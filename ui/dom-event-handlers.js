@@ -1131,6 +1131,8 @@ function setupImportZemaxButton() {
                                         .catch(() => {})
                                         .finally(() => {
                                             try { globalThis.alert = prevAlert; } catch (_) {}
+                                            // Ensure Design Intent reflects computed ImagePlane semidia without requiring a Render click.
+                                            try { refreshBlockInspector(); } catch (_) {}
                                         });
                                 } catch (_) {
                                     // ignore
