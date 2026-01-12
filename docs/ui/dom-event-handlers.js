@@ -405,6 +405,62 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
         writeBlockAperture(row, sd);
     }
 
+    // If semidia was missing in the imported .zmx, the derived semidia can differ slightly
+    // between a singlet's front/back surfaces. For a single Lens block, normalize the pair
+    // to the larger value to avoid accidental clipping on one side.
+    try {
+        /** @type {Map<string, { roles: Map<string, number>, rows: Array<{si:number,row:any}>, block:any }>} */
+        const byLensBlockId = new Map();
+        for (let si = 0; si < rowsToApply.length; si++) {
+            const row = rowsToApply[si];
+            if (!row || typeof row !== 'object') continue;
+            const t = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+            if (t === 'object' || t === 'image' || t === 'stop') continue;
+
+            const bid = String(row?._blockId ?? '').trim();
+            const role = String(row?._surfaceRole ?? '').trim();
+            if (!bid || !role) continue;
+
+            const blk = blockById.get(bid);
+            const bt = String(blk?.blockType ?? row?._blockType ?? '').trim();
+            if (!(bt === 'Lens' || bt === 'PositiveLens')) continue;
+
+            const sd = Number(row.semidia);
+            if (!Number.isFinite(sd) || sd <= 0) continue;
+
+            let rec = byLensBlockId.get(bid);
+            if (!rec) {
+                rec = { roles: new Map(), rows: [], block: blk };
+                byLensBlockId.set(bid, rec);
+            }
+            rec.roles.set(role, sd);
+            rec.rows.push({ si, row });
+        }
+
+        for (const [bid, rec] of byLensBlockId.entries()) {
+            const values = Array.from(rec.roles.values()).filter(v => Number.isFinite(v) && v > 0);
+            if (values.length < 2) continue;
+            const maxSd = Math.max(...values);
+            if (!Number.isFinite(maxSd) || maxSd <= 0) continue;
+
+            // Update canonical block aperture
+            const blk = rec.block;
+            if (blk && typeof blk === 'object') {
+                if (!blk.aperture || typeof blk.aperture !== 'object') blk.aperture = {};
+                for (const role of rec.roles.keys()) {
+                    blk.aperture[role] = maxSd;
+                }
+            }
+
+            // Update rows + semidiaOverrides keys for the same roles
+            for (const { si, row } of rec.rows) {
+                try { row.semidia = maxSd; } catch (_) {}
+                const key = provKey(row, si);
+                overrides[key] = maxSd;
+            }
+        }
+    } catch (_) {}
+
     activeCfg.semidiaOverrides = overrides;
     try {
         if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
