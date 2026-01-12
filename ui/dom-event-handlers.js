@@ -419,12 +419,15 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
         writeBlockAperture(row, sd);
     }
 
-    // If semidia was missing in the imported .zmx, the derived semidia can differ slightly
-    // between surfaces that belong to the same cemented block (Lens/Doublet/Triplet).
-    // This shows up in rendering as slanted side-lines between surfaces.
-    // Normalize all surfaces in the same block to the largest semidia in that block.
+    // If semidia was missing in the imported .zmx, derived semidia can differ surface-to-surface.
+    // We normalize ONLY the parts that define a visually clean outer contour:
+    // - Singlet (Lens/PositiveLens): normalize both surfaces to max.
+    // - Doublet: normalize s2 only.
+    // - Triplet: normalize s2 and s3 only.
+    // Other surfaces are allowed to taper (diagonal connectors are acceptable) to avoid bulky outlines
+    // that can overlap downstream lens groups.
     try {
-        /** @type {Map<string, { roles: Map<string, number>, rows: Array<{si:number,row:any}>, block:any }>} */
+        /** @type {Map<string, { roles: Map<string, number>, rows: Array<{si:number,row:any}>, block:any, blockType:string }>} */
         const byBlockId = new Map();
         for (let si = 0; si < rowsToApply.length; si++) {
             const row = rowsToApply[si];
@@ -445,33 +448,49 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
 
             let rec = byBlockId.get(bid);
             if (!rec) {
-                rec = { roles: new Map(), rows: [], block: blk };
+                rec = { roles: new Map(), rows: [], block: blk, blockType: bt };
                 byBlockId.set(bid, rec);
             }
             rec.roles.set(role, sd);
             rec.rows.push({ si, row });
         }
 
-        for (const [bid, rec] of byBlockId.entries()) {
+        const normalizeRolesToMax = (rec, rolesToNormalize) => {
             const values = Array.from(rec.roles.values()).filter(v => Number.isFinite(v) && v > 0);
-            if (values.length < 2) continue;
+            if (values.length === 0) return;
             const maxSd = Math.max(...values);
-            if (!Number.isFinite(maxSd) || maxSd <= 0) continue;
+            if (!Number.isFinite(maxSd) || maxSd <= 0) return;
 
             // Update canonical block aperture
             const blk = rec.block;
             if (blk && typeof blk === 'object') {
                 if (!blk.aperture || typeof blk.aperture !== 'object') blk.aperture = {};
-                for (const role of rec.roles.keys()) {
-                    blk.aperture[role] = maxSd;
+                for (const role of rolesToNormalize) {
+                    if (rec.roles.has(role)) blk.aperture[role] = maxSd;
                 }
             }
 
-            // Update rows + semidiaOverrides keys for the same roles
+            // Update rows + semidiaOverrides keys for the normalized roles
             for (const { si, row } of rec.rows) {
+                const role = String(row?._surfaceRole ?? '').trim();
+                if (!rolesToNormalize.includes(role)) continue;
                 try { row.semidia = maxSd; } catch (_) {}
                 const key = provKey(row, si);
                 overrides[key] = maxSd;
+            }
+        };
+
+        for (const rec of byBlockId.values()) {
+            const bt = String(rec.blockType ?? '').trim();
+            if (bt === 'Lens' || bt === 'PositiveLens') {
+                // Normalize all surfaces for singlets
+                normalizeRolesToMax(rec, Array.from(rec.roles.keys()));
+            } else if (bt === 'Doublet') {
+                // User rule: outer contour anchor is s2
+                normalizeRolesToMax(rec, ['s2']);
+            } else if (bt === 'Triplet') {
+                // User rule: outer contour anchors are s2, s3
+                normalizeRolesToMax(rec, ['s2', 's3']);
             }
         }
     } catch (_) {}
