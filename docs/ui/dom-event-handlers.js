@@ -406,11 +406,12 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
     }
 
     // If semidia was missing in the imported .zmx, the derived semidia can differ slightly
-    // between a singlet's front/back surfaces. For a single Lens block, normalize the pair
-    // to the larger value to avoid accidental clipping on one side.
+    // between surfaces that belong to the same cemented block (Lens/Doublet/Triplet).
+    // This shows up in rendering as slanted side-lines between surfaces.
+    // Normalize all surfaces in the same block to the largest semidia in that block.
     try {
         /** @type {Map<string, { roles: Map<string, number>, rows: Array<{si:number,row:any}>, block:any }>} */
-        const byLensBlockId = new Map();
+        const byBlockId = new Map();
         for (let si = 0; si < rowsToApply.length; si++) {
             const row = rowsToApply[si];
             if (!row || typeof row !== 'object') continue;
@@ -423,21 +424,21 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
 
             const blk = blockById.get(bid);
             const bt = String(blk?.blockType ?? row?._blockType ?? '').trim();
-            if (!(bt === 'Lens' || bt === 'PositiveLens')) continue;
+            if (!(bt === 'Lens' || bt === 'PositiveLens' || bt === 'Doublet' || bt === 'Triplet')) continue;
 
             const sd = Number(row.semidia);
             if (!Number.isFinite(sd) || sd <= 0) continue;
 
-            let rec = byLensBlockId.get(bid);
+            let rec = byBlockId.get(bid);
             if (!rec) {
                 rec = { roles: new Map(), rows: [], block: blk };
-                byLensBlockId.set(bid, rec);
+                byBlockId.set(bid, rec);
             }
             rec.roles.set(role, sd);
             rec.rows.push({ si, row });
         }
 
-        for (const [bid, rec] of byLensBlockId.entries()) {
+        for (const [bid, rec] of byBlockId.entries()) {
             const values = Array.from(rec.roles.values()).filter(v => Number.isFinite(v) && v > 0);
             if (values.length < 2) continue;
             const maxSd = Math.max(...values);
