@@ -1355,6 +1355,78 @@ export class OpticalPathDifferenceCalculator {
             const yh = fieldSetting?.yHeight ?? 0;
             const lastFail = this._lastMarginalRayGenFailure ? `; marginal=${this._lastMarginalRayGenFailure}` : '';
 
+            // Last-resort retry for missing-aperture imports:
+            // Blocks/rows often get a default semidia=10mm which can artificially vignette off-axis fields.
+            // If we failed due to PHYSICAL_APERTURE_BLOCK with limit≈10, relax ONLY those default semidias
+            // (keep any user-specified apertures intact) and retry once.
+            try {
+                const diag0 = this._diagnoseCenterRayTermination(fieldSetting);
+                const f0 = diag0?.failure;
+                const al0 = Number(f0?.apertureLimit);
+                const looksDefaultAperture = (String(f0?.kind ?? '') === 'PHYSICAL_APERTURE_BLOCK')
+                    && Number.isFinite(al0)
+                    && al0 > 0
+                    && al0 <= 10.000001;
+
+                if (looksDefaultAperture && Array.isArray(this.opticalSystemRows) && this.opticalSystemRows.length > 0) {
+                    // Ensure we're not actually limited by the stop itself.
+                    let stopLim = null;
+                    try {
+                        const stopRow = this.opticalSystemRows?.[this.stopSurfaceIndex];
+                        if (stopRow) {
+                            const ap = parseFloat(stopRow.aperture ?? stopRow.Aperture ?? NaN);
+                            if (Number.isFinite(ap) && ap > 0) stopLim = ap * 0.5;
+                            else {
+                                const sd = Number(stopRow.semidia);
+                                if (Number.isFinite(sd) && sd > 0) stopLim = sd;
+                            }
+                        }
+                    } catch (_) {
+                        stopLim = null;
+                    }
+
+                    if (stopLim !== null && stopLim > al0 + 1e-6) {
+                        const relaxedRows = this.opticalSystemRows.map((r, idx) => {
+                            if (!r || typeof r !== 'object') return r;
+                            const t = String(r['object type'] ?? r.object ?? '').trim().toLowerCase();
+                            if (t === 'object' || t === 'image') return r;
+                            if (idx === this.stopSurfaceIndex || t === 'stop' || t === 'sto') return r;
+
+                            const sdRaw = r.semidia;
+                            const sdNum = Number(sdRaw);
+                            const isDefaultSd = (sdRaw === '10') || (Number.isFinite(sdNum) && Math.abs(sdNum - 10) < 1e-6);
+                            if (!isDefaultSd) return r;
+                            return { ...r, semidia: '' };
+                        });
+
+                        this.opticalSystemRows = relaxedRows;
+                        try {
+                            const k = this.getFieldCacheKey(fieldSetting);
+                            this._chiefRayCache?.delete(k);
+                        } catch (_) {}
+                        try {
+                            const ek = this._getInfinitePupilModeKey(fieldSetting);
+                            this._entrancePupilConfigCache?.delete(ek);
+                        } catch (_) {}
+
+                        try {
+                            referenceRay = this.generateMarginalRay(0, 0, fieldSetting, { isReferenceRay: true });
+                            if (!referenceRay) referenceRay = this.generateMarginalRay(0, 0, fieldSetting, { isReferenceRay: true, relaxStopMissTol: true });
+                        } catch (_) {
+                            // ignore
+                        }
+                        if (!referenceRay) {
+                            try { referenceRay = this.generateChiefRay(fieldSetting); } catch (_) {}
+                        }
+                        if (!referenceRay) {
+                            try { referenceRay = this.generateFallbackReferenceRay(fieldSetting); } catch (_) {}
+                        }
+                    }
+                }
+            } catch (_) {
+                // ignore
+            }
+
             // When the system/field is physically vignetted, traceRay() returns null (aperture block),
             // and we cannot define a reference ray (OPD is undefined). Provide an actionable hint.
             let hint = '';
