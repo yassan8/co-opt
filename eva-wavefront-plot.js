@@ -183,7 +183,8 @@ export class WavefrontPlotter {
                 // Caller can override via options.opdMode.
                 opdMode: options?.opdMode || 'referenceSphere',
                 zernikeMaxNoll: 37,
-                renderFromZernike: true,
+                // Display raw OPD data (same as Heatmap)
+                renderFromZernike: false,
                 profile: profileEnabled,
                 cancelToken: options?.cancelToken || null,
                 onProgress: options?.onProgress || null
@@ -752,11 +753,19 @@ export class WavefrontPlotter {
             
             for (const fieldSetting of fieldSettings) {
                 // 各フィールドでの波面収差マップを生成
+                // 🆕 【重要修正】Zernike除去を適用してフィールド間比較を可能にする
+                // - opdMode: 'referenceSphere' で参照球面補正（軸外Tilt成分を幾何学的に除去）
+                // - renderFromZernike: true でpiston/tilt除去後の波面を表示
+                // - zernikeMaxNoll: 37 で高次収差まで正確にフィッティング
+                // - これにより各フィールドの"本質的な高次収差"が比較可能になる
                 const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, 'circular', {
                     recordRays: false,
                     progressEvery: 512,
-                    // Use reference-sphere OPD so wavefront/Wλ is comparable to PSF/Strehl.
-                    opdMode: 'referenceSphere'
+                    // Use reference-sphere OPD (geometric tilt correction for off-axis fields)
+                    opdMode: 'referenceSphere',
+                    // 🆕 Zernike除去を適用（piston/tiltを各フィールドで個別に除去）
+                    zernikeMaxNoll: 37,
+                    renderFromZernike: true
                 });
                 
                 // サーフェストレースを作成

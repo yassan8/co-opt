@@ -3702,7 +3702,7 @@ export function setupOpticalSystemChangeListeners(scene) {
     <div class="controls">
         <label for="popup-psf-object-select">Object:</label>
         <select id="popup-psf-object-select"><option value="0">1</option></select>
-        <label for="popup-psf-sampling-select">Sampling:</label>
+        <label for="popup-psf-sampling-select">FFT grid:</label>
         <select id="popup-psf-sampling-select">
             <option value="32">32x32</option>
             <option value="64">64x64</option>
@@ -3713,8 +3713,8 @@ export function setupOpticalSystemChangeListeners(scene) {
             <option value="2048">2048x2048</option>
             <option value="4096">4096x4096</option>
         </select>
-        <label for="popup-psf-zernike-sampling-select">Fit grid:</label>
-        <select id="popup-psf-zernike-sampling-select" title="Ray-traced OPD grid size used for Zernike fitting before evaluating PSF">
+        <label for="popup-psf-zernike-sampling-select">OPD grid:</label>
+        <select id="popup-psf-zernike-sampling-select" title="Ray-traced OPD grid size (number of rays traced across pupil)">
             <option value="32">32x32</option>
             <option value="64">64x64</option>
             <option value="128">128x128</option>
@@ -4261,13 +4261,26 @@ export function setupOpticalSystemChangeListeners(scene) {
 
                     const opdCalculator = createOPDCalculator(opticalSystemRows, wavelength);
                     const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
+                    
+                    // CRITICAL: Force stop mode to match render behavior
+                    // PSF calculation should use same pupil sampling as render, not entrance pupil
+                    try {
+                        if (fieldSetting.type === 'Angle' || !fieldSetting.height) {
+                            opdCalculator._setInfinitePupilMode(fieldSetting, 'stop');
+                            console.log('🔑 [PSF Popup] Forced stop mode for infinite field');
+                        }
+                    } catch (e) {
+                        console.warn('⚠️ [PSF Popup] Failed to set stop mode:', e);
+                    }
+                    
                     onProgress({ percent: 0, phase: 'opd', message: 'OPD...' });
                     const wavefrontMap = await raceWithCancel(analyzer.generateWavefrontMap(fieldSetting, Number.isFinite(zernikeSampling) ? zernikeSampling : sampling, 'circular', {
-                        // PSF input grid should be sampled from the Zernike-fitted surface.
-                        recordRays: false,
+                        // Use raw OPD data directly (no Zernike approximation)
+                        recordRays: true,  // Record ray data
                         progressEvery: 0,
                         zernikeMaxNoll: 36,
-                        renderFromZernike: true,
+                        renderFromZernike: false,  // Use raw OPD data
+                        // Use raw OPD with geometric tilt, let PSF calculator remove it
                         cancelToken: activeCancelToken,
                         onProgress: (evt) => {
                             const p = Number(evt && evt.percent);
@@ -4286,62 +4299,83 @@ export function setupOpticalSystemChangeListeners(scene) {
                         throw err;
                     }
 
-                    const psfSamplingSize = Number.isFinite(sampling) ? sampling : 128;
-                    // PSF: tilt は含める（pistonのみ 0）。
-                    // eva-wavefront.js の usedCoefficientsMicrons は表示用に piston/tilt を除去しているため、
-                    // ここではフィット係数（生）を一時的に使ってZernike面を評価する。
-                    const model = wavefrontMap && wavefrontMap.zernikeModel ? wavefrontMap.zernikeModel : null;
-                    const savedUsed = model ? model.usedCoefficientsMicrons : null;
-                    try {
-                        if (model && model.fitCoefficientsMicrons && typeof model.fitCoefficientsMicrons === 'object') {
-                            const coeffs = { ...model.fitCoefficientsMicrons };
-                            coeffs[1] = 0;
-                            model.usedCoefficientsMicrons = coeffs;
-                        }
-                    } catch (_) {}
-
-                    const zGrid = analyzer.generateZernikeRenderGrid(wavefrontMap, psfSamplingSize, 'opd', { rhoMax: 1.0 });
-                    try {
-                        if (model) model.usedCoefficientsMicrons = savedUsed;
-                    } catch (_) {}
-                    if (!zGrid || !Array.isArray(zGrid.z) || !Array.isArray(zGrid.z[0])) throw new Error('Zernike render grid generation failed (popup).');
-
-                    const s = Math.max(2, Math.floor(Number(psfSamplingSize)));
-                    const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
-                    const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
-                    const maskGrid = Array.from({ length: s }, () => Array(s).fill(false));
-                    const xCoords = new Float32Array(s);
-                    const yCoords = new Float32Array(s);
-                    for (let i = 0; i < s; i++) {
-                        const zx = (zGrid && zGrid.x) ? zGrid.x[i] : undefined;
-                        const zy = (zGrid && zGrid.y) ? zGrid.y[i] : undefined;
-                        xCoords[i] = Number((zx !== undefined && zx !== null) ? zx : ((i / (s - 1 || 1)) * 2 - 1));
-                        yCoords[i] = Number((zy !== undefined && zy !== null) ? zy : ((i / (s - 1 || 1)) * 2 - 1));
+                    // Get raw ray data from wavefrontMap
+                    const rawRays = wavefrontMap && wavefrontMap.rayData ? wavefrontMap.rayData : [];
+                    if (!Array.isArray(rawRays) || rawRays.length === 0) {
+                        throw new Error('No ray data available for PSF calculation');
                     }
-                    for (let iy = 0; iy < s; iy++) {
-                        if ((iy % 32) === 0) {
-                            throwIfCancelled(activeCancelToken);
-                            await new Promise(resolve => setTimeout(resolve, 0));
-                        }
-                        const row = zGrid.z[iy];
-                        for (let ix = 0; ix < s; ix++) {
-                            const vWaves = row ? row[ix] : undefined;
-                            if (vWaves === null || !isFinite(vWaves)) {
-                                maskGrid[iy][ix] = false;
-                                opdGrid[iy][ix] = 0;
-                                ampGrid[iy][ix] = 0;
-                                continue;
-                            }
-                            maskGrid[iy][ix] = true;
-                            opdGrid[iy][ix] = Number(vWaves) * Number(wavelength);
-                            ampGrid[iy][ix] = 1.0;
+                    
+                    // Debug: Check ray data structure
+                    console.log('🔍 [PSF Popup] Ray data count:', rawRays.length);
+                    if (rawRays.length > 0) {
+                        console.log('🔍 [PSF Popup] First ray structure:', Object.keys(rawRays[0]));
+                        console.log('🔍 [PSF Popup] First 3 rays:', rawRays.slice(0, 3).map(r => ({
+                            pupilX: r.pupilX, 
+                            pupilY: r.pupilY, 
+                            opd: r.opd
+                        })));
+                        
+                        // Check pupil coordinate range
+                        const validRays = rawRays.filter(r => !r.isVignetted);
+                        if (validRays.length > 0) {
+                            const pupilXs = validRays.map(r => r.pupilX || 0);
+                            const pupilYs = validRays.map(r => r.pupilY || 0);
+                            console.log('🔍 [PSF Popup] Pupil X range:', Math.min(...pupilXs), 'to', Math.max(...pupilXs));
+                            console.log('🔍 [PSF Popup] Pupil Y range:', Math.min(...pupilYs), 'to', Math.max(...pupilYs));
                         }
                     }
+                    
+                    // Debug: Check wavefront map metadata
+                    console.log('🔍 [PSF Popup] Wavefront map keys:', Object.keys(wavefrontMap));
+                    console.log('🔍 [PSF Popup] pupilPhysicalRadiusMm:', wavefrontMap.pupilPhysicalRadiusMm);
+                    console.log('🔍 [PSF Popup] pupilSamplingMode:', wavefrontMap.pupilSamplingMode);
+                    console.log('🔍 [PSF Popup] entranceEffectiveRadiusMm:', wavefrontMap.entranceEffectiveRadiusMm);
+                    
+                    // CRITICAL: Use actual entrance pupil radius for spatial frequency scaling
+                    // In entrance pupil mode, pupilPhysicalRadiusMm (stop radius) != actual entrance pupil radius
+                    const actualPupilRadiusMm = (wavefrontMap.pupilSamplingMode === 'entrance' && 
+                                                  Number.isFinite(wavefrontMap.entranceEffectiveRadiusMm))
+                        ? wavefrontMap.entranceEffectiveRadiusMm
+                        : wavefrontMap.pupilPhysicalRadiusMm;
+                    
+                    console.log('🔍 [PSF Popup] Using actualPupilRadiusMm:', actualPupilRadiusMm);
 
-                    const opdData = { gridSize: s, wavelength, gridData: { opd: opdGrid, amplitude: ampGrid, pupilMask: maskGrid, xCoords, yCoords } };
-                    let pupilDiameterMm = DEFAULT_STOP_SEMI_DIAMETER * 2;
+                    // Convert to PSF calculator format
+                    // Use raw pupil coordinates as-is (already normalized by generateWavefrontMap)
+                    const opdData = {
+                        wavelength: wavelength,
+                        rayData: rawRays.map(ray => ({
+                            pupilX: ray.pupilX || ray.x || 0,
+                            pupilY: ray.pupilY || ray.y || 0,
+                            opd: ray.opd || 0,
+                            isVignetted: ray.isVignetted || false
+                        }))
+                    };
+                    
+                    // Debug: OPD statistics
+                    const validOpdRays = opdData.rayData.filter(r => !r.isVignetted);
+                    if (validOpdRays.length > 0) {
+                        const opdValues = validOpdRays.map(r => r.opd);
+                        const opdMin = Math.min(...opdValues);
+                        const opdMax = Math.max(...opdValues);
+                        const opdMean = opdValues.reduce((a, b) => a + b, 0) / opdValues.length;
+                        const opdPV = opdMax - opdMin;
+                        console.log('🔍 [PSF Popup] OPD stats (μm):', {
+                            min: opdMin.toFixed(6),
+                            max: opdMax.toFixed(6),
+                            mean: opdMean.toFixed(6),
+                            PV: opdPV.toFixed(6)
+                        });
+                    }
+
+                    let pupilDiameterMm = actualPupilRadiusMm * 2;  // Use actual entrance pupil diameter
                     let focalLengthMm = 100.0;
                     let stopIndexForLog = -1;
+                    
+                    // Get stop diameter for PSF calculation
+                    // CRITICAL: Always use stop diameter for Strehl ratio calculation
+                    // Entrance pupil radius is only for understanding vignetting, not for defining diffraction limit
+                    let stopDiameterMm = 24.0;  // Default
                     try {
                         const stopIndex = findStopSurfaceIndex(opticalSystemRows);
                         stopIndexForLog = stopIndex;
@@ -4357,8 +4391,20 @@ export function setupOpticalSystemChangeListeners(scene) {
                         if (Number.isFinite(sd) && sd > 0) {
                             const isApertureField = stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined);
                             const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
-                            if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) pupilDiameterMm = stopRadiusMm * 2;
+                            if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) stopDiameterMm = stopRadiusMm * 2;
                         }
+                    } catch (_) {}
+                    
+                    // In entrance pupil mode, keep actualPupilRadiusMm for understanding
+                    // but use stopDiameterMm for PSF calculation to maintain consistent diffraction limit
+                    if (wavefrontMap.pupilSamplingMode === 'entrance') {
+                        console.log('🔍 [PSF Popup] Entrance pupil mode: using stop diameter', stopDiameterMm, 'mm instead of entrance', actualPupilRadiusMm * 2, 'mm');
+                        pupilDiameterMm = stopDiameterMm;
+                    } else {
+                        pupilDiameterMm = stopDiameterMm;  // Use stop diameter in stop mode too
+                    }
+                    
+                    try {
                         const fl = calculateFocalLength(opticalSystemRows, wavelength);
                         if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) focalLengthMm = Math.abs(fl);
                     } catch (_) {}
@@ -4368,12 +4414,13 @@ export function setupOpticalSystemChangeListeners(scene) {
 
                     if (!window.__popupPsfCalculator) window.__popupPsfCalculator = new PSFCalculator();
                     const psfCalculator = window.__popupPsfCalculator;
+                    const psfSamplingSize = Number.isFinite(sampling) ? sampling : 128;
                     const psfResult = await raceWithCancel(psfCalculator.calculatePSF(opdData, {
                         samplingSize: psfSamplingSize,
                         pupilDiameter: pupilDiameterMm,
                         focalLength: focalLengthMm,
                         forceImplementation: forceWasm ? 'wasm' : null,
-                        removeTilt: false,
+                        removeTilt: true,  // Remove best-fit plane during PSF calculation
                         onProgress: (evt) => {
                             const p = Number(evt && evt.percent);
                             const msg = (evt && evt.message) || (evt && evt.phase) || 'PSF...';

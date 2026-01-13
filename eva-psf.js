@@ -611,7 +611,10 @@ export class PSFCalculator {
             // true: if peak is near border, circular-shift PSF back to center.
             // NOTE: this effectively hides tilt-driven PSF shift, so when removeTilt=false
             // the default is to NOT recenter unless explicitly requested.
-            recenterIfWrapped = undefined
+            recenterIfWrapped = undefined,
+            // Zero-padding target size (e.g., 256, 512) to increase PSF resolution
+            // Set to samplingSize or 0 to disable zero-padding
+            zeroPadTo = 0
         } = options;
 
         const onProgress = (options && typeof options.onProgress === 'function') ? options.onProgress : null;
@@ -629,8 +632,10 @@ export class PSFCalculator {
             }
         };
 
+        // Force recentering for consistent PSF position across different sampling sizes
+        // This ensures that PSF peak is always at the center, regardless of optical aberrations
         const shouldRecenterIfWrapped = (recenterIfWrapped === undefined)
-            ? (removeTilt ? true : false)
+            ? true  // Always recenter by default for position stability
             : !!recenterIfWrapped;
 
         // console.log('🔬 [PSF] JavaScript PSF計算開始');
@@ -667,9 +672,32 @@ export class PSFCalculator {
         // 2. 複素振幅を計算（計測）
         emitProgress(25, 'psf-amplitude', 'Computing complex amplitude...');
         const complexStartTime = performance.now();
-        const complexAmplitude = this.calculateComplexAmplitude(gridData, effectiveWavelength, { removeTilt });
+        let complexAmplitude = this.calculateComplexAmplitude(gridData, effectiveWavelength, { removeTilt });
         breakdown.complexAmplitudeTime = performance.now() - complexStartTime;
         emitProgress(35, 'psf-amplitude', 'Complex amplitude ready');
+        
+        // 2.5. Zero-padding for higher PSF resolution (optional)
+        // Auto zero-pad to minimum 512x512 for better resolution, unless disabled
+        const minRecommendedSize = 512;
+        // If zeroPadTo is 0 or undefined, enable auto zero-padding
+        const autoZeroPad = (!zeroPadTo || zeroPadTo === 0);
+        let targetSize = autoZeroPad
+            ? Math.max(samplingSize, minRecommendedSize)
+            : ((zeroPadTo > samplingSize && this.supportedSamplings.includes(zeroPadTo)) ? zeroPadTo : samplingSize);
+        
+        if (targetSize > samplingSize) {
+            console.log(`🔍 [PSF] Zero-padding from ${samplingSize}×${samplingSize} to ${targetSize}×${targetSize} (${autoZeroPad ? 'auto' : 'manual'})`);
+            emitProgress(40, 'psf-zeropad', `Zero-padding to ${targetSize}×${targetSize}...`);
+            const padStartTime = performance.now();
+            complexAmplitude = this.zeroPadComplexAmplitude(complexAmplitude, samplingSize, targetSize);
+            breakdown.zeroPadTime = performance.now() - padStartTime;
+            emitProgress(45, 'psf-zeropad', 'Zero-padding done');
+            console.log(`✅ [PSF] Zero-padding completed, new size: ${complexAmplitude.real.length}×${complexAmplitude.real[0].length}`);
+        } else {
+            // No zero-padding applied
+            targetSize = samplingSize;
+            console.log(`ℹ️ [PSF] No zero-padding (samplingSize=${samplingSize}, targetSize=${targetSize})`);
+        }
 
         // Strehl比: ピーク正規化前のピーク強度を、同一スケーリングの回折限界ピークと比較
         // （表示用PSFは従来どおりピーク=1に正規化する）
@@ -686,14 +714,19 @@ export class PSFCalculator {
             });
             const aberratedPeak = aberrated?.maxIntensity ?? 0;
 
-            const size = samplingSize;
-            const idealReal = Array(size).fill().map(() => Array(size).fill(0));
-            const idealImag = Array(size).fill().map(() => Array(size).fill(0));
-            for (let i = 0; i < size; i++) {
-                for (let j = 0; j < size; j++) {
+            // Use targetSize (after zero-padding) for ideal PSF calculation
+            const idealSize = targetSize > samplingSize ? targetSize : samplingSize;
+            const idealReal = Array(idealSize).fill().map(() => Array(idealSize).fill(0));
+            const idealImag = Array(idealSize).fill().map(() => Array(idealSize).fill(0));
+            
+            // Calculate offset if zero-padded
+            const offset = targetSize > samplingSize ? Math.floor((targetSize - samplingSize) / 2) : 0;
+            
+            for (let i = 0; i < samplingSize; i++) {
+                for (let j = 0; j < samplingSize; j++) {
                     if (gridData.pupilMask[i][j]) {
-                        idealReal[i][j] = gridData.amplitude[i][j];
-                        idealImag[i][j] = 0;
+                        idealReal[i + offset][j + offset] = gridData.amplitude[i][j];
+                        idealImag[i + offset][j + offset] = 0;
                     }
                 }
             }
@@ -719,6 +752,7 @@ export class PSFCalculator {
         // 3. フーリエ変換でPSFを計算（計測）
         const fftStartTime = performance.now();
         emitProgress(60, 'psf-fft', 'FFT...');
+        console.log(`🔬 [PSF] Performing FFT on ${complexAmplitude.real.length}×${complexAmplitude.real[0].length} grid`);
         let psfData = await this.performFFTAsync(complexAmplitude, {
             onProgress: (evt) => {
                 const p = Number(evt?.percent);
@@ -728,8 +762,19 @@ export class PSFCalculator {
             }
         });
         // ピークが端にラップして見えるケースを救済（残留チルト等）
+        // Force centering for position stability across different sampling sizes
+        console.log(`🔍 [PSF] shouldRecenterIfWrapped = ${shouldRecenterIfWrapped}`);
         if (shouldRecenterIfWrapped) {
-            psfData = this.recenterPSFIfWrapped(psfData);
+            try {
+                const psfSizeBefore = psfData ? psfData.length : 'null';
+                console.log(`🔍 [PSF] Calling recenterPSFIfWrapped, psfData size: ${psfSizeBefore}×${psfSizeBefore}`);
+                psfData = this.recenterPSFIfWrapped(psfData, { forceCenter: true });
+                console.log(`✅ [PSF] recenterPSFIfWrapped completed`);
+            } catch (error) {
+                console.error(`❌ [PSF] recenterPSFIfWrapped failed:`, error);
+            }
+        } else {
+            console.log(`⚠️ [PSF] Recentering skipped (shouldRecenterIfWrapped=false)`);
         }
         breakdown.fftTime = performance.now() - fftStartTime;
         emitProgress(90, 'psf-fft', 'FFT done');
@@ -737,7 +782,9 @@ export class PSFCalculator {
         // 4. PSF評価指標を計算（計測）
         emitProgress(92, 'psf-metrics', 'Computing metrics...');
         const metricsStartTime = performance.now();
-        const usedPixelSize = pixelSize || this.calculatePixelSize(effectiveWavelength, focalLength, pupilDiameter, samplingSize);
+        // Use targetSize (after zero-padding) for pixel size calculation
+        const usedPixelSize = pixelSize || this.calculatePixelSize(effectiveWavelength, focalLength, pupilDiameter, targetSize);
+        console.log(`📏 [PSF] Pixel size: ${(usedPixelSize * 1000).toFixed(3)} nm (based on ${targetSize}×${targetSize} grid)`);
         const metrics = this.calculatePSFMetrics(psfData, {
             wavelength: effectiveWavelength,
             pupilDiameter,
@@ -762,6 +809,7 @@ export class PSFCalculator {
                 totalTime,
                 method: 'javascript',
                 samplingSize,
+                fftSize: targetSize,  // Actual FFT size (after zero-padding)
                 wavelength: effectiveWavelength,
                 pixelSize: usedPixelSize
             }
@@ -786,7 +834,66 @@ export class PSFCalculator {
      * @param {Array} psfData 2D配列
      * @returns {{i:number,j:number,max:number}|null}
      */
-    findPeakLocation(psfData) {
+    /**
+     * Gaussian fitting for sub-pixel peak detection
+     * Fits 1D Gaussian to X and Y profiles separately
+     */
+    gaussianFit1D(data, center, radius = 3) {
+        // Extract profile around peak
+        const start = Math.max(0, center - radius);
+        const end = Math.min(data.length - 1, center + radius);
+        const profile = [];
+        const positions = [];
+        
+        for (let i = start; i <= end; i++) {
+            if (Number.isFinite(data[i]) && data[i] > 0) {
+                profile.push(Math.log(data[i]));
+                positions.push(i);
+            }
+        }
+        
+        if (profile.length < 3) return center; // Need at least 3 points
+        
+        // Fit parabola to log(intensity): log(I) = a*x^2 + b*x + c
+        // Peak is at x = -b / (2*a)
+        let sumX = 0, sumX2 = 0, sumX3 = 0, sumX4 = 0;
+        let sumY = 0, sumXY = 0, sumX2Y = 0;
+        
+        for (let i = 0; i < positions.length; i++) {
+            const x = positions[i];
+            const y = profile[i];
+            sumX += x;
+            sumX2 += x * x;
+            sumX3 += x * x * x;
+            sumX4 += x * x * x * x;
+            sumY += y;
+            sumXY += x * y;
+            sumX2Y += x * x * y;
+        }
+        
+        const n = positions.length;
+        // Solve 3x3 system for a, b, c
+        const denom = n * sumX2 * sumX4 - n * sumX3 * sumX3 - sumX * sumX * sumX4 + 
+                      2 * sumX * sumX2 * sumX3 - sumX2 * sumX2 * sumX2;
+        
+        if (Math.abs(denom) < 1e-10) return center;
+        
+        const a = (n * sumX2Y * sumX2 - n * sumXY * sumX3 - sumX * sumX2Y * sumX + 
+                   sumX * sumXY * sumX3 + sumY * sumX * sumX3 - sumY * sumX2 * sumX2) / denom;
+        const b = (n * sumX2 * sumXY - n * sumX2Y * sumX - sumX * sumX * sumXY + 
+                   sumX * sumX2Y * sumX + sumY * sumX * sumX2 - sumY * sumX2 * sumX) / denom;
+        
+        if (Math.abs(a) < 1e-10 || a > 0) return center; // Not a peak (a must be negative)
+        
+        const peakPos = -b / (2 * a);
+        
+        // Sanity check: peak should be within reasonable range
+        if (peakPos < start - 1 || peakPos > end + 1) return center;
+        
+        return peakPos;
+    }
+    
+    findPeakLocation(psfData, useSubpixel = false) {
         if (!Array.isArray(psfData) || psfData.length === 0 || !Array.isArray(psfData[0])) return null;
         const h = psfData.length;
         const w = psfData[0].length;
@@ -805,7 +912,11 @@ export class PSFCalculator {
                 }
             }
         }
-        return { i: maxI, j: maxJ, max };
+        
+        // Simply use integer peak - recentering will handle the rest
+        // Sub-pixel refinement can introduce errors with aberrated PSF
+        console.log(`🎯 [Peak-Integer] Peak at (${maxI}, ${maxJ}), max=${max.toFixed(6)}`);
+        return { i: maxI, j: maxJ, max, iInt: maxI, jInt: maxJ };
     }
 
     /**
@@ -817,6 +928,13 @@ export class PSFCalculator {
     circularShift2D(data, shiftI, shiftJ) {
         const h = data.length;
         const w = data[0].length;
+        console.log(`🔄 [CircularShift] Shifting ${h}×${w} array by (${shiftI}, ${shiftJ})`);
+        
+        // Check a few values before shift
+        const center = Math.floor(h / 2);
+        const beforeCenter = data[center] ? data[center][center] : 'N/A';
+        console.log(`🔍 [CircularShift] Before: data[${center}][${center}] = ${beforeCenter}`);
+        
         const out = new Array(h);
         for (let i = 0; i < h; i++) {
             const srcI = (i - shiftI) % h;
@@ -830,29 +948,81 @@ export class PSFCalculator {
             }
             out[i] = dstRow;
         }
+        
+        // Check after shift
+        const afterCenter = out[center] ? out[center][center] : 'N/A';
+        console.log(`🔍 [CircularShift] After: out[${center}][${center}] = ${afterCenter}`);
+        
+        // Find peak in shifted data
+        let max = -Infinity, maxI = 0, maxJ = 0;
+        for (let i = 0; i < h; i++) {
+            for (let j = 0; j < w; j++) {
+                if (out[i][j] > max) {
+                    max = out[i][j];
+                    maxI = i;
+                    maxJ = j;
+                }
+            }
+        }
+        console.log(`✅ [CircularShift] Peak after shift: (${maxI}, ${maxJ})`);
+        
         return out;
     }
 
     /**
      * ピークが配列端にラップしているときだけ、ピークが中心に来るよう循環シフトする。
      * @param {Array} psfData 2D PSF
+     * @param {Object} options - { forceCenter: false } 常に中心に配置するか
      */
-    recenterPSFIfWrapped(psfData) {
-        const peak = this.findPeakLocation(psfData);
+    recenterPSFIfWrapped(psfData, options = {}) {
+        const { forceCenter = false } = options;
+        const peak = this.findPeakLocation(psfData, true);  // Use sub-pixel precision
         if (!peak) return psfData;
 
         const size = psfData.length;
         const center = Math.floor(size / 2);
-        const border = Math.max(2, Math.floor(size * 0.08));
+        // Use integer position for shift calculation
+        const peakI = peak.iInt !== undefined ? peak.iInt : Math.round(peak.i);
+        const peakJ = peak.jInt !== undefined ? peak.jInt : Math.round(peak.j);
+        
+        const offsetI = peakI - center;
+        const offsetJ = peakJ - center;
 
+        console.log(`🎯 [PSF-Recenter] Peak at (${peak.i.toFixed(2)}, ${peak.j.toFixed(2)}), center=${center}, size=${size}`);
+        console.log(`🎯 [PSF-Recenter] Integer peak: (${peakI}, ${peakJ}), offset: (${offsetI}, ${offsetJ})`);
+
+        // If forceCenter is enabled, always recenter (for position stability across sampling sizes)
+        if (forceCenter) {
+            if (offsetI !== 0 || offsetJ !== 0) {
+                const shiftI = -offsetI;
+                const shiftJ = -offsetJ;
+                console.log(`🔄 [PSF-Recenter] Force centering, shifting by (${shiftI}, ${shiftJ})`);
+                return this.circularShift2D(psfData, shiftI, shiftJ);
+            } else {
+                console.log(`✅ [PSF-Recenter] Already centered`);
+                return psfData;
+            }
+        }
+        
+        // Original logic: only recenter if near border
+        const border = Math.max(2, Math.floor(size * 0.15));
         const nearBorder =
-            peak.i < border || peak.i >= size - border ||
-            peak.j < border || peak.j >= size - border;
+            peakI < border || peakI >= size - border ||
+            peakJ < border || peakJ >= size - border;
+        
+        const centerThreshold = Math.floor(size * 0.1);
+        const farFromCenter = 
+            Math.abs(offsetI) > centerThreshold ||
+            Math.abs(offsetJ) > centerThreshold;
 
-        if (!nearBorder) return psfData;
+        if (!nearBorder && !farFromCenter) {
+            console.log(`✅ [PSF-Recenter] Peak is centered, no shift needed`);
+            return psfData;
+        }
 
-        const shiftI = center - peak.i;
-        const shiftJ = center - peak.j;
+        const shiftI = -offsetI;
+        const shiftJ = -offsetJ;
+        console.log(`🔄 [PSF-Recenter] Peak ${nearBorder ? 'near border' : 'far from center'}, shifting by (${shiftI}, ${shiftJ})`);
         return this.circularShift2D(psfData, shiftI, shiftJ);
     }
 
@@ -1354,6 +1524,38 @@ export class PSFCalculator {
     }
 
     /**
+     * Zero-pad complex amplitude to increase PSF resolution
+     * @param {Object} complexAmplitude - {real: 2D array, imag: 2D array}
+     * @param {number} srcSize - Original size
+     * @param {number} dstSize - Target size (must be >= srcSize)
+     * @returns {Object} Zero-padded complex amplitude
+     */
+    zeroPadComplexAmplitude(complexAmplitude, srcSize, dstSize) {
+        if (dstSize < srcSize) {
+            throw new Error(`Target size ${dstSize} must be >= source size ${srcSize}`);
+        }
+        if (dstSize === srcSize) {
+            return complexAmplitude;
+        }
+        
+        const offset = Math.floor((dstSize - srcSize) / 2);
+        
+        // Create zero-filled arrays
+        const paddedReal = Array(dstSize).fill().map(() => Array(dstSize).fill(0));
+        const paddedImag = Array(dstSize).fill().map(() => Array(dstSize).fill(0));
+        
+        // Copy original data to center
+        for (let i = 0; i < srcSize; i++) {
+            for (let j = 0; j < srcSize; j++) {
+                paddedReal[i + offset][j + offset] = complexAmplitude.real[i][j];
+                paddedImag[i + offset][j + offset] = complexAmplitude.imag[i][j];
+            }
+        }
+        
+        return { real: paddedReal, imag: paddedImag };
+    }
+
+    /**
      * FFTshift（中心に配置）
      * @param {Array} data - 2D配列
      * @returns {Array} シフトされた2D配列
@@ -1362,6 +1564,8 @@ export class PSFCalculator {
         const size = data.length;
         const shifted = Array(size).fill().map(() => Array(size).fill(0));
         const half = Math.floor(size / 2);
+        
+        console.log(`🔄 [FFTShift] size=${size}, half=${half}`);
         
         // 正しいFFTシフト実装
         for (let i = 0; i < size; i++) {

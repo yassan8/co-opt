@@ -6803,6 +6803,28 @@ export class WavefrontAberrationAnalyzer {
             if (z?.stats?.full?.rmsResidual !== undefined) {
                 lines.push(`Fit RMS residual: ${Number.isFinite(z.stats.full.rmsResidual) ? z.stats.full.rmsResidual.toFixed(6) : z.stats.full.rmsResidual} μm`);
             }
+            
+            // ⚠️ Warning about asymmetric sampling
+            const coords = wavefrontMap?.pupilCoordinates || [];
+            if (coords.length > 0) {
+                const yValues = coords.filter(p => Number.isFinite(p?.y)).map(p => p.y);
+                if (yValues.length > 0) {
+                    const yMin = Math.min(...yValues);
+                    const yMax = Math.max(...yValues);
+                    const yRange = yMax - yMin;
+                    const yCenter = (yMax + yMin) / 2;
+                    const asymmetry = Math.abs(yCenter) / (yRange || 1);
+                    
+                    if (asymmetry > 0.1) {
+                        lines.push('');
+                        lines.push('⚠️  WARNING: Asymmetric sample distribution detected');
+                        lines.push(`   Y-coordinate range: [${yMin.toFixed(3)}, ${yMax.toFixed(3)}], center offset: ${yCenter.toFixed(3)}`);
+                        lines.push('   High-order Zernike coefficients (j>3) may have reduced accuracy.');
+                        lines.push('   Low-order coefficients (piston, tilt) are computed analytically and remain accurate.');
+                    }
+                }
+            }
+            
             lines.push('');
             lines.push('Fitting / Rendering equation:');
             lines.push('  ρ = sqrt(x^2 + y^2) / pupilRange,  θ = atan2(y, x)');
@@ -7120,16 +7142,70 @@ function fitZernikeNollGramSchmidt(points, maxNoll) {
         return { coefficientsMicrons: coeffs, stats: { points: nPts, rmsResidual: NaN } };
     }
 
-    // Build basis columns b_j (j=1..m) evaluated at each sample.
-    const b = Array.from({ length: m }, () => new Float64Array(nPts));
-    const y = new Float64Array(nPts);
+    // Compute low-order terms analytically to avoid numerical issues
+    // with asymmetric sample distributions
+    
+    // Noll 1 (piston): mean OPD
+    let sum_opd = 0;
+    for (const pt of points) sum_opd += pt.opd;
+    coeffs[1] = sum_opd / nPts;
+    
+    // Remove piston from OPD
+    const opd_nopiston = new Float64Array(nPts);
+    for (let i = 0; i < nPts; i++) {
+        opd_nopiston[i] = points[i].opd - coeffs[1];
+    }
+    
+    // Noll 2,3 (tilt): fit to residual after removing piston
+    // Z_2 = 2*x, Z_3 = 2*y
+    // Solve: OPD' = c_2*2x + c_3*2y
+    let sum_x = 0, sum_y = 0, sum_x2 = 0, sum_y2 = 0, sum_xy = 0;
+    let sum_opd_x = 0, sum_opd_y = 0;
+    
+    for (let i = 0; i < nPts; i++) {
+        const pt = points[i];
+        sum_x += pt.x;
+        sum_y += pt.y;
+        sum_x2 += pt.x * pt.x;
+        sum_y2 += pt.y * pt.y;
+        sum_xy += pt.x * pt.y;
+        sum_opd_x += opd_nopiston[i] * pt.x;
+        sum_opd_y += opd_nopiston[i] * pt.y;
+    }
+    
+    // Solve 2x2 system: [Σx² Σxy][2c_2] = [Σ(OPD'x)]
+    //                   [Σxy Σy²][2c_3]   [Σ(OPD'y)]
+    const det = sum_x2 * sum_y2 - sum_xy * sum_xy;
+    
+    if (Math.abs(det) > 1e-10 && m >= 3) {
+        const c2_times2 = (sum_opd_x * sum_y2 - sum_opd_y * sum_xy) / det;
+        const c3_times2 = (sum_x2 * sum_opd_y - sum_xy * sum_opd_x) / det;
+        coeffs[2] = c2_times2 / 2;
+        coeffs[3] = c3_times2 / 2;
+    }
+    
+    // For higher-order terms (if requested), subtract low-order fit and use QR
+    if (m <= 3) {
+        return { coefficientsMicrons: coeffs, stats: { points: nPts, rmsResidual: 0 } };
+    }
+    
+    // Remove low-order contribution from OPD
+    const residual_opd = new Float64Array(nPts);
+    for (let i = 0; i < nPts; i++) {
+        const pt = points[i];
+        let fitted = coeffs[1] + coeffs[2] * 2 * pt.x + coeffs[3] * 2 * pt.y;
+        residual_opd[i] = pt.opd - fitted;
+    }
+
+    // Build basis columns for j=4..m only
+    const m_high = m - 3;
+    const b = Array.from({ length: m_high }, () => new Float64Array(nPts));
     for (let i = 0; i < nPts; i++) {
         const pt = points[i];
         const rho = Math.sqrt(pt.x * pt.x + pt.y * pt.y);
         const theta = Math.atan2(pt.y, pt.x);
-        y[i] = pt.opd;
-        for (let j = 1; j <= m; j++) {
-            b[j - 1][i] = zernikeNoll(j, rho, theta);
+        for (let j = 4; j <= m; j++) {
+            b[j - 4][i] = zernikeNoll(j, rho, theta);
         }
     }
 
@@ -7139,16 +7215,12 @@ function fitZernikeNollGramSchmidt(points, maxNoll) {
         return s;
     };
 
-    // Modified Gram–Schmidt: b = Q R
-    const Q = Array.from({ length: m }, () => new Float64Array(nPts));
-    const R = Array.from({ length: m }, () => new Float64Array(m));
-
-    // Relative tolerance for detecting (near) linear dependence.
-    // This is not "smoothing"; it prevents division by ~0 when the sampled
-    // pupil provides insufficient information (e.g., heavy vignetting).
+    // Modified Gram–Schmidt on high-order terms only
+    const Q = Array.from({ length: m_high }, () => new Float64Array(nPts));
+    const R = Array.from({ length: m_high }, () => new Float64Array(m_high));
     const REL_TOL = 1e-12;
 
-    for (let j = 0; j < m; j++) {
+    for (let j = 0; j < m_high; j++) {
         const v = new Float64Array(b[j]);
         let bb = 0;
         for (let i = 0; i < nPts; i++) bb += b[j][i] * b[j][i];
@@ -7171,22 +7243,23 @@ function fitZernikeNollGramSchmidt(points, maxNoll) {
         for (let i = 0; i < nPts; i++) Q[j][i] = v[i] / rjj;
     }
 
-    // a = Q^T y
-    const a = new Float64Array(m);
-    for (let j = 0; j < m; j++) {
-        a[j] = dot(Q[j], y);
+    // a = Q^T residual_opd
+    const a = new Float64Array(m_high);
+    for (let j = 0; j < m_high; j++) {
+        a[j] = dot(Q[j], residual_opd);
     }
 
     // Back-substitution: R x = a
-    const x = new Float64Array(m);
-    for (let j = m - 1; j >= 0; j--) {
+    const x = new Float64Array(m_high);
+    for (let j = m_high - 1; j >= 0; j--) {
         let s = a[j];
-        for (let k = j + 1; k < m; k++) s -= R[j][k] * x[k];
+        for (let k = j + 1; k < m_high; k++) s -= R[j][k] * x[k];
         const rjj = R[j][j];
         x[j] = (Number.isFinite(rjj) && rjj !== 0) ? (s / rjj) : 0;
     }
 
-    for (let j = 1; j <= m; j++) coeffs[j] = x[j - 1];
+    // Store high-order coefficients
+    for (let j = 4; j <= m; j++) coeffs[j] = x[j - 4];
 
     // Residual RMS
     let sum2 = 0;

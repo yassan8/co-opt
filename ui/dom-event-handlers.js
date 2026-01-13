@@ -3593,17 +3593,29 @@ async function handlePSFCalculation(debugMode = false) {
             // PSFCalculator はシングルトンで再利用（WASM初期化を使い回す）
             const { createOPDCalculator, WavefrontAberrationAnalyzer } = await import('../eva-wavefront.js');
 
-            // PSF入力のOPDは「Zernikeでフィットした関数面」を直接サンプリングして作る
-            // - 数値的な外れ値除去/平滑化はしない
-            // - OPD表示仕様と同様に piston/tilt は除去、defocus は残す（usedCoefficientsMicrons）
-            if (PSF_DEBUG) console.log('📊 [PSF] Zernikeフィット面からOPD格子を生成中...');
+            // PSF入力のOPDは生の光線追跡データから直接補間して作る
+            // - Zernike近似を経由しないため、サンプリングの非対称性に影響されない
+            // - より正確なPSF計算が可能
+            if (PSF_DEBUG) console.log('📊 [PSF] 生OPDデータから格子を生成中...');
             const opdCalculator = createOPDCalculator(opticalSystemRows, wl);
             const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
+            
+            // CRITICAL: Force stop mode to match render behavior
+            try {
+                if (fieldSetting.type === 'Angle' || !fieldSetting.height) {
+                    opdCalculator._setInfinitePupilMode(fieldSetting, 'stop');
+                    if (PSF_DEBUG) console.log('🔑 [PSF] Forced stop mode for infinite field');
+                }
+            } catch (e) {
+                if (PSF_DEBUG) console.warn('⚠️ [PSF] Failed to set stop mode:', e);
+            }
+            
             const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, zernikeFitSamplingSize, 'circular', {
-                recordRays: false,
+                recordRays: true,  // 光線データを記録
                 progressEvery: 0,
                 zernikeMaxNoll: 36,
-                renderFromZernike: true,
+                renderFromZernike: false,  // 生OPDデータを使用
+                // Use raw OPD with geometric tilt, let PSF calculator remove it
                 cancelToken
             });
 
@@ -3616,79 +3628,32 @@ async function handlePSFCalculation(debugMode = false) {
                 throw err;
             }
 
-            // PSF: tilt は含める（pistonのみ 0）。
-            // eva-wavefront.js の usedCoefficientsMicrons は表示用に piston/tilt を除去しているため、
-            // ここではフィット係数（生）を一時的に使ってZernike面を評価する。
-            const model = wavefrontMap?.zernikeModel;
-            const savedUsed = model?.usedCoefficientsMicrons;
-            try {
-                if (model?.fitCoefficientsMicrons && typeof model.fitCoefficientsMicrons === 'object') {
-                    const coeffs = { ...model.fitCoefficientsMicrons };
-                    // piston (Noll 1) is irrelevant to PSF energy distribution; force to 0 for stability.
-                    coeffs[1] = 0;
-                    model.usedCoefficientsMicrons = coeffs;
-                }
-            } catch (_) {
-                // ignore
+            // 生の光線データを取得
+            const rawRays = wavefrontMap?.rayData || [];
+            if (!Array.isArray(rawRays) || rawRays.length === 0) {
+                throw new Error('光線データが取得できませんでした');
             }
 
-            const zGrid = analyzer.generateZernikeRenderGrid(wavefrontMap, psfSamplingSize, 'opd', { rhoMax: 1.0 });
+            // PSF計算器用のデータ形式に変換
+            // Use raw pupil coordinates as-is (already normalized by generateWavefrontMap)
+            const opdData = {
+                wavelength: wl,
+                rayData: rawRays.map(ray => ({
+                    pupilX: ray.pupilX || ray.x || 0,
+                    pupilY: ray.pupilY || ray.y || 0,
+                    opd: ray.opd || 0,
+                    isVignetted: ray.isVignetted || false
+                }))
+            };
+            
+            // Debug: Log first few rays to check pupilX/pupilY orientation
+            if (PSF_DEBUG && opdData.rayData.length > 0) {
+                console.log('🔍 [PSF Debug] First 5 rays:', opdData.rayData.slice(0, 5).map(r => 
+                    `(${r.pupilX.toFixed(3)}, ${r.pupilY.toFixed(3)}) opd=${r.opd.toFixed(3)}`
+                ));
+            }
 
             throwIfCancelled(cancelToken);
-
-            try {
-                if (model) model.usedCoefficientsMicrons = savedUsed;
-            } catch (_) {
-                // ignore
-            }
-            if (!zGrid || !Array.isArray(zGrid.z) || !Array.isArray(zGrid.z[0])) {
-                throw new Error('Zernike render grid generation failed');
-            }
-
-            const s = Math.max(2, Math.floor(Number(psfSamplingSize)));
-            // Row-major [y][x]
-            const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
-            const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
-            const maskGrid = Array.from({ length: s }, () => Array(s).fill(false));
-            const xCoords = new Float32Array(s);
-            const yCoords = new Float32Array(s);
-
-            for (let i = 0; i < s; i++) {
-                xCoords[i] = Number(zGrid.x?.[i] ?? ((i / (s - 1 || 1)) * 2 - 1));
-                yCoords[i] = Number(zGrid.y?.[i] ?? ((i / (s - 1 || 1)) * 2 - 1));
-            }
-
-            for (let iy = 0; iy < s; iy++) {
-                if ((iy % 32) === 0) {
-                    throwIfCancelled(cancelToken);
-                    await new Promise(resolve => setTimeout(resolve, 0));
-                }
-                const row = zGrid.z[iy];
-                for (let ix = 0; ix < s; ix++) {
-                    const vWaves = row?.[ix];
-                    if (vWaves === null || !isFinite(vWaves)) {
-                        maskGrid[iy][ix] = false;
-                        opdGrid[iy][ix] = 0;
-                        ampGrid[iy][ix] = 0;
-                        continue;
-                    }
-                    maskGrid[iy][ix] = true;
-                    opdGrid[iy][ix] = Number(vWaves) * wl;
-                    ampGrid[iy][ix] = 1.0;
-                }
-            }
-
-            const opdData = {
-                gridSize: s,
-                wavelength: wl,
-                gridData: {
-                    opd: opdGrid,
-                    amplitude: ampGrid,
-                    pupilMask: maskGrid,
-                    xCoords,
-                    yCoords
-                }
-            };
             
             // PSF計算器を初期化（WASM統合版）
             const psfCalculator = await getPSFCalculatorSingleton();
@@ -3706,7 +3671,7 @@ async function handlePSFCalculation(debugMode = false) {
                 pupilDiameter: 10.0, // mm（適切な値に調整）
                 focalLength: 100.0,   // mm（適切な値に調整）
                 forceImplementation: performanceMode === 'auto' ? null : performanceMode,
-                removeTilt: false
+                removeTilt: true  // Remove best-fit plane during PSF calculation
             }), cancelToken);
             
             // WASM使用状況をログ

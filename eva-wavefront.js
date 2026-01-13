@@ -133,6 +133,185 @@ function brent(f, a, b, tol = 1e-8, maxIter = 100) {
 }
 
 /**
+ * 位置に関する数値ヤコビアン計算（gen-ray-cross-infinite.jsから移植）
+ * @param {Object} origin - 光線射出位置 {x, y, z}
+ * @param {Object} direction - 方向ベクトル {i, j, k}
+ * @param {number} stopSurfaceIndex - 絞り面インデックス
+ * @param {Array} opticalSystemRows - 光学系データ
+ * @param {number} stepSize - 数値微分のステップサイズ
+ * @param {number} wavelength - 波長 (μm)
+ * @returns {Object|null} ヤコビアン行列 {J11, J12, J21, J22, det} または null
+ */
+function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceIndex, opticalSystemRows, stepSize, wavelength) {
+    // direction may be {x,y,z} or {i,j,k} format, support both
+    const dirX = direction.x !== undefined ? direction.x : direction.i;
+    const dirY = direction.y !== undefined ? direction.y : direction.j;
+    const dirZ = direction.z !== undefined ? direction.z : direction.k;
+    
+    // ベースライン
+    const baseRay = {
+        pos: origin,
+        dir: { x: dirX, y: dirY, z: dirZ },
+        wavelength: wavelength
+    };
+    const basePath = traceRay(opticalSystemRows, baseRay, 1.0, null, stopSurfaceIndex + 1);
+    if (!basePath || !Array.isArray(basePath) || basePath.length <= stopSurfaceIndex) return null;
+    
+    const basePos = basePath[stopSurfaceIndex];
+    if (!basePos || !Number.isFinite(basePos.x) || !Number.isFinite(basePos.y)) return null;
+    
+    // X方向偏微分
+    const rayDx = {
+        pos: { x: origin.x + stepSize, y: origin.y, z: origin.z },
+        dir: { x: dirX, y: dirY, z: dirZ },
+        wavelength: wavelength
+    };
+    const pathDx = traceRay(opticalSystemRows, rayDx, 1.0, null, stopSurfaceIndex + 1);
+    if (!pathDx || !Array.isArray(pathDx) || pathDx.length <= stopSurfaceIndex) return null;
+    
+    const posDx = pathDx[stopSurfaceIndex];
+    if (!posDx || !Number.isFinite(posDx.x) || !Number.isFinite(posDx.y)) return null;
+    
+    // Y方向偏微分
+    const rayDy = {
+        pos: { x: origin.x, y: origin.y + stepSize, z: origin.z },
+        dir: { x: dirX, y: dirY, z: dirZ },
+        wavelength: wavelength
+    };
+    const pathDy = traceRay(opticalSystemRows, rayDy, 1.0, null, stopSurfaceIndex + 1);
+    if (!pathDy || !Array.isArray(pathDy) || pathDy.length <= stopSurfaceIndex) return null;
+    
+    const posDy = pathDy[stopSurfaceIndex];
+    if (!posDy || !Number.isFinite(posDy.x) || !Number.isFinite(posDy.y)) return null;
+    
+    // ヤコビアン行列
+    const J11 = (posDx.x - basePos.x) / stepSize;
+    const J12 = (posDy.x - basePos.x) / stepSize;
+    const J21 = (posDx.y - basePos.y) / stepSize;
+    const J22 = (posDy.y - basePos.y) / stepSize;
+    
+    return {
+        J11, J12, J21, J22,
+        det: J11 * J22 - J12 * J21
+    };
+}
+
+/**
+ * Newton法による主光線射出座標の探索（gen-ray-cross-infinite.jsから移植）
+ * @param {Object} chiefRayOrigin - 主光線の基準射出位置 {x, y, z}
+ * @param {Object} direction - 方向ベクトル {i, j, k}
+ * @param {Object} targetStopPoint - 絞り面での目標位置 {x, y, z}
+ * @param {number} stopSurfaceIndex - 絞り面インデックス
+ * @param {Array} opticalSystemRows - 光学系データ
+ * @param {number} maxIterations - 最大反復回数
+ * @param {number} tolerance - 収束判定の許容誤差 (mm)
+ * @param {number} wavelength - 波長 (μm)
+ * @param {boolean} debugMode - デバッグモード
+ * @returns {Object} {success: boolean, origin?: {x,y,z}, actualStopPoint?: {x,y,z}, error?: number, iterations?: number}
+ */
+function calculateApertureRayNewton(chiefRayOrigin, direction, targetStopPoint, stopSurfaceIndex, opticalSystemRows, maxIterations, tolerance, wavelength, debugMode) {
+    // より適切な初期推定：目標点の方向に射出位置を移動
+    // NOTE: 軸外視野では目標オフセットが大きいため、主光線位置から開始して
+    // 非常に小さいステップ（0.05）で移動する
+    const targetOffsetX = targetStopPoint.x - chiefRayOrigin.x;
+    const targetOffsetY = targetStopPoint.y - chiefRayOrigin.y;
+    
+    let currentOrigin = {
+        x: chiefRayOrigin.x + targetOffsetX * 0.05,  // 非常に保守的（0.2 → 0.05）
+        y: chiefRayOrigin.y + targetOffsetY * 0.05,  // 非常に保守的（0.2 → 0.05）
+        z: chiefRayOrigin.z
+    };
+    
+    // 垂直面制約を満たすようにZ座標調整
+    const deltaX = currentOrigin.x - chiefRayOrigin.x;
+    const deltaY = currentOrigin.y - chiefRayOrigin.y;
+    const dirZ = direction.z !== undefined ? direction.z : direction.k;
+    const dirX = direction.x !== undefined ? direction.x : direction.i;
+    const dirY = direction.y !== undefined ? direction.y : direction.j;
+    
+    if (Math.abs(dirZ) > 1e-10) {
+        const numerator = dirX * deltaX + dirY * deltaY;
+        const adjustment = numerator / dirZ;
+        currentOrigin.z = chiefRayOrigin.z - adjustment;
+    }
+    
+    if (debugMode) {
+        console.log(`🔍 [Newton] 初期推定: 目標offset(${targetOffsetX.toFixed(3)}, ${targetOffsetY.toFixed(3)}) → 初期位置(${currentOrigin.x.toFixed(3)}, ${currentOrigin.y.toFixed(3)}, ${currentOrigin.z.toFixed(3)})`);
+    }
+    
+    for (let iteration = 0; iteration < maxIterations; iteration++) {
+        const ray = {
+            pos: currentOrigin,
+            dir: { x: direction.x !== undefined ? direction.x : direction.i, y: direction.y !== undefined ? direction.y : direction.j, z: direction.z !== undefined ? direction.z : direction.k },
+            wavelength: wavelength
+        };
+        
+        const rayPath = traceRay(opticalSystemRows, ray, 1.0, null, stopSurfaceIndex + 1);
+        
+        if (!rayPath || !Array.isArray(rayPath) || rayPath.length <= stopSurfaceIndex) {
+            if (debugMode) console.log(`⚠️ [Newton] 反復${iteration}: 光線追跡失敗 (length=${rayPath?.length || 0})`);
+            return { success: false };
+        }
+        
+        const actualStopPoint = rayPath[stopSurfaceIndex];
+        if (!actualStopPoint || !Number.isFinite(actualStopPoint.x) || !Number.isFinite(actualStopPoint.y)) {
+            if (debugMode) console.log(`⚠️ [Newton] 反復${iteration}: 絞り面交点が無効`);
+            return { success: false };
+        }
+        
+        const residual = {
+            x: actualStopPoint.x - targetStopPoint.x,
+            y: actualStopPoint.y - targetStopPoint.y
+        };
+        
+        const residualMagnitude = Math.sqrt(residual.x * residual.x + residual.y * residual.y);
+        
+        if (debugMode && iteration < 3) {
+            console.log(`🔄 [Newton] 反復${iteration}: 残差=${residualMagnitude.toFixed(8)}mm`);
+        }
+        
+        if (residualMagnitude < tolerance) {
+            return {
+                success: true,
+                origin: currentOrigin,
+                actualStopPoint: actualStopPoint,
+                error: residualMagnitude,
+                iterations: iteration + 1
+            };
+        }
+        
+        // 数値ヤコビアン計算
+        const jacobian = calculateNumericalJacobianForPosition(
+            currentOrigin, direction, stopSurfaceIndex, opticalSystemRows, 1e-5, wavelength
+        );
+        
+        if (!jacobian || Math.abs(jacobian.det) < 1e-15) {
+            if (debugMode) console.log(`⚠️ [Newton] 反復${iteration}: ヤコビアン特異`);
+            return { success: false };
+        }
+        
+        // ニュートン法更新（緩和ファクター0.7で収束を速める）
+        const invDet = 1.0 / jacobian.det;
+        const deltaOrigin = {
+            x: -invDet * (jacobian.J22 * residual.x - jacobian.J12 * residual.y) * 0.7,
+            y: -invDet * (-jacobian.J21 * residual.x + jacobian.J11 * residual.y) * 0.7
+        };
+        
+        currentOrigin.x += deltaOrigin.x;
+        currentOrigin.y += deltaOrigin.y;
+        
+        // 垂直面制約を再適用
+        const newDeltaX = currentOrigin.x - chiefRayOrigin.x;
+        const newDeltaY = currentOrigin.y - chiefRayOrigin.y;
+        if (Math.abs(dirZ) > 1e-10) {
+            currentOrigin.z = chiefRayOrigin.z - (dirX * newDeltaX + dirY * newDeltaY) / dirZ;
+        }
+    }
+    
+    return { success: false };
+}
+
+/**
  * 絞り面インデックスを取得（計算ロジック専用・UI非依存）
  * NOTE: `eva-transverse-aberration.js` の同名関数と同等の探索だが、
  * `eva-wavefront.js` を計算専用モジュールとして保つためここに局所定義する。
@@ -1284,19 +1463,34 @@ export class OpticalPathDifferenceCalculator {
                 // Always try strict for the current mode.
                 referenceRay = this.generateMarginalRay(0, 0, fieldSetting, { isReferenceRay: true });
 
-                // If stop mode is physically impossible (cannot reach stop), switch to entrance mode and retry.
+                // If stop mode is physically impossible (cannot reach stop), try Newton-based chief ray first.
                 if (!referenceRay && mode === 'stop') {
                     const fail = String(this._lastMarginalRayGenFailure || '');
                     const looksStopUnreachable = fail.startsWith('infinite: stop unreachable');
                     if (looksStopUnreachable) {
-                        try {
-                            this._setInfinitePupilMode(fieldSetting, 'entrance');
-                            const k = this.getFieldCacheKey(fieldSetting);
-                            this._chiefRayCache?.delete(k);
-                            const ek = this._getInfinitePupilModeKey(fieldSetting);
-                            this._entrancePupilConfigCache?.delete(ek);
-                        } catch (_) {}
-                        referenceRay = this.generateMarginalRay(0, 0, fieldSetting, { isReferenceRay: true });
+                        // ⚠️ CRITICAL: Try Newton-based chief ray solver before switching to entrance mode.
+                        // This matches the Render's approach and can often find a valid chief ray.
+                        if (OPD_DEBUG) {
+                            console.log(`🔧 [Newton] stop unreachable detected, trying Newton-based chief ray solver...`);
+                        }
+                        referenceRay = this.generateChiefRay(fieldSetting);
+                        
+                        // Only switch to entrance mode if Newton method also fails.
+                        if (!referenceRay) {
+                            if (OPD_DEBUG) {
+                                console.log(`⚠️ [Newton] Newton-based chief ray also failed, switching to entrance mode`);
+                            }
+                            try {
+                                this._setInfinitePupilMode(fieldSetting, 'entrance');
+                                const k = this.getFieldCacheKey(fieldSetting);
+                                this._chiefRayCache?.delete(k);
+                                const ek = this._getInfinitePupilModeKey(fieldSetting);
+                                this._entrancePupilConfigCache?.delete(ek);
+                            } catch (_) {}
+                            referenceRay = this.generateMarginalRay(0, 0, fieldSetting, { isReferenceRay: true });
+                        } else if (OPD_DEBUG) {
+                            console.log(`✅ [Newton] Successfully generated chief ray with Newton method`);
+                        }
                     }
                 }
 
@@ -1317,6 +1511,20 @@ export class OpticalPathDifferenceCalculator {
 
         const chiefRay = referenceRay ? null : this.generateChiefRay(fieldSetting);
         referenceRay = referenceRay || chiefRay;
+
+        // ✅ デバッグ: 基準光線が実際にstopを通過しているか確認（常にログ出力）
+        if (referenceRay && !this.isFiniteForField(fieldSetting)) {
+            const stopPoint = this.getStopPointFromRayData(referenceRay);
+            const stopCenter = this.getSurfaceOrigin(this.stopSurfaceIndex);
+            if (stopPoint && stopCenter) {
+                const dx = stopPoint.x - stopCenter.x;
+                const dy = stopPoint.y - stopCenter.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                console.log(`✅ [RefRay] Reference ray stop hit: distance from center = ${dist.toFixed(6)} mm, stop=(${stopPoint.x.toFixed(3)}, ${stopPoint.y.toFixed(3)}), center=(${stopCenter.x.toFixed(3)}, ${stopCenter.y.toFixed(3)})`);
+            } else if (!stopPoint) {
+                console.warn(`⚠️ [RefRay] Reference ray does NOT pass through stop surface!`);
+            }
+        }
 
         // それでも失敗するケース（特定画角でsolverが外す/一時的に追跡が落ちる等）の保険。
         if (!referenceRay) {
@@ -1747,6 +1955,10 @@ export class OpticalPathDifferenceCalculator {
         // NOTE: OPD の主光線生成は、draw-cross 側（gen-ray-cross-infinite.js）と同じ
         // 「Stop中心に到達する射出座標を探索する」方針に揃える。
         // draw-cross の Stop中心は x=y=0 を固定し、z は calculateSurfaceOrigins の origin.z を使う。
+        // 
+        // ⚠️ CRITICAL FOR OPD: The reference ray MUST pass through stop center (0,0,z) to maintain
+        // consistency with marginal ray pupil coordinates. Off-center reference rays will cause
+        // all marginal rays to fail with "stop unreachable" errors.
         const getCrossStyleStopCenter = () => {
             const sIdx = this.stopSurfaceIndex;
             const z = (this._surfaceOrigins && this._surfaceOrigins[sIdx] && this._surfaceOrigins[sIdx].origin && Number.isFinite(this._surfaceOrigins[sIdx].origin.z))
@@ -1755,15 +1967,16 @@ export class OpticalPathDifferenceCalculator {
             return { x: 0, y: 0, z };
         };
 
-        const effectiveStopCenter = this.getEffectiveStopCenter(fieldSetting);
-        const crossStyleStopCenter = getCrossStyleStopCenter();
-
-        const stopCenterCandidates = [effectiveStopCenter, crossStyleStopCenter];
+        // For OPD calculation, ALWAYS use stop center (0,0,z), not effectiveStopCenter.
+        // This ensures the reference ray is consistent with marginal ray pupil sampling.
+        const stopCenter = getCrossStyleStopCenter();
 
         const tryMakeRay = (stopCenter) => {
             if (!stopCenter || !Number.isFinite(stopCenter.z)) return null;
 
             let origin = null;
+            
+            // ステップ1: 初期推定を取得（findInfiniteSystemChiefRayOriginまたは幾何学的逆投影）
             try {
                 origin = findInfiniteSystemChiefRayOrigin(
                     directionIJK,
@@ -1790,6 +2003,30 @@ export class OpticalPathDifferenceCalculator {
                 };
             }
 
+            // ステップ2: Newton法で精密化（Renderと同じアプローチ）
+            // 初期推定が得られた場合は、Newton法でstop中心を正確に通るように最適化
+            const newtonResult = calculateApertureRayNewton(
+                origin,
+                directionIJK,
+                stopCenter,
+                this.stopSurfaceIndex,
+                this.opticalSystemRows,
+                50,  // maxIterations
+                1e-6,  // tolerance (mm)
+                this.wavelength,
+                OPD_DEBUG
+            );
+
+            // Newton法が成功した場合は、その結果を使用
+            if (newtonResult.success) {
+                origin = newtonResult.origin;
+                if (OPD_DEBUG) {
+                    console.log(`✅ [Newton] 収束成功: 反復${newtonResult.iterations}回, 誤差=${newtonResult.error.toFixed(9)}mm`);
+                }
+            } else if (OPD_DEBUG) {
+                console.log(`⚠️ [Newton] 収束失敗、初期推定を使用`);
+            }
+
             const initialRay = {
                 pos: origin,
                 dir: { x: directionIJK.i, y: directionIJK.j, z: directionIJK.k },
@@ -1800,10 +2037,9 @@ export class OpticalPathDifferenceCalculator {
             return (pathData && pathData.length >= 2) ? rayResult : null;
         };
 
-        for (const stopCenter of stopCenterCandidates) {
-            const rr = tryMakeRay(stopCenter);
-            if (rr) return rr;
-        }
+        // Try to generate the ray with stop center (0,0,z)
+        const rayResult = tryMakeRay(stopCenter);
+        if (rayResult) return rayResult;
 
         // No chief ray traceable for this field.
         return null;
@@ -2093,6 +2329,21 @@ export class OpticalPathDifferenceCalculator {
             
             // 🆕 主光線のOPD検証（瞳座標0,0の場合）のみ一回だけログ出力
             const isChiefRay = Math.abs(pupilX) < 1e-6 && Math.abs(pupilY) < 1e-6;
+
+            // ✅ CRITICAL FIX: For pupil=(0,0), the reference ray is the chief ray by definition.
+            // Return OPD=0 directly to avoid re-generating the ray (which may fail in off-axis fields).
+            if (isChiefRay) {
+                this.lastRayCalculation = {
+                    ray: null,  // Reference ray is already set
+                    success: true,
+                    error: null,
+                    opd: 0.0,
+                    fieldKey: currentFieldKey,
+                    pupilCoord: { x: pupilX, y: pupilY },
+                    stopHit: null
+                };
+                return 0.0;  // Chief ray has zero OPD by definition
+            }
             
             // Disable excessive logging during grid calculations
             // if (isChiefRay) {
@@ -3331,6 +3582,17 @@ export class OpticalPathDifferenceCalculator {
         const isEdgePoint = inputPupilRadius > 0.95; // 端点または外縁部
         const shouldLogDetail = OPD_DEBUG && (isEdgePoint || (Math.abs(pupilX) > 0.5 || Math.abs(pupilY) > 0.5));
         
+        // 🔍 DEBUG: Function entry log (only for first few calls)
+        const isNearCenter = Math.abs(pupilX) < 0.1 && Math.abs(pupilY) < 0.1;
+        const isEdge = inputPupilRadius > 0.9;
+        
+        // Limit debug output to first 5 rays only
+        const debugCallCount = (this._debugMarginalCallCount || 0);
+        if (debugCallCount < 5 && (isNearCenter || isEdge)) {
+            console.log(`🚀 [generateInfiniteMarginalRay] ENTRY: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}), radius=${inputPupilRadius.toFixed(3)}`);
+            this._debugMarginalCallCount = debugCallCount + 1;
+        }
+        
         if (OPD_DEBUG && isEdgePoint) {
             console.log(`🎯 [端点光線] pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}) 半径=${inputPupilRadius.toFixed(3)} - Brent法最適化開始`);
         }
@@ -3418,7 +3680,13 @@ export class OpticalPathDifferenceCalculator {
 
         // Stop geometry (cached)
         const stopCenterBase = this.getSurfaceOrigin(this.stopSurfaceIndex);
-        const stopCenter = this.getEffectiveStopCenter(fieldSetting);
+        
+        // ✅ CRITICAL FIX: For OPD calculation consistency, ALWAYS use stop center (0,0,z)
+        // as the reference point for pupil sampling. This matches the reference ray definition.
+        // Using effectiveStopCenter (which may be off-center for off-axis fields) causes
+        // marginal rays to fail with "stop unreachable" errors.
+        const stopCenter = { x: 0, y: 0, z: stopCenterBase.z };
+        
         const stopZ = stopCenter.z;
         const stopRadius = this._getCachedStopRadiusMm();
 
@@ -3433,7 +3701,62 @@ export class OpticalPathDifferenceCalculator {
         const desiredStop = this.addVec(stopCenter, desiredOffset);
         const desiredLocalX = pupilX * stopRadius;
         const desiredLocalY = pupilY * stopRadius;
-
+        
+        // 🚀 STRATEGY: For off-axis fields in stop mode, use Newton method first for all rays
+        // Geometric method often fails for off-axis, so Newton is the primary approach
+        const referenceRay = this.referenceChiefRay;
+        
+        if (referenceRay && referenceRay.length > 0) {
+            const debugCallCount = (this._debugMarginalCallCount || 0);
+            const shouldLog = debugCallCount < 5 && (isNearCenter || isEdge);
+            
+            if (shouldLog) {
+                console.log(`🎯 [Newton-Primary] pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}) using Newton method...`);
+            }
+            
+            const chiefRayOrigin = {
+                x: referenceRay[0].x,
+                y: referenceRay[0].y,
+                z: referenceRay[0].z
+            };
+            const targetStopPoint = desiredStop;
+            
+            const newtonResult = calculateApertureRayNewton(
+                chiefRayOrigin,
+                direction,
+                targetStopPoint,
+                this.stopSurfaceIndex,
+                this.opticalSystemRows,
+                25,
+                1e-5,
+                this.wavelength,
+                false
+            );
+            
+            if (shouldLog) {
+                console.log(`🔍 [Newton-Primary-Result] success=${newtonResult?.success || false}, iterations=${newtonResult?.iterations || 'N/A'}`);
+            }
+            
+            if (newtonResult && newtonResult.success) {
+                const optimizedOrigin = newtonResult.origin;
+                const initialRay = {
+                    pos: optimizedOrigin,
+                    dir: direction,
+                    wavelength: this.wavelength
+                };
+                
+                const toEval = this.traceRayToEval(initialRay, 1.0);
+                
+                if (toEval) {
+                    this._lastMarginalRayOriginGeom = { x: optimizedOrigin.x, y: optimizedOrigin.y, z: optimizedOrigin.z };
+                    return toEval;
+                } else if (shouldLog) {
+                    console.warn(`⚠️ [Newton-Primary-Trace-Failed] pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)})`);
+                }
+            }
+            // Fall through to geometric method if Newton fails
+        }
+        
         const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
 
         const evalOriginStopError = (origin) => {
@@ -3965,6 +4288,8 @@ export class OpticalPathDifferenceCalculator {
         // 最終的に評価面まで追跡
         const rayResult = this.traceRayToEval(currentRay, 1.0);
         if (!rayResult || !Array.isArray(rayResult) || rayResult.length <= 1) {
+            // Newton法を最初から使っているので、ここでのフォールバックは不要
+            // 失敗した場合は単に終了
             if (OPD_DEBUG && inputPupilRadius <= 1.0) {
                 console.warn(`⚠️ 光線追跡失敗（瞳内）: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)})`);
             }
@@ -5528,13 +5853,19 @@ export class WavefrontAberrationAnalyzer {
                 const reason = (lastCalc && typeof lastCalc.error === 'string' && lastCalc.error) ? lastCalc.error : 'NaN';
                 invalidReasonCounts[reason] = (invalidReasonCounts[reason] || 0) + 1;
 
-                // For infinite systems in stop mode: if any sample reports stop unreachable,
-                // restart the entire map in entrance mode (single-mode consistency).
-                if (isInfiniteField && passMode === 'stop' && typeof reason === 'string' && reason.includes('stop unreachable')) {
+                // For infinite systems in stop mode: if the CHIEF RAY (pupil=0,0) reports stop unreachable,
+                // restart the entire map in entrance mode. Peripheral rays may naturally be vignetted,
+                // so we only check the reference ray at pupil origin.
+                const isPupilOrigin = Math.abs(pupilX) < 1e-9 && Math.abs(pupilY) < 1e-9;
+                if (isInfiniteField && passMode === 'stop' && isPupilOrigin && typeof reason === 'string' && reason.includes('stop unreachable')) {
                     sawStopUnreachableThisPass = true;
+                    console.warn(`⚠️ [Wavefront] Chief ray (pupil=0,0) is stop unreachable in stop mode, reason="${reason}"`);
+                } else if (isInfiniteField && passMode === 'stop' && isPupilOrigin) {
+                    // pupil=(0,0)が失敗したが、stop unreachableではない理由の場合もログ
+                    console.warn(`⚠️ [Wavefront] Chief ray (pupil=0,0) failed with reason="${reason}" (not stop unreachable)`);
                 }
                 if (OPD_DEBUG && isImportantPoint && debugLogCount < 220) {
-                    console.warn(`⚠️ NaN値検出によりスキップ: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)})`);
+                    console.warn(`⚠️ NaN値検出によりスキップ: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}), reason="${reason}"`);
                     debugLogCount++;
                 }
                 continue; // この点をスキップして次へ
@@ -6803,6 +7134,28 @@ export class WavefrontAberrationAnalyzer {
             if (z?.stats?.full?.rmsResidual !== undefined) {
                 lines.push(`Fit RMS residual: ${Number.isFinite(z.stats.full.rmsResidual) ? z.stats.full.rmsResidual.toFixed(6) : z.stats.full.rmsResidual} μm`);
             }
+            
+            // ⚠️ Warning about asymmetric sampling
+            const coords = wavefrontMap?.pupilCoordinates || [];
+            if (coords.length > 0) {
+                const yValues = coords.filter(p => Number.isFinite(p?.y)).map(p => p.y);
+                if (yValues.length > 0) {
+                    const yMin = Math.min(...yValues);
+                    const yMax = Math.max(...yValues);
+                    const yRange = yMax - yMin;
+                    const yCenter = (yMax + yMin) / 2;
+                    const asymmetry = Math.abs(yCenter) / (yRange || 1);
+                    
+                    if (asymmetry > 0.1) {
+                        lines.push('');
+                        lines.push('⚠️  WARNING: Asymmetric sample distribution detected');
+                        lines.push(`   Y-coordinate range: [${yMin.toFixed(3)}, ${yMax.toFixed(3)}], center offset: ${yCenter.toFixed(3)}`);
+                        lines.push('   High-order Zernike coefficients (j>3) may have reduced accuracy.');
+                        lines.push('   Low-order coefficients (piston, tilt) are computed analytically and remain accurate.');
+                    }
+                }
+            }
+            
             lines.push('');
             lines.push('Fitting / Rendering equation:');
             lines.push('  ρ = sqrt(x^2 + y^2) / pupilRange,  θ = atan2(y, x)');
@@ -7120,16 +7473,70 @@ function fitZernikeNollGramSchmidt(points, maxNoll) {
         return { coefficientsMicrons: coeffs, stats: { points: nPts, rmsResidual: NaN } };
     }
 
-    // Build basis columns b_j (j=1..m) evaluated at each sample.
-    const b = Array.from({ length: m }, () => new Float64Array(nPts));
-    const y = new Float64Array(nPts);
+    // Compute low-order terms analytically to avoid numerical issues
+    // with asymmetric sample distributions
+    
+    // Noll 1 (piston): mean OPD
+    let sum_opd = 0;
+    for (const pt of points) sum_opd += pt.opd;
+    coeffs[1] = sum_opd / nPts;
+    
+    // Remove piston from OPD
+    const opd_nopiston = new Float64Array(nPts);
+    for (let i = 0; i < nPts; i++) {
+        opd_nopiston[i] = points[i].opd - coeffs[1];
+    }
+    
+    // Noll 2,3 (tilt): fit to residual after removing piston
+    // Z_2 = 2*x, Z_3 = 2*y
+    // Solve: OPD' = c_2*2x + c_3*2y
+    let sum_x = 0, sum_y = 0, sum_x2 = 0, sum_y2 = 0, sum_xy = 0;
+    let sum_opd_x = 0, sum_opd_y = 0;
+    
+    for (let i = 0; i < nPts; i++) {
+        const pt = points[i];
+        sum_x += pt.x;
+        sum_y += pt.y;
+        sum_x2 += pt.x * pt.x;
+        sum_y2 += pt.y * pt.y;
+        sum_xy += pt.x * pt.y;
+        sum_opd_x += opd_nopiston[i] * pt.x;
+        sum_opd_y += opd_nopiston[i] * pt.y;
+    }
+    
+    // Solve 2x2 system: [Σx² Σxy][2c_2] = [Σ(OPD'x)]
+    //                   [Σxy Σy²][2c_3]   [Σ(OPD'y)]
+    const det = sum_x2 * sum_y2 - sum_xy * sum_xy;
+    
+    if (Math.abs(det) > 1e-10 && m >= 3) {
+        const c2_times2 = (sum_opd_x * sum_y2 - sum_opd_y * sum_xy) / det;
+        const c3_times2 = (sum_x2 * sum_opd_y - sum_xy * sum_opd_x) / det;
+        coeffs[2] = c2_times2 / 2;
+        coeffs[3] = c3_times2 / 2;
+    }
+    
+    // For higher-order terms (if requested), subtract low-order fit and use QR
+    if (m <= 3) {
+        return { coefficientsMicrons: coeffs, stats: { points: nPts, rmsResidual: 0 } };
+    }
+    
+    // Remove low-order contribution from OPD
+    const residual_opd = new Float64Array(nPts);
+    for (let i = 0; i < nPts; i++) {
+        const pt = points[i];
+        let fitted = coeffs[1] + coeffs[2] * 2 * pt.x + coeffs[3] * 2 * pt.y;
+        residual_opd[i] = pt.opd - fitted;
+    }
+
+    // Build basis columns for j=4..m only
+    const m_high = m - 3;
+    const b = Array.from({ length: m_high }, () => new Float64Array(nPts));
     for (let i = 0; i < nPts; i++) {
         const pt = points[i];
         const rho = Math.sqrt(pt.x * pt.x + pt.y * pt.y);
         const theta = Math.atan2(pt.y, pt.x);
-        y[i] = pt.opd;
-        for (let j = 1; j <= m; j++) {
-            b[j - 1][i] = zernikeNoll(j, rho, theta);
+        for (let j = 4; j <= m; j++) {
+            b[j - 4][i] = zernikeNoll(j, rho, theta);
         }
     }
 
@@ -7139,16 +7546,12 @@ function fitZernikeNollGramSchmidt(points, maxNoll) {
         return s;
     };
 
-    // Modified Gram–Schmidt: b = Q R
-    const Q = Array.from({ length: m }, () => new Float64Array(nPts));
-    const R = Array.from({ length: m }, () => new Float64Array(m));
-
-    // Relative tolerance for detecting (near) linear dependence.
-    // This is not "smoothing"; it prevents division by ~0 when the sampled
-    // pupil provides insufficient information (e.g., heavy vignetting).
+    // Modified Gram–Schmidt on high-order terms only
+    const Q = Array.from({ length: m_high }, () => new Float64Array(nPts));
+    const R = Array.from({ length: m_high }, () => new Float64Array(m_high));
     const REL_TOL = 1e-12;
 
-    for (let j = 0; j < m; j++) {
+    for (let j = 0; j < m_high; j++) {
         const v = new Float64Array(b[j]);
         let bb = 0;
         for (let i = 0; i < nPts; i++) bb += b[j][i] * b[j][i];
@@ -7171,22 +7574,23 @@ function fitZernikeNollGramSchmidt(points, maxNoll) {
         for (let i = 0; i < nPts; i++) Q[j][i] = v[i] / rjj;
     }
 
-    // a = Q^T y
-    const a = new Float64Array(m);
-    for (let j = 0; j < m; j++) {
-        a[j] = dot(Q[j], y);
+    // a = Q^T residual_opd
+    const a = new Float64Array(m_high);
+    for (let j = 0; j < m_high; j++) {
+        a[j] = dot(Q[j], residual_opd);
     }
 
     // Back-substitution: R x = a
-    const x = new Float64Array(m);
-    for (let j = m - 1; j >= 0; j--) {
+    const x = new Float64Array(m_high);
+    for (let j = m_high - 1; j >= 0; j--) {
         let s = a[j];
-        for (let k = j + 1; k < m; k++) s -= R[j][k] * x[k];
+        for (let k = j + 1; k < m_high; k++) s -= R[j][k] * x[k];
         const rjj = R[j][j];
         x[j] = (Number.isFinite(rjj) && rjj !== 0) ? (s / rjj) : 0;
     }
 
-    for (let j = 1; j <= m; j++) coeffs[j] = x[j - 1];
+    // Store high-order coefficients
+    for (let j = 4; j <= m; j++) coeffs[j] = x[j - 4];
 
     // Residual RMS
     let sum2 = 0;
