@@ -37,6 +37,8 @@ import { showWavefrontDiagram } from './eva-wavefront-plot.js?v=2025-12-31a';
 import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './eva-wavefront.js?v=2025-12-31a';
 import { PSFCalculator } from './eva-psf.js';
 import { PSFPlotter, PSFDisplayManager } from './eva-psf-plot.js';
+import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './zernike-fitting.js';
+import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './opd-zernike-analysis.js';
 import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './gen-ray-cross-finite.js';
 import { generateInfiniteSystemCrossBeam, RayColorSystem as InfiniteRayColorSystem } from './gen-ray-cross-infinite.js';
 // Distortion analysis
@@ -98,11 +100,8 @@ if (typeof globalThis !== 'undefined' && typeof globalThis.getWASMSystem !== 'fu
  * Initialize the main application
  */
 async function initializeApplication() {
-    console.log('🚀 Starting JS_lensDraw v3 application...');
-    
     try {
         // Initialize WASM system
-        console.log('⚙️ Initializing WASM acceleration system...');
         
         // ForceWASMSystemがグローバルに利用可能かチェック
         const ForceWASMSystemClass = globalThis.ForceWASMSystem || window?.ForceWASMSystem;
@@ -126,8 +125,7 @@ async function initializeApplication() {
                 initTimeout
             ]);
             
-            console.log('🔥 WASM system initialized successfully!');
-            console.log('🔍 WASM Status:', wasmSystem.getSystemStatus());
+
         } catch (error) {
             console.warn('⚠️ WASM initialization failed, falling back to JavaScript:', error.message);
             // Set a flag to indicate WASM is not available
@@ -148,24 +146,21 @@ async function initializeApplication() {
         animate();
         
         // Setup UI event listeners
-        console.log('🔧 Setting up UI event listeners...');
         try {
             setupOpticalSystemChangeListeners(scene);
-            console.log('✅ Optical system change listeners set up');
         } catch (error) {
             console.error('❌ Error setting up optical system change listeners:', error);
         }
         
         try {
             setupRayPatternButtons();
-            console.log('✅ Ray pattern buttons set up');
         } catch (error) {
             console.error('❌ Error setting up ray pattern buttons:', error);
         }
         
         try {
             setupRayColorButtons();
-            console.log('✅ Ray color buttons set up');
+
         } catch (error) {
             console.error('❌ Error setting up ray color buttons:', error);
         }
@@ -191,7 +186,7 @@ async function initializeApplication() {
             // 追加: setupSimpleViewButtons を確実に呼び出す
             try {
                 setupSimpleViewButtons();
-                console.log('✅ Simple view buttons (X-Z, Y-Z) set up successfully');
+
             } catch (simpleError) {
                 console.error('❌ Error setting up simple view buttons:', simpleError);
             }
@@ -209,14 +204,14 @@ async function initializeApplication() {
         
         try {
             initializeUIEventListeners();
-            console.log('✅ UI event listeners initialized');
+
         } catch (error) {
             console.error('❌ Error initializing UI event listeners:', error);
         }
         
         try {
             setupDOMEventHandlers();
-            console.log('✅ DOM event handlers set up');
+
         } catch (error) {
             console.error('❌ Error setting up DOM event handlers:', error);
         }
@@ -224,7 +219,7 @@ async function initializeApplication() {
         // 波面収差図Object選択UI初期化
         try {
             initializeWavefrontObjectUI();
-            console.log('✅ Wavefront object selection UI initialized');
+
         } catch (error) {
             console.error('❌ Error initializing wavefront object UI:', error);
         }
@@ -241,14 +236,12 @@ async function initializeApplication() {
         
         // Debug table initialization status
         setTimeout(async () => {
-            console.log('🔍 Checking table initialization status after 1 second...');
             debugTableStatus();
             
             // Objectテーブル初期化後にObject選択を再更新
             try {
                 if (window.updateWavefrontObjectSelect) {
                     window.updateWavefrontObjectSelect();
-                    console.log('✅ Wavefront object selection updated after table init');
                 }
             } catch (error) {
                 console.error('❌ Error updating wavefront object selection after table init:', error);
@@ -1390,7 +1383,7 @@ window.updateSurfaceNumberSelect = updateSurfaceNumberSelect;
 document.addEventListener('DOMContentLoaded', async function() {
     try {
         // Initialize the main application
-        console.log('🚀 Initializing main application...');
+
         initAIAssistant();
         const appComponents = await initializeApplication();
         
@@ -1481,9 +1474,6 @@ document.addEventListener('DOMContentLoaded', async function() {
                 // コンソールクリアボタンの説明
                 console.log('💡 [ObjectDebug] ヒント: コンソールをクリアするには、ブラウザのF12で開発者ツールを開き、コンソールタブで右クリック→"Clear console"を選択してください。');
             });
-            console.log('✅ [ObjectDebug] Objectデータデバッグボタンにイベントハンドラーを追加');
-        } else {
-            console.warn('⚠️ [ObjectDebug] debug-object-dataボタンが見つかりません');
         }
         
         // 🔍 光線角度デバッグボタンの設定
@@ -1499,9 +1489,6 @@ document.addEventListener('DOMContentLoaded', async function() {
                     console.log('💡 [RayAngleDebug] debug-opd-ray-angles.jsが正しく読み込まれているか確認してください');
                 }
             });
-            console.log('✅ [RayAngleDebug] 光線角度デバッグボタンにイベントハンドラーを追加');
-        } else {
-            console.warn('⚠️ [RayAngleDebug] debug-ray-anglesボタンが見つかりません');
         }
         
         // Draw Crossボタンのイベントリスナー
@@ -1843,7 +1830,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             });
         }
 
-        console.log('🎉 JS_lensDraw v3 application ready!');
+
         
     } catch (error) {
         console.error('❌ Failed to initialize application:', error);
@@ -2090,16 +2077,6 @@ window.isFiniteSystem = function(opticalSystemRows) {
     return false;
 };
 
-console.log('🔧 [Main] デバッグ用関数をグローバルスコープに公開完了');
-console.log('   - generateCrossBeam');
-console.log('   - calculateChiefRayNewton');
-console.log('   - traceRay');
-console.log('   - findStopSurface');
-console.log('   - calculateSurfaceOrigins');
-console.log('   - isFiniteSystem');
-console.log('   - generateDistortionPlots');
-console.log('   - generateGridDistortionPlot');
-
 // Distortion functions global expose
 window.calculateDistortionData = calculateDistortionData;
 window.plotDistortionPercent = plotDistortionPercent;
@@ -2120,8 +2097,6 @@ window.mainDebugFunctions = {
 // Distortion helpers
 window.mainDebugFunctions.generateDistortionPlots = generateDistortionPlots;
 window.mainDebugFunctions.calculateDistortionData = calculateDistortionData;
-
-console.log('🔧 [Main] mainDebugFunctions オブジェクトもグローバルスコープに公開');
 
 // 🔍 Object → FieldSetting変換ヘルパー関数
 function convertObjectToFieldSetting(objectData, index) {

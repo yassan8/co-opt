@@ -27,16 +27,7 @@
     }
   </script>
 
-  <!-- Debug localStorage on page load -->
-  <script>
-    console.log('🔵 [PageLoad] Initial localStorage state:');
-    console.log('🔵 [PageLoad] sourceTableData:', !!localStorage.getItem('sourceTableData'));
-    console.log('🔵 [PageLoad] objectTableData:', !!localStorage.getItem('objectTableData'));
-    console.log('🔵 [PageLoad] OpticalSystemTableData:', !!localStorage.getItem('OpticalSystemTableData'));
-    console.log('🔵 [PageLoad] meritFunctionData:', !!localStorage.getItem('meritFunctionData'));
-    console.log('🔵 [PageLoad] Total localStorage keys:', Object.keys(localStorage).length);
-    console.log('🔵 [PageLoad] All keys:', Object.keys(localStorage));
-  </script>
+
 
   <script>
     // Warn (in English) when the user tries to leave via the browser Back button.
@@ -684,13 +675,6 @@
               window.surfaceNormal = rayTracing.surfaceNormal;
             }
             
-            console.log('🔧 光線追跡機能が利用可能です');
-            console.log('📦 利用可能な関数:', {
-              asphericSag: typeof window.asphericSag,
-              asphericSagDerivative: typeof window.asphericSagDerivative,
-              surfaceNormal: typeof window.surfaceNormal
-            });
-            
             // WASMデバッグ関数をグローバルにエクスポート
             if (typeof main.getWASMSystem === 'function') {
               window.getWASMSystem = main.getWASMSystem;
@@ -700,17 +684,10 @@
               window.quickWASMComparison = debugUtils.quickWASMComparison;
             }
             
-            console.log('🔥 WASM統合システム機能:');
-            console.log('   コンソールで debugWASMSystem() でWASM状態を確認');
-            console.log('   コンソールで quickWASMComparison() でJS vs WASM比較');
-            console.log('   オレンジボタン "🔥 Test WASM" でもテスト可能');
-            
             // 絞り周辺光線モジュールを読み込み
             import('./ray-marginal.js').then(marginalRayModule => {
               window.calculateMarginalRay = marginalRayModule.calculateMarginalRay;
               window.calculateAllMarginalRays = marginalRayModule.calculateAllMarginalRays;
-              console.log('📐 絞り周辺光線モジュールを読み込みました');
-              console.log('   testMarginalRays() でテスト実行可能');
             }).catch(error => {
               console.error('❌ 絞り周辺光線モジュールの読み込みに失敗:', error);
             });
@@ -752,21 +729,18 @@
             }
           };
           document.head.appendChild(script);
-        } else {
-          console.log('✅ ForceWASMSystem グローバル変数確認完了');
         }
+
+        setTimeout(() => {
+          // console.log('🔧 [PSF] DOMContentLoaded後のPSFオブジェクト選択初期化');
+          if (typeof window.setupPSFObjectSelect === 'function') {
+            window.setupPSFObjectSelect();
+          }
+          
+          // PSF WASM状況の初期化
+          initializePSFWasmStatus();
+        }, 3000);
       }, 2000);
-      
-      // PSFオブジェクト選択の確実な初期化
-      setTimeout(() => {
-        // console.log('🔧 [PSF] DOMContentLoaded後のPSFオブジェクト選択初期化');
-        if (typeof window.setupPSFObjectSelect === 'function') {
-          window.setupPSFObjectSelect();
-        }
-        
-        // PSF WASM状況の初期化
-        initializePSFWasmStatus();
-      }, 3000);
     });
   </script>
 
@@ -922,7 +896,7 @@
             const refFLInput = document.getElementById('reference-focal-length');
             if (refFLInput && systemData.referenceFocalLength !== undefined) {
               refFLInput.value = systemData.referenceFocalLength;
-              console.log('✅ System Data復元完了:', systemData);
+
             }
           } catch (e) {
             console.warn('⚠️ System Data復元エラー:', e);
@@ -957,8 +931,7 @@
           }
         };
         
-        console.log('💡 利用可能な基本テスト:');
-        console.log('   testBasicFunctionality() - 基本機能動作確認');
+
         
       } catch (error) {
         console.warn('⚠️ 基本システム初期化で軽微なエラー:', error.message);

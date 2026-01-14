@@ -398,10 +398,10 @@ export class PSFCalculatorWasm {
         let Syz = 0;
 
         for (let i = 0; i < size; i++) {
-            const x = (xCoords && xCoords.length === size) ? xCoords[i] : ((i - (size - 1) / 2) / ((size - 1) / 2));
+            const y = (yCoords && yCoords.length === size) ? yCoords[i] : ((i - (size - 1) / 2) / ((size - 1) / 2));
             for (let j = 0; j < size; j++) {
                 if (!gridData.pupilMask?.[i]?.[j]) continue;
-                const y = (yCoords && yCoords.length === size) ? yCoords[j] : ((j - (size - 1) / 2) / ((size - 1) / 2));
+                const x = (xCoords && xCoords.length === size) ? xCoords[j] : ((j - (size - 1) / 2) / ((size - 1) / 2));
                 const z = gridData.opd?.[i]?.[j];
                 if (!Number.isFinite(z)) continue;
                 S += 1;
@@ -473,7 +473,7 @@ export class PSFCalculatorWasm {
         const maskFlat = new Int32Array(size * size);
 
         for (let i = 0; i < size; i++) {
-            const x = (xCoords && xCoords.length === size) ? xCoords[i] : ((i - (size - 1) / 2) / ((size - 1) / 2));
+            const yRow = (yCoords && yCoords.length === size) ? yCoords[i] : ((i - (size - 1) / 2) / ((size - 1) / 2));
             for (let j = 0; j < size; j++) {
                 const idx = i * size + j;
                 const inPupil = !!gridData.pupilMask?.[i]?.[j];
@@ -486,8 +486,8 @@ export class PSFCalculatorWasm {
                     continue;
                 }
 
-                const y = (yCoords && yCoords.length === size) ? yCoords[j] : ((j - (size - 1) / 2) / ((size - 1) / 2));
-                opdFlat[idx] = z - (a * x + b * y + c);
+                const xCol = (xCoords && xCoords.length === size) ? xCoords[j] : ((j - (size - 1) / 2) / ((size - 1) / 2));
+                opdFlat[idx] = z - (a * xCol + b * yRow + c);
                 const aij = gridData.amplitude?.[i]?.[j];
                 ampFlat[idx] = Number.isFinite(aij) ? aij : 1;
                 maskFlat[idx] = 1;

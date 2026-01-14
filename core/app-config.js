@@ -128,5 +128,5 @@ export function initializeReferences(sceneRef, cameraRef, rendererRef, controlsR
     tableObject = tableObjectRef;
     tableSource = tableSourceRef;
     
-    console.log('✅ All references initialized in app-config.js');
+
 }

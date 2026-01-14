@@ -28,18 +28,13 @@ const initialTableData = [
 
 // ローカルストレージからデータを取得
 export function loadTableData() {
-  console.log('🔵 [TableObject] Loading data from localStorage...');
   if (typeof localStorage === 'undefined' || !localStorage) {
-    console.log('🔵 [TableObject] localStorage unavailable; using initial data');
     return initialTableData;
   }
   const json = localStorage.getItem(STORAGE_KEY);
-  console.log('🔵 [TableObject] localStorage key:', STORAGE_KEY);
-  console.log('🔵 [TableObject] Data exists:', !!json);
   if (json) {
     try {
       const parsed = JSON.parse(json);
-      console.log('🔵 [TableObject] Parsed data length:', parsed.length);
       return parsed;
     } catch (e) {
       console.warn('⚠️ [TableObject] Parse error:', e);
@@ -98,8 +93,6 @@ const hasWindow = (typeof window !== 'undefined') && window;
 export let tableObject;
 
 try {
-  console.log('🔄 [TableObject] Initializing Tabulator...');
-  
   // Check if Tabulator is available
   if (typeof Tabulator === 'undefined') {
     throw new Error('Tabulator is not available');
@@ -110,8 +103,6 @@ try {
   if (!tableElement) {
     throw new Error('DOM element #table-object not found');
   }
-  
-  console.log('✅ [TableObject] Prerequisites met, creating Tabulator instance...');
   
   tableObject = new Tabulator("#table-object", {
     data: initialData,
@@ -149,7 +140,7 @@ try {
   ]
   });
 
-  console.log('✅ [TableObject] Tabulator instance created successfully');
+
 
   // Tabulatorエラーハンドリング
   tableObject.on("error", function(error) {

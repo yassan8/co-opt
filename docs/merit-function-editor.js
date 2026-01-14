@@ -3198,7 +3198,7 @@ class MeritFunctionEditor {
                     return { ...operand, configId: String(operand.configId) };
                 });
                 
-                console.log('✅ Merit Function データをローカルストレージから読み込みました:', this.operands.length, '件');
+
             }
         } catch (error) {
             console.error('❌ Merit Function ローカルストレージ読み込みエラー:', error);
@@ -3284,7 +3284,7 @@ class MeritFunctionEditor {
 document.addEventListener('DOMContentLoaded', () => {
     try {
         window.meritFunctionEditor = new MeritFunctionEditor();
-        console.log('✅ Merit Function Editor initialized (Tabulator版)');
+
 
         try {
             if (typeof window !== 'undefined' && !window.__cooptLastSpotSizeDebug) {

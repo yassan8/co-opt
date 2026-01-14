@@ -135,10 +135,6 @@ export function initializeThreeJS() {
  * @returns {Object} Object containing light instances
  */
 export function initializeLighting(scene) {
-    console.log('🔧 Initializing lighting...');
-    console.log('Scene:', scene);
-    console.log('THREE:', typeof THREE);
-    console.log('APP_CONFIG:', APP_CONFIG);
     
     try {
         // Ambient light
@@ -153,8 +149,6 @@ export function initializeLighting(scene) {
             APP_CONFIG.DIRECTIONAL_LIGHT_POSITION.z
         );
         scene.add(directionalLight);
-        
-        console.log('✅ Lighting initialized successfully');
         return { ambientLight, directionalLight };
     } catch (error) {
         console.error('❌ Error initializing lighting:', error);
@@ -193,7 +187,7 @@ export function setupAnimationLoop(scene, camera, renderer, controls) {
  * Start the animation loop with global variables from app-config
  */
 export function animate() {
-    console.log('🎬 Animation loop started - using global scene references');
+
     
     function animationLoop() {
         requestAnimationFrame(animationLoop);

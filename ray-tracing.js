@@ -2,10 +2,6 @@
 const RAY_TRACING_BUILD = '2025-12-30a';
 if (typeof window !== 'undefined') {
   window.__RAY_TRACING_BUILD = RAY_TRACING_BUILD;
-  if (!window.__RAY_TRACING_BUILD_LOGGED) {
-    window.__RAY_TRACING_BUILD_LOGGED = true;
-    console.log(`[ray-tracing] build=${RAY_TRACING_BUILD}`);
-  }
 }
 
 // Import functions from ray-paraxial.js without destructuring for compatibility

@@ -55,26 +55,7 @@ function generateRayStartPointsForSpot(obj, opticalSystemRows, rayNumber, apertu
     // Draw機能と同じように開口制限なしで呼び出す（apertureInfo引数を渡さない）
     try {
         // 直接インポートした関数を使用
-        console.log('✅ Using imported generateRayStartPointsForObject function...');
         const result = generateRayStartPointsForObject(obj, opticalSystemRows, rayNumber, null, options);
-        
-        console.log('📊 generateRayStartPointsForObject result:', {
-            resultLength: result ? result.length : 'null',
-            resultType: typeof result,
-            isArray: Array.isArray(result),
-            firstItem: result && result[0] ? result[0] : 'none'
-        });
-        
-        // 返り値の詳細確認
-        if (result && Array.isArray(result) && result.length > 0) {
-            console.log('🔍 First ray detailed check:', {
-                hasStartP: result[0].hasOwnProperty('startP'),
-                hasDir: result[0].hasOwnProperty('dir'),
-                startP: result[0].startP,
-                dir: result[0].dir
-            });
-        }
-        
         return result;
     } catch (error) {
         console.error('❌ Error calling generateRayStartPointsForObject:', error);
@@ -252,12 +233,6 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
             
             try {
                 // ray-tracing.jsのtraceRay関数をデバッグモードで実行（CB面の座標変換を含む）
-                console.log(`🚀 Tracing ray ${i} with:`, {
-                    startP: rayStart.startP,
-                    dir: rayStart.dir,
-                    surfaceNumber: surfaceNumber
-                });
-                
                 // デバッグログ配列を作成して詳細な光線追跡情報を取得
                 const debugLog = [];
                 
@@ -272,50 +247,11 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                 };
                 const rayPath = traceRay(opticalRowsCopy, ray0, 1.0, debugLog, targetSurfaceIndex);
                 
-                // 詳細なデバッグ情報をログに出力（最初の数本の光線のみ）
-                if (i < 3) {
-                    console.log(`🔍 Detailed ray ${i} debug log:`, debugLog.slice(0, 10)); // 最初の10行のみ
-                    console.log(`🔍 Ray ${i} path summary:`, {
-                        rayPathLength: rayPath ? rayPath.length : 'null',
-                        firstPoint: rayPath && rayPath[0] ? rayPath[0] : 'none',
-                        lastPoint: rayPath && rayPath.length > 0 ? rayPath[rayPath.length - 1] : 'none'
-                    });
-                }
-                
-                console.log(`🔍 Ray ${i} trace result:`, {
-                    rayPathLength: rayPath ? rayPath.length : 'null',
-                    surfaceNumber: surfaceNumber,
-                    targetIndex: surfaceNumber,
-                    debugLogLength: debugLog.length
-                });
-                
         // 指定面での交点を取得
-        // traceRay の戻り値は 0-indexed なので、面番号(1始まり)を 0始まりに変換
-        
-        try {
-            const RAYTRACE_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__RAYTRACE_DEBUG);
-            if (RAYTRACE_DEBUG) {
-                console.log(`📊 Surface calculation for surface ${surfaceNumber}:`, {
-                    targetSurfaceIndex: targetSurfaceIndex,
-                    rayPathLength: rayPath ? rayPath.length : 'null',
-                    rayPathExists: !!rayPath,
-                    actualOpticalSystemLength: opticalSystemRows.length
-                });
-            }
-        } catch (_) {}
-        
         if (rayPath && Array.isArray(rayPath) && rayPath.length > targetSurfaceIndex && targetSurfaceIndex >= 0) {
             const hitPointGlobal = rayPath[targetSurfaceIndex];
             const surfaceInfo = surfaceInfoList[targetSurfaceIndex];
             const hitPointLocal = surfaceInfo ? transformPointToLocal(hitPointGlobal, surfaceInfo) : hitPointGlobal;
-            console.log(`📍 Hit point for ray ${i} at surface ${surfaceNumber} (index ${targetSurfaceIndex}):`, {
-                hitPoint: hitPointLocal,
-                hasX: hitPointLocal && typeof hitPointLocal.x === 'number',
-                hasY: hitPointLocal && typeof hitPointLocal.y === 'number',
-                x: hitPointLocal ? hitPointLocal.x : 'undefined',
-                y: hitPointLocal ? hitPointLocal.y : 'undefined',
-                z: hitPointLocal ? hitPointLocal.z : 'undefined'
-            });
             
             if (hitPointLocal && typeof hitPointLocal.x === 'number' && typeof hitPointLocal.y === 'number') {
                 const startPointClone = rayStart?.startP && typeof rayStart.startP === 'object'
@@ -344,7 +280,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                 if (rayStart && rayStart.dir) {
                     spotPoints[spotPoints.length - 1].initialDir = { ...rayStart.dir };
                 }
-                console.log(`✅ Successfully added spot point ${successfulRays}: (${hitPointLocal.x.toFixed(6)}, ${hitPointLocal.y.toFixed(6)})${isChief ? ' [Chief Ray]' : ''}`);
+                // Successfully added spot point
             } else {
                 console.warn(`⚠️ Invalid hit point for ray ${i}:`, hitPointLocal);
             }
@@ -389,8 +325,6 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                 });
             }
         }
-        
-        console.log(`✅ Object ${objectId}: ${successfulRays}/${rayStartPoints.length} rays successful`);
         
         const chiefStartPoint = spotPoints.find(p => p.isChiefRay && p.startPoint)?.startPoint
             || (rayStartPoints[0]?.startP ? { x: rayStartPoints[0].startP.x, y: rayStartPoints[0].startP.y, z: rayStartPoints[0].startP.z } : null);
@@ -495,7 +429,6 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         // 主光線フラグが設定されていない場合、重心に最も近い光線を主光線とする
         const hasChiefRay = spotPoints.some(p => p.isChiefRay);
         if (!hasChiefRay && spotPoints.length > 0) {
-            console.warn(`⚠️ Object ${objectId}: No chief ray found. Using centroid-closest ray as chief.`);
             const centroidX = spotPoints.reduce((sum, p) => sum + p.x, 0) / spotPoints.length;
             const centroidY = spotPoints.reduce((sum, p) => sum + p.y, 0) / spotPoints.length;
             
@@ -509,7 +442,6 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                 }
             });
             spotPoints[closestIndex].isChiefRay = true;
-            console.log(`✅ Set ray ${closestIndex} as chief ray (distance to centroid: ${(minDist * 1000).toFixed(3)} µm)`);
         }
         
         spotData.push({
@@ -537,27 +469,9 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         });
     }
     
-    // 結果の検証と詳細情報の出力
+    // 結果の検証
     const totalSuccessfulRays = spotData.reduce((sum, obj) => sum + (obj.successfulRays || 0), 0);
     const totalRays = spotData.reduce((sum, obj) => sum + (obj.totalRays || 0), 0);
-    console.log(`📊 Spot diagram generation summary:`);
-    console.log(`   Surface: ${surfaceNumber}`);
-    console.log(`   Total rays: ${totalRays}`);
-    console.log(`   Successful rays: ${totalSuccessfulRays}`);
-    console.log(`   Success rate: ${totalRays > 0 ? (totalSuccessfulRays / totalRays * 100).toFixed(1) : 0}%`);
-    console.log(`   Requested annular rings: ${ringCount}`);
-    const requestedRingSet = spotData
-        .map(obj => Number(obj.selectedRingOverride || 0))
-        .filter(count => count > 0);
-    if (requestedRingSet.length > 0) {
-        console.log(`   Requested annular rings per object: ${requestedRingSet.join(', ')}`);
-    }
-    const appliedRingSet = spotData
-        .map(obj => Number(obj.annularRingsUsed || 0))
-        .filter(count => count > 0);
-    if (appliedRingSet.length > 0) {
-        console.log(`   Applied annular rings per object: ${appliedRingSet.join(', ')}`);
-    }
     
     if (totalSuccessfulRays === 0) {
         // より詳細なエラー情報を提供

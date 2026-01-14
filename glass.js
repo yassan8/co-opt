@@ -4,6 +4,7 @@ export const miscellaneousDB = [
     "name": "null",
     "nd": 1,
     "vd": 1e10,
+    "manufacturer": "Special",
     "sellmeier": {
       "A1": 0,
       "A2": 0,
@@ -17,6 +18,7 @@ export const miscellaneousDB = [
     "name": "AIR",
     "nd": 1,
     "vd": 1,
+    "manufacturer": "Special",
     "sellmeier": {
       "A1": 0,
       "A2": 0,
@@ -30,6 +32,7 @@ export const miscellaneousDB = [
     "name": "MIRROR",
     "nd": -1,
     "vd": 1,
+    "manufacturer": "Special",
     "sellmeier": {
       "A1": 0,
       "A2": 0,
@@ -46,6 +49,7 @@ export const oharaGlassDB = [
     "name": "L-BSL 7",
     "nd": 1.51633,
     "vd": 64.06,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.917473918,
       "A2": 0.352687665,
@@ -59,6 +63,7 @@ export const oharaGlassDB = [
     "name": "L-BAL35",
     "nd": 1.58913,
     "vd": 61.15,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.1626263,
       "A2": 0.325661051,
@@ -72,6 +77,7 @@ export const oharaGlassDB = [
     "name": "L-BAL35P",
     "nd": 1.59208,
     "vd": 61.0,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.806742194,
       "A2": 0.690488648,
@@ -85,6 +91,7 @@ export const oharaGlassDB = [
     "name": "L-BAL42",
     "nd": 1.583126,
     "vd": 59.38,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.39528097,
       "A2": 0.072551952,
@@ -98,6 +105,7 @@ export const oharaGlassDB = [
     "name": "L-BAL42P",
     "nd": 1.58593,
     "vd": 59.24,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.881090017,
       "A2": 0.595038859,
@@ -111,6 +119,7 @@ export const oharaGlassDB = [
     "name": "L-BAL43",
     "nd": 1.58573,
     "vd": 59.7,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.04745291,
       "A2": 0.428452873,
@@ -124,6 +133,7 @@ export const oharaGlassDB = [
     "name": "L-TIM28",
     "nd": 1.68948,
     "vd": 31.02,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.52780829,
       "A2": 0.232776367,
@@ -137,6 +147,7 @@ export const oharaGlassDB = [
     "name": "L-LAL13",
     "nd": 1.6935,
     "vd": 53.18,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.17776146,
       "A2": 0.634591345,
@@ -150,6 +161,7 @@ export const oharaGlassDB = [
     "name": "L-LAL15",
     "nd": 1.69304,
     "vd": 52.93,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.07959634,
       "A2": 0.731872134,
@@ -163,6 +175,7 @@ export const oharaGlassDB = [
     "name": "L-LAM60",
     "nd": 1.743198,
     "vd": 49.29,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.47574184,
       "A2": 0.496132743,
@@ -176,6 +189,7 @@ export const oharaGlassDB = [
     "name": "L-LAM69",
     "nd": 1.73077,
     "vd": 40.51,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.7403896,
       "A2": 0.176996917,
@@ -189,6 +203,7 @@ export const oharaGlassDB = [
     "name": "L-LAH53",
     "nd": 1.80625,
     "vd": 40.91,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.87409991,
       "A2": 0.297921402,
@@ -202,6 +217,7 @@ export const oharaGlassDB = [
     "name": "L-LAH84",
     "nd": 1.80835,
     "vd": 40.55,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.83606127,
       "A2": 0.341720032,
@@ -215,6 +231,7 @@ export const oharaGlassDB = [
     "name": "L-LAH85V",
     "nd": 1.854,
     "vd": 40.38,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.97460503,
       "A2": 0.361903592,
@@ -228,6 +245,7 @@ export const oharaGlassDB = [
     "name": "L-LAH90",
     "nd": 1.8322,
     "vd": 40.1,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.97595301,
       "A2": 0.283924985,
@@ -241,6 +259,7 @@ export const oharaGlassDB = [
     "name": "L-LAH91",
     "nd": 1.7645,
     "vd": 49.09,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.26144128,
       "A2": 0.782115273,
@@ -254,6 +273,7 @@ export const oharaGlassDB = [
     "name": "L-LAH94",
     "nd": 1.861,
     "vd": 37.1,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.0062142,
       "A2": 0.347029888,
@@ -267,6 +287,7 @@ export const oharaGlassDB = [
     "name": "S-FPL51",
     "nd": 1.496999,
     "vd": 81.54,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.17010505,
       "A2": 0.0475710783,
@@ -280,6 +301,7 @@ export const oharaGlassDB = [
     "name": "S-FPL53",
     "nd": 1.43875,
     "vd": 94.93,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.983532327,
       "A2": 0.069568814,
@@ -293,6 +315,7 @@ export const oharaGlassDB = [
     "name": "S-FPL55",
     "nd": 1.43875,
     "vd": 94.66,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.839067682,
       "A2": 0.214083503,
@@ -306,6 +329,7 @@ export const oharaGlassDB = [
     "name": "S-FPM 2",
     "nd": 1.59522,
     "vd": 67.74,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.761242785,
       "A2": 0.747033375,
@@ -319,6 +343,7 @@ export const oharaGlassDB = [
     "name": "S-FPM 3",
     "nd": 1.53775,
     "vd": 74.7,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.809407286,
       "A2": 0.527007033,
@@ -332,6 +357,7 @@ export const oharaGlassDB = [
     "name": "S-FPM 4",
     "nd": 1.52841,
     "vd": 76.46,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.685585084,
       "A2": 0.623380215,
@@ -345,6 +371,7 @@ export const oharaGlassDB = [
     "name": "S-FPM 5",
     "nd": 1.552,
     "vd": 70.7,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.839899764,
       "A2": 0.537721312,
@@ -358,6 +385,7 @@ export const oharaGlassDB = [
     "name": "S-FSL 5",
     "nd": 1.48749,
     "vd": 70.23,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.17447043,
       "A2": 0.0140056154,
@@ -371,6 +399,7 @@ export const oharaGlassDB = [
     "name": "S-BSL 7",
     "nd": 1.51633,
     "vd": 64.14,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.1515019,
       "A2": 0.118583612,
@@ -384,6 +413,7 @@ export const oharaGlassDB = [
     "name": "S-BSM 2",
     "nd": 1.607379,
     "vd": 56.81,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.867168676,
       "A2": 0.672848343,
@@ -397,6 +427,7 @@ export const oharaGlassDB = [
     "name": "S-BSM10",
     "nd": 1.622799,
     "vd": 57.05,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.945443081,
       "A2": 0.643237376,
@@ -410,6 +441,7 @@ export const oharaGlassDB = [
     "name": "S-BSM14",
     "nd": 1.603112,
     "vd": 60.64,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.2828627,
       "A2": 0.247647429,
@@ -423,6 +455,7 @@ export const oharaGlassDB = [
     "name": "S-BSM15",
     "nd": 1.622992,
     "vd": 58.16,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.953128328,
       "A2": 0.637613977,
@@ -436,6 +469,7 @@ export const oharaGlassDB = [
     "name": "S-BSM16",
     "nd": 1.620411,
     "vd": 60.29,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.14490383,
       "A2": 0.439563911,
@@ -449,6 +483,7 @@ export const oharaGlassDB = [
     "name": "S-BSM18",
     "nd": 1.638539,
     "vd": 55.38,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.927886025,
       "A2": 0.708858526,
@@ -462,6 +497,7 @@ export const oharaGlassDB = [
     "name": "S-BSM25",
     "nd": 1.658441,
     "vd": 50.88,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.34814257,
       "A2": 0.347530319,
@@ -475,6 +511,7 @@ export const oharaGlassDB = [
     "name": "S-BSM28",
     "nd": 1.617722,
     "vd": 49.81,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.43822841,
       "A2": 0.128100017,
@@ -488,6 +525,7 @@ export const oharaGlassDB = [
     "name": "S-BSM71",
     "nd": 1.648498,
     "vd": 53.02,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.50847885,
       "A2": 0.158099826,
@@ -501,6 +539,7 @@ export const oharaGlassDB = [
     "name": "S-BSM81",
     "nd": 1.639999,
     "vd": 60.08,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.996356844,
       "A2": 0.651392837,
@@ -514,6 +553,7 @@ export const oharaGlassDB = [
     "name": "S-NSL 3",
     "nd": 1.518229,
     "vd": 58.9,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.882514764,
       "A2": 0.389271907,
@@ -527,6 +567,7 @@ export const oharaGlassDB = [
     "name": "S-NSL36",
     "nd": 1.517417,
     "vd": 52.43,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.09666153,
       "A2": 0.168990073,
@@ -540,6 +581,7 @@ export const oharaGlassDB = [
     "name": "S-BAL 3",
     "nd": 1.571351,
     "vd": 52.95,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.2936689,
       "A2": 0.132440252,
@@ -553,6 +595,7 @@ export const oharaGlassDB = [
     "name": "S-BAL12",
     "nd": 1.539956,
     "vd": 59.46,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.714605258,
       "A2": 0.621993289,
@@ -566,6 +609,7 @@ export const oharaGlassDB = [
     "name": "S-BAL14",
     "nd": 1.568832,
     "vd": 56.36,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.27553696,
       "A2": 0.146083393,
@@ -579,6 +623,7 @@ export const oharaGlassDB = [
     "name": "S-BAL35",
     "nd": 1.58913,
     "vd": 61.14,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.941357273,
       "A2": 0.546174895,
@@ -592,6 +637,7 @@ export const oharaGlassDB = [
     "name": "S-BAL42",
     "nd": 1.583126,
     "vd": 59.38,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.39570615,
       "A2": 0.071850507,
@@ -605,6 +651,7 @@ export const oharaGlassDB = [
     "name": "S-BAM 4",
     "nd": 1.60562,
     "vd": 43.7,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.41059317,
       "A2": 0.111201306,
@@ -618,6 +665,7 @@ export const oharaGlassDB = [
     "name": "S-BAM12",
     "nd": 1.6393,
     "vd": 44.87,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.50161605,
       "A2": 0.126987445,
@@ -631,6 +679,7 @@ export const oharaGlassDB = [
     "name": "S-BAH11",
     "nd": 1.666718,
     "vd": 48.32,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.5713886,
       "A2": 0.147869313,
@@ -644,6 +693,7 @@ export const oharaGlassDB = [
     "name": "S-BAH27",
     "nd": 1.701536,
     "vd": 41.24,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.68939052,
       "A2": 0.133081013,
@@ -657,6 +707,7 @@ export const oharaGlassDB = [
     "name": "S-BAH28",
     "nd": 1.72342,
     "vd": 37.95,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.69493484,
       "A2": 0.192890298,
@@ -670,6 +721,7 @@ export const oharaGlassDB = [
     "name": "S-PHM52",
     "nd": 1.618,
     "vd": 63.33,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.0996655,
       "A2": 0.478125422,
@@ -683,6 +735,7 @@ export const oharaGlassDB = [
     "name": "S-PHM52Q",
     "nd": 1.618,
     "vd": 63.32,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.2696875,
       "A2": 0.308418136,
@@ -696,6 +749,7 @@ export const oharaGlassDB = [
     "name": "S-PHM53",
     "nd": 1.603001,
     "vd": 65.44,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.09775423,
       "A2": 0.434816432,
@@ -709,6 +763,7 @@ export const oharaGlassDB = [
     "name": "S-TIL 1",
     "nd": 1.548141,
     "vd": 45.79,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.25088944,
       "A2": 0.0997973327,
@@ -722,6 +777,7 @@ export const oharaGlassDB = [
     "name": "S-TIL 2",
     "nd": 1.54072,
     "vd": 47.23,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.23401499,
       "A2": 0.0959796833,
@@ -735,6 +791,7 @@ export const oharaGlassDB = [
     "name": "S-TIL 6",
     "nd": 1.531717,
     "vd": 48.84,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.17701777,
       "A2": 0.12795803,
@@ -748,6 +805,7 @@ export const oharaGlassDB = [
     "name": "S-TIL25",
     "nd": 1.581439,
     "vd": 40.75,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.32122534,
       "A2": 0.123824976,
@@ -761,6 +819,7 @@ export const oharaGlassDB = [
     "name": "S-TIL26",
     "nd": 1.567322,
     "vd": 42.82,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.31066488,
       "A2": 0.0941903094,
@@ -774,6 +833,7 @@ export const oharaGlassDB = [
     "name": "S-TIL27",
     "nd": 1.575006,
     "vd": 41.5,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.31433154,
       "A2": 0.112300168,
@@ -787,6 +847,7 @@ export const oharaGlassDB = [
     "name": "S-TIM 2",
     "nd": 1.620041,
     "vd": 36.26,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.42193846,
       "A2": 0.133827968,
@@ -800,6 +861,7 @@ export const oharaGlassDB = [
     "name": "S-TIM 5",
     "nd": 1.60342,
     "vd": 38.03,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.38531342,
       "A2": 0.122372945,
@@ -813,6 +875,7 @@ export const oharaGlassDB = [
     "name": "S-TIM 8",
     "nd": 1.595509,
     "vd": 39.24,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.37262713,
       "A2": 0.112636276,
@@ -826,6 +889,7 @@ export const oharaGlassDB = [
     "name": "S-TIM25",
     "nd": 1.6727,
     "vd": 32.1,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.50659233,
       "A2": 0.204786135,
@@ -839,6 +903,7 @@ export const oharaGlassDB = [
     "name": "S-TIM27",
     "nd": 1.639799,
     "vd": 34.46,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.4168047,
       "A2": 0.196785057,
@@ -852,6 +917,7 @@ export const oharaGlassDB = [
     "name": "S-TIM28",
     "nd": 1.688931,
     "vd": 31.07,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.5427081,
       "A2": 0.217113891,
@@ -865,6 +931,7 @@ export const oharaGlassDB = [
     "name": "S-TIM35",
     "nd": 1.698947,
     "vd": 30.13,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.55849775,
       "A2": 0.230767007,
@@ -878,6 +945,7 @@ export const oharaGlassDB = [
     "name": "S-TIH 1",
     "nd": 1.717362,
     "vd": 29.52,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.60326759,
       "A2": 0.242980935,
@@ -891,6 +959,7 @@ export const oharaGlassDB = [
     "name": "S-TIH 3",
     "nd": 1.739998,
     "vd": 28.3,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.64797648,
       "A2": 0.267261917,
@@ -904,6 +973,7 @@ export const oharaGlassDB = [
     "name": "S-TIH 4",
     "nd": 1.755199,
     "vd": 27.51,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.66755531,
       "A2": 0.294411865,
@@ -917,6 +987,7 @@ export const oharaGlassDB = [
     "name": "S-TIH 6",
     "nd": 1.805181,
     "vd": 25.42,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.77227611,
       "A2": 0.34569125,
@@ -930,6 +1001,7 @@ export const oharaGlassDB = [
     "name": "S-TIH10",
     "nd": 1.72825,
     "vd": 28.46,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.61549392,
       "A2": 0.262433239,
@@ -943,6 +1015,7 @@ export const oharaGlassDB = [
     "name": "S-TIH11",
     "nd": 1.784723,
     "vd": 25.68,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.72677471,
       "A2": 0.324568628,
@@ -956,6 +1029,7 @@ export const oharaGlassDB = [
     "name": "S-TIH13",
     "nd": 1.740769,
     "vd": 27.79,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.62224674,
       "A2": 0.293844589,
@@ -969,6 +1043,7 @@ export const oharaGlassDB = [
     "name": "S-TIH14",
     "nd": 1.761821,
     "vd": 26.52,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.68915108,
       "A2": 0.290462024,
@@ -982,6 +1057,7 @@ export const oharaGlassDB = [
     "name": "S-TIH18",
     "nd": 1.721507,
     "vd": 29.23,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.59921608,
       "A2": 0.259532164,
@@ -995,6 +1071,7 @@ export const oharaGlassDB = [
     "name": "S-TIH53",
     "nd": 1.84666,
     "vd": 23.78,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.87904886,
       "A2": 0.369719775,
@@ -1008,6 +1085,7 @@ export const oharaGlassDB = [
     "name": "S-TIH53W",
     "nd": 1.84666,
     "vd": 23.78,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.87904886,
       "A2": 0.369719775,
@@ -1021,6 +1099,7 @@ export const oharaGlassDB = [
     "name": "S-TIH53WN",
     "nd": 1.84666,
     "vd": 23.86,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.87308069,
       "A2": 0.376460262,
@@ -1034,6 +1113,7 @@ export const oharaGlassDB = [
     "name": "S-TIH57",
     "nd": 1.963,
     "vd": 24.11,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.21103256,
       "A2": 0.450346986,
@@ -1047,6 +1127,7 @@ export const oharaGlassDB = [
     "name": "S-LAL 7Q",
     "nd": 1.6516,
     "vd": 58.54,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.905277143,
       "A2": 0.777955684,
@@ -1060,6 +1141,7 @@ export const oharaGlassDB = [
     "name": "S-LAL 8",
     "nd": 1.712995,
     "vd": 53.87,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.30663291,
       "A2": 0.571377253,
@@ -1073,6 +1155,7 @@ export const oharaGlassDB = [
     "name": "S-LAL 9",
     "nd": 1.691002,
     "vd": 54.82,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.16195687,
       "A2": 0.644860099,
@@ -1086,6 +1169,7 @@ export const oharaGlassDB = [
     "name": "S-LAL10",
     "nd": 1.719995,
     "vd": 50.23,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.52812575,
       "A2": 0.367965267,
@@ -1099,6 +1183,7 @@ export const oharaGlassDB = [
     "name": "S-LAL12",
     "nd": 1.6779,
     "vd": 55.34,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.992053895,
       "A2": 0.771377731,
@@ -1112,6 +1197,7 @@ export const oharaGlassDB = [
     "name": "S-LAL12Q",
     "nd": 1.6779,
     "vd": 55.35,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.09887025,
       "A2": 0.665500482,
@@ -1125,6 +1211,7 @@ export const oharaGlassDB = [
     "name": "S-LAL14",
     "nd": 1.696797,
     "vd": 55.53,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.2372097,
       "A2": 0.589722623,
@@ -1138,6 +1225,7 @@ export const oharaGlassDB = [
     "name": "S-LAL18",
     "nd": 1.729157,
     "vd": 54.68,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.50276318,
       "A2": 0.430224497,
@@ -1151,6 +1239,7 @@ export const oharaGlassDB = [
     "name": "S-LAL18N",
     "nd": 1.729157,
     "vd": 54.59,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.43131727,
       "A2": 0.501296855,
@@ -1164,6 +1253,7 @@ export const oharaGlassDB = [
     "name": "S-LAL19",
     "nd": 1.72916,
     "vd": 54.09,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.973997577,
       "A2": 0.958186322,
@@ -1177,6 +1267,7 @@ export const oharaGlassDB = [
     "name": "S-LAL20",
     "nd": 1.6993,
     "vd": 51.11,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.06788467,
       "A2": 0.75873535,
@@ -1190,6 +1281,7 @@ export const oharaGlassDB = [
     "name": "S-LAL21",
     "nd": 1.703,
     "vd": 52.38,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.935250779,
       "A2": 0.905988706,
@@ -1203,6 +1295,7 @@ export const oharaGlassDB = [
     "name": "S-LAL54Q",
     "nd": 1.651,
     "vd": 56.24,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 0.920085087,
       "A2": 0.758646115,
@@ -1216,6 +1309,7 @@ export const oharaGlassDB = [
     "name": "S-LAL58",
     "nd": 1.693495,
     "vd": 50.81,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.06368789,
       "A2": 0.744939067,
@@ -1229,6 +1323,7 @@ export const oharaGlassDB = [
     "name": "S-LAL59",
     "nd": 1.733997,
     "vd": 51.47,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.13962742,
       "A2": 0.805227838,
@@ -1242,6 +1337,7 @@ export const oharaGlassDB = [
     "name": "S-LAL61",
     "nd": 1.740999,
     "vd": 52.64,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.11073292,
       "A2": 0.859347773,
@@ -1255,6 +1351,7 @@ export const oharaGlassDB = [
     "name": "S-LAL61Q",
     "nd": 1.741,
     "vd": 52.6,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.38144225,
       "A2": 0.587690089,
@@ -1268,6 +1365,7 @@ export const oharaGlassDB = [
     "name": "S-LAM 2",
     "nd": 1.743997,
     "vd": 44.78,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.7713,
       "A2": 0.19581423,
@@ -1281,6 +1379,7 @@ export const oharaGlassDB = [
     "name": "S-LAM 3",
     "nd": 1.717004,
     "vd": 47.92,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.64258713,
       "A2": 0.23963461,
@@ -1294,6 +1393,7 @@ export const oharaGlassDB = [
     "name": "S-LAM 7",
     "nd": 1.749497,
     "vd": 35.28,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.71014712,
       "A2": 0.256943292,
@@ -1307,6 +1407,7 @@ export const oharaGlassDB = [
     "name": "S-LAM55",
     "nd": 1.762001,
     "vd": 40.1,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.85412979,
       "A2": 0.165450323,
@@ -1320,6 +1421,7 @@ export const oharaGlassDB = [
     "name": "S-LAM60",
     "nd": 1.743198,
     "vd": 49.34,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.60673056,
       "A2": 0.36641564,
@@ -1333,6 +1435,7 @@ export const oharaGlassDB = [
     "name": "S-LAM66",
     "nd": 1.800999,
     "vd": 34.97,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.92094221,
       "A2": 0.219901208,
@@ -1346,6 +1449,7 @@ export const oharaGlassDB = [
     "name": "S-LAM73",
     "nd": 1.7936,
     "vd": 37.09,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.86353123,
       "A2": 0.255215617,
@@ -1359,6 +1463,7 @@ export const oharaGlassDB = [
     "name": "S-LAH51",
     "nd": 1.785896,
     "vd": 44.2,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.82586991,
       "A2": 0.283023349,
@@ -1372,6 +1477,7 @@ export const oharaGlassDB = [
     "name": "S-LAH52",
     "nd": 1.799516,
     "vd": 42.22,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.85390925,
       "A2": 0.297925555,
@@ -1385,6 +1491,7 @@ export const oharaGlassDB = [
     "name": "S-LAH52Q",
     "nd": 1.79952,
     "vd": 42.24,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.91082318,
       "A2": 0.239854589,
@@ -1398,6 +1505,7 @@ export const oharaGlassDB = [
     "name": "S-LAH53",
     "nd": 1.806098,
     "vd": 40.92,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.91811619,
       "A2": 0.253724399,
@@ -1411,6 +1519,7 @@ export const oharaGlassDB = [
     "name": "S-LAH53V",
     "nd": 1.8061,
     "vd": 40.93,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.96600955,
       "A2": 0.205143305,
@@ -1424,6 +1533,7 @@ export const oharaGlassDB = [
     "name": "S-LAH55V",
     "nd": 1.834807,
     "vd": 42.73,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.97025325,
       "A2": 0.30489414,
@@ -1437,6 +1547,7 @@ export const oharaGlassDB = [
     "name": "S-LAH55VS",
     "nd": 1.83481,
     "vd": 42.74,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.92591095,
       "A2": 0.34895346,
@@ -1450,6 +1561,7 @@ export const oharaGlassDB = [
     "name": "S-LAH58",
     "nd": 1.882997,
     "vd": 40.76,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.78764964,
       "A2": 0.6526356,
@@ -1463,6 +1575,7 @@ export const oharaGlassDB = [
     "name": "S-LAH59",
     "nd": 1.816,
     "vd": 46.62,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.51372967,
       "A2": 0.702462343,
@@ -1476,6 +1589,7 @@ export const oharaGlassDB = [
     "name": "S-LAH60",
     "nd": 1.834,
     "vd": 37.16,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.95243469,
       "A2": 0.30710021,
@@ -1489,6 +1603,7 @@ export const oharaGlassDB = [
     "name": "S-LAH60MQ",
     "nd": 1.834,
     "vd": 37.17,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.95539063,
       "A2": 0.302550219,
@@ -1502,6 +1617,7 @@ export const oharaGlassDB = [
     "name": "S-LAH60V",
     "nd": 1.834,
     "vd": 37.21,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.05081962,
       "A2": 0.208475257,
@@ -1515,6 +1631,7 @@ export const oharaGlassDB = [
     "name": "S-LAH63Q",
     "nd": 1.8044,
     "vd": 39.58,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.96723017,
       "A2": 0.194953915,
@@ -1528,6 +1645,7 @@ export const oharaGlassDB = [
     "name": "S-LAH64",
     "nd": 1.788001,
     "vd": 47.37,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.83021453,
       "A2": 0.29156359,
@@ -1541,6 +1659,7 @@ export const oharaGlassDB = [
     "name": "S-LAH65V",
     "nd": 1.804,
     "vd": 46.58,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.81419034,
       "A2": 0.361376301,
@@ -1554,6 +1673,7 @@ export const oharaGlassDB = [
     "name": "S-LAH65VS",
     "nd": 1.804,
     "vd": 46.53,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.76068422,
       "A2": 0.414128906,
@@ -1567,6 +1687,7 @@ export const oharaGlassDB = [
     "name": "S-LAH66",
     "nd": 1.772499,
     "vd": 49.6,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.39280586,
       "A2": 0.679577094,
@@ -1580,6 +1701,7 @@ export const oharaGlassDB = [
     "name": "S-LAH66N",
     "nd": 1.772499,
     "vd": 49.55,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.66344396,
       "A2": 0.408708592,
@@ -1593,6 +1715,7 @@ export const oharaGlassDB = [
     "name": "S-LAH71",
     "nd": 1.850259,
     "vd": 32.27,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.98280031,
       "A2": 0.31675845,
@@ -1606,6 +1729,7 @@ export const oharaGlassDB = [
     "name": "S-LAH79",
     "nd": 2.0033,
     "vd": 28.27,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.32557148,
       "A2": 0.507967133,
@@ -1619,6 +1743,7 @@ export const oharaGlassDB = [
     "name": "S-LAH88",
     "nd": 1.9165,
     "vd": 31.6,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.1284434,
       "A2": 0.405082139,
@@ -1632,6 +1757,7 @@ export const oharaGlassDB = [
     "name": "S-LAH89",
     "nd": 1.8515,
     "vd": 40.78,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.95118827,
       "A2": 0.377607223,
@@ -1645,6 +1771,7 @@ export const oharaGlassDB = [
     "name": "S-LAH92",
     "nd": 1.8919,
     "vd": 37.13,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.10440311,
       "A2": 0.358346161,
@@ -1658,6 +1785,7 @@ export const oharaGlassDB = [
     "name": "S-LAH93",
     "nd": 1.90525,
     "vd": 35.04,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.17884378,
       "A2": 0.325508683,
@@ -1671,6 +1799,7 @@ export const oharaGlassDB = [
     "name": "S-LAH95",
     "nd": 1.90366,
     "vd": 31.34,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.15636617,
       "A2": 0.329558178,
@@ -1684,6 +1813,7 @@ export const oharaGlassDB = [
     "name": "S-LAH96",
     "nd": 1.76385,
     "vd": 48.49,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.85078519,
       "A2": 0.189204854,
@@ -1697,6 +1827,7 @@ export const oharaGlassDB = [
     "name": "S-LAH97",
     "nd": 1.755,
     "vd": 52.32,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.0273018,
       "A2": 0.989293564,
@@ -1710,6 +1841,7 @@ export const oharaGlassDB = [
     "name": "S-LAH98",
     "nd": 1.95375,
     "vd": 32.32,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.28510629,
       "A2": 0.385532264,
@@ -1723,6 +1855,7 @@ export const oharaGlassDB = [
     "name": "S-LAH99",
     "nd": 2.001,
     "vd": 29.14,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.39140662,
       "A2": 0.439219228,
@@ -1736,6 +1869,7 @@ export const oharaGlassDB = [
     "name": "S-LAH99W",
     "nd": 2.001,
     "vd": 29.14,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.39140662,
       "A2": 0.439219228,
@@ -1749,6 +1883,7 @@ export const oharaGlassDB = [
     "name": "S-FTM16",
     "nd": 1.592701,
     "vd": 35.31,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.32940907,
       "A2": 0.141512125,
@@ -1762,6 +1897,7 @@ export const oharaGlassDB = [
     "name": "S-NBM51",
     "nd": 1.613397,
     "vd": 44.27,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.37023101,
       "A2": 0.177665568,
@@ -1775,6 +1911,7 @@ export const oharaGlassDB = [
     "name": "S-NBM52",
     "nd": 1.62205,
     "vd": 41.08,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.39799204,
       "A2": 0.172238041,
@@ -1788,6 +1925,7 @@ export const oharaGlassDB = [
     "name": "S-NBH 5",
     "nd": 1.654115,
     "vd": 39.68,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.47544521,
       "A2": 0.193060095,
@@ -1801,6 +1939,7 @@ export const oharaGlassDB = [
     "name": "S-NBH 8",
     "nd": 1.720467,
     "vd": 34.71,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.61344136,
       "A2": 0.257295888,
@@ -1814,6 +1953,7 @@ export const oharaGlassDB = [
     "name": "S-NBH51",
     "nd": 1.749505,
     "vd": 35.33,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.71203689,
       "A2": 0.255989588,
@@ -1827,6 +1967,7 @@ export const oharaGlassDB = [
     "name": "S-NBH52V",
     "nd": 1.673,
     "vd": 38.26,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.51336868,
       "A2": 0.212341478,
@@ -1840,6 +1981,7 @@ export const oharaGlassDB = [
     "name": "S-NBH53V",
     "nd": 1.738,
     "vd": 32.33,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.65444141,
       "A2": 0.267453927,
@@ -1853,6 +1995,7 @@ export const oharaGlassDB = [
     "name": "S-NBH55",
     "nd": 1.8,
     "vd": 29.84,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.83145156,
       "A2": 0.287818024,
@@ -1866,6 +2009,7 @@ export const oharaGlassDB = [
     "name": "S-NBH56",
     "nd": 1.85478,
     "vd": 24.8,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.85191438,
       "A2": 0.431102852,
@@ -1879,6 +2023,7 @@ export const oharaGlassDB = [
     "name": "S-NBH57",
     "nd": 1.85025,
     "vd": 30.05,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.92026488,
       "A2": 0.37153524,
@@ -1892,6 +2037,7 @@ export const oharaGlassDB = [
     "name": "S-NBH58",
     "nd": 1.7888,
     "vd": 28.43,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.71408219,
       "A2": 0.362966167,
@@ -1905,6 +2051,7 @@ export const oharaGlassDB = [
     "name": "S-NBH59",
     "nd": 1.766342,
     "vd": 35.82,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.73689864,
       "A2": 0.287362541,
@@ -1918,6 +2065,7 @@ export const oharaGlassDB = [
     "name": "S-NPH 1",
     "nd": 1.808095,
     "vd": 22.76,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.75156623,
       "A2": 0.364006304,
@@ -1931,6 +2079,7 @@ export const oharaGlassDB = [
     "name": "S-NPH 1W",
     "nd": 1.808095,
     "vd": 22.76,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.75156623,
       "A2": 0.364006304,
@@ -1944,6 +2093,7 @@ export const oharaGlassDB = [
     "name": "S-NPH 2",
     "nd": 1.92286,
     "vd": 18.9,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.0386951,
       "A2": 0.437269641,
@@ -1957,6 +2107,7 @@ export const oharaGlassDB = [
     "name": "S-NPH 3",
     "nd": 1.95906,
     "vd": 17.47,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 2.09834903,
       "A2": 0.489088388,
@@ -1970,6 +2121,7 @@ export const oharaGlassDB = [
     "name": "S-NPH 4",
     "nd": 1.89286,
     "vd": 20.36,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.93563931,
       "A2": 0.449596478,
@@ -1983,6 +2135,7 @@ export const oharaGlassDB = [
     "name": "S-NPH 5",
     "nd": 1.858956,
     "vd": 22.73,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.89108996,
       "A2": 0.395220126,
@@ -1996,6 +2149,7 @@ export const oharaGlassDB = [
     "name": "S-NPH 7",
     "nd": 1.7783,
     "vd": 23.91,
+    "manufacturer": "OHARA",
     "sellmeier": {
       "A1": 1.68236554,
       "A2": 0.339649644,
@@ -2012,6 +2166,7 @@ export const schottGlassDB = [
     "name": "BK7G18",
     "nd": 1.51975,
     "vd": 63.58,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.26538542,
       "A2": 0.0144191073,
@@ -2025,6 +2180,7 @@ export const schottGlassDB = [
     "name": "F2",
     "nd": 1.62004,
     "vd": 36.37,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.34533359,
       "A2": 0.209073176,
@@ -2038,6 +2194,7 @@ export const schottGlassDB = [
     "name": "F2G12",
     "nd": 1.62072,
     "vd": 36.56,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.34702224,
       "A2": 0.210037763,
@@ -2051,6 +2208,7 @@ export const schottGlassDB = [
     "name": "F2HT",
     "nd": 1.62004,
     "vd": 36.37,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.34533359,
       "A2": 0.209073176,
@@ -2064,6 +2222,7 @@ export const schottGlassDB = [
     "name": "F2HTi",
     "nd": 1.62004,
     "vd": 36.37,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.34533359,
       "A2": 0.209073176,
@@ -2077,6 +2236,7 @@ export const schottGlassDB = [
     "name": "F5",
     "nd": 1.60342,
     "vd": 38.03,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.3104463,
       "A2": 0.19603426,
@@ -2090,6 +2250,7 @@ export const schottGlassDB = [
     "name": "FK5HTi",
     "nd": 1.48748,
     "vd": 70.47,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 0.90936218,
       "A2": 0.279077054,
@@ -2103,6 +2264,7 @@ export const schottGlassDB = [
     "name": "K10",
     "nd": 1.50137,
     "vd": 56.41,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.15687082,
       "A2": 0.0642625444,
@@ -2116,6 +2278,7 @@ export const schottGlassDB = [
     "name": "K5G20",
     "nd": 1.52344,
     "vd": 56.76,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.14094396,
       "A2": 0.14500119,
@@ -2129,6 +2292,7 @@ export const schottGlassDB = [
     "name": "LAK9G15",
     "nd": 1.69064,
     "vd": 54.76,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.28773667,
       "A2": 0.518244853,
@@ -2142,6 +2306,7 @@ export const schottGlassDB = [
     "name": "LASF35",
     "nd": 2.02204,
     "vd": 29.06,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 2.45505861,
       "A2": 0.453006077,
@@ -2155,6 +2320,7 @@ export const schottGlassDB = [
     "name": "LF5",
     "nd": 1.58144,
     "vd": 40.85,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.28035628,
       "A2": 0.163505973,
@@ -2168,6 +2334,7 @@ export const schottGlassDB = [
     "name": "LF5G19",
     "nd": 1.59655,
     "vd": 39.89,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.34611327,
       "A2": 0.142428018,
@@ -2181,6 +2348,7 @@ export const schottGlassDB = [
     "name": "LF5HTi",
     "nd": 1.58144,
     "vd": 40.89,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.28552924,
       "A2": 0.158357622,
@@ -2194,6 +2362,7 @@ export const schottGlassDB = [
     "name": "LLF1",
     "nd": 1.54814,
     "vd": 45.75,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.21640125,
       "A2": 0.13366454,
@@ -2207,6 +2376,7 @@ export const schottGlassDB = [
     "name": "LLF1HTi",
     "nd": 1.54815,
     "vd": 45.9,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.22510445,
       "A2": 0.125155671,
@@ -2220,6 +2390,7 @@ export const schottGlassDB = [
     "name": "N-BAF10",
     "nd": 1.67003,
     "vd": 47.11,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.5851495,
       "A2": 0.143559385,
@@ -2233,6 +2404,7 @@ export const schottGlassDB = [
     "name": "N-BAF4",
     "nd": 1.60568,
     "vd": 43.72,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.42056328,
       "A2": 0.102721269,
@@ -2246,6 +2418,7 @@ export const schottGlassDB = [
     "name": "N-BAF51",
     "nd": 1.65224,
     "vd": 44.96,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.51503623,
       "A2": 0.153621958,
@@ -2259,6 +2432,7 @@ export const schottGlassDB = [
     "name": "N-BAF52",
     "nd": 1.60863,
     "vd": 46.6,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.43903433,
       "A2": 0.0967046052,
@@ -2272,6 +2446,7 @@ export const schottGlassDB = [
     "name": "N-BAK1",
     "nd": 1.5725,
     "vd": 57.55,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.12365662,
       "A2": 0.309276848,
@@ -2285,6 +2460,7 @@ export const schottGlassDB = [
     "name": "N-BAK2",
     "nd": 1.53996,
     "vd": 59.71,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.01662154,
       "A2": 0.319903051,
@@ -2298,6 +2474,7 @@ export const schottGlassDB = [
     "name": "N-BAK4",
     "nd": 1.56883,
     "vd": 55.98,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.28834642,
       "A2": 0.132817724,
@@ -2311,6 +2488,7 @@ export const schottGlassDB = [
     "name": "N-BAK4HT",
     "nd": 1.56883,
     "vd": 55.98,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.28834642,
       "A2": 0.132817724,
@@ -2324,6 +2502,7 @@ export const schottGlassDB = [
     "name": "N-BALF4",
     "nd": 1.57956,
     "vd": 53.87,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.31004128,
       "A2": 0.142038259,
@@ -2337,6 +2516,7 @@ export const schottGlassDB = [
     "name": "N-BALF5",
     "nd": 1.54739,
     "vd": 53.63,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.28385965,
       "A2": 0.0719300942,
@@ -2350,6 +2530,7 @@ export const schottGlassDB = [
     "name": "N-BASF2",
     "nd": 1.66446,
     "vd": 36.0,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.53652081,
       "A2": 0.156971102,
@@ -2363,6 +2544,7 @@ export const schottGlassDB = [
     "name": "N-BASF64",
     "nd": 1.704,
     "vd": 39.38,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.65554268,
       "A2": 0.17131977,
@@ -2376,6 +2558,7 @@ export const schottGlassDB = [
     "name": "N-BK10",
     "nd": 1.49782,
     "vd": 66.95,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 0.888308131,
       "A2": 0.328964475,
@@ -2389,6 +2572,7 @@ export const schottGlassDB = [
     "name": "N-BK7",
     "nd": 1.5168,
     "vd": 64.17,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.03961212,
       "A2": 0.231792344,
@@ -2402,6 +2586,7 @@ export const schottGlassDB = [
     "name": "N-BK7HT",
     "nd": 1.5168,
     "vd": 64.17,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.03961212,
       "A2": 0.231792344,
@@ -2415,6 +2600,7 @@ export const schottGlassDB = [
     "name": "N-BK7HTi",
     "nd": 1.5168,
     "vd": 64.17,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.03961212,
       "A2": 0.231792344,
@@ -2428,6 +2614,7 @@ export const schottGlassDB = [
     "name": "N-F2",
     "nd": 1.62005,
     "vd": 36.43,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.39757037,
       "A2": 0.159201403,
@@ -2441,6 +2628,7 @@ export const schottGlassDB = [
     "name": "N-FK5",
     "nd": 1.48749,
     "vd": 70.41,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 0.844309338,
       "A2": 0.344147824,
@@ -2454,6 +2642,7 @@ export const schottGlassDB = [
     "name": "N-FK51A",
     "nd": 1.48656,
     "vd": 84.47,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 0.971247817,
       "A2": 0.216901417,
@@ -2467,6 +2656,7 @@ export const schottGlassDB = [
     "name": "N-FK58",
     "nd": 1.456,
     "vd": 90.9,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 0.738042712,
       "A2": 0.363371967,
@@ -2480,6 +2670,7 @@ export const schottGlassDB = [
     "name": "N-K5",
     "nd": 1.52249,
     "vd": 59.48,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.08511833,
       "A2": 0.199562005,
@@ -2493,6 +2684,7 @@ export const schottGlassDB = [
     "name": "N-KF9",
     "nd": 1.52346,
     "vd": 51.54,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.19286778,
       "A2": 0.0893346571,
@@ -2506,6 +2698,7 @@ export const schottGlassDB = [
     "name": "N-KZFS11",
     "nd": 1.63775,
     "vd": 42.41,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.3322245,
       "A2": 0.28924161,
@@ -2519,6 +2712,7 @@ export const schottGlassDB = [
     "name": "N-KZFS2",
     "nd": 1.55836,
     "vd": 54.01,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.23697554,
       "A2": 0.153569376,
@@ -2532,6 +2726,7 @@ export const schottGlassDB = [
     "name": "N-KZFS4",
     "nd": 1.61336,
     "vd": 44.49,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.35055424,
       "A2": 0.197575506,
@@ -2545,6 +2740,7 @@ export const schottGlassDB = [
     "name": "N-KZFS5",
     "nd": 1.65412,
     "vd": 39.7,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.47460789,
       "A2": 0.193584488,
@@ -2558,6 +2754,7 @@ export const schottGlassDB = [
     "name": "N-KZFS8",
     "nd": 1.72047,
     "vd": 34.7,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.62693651,
       "A2": 0.24369876,
@@ -2571,6 +2768,7 @@ export const schottGlassDB = [
     "name": "N-LAF2",
     "nd": 1.74397,
     "vd": 44.85,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.80984227,
       "A2": 0.15729555,
@@ -2584,6 +2782,7 @@ export const schottGlassDB = [
     "name": "N-LAF21",
     "nd": 1.788,
     "vd": 47.49,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.87134529,
       "A2": 0.25078301,
@@ -2597,6 +2796,7 @@ export const schottGlassDB = [
     "name": "N-LAF33",
     "nd": 1.78582,
     "vd": 44.05,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.79653417,
       "A2": 0.311577903,
@@ -2610,6 +2810,7 @@ export const schottGlassDB = [
     "name": "N-LAF34",
     "nd": 1.7725,
     "vd": 49.62,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.75836958,
       "A2": 0.313537785,
@@ -2623,6 +2824,7 @@ export const schottGlassDB = [
     "name": "N-LAF7",
     "nd": 1.7495,
     "vd": 34.82,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.74028764,
       "A2": 0.226710554,
@@ -2636,6 +2838,7 @@ export const schottGlassDB = [
     "name": "N-LAK10",
     "nd": 1.72003,
     "vd": 50.62,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.72878017,
       "A2": 0.169257825,
@@ -2649,6 +2852,7 @@ export const schottGlassDB = [
     "name": "N-LAK12",
     "nd": 1.6779,
     "vd": 55.2,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.17365704,
       "A2": 0.588992398,
@@ -2662,6 +2866,7 @@ export const schottGlassDB = [
     "name": "N-LAK14",
     "nd": 1.6968,
     "vd": 55.41,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.50781212,
       "A2": 0.318866829,
@@ -2675,6 +2880,7 @@ export const schottGlassDB = [
     "name": "N-LAK21",
     "nd": 1.64049,
     "vd": 60.1,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.22718116,
       "A2": 0.420783743,
@@ -2688,6 +2894,7 @@ export const schottGlassDB = [
     "name": "N-LAK22",
     "nd": 1.65113,
     "vd": 55.89,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.14229781,
       "A2": 0.535138441,
@@ -2701,6 +2908,7 @@ export const schottGlassDB = [
     "name": "N-LAK28",
     "nd": 1.74429,
     "vd": 50.77,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.50441986,
       "A2": 0.474120561,
@@ -2714,6 +2922,7 @@ export const schottGlassDB = [
     "name": "N-LAK33B",
     "nd": 1.755,
     "vd": 52.3,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.42288601,
       "A2": 0.593661336,
@@ -2727,6 +2936,7 @@ export const schottGlassDB = [
     "name": "N-LAK34",
     "nd": 1.72916,
     "vd": 54.5,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.26661442,
       "A2": 0.665919318,
@@ -2740,6 +2950,7 @@ export const schottGlassDB = [
     "name": "N-LAK7",
     "nd": 1.6516,
     "vd": 58.52,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.23679889,
       "A2": 0.445051837,
@@ -2753,6 +2964,7 @@ export const schottGlassDB = [
     "name": "N-LAK8",
     "nd": 1.713,
     "vd": 53.83,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.33183167,
       "A2": 0.546623206,
@@ -2766,6 +2978,7 @@ export const schottGlassDB = [
     "name": "N-LAK9",
     "nd": 1.691,
     "vd": 54.71,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.46231905,
       "A2": 0.344399589,
@@ -2779,6 +2992,7 @@ export const schottGlassDB = [
     "name": "N-LASF31A",
     "nd": 1.883,
     "vd": 40.76,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.96485075,
       "A2": 0.475231259,
@@ -2792,6 +3006,7 @@ export const schottGlassDB = [
     "name": "N-LASF40",
     "nd": 1.83404,
     "vd": 37.3,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.98550331,
       "A2": 0.274057042,
@@ -2805,6 +3020,7 @@ export const schottGlassDB = [
     "name": "N-LASF41",
     "nd": 1.83501,
     "vd": 43.13,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.86348331,
       "A2": 0.413307255,
@@ -2818,6 +3034,7 @@ export const schottGlassDB = [
     "name": "N-LASF43",
     "nd": 1.8061,
     "vd": 40.61,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.93502827,
       "A2": 0.23662935,
@@ -2831,6 +3048,7 @@ export const schottGlassDB = [
     "name": "N-LASF44",
     "nd": 1.8042,
     "vd": 46.5,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.78897105,
       "A2": 0.38675867,
@@ -2844,6 +3062,7 @@ export const schottGlassDB = [
     "name": "N-LASF45",
     "nd": 1.80107,
     "vd": 34.97,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.87140198,
       "A2": 0.267777879,
@@ -2857,6 +3076,7 @@ export const schottGlassDB = [
     "name": "N-LASF46B",
     "nd": 1.90366,
     "vd": 31.32,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 2.17988922,
       "A2": 0.306495184,
@@ -2870,6 +3090,7 @@ export const schottGlassDB = [
     "name": "N-LASF55",
     "nd": 1.9538,
     "vd": 30.56,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 2.30861228,
       "A2": 0.354736638,
@@ -2883,6 +3104,7 @@ export const schottGlassDB = [
     "name": "N-LASF9",
     "nd": 1.85025,
     "vd": 32.17,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 2.00029547,
       "A2": 0.298926886,
@@ -2896,6 +3118,7 @@ export const schottGlassDB = [
     "name": "N-PK51",
     "nd": 1.52855,
     "vd": 76.98,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.15610775,
       "A2": 0.153229344,
@@ -2909,6 +3132,7 @@ export const schottGlassDB = [
     "name": "N-PK52A",
     "nd": 1.497,
     "vd": 81.61,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.029607,
       "A2": 0.1880506,
@@ -2922,6 +3146,7 @@ export const schottGlassDB = [
     "name": "N-PSK3",
     "nd": 1.55232,
     "vd": 63.46,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 0.88727211,
       "A2": 0.489592425,
@@ -2935,6 +3160,7 @@ export const schottGlassDB = [
     "name": "N-PSK53A",
     "nd": 1.618,
     "vd": 63.39,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.38121836,
       "A2": 0.196745645,
@@ -2948,6 +3174,7 @@ export const schottGlassDB = [
     "name": "N-SF1",
     "nd": 1.71736,
     "vd": 29.62,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.60865158,
       "A2": 0.237725916,
@@ -2961,6 +3188,7 @@ export const schottGlassDB = [
     "name": "N-SF10",
     "nd": 1.72828,
     "vd": 28.53,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.62153902,
       "A2": 0.256287842,
@@ -2974,6 +3202,7 @@ export const schottGlassDB = [
     "name": "N-SF11",
     "nd": 1.78472,
     "vd": 25.68,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.73759695,
       "A2": 0.313747346,
@@ -2987,6 +3216,7 @@ export const schottGlassDB = [
     "name": "N-SF2",
     "nd": 1.64769,
     "vd": 33.82,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.47343127,
       "A2": 0.163681849,
@@ -3000,6 +3230,7 @@ export const schottGlassDB = [
     "name": "N-SF3",
     "nd": 1.74,
     "vd": 28.2,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.57230542,
       "A2": 0.339661149,
@@ -3013,6 +3244,7 @@ export const schottGlassDB = [
     "name": "N-SF4",
     "nd": 1.75513,
     "vd": 27.38,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.67780282,
       "A2": 0.282849893,
@@ -3026,6 +3258,7 @@ export const schottGlassDB = [
     "name": "N-SF5",
     "nd": 1.67271,
     "vd": 32.25,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.52481889,
       "A2": 0.187085527,
@@ -3039,6 +3272,7 @@ export const schottGlassDB = [
     "name": "N-SF57",
     "nd": 1.84666,
     "vd": 23.83,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.87543831,
       "A2": 0.37375749,
@@ -3052,6 +3286,7 @@ export const schottGlassDB = [
     "name": "N-SF57HT",
     "nd": 1.84666,
     "vd": 23.78,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.87543831,
       "A2": 0.37375749,
@@ -3065,6 +3300,7 @@ export const schottGlassDB = [
     "name": "N-SF57HTultra",
     "nd": 1.84666,
     "vd": 23.78,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.87543831,
       "A2": 0.37375749,
@@ -3078,6 +3314,7 @@ export const schottGlassDB = [
     "name": "N-SF6",
     "nd": 1.80518,
     "vd": 25.36,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.77931763,
       "A2": 0.338149866,
@@ -3091,6 +3328,7 @@ export const schottGlassDB = [
     "name": "N-SF66",
     "nd": 1.92286,
     "vd": 20.88,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 2.0245976,
       "A2": 0.470187196,
@@ -3104,6 +3342,7 @@ export const schottGlassDB = [
     "name": "N-SF6HT",
     "nd": 1.80518,
     "vd": 25.36,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.77931763,
       "A2": 0.338149866,
@@ -3117,6 +3356,7 @@ export const schottGlassDB = [
     "name": "N-SF6HTultra",
     "nd": 1.80518,
     "vd": 25.36,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.77931763,
       "A2": 0.338149866,
@@ -3130,6 +3370,7 @@ export const schottGlassDB = [
     "name": "N-SF8",
     "nd": 1.68894,
     "vd": 31.31,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.55075812,
       "A2": 0.209816918,
@@ -3143,6 +3384,7 @@ export const schottGlassDB = [
     "name": "N-SK11",
     "nd": 1.56384,
     "vd": 60.8,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.17963631,
       "A2": 0.229817295,
@@ -3156,6 +3398,7 @@ export const schottGlassDB = [
     "name": "N-SK14",
     "nd": 1.60311,
     "vd": 60.6,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 0.936155374,
       "A2": 0.594052018,
@@ -3169,6 +3412,7 @@ export const schottGlassDB = [
     "name": "N-SK16",
     "nd": 1.62041,
     "vd": 60.32,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.34317774,
       "A2": 0.241144399,
@@ -3182,6 +3426,7 @@ export const schottGlassDB = [
     "name": "N-SK2",
     "nd": 1.60738,
     "vd": 56.65,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.28189012,
       "A2": 0.257738258,
@@ -3195,6 +3440,7 @@ export const schottGlassDB = [
     "name": "N-SK2HT",
     "nd": 1.60738,
     "vd": 56.65,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.28189012,
       "A2": 0.257738258,
@@ -3208,6 +3454,7 @@ export const schottGlassDB = [
     "name": "N-SK4",
     "nd": 1.61272,
     "vd": 58.63,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.32993741,
       "A2": 0.228542996,
@@ -3221,6 +3468,7 @@ export const schottGlassDB = [
     "name": "N-SK5",
     "nd": 1.58913,
     "vd": 61.27,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 0.991463823,
       "A2": 0.495982121,
@@ -3234,6 +3482,7 @@ export const schottGlassDB = [
     "name": "N-SK5HTi",
     "nd": 1.58913,
     "vd": 61.27,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 0.991463823,
       "A2": 0.495982121,
@@ -3247,6 +3496,7 @@ export const schottGlassDB = [
     "name": "N-SSK2",
     "nd": 1.62229,
     "vd": 53.27,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.4306027,
       "A2": 0.153150554,
@@ -3260,6 +3510,7 @@ export const schottGlassDB = [
     "name": "N-SSK5",
     "nd": 1.65844,
     "vd": 50.88,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.59222659,
       "A2": 0.103520774,
@@ -3273,6 +3524,7 @@ export const schottGlassDB = [
     "name": "N-SSK8",
     "nd": 1.61773,
     "vd": 49.83,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.44857867,
       "A2": 0.117965926,
@@ -3286,6 +3538,7 @@ export const schottGlassDB = [
     "name": "N-ZK7A",
     "nd": 1.508054,
     "vd": 61.04,
+    "manufacturer": "SCHOTT",
     "sellmeier": {
       "A1": 1.07509891,
       "A2": 0.168895044,
@@ -3333,9 +3586,106 @@ export function calculateRefractiveIndex(sellmeierCoeffs, wavelength) {
 }
 
 /**
- * Get glass data with Sellmeier coefficients from all databases
+ * Calculate refractive index using Schott equation (used by CDGM)
+ * Schott formula: n² = A0 + A1*λ² + A2*λ⁻² + A3*λ⁻⁴ + A4*λ⁻⁶ + A5*λ⁻⁸
+ * @param {Object} schottCoeffs - Schott coefficients {A0, A1, A2, A3, A4, A5}
+ * @param {number} wavelength - Wavelength in micrometers (μm)
+ * @returns {number} Calculated refractive index
+ */
+export function calculateRefractiveIndexSchott(schottCoeffs, wavelength) {
+  if (!schottCoeffs || wavelength <= 0) {
+    return 1.0;
+  }
+  
+  const { A0, A1, A2, A3, A4, A5 } = schottCoeffs;
+  const lambda2 = wavelength * wavelength;
+  const lambdaMinus2 = 1 / lambda2;
+  const lambdaMinus4 = lambdaMinus2 * lambdaMinus2;
+  const lambdaMinus6 = lambdaMinus4 * lambdaMinus2;
+  const lambdaMinus8 = lambdaMinus4 * lambdaMinus4;
+  
+  try {
+    const n2 = A0 + A1 * lambda2 + A2 * lambdaMinus2 + A3 * lambdaMinus4 + A4 * lambdaMinus6 + A5 * lambdaMinus8;
+    const n = Math.sqrt(n2);
+    
+    // Sanity check
+    if (!isFinite(n) || n < 1.0 || n > 3.0) {
+      console.warn(`⚠️ Calculated refractive index (Schott) ${n} seems invalid for wavelength ${wavelength}μm`);
+      return 1.0;
+    }
+    
+    return n;
+  } catch (error) {
+    console.warn(`⚠️ Error calculating refractive index (Schott): ${error.message}`);
+    return 1.0;
+  }
+}
+
+/**
+ * Calculate refractive index using Sumita equation
+ * Sumita formula: n² = A0 + A1*λ² + A2*λ⁻² + A3*λ⁻⁴ + A4*λ⁻⁶ + A5*λ⁻⁸
+ * (Same as Schott formula, but stored separately for clarity)
+ * @param {Object} sumitaCoeffs - Sumita coefficients {A0, A1, A2, A3, A4, A5}
+ * @param {number} wavelength - Wavelength in micrometers (μm)
+ * @returns {number} Calculated refractive index
+ */
+export function calculateRefractiveIndexSumita(sumitaCoeffs, wavelength) {
+  if (!sumitaCoeffs || wavelength <= 0) {
+    return 1.0;
+  }
+  
+  const { A0, A1, A2, A3, A4, A5 } = sumitaCoeffs;
+  const lambda2 = wavelength * wavelength;
+  const lambdaMinus2 = 1 / lambda2;
+  const lambdaMinus4 = lambdaMinus2 * lambdaMinus2;
+  const lambdaMinus6 = lambdaMinus4 * lambdaMinus2;
+  const lambdaMinus8 = lambdaMinus4 * lambdaMinus4;
+  
+  try {
+    const n2 = A0 + A1 * lambda2 + A2 * lambdaMinus2 + A3 * lambdaMinus4 + A4 * lambdaMinus6 + A5 * lambdaMinus8;
+    const n = Math.sqrt(n2);
+    
+    // Sanity check
+    if (!isFinite(n) || n < 1.0 || n > 3.0) {
+      console.warn(`⚠️ Calculated refractive index (Sumita) ${n} seems invalid for wavelength ${wavelength}μm`);
+      return 1.0;
+    }
+    
+    return n;
+  } catch (error) {
+    console.warn(`⚠️ Error calculating refractive index (Sumita): ${error.message}`);
+    return 1.0;
+  }
+}
+
+/**
+ * Calculate refractive index for a glass at a given wavelength
+ * Automatically detects the formula type (Sellmeier, Schott, or Sumita)
+ * @param {Object} glassData - Glass data with coefficients
+ * @param {number} wavelength - Wavelength in micrometers (μm)
+ * @returns {number} Calculated refractive index
+ */
+export function calculateGlassRefractiveIndex(glassData, wavelength) {
+  if (!glassData || wavelength <= 0) {
+    return 1.0;
+  }
+  
+  if (glassData.sellmeier) {
+    return calculateRefractiveIndex(glassData.sellmeier, wavelength);
+  } else if (glassData.schott) {
+    return calculateRefractiveIndexSchott(glassData.schott, wavelength);
+  } else if (glassData.sumita) {
+    return calculateRefractiveIndexSumita(glassData.sumita, wavelength);
+  }
+  
+  // Fallback: return nd if available
+  return glassData.nd || 1.0;
+}
+
+/**
+ * Get glass data with coefficients from all databases
  * @param {string} glassName - Name of the glass material (or numeric string for direct refractive index)
- * @returns {Object|null} Glass data with Sellmeier coefficients or null if not found
+ * @returns {Object|null} Glass data with coefficients or null if not found
  */
 export function getGlassDataWithSellmeier(glassName) {
   if (!glassName) return null;
@@ -3361,17 +3711,12 @@ export function getGlassDataWithSellmeier(glassName) {
     };
   }
   
-  // Search in miscellaneousDB first
-  let glassData = miscellaneousDB.find(glass => glass.name === glassName);
-  if (glassData) return glassData;
-  
-  // Search in oharaGlassDB
-  glassData = oharaGlassDB.find(glass => glass.name === glassName);
-  if (glassData) return glassData;
-  
-  // Search in schottGlassDB
-  glassData = schottGlassDB.find(glass => glass.name === glassName);
-  if (glassData) return glassData;
+  // Search in all databases
+  const databases = getAllGlassDatabases();
+  for (const db of databases) {
+    const glassData = db.find(glass => glass.name === glassName);
+    if (glassData) return glassData;
+  }
   
   return null;
 }
@@ -3386,6 +3731,7 @@ export const hoyaGlassDB = [
     "name": "FC5",
     "nd": 1.48749,
     "vd": 70.44,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.1894054,
       "A2": 0.008640337,
@@ -3399,6 +3745,7 @@ export const hoyaGlassDB = [
     "name": "FCD1",
     "nd": 1.497,
     "vd": 81.61,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.2181132,
       "A2": 0.0083470679,
@@ -3412,6 +3759,7 @@ export const hoyaGlassDB = [
     "name": "FCD1B",
     "nd": 1.4971,
     "vd": 81.56,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.2189068,
       "A2": 0.0080887631,
@@ -3425,6 +3773,7 @@ export const hoyaGlassDB = [
     "name": "FCD10A",
     "nd": 1.4586,
     "vd": 90.19,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.1085888,
       "A2": 0.006954748,
@@ -3438,6 +3787,7 @@ export const hoyaGlassDB = [
     "name": "FCD100",
     "nd": 1.437,
     "vd": 95.1,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.0482157,
       "A2": 0.0061826755,
@@ -3451,6 +3801,7 @@ export const hoyaGlassDB = [
     "name": "FCD500",
     "nd": 1.55397,
     "vd": 71.76,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.3872008,
       "A2": 0.0089478008,
@@ -3464,6 +3815,7 @@ export const hoyaGlassDB = [
     "name": "FCD515",
     "nd": 1.59282,
     "vd": 68.62,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.502355,
       "A2": 0.012012743,
@@ -3477,6 +3829,7 @@ export const hoyaGlassDB = [
     "name": "FCD600",
     "nd": 1.5941,
     "vd": 60.47,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5009632,
       "A2": 0.014064825,
@@ -3490,6 +3843,7 @@ export const hoyaGlassDB = [
     "name": "FCD615",
     "nd": 1.57144,
     "vd": 71.61,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.437899,
       "A2": 0.011069238,
@@ -3503,6 +3857,7 @@ export const hoyaGlassDB = [
     "name": "FCD705",
     "nd": 1.55032,
     "vd": 75.5,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.3742832,
       "A2": 0.010582967,
@@ -3516,6 +3871,7 @@ export const hoyaGlassDB = [
     "name": "FCD915",
     "nd": 1.48071,
     "vd": 85.29,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.1715724,
       "A2": 0.0075638473,
@@ -3529,6 +3885,7 @@ export const hoyaGlassDB = [
     "name": "PCD4",
     "nd": 1.618,
     "vd": 63.4,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5807045,
       "A2": 0.01268943,
@@ -3542,6 +3899,7 @@ export const hoyaGlassDB = [
     "name": "PCD40",
     "nd": 1.61997,
     "vd": 63.88,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5844463,
       "A2": 0.014301987,
@@ -3555,6 +3913,7 @@ export const hoyaGlassDB = [
     "name": "PCD51",
     "nd": 1.59349,
     "vd": 67.0,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5046638,
       "A2": 0.012653769,
@@ -3568,6 +3927,7 @@ export const hoyaGlassDB = [
     "name": "BSC7",
     "nd": 1.5168,
     "vd": 64.2,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.2702566,
       "A2": 0.011609706,
@@ -3581,6 +3941,7 @@ export const hoyaGlassDB = [
     "name": "E-C3",
     "nd": 1.51823,
     "vd": 58.96,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.2725452,
       "A2": 0.011306843,
@@ -3594,6 +3955,7 @@ export const hoyaGlassDB = [
     "name": "BAC4",
     "nd": 1.56883,
     "vd": 56.04,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.4196645,
       "A2": 0.01539739,
@@ -3607,6 +3969,7 @@ export const hoyaGlassDB = [
     "name": "BACD5",
     "nd": 1.58913,
     "vd": 61.25,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.4861499,
       "A2": 0.014685059,
@@ -3620,6 +3983,7 @@ export const hoyaGlassDB = [
     "name": "BACD14",
     "nd": 1.60311,
     "vd": 60.7,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5335256,
       "A2": 0.012257249,
@@ -3633,6 +3997,7 @@ export const hoyaGlassDB = [
     "name": "BACD15",
     "nd": 1.62299,
     "vd": 58.12,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5864832,
       "A2": 0.018080573,
@@ -3646,6 +4011,7 @@ export const hoyaGlassDB = [
     "name": "BACD16",
     "nd": 1.62041,
     "vd": 60.35,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5859898,
       "A2": 0.013995502,
@@ -3659,6 +4025,7 @@ export const hoyaGlassDB = [
     "name": "BACD18",
     "nd": 1.63854,
     "vd": 55.45,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.6365277,
       "A2": 0.017143665,
@@ -3672,6 +4039,7 @@ export const hoyaGlassDB = [
     "name": "BACED5",
     "nd": 1.65844,
     "vd": 50.86,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.6934245,
       "A2": 0.02049645,
@@ -3685,6 +4053,7 @@ export const hoyaGlassDB = [
     "name": "LAC8",
     "nd": 1.713,
     "vd": 53.94,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8778537,
       "A2": 0.020301185,
@@ -3698,6 +4067,7 @@ export const hoyaGlassDB = [
     "name": "LAC14",
     "nd": 1.6968,
     "vd": 55.46,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8255229,
       "A2": 0.019791402,
@@ -3711,6 +4081,7 @@ export const hoyaGlassDB = [
     "name": "TAC6L",
     "nd": 1.755,
     "vd": 52.32,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.0165377,
       "A2": 0.022581959,
@@ -3724,6 +4095,7 @@ export const hoyaGlassDB = [
     "name": "TAC6",
     "nd": 1.755,
     "vd": 52.32,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.0182184,
       "A2": 0.021520137,
@@ -3737,6 +4109,7 @@ export const hoyaGlassDB = [
     "name": "TAC8P",
     "nd": 1.72916,
     "vd": 54.54,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9312694,
       "A2": 0.021679031,
@@ -3750,6 +4123,7 @@ export const hoyaGlassDB = [
     "name": "TAC8",
     "nd": 1.72916,
     "vd": 54.67,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9324178,
       "A2": 0.021121636,
@@ -3763,6 +4137,7 @@ export const hoyaGlassDB = [
     "name": "E-CF6",
     "nd": 1.51742,
     "vd": 52.15,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.2668912,
       "A2": 0.012174195,
@@ -3776,6 +4151,7 @@ export const hoyaGlassDB = [
     "name": "E-FEL1",
     "nd": 1.54814,
     "vd": 45.82,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.3534484,
       "A2": 0.014097325,
@@ -3789,6 +4165,7 @@ export const hoyaGlassDB = [
     "name": "E-FEL2",
     "nd": 1.54072,
     "vd": 47.2,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.3317983,
       "A2": 0.014032761,
@@ -3802,6 +4179,7 @@ export const hoyaGlassDB = [
     "name": "E-FL5",
     "nd": 1.58144,
     "vd": 40.89,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.4465754,
       "A2": 0.017759132,
@@ -3815,6 +4193,7 @@ export const hoyaGlassDB = [
     "name": "E-FL6",
     "nd": 1.56732,
     "vd": 42.84,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.4079653,
       "A2": 0.015704715,
@@ -3828,6 +4207,7 @@ export const hoyaGlassDB = [
     "name": "E-F2",
     "nd": 1.62004,
     "vd": 36.3,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5561822,
       "A2": 0.022470348,
@@ -3841,6 +4221,7 @@ export const hoyaGlassDB = [
     "name": "E-F5",
     "nd": 1.60342,
     "vd": 38.01,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5095673,
       "A2": 0.019894774,
@@ -3854,6 +4235,7 @@ export const hoyaGlassDB = [
     "name": "E-FD1L",
     "nd": 1.71736,
     "vd": 29.5,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8496451,
       "A2": 0.030196873,
@@ -3867,6 +4249,7 @@ export const hoyaGlassDB = [
     "name": "E-FD1",
     "nd": 1.71736,
     "vd": 29.5,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8508499,
       "A2": 0.029415325,
@@ -3880,6 +4263,7 @@ export const hoyaGlassDB = [
     "name": "E-FD2",
     "nd": 1.64769,
     "vd": 33.84,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.6399644,
       "A2": 0.023061733,
@@ -3893,6 +4277,7 @@ export const hoyaGlassDB = [
     "name": "E-FD4L",
     "nd": 1.7552,
     "vd": 27.53,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9677007,
       "A2": 0.033049583,
@@ -3906,6 +4291,7 @@ export const hoyaGlassDB = [
     "name": "E-FD4",
     "nd": 1.7552,
     "vd": 27.53,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9673173,
       "A2": 0.03345668,
@@ -3919,6 +4305,7 @@ export const hoyaGlassDB = [
     "name": "E-FD5",
     "nd": 1.6727,
     "vd": 32.17,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.7135839,
       "A2": 0.026133708,
@@ -3932,6 +4319,7 @@ export const hoyaGlassDB = [
     "name": "E-FD8",
     "nd": 1.68893,
     "vd": 31.16,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.7617586,
       "A2": 0.028221737,
@@ -3945,6 +4333,7 @@ export const hoyaGlassDB = [
     "name": "E-FD80",
     "nd": 1.6896,
     "vd": 31.14,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.7659751,
       "A2": 0.02715647,
@@ -3958,6 +4347,7 @@ export const hoyaGlassDB = [
     "name": "E-FD10L",
     "nd": 1.72825,
     "vd": 28.32,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8819845,
       "A2": 0.031090844,
@@ -3971,6 +4361,7 @@ export const hoyaGlassDB = [
     "name": "E-FD10",
     "nd": 1.72825,
     "vd": 28.32,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.881518,
       "A2": 0.03145559,
@@ -3984,6 +4375,7 @@ export const hoyaGlassDB = [
     "name": "E-FD13",
     "nd": 1.74077,
     "vd": 27.76,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9205906,
       "A2": 0.03256776,
@@ -3997,6 +4389,7 @@ export const hoyaGlassDB = [
     "name": "E-FD15L",
     "nd": 1.69895,
     "vd": 30.05,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.7924658,
       "A2": 0.028359569,
@@ -4010,6 +4403,7 @@ export const hoyaGlassDB = [
     "name": "E-FD15",
     "nd": 1.69895,
     "vd": 30.05,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.7919943,
       "A2": 0.028802741,
@@ -4023,6 +4417,7 @@ export const hoyaGlassDB = [
     "name": "FD60-W",
     "nd": 1.80518,
     "vd": 25.46,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1171483,
       "A2": 0.044864975,
@@ -4036,6 +4431,7 @@ export const hoyaGlassDB = [
     "name": "FD60",
     "nd": 1.80518,
     "vd": 25.46,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1171483,
       "A2": 0.044864975,
@@ -4049,6 +4445,7 @@ export const hoyaGlassDB = [
     "name": "FD110",
     "nd": 1.78472,
     "vd": 25.72,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.0534415,
       "A2": 0.040609369,
@@ -4062,6 +4459,7 @@ export const hoyaGlassDB = [
     "name": "FD140",
     "nd": 1.76182,
     "vd": 26.61,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9851294,
       "A2": 0.035496437,
@@ -4075,6 +4473,7 @@ export const hoyaGlassDB = [
     "name": "FD225",
     "nd": 1.80809,
     "vd": 22.76,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1189869,
       "A2": 0.044425024,
@@ -4088,6 +4487,7 @@ export const hoyaGlassDB = [
     "name": "FD270",
     "nd": 1.6843,
     "vd": 26.81,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.7430787,
       "A2": 0.024611038,
@@ -4101,6 +4501,7 @@ export const hoyaGlassDB = [
     "name": "FD300",
     "nd": 1.62423,
     "vd": 30.05,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5643434,
       "A2": 0.019574131,
@@ -4114,6 +4515,7 @@ export const hoyaGlassDB = [
     "name": "E-FDS1-W",
     "nd": 1.92286,
     "vd": 20.88,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.5044639,
       "A2": 0.0538027,
@@ -4127,6 +4529,7 @@ export const hoyaGlassDB = [
     "name": "E-FDS1",
     "nd": 1.92286,
     "vd": 20.88,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.5044639,
       "A2": 0.0538027,
@@ -4140,6 +4543,7 @@ export const hoyaGlassDB = [
     "name": "E-FDS2",
     "nd": 2.00272,
     "vd": 19.32,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.7672603,
       "A2": 0.069849634,
@@ -4153,6 +4557,7 @@ export const hoyaGlassDB = [
     "name": "E-FDS3-W",
     "nd": 2.1042,
     "vd": 17.02,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 4.1120387,
       "A2": 0.089852105,
@@ -4166,6 +4571,7 @@ export const hoyaGlassDB = [
     "name": "E-FDS3",
     "nd": 2.1042,
     "vd": 17.02,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 4.1120387,
       "A2": 0.089852105,
@@ -4179,6 +4585,7 @@ export const hoyaGlassDB = [
     "name": "FDS16-W",
     "nd": 1.98612,
     "vd": 16.48,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.6906098,
       "A2": 0.063139051,
@@ -4192,6 +4599,7 @@ export const hoyaGlassDB = [
     "name": "FDS165-W",
     "nd": 1.98611,
     "vd": 17.25,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.696567,
       "A2": 0.06426158,
@@ -4205,6 +4613,7 @@ export const hoyaGlassDB = [
     "name": "FDS18-W",
     "nd": 1.94595,
     "vd": 17.98,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.563784,
       "A2": 0.058401659,
@@ -4218,6 +4627,7 @@ export const hoyaGlassDB = [
     "name": "FDS18",
     "nd": 1.94595,
     "vd": 17.98,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.563784,
       "A2": 0.058401659,
@@ -4231,6 +4641,7 @@ export const hoyaGlassDB = [
     "name": "FDS20-W",
     "nd": 1.86966,
     "vd": 20.02,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.3114745,
       "A2": 0.051621829,
@@ -4244,6 +4655,7 @@ export const hoyaGlassDB = [
     "name": "FDS24-W",
     "nd": 1.92119,
     "vd": 23.96,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.5126327,
       "A2": 0.053936061,
@@ -4257,6 +4669,7 @@ export const hoyaGlassDB = [
     "name": "FDS24-SW",
     "nd": 1.92119,
     "vd": 23.96,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.5126327,
       "A2": 0.053936061,
@@ -4270,6 +4683,7 @@ export const hoyaGlassDB = [
     "name": "FDS24",
     "nd": 1.92119,
     "vd": 23.96,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.5126327,
       "A2": 0.053936061,
@@ -4283,6 +4697,7 @@ export const hoyaGlassDB = [
     "name": "FDS90-SGP",
     "nd": 1.84666,
     "vd": 23.84,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.2570937,
       "A2": 0.043820858,
@@ -4296,6 +4711,7 @@ export const hoyaGlassDB = [
     "name": "FDS90-SG",
     "nd": 1.84666,
     "vd": 23.78,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.2606321,
       "A2": 0.040902938,
@@ -4309,6 +4725,7 @@ export const hoyaGlassDB = [
     "name": "FDS90",
     "nd": 1.84666,
     "vd": 23.78,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.2606321,
       "A2": 0.040902938,
@@ -4322,6 +4739,7 @@ export const hoyaGlassDB = [
     "name": "FF5",
     "nd": 1.5927,
     "vd": 35.45,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.4743324,
       "A2": 0.019293801,
@@ -4335,6 +4753,7 @@ export const hoyaGlassDB = [
     "name": "FF8",
     "nd": 1.75211,
     "vd": 25.05,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9564361,
       "A2": 0.029878823,
@@ -4348,6 +4767,7 @@ export const hoyaGlassDB = [
     "name": "BAFD7",
     "nd": 1.70154,
     "vd": 41.15,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8217211,
       "A2": 0.024345979,
@@ -4361,6 +4781,7 @@ export const hoyaGlassDB = [
     "name": "BAFD8",
     "nd": 1.72342,
     "vd": 37.99,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8863236,
       "A2": 0.027654256,
@@ -4374,6 +4795,7 @@ export const hoyaGlassDB = [
     "name": "LAF2",
     "nd": 1.744,
     "vd": 44.9,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9657374,
       "A2": 0.026024525,
@@ -4387,6 +4809,7 @@ export const hoyaGlassDB = [
     "name": "LAF3",
     "nd": 1.717,
     "vd": 47.98,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8789799,
       "A2": 0.024425656,
@@ -4400,6 +4823,7 @@ export const hoyaGlassDB = [
     "name": "LAF45",
     "nd": 1.61396,
     "vd": 44.29,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5507417,
       "A2": 0.018744935,
@@ -4413,6 +4837,7 @@ export const hoyaGlassDB = [
     "name": "LAF50",
     "nd": 1.60199,
     "vd": 50.21,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5196146,
       "A2": 0.01660586,
@@ -4426,6 +4851,7 @@ export const hoyaGlassDB = [
     "name": "NBF1",
     "nd": 1.7433,
     "vd": 49.22,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9753491,
       "A2": 0.021096383,
@@ -4439,6 +4865,7 @@ export const hoyaGlassDB = [
     "name": "NBFD3",
     "nd": 1.8045,
     "vd": 39.64,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1633746,
       "A2": 0.031133309,
@@ -4452,6 +4879,7 @@ export const hoyaGlassDB = [
     "name": "NBFD10",
     "nd": 1.834,
     "vd": 37.34,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.2615573,
       "A2": 0.033470739,
@@ -4465,6 +4893,7 @@ export const hoyaGlassDB = [
     "name": "NBFD11",
     "nd": 1.7859,
     "vd": 43.94,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1010267,
       "A2": 0.032631687,
@@ -4478,6 +4907,7 @@ export const hoyaGlassDB = [
     "name": "NBFD13",
     "nd": 1.8061,
     "vd": 40.73,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1729223,
       "A2": 0.029168114,
@@ -4491,6 +4921,7 @@ export const hoyaGlassDB = [
     "name": "NBFD15-W",
     "nd": 1.8061,
     "vd": 33.27,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1540011,
       "A2": 0.034103312,
@@ -4504,6 +4935,7 @@ export const hoyaGlassDB = [
     "name": "NBFD15",
     "nd": 1.8061,
     "vd": 33.27,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1540011,
       "A2": 0.034103312,
@@ -4517,6 +4949,7 @@ export const hoyaGlassDB = [
     "name": "NBFD25",
     "nd": 1.85451,
     "vd": 25.15,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.2879389,
       "A2": 0.045638807,
@@ -4530,6 +4963,7 @@ export const hoyaGlassDB = [
     "name": "NBFD26",
     "nd": 1.83401,
     "vd": 25.97,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.2218201,
       "A2": 0.043038744,
@@ -4543,6 +4977,7 @@ export const hoyaGlassDB = [
     "name": "NBFD265",
     "nd": 1.95203,
     "vd": 26.2,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.6415592,
       "A2": 0.049779099,
@@ -4556,6 +4991,7 @@ export const hoyaGlassDB = [
     "name": "NBFD27",
     "nd": 1.9011,
     "vd": 27.06,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4613308,
       "A2": 0.046156752,
@@ -4569,6 +5005,7 @@ export const hoyaGlassDB = [
     "name": "NBFD29",
     "nd": 1.77047,
     "vd": 29.74,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.023484,
       "A2": 0.034673303,
@@ -4582,6 +5019,7 @@ export const hoyaGlassDB = [
     "name": "NBFD30",
     "nd": 1.85883,
     "vd": 30.0,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.3241277,
       "A2": 0.040932303,
@@ -4595,6 +5033,7 @@ export const hoyaGlassDB = [
     "name": "NBFD32",
     "nd": 1.73037,
     "vd": 32.23,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8989349,
       "A2": 0.030163481,
@@ -4608,6 +5047,7 @@ export const hoyaGlassDB = [
     "name": "NBFD38",
     "nd": 1.65253,
     "vd": 39.48,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.6646621,
       "A2": 0.02226518,
@@ -4621,6 +5061,7 @@ export const hoyaGlassDB = [
     "name": "TAF1",
     "nd": 1.7725,
     "vd": 49.63,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.0736378,
       "A2": 0.023627699,
@@ -4634,6 +5075,7 @@ export const hoyaGlassDB = [
     "name": "TAF3D",
     "nd": 1.8042,
     "vd": 46.5,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.175337,
       "A2": 0.0278609,
@@ -4647,6 +5089,7 @@ export const hoyaGlassDB = [
     "name": "TAF3",
     "nd": 1.8042,
     "vd": 46.5,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1743707,
       "A2": 0.028862637,
@@ -4660,6 +5103,7 @@ export const hoyaGlassDB = [
     "name": "TAF48",
     "nd": 1.79091,
     "vd": 48.09,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1330829,
       "A2": 0.025642638,
@@ -4673,6 +5117,7 @@ export const hoyaGlassDB = [
     "name": "TAFD5G",
     "nd": 1.83481,
     "vd": 42.72,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.2756799,
       "A2": 0.030780102,
@@ -4686,6 +5131,7 @@ export const hoyaGlassDB = [
     "name": "TAFD5F",
     "nd": 1.83481,
     "vd": 42.72,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.275546,
       "A2": 0.030922062,
@@ -4699,6 +5145,7 @@ export const hoyaGlassDB = [
     "name": "TAFD25L",
     "nd": 1.90366,
     "vd": 31.32,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4892744,
       "A2": 0.042076777,
@@ -4712,6 +5159,7 @@ export const hoyaGlassDB = [
     "name": "TAFD25",
     "nd": 1.90366,
     "vd": 31.32,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4905528,
       "A2": 0.041146322,
@@ -4725,6 +5173,7 @@ export const hoyaGlassDB = [
     "name": "TAFD30",
     "nd": 1.883,
     "vd": 40.81,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4419038,
       "A2": 0.03435104,
@@ -4738,6 +5187,7 @@ export const hoyaGlassDB = [
     "name": "TAFD32",
     "nd": 1.8707,
     "vd": 40.73,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.396108,
       "A2": 0.034853516,
@@ -4751,6 +5201,7 @@ export const hoyaGlassDB = [
     "name": "TAFD33",
     "nd": 1.881,
     "vd": 40.14,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4316955,
       "A2": 0.035631862,
@@ -4764,6 +5215,7 @@ export const hoyaGlassDB = [
     "name": "TAFD34",
     "nd": 1.85033,
     "vd": 42.7,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.3289859,
       "A2": 0.03199523,
@@ -4777,6 +5229,7 @@ export const hoyaGlassDB = [
     "name": "TAFD35L",
     "nd": 1.91082,
     "vd": 35.25,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.5269868,
       "A2": 0.040047918,
@@ -4790,6 +5243,7 @@ export const hoyaGlassDB = [
     "name": "TAFD35",
     "nd": 1.91082,
     "vd": 35.25,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.5274747,
       "A2": 0.039745402,
@@ -4803,6 +5257,7 @@ export const hoyaGlassDB = [
     "name": "TAFD37A",
     "nd": 1.90043,
     "vd": 37.37,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4958125,
       "A2": 0.037807251,
@@ -4816,6 +5271,7 @@ export const hoyaGlassDB = [
     "name": "TAFD37",
     "nd": 1.90043,
     "vd": 37.37,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4943369,
       "A2": 0.03883317,
@@ -4829,6 +5285,7 @@ export const hoyaGlassDB = [
     "name": "TAFD40-W",
     "nd": 2.00069,
     "vd": 25.46,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.8106232,
       "A2": 0.058801097,
@@ -4842,6 +5299,7 @@ export const hoyaGlassDB = [
     "name": "TAFD40",
     "nd": 2.00069,
     "vd": 25.46,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.8106232,
       "A2": 0.058801097,
@@ -4855,6 +5313,7 @@ export const hoyaGlassDB = [
     "name": "TAFD45L",
     "nd": 1.95375,
     "vd": 32.32,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.6715088,
       "A2": 0.046652775,
@@ -4868,6 +5327,7 @@ export const hoyaGlassDB = [
     "name": "TAFD45",
     "nd": 1.95375,
     "vd": 32.32,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.672962,
       "A2": 0.0457187,
@@ -4881,6 +5341,7 @@ export const hoyaGlassDB = [
     "name": "TAFD55-W",
     "nd": 2.001,
     "vd": 29.13,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.8317578,
       "A2": 0.054573843,
@@ -4894,6 +5355,7 @@ export const hoyaGlassDB = [
     "name": "TAFD55",
     "nd": 2.001,
     "vd": 29.13,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.8317578,
       "A2": 0.054573843,
@@ -4907,6 +5369,7 @@ export const hoyaGlassDB = [
     "name": "TAFD65",
     "nd": 2.0509,
     "vd": 26.94,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 4.0113202,
       "A2": 0.05856933,
@@ -4920,6 +5383,7 @@ export const hoyaGlassDB = [
     "name": "TAFD75-W",
     "nd": 2.102,
     "vd": 23.39,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 4.1779854,
       "A2": 0.072323156,
@@ -4933,6 +5397,7 @@ export const hoyaGlassDB = [
     "name": "FCD10",
     "nd": 1.4565,
     "vd": 90.27,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.103249,
       "A2": 0.0065323077,
@@ -4946,6 +5411,7 @@ export const hoyaGlassDB = [
     "name": "FCD505",
     "nd": 1.59282,
     "vd": 68.62,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.502355,
       "A2": 0.012012743,
@@ -4959,6 +5425,7 @@ export const hoyaGlassDB = [
     "name": "LBC3N",
     "nd": 1.60625,
     "vd": 63.72,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5388484,
       "A2": 0.015111456,
@@ -4972,6 +5439,7 @@ export const hoyaGlassDB = [
     "name": "BACD2",
     "nd": 1.60738,
     "vd": 56.72,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5393255,
       "A2": 0.015909566,
@@ -4985,6 +5453,7 @@ export const hoyaGlassDB = [
     "name": "BACD4",
     "nd": 1.61272,
     "vd": 58.58,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5584621,
       "A2": 0.015110495,
@@ -4998,6 +5467,7 @@ export const hoyaGlassDB = [
     "name": "BACD11",
     "nd": 1.56384,
     "vd": 60.83,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.4095163,
       "A2": 0.012939968,
@@ -5011,6 +5481,7 @@ export const hoyaGlassDB = [
     "name": "LAC7",
     "nd": 1.6516,
     "vd": 58.4,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.6876223,
       "A2": 0.012545954,
@@ -5024,6 +5495,7 @@ export const hoyaGlassDB = [
     "name": "LAC9",
     "nd": 1.691,
     "vd": 54.7,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8081523,
       "A2": 0.017693707,
@@ -5037,6 +5509,7 @@ export const hoyaGlassDB = [
     "name": "LAC10",
     "nd": 1.72,
     "vd": 50.35,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8951998,
       "A2": 0.022126485,
@@ -5050,6 +5523,7 @@ export const hoyaGlassDB = [
     "name": "LAC12",
     "nd": 1.6779,
     "vd": 55.52,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.7634844,
       "A2": 0.018246442,
@@ -5063,6 +5537,7 @@ export const hoyaGlassDB = [
     "name": "LAC13",
     "nd": 1.6935,
     "vd": 53.34,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8125316,
       "A2": 0.019960339,
@@ -5076,6 +5551,7 @@ export const hoyaGlassDB = [
     "name": "LACL60",
     "nd": 1.64,
     "vd": 60.2,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.6490884,
       "A2": 0.014451135,
@@ -5089,6 +5565,7 @@ export const hoyaGlassDB = [
     "name": "E-FEL6",
     "nd": 1.53172,
     "vd": 48.84,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.3068946,
       "A2": 0.01309702,
@@ -5102,6 +5579,7 @@ export const hoyaGlassDB = [
     "name": "E-F1",
     "nd": 1.62588,
     "vd": 35.74,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5730565,
       "A2": 0.023095784,
@@ -5115,6 +5593,7 @@ export const hoyaGlassDB = [
     "name": "E-F3",
     "nd": 1.61293,
     "vd": 36.96,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5362697,
       "A2": 0.021233821,
@@ -5128,6 +5607,7 @@ export const hoyaGlassDB = [
     "name": "E-F8",
     "nd": 1.59551,
     "vd": 39.22,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.4866561,
       "A2": 0.019287417,
@@ -5141,6 +5621,7 @@ export const hoyaGlassDB = [
     "name": "E-FD7",
     "nd": 1.6398,
     "vd": 34.57,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.6165865,
       "A2": 0.022534361,
@@ -5154,6 +5635,7 @@ export const hoyaGlassDB = [
     "name": "TAC2",
     "nd": 1.741,
     "vd": 52.61,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9717137,
       "A2": 0.020162868,
@@ -5167,6 +5649,7 @@ export const hoyaGlassDB = [
     "name": "TAC4",
     "nd": 1.734,
     "vd": 51.05,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9425645,
       "A2": 0.023559223,
@@ -5180,6 +5663,7 @@ export const hoyaGlassDB = [
     "name": "BAF10",
     "nd": 1.67003,
     "vd": 47.2,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.7324621,
       "A2": 0.018562334,
@@ -5193,6 +5677,7 @@ export const hoyaGlassDB = [
     "name": "BAF11",
     "nd": 1.66672,
     "vd": 48.3,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.7272955,
       "A2": 0.014809271,
@@ -5206,6 +5691,7 @@ export const hoyaGlassDB = [
     "name": "E-ADF10",
     "nd": 1.6131,
     "vd": 44.36,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5528983,
       "A2": 0.015647688,
@@ -5219,6 +5705,7 @@ export const hoyaGlassDB = [
     "name": "E-ADF50",
     "nd": 1.65412,
     "vd": 39.62,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.6680422,
       "A2": 0.023930479,
@@ -5232,6 +5719,7 @@ export const hoyaGlassDB = [
     "name": "E-BACD10",
     "nd": 1.6228,
     "vd": 56.91,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5906326,
       "A2": 0.014490916,
@@ -5245,6 +5733,7 @@ export const hoyaGlassDB = [
     "name": "E-BACED20",
     "nd": 1.6485,
     "vd": 53.03,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.6667537,
       "A2": 0.017436284,
@@ -5258,6 +5747,7 @@ export const hoyaGlassDB = [
     "name": "E-BAF8",
     "nd": 1.62374,
     "vd": 47.05,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5801121,
       "A2": 0.019728054,
@@ -5271,6 +5761,7 @@ export const hoyaGlassDB = [
     "name": "E-LAF7",
     "nd": 1.7495,
     "vd": 35.04,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9704178,
       "A2": 0.028359006,
@@ -5284,6 +5775,7 @@ export const hoyaGlassDB = [
     "name": "NBFD12",
     "nd": 1.7995,
     "vd": 42.34,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1513655,
       "A2": 0.029502111,
@@ -5297,6 +5789,7 @@ export const hoyaGlassDB = [
     "name": "TAF2",
     "nd": 1.7945,
     "vd": 45.39,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1415564,
       "A2": 0.026483051,
@@ -5310,6 +5803,7 @@ export const hoyaGlassDB = [
     "name": "TAF4",
     "nd": 1.788,
     "vd": 47.49,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1212281,
       "A2": 0.026520622,
@@ -5323,6 +5817,7 @@ export const hoyaGlassDB = [
     "name": "TAF5",
     "nd": 1.816,
     "vd": 46.57,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.2191571,
       "A2": 0.02636257,
@@ -5336,6 +5831,7 @@ export const hoyaGlassDB = [
     "name": "M-FCD1",
     "nd": 1.4971,
     "vd": 81.56,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.2189068,
       "A2": 0.0080887631,
@@ -5349,6 +5845,7 @@ export const hoyaGlassDB = [
     "name": "MP-FCD1-M20",
     "nd": 1.4969,
     "vd": 81.51,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.2209418,
       "A2": 0.0062463392,
@@ -5362,6 +5859,7 @@ export const hoyaGlassDB = [
     "name": "MC-FCD1-M20",
     "nd": 1.4969,
     "vd": 81.51,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.2209418,
       "A2": 0.0062463392,
@@ -5375,6 +5873,7 @@ export const hoyaGlassDB = [
     "name": "M-FCD500",
     "nd": 1.55332,
     "vd": 71.69,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.3841554,
       "A2": 0.0097130883,
@@ -5388,6 +5887,7 @@ export const hoyaGlassDB = [
     "name": "MP-FCD500-20",
     "nd": 1.55352,
     "vd": 71.72,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.3850427,
       "A2": 0.0094886852,
@@ -5401,6 +5901,7 @@ export const hoyaGlassDB = [
     "name": "MC-FCD500-20",
     "nd": 1.55352,
     "vd": 71.72,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.3850427,
       "A2": 0.0094886852,
@@ -5414,6 +5915,7 @@ export const hoyaGlassDB = [
     "name": "M-PCD4",
     "nd": 1.61881,
     "vd": 63.85,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.582335,
       "A2": 0.01329184,
@@ -5427,6 +5929,7 @@ export const hoyaGlassDB = [
     "name": "MP-PCD4-40",
     "nd": 1.61921,
     "vd": 63.85,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5831471,
       "A2": 0.013615374,
@@ -5440,6 +5943,7 @@ export const hoyaGlassDB = [
     "name": "MC-PCD4-40",
     "nd": 1.61921,
     "vd": 63.85,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5831471,
       "A2": 0.013615374,
@@ -5453,6 +5957,7 @@ export const hoyaGlassDB = [
     "name": "M-PCD51",
     "nd": 1.59201,
     "vd": 67.02,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.502026,
       "A2": 0.0112772,
@@ -5466,6 +5971,7 @@ export const hoyaGlassDB = [
     "name": "MP-PCD51-70",
     "nd": 1.59271,
     "vd": 66.97,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5025436,
       "A2": 0.012433636,
@@ -5479,6 +5985,7 @@ export const hoyaGlassDB = [
     "name": "MC-PCD51-70",
     "nd": 1.59271,
     "vd": 66.97,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.5025436,
       "A2": 0.012433636,
@@ -5492,6 +5999,7 @@ export const hoyaGlassDB = [
     "name": "M-PCD55AR",
     "nd": 1.63858,
     "vd": 55.18,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.6366261,
       "A2": 0.016956609,
@@ -5505,6 +6013,7 @@ export const hoyaGlassDB = [
     "name": "MP-PCD55AR",
     "nd": 1.63858,
     "vd": 55.18,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.6366261,
       "A2": 0.016956609,
@@ -5518,6 +6027,7 @@ export const hoyaGlassDB = [
     "name": "M-BACD5N",
     "nd": 1.58913,
     "vd": 61.25,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.48951,
       "A2": 0.01294262,
@@ -5531,6 +6041,7 @@ export const hoyaGlassDB = [
     "name": "MP-BACD5N",
     "nd": 1.58913,
     "vd": 61.25,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.48951,
       "A2": 0.01294262,
@@ -5544,6 +6055,7 @@ export const hoyaGlassDB = [
     "name": "MC-BACD5N",
     "nd": 1.58913,
     "vd": 61.25,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.48951,
       "A2": 0.01294262,
@@ -5557,6 +6069,7 @@ export const hoyaGlassDB = [
     "name": "M-BACD12",
     "nd": 1.58313,
     "vd": 59.46,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.468781,
       "A2": 0.01325184,
@@ -5570,6 +6083,7 @@ export const hoyaGlassDB = [
     "name": "MP-BACD12",
     "nd": 1.58313,
     "vd": 59.46,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.468781,
       "A2": 0.01325184,
@@ -5583,6 +6097,7 @@ export const hoyaGlassDB = [
     "name": "MC-BACD12",
     "nd": 1.58313,
     "vd": 59.46,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.468781,
       "A2": 0.01325184,
@@ -5596,6 +6111,7 @@ export const hoyaGlassDB = [
     "name": "M-BACD15",
     "nd": 1.62263,
     "vd": 58.17,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.590919,
       "A2": 0.01520205,
@@ -5609,6 +6125,7 @@ export const hoyaGlassDB = [
     "name": "MP-BACD15",
     "nd": 1.62263,
     "vd": 58.17,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.590919,
       "A2": 0.01520205,
@@ -5622,6 +6139,7 @@ export const hoyaGlassDB = [
     "name": "M-LAC130",
     "nd": 1.6935,
     "vd": 53.2,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.813412,
       "A2": 0.01927865,
@@ -5635,6 +6153,7 @@ export const hoyaGlassDB = [
     "name": "MP-LAC130",
     "nd": 1.6935,
     "vd": 53.2,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.813412,
       "A2": 0.01927865,
@@ -5648,6 +6167,7 @@ export const hoyaGlassDB = [
     "name": "MC-LAC130",
     "nd": 1.6935,
     "vd": 53.2,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.813412,
       "A2": 0.01927865,
@@ -5661,6 +6181,7 @@ export const hoyaGlassDB = [
     "name": "M-LAC14",
     "nd": 1.6968,
     "vd": 55.46,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8278386,
       "A2": 0.018211733,
@@ -5674,6 +6195,7 @@ export const hoyaGlassDB = [
     "name": "MP-LAC14-80",
     "nd": 1.6976,
     "vd": 55.51,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8306733,
       "A2": 0.018103472,
@@ -5687,6 +6209,7 @@ export const hoyaGlassDB = [
     "name": "M-TAC60",
     "nd": 1.75501,
     "vd": 51.16,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.017866,
       "A2": 0.021144702,
@@ -5700,6 +6223,7 @@ export const hoyaGlassDB = [
     "name": "MP-TAC60-90",
     "nd": 1.75591,
     "vd": 51.18,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.0209214,
       "A2": 0.02114253,
@@ -5713,6 +6237,7 @@ export const hoyaGlassDB = [
     "name": "M-TAC80",
     "nd": 1.72903,
     "vd": 54.04,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9351948,
       "A2": 0.018392287,
@@ -5726,6 +6251,7 @@ export const hoyaGlassDB = [
     "name": "MP-TAC80-60",
     "nd": 1.72963,
     "vd": 54.07,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9372128,
       "A2": 0.01839514,
@@ -5739,6 +6265,7 @@ export const hoyaGlassDB = [
     "name": "M-FD80",
     "nd": 1.68893,
     "vd": 31.16,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.761638,
       "A2": 0.02865346,
@@ -5752,6 +6279,7 @@ export const hoyaGlassDB = [
     "name": "MP-FD80",
     "nd": 1.68893,
     "vd": 31.16,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.761638,
       "A2": 0.02865346,
@@ -5765,6 +6293,7 @@ export const hoyaGlassDB = [
     "name": "MC-FD80",
     "nd": 1.68893,
     "vd": 31.16,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.761638,
       "A2": 0.02865346,
@@ -5778,6 +6307,7 @@ export const hoyaGlassDB = [
     "name": "M-FDS2",
     "nd": 2.00178,
     "vd": 19.32,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.771581,
       "A2": 0.063942579,
@@ -5791,6 +6321,7 @@ export const hoyaGlassDB = [
     "name": "MP-FDS2",
     "nd": 2.00178,
     "vd": 19.32,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.771581,
       "A2": 0.063942579,
@@ -5804,6 +6335,7 @@ export const hoyaGlassDB = [
     "name": "MC-FDS2",
     "nd": 2.00178,
     "vd": 19.32,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.771581,
       "A2": 0.063942579,
@@ -5817,6 +6349,7 @@ export const hoyaGlassDB = [
     "name": "M-FDS910",
     "nd": 1.82115,
     "vd": 24.06,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.165987,
       "A2": 0.04649918,
@@ -5830,6 +6363,7 @@ export const hoyaGlassDB = [
     "name": "MP-FDS910-50",
     "nd": 1.82165,
     "vd": 24.04,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1667902,
       "A2": 0.047178656,
@@ -5843,6 +6377,7 @@ export const hoyaGlassDB = [
     "name": "MC-FDS910-50",
     "nd": 1.82165,
     "vd": 24.04,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1667902,
       "A2": 0.047178656,
@@ -5856,6 +6391,7 @@ export const hoyaGlassDB = [
     "name": "M-NBFD10",
     "nd": 1.83441,
     "vd": 37.29,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.264623,
       "A2": 0.03225894,
@@ -5869,6 +6405,7 @@ export const hoyaGlassDB = [
     "name": "MP-NBFD10-20",
     "nd": 1.83461,
     "vd": 37.29,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.2722586,
       "A2": 0.027264508,
@@ -5882,6 +6419,7 @@ export const hoyaGlassDB = [
     "name": "M-NBFD130",
     "nd": 1.8061,
     "vd": 40.73,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.173794,
       "A2": 0.02906741,
@@ -5895,6 +6433,7 @@ export const hoyaGlassDB = [
     "name": "MP-NBFD130",
     "nd": 1.8061,
     "vd": 40.73,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.173794,
       "A2": 0.02906741,
@@ -5908,6 +6447,7 @@ export const hoyaGlassDB = [
     "name": "MC-NBFD130",
     "nd": 1.8061,
     "vd": 40.73,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.173794,
       "A2": 0.02906741,
@@ -5921,6 +6461,7 @@ export const hoyaGlassDB = [
     "name": "MC-NBFD130L",
     "nd": 1.8061,
     "vd": 40.73,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.17174,
       "A2": 0.03021137,
@@ -5934,6 +6475,7 @@ export const hoyaGlassDB = [
     "name": "MC-NBFD135",
     "nd": 1.80834,
     "vd": 40.92,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.1819698,
       "A2": 0.028987649,
@@ -5947,6 +6489,7 @@ export const hoyaGlassDB = [
     "name": "M-TAF31",
     "nd": 1.80139,
     "vd": 45.45,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.164358,
       "A2": 0.02767034,
@@ -5960,6 +6503,7 @@ export const hoyaGlassDB = [
     "name": "MP-TAF31-15",
     "nd": 1.80154,
     "vd": 45.47,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.164475,
       "A2": 0.027926276,
@@ -5973,6 +6517,7 @@ export const hoyaGlassDB = [
     "name": "MC-TAF31-15",
     "nd": 1.80154,
     "vd": 45.47,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.164475,
       "A2": 0.027926276,
@@ -5986,6 +6531,7 @@ export const hoyaGlassDB = [
     "name": "M-TAF101",
     "nd": 1.76802,
     "vd": 49.24,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.05615,
       "A2": 0.02431126,
@@ -5999,6 +6545,7 @@ export const hoyaGlassDB = [
     "name": "MP-TAF101-100",
     "nd": 1.76902,
     "vd": 49.29,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.0591566,
       "A2": 0.024624272,
@@ -6012,6 +6559,7 @@ export const hoyaGlassDB = [
     "name": "MC-TAF101-100",
     "nd": 1.76902,
     "vd": 49.29,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.0591566,
       "A2": 0.024624272,
@@ -6025,6 +6573,7 @@ export const hoyaGlassDB = [
     "name": "M-TAF105",
     "nd": 1.7725,
     "vd": 49.5,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.0705638,
       "A2": 0.025280355,
@@ -6038,6 +6587,7 @@ export const hoyaGlassDB = [
     "name": "MP-TAF105",
     "nd": 1.7725,
     "vd": 49.5,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.0705638,
       "A2": 0.025280355,
@@ -6051,6 +6601,7 @@ export const hoyaGlassDB = [
     "name": "MC-TAF105",
     "nd": 1.7725,
     "vd": 49.5,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.0705638,
       "A2": 0.025280355,
@@ -6064,6 +6615,7 @@ export const hoyaGlassDB = [
     "name": "MC-TAF115",
     "nd": 1.777047,
     "vd": 49.46,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.0645313,
       "A2": 0.024574301,
@@ -6077,6 +6629,7 @@ export const hoyaGlassDB = [
     "name": "M-TAF401",
     "nd": 1.77377,
     "vd": 47.17,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.07279,
       "A2": 0.02527346,
@@ -6090,6 +6643,7 @@ export const hoyaGlassDB = [
     "name": "MP-TAF401",
     "nd": 1.77377,
     "vd": 47.17,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.07279,
       "A2": 0.02527346,
@@ -6103,6 +6657,7 @@ export const hoyaGlassDB = [
     "name": "MC-TAF401",
     "nd": 1.77377,
     "vd": 47.17,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.07279,
       "A2": 0.02527346,
@@ -6116,6 +6671,7 @@ export const hoyaGlassDB = [
     "name": "M-TAFD51",
     "nd": 1.8208,
     "vd": 42.71,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.227682,
       "A2": 0.0292121,
@@ -6129,6 +6685,7 @@ export const hoyaGlassDB = [
     "name": "MP-TAFD51-50",
     "nd": 1.8213,
     "vd": 42.72,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.2288052,
       "A2": 0.029863488,
@@ -6142,6 +6699,7 @@ export const hoyaGlassDB = [
     "name": "MC-TAFD51-50",
     "nd": 1.8213,
     "vd": 42.72,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.2288052,
       "A2": 0.029863488,
@@ -6155,6 +6713,7 @@ export const hoyaGlassDB = [
     "name": "M-TAFD305",
     "nd": 1.85135,
     "vd": 40.1,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.327184,
       "A2": 0.033398,
@@ -6168,6 +6727,7 @@ export const hoyaGlassDB = [
     "name": "MP-TAFD305",
     "nd": 1.85135,
     "vd": 40.1,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.327184,
       "A2": 0.033398,
@@ -6181,6 +6741,7 @@ export const hoyaGlassDB = [
     "name": "MC-TAFD305",
     "nd": 1.85135,
     "vd": 40.1,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.327184,
       "A2": 0.033398,
@@ -6194,6 +6755,7 @@ export const hoyaGlassDB = [
     "name": "M-TAFD315",
     "nd": 1.85135,
     "vd": 40.07,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.3260687,
       "A2": 0.034217904,
@@ -6207,6 +6769,7 @@ export const hoyaGlassDB = [
     "name": "MC-TAFD315",
     "nd": 1.85135,
     "vd": 40.07,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.3260687,
       "A2": 0.034217904,
@@ -6220,6 +6783,7 @@ export const hoyaGlassDB = [
     "name": "M-TAFD307",
     "nd": 1.88202,
     "vd": 37.22,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4286062,
       "A2": 0.037363009,
@@ -6233,6 +6797,7 @@ export const hoyaGlassDB = [
     "name": "MP-TAFD307",
     "nd": 1.88202,
     "vd": 37.22,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4286062,
       "A2": 0.037363009,
@@ -6246,6 +6811,7 @@ export const hoyaGlassDB = [
     "name": "MC-TAFD307",
     "nd": 1.88202,
     "vd": 37.22,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4286062,
       "A2": 0.037363009,
@@ -6259,6 +6825,7 @@ export const hoyaGlassDB = [
     "name": "MC-TAFD317",
     "nd": 1.8812,
     "vd": 37.17,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4245278,
       "A2": 0.037836322,
@@ -6272,6 +6839,7 @@ export const hoyaGlassDB = [
     "name": "M-TAFD405",
     "nd": 1.9515,
     "vd": 29.83,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.6542352,
       "A2": 0.048094089,
@@ -6285,6 +6853,7 @@ export const hoyaGlassDB = [
     "name": "MP-TAFD405",
     "nd": 1.9515,
     "vd": 29.83,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.6542352,
       "A2": 0.048094089,
@@ -6298,6 +6867,7 @@ export const hoyaGlassDB = [
     "name": "M-LAC8",
     "nd": 1.713,
     "vd": 53.94,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8817481,
       "A2": 0.017690493,
@@ -6311,6 +6881,7 @@ export const hoyaGlassDB = [
     "name": "MP-LAC8-30",
     "nd": 1.7133,
     "vd": 53.95,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.8827498,
       "A2": 0.017707976,
@@ -6324,6 +6895,7 @@ export const hoyaGlassDB = [
     "name": "M-FDS1",
     "nd": 1.92286,
     "vd": 20.88,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4984224,
       "A2": 0.057567078,
@@ -6337,6 +6909,7 @@ export const hoyaGlassDB = [
     "name": "MP-FDS1",
     "nd": 1.92286,
     "vd": 20.88,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.4984224,
       "A2": 0.057567078,
@@ -6350,6 +6923,7 @@ export const hoyaGlassDB = [
     "name": "M-LAF81",
     "nd": 1.73077,
     "vd": 40.5,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9167886,
       "A2": 0.026675237,
@@ -6363,6 +6937,7 @@ export const hoyaGlassDB = [
     "name": "MP-LAF81",
     "nd": 1.73077,
     "vd": 40.5,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.9167886,
       "A2": 0.026675237,
@@ -6376,6 +6951,7 @@ export const hoyaGlassDB = [
     "name": "M-NBF1",
     "nd": 1.7433,
     "vd": 49.33,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.975245,
       "A2": 0.02140074,
@@ -6389,6 +6965,7 @@ export const hoyaGlassDB = [
     "name": "MP-NBF1",
     "nd": 1.7433,
     "vd": 49.33,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.975245,
       "A2": 0.02140074,
@@ -6402,6 +6979,7 @@ export const hoyaGlassDB = [
     "name": "MC-NBF1",
     "nd": 1.7433,
     "vd": 49.33,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 2.975245,
       "A2": 0.02140074,
@@ -6415,6 +6993,7 @@ export const hoyaGlassDB = [
     "name": "M-TAF1",
     "nd": 1.7725,
     "vd": 49.46,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.070806,
       "A2": 0.02456566,
@@ -6428,6 +7007,7 @@ export const hoyaGlassDB = [
     "name": "MC-TAF1",
     "nd": 1.7725,
     "vd": 49.46,
+    "manufacturer": "HOYA",
     "sellmeier": {
       "A1": 3.070806,
       "A2": 0.02456566,
@@ -6444,270 +7024,5248 @@ export const hoyaGlassDB = [
 // Sumita Optical Glass Database
 export const sumitaGlassDB = [
   {
-    "name": "K-BK7",
-    "nd": 1.51680,
-    "vd": 64.17,
-    "sellmeier": {
-      "A1": 1.03961212,
-      "A2": 0.231792344,
-      "A3": 1.01046945,
-      "B1": 0.00600069867,
-      "B2": 0.0200179144,
-      "B3": 103.560653
+    "name": "K-CaFK95",
+    "nd": 1.43425,
+    "vd": 95.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.0408226,
+      "A1": -0.0045471403,
+      "A2": 0.0058631038,
+      "A3": 0.00012966471,
+      "A4": -1.1902639e-05,
+      "A5": 6.9279944e-07
     }
   },
   {
-    "name": "K-PSK3",
-    "nd": 1.55232,
-    "vd": 63.46,
-    "sellmeier": {
-      "A1": 1.24174671,
-      "A2": 0.130485972,
-      "A3": 1.07834254,
-      "B1": 0.00778537076,
-      "B2": 0.0313493085,
-      "B3": 105.549191
+    "name": "K-PFK80",
+    "nd": 1.497,
+    "vd": 81.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.2178347,
+      "A1": -0.0055966846,
+      "A2": 0.0083703747,
+      "A3": 0.0001097485,
+      "A4": -3.3983937e-06,
+      "A5": 2.5836351e-07
+    }
+  },
+  {
+    "name": "K-PFK85",
+    "nd": 1.48563,
+    "vd": 85.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.1858326,
+      "A1": -0.0050155632,
+      "A2": 0.0075107775,
+      "A3": 0.00017770562,
+      "A4": -1.2164148e-05,
+      "A5": 6.1341005e-07
+    }
+  },
+  {
+    "name": "K-PFK90",
+    "nd": 1.4588,
+    "vd": 90.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.1094643,
+      "A1": -0.0048026812,
+      "A2": 0.0067645351,
+      "A3": 8.3329962e-05,
+      "A4": 3.4196126e-07,
+      "A5": -8.4933854e-08
+    }
+  },
+  {
+    "name": "K-GFK68",
+    "nd": 1.5924,
+    "vd": 68.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.4994867,
+      "A1": -0.0059285872,
+      "A2": 0.012743526,
+      "A3": 0.00015469636,
+      "A4": 3.9947612e-06,
+      "A5": -1.760356e-07
+    }
+  },
+  {
+    "name": "K-GFK70",
+    "nd": 1.56907,
+    "vd": 71.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.4293935,
+      "A1": -0.0057591097,
+      "A2": 0.011512013,
+      "A3": 0.0001324924,
+      "A4": 7.3250033e-06,
+      "A5": -5.7195445e-07
+    }
+  },
+  {
+    "name": "K-PBK40",
+    "nd": 1.5176,
+    "vd": 63.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.2744024,
+      "A1": -0.01070289,
+      "A2": 0.010577306,
+      "A3": 0.00022857431,
+      "A4": -7.2914225e-06,
+      "A5": 2.4124054e-07
+    }
+  },
+  {
+    "name": "K-PBK50",
+    "nd": 1.5225,
+    "vd": 62.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.2879519,
+      "A1": -0.010513752,
+      "A2": 0.010963175,
+      "A3": 0.00027027054,
+      "A4": -1.7054549e-05,
+      "A5": 1.0857039e-06
+    }
+  },
+  {
+    "name": "K-PBK60",
+    "nd": 1.5274,
+    "vd": 62.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.3028575,
+      "A1": -0.011402225,
+      "A2": 0.011233487,
+      "A3": 0.00017866325,
+      "A4": -7.1547007e-07,
+      "A5": 1.1484315e-07
+    }
+  },
+  {
+    "name": "K-PMK30",
+    "nd": 1.525,
+    "vd": 70.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.2984199,
+      "A1": -0.0098977917,
+      "A2": 0.010454435,
+      "A3": -1.1762246e-05,
+      "A4": 2.220678e-05,
+      "A5": -1.2212713e-06
+    }
+  },
+  {
+    "name": "K-PSK100",
+    "nd": 1.5917,
+    "vd": 60.7,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.4948235,
+      "A1": -0.0091228463,
+      "A2": 0.013721276,
+      "A3": 0.00023830265,
+      "A4": 4.1915859e-06,
+      "A5": -3.8958137e-07
+    }
+  },
+  {
+    "name": "K-PSK200",
+    "nd": 1.61305,
+    "vd": 59.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5593395,
+      "A1": -0.0088787219,
+      "A2": 0.015115397,
+      "A3": 0.0002035651,
+      "A4": 7.5991137e-06,
+      "A5": -1.5375246e-07
+    }
+  },
+  {
+    "name": "K-PSK300",
+    "nd": 1.5995,
+    "vd": 65.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5225158,
+      "A1": -0.0094326823,
+      "A2": 0.012761452,
+      "A3": 0.00028145417,
+      "A4": -8.1267471e-06,
+      "A5": 2.3400154e-07
+    }
+  },
+  {
+    "name": "K-PSK400",
+    "nd": 1.595,
+    "vd": 67.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5082367,
+      "A1": -0.0073364341,
+      "A2": 0.012625639,
+      "A3": 0.00022697479,
+      "A4": -8.7309089e-06,
+      "A5": 6.2693824e-07
+    }
+  },
+  {
+    "name": "K-PSK500",
+    "nd": 1.55215,
+    "vd": 72.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.3790004,
+      "A1": -0.0067834145,
+      "A2": 0.010749512,
+      "A3": 0.00017555369,
+      "A4": -4.6285653e-06,
+      "A5": 2.8065215e-07
+    }
+  },
+  {
+    "name": "K-CSK120",
+    "nd": 1.587,
+    "vd": 59.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.4804566,
+      "A1": -0.01071977,
+      "A2": 0.0135632,
+      "A3": 0.00034918608,
+      "A4": -2.3041786e-05,
+      "A5": 1.5937217e-06
+    }
+  },
+  {
+    "name": "K-SKLD100",
+    "nd": 1.5911,
+    "vd": 60.7,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.494405,
+      "A1": -0.011746954,
+      "A2": 0.013616484,
+      "A3": 0.0002161756,
+      "A4": 2.8081583e-09,
+      "A5": 1.1416106e-07
+    }
+  },
+  {
+    "name": "K-SKLD120",
+    "nd": 1.5868,
+    "vd": 59.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.4809256,
+      "A1": -0.011763845,
+      "A2": 0.013309488,
+      "A3": 0.00032545605,
+      "A4": -9.9643058e-06,
+      "A5": 2.0790854e-07
+    }
+  },
+  {
+    "name": "K-SKLD200",
+    "nd": 1.5866,
+    "vd": 59.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.4786815,
+      "A1": -0.010928711,
+      "A2": 0.014104052,
+      "A3": 0.00015365594,
+      "A4": 1.194296e-05,
+      "A5": -5.3372519e-07
+    }
+  },
+  {
+    "name": "K-LaFK50",
+    "nd": 1.772,
+    "vd": 50.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.070131,
+      "A1": -0.012037535,
+      "A2": 0.023978866,
+      "A3": 0.00056153238,
+      "A4": -1.0529871e-05,
+      "A5": 1.1710915e-06
+    }
+  },
+  {
+    "name": "K-LaFK50T",
+    "nd": 1.766,
+    "vd": 49.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.0499512,
+      "A1": -0.012617622,
+      "A2": 0.023790052,
+      "A3": 0.00047378243,
+      "A4": 1.3794282e-05,
+      "A5": -8.9478674e-07
+    }
+  },
+  {
+    "name": "K-LaFK55",
+    "nd": 1.694,
+    "vd": 56.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8185206,
+      "A1": -0.013230603,
+      "A2": 0.018037587,
+      "A3": 0.00045589602,
+      "A4": -2.131672e-05,
+      "A5": 1.5724724e-06
+    }
+  },
+  {
+    "name": "K-LaFK58",
+    "nd": 1.6956,
+    "vd": 59.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8262526,
+      "A1": -0.012785561,
+      "A2": 0.017234088,
+      "A3": 0.0004436105,
+      "A4": -2.0762175e-05,
+      "A5": 1.2592648e-06
+    }
+  },
+  {
+    "name": "K-LaFK60",
+    "nd": 1.63246,
+    "vd": 63.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.6248172,
+      "A1": -0.010251149,
+      "A2": 0.0143793,
+      "A3": 0.00024017461,
+      "A4": -1.041901e-06,
+      "A5": 1.0237991e-07
+    }
+  },
+  {
+    "name": "K-LaFK63",
+    "nd": 1.6386,
+    "vd": 63.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.6439316,
+      "A1": -0.010471601,
+      "A2": 0.014890809,
+      "A3": 0.00015162245,
+      "A4": 1.3530927e-05,
+      "A5": -6.5983298e-07
+    }
+  },
+  {
+    "name": "K-LaFK65",
+    "nd": 1.6567,
+    "vd": 62.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.7016663,
+      "A1": -0.011618909,
+      "A2": 0.015582285,
+      "A3": 0.00019824944,
+      "A4": 1.0097927e-05,
+      "A5": -5.2589483e-07
+    }
+  },
+  {
+    "name": "K-VC78",
+    "nd": 1.66955,
+    "vd": 55.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.7376882,
+      "A1": -0.012269245,
+      "A2": 0.017439403,
+      "A3": 0.00047088707,
+      "A4": -2.7150134e-05,
+      "A5": 1.8172045e-06
+    }
+  },
+  {
+    "name": "K-VC79",
+    "nd": 1.61035,
+    "vd": 57.9,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5520489,
+      "A1": -0.011234947,
+      "A2": 0.014455084,
+      "A3": 0.00046725318,
+      "A4": -3.6714004e-05,
+      "A5": 2.2810504e-06
+    }
+  },
+  {
+    "name": "K-VC80",
+    "nd": 1.69384,
+    "vd": 53.1,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8135722,
+      "A1": -0.012577591,
+      "A2": 0.019933465,
+      "A3": 0.00015711222,
+      "A4": 4.0676176e-05,
+      "A5": -2.4977604e-06
+    }
+  },
+  {
+    "name": "K-VC82",
+    "nd": 1.7555,
+    "vd": 45.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.0092545,
+      "A1": -0.014428442,
+      "A2": 0.024950143,
+      "A3": 0.0006532589,
+      "A4": -1.7536585e-05,
+      "A5": 2.6440099e-06
+    }
+  },
+  {
+    "name": "K-VC89",
+    "nd": 1.81,
+    "vd": 41.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.1860388,
+      "A1": -0.013756822,
+      "A2": 0.029614017,
+      "A3": 0.0012383727,
+      "A4": -8.0134175e-05,
+      "A5": 7.2330635e-06
+    }
+  },
+  {
+    "name": "K-VC90",
+    "nd": 1.8528,
+    "vd": 39.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.3299316,
+      "A1": -0.013661207,
+      "A2": 0.034088332,
+      "A3": 0.0010979548,
+      "A4": -2.7983676e-05,
+      "A5": 5.172898e-06
+    }
+  },
+  {
+    "name": "K-VC91",
+    "nd": 1.8866,
+    "vd": 35.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.4398054,
+      "A1": -0.014667565,
+      "A2": 0.038194385,
+      "A3": 0.0018572053,
+      "A4": -0.00010460909,
+      "A5": 1.2213163e-05
+    }
+  },
+  {
+    "name": "K-VC99",
+    "nd": 1.8506,
+    "vd": 41.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.3294765,
+      "A1": -0.015324675,
+      "A2": 0.031941277,
+      "A3": 0.0010078745,
+      "A4": -2.8400554e-05,
+      "A5": 3.488686e-06
+    }
+  },
+  {
+    "name": "K-VC100",
+    "nd": 1.804,
+    "vd": 43.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.1712789,
+      "A1": -0.014900418,
+      "A2": 0.028162431,
+      "A3": 0.00083037332,
+      "A4": -1.8683781e-05,
+      "A5": 2.6807865e-06
+    }
+  },
+  {
+    "name": "K-VC179",
+    "nd": 1.7989,
+    "vd": 41.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.1494839,
+      "A1": -0.013834728,
+      "A2": 0.02918544,
+      "A3": 0.00080690933,
+      "A4": -6.1681096e-06,
+      "A5": 2.3940146e-06
+    }
+  },
+  {
+    "name": "K-VC181",
+    "nd": 1.81055,
+    "vd": 41.1,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.1886895,
+      "A1": -0.013820455,
+      "A2": 0.029631617,
+      "A3": 0.0010659501,
+      "A4": -3.7795055e-05,
+      "A5": 4.3966629e-06
+    }
+  },
+  {
+    "name": "K-VC185",
+    "nd": 1.85375,
+    "vd": 40.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.3380677,
+      "A1": -0.014969129,
+      "A2": 0.032739414,
+      "A3": 0.0011048947,
+      "A4": -3.8597399e-05,
+      "A5": 4.5931893e-06
+    }
+  },
+  {
+    "name": "K-CD45",
+    "nd": 1.6932,
+    "vd": 33.7,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.780768,
+      "A1": -0.011432782,
+      "A2": 0.02823867,
+      "A3": 0.0009260712,
+      "A4": 5.9615098e-06,
+      "A5": 5.5996227e-06
+    }
+  },
+  {
+    "name": "K-CD120",
+    "nd": 1.7225,
+    "vd": 29.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8630662,
+      "A1": -0.011977981,
+      "A2": 0.032706279,
+      "A3": 0.0016821116,
+      "A4": -7.4783483e-05,
+      "A5": 1.4696883e-05
+    }
+  },
+  {
+    "name": "K-CD300",
+    "nd": 1.6922,
+    "vd": 29.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.7660702,
+      "A1": -0.010339855,
+      "A2": 0.030603824,
+      "A3": 0.0016069801,
+      "A4": -8.5220479e-05,
+      "A5": 1.4076295e-05
+    }
+  },
+  {
+    "name": "K-LCV93",
+    "nd": 1.6652,
+    "vd": 47.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.7157014,
+      "A1": -0.012306139,
+      "A2": 0.019299156,
+      "A3": 0.00076108019,
+      "A4": -4.4909824e-05,
+      "A5": 3.3413499e-06
+    }
+  },
+  {
+    "name": "K-LCV161",
+    "nd": 1.6182,
+    "vd": 45.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5638471,
+      "A1": -0.010292698,
+      "A2": 0.018684011,
+      "A3": 0.00048290224,
+      "A4": -1.4901827e-06,
+      "A5": 2.0486494e-06
+    }
+  },
+  {
+    "name": "K-ZnSF8",
+    "nd": 1.7143,
+    "vd": 38.9,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8600337,
+      "A1": -0.012073452,
+      "A2": 0.026131306,
+      "A3": 0.00091303268,
+      "A4": -3.0467767e-05,
+      "A5": 4.891802e-06
+    }
+  },
+  {
+    "name": "K-PSFn1",
+    "nd": 1.9068,
+    "vd": 21.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.4407637,
+      "A1": -0.015750622,
+      "A2": 0.059024249,
+      "A3": 0.0035647556,
+      "A4": -0.00012641103,
+      "A5": 4.0309245e-05
+    }
+  },
+  {
+    "name": "K-PSFn2",
+    "nd": 2.0017,
+    "vd": 20.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.7699503,
+      "A1": -0.013004151,
+      "A2": 0.072310519,
+      "A3": 0.0035123072,
+      "A4": -1.0361594e-05,
+      "A5": 3.8615781e-05
+    }
+  },
+  {
+    "name": "K-PSFn3",
+    "nd": 1.83917,
+    "vd": 23.9,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.2268914,
+      "A1": -0.014590158,
+      "A2": 0.047763869,
+      "A3": 0.0027173637,
+      "A4": -9.5689164e-05,
+      "A5": 2.7097845e-05
+    }
+  },
+  {
+    "name": "K-PSFn166",
+    "nd": 1.663,
+    "vd": 34.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.6866768,
+      "A1": -0.01088273,
+      "A2": 0.025595704,
+      "A3": 0.0010483014,
+      "A4": -3.3897735e-05,
+      "A5": 7.7058201e-06
+    }
+  },
+  {
+    "name": "K-PSFn185",
+    "nd": 1.8507,
+    "vd": 26.9,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.2821266,
+      "A1": -0.013764195,
+      "A2": 0.044857954,
+      "A3": 0.0020290189,
+      "A4": -1.5619433e-05,
+      "A5": 1.6072643e-05
+    }
+  },
+  {
+    "name": "K-PSFn190",
+    "nd": 1.9046,
+    "vd": 21.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.4367173,
+      "A1": -0.016285824,
+      "A2": 0.057270178,
+      "A3": 0.0038227479,
+      "A4": -0.00019197328,
+      "A5": 4.4106437e-05
+    }
+  },
+  {
+    "name": "K-PSFn202",
+    "nd": 2.0196,
+    "vd": 21.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.8508789,
+      "A1": -0.016529344,
+      "A2": 0.066096066,
+      "A3": 0.0058480521,
+      "A4": -0.0005055984,
+      "A5": 7.6558669e-05
+    }
+  },
+  {
+    "name": "K-PSFn214P",
+    "nd": 2.144,
+    "vd": 17.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 4.2694007,
+      "A1": -0.013941316,
+      "A2": 0.095671794,
+      "A3": 0.0065505527,
+      "A4": -0.0002821175,
+      "A5": 9.8041281e-05
+    }
+  },
+  {
+    "name": "K-PG325",
+    "nd": 1.5067,
+    "vd": 70.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.2433502,
+      "A1": -0.0070443238,
+      "A2": 0.0095932746,
+      "A3": 0.00019364616,
+      "A4": -9.8585539e-06,
+      "A5": 6.1088785e-07
+    }
+  },
+  {
+    "name": "K-PG375",
+    "nd": 1.5425,
+    "vd": 62.9,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.345943,
+      "A1": -0.0077317211,
+      "A2": 0.011783664,
+      "A3": 0.00025239185,
+      "A4": -1.2352344e-05,
+      "A5": 8.7540057e-07
     }
   },
   {
     "name": "K-FK5",
     "nd": 1.48749,
-    "vd": 70.41,
-    "sellmeier": {
-      "A1": 0.871922037,
-      "A2": 0.222284402,
-      "A3": 0.949444029,
-      "B1": 0.00502980128,
-      "B2": 0.0163701764,
-      "B3": 98.7378103
+    "vd": 70.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.189197,
+      "A1": -0.0097642231,
+      "A2": 0.0086917382,
+      "A3": 0.00023646623,
+      "A4": -1.7699987e-05,
+      "A5": 9.6989631e-07
     }
   },
   {
-    "name": "K-LAFK5",
-    "nd": 1.61340,
-    "vd": 43.84,
-    "sellmeier": {
-      "A1": 1.22785,
-      "A2": 0.211606,
-      "A3": 1.46894,
-      "B1": 0.00862433,
-      "B2": 0.0425537,
-      "B3": 113.654
+    "name": "K-BK7",
+    "nd": 1.51633,
+    "vd": 64.1,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.2705778,
+      "A1": -0.010059376,
+      "A2": 0.010414999,
+      "A3": 0.00028872517,
+      "A4": -2.2214495e-05,
+      "A5": 1.4258559e-06
     }
   },
   {
-    "name": "K-LASF016",
-    "nd": 1.74330,
-    "vd": 49.22,
-    "sellmeier": {
-      "A1": 1.57055634,
-      "A2": 0.153621958,
-      "A3": 1.63539616,
-      "B1": 0.0102711071,
-      "B2": 0.0493003855,
-      "B3": 118.555571
+    "name": "K-BPG2",
+    "nd": 1.5592,
+    "vd": 53.9,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.3909284,
+      "A1": -0.0090241173,
+      "A2": 0.014036614,
+      "A3": 0.00033108428,
+      "A4": -9.985229e-06,
+      "A5": 1.1070906e-06
     }
   },
   {
-    "name": "K-LASFN1",
-    "nd": 1.88067,
-    "vd": 41.01,
-    "sellmeier": {
-      "A1": 1.76703785,
-      "A2": 0.315812841,
-      "A3": 1.79696391,
-      "B1": 0.0115033344,
-      "B2": 0.0556647262,
-      "B3": 125.856736
+    "name": "K-PSKn2",
+    "nd": 1.618,
+    "vd": 63.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.578886,
+      "A1": -0.010381408,
+      "A2": 0.014233563,
+      "A3": 0.00012483021,
+      "A4": 1.7477672e-05,
+      "A5": -9.6204805e-07
     }
   },
   {
-    "name": "K-LASFN2",
-    "nd": 1.88300,
-    "vd": 40.76,
-    "sellmeier": {
-      "A1": 1.78524,
-      "A2": 0.390551,
-      "A3": 1.80208,
-      "B1": 0.0111937,
-      "B2": 0.0569007,
-      "B3": 126.263
+    "name": "K-SK4",
+    "nd": 1.61272,
+    "vd": 58.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5587726,
+      "A1": -0.0098095616,
+      "A2": 0.014840563,
+      "A3": 0.0003193166,
+      "A4": -1.016436e-05,
+      "A5": 6.6518794e-07
     }
   },
   {
-    "name": "K-LASFN9",
-    "nd": 1.85026,
-    "vd": 32.28,
-    "sellmeier": {
-      "A1": 1.66565666,
-      "A2": 0.298038492,
-      "A3": 1.75813750,
-      "B1": 0.0111162987,
-      "B2": 0.0526919407,
-      "B3": 138.964129
+    "name": "K-SK5",
+    "nd": 1.58913,
+    "vd": 61.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.4895419,
+      "A1": -0.011359477,
+      "A2": 0.012448401,
+      "A3": 0.00055781133,
+      "A4": -5.0555753e-05,
+      "A5": 2.8679508e-06
+    }
+  },
+  {
+    "name": "K-SK7",
+    "nd": 1.60729,
+    "vd": 59.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5429277,
+      "A1": -0.01031719,
+      "A2": 0.014356944,
+      "A3": 0.00031433872,
+      "A4": -1.0824341e-05,
+      "A5": 6.8100892e-07
+    }
+  },
+  {
+    "name": "K-SK14",
+    "nd": 1.60311,
+    "vd": 60.7,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5313894,
+      "A1": -0.010956275,
+      "A2": 0.013803544,
+      "A3": 0.00029803889,
+      "A4": -6.2451964e-06,
+      "A5": 2.5686024e-07
+    }
+  },
+  {
+    "name": "K-SK15",
+    "nd": 1.62299,
+    "vd": 58.1,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5918508,
+      "A1": -0.010567563,
+      "A2": 0.014411695,
+      "A3": 0.00063226961,
+      "A4": -5.7927037e-05,
+      "A5": 3.4193172e-06
+    }
+  },
+  {
+    "name": "K-SK16",
+    "nd": 1.62041,
+    "vd": 60.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5843629,
+      "A1": -0.010743741,
+      "A2": 0.014943604,
+      "A3": 0.00020007994,
+      "A4": 4.5624595e-06,
+      "A5": -1.2296939e-07
+    }
+  },
+  {
+    "name": "K-SK16RH",
+    "nd": 1.62041,
+    "vd": 60.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5853303,
+      "A1": -0.011740187,
+      "A2": 0.014496524,
+      "A3": 0.0003287161,
+      "A4": -1.5804639e-05,
+      "A5": 1.1016183e-06
+    }
+  },
+  {
+    "name": "K-SK18",
+    "nd": 1.63854,
+    "vd": 55.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.6383229,
+      "A1": -0.010806956,
+      "A2": 0.016153414,
+      "A3": 0.00046673954,
+      "A4": -2.5414619e-05,
+      "A5": 1.9703165e-06
+    }
+  },
+  {
+    "name": "K-SK18RH",
+    "nd": 1.63854,
+    "vd": 55.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.6368942,
+      "A1": -0.00998234,
+      "A2": 0.017151413,
+      "A3": 0.00011644223,
+      "A4": 3.4189945e-05,
+      "A5": -1.8645959e-06
+    }
+  },
+  {
+    "name": "K-SSK1",
+    "nd": 1.6172,
+    "vd": 54.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5692173,
+      "A1": -0.010022582,
+      "A2": 0.016067095,
+      "A3": 0.00039868115,
+      "A4": -1.5698671e-05,
+      "A5": 1.1774033e-06
+    }
+  },
+  {
+    "name": "K-SSK3",
+    "nd": 1.61484,
+    "vd": 51.1,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5581178,
+      "A1": -0.0093433459,
+      "A2": 0.017279508,
+      "A3": 0.00034232239,
+      "A4": -8.1515194e-06,
+      "A5": 1.1314454e-06
+    }
+  },
+  {
+    "name": "K-SSK4",
+    "nd": 1.61765,
+    "vd": 55.1,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5749313,
+      "A1": -0.011981485,
+      "A2": 0.013663757,
+      "A3": 0.00099687549,
+      "A4": -9.3565959e-05,
+      "A5": 4.629733e-06
+    }
+  },
+  {
+    "name": "K-SSK9",
+    "nd": 1.62012,
+    "vd": 49.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5737917,
+      "A1": -0.0093452955,
+      "A2": 0.017645209,
+      "A3": 0.00035765081,
+      "A4": 1.1614434e-06,
+      "A5": 1.16034e-06
+    }
+  },
+  {
+    "name": "K-BaF8",
+    "nd": 1.62374,
+    "vd": 47.1,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5830562,
+      "A1": -0.01131971,
+      "A2": 0.018817464,
+      "A3": 0.00027063309,
+      "A4": 2.1527561e-05,
+      "A5": 7.7761941e-07
+    }
+  },
+  {
+    "name": "K-BaF9",
+    "nd": 1.64328,
+    "vd": 47.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.6455399,
+      "A1": -0.010990833,
+      "A2": 0.018955207,
+      "A3": 0.00040800743,
+      "A4": 9.934634e-06,
+      "A5": 9.3197902e-07
+    }
+  },
+  {
+    "name": "K-BaFn1",
+    "nd": 1.6825,
+    "vd": 44.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.7669297,
+      "A1": -0.011669996,
+      "A2": 0.02151984,
+      "A3": 0.00070810281,
+      "A4": -2.495822e-05,
+      "A5": 3.7747946e-06
+    }
+  },
+  {
+    "name": "K-BaFn3",
+    "nd": 1.66422,
+    "vd": 49.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.7128944,
+      "A1": -0.010619935,
+      "A2": 0.019653632,
+      "A3": 0.00040051165,
+      "A4": 1.1626539e-06,
+      "A5": 1.1579589e-06
+    }
+  },
+  {
+    "name": "K-BaSF4",
+    "nd": 1.65128,
+    "vd": 38.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.6590501,
+      "A1": -0.011944106,
+      "A2": 0.02185629,
+      "A3": 0.0011761807,
+      "A4": -7.8567029e-05,
+      "A5": 8.1413835e-06
+    }
+  },
+  {
+    "name": "K-BaSF5",
+    "nd": 1.60323,
+    "vd": 42.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.5165762,
+      "A1": -0.01183779,
+      "A2": 0.017631594,
+      "A3": 0.00095834052,
+      "A4": -6.7623905e-05,
+      "A5": 6.2543393e-06
+    }
+  },
+  {
+    "name": "K-BaSF12",
+    "nd": 1.66998,
+    "vd": 39.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.7201325,
+      "A1": -0.012755345,
+      "A2": 0.02235917,
+      "A3": 0.0011060351,
+      "A4": -5.6019485e-05,
+      "A5": 5.8998558e-06
+    }
+  },
+  {
+    "name": "K-LaK6",
+    "nd": 1.6425,
+    "vd": 58.1,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.6532657,
+      "A1": -0.011570116,
+      "A2": 0.015955637,
+      "A3": 0.00023811283,
+      "A4": 1.7165459e-05,
+      "A5": -1.4129709e-06
+    }
+  },
+  {
+    "name": "K-LaK7",
+    "nd": 1.6516,
+    "vd": 58.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.6835737,
+      "A1": -0.012086498,
+      "A2": 0.015193489,
+      "A3": 0.00064847987,
+      "A4": -5.2423893e-05,
+      "A5": 2.8301452e-06
+    }
+  },
+  {
+    "name": "K-LaK8",
+    "nd": 1.713,
+    "vd": 53.9,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8797142,
+      "A1": -0.015009518,
+      "A2": 0.01933782,
+      "A3": 0.00048379963,
+      "A4": -1.1367908e-05,
+      "A5": 7.0484275e-07
+    }
+  },
+  {
+    "name": "K-LaK9",
+    "nd": 1.691,
+    "vd": 54.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8065086,
+      "A1": -0.012084694,
+      "A2": 0.018509723,
+      "A3": 0.00045689652,
+      "A4": -1.5275984e-05,
+      "A5": 1.0018509e-06
+    }
+  },
+  {
+    "name": "K-LaK10",
+    "nd": 1.72,
+    "vd": 50.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8960747,
+      "A1": -0.011713123,
+      "A2": 0.021599254,
+      "A3": 0.00043811038,
+      "A4": 5.752903e-06,
+      "A5": -1.7364157e-07
+    }
+  },
+  {
+    "name": "K-LaK11",
+    "nd": 1.6583,
+    "vd": 57.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.703071,
+      "A1": -0.011555097,
+      "A2": 0.016440907,
+      "A3": 0.00044044678,
+      "A4": -2.1866961e-05,
+      "A5": 1.3531002e-06
+    }
+  },
+  {
+    "name": "K-LaK12",
+    "nd": 1.6779,
+    "vd": 55.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.7644388,
+      "A1": -0.011785176,
+      "A2": 0.017957173,
+      "A3": 0.00034733134,
+      "A4": 3.6439617e-06,
+      "A5": -3.286378e-07
+    }
+  },
+  {
+    "name": "K-LaK13",
+    "nd": 1.6935,
+    "vd": 53.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8106459,
+      "A1": -0.010211215,
+      "A2": 0.02047301,
+      "A3": 9.7897189e-05,
+      "A4": 3.378933e-05,
+      "A5": -1.1893964e-06
+    }
+  },
+  {
+    "name": "K-LaK14",
+    "nd": 1.6968,
+    "vd": 55.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8277206,
+      "A1": -0.013838479,
+      "A2": 0.0179847,
+      "A3": 0.00057777884,
+      "A4": -3.7712827e-05,
+      "A5": 2.2935918e-06
+    }
+  },
+  {
+    "name": "K-LaK18",
+    "nd": 1.72916,
+    "vd": 54.7,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.9333796,
+      "A1": -0.014920134,
+      "A2": 0.020207432,
+      "A3": 0.00041238589,
+      "A4": -1.230332e-05,
+      "A5": 1.1436994e-06
+    }
+  },
+  {
+    "name": "K-LaKn2",
+    "nd": 1.6405,
+    "vd": 60.1,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.6498456,
+      "A1": -0.013078949,
+      "A2": 0.014887079,
+      "A3": 0.0003621869,
+      "A4": -1.1506273e-05,
+      "A5": 6.1300945e-07
+    }
+  },
+  {
+    "name": "K-LaKn7",
+    "nd": 1.67,
+    "vd": 51.7,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.735741,
+      "A1": -0.011476747,
+      "A2": 0.017975035,
+      "A3": 0.00072020288,
+      "A4": -5.1933951e-05,
+      "A5": 3.5980087e-06
+    }
+  },
+  {
+    "name": "K-LaKn12",
+    "nd": 1.7335,
+    "vd": 51.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.9410903,
+      "A1": -0.011791679,
+      "A2": 0.022466126,
+      "A3": 0.00034761977,
+      "A4": -1.7639536e-06,
+      "A5": 1.0304373e-06
+    }
+  },
+  {
+    "name": "K-LaKn14",
+    "nd": 1.741,
+    "vd": 52.7,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.9713549,
+      "A1": -0.015047149,
+      "A2": 0.020748381,
+      "A3": 0.00068239287,
+      "A4": -4.5897244e-05,
+      "A5": 3.0151479e-06
+    }
+  },
+  {
+    "name": "K-LaF2",
+    "nd": 1.744,
+    "vd": 44.9,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.969235,
+      "A1": -0.01236657,
+      "A2": 0.024178838,
+      "A3": 0.00087063153,
+      "A4": -4.4196612e-05,
+      "A5": 4.4742987e-06
+    }
+  },
+  {
+    "name": "K-LaF3",
+    "nd": 1.717,
+    "vd": 47.9,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8849358,
+      "A1": -0.012668322,
+      "A2": 0.021170498,
+      "A3": 0.00085117754,
+      "A4": -4.902482e-05,
+      "A5": 3.7361709e-06
+    }
+  },
+  {
+    "name": "K-LaFn1",
+    "nd": 1.685,
+    "vd": 49.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.7831037,
+      "A1": -0.012354306,
+      "A2": 0.018328162,
+      "A3": 0.0010714523,
+      "A4": -8.5608858e-05,
+      "A5": 5.4247225e-06
+    }
+  },
+  {
+    "name": "K-LaFn2",
+    "nd": 1.697,
+    "vd": 48.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8209581,
+      "A1": -0.012387214,
+      "A2": 0.01929917,
+      "A3": 0.0010436756,
+      "A4": -7.7921095e-05,
+      "A5": 5.1365409e-06
+    }
+  },
+  {
+    "name": "K-LaFn3",
+    "nd": 1.7,
+    "vd": 48.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.827081,
+      "A1": -0.010220727,
+      "A2": 0.021224097,
+      "A3": 0.0006653956,
+      "A4": -3.3316539e-05,
+      "A5": 3.16429e-06
+    }
+  },
+  {
+    "name": "K-LaFn5",
+    "nd": 1.743,
+    "vd": 49.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.9746618,
+      "A1": -0.015490396,
+      "A2": 0.021676376,
+      "A3": 0.0007907947,
+      "A4": -3.5069226e-05,
+      "A5": 2.1235401e-06
+    }
+  },
+  {
+    "name": "K-LaFn9",
+    "nd": 1.764,
+    "vd": 40.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.032871,
+      "A1": -0.01386928,
+      "A2": 0.023554889,
+      "A3": 0.0024226145,
+      "A4": -0.00025576787,
+      "A5": 1.7912149e-05
+    }
+  },
+  {
+    "name": "K-LaFn11",
+    "nd": 1.72013,
+    "vd": 46.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8917009,
+      "A1": -0.011920903,
+      "A2": 0.022558933,
+      "A3": 0.00079204231,
+      "A4": -4.0820426e-05,
+      "A5": 4.1373045e-06
+    }
+  },
+  {
+    "name": "K-LaSKn1",
+    "nd": 1.755,
+    "vd": 52.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.0176028,
+      "A1": -0.01512239,
+      "A2": 0.021959514,
+      "A3": 0.00052144528,
+      "A4": -1.8693935e-05,
+      "A5": 1.6369365e-06
+    }
+  },
+  {
+    "name": "K-LaSFn1",
+    "nd": 1.8061,
+    "vd": 40.7,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.1704478,
+      "A1": -0.012872124,
+      "A2": 0.030711328,
+      "A3": 0.00091467552,
+      "A4": -4.2179151e-05,
+      "A5": 5.885503e-06
+    }
+  },
+  {
+    "name": "K-LaSFn2",
+    "nd": 1.805,
+    "vd": 39.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.1666472,
+      "A1": -0.014823032,
+      "A2": 0.030366123,
+      "A3": 0.0010942894,
+      "A4": -4.2108569e-05,
+      "A5": 5.7186779e-06
+    }
+  },
+  {
+    "name": "K-LaSFn3",
+    "nd": 1.7995,
+    "vd": 42.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.1507226,
+      "A1": -0.012460963,
+      "A2": 0.029910697,
+      "A3": 0.00050733106,
+      "A4": 3.6278868e-05,
+      "A5": -2.5019766e-08
+    }
+  },
+  {
+    "name": "K-LaSFn4",
+    "nd": 1.785,
+    "vd": 43.7,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.1049984,
+      "A1": -0.013342479,
+      "A2": 0.027506526,
+      "A3": 0.00075451621,
+      "A4": -1.6565687e-05,
+      "A5": 2.780481e-06
+    }
+  },
+  {
+    "name": "K-LaSFn6",
+    "nd": 1.804,
+    "vd": 46.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.1766024,
+      "A1": -0.015214563,
+      "A2": 0.026674405,
+      "A3": 0.00074674513,
+      "A4": -2.63508e-05,
+      "A5": 2.7514981e-06
+    }
+  },
+  {
+    "name": "K-LaSFn7",
+    "nd": 1.7725,
+    "vd": 49.6,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.0728806,
+      "A1": -0.014815338,
+      "A2": 0.024064142,
+      "A3": 0.00049961497,
+      "A4": 1.2852807e-06,
+      "A5": 5.2262074e-07
+    }
+  },
+  {
+    "name": "K-LaSFn8",
+    "nd": 1.835,
+    "vd": 42.7,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.2767321,
+      "A1": -0.015115573,
+      "A2": 0.030753445,
+      "A3": 0.00078350578,
+      "A4": -3.4594495e-06,
+      "A5": 2.0542573e-06
+    }
+  },
+  {
+    "name": "K-LaSFn8W",
+    "nd": 1.8349,
+    "vd": 42.7,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.276444,
+      "A1": -0.015177935,
+      "A2": 0.030678303,
+      "A3": 0.0007939596,
+      "A4": 8.2678979e-07,
+      "A5": 1.3913562e-06
+    }
+  },
+  {
+    "name": "K-LaSFn9",
+    "nd": 1.816,
+    "vd": 46.7,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.2184433,
+      "A1": -0.014906369,
+      "A2": 0.02692619,
+      "A3": 0.00087409748,
+      "A4": -4.0331281e-05,
+      "A5": 3.1677745e-06
+    }
+  },
+  {
+    "name": "K-LaSFn10",
+    "nd": 1.8155,
+    "vd": 44.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.2128137,
+      "A1": -0.015587464,
+      "A2": 0.028249299,
+      "A3": 0.00086439607,
+      "A4": -2.9175496e-05,
+      "A5": 2.9912535e-06
+    }
+  },
+  {
+    "name": "K-LaSFn14",
+    "nd": 1.834,
+    "vd": 37.3,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.2643191,
+      "A1": -0.016265121,
+      "A2": 0.03202838,
+      "A3": 0.0015271854,
+      "A4": -4.7775544e-05,
+      "A5": 5.7345907e-06
+    }
+  },
+  {
+    "name": "K-LaSFn16",
+    "nd": 1.7883,
+    "vd": 47.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.124535,
+      "A1": -0.014985014,
+      "A2": 0.024795878,
+      "A3": 0.00096271556,
+      "A4": -6.4587038e-05,
+      "A5": 4.6162437e-06
+    }
+  },
+  {
+    "name": "K-LaSFn17",
+    "nd": 1.883,
+    "vd": 40.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.4434117,
+      "A1": -0.015474743,
+      "A2": 0.033695975,
+      "A3": 0.0012878574,
+      "A4": -4.547423e-05,
+      "A5": 3.867959e-06
+    }
+  },
+  {
+    "name": "K-LaSFn21",
+    "nd": 1.85,
+    "vd": 32.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.3040338,
+      "A1": -0.016019748,
+      "A2": 0.037645989,
+      "A3": 0.0021532464,
+      "A4": -0.00020498123,
+      "A5": 2.7623217e-05
+    }
+  },
+  {
+    "name": "K-LaSFn22",
+    "nd": 1.898,
+    "vd": 34.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.477103,
+      "A1": -0.01493764,
+      "A2": 0.040192699,
+      "A3": 0.0018404932,
+      "A4": -0.00010009344,
+      "A5": 1.4346776e-05
+    }
+  },
+  {
+    "name": "K-LaSFn23",
+    "nd": 1.911,
+    "vd": 35.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.5274271,
+      "A1": -0.01463666,
+      "A2": 0.040395739,
+      "A3": 0.0015517485,
+      "A4": -4.6386509e-05,
+      "A5": 9.1517458e-06
+    }
+  },
+  {
+    "name": "K-SFLD1",
+    "nd": 1.71736,
+    "vd": 29.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8465679,
+      "A1": -0.01179579,
+      "A2": 0.032766631,
+      "A3": 0.0014514223,
+      "A4": -4.8225155e-05,
+      "A5": 1.2981324e-05
     }
   },
   {
     "name": "K-SFLD2",
-    "nd": 1.59240,
-    "vd": 68.40,
-    "sellmeier": {
-      "A1": 1.20870776,
-      "A2": 0.119654226,
-      "A3": 1.13188434,
-      "B1": 0.00733236765,
-      "B2": 0.0270190213,
-      "B3": 107.097324
+    "nd": 1.64769,
+    "vd": 33.9,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.6390073,
+      "A1": -0.011704695,
+      "A2": 0.024198189,
+      "A3": 0.00125366,
+      "A4": -5.1544035e-05,
+      "A5": 7.7549405e-06
     }
   },
   {
-    "name": "K-VC78",
-    "nd": 1.53172,
-    "vd": 48.84,
-    "sellmeier": {
-      "A1": 1.08594574,
-      "A2": 0.111477403,
-      "A3": 1.18925231,
-      "B1": 0.00647264107,
-      "B2": 0.0280275766,
-      "B3": 91.1824154
+    "name": "K-SFLD4",
+    "nd": 1.7552,
+    "vd": 27.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.9621759,
+      "A1": -0.011836005,
+      "A2": 0.037648353,
+      "A3": 0.0015341601,
+      "A4": -1.0776303e-05,
+      "A5": 1.378924e-05
     }
-  }
+  },
+  {
+    "name": "K-SFLD5",
+    "nd": 1.6727,
+    "vd": 32.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.7102301,
+      "A1": -0.010851642,
+      "A2": 0.029534854,
+      "A3": 0.00041107114,
+      "A4": 9.7348452e-05,
+      "A5": 8.8402787e-07
+    }
+  },
+  {
+    "name": "K-SFLD6",
+    "nd": 1.80518,
+    "vd": 25.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.1176009,
+      "A1": -0.012108189,
+      "A2": 0.044689743,
+      "A3": 0.0016574765,
+      "A4": 4.1984442e-05,
+      "A5": 1.29135e-05
+    }
+  },
+  {
+    "name": "K-SFLD8",
+    "nd": 1.68893,
+    "vd": 31.1,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.7609221,
+      "A1": -0.011601354,
+      "A2": 0.029309701,
+      "A3": 0.0012957192,
+      "A4": -3.6971081e-05,
+      "A5": 9.8723481e-06
+    }
+  },
+  {
+    "name": "K-SFLD8W",
+    "nd": 1.6891,
+    "vd": 31.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.7616037,
+      "A1": -0.011625188,
+      "A2": 0.029251663,
+      "A3": 0.0013183689,
+      "A4": -4.4020904e-05,
+      "A5": 1.048639e-05
+    }
+  },
+  {
+    "name": "K-SFLD10",
+    "nd": 1.72825,
+    "vd": 28.4,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.8794157,
+      "A1": -0.012203687,
+      "A2": 0.03351206,
+      "A3": 0.0018761149,
+      "A4": -9.8708915e-05,
+      "A5": 1.7667333e-05
+    }
+  },
+  {
+    "name": "K-SFLD11",
+    "nd": 1.78472,
+    "vd": 25.9,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.052913,
+      "A1": -0.012276955,
+      "A2": 0.041487837,
+      "A3": 0.0019043764,
+      "A4": -3.1653157e-05,
+      "A5": 1.7320425e-05
+    }
+  },
+  {
+    "name": "K-SFLD14",
+    "nd": 1.76182,
+    "vd": 26.5,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.9787433,
+      "A1": -0.011798697,
+      "A2": 0.040432992,
+      "A3": 0.0011404668,
+      "A4": 8.4929619e-05,
+      "A5": 8.409647e-06
+    }
+  },
+  {
+    "name": "K-SFLDn3",
+    "nd": 1.8467,
+    "vd": 23.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.2514481,
+      "A1": -0.013518435,
+      "A2": 0.048164106,
+      "A3": 0.0030770868,
+      "A4": -0.00016501402,
+      "A5": 3.116076e-05
+    }
+  },
+  {
+    "name": "K-SFLDn3W",
+    "nd": 1.8467,
+    "vd": 23.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.2497343,
+      "A1": -0.01306627,
+      "A2": 0.050214784,
+      "A3": 0.0021132827,
+      "A4": 2.6714562e-05,
+      "A5": 1.7728631e-05
+    }
+  },
+  {
+    "name": "K-BOC30",
+    "nd": 2.0068,
+    "vd": 26.2,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.8356956,
+      "A1": -0.015106203,
+      "A2": 0.06003757,
+      "A3": 0.0026135256,
+      "A4": -1.9280273e-05,
+      "A5": 2.0127922e-05
+    }
+  },
+  {
+    "name": "K-GIR79",
+    "nd": 1.8592,
+    "vd": 33.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 3.3309552,
+      "A1": -0.0085102025,
+      "A2": 0.040332166,
+      "A3": 0.0014009819,
+      "A4": -1.9888108e-05,
+      "A5": 7.117453e-06
+    }
+  },
+  {
+    "name": "K-GIR140",
+    "nd": 1.75106,
+    "vd": 43.1,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.9854628,
+      "A1": -0.0065859032,
+      "A2": 0.026407911,
+      "A3": 0.00084695423,
+      "A4": -3.2505558e-05,
+      "A5": 3.1878545e-06
+    }
+  },
+  {
+    "name": "K-FIR98UV",
+    "nd": 1.42537,
+    "vd": 97.8,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 2.0158016,
+      "A1": -0.0038179076,
+      "A2": 0.0058067887,
+      "A3": 4.2558748e-05,
+      "A4": 7.6622455e-07,
+      "A5": 1.6716816e-09
+    }
+  },
+  {
+    "name": "K-FIR100UV",
+    "nd": 1.4139,
+    "vd": 101.0,
+    "manufacturer": "Sumita",
+    "sumita": {
+      "A0": 1.9845467,
+      "A1": -0.0039034211,
+      "A2": 0.0053331804,
+      "A3": 5.5561154e-05,
+      "A4": -4.9201283e-07,
+      "A5": 2.6560523e-08
+    }
+  },
 ];
+
 
 // CDGM (Chengdu Guangming) Optical Glass Database
 export const cdgmGlassDB = [
   {
+    "name": "H-FK61",
+    "nd": 1.497,
+    "vd": 81.61,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.21667349,
+      "A1": -0.00493991656,
+      "A2": 0.00915004725,
+      "A3": -0.00012667557,
+      "A4": 2.8243403e-05,
+      "A5": -1.31517813e-06
+    }
+  },
+  {
+    "name": "H-FK61B",
+    "nd": 1.497,
+    "vd": 81.61,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.21667349,
+      "A1": -0.00493991656,
+      "A2": 0.00915004725,
+      "A3": -0.00012667557,
+      "A4": 2.8243403e-05,
+      "A5": -1.31517813e-06
+    }
+  },
+  {
+    "name": "H-FK71",
+    "nd": 1.4565,
+    "vd": 90.27,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.103249,
+      "A1": -0.0050247988,
+      "A2": 0.0065323077,
+      "A3": 0.00013078405,
+      "A4": -6.3652072e-06,
+      "A5": 1.9254745e-07
+    }
+  },
+  {
+    "name": "H-QK1",
+    "nd": 1.47047,
+    "vd": 66.88,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.13732812,
+      "A1": -0.00894176765,
+      "A2": 0.00967010992,
+      "A3": -6.31093115e-05,
+      "A4": 2.62713578e-05,
+      "A5": -1.27152263e-06
+    }
+  },
+  {
+    "name": "H-QK3L",
+    "nd": 1.48749,
+    "vd": 70.44,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.18873391,
+      "A1": -0.00969305681,
+      "A2": 0.00915154799,
+      "A3": 6.46567507e-05,
+      "A4": 9.18900583e-06,
+      "A5": -4.71149273e-07
+    }
+  },
+  {
+    "name": "H-K1",
+    "nd": 1.49967,
+    "vd": 62.07,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.2199551,
+      "A1": -0.00854352351,
+      "A2": 0.0103698555,
+      "A3": 0.000273240959,
+      "A4": -1.58736064e-05,
+      "A5": 9.73235567e-07
+    }
+  },
+  {
+    "name": "H-K2",
+    "nd": 1.50047,
+    "vd": 66.02,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.22522177,
+      "A1": -0.010126267,
+      "A2": 0.00954719533,
+      "A3": 0.000310146735,
+      "A4": -2.84359869e-05,
+      "A5": 1.63632169e-06
+    }
+  },
+  {
+    "name": "H-K3",
+    "nd": 1.50463,
+    "vd": 64.72,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.23568924,
+      "A1": -0.0101322782,
+      "A2": 0.0109219541,
+      "A3": -5.77272119e-05,
+      "A4": 2.68720113e-05,
+      "A5": -1.16041466e-06
+    }
+  },
+  {
+    "name": "K4A",
+    "nd": 1.50802,
+    "vd": 61.05,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.24187488,
+      "A1": -0.00891932146,
+      "A2": 0.0126251741,
+      "A3": -0.000298598739,
+      "A4": 5.95648836e-05,
+      "A5": -2.58633231e-06
+    }
+  },
+  {
+    "name": "H-K5",
+    "nd": 1.51007,
+    "vd": 63.36,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.25018356,
+      "A1": -0.00894066156,
+      "A2": 0.0114317829,
+      "A3": -7.33393278e-05,
+      "A4": 3.49616695e-05,
+      "A5": -1.80100775e-06
+    }
+  },
+  {
+    "name": "H-K6",
+    "nd": 1.51112,
+    "vd": 60.46,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.25024516,
+      "A1": -0.00758714819,
+      "A2": 0.0126303778,
+      "A3": -0.000229001819,
+      "A4": 5.80225939e-05,
+      "A5": -2.84094604e-06
+    }
+  },
+  {
+    "name": "H-K7",
+    "nd": 1.51478,
+    "vd": 60.63,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.25978818,
+      "A1": -0.00693885931,
+      "A2": 0.0134488547,
+      "A3": -0.000405904363,
+      "A4": 7.64411122e-05,
+      "A5": -3.51928135e-06
+    }
+  },
+  {
+    "name": "H-K8",
+    "nd": 1.51602,
+    "vd": 56.79,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.26289162,
+      "A1": -0.00770544885,
+      "A2": 0.0130033906,
+      "A3": -3.10393046e-05,
+      "A4": 3.16686868e-05,
+      "A5": -1.27242154e-06
+    }
+  },
+  {
     "name": "H-K9L",
-    "nd": 1.51680,
-    "vd": 64.17,
-    "sellmeier": {
-      "A1": 1.03961212,
-      "A2": 0.231792344,
-      "A3": 1.01046945,
-      "B1": 0.00600069867,
-      "B2": 0.0200179144,
-      "B3": 103.560653
+    "nd": 1.5168,
+    "vd": 64.2,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.27196941,
+      "A1": -0.00991721869,
+      "A2": 0.0103697525,
+      "A3": 0.000311903798,
+      "A4": -2.64582145e-05,
+      "A5": 1.64750848e-06
+    }
+  },
+  {
+    "name": "H-K9LGT",
+    "nd": 1.5168,
+    "vd": 64.2,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.27196941,
+      "A1": -0.00991721869,
+      "A2": 0.0103697525,
+      "A3": 0.000311903798,
+      "A4": -2.64582145e-05,
+      "A5": 1.64750848e-06
+    }
+  },
+  {
+    "name": "H-K9L*",
+    "nd": 1.5168,
+    "vd": 64.2,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.27196941,
+      "A1": -0.00991721869,
+      "A2": 0.0103697525,
+      "A3": 0.000311903798,
+      "A4": -2.64582145e-05,
+      "A5": 1.64750848e-06
+    }
+  },
+  {
+    "name": "H-K10",
+    "nd": 1.51818,
+    "vd": 58.95,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.26857433,
+      "A1": -0.00685600163,
+      "A2": 0.0140981051,
+      "A3": -0.000498309358,
+      "A4": 9.50956734e-05,
+      "A5": -4.50515754e-06
+    }
+  },
+  {
+    "name": "H-K11",
+    "nd": 1.52638,
+    "vd": 60.16,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.29500524,
+      "A1": -0.00752634179,
+      "A2": 0.0130212465,
+      "A3": -0.000143116298,
+      "A4": 4.31227975e-05,
+      "A5": -1.8646905e-06
+    }
+  },
+  {
+    "name": "H-K12",
+    "nd": 1.53359,
+    "vd": 55.47,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.31506425,
+      "A1": -0.00827156166,
+      "A2": 0.0129535559,
+      "A3": 0.000268505199,
+      "A4": -5.46028268e-06,
+      "A5": 6.24325621e-07
+    }
+  },
+  {
+    "name": "H-K50",
+    "nd": 1.52249,
+    "vd": 59.48,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.2834436,
+      "A1": -0.00800379011,
+      "A2": 0.0130801119,
+      "A3": -0.000224166591,
+      "A4": 6.15548619e-05,
+      "A5": -2.94342401e-06
+    }
+  },
+  {
+    "name": "H-K51",
+    "nd": 1.52307,
+    "vd": 58.64,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.28704699,
+      "A1": -0.00896946455,
+      "A2": 0.0115278522,
+      "A3": 0.00030799622,
+      "A4": -7.93584686e-06,
+      "A5": 2.91898123e-07
+    }
+  },
+  {
+    "name": "H-ZPK1A",
+    "nd": 1.618,
+    "vd": 63.39,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.57612635,
+      "A1": -0.00780401598,
+      "A2": 0.0152465014,
+      "A3": -2.0774016e-05,
+      "A4": 2.28544414e-05,
+      "A5": -8.23333227e-07
+    }
+  },
+  {
+    "name": "H-ZPK2A",
+    "nd": 1.603,
+    "vd": 65.47,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.53073192,
+      "A1": -0.0083442991,
+      "A2": 0.0146551845,
+      "A3": -0.000216647389,
+      "A4": 5.35525389e-05,
+      "A5": -2.46158263e-06
+    }
+  },
+  {
+    "name": "H-ZPK3",
+    "nd": 1.59349,
+    "vd": 67.29,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.50355665,
+      "A1": -0.00956011816,
+      "A2": 0.0134870279,
+      "A3": -0.000107119645,
+      "A4": 3.74651897e-05,
+      "A5": -1.78002982e-06
+    }
+  },
+  {
+    "name": "H-ZPK5",
+    "nd": 1.5928,
+    "vd": 68.34,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.50094134,
+      "A1": -0.00643181261,
+      "A2": 0.0128057147,
+      "A3": 0.000118159755,
+      "A4": 9.93809342e-06,
+      "A5": -5.19594876e-07
+    }
+  },
+  {
+    "name": "H-ZPK7",
+    "nd": 1.56907,
+    "vd": 71.3,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.42841338,
+      "A1": -0.00541267847,
+      "A2": 0.0121615985,
+      "A3": -4.11146408e-05,
+      "A4": 2.64464009e-05,
+      "A5": -1.25193808e-06
+    }
+  },
+  {
+    "name": "H-BaK1",
+    "nd": 1.53028,
+    "vd": 60.47,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.30865698,
+      "A1": -0.00872904002,
+      "A2": 0.0119533972,
+      "A3": 0.000159700912,
+      "A4": 6.99805905e-06,
+      "A5": -3.33717539e-07
+    }
+  },
+  {
+    "name": "H-BaK2",
+    "nd": 1.53996,
+    "vd": 59.72,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.33527993,
+      "A1": -0.0078806451,
+      "A2": 0.0135145071,
+      "A3": -0.000142281768,
+      "A4": 4.61865579e-05,
+      "A5": -2.07689693e-06
+    }
+  },
+  {
+    "name": "H-BaK3",
+    "nd": 1.54678,
+    "vd": 62.78,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.35870163,
+      "A1": -0.00950600467,
+      "A2": 0.0127948403,
+      "A3": -8.28951235e-05,
+      "A4": 3.5627075e-05,
+      "A5": -1.74142152e-06
+    }
+  },
+  {
+    "name": "H-BaK4",
+    "nd": 1.55248,
+    "vd": 63.37,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.37934396,
+      "A1": -0.0111573292,
+      "A2": 0.010770657,
+      "A3": 0.000537494005,
+      "A4": -4.85885263e-05,
+      "A5": 2.43110267e-06
+    }
+  },
+  {
+    "name": "H-BaK5",
+    "nd": 1.56069,
+    "vd": 58.34,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.39698774,
+      "A1": -0.00814093911,
+      "A2": 0.0141635533,
+      "A3": -1.31826571e-05,
+      "A4": 3.09378511e-05,
+      "A5": -1.33359749e-06
+    }
+  },
+  {
+    "name": "H-BaK6",
+    "nd": 1.56388,
+    "vd": 60.76,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.40421729,
+      "A1": -0.00689279508,
+      "A2": 0.0171159715,
+      "A3": -0.00118980816,
+      "A4": 0.000211469997,
+      "A5": -1.18837301e-05
+    }
+  },
+  {
+    "name": "H-BaK7",
+    "nd": 1.56883,
+    "vd": 56.04,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.41803544,
+      "A1": -0.0076261289,
+      "A2": 0.0165596275,
+      "A3": -0.000521246254,
+      "A4": 0.000106128523,
+      "A5": -4.8581855e-06
+    }
+  },
+  {
+    "name": "H-BaK7GT",
+    "nd": 1.56883,
+    "vd": 56.04,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.41803544,
+      "A1": -0.0076261289,
+      "A2": 0.0165596275,
+      "A3": -0.000521246254,
+      "A4": 0.000106128523,
+      "A5": -4.8581855e-06
+    }
+  },
+  {
+    "name": "H-BaK7A",
+    "nd": 1.56883,
+    "vd": 56.12,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.42067444,
+      "A1": -0.00907062595,
+      "A2": 0.0148479874,
+      "A3": -1.63554726e-05,
+      "A4": 3.76515875e-05,
+      "A5": -1.56033963e-06
+    }
+  },
+  {
+    "name": "H-BaK8",
+    "nd": 1.5725,
+    "vd": 57.49,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.43343745,
+      "A1": -0.00872725497,
+      "A2": 0.0139111043,
+      "A3": 0.000238516088,
+      "A4": 1.02781404e-06,
+      "A5": 1.01938839e-07
+    }
+  },
+  {
+    "name": "H-ZK1",
+    "nd": 1.56888,
+    "vd": 62.96,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.42695876,
+      "A1": -0.0107508507,
+      "A2": 0.012802243,
+      "A3": 9.25440065e-05,
+      "A4": 1.33568132e-05,
+      "A5": -5.38892285e-07
+    }
+  },
+  {
+    "name": "H-ZK2",
+    "nd": 1.58313,
+    "vd": 59.46,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.46852235,
+      "A1": -0.0101871678,
+      "A2": 0.0133916752,
+      "A3": 0.000329060714,
+      "A4": -1.21986536e-05,
+      "A5": 6.59142401e-07
+    }
+  },
+  {
+    "name": "H-ZK3",
+    "nd": 1.58913,
+    "vd": 61.25,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.48804118,
+      "A1": -0.0104146168,
+      "A2": 0.0133178501,
+      "A3": 0.000319390239,
+      "A4": -1.887969e-05,
+      "A5": 1.1928548e-06
+    }
+  },
+  {
+    "name": "H-ZK3A",
+    "nd": 1.58913,
+    "vd": 61.25,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.48635025,
+      "A1": -0.00969802289,
+      "A2": 0.0145444434,
+      "A3": -6.42693019e-05,
+      "A4": 3.4793343e-05,
+      "A5": -1.53631738e-06
+    }
+  },
+  {
+    "name": "H-ZK4",
+    "nd": 1.60881,
+    "vd": 58.86,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.54489747,
+      "A1": -0.00883488409,
+      "A2": 0.0159113795,
+      "A3": -5.14042928e-05,
+      "A4": 3.62073286e-05,
+      "A5": -1.50010238e-06
+    }
+  },
+  {
+    "name": "H-ZK5",
+    "nd": 1.61117,
+    "vd": 55.77,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.54498193,
+      "A1": -0.00576275042,
+      "A2": 0.0196014743,
+      "A3": -0.000812786508,
+      "A4": 0.000138354802,
+      "A5": -6.16579204e-06
+    }
+  },
+  {
+    "name": "H-ZK6",
+    "nd": 1.61272,
+    "vd": 58.58,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.55828763,
+      "A1": -0.00978781657,
+      "A2": 0.0153557077,
+      "A3": 0.000130481426,
+      "A4": 1.76143611e-05,
+      "A5": -7.13242444e-07
+    }
+  },
+  {
+    "name": "H-ZK7",
+    "nd": 1.61309,
+    "vd": 60.58,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.56229558,
+      "A1": -0.0108844706,
+      "A2": 0.0140997791,
+      "A3": 0.000379257039,
+      "A4": -2.41612681e-05,
+      "A5": 1.41616214e-06
+    }
+  },
+  {
+    "name": "H-ZK7A",
+    "nd": 1.61309,
+    "vd": 60.36,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.56202058,
+      "A1": -0.0111746005,
+      "A2": 0.0144141241,
+      "A3": 0.000274592244,
+      "A4": -8.38629274e-06,
+      "A5": 6.6157559e-07
+    }
+  },
+  {
+    "name": "H-ZK8",
+    "nd": 1.61405,
+    "vd": 55.12,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.55701495,
+      "A1": -0.00765926112,
+      "A2": 0.0176261795,
+      "A3": -0.0002049981,
+      "A4": 6.81299541e-05,
+      "A5": -3.07368383e-06
+    }
+  },
+  {
+    "name": "H-ZK9B",
+    "nd": 1.62041,
+    "vd": 60.34,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.5813755,
+      "A1": -0.00958578041,
+      "A2": 0.0171950468,
+      "A3": -0.000507547344,
+      "A4": 0.000101126924,
+      "A5": -4.80045747e-06
+    }
+  },
+  {
+    "name": "H-ZK9A",
+    "nd": 1.62041,
+    "vd": 60.34,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.58407802,
+      "A1": -0.0111281379,
+      "A2": 0.0154281597,
+      "A3": 2.64033929e-05,
+      "A4": 2.77466467e-05,
+      "A5": -1.24493904e-06
+    }
+  },
+  {
+    "name": "H-ZK10",
+    "nd": 1.6221,
+    "vd": 56.71,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.5840705,
+      "A1": -0.0087264109,
+      "A2": 0.017569665,
+      "A3": -0.00030815451,
+      "A4": 8.8794888e-05,
+      "A5": -4.7409985e-06
+    }
+  },
+  {
+    "name": "H-ZK10L",
+    "nd": 1.6228,
+    "vd": 56.91,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.5987875,
+      "A1": -0.01767092,
+      "A2": 0.011069609,
+      "A3": 0.0013151858,
+      "A4": -0.00010779203,
+      "A5": 4.5458961e-06
+    }
+  },
+  {
+    "name": "H-ZK11",
+    "nd": 1.63854,
+    "vd": 55.45,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.6370236,
+      "A1": -0.010212072,
+      "A2": 0.017024722,
+      "A3": 0.00021432422,
+      "A4": 7.4387689e-06,
+      "A5": 4.3580605e-07
+    }
+  },
+  {
+    "name": "H-ZK14",
+    "nd": 1.60311,
+    "vd": 60.6,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.53022442,
+      "A1": -0.0101985443,
+      "A2": 0.0142843974,
+      "A3": 0.000253350969,
+      "A4": -1.29976369e-05,
+      "A5": 1.10420609e-06
+    }
+  },
+  {
+    "name": "H-ZK20",
+    "nd": 1.6172,
+    "vd": 53.91,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.56416217,
+      "A1": -0.00663710078,
+      "A2": 0.0191195924,
+      "A3": -0.000520583562,
+      "A4": 0.000117796641,
+      "A5": -5.72026705e-06
+    }
+  },
+  {
+    "name": "H-ZK21",
+    "nd": 1.62299,
+    "vd": 58.12,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.59019466,
+      "A1": -0.0103261557,
+      "A2": 0.0158597885,
+      "A3": 0.000158705075,
+      "A4": 8.97501936e-06,
+      "A5": -9.7736858e-08
+    }
+  },
+  {
+    "name": "H-ZK50",
+    "nd": 1.60738,
+    "vd": 56.65,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.54140617,
+      "A1": -0.00972103422,
+      "A2": 0.0143707512,
+      "A3": 0.000594894245,
+      "A4": -4.88938359e-05,
+      "A5": 2.80646352e-06
+    }
+  },
+  {
+    "name": "H-ZK50GT",
+    "nd": 1.60738,
+    "vd": 56.65,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.54140617,
+      "A1": -0.00972103422,
+      "A2": 0.0143707512,
+      "A3": 0.000594894245,
+      "A4": -4.88938359e-05,
+      "A5": 2.80646352e-06
+    }
+  },
+  {
+    "name": "H-LaK1",
+    "nd": 1.6595,
+    "vd": 57.35,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.70432455,
+      "A1": -0.0100067787,
+      "A2": 0.018102254,
+      "A3": -2.16494884e-05,
+      "A4": 3.81507477e-05,
+      "A5": -1.57874424e-06
+    }
+  },
+  {
+    "name": "H-LaK2A",
+    "nd": 1.69211,
+    "vd": 54.54,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.80801074,
+      "A1": -0.0109758888,
+      "A2": 0.0197813052,
+      "A3": 0.000143229802,
+      "A4": 2.39192838e-05,
+      "A5": -7.82772539e-07
+    }
+  },
+  {
+    "name": "H-LaK3",
+    "nd": 1.74693,
+    "vd": 50.95,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.98365374,
+      "A1": -0.0123163831,
+      "A2": 0.0255848948,
+      "A3": -0.000570810681,
+      "A4": 0.000147648023,
+      "A5": -7.54741056e-06
+    }
+  },
+  {
+    "name": "H-LaK4L",
+    "nd": 1.64,
+    "vd": 60.2,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.64769834,
+      "A1": -0.0137710798,
+      "A2": 0.015665045,
+      "A3": 9.82676335e-05,
+      "A4": 2.2112348e-05,
+      "A5": -1.07455498e-06
+    }
+  },
+  {
+    "name": "H-LaK5A",
+    "nd": 1.6779,
+    "vd": 55.52,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.76282776,
+      "A1": -0.0110853656,
+      "A2": 0.0190396002,
+      "A3": 5.14224172e-05,
+      "A4": 3.63740807e-05,
+      "A5": -1.55525971e-06
+    }
+  },
+  {
+    "name": "H-LaK6A",
+    "nd": 1.6935,
+    "vd": 53.38,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.81484052,
+      "A1": -0.0147823622,
+      "A2": 0.0190209745,
+      "A3": 0.000336628211,
+      "A4": 1.35687736e-05,
+      "A5": -5.85525604e-07
+    }
+  },
+  {
+    "name": "H-LaK7A",
+    "nd": 1.713,
+    "vd": 53.83,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.87982167,
+      "A1": -0.0147537347,
+      "A2": 0.0188595645,
+      "A3": 0.000746887433,
+      "A4": -6.23723325e-05,
+      "A5": 3.88098485e-06
+    }
+  },
+  {
+    "name": "H-LaK8A",
+    "nd": 1.72,
+    "vd": 50.34,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.89697306,
+      "A1": -0.0143738053,
+      "A2": 0.0222280432,
+      "A3": 0.000105067282,
+      "A4": 5.16989124e-05,
+      "A5": -1.90417816e-06
+    }
+  },
+  {
+    "name": "H-LaK8B",
+    "nd": 1.72,
+    "vd": 50.28,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.8950254,
+      "A1": -0.0117106099,
+      "A2": 0.0225402373,
+      "A3": 0.000146324301,
+      "A4": 4.12272418e-05,
+      "A5": -1.47798073e-06
+    }
+  },
+  {
+    "name": "H-LaK10",
+    "nd": 1.65113,
+    "vd": 55.89,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.67519359,
+      "A1": -0.00927946143,
+      "A2": 0.018891795,
+      "A3": -0.000239296657,
+      "A4": 7.29098315e-05,
+      "A5": -3.36344313e-06
+    }
+  },
+  {
+    "name": "H-LaK11",
+    "nd": 1.66461,
+    "vd": 54.61,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.71757958,
+      "A1": -0.00952801665,
+      "A2": 0.0196309871,
+      "A3": -0.000237384298,
+      "A4": 8.48314788e-05,
+      "A5": -4.09640039e-06
+    }
+  },
+  {
+    "name": "H-LaK12",
+    "nd": 1.6968,
+    "vd": 56.18,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.82673774,
+      "A1": -0.0136335725,
+      "A2": 0.0190474212,
+      "A3": 0.000204685509,
+      "A4": 8.81193052e-06,
+      "A5": -2.15937861e-08
+    }
+  },
+  {
+    "name": "H-LaK50A",
+    "nd": 1.6516,
+    "vd": 58.4,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.68411905,
+      "A1": -0.013655729,
+      "A2": 0.0156617129,
+      "A3": 0.00038271126,
+      "A4": -8.02343758e-06,
+      "A5": 1.71633677e-07
+    }
+  },
+  {
+    "name": "H-LaK51A",
+    "nd": 1.6968,
+    "vd": 55.53,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.82348938,
+      "A1": -0.0126281485,
+      "A2": 0.0212484444,
+      "A3": -0.000445653258,
+      "A4": 0.0001038003,
+      "A5": -4.7255594e-06
+    }
+  },
+  {
+    "name": "H-LaK52",
+    "nd": 1.72916,
+    "vd": 54.68,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.92799279,
+      "A1": -0.0122458967,
+      "A2": 0.0239216813,
+      "A3": -0.000731304876,
+      "A4": 0.000147071309,
+      "A5": -6.91523554e-06
+    }
+  },
+  {
+    "name": "H-LaK53B",
+    "nd": 1.755,
+    "vd": 52.32,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.01623609,
+      "A1": -0.0144609479,
+      "A2": 0.0229095394,
+      "A3": 0.000216967699,
+      "A4": 2.73048039e-05,
+      "A5": -9.80684551e-07
+    }
+  },
+  {
+    "name": "H-LaK53A",
+    "nd": 1.755,
+    "vd": 52.32,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.01460463,
+      "A1": -0.0136968806,
+      "A2": 0.0241031658,
+      "A3": -0.000167588963,
+      "A4": 8.27221505e-05,
+      "A5": -3.77703053e-06
+    }
+  },
+  {
+    "name": "H-LaK54",
+    "nd": 1.734,
+    "vd": 51.49,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.94175946,
+      "A1": -0.0126663226,
+      "A2": 0.0243839518,
+      "A3": -0.000490360525,
+      "A4": 0.000138790487,
+      "A5": -7.39070455e-06
+    }
+  },
+  {
+    "name": "H-LaK59A",
+    "nd": 1.691,
+    "vd": 54.82,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.79972754,
+      "A1": -0.00873189032,
+      "A2": 0.0230159159,
+      "A3": -0.000850193825,
+      "A4": 0.000152864586,
+      "A5": -6.91746601e-06
+    }
+  },
+  {
+    "name": "H-LaK61",
+    "nd": 1.741,
+    "vd": 52.64,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.96883578,
+      "A1": -0.0137037464,
+      "A2": 0.0224806873,
+      "A3": 0.00013022706,
+      "A4": 3.52478352e-05,
+      "A5": -1.34827056e-06
+    }
+  },
+  {
+    "name": "H-LaK67",
+    "nd": 1.67,
+    "vd": 51.7,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.7410828,
+      "A1": -0.016285022,
+      "A2": 0.015866919,
+      "A3": 0.0010819231,
+      "A4": -7.7131038e-05,
+      "A5": 4.033333e-06
+    }
+  },
+  {
+    "name": "H-KF6",
+    "nd": 1.51742,
+    "vd": 52.15,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.26924681,
+      "A1": -0.0111135716,
+      "A2": 0.010955079,
+      "A3": 0.000811179449,
+      "A4": -7.07180723e-05,
+      "A5": 4.69509667e-06
+    }
+  },
+  {
+    "name": "H-QF1",
+    "nd": 1.54814,
+    "vd": 45.82,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.35209772,
+      "A1": -0.00953088569,
+      "A2": 0.0149480904,
+      "A3": 0.0006139718,
+      "A4": -3.07481422e-05,
+      "A5": 3.26363142e-06
+    }
+  },
+  {
+    "name": "QF1",
+    "nd": 1.54811,
+    "vd": 45.87,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.3504951,
+      "A1": -0.0086857021,
+      "A2": 0.016092857,
+      "A3": 0.00018705912,
+      "A4": 4.2149581e-05,
+      "A5": -1.3216062e-06
+    }
+  },
+  {
+    "name": "H-QF3",
+    "nd": 1.57501,
+    "vd": 41.5,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.42501025,
+      "A1": -0.00862223052,
+      "A2": 0.0193144869,
+      "A3": 0.000210375528,
+      "A4": 3.29751181e-05,
+      "A5": 1.50559094e-06
+    }
+  },
+  {
+    "name": "QF3",
+    "nd": 1.57502,
+    "vd": 41.31,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.4245509,
+      "A1": -0.0079714057,
+      "A2": 0.019149892,
+      "A3": 0.00035505098,
+      "A4": 1.3941882e-05,
+      "A5": 1.705772e-06
+    }
+  },
+  {
+    "name": "QF5",
+    "nd": 1.58215,
+    "vd": 42.03,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.4440594,
+      "A1": -0.0067974631,
+      "A2": 0.021425387,
+      "A3": -0.00038544649,
+      "A4": 0.00012195244,
+      "A5": -4.2162236e-06
+    }
+  },
+  {
+    "name": "H-QF6A",
+    "nd": 1.53172,
+    "vd": 48.84,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.30458321,
+      "A1": -0.00865226981,
+      "A2": 0.0147424307,
+      "A3": 0.000146916808,
+      "A4": 2.49577574e-05,
+      "A5": 4.79637168e-07
+    }
+  },
+  {
+    "name": "QF6",
+    "nd": 1.53172,
+    "vd": 48.76,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.3044884,
+      "A1": -0.0083782321,
+      "A2": 0.014424342,
+      "A3": 0.00033374311,
+      "A4": -4.4657456e-06,
+      "A5": 1.3349929e-06
+    }
+  },
+  {
+    "name": "H-QF8",
+    "nd": 1.54072,
+    "vd": 47.23,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.32749417,
+      "A1": -0.007674586,
+      "A2": 0.017076264,
+      "A3": -0.000306358071,
+      "A4": 9.60375308e-05,
+      "A5": -3.46437878e-06
+    }
+  },
+  {
+    "name": "QF8",
+    "nd": 1.54072,
+    "vd": 47.2,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.3287431,
+      "A1": -0.00786798,
+      "A2": 0.015763854,
+      "A3": 0.00019794235,
+      "A4": 1.8002892e-05,
+      "A5": 3.6533474e-07
+    }
+  },
+  {
+    "name": "H-QF14",
+    "nd": 1.59551,
+    "vd": 39.22,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.48489196,
+      "A1": -0.00931778798,
+      "A2": 0.0204890803,
+      "A3": 0.000525537026,
+      "A4": -2.39700021e-06,
+      "A5": 4.02659016e-06
+    }
+  },
+  {
+    "name": "H-QF50A",
+    "nd": 1.58144,
+    "vd": 40.75,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.44404966,
+      "A1": -0.00918670215,
+      "A2": 0.0196254289,
+      "A3": 0.000277356083,
+      "A4": 3.30397755e-05,
+      "A5": 1.33695258e-06
+    }
+  },
+  {
+    "name": "QF50",
+    "nd": 1.58144,
+    "vd": 40.89,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.4427964,
+      "A1": -0.00775720479,
+      "A2": 0.0201147743,
+      "A3": 0.000157059447,
+      "A4": 5.32738337e-05,
+      "A5": -6.98910829e-07
+    }
+  },
+  {
+    "name": "H-QF56",
+    "nd": 1.56732,
+    "vd": 42.81,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.40441893,
+      "A1": -0.00857629873,
+      "A2": 0.0176754574,
+      "A3": 0.000438205807,
+      "A4": -1.42198699e-06,
+      "A5": 2.74287911e-06
+    }
+  },
+  {
+    "name": "H-F1",
+    "nd": 1.60342,
+    "vd": 38.01,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.50656956,
+      "A1": -0.00926894171,
+      "A2": 0.021861508,
+      "A3": 0.000431237321,
+      "A4": 1.69302544e-05,
+      "A5": 3.4236134e-06
+    }
+  },
+  {
+    "name": "F1",
+    "nd": 1.60342,
+    "vd": 38.01,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.5059651,
+      "A1": -0.0078686119,
+      "A2": 0.021574214,
+      "A3": 0.00059867966,
+      "A4": -9.5194606e-07,
+      "A5": 2.9024858e-06
+    }
+  },
+  {
+    "name": "H-F2",
+    "nd": 1.61293,
+    "vd": 37.0,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.5360648,
+      "A1": -0.01059228,
+      "A2": 0.021518011,
+      "A3": 0.00087655888,
+      "A4": -4.3936258e-05,
+      "A5": 7.5438308e-06
+    }
+  },
+  {
+    "name": "F2",
+    "nd": 1.61293,
+    "vd": 36.96,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.53265982,
+      "A1": -0.00773825354,
+      "A2": 0.0231731432,
+      "A3": 0.000409362855,
+      "A4": 3.78046829e-05,
+      "A5": 1.03464346e-06
+    }
+  },
+  {
+    "name": "F3",
+    "nd": 1.61659,
+    "vd": 36.61,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.54428229,
+      "A1": -0.00835307611,
+      "A2": 0.0228231808,
+      "A3": 0.000670214922,
+      "A4": 1.04294821e-06,
+      "A5": 3.03297376e-06
+    }
+  },
+  {
+    "name": "H-F4",
+    "nd": 1.62005,
+    "vd": 36.35,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.56216381,
+      "A1": -0.0130775362,
+      "A2": 0.0181084716,
+      "A3": 0.00231573055,
+      "A4": -0.000264961402,
+      "A5": 2.07458046e-05
+    }
+  },
+  {
+    "name": "F4",
+    "nd": 1.62005,
+    "vd": 36.35,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.5544667,
+      "A1": -0.00847847799,
+      "A2": 0.0232832892,
+      "A3": 0.000583809482,
+      "A4": 2.1963001e-05,
+      "A5": 1.96537708e-06
+    }
+  },
+  {
+    "name": "F5",
+    "nd": 1.62435,
+    "vd": 35.92,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.56837524,
+      "A1": -0.00914046228,
+      "A2": 0.0225979637,
+      "A3": 0.000999853488,
+      "A4": -3.66330712e-05,
+      "A5": 4.93324803e-06
+    }
+  },
+  {
+    "name": "F6",
+    "nd": 1.62495,
+    "vd": 35.57,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.56849722,
+      "A1": -0.00836232123,
+      "A2": 0.0234448291,
+      "A3": 0.000828924343,
+      "A4": -1.18355482e-05,
+      "A5": 4.09561662e-06
+    }
+  },
+  {
+    "name": "F7",
+    "nd": 1.63636,
+    "vd": 35.35,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.6027537,
+      "A1": -0.0084678903,
+      "A2": 0.0246596174,
+      "A3": 0.00074451296,
+      "A4": -4.85328405e-06,
+      "A5": 4.25920114e-06
+    }
+  },
+  {
+    "name": "H-F13",
+    "nd": 1.62588,
+    "vd": 35.7,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.57016399,
+      "A1": -0.00927948027,
+      "A2": 0.0256258559,
+      "A3": -5.72485798e-05,
+      "A4": 0.000120086571,
+      "A5": -1.72844835e-06
+    }
+  },
+  {
+    "name": "F13",
+    "nd": 1.62588,
+    "vd": 35.7,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.56957078,
+      "A1": -0.00760403138,
+      "A2": 0.0249680705,
+      "A3": 0.000334501945,
+      "A4": 5.6815438e-05,
+      "A5": 6.07326285e-07
+    }
+  },
+  {
+    "name": "H-F51",
+    "nd": 1.6398,
+    "vd": 34.46,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.6140425,
+      "A1": -0.0105872748,
+      "A2": 0.0244505093,
+      "A3": 0.000934367796,
+      "A4": -2.61723924e-05,
+      "A5": 7.64975209e-06
+    }
+  },
+  {
+    "name": "H-BaF2",
+    "nd": 1.5697,
+    "vd": 49.45,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.41711733,
+      "A1": -0.00823177266,
+      "A2": 0.0168544799,
+      "A3": -3.47350495e-05,
+      "A4": 5.15389783e-05,
+      "A5": -1.33117437e-06
+    }
+  },
+  {
+    "name": "H-BaF3",
+    "nd": 1.57957,
+    "vd": 53.71,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.45168402,
+      "A1": -0.00862082666,
+      "A2": 0.0153497797,
+      "A3": 0.000182555027,
+      "A4": 1.41449954e-05,
+      "A5": -1.68159962e-07
+    }
+  },
+  {
+    "name": "H-BaF4",
+    "nd": 1.58267,
+    "vd": 46.6,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.45376994,
+      "A1": -0.00813614699,
+      "A2": 0.0179634979,
+      "A3": 0.000111641611,
+      "A4": 3.86804485e-05,
+      "A5": -3.17507239e-07
+    }
+  },
+  {
+    "name": "BaF4",
+    "nd": 1.58271,
+    "vd": 46.47,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.451472,
+      "A1": -0.0065118879,
+      "A2": 0.019377342,
+      "A3": -0.00030637647,
+      "A4": 0.00010174985,
+      "A5": -3.9270356e-06
+    }
+  },
+  {
+    "name": "H-BaF5",
+    "nd": 1.60562,
+    "vd": 43.88,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.52420606,
+      "A1": -0.0105526237,
+      "A2": 0.0179847388,
+      "A3": 0.000680268445,
+      "A4": -2.35420343e-05,
+      "A5": 3.35670967e-06
+    }
+  },
+  {
+    "name": "H-BaF6",
+    "nd": 1.60801,
+    "vd": 46.2,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.53242221,
+      "A1": -0.00913744794,
+      "A2": 0.0181613436,
+      "A3": 0.000464889992,
+      "A4": -9.77023624e-06,
+      "A5": 2.46562672e-06
+    }
+  },
+  {
+    "name": "H-BaF7",
+    "nd": 1.61413,
+    "vd": 39.99,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.5419557,
+      "A1": -0.00867236761,
+      "A2": 0.0216670486,
+      "A3": 0.000351132658,
+      "A4": 2.45600301e-05,
+      "A5": 2.23930385e-06
+    }
+  },
+  {
+    "name": "BaF7",
+    "nd": 1.61413,
+    "vd": 40.03,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.5436416,
+      "A1": -0.0086925216,
+      "A2": 0.020049192,
+      "A3": 0.00089795352,
+      "A4": -4.9734473e-05,
+      "A5": 5.3556e-06
+    }
+  },
+  {
+    "name": "H-BaF8",
+    "nd": 1.62604,
+    "vd": 39.07,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.57817643,
+      "A1": -0.00908880991,
+      "A2": 0.0220196312,
+      "A3": 0.000598073894,
+      "A4": -4.33206771e-06,
+      "A5": 4.0384407e-06
+    }
+  },
+  {
+    "name": "H-ZBaF1",
+    "nd": 1.6223,
+    "vd": 53.17,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.57943,
+      "A1": -0.00757753047,
+      "A2": 0.0201786053,
+      "A3": -0.000845832798,
+      "A4": 0.000178126935,
+      "A5": -9.19232657e-06
+    }
+  },
+  {
+    "name": "ZBaF2",
+    "nd": 1.63962,
+    "vd": 48.27,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.6324147,
+      "A1": -0.0087251762,
+      "A2": 0.019124302,
+      "A3": 0.00044859331,
+      "A4": -1.7473295e-05,
+      "A5": 2.8601145e-06
+    }
+  },
+  {
+    "name": "H-ZBaF3",
+    "nd": 1.65691,
+    "vd": 51.12,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.69165216,
+      "A1": -0.0101363344,
+      "A2": 0.0186481237,
+      "A3": 0.000358040785,
+      "A4": 6.16688889e-06,
+      "A5": 5.75545763e-07
+    }
+  },
+  {
+    "name": "H-ZBaF4",
+    "nd": 1.66426,
+    "vd": 35.48,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.69163001,
+      "A1": -0.00984427132,
+      "A2": 0.0256830841,
+      "A3": 0.000843697635,
+      "A4": -1.65735681e-05,
+      "A5": 6.7123065e-06
+    }
+  },
+  {
+    "name": "H-ZBaF5",
+    "nd": 1.67103,
+    "vd": 47.29,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.7282151,
+      "A1": -0.00801785321,
+      "A2": 0.0232797778,
+      "A3": -0.000366897021,
+      "A4": 0.000117676258,
+      "A5": -4.64381474e-06
+    }
+  },
+  {
+    "name": "H-ZBaF16",
+    "nd": 1.66672,
+    "vd": 48.42,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.7163405,
+      "A1": -0.00800848114,
+      "A2": 0.0220673585,
+      "A3": -0.000143211774,
+      "A4": 7.67032228e-05,
+      "A5": -2.71338303e-06
+    }
+  },
+  {
+    "name": "ZBaF17",
+    "nd": 1.66755,
+    "vd": 41.93,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.7114815,
+      "A1": -0.0083031047,
+      "A2": 0.023733195,
+      "A3": 0.00028197729,
+      "A4": 3.9409899e-05,
+      "A5": 7.1756265e-07
+    }
+  },
+  {
+    "name": "H-ZBaF20",
+    "nd": 1.70154,
+    "vd": 41.15,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.82081937,
+      "A1": -0.0100823647,
+      "A2": 0.0255084629,
+      "A3": 0.00032956767,
+      "A4": 5.02565379e-05,
+      "A5": 6.00432403e-07
+    }
+  },
+  {
+    "name": "H-ZBaF21",
+    "nd": 1.72341,
+    "vd": 37.99,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.88488353,
+      "A1": -0.00963959047,
+      "A2": 0.029172134,
+      "A3": 0.000302410773,
+      "A4": 5.7628195e-05,
+      "A5": 2.46415353e-06
+    }
+  },
+  {
+    "name": "H-ZBaF50",
+    "nd": 1.65844,
+    "vd": 50.85,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.69045194,
+      "A1": -0.00736356688,
+      "A2": 0.0226992125,
+      "A3": -0.000794594575,
+      "A4": 0.000161075119,
+      "A5": -6.92969544e-06
+    }
+  },
+  {
+    "name": "ZBaF51",
+    "nd": 1.68273,
+    "vd": 44.5,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.7590164,
+      "A1": -0.0058180526,
+      "A2": 0.026609946,
+      "A3": -0.00075485994,
+      "A4": 0.00017640459,
+      "A5": -6.7271173e-06
+    }
+  },
+  {
+    "name": "H-ZBaF52",
+    "nd": 1.67003,
+    "vd": 47.2,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.72624888,
+      "A1": -0.00858990967,
+      "A2": 0.0222509606,
+      "A3": -2.894972e-05,
+      "A4": 6.84239255e-05,
+      "A5": -2.15508588e-06
     }
   },
   {
     "name": "H-ZF1",
-    "nd": 1.67270,
-    "vd": 32.10,
-    "sellmeier": {
-      "A1": 1.58514950,
-      "A2": 0.143559385,
-      "A3": 1.69375109,
-      "B1": 0.00982060155,
-      "B2": 0.0463996529,
-      "B3": 111.982777
+    "nd": 1.64769,
+    "vd": 33.84,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.636187,
+      "A1": -0.0097034146,
+      "A2": 0.0255502623,
+      "A3": 0.00100610407,
+      "A4": -4.2521904e-05,
+      "A5": 9.06375385e-06
+    }
+  },
+  {
+    "name": "H-ZF1A",
+    "nd": 1.64769,
+    "vd": 33.89,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.63819797,
+      "A1": -0.0109320897,
+      "A2": 0.0244992736,
+      "A3": 0.00125518288,
+      "A4": -7.28811086e-05,
+      "A5": 1.06546059e-05
+    }
+  },
+  {
+    "name": "ZF1",
+    "nd": 1.64769,
+    "vd": 33.84,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.6356161,
+      "A1": -0.008839642,
+      "A2": 0.025644781,
+      "A3": 0.00096522374,
+      "A4": -1.8304798e-05,
+      "A5": 5.5563517e-06
     }
   },
   {
     "name": "H-ZF2",
-    "nd": 1.67270,
-    "vd": 32.21,
-    "sellmeier": {
-      "A1": 1.58270458,
-      "A2": 0.143831059,
-      "A3": 1.68756138,
-      "B1": 0.00981307054,
-      "B2": 0.0464157821,
-      "B3": 111.620728
+    "nd": 1.6727,
+    "vd": 32.17,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.70748536,
+      "A1": -0.00876853099,
+      "A2": 0.030735315,
+      "A3": 0.000240155352,
+      "A4": 8.93430086e-05,
+      "A5": 3.65229043e-06
+    }
+  },
+  {
+    "name": "ZF2",
+    "nd": 1.6727,
+    "vd": 32.17,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.70820441,
+      "A1": -0.00794171159,
+      "A2": 0.0292224783,
+      "A3": 0.000884931615,
+      "A4": 6.6862056e-07,
+      "A5": 5.65902766e-06
     }
   },
   {
     "name": "H-ZF3",
     "nd": 1.71736,
-    "vd": 29.62,
-    "sellmeier": {
-      "A1": 1.77497934,
-      "A2": 0.133874699,
-      "A3": 1.89219003,
-      "B1": 0.0104687116,
-      "B2": 0.0485718313,
-      "B3": 119.737157
+    "vd": 29.5,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.85722177,
+      "A1": -0.0177283648,
+      "A2": 0.0259634053,
+      "A3": 0.0034434958,
+      "A4": -0.000319318567,
+      "A5": 2.68269122e-05
+    }
+  },
+  {
+    "name": "ZF3",
+    "nd": 1.71736,
+    "vd": 29.5,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.84758519,
+      "A1": -0.0105088281,
+      "A2": 0.0309450925,
+      "A3": 0.00213696398,
+      "A4": -0.00013104012,
+      "A5": 1.42428874e-05
+    }
+  },
+  {
+    "name": "H-ZF4A",
+    "nd": 1.72825,
+    "vd": 28.32,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.87667041,
+      "A1": -0.0108521785,
+      "A2": 0.0348454207,
+      "A3": 0.00163571517,
+      "A4": -8.15344316e-05,
+      "A5": 1.79346084e-05
+    }
+  },
+  {
+    "name": "H-ZF4AGT",
+    "nd": 1.72825,
+    "vd": 28.32,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.87667041,
+      "A1": -0.0108521785,
+      "A2": 0.0348454207,
+      "A3": 0.00163571517,
+      "A4": -8.15344316e-05,
+      "A5": 1.79346084e-05
+    }
+  },
+  {
+    "name": "ZF4",
+    "nd": 1.72825,
+    "vd": 28.32,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.89234898,
+      "A1": -0.0179339416,
+      "A2": 0.0230094722,
+      "A3": 0.00563906172,
+      "A4": -0.000698154951,
+      "A5": 5.25289979e-05
+    }
+  },
+  {
+    "name": "H-ZF5",
+    "nd": 1.74,
+    "vd": 28.3,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.91358387,
+      "A1": -0.0105930316,
+      "A2": 0.0366349235,
+      "A3": 0.00134643008,
+      "A4": -3.4696778e-05,
+      "A5": 1.5917092e-05
+    }
+  },
+  {
+    "name": "ZF5",
+    "nd": 1.74,
+    "vd": 28.24,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.9160432,
+      "A1": -0.010435647,
+      "A2": 0.033907872,
+      "A3": 0.0022728802,
+      "A4": -0.00013563213,
+      "A5": 1.6527592e-05
+    }
+  },
+  {
+    "name": "H-ZF6",
+    "nd": 1.7552,
+    "vd": 27.53,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.9632067,
+      "A1": -0.0121274947,
+      "A2": 0.0364365808,
+      "A3": 0.00212579927,
+      "A4": -0.000130100151,
+      "A5": 2.14141061e-05
+    }
+  },
+  {
+    "name": "ZF6",
+    "nd": 1.7552,
+    "vd": 27.53,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.96285995,
+      "A1": -0.0104077823,
+      "A2": 0.0356441238,
+      "A3": 0.00245699205,
+      "A4": -0.000149615893,
+      "A5": 1.77827751e-05
+    }
+  },
+  {
+    "name": "H-ZF7LA",
+    "nd": 1.80518,
+    "vd": 25.46,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.11930169,
+      "A1": -0.0120954989,
+      "A2": 0.0427579381,
+      "A3": 0.00249825483,
+      "A4": -0.000116785147,
+      "A5": 2.28047853e-05
+    }
+  },
+  {
+    "name": "H-ZF7LAGT",
+    "nd": 1.80518,
+    "vd": 25.46,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.11930169,
+      "A1": -0.0120954989,
+      "A2": 0.0427579381,
+      "A3": 0.00249825483,
+      "A4": -0.000116785147,
+      "A5": 2.28047853e-05
+    }
+  },
+  {
+    "name": "ZF7",
+    "nd": 1.80627,
+    "vd": 25.37,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.1221966,
+      "A1": -0.010649791,
+      "A2": 0.042191871,
+      "A3": 0.002893766,
+      "A4": -0.00016523594,
+      "A5": 2.329181e-05
+    }
+  },
+  {
+    "name": "ZF7L",
+    "nd": 1.80518,
+    "vd": 25.46,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.11724527,
+      "A1": -0.00977958678,
+      "A2": 0.0431752564,
+      "A3": 0.00252279577,
+      "A4": -0.00011739974,
+      "A5": 2.07881157e-05
+    }
+  },
+  {
+    "name": "ZF7LGT",
+    "nd": 1.80518,
+    "vd": 25.46,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.11724527,
+      "A1": -0.00977958678,
+      "A2": 0.0431752564,
+      "A3": 0.00252279577,
+      "A4": -0.00011739974,
+      "A5": 2.07881157e-05
+    }
+  },
+  {
+    "name": "ZF8",
+    "nd": 1.65446,
+    "vd": 33.65,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.6567173,
+      "A1": -0.0091117044,
+      "A2": 0.025815197,
+      "A3": 0.0011203564,
+      "A4": -4.1066817e-05,
+      "A5": 6.9242011e-06
+    }
+  },
+  {
+    "name": "H-ZF10",
+    "nd": 1.68893,
+    "vd": 31.16,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.7617586,
+      "A1": -0.011254039,
+      "A2": 0.028221737,
+      "A3": 0.0017540315,
+      "A4": -0.00012127053,
+      "A5": 1.5522384e-05
+    }
+  },
+  {
+    "name": "ZF10",
+    "nd": 1.68893,
+    "vd": 31.18,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.75929053,
+      "A1": -0.00920455833,
+      "A2": 0.0293164338,
+      "A3": 0.00148740799,
+      "A4": -7.05223488e-05,
+      "A5": 9.9538848e-06
+    }
+  },
+  {
+    "name": "H-ZF11",
+    "nd": 1.69894,
+    "vd": 30.05,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.79257889,
+      "A1": -0.0123189318,
+      "A2": 0.0282213886,
+      "A3": 0.00233803553,
+      "A4": -0.000193264698,
+      "A5": 2.03435598e-05
+    }
+  },
+  {
+    "name": "ZF11",
+    "nd": 1.69895,
+    "vd": 30.07,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.7906689,
+      "A1": -0.010644977,
+      "A2": 0.029071854,
+      "A3": 0.0021286607,
+      "A4": -0.00015815625,
+      "A5": 1.7145247e-05
+    }
+  },
+  {
+    "name": "H-ZF12",
+    "nd": 1.76182,
+    "vd": 26.61,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.98833616,
+      "A1": -0.01558083,
+      "A2": 0.0325585737,
+      "A3": 0.00407634444,
+      "A4": -0.000423585266,
+      "A5": 4.04422209e-05
+    }
+  },
+  {
+    "name": "ZF12",
+    "nd": 1.76182,
+    "vd": 26.55,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.99506991,
+      "A1": -0.0165672521,
+      "A2": 0.0256701429,
+      "A3": 0.00670445128,
+      "A4": -0.000837476647,
+      "A5": 6.26402774e-05
+    }
+  },
+  {
+    "name": "H-ZF13",
+    "nd": 1.78472,
+    "vd": 25.72,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.05150937,
+      "A1": -0.0123177102,
+      "A2": 0.0421532614,
+      "A3": 0.00181669625,
+      "A4": -2.87661517e-05,
+      "A5": 1.88518506e-05
+    }
+  },
+  {
+    "name": "H-ZF13GT",
+    "nd": 1.78472,
+    "vd": 25.72,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.05150937,
+      "A1": -0.0123177102,
+      "A2": 0.0421532614,
+      "A3": 0.00181669625,
+      "A4": -2.87661517e-05,
+      "A5": 1.88518506e-05
+    }
+  },
+  {
+    "name": "ZF13",
+    "nd": 1.78472,
+    "vd": 25.76,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.06161235,
+      "A1": -0.0145895142,
+      "A2": 0.0328146593,
+      "A3": 0.00523989954,
+      "A4": -0.000560505494,
+      "A5": 4.64234125e-05
+    }
+  },
+  {
+    "name": "H-ZF39",
+    "nd": 1.6668,
+    "vd": 33.05,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.69566345,
+      "A1": -0.0106305729,
+      "A2": 0.0263464696,
+      "A3": 0.0012869122,
+      "A4": -6.75605612e-05,
+      "A5": 1.09913394e-05
+    }
+  },
+  {
+    "name": "H-ZF50",
+    "nd": 1.74077,
+    "vd": 27.76,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.92360946,
+      "A1": -0.0149760388,
+      "A2": 0.03002329,
+      "A3": 0.0038613679,
+      "A4": -0.000421158445,
+      "A5": 3.86612695e-05
+    }
+  },
+  {
+    "name": "ZF50",
+    "nd": 1.74077,
+    "vd": 27.76,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.9228084,
+      "A1": -0.013029549,
+      "A2": 0.029540007,
+      "A3": 0.0041308365,
+      "A4": -0.00044721542,
+      "A5": 3.7137603e-05
+    }
+  },
+  {
+    "name": "ZF51",
+    "nd": 1.7847,
+    "vd": 26.08,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.06187076,
+      "A1": -0.0138733563,
+      "A2": 0.032985222,
+      "A3": 0.00507141578,
+      "A4": -0.000538606629,
+      "A5": 4.36089245e-05
     }
   },
   {
     "name": "H-ZF52",
     "nd": 1.84666,
-    "vd": 23.82,
-    "sellmeier": {
-      "A1": 2.16663704,
-      "A2": 0.209007144,
-      "A3": 2.47074613,
-      "B1": 0.0133424713,
-      "B2": 0.0590823831,
-      "B3": 154.696411
+    "vd": 23.78,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.26760058,
+      "A1": -0.0205384566,
+      "A2": 0.0351507672,
+      "A3": 0.00770151348,
+      "A4": -0.000908139817,
+      "A5": 7.52649555e-05
     }
   },
   {
-    "name": "H-LAK1",
-    "nd": 1.64000,
-    "vd": 60.08,
-    "sellmeier": {
-      "A1": 1.42288601,
-      "A2": 0.178561485,
-      "A3": 1.51920027,
-      "B1": 0.00872634628,
-      "B2": 0.0348565834,
-      "B3": 116.040941
+    "name": "H-ZF52GT",
+    "nd": 1.84666,
+    "vd": 23.78,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.26760058,
+      "A1": -0.0205384566,
+      "A2": 0.0351507672,
+      "A3": 0.00770151348,
+      "A4": -0.000908139817,
+      "A5": 7.52649555e-05
     }
   },
   {
-    "name": "H-LAK3",
-    "nd": 1.69350,
-    "vd": 53.20,
-    "sellmeier": {
-      "A1": 1.28924,
-      "A2": 0.389631,
-      "A3": 1.36815,
-      "B1": 0.00925111,
-      "B2": 0.0390918,
-      "B3": 105.912
+    "name": "H-ZF52TT",
+    "nd": 1.84666,
+    "vd": 23.78,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.26760058,
+      "A1": -0.0205384566,
+      "A2": 0.0351507672,
+      "A3": 0.00770151348,
+      "A4": -0.000908139817,
+      "A5": 7.52649555e-05
     }
   },
   {
-    "name": "H-ZLAF50D",
-    "nd": 1.80809,
-    "vd": 22.76,
-    "sellmeier": {
-      "A1": 2.08511178,
-      "A2": 0.252991627,
-      "A3": 2.23332936,
-      "B1": 0.0131872608,
-      "B2": 0.0596801521,
-      "B3": 147.716278
+    "name": "H-ZF52A",
+    "nd": 1.84666,
+    "vd": 23.78,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.2506862,
+      "A1": -0.0133942217,
+      "A2": 0.0483625913,
+      "A3": 0.00314442751,
+      "A4": -0.000197073674,
+      "A5": 3.47645679e-05
     }
   },
   {
-    "name": "H-ZLAF52",
-    "nd": 1.83400,
-    "vd": 37.28,
-    "sellmeier": {
-      "A1": 1.88746502,
-      "A2": 0.326910256,
-      "A3": 1.91526595,
-      "B1": 0.0119085894,
-      "B2": 0.0523494671,
-      "B3": 131.004093
+    "name": "ZF52",
+    "nd": 1.84666,
+    "vd": 23.83,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.242645,
+      "A1": -0.00779545833,
+      "A2": 0.0533808621,
+      "A3": 0.00151154152,
+      "A4": 7.22194744e-05,
+      "A5": 1.6602659e-05
     }
   },
   {
-    "name": "H-ZLAF71",
-    "nd": 1.85025,
-    "vd": 32.17,
-    "sellmeier": {
-      "A1": 1.91437199,
-      "A2": 0.294179742,
-      "A3": 2.02152569,
-      "B1": 0.0119951087,
-      "B2": 0.0547660666,
-      "B3": 143.199654
+    "name": "H-ZF62",
+    "nd": 1.92286,
+    "vd": 20.88,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.50341992,
+      "A1": -0.0191891965,
+      "A2": 0.0536641379,
+      "A3": 0.00664979774,
+      "A4": -0.000678415522,
+      "A5": 8.33179504e-05
     }
-  }
+  },
+  {
+    "name": "H-ZF71",
+    "nd": 1.8081,
+    "vd": 22.7,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.12457417,
+      "A1": -0.0184343398,
+      "A2": 0.0395426536,
+      "A3": 0.0055116689,
+      "A4": -0.000577885043,
+      "A5": 6.1110918e-05
+    }
+  },
+  {
+    "name": "H-ZF72A",
+    "nd": 1.92286,
+    "vd": 18.9,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.49933112,
+      "A1": -0.0270915729,
+      "A2": 0.0477045173,
+      "A3": 0.0109646331,
+      "A4": -0.00132276177,
+      "A5": 0.000133630751
+    }
+  },
+  {
+    "name": "H-ZF88",
+    "nd": 1.94595,
+    "vd": 17.94,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.57552387,
+      "A1": -0.0303712686,
+      "A2": 0.0482363566,
+      "A3": 0.013150654,
+      "A4": -0.00163641867,
+      "A5": 0.000162274903
+    }
+  },
+  {
+    "name": "H-LaF1",
+    "nd": 1.69362,
+    "vd": 49.19,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.81903533,
+      "A1": -0.0164493508,
+      "A2": 0.0136602235,
+      "A3": 0.0024815081,
+      "A4": -0.000258533047,
+      "A5": 1.30918358e-05
+    }
+  },
+  {
+    "name": "H-LaF2",
+    "nd": 1.717,
+    "vd": 47.89,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.87222927,
+      "A1": -0.00570883559,
+      "A2": 0.0292421752,
+      "A3": -0.00146115324,
+      "A4": 0.000252525251,
+      "A5": -1.08672409e-05
+    }
+  },
+  {
+    "name": "H-LaF3B",
+    "nd": 1.744,
+    "vd": 44.9,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.96108042,
+      "A1": -0.00745575504,
+      "A2": 0.029397524,
+      "A3": -0.000709734612,
+      "A4": 0.000179647406,
+      "A5": -7.42813844e-06
+    }
+  },
+  {
+    "name": "H-LaF4",
+    "nd": 1.7495,
+    "vd": 34.99,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.95612047,
+      "A1": -0.00557678753,
+      "A2": 0.0372582362,
+      "A3": -0.000718686091,
+      "A4": 0.000199998634,
+      "A5": -2.80025194e-06
+    }
+  },
+  {
+    "name": "H-LaF4GT",
+    "nd": 1.7495,
+    "vd": 34.99,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.95612047,
+      "A1": -0.00557678753,
+      "A2": 0.0372582362,
+      "A3": -0.000718686091,
+      "A4": 0.000199998634,
+      "A5": -2.80025194e-06
+    }
+  },
+  {
+    "name": "H-LaFL5",
+    "nd": 1.75367,
+    "vd": 37.49,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.98452959,
+      "A1": -0.0112966796,
+      "A2": 0.0309775151,
+      "A3": 0.000431829146,
+      "A4": 4.82383023e-05,
+      "A5": 2.94612279e-06
+    }
+  },
+  {
+    "name": "H-LaF6LA",
+    "nd": 1.757,
+    "vd": 47.71,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.01970241,
+      "A1": -0.0158473652,
+      "A2": 0.0227654052,
+      "A3": 0.000979523125,
+      "A4": -6.86654467e-05,
+      "A5": 4.74327269e-06
+    }
+  },
+  {
+    "name": "H-LaF7",
+    "nd": 1.78179,
+    "vd": 37.09,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.0798693,
+      "A1": -0.0120988227,
+      "A2": 0.0313371888,
+      "A3": 0.000985836878,
+      "A4": -1.3379864e-05,
+      "A5": 5.4990762e-06
+    }
+  },
+  {
+    "name": "H-LaF10LA",
+    "nd": 1.788,
+    "vd": 47.49,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.12042876,
+      "A1": -0.0138076336,
+      "A2": 0.0272349388,
+      "A3": 0.000140668568,
+      "A4": 5.42355668e-05,
+      "A5": -1.61404497e-06
+    }
+  },
+  {
+    "name": "H-LaF50B",
+    "nd": 1.7725,
+    "vd": 49.6,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.07031881,
+      "A1": -0.0135921167,
+      "A2": 0.0258190179,
+      "A3": -1.6644976e-05,
+      "A4": 6.94966225e-05,
+      "A5": -2.88382024e-06
+    }
+  },
+  {
+    "name": "H-LaF51",
+    "nd": 1.7,
+    "vd": 48.08,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.82740564,
+      "A1": -0.0113834621,
+      "A2": 0.0217208712,
+      "A3": 0.000385985738,
+      "A4": 1.31857828e-05,
+      "A5": 6.83783132e-07
+    }
+  },
+  {
+    "name": "H-LaF52",
+    "nd": 1.7859,
+    "vd": 44.19,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.10868845,
+      "A1": -0.0135809895,
+      "A2": 0.027901619,
+      "A3": 0.000460094924,
+      "A4": 3.20811469e-05,
+      "A5": -2.81458925e-07
+    }
+  },
+  {
+    "name": "H-LaF53",
+    "nd": 1.7433,
+    "vd": 49.22,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.96765171,
+      "A1": -0.0109098989,
+      "A2": 0.0265455309,
+      "A3": -0.000515952248,
+      "A4": 0.000124492897,
+      "A5": -5.16337751e-06
+    }
+  },
+  {
+    "name": "H-LaF54",
+    "nd": 1.79952,
+    "vd": 42.24,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.14470202,
+      "A1": -0.010105906,
+      "A2": 0.0343096974,
+      "A3": -0.000833127912,
+      "A4": 0.000217008428,
+      "A5": -8.70147899e-06
+    }
+  },
+  {
+    "name": "H-LaF55",
+    "nd": 1.762,
+    "vd": 40.11,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.01845855,
+      "A1": -0.0104580593,
+      "A2": 0.0288640175,
+      "A3": 0.000697086524,
+      "A4": 6.35741467e-06,
+      "A5": 2.82444289e-06
+    }
+  },
+  {
+    "name": "H-LaF62",
+    "nd": 1.72,
+    "vd": 43.68,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.88929239,
+      "A1": -0.0118090997,
+      "A2": 0.0220839611,
+      "A3": 0.00132896557,
+      "A4": -9.97765672e-05,
+      "A5": 6.8989327e-06
+    }
+  },
+  {
+    "name": "H-ZLaF1",
+    "nd": 1.80166,
+    "vd": 44.26,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.16228962,
+      "A1": -0.014206768,
+      "A2": 0.0294595374,
+      "A3": 0.000212856988,
+      "A4": 6.58725595e-05,
+      "A5": -1.65992623e-06
+    }
+  },
+  {
+    "name": "H-ZLaF2A",
+    "nd": 1.80279,
+    "vd": 46.76,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.16963751,
+      "A1": -0.0138628788,
+      "A2": 0.0288233041,
+      "A3": -1.62994843e-05,
+      "A4": 8.61841046e-05,
+      "A5": -3.37002982e-06
+    }
+  },
+  {
+    "name": "H-ZLaF3",
+    "nd": 1.85544,
+    "vd": 36.59,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.33260614,
+      "A1": -0.0142217301,
+      "A2": 0.0366299952,
+      "A3": 0.00102037909,
+      "A4": -3.17481272e-06,
+      "A5": 5.76556277e-06
+    }
+  },
+  {
+    "name": "H-ZLaF4LA",
+    "nd": 1.91082,
+    "vd": 35.25,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.52200128,
+      "A1": -0.0121473151,
+      "A2": 0.0435909987,
+      "A3": 0.000593247086,
+      "A4": 8.40620002e-05,
+      "A5": 2.27233268e-06
+    }
+  },
+  {
+    "name": "H-ZLaF50E",
+    "nd": 1.804,
+    "vd": 46.57,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.17475472,
+      "A1": -0.0138702913,
+      "A2": 0.0278405909,
+      "A3": 0.000351405611,
+      "A4": 4.08115849e-05,
+      "A5": -1.46429081e-06
+    }
+  },
+  {
+    "name": "H-ZLaF50D",
+    "nd": 1.804,
+    "vd": 46.58,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.17122941,
+      "A1": -0.0123809285,
+      "A2": 0.0303628745,
+      "A3": -0.000417232894,
+      "A4": 0.000142630066,
+      "A5": -6.197583e-06
+    }
+  },
+  {
+    "name": "H-ZLaF51",
+    "nd": 1.8045,
+    "vd": 39.64,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.16163938,
+      "A1": -0.0127262423,
+      "A2": 0.0325482205,
+      "A3": 0.000373836955,
+      "A4": 6.46085816e-05,
+      "A5": 7.28177708e-08
+    }
+  },
+  {
+    "name": "H-ZLaF52A",
+    "nd": 1.8061,
+    "vd": 41.02,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.16845789,
+      "A1": -0.0114753166,
+      "A2": 0.0326408875,
+      "A3": 9.57006606e-05,
+      "A4": 9.63026379e-05,
+      "A5": -2.45219866e-06
+    }
+  },
+  {
+    "name": "H-ZLaF52",
+    "nd": 1.8061,
+    "vd": 40.95,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.16943454,
+      "A1": -0.0124379117,
+      "A2": 0.0322101116,
+      "A3": 0.000181456299,
+      "A4": 8.90652926e-05,
+      "A5": -1.91933145e-06
+    }
+  },
+  {
+    "name": "H-ZLaF53B",
+    "nd": 1.834,
+    "vd": 37.21,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.25780649,
+      "A1": -0.0123377843,
+      "A2": 0.0355171622,
+      "A3": 0.000705690228,
+      "A4": 4.3498733e-05,
+      "A5": 1.95613611e-06
+    }
+  },
+  {
+    "name": "H-ZLaF53BGT",
+    "nd": 1.834,
+    "vd": 37.21,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.25780649,
+      "A1": -0.0123377843,
+      "A2": 0.0355171622,
+      "A3": 0.000705690228,
+      "A4": 4.3498733e-05,
+      "A5": 1.95613611e-06
+    }
+  },
+  {
+    "name": "H-ZLaF55D",
+    "nd": 1.83481,
+    "vd": 42.73,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.27258827,
+      "A1": -0.0129423515,
+      "A2": 0.032844328,
+      "A3": 0.000183315988,
+      "A4": 7.64020197e-05,
+      "A5": -1.75379429e-06
+    }
+  },
+  {
+    "name": "H-ZLaF55C",
+    "nd": 1.83481,
+    "vd": 42.71,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.27170954,
+      "A1": -0.0126721575,
+      "A2": 0.0335300924,
+      "A3": -2.4910401e-05,
+      "A4": 0.00010247728,
+      "A5": -2.87496464e-06
+    }
+  },
+  {
+    "name": "H-ZLaF56B",
+    "nd": 1.8061,
+    "vd": 33.27,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.14933428,
+      "A1": -0.0111549297,
+      "A2": 0.0375191596,
+      "A3": 0.000787288786,
+      "A4": 2.9727118e-05,
+      "A5": 7.44861477e-06
+    }
+  },
+  {
+    "name": "H-ZLaF66",
+    "nd": 1.801,
+    "vd": 34.97,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.13578304,
+      "A1": -0.0105336277,
+      "A2": 0.0366011503,
+      "A3": 0.000398524293,
+      "A4": 7.65525829e-05,
+      "A5": 3.24358098e-06
+    }
+  },
+  {
+    "name": "H-ZLaF66GT",
+    "nd": 1.801,
+    "vd": 34.97,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.13578304,
+      "A1": -0.0105336277,
+      "A2": 0.0366011503,
+      "A3": 0.000398524293,
+      "A4": 7.65525829e-05,
+      "A5": 3.24358098e-06
+    }
+  },
+  {
+    "name": "H-ZLaF68C",
+    "nd": 1.883,
+    "vd": 40.85,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.4376406,
+      "A1": -0.0115726315,
+      "A2": 0.0371406216,
+      "A3": 0.000330923804,
+      "A4": 7.3366651e-05,
+      "A5": -1.36270312e-06
+    }
+  },
+  {
+    "name": "H-ZLaF68N",
+    "nd": 1.883,
+    "vd": 39.22,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.43465461,
+      "A1": -0.0126976179,
+      "A2": 0.0380366168,
+      "A3": 0.000397530666,
+      "A4": 8.03440262e-05,
+      "A5": -6.06964244e-07
+    }
+  },
+  {
+    "name": "H-ZLaF68B",
+    "nd": 1.883,
+    "vd": 40.79,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.43418261,
+      "A1": -0.0106199538,
+      "A2": 0.0400046303,
+      "A3": -0.000637942235,
+      "A4": 0.000216353029,
+      "A5": -8.49876445e-06
+    }
+  },
+  {
+    "name": "H-ZLaF69",
+    "nd": 1.816,
+    "vd": 46.54,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.2148109,
+      "A1": -0.012992517,
+      "A2": 0.029243707,
+      "A3": 0.00018800218,
+      "A4": 5.7106547e-05,
+      "A5": -1.9571482e-06
+    }
+  },
+  {
+    "name": "H-ZLaF69A",
+    "nd": 1.816,
+    "vd": 46.56,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.21670244,
+      "A1": -0.0140073162,
+      "A2": 0.0280087784,
+      "A3": 0.000558763894,
+      "A4": 5.06302253e-06,
+      "A5": 8.24597149e-07
+    }
+  },
+  {
+    "name": "H-ZLaF71",
+    "nd": 1.85026,
+    "vd": 32.3,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.30457034,
+      "A1": -0.0157032075,
+      "A2": 0.0374207147,
+      "A3": 0.00217455908,
+      "A4": -0.000149305709,
+      "A5": 1.85063226e-05
+    }
+  },
+  {
+    "name": "H-ZLaF75A",
+    "nd": 1.90366,
+    "vd": 31.32,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.48751324,
+      "A1": -0.0149732265,
+      "A2": 0.0432288095,
+      "A3": 0.00210592206,
+      "A4": -0.000100284898,
+      "A5": 1.62326633e-05
+    }
+  },
+  {
+    "name": "H-ZLaF75B",
+    "nd": 1.90366,
+    "vd": 31.42,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.48346668,
+      "A1": -0.0133305235,
+      "A2": 0.046504237,
+      "A3": 0.00100655469,
+      "A4": 5.58112511e-05,
+      "A5": 7.97155171e-06
+    }
+  },
+  {
+    "name": "H-ZLaF76",
+    "nd": 1.85013,
+    "vd": 30.06,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.29759774,
+      "A1": -0.0171679311,
+      "A2": 0.0386912114,
+      "A3": 0.00268188761,
+      "A4": -0.00020390322,
+      "A5": 2.43325022e-05
+    }
+  },
+  {
+    "name": "H-ZLaF78B",
+    "nd": 1.90069,
+    "vd": 37.05,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.49322693,
+      "A1": -0.0132987683,
+      "A2": 0.0400277433,
+      "A3": 0.000823139853,
+      "A4": 3.93075178e-05,
+      "A5": 2.86901814e-06
+    }
+  },
+  {
+    "name": "H-ZLaF89L",
+    "nd": 1.95375,
+    "vd": 32.31,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.66932806,
+      "A1": -0.0136919991,
+      "A2": 0.0484216361,
+      "A3": 0.00132160482,
+      "A4": 2.4217258e-05,
+      "A5": 8.50124351e-06
+    }
+  },
+  {
+    "name": "H-ZLaF90",
+    "nd": 2.00069,
+    "vd": 25.43,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.81589583,
+      "A1": -0.0188810016,
+      "A2": 0.0545200672,
+      "A3": 0.00508907678,
+      "A4": -0.000444175735,
+      "A5": 5.0454684e-05
+    }
+  },
+  {
+    "name": "H-ZLaF92",
+    "nd": 2.0033,
+    "vd": 28.32,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.83592109,
+      "A1": -0.0155216804,
+      "A2": 0.0558392182,
+      "A3": 0.0025842306,
+      "A4": -9.64328404e-05,
+      "A5": 2.26279197e-05
+    }
+  },
+  {
+    "name": "H-TF3L",
+    "nd": 1.6134,
+    "vd": 44.11,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.5493446,
+      "A1": -0.012566087,
+      "A2": 0.018232175,
+      "A3": 0.00067809743,
+      "A4": -2.8500371e-05,
+      "A5": 3.2560812e-06
+    }
+  },
+  {
+    "name": "TF3",
+    "nd": 1.61242,
+    "vd": 44.09,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.54141593,
+      "A1": -0.0106607788,
+      "A2": 0.021716721,
+      "A3": -0.000401848477,
+      "A4": 0.000122475727,
+      "A5": -4.7776413e-06
+    }
+  },
+  {
+    "name": "H-TF5",
+    "nd": 1.6541,
+    "vd": 39.54,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.66774774,
+      "A1": -0.0123753603,
+      "A2": 0.0236856508,
+      "A3": 0.000348562611,
+      "A4": 4.13195176e-05,
+      "A5": 7.37775936e-07
+    }
+  },
+  {
+    "name": "H-TF8",
+    "nd": 1.72047,
+    "vd": 34.71,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.87079347,
+      "A1": -0.0122606251,
+      "A2": 0.029586462,
+      "A3": 0.000868012172,
+      "A4": 6.58046251e-06,
+      "A5": 4.82032902e-06
+    }
+  },
+  {
+    "name": "D-FK61",
+    "nd": 1.497,
+    "vd": 81.61,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.21665351,
+      "A1": -0.00466455116,
+      "A2": 0.00907679939,
+      "A3": -0.000109123599,
+      "A4": 2.81347967e-05,
+      "A5": -1.39681747e-06
+    }
+  },
+  {
+    "name": "D-K9",
+    "nd": 1.51633,
+    "vd": 64.06,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.27154844,
+      "A1": -0.0108815116,
+      "A2": 0.00996474656,
+      "A3": 0.000380487041,
+      "A4": -2.93440524e-05,
+      "A5": 1.45099948e-06
+    }
+  },
+  {
+    "name": "D-K59",
+    "nd": 1.5176,
+    "vd": 63.5,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.27042265,
+      "A1": -0.00876481814,
+      "A2": 0.0132414328,
+      "A3": -0.000548580823,
+      "A4": 9.37358416e-05,
+      "A5": -4.41911546e-06
+    }
+  },
+  {
+    "name": "D-PK3",
+    "nd": 1.525,
+    "vd": 70.37,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.29778839,
+      "A1": -0.00944743443,
+      "A2": 0.0107674711,
+      "A3": -7.59126906e-05,
+      "A4": 2.70221688e-05,
+      "A5": -1.2965337e-06
+    }
+  },
+  {
+    "name": "D-ZPK1A",
+    "nd": 1.62087,
+    "vd": 63.83,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.5865056,
+      "A1": -0.00836488456,
+      "A2": 0.014712994,
+      "A3": 6.50980579e-05,
+      "A4": 2.0373089e-05,
+      "A5": -9.57408813e-07
+    }
+  },
+  {
+    "name": "D-ZK2",
+    "nd": 1.58313,
+    "vd": 59.38,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.46827466,
+      "A1": -0.0104485861,
+      "A2": 0.01366454,
+      "A3": 0.000255364655,
+      "A4": -4.77558494e-06,
+      "A5": 3.20543262e-07
+    }
+  },
+  {
+    "name": "D-ZK3",
+    "nd": 1.58913,
+    "vd": 61.15,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.48968705,
+      "A1": -0.0121700502,
+      "A2": 0.0125749866,
+      "A3": 0.000532456449,
+      "A4": -5.1039362e-05,
+      "A5": 2.86502873e-06
+    }
+  },
+  {
+    "name": "D-ZK79",
+    "nd": 1.60886,
+    "vd": 57.9,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.54530492,
+      "A1": -0.00968163858,
+      "A2": 0.0157167913,
+      "A3": 3.66972503e-05,
+      "A4": 2.96132095e-05,
+      "A5": -1.32380367e-06
+    }
+  },
+  {
+    "name": "D-LaK5",
+    "nd": 1.6779,
+    "vd": 54.89,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.76433988,
+      "A1": -0.0131613327,
+      "A2": 0.0182673276,
+      "A3": 0.000301224328,
+      "A4": 4.56200323e-06,
+      "A5": -2.05087278e-09
+    }
+  },
+  {
+    "name": "D-LaK6",
+    "nd": 1.69384,
+    "vd": 53.1,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.81430513,
+      "A1": -0.0134495125,
+      "A2": 0.0196569671,
+      "A3": 0.000249252546,
+      "A4": 1.98274573e-05,
+      "A5": -8.02641015e-07
+    }
+  },
+  {
+    "name": "D-LaK70",
+    "nd": 1.6691,
+    "vd": 55.39,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.73281949,
+      "A1": -0.0114137973,
+      "A2": 0.0202755954,
+      "A3": -0.000478308953,
+      "A4": 0.000110158258,
+      "A5": -5.30283301e-06
+    }
+  },
+  {
+    "name": "D-ZF10",
+    "nd": 1.68893,
+    "vd": 31.08,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.7595094,
+      "A1": -0.0104875429,
+      "A2": 0.0298924037,
+      "A3": 0.00121551438,
+      "A4": -3.91801667e-05,
+      "A5": 1.10580161e-05
+    }
+  },
+  {
+    "name": "D-ZF93",
+    "nd": 2.0017,
+    "vd": 20.7,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.80125332,
+      "A1": -0.0264815939,
+      "A2": 0.0481190715,
+      "A3": 0.0121421023,
+      "A4": -0.00148894236,
+      "A5": 0.000136817158
+    }
+  },
+  {
+    "name": "D-LaF50",
+    "nd": 1.774,
+    "vd": 49.59,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.07490611,
+      "A1": -0.0115747081,
+      "A2": 0.0253759637,
+      "A3": 0.000221233049,
+      "A4": 3.69552724e-05,
+      "A5": -1.22052174e-06
+    }
+  },
+  {
+    "name": "D-LaF050",
+    "nd": 1.76842,
+    "vd": 49.28,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.0588612,
+      "A1": -0.014713037,
+      "A2": 0.023619508,
+      "A3": 0.00067085861,
+      "A4": -2.760135e-05,
+      "A5": 2.1299817e-06
+    }
+  },
+  {
+    "name": "D-LaF53",
+    "nd": 1.7433,
+    "vd": 49.33,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.97237085,
+      "A1": -0.0132859996,
+      "A2": 0.0235602874,
+      "A3": 0.000319211658,
+      "A4": 1.70425085e-05,
+      "A5": -8.96802291e-08
+    }
+  },
+  {
+    "name": "D-LaF79",
+    "nd": 1.73077,
+    "vd": 40.51,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.9216709,
+      "A1": -0.016405602,
+      "A2": 0.024564777,
+      "A3": 0.0010630152,
+      "A4": -3.3184678e-05,
+      "A5": 4.2899849e-06
+    }
+  },
+  {
+    "name": "D-LaF82L",
+    "nd": 1.73485,
+    "vd": 48.77,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 2.9384022,
+      "A1": -0.011000275,
+      "A2": 0.026895091,
+      "A3": -0.00074423432,
+      "A4": 0.00016294737,
+      "A5": -7.3175367e-06
+    }
+  },
+  {
+    "name": "D-ZLaF50",
+    "nd": 1.80337,
+    "vd": 45.49,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.17013467,
+      "A1": -0.0130614687,
+      "A2": 0.0284367701,
+      "A3": 0.000413884621,
+      "A4": 2.91645398e-05,
+      "A5": -3.26598959e-07
+    }
+  },
+  {
+    "name": "D-ZLaF52LA",
+    "nd": 1.81,
+    "vd": 40.99,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.1753525,
+      "A1": -0.00848750283,
+      "A2": 0.0371301651,
+      "A3": -0.00109609062,
+      "A4": 0.00024418582,
+      "A5": -8.94583294e-06
+    }
+  },
+  {
+    "name": "D-ZLaF61",
+    "nd": 1.82241,
+    "vd": 42.71,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.23113634,
+      "A1": -0.0129344158,
+      "A2": 0.0306465184,
+      "A3": 0.0006186837,
+      "A4": 1.99460431e-05,
+      "A5": 9.30145697e-07
+    }
+  },
+  {
+    "name": "D-ZLaF67",
+    "nd": 1.88385,
+    "vd": 37.2,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.43595778,
+      "A1": -0.014299558,
+      "A2": 0.036984078,
+      "A3": 0.00131399739,
+      "A4": -2.83852011e-05,
+      "A5": 5.77405361e-06
+    }
+  },
+  {
+    "name": "D-ZLaF81",
+    "nd": 1.8088,
+    "vd": 41.0,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.1745656,
+      "A1": -0.0098395711,
+      "A2": 0.034884391,
+      "A3": -0.00052006433,
+      "A4": 0.00017902813,
+      "A5": -6.3116821e-06
+    }
+  },
+  {
+    "name": "D-ZLaF85L",
+    "nd": 1.8537,
+    "vd": 40.58,
+    "manufacturer": "CDGM",
+    "schott": {
+      "A0": 3.33472677,
+      "A1": -0.0126400664,
+      "A2": 0.0345933295,
+      "A3": 0.000546091024,
+      "A4": 4.29052791e-05,
+      "A5": 2.50964053e-07
+    }
+  },
 ];
+
 
 export function getAllGlassDatabases() {
   return [miscellaneousDB, oharaGlassDB, schottGlassDB, hoyaGlassDB, sumitaGlassDB, cdgmGlassDB];
@@ -6746,6 +12304,7 @@ export function findSimilarGlassesByNdVd(targetNd, targetVd, maxResults = 20) {
         name: String(glass.name),
         nd,
         vd,
+        manufacturer: glass.manufacturer || 'Unknown',
         ndDiff,
         vdDiff,
         totalDiff
@@ -6836,7 +12395,7 @@ export function findSimilarGlassNames(query, maxResults = 20) {
       if (nn.includes(qn) || qn.includes(nn)) score = 0;
       else score = __levenshteinDistance(qn, nn, 24);
 
-      out.push({ name, score });
+      out.push({ name, score, manufacturer: g.manufacturer || 'Unknown' });
     }
   }
 

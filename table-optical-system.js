@@ -235,21 +235,17 @@ const initialTableData = [
 
 // ローカルストレージからデータを取得
 export function loadTableData() {
-  console.log('🔵 [TableOpticalSystem] Loading data from localStorage...');
   const json = localStorage.getItem(STORAGE_KEY);
-  console.log('🔵 [TableOpticalSystem] localStorage key:', STORAGE_KEY);
-  console.log('🔵 [TableOpticalSystem] Data exists:', !!json);
   if (json) {
     try {
       const parsed = JSON.parse(json);
-      console.log('🔵 [TableOpticalSystem] Parsed data length:', parsed.length);
       return parsed;
     } catch (e) {
       console.warn('⚠️ [TableOpticalSystem] Parse error:', e);
       console.warn("保存データの読み込みに失敗しました。初期データを使用します。");
     }
   }
-  console.log('🔵 [TableOpticalSystem] Using initial data, length:', initialTableData.length);
+
   return initialTableData;
 }
 
@@ -315,7 +311,7 @@ const __DISABLE_EXPANDED_OPTICAL_SYSTEM_UI = shouldDisableExpandedOpticalSystemU
 
 if (__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) {
   try {
-    console.log('ℹ️ [TableOpticalSystem] Expanded Optical System UI disabled (Blocks-only mode).');
+
   } catch (_) {}
 }
 
@@ -1503,6 +1499,7 @@ function findSimilarGlasses(targetNd, targetVd, maxResults = 20) {
             name: glass.name,
             nd: glass.nd,
             vd: glass.vd,
+            manufacturer: glass.manufacturer || 'Unknown',
             ndDiff: glass.nd - targetNd,
             vdDiff: glass.vd - targetVd,
             totalDiff: totalDiff
@@ -1603,6 +1600,7 @@ function showGlassSearchDialog(rowData, rowIndex) {
             <tr>
                 <th>順位</th>
                 <th>ガラス名</th>
+                <th>メーカー</th>
                 <th>nd (屈折率)</th>
                 <th>Δnd</th>
                 <th>vd (Abbe数)</th>
@@ -1623,6 +1621,7 @@ function showGlassSearchDialog(rowData, rowIndex) {
             <tr data-glass-name="${glass.name}" data-glass-nd="${glass.nd}" data-glass-vd="${glass.vd}">
                 <td class="glass-rank">${index + 1}</td>
                 <td class="glass-name">${glass.name}</td>
+                <td class="glass-manufacturer">${glass.manufacturer || 'Unknown'}</td>
                 <td>${glass.nd.toFixed(6)}</td>
                 <td class="glass-diff ${ndDiffClass}">${glass.ndDiff >= 0 ? '+' : ''}${glass.ndDiff.toFixed(6)}</td>
                 <td>${glass.vd.toFixed(2)}</td>

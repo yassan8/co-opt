@@ -27,43 +27,29 @@ const initialTableData = [
 
 // ローカルストレージからデータを取得
 export function loadTableData() {
-  console.log('🔵 [TableSource] Loading data from localStorage...');
   if (typeof localStorage === 'undefined' || !localStorage) {
-    console.log('🔵 [TableSource] localStorage unavailable; using initial data');
     return initialTableData;
   }
   const json = localStorage.getItem(STORAGE_KEY);
-  console.log('🔵 [TableSource] localStorage key:', STORAGE_KEY);
-  console.log('🔵 [TableSource] Data exists:', !!json);
   if (json) {
     try {
       const parsed = JSON.parse(json);
-      console.log('🔵 [TableSource] Parsed data length:', parsed.length);
       return parsed;
     } catch (e) {
       console.warn('⚠️ [TableSource] Parse error:', e);
       console.warn("保存データの読み込みに失敗しました。初期データを使用します。");
     }
   }
-  console.log('🔵 [TableSource] Using initial data, length:', initialTableData.length);
   return initialTableData;
 }
 
 // テーブルデータをローカルストレージに保存
 export function saveTableData(data) {
-  console.log('🔵 [TableSource] Saving data to localStorage...');
-  console.log('🔵 [TableSource] Data is array:', Array.isArray(data));
-  console.log('🔵 [TableSource] Data length:', data ? data.length : 'null');
   if (typeof localStorage === 'undefined' || !localStorage) {
-    console.log('🔵 [TableSource] localStorage unavailable; skipping save');
     return;
   }
   if (data && Array.isArray(data)) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    console.log(`💾 [TableSource] Saved ${data.length} entries to localStorage key: ${STORAGE_KEY}`);
-    // Verify save
-    const verify = localStorage.getItem(STORAGE_KEY);
-    console.log('🔵 [TableSource] Verification - data saved:', !!verify);
   } else {
     console.warn('⚠️ [TableSource] Invalid data, not saving:', data);
   }
@@ -93,17 +79,8 @@ const STORAGE_KEY = "sourceTableData";
 // 初期データをローカルストレージから取得
 const initialData = loadTableData();
 
-console.log('📊 [TableSource] Module loaded');
-console.log('📊 [TableSource] Initial data:', initialData);
-console.log('📊 [TableSource] Tabulator available:', typeof Tabulator);
-
 const hasDocument = (typeof document !== 'undefined') && document && typeof document.getElementById === 'function';
 const tableContainer = hasDocument ? document.getElementById('table-source') : null;
-try {
-  console.log('📊 [TableSource] DOM container:', hasDocument ? document.readyState : '(no document)', tableContainer);
-} catch (_) {
-  // ignore
-}
 
 // 表の構成
 export let tableSource;
@@ -120,8 +97,6 @@ try {
   if (!canInitTabulator) {
     throw new Error('Tabulator or DOM container is not available');
   }
-  console.log('🔧 [TableSource] Tabulatorテーブル初期化開始...');
-  console.log('🔍 [TableSource] コンテナ要素チェック:', document.getElementById('table-source'));
   
   tableSource = new Tabulator("#table-source", {
     data: initialData,

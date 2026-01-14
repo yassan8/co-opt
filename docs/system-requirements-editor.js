@@ -828,7 +828,7 @@ class SystemRequirementsEditor {
 document.addEventListener('DOMContentLoaded', () => {
   try {
     window.systemRequirementsEditor = new SystemRequirementsEditor();
-    console.log('✅ System Requirements Editor initialized');
+
   } catch (e) {
     console.error('❌ System Requirements Editor init failed:', e);
   }

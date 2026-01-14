@@ -50,7 +50,6 @@ function stopAutoSave() {
  * Configuration UIを初期化
  */
 export function initializeConfigurationUI() {
-  console.log('🔧 [Configuration] Initializing UI...');
   
   // 既存のConfigurationシステムを初期化（初回起動時）
   initializeConfigurationSystem();
@@ -61,8 +60,6 @@ export function initializeConfigurationUI() {
   
   // イベントリスナー設定
   setupConfigurationEventListeners();
-  
-  console.log('✅ [Configuration] UI initialized');
 }
 
 // Allow other modules (e.g. Load flow) to refresh the config dropdown/info

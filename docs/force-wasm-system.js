@@ -37,11 +37,8 @@ class ForceWASMSystem {
     }
 
     async _performInitialization() {
-        console.log('🚀 WASM強制初期化開始...');
-        
         try {
             // WASM V3モジュールの確認と初期化
-            console.log('🔧 WASM V3モジュール読み込み待機中...');
             
             // RayTracingWASM関数が利用可能になるまで待機
             let attempts = 0;
@@ -55,8 +52,6 @@ class ForceWASMSystem {
             if (typeof RayTracingWASM === 'undefined') {
                 throw new Error('WASM V3モジュール (RayTracingWASM) が読み込まれていません');
             }
-            
-            console.log('✅ RayTracingWASM関数を発見');
             
             // WASMモジュールを初期化
             const cacheBust = this._getRayTracingWasmCacheBustParam();
@@ -104,8 +99,7 @@ class ForceWASMSystem {
             }
 
             this.isWASMReady = true;
-            console.log('✅ WASM V3初期化成功');
-            console.log('   利用可能関数:', Object.keys(this.wasmModule).filter(k => k.startsWith('_')));
+
             
             // 動作テスト
             await this.testWASMFunctionality();
@@ -123,7 +117,6 @@ class ForceWASMSystem {
      * WASM機能テスト
      */
     async testWASMFunctionality() {
-        console.log('🧪 WASM機能テスト実行...');
         
         try {
             // 基本的な計算テスト
@@ -139,14 +132,10 @@ class ForceWASMSystem {
                 
                 const result = this.wasmModule._aspheric_sag(r, c, k, a4, a6, a8, a10);
                 
-                console.log(`   テスト${i + 1}: r=${r}, result=${result.toExponential(6)}`);
-                
                 if (isNaN(result) || !isFinite(result)) {
                     throw new Error(`無効な結果: ${result} (r=${r})`);
                 }
             }
-
-            console.log('✅ WASM機能テスト完了 - 全て正常');
             return true;
 
         } catch (error) {

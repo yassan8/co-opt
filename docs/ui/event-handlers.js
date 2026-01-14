@@ -646,7 +646,6 @@ const ensurePopupMessageHandler = () => {
 
     window.addEventListener('message', messageHandler);
     window.popupMessageHandlerRegistered = true;
-    console.log('📡 Popup message handler registered');
 };
 
 async function executeCrossSectionView({
@@ -1088,7 +1087,6 @@ function updateColorButtonStates(objectBtn, segmentBtn, activeMode) {
  * @param {Function} options.drawOpticalSystemSurfaceWrapper - Function to draw surfaces
  */
 export function setupViewButtons(options) {
-    console.log('🔧 setupViewButtons called with options:', options);
     
     if (!options) {
         throw new Error('❌ setupViewButtons: options parameter is required');
@@ -1105,18 +1103,6 @@ export function setupViewButtons(options) {
         calculateOpticalSystemOffset,
         drawOpticalSystemSurfaceWrapper
     } = options;
-
-    console.log('🔧 setupViewButtons: Extracted options:', {
-        scene: !!scene,
-        camera: !!camera,
-        controls: !!controls,
-        renderer: !!renderer,
-        drawOptimizedRaysFromObjects: !!drawOptimizedRaysFromObjects,
-        getOpticalSystemRows: !!getOpticalSystemRows,
-        getObjectRows: !!getObjectRows,
-        calculateOpticalSystemOffset: !!calculateOpticalSystemOffset,
-        drawOpticalSystemSurfaceWrapper: !!drawOpticalSystemSurfaceWrapper
-    });
 
     // Validate required options
     if (!scene || !camera || !controls || !renderer) {
@@ -1154,25 +1140,11 @@ export function setupViewButtons(options) {
  * Setup simplified view buttons without complex dependencies
  */
 export function setupSimpleViewButtons() {
-    console.log('🔧 Setting up simplified view buttons...');
-    console.log('🔧 Available functions check:', {
-        getOpticalSystemRows: typeof window.getOpticalSystemRows,
-        getObjectRows: typeof window.getObjectRows,
-        generateCrossBeam: typeof window.generateCrossBeam,
-        generateInfiniteSystemCrossBeam: typeof window.generateInfiniteSystemCrossBeam,
-        drawOpticalSystemSurfaces: typeof window.drawOpticalSystemSurfaces,
-        drawCrossBeamRays: typeof window.drawCrossBeamRays
-    });
     
     // X-Z View button (modified functionality)
     const xzBtn = document.getElementById('view-xz-btn');
-    console.log('🔧 X-Z button element:', xzBtn);
     if (xzBtn) {
-        console.log('🔧 Adding event listener to X-Z button');
         xzBtn.addEventListener('click', async function() {
-            console.log('🎯 X-Z view button clicked - Draw Cross based functionality');
-            console.log('🔧 Button event fired successfully');
-            
             try {
                 await executeCrossSectionView({ viewAxis: 'XZ', buttonElement: xzBtn });
             } catch (error) {
@@ -1183,13 +1155,8 @@ export function setupSimpleViewButtons() {
     
     // Y-Z View button (modified functionality)
     const yzBtn = document.getElementById('view-yz-btn');
-    console.log('🔧 Y-Z button element:', yzBtn);
     if (yzBtn) {
-        console.log('🔧 Adding event listener to Y-Z button');
         yzBtn.addEventListener('click', async function() {
-            console.log('🎯 Y-Z view button clicked - Draw Cross based functionality');
-            console.log('🔧 Button event fired successfully');
-            
             try {
                 await executeCrossSectionView({ viewAxis: 'YZ', buttonElement: yzBtn });
             } catch (error) {
@@ -1197,8 +1164,6 @@ export function setupSimpleViewButtons() {
             }
         });
     }
-    
-    console.log('✅ Simplified view buttons set up');
 }
 
 /**
@@ -1206,7 +1171,6 @@ export function setupSimpleViewButtons() {
  * Handles table data changes and automatically clears optical elements when needed
  */
 export function setupOpticalSystemChangeListeners(scene) {
-    console.log('🔧 Setting up optical system change listeners...');
 
     // Guard: avoid duplicate listener registration.
     if (window.__opticalSystemChangeListenersBound) {
@@ -3545,66 +3509,14 @@ export function setupOpticalSystemChangeListeners(scene) {
                 };
                 
                 try {
-                    if (computeInPopup) {
-                        const baseHref = (() => {
-                            try {
-                                return (window.opener && window.opener.location && window.opener.location.href)
-                                    ? window.opener.location.href
-                                    : window.location.href;
-                            } catch (_) {
-                                return window.location.href;
-                            }
-                        })();
-
-                        // eva-wavefront-plot expects several helpers on window.
-                        try {
-                            if (window.opener) {
-                                if (typeof window.getOpticalSystemRows !== 'function' && typeof window.opener.getOpticalSystemRows === 'function') {
-                                    window.getOpticalSystemRows = () => window.opener.getOpticalSystemRows();
-                                }
-                                if (typeof window.getObjectRows !== 'function' && typeof window.opener.getObjectRows === 'function') {
-                                    window.getObjectRows = () => window.opener.getObjectRows();
-                                }
-                                if (typeof window.getSourceRows !== 'function' && typeof window.opener.getSourceRows === 'function') {
-                                    window.getSourceRows = () => window.opener.getSourceRows();
-                                }
-                            }
-                        } catch (_) {}
-
-                        try {
-                            const wf = await import(new URL('./eva-wavefront.js', baseHref).href);
-                            if (typeof window.createOPDCalculator !== 'function' && typeof wf.createOPDCalculator === 'function') {
-                                window.createOPDCalculator = wf.createOPDCalculator;
-                            }
-                            if (typeof window.createWavefrontAnalyzer !== 'function' && typeof wf.createWavefrontAnalyzer === 'function') {
-                                window.createWavefrontAnalyzer = wf.createWavefrontAnalyzer;
-                            }
-                            if (typeof window.WavefrontAberrationAnalyzer !== 'function' && typeof wf.WavefrontAberrationAnalyzer === 'function') {
-                                window.WavefrontAberrationAnalyzer = wf.WavefrontAberrationAnalyzer;
-                            }
-                            if (typeof window.OpticalPathDifferenceCalculator !== 'function' && typeof wf.OpticalPathDifferenceCalculator === 'function') {
-                                window.OpticalPathDifferenceCalculator = wf.OpticalPathDifferenceCalculator;
-                            }
-                        } catch (_) {}
-                        const mod = await import(new URL('./eva-wavefront-plot.js', baseHref).href);
-                        if (!mod || typeof mod.showWavefrontDiagram !== 'function') {
-                            throw new Error('showWavefrontDiagram is not available (popup import)');
-                        }
-                        await mod.showWavefrontDiagram(plotType, 'opd', Number.isFinite(gridSize) ? gridSize : 64, Number.isFinite(objectIndex) ? objectIndex : 0, {
-                            containerElement: containerEl,
-                            cancelToken: popupCancelToken,
-                            onProgress
-                        });
-                    } else {
-                        if (!window.opener || typeof window.opener.showWavefrontDiagram !== 'function') {
-                            throw new Error('showWavefrontDiagram is not available on opener');
-                        }
-                        await window.opener.showWavefrontDiagram(plotType, 'opd', Number.isFinite(gridSize) ? gridSize : 64, Number.isFinite(objectIndex) ? objectIndex : 0, {
-                            containerElement: containerEl,
-                            cancelToken: popupCancelToken,
-                            onProgress
-                        });
+                    if (!window.opener || typeof window.opener.showWavefrontDiagram !== 'function') {
+                        throw new Error('showWavefrontDiagram is not available on opener');
                     }
+                    await window.opener.showWavefrontDiagram(plotType, 'opd', Number.isFinite(gridSize) ? gridSize : 64, Number.isFinite(objectIndex) ? objectIndex : 0, {
+                        containerElement: containerEl,
+                        cancelToken: popupCancelToken,
+                        onProgress
+                    });
                     setProgress(100, 'Done');
                     resizePlot();
                 } catch (err) {
@@ -3754,7 +3666,7 @@ export function setupOpticalSystemChangeListeners(scene) {
     <div class="controls">
         <label for="popup-psf-object-select">Object:</label>
         <select id="popup-psf-object-select"><option value="0">1</option></select>
-        <label for="popup-psf-sampling-select">Sampling:</label>
+        <label for="popup-psf-sampling-select">FFT grid:</label>
         <select id="popup-psf-sampling-select">
             <option value="32">32x32</option>
             <option value="64">64x64</option>
@@ -3765,8 +3677,8 @@ export function setupOpticalSystemChangeListeners(scene) {
             <option value="2048">2048x2048</option>
             <option value="4096">4096x4096</option>
         </select>
-        <label for="popup-psf-zernike-sampling-select">Fit grid:</label>
-        <select id="popup-psf-zernike-sampling-select" title="Ray-traced OPD grid size used for Zernike fitting before evaluating PSF">
+        <label for="popup-psf-zernike-sampling-select">OPD grid:</label>
+        <select id="popup-psf-zernike-sampling-select" title="Ray-traced OPD grid size (number of rays traced across pupil)">
             <option value="32">32x32</option>
             <option value="64">64x64</option>
             <option value="128">128x128</option>
@@ -4038,6 +3950,7 @@ export function setupOpticalSystemChangeListeners(scene) {
             const zernikeSampling = popupZernikeSampling ? parseInt(popupZernikeSampling.value, 10) : sampling;
             const logScale = !!(popupLog && popupLog.checked);
             const forceWasm = !!(popupForceWasm && popupForceWasm.checked);
+            const PSF_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__PSF_DEBUG);
 
             const openerObject = getOpenerEl('psf-object-select');
             const openerSampling = getOpenerEl('psf-sampling-select');
@@ -4064,9 +3977,7 @@ export function setupOpticalSystemChangeListeners(scene) {
 
                 // Always compute inside the popup to avoid background throttling of the opener
                 // when the main window is hidden/minimized/unfocused.
-                const computeInPopup = true;
-
-                if (computeInPopup) {
+                {
                     const moduleURL = (relPath) => {
                         const baseHref = (() => {
                             try {
@@ -4315,13 +4226,33 @@ export function setupOpticalSystemChangeListeners(scene) {
 
                     const opdCalculator = createOPDCalculator(opticalSystemRows, wavelength);
                     const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
+                    
+                    // CRITICAL: Force stop mode to match render behavior
+                    // PSF calculation should use same pupil sampling as render, not entrance pupil
+                    try {
+                        if (fieldSetting.type === 'Angle' || !fieldSetting.height) {
+                            opdCalculator._setInfinitePupilMode(fieldSetting, 'stop');
+                            console.log('🔑 [PSF Popup] Forced stop mode for infinite field');
+                        }
+                    } catch (e) {
+                        console.warn('⚠️ [PSF Popup] Failed to set stop mode:', e);
+                    }
+                    
                     onProgress({ percent: 0, phase: 'opd', message: 'OPD...' });
-                    const wavefrontMap = await raceWithCancel(analyzer.generateWavefrontMap(fieldSetting, Number.isFinite(zernikeSampling) ? zernikeSampling : sampling, 'circular', {
-                        // PSF input grid should be sampled from the Zernike-fitted surface.
+                    const wavefrontGridSize = Number.isFinite(zernikeSampling) ? Math.max(16, Math.floor(Number(zernikeSampling))) : Math.max(16, Math.floor(Number(sampling) || 128));
+                    const wavefrontMap = await raceWithCancel(analyzer.generateWavefrontMap(fieldSetting, wavefrontGridSize, 'circular', {
+                        // Match OPD display pipeline:
+                        // - referenceSphere
+                        // - no Zernike fit
+                        // - piston+tilt removed (display)
                         recordRays: false,
                         progressEvery: 0,
-                        zernikeMaxNoll: 36,
-                        renderFromZernike: true,
+                        renderFromZernike: false,
+                        skipZernikeFit: true,
+                        opdMode: 'referenceSphere',
+                        opdDisplayMode: 'pistonTiltRemoved',
+                        diagnoseDiscontinuities: PSF_DEBUG,
+                        diagTopK: 8,
                         cancelToken: activeCancelToken,
                         onProgress: (evt) => {
                             const p = Number(evt && evt.percent);
@@ -4340,62 +4271,147 @@ export function setupOpticalSystemChangeListeners(scene) {
                         throw err;
                     }
 
-                    const psfSamplingSize = Number.isFinite(sampling) ? sampling : 128;
-                    // PSF: tilt は含める（pistonのみ 0）。
-                    // eva-wavefront.js の usedCoefficientsMicrons は表示用に piston/tilt を除去しているため、
-                    // ここではフィット係数（生）を一時的に使ってZernike面を評価する。
-                    const model = wavefrontMap && wavefrontMap.zernikeModel ? wavefrontMap.zernikeModel : null;
-                    const savedUsed = model ? model.usedCoefficientsMicrons : null;
-                    try {
-                        if (model && model.fitCoefficientsMicrons && typeof model.fitCoefficientsMicrons === 'object') {
-                            const coeffs = { ...model.fitCoefficientsMicrons };
-                            coeffs[1] = 0;
-                            model.usedCoefficientsMicrons = coeffs;
-                        }
-                    } catch (_) {}
+                    // Debug: Check wavefront map metadata
+                    console.log('🔍 [PSF Popup] Wavefront map keys:', Object.keys(wavefrontMap));
+                    console.log('🔍 [PSF Popup] pupilPhysicalRadiusMm:', wavefrontMap.pupilPhysicalRadiusMm);
+                    console.log('🔍 [PSF Popup] pupilSamplingMode:', wavefrontMap.pupilSamplingMode);
+                    console.log('🔍 [PSF Popup] entranceEffectiveRadiusMm:', wavefrontMap.entranceEffectiveRadiusMm);
+                    
+                    // CRITICAL: Use actual entrance pupil radius for spatial frequency scaling
+                    // In entrance pupil mode, pupilPhysicalRadiusMm (stop radius) != actual entrance pupil radius
+                    const actualPupilRadiusMm = (wavefrontMap.pupilSamplingMode === 'entrance' && 
+                                                  Number.isFinite(wavefrontMap.entranceEffectiveRadiusMm))
+                        ? wavefrontMap.entranceEffectiveRadiusMm
+                        : wavefrontMap.pupilPhysicalRadiusMm;
+                    
+                    console.log('🔍 [PSF Popup] Using actualPupilRadiusMm:', actualPupilRadiusMm);
 
-                    const zGrid = analyzer.generateZernikeRenderGrid(wavefrontMap, psfSamplingSize, 'opd', { rhoMax: 1.0 });
-                    try {
-                        if (model) model.usedCoefficientsMicrons = savedUsed;
-                    } catch (_) {}
-                    if (!zGrid || !Array.isArray(zGrid.z) || !Array.isArray(zGrid.z[0])) throw new Error('Zernike render grid generation failed (popup).');
-
-                    const s = Math.max(2, Math.floor(Number(psfSamplingSize)));
+                    // Convert to PSF calculator format (gridData)
+                    // Build OPD grid from the wavefront map samples (piston+tilt removed display OPD).
+                    const gridSize = Number.isFinite(sampling) ? Math.max(16, Math.floor(Number(sampling))) : 128;
+                    const s = Math.max(2, Math.floor(Number(gridSize)));
                     const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
                     const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
                     const maskGrid = Array.from({ length: s }, () => Array(s).fill(false));
                     const xCoords = new Float32Array(s);
                     const yCoords = new Float32Array(s);
+
+                    const pupilRange = (Number.isFinite(Number(wavefrontMap?.pupilRange)) && Number(wavefrontMap.pupilRange) > 0)
+                        ? Number(wavefrontMap.pupilRange)
+                        : 1.0;
                     for (let i = 0; i < s; i++) {
-                        const zx = (zGrid && zGrid.x) ? zGrid.x[i] : undefined;
-                        const zy = (zGrid && zGrid.y) ? zGrid.y[i] : undefined;
-                        xCoords[i] = Number((zx !== undefined && zx !== null) ? zx : ((i / (s - 1 || 1)) * 2 - 1));
-                        yCoords[i] = Number((zy !== undefined && zy !== null) ? zy : ((i / (s - 1 || 1)) * 2 - 1));
-                    }
-                    for (let iy = 0; iy < s; iy++) {
-                        if ((iy % 32) === 0) {
-                            throwIfCancelled(activeCancelToken);
-                            await new Promise(resolve => setTimeout(resolve, 0));
-                        }
-                        const row = zGrid.z[iy];
-                        for (let ix = 0; ix < s; ix++) {
-                            const vWaves = row ? row[ix] : undefined;
-                            if (vWaves === null || !isFinite(vWaves)) {
-                                maskGrid[iy][ix] = false;
-                                opdGrid[iy][ix] = 0;
-                                ampGrid[iy][ix] = 0;
-                                continue;
-                            }
-                            maskGrid[iy][ix] = true;
-                            opdGrid[iy][ix] = Number(vWaves) * Number(wavelength);
-                            ampGrid[iy][ix] = 1.0;
-                        }
+                        const t = (i / (s - 1 || 1)) * 2 - 1;
+                        xCoords[i] = t * pupilRange;
+                        yCoords[i] = t * pupilRange;
                     }
 
-                    const opdData = { gridSize: s, wavelength, gridData: { opd: opdGrid, amplitude: ampGrid, pupilMask: maskGrid, xCoords, yCoords } };
-                    let pupilDiameterMm = DEFAULT_STOP_SEMI_DIAMETER * 2;
+                    const coords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
+                    const opdMicrons = (wavefrontMap?.display && Array.isArray(wavefrontMap.display.opds))
+                        ? wavefrontMap.display.opds
+                        : (Array.isArray(wavefrontMap?.opds) ? wavefrontMap.opds : []);
+                    const n = Math.min(coords.length, opdMicrons.length);
+                    for (let k = 0; k < n; k++) {
+                        const c = coords[k];
+                        const ix = Number.isInteger(c?.ix) ? c.ix : null;
+                        const iy = Number.isInteger(c?.iy) ? c.iy : null;
+                        if (ix === null || iy === null) continue;
+                        if (ix < 0 || ix >= s || iy < 0 || iy >= s) continue;
+                        const vMicrons = Number(opdMicrons[k]);
+                        if (!Number.isFinite(vMicrons)) continue;
+                        maskGrid[iy][ix] = true;
+                        opdGrid[iy][ix] = vMicrons;
+                        ampGrid[iy][ix] = 1.0;
+                    }
+
+                    const opdData = {
+                        gridSize: s,
+                        wavelength: wavelength,
+                        gridData: {
+                            opd: opdGrid,
+                            amplitude: ampGrid,
+                            pupilMask: maskGrid,
+                            xCoords,
+                            yCoords
+                        }
+                    };
+                    
+                    // OPD grid stats: valid coverage + RMS + P-V.
+                    try {
+                        let valid = 0;
+                        let sum = 0;
+                        let sum2 = 0;
+                        let min = Infinity;
+                        let max = -Infinity;
+                        for (let iy = 0; iy < s; iy++) {
+                            for (let ix = 0; ix < s; ix++) {
+                                if (!maskGrid[iy][ix]) continue;
+                                const v = Number(opdGrid[iy][ix]);
+                                if (!Number.isFinite(v)) continue;
+                                valid++;
+                                sum += v;
+                                sum2 += v * v;
+                                if (v < min) min = v;
+                                if (v > max) max = v;
+                            }
+                        }
+                        const mean = valid ? (sum / valid) : NaN;
+                        const rms = valid ? Math.sqrt(Math.max(0, sum2 / valid - mean * mean)) : NaN;
+                        const ptp = (Number.isFinite(min) && Number.isFinite(max)) ? (max - min) : NaN;
+                        const rmsW = (Number.isFinite(rms) && Number.isFinite(wavelength) && wavelength > 0) ? (rms / wavelength) : NaN;
+                        const ptpW = (Number.isFinite(ptp) && Number.isFinite(wavelength) && wavelength > 0) ? (ptp / wavelength) : NaN;
+                        const line = '📌 [PSF popup] OPD grid stats: valid=' + valid + '/' + (s * s) +
+                            ' (' + (100 * valid / (s * s)).toFixed(1) + '%)' +
+                            ' rms=' + (Number.isFinite(rms) ? rms.toExponential(3) : String(rms)) + 'µm' +
+                            ' (' + (Number.isFinite(rmsW) ? rmsW.toExponential(3) : String(rmsW)) + 'λ)' +
+                            ' ptp=' + (Number.isFinite(ptp) ? ptp.toExponential(3) : String(ptp)) + 'µm' +
+                            ' (' + (Number.isFinite(ptpW) ? ptpW.toExponential(3) : String(ptpW)) + 'λ)';
+                        console.log(line);
+                        try {
+                            if (window.opener && window.opener.console && typeof window.opener.console.log === 'function') {
+                                window.opener.console.log(line);
+                            }
+                        } catch (_) {}
+                        if (wavefrontMap?.pupilMaskStats) {
+                            console.log('📌 [PSF popup] pupilMaskStats:', wavefrontMap.pupilMaskStats);
+                        }
+
+                        try {
+                            const mode = wavefrontMap && wavefrontMap.pupilSamplingMode;
+                            const bestEffort = !!(wavefrontMap && wavefrontMap.bestEffortVignettedPupil);
+                            if (mode) {
+                                const msg = '📌 [PSF popup] pupilSamplingMode=' + String(mode) + (bestEffort ? ' (bestEffortVignettedPupil=true)' : '');
+                                console.log(msg);
+                                try {
+                                    if (window.opener && window.opener.console && typeof window.opener.console.log === 'function') {
+                                        window.opener.console.log(msg);
+                                    }
+                                } catch (_) {}
+                            }
+
+                            const reasons = (wavefrontMap && wavefrontMap.invalidReasonCounts) ? wavefrontMap.invalidReasonCounts : null;
+                            const top = reasons
+                                ? Object.entries(reasons).sort((a, b) => ((b && b[1]) || 0) - ((a && a[1]) || 0)).slice(0, 8)
+                                : [];
+                            if (top.length) {
+                                const msg = '📌 [PSF popup] invalid reasons top: ' + top.map((kv) => String(kv && kv[0]) + ':' + String(kv && kv[1])).join(', ');
+                                console.log(msg);
+                                try {
+                                    if (window.opener && window.opener.console && typeof window.opener.console.log === 'function') {
+                                        window.opener.console.log(msg);
+                                    }
+                                } catch (_) {}
+                            }
+                        } catch (_) {}
+                    } catch (_) {}
+
+                    let pupilDiameterMm = actualPupilRadiusMm * 2;  // Use actual entrance pupil diameter
                     let focalLengthMm = 100.0;
                     let stopIndexForLog = -1;
+                    
+                    // Get stop diameter for PSF calculation
+                    // CRITICAL: Always use stop diameter for Strehl ratio calculation
+                    // Entrance pupil radius is only for understanding vignetting, not for defining diffraction limit
+                    let stopDiameterMm = 24.0;  // Default
                     try {
                         const stopIndex = findStopSurfaceIndex(opticalSystemRows);
                         stopIndexForLog = stopIndex;
@@ -4411,8 +4427,20 @@ export function setupOpticalSystemChangeListeners(scene) {
                         if (Number.isFinite(sd) && sd > 0) {
                             const isApertureField = stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined);
                             const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
-                            if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) pupilDiameterMm = stopRadiusMm * 2;
+                            if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) stopDiameterMm = stopRadiusMm * 2;
                         }
+                    } catch (_) {}
+                    
+                    // In entrance pupil mode, keep actualPupilRadiusMm for understanding
+                    // but use stopDiameterMm for PSF calculation to maintain consistent diffraction limit
+                    if (wavefrontMap.pupilSamplingMode === 'entrance') {
+                        console.log('🔍 [PSF Popup] Entrance pupil mode: using stop diameter', stopDiameterMm, 'mm instead of entrance', actualPupilRadiusMm * 2, 'mm');
+                        pupilDiameterMm = stopDiameterMm;
+                    } else {
+                        pupilDiameterMm = stopDiameterMm;  // Use stop diameter in stop mode too
+                    }
+                    
+                    try {
                         const fl = calculateFocalLength(opticalSystemRows, wavelength);
                         if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) focalLengthMm = Math.abs(fl);
                     } catch (_) {}
@@ -4422,11 +4450,14 @@ export function setupOpticalSystemChangeListeners(scene) {
 
                     if (!window.__popupPsfCalculator) window.__popupPsfCalculator = new PSFCalculator();
                     const psfCalculator = window.__popupPsfCalculator;
+                    const psfSamplingSize = Number.isFinite(sampling) ? sampling : 128;
                     const psfResult = await raceWithCancel(psfCalculator.calculatePSF(opdData, {
                         samplingSize: psfSamplingSize,
                         pupilDiameter: pupilDiameterMm,
                         focalLength: focalLengthMm,
                         forceImplementation: forceWasm ? 'wasm' : null,
+                        // Zernike render removes piston+tilt (Noll 1..3) by design.
+                        // Still safe to leave removeTilt=true for robustness; but keep it off to preserve definition.
                         removeTilt: false,
                         onProgress: (evt) => {
                             const p = Number(evt && evt.percent);
@@ -4440,18 +4471,6 @@ export function setupOpticalSystemChangeListeners(scene) {
 
                     const plotter = new PSFPlotter(containerEl);
                     await plotter.plot2DPSF(psfResult, { logScale, title: 'Point Spread Function' });
-                } else {
-                    if (!window.opener || typeof window.opener.showPSFDiagram !== 'function') {
-                        throw new Error('showPSFDiagram is not available on opener');
-                    }
-                    await window.opener.showPSFDiagram('2d', Number.isFinite(sampling) ? sampling : 128, logScale, Number.isFinite(objectIndex) ? objectIndex : 0, {
-                        containerElement: containerEl,
-                        statsElement: document.getElementById('popup-psf-container-stats'),
-                        forceImplementation: forceWasm ? 'wasm' : null,
-                        zernikeFitSamplingSize: Number.isFinite(zernikeSampling) ? zernikeSampling : undefined,
-                        cancelToken: activeCancelToken,
-                        onProgress
-                    });
                 }
 
                 setProgress(100, 'Done');
@@ -4736,6 +4755,7 @@ export function setupOpticalSystemChangeListeners(scene) {
                 if (Number.isFinite(primary) && Array.from(wlSel.options).some(o => o.value === String(primary))) {
                     wlSel.value = String(primary);
                 } else {
+                    // Fallback to first numeric wavelength if present
                     const firstNumeric = Array.from(wlSel.options).find(o => o.value !== 'all');
                     if (firstNumeric) wlSel.value = firstNumeric.value;
                 }
@@ -5013,5 +5033,4 @@ export function setupOpticalSystemChangeListeners(scene) {
                 });
         }
     
-    console.log('✅ Optical system change listeners set up');
 }

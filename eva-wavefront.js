@@ -14,6 +14,7 @@ import { traceRay, calculateSurfaceOrigins } from './ray-tracing.js';
 import { getRefractiveIndex as getCatalogRefractiveIndex } from './ray-paraxial.js';
 import { findFiniteSystemChiefRayDirection } from './gen-ray-cross-finite.js';
 import { findInfiniteSystemChiefRayOrigin } from './gen-ray-cross-infinite.js';
+import { fitZernikeWeighted, reconstructOPD, jToNM, nmToJ, getZernikeName } from './zernike-fitting.js';
 
 const OPD_DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis.__OPD_DEBUG || globalThis.__PSF_DEBUG));
 
@@ -491,9 +492,7 @@ export class OpticalPathDifferenceCalculator {
             console.log(`🔍 OPD Calculator 初期化: 波長=${wavelength}μm, 絞り面インデックス=${this.stopSurfaceIndex}`);
             console.log(`🔍 光学系行数: ${opticalSystemRows ? opticalSystemRows.length : 'null'}`);
 
-            // 有限系・無限系の判定
-            const isFinite = this.isFiniteForField(fieldSetting);
-            console.log(`🔍 光学系タイプ: ${isFinite ? '有限系' : '無限系'}`);
+            // NOTE: 有限系/無限系の判定は fieldSetting に依存するため、ここ（コンストラクタ）では判定しない。
 
             if (opticalSystemRows && opticalSystemRows.length > 0) {
                 const firstSurface = opticalSystemRows[0];
@@ -2526,11 +2525,13 @@ export class OpticalPathDifferenceCalculator {
 
             let cachedCenter = null;
             let cachedRadius = null;
+            let cachedSphereCenter = null;
             try {
                 const c = this._referenceSphereCache?.get?.(currentFieldKey);
                 if (c && typeof c === 'object') {
                     cachedCenter = c.center || null;
                     cachedRadius = c.radius;
+                    cachedSphereCenter = c.sphereCenter || null;
                 }
             } catch (_) {}
 
@@ -2539,15 +2540,21 @@ export class OpticalPathDifferenceCalculator {
                 cachedCenter = this.getChiefRayImagePoint();
             }
             if (cachedRadius === null || cachedRadius === undefined) {
-                cachedRadius = this.calculateImageSphereRadius(cachedCenter);
+                const geom = this.calculateImageSphereGeometry(cachedCenter);
+                cachedRadius = geom?.imageSphereRadius;
+                cachedSphereCenter = geom?.referenceSphereCenter;
                 try {
-                    this._referenceSphereCache?.set?.(currentFieldKey, { center: cachedCenter, radius: cachedRadius });
+                    this._referenceSphereCache?.set?.(currentFieldKey, { center: cachedCenter, radius: cachedRadius, sphereCenter: cachedSphereCenter });
                 } catch (_) {}
             }
 
             const ref = this.calculateOPDFromReferenceSphere(marginalRay, marginalOpticalPath, fieldSetting, removeTilt, {
                 imageSphereCenter: cachedCenter,
-                imageSphereRadius: cachedRadius
+                imageSphereRadius: cachedRadius,
+                _imageSphereGeometry: {
+                    imageSphereRadius: cachedRadius,
+                    referenceSphereCenter: cachedSphereCenter
+                }
             });
             if (!ref?.success || !isFinite(ref.opd) || isNaN(ref.opd)) {
                 this.lastRayCalculation = {
@@ -2569,7 +2576,10 @@ export class OpticalPathDifferenceCalculator {
                 fieldKey: currentFieldKey,
                 pupilCoord: { x: pupilX, y: pupilY },
                 referenceSphere: {
+                    referenceMode: ref.referenceMode || 'sphere',
                     imageSphereRadius: ref.imageSphereRadius,
+                    referenceSphereCenter: ref.referenceSphereCenter,
+                    imageSphereCenter: ref.imageSphereCenter,
                     distanceToCenter: ref.distanceToCenter,
                     spherePathDifference: ref.spherePathDifference
                 }
@@ -2711,16 +2721,22 @@ export class OpticalPathDifferenceCalculator {
                 throw new Error('主光線データが設定されていません');
             }
 
-            // 2. 像参照球の中心: 主光線が像面と交わる点（実像高 H'）【図面準拠】
-            const imageSphereCenter = (precomputed && precomputed.imageSphereCenter) ? precomputed.imageSphereCenter : this.getChiefRayImagePoint();
-            if (!imageSphereCenter) {
+            // 2. 像参照球の定義点: 主光線が像面と交わる点（実像高 H'）【図面準拠】
+            // NOTE: これは「球面上の点」であり、球の中心ではない。
+            const imageSpherePoint = (precomputed && precomputed.imageSphereCenter) ? precomputed.imageSphereCenter : this.getChiefRayImagePoint();
+            if (!imageSpherePoint) {
                 throw new Error('主光線の像面交点を取得できません');
             }
 
-            // 3. 像参照球の半径 Rex: 主光線を逆延長して光軸と交わる点までの距離【図面準拠】
-            const imageSphereRadius = (precomputed && precomputed.imageSphereRadius !== undefined)
-                ? precomputed.imageSphereRadius
-                : this.calculateImageSphereRadius(imageSphereCenter);
+            // 3. 像参照球の幾何
+            // - 球中心: 主光線を逆延長して光軸と交わる点 (0,0,z0)
+            // - 半径: H'（imageSpherePoint）から球中心までの距離 Rex
+            const geom = (precomputed && precomputed._imageSphereGeometry)
+                ? precomputed._imageSphereGeometry
+                : this.calculateImageSphereGeometry(imageSpherePoint);
+
+            const imageSphereRadius = geom?.imageSphereRadius;
+            const referenceSphereCenter = geom?.referenceSphereCenter;
             if (imageSphereRadius === null) {
                 throw new Error('像参照球半径を計算できません');
             }
@@ -2736,8 +2752,9 @@ export class OpticalPathDifferenceCalculator {
                     opd: opdPlane,
                     opdWithoutTilt: opdPlane,
                     tiltComponent: 0,
-                    imageSphereCenter,
+                    imageSphereCenter: imageSpherePoint,
                     imageSphereRadius,
+                    referenceSphereCenter,
                     marginalImagePoint: null,
                     distanceToCenter: NaN,
                     spherePathDifference: NaN,
@@ -2758,8 +2775,9 @@ export class OpticalPathDifferenceCalculator {
                     opd: opdPlane,
                     opdWithoutTilt: opdPlane,
                     tiltComponent: 0,
-                    imageSphereCenter,
+                    imageSphereCenter: imageSpherePoint,
                     imageSphereRadius,
+                    referenceSphereCenter,
                     marginalImagePoint: null,
                     distanceToCenter: NaN,
                     spherePathDifference: NaN,
@@ -2774,7 +2792,7 @@ export class OpticalPathDifferenceCalculator {
             if (Math.abs(imageSphereRadius) > 10000) { // 10m以上は異常
                 if (OPD_DEBUG) {
                     console.warn(`⚠️ 異常に大きな参照球半径: ${imageSphereRadius.toFixed(1)}mm`);
-                    console.warn(`   主光線像点: (${imageSphereCenter.x.toFixed(3)}, ${imageSphereCenter.y.toFixed(3)}, ${imageSphereCenter.z.toFixed(3)})mm`);
+                    console.warn(`   主光線像点: (${imageSpherePoint.x.toFixed(3)}, ${imageSpherePoint.y.toFixed(3)}, ${imageSpherePoint.z.toFixed(3)})mm`);
                     console.warn(`   これは光学系設定に問題がある可能性があります`);
                 }
             }
@@ -2787,9 +2805,12 @@ export class OpticalPathDifferenceCalculator {
 
             // 5. 周辺光線の像点から像参照球中心までの距離
             // 【図面対応】軸外では周辺光線が像参照球 Rex からずれることを測定
-            const dx = marginalImagePoint.x - imageSphereCenter.x;
-            const dy = marginalImagePoint.y - imageSphereCenter.y;
-            const dz = marginalImagePoint.z - imageSphereCenter.z;
+            if (!referenceSphereCenter) {
+                throw new Error('参照球中心を取得できません');
+            }
+            const dx = marginalImagePoint.x - referenceSphereCenter.x;
+            const dy = marginalImagePoint.y - referenceSphereCenter.y;
+            const dz = marginalImagePoint.z - referenceSphereCenter.z;
             const distanceToCenter = Math.sqrt(dx*dx + dy*dy + dz*dz); // mm
 
             // 6. 軸外OPD計算の正しい理論【文献準拠修正版】
@@ -2828,8 +2849,9 @@ export class OpticalPathDifferenceCalculator {
                     opd: opdPlane,
                     opdWithoutTilt: opdPlane,
                     tiltComponent: 0,
-                    imageSphereCenter,
+                    imageSphereCenter: imageSpherePoint,
                     imageSphereRadius,
+                    referenceSphereCenter,
                     marginalImagePoint,
                     distanceToCenter,
                     spherePathDifference,
@@ -2852,10 +2874,10 @@ export class OpticalPathDifferenceCalculator {
             let tiltComponent = 0;
             
             // Tilt成分の推定（より高精度版）
-            if (removeTilt && (Math.abs(imageSphereCenter.x) > 0.1 || Math.abs(imageSphereCenter.y) > 0.1)) {
+            if (removeTilt && (Math.abs(imageSpherePoint.x) > 0.1 || Math.abs(imageSpherePoint.y) > 0.1)) {
                 // 軸外での瞳座標に比例するtilt成分を推定
                 // 主光線角度から予想されるtilt成分を計算
-                const fieldRadius = Math.sqrt(imageSphereCenter.x*imageSphereCenter.x + imageSphereCenter.y*imageSphereCenter.y);
+                const fieldRadius = Math.sqrt(imageSpherePoint.x*imageSpherePoint.x + imageSpherePoint.y*imageSpherePoint.y);
                 
                 // より物理的なtilt成分推定
                 // 主光線の角度から予想される1次収差（tilt）成分
@@ -2869,9 +2891,9 @@ export class OpticalPathDifferenceCalculator {
                     console.log(`  計算tilt成分: ${tiltComponent.toFixed(3)}μm (${(tiltComponent/this.wavelength).toFixed(3)}λ)`);
                     console.log(`  Tilt除去後OPD: ${opdWithoutTilt.toFixed(6)}μm (${(opdWithoutTilt/this.wavelength).toFixed(3)}λ)`);
                 }
-            } else if (!removeTilt && (Math.abs(imageSphereCenter.x) > 0.1 || Math.abs(imageSphereCenter.y) > 0.1)) {
+            } else if (!removeTilt && (Math.abs(imageSpherePoint.x) > 0.1 || Math.abs(imageSpherePoint.y) > 0.1)) {
                 // tilt除去しない場合の参考情報
-                const fieldRadius = Math.sqrt(imageSphereCenter.x*imageSphereCenter.x + imageSphereCenter.y*imageSphereCenter.y);
+                const fieldRadius = Math.sqrt(imageSpherePoint.x*imageSpherePoint.x + imageSpherePoint.y*imageSpherePoint.y);
                 if (OPD_DEBUG) {
                     console.log(`📊 Tilt成分情報（除去無効）:`);
                     console.log(`  軸外Field距離: ${fieldRadius.toFixed(3)}mm`);
@@ -2880,8 +2902,8 @@ export class OpticalPathDifferenceCalculator {
             }
             
             // デバッグ情報（軸外OPD計算の確認用）
-            if (OPD_DEBUG && (Math.abs(imageSphereCenter.x) > 0.1 || Math.abs(imageSphereCenter.y) > 0.1)) {
-                const fieldRadius = Math.sqrt(imageSphereCenter.x*imageSphereCenter.x + imageSphereCenter.y*imageSphereCenter.y);
+            if (OPD_DEBUG && (Math.abs(imageSpherePoint.x) > 0.1 || Math.abs(imageSpherePoint.y) > 0.1)) {
+                const fieldRadius = Math.sqrt(imageSpherePoint.x*imageSpherePoint.x + imageSpherePoint.y*imageSpherePoint.y);
                 console.log(`📐 軸外OPD詳細（修正版2）(像高H'=${fieldRadius.toFixed(3)}mm):`);
                 console.log(`  像参照球半径: ${imageSphereRadius.toFixed(6)}mm`);
                 console.log(`  周辺光線から球心距離: ${distanceToCenter.toFixed(6)}mm`);
@@ -2920,8 +2942,9 @@ export class OpticalPathDifferenceCalculator {
                 opd: opd,
                 opdWithoutTilt: opdWithoutTilt,  // tilt除去版
                 tiltComponent: tiltComponent,  // tilt成分
-                imageSphereCenter: imageSphereCenter,
+                imageSphereCenter: imageSpherePoint,
                 imageSphereRadius: imageSphereRadius,
+                referenceSphereCenter: referenceSphereCenter,
                 marginalImagePoint: marginalImagePoint,
                 distanceToCenter: distanceToCenter,
                 spherePathDifference: spherePathDifference,
@@ -2940,16 +2963,12 @@ export class OpticalPathDifferenceCalculator {
     }
 
     /**
-     * 像参照球の半径を計算（図面仕様準拠）
-     * 
-     * 【図面定義】像参照球 Rex:
-     * - 中心: 実像高 H'（主光線と像面の交点）
-     * - 半径: 主光線を逆延長して光軸と交わる点までの距離
-     * 
-     * @param {Object} imageSphereCenter - 像参照球中心座標（実像高 H'）
-     * @returns {number|null} 像参照球半径 Rex（mm）
+     * 像参照球の幾何を計算（球中心 + 半径）
+     *
+     * - 入力: 像面上の主光線像点（実像高 H'）
+     * - 出力: 球中心(光軸上の交点) + 半径(Rex)
      */
-    calculateImageSphereRadius(imageSphereCenter) {
+    calculateImageSphereGeometry(imageSpherePoint) {
         try {
             if (!this.referenceChiefRay) {
                 throw new Error('主光線データが設定されていません');
@@ -2961,16 +2980,15 @@ export class OpticalPathDifferenceCalculator {
                 throw new Error('主光線のパスデータが不十分です');
             }
 
-            const lastPoint = chiefPath[chiefPath.length - 1]; // 像面交点（実像高 H'）
-            const prevPoint = chiefPath[chiefPath.length - 2]; // 直前の点
+            const lastPoint = chiefPath[chiefPath.length - 1]; // 像面交点
+            const prevPoint = chiefPath[chiefPath.length - 2];
 
-            // 主光線の方向ベクトル（逆方向 = 主光線を逆延長）【図面準拠】
+            // 主光線の方向ベクトル（逆方向 = 主光線を逆延長）
             const dirX = prevPoint.x - lastPoint.x;
             const dirY = prevPoint.y - lastPoint.y;
             const dirZ = prevPoint.z - lastPoint.z;
 
-            // 方向ベクトルの正規化
-            const dirLength = Math.sqrt(dirX*dirX + dirY*dirY + dirZ*dirZ);
+            const dirLength = Math.sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
             if (dirLength === 0) {
                 throw new Error('主光線の方向ベクトルが計算できません');
             }
@@ -2979,59 +2997,49 @@ export class OpticalPathDifferenceCalculator {
             const normalizedDirY = dirY / dirLength;
             const normalizedDirZ = dirZ / dirLength;
 
-            // 主光線を像面から逆方向に延長して光軸(x=0, y=0)との交点を求める
-            // パラメトリック方程式: P = imageSphereCenter + t * direction
-            // 光軸条件: x = 0, y = 0
-            
-            // x方向: 0 = imageSphereCenter.x + t * normalizedDirX
-            // y方向: 0 = imageSphereCenter.y + t * normalizedDirY
-            
             let t = null;
-            
             if (Math.abs(normalizedDirX) > 1e-10) {
-                t = -imageSphereCenter.x / normalizedDirX;
-                
-                // y座標でも確認
-                const yAtT = imageSphereCenter.y + t * normalizedDirY;
-                if (OPD_DEBUG && Math.abs(yAtT) > 1e-6) {
-                    console.warn(`⚠️ 光軸交点でy座標が0になりません: y=${yAtT.toFixed(6)}`);
-                }
+                t = -imageSpherePoint.x / normalizedDirX;
             } else if (Math.abs(normalizedDirY) > 1e-10) {
-                t = -imageSphereCenter.y / normalizedDirY;
-                
-                // x座標でも確認
-                const xAtT = imageSphereCenter.x + t * normalizedDirX;
-                if (OPD_DEBUG && Math.abs(xAtT) > 1e-6) {
-                    console.warn(`⚠️ 光軸交点でx座標が0になりません: x=${xAtT.toFixed(6)}`);
-                }
+                t = -imageSpherePoint.y / normalizedDirY;
             } else {
-                // Chief ray is (nearly) parallel to optical axis: axis intersection is at infinity.
-                // Treat reference sphere radius as infinite (plane-wave reference).
-                return Infinity;
+                // Chief ray ~ parallel to axis → intersection at infinity
+                return { imageSphereRadius: Infinity, referenceSphereCenter: null, axisIntersectionZ: null };
             }
 
             if (t === null || !isFinite(t)) {
                 throw new Error('光軸との交点パラメータが計算できません');
             }
 
-            // 光軸交点のz座標
-            const axisIntersectionZ = imageSphereCenter.z + t * normalizedDirZ;
+            const axisIntersectionZ = imageSpherePoint.z + t * normalizedDirZ;
+            const dz = imageSpherePoint.z - axisIntersectionZ;
+            const radius = Math.sqrt(imageSpherePoint.x * imageSpherePoint.x + imageSpherePoint.y * imageSpherePoint.y + dz * dz);
 
-            // 像参照球半径 = 中心から光軸交点までの距離
-            const radiusSquared = (imageSphereCenter.x * imageSphereCenter.x) + 
-                                 (imageSphereCenter.y * imageSphereCenter.y) + 
-                                 ((imageSphereCenter.z - axisIntersectionZ) * (imageSphereCenter.z - axisIntersectionZ));
-            
-            const radius = Math.sqrt(radiusSquared);
+            return {
+                imageSphereRadius: radius,
+                referenceSphereCenter: { x: 0, y: 0, z: axisIntersectionZ },
+                axisIntersectionZ
+            };
+        } catch (error) {
+            console.error(`❌ 像参照球幾何計算エラー: ${error.message}`);
+            return { imageSphereRadius: null, referenceSphereCenter: null, axisIntersectionZ: null };
+        }
+    }
 
-            if (OPD_DEBUG) {
-                console.log(`📐 像参照球半径計算:`);
-                console.log(`  像球中心: (${imageSphereCenter.x.toFixed(6)}, ${imageSphereCenter.y.toFixed(6)}, ${imageSphereCenter.z.toFixed(6)})mm`);
-                console.log(`  光軸交点: (0, 0, ${axisIntersectionZ.toFixed(6)})mm`);
-                console.log(`  計算半径: ${radius.toFixed(6)}mm`);
-            }
-
-            return radius;
+    /**
+     * 像参照球の半径を計算（図面仕様準拠）
+     * 
+     * 【図面定義】像参照球 Rex:
+     * - 中心: 実像高 H'（主光線と像面の交点）
+     * - 半径: 主光線を逆延長して光軸と交わる点までの距離
+     * 
+     * @param {Object} imageSphereCenter - 像参照球中心座標（実像高 H'）
+     * @returns {number|null} 像参照球半径 Rex（mm）
+     */
+    calculateImageSphereRadius(imageSphereCenter) {
+        try {
+            const geom = this.calculateImageSphereGeometry(imageSphereCenter);
+            return geom?.imageSphereRadius ?? null;
 
         } catch (error) {
             console.error(`❌ 像参照球半径計算エラー: ${error.message}`);
@@ -5201,6 +5209,217 @@ export class WavefrontAberrationAnalyzer {
         this.zernikeCoefficients = new Map();
     }
 
+    _removeBestFitPlane(pupilCoordinates, opdsMicrons) {
+        try {
+            if (!Array.isArray(pupilCoordinates) || !Array.isArray(opdsMicrons) || pupilCoordinates.length !== opdsMicrons.length) {
+                return null;
+            }
+
+            // Coordinates may be normalized to unit pupil OR scaled by pupilRange.
+            // Infer the effective pupil radius from finite samples (robust for renderFromZernike grids).
+            let pupilRadius = 1.0;
+            try {
+                let rMax = 0;
+                for (let i = 0; i < pupilCoordinates.length; i++) {
+                    const p = pupilCoordinates[i];
+                    const z = opdsMicrons[i];
+                    const x = Number(p?.x);
+                    const y = Number(p?.y);
+                    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+                    const r = Math.hypot(x, y);
+                    if (r > rMax) rMax = r;
+                }
+                if (Number.isFinite(rMax) && rMax > 0) pupilRadius = rMax;
+            } catch (_) {}
+
+            // Fit z = a + b*x + c*y in least squares.
+            // This removes piston + tilt (but not defocus).
+            let n = 0;
+            let sumX = 0;
+            let sumY = 0;
+            let sumXX = 0;
+            let sumXY = 0;
+            let sumYY = 0;
+            let sumZ = 0;
+            let sumXZ = 0;
+            let sumYZ = 0;
+
+            for (let i = 0; i < pupilCoordinates.length; i++) {
+                const p = pupilCoordinates[i];
+                const z = opdsMicrons[i];
+                const x = Number(p?.x);
+                const y = Number(p?.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+                const r = Math.hypot(x, y);
+                if (r > pupilRadius + 1e-9) continue;
+
+                n++;
+                sumX += x;
+                sumY += y;
+                sumXX += x * x;
+                sumXY += x * y;
+                sumYY += y * y;
+                sumZ += z;
+                sumXZ += x * z;
+                sumYZ += y * z;
+            }
+
+            if (n < 6) return null;
+
+            // Solve normal equations:
+            // [ n    sumX  sumY ] [a] = [sumZ]
+            // [sumX sumXX sumXY ] [b] = [sumXZ]
+            // [sumY sumXY sumYY ] [c] = [sumYZ]
+            const A = [
+                [n, sumX, sumY, sumZ],
+                [sumX, sumXX, sumXY, sumXZ],
+                [sumY, sumXY, sumYY, sumYZ]
+            ];
+
+            // Gaussian elimination (3x3 augmented).
+            for (let col = 0; col < 3; col++) {
+                // pivot
+                let pivotRow = col;
+                let pivotAbs = Math.abs(A[col][col]);
+                for (let r = col + 1; r < 3; r++) {
+                    const v = Math.abs(A[r][col]);
+                    if (v > pivotAbs) {
+                        pivotAbs = v;
+                        pivotRow = r;
+                    }
+                }
+                if (!Number.isFinite(pivotAbs) || pivotAbs < 1e-18) return null;
+                if (pivotRow !== col) {
+                    const tmp = A[col];
+                    A[col] = A[pivotRow];
+                    A[pivotRow] = tmp;
+                }
+
+                const piv = A[col][col];
+                for (let c = col; c < 4; c++) A[col][c] /= piv;
+                for (let r = 0; r < 3; r++) {
+                    if (r === col) continue;
+                    const f = A[r][col];
+                    if (!Number.isFinite(f) || Math.abs(f) < 1e-18) continue;
+                    for (let c = col; c < 4; c++) {
+                        A[r][c] -= f * A[col][c];
+                    }
+                }
+            }
+
+            const a = A[0][3];
+            const b = A[1][3];
+            const c = A[2][3];
+            if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) return null;
+
+            const residualMicrons = new Array(opdsMicrons.length);
+            const wavelength = this.opdCalculator?.wavelength;
+            const residualWaves = new Array(opdsMicrons.length);
+
+            for (let i = 0; i < pupilCoordinates.length; i++) {
+                const p = pupilCoordinates[i];
+                const z = opdsMicrons[i];
+                const x = Number(p?.x);
+                const y = Number(p?.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+                    residualMicrons[i] = NaN;
+                    residualWaves[i] = NaN;
+                    continue;
+                }
+                const r = Math.hypot(x, y);
+                if (r > pupilRadius + 1e-9) {
+                    residualMicrons[i] = NaN;
+                    residualWaves[i] = NaN;
+                    continue;
+                }
+                const plane = a + b * x + c * y;
+                const res = z - plane;
+                residualMicrons[i] = res;
+                residualWaves[i] = (Number.isFinite(res) && Number.isFinite(wavelength) && wavelength > 0) ? (res / wavelength) : NaN;
+            }
+
+            return {
+                coefficientsMicrons: { a, b, c },
+                residualMicrons,
+                residualWaves
+            };
+        } catch (_) {
+            return null;
+        }
+    }
+
+    _calculateLowOrderRemovedStats(pupilCoordinates, opdsMicrons, options = {}) {
+        try {
+            const removeIndices = Array.isArray(options?.removeIndices)
+                ? options.removeIndices.filter(v => Number.isInteger(v) && v >= 0)
+                : [0, 1, 2, 4];
+            const maxOrder = Number.isFinite(options?.maxOrder) ? Math.max(1, Math.floor(options.maxOrder)) : 2; // n<=2 includes defocus
+            const wavelength = this.opdCalculator?.wavelength;
+
+            if (!Array.isArray(pupilCoordinates) || !Array.isArray(opdsMicrons) || pupilCoordinates.length !== opdsMicrons.length) {
+                return null;
+            }
+
+            const points = [];
+            for (let i = 0; i < pupilCoordinates.length; i++) {
+                const p = pupilCoordinates[i];
+                const opd = opdsMicrons[i];
+                if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(opd)) continue;
+                const r = Math.hypot(p.x, p.y);
+                if (r > 1.0 + 1e-9) continue;
+                points.push({ x: p.x, y: p.y, opd, weight: 1.0 });
+            }
+            if (points.length < 6) return null;
+
+            const fit = fitZernikeWeighted(points, maxOrder, {
+                removePiston: false,
+                removeTilt: false
+            });
+
+            const coeffs = Array.isArray(fit?.coefficients) ? fit.coefficients : null;
+            if (!coeffs || coeffs.length === 0) return null;
+
+            const removeCoeffs = new Array(coeffs.length).fill(0);
+            for (const j of removeIndices) {
+                if (j >= 0 && j < coeffs.length && Number.isFinite(coeffs[j])) {
+                    removeCoeffs[j] = coeffs[j];
+                }
+            }
+
+            const residualMicrons = [];
+            const residualWaves = [];
+            for (let i = 0; i < pupilCoordinates.length; i++) {
+                const p = pupilCoordinates[i];
+                const opd = opdsMicrons[i];
+                if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(opd)) {
+                    residualMicrons.push(NaN);
+                    residualWaves.push(NaN);
+                    continue;
+                }
+                const r = Math.hypot(p.x, p.y);
+                if (r > 1.0 + 1e-9) {
+                    residualMicrons.push(NaN);
+                    residualWaves.push(NaN);
+                    continue;
+                }
+                const model = reconstructOPD(removeCoeffs, p.x, p.y);
+                const res = (Number.isFinite(model)) ? (opd - model) : NaN;
+                residualMicrons.push(res);
+                residualWaves.push(Number.isFinite(res) && Number.isFinite(wavelength) && wavelength > 0 ? (res / wavelength) : NaN);
+            }
+
+            return {
+                removeIndices,
+                maxOrder,
+                coefficientsMicrons: coeffs,
+                opdMicrons: this.calculateStatistics(residualMicrons, { removePiston: false }),
+                opdWavelengths: this.calculateStatistics(residualWaves, { removePiston: false })
+            };
+        } catch (_) {
+            return null;
+        }
+    }
+
     async _yieldToUI() {
         // ブラウザUIが固まるのを防ぐため、定期的にイベントループへ制御を返す。
         // requestAnimationFrame はタブ/ウインドウが非アクティブ時に停止しうるため、
@@ -5269,8 +5488,10 @@ export class WavefrontAberrationAnalyzer {
         const diagnoseDiscontinuities = !!options?.diagnoseDiscontinuities;
         const diagTopK = Number.isFinite(options?.diagTopK) ? Math.max(1, Math.floor(options.diagTopK)) : 5;
         const opdMode = String(options?.opdMode || 'simple'); // 'simple' | 'referenceSphere'
+        const opdDisplayMode = String(options?.opdDisplayMode || 'default'); // 'default' | 'pistonTiltRemoved'
         const zernikeMaxNollOpt = Number.isFinite(options?.zernikeMaxNoll) ? Math.max(1, Math.floor(options.zernikeMaxNoll)) : 15;
         const renderFromZernike = !!options?.renderFromZernike;
+        const skipZernikeFit = !!options?.skipZernikeFit; // Skip Zernike fitting if requested
 
         // NOTE: Historically we downsampled the ray-traced OPD grid for Zernike fitting to cap runtime.
         // The user may require the UI grid size to be reflected in the actual ray tracing, even when
@@ -5320,6 +5541,9 @@ export class WavefrontAberrationAnalyzer {
             fieldSetting: fieldSetting,
             gridSize: gridSize,
             gridSizeRequested: requestedGridSize,
+            opdMode,
+            opdDisplayModeRequested: opdDisplayMode,
+            skipZernikeFit,
             pupilRange: null,
             pupilCoordinates: [],
             wavefrontAberrations: [],
@@ -5330,13 +5554,11 @@ export class WavefrontAberrationAnalyzer {
         };
 
         // 基準光線を設定
-        console.log(`🔍 基準光線設定開始`);
         emitProgress(1, 'reference', 'Setting reference ray...');
         if (prof) prof.marks.refStart = now();
         let isInfiniteField = false;
         try {
             this.opdCalculator.setReferenceRay(fieldSetting);
-            console.log(`🔍 基準光線設定完了`);
             if (prof) prof.marks.refEnd = now();
             emitProgress(3, 'reference', 'Reference ray set');
 
@@ -5529,9 +5751,6 @@ export class WavefrontAberrationAnalyzer {
         }
         if (prof) prof.marks.gridGenEnd = now();
         emitProgress(8, 'grid', 'Pupil grid ready');
-        
-        // ここは進捗として有用なので常時表示（ただし1行のみ）
-        console.log(`📊 生成された四角形グリッド点数: ${gridPoints.length}`);
 
         // Evaluate points in a center-out, neighbor-connected order.
         if (prof) prof.marks.orderStart = now();
@@ -5799,6 +6018,7 @@ export class WavefrontAberrationAnalyzer {
                     : this.opdCalculator.calculateOPD(pupilX, pupilY, fieldSetting, opts);
             };
 
+            let usedSolveOptions = preferFast ? solveOptionsFast : solveOptionsSlow;
             let opd = preferFast ? computeOPD(solveOptionsFast) : computeOPD(solveOptionsSlow);
 
             // Targeted retry: only for stop-miss/unreachable failures in fast mode.
@@ -5807,6 +6027,7 @@ export class WavefrontAberrationAnalyzer {
                     const last = this.opdCalculator.getLastRayCalculation?.();
                     const err = (last && typeof last.error === 'string') ? last.error : '';
                     if (err.includes('stop miss') || err.includes('stop unreachable')) {
+                        usedSolveOptions = solveOptionsSlow;
                         opd = computeOPD(solveOptionsSlow);
                     }
                 } catch (_) {
@@ -5886,6 +6107,40 @@ export class WavefrontAberrationAnalyzer {
                 
                 // 🆕 光線データを記録（描画用）
                 const rayResult = recordRays ? this.opdCalculator.getLastRayCalculation() : null;
+
+                // Profile-only diagnostic: measure how different referenceSphere vs simple is
+                // at points where the solver actually succeeds, using the same solve options.
+                if (prof) {
+                    try {
+                        if (!prof._opdModeCompare) {
+                            prof._opdModeCompare = {
+                                absMic: [],
+                                absW: [],
+                                refModeCounts: Object.create(null),
+                                exampleImageSphereRadius: null
+                            };
+                        }
+                        const cmp = prof._opdModeCompare;
+                        if (cmp.absMic.length < 5) {
+                            const vSimple = this.opdCalculator.calculateOPD(pupilX, pupilY, fieldSetting, usedSolveOptions);
+                            const vRef = this.opdCalculator.calculateOPDReferenceSphere(pupilX, pupilY, fieldSetting, false, usedSolveOptions);
+                            if (Number.isFinite(vSimple) && Number.isFinite(vRef)) {
+                                const dMic = vRef - vSimple;
+                                cmp.absMic.push(Math.abs(dMic));
+                                cmp.absW.push(Math.abs(dMic / this.opdCalculator.wavelength));
+                                try {
+                                    const last = this.opdCalculator.getLastRayCalculation?.();
+                                    const rm = last?.referenceSphere?.referenceMode;
+                                    if (rm) cmp.refModeCounts[String(rm)] = (cmp.refModeCounts[String(rm)] || 0) + 1;
+                                    const r = last?.referenceSphere?.imageSphereRadius;
+                                    if (cmp.exampleImageSphereRadius === null && r !== undefined && r !== null) {
+                                        cmp.exampleImageSphereRadius = r;
+                                    }
+                                } catch (_) {}
+                            }
+                        }
+                    } catch (_) {}
+                }
                 
                 // ログ出力での詳細確認
                 if (OPD_DEBUG && pupilRadius > 0.8 && debugLogCount < 240) { // ログ上限
@@ -5982,11 +6237,6 @@ export class WavefrontAberrationAnalyzer {
                         }
                     }
                 }
-                    
-                    // 最初の成功例を詳細ログ
-                    if (validPointCount <= 3) {
-                        console.log(`✅ 成功例${validPointCount}: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}), OPD=${opd.toFixed(6)}μm, Wλ=${wavefrontAberration.toFixed(6)}`);
-                    }
                 } else {
                     // 失敗例の詳細ログ（最初の数例のみ）
                     if (validPointCount <= 3 && pointIndex < 10) {
@@ -6067,9 +6317,7 @@ export class WavefrontAberrationAnalyzer {
         if (prof) {
             prof.marks.opdLoopEnd = now();
         }
-        
 
-        console.log(`📊 有効データ点数: ${validPointCount}/${gridPoints.length} (四角形グリッド)`);
         wavefrontMap.invalidReasonCounts = invalidReasonCounts;
         wavefrontMap.restartedDueToModeSwitch = restartedDueToModeSwitch;
         wavefrontMap.restartedDueToStopUnreachable = restartedDueToStopUnreachable;
@@ -6217,7 +6465,6 @@ export class WavefrontAberrationAnalyzer {
             }
 
             wavefrontMap.pupilMaskStats = { gridSize: g, occupiedCells: total, components, largestComponent: largest };
-            console.log(`🧩 瞳マスク診断: cells=${total}, components=${components}, largest=${largest}`);
         } catch (_) {
             // ignore
         }
@@ -6284,54 +6531,56 @@ export class WavefrontAberrationAnalyzer {
             if (prof) {
                 prof.tEnd = now();
                 prof.marks.end = prof.tEnd;
-                console.log('⏱️ [WavefrontProfile] summary:', {
-                    profileVersion: '2025-12-31-breakdown-v1',
-                    gridSize,
-                    points: gridPoints?.length || 0,
-                    recordRays,
-                    opdMode,
-                    renderFromZernike,
-                    zernikeMaxNollOpt,
-                    totalMs: Number.isFinite(prof.tEnd - prof.tStart) ? (prof.tEnd - prof.tStart).toFixed(1) : (prof.tEnd - prof.tStart),
-                    refMs: null,
-                    gridMs: null,
-                    orderMs: null,
-                    opdLoopMs: null,
-                    avgOpdCallMs: (prof.opdCalls > 0) ? (prof.opdCallMs / prof.opdCalls).toFixed(3) : null,
-                    zernikeFitMs: null,
-                    zernikeModelMs: null,
-                    applyRemovedMs: null,
-                    traceRayToSurfaceCount: prof.traceRayToSurfaceCount || 0,
-                    traceRayToSurfaceMs: Number.isFinite(prof.traceRayToSurfaceMs) ? prof.traceRayToSurfaceMs.toFixed(1) : (prof.traceRayToSurfaceMs || 0),
-                    traceRayToEvalCount: prof.traceRayToEvalCount || 0,
-                    finalStopReuseCount: (typeof prof.finalStopReuseCount === 'number') ? prof.finalStopReuseCount : null,
-                    finalStopFallbackCount: (typeof prof.finalStopFallbackCount === 'number') ? prof.finalStopFallbackCount : null,
-                    marginalRayFiniteCalls: prof.marginalRayFiniteCalls || 0,
-                    marginalRayInfiniteCalls: prof.marginalRayInfiniteCalls || 0,
-                    finiteStopCorrectionCalls: prof.finiteStopCorrectionCalls || 0,
-                    finiteStopCorrectionIters: prof.finiteStopCorrectionIters || 0,
-                    finiteStopCorrectionFastCalls: prof.finiteStopCorrectionFastCalls || 0,
-                    finiteStopHitCount: prof.finiteStopHitCount || 0,
-                    finiteBrentFallbackCount: prof.finiteBrentFallbackCount || 0,
-                    finiteBrentFallbackFastCount: prof.finiteBrentFallbackFastCount || 0,
-                    finiteInitialTraceNullCount: prof.finiteInitialTraceNullCount || 0,
-                    finiteEvalNullWithStopHitCount: prof.finiteEvalNullWithStopHitCount || 0,
-                    finiteDirectionSolveSkippedDueToStopHit: prof.finiteDirectionSolveSkippedDueToStopHit || 0,
-                    finiteDirectionSolveSkippedDueToNoStopHit: prof.finiteDirectionSolveSkippedDueToNoStopHit || 0,
-                    finiteNoStopHitFastFallbackAttempted: prof.finiteNoStopHitFastFallbackAttempted || 0,
-                    finiteNoStopHitFastFallbackSucceeded: prof.finiteNoStopHitFastFallbackSucceeded || 0,
-                    finiteDirectionSolveCalls: prof.finiteDirectionSolveCalls || 0,
-                    finiteDirectionSolveFastCalls: prof.finiteDirectionSolveFastCalls || 0,
-                    finiteDirectionSolveFallbackCalls: prof.finiteDirectionSolveFallbackCalls || 0,
-                    finiteDirectionSolveFallbackFastCalls: prof.finiteDirectionSolveFallbackFastCalls || 0,
-                    finiteDirectionSolveMs: Number.isFinite(prof.finiteDirectionSolveMs) ? prof.finiteDirectionSolveMs.toFixed(1) : (prof.finiteDirectionSolveMs || 0),
-                    marginalRayCalls: prof.marginalRayCalls || 0,
-                    marginalRayMs: Number.isFinite(prof.marginalRayMs) ? prof.marginalRayMs.toFixed(1) : (prof.marginalRayMs || 0),
-                    opticalPathCalls: prof.opticalPathCalls || 0,
-                    opticalPathMs: Number.isFinite(prof.opticalPathMs) ? prof.opticalPathMs.toFixed(1) : (prof.opticalPathMs || 0),
-                    opticalPathCacheRebuilds: prof.opticalPathCacheRebuilds || 0
-                });
-                this.opdCalculator._wavefrontProfile = null;
+                if (OPD_DEBUG) {
+                    console.log('⏱️ [WavefrontProfile] summary:', {
+                        profileVersion: '2025-12-31-breakdown-v1',
+                        gridSize,
+                        points: gridPoints?.length || 0,
+                        recordRays,
+                        opdMode,
+                        renderFromZernike,
+                        zernikeMaxNollOpt,
+                        totalMs: Number.isFinite(prof.tEnd - prof.tStart) ? (prof.tEnd - prof.tStart).toFixed(1) : (prof.tEnd - prof.tStart),
+                        refMs: null,
+                        gridMs: null,
+                        orderMs: null,
+                        opdLoopMs: null,
+                        avgOpdCallMs: (prof.opdCalls > 0) ? (prof.opdCallMs / prof.opdCalls).toFixed(3) : null,
+                        zernikeFitMs: null,
+                        zernikeModelMs: null,
+                        applyRemovedMs: null,
+                        traceRayToSurfaceCount: prof.traceRayToSurfaceCount || 0,
+                        traceRayToSurfaceMs: Number.isFinite(prof.traceRayToSurfaceMs) ? prof.traceRayToSurfaceMs.toFixed(1) : (prof.traceRayToSurfaceMs || 0),
+                        traceRayToEvalCount: prof.traceRayToEvalCount || 0,
+                        finalStopReuseCount: (typeof prof.finalStopReuseCount === 'number') ? prof.finalStopReuseCount : null,
+                        finalStopFallbackCount: (typeof prof.finalStopFallbackCount === 'number') ? prof.finalStopFallbackCount : null,
+                        marginalRayFiniteCalls: prof.marginalRayFiniteCalls || 0,
+                        marginalRayInfiniteCalls: prof.marginalRayInfiniteCalls || 0,
+                        finiteStopCorrectionCalls: prof.finiteStopCorrectionCalls || 0,
+                        finiteStopCorrectionIters: prof.finiteStopCorrectionIters || 0,
+                        finiteStopCorrectionFastCalls: prof.finiteStopCorrectionFastCalls || 0,
+                        finiteStopHitCount: prof.finiteStopHitCount || 0,
+                        finiteBrentFallbackCount: prof.finiteBrentFallbackCount || 0,
+                        finiteBrentFallbackFastCount: prof.finiteBrentFallbackFastCount || 0,
+                        finiteInitialTraceNullCount: prof.finiteInitialTraceNullCount || 0,
+                        finiteEvalNullWithStopHitCount: prof.finiteEvalNullWithStopHitCount || 0,
+                        finiteDirectionSolveSkippedDueToStopHit: prof.finiteDirectionSolveSkippedDueToStopHit || 0,
+                        finiteDirectionSolveSkippedDueToNoStopHit: prof.finiteDirectionSolveSkippedDueToNoStopHit || 0,
+                        finiteNoStopHitFastFallbackAttempted: prof.finiteNoStopHitFastFallbackAttempted || 0,
+                        finiteNoStopHitFastFallbackSucceeded: prof.finiteNoStopHitFastFallbackSucceeded || 0,
+                        finiteDirectionSolveCalls: prof.finiteDirectionSolveCalls || 0,
+                        finiteDirectionSolveFastCalls: prof.finiteDirectionSolveFastCalls || 0,
+                        finiteDirectionSolveFallbackCalls: prof.finiteDirectionSolveFallbackCalls || 0,
+                        finiteDirectionSolveFallbackFastCalls: prof.finiteDirectionSolveFallbackFastCalls || 0,
+                        finiteDirectionSolveMs: Number.isFinite(prof.finiteDirectionSolveMs) ? prof.finiteDirectionSolveMs.toFixed(1) : (prof.finiteDirectionSolveMs || 0),
+                        marginalRayCalls: prof.marginalRayCalls || 0,
+                        marginalRayMs: Number.isFinite(prof.marginalRayMs) ? prof.marginalRayMs.toFixed(1) : (prof.marginalRayMs || 0),
+                        opticalPathCalls: prof.opticalPathCalls || 0,
+                        opticalPathMs: Number.isFinite(prof.opticalPathMs) ? prof.opticalPathMs.toFixed(1) : (prof.opticalPathMs || 0),
+                        opticalPathCacheRebuilds: prof.opticalPathCacheRebuilds || 0
+                    });
+                    this.opdCalculator._wavefrontProfile = null;
+                }
             }
             console.error('❌ 有効なOPDサンプルが0点のため、Zernike/描画用モデル生成をスキップします');
             return wavefrontMap;
@@ -6345,32 +6594,50 @@ export class WavefrontAberrationAnalyzer {
         if (prof) prof.marks.zernikeFitStart = now();
 
         const sampleCount = Array.isArray(wavefrontMap.raw.opds) ? wavefrontMap.raw.opds.length : 0;
-        const zernikeMaxNollForFit = Math.max(1, Math.min(zernikeMaxNollOpt, sampleCount));
-        if (zernikeMaxNollForFit < zernikeMaxNollOpt) {
-            console.warn(`⚠️ 有効サンプル数が少ないため、Zernike項数を ${zernikeMaxNollForFit} に制限します（要求=${zernikeMaxNollOpt}, 有効点=${sampleCount}）`);
+        
+        // Skip Zernike fitting if requested
+        if (skipZernikeFit) {
+            console.log('⚡ Zernike fitting skipped (skipZernikeFit=true)');
+            wavefrontMap.zernike = null;
+            emitProgress(95, 'zernike-fit', 'Zernike fit skipped');
+        } else {
+            const zernikeMaxNollForFit = Math.max(1, Math.min(zernikeMaxNollOpt, sampleCount));
+            if (zernikeMaxNollForFit < zernikeMaxNollOpt) {
+                console.warn(`⚠️ 有効サンプル数が少ないため、Zernike項数を ${zernikeMaxNollForFit} に制限します（要求=${zernikeMaxNollOpt}, 有効点=${sampleCount}）`);
+            }
+            const zernikeFit = this.fitZernikePolynomials({
+                pupilCoordinates: wavefrontMap.pupilCoordinates,
+                opds: wavefrontMap.raw.opds
+            }, zernikeMaxNollForFit);
+            wavefrontMap.zernike = zernikeFit;
+            emitProgress(95, 'zernike-fit', 'Zernike fit done');
         }
-        const zernikeFit = this.fitZernikePolynomials({
-            pupilCoordinates: wavefrontMap.pupilCoordinates,
-            opds: wavefrontMap.raw.opds
-        }, zernikeMaxNollForFit);
-        wavefrontMap.zernike = zernikeFit;
         if (prof) prof.marks.zernikeFitEnd = now();
-        emitProgress(95, 'zernike-fit', 'Zernike fit done');
 
         // Requested rendering mode: draw the Zernike-fitted function itself (no removal / no smoothing of data).
         // We keep raw samples in wavefrontMap.raw for diagnostics.
-        if (renderFromZernike && zernikeFit?.coefficientsMicrons) {
+        if (renderFromZernike && wavefrontMap.zernike?.coefficientsMicrons) {
             emitProgress(97, 'zernike-render', 'Rendering from Zernike model...');
             if (prof) prof.marks.zernikeModelStart = now();
+            const zernikeFit = wavefrontMap.zernike;
             const maxNollUsed = Math.max(1, Math.min(zernikeFit.maxNoll || zernikeMaxNollOpt, zernikeMaxNollOpt));
             const wavelength = this.opdCalculator.wavelength;
 
             // Coefficients used for rendering.
-            // OPD display: remove piston/tilt only (Noll 1,2,3), keep defocus (Noll 5).
-            const displayRemovedNoll = [1, 2, 3];
+            // IMPORTANT: fitZernikePolynomials() produces OSA/ANSI-indexed coefficients (j=0..).
+            // NOTE: OPD display mode (piston/tilt removal) is a *view transform* handled separately.
+            // Keep the underlying Zernike model intact here so that toggling OPD display actually changes the plot.
+            const displayRemovedOSA = [];
             const fitCoefficientsMicrons = { ...zernikeFit.coefficientsMicrons };
             const usedCoefficientsMicrons = { ...fitCoefficientsMicrons };
-            for (const j of displayRemovedNoll) usedCoefficientsMicrons[j] = 0;
+
+            const maxJUsed = Number.isFinite(maxNollUsed) ? Math.max(1, Math.floor(maxNollUsed))
+                : (Math.max(0, ...Object.keys(usedCoefficientsMicrons).map(Number).filter(Number.isFinite)) + 1);
+            const usedCoeffsArray = new Array(maxJUsed).fill(0);
+            for (let j = 0; j < maxJUsed; j++) {
+                const c = Number(usedCoefficientsMicrons?.[j] ?? 0);
+                usedCoeffsArray[j] = Number.isFinite(c) ? c : 0;
+            }
 
             const evalAt = (x, y, ix = null, iy = null) => {
                 if (!Number.isFinite(x) || !Number.isFinite(y)) return NaN;
@@ -6387,14 +6654,10 @@ export class WavefrontAberrationAnalyzer {
                     // ignore
                 }
 
-                const theta = Math.atan2(y, x);
-                let model = 0;
-                for (let j = 1; j <= maxNollUsed; j++) {
-                    // piston/tilt/defocus: set coefficients to 0 (Noll 1,2,3,5)
-                    const c = usedCoefficientsMicrons?.[j] ?? 0;
-                    model += c * zernikeNoll(j, rho, theta);
-                }
-                return model;
+                const pr = (Number.isFinite(wavefrontMap.pupilRange) && wavefrontMap.pupilRange > 0) ? wavefrontMap.pupilRange : 1.0;
+                const xn = x / pr;
+                const yn = y / pr;
+                return reconstructOPD(usedCoeffsArray, xn, yn);
             };
 
             // If we are not recording rays, it's safe to render on the full grid mask (fills holes deterministically).
@@ -6421,9 +6684,13 @@ export class WavefrontAberrationAnalyzer {
             }
 
             wavefrontMap.zernikeModel = {
-                maxNollUsed,
+                // Backward-compat: keep the existing field name, but it now means
+                // "max OSA/ANSI term count" (j=0..max-1).
+                maxNollUsed: maxJUsed,
                 fitCoefficientsMicrons,
-                displayRemovedNoll,
+                // Backward-compat: keep old name (now contains OSA indices).
+                displayRemovedNoll: displayRemovedOSA,
+                displayRemovedOSA,
                 usedCoefficientsMicrons,
                 opds: modelMicrons,
                 opdsInWavelengths: modelWaves
@@ -6444,8 +6711,9 @@ export class WavefrontAberrationAnalyzer {
         // UI追加なしで切替できるよう globalThis フラグを用意する。
         const applyRemovedModel = !renderFromZernike && !(typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_APPLY_REMOVED_MODEL === false);
 
-        if (applyRemovedModel && zernikeFit?.removedModelMicrons?.length === wavefrontMap.opds.length) {
+        if (applyRemovedModel && wavefrontMap.zernike?.removedModelMicrons?.length === wavefrontMap.opds.length) {
             if (prof) prof.marks.applyRemovedStart = now();
+            const zernikeFit = wavefrontMap.zernike;
             for (let k = 0; k < wavefrontMap.opds.length; k++) {
                 const rawOpd = wavefrontMap.raw.opds[k];
                 const model = zernikeFit.removedModelMicrons[k];
@@ -6493,10 +6761,120 @@ export class WavefrontAberrationAnalyzer {
             const points = gridPoints?.length || 0;
             const avgOpdMs = (prof.opdCalls > 0) ? (prof.opdCallMs / prof.opdCalls) : null;
 
+            // Correctness diagnostic: compare a few sample points between OPD modes.
+            // This helps confirm whether toggling opdMode should change results for the current field.
+            let opdModeCompare = null;
+            try {
+                const fromValid = prof._opdModeCompare;
+                if (fromValid && Array.isArray(fromValid.absMic) && fromValid.absMic.length > 0 && Array.isArray(fromValid.absW) && fromValid.absW.length > 0) {
+                    const rms = (arr) => Math.sqrt(arr.reduce((s, v) => s + v * v, 0) / arr.length);
+                    opdModeCompare = {
+                        sampleCount: fromValid.absMic.length,
+                        exampleImageSphereRadius: fromValid.exampleImageSphereRadius,
+                        referenceModeCounts: fromValid.refModeCounts,
+                        maxAbsDeltaMicrons: Math.max(...fromValid.absMic),
+                        rmsAbsDeltaMicrons: rms(fromValid.absMic),
+                        maxAbsDeltaWaves: Math.max(...fromValid.absW),
+                        rmsAbsDeltaWaves: rms(fromValid.absW)
+                    };
+                } else {
+                    // Fallback: naive sampling without solver hints (may produce NaNs in fragile infinite solves).
+                    const samplePoints = [
+                        { x: 0, y: 0 },
+                        { x: 0.5, y: 0 },
+                        { x: 0, y: 0.5 },
+                        { x: 0.7, y: 0 },
+                        { x: 0, y: 0.7 },
+                        { x: 0.5, y: 0.5 },
+                        { x: 0.7, y: 0.7 }
+                    ].filter(p => (p.x * p.x + p.y * p.y) <= 1.0 + 1e-12);
+
+                    const absMic = [];
+                    const absW = [];
+                    const refModeCounts = Object.create(null);
+                    let exampleImageSphereRadius = null;
+                    let sampleCount = 0;
+                    for (const p of samplePoints) {
+                        const vSimple = this.opdCalculator.calculateOPD(p.x, p.y, fieldSetting);
+                        const vRef = this.opdCalculator.calculateOPDReferenceSphere(p.x, p.y, fieldSetting, false);
+                        try {
+                            const last = this.opdCalculator.getLastRayCalculation?.();
+                            const rm = last?.referenceSphere?.referenceMode;
+                            if (rm) refModeCounts[String(rm)] = (refModeCounts[String(rm)] || 0) + 1;
+                            const r = last?.referenceSphere?.imageSphereRadius;
+                            if (exampleImageSphereRadius === null && r !== undefined && r !== null) {
+                                exampleImageSphereRadius = r;
+                            }
+                        } catch (_) {}
+                        if (!Number.isFinite(vSimple) || !Number.isFinite(vRef)) continue;
+                        const dMic = vRef - vSimple;
+                        absMic.push(Math.abs(dMic));
+                        absW.push(Math.abs(dMic / this.opdCalculator.wavelength));
+                        sampleCount++;
+                        if (sampleCount >= 5) break;
+                    }
+
+                    if (sampleCount > 0) {
+                        const rms = (arr) => Math.sqrt(arr.reduce((s, v) => s + v * v, 0) / arr.length);
+                        opdModeCompare = {
+                            sampleCount,
+                            exampleImageSphereRadius,
+                            referenceModeCounts: refModeCounts,
+                            maxAbsDeltaMicrons: Math.max(...absMic),
+                            rmsAbsDeltaMicrons: rms(absMic),
+                            maxAbsDeltaWaves: Math.max(...absW),
+                            rmsAbsDeltaWaves: rms(absW)
+                        };
+                    } else {
+                        opdModeCompare = { sampleCount: 0, exampleImageSphereRadius, referenceModeCounts: refModeCounts };
+                    }
+                }
+            } catch (_) {
+                opdModeCompare = { sampleCount: 0 };
+            }
+
+            const finiteOpdSamples = (() => {
+                try {
+                    const arr = wavefrontMap?.opds;
+                    if (!Array.isArray(arr)) return 0;
+                    let c = 0;
+                    for (const v of arr) if (Number.isFinite(v)) c++;
+                    return c;
+                } catch (_) {
+                    return 0;
+                }
+            })();
+
+            const opdModeCompareSummary = (() => {
+                try {
+                    const sc = Number(opdModeCompare?.sampleCount || 0);
+                    const maxW = opdModeCompare?.maxAbsDeltaWaves;
+                    const rmsW = opdModeCompare?.rmsAbsDeltaWaves;
+                    const maxU = opdModeCompare?.maxAbsDeltaMicrons;
+                    const rmsU = opdModeCompare?.rmsAbsDeltaMicrons;
+                    const r = opdModeCompare?.exampleImageSphereRadius;
+                    const modes = opdModeCompare?.referenceModeCounts;
+                    const modesText = (modes && typeof modes === 'object') ? JSON.stringify(modes) : '';
+                    const rText = (r === Infinity) ? 'Infinity' : (Number.isFinite(r) ? Number(r).toFixed(6) : String(r));
+                    const maxWText = Number.isFinite(maxW) ? Number(maxW).toExponential(3) : String(maxW);
+                    const rmsWText = Number.isFinite(rmsW) ? Number(rmsW).toExponential(3) : String(rmsW);
+                    const maxUText = Number.isFinite(maxU) ? Number(maxU).toExponential(3) : String(maxU);
+                    const rmsUText = Number.isFinite(rmsU) ? Number(rmsU).toExponential(3) : String(rmsU);
+                    return `samples=${sc} finiteOpdSamples=${finiteOpdSamples} | maxΔ=${maxUText}µm (${maxWText}λ) rmsΔ=${rmsUText}µm (${rmsWText}λ) | imageSphereRadius=${rText} | refModes=${modesText}`;
+                } catch (_) {
+                    return null;
+                }
+            })();
+
+            if (opdModeCompareSummary) {
+                console.log('🧪 [WavefrontProfile] opdModeCompareSummary:', opdModeCompareSummary);
+            }
+
             console.log('⏱️ [WavefrontProfile] summary:', {
                 profileVersion: '2025-12-31-breakdown-v1',
                 gridSize,
                 points,
+                finiteOpdSamples,
                 recordRays,
                 opdMode,
                 renderFromZernike,
@@ -6538,7 +6916,9 @@ export class WavefrontAberrationAnalyzer {
                 marginalRayMs: Number.isFinite(prof.marginalRayMs) ? prof.marginalRayMs.toFixed(1) : (prof.marginalRayMs || 0),
                 opticalPathCalls: prof.opticalPathCalls || 0,
                 opticalPathMs: Number.isFinite(prof.opticalPathMs) ? prof.opticalPathMs.toFixed(1) : (prof.opticalPathMs || 0),
-                opticalPathCacheRebuilds: prof.opticalPathCacheRebuilds || 0
+                opticalPathCacheRebuilds: prof.opticalPathCacheRebuilds || 0,
+                opdModeCompare,
+                opdModeCompareSummary
             });
 
             // Detach to avoid leaking counters across runs.
@@ -6547,16 +6927,59 @@ export class WavefrontAberrationAnalyzer {
 
         emitProgress(100, 'done', 'Wavefront generation complete');
 
-        // 統計情報を計算（補正後を primary とする）
-        wavefrontMap.statistics = {
-            wavefront: this.calculateStatistics(wavefrontMap.wavefrontAberrations),
-            opdMicrons: this.calculateStatistics(wavefrontMap.opds),
-            opdWavelengths: this.calculateStatistics(wavefrontMap.opdsInWavelengths),
-            raw: {
-                wavefront: this.calculateStatistics(wavefrontMap.raw.wavefrontAberrations),
-                opdMicrons: this.calculateStatistics(wavefrontMap.raw.opds),
-                opdWavelengths: this.calculateStatistics(wavefrontMap.raw.opdsInWavelengths)
+        // Optional display-mode: remove piston+tilt from the *plotted* OPD (defocus kept).
+        // This is a view transform; raw and primary stats remain available.
+        let display = null;
+        let displayStats = null;
+        try {
+            if (opdDisplayMode === 'pistonTiltRemoved') {
+                const fit = this._removeBestFitPlane(wavefrontMap.pupilCoordinates, wavefrontMap.opds);
+                if (fit && Array.isArray(fit.residualMicrons) && Array.isArray(fit.residualWaves)) {
+                    display = {
+                        mode: 'pistonTiltRemoved',
+                        planeCoefficientsMicrons: fit.coefficientsMicrons,
+                        opds: fit.residualMicrons,
+                        opdsInWavelengths: fit.residualWaves,
+                        wavefrontAberrations: fit.residualWaves
+                    };
+                    displayStats = {
+                        mode: 'pistonTiltRemoved',
+                        planeCoefficientsMicrons: fit.coefficientsMicrons,
+                        opdMicrons: this.calculateStatistics(fit.residualMicrons, { removePiston: false }),
+                        opdWavelengths: this.calculateStatistics(fit.residualWaves, { removePiston: false })
+                    };
+                }
             }
+        } catch (_) {
+            display = null;
+            displayStats = null;
+        }
+        if (display) {
+            wavefrontMap.display = display;
+        }
+
+        // 統計情報を計算（補正後を primary とする）
+        // OPD統計はピストン除去後の値を表示（光学的に意味のある収差量）
+        const lowOrderRemoved = this._calculateLowOrderRemovedStats(
+            wavefrontMap.pupilCoordinates,
+            wavefrontMap.raw?.opds,
+            {
+                // OSA/ANSI: 0 piston, 1/2 tilt, 4 defocus
+                removeIndices: [0, 1, 2, 4],
+                maxOrder: 2
+            }
+        );
+        wavefrontMap.statistics = {
+            wavefront: this.calculateStatistics(wavefrontMap.wavefrontAberrations, { removePiston: true }),
+            opdMicrons: this.calculateStatistics(wavefrontMap.opds, { removePiston: true }),
+            opdWavelengths: this.calculateStatistics(wavefrontMap.opdsInWavelengths, { removePiston: true }),
+            raw: {
+                wavefront: this.calculateStatistics(wavefrontMap.raw.wavefrontAberrations, { removePiston: false }),
+                opdMicrons: this.calculateStatistics(wavefrontMap.raw.opds, { removePiston: false }),
+                opdWavelengths: this.calculateStatistics(wavefrontMap.raw.opdsInWavelengths, { removePiston: false })
+            },
+            aberration: lowOrderRemoved,
+            display: displayStats
         };
 
         // Attach mode meta to each statistics object for easy display.
@@ -6565,9 +6988,64 @@ export class WavefrontAberrationAnalyzer {
             if (wavefrontMap.statistics?.wavefront) wavefrontMap.statistics.wavefront.pupilSamplingMode = mode;
             if (wavefrontMap.statistics?.opdMicrons) wavefrontMap.statistics.opdMicrons.pupilSamplingMode = mode;
             if (wavefrontMap.statistics?.opdWavelengths) wavefrontMap.statistics.opdWavelengths.pupilSamplingMode = mode;
+
+            const usedOpdMode = wavefrontMap.opdMode || null;
+            const usedSkipZernikeFit = !!wavefrontMap.skipZernikeFit;
+            if (wavefrontMap.statistics?.wavefront) {
+                wavefrontMap.statistics.wavefront.opdMode = usedOpdMode;
+                wavefrontMap.statistics.wavefront.skipZernikeFit = usedSkipZernikeFit;
+            }
+            if (wavefrontMap.statistics?.opdMicrons) {
+                wavefrontMap.statistics.opdMicrons.opdMode = usedOpdMode;
+                wavefrontMap.statistics.opdMicrons.skipZernikeFit = usedSkipZernikeFit;
+            }
+            if (wavefrontMap.statistics?.opdWavelengths) {
+                wavefrontMap.statistics.opdWavelengths.opdMode = usedOpdMode;
+                wavefrontMap.statistics.opdWavelengths.skipZernikeFit = usedSkipZernikeFit;
+            }
+            if (wavefrontMap.statistics?.raw?.wavefront) {
+                wavefrontMap.statistics.raw.wavefront.pupilSamplingMode = mode;
+                wavefrontMap.statistics.raw.wavefront.opdMode = usedOpdMode;
+                wavefrontMap.statistics.raw.wavefront.skipZernikeFit = usedSkipZernikeFit;
+            }
+            if (wavefrontMap.statistics?.raw?.opdMicrons) {
+                wavefrontMap.statistics.raw.opdMicrons.pupilSamplingMode = mode;
+                wavefrontMap.statistics.raw.opdMicrons.opdMode = usedOpdMode;
+                wavefrontMap.statistics.raw.opdMicrons.skipZernikeFit = usedSkipZernikeFit;
+            }
+            if (wavefrontMap.statistics?.raw?.opdWavelengths) {
+                wavefrontMap.statistics.raw.opdWavelengths.pupilSamplingMode = mode;
+                wavefrontMap.statistics.raw.opdWavelengths.opdMode = usedOpdMode;
+                wavefrontMap.statistics.raw.opdWavelengths.skipZernikeFit = usedSkipZernikeFit;
+            }
+
+            if (wavefrontMap.statistics?.aberration?.opdMicrons) {
+                wavefrontMap.statistics.aberration.opdMicrons.pupilSamplingMode = mode;
+                wavefrontMap.statistics.aberration.opdMicrons.opdMode = usedOpdMode;
+                wavefrontMap.statistics.aberration.opdMicrons.skipZernikeFit = usedSkipZernikeFit;
+                wavefrontMap.statistics.aberration.opdMicrons.removeIndices = wavefrontMap.statistics.aberration.removeIndices;
+            }
+            if (wavefrontMap.statistics?.aberration?.opdWavelengths) {
+                wavefrontMap.statistics.aberration.opdWavelengths.pupilSamplingMode = mode;
+                wavefrontMap.statistics.aberration.opdWavelengths.opdMode = usedOpdMode;
+                wavefrontMap.statistics.aberration.opdWavelengths.skipZernikeFit = usedSkipZernikeFit;
+                wavefrontMap.statistics.aberration.opdWavelengths.removeIndices = wavefrontMap.statistics.aberration.removeIndices;
+            }
+
+            if (wavefrontMap.statistics?.display?.opdMicrons) {
+                wavefrontMap.statistics.display.opdMicrons.pupilSamplingMode = mode;
+                wavefrontMap.statistics.display.opdMicrons.opdMode = usedOpdMode;
+                wavefrontMap.statistics.display.opdMicrons.skipZernikeFit = usedSkipZernikeFit;
+                wavefrontMap.statistics.display.opdMicrons.opdDisplayMode = opdDisplayMode;
+            }
+            if (wavefrontMap.statistics?.display?.opdWavelengths) {
+                wavefrontMap.statistics.display.opdWavelengths.pupilSamplingMode = mode;
+                wavefrontMap.statistics.display.opdWavelengths.opdMode = usedOpdMode;
+                wavefrontMap.statistics.display.opdWavelengths.skipZernikeFit = usedSkipZernikeFit;
+                wavefrontMap.statistics.display.opdWavelengths.opdDisplayMode = opdDisplayMode;
+            }
         } catch (_) {}
         if (OPD_DEBUG) console.log('📊 統計情報:', wavefrontMap.statistics);
-        console.log(`✅ 波面収差マップ生成完了`);
 
         // ---- Discontinuity / outlier diagnostics (log-only) ----
         if (diagnoseDiscontinuities) {
@@ -6605,7 +7083,6 @@ export class WavefrontAberrationAnalyzer {
         const totalInPupil = Array.isArray(gridPoints) ? gridPoints.length : validCount;
         const squareTotal = gridSize * gridSize;
         const pct = (totalInPupil > 0) ? (validCount / totalInPupil * 100) : 0;
-        console.log(`📊 データ生成結果: 有効=${validCount}点, 瞳内=${totalInPupil}点 (${pct.toFixed(1)}%), 全格子=${squareTotal}点`);
         
         if (validCount === 0) {
             console.error(`❌ 有効なデータが1点もありません！`);
@@ -6627,14 +7104,8 @@ export class WavefrontAberrationAnalyzer {
             } catch (error) {
                 console.error(`❌ 中央点OPD計算エラー: ${error.message}`);
             }
-        } else {
-            console.log(`✅ ${validCount}点の有効なデータを生成しました`);
-            const mmOPD = finiteMinMax(wavefrontMap.opds);
-            const mmW = finiteMinMax(wavefrontMap.wavefrontAberrations);
-            console.log(`  OPD範囲: ${Number.isFinite(mmOPD.min) ? mmOPD.min.toFixed(3) : 'NaN'} ~ ${Number.isFinite(mmOPD.max) ? mmOPD.max.toFixed(3) : 'NaN'}μm`);
-            console.log(`  波面収差範囲: ${Number.isFinite(mmW.min) ? mmW.min.toFixed(3) : 'NaN'} ~ ${Number.isFinite(mmW.max) ? mmW.max.toFixed(3) : 'NaN'}λ`);
         }
-        
+
         return wavefrontMap;
     }
 
@@ -6662,6 +7133,13 @@ export class WavefrontAberrationAnalyzer {
         if (!Number.isFinite(wavelength) || wavelength <= 0) return null;
         if (!usedCoeffs || typeof usedCoeffs !== 'object') return null;
         if (!Number.isFinite(maxNollUsed) || maxNollUsed < 1) return null;
+
+        // IMPORTANT: usedCoeffs are OSA/ANSI-indexed (j=0..max-1). Use reconstructOPD.
+        const usedCoeffsArray = new Array(maxNollUsed).fill(0);
+        for (let j = 0; j < maxNollUsed; j++) {
+            const c = Number(usedCoeffs?.[j] ?? 0);
+            usedCoeffsArray[j] = Number.isFinite(c) ? c : 0;
+        }
 
         const g = Math.max(2, Math.floor(Number(renderGridSize)));
         const xAxis = [];
@@ -6702,14 +7180,9 @@ export class WavefrontAberrationAnalyzer {
                     zGrid[iy][ix] = null;
                     continue;
                 }
-                const theta = Math.atan2(y, x);
-
-                let microns = 0;
-                for (let j = 1; j <= maxNollUsed; j++) {
-                    const c = Number(usedCoeffs?.[j] ?? 0);
-                    if (!Number.isFinite(c)) continue;
-                    microns += c * zernikeNoll(j, rho, theta);
-                }
+                const xn = x / pupilRange;
+                const yn = y / pupilRange;
+                const microns = reconstructOPD(usedCoeffsArray, xn, yn);
 
                 // dataTypeはどちらでも「λ」表示がUI側の期待。
                 // opd: OPD[μm]/λ, wavefront: Wλ も同じく OPD/λ で表現。
@@ -6921,13 +7394,17 @@ export class WavefrontAberrationAnalyzer {
     /**
      * 統計情報を計算
      * @param {Array} aberrations - 波面収差の配列
+     * @param {Object} options - オプション
+     * @param {boolean} options.removePiston - ピストン（平均）を除去してから統計計算（デフォルト: false）
      * @returns {Object} 統計情報
      */
-    calculateStatistics(aberrations) {
+    calculateStatistics(aberrations, options = {}) {
         if (!aberrations || aberrations.length === 0) {
             console.warn('⚠️ 統計計算: データが空です');
             return { count: 0, mean: 0, rms: 0, peakToPeak: 0, min: 0, max: 0 };
         }
+
+        const removePiston = options.removePiston || false;
 
         // ゼロ以外の有限値のみで統計を計算（ビネッティング/無効を除外）
         // NOTE: Do NOT use Math.min(...arr)/Math.max(...arr) because large grids can overflow the call stack.
@@ -6953,19 +7430,39 @@ export class WavefrontAberrationAnalyzer {
         }
 
         const mean = sum / count;
+        
+        // ピストン除去オプション: 平均を引いてから統計を再計算
+        if (removePiston && Math.abs(mean) > 1e-10) {
+            sum = 0;
+            sumSq = 0;
+            min = Infinity;
+            max = -Infinity;
+            for (let i = 0; i < aberrations.length; i++) {
+                const val = aberrations[i];
+                if (val === 0) continue;
+                if (!Number.isFinite(val)) continue;
+                const centered = val - mean;
+                sum += centered;  // Should be ~0
+                sumSq += centered * centered;
+                if (centered < min) min = centered;
+                if (centered > max) max = centered;
+            }
+        }
+        
         // variance = E[x^2] - (E[x])^2
         const ex2 = sumSq / count;
-        const variance = Math.max(0, ex2 - mean * mean);
+        const meanFinal = removePiston ? 0 : mean;  // ピストン除去時は平均=0
+        const variance = Math.max(0, ex2 - meanFinal * meanFinal);
         const rms = Math.sqrt(variance);
         const peakToPeak = max - min;
 
         if (OPD_DEBUG) {
-            console.log(`📊 統計計算詳細: 総数=${aberrations.length}, 有効数=${count}, mean=${mean.toFixed(6)}, rms=${rms.toFixed(6)}, P-P=${peakToPeak.toFixed(6)}`);
+            console.log(`📊 統計計算詳細: 総数=${aberrations.length}, 有効数=${count}, mean=${meanFinal.toFixed(6)}, rms=${rms.toFixed(6)}, P-P=${peakToPeak.toFixed(6)}${removePiston ? ' (piston removed)' : ''}`);
         }
 
         return {
             count: count,
-            mean: mean,
+            mean: meanFinal,
             rms: rms,
             peakToPeak: peakToPeak,
             min: min,
@@ -6982,41 +7479,233 @@ export class WavefrontAberrationAnalyzer {
     fitZernikePolynomials(wavefrontMap, maxOrder = 4) {
         const pupilCoordinates = wavefrontMap?.pupilCoordinates || [];
         const opds = wavefrontMap?.opds || [];
-        const maxNollRequested = Math.max(4, Number(maxOrder) || 4);
+        const maxOrderRequested = Math.max(3, Number(maxOrder) || 6);
 
+        // ビネッティング検出用に重み付きポイント配列を作成
         const points = [];
         for (let i = 0; i < pupilCoordinates.length; i++) {
             const p = pupilCoordinates[i];
             const opd = opds[i];
-            if (!p || !isFinite(p.x) || !isFinite(p.y) || !isFinite(opd)) continue;
+            if (!p) continue;
+            
             const r = Math.sqrt(p.x * p.x + p.y * p.y);
             if (r > 1.0 + 1e-9) continue;
-            points.push({ x: p.x, y: p.y, opd });
+            
+            // 有効なOPD値には重み1、無効（ビネッティング）には重み0
+            const weight = (isFinite(p.x) && isFinite(p.y) && isFinite(opd)) ? 1 : 0;
+            points.push({ 
+                x: p.x, 
+                y: p.y, 
+                opd: weight > 0 ? opd : 0,  // 無効点は0として扱う
+                weight 
+            });
         }
 
-        // Under heavy vignetting (especially infinite systems off-axis), valid sample count can be much smaller
-        // than the requested Zernike term count. Fitting more terms than samples is underdetermined and can
-        // explode numerically. We treat maxOrder as an upper bound.
-        const maxNoll = Math.max(1, Math.min(maxNollRequested, points.length));
+        const validPoints = points.filter(pt => pt.weight > 0);
+        if (validPoints.length === 0) {
+            console.warn('⚠️ 有効なサンプル点が0個のため、Zernikeフィッティングをスキップします');
+            return {
+                maxNoll: 0,
+                coefficientsMicrons: {},
+                stats: { points: 0, rmsResidual: NaN }
+            };
+        }
 
-        // Full fit via Gram–Schmidt orthonormalization
-        const fit = fitZernikeNollGramSchmidt(points, maxNoll);
+        // OPD値を中心化（平均を引く）- 数値的安定性のため
+        const opdMean = validPoints.reduce((sum, pt) => sum + pt.opd, 0) / validPoints.length;
+        
+        for (const pt of points) {
+            if (pt.weight > 0) {
+                pt.opd -= opdMean;
+            }
+        }
 
-        // 参照面基準W: 低次成分（piston/tilt/defocus 等）を除去
-        // Noll: 1=piston, 2/3=tilt, 5=defocus
-        // NOTE: 係数推定は「除去したい低次だけ」で別フィットすると、
-        // サンプリング非直交や数値誤差の影響が減り、局所的なスパイクが出にくい。
-        // UI追加なしで切替できるよう globalThis から上書き可能にする。
-        // 例)
-        //   globalThis.__WAVEFRONT_REMOVE_NOLL = [1];      // pistonのみ
-        //   globalThis.__WAVEFRONT_REMOVE_NOLL = [];       // 何も除去しない
-        //   globalThis.__WAVEFRONT_REMOVE_NOLL = [1,5];    // piston+defocus
-        const defaultRemoveNoll = [1, 2, 3, 5];
-        const removeNoll = (typeof globalThis !== 'undefined' && Array.isArray(globalThis.__WAVEFRONT_REMOVE_NOLL))
-            ? globalThis.__WAVEFRONT_REMOVE_NOLL
-            : defaultRemoveNoll;
-        const removeList = Array.isArray(removeNoll) ? removeNoll.slice(0, Math.max(0, Math.min(removeNoll.length, points.length))) : [];
-        const removeFit = fitZernikeNollGramSchmidtSelected(points, removeList);
+        // OPD範囲を計算してスケールファクターを決定
+        const opdValues = validPoints.map(pt => pt.opd);
+        const opdMin = Math.min(...opdValues);
+        const opdMax = Math.max(...opdValues);
+        const opdRange = opdMax - opdMin;
+        
+        // スケールファクター: OPD範囲をO(1)にスケーリング（条件数改善のため）
+        // 参考文献: Golub & Van Loan "Matrix Computations" (2013), Sec. 2.7, 5.3
+        //          Press et al. "Numerical Recipes" (2007), Sec. 15.4
+        const scaleFactor = Math.max(1.0, opdRange);  // 少なくとも1以上
+        
+        // OPD値をスケーリング
+        for (const pt of points) {
+            if (pt.weight > 0) {
+                pt.opd /= scaleFactor;
+            }
+        }
+
+        // ============================================================
+        // 新実装：ハイブリッドアプローチ（Gram-Schmidt + Cholesky）
+        // - 低次項（ピストン・チルト）を解析的に計算（数値安定性）
+        // - 高次項のみCholesky分解でフィッティング
+        // ============================================================
+        
+        // Step 1: ピストン（j=0）を解析的に計算
+        // OPDは既に中心化済み（平均=0）なので、ピストンはopdMean/scaleFactor
+        const piston_scaled = 0;  // 中心化済みなので0
+        
+        // Step 2: チルト（j=1, j=2）を解析的に計算
+        // OSA/ANSI（zernike-fitting.js の zernikePolynomial と同じ正規化）:
+        //   j=1 → (n=1, m=-1) → Z = 2 * ρ * sin(θ) = 2 * y
+        //   j=2 → (n=1, m= 1) → Z = 2 * ρ * cos(θ) = 2 * x
+        // OPD = c1*(2*y) + c2*(2*x) を最小二乗で解く
+        
+        let sum_x = 0, sum_y = 0, sum_x2 = 0, sum_y2 = 0, sum_xy = 0;
+        let sum_opd_x = 0, sum_opd_y = 0;
+        
+        for (const pt of validPoints) {
+            sum_x += pt.x;
+            sum_y += pt.y;
+            sum_x2 += pt.x * pt.x;
+            sum_y2 += pt.y * pt.y;
+            sum_xy += pt.x * pt.y;
+            sum_opd_x += pt.opd * pt.x;
+            sum_opd_y += pt.opd * pt.y;
+        }
+        
+        const nPts = validPoints.length;
+        const det = sum_x2 * sum_y2 - sum_xy * sum_xy;
+        
+        let tiltY_scaled = 0, tiltX_scaled = 0;
+        if (Math.abs(det) > 1e-10) {
+            // Solve: [Σx² Σxy][2*c2] = [Σ(OPD*x)]
+            //        [Σxy Σy²][2*c1]   [Σ(OPD*y)]
+            const two_c2 = (sum_opd_x * sum_y2 - sum_opd_y * sum_xy) / det;
+            const two_c1 = (sum_x2 * sum_opd_y - sum_xy * sum_opd_x) / det;
+            tiltY_scaled = two_c1 / 2;  // j=1
+            tiltX_scaled = two_c2 / 2;  // j=2
+        }
+        
+        // Step 3: OPDから低次成分を除去
+        const opd_residual = validPoints.map(pt => {
+            const tiltContribution = tiltY_scaled * 2 * pt.y + tiltX_scaled * 2 * pt.x;
+            return pt.opd - tiltContribution;
+        });
+        
+        // 残差をpointsに反映
+        validPoints.forEach((pt, i) => {
+            pt.opd = opd_residual[i];
+        });
+        
+        // Step 3.5: ノイズ対策 - 外れ値の除外（任意、globalThisで制御可能）
+        // 以前の "σベース" はスパイクの影響で閾値が緩くなりやすいので、MAD (median absolute deviation) に変更。
+        const enableOutlierRemoval = (typeof globalThis !== 'undefined' && globalThis.__ZERNIKE_REMOVE_OUTLIERS !== false);
+        const outlierSigmaMultiplier = (typeof globalThis !== 'undefined' && typeof globalThis.__ZERNIKE_OUTLIER_SIGMA === 'number')
+            ? globalThis.__ZERNIKE_OUTLIER_SIGMA
+            : 6.0;  // デフォルト: 6σ相当（MADは保守的にしやすい）
+        const outlierMinAbs = (typeof globalThis !== 'undefined' && typeof globalThis.__ZERNIKE_OUTLIER_MIN_ABS === 'number')
+            ? Math.max(0, globalThis.__ZERNIKE_OUTLIER_MIN_ABS)
+            : 0.0;
+        const outlierMinPoints = (typeof globalThis !== 'undefined' && Number.isFinite(globalThis.__ZERNIKE_OUTLIER_MIN_POINTS))
+            ? Math.max(10, Math.floor(globalThis.__ZERNIKE_OUTLIER_MIN_POINTS))
+            : 20;
+
+        const median = (arr) => {
+            const vals = Array.isArray(arr) ? arr.filter(Number.isFinite).slice() : [];
+            if (vals.length === 0) return NaN;
+            vals.sort((a, b) => a - b);
+            const mid = Math.floor(vals.length / 2);
+            return (vals.length % 2 === 0) ? (vals[mid - 1] + vals[mid]) / 2 : vals[mid];
+        };
+
+        let filteredPoints = validPoints;
+        let outlierFilterStats = null;
+        if (enableOutlierRemoval && validPoints.length >= outlierMinPoints) {
+            const vals = validPoints.map(pt => pt.opd).filter(Number.isFinite);
+            const med = median(vals);
+            const absDev = vals.map(v => Math.abs(v - med));
+            const mad = median(absDev);
+            const robustSigma = (Number.isFinite(mad) && mad > 0) ? (1.4826 * mad) : NaN;
+            const threshold = (Number.isFinite(robustSigma) && robustSigma > 0)
+                ? Math.max(outlierMinAbs, outlierSigmaMultiplier * robustSigma)
+                : NaN;
+
+            if (Number.isFinite(threshold) && threshold > 0) {
+                filteredPoints = validPoints.filter(pt => {
+                    if (!pt || !Number.isFinite(pt.opd)) return false;
+                    return Math.abs(pt.opd - med) <= threshold;
+                });
+
+                outlierFilterStats = {
+                    method: 'MAD',
+                    sigmaMultiplier: outlierSigmaMultiplier,
+                    minAbs: outlierMinAbs,
+                    minPoints: outlierMinPoints,
+                    median: med,
+                    mad,
+                    robustSigma,
+                    threshold,
+                    removed: validPoints.length - filteredPoints.length,
+                    kept: filteredPoints.length
+                };
+
+                if (outlierFilterStats.removed > 0) {
+                    console.log(`⚡ Zernike fitting: ${outlierFilterStats.removed} outliers removed (MAD, threshold=${threshold.toExponential(3)} in scaled OPD units)`);
+                }
+
+                // 外れ値除去で点数が落ちすぎた場合は無効化（不安定化を避ける）
+                if (filteredPoints.length < 10) {
+                    filteredPoints = validPoints;
+                    outlierFilterStats = {
+                        ...outlierFilterStats,
+                        disabledReason: 'too_few_points_after_filter'
+                    };
+                }
+            }
+        }
+        
+        // Step 4: 高次項（j>=3）のみをフィッティング
+        // ノイズ増幅を防ぐため、より保守的な次数制限を適用
+        const conservativeFactor = (typeof globalThis !== 'undefined' && typeof globalThis.__ZERNIKE_ORDER_FACTOR === 'number')
+            ? globalThis.__ZERNIKE_ORDER_FACTOR
+            : 3.0;  // デフォルト: √(N/3) より保守的
+        
+        const maxOrderFromPoints = Math.floor(Math.sqrt(filteredPoints.length / conservativeFactor));
+        const maxOrderForFit = Math.min(
+            6,  // デフォルト最大次数を8→6に削減（より保守的）
+            maxOrderRequested,
+            maxOrderFromPoints
+        );
+        
+        console.log(`🔧 Zernike fitting: maxOrder=${maxOrderForFit} (points=${filteredPoints.length}, requested=${maxOrderRequested})`);
+        
+        const fitResult = fitZernikeWeighted(filteredPoints, maxOrderForFit, {
+            skipPiston: true,     // j=0をスキップ（既に計算済み）
+            skipTilt: true,       // j=1,2をスキップ（既に計算済み）
+            removePiston: false,  
+            removeTilt: false     
+        });
+        
+        // Step 5: 係数を統合（スケール復元）
+        // CRITICAL FIX: OPDは既に中心化済み（平均除去）なので、ピストン項は0にする
+        // opdMeanを係数に含めると除去モデルが巨大になり、波面が大きくなる問題が発生する
+        const coefficientsMicrons = {};
+        coefficientsMicrons[0] = 0;  // ピストン = 0（既に中心化済み）
+        coefficientsMicrons[1] = tiltY_scaled * scaleFactor;  // チルトY
+        coefficientsMicrons[2] = tiltX_scaled * scaleFactor;  // チルトX
+        
+        // デバッグ: OPD中心化の検証
+        if (Math.abs(opdMean) > 1.0) {  // 1μm以上の平均値がある場合
+            console.log(`📊 OPD中心化: 元の平均=${opdMean.toFixed(3)}μm → 係数[0]=0（中心化済み）`);
+        }
+        
+        // 高次項（fitResultから取得）
+        for (let j = 3; j < fitResult.coefficients.length; j++) {
+            coefficientsMicrons[j] = fitResult.coefficients[j] * scaleFactor;
+        }
+
+        // 低次成分除去用の設定（globalThisから上書き可能）
+        // デフォルト: ピストン(j=0)のみ除去 - チルトは光軸ずれの情報なので保持
+        const defaultRemoveIndices = [0];  // OSA/ANSI: j=0(piston)のみ
+        const removeIndices = (typeof globalThis !== 'undefined' && Array.isArray(globalThis.__WAVEFRONT_REMOVE_OSA))
+            ? globalThis.__WAVEFRONT_REMOVE_OSA
+            : defaultRemoveIndices;
+
+        // 除去用モデルを計算：除去する項のみを使ってOPDを再構築
         const removedModelMicrons = [];
         for (let i = 0; i < pupilCoordinates.length; i++) {
             const p = pupilCoordinates[i];
@@ -7025,41 +7714,53 @@ export class WavefrontAberrationAnalyzer {
                 continue;
             }
             const rho = Math.sqrt(p.x * p.x + p.y * p.y);
-            const theta = Math.atan2(p.y, p.x);
             if (rho > 1.0 + 1e-9) {
                 removedModelMicrons.push(NaN);
                 continue;
             }
 
-            let model = 0;
-            for (const j of removeList) {
-                const c = removeFit?.coefficientsMicrons?.[j] ?? 0;
-                model += c * zernikeNoll(j, rho, theta);
+            // 除去対象の係数のみを抽出して再構築
+            const maxJ = Math.max(...Object.keys(coefficientsMicrons).map(Number));
+            const removeCoeffs = new Array(maxJ + 1).fill(0);
+            for (const j of removeIndices) {
+                if (coefficientsMicrons[j] !== undefined) {
+                    removeCoeffs[j] = coefficientsMicrons[j];
+                }
             }
+            const model = reconstructOPD(removeCoeffs, p.x, p.y);
+            
+            // デバッグ：最初の数点でモデル値を確認
+            if (i < 5) {
+                console.log(`🔍 Point ${i}: pupil(${p.x.toFixed(3)}, ${p.y.toFixed(3)}), model=${model.toFixed(6)} μm`);
+            }
+            
             removedModelMicrons.push(model);
         }
 
+        // Map形式で係数を保存（既存コードとの互換性）
         const coefficients = new Map();
-        for (let j = 1; j <= maxNoll; j++) {
-            coefficients.set(j, fit.coefficientsMicrons[j] || 0);
+        const maxJ = Math.max(...Object.keys(coefficientsMicrons).map(Number)) + 1;
+        for (let j = 0; j < maxJ; j++) {
+            const coeff = coefficientsMicrons[j] || 0;
+            coefficients.set(j, coeff);
         }
         this.zernikeCoefficients = coefficients;
 
         return {
-            maxNoll,
-            coefficientsMicrons: fit.coefficientsMicrons,
+            maxNoll: (maxOrderForFit + 1) * (maxOrderForFit + 2) / 2,
+            coefficientsMicrons,
             coefficientsWaves: Object.fromEntries(
-                Object.entries(fit.coefficientsMicrons).map(([k, v]) => [k, v / this.opdCalculator.wavelength])
+                Object.entries(coefficientsMicrons).map(([k, v]) => [k, v / this.opdCalculator.wavelength])
             ),
-            removed: removeNoll,
-            removedCoefficientsMicrons: removeFit?.coefficientsMicrons,
-            removedCoefficientsWaves: removeFit?.coefficientsMicrons
-                ? Object.fromEntries(Object.entries(removeFit.coefficientsMicrons).map(([k, v]) => [k, v / this.opdCalculator.wavelength]))
-                : undefined,
+            removed: removeIndices,
             removedModelMicrons,
             stats: {
-                full: fit.stats,
-                removed: removeFit?.stats
+                full: {
+                    points: validPoints.length,
+                    pointsAfterOutlierFilter: filteredPoints.length,
+                    rmsResidual: fitResult.rms || 0
+                },
+                outlierFilter: outlierFilterStats
             }
         };
     }
@@ -7235,10 +7936,15 @@ export class WavefrontAberrationAnalyzer {
 }
 
 // ------------------------------
-// Zernike (Noll indexing) helpers
+// OSA/ANSI Zernike helpers (新実装)
 // ------------------------------
 
+// Noll index → (n, m) 変換関数（eva-wavefront-plot.jsで使用）
 function nollToNM(j) {
+    return nollToNM_deprecated(j);
+}
+
+function nollToNM_deprecated(j) {
     // Noll indexing (sequential) mapping.
     // Order n starts at j0 = n(n+1)/2 + 1 and has (n+1) terms with m = -n, -n+2, ..., n.
     const jj = Math.floor(Number(j));
@@ -7783,7 +8489,6 @@ export function createWavefrontAnalyzer(opdCalculator) {
         throw new Error('有効な光学系データが必要です。光学系設定を確認してください。');
     }
     
-    console.log(`✅ WavefrontAnalyzer作成完了 (光学系: ${opdCalculator.opticalSystemRows.length}面)`);
     return new WavefrontAberrationAnalyzer(opdCalculator);
 }
 
@@ -7811,5 +8516,5 @@ if (typeof window !== 'undefined') {
     window.OpticalPathDifferenceCalculator = OpticalPathDifferenceCalculator;
     window.WavefrontAberrationAnalyzer = WavefrontAberrationAnalyzer;
     window.createWavefrontAnalyzer = createWavefrontAnalyzer;
-    console.log('🔧 [EVAWavefront] 波面収差計算クラスとヘルパー関数をグローバルに公開しました');
+
 }

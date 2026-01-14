@@ -18,8 +18,6 @@ import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlock
 import { calculateBackFocalLength, calculateImageDistance, calculateFocalLength, calculateParaxialData, findStopSurfaceIndex } from '../ray-paraxial.js';
 import { traceRay, traceRayHitPoint } from '../ray-tracing.js';
 import { findInfiniteSystemChiefRayOrigin, findApertureBoundaryRays } from '../gen-ray-cross-infinite.js';
-import { getGlassDataWithSellmeier, findSimilarGlassesByNdVd, findSimilarGlassNames } from '../glass.js';
-import { normalizeDesign } from '../normalize-design.js';
 import { generateZMXText, downloadZMX } from '../zemax-export.js';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../zemax-import.js';
 
@@ -125,6 +123,8 @@ function __zmxSolveCrossRayToStopCoordAxis(opticalSystemRows, stopIndex, targetC
     if (f0.ok && Number.isFinite(f0.value) && Math.abs(f0.value) < 1e-7) return f0.ray0;
 
     let lo = 0;
+    // Pick the initial search direction based on whether u needs to increase or decrease
+    // to approach the target coordinate at the stop.
     const dirSign = (f0.ok && Number.isFinite(f0.value) && f0.value < 0) ? +1 : -1;
     let hi = (isInfinite ? Math.max(1e-6, Math.abs(target) || 1) : 0.05) * dirSign;
     let fhiObj = evalFunc(hi);
@@ -173,6 +173,8 @@ function __zmxIsObjectRow(row) {
     return t === 'object';
 }
 
+// traceRay() rayPath does not record intersections for Object/Coord Break rows.
+// Convert table surfaceIndex -> rayPath point index.
 function __zmxGetRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
     if (!Array.isArray(opticalSystemRows) || surfaceIndex === null || surfaceIndex === undefined) return null;
     const sIdx = Math.max(0, Math.min(Number(surfaceIndex), opticalSystemRows.length - 1));
@@ -249,6 +251,10 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
     const isInfinite = __zmxIsInfiniteConjugateFromObjectRow(rowsToApply);
     const fields = (Array.isArray(objectRows) && objectRows.length > 0) ? objectRows : [{ xHeightAngle: 0, yHeightAngle: 0 }];
 
+    // Avoid a chicken/egg issue for high field angles:
+    // - Chief/boundary ray search can fail if surfaces have too-small default semidia (e.g. 10mm)
+    // - But we need those rays to *compute* a better semidia
+    // So we temporarily relax physical apertures during tracing by setting large semidia.
     const BIG_SEMIDIA_MM = Math.max(200, Math.abs(Number(stopRadiusMm) || 0) * 20, 100);
     const originalSemidias = new Array(rowsToApply.length);
     try {
@@ -268,6 +274,7 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
     } catch (_) {}
 
     if (isInfinite) {
+        // Use the same robust chief/boundary search used by the ray visualizer (gen-ray-cross-infinite.js).
         const zs = __zmxComputeSurfaceOriginsZLikeGenRayCross(rowsToApply);
         const stopCenter = { x: 0, y: 0, z: Number(zs?.[stopIndex] ?? 0) };
 
@@ -305,6 +312,7 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
             }
         }
     } else {
+        // Finite conjugates: keep the legacy on-axis approximation (better than default 10).
         const ray0y = __zmxSolveCrossRayToStopCoordAxis(rowsToApply, stopIndex, stopRadiusMm, wl, 'y');
         const ray0x = __zmxSolveCrossRayToStopCoordAxis(rowsToApply, stopIndex, stopRadiusMm, wl, 'x');
         if (ray0y) {
@@ -317,6 +325,7 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
         }
     }
 
+    // Restore original semidia before writing computed values back.
     try {
         for (let i = 0; i < rowsToApply.length; i++) {
             const r = rowsToApply[i];
@@ -333,6 +342,7 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
         return { ok: false, reason: 'ray trace failed' };
     }
 
+    // Compute max radius per surface index (rayPath indexing follows gen-ray-cross-* mapping).
     const maxR = new Array(rowsToApply.length).fill(0);
     for (const p of paths) {
         for (let si = 0; si < rowsToApply.length; si++) {
@@ -346,6 +356,7 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
         }
     }
 
+    // Index blocks by blockId for canonical aperture writes.
     const blockById = new Map();
     try {
         if (Array.isArray(activeCfg.blocks)) {
@@ -356,6 +367,7 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
         }
     } catch (_) {}
 
+    // Persist stop radius into Stop block when possible.
     try {
         if (Array.isArray(activeCfg.blocks)) {
             const stopBlock = activeCfg.blocks.find(b => b && String(b.blockType ?? '') === 'Stop');
@@ -366,6 +378,8 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
         }
     } catch (_) {}
 
+    // Build semidiaOverrides (legacy support) and apply to current rowsToApply.
+    // IMPORTANT: Render is blocks-first, so we also write back into the block.aperture fields.
     const overrides = (activeCfg.semidiaOverrides && typeof activeCfg.semidiaOverrides === 'object') ? { ...activeCfg.semidiaOverrides } : {};
     const provKey = (row, surfaceIndex) => {
         const bid = String(row?._blockId ?? '').trim();
@@ -543,6 +557,8 @@ function derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthMi
 
     return { pupilDiameterMm, focalLengthMm };
 }
+import { getGlassDataWithSellmeier, findSimilarGlassesByNdVd, findSimilarGlassNames } from '../glass.js';
+import { normalizeDesign } from '../normalize-design.js';
 
 // Small shared helpers (used by load/apply flows)
 
@@ -2570,7 +2586,7 @@ function setupClearStorageButton() {
 function setupParaxialButton() {
     const paraxialBtn = document.getElementById('calculate-paraxial-btn');
     if (paraxialBtn) {
-        console.log('✅ 近軸計算ボタンが見つかりました');
+
         paraxialBtn.addEventListener('click', function() {
             console.log('📐 近軸計算ボタンがクリックされました');
             try {
@@ -2597,7 +2613,7 @@ function setupParaxialButton() {
 function setupSeidelButton() {
     const seidelBtn = document.getElementById('calculate-seidel-btn');
     if (seidelBtn) {
-        console.log('✅ Seidel係数計算ボタンが見つかりました');
+
         seidelBtn.addEventListener('click', function() {
             console.log('🔬 Seidel係数計算ボタンがクリックされました');
             try {
@@ -2622,7 +2638,7 @@ function setupSeidelButton() {
 async function setupSeidelAfocalButton() {
     const seidelAfocalBtn = document.getElementById('calculate-seidel-afocal-btn');
     if (seidelAfocalBtn) {
-        console.log('✅ Seidel係数計算（アフォーカル）ボタンが見つかりました');
+
         seidelAfocalBtn.addEventListener('click', async function() {
             console.log('🔬 Seidel係数計算（アフォーカル）ボタンがクリックされました');
             try {
@@ -2708,7 +2724,7 @@ async function setupSeidelAfocalButton() {
 function setupCoordinateTransformButton() {
     const coordBtn = document.getElementById('coord-transform-btn');
     if (coordBtn) {
-        console.log('✅ 座標変換ボタンが見つかりました');
+
         coordBtn.addEventListener('click', function() {
             console.log('🔄 座標変換ボタンがクリックされました');
             try {
@@ -2905,10 +2921,7 @@ function updateWavefrontObjectOptions() {
         });
         
         // デバッグ: 実際のObjectデータを確認
-        console.log('🔍 全Objectデータ:', objectData);
-        console.log('� 有効Objectデータ:', validObjectData);
-        console.log('�📊 全Objectデータ数:', objectData.length);
-        console.log('📊 有効Objectデータ数:', validObjectData.length);
+
         
         // ローカルストレージのデータが多すぎる場合の警告
         if (objectData.length > 6) {
@@ -3264,7 +3277,6 @@ function updateSurfaceNumberSelectLegacy() {
             const sig = `${surfaceOptions.length}::${String(defaultValue ?? '')}`;
             if (window.__lastSurfaceSelectSignature !== sig) {
                 window.__lastSurfaceSelectSignature = sig;
-                console.log(`✅ 面選択が${surfaceOptions.length}個のオプションで更新されました`);
             }
         }
     } catch (error) {
@@ -3357,7 +3369,7 @@ function setupSpotDiagramConfigSelect() {
  */
 function setupPSFCalculationButton() {
     const calculatePsfBtn = document.getElementById('calculate-psf-btn');
-    console.log('🔍 [PSF] setupPSFCalculationButton called, button found:', !!calculatePsfBtn);
+
     if (calculatePsfBtn) {
         calculatePsfBtn.addEventListener('click', async function() {
             await handlePSFCalculation(false); // 通常モード
@@ -3370,7 +3382,7 @@ function setupPSFCalculationButton() {
  */
 function setupDebugPSFCalculationButton() {
     const debugPsfBtn = document.getElementById('debug-psf-btn');
-    console.log('🔧 [DEBUG] setupDebugPSFCalculationButton called, button found:', !!debugPsfBtn);
+
     if (debugPsfBtn) {
         debugPsfBtn.addEventListener('click', async function() {
             await handlePSFCalculation(true); // デバッグモード
@@ -3577,17 +3589,29 @@ async function handlePSFCalculation(debugMode = false) {
             // PSFCalculator はシングルトンで再利用（WASM初期化を使い回す）
             const { createOPDCalculator, WavefrontAberrationAnalyzer } = await import('../eva-wavefront.js');
 
-            // PSF入力のOPDは「Zernikeでフィットした関数面」を直接サンプリングして作る
-            // - 数値的な外れ値除去/平滑化はしない
-            // - OPD表示仕様と同様に piston/tilt は除去、defocus は残す（usedCoefficientsMicrons）
-            if (PSF_DEBUG) console.log('📊 [PSF] Zernikeフィット面からOPD格子を生成中...');
+            // PSF入力のOPDは生の光線追跡データから直接補間して作る
+            // - Zernike近似を経由しないため、サンプリングの非対称性に影響されない
+            // - より正確なPSF計算が可能
+            if (PSF_DEBUG) console.log('📊 [PSF] 生OPDデータから格子を生成中...');
             const opdCalculator = createOPDCalculator(opticalSystemRows, wl);
             const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
+            
+            // CRITICAL: Force stop mode to match render behavior
+            try {
+                if (fieldSetting.type === 'Angle' || !fieldSetting.height) {
+                    opdCalculator._setInfinitePupilMode(fieldSetting, 'stop');
+                    if (PSF_DEBUG) console.log('🔑 [PSF] Forced stop mode for infinite field');
+                }
+            } catch (e) {
+                if (PSF_DEBUG) console.warn('⚠️ [PSF] Failed to set stop mode:', e);
+            }
+            
             const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, zernikeFitSamplingSize, 'circular', {
-                recordRays: false,
+                recordRays: true,  // 光線データを記録
                 progressEvery: 0,
                 zernikeMaxNoll: 36,
-                renderFromZernike: true,
+                renderFromZernike: false,  // 生OPDデータを使用
+                // Use raw OPD with geometric tilt, let PSF calculator remove it
                 cancelToken
             });
 
@@ -3600,79 +3624,67 @@ async function handlePSFCalculation(debugMode = false) {
                 throw err;
             }
 
-            // PSF: tilt は含める（pistonのみ 0）。
-            // eva-wavefront.js の usedCoefficientsMicrons は表示用に piston/tilt を除去しているため、
-            // ここではフィット係数（生）を一時的に使ってZernike面を評価する。
-            const model = wavefrontMap?.zernikeModel;
-            const savedUsed = model?.usedCoefficientsMicrons;
-            try {
-                if (model?.fitCoefficientsMicrons && typeof model.fitCoefficientsMicrons === 'object') {
-                    const coeffs = { ...model.fitCoefficientsMicrons };
-                    // piston (Noll 1) is irrelevant to PSF energy distribution; force to 0 for stability.
-                    coeffs[1] = 0;
-                    model.usedCoefficientsMicrons = coeffs;
-                }
-            } catch (_) {
-                // ignore
+            // 生の光線データを取得
+            const rawRays = wavefrontMap?.rayData || [];
+            if (!Array.isArray(rawRays) || rawRays.length === 0) {
+                throw new Error('光線データが取得できませんでした');
             }
 
-            const zGrid = analyzer.generateZernikeRenderGrid(wavefrontMap, psfSamplingSize, 'opd', { rhoMax: 1.0 });
+            // PSF計算器用のデータ形式に変換
+            // Use raw pupil coordinates as-is (already normalized by generateWavefrontMap)
+            const opdData = {
+                wavelength: wl,
+                rayData: rawRays.map(ray => ({
+                    pupilX: ray.pupilX || ray.x || 0,
+                    pupilY: ray.pupilY || ray.y || 0,
+                    opd: ray.opd || 0,
+                    isVignetted: ray.isVignetted || false
+                }))
+            };
+
+            // Prefer Zernike-fit piston+tilt removal for PSF input.
+            // This keeps the residual wavefront (higher-order terms) while aligning the reference plane.
+            // NOTE: Noll indexing here follows eva-wavefront.js (j=2 => sin, j=3 => cos).
+            const removePistonTiltByZernikeFit = (() => {
+                try {
+                    const coeffs = wavefrontMap?.zernike?.coefficientsMicrons;
+                    if (!coeffs || typeof coeffs !== 'object') return false;
+                    const c1 = Number(coeffs?.[1] ?? 0);
+                    const c2 = Number(coeffs?.[2] ?? 0);
+                    const c3 = Number(coeffs?.[3] ?? 0);
+                    if (![c1, c2, c3].some(Number.isFinite)) return false;
+
+                    const eps = 1e-12;
+                    for (const r of opdData.rayData) {
+                        const x = Number(r?.pupilX);
+                        const y = Number(r?.pupilY);
+                        const opd = Number(r?.opd);
+                        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(opd)) continue;
+                        const rho = Math.hypot(x, y);
+                        if (!(rho <= 1 + eps)) continue;
+                        const theta = Math.atan2(y, x);
+
+                        // Orthonormal Zernike (same normalization as eva-wavefront.js)
+                        const Z1 = 1.0;
+                        const Z2 = 2.0 * rho * Math.sin(theta); // Noll j=2 => m=-1
+                        const Z3 = 2.0 * rho * Math.cos(theta); // Noll j=3 => m=+1
+                        const plane = (Number.isFinite(c1) ? c1 * Z1 : 0) + (Number.isFinite(c2) ? c2 * Z2 : 0) + (Number.isFinite(c3) ? c3 * Z3 : 0);
+                        r.opd = opd - plane;
+                    }
+                    return true;
+                } catch {
+                    return false;
+                }
+            })();
+            
+            // Debug: Log first few rays to check pupilX/pupilY orientation
+            if (PSF_DEBUG && opdData.rayData.length > 0) {
+                console.log('🔍 [PSF Debug] First 5 rays:', opdData.rayData.slice(0, 5).map(r => 
+                    `(${r.pupilX.toFixed(3)}, ${r.pupilY.toFixed(3)}) opd=${r.opd.toFixed(3)}`
+                ));
+            }
 
             throwIfCancelled(cancelToken);
-
-            try {
-                if (model) model.usedCoefficientsMicrons = savedUsed;
-            } catch (_) {
-                // ignore
-            }
-            if (!zGrid || !Array.isArray(zGrid.z) || !Array.isArray(zGrid.z[0])) {
-                throw new Error('Zernike render grid generation failed');
-            }
-
-            const s = Math.max(2, Math.floor(Number(psfSamplingSize)));
-            // Row-major [y][x]
-            const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
-            const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
-            const maskGrid = Array.from({ length: s }, () => Array(s).fill(false));
-            const xCoords = new Float32Array(s);
-            const yCoords = new Float32Array(s);
-
-            for (let i = 0; i < s; i++) {
-                xCoords[i] = Number(zGrid.x?.[i] ?? ((i / (s - 1 || 1)) * 2 - 1));
-                yCoords[i] = Number(zGrid.y?.[i] ?? ((i / (s - 1 || 1)) * 2 - 1));
-            }
-
-            for (let iy = 0; iy < s; iy++) {
-                if ((iy % 32) === 0) {
-                    throwIfCancelled(cancelToken);
-                    await new Promise(resolve => setTimeout(resolve, 0));
-                }
-                const row = zGrid.z[iy];
-                for (let ix = 0; ix < s; ix++) {
-                    const vWaves = row?.[ix];
-                    if (vWaves === null || !isFinite(vWaves)) {
-                        maskGrid[iy][ix] = false;
-                        opdGrid[iy][ix] = 0;
-                        ampGrid[iy][ix] = 0;
-                        continue;
-                    }
-                    maskGrid[iy][ix] = true;
-                    opdGrid[iy][ix] = Number(vWaves) * wl;
-                    ampGrid[iy][ix] = 1.0;
-                }
-            }
-
-            const opdData = {
-                gridSize: s,
-                wavelength: wl,
-                gridData: {
-                    opd: opdGrid,
-                    amplitude: ampGrid,
-                    pupilMask: maskGrid,
-                    xCoords,
-                    yCoords
-                }
-            };
             
             // PSF計算器を初期化（WASM統合版）
             const psfCalculator = await getPSFCalculatorSingleton();
@@ -3690,7 +3702,8 @@ async function handlePSFCalculation(debugMode = false) {
                 pupilDiameter: 10.0, // mm（適切な値に調整）
                 focalLength: 100.0,   // mm（適切な値に調整）
                 forceImplementation: performanceMode === 'auto' ? null : performanceMode,
-                removeTilt: false
+                // If piston+tilt were already removed via Zernike fit, avoid removing again in PSF.
+                removeTilt: !removePistonTiltByZernikeFit
             }), cancelToken);
             
             // WASM使用状況をログ
@@ -4113,7 +4126,6 @@ function setupPSFDisplaySettings() {
     
     if (psfLogScaleCb) {
         psfLogScaleCb.addEventListener('change', updatePSFDisplay);
-        console.log('✅ [PSF] Log scale checkbox listener added');
     }
     if (psfContoursCb) {
         psfContoursCb.addEventListener('change', updatePSFDisplay);
@@ -4160,14 +4172,13 @@ function setupTableChangeListeners() {
     
     // PSF関連の機能は削除されました
     if (window.objectTabulator && typeof window.objectTabulator.on === 'function') {
-        console.log('✅ Object table listeners ready');
     } else {
         console.warn('⚠️ objectTabulator is not initialized or does not have .on method');
     }
     
     // tableObjectが利用可能な場合の確認
     if (window.tableObject && typeof window.tableObject.on === 'function') {
-        console.log('✅ tableObject listeners ready');
+
     }
 }
 
@@ -4186,7 +4197,6 @@ function waitForTableInitialization() {
                 window.tableObject && 
                 typeof window.tableObject.on === 'function') {
                 clearInterval(checkInterval);
-                console.log('✅ All tables are initialized');
                 window.__tableInitReady = true;
                 resolve();
             }
@@ -4214,18 +4224,12 @@ function tryInitializePSF() {
     
     function attemptInitialization() {
         initAttempts++;
-        console.log(`🕒 PSF初期化試行 ${initAttempts}/${maxAttempts}`);
         
         const objectRows = getObjectRows();
         if (objectRows && objectRows.length > 0) {
-            console.log('✅ オブジェクトデータが見つかりました');
             // PSF機能は削除されました
         } else if (initAttempts < maxAttempts) {
-            console.log('⏳ オブジェクトデータの準備ができていません、200ms後に再試行...');
             setTimeout(attemptInitialization, 200);
-        } else {
-            console.warn('⚠️ 最大試行回数後に初期化が完了しませんでした');
-            // PSF機能は削除されました
         }
     }
     
@@ -4694,7 +4698,7 @@ export function setupDOMEventHandlers() {
     // Guard: avoid registering the same UI/table listeners multiple times.
     // Some load flows can call this more than once.
     if (window.__domEventHandlersInitialized) {
-        console.log('ℹ️ DOM event handlers already initialized; skipping re-bind');
+
         return;
     }
     window.__domEventHandlersInitialized = true;
@@ -4709,9 +4713,6 @@ export function setupDOMEventHandlers() {
             debugWASMSystem();
             setTimeout(() => quickWASMComparison(), 1000);
         });
-        console.log('✅ WASM test button handler set up');
-    } else {
-        console.warn('⚠️ WASM test button not found');
     }
     
     // グローバルアクセス用にテーブルオブジェクトを設定
@@ -4795,7 +4796,7 @@ export function setupDOMEventHandlers() {
         });
         setupPSFDisplayModeButtons(); // PSF表示モード切り替えボタンのセットアップ
         
-        console.log('✅ UIイベントハンドラーが正常に設定されました');
+
     } catch (error) {
         console.error('❌ UIイベントハンドラー設定エラー:', error);
     }
@@ -4807,8 +4808,6 @@ export function setupDOMEventHandlers() {
     
     // テーブル初期化待機
     waitForTableInitialization().then(() => {
-        console.log('✅ テーブル初期化完了');
-        
         // PSF設定のイベントリスナーを遅延設定（DOM要素が確実に存在するように）
         setTimeout(() => {
             setupPSFDisplaySettings();
@@ -4984,8 +4983,11 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
         const performanceMode = forcedMode !== undefined ? forcedMode : selectedMode;
 
         // OPDデータを計算
-        // PSF入力のOPDは「Zernikeでフィットした関数面」を直接サンプリングして作る
-        if (PSF_DEBUG) console.log('📊 [PSF] Zernikeフィット面からOPD格子を生成中...');
+        // OPD表示と同じ固定条件でPSF入力格子を生成する:
+        // - opdMode: referenceSphere
+        // - Zernike fit なし
+        // - piston+tilt removed
+        if (PSF_DEBUG) console.log('📊 [PSF] Fixed wavefront map (referenceSphere/no-Zernike/piston+tilt removed) からOPD格子を生成中...');
         const { WavefrontAberrationAnalyzer } = await import('../eva-wavefront.js');
         const opdCalculator = createOPDCalculator(opticalSystemRows, wavelength);
         const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
@@ -5037,18 +5039,18 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
         }
         
         const psfSamplingSize = Number.isFinite(Number(samplingSize)) ? Math.max(16, Math.floor(Number(samplingSize))) : 64;
-        // Zernikeフィット用サンプリング（未指定ならPSFと同じ）
-        const zernikeSelect = document.getElementById('psf-zernike-sampling-select');
-        const zernikeFitSamplingSize = (options && Number.isFinite(Number(options.zernikeFitSamplingSize)))
-            ? Math.max(16, Math.floor(Number(options.zernikeFitSamplingSize)))
-            : (zernikeSelect ? Math.max(16, Math.floor(Number(zernikeSelect.value))) : psfSamplingSize);
 
         emitProgress(0, 'wavefront', 'Wavefront start');
-        const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, zernikeFitSamplingSize, 'circular', {
+        const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, psfSamplingSize, 'circular', {
             recordRays: false,
             progressEvery: 0,
             zernikeMaxNoll: 37,
-            renderFromZernike: true,
+            renderFromZernike: false,
+            skipZernikeFit: true,
+            opdMode: 'referenceSphere',
+            opdDisplayMode: 'pistonTiltRemoved',
+            diagnoseDiscontinuities: PSF_DEBUG,
+            diagTopK: 8,
             cancelToken,
             onProgress: (evt) => {
                 const p = Number(evt?.percent);
@@ -5070,45 +5072,76 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
             throw new Error(wavefrontMap.error?.message || 'Wavefront generation failed');
         }
 
-        // NOTE: PSF入力格子は psfSamplingSize と同じ解像度で「Zernike面」を評価して作る（補間を避ける）。
-        // PSFは通常、piston/tilt を除去した波面（chief ray 基準）で評価する。
-        const zGrid = analyzer.generateZernikeRenderGrid(wavefrontMap, psfSamplingSize, 'opd', { rhoMax: 1.0 });
-
-        throwIfCancelled(cancelToken);
-
-        if (!zGrid || !Array.isArray(zGrid.z) || !Array.isArray(zGrid.z[0])) {
-            throw new Error('Zernike render grid generation failed');
-        }
-
+        // PSF入力格子は、PSFサンプリングと同じ解像度で「波面マップのサンプル値」を格子に詰め直して作る。
+        // ここでは piston+tilt removed の display OPD を使用する（defocus は残す）。
         const s = Math.max(2, Math.floor(Number(psfSamplingSize)));
-            // Row-major [y][x]
-            const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
-            const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
-            const maskGrid = Array.from({ length: s }, () => Array(s).fill(false));
+        // Row-major [y][x]
+        const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
+        const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
+        const maskGrid = Array.from({ length: s }, () => Array(s).fill(false));
         const xCoords = new Float32Array(s);
         const yCoords = new Float32Array(s);
+
+        const pupilRange = (Number.isFinite(Number(wavefrontMap?.pupilRange)) && Number(wavefrontMap.pupilRange) > 0)
+            ? Number(wavefrontMap.pupilRange)
+            : 1.0;
         for (let i = 0; i < s; i++) {
-            xCoords[i] = Number(zGrid.x?.[i] ?? ((i / (s - 1 || 1)) * 2 - 1));
-            yCoords[i] = Number(zGrid.y?.[i] ?? ((i / (s - 1 || 1)) * 2 - 1));
+            const t = (i / (s - 1 || 1)) * 2 - 1;
+            xCoords[i] = t * pupilRange;
+            yCoords[i] = t * pupilRange;
         }
 
-        for (let iy = 0; iy < s; iy++) {
-            if ((iy % 32) === 0) {
+        const coords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
+        const opdMicrons = (wavefrontMap?.display && Array.isArray(wavefrontMap.display.opds))
+            ? wavefrontMap.display.opds
+            : (Array.isArray(wavefrontMap?.opds) ? wavefrontMap.opds : []);
+        const n = Math.min(coords.length, opdMicrons.length);
+        for (let k = 0; k < n; k++) {
+            if ((k % 1024) === 0) {
                 throwIfCancelled(cancelToken);
-                await new Promise(resolve => setTimeout(resolve, 0));
             }
-            const row = zGrid.z[iy];
-            for (let ix = 0; ix < s; ix++) {
-                const vWaves = row?.[ix];
-                if (vWaves === null || !isFinite(vWaves)) {
-                    maskGrid[iy][ix] = false;
-                    opdGrid[iy][ix] = 0;
-                    ampGrid[iy][ix] = 0;
-                    continue;
+            const c = coords[k];
+            const ix = Number.isInteger(c?.ix) ? c.ix : null;
+            const iy = Number.isInteger(c?.iy) ? c.iy : null;
+            if (ix === null || iy === null) continue;
+            if (ix < 0 || ix >= s || iy < 0 || iy >= s) continue;
+            const vMicrons = Number(opdMicrons[k]);
+            if (!Number.isFinite(vMicrons)) continue;
+            maskGrid[iy][ix] = true;
+            opdGrid[iy][ix] = vMicrons;
+            ampGrid[iy][ix] = 1.0;
+        }
+
+        if (PSF_DEBUG) {
+            try {
+                let valid = 0;
+                let sum = 0;
+                let sum2 = 0;
+                let min = Infinity;
+                let max = -Infinity;
+                for (let iy = 0; iy < s; iy++) {
+                    for (let ix = 0; ix < s; ix++) {
+                        if (!maskGrid[iy][ix]) continue;
+                        const v = opdGrid[iy][ix];
+                        if (!Number.isFinite(v)) continue;
+                        valid++;
+                        sum += v;
+                        sum2 += v * v;
+                        if (v < min) min = v;
+                        if (v > max) max = v;
+                    }
                 }
-                maskGrid[iy][ix] = true;
-                opdGrid[iy][ix] = Number(vWaves) * Number(wavelength);
-                ampGrid[iy][ix] = 1.0;
+                const mean = valid ? (sum / valid) : NaN;
+                const rms = valid ? Math.sqrt(Math.max(0, sum2 / valid - mean * mean)) : NaN;
+                const ptp = (Number.isFinite(min) && Number.isFinite(max)) ? (max - min) : NaN;
+                const rmsW = (Number.isFinite(rms) && Number.isFinite(wavelength) && wavelength > 0) ? (rms / wavelength) : NaN;
+                const ptpW = (Number.isFinite(ptp) && Number.isFinite(wavelength) && wavelength > 0) ? (ptp / wavelength) : NaN;
+                console.log(`📌 [PSF] OPD grid stats: valid=${valid}/${s * s} (${(100 * valid / (s * s)).toFixed(1)}%) rms=${rms.toExponential(3)}µm (${rmsW.toExponential(3)}λ) ptp=${ptp.toExponential(3)}µm (${ptpW.toExponential(3)}λ)`);
+                if (wavefrontMap?.pupilMaskStats) {
+                    console.log('📌 [PSF] pupilMaskStats:', wavefrontMap.pupilMaskStats);
+                }
+            } catch (_) {
+                // ignore
             }
         }
 
@@ -5142,7 +5175,9 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
             pupilDiameter: pupilDiameterMm,
             focalLength: focalLengthMm,
             forceImplementation: performanceMode === 'auto' ? null : performanceMode,
-            removeTilt: true,
+            // Zernike render already removes piston+tilt (Noll 1..3) in eva-wavefront.js.
+            // Avoid double-detrending here.
+            removeTilt: false,
             onProgress: (evt) => {
                 const p = Number(evt?.percent);
                 const msg = evt?.message || evt?.phase || 'PSF...';
@@ -5391,24 +5426,25 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     // Match Spherical Aberration diagram color mapping.
     const getColorForWavelength = (wavelength) => {
         if (wavelength < 0.45) {
-            return '#8B00FF';
+            return '#8B00FF'; // violet (380-450nm)
         } else if (wavelength < 0.495) {
-            return '#0000FF';
+            return '#0000FF'; // blue (450-495nm)
         } else if (wavelength < 0.57) {
-            return '#00FF00';
+            return '#00FF00'; // green (495-570nm)
         } else if (wavelength < 0.59) {
-            return '#9ACD32';
+            return '#9ACD32'; // yellow-green (570-590nm)
         } else if (wavelength < 0.62) {
-            return '#FF8800';
+            return '#FF8800'; // orange (590-620nm)
         } else {
-            return '#FF0000';
+            return '#FF0000'; // red (620-750nm)
         }
     };
 
     const reportProgress = (percent, message) => {
         try {
             if (typeof onProgress !== 'function') return;
-            onProgress({ percent, message });
+            const evt = { percent, message };
+            onProgress(evt);
         } catch (_) {}
     };
 
@@ -5426,6 +5462,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
 
     const isPowerOfTwo = (n) => Number.isInteger(n) && n > 0 && (n & (n - 1)) === 0;
     const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+    // samplingSize is the FFT grid size (NxN). Legacy samplingPoints is treated as alias when it looks like a valid grid size.
     const samplingCandidate = Math.floor(safeNumber(samplingSize, NaN));
     const legacyCandidate = Math.floor(safeNumber(samplingPoints, NaN));
     const gridCandidate = Number.isFinite(samplingCandidate) ? samplingCandidate : legacyCandidate;
@@ -5439,6 +5476,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
 
     reportProgress(0, 'Starting...');
 
+    // Prefer Plotly from the container's window (popup), fallback to opener.
     const plotly = containerEl?.ownerDocument?.defaultView?.Plotly || (typeof window !== 'undefined' ? window.Plotly : null);
     if (!plotly) {
         throw new Error('Plotly is not available');
@@ -5446,12 +5484,14 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
 
     reportProgress(5, 'Loading modules...');
 
+    // Dynamic imports (reuse the same infra as PSF)
     const { createOPDCalculator } = await import('../eva-wavefront.js?v=2026-01-07a');
     const { WavefrontAberrationAnalyzer } = await import('../eva-wavefront.js?v=2026-01-07a');
     const { SimpleFFT } = await import('../eva-psf.js?v=2026-01-07a');
 
     reportProgress(10, 'Preparing optical system...');
 
+    // Optical system and objects (live table preferred)
     const opticalSystemRows = getOpticalSystemRows(window.tableOpticalSystem);
     if (!opticalSystemRows || opticalSystemRows.length === 0) {
         throw new Error('光学システムデータがありません。まず光学システムを設定してください。');
@@ -5480,6 +5520,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
         yHeight = safeNumber(objectY, 0);
     }
 
+    // Meridional/Sagittal: without directional interpolation, choose the nearest principal axis
+    // based on field direction (x-dominant => meridional=x, otherwise meridional=y).
     const fieldVecRaw = (/\bangle\b/.test(objectTypeLower))
         ? { x: safeNumber(fieldAngle?.x, 0), y: safeNumber(fieldAngle?.y, 0) }
         : { x: safeNumber(xHeight, 0), y: safeNumber(yHeight, 0) };
@@ -5609,6 +5651,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             }
         };
 
+        // IMPORTANT: For MTF vs spatial frequency (lp/mm), keep pixelSize independent of FFT grid.
         const preferEntrancePupilForMTF = /\bangle\b/.test(objectTypeLower);
         const derivedMTFScale = derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wlLocal, preferEntrancePupilForMTF);
         const pupilDiameterMm = derivedMTFScale.pupilDiameterMm;
@@ -5625,7 +5668,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             focalLength: focalLengthMm,
             pixelSize: pixelSizeMicronsForMTF,
             forceImplementation: null,
-            removeTilt: true
+            // Zernike render already removes piston+tilt (Noll 1..3) in eva-wavefront.js.
+            // Avoid double-detrending here.
+            removeTilt: false
         });
 
         reportProgress(localBase + localSpan * 0.85, `λ=${titleNmLocal} nm: Computing OTF/MTF...`);
@@ -7439,6 +7484,7 @@ function __blocks_setBlockParamValueAllConfigs(blockId, key, rawValue) {
     }
 
     if (missing.length > 0) {
+        // Roll back any changes.
         try {
             for (const cfg of (systemConfig.configurations || [])) {
                 if (!cfg || !Array.isArray(cfg.blocks)) continue;
@@ -7454,12 +7500,14 @@ function __blocks_setBlockParamValueAllConfigs(blockId, key, rawValue) {
         };
     }
 
+    // Validate each config; if fatal, rollback that config.
     try {
         for (const cfg of (systemConfig.configurations || [])) {
             if (!cfg || !Array.isArray(cfg.blocks)) continue;
             const issues = validateBlocksConfiguration(cfg);
             const fatals = issues.filter(i => i && i.severity === 'fatal');
             if (fatals.length > 0) {
+                // rollback mutated key
                 try {
                     for (const cfg2 of (systemConfig.configurations || [])) {
                         if (!cfg2 || !Array.isArray(cfg2.blocks)) continue;
@@ -7474,7 +7522,9 @@ function __blocks_setBlockParamValueAllConfigs(blockId, key, rawValue) {
                 return { ok: false, reason: 'block validation failed.' };
             }
         }
-    } catch (_) {}
+    } catch (_) {
+        // ignore
+    }
 
     try {
         for (const cfg of (systemConfig.configurations || [])) {
@@ -7663,6 +7713,8 @@ function __blocks_setVarMode(blockId, key, enabled, scope = 'perConfig') {
             ? (systemConfig.configurations || [])
             : [systemConfig.configurations.find(c => c && c.id === activeId) || systemConfig.configurations[0]];
 
+        // If making a variable global/shared, prefer syncing numeric parameter values across configs
+        // to avoid inconsistent starting states (which can look like "doesn't converge").
         let sharedNumericValue = null;
         if (enabled && scope === 'global') {
             try {
@@ -7693,6 +7745,7 @@ function __blocks_setVarMode(blockId, key, enabled, scope = 'perConfig') {
             b.variables[key].optimize.mode = enabled ? 'V' : 'F';
             b.variables[key].optimize.scope = (scope === 'global') ? 'global' : 'perConfig';
 
+            // Sync numeric value when switching to global.
             if (sharedNumericValue !== null && scope === 'global') {
                 try {
                     if (!b.parameters || typeof b.parameters !== 'object') b.parameters = {};
@@ -8242,6 +8295,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                         ? (Number(window.getPrimaryWavelength()) || 0.5876)
                                         : 0.5876;
 
+                                    // Prefer System Requirements target (when present) so this can
+                                    // directly satisfy the IMD/BFL requirement for the active config.
+                                    // Fallback: compute from current system.
                                     let val = __blocks_findRequirementTarget(desired, activeId);
                                     if (!Number.isFinite(val)) {
                                         val = (desired === 'BFL')
@@ -8254,6 +8310,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                         return;
                                     }
 
+                                    // If the thickness variable is marked Shared(all configs), apply the
+                                    // same thickness across configs to avoid per-config drift.
                                     const thScope = __blocks_getVarScope(vars?.thickness);
                                     const res2 = (thScope === 'global')
                                         ? __blocks_setBlockParamValueAllConfigs(blockId, 'thickness', val)
@@ -8470,7 +8528,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             });
 
                             const left = document.createElement('div');
-                            left.textContent = `${i + 1}. ${String(g.name)}`;
+                            const manufacturer = g.manufacturer ? ` [${g.manufacturer}]` : '';
+                            left.textContent = `${i + 1}. ${String(g.name)}${manufacturer}`;
                             const right = document.createElement('div');
                             right.style.color = '#777';
                             right.style.fontSize = '11px';
@@ -8521,7 +8580,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             });
 
                             const left = document.createElement('div');
-                            left.textContent = `${i + 1}. ${String(g.name)}`;
+                            const manufacturer = g.manufacturer ? ` [${g.manufacturer}]` : '';
+                            left.textContent = `${i + 1}. ${String(g.name)}${manufacturer}`;
                             const right = document.createElement('div');
                             right.style.color = '#777';
                             right.style.fontSize = '11px';

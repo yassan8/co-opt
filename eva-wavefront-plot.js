@@ -179,12 +179,14 @@ export class WavefrontPlotter {
                 progressEvery: 0,
                 diagnoseDiscontinuities,
                 diagTopK: 5,
-                // Default to reference-sphere OPD so the displayed wavefront matches PSF/Strehl semantics.
-                // Caller can override via options.opdMode.
-                opdMode: options?.opdMode || 'referenceSphere',
+                // OPD is fixed to reference-sphere semantics.
+                opdMode: 'referenceSphere',
                 zernikeMaxNoll: 37,
-                // Display raw OPD data (same as Heatmap)
+                // OPD is fixed to raw-grid computation (no Zernike fit).
+                skipZernikeFit: true,
                 renderFromZernike: false,
+                // OPD display is fixed to piston+tilt removed (defocus kept).
+                opdDisplayMode: 'pistonTiltRemoved',
                 profile: profileEnabled,
                 cancelToken: options?.cancelToken || null,
                 onProgress: options?.onProgress || null
@@ -227,54 +229,23 @@ export class WavefrontPlotter {
             // Keep System Data consistent with Heatmap mode
             this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
 
-            // Plotly用のデータに変換
-            // 3D surfaceの円周ギザギザを抑えるため、Zernike関数面を高密度サンプリングして描画（計算グリッドは変更しない）
-            let surfaceData;
-            try {
-                const baseG = Math.floor(Number(wavefrontMap?.gridSize)) || 16;
-                // Default is intentionally capped for performance; override via:
-                //   globalThis.__WAVEFRONT_RENDER_GRID_MAX = 401
-                //   globalThis.__WAVEFRONT_RENDER_GRID_SCALE = 4
-                const renderGridMax = (typeof globalThis !== 'undefined' && Number.isFinite(globalThis.__WAVEFRONT_RENDER_GRID_MAX))
-                    ? Math.max(33, Math.floor(Number(globalThis.__WAVEFRONT_RENDER_GRID_MAX)))
-                    : 257;
-                const renderGridScale = (typeof globalThis !== 'undefined' && Number.isFinite(globalThis.__WAVEFRONT_RENDER_GRID_SCALE))
-                    ? Math.max(1, Number(globalThis.__WAVEFRONT_RENDER_GRID_SCALE))
-                    : 3;
-                const renderG = Math.max(129, Math.min(renderGridMax, Math.floor(baseG * renderGridScale - 2)));
+            // If display mode is enabled, plot the transformed OPD arrays.
+            const displayMode = 'pistonTiltRemoved';
+            const mapForPlot = (displayMode === 'pistonTiltRemoved' && wavefrontMap?.display?.opdsInWavelengths)
+                ? {
+                    ...wavefrontMap,
+                    opds: wavefrontMap.display.opds,
+                    opdsInWavelengths: wavefrontMap.display.opdsInWavelengths,
+                    wavefrontAberrations: wavefrontMap.display.wavefrontAberrations
+                }
+                : wavefrontMap;
 
-                let dense = null;
-                if (wavefrontMap?.renderFromZernike && typeof analyzer.generateZernikeRenderGrid === 'function') {
-                    if (profileEnabled) console.time('⏱️ plotOPDSurface.generateZernikeRenderGrid');
-                    const useWavefrontMask = (wavefrontMap?.pupilSamplingMode && wavefrontMap.pupilSamplingMode !== 'finite');
-                    dense = analyzer.generateZernikeRenderGrid(wavefrontMap, renderG, 'opd', { rhoMax: 0.99, useWavefrontMask });
-                    if (profileEnabled) console.timeEnd('⏱️ plotOPDSurface.generateZernikeRenderGrid');
-                }
-                if (dense && dense.x && dense.y && dense.z) {
-                    surfaceData = {
-                        type: 'surface',
-                        x: dense.x,
-                        y: dense.y,
-                        z: dense.z,
-                        colorscale: 'RdBu',
-                        reversescale: true,
-                        showscale: true,
-                        colorbar: { title: 'OPD [λ]' },
-                        flatshading: false,
-                        lighting: {
-                            ambient: 0.85,
-                            diffuse: 0.85,
-                            specular: 0.03,
-                            roughness: 0.95,
-                            fresnel: 0.05
-                        }
-                    };
-                } else {
-                    surfaceData = this.convertToPlotlySurfaceData(wavefrontMap, 'opd');
-                }
-            } catch (_) {
-                surfaceData = this.convertToPlotlySurfaceData(wavefrontMap, 'opd');
-            }
+            // Plotly用のデータに変換
+            // OPD is fixed to raw-grid rendering (no Zernike surface rendering).
+            let surfaceData = this.convertToPlotlySurfaceData(mapForPlot, 'opd', { rawMode: true });
+
+            // Plotly側で描画行列を入れ替え（z転置）
+            surfaceData = this._transposeZForPlotly(surfaceData);
 
             // プロット設定
             const layout = {
@@ -348,7 +319,14 @@ export class WavefrontPlotter {
             }
 
             // 統計情報を表示
-            this.displayStatistics(wavefrontMap.statistics.opdWavelengths, 'OPD', 'λ');
+            {
+                // IMPORTANT: Stats must match what is plotted.
+                // OPD is fixed to piston+tilt removed display (fallback to raw if missing).
+                const stats = wavefrontMap?.statistics?.display?.opdWavelengths
+                    ? wavefrontMap.statistics.display.opdWavelengths
+                    : (wavefrontMap?.statistics?.raw?.opdWavelengths || wavefrontMap?.statistics?.opdWavelengths);
+                this.displayStatistics(stats, 'OPD', 'λ');
+            }
 
             console.log('✅ OPD 3Dサーフェスプロット生成完了');
             return wavefrontMap;
@@ -472,10 +450,10 @@ export class WavefrontPlotter {
                         }
                     };
                 } else {
-                    surfaceData = this.convertToPlotlySurfaceData(wavefrontMap, 'wavefront');
+                    surfaceData = this.convertToPlotlySurfaceData(wavefrontMap, 'wavefront', { rawMode: false });
                 }
             } catch (_) {
-                surfaceData = this.convertToPlotlySurfaceData(wavefrontMap, 'wavefront');
+                surfaceData = this.convertToPlotlySurfaceData(wavefrontMap, 'wavefront', { rawMode: false });
             }
 
             // プロット設定
@@ -587,11 +565,14 @@ export class WavefrontPlotter {
                 progressEvery: 0,
                 diagnoseDiscontinuities,
                 diagTopK: 5,
-                // Default to reference-sphere OPD so the displayed wavefront matches PSF/Strehl semantics.
-                // Caller can override via options.opdMode.
-                opdMode: options?.opdMode || 'referenceSphere',
+                // OPD is fixed to reference-sphere semantics.
+                opdMode: 'referenceSphere',
                 zernikeMaxNoll: 37,
                 renderFromZernike: false,
+                // OPD is fixed to raw-grid computation (no Zernike fit).
+                skipZernikeFit: true,
+                // OPD display is fixed to piston+tilt removed (defocus kept).
+                opdDisplayMode: 'pistonTiltRemoved',
                 cancelToken: options?.cancelToken || null,
                 onProgress: options?.onProgress || null,
                 profile: profileEnabled
@@ -605,7 +586,17 @@ export class WavefrontPlotter {
                 throw new Error('有効な光線データがありません。光学系設定を確認してください。');
             }
             // ヒートマップ用のデータに変換
-            const heatmapData = this.convertToPlotlyHeatmapData(wavefrontMap, 'opd', gridSize);
+            // If display mode is enabled, plot the transformed OPD arrays.
+            const displayMode = 'pistonTiltRemoved';
+            const mapForPlot = (displayMode === 'pistonTiltRemoved' && wavefrontMap?.display?.opdsInWavelengths)
+                ? {
+                    ...wavefrontMap,
+                    opds: wavefrontMap.display.opds,
+                    opdsInWavelengths: wavefrontMap.display.opdsInWavelengths,
+                    wavefrontAberrations: wavefrontMap.display.wavefrontAberrations
+                }
+                : wavefrontMap;
+            const heatmapData = this.convertToPlotlyHeatmapData(mapForPlot, 'opd', gridSize, { rawMode: true });
             
             // 🆕 実際のデータ範囲に基づいて軸範囲を設定
             const xRange = heatmapData.x.length > 0 ? [Math.min(...heatmapData.x) - 0.1, Math.max(...heatmapData.x) + 0.1] : [-1.1, 1.1];
@@ -645,7 +636,15 @@ export class WavefrontPlotter {
             delete layout.height;
             await plotly.newPlot(container, [heatmapData], layout, this.plotlyConfig);
             // 統計情報を表示
-            this.displayStatistics(wavefrontMap.statistics.opdWavelengths, 'OPD', 'λ');
+            {
+                // IMPORTANT: Stats must match what is plotted.
+                // - Zernike fit OFF(raw): plot shows raw OPD → show raw stats.
+                // - Zernike fit ON: plot shows OPD after removedModel (default piston) → show primary stats.
+                const stats = wavefrontMap?.statistics?.display?.opdWavelengths
+                    ? wavefrontMap.statistics.display.opdWavelengths
+                    : (wavefrontMap?.statistics?.raw?.opdWavelengths || wavefrontMap?.statistics?.opdWavelengths);
+                this.displayStatistics(stats, 'OPD', 'λ');
+            }
             console.log('✅ OPD ヒートマップ生成完了');
             return wavefrontMap;
         } catch (error) {
@@ -684,7 +683,7 @@ export class WavefrontPlotter {
                 throw new Error('有効な光線データがありません。光学系設定を確認してください。');
             }
 
-            const heatmapData = this.convertToPlotlyHeatmapData(wavefrontMap, 'wavefront', gridSize);
+            const heatmapData = this.convertToPlotlyHeatmapData(wavefrontMap, 'wavefront', gridSize, { rawMode: false });
             const xRange = heatmapData.x.length > 0 ? [Math.min(...heatmapData.x) - 0.1, Math.max(...heatmapData.x) + 0.1] : [-1.1, 1.1];
             const yRange = heatmapData.y.length > 0 ? [Math.min(...heatmapData.y) - 0.1, Math.max(...heatmapData.y) + 0.1] : [-1.1, 1.1];
 
@@ -809,24 +808,93 @@ export class WavefrontPlotter {
         }
     }
 
+    _median(values) {
+        const v = Array.isArray(values) ? values.filter(n => Number.isFinite(n)).slice() : [];
+        const n = v.length;
+        if (!n) return NaN;
+        v.sort((a, b) => a - b);
+        const mid = Math.floor(n / 2);
+        return (n % 2) ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+    }
+
+    _filterOutliersMAD(values, {
+        label = 'values',
+        madK = null,
+        absMax = null,
+        minScale = null
+    } = {}) {
+        try {
+            if (!Array.isArray(values) || values.length === 0) return values;
+            const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+            if (g && g.__WAVEFRONT_DISABLE_OUTLIER_FILTER === true) return values;
+
+            const finite = values.filter(v => Number.isFinite(v));
+            if (finite.length < 16) return values;
+
+            const median = this._median(finite);
+            if (!Number.isFinite(median)) return values;
+
+            const absDev = finite.map(v => Math.abs(v - median));
+            const mad = this._median(absDev);
+            const scale = Number.isFinite(mad) ? (1.4826 * mad) : NaN;
+
+            const k = Number.isFinite(madK)
+                ? Number(madK)
+                : (g && Number.isFinite(g.__WAVEFRONT_OUTLIER_MAD_K) ? Number(g.__WAVEFRONT_OUTLIER_MAD_K) : 8);
+            const hardAbs = Number.isFinite(absMax)
+                ? Number(absMax)
+                : (g && Number.isFinite(g.__WAVEFRONT_OUTLIER_ABS_MAX) ? Number(g.__WAVEFRONT_OUTLIER_ABS_MAX) : 60);
+            const eps = Number.isFinite(minScale)
+                ? Number(minScale)
+                : (g && Number.isFinite(g.__WAVEFRONT_OUTLIER_MIN_SCALE) ? Number(g.__WAVEFRONT_OUTLIER_MIN_SCALE) : 1e-6);
+
+            const sigma = Number.isFinite(scale) ? Math.max(eps, scale) : eps;
+            const cutoff = Math.max(eps, sigma * Math.max(1, k));
+
+            let outliers = 0;
+            const out = values.slice();
+            for (let i = 0; i < out.length; i++) {
+                const v = out[i];
+                if (!Number.isFinite(v)) continue;
+                if (Math.abs(v - median) > cutoff || Math.abs(v) > hardAbs) {
+                    out[i] = NaN;
+                    outliers++;
+                }
+            }
+
+            if (outliers > 0) {
+                console.log(`🧹 [WavefrontPlot] outlier filter (${label}): removed=${outliers}/${values.length}, median=${median.toFixed(4)}, mad=${Number.isFinite(mad) ? mad.toFixed(4) : 'NaN'}, cutoff=${cutoff.toFixed(4)}`);
+            }
+            return out;
+        } catch (_) {
+            return values;
+        }
+    }
+
     /**
      * 波面収差マップをPlotly 3Dサーフェス用データに変換
      * @param {Object} wavefrontMap - 波面収差マップ
      * @param {string} dataType - データタイプ ('opd' または 'wavefront')
      * @returns {Object} Plotly 3Dサーフェスデータ
      */
-    convertToPlotlySurfaceData(wavefrontMap, dataType = 'wavefront') {
+    convertToPlotlySurfaceData(wavefrontMap, dataType = 'wavefront', options = {}) {
         const { pupilCoordinates, wavefrontAberrations, opdsInWavelengths } = wavefrontMap;
-        const values = dataType === 'opd' ? opdsInWavelengths : wavefrontAberrations;
+        const valuesRaw = dataType === 'opd' ? opdsInWavelengths : wavefrontAberrations;
+
+        const rawMode = !!options?.rawMode;
+
+        // Drop rare extreme spikes before gridding/interpolation (treat as missing).
+        const values = this._filterOutliersMAD(valuesRaw, { label: `${dataType}:${rawMode ? 'raw' : 'interp'}:surface` });
 
         // まず「元のグリッド」に確実に戻す（X/Y入れ替え・補間アーティファクト回避）
-        const regular = this._tryBuildRegularGrid(wavefrontMap, values, null, { fillHoles: true });
+        const regular = this._tryBuildRegularGrid(wavefrontMap, values, null, { fillHoles: !rawMode });
         if (regular) {
             return {
                 type: 'surface',
                 x: regular.x,
                 y: regular.y,
                 z: regular.z,
+                connectgaps: false,
                 colorscale: 'RdBu',
                 reversescale: true,
                 showscale: true,
@@ -863,6 +931,58 @@ export class WavefrontPlotter {
         
         console.log(`📊 グリッドサイズ: X=${uniqueX.length}, Y=${uniqueY.length}`);
         
+        // rawMode では補間しない（生値確認が目的のため）
+        if (rawMode) {
+            // Use the observed unique grid and only exact matches; missing cells remain null.
+            const zGrid = [];
+            let validCells = 0;
+            let nullCells = 0;
+
+            for (let j = 0; j < uniqueY.length; j++) {
+                const row = [];
+                for (let i = 0; i < uniqueX.length; i++) {
+                    const x = uniqueX[i];
+                    const y = uniqueY[j];
+                    const radius = Math.sqrt(x * x + y * y);
+                    if (radius > 1.0 + 1e-9) {
+                        row.push(null);
+                        nullCells++;
+                        continue;
+                    }
+
+                    const exactMatch = validCoords.find(c =>
+                        Math.abs(c.x - x) < 1e-10 && Math.abs(c.y - y) < 1e-10
+                    );
+                    if (exactMatch) {
+                        const index = validCoords.indexOf(exactMatch);
+                        row.push(validValues[index]);
+                        validCells++;
+                    } else {
+                        row.push(null);
+                        nullCells++;
+                    }
+                }
+                zGrid.push(row);
+            }
+
+            console.log(`📊 [RawMode] grid cells: valid=${validCells}, null=${nullCells}, total=${validCells + nullCells}`);
+
+            const out = {
+                type: 'surface',
+                x: uniqueX,
+                y: uniqueY,
+                z: zGrid,
+                connectgaps: false,
+                colorscale: 'RdBu',
+                reversescale: true,
+                showscale: true,
+                colorbar: {
+                    title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [波長]'
+                }
+            };
+            return this._transposeZForPlotly(out);
+        }
+
         // 🆕 密度が低い場合は補間用のより密なグリッドを生成
         let interpolatedX = uniqueX;
         let interpolatedY = uniqueY;
@@ -900,7 +1020,7 @@ export class WavefrontPlotter {
                 
                 // 円形マスクの適用
                 const radius = Math.sqrt(x * x + y * y);
-                if (radius > 1.05) { // 瞳境界外
+                if (radius > 1.0 + 1e-9) { // 瞳境界外
                     row.push(null);
                     nullCells++;
                     continue;
@@ -940,11 +1060,12 @@ export class WavefrontPlotter {
             console.log(`📊 Z値範囲: ${min.toFixed(3)} ~ ${max.toFixed(3)}`);
         }
         
-        return {
+        const out = {
             type: 'surface',
             x: interpolatedX,
             y: interpolatedY,
             z: zGrid,
+            connectgaps: false,
             colorscale: 'RdBu',
             reversescale: true,
             showscale: true,
@@ -952,6 +1073,7 @@ export class WavefrontPlotter {
                 title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [波長]'
             }
         };
+        return this._transposeZForPlotly(out);
     }
 
     /**
@@ -998,6 +1120,33 @@ export class WavefrontPlotter {
         console.log(`✅ データ検証完了: ${validValues.length}/${data.z.flat().length} 有効値`);
     }
 
+    _transposeZForPlotly(data) {
+        try {
+            if (!data || !Array.isArray(data.z) || data.z.length === 0 || !Array.isArray(data.z[0])) return data;
+            const z = data.z;
+            const rows = z.length;
+            const cols = Math.max(0, ...z.map(r => (Array.isArray(r) ? r.length : 0)));
+            if (rows === 0 || cols === 0) return data;
+
+            const zT = Array.from({ length: cols }, (_, c) => Array.from({ length: rows }, (_, r) => {
+                const row = z[r];
+                return (Array.isArray(row) && c < row.length) ? row[c] : null;
+            }));
+
+            // If the grid isn't square, swap axes too so Plotly dimension checks still pass.
+            if (Array.isArray(data.x) && Array.isArray(data.y) && data.x.length !== data.y.length) {
+                const tmp = data.x;
+                data.x = data.y;
+                data.y = tmp;
+            }
+
+            data.z = zT;
+            return data;
+        } catch (_) {
+            return data;
+        }
+    }
+
     /**
      * 有効データが少ない場合のフォールバック用サーフェスデータ
      * @param {string} dataType - データタイプ
@@ -1034,20 +1183,41 @@ export class WavefrontPlotter {
      * @param {number} gridSize - グリッドサイズ
      * @returns {Object} Plotlyヒートマップデータ
      */
-    convertToPlotlyHeatmapData(wavefrontMap, dataType = 'opd', gridSize = 31) {
+    convertToPlotlyHeatmapData(wavefrontMap, dataType = 'opd', gridSize = 31, options = {}) {
         const { pupilCoordinates, wavefrontAberrations, opdsInWavelengths, rayData } = wavefrontMap;
-        const values = dataType === 'opd' ? opdsInWavelengths : wavefrontAberrations;
+        const valuesRaw = dataType === 'opd' ? opdsInWavelengths : wavefrontAberrations;
+
+        const rawMode = !!options?.rawMode;
+
+        // Drop rare extreme spikes before gridding (treat as missing).
+        const values = this._filterOutliersMAD(valuesRaw, { label: `${dataType}:${rawMode ? 'raw' : 'interp'}:heatmap` });
 
         // まず「元のグリッド」に確実に戻す（X/Y入れ替え・補間アーティファクト回避）
-        const regular = this._tryBuildRegularGrid(wavefrontMap, values, gridSize, { fillHoles: true });
+        const regular = this._tryBuildRegularGrid(wavefrontMap, values, gridSize, { fillHoles: !rawMode });
         if (regular) {
-            return {
+            let valid = 0;
+            let total = 0;
+            try {
+                const z = regular.z;
+                if (Array.isArray(z)) {
+                    for (const row of z) {
+                        if (!Array.isArray(row)) continue;
+                        for (const v of row) {
+                            total++;
+                            if (v !== null && Number.isFinite(v)) valid++;
+                        }
+                    }
+                }
+            } catch (_) {}
+            const frac = total > 0 ? (valid / total) : 0;
+            const allowConnectGaps = (!rawMode) && (frac >= 0.85);
+            const out = {
                 type: 'heatmap',
                 x: regular.x,
                 y: regular.y,
                 z: regular.z,
-                zsmooth: 'best',
-                connectgaps: true,
+                zsmooth: rawMode ? false : (allowConnectGaps ? 'best' : false),
+                connectgaps: rawMode ? false : allowConnectGaps,
                 colorscale: 'RdBu',
                 reversescale: true,
                 showscale: true,
@@ -1055,6 +1225,7 @@ export class WavefrontPlotter {
                     title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [波長]'
                 }
             };
+            return this._transposeZForPlotly(out);
         }
         
         // 🆕 3Dマップと同じ処理：有効データのみをフィルタリング
@@ -1082,6 +1253,42 @@ export class WavefrontPlotter {
         const uniqueY = [...new Set(validCoords.map(coord => coord.y))].sort((a, b) => a - b);
         
         console.log(`📊 ヒートマップグリッドサイズ: X=${uniqueX.length}, Y=${uniqueY.length}`);
+
+        if (rawMode) {
+            // Raw mode: no interpolation, no gap filling.
+            const zGrid = [];
+            for (let j = 0; j < uniqueY.length; j++) {
+                const row = [];
+                for (let i = 0; i < uniqueX.length; i++) {
+                    const coord = validCoords.find(c =>
+                        Math.abs(c.x - uniqueX[i]) < 1e-10 && Math.abs(c.y - uniqueY[j]) < 1e-10
+                    );
+                    if (coord) {
+                        const idx = validCoords.indexOf(coord);
+                        row.push(validValues[idx]);
+                    } else {
+                        row.push(null);
+                    }
+                }
+                zGrid.push(row);
+            }
+
+            const out = {
+                type: 'heatmap',
+                x: uniqueX,
+                y: uniqueY,
+                z: zGrid,
+                zsmooth: false,
+                connectgaps: false,
+                colorscale: 'RdBu',
+                reversescale: true,
+                showscale: true,
+                colorbar: {
+                    title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [波長]'
+                }
+            };
+            return this._transposeZForPlotly(out);
+        }
         
         // Z値のグリッドを作成（3Dサーフェスと同じアルゴリズム）
         const zGrid = [];
@@ -1107,14 +1314,17 @@ export class WavefrontPlotter {
         }
         
         console.log(`📊 ヒートマップグリッドセル: 有効=${validCells}, null=${nullCells}, 合計=${validCells + nullCells}`);
+
+        const frac = (validCells + nullCells) > 0 ? (validCells / (validCells + nullCells)) : 0;
+        const allowConnectGaps = frac >= 0.85;
         
-        return {
+        const out = {
             type: 'heatmap',
             x: uniqueX,
             y: uniqueY,
             z: zGrid,
-            zsmooth: 'best',
-            connectgaps: true,
+            zsmooth: allowConnectGaps ? 'best' : false,
+            connectgaps: allowConnectGaps,
             colorscale: 'RdBu',
             reversescale: true,
             showscale: true,
@@ -1122,6 +1332,7 @@ export class WavefrontPlotter {
                 title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [波長]'
             }
         };
+        return this._transposeZForPlotly(out);
     }
 
     /**
@@ -1136,16 +1347,48 @@ export class WavefrontPlotter {
         if (!statsContainer) return;
 
         const mode = statistics?.pupilSamplingMode;
+        const opdMode = statistics?.opdMode;
+        const skipZernikeFit = statistics?.skipZernikeFit;
         const modeNote = (mode === 'entrance')
             ? '<div class="stats-note"><strong>瞳サンプリング:</strong> entrance（ベストエフォート / ビネッティングあり）</div>'
             : (mode === 'stop')
                 ? '<div class="stats-note"><strong>瞳サンプリング:</strong> stop（絞り面到達を要求）</div>'
                 : '';
+
+        const opdModeNote = opdMode
+            ? `<div class="stats-note"><strong>OPD mode:</strong> ${String(opdMode)}</div>`
+            : '';
+
+        const zernikeNote = (typeof skipZernikeFit === 'boolean')
+            ? `<div class="stats-note"><strong>Zernike fit:</strong> ${skipZernikeFit ? 'OFF (raw)' : 'ON'}</div>`
+            : '';
+
+        const rawMeanNote = (!skipZernikeFit && Number.isFinite(statistics?.rawMean))
+            ? `<div class="stats-note"><strong>Raw mean (piston):</strong> ${Number(statistics.rawMean).toFixed(4)} ${unit}</div>`
+            : '';
+
+        const removalNote = (Array.isArray(statistics?.removeIndices) && statistics.removeIndices.length)
+            ? `<div class="stats-note"><strong>Stats removal (OSA):</strong> [${statistics.removeIndices.join(', ')}] (piston/tilt/defocus)</div>`
+            : '';
+        
+        // Check if mean value is unusually large (potential piston issue)
+        // NOTE: When showing raw OPD, the mean value includes piston by design.
+        const meanMagnitude = Math.abs(statistics.mean);
+        const largePistonWarning = (unit === 'λ' && meanMagnitude > 10)
+            ? `<div class="stats-warning" style="color: #ff6b6b; margin-top: 8px;">
+                ⚠️ <strong>ピストン（平均）が大きい</strong>: 平均値=${statistics.mean.toFixed(2)} ${unit}<br>
+                → 統計でピストン除去を有効化すると平均は0に近づきます。
+               </div>`
+            : '';
         
         const statsHtml = `
             <div class="wavefront-statistics">
                 <h4>${title} 統計情報</h4>
                 ${modeNote}
+                ${opdModeNote}
+                ${zernikeNote}
+                ${rawMeanNote}
+                ${removalNote}
                 <div class="stats-grid">
                     <div><strong>データ点数:</strong> ${statistics.count}</div>
                     <div><strong>平均値:</strong> ${statistics.mean.toFixed(4)} ${unit}</div>
@@ -1154,6 +1397,7 @@ export class WavefrontPlotter {
                     <div><strong>最小値:</strong> ${statistics.min.toFixed(4)} ${unit}</div>
                     <div><strong>最大値:</strong> ${statistics.max.toFixed(4)} ${unit}</div>
                 </div>
+                ${largePistonWarning}
             </div>
         `;
         
@@ -1169,39 +1413,47 @@ export class WavefrontPlotter {
      * @returns {number|null} 補間された値またはnull
      */
     interpolateValue(x, y, coords, values) {
-        // 最近傍の点を探す
-        const distances = coords.map((coord, index) => ({
-            index,
-            coord,
-            value: values[index],
-            distance: Math.sqrt((coord.x - x) ** 2 + (coord.y - y) ** 2)
-        }));
-        
+        const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+        const maxDist = (g && Number.isFinite(g.__WAVEFRONT_INTERP_MAX_DIST)) ? Math.max(0.01, Number(g.__WAVEFRONT_INTERP_MAX_DIST)) : 0.12;
+        const minNeighbors = (g && Number.isFinite(g.__WAVEFRONT_INTERP_MIN_NEIGHBORS)) ? Math.max(2, Math.floor(Number(g.__WAVEFRONT_INTERP_MIN_NEIGHBORS))) : 6;
+        const maxNeighbors = (g && Number.isFinite(g.__WAVEFRONT_INTERP_MAX_NEIGHBORS)) ? Math.max(minNeighbors, Math.floor(Number(g.__WAVEFRONT_INTERP_MAX_NEIGHBORS))) : 12;
+
+        // 最近傍の点を探す（有限値のみ）
+        const distances = [];
+        for (let index = 0; index < coords.length; index++) {
+            const coord = coords[index];
+            const value = values[index];
+            if (!coord || !Number.isFinite(coord.x) || !Number.isFinite(coord.y)) continue;
+            if (!Number.isFinite(value)) continue;
+            const d = Math.hypot(coord.x - x, coord.y - y);
+            distances.push({ index, value, distance: d });
+        }
+        if (distances.length === 0) return null;
+
         // 距離でソート
         distances.sort((a, b) => a.distance - b.distance);
-        
+
         // 非常に近い点がある場合はその値を使用
-        if (distances[0].distance < 0.01) {
-            return distances[0].value;
+        if (distances[0].distance < 0.01) return distances[0].value;
+
+        // 近傍が十分に無い or 離れすぎは補間しない（ギャップ跨ぎ抑止）
+        const nearby = [];
+        for (const d of distances) {
+            if (d.distance > maxDist) break;
+            nearby.push(d);
+            if (nearby.length >= maxNeighbors) break;
         }
-        
-        // 半径0.3以内の点がない場合はnull
-        const nearbyPoints = distances.filter(d => d.distance < 0.3);
-        if (nearbyPoints.length === 0) {
-            return null;
-        }
-        
-        // 距離による重み付き平均補間
+        if (nearby.length < minNeighbors) return null;
+
+        // 距離による重み付き平均補間（d^2で遠方の寄与を抑える）
         let weightedSum = 0;
         let totalWeight = 0;
-        
-        for (const point of nearbyPoints.slice(0, 4)) { // 最大4点使用
-            const weight = 1 / (point.distance + 0.001); // 0.001で0除算を回避
-            weightedSum += point.value * weight;
-            totalWeight += weight;
+        for (const p of nearby) {
+            const w = 1 / (p.distance * p.distance + 1e-6);
+            weightedSum += p.value * w;
+            totalWeight += w;
         }
-        
-        return totalWeight > 0 ? weightedSum / totalWeight : null;
+        return totalWeight > 0 ? (weightedSum / totalWeight) : null;
     }
 
     _tryBuildRegularGrid(wavefrontMap, values, gridSizeOverride = null, options = {}) {
@@ -1258,25 +1510,41 @@ export class WavefrontPlotter {
 
             // Draw-only: fill small interior holes to avoid surface discontinuities.
             // Do NOT fill near the pupil boundary (to preserve masking) and do not bridge large gaps.
+            // IMPORTANT: On heavily vignetted/sparse fields, hole-filling can create tall spikes by
+            // bridging across physically invalid regions. In that case, leave holes as null.
             if (options?.fillHoles) {
                 const coreRadius = pupilRange * 0.90;
                 let coreNulls = 0;
+                let coreCells = 0;
+                let coreValid = 0;
                 for (let iy = 0; iy < gridSize; iy++) {
                     const y = yAxis[iy];
                     for (let ix = 0; ix < gridSize; ix++) {
-                        if (zGrid[iy][ix] !== null) continue;
                         const x = xAxis[ix];
-                        if (Math.hypot(x, y) <= coreRadius + 1e-12) coreNulls++;
+                        if (Math.hypot(x, y) > coreRadius + 1e-12) continue;
+                        coreCells++;
+                        if (zGrid[iy][ix] === null) {
+                            coreNulls++;
+                        } else {
+                            coreValid++;
+                        }
                     }
                 }
 
-                if (coreNulls > 0) {
+                const coreValidFrac = coreCells > 0 ? (coreValid / coreCells) : 0;
+                const allowFill = (coreNulls > 0) && (coreValidFrac >= 0.60);
+
+                if (!allowFill && coreNulls > 0) {
+                    console.log(`🩹 [WavefrontPlot] surface hole-fill skipped (sparse): coreValidFrac=${coreValidFrac.toFixed(3)}, coreValid=${coreValid}, coreNulls=${coreNulls}`);
+                }
+
+                if (allowFill) {
                     const fillFromNeighbors = (src) => {
                         const out = src.map(row => row.slice());
                         let filled = 0;
                         let remaining = 0;
 
-                        const maxR = 3; // small holes only
+                        const maxR = 2; // small holes only (avoid bridging gaps)
                         for (let iy = 0; iy < gridSize; iy++) {
                             const y = yAxis[iy];
                             for (let ix = 0; ix < gridSize; ix++) {
@@ -1308,7 +1576,7 @@ export class WavefrontPlotter {
                                     if (used >= 6) break;
                                 }
 
-                                if (used >= 3 && wsum > 0) {
+                                if (used >= 6 && wsum > 0) {
                                     out[iy][ix] = acc / wsum;
                                     filled++;
                                 } else {
@@ -1321,16 +1589,15 @@ export class WavefrontPlotter {
                     };
 
                     const pass1 = fillFromNeighbors(zGrid);
-                    const pass2 = fillFromNeighbors(pass1.out);
-                    const filledTotal = (pass1.filled || 0) + (pass2.filled || 0);
-                    const remaining = pass2.remaining;
+                    const filledTotal = (pass1.filled || 0);
+                    const remaining = pass1.remaining;
                     if (filledTotal > 0) {
                         console.log(`🩹 [WavefrontPlot] surface hole-fill: coreNulls=${coreNulls}, filled=${filledTotal}, remaining=${remaining}`);
                     }
                     // replace with filled grid
                     for (let iy = 0; iy < gridSize; iy++) {
                         for (let ix = 0; ix < gridSize; ix++) {
-                            zGrid[iy][ix] = pass2.out[iy][ix];
+                            zGrid[iy][ix] = pass1.out[iy][ix];
                         }
                     }
                 }
@@ -1353,12 +1620,9 @@ export class WavefrontPlotter {
  */
 export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wavefront', gridSize = 64, selectedObjectIndex = 0, options = {}) {
     try {
-        console.log(`🌊 波面収差図表示開始 - Object${selectedObjectIndex + 1}...`);
-
         // Extract cancelToken and progressCallback from options
         const cancelToken = options?.cancelToken || null;
         const onProgress = options?.onProgress || null;
-        const opdMode = options?.opdMode;
 
         const getActiveConfigLabel = () => {
             try {
@@ -1380,8 +1644,6 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
         // 🔧 **修正**: windowオブジェクトから直接データを取得（wavefront-ray-handlers.jsと同様）
         const opticalSystemRows = window.getOpticalSystemRows ? window.getOpticalSystemRows() : null;
         const objectRows = window.getObjectRows ? window.getObjectRows() : [];
-        
-        console.log(`🔍 データ取得結果: 光学系=${opticalSystemRows ? opticalSystemRows.length : 0}面, Object=${objectRows ? objectRows.length : 0}個`);
 
         // Diagnostic: confirm which config/data is actually used.
         try {
@@ -1391,12 +1653,6 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
             const idx5 = opticalSystemRows?.[5];
             const idx6 = opticalSystemRows?.[6];
             const activeCfg = getActiveConfigLabel();
-            console.log(
-                `🧾 [Wavefront] activeConfig=${activeCfg || '(none)'} rows=${opticalSystemRows ? opticalSystemRows.length : 0}` +
-                ` idx4(th=${idx4?.thickness}, obj=${idx4?.['object type'] || ''}, cmt=${idx4?.comment || ''})` +
-                ` idx5(th=${idx5?.thickness}, obj=${idx5?.['object type'] || ''}, cmt=${idx5?.comment || ''})` +
-                ` idx6(th=${idx6?.thickness}, obj=${idx6?.['object type'] || ''}, cmt=${idx6?.comment || ''})`
-            );
         } catch (_) {}
         
         if (!opticalSystemRows || opticalSystemRows.length === 0) {
@@ -1424,7 +1680,6 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
         }
         
         const selectedObject = objectRows[selectedObjectIndex];
-        console.log(`🎯 選択されたObject: Object${selectedObjectIndex + 1} (${selectedObject.xHeightAngle || 0}, ${selectedObject.yHeightAngle || 0})`);
         
         // 主波長を取得（0.55の固定値フォールバックは避ける）
         const wavelength = (() => {
@@ -1442,7 +1697,6 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
             } catch (_) {}
             return 0.5876;
         })();
-        console.log(`📏 使用波長: ${wavelength} μm`);
         
         const isInfiniteSystem = (() => {
             const objectSurface = opticalSystemRows?.[0];
@@ -1516,8 +1770,6 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
 
         // マルチフィールド比較の場合は全Objectを使用
         const fieldSettings = objectRows.map((obj, index) => toFieldSettingFromObject(obj, index));
-        
-        console.log('🎯 選択フィールド設定:', fieldSetting);
         
         // プロッターを作成
         const plotter = new WavefrontPlotter(options?.containerElement || 'wavefront-container');
@@ -1594,7 +1846,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
         switch (plotType) {
             case 'surface':
                 if (dataType === 'opd') {
-                    const wavefrontMap = await plotter.plotOPDSurface(opticalSystemRows, fieldSetting, wavelength, gridSize, { cancelToken, onProgress, opdMode });
+                    const wavefrontMap = await plotter.plotOPDSurface(opticalSystemRows, fieldSetting, wavelength, gridSize, { cancelToken, onProgress });
                     storeLast(wavefrontMap);
                 } else {
                     const wavefrontMap = await plotter.plotWavefrontAberrationSurface(opticalSystemRows, fieldSetting, wavelength, gridSize);
@@ -1604,7 +1856,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                 
             case 'heatmap':
                 if (dataType === 'opd') {
-                    const wavefrontMap = await plotter.plotOPDHeatmap(opticalSystemRows, fieldSetting, wavelength, gridSize, { cancelToken, onProgress, opdMode });
+                    const wavefrontMap = await plotter.plotOPDHeatmap(opticalSystemRows, fieldSetting, wavelength, gridSize, { cancelToken, onProgress });
                     storeLast(wavefrontMap);
                 } else {
                     const wavefrontMap = await plotter.plotWavefrontHeatmap(opticalSystemRows, fieldSetting, wavelength, gridSize);

@@ -19,24 +19,11 @@ export function updateWavefrontObjectSelect() {
         if (typeof window !== 'undefined' && window.tableObject && window.tableObject.getData) {
             const allObjectRows = window.tableObject.getData();
             
-            // デバッグ: 全Objectデータの詳細を確認
-            console.log('🔍 全Objectデータ詳細:', allObjectRows);
-            console.log('🔍 ローカルストレージ確認:', localStorage.getItem('objectTableData'));
-            
-            allObjectRows.forEach((obj, index) => {
-                console.log(`🔍 Object[${index}]:`, obj, `id=${obj?.id}, 型=${typeof obj?.id}`);
-            });
-            
-            // 有効なObjectデータのみをフィルタリング（テスト用：一時的に全て表示）
+            // 有効なObjectデータのみをフィルタリング
             objectRows = allObjectRows.filter((obj, index) => {
-                // テスト用：より寛容な条件、ほぼ全てを通す
                 const isValid = obj && obj !== null && obj !== undefined;
-                
-                console.log(`🔍 Object[${index}] テスト結果: ${isValid ? '✅通過' : '❌除外'}`, obj);
                 return isValid;
             });
-            
-            console.log(`Object数: 全体=${allObjectRows.length}, 有効=${objectRows.length}`);
             
             // データ数の警告
             if (allObjectRows.length > objectRows.length) {
@@ -62,7 +49,7 @@ export function updateWavefrontObjectSelect() {
             defaultOption.disabled = true;
             objectSelect.appendChild(defaultOption);
             
-            console.log('📝 Object選択: Objectデータがありません');
+
         } else {
             objectRows.forEach((obj, index) => {
                 const option = document.createElement('option');
@@ -84,8 +71,6 @@ export function updateWavefrontObjectSelect() {
                 option.textContent = objectName;
                 objectSelect.appendChild(option);
             });
-            
-            console.log(`📝 Object選択更新: ${objectRows.length}個のObjectを追加`);
         }
         
         // 以前の選択を復元（可能であれば）
@@ -95,12 +80,9 @@ export function updateWavefrontObjectSelect() {
             objectSelect.value = '0'; // デフォルトは最初のObject
         }
         
-        // 選択されているObjectをログ出力
+        // 選択されているObject
         const selectedIndex = parseInt(objectSelect.value) || 0;
         const selectedObject = objectRows[selectedIndex];
-        if (selectedObject) {
-            console.log(`🎯 選択されたObject: Object${selectedIndex + 1} (${selectedObject.xHeightAngle || 0}, ${selectedObject.yHeightAngle || 0})`);
-        }
         
     } catch (error) {
         console.error('❌ Object選択ドロップダウン更新エラー:', error);

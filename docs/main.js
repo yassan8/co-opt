@@ -37,6 +37,8 @@ import { showWavefrontDiagram } from './eva-wavefront-plot.js?v=2025-12-31a';
 import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './eva-wavefront.js?v=2025-12-31a';
 import { PSFCalculator } from './eva-psf.js';
 import { PSFPlotter, PSFDisplayManager } from './eva-psf-plot.js';
+import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './zernike-fitting.js';
+import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './opd-zernike-analysis.js';
 import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './gen-ray-cross-finite.js';
 import { generateInfiniteSystemCrossBeam, RayColorSystem as InfiniteRayColorSystem } from './gen-ray-cross-infinite.js';
 // Distortion analysis
@@ -98,11 +100,8 @@ if (typeof globalThis !== 'undefined' && typeof globalThis.getWASMSystem !== 'fu
  * Initialize the main application
  */
 async function initializeApplication() {
-    console.log('🚀 Starting JS_lensDraw v3 application...');
-    
     try {
         // Initialize WASM system
-        console.log('⚙️ Initializing WASM acceleration system...');
         
         // ForceWASMSystemがグローバルに利用可能かチェック
         const ForceWASMSystemClass = globalThis.ForceWASMSystem || window?.ForceWASMSystem;
@@ -126,8 +125,7 @@ async function initializeApplication() {
                 initTimeout
             ]);
             
-            console.log('🔥 WASM system initialized successfully!');
-            console.log('🔍 WASM Status:', wasmSystem.getSystemStatus());
+
         } catch (error) {
             console.warn('⚠️ WASM initialization failed, falling back to JavaScript:', error.message);
             // Set a flag to indicate WASM is not available
@@ -148,24 +146,21 @@ async function initializeApplication() {
         animate();
         
         // Setup UI event listeners
-        console.log('🔧 Setting up UI event listeners...');
         try {
             setupOpticalSystemChangeListeners(scene);
-            console.log('✅ Optical system change listeners set up');
         } catch (error) {
             console.error('❌ Error setting up optical system change listeners:', error);
         }
         
         try {
             setupRayPatternButtons();
-            console.log('✅ Ray pattern buttons set up');
         } catch (error) {
             console.error('❌ Error setting up ray pattern buttons:', error);
         }
         
         try {
             setupRayColorButtons();
-            console.log('✅ Ray color buttons set up');
+
         } catch (error) {
             console.error('❌ Error setting up ray color buttons:', error);
         }
@@ -191,7 +186,7 @@ async function initializeApplication() {
             // 追加: setupSimpleViewButtons を確実に呼び出す
             try {
                 setupSimpleViewButtons();
-                console.log('✅ Simple view buttons (X-Z, Y-Z) set up successfully');
+
             } catch (simpleError) {
                 console.error('❌ Error setting up simple view buttons:', simpleError);
             }
@@ -209,14 +204,14 @@ async function initializeApplication() {
         
         try {
             initializeUIEventListeners();
-            console.log('✅ UI event listeners initialized');
+
         } catch (error) {
             console.error('❌ Error initializing UI event listeners:', error);
         }
         
         try {
             setupDOMEventHandlers();
-            console.log('✅ DOM event handlers set up');
+
         } catch (error) {
             console.error('❌ Error setting up DOM event handlers:', error);
         }
@@ -224,7 +219,7 @@ async function initializeApplication() {
         // 波面収差図Object選択UI初期化
         try {
             initializeWavefrontObjectUI();
-            console.log('✅ Wavefront object selection UI initialized');
+
         } catch (error) {
             console.error('❌ Error initializing wavefront object UI:', error);
         }
@@ -241,14 +236,12 @@ async function initializeApplication() {
         
         // Debug table initialization status
         setTimeout(async () => {
-            console.log('🔍 Checking table initialization status after 1 second...');
             debugTableStatus();
             
             // Objectテーブル初期化後にObject選択を再更新
             try {
                 if (window.updateWavefrontObjectSelect) {
                     window.updateWavefrontObjectSelect();
-                    console.log('✅ Wavefront object selection updated after table init');
                 }
             } catch (error) {
                 console.error('❌ Error updating wavefront object selection after table init:', error);
@@ -944,55 +937,50 @@ function updateCameraViewBounds() {
     }
 }
 
+// グローバルに公開
+window.updateCameraViewBounds = updateCameraViewBounds;
+
 function __coopt_calculateOpticalElementsBounds(scene) {
     try {
-        if (!scene || typeof scene.traverse !== 'function') return null;
+        if (!scene) return null;
+        const box = new THREE.Box3();
+        let has = false;
 
-        const bounds = new THREE.Box3();
-        let hasAny = false;
+        scene.traverse((child) => {
+            if (!child || child.visible === false) return;
+            if (!(child.isMesh || child.isLine || child.isGroup)) return;
 
-        scene.traverse((obj) => {
-            if (!obj || !obj.isObject3D) return;
-            if (!obj.visible) return;
-            if (obj.isCamera || obj.isLight) return;
-            if (!obj.isMesh && !obj.isLine && !obj.isPoints) return;
+            // Skip helpers/lights
+            if (child.type === 'GridHelper' || child.type === 'AxesHelper' || child.type === 'AmbientLight' || child.type === 'DirectionalLight') return;
 
-            const ud = obj.userData || {};
-            const name = (obj.name || '').toLowerCase();
-            const isProbablyOptical =
-                ud.isOpticalElement === true ||
-                ud.type === 'surface' ||
-                ud.type === 'aperture' ||
+            const name = String(child.name || '');
+            const ud = child.userData || {};
+            const isOptical = !!(
+                ud.isOpticalElement ||
+                ud.isLensSurface ||
+                ud.isRayLine ||
                 ud.type === 'ray' ||
-                name.includes('surface') ||
-                name.includes('lens') ||
-                name.includes('aperture') ||
-                name.includes('ray');
+                ud.type === 'surfaceProfile' ||
+                ud.type === 'semidiaRing' ||
+                ud.type === 'ring' ||
+                ud.type === 'crossSection' ||
+                ud.surfaceIndex !== undefined ||
+                /surface|lens|cross-section|semidia|mirror|profile|ring|connection/i.test(name)
+            );
+            if (!isOptical) return;
 
-            if (!isProbablyOptical) return;
-
-            const objBounds = new THREE.Box3().setFromObject(obj);
-            if (!Number.isFinite(objBounds.min.x) || !Number.isFinite(objBounds.max.x)) return;
-            if (!Number.isFinite(objBounds.min.y) || !Number.isFinite(objBounds.max.y)) return;
-            if (!Number.isFinite(objBounds.min.z) || !Number.isFinite(objBounds.max.z)) return;
-
-            if (!hasAny) {
-                bounds.copy(objBounds);
-                hasAny = true;
-            } else {
-                bounds.union(objBounds);
+            const childBox = new THREE.Box3().setFromObject(child);
+            if (!childBox.isEmpty()) {
+                box.union(childBox);
+                has = true;
             }
         });
 
-        return hasAny ? bounds : null;
-    } catch (e) {
-        console.warn('Failed to calculate scene bounds:', e);
+        return has ? box : null;
+    } catch (_) {
         return null;
     }
 }
-
-// グローバルに公開
-window.updateCameraViewBounds = updateCameraViewBounds;
 
 function expandOrthoBoundsToAspect(camera, aspect) {
     if (!camera?.isOrthographicCamera) return;
@@ -1041,18 +1029,6 @@ function setCameraForYZCrossSection(options = {}) {
         
         // 光学系のZ範囲とY範囲を動的に計算
         const { minZ, maxZ, centerZ, totalLength, maxY } = calculateOpticalSystemZRange();
-        const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
-
-        const fitMinZ0 = sceneBounds ? Math.min(minZ, sceneBounds.min.z) : minZ;
-        const fitMaxZ0 = sceneBounds ? Math.max(maxZ, sceneBounds.max.z) : maxZ;
-        const fitTotalLength0 = fitMaxZ0 - fitMinZ0;
-        const safeMaxY = (() => {
-            const fromRows = (Number.isFinite(maxY) && maxY > 0) ? maxY : 0;
-            if (!sceneBounds) return fromRows || 50;
-            const ySpan = sceneBounds.max.y - sceneBounds.min.y;
-            const fromScene = (Number.isFinite(ySpan) && ySpan > 0) ? ySpan / 2 : 0;
-            return Math.max(fromRows, fromScene, 50);
-        })();
         
         // Y-Z断面を正面から見るためにX軸負方向からカメラを配置
         // Z軸は光軸（画面横方向）、Y軸は上下方向、X軸は視線方向
@@ -1061,17 +1037,32 @@ function setCameraForYZCrossSection(options = {}) {
         // Popupでは「光学系が画面に収まる」優先のため、固定マージンは無効化できる
         const includeRayStartMargin = options.includeRayStartMargin !== false;
         const rayStartMargin = includeRayStartMargin ? 25 : 0;
-        const effectiveMinZ = Math.min(fitMinZ0, -rayStartMargin);
-        const effectiveMaxZ = fitMaxZ0;
+        const effectiveMinZ = Math.min(minZ, -rayStartMargin);
+        const effectiveMaxZ = maxZ;
         const effectiveTotalLength = effectiveMaxZ - effectiveMinZ;
         const effectiveCenterZ = (effectiveMinZ + effectiveMaxZ) / 2;
+
+        // Prefer actual drawn geometry bounds when available (more robust than semidia-based estimates).
+        const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
+        const fitMinZ = sceneBounds ? Math.min(effectiveMinZ, sceneBounds.min.z) : effectiveMinZ;
+        const fitMaxZ = sceneBounds ? Math.max(effectiveMaxZ, sceneBounds.max.z) : effectiveMaxZ;
+        const fitTotalLength = fitMaxZ - fitMinZ;
+        const fitCenterZ = (fitMinZ + fitMaxZ) / 2;
+        const fitMaxY = (() => {
+            let y = maxY;
+            if (sceneBounds) {
+                const ySpan = sceneBounds.max.y - sceneBounds.min.y;
+                if (Number.isFinite(ySpan) && ySpan > 0) y = Math.max(y || 0, ySpan / 2);
+            }
+            return y;
+        })();
 
         // Draw Crossの表示範囲を保存/再利用（XZ/YZ切り替えでスケールが変わらないように）
         const savedBounds = camera?.userData?.__drawCrossOrthoBounds;
         const preserveDrawCrossBounds = options.preserveDrawCrossBounds === true && savedBounds;
         const systemCenterZ = Number.isFinite(options.centerZOverride)
             ? options.centerZOverride
-            : (preserveDrawCrossBounds && Number.isFinite(savedBounds.centerZ) ? savedBounds.centerZ : effectiveCenterZ);
+            : (preserveDrawCrossBounds && Number.isFinite(savedBounds.centerZ) ? savedBounds.centerZ : fitCenterZ);
 
         const targetOverride = options.targetOverride &&
             Number.isFinite(options.targetOverride.x) &&
@@ -1090,12 +1081,15 @@ function setCameraForYZCrossSection(options = {}) {
         
         // 描画枠全体に光学系が収まるように視野サイズを計算
         const marginFactor = 1.1; // マージンを10%
+        const safeMaxY = (Number.isFinite(fitMaxY) && fitMaxY > 0) ? fitMaxY : 50;
         const visibleHeight = safeMaxY * 2 * marginFactor; // Y方向の高さ（両側+マージン）
-        const visibleWidth = Math.max(1e-9, effectiveTotalLength) * marginFactor; // Z方向の幅（光線開始位置を含む+マージン）
+        const visibleWidth = fitTotalLength * marginFactor; // Z方向の幅（光線開始位置/描画物を含む+マージン）
         
         // OrthographicCameraの場合、視野範囲を直接設定
         if (camera.isOrthographicCamera) {
             const preserveRequested = options.preserveCurrentOrthoBounds === true;
+            // If semidia is missing (maxY<=0), preserving the current bounds tends to keep
+            // the popup's default view (often centered near the image plane). Force a refit.
             const hasReliableExtent = (Number.isFinite(maxY) && maxY > 0);
             const preserveCurrentOrthoBounds = preserveRequested && hasReliableExtent;
             if (preserveCurrentOrthoBounds) {
@@ -1142,6 +1136,9 @@ function setCameraForYZCrossSection(options = {}) {
         console.log(`📷 Dynamic camera setup: centerZ=${systemCenterZ.toFixed(3)}`);
         console.log(`📷 Optical system range: Z=${minZ.toFixed(3)} to ${maxZ.toFixed(3)} (length: ${totalLength.toFixed(3)}), maxY=${maxY.toFixed(3)}`);
         console.log(`📷 Effective range (with rays): Z=${effectiveMinZ.toFixed(3)} to ${effectiveMaxZ.toFixed(3)} (length: ${effectiveTotalLength.toFixed(3)})`);
+        if (sceneBounds) {
+            console.log(`📷 Scene-bounds fit: Z=${fitMinZ.toFixed(3)} to ${fitMaxZ.toFixed(3)} (length: ${fitTotalLength.toFixed(3)}), maxY≈${safeMaxY.toFixed(3)}`);
+        }
         console.log(`📷 Visible dimensions: height=${visibleHeight.toFixed(1)} (Y-vertical), width=${visibleWidth.toFixed(1)} (Z-horizontal)`);
         
         // カメラをX軸負方向に配置（Y-Z断面の正面）- 距離は任意（正投影なので影響なし）
@@ -1207,29 +1204,32 @@ function setCameraForXZCrossSection(options = {}) {
         }
 
         const { minZ, maxZ, maxY } = rangeData;
-        const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
-
-        const fitMinZ0 = sceneBounds ? Math.min(minZ, sceneBounds.min.z) : minZ;
-        const fitMaxZ0 = sceneBounds ? Math.max(maxZ, sceneBounds.max.z) : maxZ;
-        const safeMaxY = (() => {
-            const fromRows = (Number.isFinite(maxY) && maxY > 0) ? maxY : 0;
-            if (!sceneBounds) return fromRows || 50;
-            const ySpan = sceneBounds.max.y - sceneBounds.min.y;
-            const fromScene = (Number.isFinite(ySpan) && ySpan > 0) ? ySpan / 2 : 0;
-            return Math.max(fromRows, fromScene, 50);
-        })();
         const includeRayStartMargin = options.includeRayStartMargin !== false;
         const rayStartMargin = includeRayStartMargin ? 25 : 0;
-        const effectiveMinZ = Math.min(fitMinZ0, -rayStartMargin);
-        const effectiveMaxZ = fitMaxZ0;
+        const effectiveMinZ = Math.min(minZ, -rayStartMargin);
+        const effectiveMaxZ = maxZ;
         const effectiveTotalLength = effectiveMaxZ - effectiveMinZ;
         const effectiveCenterZ = (effectiveMinZ + effectiveMaxZ) / 2;
+
+        const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
+        const fitMinZ = sceneBounds ? Math.min(effectiveMinZ, sceneBounds.min.z) : effectiveMinZ;
+        const fitMaxZ = sceneBounds ? Math.max(effectiveMaxZ, sceneBounds.max.z) : effectiveMaxZ;
+        const fitTotalLength = fitMaxZ - fitMinZ;
+        const fitCenterZ = (fitMinZ + fitMaxZ) / 2;
+        const fitMaxX = (() => {
+            let x = maxY;
+            if (sceneBounds) {
+                const xSpan = sceneBounds.max.x - sceneBounds.min.x;
+                if (Number.isFinite(xSpan) && xSpan > 0) x = Math.max(x || 0, xSpan / 2);
+            }
+            return x;
+        })();
 
         const savedBounds = camera?.userData?.__drawCrossOrthoBounds;
         const preserveDrawCrossBounds = options.preserveDrawCrossBounds === true && savedBounds;
         const targetCenterZ = Number.isFinite(options.centerZOverride)
             ? options.centerZOverride
-            : (preserveDrawCrossBounds && Number.isFinite(savedBounds.centerZ) ? savedBounds.centerZ : effectiveCenterZ);
+            : (preserveDrawCrossBounds && Number.isFinite(savedBounds.centerZ) ? savedBounds.centerZ : fitCenterZ);
 
         const targetOverride = options.targetOverride &&
             Number.isFinite(options.targetOverride.x) &&
@@ -1246,8 +1246,9 @@ function setCameraForXZCrossSection(options = {}) {
         }
 
         const marginFactor = 1.1;
-        const visibleHeight = safeMaxY * 2 * marginFactor;
-        const visibleWidth = Math.max(1e-9, effectiveTotalLength) * marginFactor;
+        const safeMaxX = (Number.isFinite(fitMaxX) && fitMaxX > 0) ? fitMaxX : 50;
+        const visibleHeight = safeMaxX * 2 * marginFactor;
+        const visibleWidth = fitTotalLength * marginFactor;
 
         if (camera.isOrthographicCamera) {
             const preserveRequested = options.preserveCurrentOrthoBounds === true;
@@ -1382,7 +1383,7 @@ window.updateSurfaceNumberSelect = updateSurfaceNumberSelect;
 document.addEventListener('DOMContentLoaded', async function() {
     try {
         // Initialize the main application
-        console.log('🚀 Initializing main application...');
+
         initAIAssistant();
         const appComponents = await initializeApplication();
         
@@ -1473,9 +1474,6 @@ document.addEventListener('DOMContentLoaded', async function() {
                 // コンソールクリアボタンの説明
                 console.log('💡 [ObjectDebug] ヒント: コンソールをクリアするには、ブラウザのF12で開発者ツールを開き、コンソールタブで右クリック→"Clear console"を選択してください。');
             });
-            console.log('✅ [ObjectDebug] Objectデータデバッグボタンにイベントハンドラーを追加');
-        } else {
-            console.warn('⚠️ [ObjectDebug] debug-object-dataボタンが見つかりません');
         }
         
         // 🔍 光線角度デバッグボタンの設定
@@ -1491,9 +1489,6 @@ document.addEventListener('DOMContentLoaded', async function() {
                     console.log('💡 [RayAngleDebug] debug-opd-ray-angles.jsが正しく読み込まれているか確認してください');
                 }
             });
-            console.log('✅ [RayAngleDebug] 光線角度デバッグボタンにイベントハンドラーを追加');
-        } else {
-            console.warn('⚠️ [RayAngleDebug] debug-ray-anglesボタンが見つかりません');
         }
         
         // Draw Crossボタンのイベントリスナー
@@ -1835,7 +1830,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             });
         }
 
-        console.log('🎉 JS_lensDraw v3 application ready!');
+
         
     } catch (error) {
         console.error('❌ Failed to initialize application:', error);
@@ -2082,16 +2077,6 @@ window.isFiniteSystem = function(opticalSystemRows) {
     return false;
 };
 
-console.log('🔧 [Main] デバッグ用関数をグローバルスコープに公開完了');
-console.log('   - generateCrossBeam');
-console.log('   - calculateChiefRayNewton');
-console.log('   - traceRay');
-console.log('   - findStopSurface');
-console.log('   - calculateSurfaceOrigins');
-console.log('   - isFiniteSystem');
-console.log('   - generateDistortionPlots');
-console.log('   - generateGridDistortionPlot');
-
 // Distortion functions global expose
 window.calculateDistortionData = calculateDistortionData;
 window.plotDistortionPercent = plotDistortionPercent;
@@ -2112,8 +2097,6 @@ window.mainDebugFunctions = {
 // Distortion helpers
 window.mainDebugFunctions.generateDistortionPlots = generateDistortionPlots;
 window.mainDebugFunctions.calculateDistortionData = calculateDistortionData;
-
-console.log('🔧 [Main] mainDebugFunctions オブジェクトもグローバルスコープに公開');
 
 // 🔍 Object → FieldSetting変換ヘルパー関数
 function convertObjectToFieldSetting(objectData, index) {

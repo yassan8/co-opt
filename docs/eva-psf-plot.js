@@ -79,6 +79,24 @@ export class PSFPlotter {
     }
 
     /**
+     * PSF画像を左回り90°回転する（z[row][col] の行列）
+     * - 正方行列（NxN）を主対象。
+     * - 非正方のときは寸法が入れ替わるため、呼び出し側で x/y も合わせる。
+     */
+    static rotateZ90CCW(z) {
+        if (!Array.isArray(z) || z.length === 0 || !Array.isArray(z[0])) return z;
+        const h = z.length;
+        const w = z[0].length;
+        const out = Array(w).fill().map(() => Array(h).fill(0));
+        for (let i = 0; i < w; i++) {
+            for (let j = 0; j < h; j++) {
+                out[i][j] = z[j]?.[w - 1 - i] ?? 0;
+            }
+        }
+        return out;
+    }
+
+    /**
      * 2D PSFヒートマップを表示
      * @param {Object} psfResult - PSF計算結果
      * @param {Object} options - プロットオプション
@@ -119,11 +137,16 @@ export class PSFPlotter {
                 y.push((i - center) * pixelSize);
             }
 
+            // PSF画像全体を左回り90°回転（表示の向き調整）
+            const rotatedZ = PSFPlotter.rotateZ90CCW(plotData);
+            const xForPlot = (rotatedZ.length === y.length && (rotatedZ[0]?.length ?? 0) === x.length) ? x : y;
+            const yForPlot = (rotatedZ.length === y.length && (rotatedZ[0]?.length ?? 0) === x.length) ? y : [...x].reverse();
+
             // Plotlyのヒートマップデータ
             const trace = {
-                z: plotData,
-                x: x,
-                y: y,
+                z: rotatedZ,
+                x: xForPlot,
+                y: yForPlot,
                 type: 'heatmap',
                 colorscale: this.normalizeColorscale(colorscale),
                 showscale: true,
@@ -248,11 +271,16 @@ export class PSFPlotter {
                 y.push((i - center) * pixelSize);
             }
 
+            // PSF画像全体を左回り90°回転（表示の向き調整）
+            const rotatedZ = PSFPlotter.rotateZ90CCW(plotData);
+            const xForPlot = (rotatedZ.length === y.length && (rotatedZ[0]?.length ?? 0) === x.length) ? x : y;
+            const yForPlot = (rotatedZ.length === y.length && (rotatedZ[0]?.length ?? 0) === x.length) ? y : [...x].reverse();
+
             // Plotlyの3Dサーフェスデータ
             const trace = {
-                z: plotData,
-                x: x,
-                y: y,
+                z: rotatedZ,
+                x: xForPlot,
+                y: yForPlot,
                 type: 'surface',
                 colorscale: this.normalizeColorscale(colorscale),
                 showscale: true,
