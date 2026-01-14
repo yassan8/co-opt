@@ -769,7 +769,7 @@ let _psfCalculatorSingletonPromise = null;
 async function getPSFCalculatorSingleton() {
     if (!_psfCalculatorSingletonPromise) {
         _psfCalculatorSingletonPromise = (async () => {
-            const { PSFCalculator } = await import('../eva-psf.js');
+            const { PSFCalculator } = await import('../eva-psf.js?v=2026-01-14a');
             return new PSFCalculator();
         })();
     }
@@ -4900,7 +4900,7 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
         
         // 必要なモジュールを動的インポート
         // PSFCalculator はシングルトンで再利用（WASM初期化を使い回す）
-        const { PSFPlotter } = await import('../eva-psf-plot.js');
+        const { PSFPlotter } = await import('../eva-psf-plot.js?v=2026-01-14a');
         const { createOPDCalculator } = await import('../eva-wavefront.js?v=2026-01-14a');
         
         // 光学システムデータを取得（live table を優先）

@@ -611,7 +611,11 @@ export class PSFCalculator {
             // true: if peak is near border, circular-shift PSF back to center.
             // NOTE: this effectively hides tilt-driven PSF shift, so when removeTilt=false
             // the default is to NOT recenter unless explicitly requested.
-            recenterIfWrapped = undefined
+            recenterIfWrapped = undefined,
+            // Zero-padding target size (e.g., 256, 512) to increase PSF resolution.
+            // NOTE: For parity with the local build, 0/undefined enables auto padding to a
+            // recommended minimum (currently 512) rather than disabling.
+            zeroPadTo = 0
         } = options;
 
         const onProgress = (options && typeof options.onProgress === 'function') ? options.onProgress : null;
@@ -674,9 +678,27 @@ export class PSFCalculator {
         // 2. 複素振幅を計算（計測）
         emitProgress(25, 'psf-amplitude', 'Computing complex amplitude...');
         const complexStartTime = performance.now();
-        const complexAmplitude = this.calculateComplexAmplitude(gridData, effectiveWavelength, { removeTilt });
+        let complexAmplitude = this.calculateComplexAmplitude(gridData, effectiveWavelength, { removeTilt });
         breakdown.complexAmplitudeTime = performance.now() - complexStartTime;
         emitProgress(35, 'psf-amplitude', 'Complex amplitude ready');
+
+        // 2.5. Zero-padding for higher PSF resolution (optional)
+        // Keep behavior aligned with the local build.
+        const minRecommendedSize = 512;
+        const autoZeroPad = (!zeroPadTo || zeroPadTo === 0);
+        let targetSize = autoZeroPad
+            ? Math.max(samplingSize, minRecommendedSize)
+            : ((zeroPadTo > samplingSize && this.supportedSamplings.includes(zeroPadTo)) ? zeroPadTo : samplingSize);
+
+        if (targetSize > samplingSize) {
+            emitProgress(40, 'psf-zeropad', `Zero-padding to ${targetSize}×${targetSize}...`);
+            const padStartTime = performance.now();
+            complexAmplitude = this.zeroPadComplexAmplitude(complexAmplitude, samplingSize, targetSize);
+            breakdown.zeroPadTime = performance.now() - padStartTime;
+            emitProgress(45, 'psf-zeropad', 'Zero-padding done');
+        } else {
+            targetSize = samplingSize;
+        }
 
         // Strehl比: ピーク正規化前のピーク強度を、同一スケーリングの回折限界ピークと比較
         // （表示用PSFは従来どおりピーク=1に正規化する）
@@ -693,14 +715,16 @@ export class PSFCalculator {
             });
             const aberratedPeak = aberrated?.maxIntensity ?? 0;
 
-            const size = samplingSize;
-            const idealReal = Array(size).fill().map(() => Array(size).fill(0));
-            const idealImag = Array(size).fill().map(() => Array(size).fill(0));
-            for (let i = 0; i < size; i++) {
-                for (let j = 0; j < size; j++) {
+            const idealSize = targetSize > samplingSize ? targetSize : samplingSize;
+            const idealReal = Array(idealSize).fill().map(() => Array(idealSize).fill(0));
+            const idealImag = Array(idealSize).fill().map(() => Array(idealSize).fill(0));
+
+            const offset = (targetSize > samplingSize) ? Math.floor((targetSize - samplingSize) / 2) : 0;
+            for (let i = 0; i < samplingSize; i++) {
+                for (let j = 0; j < samplingSize; j++) {
                     if (gridData.pupilMask[i][j]) {
-                        idealReal[i][j] = gridData.amplitude[i][j];
-                        idealImag[i][j] = 0;
+                        idealReal[i + offset][j + offset] = gridData.amplitude[i][j];
+                        idealImag[i + offset][j + offset] = 0;
                     }
                 }
             }
@@ -744,7 +768,7 @@ export class PSFCalculator {
         // 4. PSF評価指標を計算（計測）
         emitProgress(92, 'psf-metrics', 'Computing metrics...');
         const metricsStartTime = performance.now();
-        const usedPixelSize = pixelSize || this.calculatePixelSize(effectiveWavelength, focalLength, pupilDiameter, samplingSize);
+        const usedPixelSize = pixelSize || this.calculatePixelSize(effectiveWavelength, focalLength, pupilDiameter, targetSize);
         const metrics = this.calculatePSFMetrics(psfData, {
             wavelength: effectiveWavelength,
             pupilDiameter,
@@ -769,6 +793,7 @@ export class PSFCalculator {
                 totalTime,
                 method: 'javascript',
                 samplingSize,
+                fftSize: targetSize,
                 wavelength: effectiveWavelength,
                 pixelSize: usedPixelSize
             }
