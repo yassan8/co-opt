@@ -100,6 +100,7 @@
     <div class="top-file-row" id="loaded-file-display">
       <span class="top-file-icon">📁</span>
       <span id="loaded-file-name" class="top-file-name">No file loaded</span>
+      <button id="open-settings-btn" class="top-settings-btn" title="Settings">⚙️</button>
     </div>
     <div class="top-buttons-row">
       <button id="save-all-btn">Save</button>
@@ -555,7 +556,7 @@
       console.warn('⚠️ [Startup] Failed to pre-load active configuration:', e);
     }
   </script>
-  <script type="module" src="main.js?v=2026-01-08h"></script>
+  <script type="module" src="main.js?v=2026-01-14a"></script>
   
   <!-- Configuration System -->
   <script type="module" src="table-configuration.js"></script>
@@ -620,7 +621,7 @@
         // ray-tracing.jsの関数をグローバルに公開
         setTimeout(async () => {
           try {
-            const main = await import('./main.js?v=2026-01-08h');
+            const main = await import('./main.js?v=2026-01-14a');
             const rayTracing = await import('./ray-tracing.js');
             const debugUtils = await import('./debug/debug-utils.js');
             

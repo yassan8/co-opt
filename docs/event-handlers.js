@@ -8,6 +8,64 @@ import { calculateSurfaceOrigins } from '../ray-tracing.js';
 import { calculateOpticalSystemOffset } from '../utils/math.js';
 import { drawLensCrossSectionWithSurfaceOrigins, harmonizeSceneGeometry } from '../surface.js';
 
+const __COOPT_FORCE_INFINITE_PUPIL_MODE_KEY = 'coopt.forceInfinitePupilMode';
+
+function __cooptSanitizeForcedInfinitePupilMode(v) {
+    const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
+    return (s === 'stop' || s === 'entrance') ? s : '';
+}
+
+function __cooptGetForceInfinitePupilMode() {
+    try {
+        return __cooptSanitizeForcedInfinitePupilMode(globalThis?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? globalThis?.COOPT_FORCE_INFINITE_PUPIL_MODE);
+    } catch (_) {
+        return '';
+    }
+}
+
+function __cooptSetForceInfinitePupilMode(mode) {
+    const m = __cooptSanitizeForcedInfinitePupilMode(mode);
+    try {
+        if (m) {
+            globalThis.__COOPT_FORCE_INFINITE_PUPIL_MODE = m;
+            globalThis.COOPT_FORCE_INFINITE_PUPIL_MODE = m;
+        } else {
+            try { delete globalThis.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { globalThis.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+            try { delete globalThis.COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { globalThis.COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+        }
+    } catch (_) {}
+
+    try {
+        if (m) localStorage.setItem(__COOPT_FORCE_INFINITE_PUPIL_MODE_KEY, m);
+        else localStorage.removeItem(__COOPT_FORCE_INFINITE_PUPIL_MODE_KEY);
+    } catch (_) {}
+}
+
+function __cooptInitForceInfinitePupilModeFromStorage() {
+    // Respect explicit globals first; otherwise restore from localStorage.
+    const already = __cooptGetForceInfinitePupilMode();
+    if (already) return;
+    let saved = '';
+    try {
+        saved = __cooptSanitizeForcedInfinitePupilMode(localStorage.getItem(__COOPT_FORCE_INFINITE_PUPIL_MODE_KEY));
+    } catch (_) {
+        saved = '';
+    }
+    if (saved) __cooptSetForceInfinitePupilMode(saved);
+}
+
+try {
+    if (!globalThis.__cooptForceInfinitePupilModeInitDone) {
+        globalThis.__cooptForceInfinitePupilModeInitDone = true;
+        __cooptInitForceInfinitePupilModeFromStorage();
+        // Expose for popup Settings window.
+        try {
+            window.__cooptGetForceInfinitePupilMode = __cooptGetForceInfinitePupilMode;
+            window.__cooptSetForceInfinitePupilMode = __cooptSetForceInfinitePupilMode;
+        } catch (_) {}
+    }
+} catch (_) {}
+
 // X-Z、Y-Zボタンで必要な関数をグローバルから取得する関数
 function getRequiredFunctions() {
     return {
@@ -3978,6 +4036,7 @@ export function setupOpticalSystemChangeListeners(scene) {
                 // Always compute inside the popup to avoid background throttling of the opener
                 // when the main window is hidden/minimized/unfocused.
                 {
+                    const CACHE_BUSTER = '2026-01-14a';
                     const moduleURL = (relPath) => {
                         const baseHref = (() => {
                             try {
@@ -3988,7 +4047,9 @@ export function setupOpticalSystemChangeListeners(scene) {
                                 return window.location.href;
                             }
                         })();
-                        return new URL(relPath, baseHref).href;
+                        const url = new URL(relPath, baseHref);
+                        if (!url.searchParams.has('v')) url.searchParams.set('v', CACHE_BUSTER);
+                        return url.href;
                     };
 
                     const throwIfCancelled = (token) => {
@@ -4176,41 +4237,43 @@ export function setupOpticalSystemChangeListeners(scene) {
                         return { checksum: calcFNV1a32(parts.join(';')) };
                     };
 
-                    // Mirror the main window's PSF trace line to confirm field-setting changes.
-                    try {
-                        const fa = (fieldSetting && fieldSetting.fieldAngle && typeof fieldSetting.fieldAngle === 'object')
-                            ? fieldSetting.fieldAngle
-                            : { x: 0, y: 0 };
-                        const line = '🧭 [PSF popup] objectIndex=' + idx + ' type=' + objectType +
-                            ' fieldAngle=(' + (Number(fa.x) || 0) + ',' + (Number(fa.y) || 0) + ')' +
-                            ' height=(' + (Number(fieldSetting && fieldSetting.xHeight) || 0) + ',' + (Number(fieldSetting && fieldSetting.yHeight) || 0) + ')' +
-                            ' wl=' + (Number(wavelength) || 0);
-                        console.log(line);
+                    if (PSF_DEBUG) {
                         try {
-                            if (window.opener && window.opener.console && typeof window.opener.console.log === 'function') {
-                                window.opener.console.log(line);
-                            }
+                            const fa = (fieldSetting && fieldSetting.fieldAngle && typeof fieldSetting.fieldAngle === 'object')
+                                ? fieldSetting.fieldAngle
+                                : { x: 0, y: 0 };
+                            const line = '🧭 [PSF popup] objectIndex=' + idx + ' type=' + objectType +
+                                ' fieldAngle=(' + (Number(fa.x) || 0) + ',' + (Number(fa.y) || 0) + ')' +
+                                ' height=(' + (Number(fieldSetting && fieldSetting.xHeight) || 0) + ',' + (Number(fieldSetting && fieldSetting.yHeight) || 0) + ')' +
+                                ' wl=' + (Number(wavelength) || 0);
+                            console.log(line);
+                            try {
+                                if (window.opener && window.opener.console && typeof window.opener.console.log === 'function') {
+                                    window.opener.console.log(line);
+                                }
+                            } catch (_) {}
                         } catch (_) {}
-                    } catch (_) {}
+                    }
 
-                    // Always emit identity line in the popup console too.
-                    // This helps confirm which config/rows the popup actually used.
-                    try {
-                        const summary = summarizeOpticalSystemRows(opticalSystemRows);
-                        const idLine = '🧾 [PSF popup] activeConfig=' + (getActiveConfigLabel() || '(none)') +
-                            ' rows=' + (Array.isArray(opticalSystemRows) ? opticalSystemRows.length : 0) +
-                            ' checksum=' + (summary && summary.checksum ? summary.checksum : '0');
-                        console.log(idLine);
+                    if (PSF_DEBUG) {
                         try {
-                            if (window.opener && window.opener.console && typeof window.opener.console.log === 'function') {
-                                window.opener.console.log(idLine);
-                            }
+                            const summary = summarizeOpticalSystemRows(opticalSystemRows);
+                            const idLine = '🧾 [PSF popup] activeConfig=' + (getActiveConfigLabel() || '(none)') +
+                                ' rows=' + (Array.isArray(opticalSystemRows) ? opticalSystemRows.length : 0) +
+                                ' checksum=' + (summary && summary.checksum ? summary.checksum : '0');
+                            console.log(idLine);
+                            try {
+                                if (window.opener && window.opener.console && typeof window.opener.console.log === 'function') {
+                                    window.opener.console.log(idLine);
+                                }
+                            } catch (_) {}
                         } catch (_) {}
-                    } catch (_) {}
+                    }
 
                     // Also log PSF physical scale inputs (pupil diameter / focal length) once available.
                     // This is critical when the plot auto-normalizes intensity and hides differences.
                     const logScaleInputs = (pupilDiameterMm, focalLengthMm, stopIndex) => {
+                        if (!PSF_DEBUG) return;
                         try {
                             const line = '📏 [PSF popup] pupilDiameterMm=' + (Number(pupilDiameterMm) || 0) +
                                 ' focalLengthMm=' + (Number(focalLengthMm) || 0) +
@@ -4232,7 +4295,7 @@ export function setupOpticalSystemChangeListeners(scene) {
                     try {
                         if (fieldSetting.type === 'Angle' || !fieldSetting.height) {
                             opdCalculator._setInfinitePupilMode(fieldSetting, 'stop');
-                            console.log('🔑 [PSF Popup] Forced stop mode for infinite field');
+                            if (PSF_DEBUG) console.log('🔑 [PSF Popup] Forced stop mode for infinite field');
                         }
                     } catch (e) {
                         console.warn('⚠️ [PSF Popup] Failed to set stop mode:', e);
@@ -4271,11 +4334,12 @@ export function setupOpticalSystemChangeListeners(scene) {
                         throw err;
                     }
 
-                    // Debug: Check wavefront map metadata
-                    console.log('🔍 [PSF Popup] Wavefront map keys:', Object.keys(wavefrontMap));
-                    console.log('🔍 [PSF Popup] pupilPhysicalRadiusMm:', wavefrontMap.pupilPhysicalRadiusMm);
-                    console.log('🔍 [PSF Popup] pupilSamplingMode:', wavefrontMap.pupilSamplingMode);
-                    console.log('🔍 [PSF Popup] entranceEffectiveRadiusMm:', wavefrontMap.entranceEffectiveRadiusMm);
+                    if (PSF_DEBUG) {
+                        console.log('🔍 [PSF Popup] Wavefront map keys:', Object.keys(wavefrontMap));
+                        console.log('🔍 [PSF Popup] pupilPhysicalRadiusMm:', wavefrontMap.pupilPhysicalRadiusMm);
+                        console.log('🔍 [PSF Popup] pupilSamplingMode:', wavefrontMap.pupilSamplingMode);
+                        console.log('🔍 [PSF Popup] entranceEffectiveRadiusMm:', wavefrontMap.entranceEffectiveRadiusMm);
+                    }
                     
                     // CRITICAL: Use actual entrance pupil radius for spatial frequency scaling
                     // In entrance pupil mode, pupilPhysicalRadiusMm (stop radius) != actual entrance pupil radius
@@ -4284,7 +4348,7 @@ export function setupOpticalSystemChangeListeners(scene) {
                         ? wavefrontMap.entranceEffectiveRadiusMm
                         : wavefrontMap.pupilPhysicalRadiusMm;
                     
-                    console.log('🔍 [PSF Popup] Using actualPupilRadiusMm:', actualPupilRadiusMm);
+                    if (PSF_DEBUG) console.log('🔍 [PSF Popup] Using actualPupilRadiusMm:', actualPupilRadiusMm);
 
                     // Convert to PSF calculator format (gridData)
                     // Build OPD grid from the wavefront map samples (piston+tilt removed display OPD).
@@ -4335,8 +4399,7 @@ export function setupOpticalSystemChangeListeners(scene) {
                         }
                     };
                     
-                    // OPD grid stats: valid coverage + RMS + P-V.
-                    try {
+                    if (PSF_DEBUG) try {
                         let valid = 0;
                         let sum = 0;
                         let sum2 = 0;
@@ -4434,7 +4497,7 @@ export function setupOpticalSystemChangeListeners(scene) {
                     // In entrance pupil mode, keep actualPupilRadiusMm for understanding
                     // but use stopDiameterMm for PSF calculation to maintain consistent diffraction limit
                     if (wavefrontMap.pupilSamplingMode === 'entrance') {
-                        console.log('🔍 [PSF Popup] Entrance pupil mode: using stop diameter', stopDiameterMm, 'mm instead of entrance', actualPupilRadiusMm * 2, 'mm');
+                        if (PSF_DEBUG) console.log('🔍 [PSF Popup] Entrance pupil mode: using stop diameter', stopDiameterMm, 'mm instead of entrance', actualPupilRadiusMm * 2, 'mm');
                         pupilDiameterMm = stopDiameterMm;
                     } else {
                         pupilDiameterMm = stopDiameterMm;  // Use stop diameter in stop mode too
@@ -4445,7 +4508,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                         if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) focalLengthMm = Math.abs(fl);
                     } catch (_) {}
 
-                    // Emit scale inputs after we compute them.
                     logScaleInputs(pupilDiameterMm, focalLengthMm, stopIndexForLog);
 
                     if (!window.__popupPsfCalculator) window.__popupPsfCalculator = new PSFCalculator();
@@ -5024,6 +5086,172 @@ export function setupOpticalSystemChangeListeners(scene) {
         window.addEventListener('load', () => {
             try { window.renderTransverseAberration(); } catch (_) {}
         });
+    </script>
+</body>
+</html>
+                        `);
+
+                        try { popup.document.close(); } catch (_) {}
+                });
+        }
+
+        // Settings popup (environment settings)
+        const openSettingsBtn = document.getElementById('open-settings-btn');
+        if (openSettingsBtn) {
+                openSettingsBtn.addEventListener('click', () => {
+                        if (window.__settingsPopup && !window.__settingsPopup.closed) {
+                                try { window.__settingsPopup.focus(); } catch (_) {}
+                                return;
+                        }
+
+                        const popup = window.open('', 'Settings', 'width=520,height=340');
+                        window.__settingsPopup = popup;
+
+                        popup.document.write(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Settings</title>
+    <style>
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: #f4f4f4;
+        }
+        .header {
+            padding: 10px 12px;
+            background: #f8f8f8;
+            color: #333;
+            border-bottom: 1px solid #ddd;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .content {
+            padding: 12px;
+            background: #fff;
+            flex: 1 1 auto;
+            overflow: auto;
+        }
+        .section-title { font-size: 13px; font-weight: 600; color: #333; margin: 0 0 8px 0; }
+        .help { font-size: 12px; color: #666; margin: 0 0 10px 0; line-height: 1.35; }
+        .radio-group { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px 0; }
+        label { font-size: 13px; color: #333; }
+        .footer {
+            padding: 10px 12px;
+            border-top: 1px solid #ddd;
+            background: #f8f8f8;
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+        button {
+            padding: 6px 10px;
+            border: 1px solid #bbb;
+            background: #f8f8f8;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #333;
+        }
+        button:hover { background: #e9e9e9; }
+        code { font-family: Menlo, Consolas, monospace; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="header">Settings</div>
+    <div class="content">
+        <div class="section-title">Infinite Field: Pupil Sampling Mode</div>
+        <div class="help">
+            Fix the sampling mode used for infinite-field wavefront/PSF/MTF generation.
+            <br />
+            This sets <code>__COOPT_FORCE_INFINITE_PUPIL_MODE</code> to <code>stop</code> or <code>entrance</code>.
+        </div>
+
+        <div class="radio-group">
+            <label><input type="radio" name="force-mode" value="" /> Auto (default)</label>
+            <label><input type="radio" name="force-mode" value="stop" /> Force <code>stop</code></label>
+            <label><input type="radio" name="force-mode" value="entrance" /> Force <code>entrance</code></label>
+        </div>
+
+        <div class="help" style="margin-top: 6px;">
+            Note: Changes take effect on the next calculation.
+        </div>
+    </div>
+    <div class="footer">
+        <button id="close-btn" type="button">Close</button>
+    </div>
+
+    <script>
+        const KEY = 'coopt.forceInfinitePupilMode';
+        const sanitize = (v) => {
+            const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
+            return (s === 'stop' || s === 'entrance') ? s : '';
+        };
+
+        function getOpener() {
+            try { return window.opener || null; } catch (_) { return null; }
+        }
+
+        function getCurrent() {
+            const o = getOpener();
+            try {
+                const fromOpener = o && typeof o.__cooptGetForceInfinitePupilMode === 'function'
+                    ? sanitize(o.__cooptGetForceInfinitePupilMode())
+                    : sanitize(o?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? o?.COOPT_FORCE_INFINITE_PUPIL_MODE);
+                if (fromOpener) return fromOpener;
+            } catch (_) {}
+            try { return sanitize(localStorage.getItem(KEY)); } catch (_) { return ''; }
+        }
+
+        function applyMode(mode) {
+            const m = sanitize(mode);
+            const o = getOpener();
+            try {
+                if (o && typeof o.__cooptSetForceInfinitePupilMode === 'function') {
+                    o.__cooptSetForceInfinitePupilMode(m);
+                } else if (o) {
+                    if (m) {
+                        o.__COOPT_FORCE_INFINITE_PUPIL_MODE = m;
+                        o.COOPT_FORCE_INFINITE_PUPIL_MODE = m;
+                    } else {
+                        try { delete o.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { o.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+                        try { delete o.COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { o.COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+                    }
+                }
+            } catch (_) {}
+
+            try {
+                if (m) localStorage.setItem(KEY, m);
+                else localStorage.removeItem(KEY);
+            } catch (_) {}
+        }
+
+        function syncUI() {
+            const cur = getCurrent();
+            const radios = document.querySelectorAll('input[name="force-mode"]');
+            radios.forEach(r => {
+                r.checked = (sanitize(r.value) === cur);
+                if (cur === '' && sanitize(r.value) === '') r.checked = true;
+            });
+        }
+
+        document.querySelectorAll('input[name="force-mode"]').forEach(r => {
+            r.addEventListener('change', () => {
+                if (r.checked) applyMode(r.value);
+            });
+        });
+
+        document.getElementById('close-btn').addEventListener('click', () => {
+            try { window.close(); } catch (_) {}
+        });
+
+        window.addEventListener('focus', syncUI);
+        syncUI();
     </script>
 </body>
 </html>

@@ -1193,6 +1193,12 @@ button:active {
     color: #1a4d8f;
 }
 
+.top-settings-btn {
+    margin-left: auto !important;
+    padding: 6px 10px;
+    min-width: 30px;
+}
+
 .top-buttons-row {
     display: flex;
     gap: 10px;

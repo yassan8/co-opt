@@ -2261,6 +2261,7 @@ if (typeof window !== 'undefined') {
   window.displayCacheStats = displayCacheStats;
   window.getPerformanceReport = getPerformanceReport;
   window.enableRayTracingProfiler = enableRayTracingProfiler;
+  window.isRayTracingProfilerEnabled = isRayTracingProfilerEnabled;
   window.getRayTracingProfile = getRayTracingProfile;
 }
 
@@ -2317,6 +2318,10 @@ function now() {
 export function enableRayTracingProfiler(enable = true, reset = true) {
   RT_PROF.enabled = !!enable;
   if (reset) resetRayTracingProfiler();
+}
+
+export function isRayTracingProfilerEnabled() {
+  return !!RT_PROF.enabled;
 }
 
 function resetRayTracingProfiler() {

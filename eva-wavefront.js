@@ -18,6 +18,16 @@ import { fitZernikeWeighted, reconstructOPD, jToNM, nmToJ, getZernikeName } from
 
 const OPD_DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis.__OPD_DEBUG || globalThis.__PSF_DEBUG));
 
+function __getActiveWavefrontProfile() {
+    try {
+        const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+        const p = g ? g.__cooptActiveWavefrontProfile : null;
+        return (p && p.enabled) ? p : null;
+    } catch (_) {
+        return null;
+    }
+}
+
 let extremeOPDWarnedOnce = false;
 let rayTraceFailureWarnCount = 0;
 
@@ -211,6 +221,10 @@ function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceInd
  * @returns {Object} {success: boolean, origin?: {x,y,z}, actualStopPoint?: {x,y,z}, error?: number, iterations?: number}
  */
 function calculateApertureRayNewton(chiefRayOrigin, direction, targetStopPoint, stopSurfaceIndex, opticalSystemRows, maxIterations, tolerance, wavelength, debugMode) {
+    const __prof = __getActiveWavefrontProfile();
+    if (__prof) {
+        __prof.newtonChiefCalls = (__prof.newtonChiefCalls || 0) + 1;
+    }
     // より適切な初期推定：目標点の方向に射出位置を移動
     // NOTE: 軸外視野では目標オフセットが大きいため、主光線位置から開始して
     // 非常に小さいステップ（0.05）で移動する
@@ -241,6 +255,7 @@ function calculateApertureRayNewton(chiefRayOrigin, direction, targetStopPoint, 
     }
     
     for (let iteration = 0; iteration < maxIterations; iteration++) {
+        if (__prof) __prof.newtonChiefIterations = (__prof.newtonChiefIterations || 0) + 1;
         const ray = {
             pos: currentOrigin,
             dir: { x: direction.x !== undefined ? direction.x : direction.i, y: direction.y !== undefined ? direction.y : direction.j, z: direction.z !== undefined ? direction.z : direction.k },
@@ -272,6 +287,7 @@ function calculateApertureRayNewton(chiefRayOrigin, direction, targetStopPoint, 
         }
         
         if (residualMagnitude < tolerance) {
+            if (__prof) __prof.newtonChiefSuccess = (__prof.newtonChiefSuccess || 0) + 1;
             return {
                 success: true,
                 origin: currentOrigin,
@@ -309,6 +325,7 @@ function calculateApertureRayNewton(chiefRayOrigin, direction, targetStopPoint, 
         }
     }
     
+    if (__prof) __prof.newtonChiefFail = (__prof.newtonChiefFail || 0) + 1;
     return { success: false };
 }
 
@@ -534,12 +551,37 @@ export class OpticalPathDifferenceCalculator {
         return this._getStopCenterOverrideKey(fieldSetting);
     }
 
+    _getForcedInfinitePupilMode() {
+        try {
+            const v = globalThis?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? globalThis?.COOPT_FORCE_INFINITE_PUPIL_MODE;
+            const s = (typeof v === 'string') ? v.trim().toLowerCase() : null;
+            if (s === 'stop' || s === 'entrance') return s;
+
+            // Popup windows may not inherit the opener's globalThis flags.
+            // Fall back to persisted storage so forced mode remains effective everywhere.
+            try {
+                const raw = globalThis?.localStorage?.getItem?.('coopt.forceInfinitePupilMode');
+                const ss = (typeof raw === 'string') ? raw.trim().toLowerCase() : null;
+                return (ss === 'stop' || ss === 'entrance') ? ss : null;
+            } catch (_) {
+                return null;
+            }
+        } catch (_) {
+            return null;
+        }
+    }
+
     _getInfinitePupilMode(fieldSetting) {
+        const forced = this._getForcedInfinitePupilMode();
+        if (forced) return forced;
         const key = this._getInfinitePupilModeKey(fieldSetting);
         return this._infinitePupilModeCache?.get(key) || 'stop';
     }
 
     _setInfinitePupilMode(fieldSetting, mode) {
+        // If the mode is globally forced, do not mutate per-field caches.
+        // This keeps the run deterministic and prevents auto-switch logic from overriding the user.
+        if (this._getForcedInfinitePupilMode()) return;
         const key = this._getInfinitePupilModeKey(fieldSetting);
         if (mode === 'entrance' || mode === 'stop') {
             this._infinitePupilModeCache.set(key, mode);
@@ -558,14 +600,16 @@ export class OpticalPathDifferenceCalculator {
             return cached;
         }
 
-        // This can be expensive for heavily vignetted fields; emit a single log so it doesn't look hung.
-        try {
-            if (!this._entrancePupilBuildLogged) this._entrancePupilBuildLogged = new Set();
-            if (!this._entrancePupilBuildLogged.has(key)) {
-                this._entrancePupilBuildLogged.add(key);
-                console.warn('🧩 [EntrancePupil] building entrance pupil config...', { key, fieldSetting });
-            }
-        } catch (_) {}
+        if (OPD_DEBUG) {
+            // This can be expensive for heavily vignetted fields; emit a single log so it doesn't look hung.
+            try {
+                if (!this._entrancePupilBuildLogged) this._entrancePupilBuildLogged = new Set();
+                if (!this._entrancePupilBuildLogged.has(key)) {
+                    this._entrancePupilBuildLogged.add(key);
+                    console.warn('🧩 [EntrancePupil] building entrance pupil config...', { key, fieldSetting });
+                }
+            } catch (_) {}
+        }
 
         // Estimate entrance radius from the first physical surface semi-diameter.
         const entranceRadius = (() => {
@@ -737,14 +781,16 @@ export class OpticalPathDifferenceCalculator {
         };
         this._entrancePupilConfigCache.set(key, cfg);
 
-        try {
-            console.warn('🧩 [EntrancePupil] entrance pupil config ready', {
-                key,
-                planeZ: cfg.planeZ,
-                centerOrigin: cfg.centerOrigin,
-                radius: cfg.radius
-            });
-        } catch (_) {}
+        if (OPD_DEBUG) {
+            try {
+                console.warn('🧩 [EntrancePupil] entrance pupil config ready', {
+                    key,
+                    planeZ: cfg.planeZ,
+                    centerOrigin: cfg.centerOrigin,
+                    radius: cfg.radius
+                });
+            } catch (_) {}
+        }
         return cfg;
     }
 
@@ -1459,6 +1505,7 @@ export class OpticalPathDifferenceCalculator {
                 }
             } else {
                 const mode = this._getInfinitePupilMode(fieldSetting);
+                const forcedMode = this._getForcedInfinitePupilMode();
                 // Always try strict for the current mode.
                 referenceRay = this.generateMarginalRay(0, 0, fieldSetting, { isReferenceRay: true });
 
@@ -1479,14 +1526,17 @@ export class OpticalPathDifferenceCalculator {
                             if (OPD_DEBUG) {
                                 console.log(`⚠️ [Newton] Newton-based chief ray also failed, switching to entrance mode`);
                             }
-                            try {
-                                this._setInfinitePupilMode(fieldSetting, 'entrance');
-                                const k = this.getFieldCacheKey(fieldSetting);
-                                this._chiefRayCache?.delete(k);
-                                const ek = this._getInfinitePupilModeKey(fieldSetting);
-                                this._entrancePupilConfigCache?.delete(ek);
-                            } catch (_) {}
-                            referenceRay = this.generateMarginalRay(0, 0, fieldSetting, { isReferenceRay: true });
+                            // Respect global force switch: do not auto-switch modes when forced.
+                            if (forcedMode !== 'stop') {
+                                try {
+                                    this._setInfinitePupilMode(fieldSetting, 'entrance');
+                                    const k = this.getFieldCacheKey(fieldSetting);
+                                    this._chiefRayCache?.delete(k);
+                                    const ek = this._getInfinitePupilModeKey(fieldSetting);
+                                    this._entrancePupilConfigCache?.delete(ek);
+                                } catch (_) {}
+                                referenceRay = this.generateMarginalRay(0, 0, fieldSetting, { isReferenceRay: true });
+                            }
                         } else if (OPD_DEBUG) {
                             console.log(`✅ [Newton] Successfully generated chief ray with Newton method`);
                         }
@@ -1545,13 +1595,16 @@ export class OpticalPathDifferenceCalculator {
         if (!referenceRay) {
             const isFinite = this.isFiniteForField(fieldSetting);
             if (!isFinite) {
-                try {
-                    this._setInfinitePupilMode(fieldSetting, 'entrance');
-                    // Clear cached chief ray for this field to avoid mixing modes.
-                    const k = this.getFieldCacheKey(fieldSetting);
-                    this._chiefRayCache?.delete(k);
-                } catch (_) {}
-                referenceRay = this.generateMarginalRay(0, 0, fieldSetting, { isReferenceRay: true });
+                const forcedMode = this._getForcedInfinitePupilMode();
+                if (forcedMode !== 'stop') {
+                    try {
+                        this._setInfinitePupilMode(fieldSetting, 'entrance');
+                        // Clear cached chief ray for this field to avoid mixing modes.
+                        const k = this.getFieldCacheKey(fieldSetting);
+                        this._chiefRayCache?.delete(k);
+                    } catch (_) {}
+                    referenceRay = this.generateMarginalRay(0, 0, fieldSetting, { isReferenceRay: true });
+                }
             }
         }
 
@@ -3585,6 +3638,11 @@ export class OpticalPathDifferenceCalculator {
     generateInfiniteMarginalRay(pupilX, pupilY, fieldSetting, options = undefined) {
         const fastSolve = !!(options && (options.fastMarginalRay || options.fastSolve));
         const relaxStopMissTol = !!(options && options.relaxStopMissTol);
+        const forcedMode = (this._getForcedInfinitePupilMode)
+            ? this._getForcedInfinitePupilMode()
+            : null;
+        const isForcedStop = forcedMode === 'stop';
+        const canForcedStopSlowRetry = isForcedStop && fastSolve && !(options && options._forceStopSlowRetry);
         // 🔍 端点での詳細ログ
         const inputPupilRadius = Math.sqrt(pupilX * pupilX + pupilY * pupilY);
         const isEdgePoint = inputPupilRadius > 0.95; // 端点または外縁部
@@ -3710,15 +3768,19 @@ export class OpticalPathDifferenceCalculator {
         const desiredLocalX = pupilX * stopRadius;
         const desiredLocalY = pupilY * stopRadius;
         
-        // 🚀 STRATEGY: For off-axis fields in stop mode, use Newton method first for all rays
-        // Geometric method often fails for off-axis, so Newton is the primary approach
+        // PERF NOTE:
+        // Newton-Primary (Newton first for *all* rays) is extremely expensive because each Newton
+        // iteration triggers multiple traceRay() calls (ray + Jacobian). This can dominate runtime.
+        // Default is OFF; opt-in with globalThis.__COOPT_WAVEFRONT_NEWTON_PRIMARY = true.
+        const __g = (typeof globalThis !== 'undefined') ? globalThis : null;
+        const __useNewtonPrimary = !!(__g && __g.__COOPT_WAVEFRONT_NEWTON_PRIMARY) || !!(options && options._forceNewtonPrimaryForFallback);
         const referenceRay = this.referenceChiefRay;
         
-        if (referenceRay && referenceRay.length > 0) {
+        if (__useNewtonPrimary && referenceRay && referenceRay.length > 0) {
             const debugCallCount = (this._debugMarginalCallCount || 0);
             const shouldLog = debugCallCount < 5 && (isNearCenter || isEdge);
             
-            if (shouldLog) {
+            if (OPD_DEBUG && shouldLog) {
                 console.log(`🎯 [Newton-Primary] pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}) using Newton method...`);
             }
             
@@ -3741,7 +3803,7 @@ export class OpticalPathDifferenceCalculator {
                 false
             );
             
-            if (shouldLog) {
+            if (OPD_DEBUG && shouldLog) {
                 console.log(`🔍 [Newton-Primary-Result] success=${newtonResult?.success || false}, iterations=${newtonResult?.iterations || 'N/A'}`);
             }
             
@@ -3758,7 +3820,7 @@ export class OpticalPathDifferenceCalculator {
                 if (toEval) {
                     this._lastMarginalRayOriginGeom = { x: optimizedOrigin.x, y: optimizedOrigin.y, z: optimizedOrigin.z };
                     return toEval;
-                } else if (shouldLog) {
+                } else if (OPD_DEBUG && shouldLog) {
                     console.warn(`⚠️ [Newton-Primary-Trace-Failed] pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)})`);
                 }
             }
@@ -3902,8 +3964,15 @@ export class OpticalPathDifferenceCalculator {
         })();
         // Hard cap for the dense-grid path: each iteration is a full trace to the stop.
         // Continuity seeding (originDeltaHints) should make 1-3 iterations sufficient.
+        const fastMaxItersOpt = Number(options?.fastMaxIterations);
         const maxIterations = fastSolve
-            ? ((inputPupilRadius >= 0.9 || fieldAngleDeg >= 2.0) ? 4 : 3)
+            ? (() => {
+                const base = ((inputPupilRadius >= 0.9 || fieldAngleDeg >= 2.0) ? 6 : 5);
+                if (Number.isFinite(fastMaxItersOpt) && fastMaxItersOpt > 0) {
+                    return Math.max(base, Math.min(12, Math.floor(fastMaxItersOpt)));
+                }
+                return base;
+            })()
             : ((inputPupilRadius >= 0.9 || fieldAngleDeg >= 2.0) ? 20 : 10);
         const correctionFactor = 0.7;
         const maxStep = Math.max(0.5, stopRadius * ((inputPupilRadius >= 0.9) ? 0.18 : 0.12)); // mm, clamp to avoid overshoot into blocked regions
@@ -3927,6 +3996,8 @@ export class OpticalPathDifferenceCalculator {
         let bestEval = null;
         let hadStopHit = false;
         let lastEval = null;
+        let _fastUnreachableResetTried = false;
+        let _fastUnreachableBackBoostTried = false;
         // In fast mode, accept a solution once it's safely inside the stop-miss gate.
         // This avoids extra traceRayToSurface calls that don't materially affect OPD quality.
         const fastAcceptErr = fastSolve ? Math.max(tolerance, stopMissTol * 0.65) : NaN;
@@ -3935,6 +4006,37 @@ export class OpticalPathDifferenceCalculator {
             const toStop = this.traceRayToSurface(currentRay, this.stopSurfaceIndex, 1.0);
             const actualStop = this.getStopPointFromRayData(toStop);
             if (!actualStop) {
+                // FastSolve robustness: continuity hints can occasionally place the origin inside the
+                // optical train or into a vignetted region, causing an immediate "stop unreachable".
+                // Before giving up (and triggering an expensive slow retry), try falling back to the
+                // geometric origin once.
+                if (fastSolve && !hadStopHit) {
+                    const prof2 = this._wavefrontProfile;
+                    if (!_fastUnreachableResetTried) {
+                        _fastUnreachableResetTried = true;
+                        if (prof2 && prof2.enabled) {
+                            prof2.infiniteFastUnreachableReset = (prof2.infiniteFastUnreachableReset || 0) + 1;
+                        }
+                        currentOrigin = { ...geomOrigin };
+                        currentRay = { pos: currentOrigin, dir: direction, wavelength: this.wavelength };
+                        continue;
+                    }
+                    if (!_fastUnreachableBackBoostTried) {
+                        _fastUnreachableBackBoostTried = true;
+                        if (prof2 && prof2.enabled) {
+                            prof2.infiniteFastUnreachableBackBoost = (prof2.infiniteFastUnreachableBackBoost || 0) + 1;
+                        }
+                        const extraBack = Math.min(200, Math.max(40, backDistance * 0.5));
+                        currentOrigin = {
+                            x: geomOrigin.x - direction.x * extraBack,
+                            y: geomOrigin.y - direction.y * extraBack,
+                            z: geomOrigin.z - direction.z * extraBack
+                        };
+                        currentRay = { pos: currentOrigin, dir: direction, wavelength: this.wavelength };
+                        continue;
+                    }
+                }
+
                 // If this is the reference-ray setup at pupil center, the nominal stop center may be vignetted.
                 // Try to find a reachable stop point near the center and treat it as the effective stop center.
                 const inputPupilRadius = Math.sqrt(pupilX * pupilX + pupilY * pupilY);
@@ -3981,6 +4083,19 @@ export class OpticalPathDifferenceCalculator {
                     this._lastMarginalRayGenFailure = zDegenerate
                         ? 'infinite: stop unreachable (direction.z≈0)'
                         : (!actualStop ? 'infinite: stop unreachable (terminated before stop)' : 'infinite: stop unreachable');
+                }
+                if (canForcedStopSlowRetry) {
+                    const profRetry = this._wavefrontProfile;
+                    if (profRetry && profRetry.enabled) {
+                        profRetry.infiniteForcedStopSlowRetry = (profRetry.infiniteForcedStopSlowRetry || 0) + 1;
+                    }
+                    return this.generateInfiniteMarginalRay(pupilX, pupilY, fieldSetting, {
+                        ...(options || {}),
+                        fastMarginalRay: false,
+                        fastSolve: false,
+                        _forceStopSlowRetry: true,
+                        _forceNewtonPrimaryForFallback: true
+                    });
                 }
                 return null;
             }
@@ -4290,6 +4405,19 @@ export class OpticalPathDifferenceCalculator {
             if (!this._lastMarginalRayGenFailure) {
                 this._lastMarginalRayGenFailure = `infinite: stop miss (${finalStop.errMag.toFixed(3)}mm > ${stopMissTol.toFixed(3)}mm)`;
             }
+            if (canForcedStopSlowRetry) {
+                const profRetry = this._wavefrontProfile;
+                if (profRetry && profRetry.enabled) {
+                    profRetry.infiniteForcedStopSlowRetry = (profRetry.infiniteForcedStopSlowRetry || 0) + 1;
+                }
+                return this.generateInfiniteMarginalRay(pupilX, pupilY, fieldSetting, {
+                    ...(options || {}),
+                    fastMarginalRay: false,
+                    fastSolve: false,
+                    _forceStopSlowRetry: true,
+                    _forceNewtonPrimaryForFallback: true
+                });
+            }
             return null;
         }
 
@@ -4305,6 +4433,19 @@ export class OpticalPathDifferenceCalculator {
                 this._lastMarginalRayGenFailure = zDegenerate
                     ? 'infinite: eval unreachable (direction.z≈0)'
                     : 'infinite: eval unreachable';
+            }
+            if (canForcedStopSlowRetry) {
+                const profRetry = this._wavefrontProfile;
+                if (profRetry && profRetry.enabled) {
+                    profRetry.infiniteForcedStopSlowRetry = (profRetry.infiniteForcedStopSlowRetry || 0) + 1;
+                }
+                return this.generateInfiniteMarginalRay(pupilX, pupilY, fieldSetting, {
+                    ...(options || {}),
+                    fastMarginalRay: false,
+                    fastSolve: false,
+                    _forceStopSlowRetry: true,
+                    _forceNewtonPrimaryForFallback: true
+                });
             }
             return null;
         }
@@ -5506,6 +5647,7 @@ export class WavefrontAberrationAnalyzer {
             console.log(`⚡ Zernike描画: フィット用グリッドを ${gridSize} に縮小（要求=${requestedGridSize}、上限=${fitGridSizeMax}）`);
         }
 
+        const g = (typeof globalThis !== 'undefined') ? globalThis : null;
         const profileEnabled = !!(options?.profile || (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_PROFILE === true));
         const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
             ? () => performance.now()
@@ -5526,6 +5668,21 @@ export class WavefrontAberrationAnalyzer {
         if (prof) {
             this.opdCalculator._wavefrontProfile = prof;
             prof.marks.start = prof.tStart;
+
+            // Enable low-overhead ray-tracing profiler only for this run.
+            try {
+                prof.__rtPrevEnabled = (g && typeof g.isRayTracingProfilerEnabled === 'function') ? !!g.isRayTracingProfilerEnabled() : null;
+            } catch (_) {
+                prof.__rtPrevEnabled = null;
+            }
+            try {
+                if (g) g.__cooptActiveWavefrontProfile = prof;
+            } catch (_) {}
+            try {
+                if (g && typeof g.enableRayTracingProfiler === 'function') {
+                    g.enableRayTracingProfiler(true, true);
+                }
+            } catch (_) {}
         }
 
         // 通常運用ではログを最小化（Chromeのログ抑制/フリーズ対策）
@@ -5567,11 +5724,15 @@ export class WavefrontAberrationAnalyzer {
             // Record pupil sampling mode for UI/diagnostics.
             const isFinite = this.opdCalculator.isFiniteForField(fieldSetting);
             isInfiniteField = !isFinite;
-            wavefrontMap.pupilSamplingMode = isFinite ? 'finite' : this.opdCalculator._getInfinitePupilMode(fieldSetting);
+            const forcedInfinitePupilMode = (!isFinite && this.opdCalculator._getForcedInfinitePupilMode)
+                ? this.opdCalculator._getForcedInfinitePupilMode()
+                : null;
+            wavefrontMap.pupilSamplingMode = isFinite
+                ? 'finite'
+                : (forcedInfinitePupilMode || this.opdCalculator._getInfinitePupilMode(fieldSetting));
             wavefrontMap.bestEffortVignettedPupil = (!isFinite && wavefrontMap.pupilSamplingMode === 'entrance');
 
-            // Always emit a single-line mode indicator to avoid confusion when best-effort retries happen.
-            if (!isFinite) {
+            if (OPD_DEBUG && !isFinite) {
                 console.log(`🧿 [Wavefront] infinite pupilSamplingMode=${wavefrontMap.pupilSamplingMode}`);
             }
         } catch (error) {
@@ -5852,7 +6013,10 @@ export class WavefrontAberrationAnalyzer {
         // IMPORTANT: If infinite pupilSamplingMode switches stop→entrance mid-loop (best-effort),
         // we must restart the entire sampling pass so a single wavefront map never mixes pupil
         // definitions/reference rays.
-        const maxSamplingPasses = isInfiniteField ? 2 : 1;
+        const forcedInfinitePupilMode = (isInfiniteField && this.opdCalculator._getForcedInfinitePupilMode)
+            ? this.opdCalculator._getForcedInfinitePupilMode()
+            : null;
+        const maxSamplingPasses = (isInfiniteField && !forcedInfinitePupilMode) ? 2 : 1;
         let restartedDueToModeSwitch = false;
         let restartedDueToStopUnreachable = false;
 
@@ -5874,7 +6038,7 @@ export class WavefrontAberrationAnalyzer {
             let passMode = wavefrontMap.pupilSamplingMode;
             if (isInfiniteField) {
                 try {
-                    const m0 = this.opdCalculator._getInfinitePupilMode(fieldSetting);
+                    const m0 = forcedInfinitePupilMode || this.opdCalculator._getInfinitePupilMode(fieldSetting);
                     if (m0) passMode = m0;
                 } catch (_) {}
                 wavefrontMap.pupilSamplingMode = passMode;
@@ -5890,14 +6054,16 @@ export class WavefrontAberrationAnalyzer {
                     }
                 } catch (_) {}
 
-                console.log(`🧿 [Wavefront] infinite pupilSamplingMode(pass${samplingPass})=${passMode}`);
-                if (Number.isFinite(wavefrontMap.pupilPhysicalRadiusMm)) {
-                    console.log(`🧿 [Wavefront] pupilPhysicalRadiusMm=${wavefrontMap.pupilPhysicalRadiusMm.toFixed(6)} (mode=${passMode})`);
+                if (OPD_DEBUG) {
+                    console.log(`🧿 [Wavefront] infinite pupilSamplingMode(pass${samplingPass})=${passMode}`);
+                    if (Number.isFinite(wavefrontMap.pupilPhysicalRadiusMm)) {
+                        console.log(`🧿 [Wavefront] pupilPhysicalRadiusMm=${wavefrontMap.pupilPhysicalRadiusMm.toFixed(6)} (mode=${passMode})`);
+                    }
                 }
 
                 try {
                     const usedRelax = !!this.opdCalculator._referenceRayUsedRelaxStopMissTol;
-                    if (usedRelax) {
+                    if (OPD_DEBUG && usedRelax) {
                         console.warn('🟡 [Wavefront] reference ray used relaxStopMissTol=true (may indicate solver fragility)');
                     }
                 } catch (_) {}
@@ -5926,7 +6092,7 @@ export class WavefrontAberrationAnalyzer {
 
             // 進捗ログ（NaN多発でも必ず出る位置に置く）
             if (progressEvery > 0 && (pointIndex % progressEvery) === 0) {
-                console.log(`⏳ 波面計算進捗: ${pointIndex}/${gridPoints.length}点 (有効=${validPointCount}, 無効=${invalidPointCount})`);
+                if (OPD_DEBUG) console.log(`⏳ 波面計算進捗: ${pointIndex}/${gridPoints.length}点 (有効=${validPointCount}, 無効=${invalidPointCount})`);
                 // ログを出した直後に一度yieldして、ブラウザが固まって見えないようにする
                 await this._yieldToUI();
                 throwIfCancelled();
@@ -6022,13 +6188,43 @@ export class WavefrontAberrationAnalyzer {
             let opd = preferFast ? computeOPD(solveOptionsFast) : computeOPD(solveOptionsSlow);
 
             // Targeted retry: only for stop-miss/unreachable failures in fast mode.
+            // IMPORTANT: In infinite stop-mode, edge samples are often physically vignetted.
+            // Retrying the full (slow) solver there can double work with little benefit.
+            // We still retry for near-center points, or when the stop-miss is modest.
             if (!(isFinite(opd) && !isNaN(opd)) && preferFast) {
                 try {
                     const last = this.opdCalculator.getLastRayCalculation?.();
                     const err = (last && typeof last.error === 'string') ? last.error : '';
-                    if (err.includes('stop miss') || err.includes('stop unreachable')) {
-                        usedSolveOptions = solveOptionsSlow;
-                        opd = computeOPD(solveOptionsSlow);
+                    const isStopMiss = err.includes('stop miss');
+                    const isStopUnreachable = err.includes('stop unreachable');
+                    const isStopRelated = (isStopMiss || isStopUnreachable);
+
+                    if (isStopRelated) {
+                        if (prof) {
+                            prof.fastToSlowRetryStopRelated = (prof.fastToSlowRetryStopRelated || 0) + 1;
+                            if (err.includes('stop miss')) {
+                                prof.fastRetryStopMiss = (prof.fastRetryStopMiss || 0) + 1;
+                            } else if (err.includes('stop unreachable')) {
+                                prof.fastRetryStopUnreachable = (prof.fastRetryStopUnreachable || 0) + 1;
+                            }
+                        }
+
+                        // Empirical result (profile): slow retry almost never fixes "stop miss"
+                        // (i.e., the ray does not correspond to the requested pupil coordinate).
+                        // Retrying the slow solver there just doubles work. Only retry slow for
+                        // "stop unreachable" (solver/geometry issues).
+                        if (isStopUnreachable) {
+                            if (prof) prof.fastToSlowRetrySlow = (prof.fastToSlowRetrySlow || 0) + 1;
+                            usedSolveOptions = solveOptionsSlow;
+                            opd = computeOPD(solveOptionsSlow);
+                            if (prof) {
+                                if (isFinite(opd) && !isNaN(opd)) prof.fastToSlowRetrySlowOk = (prof.fastToSlowRetrySlowOk || 0) + 1;
+                                else prof.fastToSlowRetrySlowNg = (prof.fastToSlowRetrySlowNg || 0) + 1;
+                            }
+                        } else {
+                            // stop miss -> treat as vignetted/invalid in stop-mode; do not slow retry.
+                            if (prof) prof.fastToSlowRetrySkipped = (prof.fastToSlowRetrySkipped || 0) + 1;
+                        }
                     }
                 } catch (_) {
                     // ignore
@@ -6036,7 +6232,8 @@ export class WavefrontAberrationAnalyzer {
             }
 
             // Detect mode switch caused by OPD engine and restart the whole pass to keep consistency.
-            if (isInfiniteField) {
+            // If the mode is globally forced, do not allow auto-switch/restart.
+            if (isInfiniteField && !forcedInfinitePupilMode) {
                 try {
                     const m = this.opdCalculator._getInfinitePupilMode(fieldSetting);
                     if (m && wavefrontMap.pupilSamplingMode && m !== wavefrontMap.pupilSamplingMode) {
@@ -6047,7 +6244,9 @@ export class WavefrontAberrationAnalyzer {
                     // ignore
                 }
                 if (modeSwitchedMidPass) {
-                    console.warn(`🟣 [Wavefront] infinite pupilSamplingMode switched ${wavefrontMap.pupilSamplingMode}→${switchedTo} during sampling; restarting pass`);
+                    if (OPD_DEBUG) {
+                        console.warn(`🟣 [Wavefront] infinite pupilSamplingMode switched ${wavefrontMap.pupilSamplingMode}→${switchedTo} during sampling; restarting pass`);
+                    }
                     wavefrontMap.pupilSamplingMode = switchedTo;
                     wavefrontMap.bestEffortVignettedPupil = (switchedTo === 'entrance');
                     restartedDueToModeSwitch = true;
@@ -6080,10 +6279,10 @@ export class WavefrontAberrationAnalyzer {
                 const isPupilOrigin = Math.abs(pupilX) < 1e-9 && Math.abs(pupilY) < 1e-9;
                 if (isInfiniteField && passMode === 'stop' && isPupilOrigin && typeof reason === 'string' && reason.includes('stop unreachable')) {
                     sawStopUnreachableThisPass = true;
-                    console.warn(`⚠️ [Wavefront] Chief ray (pupil=0,0) is stop unreachable in stop mode, reason="${reason}"`);
+                    if (OPD_DEBUG) console.warn(`⚠️ [Wavefront] Chief ray (pupil=0,0) is stop unreachable in stop mode, reason="${reason}"`);
                 } else if (isInfiniteField && passMode === 'stop' && isPupilOrigin) {
                     // pupil=(0,0)が失敗したが、stop unreachableではない理由の場合もログ
-                    console.warn(`⚠️ [Wavefront] Chief ray (pupil=0,0) failed with reason="${reason}" (not stop unreachable)`);
+                    if (OPD_DEBUG) console.warn(`⚠️ [Wavefront] Chief ray (pupil=0,0) failed with reason="${reason}" (not stop unreachable)`);
                 }
                 if (OPD_DEBUG && isImportantPoint && debugLogCount < 220) {
                     console.warn(`⚠️ NaN値検出によりスキップ: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}), reason="${reason}"`);
@@ -6248,7 +6447,7 @@ export class WavefrontAberrationAnalyzer {
             }
 
             // If we broke due to mode switch, restart if we still have a pass remaining.
-            if (modeSwitchedMidPass && samplingPass + 1 < maxSamplingPasses) {
+            if (!forcedInfinitePupilMode && modeSwitchedMidPass && samplingPass + 1 < maxSamplingPasses) {
                 // Ensure the reference ray is consistent with the *new* mode before re-sampling.
                 try {
                     this.opdCalculator.referenceOpticalPath = null;
@@ -6262,7 +6461,7 @@ export class WavefrontAberrationAnalyzer {
 
             // If stop-mode sampling observed any "stop unreachable" failures, restart the whole map
             // in entrance mode (no mid-map switching; we just re-run consistently).
-            if (isInfiniteField && passMode === 'stop' && sawStopUnreachableThisPass && samplingPass + 1 < maxSamplingPasses) {
+            if (!forcedInfinitePupilMode && isInfiniteField && passMode === 'stop' && sawStopUnreachableThisPass && samplingPass + 1 < maxSamplingPasses) {
                 console.warn('🟣 [Wavefront] stop unreachable observed in stop mode; restarting in entrance pupil mode', {
                     fieldSetting,
                     invalidStopUnreachable: true
@@ -6299,10 +6498,8 @@ export class WavefrontAberrationAnalyzer {
             // Update the mode to reflect what was actually used by the OPD engine.
             if (isInfiniteField) {
                 try {
-                    const finalMode = this.opdCalculator._getInfinitePupilMode(fieldSetting);
-                    if (finalMode && finalMode !== wavefrontMap.pupilSamplingMode) {
-                        wavefrontMap.pupilSamplingMode = finalMode;
-                    }
+                    const finalMode = forcedInfinitePupilMode || this.opdCalculator._getInfinitePupilMode(fieldSetting);
+                    if (finalMode && finalMode !== wavefrontMap.pupilSamplingMode) wavefrontMap.pupilSamplingMode = finalMode;
                     wavefrontMap.bestEffortVignettedPupil = (wavefrontMap.pupilSamplingMode === 'entrance');
                     console.log(`🧿 [Wavefront] infinite pupilSamplingMode(final)=${wavefrontMap.pupilSamplingMode}`);
                 } catch (_) {
@@ -6483,8 +6680,11 @@ export class WavefrontAberrationAnalyzer {
             try {
                 const isFinite = this.opdCalculator.isFiniteForField(fieldSetting);
                 const mode = !isFinite ? this.opdCalculator._getInfinitePupilMode(fieldSetting) : null;
+                const forced = (!isFinite && this.opdCalculator._getForcedInfinitePupilMode)
+                    ? this.opdCalculator._getForcedInfinitePupilMode()
+                    : null;
                 const alreadyRetried = !!options?._bestEffortEntranceRetry;
-                if (!alreadyRetried && !isFinite && mode === 'stop') {
+                if (!alreadyRetried && !isFinite && !forced && mode === 'stop') {
                     console.warn('⚠️ 有効OPDサンプルが0点: entrance瞳ベストエフォートで再試行します');
                     this.opdCalculator._setInfinitePupilMode(fieldSetting, 'entrance');
                     return await this.generateWavefrontMap(fieldSetting, requestedGridSize, gridPattern, {
@@ -6597,7 +6797,7 @@ export class WavefrontAberrationAnalyzer {
         
         // Skip Zernike fitting if requested
         if (skipZernikeFit) {
-            console.log('⚡ Zernike fitting skipped (skipZernikeFit=true)');
+            if (OPD_DEBUG) console.log('⚡ Zernike fitting skipped (skipZernikeFit=true)');
             wavefrontMap.zernike = null;
             emitProgress(95, 'zernike-fit', 'Zernike fit skipped');
         } else {
@@ -6866,11 +7066,11 @@ export class WavefrontAberrationAnalyzer {
                 }
             })();
 
-            if (opdModeCompareSummary) {
+            if (OPD_DEBUG && opdModeCompareSummary) {
                 console.log('🧪 [WavefrontProfile] opdModeCompareSummary:', opdModeCompareSummary);
             }
 
-            console.log('⏱️ [WavefrontProfile] summary:', {
+            OPD_DEBUG && console.log('⏱️ [WavefrontProfile] summary:', {
                 profileVersion: '2025-12-31-breakdown-v1',
                 gridSize,
                 points,
@@ -6920,6 +7120,69 @@ export class WavefrontAberrationAnalyzer {
                 opdModeCompare,
                 opdModeCompareSummary
             });
+
+            // Minimal one-shot summary (this is what you should look at first).
+            try {
+                const rt = (g && typeof g.getRayTracingProfile === 'function') ? g.getRayTracingProfile({ reset: false }) : null;
+                const traceCalls = Number(rt?.traceCalls) || 0;
+                const wasmAttempts = Number(rt?.wasmIntersectAttempts) || 0;
+                const wasmHits = Number(rt?.wasmIntersectHits) || 0;
+                const wasmUnavailable = Number(rt?.wasmIntersectUnavailable) || 0;
+                const wasmHitRate = (wasmAttempts > 0) ? (100 * wasmHits / wasmAttempts) : 0;
+                const newtonCalls = Number(prof.newtonChiefCalls) || 0;
+                const newtonIters = Number(prof.newtonChiefIterations) || 0;
+                const newtonAvg = (newtonCalls > 0) ? (newtonIters / newtonCalls) : 0;
+                const newtonOk = Number(prof.newtonChiefSuccess) || 0;
+                const newtonNg = Number(prof.newtonChiefFail) || 0;
+                const totalMsNum = Number.isFinite(totalMs) ? Number(totalMs) : null;
+                const callsPerMs = (totalMsNum && totalMsNum > 0) ? (traceCalls / totalMsNum) : 0;
+
+                // Internal breakdown (these counters are independent from ray-tracing profiler traceCalls)
+                const toSurface = Number(prof.traceRayToSurfaceCount) || 0;
+                const toEval = Number(prof.traceRayToEvalCount) || 0;
+                const stopCorrCalls = Number(prof.finiteStopCorrectionCalls) || 0;
+                const stopCorrIters = Number(prof.finiteStopCorrectionIters) || 0;
+                const stopCorrAvg = (stopCorrCalls > 0) ? (stopCorrIters / stopCorrCalls) : 0;
+                const brentFallback = Number(prof.finiteBrentFallbackCount) || 0;
+                const dirSolveCalls = Number(prof.finiteDirectionSolveCalls) || 0;
+                const finiteMarginal = Number(prof.marginalRayFiniteCalls) || 0;
+                const infiniteMarginal = Number(prof.marginalRayInfiniteCalls) || 0;
+                const mode = (wavefrontMap && wavefrontMap.pupilSamplingMode) ? String(wavefrontMap.pupilSamplingMode) : '';
+                const retryStopRelated = Number(prof.fastToSlowRetryStopRelated) || 0;
+                const retryStopMiss = Number(prof.fastRetryStopMiss) || 0;
+                const retryStopUnreach = Number(prof.fastRetryStopUnreachable) || 0;
+                const retrySlow = Number(prof.fastToSlowRetrySlow) || 0;
+                const retrySlowOk = Number(prof.fastToSlowRetrySlowOk) || 0;
+                const retrySlowNg = Number(prof.fastToSlowRetrySlowNg) || 0;
+                const retrySkip = Number(prof.fastToSlowRetrySkipped) || 0;
+
+                console.log(
+                    `📊 [OPD Profile] total=${totalMsNum !== null ? totalMsNum.toFixed(1) : String(totalMs)}ms grid=${gridSize} pts=${points} ` +
+                    `traceRay=${traceCalls} (${callsPerMs.toFixed(1)} calls/ms) ` +
+                    `toSurface=${toSurface} toEval=${toEval} ` +
+                    `stopCorr=${stopCorrCalls}calls/${stopCorrIters}iters(avg=${stopCorrAvg.toFixed(2)}) ` +
+                    `brent=${brentFallback} dirSolve=${dirSolveCalls} ` +
+                    `marginalRay(finite=${finiteMarginal},inf=${infiniteMarginal})${mode ? ` mode=${mode}` : ''} ` +
+                    `fastRetry(stop=${retryStopRelated} miss=${retryStopMiss} unreach=${retryStopUnreach},slow=${retrySlow} ok=${retrySlowOk} ng=${retrySlowNg},skip=${retrySkip}) ` +
+                    `chiefNewton=${newtonCalls} calls ${newtonIters} iters (avg=${newtonAvg.toFixed(2)} ok=${newtonOk} ng=${newtonNg}) ` +
+                    `wasmIntersectHit=${wasmHitRate.toFixed(1)}% (hit=${wasmHits}/att=${wasmAttempts}, unavail=${wasmUnavailable})`
+                );
+            } catch (_) {
+                // ignore
+            }
+
+            // Restore profiler state / detach active run
+            try {
+                if (g && typeof g.enableRayTracingProfiler === 'function') {
+                    if (prof.__rtPrevEnabled === true) g.enableRayTracingProfiler(true, false);
+                    else if (prof.__rtPrevEnabled === false) g.enableRayTracingProfiler(false, false);
+                }
+            } catch (_) {}
+            try {
+                if (g && g.__cooptActiveWavefrontProfile === prof) delete g.__cooptActiveWavefrontProfile;
+            } catch (_) {
+                try { if (g) g.__cooptActiveWavefrontProfile = null; } catch (_) {}
+            }
 
             // Detach to avoid leaking counters across runs.
             this.opdCalculator._wavefrontProfile = null;
