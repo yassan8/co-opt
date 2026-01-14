@@ -5575,7 +5575,6 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
         };
 
         const samplingSizeForPSF = gridSize;
-        const zernikeFitSamplingSize = 128;
 
         const opdCalculator = createOPDCalculator(opticalSystemRows, wlLocal);
         const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
@@ -5595,48 +5594,56 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             } catch (_) {}
         };
 
-        const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, zernikeFitSamplingSize, 'circular', {
+        // Use the same fixed OPD definition as OPD/PSF (referenceSphere, no Zernike fit, piston+tilt removed).
+        const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, samplingSizeForPSF, 'circular', {
             recordRays: false,
             progressEvery: 512,
             zernikeMaxNoll: 37,
-            renderFromZernike: true,
+            renderFromZernike: false,
+            skipZernikeFit: true,
+            opdMode: 'referenceSphere',
+            opdDisplayMode: 'pistonTiltRemoved',
             onProgress: onWavefrontProgress
         });
         if (wavefrontMap?.error) {
             throw new Error(wavefrontMap.error?.message || 'Wavefront generation failed');
         }
 
-        reportProgress(localBase + localSpan * 0.60, `λ=${titleNmLocal} nm: Rendering Zernike grid...`);
+        reportProgress(localBase + localSpan * 0.60, `λ=${titleNmLocal} nm: Building OPD grid...`);
 
-        const zGrid = analyzer.generateZernikeRenderGrid(wavefrontMap, samplingSizeForPSF, 'opd', { rhoMax: 1.0 });
-        if (!zGrid || !Array.isArray(zGrid.z) || !Array.isArray(zGrid.z[0])) {
-            throw new Error('Zernike render grid generation failed');
-        }
-
+        // Re-grid sampled wavefront values into an NxN OPD grid for PSF/MTF.
         const s = Math.max(16, Math.floor(Number(samplingSizeForPSF)));
         const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
         const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
         const maskGrid = Array.from({ length: s }, () => Array(s).fill(false));
         const xCoords = new Float32Array(s);
         const yCoords = new Float32Array(s);
+
+        const pupilRange = (Number.isFinite(Number(wavefrontMap?.pupilRange)) && Number(wavefrontMap.pupilRange) > 0)
+            ? Number(wavefrontMap.pupilRange)
+            : 1.0;
         for (let i = 0; i < s; i++) {
-            xCoords[i] = Number(zGrid.x?.[i] ?? ((i / (s - 1 || 1)) * 2 - 1));
-            yCoords[i] = Number(zGrid.y?.[i] ?? ((i / (s - 1 || 1)) * 2 - 1));
+            const t = (i / (s - 1 || 1)) * 2 - 1;
+            xCoords[i] = t * pupilRange;
+            yCoords[i] = t * pupilRange;
         }
-        for (let iy = 0; iy < s; iy++) {
-            const row = zGrid.z[iy];
-            for (let ix = 0; ix < s; ix++) {
-                const vWaves = row?.[ix];
-                if (vWaves === null || !isFinite(vWaves)) {
-                    maskGrid[iy][ix] = false;
-                    opdGrid[iy][ix] = 0;
-                    ampGrid[iy][ix] = 0;
-                    continue;
-                }
-                maskGrid[iy][ix] = true;
-                opdGrid[iy][ix] = Number(vWaves) * Number(wlLocal);
-                ampGrid[iy][ix] = 1.0;
-            }
+
+        const coords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
+        const opdMicrons = (wavefrontMap?.display && Array.isArray(wavefrontMap.display.opds))
+            ? wavefrontMap.display.opds
+            : (Array.isArray(wavefrontMap?.opds) ? wavefrontMap.opds : []);
+        const n = Math.min(coords.length, opdMicrons.length);
+        for (let k = 0; k < n; k++) {
+            const c = coords[k];
+            const ix = Number.isInteger(c?.ix) ? c.ix : null;
+            const iy = Number.isInteger(c?.iy) ? c.iy : null;
+            if (ix === null || iy === null) continue;
+            if (ix < 0 || ix >= s || iy < 0 || iy >= s) continue;
+            const vMicrons = Number(opdMicrons[k]);
+            if (!Number.isFinite(vMicrons)) continue;
+            maskGrid[iy][ix] = true;
+            opdGrid[iy][ix] = vMicrons;
+            ampGrid[iy][ix] = 1.0;
         }
 
         const opdData = {
@@ -5668,8 +5675,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             focalLength: focalLengthMm,
             pixelSize: pixelSizeMicronsForMTF,
             forceImplementation: null,
-            // Zernike render already removes piston+tilt (Noll 1..3) in eva-wavefront.js.
-            // Avoid double-detrending here.
+            // OPD grid is already piston+tilt removed by opdDisplayMode.
             removeTilt: false
         });
 
