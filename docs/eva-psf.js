@@ -1650,6 +1650,38 @@ export class PSFCalculator {
     }
 
     /**
+     * Zero-pad complex amplitude to increase PSF resolution
+     * @param {Object} complexAmplitude - {real: 2D array, imag: 2D array}
+     * @param {number} srcSize - Original size
+     * @param {number} dstSize - Target size (must be >= srcSize)
+     * @returns {Object} Zero-padded complex amplitude
+     */
+    zeroPadComplexAmplitude(complexAmplitude, srcSize, dstSize) {
+        if (dstSize < srcSize) {
+            throw new Error(`Target size ${dstSize} must be >= source size ${srcSize}`);
+        }
+        if (dstSize === srcSize) {
+            return complexAmplitude;
+        }
+
+        const offset = Math.floor((dstSize - srcSize) / 2);
+
+        // Create zero-filled arrays
+        const paddedReal = Array(dstSize).fill().map(() => Array(dstSize).fill(0));
+        const paddedImag = Array(dstSize).fill().map(() => Array(dstSize).fill(0));
+
+        // Copy original data to center
+        for (let i = 0; i < srcSize; i++) {
+            for (let j = 0; j < srcSize; j++) {
+                paddedReal[i + offset][j + offset] = complexAmplitude.real[i][j];
+                paddedImag[i + offset][j + offset] = complexAmplitude.imag[i][j];
+            }
+        }
+
+        return { real: paddedReal, imag: paddedImag };
+    }
+
+    /**
      * FFTshift（中心に配置）
      * @param {Array} data - 2D配列
      * @returns {Array} シフトされた2D配列
