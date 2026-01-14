@@ -35,8 +35,8 @@ import { calculateTransverseAberration, getFieldAnglesFromSource, getPrimaryWave
 import { plotTransverseAberrationDiagram, showTransverseAberrationInNewWindow } from './eva-transverse-aberration-plot.js';
 import { showWavefrontDiagram } from './eva-wavefront-plot.js?v=2025-12-31a';
 import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './eva-wavefront.js?v=2025-12-31a';
-import { PSFCalculator } from './eva-psf.js?v=2026-01-14a';
-import { PSFPlotter, PSFDisplayManager } from './eva-psf-plot.js?v=2026-01-14a';
+import { PSFCalculator } from './eva-psf.js?v=2026-01-14b';
+import { PSFPlotter, PSFDisplayManager } from './eva-psf-plot.js?v=2026-01-14b';
 import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './zernike-fitting.js';
 import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './opd-zernike-analysis.js';
 import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './gen-ray-cross-finite.js';
@@ -57,7 +57,7 @@ import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayCo
 // UI modules
 import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons } from './ui/event-handlers.js?v=2026-01-08h';
 import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListeners } from './ui/ui-updates.js';
-import { setupDOMEventHandlers } from './ui/dom-event-handlers.js?v=2026-01-14a';
+import { setupDOMEventHandlers } from './ui/dom-event-handlers.js?v=2026-01-14b';
 import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.js';
 
 // Suggest (Design Intent) implementation (adds window.SuggestDesignIntent)

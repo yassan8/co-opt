@@ -4036,7 +4036,7 @@ export function setupOpticalSystemChangeListeners(scene) {
                 // Always compute inside the popup to avoid background throttling of the opener
                 // when the main window is hidden/minimized/unfocused.
                 {
-                    const CACHE_BUSTER = '2026-01-14a';
+                    const CACHE_BUSTER = '2026-01-14b';
                     const moduleURL = (relPath) => {
                         const baseHref = (() => {
                             try {

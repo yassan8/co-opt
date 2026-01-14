@@ -123,12 +123,71 @@ export class PSFPlotter {
                 ? rawPixelSize
                 : ((Number.isFinite(fallbackPixelSize) && fallbackPixelSize > 0) ? fallbackPixelSize : 1.0);
 
-            // データの前処理
-            const plotData = this.preprocessPSFData(psfData, logScale);
-            
-            // 軸の座標を生成
+            // データの前処理（転置前にリセンタリングしない）
+            // 重心計算用に線形スケールデータを保持
+            const linearData = this.preprocessPSFData(psfData, false); // 常に線形スケール
+            const plotData = this.preprocessPSFData(psfData, logScale); // 表示用
+
+            // まず線形データを転置して重心を計算
+            const linearTransposed = Array(size).fill().map(() => Array(size).fill(0));
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    linearTransposed[j][i] = linearData[i][j];
+                }
+            }
+
+            // 表示用データも転置
+            const transposed = Array(size).fill().map(() => Array(size).fill(0));
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    transposed[j][i] = plotData[i][j];
+                }
+            }
+
+            // 線形データで最大値を検出
+            let maxVal = -Infinity;
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    if (linearTransposed[i][j] > maxVal) {
+                        maxVal = linearTransposed[i][j];
+                    }
+                }
+            }
+
+            // 線形データで高強度領域（ピークの30%以上）の重心を計算
+            const threshold = maxVal * 0.3;
+            let sumI = 0, sumJ = 0, sumWeight = 0;
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    const val = linearTransposed[i][j];
+                    if (val >= threshold) {
+                        sumI += i * val;
+                        sumJ += j * val;
+                        sumWeight += val;
+                    }
+                }
+            }
+
             const center = Math.floor(size / 2);
-            const extent = (size / 2) * pixelSize;
+            const centroidI = sumWeight > 0 ? sumI / sumWeight : center;
+            const centroidJ = sumWeight > 0 ? sumJ / sumWeight : center;
+
+            // 表示用データをシフトして重心を中心に配置
+            const shiftI = Math.round(center - centroidI);
+            const shiftJ = Math.round(center - centroidJ);
+            let finalData = transposed;
+            if (shiftI !== 0 || shiftJ !== 0) {
+                finalData = Array(size).fill().map(() => Array(size).fill(0));
+                for (let i = 0; i < size; i++) {
+                    for (let j = 0; j < size; j++) {
+                        const srcI = (i - shiftI + size) % size;
+                        const srcJ = (j - shiftJ + size) % size;
+                        finalData[i][j] = transposed[srcI][srcJ];
+                    }
+                }
+            }
+
+            // 軸の座標を生成
             const x = [];
             const y = [];
             
@@ -138,7 +197,7 @@ export class PSFPlotter {
             }
 
             // PSF画像全体を左回り90°回転（表示の向き調整）
-            const rotatedZ = PSFPlotter.rotateZ90CCW(plotData);
+            const rotatedZ = PSFPlotter.rotateZ90CCW(finalData);
             const xForPlot = (rotatedZ.length === y.length && (rotatedZ[0]?.length ?? 0) === x.length) ? x : y;
             const yForPlot = (rotatedZ.length === y.length && (rotatedZ[0]?.length ?? 0) === x.length) ? y : [...x].reverse();
 
