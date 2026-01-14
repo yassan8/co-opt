@@ -35,8 +35,8 @@ import { calculateTransverseAberration, getFieldAnglesFromSource, getPrimaryWave
 import { plotTransverseAberrationDiagram, showTransverseAberrationInNewWindow } from './eva-transverse-aberration-plot.js';
 import { showWavefrontDiagram } from './eva-wavefront-plot.js?v=2025-12-31a';
 import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './eva-wavefront.js?v=2025-12-31a';
-import { PSFCalculator } from './eva-psf.js';
-import { PSFPlotter, PSFDisplayManager } from './eva-psf-plot.js';
+import { PSFCalculator } from './eva-psf.js?v=2026-01-14a';
+import { PSFPlotter, PSFDisplayManager } from './eva-psf-plot.js?v=2026-01-14a';
 import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './zernike-fitting.js';
 import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './opd-zernike-analysis.js';
 import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './gen-ray-cross-finite.js';
