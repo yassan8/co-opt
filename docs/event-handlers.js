@@ -5165,6 +5165,21 @@ export function setupOpticalSystemChangeListeners(scene) {
 <body>
     <div class="header">Settings</div>
     <div class="content">
+        <div class="section-title">Glass Map: Default Manufacturers</div>
+        <div class="help">
+            Choose which manufacturers are enabled by default when opening Glass Map.
+            <br />If nothing is selected, Glass Map will show all manufacturers.
+        </div>
+
+        <div class="checkbox-group" style="display:flex;flex-direction:column;gap:8px;margin:8px 0 14px 0;">
+            <label><input type="checkbox" class="glassmap-mfr-cb" value="SCHOTT" /> SCHOTT</label>
+            <label><input type="checkbox" class="glassmap-mfr-cb" value="HOYA" /> HOYA</label>
+            <label><input type="checkbox" class="glassmap-mfr-cb" value="OHARA" /> OHARA</label>
+            <label><input type="checkbox" class="glassmap-mfr-cb" value="Sumita" /> Sumita</label>
+            <label><input type="checkbox" class="glassmap-mfr-cb" value="CDGM" /> CDGM</label>
+            <label><input type="checkbox" class="glassmap-mfr-cb" value="Special" /> Special</label>
+        </div>
+
         <div class="section-title">Infinite Field: Pupil Sampling Mode</div>
         <div class="help">
             Fix the sampling mode used for infinite-field wavefront/PSF/MTF generation.
@@ -5188,9 +5203,28 @@ export function setupOpticalSystemChangeListeners(scene) {
 
     <script>
         const KEY = 'coopt.forceInfinitePupilMode';
+        const GLASS_MAP_MFR_KEY = 'coopt.glassMap.defaultManufacturers';
         const sanitize = (v) => {
             const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
             return (s === 'stop' || s === 'entrance') ? s : '';
+        };
+
+        const sanitizeMfrList = (list) => {
+            if (!Array.isArray(list)) return [];
+            const allow = new Set(['SCHOTT', 'HOYA', 'OHARA', 'SUMITA', 'CDGM', 'SPECIAL']);
+            const out = [];
+            for (const v of list) {
+                const s = String(v ?? '').trim();
+                if (!s) continue;
+                const upper = s.toUpperCase();
+                if (!allow.has(upper)) continue;
+                // Preserve canonical casing used in the checkboxes.
+                if (upper === 'SUMITA') out.push('Sumita');
+                else if (upper === 'SPECIAL') out.push('Special');
+                else out.push(upper);
+            }
+            // Deduplicate
+            return Array.from(new Set(out));
         };
 
         function getOpener() {
@@ -5238,11 +5272,42 @@ export function setupOpticalSystemChangeListeners(scene) {
                 r.checked = (sanitize(r.value) === cur);
                 if (cur === '' && sanitize(r.value) === '') r.checked = true;
             });
+
+            // Glass Map manufacturers
+            let stored = [];
+            try {
+                stored = sanitizeMfrList(JSON.parse(localStorage.getItem(GLASS_MAP_MFR_KEY) || '[]'));
+            } catch (_) {
+                stored = [];
+            }
+            const storedSet = new Set(stored.map(s => String(s).toUpperCase()));
+            document.querySelectorAll('.glassmap-mfr-cb').forEach(cb => {
+                const v = String(cb.value || '');
+                cb.checked = storedSet.has(v.toUpperCase());
+            });
+        }
+
+        function saveGlassMapMfrSelection() {
+            const selected = [];
+            document.querySelectorAll('.glassmap-mfr-cb').forEach(cb => {
+                if (cb.checked) selected.push(cb.value);
+            });
+            const sanitized = sanitizeMfrList(selected);
+            try {
+                if (sanitized.length) localStorage.setItem(GLASS_MAP_MFR_KEY, JSON.stringify(sanitized));
+                else localStorage.removeItem(GLASS_MAP_MFR_KEY);
+            } catch (_) {}
         }
 
         document.querySelectorAll('input[name="force-mode"]').forEach(r => {
             r.addEventListener('change', () => {
                 if (r.checked) applyMode(r.value);
+            });
+        });
+
+        document.querySelectorAll('.glassmap-mfr-cb').forEach(cb => {
+            cb.addEventListener('change', () => {
+                saveGlassMapMfrSelection();
             });
         });
 

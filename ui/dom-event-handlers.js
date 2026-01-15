@@ -558,7 +558,65 @@ function derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthMi
     return { pupilDiameterMm, focalLengthMm };
 }
 import { getGlassDataWithSellmeier, findSimilarGlassesByNdVd, findSimilarGlassNames } from '../glass.js';
+import { openGlassMapWindow } from '../glass-map.js';
 import { normalizeDesign } from '../normalize-design.js';
+
+function __blocks_setBlockGlassRegionConstraint(blockId, region) {
+    const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
+    if (!systemConfig || !Array.isArray(systemConfig.configurations)) return { ok: false, reason: 'systemConfigurations not found.' };
+
+    const activeId = systemConfig.activeConfigId;
+    const cfgIdx = systemConfig.configurations.findIndex(c => c && c.id === activeId);
+    if (cfgIdx < 0) return { ok: false, reason: 'active config not found.' };
+
+    const activeCfg = systemConfig.configurations[cfgIdx];
+    if (!activeCfg || !Array.isArray(activeCfg.blocks)) return { ok: false, reason: 'active config has no blocks.' };
+
+    const b = activeCfg.blocks.find(x => x && String(x.blockId ?? '') === String(blockId));
+    if (!b) return { ok: false, reason: `block not found: ${String(blockId)}` };
+
+    const minNd = Number(region?.minNd);
+    const maxNd = Number(region?.maxNd);
+    const minVd = Number(region?.minVd);
+    const maxVd = Number(region?.maxVd);
+    if (![minNd, maxNd, minVd, maxVd].every(Number.isFinite)) {
+        return { ok: false, reason: 'invalid region (must be finite numbers)' };
+    }
+
+    if (!b.constraints || typeof b.constraints !== 'object') b.constraints = {};
+    b.constraints = {
+        ...b.constraints,
+        glassRegion: {
+            minNd: Math.min(minNd, maxNd),
+            maxNd: Math.max(minNd, maxNd),
+            minVd: Math.min(minVd, maxVd),
+            maxVd: Math.max(minVd, maxVd)
+        }
+    };
+
+    try {
+        if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+        activeCfg.metadata.modified = new Date().toISOString();
+    } catch (_) {}
+
+    try {
+        const issues = validateBlocksConfiguration(activeCfg);
+        const fatals = issues.filter(i => i && i.severity === 'fatal');
+        if (fatals.length > 0) return { ok: false, reason: 'block validation failed.' };
+    } catch (_) {}
+
+    try {
+        if (typeof saveSystemConfigurations === 'function') {
+            saveSystemConfigurations(systemConfig);
+        } else if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
+        }
+    } catch (e) {
+        return { ok: false, reason: `failed to save: ${e?.message || String(e)}` };
+    }
+
+    return { ok: true };
+}
 
 // Small shared helpers (used by load/apply flows)
 
@@ -8521,7 +8579,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                 e.stopPropagation();
                                 const name = String(g?.name ?? '').trim();
                                 if (!name) return;
-                                const ok = commitValue(name);
+                                const current = String(currentValue ?? '').trim();
+                                const ok = (name === current) ? true : commitValue(name);
                                 if (ok) {
                                     listEl.style.display = 'none';
                                     listEl.innerHTML = '';
@@ -8534,7 +8593,17 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             const right = document.createElement('div');
                             right.style.color = '#777';
                             right.style.fontSize = '11px';
-                            right.textContent = `${Number(g.nd).toFixed(6)} / ${Number(g.vd).toFixed(2)}  (Δn=${(Number(g.ndDiff) >= 0 ? '+' : '') + Number(g.ndDiff).toFixed(6)}, Δv=${(Number(g.vdDiff) >= 0 ? '+' : '') + Number(g.vdDiff).toFixed(2)})`;
+                            right.style.textAlign = 'left';
+                            right.style.whiteSpace = 'pre';
+                            right.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+                            {
+                                const ndStr = Number(g.nd).toFixed(6).padStart(10);
+                                const vdStr = Number(g.vd).toFixed(2).padStart(6);
+                                const ndDiffStr = ((Number(g.ndDiff) >= 0 ? '+' : '') + Number(g.ndDiff).toFixed(6)).padStart(11);
+                                const vdDiffStr = ((Number(g.vdDiff) >= 0 ? '+' : '') + Number(g.vdDiff).toFixed(2)).padStart(7);
+                                const priceStr = (Number.isFinite(g?.price) ? Number(g.price).toFixed(4) : 'null').padStart(8);
+                                right.textContent = `${ndStr} / ${vdStr}  (Δn=${ndDiffStr}, Δv=${vdDiffStr})  price=${priceStr}`;
+                            }
                             rowEl.appendChild(left);
                             rowEl.appendChild(right);
                             listEl.appendChild(rowEl);
@@ -8573,7 +8642,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                 e.stopPropagation();
                                 const name = String(g?.name ?? '').trim();
                                 if (!name) return;
-                                const ok = commitValue(name);
+                                const current = String(currentValue ?? '').trim();
+                                const ok = (name === current) ? true : commitValue(name);
                                 if (ok) {
                                     listEl.style.display = 'none';
                                     listEl.innerHTML = '';
@@ -8586,7 +8656,14 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             const right = document.createElement('div');
                             right.style.color = '#777';
                             right.style.fontSize = '11px';
-                            right.textContent = `score=${Number(g.score).toFixed(0)}`;
+                            right.style.textAlign = 'left';
+                            right.style.whiteSpace = 'pre';
+                            right.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+                            {
+                                const scoreStr = String(Number(g.score).toFixed(0)).padStart(3);
+                                const priceStr = (Number.isFinite(g?.price) ? Number(g.price).toFixed(4) : 'null').padStart(8);
+                                right.textContent = `score=${scoreStr}  price=${priceStr}`;
+                            }
                             rowEl.appendChild(left);
                             rowEl.appendChild(right);
                             listEl.appendChild(rowEl);
@@ -8667,6 +8744,69 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 }
                 line.appendChild(name);
                 line.appendChild(valueEl);
+
+                if (isMaterialItem) {
+                    const mapBtn = document.createElement('button');
+                    mapBtn.type = 'button';
+                    mapBtn.textContent = '🗺️ Map';
+                    mapBtn.title = 'Select a glass region (nd/vd) constraint from the Abbe diagram';
+                    mapBtn.style.flex = '0 0 auto';
+                    mapBtn.style.fontSize = '12px';
+                    // Match the adjacent material/nd/vd text inputs.
+                    mapBtn.style.boxSizing = 'border-box';
+                    mapBtn.style.height = '22px';
+                    mapBtn.style.display = 'inline-flex';
+                    mapBtn.style.alignItems = 'center';
+                    mapBtn.style.padding = '2px 6px';
+                    mapBtn.style.border = '1px solid #ddd';
+                    mapBtn.style.borderRadius = '4px';
+                    mapBtn.style.background = '#fff';
+                    mapBtn.style.cursor = 'pointer';
+                    mapBtn.addEventListener('click', (e) => {
+                        try { e?.preventDefault?.(); } catch (_) {}
+                        try { e?.stopPropagation?.(); } catch (_) {}
+
+                        try {
+                            openGlassMapWindow((region) => {
+                                const res = __blocks_setBlockGlassRegionConstraint(String(blockId), {
+                                    minNd: region?.ndMin,
+                                    maxNd: region?.ndMax,
+                                    minVd: region?.vdMin,
+                                    maxVd: region?.vdMax
+                                });
+                                if (!res || res.ok !== true) {
+                                    alert(`Failed to apply glassRegion constraint: ${res?.reason || 'unknown error'}`);
+                                    return;
+                                }
+                                try { refreshBlockInspector(); } catch (_) {}
+                            }, (glass) => {
+                                const name = String(glass?.name ?? '').trim();
+                                if (!name) return false;
+
+                                const manufacturer = String(glass?.manufacturer ?? '').trim();
+                                const hasMfr = !!manufacturer;
+                                const priceStr = Number.isFinite(glass?.price) ? Number(glass.price).toFixed(4) : 'null';
+
+                                const msg = `Replace material with ${hasMfr ? (manufacturer + ' ') : ''}${name}?\nprice=${priceStr}`;
+                                if (!confirm(msg)) return false;
+
+                                const current = String(currentValue ?? '').trim();
+                                const ok = (name === current) ? true : commitValue(name);
+                                if (!ok) {
+                                    alert('Failed to replace material.');
+                                    return false;
+                                }
+                                try { refreshBlockInspector(); } catch (_) {}
+                                return true;
+                            });
+                        } catch (err) {
+                            console.error('Failed to open glass map window', err);
+                            alert(err?.message || 'Failed to open glass map window');
+                        }
+                    });
+                    // Place the button to the left of the material textbox.
+                    try { line.insertBefore(mapBtn, valueEl); } catch (_) { line.appendChild(mapBtn); }
+                }
 
                 // For material rows: add ref index + abbe after the material input.
                 try {

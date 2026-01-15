@@ -487,7 +487,95 @@ const priceIndexByManufacturer = {
     "TAFD65": 1.0222,
     "TAFD75-W": 1.0872
   },
-  "OHARA": {},
+  "OHARA": {
+    "L-BAL35": 47.0,
+    "L-BAL42": 47.0,
+    "L-BSL 7": 41.0,
+    "L-LAH85V": 307.0,
+    "L-LAL13": 69.0,
+    "L-LAM69": 171.0,
+    "L-TIM28": 77.0,
+    "S-BAH11": 33.0,
+    "S-BAH27": 28.0,
+    "S-BAH28": 28.0,
+    "S-BAL12": 24.0,
+    "S-BAL14": 10.0,
+    "S-BAL35": 11.0,
+    "S-BAL42": 31.0,
+    "S-BAM 4": 77.0,
+    "S-BSL 7": 10.0,
+    "S-BSM 2": 26.0,
+    "S-BSM10": 20.0,
+    "S-BSM14": 18.0,
+    "S-BSM15": 18.0,
+    "S-BSM16": 10.0,
+    "S-BSM18": 10.0,
+    "S-BSM25": 24.0,
+    "S-BSM81": 53.0,
+    "S-FPL51": 80.0,
+    "S-FPL53": 158.0,
+    "S-FSL 5": 23.0,
+    "S-LAH51": 71.0,
+    "S-LAH52": 78.0,
+    "S-LAH53V": 65.0,
+    "S-LAH55VS": 62.0,
+    "S-LAH58": 246.0,
+    "S-LAH59": 194.0,
+    "S-LAH60": 58.0,
+    "S-LAH64": 49.0,
+    "S-LAH65VS": 55.0,
+    "S-LAH95": 65.0,
+    "S-LAH98": 132.0,
+    "S-LAL 8": 39.0,
+    "S-LAL 9": 63.0,
+    "S-LAL10": 74.0,
+    "S-LAL12": 55.0,
+    "S-LAL14": 39.0,
+    "S-LAL18": 46.0,
+    "S-LAL58": 61.0,
+    "S-LAL59": 68.0,
+    "S-LAL61": 86.0,
+    "S-LAM 2": 33.0,
+    "S-LAM 3": 40.0,
+    "S-LAM 7": 60.0,
+    "S-LAM55": 79.0,
+    "S-LAM60": 59.0,
+    "S-LAM66": 59.0,
+    "S-NBH 5": 132.0,
+    "S-NBH57": 109.0,
+    "S-NBM51": 100.0,
+    "S-NPH 1": 258.0,
+    "S-NPH 1W": 284.0,
+    "S-NPH 2": 166.0,
+    "S-NPH 3": 323.0,
+    "S-NSL 3": 36.0,
+    "S-NSL36": 36.0,
+    "S-PHM52": 70.0,
+    "S-PHM53": 84.0,
+    "S-TIH 1": 29.0,
+    "S-TIH 3": 54.0,
+    "S-TIH 4": 43.0,
+    "S-TIH 6": 49.0,
+    "S-TIH10": 26.0,
+    "S-TIH11": 49.0,
+    "S-TIH13": 54.0,
+    "S-TIH14": 71.0,
+    "S-TIH53": 50.0,
+    "S-TIH53W": 50.0,
+    "S-TIL 1": 46.0,
+    "S-TIL 2": 45.0,
+    "S-TIL 6": 43.0,
+    "S-TIL25": 41.0,
+    "S-TIL26": 43.0,
+    "S-TIL27": 41.0,
+    "S-TIM 2": 16.0,
+    "S-TIM 5": 25.0,
+    "S-TIM 8": 47.0,
+    "S-TIM25": 19.0,
+    "S-TIM27": 46.0,
+    "S-TIM28": 34.0,
+    "S-TIM35": 36.0
+  },
   "SCHOTT": {
     "BK7G18": 1.8,
     "F2": 1.2,
@@ -613,9 +701,9 @@ const priceIndexNormalization = {
     "scaleToNBK7": 1.341741580571582
   },
   "OHARA": {
-    "rawReferencePrice": null,
-    "referenceGlass": null,
-    "scaleToNBK7": null
+    "rawReferencePrice": 10.0,
+    "referenceGlass": "S-BSL 7",
+    "scaleToNBK7": 0.1
   },
   "SCHOTT": {
     "rawReferencePrice": 1.0,
@@ -12907,8 +12995,19 @@ export function getAllGlassDatabases() {
 }
 
 function __applyPriceIndexToGlassDb() {
+  function __normalizeGlassNameKey(s) {
+    return String(s ?? '')
+      .toUpperCase()
+      .replace(/\s+/g, '')
+      .replace(/[^A-Z0-9]/g, '');
+  }
+
   const maps = priceIndexByManufacturer && typeof priceIndexByManufacturer === 'object' ? priceIndexByManufacturer : {};
   const norm = priceIndexNormalization && typeof priceIndexNormalization === 'object' ? priceIndexNormalization : {};
+
+  // Cache normalized vendor maps per manufacturer for fast fallback matching.
+  /** @type {Map<string, Record<string, number>>} */
+  const normalizedVendorMapCache = new Map();
 
   const dbs = getAllGlassDatabases();
   for (const db of dbs) {
@@ -12919,7 +13018,46 @@ function __applyPriceIndexToGlassDb() {
       const manufacturer = g.manufacturer;
       const name = g.name;
       const vendorMap = manufacturer && maps[manufacturer];
-      const raw = vendorMap && name != null ? vendorMap[String(name)] : undefined;
+
+      let raw = vendorMap && name != null ? vendorMap[String(name)] : undefined;
+      if (!Number.isFinite(raw) && vendorMap && typeof vendorMap === 'object' && name != null) {
+        const manufacturerKey = String(manufacturer);
+        let normalizedVendorMap = normalizedVendorMapCache.get(manufacturerKey);
+        if (!normalizedVendorMap) {
+          normalizedVendorMap = Object.create(null);
+          const ambiguous = new Set();
+          for (const [k, v] of Object.entries(vendorMap)) {
+            if (!Number.isFinite(v)) continue;
+            const nk = __normalizeGlassNameKey(k);
+            if (!nk) continue;
+            if (Object.prototype.hasOwnProperty.call(normalizedVendorMap, nk) && normalizedVendorMap[nk] !== v) {
+              ambiguous.add(nk);
+              continue;
+            }
+            normalizedVendorMap[nk] = v;
+          }
+          for (const nk of ambiguous) delete normalizedVendorMap[nk];
+          normalizedVendorMapCache.set(manufacturerKey, normalizedVendorMap);
+        }
+
+        const nk = __normalizeGlassNameKey(name);
+        raw = nk ? normalizedVendorMap[nk] : undefined;
+        if (!Number.isFinite(raw) && nk && nk.length >= 2) {
+          // Common OHARA suffix variants (fallback only):
+          // - trailing P/Q/N: L-BAL35P, S-PHM52Q, S-TIH53WN
+          // - trailing V/W:   S-LAH60V
+          // - trailing MQ:    S-LAH60MQ
+          if (nk.endsWith('MQ') && nk.length >= 3) {
+            raw = normalizedVendorMap[nk.slice(0, -2)];
+          }
+          if (!Number.isFinite(raw)) {
+            const last = nk[nk.length - 1];
+            if (last === 'P' || last === 'Q' || last === 'N' || last === 'V' || last === 'W') {
+              raw = normalizedVendorMap[nk.slice(0, -1)];
+            }
+          }
+        }
+      }
 
       if (!Number.isFinite(raw)) {
         g.price = null;
@@ -12945,7 +13083,7 @@ __applyPriceIndexToGlassDb();
  * @param {number} targetNd
  * @param {number} targetVd
  * @param {number} [maxResults=20]
- * @returns {Array<{name:string, nd:number, vd:number, ndDiff:number, vdDiff:number, totalDiff:number}>}
+ * @returns {Array<{name:string, nd:number, vd:number, manufacturer:string, price:(number|null), ndDiff:number, vdDiff:number, totalDiff:number}>}
  */
 export function findSimilarGlassesByNdVd(targetNd, targetVd, maxResults = 20) {
   if (!Number.isFinite(targetNd) || !Number.isFinite(targetVd)) return [];
@@ -12953,7 +13091,7 @@ export function findSimilarGlassesByNdVd(targetNd, targetVd, maxResults = 20) {
   if (targetVd <= 0) return [];
 
   const dbs = getAllGlassDatabases();
-  /** @type {Array<{name:string, nd:number, vd:number, ndDiff:number, vdDiff:number, totalDiff:number}>} */
+  /** @type {Array<{name:string, nd:number, vd:number, manufacturer:string, price:(number|null), ndDiff:number, vdDiff:number, totalDiff:number}>} */
   const out = [];
 
   for (const db of dbs) {
@@ -12972,6 +13110,7 @@ export function findSimilarGlassesByNdVd(targetNd, targetVd, maxResults = 20) {
         nd,
         vd,
         manufacturer: glass.manufacturer || 'Unknown',
+        price: Number.isFinite(glass.price) ? Number(glass.price) : null,
         ndDiff,
         vdDiff,
         totalDiff
@@ -13036,7 +13175,7 @@ function __levenshteinDistance(a, b, maxDistance = 32) {
  *
  * @param {string} query
  * @param {number} [maxResults=20]
- * @returns {Array<{name:string, score:number}>}
+ * @returns {Array<{name:string, score:number, manufacturer:string, price:(number|null)}>} 
  */
 export function findSimilarGlassNames(query, maxResults = 20) {
   const q = String(query ?? '').trim();
@@ -13046,7 +13185,7 @@ export function findSimilarGlassNames(query, maxResults = 20) {
   if (qn === '') return [];
 
   const dbs = getAllGlassDatabases();
-  /** @type {Array<{name:string, score:number}>} */
+  /** @type {Array<{name:string, score:number, manufacturer:string, price:(number|null)}>} */
   const out = [];
 
   for (const db of dbs) {
@@ -13062,7 +13201,12 @@ export function findSimilarGlassNames(query, maxResults = 20) {
       if (nn.includes(qn) || qn.includes(nn)) score = 0;
       else score = __levenshteinDistance(qn, nn, 24);
 
-      out.push({ name, score, manufacturer: g.manufacturer || 'Unknown' });
+      out.push({
+        name,
+        score,
+        manufacturer: g.manufacturer || 'Unknown',
+        price: Number.isFinite(g.price) ? Number(g.price) : null,
+      });
     }
   }
 

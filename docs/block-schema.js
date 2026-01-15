@@ -1847,3 +1847,31 @@ export function expandBlocksIntoConfiguration(config) {
   config.opticalSystem = expanded.rows;
   return { expandedOpticalSystem: expanded.rows, issues };
 }
+
+/**
+ * Returns true if the given block contains a usable glass region constraint.
+ *
+ * Expected shape:
+ *   block.constraints.glassRegion = { minNd, maxNd, minVd, maxVd }
+ *
+ * @param {any} block
+ * @returns {boolean}
+ */
+export function hasGlassRegionConstraint(block) {
+  try {
+    const gr = block?.constraints?.glassRegion;
+    if (!gr || typeof gr !== 'object') return false;
+
+    const minNd = Number(gr.minNd ?? gr.ndMin);
+    const maxNd = Number(gr.maxNd ?? gr.ndMax);
+    const minVd = Number(gr.minVd ?? gr.vdMin);
+    const maxVd = Number(gr.maxVd ?? gr.vdMax);
+
+    if (![minNd, maxNd, minVd, maxVd].every(Number.isFinite)) return false;
+    if (!(maxNd > minNd)) return false;
+    if (!(maxVd > minVd)) return false;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
