@@ -8724,7 +8724,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
                     // Defer inserting ref index/abbe until after the material input is added,
                     // so the final order is: Optimize, Per-config, material, ref index, abbe.
-                    materialListEl.__inlineControls = { ndInput, vdInput };
+                    // Expose suggestion helpers so the UI can trigger candidate search
+                    // (e.g. via a per-row Find Glass button) while reusing the same logic.
+                    materialListEl.__inlineControls = { ndInput, vdInput, suggest, materialKey };
                 }
 
                 if (allowOptimize) {
@@ -8811,8 +8813,41 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                         }
                     });
 
-                    // Place the button to the left of the material textbox.
+                    const findBtn = document.createElement('button');
+                    findBtn.type = 'button';
+                    findBtn.textContent = '🔍';
+                    findBtn.title = 'Find similar glasses (nd/vd or name)';
+                    findBtn.setAttribute('aria-label', 'Find Glass');
+                    findBtn.style.flex = '0 0 auto';
+                    findBtn.style.fontSize = '12px';
+                    // Match the adjacent material/nd/vd text inputs.
+                    findBtn.style.boxSizing = 'border-box';
+                    findBtn.style.height = '22px';
+                    findBtn.style.display = 'inline-flex';
+                    findBtn.style.alignItems = 'center';
+                    findBtn.style.justifyContent = 'center';
+                    findBtn.style.padding = '2px 6px';
+                    findBtn.style.border = '1px solid #ddd';
+                    findBtn.style.borderRadius = '4px';
+                    findBtn.style.background = '#fff';
+                    findBtn.style.cursor = 'pointer';
+                    findBtn.addEventListener('click', (e) => {
+                        try { e?.preventDefault?.(); } catch (_) {}
+                        try { e?.stopPropagation?.(); } catch (_) {}
+                        try {
+                            const ctrls = materialListEl && materialListEl.__inlineControls ? materialListEl.__inlineControls : null;
+                            const mk = String(ctrls?.materialKey ?? materialKey ?? '').trim();
+                            if (mk) __blockInspectorPreferredMaterialKeyByBlockId.set(String(blockId), mk);
+                            if (ctrls && typeof ctrls.suggest === 'function') ctrls.suggest();
+                        } catch (err) {
+                            console.error('Find Glass failed', err);
+                        }
+                    });
+
+                    // Place buttons to the left of the material textbox.
+                    // Order: 🗺️ Map, 🔍 Find
                     try { line.insertBefore(mapBtn, valueEl); } catch (_) { line.appendChild(mapBtn); }
+                    try { line.insertBefore(findBtn, valueEl); } catch (_) { line.appendChild(findBtn); }
                 }
 
                 // For material rows: add ref index + abbe after the material input.
