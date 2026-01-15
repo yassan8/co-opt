@@ -112,15 +112,20 @@ h3 {
     font-size: 13px;
 }
 
-#table-source .glass-search-table th {
-    padding: 2px 6px;
+#table-source .glass-search-table th,
+#table-object .glass-search-table th {
+    padding: 3px 8px;
+    line-height: 1.2;
 }
 
-#table-source .glass-search-table td {
-    padding: 2px 6px;
+#table-source .glass-search-table td,
+#table-object .glass-search-table td {
+    padding: 3px 8px;
+    line-height: 1.2;
 }
 
-#table-source .glass-search-table input {
+/* Text inputs only (do not style the Primary checkbox as a text field) */
+#table-source .glass-search-table input[type="text"] {
     font-family: inherit;
     font-size: 13px;
     padding: 2px 6px;
@@ -130,17 +135,19 @@ h3 {
     box-sizing: border-box;
 }
 
+#table-source .glass-search-table input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    vertical-align: middle;
+    box-sizing: border-box;
+}
+
 #table-object .glass-search-table {
     font-family: inherit;
     font-size: 13px;
-}
-
-#table-object .glass-search-table th {
-    padding: 2px 6px;
-}
-
-#table-object .glass-search-table td {
-    padding: 2px 6px;
 }
 
 #table-object .glass-search-table input,
