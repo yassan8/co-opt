@@ -7963,8 +7963,11 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
     // Blocks-only toolbar: add a new block to the active configuration.
     for (const b of list) {
+        const blockId = String(b.blockId ?? '').trim();
+
         const row = document.createElement('div');
         row.className = 'block-inspector-row';
+        if (blockId && __blockInspectorExpandedBlockId === blockId) row.classList.add('selected');
 
         const colId = document.createElement('div');
         colId.className = 'block-inspector-col-id';
@@ -8009,7 +8012,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
         row.appendChild(colCount);
 
         row.onclick = () => {
-            const blockId = String(b.blockId ?? '').trim();
             if (!blockId) return;
             __blockInspectorExpandedBlockId = (__blockInspectorExpandedBlockId === blockId) ? null : blockId;
             try { refreshBlockInspector(); } catch (_) {}
@@ -8017,7 +8019,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
         container.appendChild(row);
 
-        const blockId = String(b.blockId ?? '');
         const blockType = String(b.blockType ?? '');
         const realBlock = blockById && typeof blockById.get === 'function' ? blockById.get(blockId) : null;
         if (realBlock && __blockInspectorExpandedBlockId === blockId) {

@@ -995,6 +995,11 @@ button:active {
     background-color: #f5f5f5;
 }
 
+.block-inspector-row.selected,
+.block-inspector-row.selected:hover {
+    background-color: #cfe2ff;
+}
+
 .block-inspector-col-id {
     flex: 1;
     min-width: 0;
