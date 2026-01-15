@@ -94,12 +94,80 @@ h3 {
     margin: 10px 1px;
     width: 100%;
     border-collapse: collapse;
+    background-color: white;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    padding: 6px;
+    height: 160px;
+    min-height: 120px;
+    max-height: 80vh;
+    overflow: auto;
+    resize: vertical;
+    box-sizing: border-box;
+}
+
+/* Source/Object table font: match Design Intent (Blocks) list */
+#table-source .glass-search-table {
+    font-family: inherit;
+    font-size: 13px;
+}
+
+#table-source .glass-search-table th {
+    padding: 2px 6px;
+}
+
+#table-source .glass-search-table td {
+    padding: 2px 6px;
+}
+
+#table-source .glass-search-table input {
+    font-family: inherit;
+    font-size: 13px;
+    padding: 2px 6px;
+    height: 22px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+#table-object .glass-search-table {
+    font-family: inherit;
+    font-size: 13px;
+}
+
+#table-object .glass-search-table th {
+    padding: 2px 6px;
+}
+
+#table-object .glass-search-table td {
+    padding: 2px 6px;
+}
+
+#table-object .glass-search-table input,
+#table-object .glass-search-table select {
+    font-family: inherit;
+    font-size: 13px;
+    padding: 2px 6px;
+    height: 22px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-sizing: border-box;
 }
 
 #table-object {
     margin: 10px 1px;
     width: 100%;
     border-collapse: collapse;
+    background-color: white;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    padding: 6px;
+    height: 160px;
+    min-height: 120px;
+    max-height: 80vh;
+    overflow: auto;
+    resize: vertical;
+    box-sizing: border-box;
 }
 
 #table-optical-system {
