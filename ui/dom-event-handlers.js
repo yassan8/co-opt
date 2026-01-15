@@ -7134,6 +7134,22 @@ function formatBlockPreview(block) {
         return String(sd) !== '' ? `SD=${String(sd)}` : '';
     }
 
+    if (type === 'CoordBreak') {
+        const dx = pick('decenterX');
+        const dy = pick('decenterY');
+        const dz = pick('decenterZ');
+        const tx = pick('tiltX');
+        const ty = pick('tiltY');
+        const tz = pick('tiltZ');
+        const order = pick('order');
+
+        const parts = [];
+        if (String(dx) !== '' || String(dy) !== '' || String(dz) !== '') parts.push(`D=[${String(dx)},${String(dy)},${String(dz)}]`);
+        if (String(tx) !== '' || String(ty) !== '' || String(tz) !== '') parts.push(`T=[${String(tx)},${String(ty)},${String(tz)}]`);
+        if (String(order) !== '') parts.push(`order=${String(order)}`);
+        return parts.join(' ');
+    }
+
     return '';
 }
 
@@ -7224,6 +7240,18 @@ function __blocks_makeDefaultBlock(blockType, blockId) {
     }
     if (type === 'Stop') {
         base.parameters = { semiDiameter: DEFAULT_STOP_SEMI_DIAMETER };
+        return base;
+    }
+    if (type === 'CoordBreak') {
+        base.parameters = {
+            decenterX: 0,
+            decenterY: 0,
+            decenterZ: 0,
+            tiltX: 0,
+            tiltY: 0,
+            tiltZ: 0,
+            order: 0
+        };
         return base;
     }
     if (type === 'ImagePlane') {
@@ -8167,6 +8195,16 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             } else if (blockType === 'Stop') {
                 // UX alias: the surface table uses "semidia"; Blocks store it as Stop.parameters.semiDiameter.
                 items.push({ key: 'semiDiameter', label: 'semidia' });
+            } else if (blockType === 'CoordBreak') {
+                items.push(
+                    { key: 'decenterX', label: 'decenterX' },
+                    { key: 'decenterY', label: 'decenterY' },
+                    { key: 'decenterZ', label: 'decenterZ' },
+                    { key: 'tiltX', label: 'tiltX (deg)' },
+                    { key: 'tiltY', label: 'tiltY (deg)' },
+                    { key: 'tiltZ', label: 'tiltZ (deg)' },
+                    { key: 'order', label: 'order (0/1)' }
+                );
             } else if (blockType === 'ImagePlane') {
                 items.push({ kind: 'imageSemiDiaMode', key: 'optimizeSemiDia', label: 'auto semidia (chief ray)', noOptimize: true });
                 items.push({ key: 'semidia', label: 'semidia', noOptimize: true });
@@ -9174,6 +9212,20 @@ function __blocks_mapSurfaceEditToBlockChange(edit) {
             }
             return { blockId: String(airGapId), blockType: 'AirGap', variable: 'thickness', oldValue, newValue };
         }
+        return null;
+    }
+
+    if (blockType === 'CoordBreak') {
+        // Expanded Coord Break row field reuse:
+        // semidia->decenterX, material->decenterY, thickness->decenterZ,
+        // rindex->tiltX, abbe->tiltY, conic->tiltZ, coef1->order
+        if (field === 'semidia') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'decenterX', oldValue, newValue };
+        if (field === 'material') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'decenterY', oldValue, newValue };
+        if (field === 'thickness') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'decenterZ', oldValue, newValue };
+        if (field === 'rindex') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'tiltX', oldValue, newValue };
+        if (field === 'abbe') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'tiltY', oldValue, newValue };
+        if (field === 'conic') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'tiltZ', oldValue, newValue };
+        if (field === 'coef1') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'order', oldValue, newValue };
         return null;
     }
 

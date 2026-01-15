@@ -423,11 +423,11 @@ export function validateBlocksConfiguration(config) {
     }
 
     const blockType = block.blockType;
-    if (blockType !== 'ObjectPlane' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'ImagePlane') {
+    if (blockType !== 'ObjectPlane' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordBreak' && blockType !== 'ImagePlane') {
       issues.push({
         severity: 'fatal',
         phase: 'validate',
-        message: `Unsupported blockType: ${blockType} (MVP supports ObjectPlane, Lens, Doublet, Triplet, Gap, Stop, ImagePlane only).`,
+        message: `Unsupported blockType: ${blockType} (MVP supports ObjectPlane, Lens, Doublet, Triplet, Gap, Stop, CoordBreak, ImagePlane only).`,
         blockId: block.blockId
       });
       continue;
@@ -681,6 +681,49 @@ export function validateBlocksConfiguration(config) {
       }
     }
 
+    if (blockType === 'CoordBreak') {
+      // CoordBreak is a non-refractive row that applies a coordinate transform.
+      // Mapping to expanded Optical System (ray-tracing.md):
+      // semidia->decenterX, material->decenterY, thickness->decenterZ,
+      // rindex->tiltX, abbe->tiltY, conic->tiltZ, coef1->order (0/1)
+
+      const decenterX = getParamOrVarValue(parameters, variables, 'decenterX');
+      const decenterY = getParamOrVarValue(parameters, variables, 'decenterY');
+      const decenterZ = getParamOrVarValue(parameters, variables, 'decenterZ');
+      const tiltX = getParamOrVarValue(parameters, variables, 'tiltX');
+      const tiltY = getParamOrVarValue(parameters, variables, 'tiltY');
+      const tiltZ = getParamOrVarValue(parameters, variables, 'tiltZ');
+      const orderRaw = getParamOrVarValue(parameters, variables, 'order');
+
+      // All numeric fields are optional; blank means 0.
+      // When provided, must be parseable as a number.
+      const numericKeys = [
+        ['decenterX', decenterX],
+        ['decenterY', decenterY],
+        ['decenterZ', decenterZ],
+        ['tiltX', tiltX],
+        ['tiltY', tiltY],
+        ['tiltZ', tiltZ]
+      ];
+      for (const [k, v] of numericKeys) {
+        const s = String(v ?? '').trim();
+        if (s === '') continue;
+        if (!isNumericString(s) && !(typeof v === 'number' && Number.isFinite(v))) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: `CoordBreak.${k} must be numeric when provided (got: ${String(v)})`, blockId: block.blockId });
+        }
+      }
+
+      try {
+        const s = String(orderRaw ?? '').trim();
+        if (s !== '') {
+          const n = (typeof orderRaw === 'number') ? orderRaw : (isNumericString(s) ? Number(s) : NaN);
+          if (!Number.isFinite(n) || (n !== 0 && n !== 1)) {
+            issues.push({ severity: 'fatal', phase: 'validate', message: `CoordBreak.order must be 0 or 1 when provided (got: ${String(orderRaw)})`, blockId: block.blockId });
+          }
+        }
+      } catch (_) {}
+    }
+
     if (blockType === 'Stop') {
       // Stop is a definition point: semiDiameter may be omitted (defaulted during expand).
       // Source of truth is parameters.semiDiameter (normalize step may migrate legacy variables into parameters).
@@ -891,10 +934,29 @@ export function expandBlocksToOpticalSystemRows(blocks) {
 
   const isStopRow = (r) => r && (r['object type'] === 'Stop' || r.object === 'Stop');
 
-  // For semidia inheritance, skip Stop rows so Stop.semiDiameter does not "bleed" into following surfaces.
+  const isCoordBreakRow = (r) => {
+    try {
+      const st = String(r?.surfType ?? r?.['surf type'] ?? r?.type ?? '').trim().toLowerCase();
+      return st === 'coord break' || st === 'coordinate break' || st === 'cb';
+    } catch (_) {
+      return false;
+    }
+  };
+
+  // For semidia inheritance, skip Stop and Coord Break rows so their special fields
+  // (Stop.semiDiameter / CoordBreak decenterX) do not "bleed" into following surfaces.
   const getLastNonStopRow = () => {
     for (let i = rows.length - 1; i >= 0; i--) {
-      if (!isStopRow(rows[i])) return rows[i];
+      if (!isStopRow(rows[i]) && !isCoordBreakRow(rows[i])) return rows[i];
+    }
+    return rows[0];
+  };
+
+  // Gap blocks attach thickness/material to the previous *physical* surface.
+  // Coord Break rows reuse thickness/material for decenter parameters, so never attach a Gap to a Coord Break.
+  const getLastNonCoordBreakRow = () => {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (!isCoordBreakRow(rows[i])) return rows[i];
     }
     return rows[0];
   };
@@ -1062,6 +1124,43 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       }
 
       rows.push(front, back);
+      continue;
+    }
+
+    if (type === 'CoordBreak') {
+      const cb = createBlankSurfaceRow(rows.length, getLastNonStopRow());
+
+      cb._blockType = 'CoordBreak';
+      cb._blockId = blockId || null;
+      cb._surfaceRole = 'cb';
+
+      cb.surfType = 'Coord Break';
+      cb.radius = 'INF';
+
+      const decenterX = getParamOrVarValue(params, vars, 'decenterX');
+      const decenterY = getParamOrVarValue(params, vars, 'decenterY');
+      const decenterZ = getParamOrVarValue(params, vars, 'decenterZ');
+      const tiltX = getParamOrVarValue(params, vars, 'tiltX');
+      const tiltY = getParamOrVarValue(params, vars, 'tiltY');
+      const tiltZ = getParamOrVarValue(params, vars, 'tiltZ');
+      const order = getParamOrVarValue(params, vars, 'order');
+
+      // Coord Break field reuse (see specification/ray-tracing.md)
+      cb.semidia = normalizeOptionalNumberToRowValue(decenterX);
+      cb.material = normalizeOptionalNumberToRowValue(decenterY);
+      cb.thickness = (() => {
+        const s = String(decenterZ ?? '').trim();
+        if (s === '') return 0;
+        if (typeof decenterZ === 'number' && Number.isFinite(decenterZ)) return decenterZ;
+        if (isNumericString(s)) return Number(s);
+        return 0;
+      })();
+      cb.rindex = normalizeOptionalNumberToRowValue(tiltX);
+      cb.abbe = normalizeOptionalNumberToRowValue(tiltY);
+      cb.conic = normalizeOptionalNumberToRowValue(tiltZ);
+      cb.coef1 = normalizeOptionalNumberToRowValue(order);
+
+      rows.push(cb);
       continue;
     }
 
@@ -1236,13 +1335,24 @@ export function expandBlocksToOpticalSystemRows(blocks) {
         continue;
       }
 
-      const prev = getLastRow();
+      const prev = getLastNonCoordBreakRow();
       // Never touch Image surface auto fields (Image row is appended later; this is a safety check).
       if (prev && (prev['object type'] === 'Image' || prev.object === 'Image')) {
         issues.push({
           severity: 'fatal',
           phase: 'expand',
           message: 'Gap cannot modify the Image surface.',
+          blockId,
+          surfaceIndex: typeof prev.id === 'number' ? prev.id : undefined
+        });
+        continue;
+      }
+
+      if (prev && (prev['object type'] === 'Object' || prev.object === 'Object')) {
+        issues.push({
+          severity: 'fatal',
+          phase: 'expand',
+          message: 'Gap cannot attach to Object surface (place a Lens/Stop first).',
           blockId,
           surfaceIndex: typeof prev.id === 'number' ? prev.id : undefined
         });
