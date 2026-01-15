@@ -257,7 +257,9 @@ export class WavefrontPlotter {
 
             // Plotly用のデータに変換
             // OPD is fixed to raw-grid rendering (no Zernike surface rendering).
-            let surfaceData = this.convertToPlotlySurfaceData(mapForPlot, 'opd', { rawMode: true });
+            // rawMode keeps the raw-grid sampling (no Zernike surface), but we still
+            // allow small interior hole-filling to avoid Plotly rendering artifacts.
+            let surfaceData = this.convertToPlotlySurfaceData(mapForPlot, 'opd', { rawMode: true, fillHoles: true });
 
             // Plotly側で描画行列を入れ替え（z転置）
             surfaceData = this._transposeZForPlotly(surfaceData);
@@ -901,11 +903,20 @@ export class WavefrontPlotter {
 
         const rawMode = !!options?.rawMode;
 
+        // Even in rawMode, callers may request small interior hole filling
+        // (e.g. to avoid a single missing center sample creating a large Plotly hole).
+        const fillHoles = (options?.fillHoles !== undefined) ? !!options.fillHoles : !rawMode;
+
         // Drop rare extreme spikes before gridding/interpolation (treat as missing).
-        const values = this._filterOutliersMAD(valuesRaw, { label: `${dataType}:${rawMode ? 'raw' : 'interp'}:surface` });
+        // NOTE: OPD (especially with defocus kept) can legitimately exceed tens/hundreds of waves.
+        // The default hard-abs cutoff (60λ) would incorrectly blank large regions (visible as holes).
+        const outlierOpts = (rawMode && dataType === 'opd')
+            ? { label: `${dataType}:${rawMode ? 'raw' : 'interp'}:surface`, madK: 1e9, absMax: 1e9 }
+            : { label: `${dataType}:${rawMode ? 'raw' : 'interp'}:surface` };
+        const values = this._filterOutliersMAD(valuesRaw, outlierOpts);
 
         // まず「元のグリッド」に確実に戻す（X/Y入れ替え・補間アーティファクト回避）
-        const regular = this._tryBuildRegularGrid(wavefrontMap, values, null, { fillHoles: !rawMode });
+        const regular = this._tryBuildRegularGrid(wavefrontMap, values, null, { fillHoles });
         if (regular) {
             return {
                 type: 'surface',
@@ -1204,7 +1215,12 @@ export class WavefrontPlotter {
         const rawMode = !!options?.rawMode;
 
         // Drop rare extreme spikes before gridding (treat as missing).
-        const values = this._filterOutliersMAD(valuesRaw, { label: `${dataType}:${rawMode ? 'raw' : 'interp'}:heatmap` });
+        // NOTE: OPD (especially with defocus kept) can legitimately exceed tens/hundreds of waves.
+        // The default hard-abs cutoff (60λ) would incorrectly blank large regions (visible as holes).
+        const outlierOpts = (rawMode && dataType === 'opd')
+            ? { label: `${dataType}:${rawMode ? 'raw' : 'interp'}:heatmap`, madK: 1e9, absMax: 1e9 }
+            : { label: `${dataType}:${rawMode ? 'raw' : 'interp'}:heatmap` };
+        const values = this._filterOutliersMAD(valuesRaw, outlierOpts);
 
         // まず「元のグリッド」に確実に戻す（X/Y入れ替え・補間アーティファクト回避）
         const regular = this._tryBuildRegularGrid(wavefrontMap, values, gridSize, { fillHoles: !rawMode });
