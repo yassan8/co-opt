@@ -413,10 +413,16 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       // Import the nd (tokens[4]) as a numeric material name so co-opt can still ray-trace.
       if (String(name).toUpperCase() === '___BLANK') {
         const nd = parseNumberOrNull(tokens[4]);
+        const vd = parseNumberOrNull(tokens[5]);
         if (nd !== null && Number.isFinite(nd) && nd > 0) {
           row.material = String(nd);
         } else {
           row.material = '';
+        }
+
+        // Preserve Abbe number so Design Intent conversion can map numeric nd to a real glass.
+        if (vd !== null && Number.isFinite(vd) && vd > 0) {
+          row.abbe = String(vd);
         }
       } else {
         row.material = normalizeImportedMaterialName(name);
