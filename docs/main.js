@@ -33,8 +33,8 @@ import { calculateAdaptiveMarginalRay, calculateAllMarginalRays } from './ray-ma
 import { generateSpotDiagram, drawSpotDiagram, generateSurfaceOptions } from './eva-spot-diagram.js';
 import { calculateTransverseAberration, getFieldAnglesFromSource, getPrimaryWavelengthForAberration, validateAberrationData, calculateChiefRayNewton, getEstimatedEntrancePupilDiameter } from './eva-transverse-aberration.js';
 import { plotTransverseAberrationDiagram, showTransverseAberrationInNewWindow } from './eva-transverse-aberration-plot.js';
-import { showWavefrontDiagram } from './eva-wavefront-plot.js?v=2025-12-31a';
-import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './eva-wavefront.js?v=2025-12-31a';
+import { showWavefrontDiagram } from './eva-wavefront-plot.js?v=2026-01-15b';
+import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './eva-wavefront.js?v=2026-01-15l';
 import { PSFCalculator } from './eva-psf.js?v=2026-01-14b';
 import { PSFPlotter, PSFDisplayManager } from './eva-psf-plot.js?v=2026-01-14b';
 import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './zernike-fitting.js';
@@ -55,7 +55,7 @@ import { initAIAssistant } from './ai-assistant.js';
 import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayColorMode, optimizeObjectPositionForStop, optimizeAngleObjectPosition, generateRayStartPointsForObject, drawRayWithSegmentColors } from './optical/ray-renderer.js';
 
 // UI modules
-import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons } from './ui/event-handlers.js?v=2026-01-08h';
+import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons } from './ui/event-handlers.js?v=2026-01-15l';
 import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListeners } from './ui/ui-updates.js';
 import { setupDOMEventHandlers } from './ui/dom-event-handlers.js?v=2026-01-14b';
 import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.js';
@@ -247,18 +247,7 @@ async function initializeApplication() {
                 console.error('❌ Error updating wavefront object selection after table init:', error);
             }
             
-            // 🆕 遅延波面収差ボタン初期化（セカンダリ）
-            if (!window.wavefrontButtonsInitialized) {
-                try {
-                    console.log('🔧 遅延波面収差光線描画ボタン初期化開始...');
-                    const { setupWavefrontRayButtons } = await import('./ui/wavefront-ray-handlers.js');
-                    setupWavefrontRayButtons();
-                    window.wavefrontButtonsInitialized = true;
-                    console.log('✅ 遅延波面収差光線描画ボタン初期化完了');
-                } catch (error) {
-                    console.error('❌ 遅延波面収差光線描画ボタンの初期化に失敗:', error);
-                }
-            }
+            // (removed) OPD Rays drawing feature
         }, 1000);
         
         // Export functions to global scope for debugging
@@ -1412,16 +1401,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         
         console.log('✅ Application initialization completed');
         
-        // 🆕 波面収差光線描画ボタンを初期化
-        try {
-            console.log('🔧 波面収差光線描画ボタン初期化開始...');
-            const { setupWavefrontRayButtons } = await import('./ui/wavefront-ray-handlers.js');
-            setupWavefrontRayButtons();
-            window.wavefrontButtonsInitialized = true;
-            console.log('✅ 波面収差光線描画ボタン初期化完了');
-        } catch (error) {
-            console.error('❌ 波面収差光線描画ボタンの初期化に失敗:', error);
-        }
+        // (removed) OPD Rays drawing feature
         
         // 🔍 Objectデータデバッグボタンの設定
         const debugObjectDataBtn = document.getElementById('debug-object-data');

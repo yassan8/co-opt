@@ -1098,7 +1098,7 @@ function maybeBuildLocalAnswer(userText, context) {
         if (needRun) {
             lines.push('次の確認:');
             if (wavefrontMissing) lines.push('- 波面/光路差表示を一度実行し、runtimeDiagnostics.wavefront が埋まるか確認');
-            if (opdMissing) lines.push('- Draw OPD Rays 等を一度実行し、runtimeDiagnostics.opdLastRay が埋まるか確認');
+            if (opdMissing) lines.push('- Show wavefront diagram を一度実行し、runtimeDiagnostics.opdLastRay が埋まるか確認');
         }
     }
 

@@ -179,7 +179,6 @@
       </select>
       <button id="design-intent-add-block-btn">Add</button>
       <button id="design-intent-delete-block-btn">Delete</button>
-      <button id="suggest-design-intent-btn" title="Find similar glass / suggest design intent.">Find Glass</button>
     </div>
 
     <div id="import-analyze-mode-banner" class="merit-function-help" style="display: none;">
@@ -456,8 +455,6 @@
           </select>
           <button id="show-wavefront-diagram-btn">Show wavefront diagram</button>
           <button id="stop-opd-btn" type="button" disabled>Stop</button>
-          <button id="draw-wavefront-rays-btn">Draw OPD Rays</button>
-          <button id="clear-wavefront-rays-btn">Clear OPD Rays</button>
           <button id="zernike-fit-btn">Zernike Fit</button>
         </div>
         <div id="opd-progress" style="margin: 8px 0; font-size: 13px; color: #666;"></div>
@@ -556,7 +553,7 @@
       console.warn('⚠️ [Startup] Failed to pre-load active configuration:', e);
     }
   </script>
-  <script type="module" src="main.js?v=2026-01-14a"></script>
+  <script type="module" src="main.js?v=2026-01-15l"></script>
   
   <!-- Configuration System -->
   <script type="module" src="table-configuration.js"></script>
@@ -621,7 +618,7 @@
         // ray-tracing.jsの関数をグローバルに公開
         setTimeout(async () => {
           try {
-            const main = await import('./main.js?v=2026-01-14a');
+            const main = await import('./main.js?v=2026-01-15l');
             const rayTracing = await import('./ray-tracing.js');
             const debugUtils = await import('./debug/debug-utils.js');
             

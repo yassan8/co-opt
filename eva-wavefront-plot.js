@@ -24,6 +24,18 @@ export class WavefrontPlotter {
             responsive: true
         };
     }
+
+    /**
+     * PSFと同じ強度系カラースケール（低→高: 青→緑→赤）
+     * Plotlyのcolorscale配列を返す
+     */
+    static getBlueGreenRedColorscale() {
+        return [
+            [0.0, 'rgb(0, 0, 255)'],
+            [0.5, 'rgb(0, 255, 0)'],
+            [1.0, 'rgb(255, 0, 0)']
+        ];
+    }
     _extractHintText(message) {
         const m = String(message ?? '');
         const idx = m.indexOf('hint=');
@@ -226,8 +238,11 @@ export class WavefrontPlotter {
                 return wavefrontMap;
             }
 
-            // Keep System Data consistent with Heatmap mode
-            this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
+            // Do not write System Data by default for OPD.
+            // (OPD popup has an explicit checkbox that pushes Zernike report.)
+            if (options?.updateSystemData === true) {
+                this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
+            }
 
             // If display mode is enabled, plot the transformed OPD arrays.
             const displayMode = 'pistonTiltRemoved';
@@ -250,21 +265,21 @@ export class WavefrontPlotter {
             // プロット設定
             const layout = {
                 title: {
-                    text: `光路差（OPD）分布 - ${fieldSetting.displayName || 'Field Point'}`,
+                    text: `Optical Path Difference (OPD) Distribution - ${fieldSetting.displayName || 'Field Point'}`,
                     font: { size: 16 }
                 },
                 scene: {
                     xaxis: {
-                        title: '瞳座標 X',
+                        title: 'Pupil coordinate X',
                         range: [-1.1, 1.1],
                         dtick: 0.5
                     },
                     yaxis: {
-                        title: '瞳座標 Y',
+                        title: 'Pupil coordinate Y',
                         range: [-1.1, 1.1],
                         dtick: 0.5
                     },
-                    zaxis: { title: '光路差 [λ]' },
+                    zaxis: { title: 'OPD [λ]' },
                     camera: {
                         eye: { x: 1.5, y: 1.5, z: 1.5 }
                     }
@@ -408,7 +423,11 @@ export class WavefrontPlotter {
             }
 
             // Keep System Data consistent with Heatmap mode
-            this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
+            // Do not write System Data by default for OPD.
+            // (OPD popup has an explicit checkbox that pushes Zernike report.)
+            if (options?.updateSystemData === true) {
+                this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
+            }
 
             // Plotly用のデータに変換
             // 3D surfaceの円周ギザギザを抑えるため、Zernike関数面を高密度サンプリングして描画（計算グリッドは変更しない）
@@ -436,8 +455,7 @@ export class WavefrontPlotter {
                         x: dense.x,
                         y: dense.y,
                         z: dense.z,
-                        colorscale: 'RdBu',
-                        reversescale: true,
+                        colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
                         showscale: true,
                         colorbar: { title: 'Wλ [波長]' },
                         flatshading: false,
@@ -459,21 +477,21 @@ export class WavefrontPlotter {
             // プロット設定
             const layout = {
                 title: {
-                    text: `波面収差（Wλ）分布 - ${fieldSetting.displayName || 'Field Point'}`,
+                    text: `Wavefront Aberration (Wλ) Distribution - ${fieldSetting.displayName || 'Field Point'}`,
                     font: { size: 16 }
                 },
                 scene: {
                     xaxis: {
-                        title: '瞳座標 X',
+                        title: 'Pupil coordinate X',
                         range: [-1.1, 1.1],
                         dtick: 0.5
                     },
                     yaxis: {
-                        title: '瞳座標 Y',
+                        title: 'Pupil coordinate Y',
                         range: [-1.1, 1.1],
                         dtick: 0.5
                     },
-                    zaxis: { title: '波面収差 [波長]' },
+                    zaxis: { title: 'Wavefront aberration [λ]' },
                     camera: {
                         eye: { x: 1.5, y: 1.5, z: 1.5 }
                     }
@@ -605,17 +623,17 @@ export class WavefrontPlotter {
             // プロット設定
             const layout = {
                 title: {
-                    text: `光路差（OPD）ヒートマップ - ${fieldSetting.displayName || 'Field Point'}`,
+                    text: `Optical Path Difference (OPD) Heatmap - ${fieldSetting.displayName || 'Field Point'}`,
                     font: { size: 16 }
                 },
                 xaxis: { 
-                    title: '瞳座標 X',
+                    title: 'Pupil coordinate X',
                     range: xRange,
                     dtick: 0.5,
                     constrain: 'domain'
                 },
                 yaxis: { 
-                    title: '瞳座標 Y', 
+                    title: 'Pupil coordinate Y', 
                     scaleanchor: 'x',
                     scaleratio: 1,
                     range: yRange,
@@ -689,17 +707,17 @@ export class WavefrontPlotter {
 
             const layout = {
                 title: {
-                    text: `波面収差（Wλ）ヒートマップ - ${fieldSetting.displayName || 'Field Point'}`,
+                    text: `Wavefront Aberration (Wλ) Heatmap - ${fieldSetting.displayName || 'Field Point'}`,
                     font: { size: 16 }
                 },
                 xaxis: {
-                    title: '瞳座標 X',
+                    title: 'Pupil coordinate X',
                     range: xRange,
                     dtick: 0.5,
                     constrain: 'domain'
                 },
                 yaxis: {
-                    title: '瞳座標 Y',
+                    title: 'Pupil coordinate Y',
                     scaleanchor: 'x',
                     scaleratio: 1,
                     range: yRange,
@@ -778,13 +796,13 @@ export class WavefrontPlotter {
             // プロット設定
             const layout = {
                 title: {
-                    text: `マルチフィールド波面収差比較`,
+                    text: `Multi-field Wavefront Aberration Comparison`,
                     font: { size: 16 }
                 },
                 scene: {
-                    xaxis: { title: '瞳座標 X' },
-                    yaxis: { title: '瞳座標 Y' },
-                    zaxis: { title: '波面収差 [波長]' },
+                    xaxis: { title: 'Pupil coordinate X' },
+                    yaxis: { title: 'Pupil coordinate Y' },
+                    zaxis: { title: 'Wavefront aberration [λ]' },
                     camera: {
                         eye: { x: 1.5, y: 1.5, z: 1.5 }
                     }
@@ -895,8 +913,7 @@ export class WavefrontPlotter {
                 y: regular.y,
                 z: regular.z,
                 connectgaps: false,
-                colorscale: 'RdBu',
-                reversescale: true,
+                colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
                 showscale: true,
                 colorbar: {
                     title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [波長]'
@@ -973,8 +990,7 @@ export class WavefrontPlotter {
                 y: uniqueY,
                 z: zGrid,
                 connectgaps: false,
-                colorscale: 'RdBu',
-                reversescale: true,
+                colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
                 showscale: true,
                 colorbar: {
                     title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [波長]'
@@ -1066,8 +1082,7 @@ export class WavefrontPlotter {
             y: interpolatedY,
             z: zGrid,
             connectgaps: false,
-            colorscale: 'RdBu',
-            reversescale: true,
+            colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
             showscale: true,
             colorbar: {
                 title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [波長]'
@@ -1167,8 +1182,7 @@ export class WavefrontPlotter {
             x: x,
             y: y,
             z: z,
-            colorscale: 'RdBu',
-            reversescale: true,
+            colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
             showscale: true,
             colorbar: {
                 title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [波長]'
@@ -1218,8 +1232,7 @@ export class WavefrontPlotter {
                 z: regular.z,
                 zsmooth: rawMode ? false : (allowConnectGaps ? 'best' : false),
                 connectgaps: rawMode ? false : allowConnectGaps,
-                colorscale: 'RdBu',
-                reversescale: true,
+                colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
                 showscale: true,
                 colorbar: {
                     title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [波長]'
@@ -1280,8 +1293,7 @@ export class WavefrontPlotter {
                 z: zGrid,
                 zsmooth: false,
                 connectgaps: false,
-                colorscale: 'RdBu',
-                reversescale: true,
+                colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
                 showscale: true,
                 colorbar: {
                     title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [波長]'
@@ -1325,11 +1337,10 @@ export class WavefrontPlotter {
             z: zGrid,
             zsmooth: allowConnectGaps ? 'best' : false,
             connectgaps: allowConnectGaps,
-            colorscale: 'RdBu',
-            reversescale: true,
+            colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
             showscale: true,
             colorbar: {
-                title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [波長]'
+                title: dataType === 'opd' ? 'OPD [λ]' : 'Wλ [λ]'
             }
         };
         return this._transposeZForPlotly(out);
@@ -1350,9 +1361,9 @@ export class WavefrontPlotter {
         const opdMode = statistics?.opdMode;
         const skipZernikeFit = statistics?.skipZernikeFit;
         const modeNote = (mode === 'entrance')
-            ? '<div class="stats-note"><strong>瞳サンプリング:</strong> entrance（ベストエフォート / ビネッティングあり）</div>'
+            ? '<div class="stats-note"><strong>Pupil sampling:</strong> entrance (best effort / vignetting possible)</div>'
             : (mode === 'stop')
-                ? '<div class="stats-note"><strong>瞳サンプリング:</strong> stop（絞り面到達を要求）</div>'
+                ? '<div class="stats-note"><strong>Pupil sampling:</strong> stop (requires reaching stop surface)</div>'
                 : '';
 
         const opdModeNote = opdMode
@@ -1376,26 +1387,26 @@ export class WavefrontPlotter {
         const meanMagnitude = Math.abs(statistics.mean);
         const largePistonWarning = (unit === 'λ' && meanMagnitude > 10)
             ? `<div class="stats-warning" style="color: #ff6b6b; margin-top: 8px;">
-                ⚠️ <strong>ピストン（平均）が大きい</strong>: 平均値=${statistics.mean.toFixed(2)} ${unit}<br>
-                → 統計でピストン除去を有効化すると平均は0に近づきます。
+                ⚠️ <strong>Large piston (mean)</strong>: mean=${statistics.mean.toFixed(2)} ${unit}<br>
+                → Enable piston removal in the statistics to make the mean closer to 0.
                </div>`
             : '';
         
         const statsHtml = `
             <div class="wavefront-statistics">
-                <h4>${title} 統計情報</h4>
+                <h4>${title} Statistics</h4>
                 ${modeNote}
                 ${opdModeNote}
                 ${zernikeNote}
                 ${rawMeanNote}
                 ${removalNote}
                 <div class="stats-grid">
-                    <div><strong>データ点数:</strong> ${statistics.count}</div>
-                    <div><strong>平均値:</strong> ${statistics.mean.toFixed(4)} ${unit}</div>
+                    <div><strong>Data points:</strong> ${statistics.count}</div>
+                    <div><strong>Mean:</strong> ${statistics.mean.toFixed(4)} ${unit}</div>
                     <div><strong>RMS:</strong> ${statistics.rms.toFixed(4)} ${unit}</div>
                     <div><strong>Peak-to-Peak:</strong> ${statistics.peakToPeak.toFixed(4)} ${unit}</div>
-                    <div><strong>最小値:</strong> ${statistics.min.toFixed(4)} ${unit}</div>
-                    <div><strong>最大値:</strong> ${statistics.max.toFixed(4)} ${unit}</div>
+                    <div><strong>Min:</strong> ${statistics.min.toFixed(4)} ${unit}</div>
+                    <div><strong>Max:</strong> ${statistics.max.toFixed(4)} ${unit}</div>
                 </div>
                 ${largePistonWarning}
             </div>

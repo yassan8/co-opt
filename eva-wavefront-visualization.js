@@ -202,6 +202,8 @@ function sanitizeRayPath(rayPath) {
  * @param {Object} options - 描画オプション
  */
 export function drawWavefrontRays(wavefrontData, options = {}) {
+    // (Removed) Draw/Clear OPD Rays feature.
+    return;
     const {
         scene = window.scene,
         showVignetted = true,
@@ -606,6 +608,8 @@ function calculateOPDStatistics(rayData) {
  * @param {THREE.Scene} scene - Three.jsシーン
  */
 export function clearWavefrontRays(scene) {
+    // (Removed) Draw/Clear OPD Rays feature.
+    return;
     console.log('🧹 [WavefrontViz] 光線クリア開始 - 包括的削除モード');
 
     const T = getThreeForScene(scene);
@@ -728,18 +732,6 @@ export function filterWavefrontRaysByOPD(scene, opdRange) {
  * @param {Object} options - 初期化オプション
  */
 export function initializeWavefrontVisualization(options = {}) {
-    console.log('🚀 [WavefrontViz] 波面収差光線描画システム初期化');
-    
-    // グローバル関数として公開
-    window.drawWavefrontRays = drawWavefrontRays;
-    window.toggleWavefrontRaysVisibility = toggleWavefrontRaysVisibility;
-    window.filterWavefrontRaysByOPD = filterWavefrontRaysByOPD;
-    window.clearWavefrontRays = (scene = window.scene) => clearWavefrontRays(scene);
-    
-    console.log('✅ [WavefrontViz] 初期化完了 - グローバル関数登録済み');
-}
-
-// 自動初期化
-if (typeof window !== 'undefined') {
-    initializeWavefrontVisualization();
+    // (Removed) Draw/Clear OPD Rays feature.
+    // Intentionally left as a no-op.
 }

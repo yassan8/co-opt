@@ -3135,7 +3135,7 @@ function setupWavefrontAberrationButton() {
             const map = window.__lastWavefrontMap;
             const fit = map?.zernike;
             if (!map || !fit) {
-                alert('Zernike Fit: 先に「Show wavefront diagram」または「Draw OPD Rays」を実行してください。');
+                alert('Zernike Fit: 先に「Show wavefront diagram」を実行してください。');
                 return;
             }
 
@@ -8810,6 +8810,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             alert(err?.message || 'Failed to open glass map window');
                         }
                     });
+
                     // Place the button to the left of the material textbox.
                     try { line.insertBefore(mapBtn, valueEl); } catch (_) { line.appendChild(mapBtn); }
                 }

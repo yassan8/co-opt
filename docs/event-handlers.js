@@ -3287,12 +3287,15 @@ export function setupOpticalSystemChangeListeners(scene) {
         if (openOpdWindowBtn) {
                 openOpdWindowBtn.addEventListener('click', () => {
                         if (window.__opdPopup && !window.__opdPopup.closed) {
-                                try { window.__opdPopup.focus(); } catch (_) {}
-                                return;
+                    // Always reopen fresh so stale about:blank popup code can't persist.
+                    try { window.__opdPopup.close(); } catch (_) {}
+                    window.__opdPopup = null;
                         }
 
                         const popup = window.open('', 'Optical Path Difference', 'width=800,height=600');
                         window.__opdPopup = popup;
+
+                        try { popup.document.open(); } catch (_) {}
 
                         popup.document.write(`
 <!DOCTYPE html>
@@ -3378,10 +3381,12 @@ export function setupOpticalSystemChangeListeners(scene) {
             <option value="128">128x128</option>
             <option value="256">256x256</option>
         </select>
+        <label style="display:flex;align-items:center;gap:6px;">
+            <input id="popup-zernike-fit-checkbox" type="checkbox" />
+            Zernike (calc)
+        </label>
         <button id="popup-show-wavefront-btn" type="button">Show wavefront diagram</button>
         <button id="popup-stop-opd-btn" type="button" disabled>Stop</button>
-        <button id="popup-draw-opd-rays-btn" type="button">Draw OPD Rays</button>
-        <button id="popup-clear-opd-rays-btn" type="button">Clear OPD Rays</button>
     </div>
     <div id="popup-opd-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
         <div id="popup-opd-progress-text" style="margin-bottom: 6px;">Calculating OPD...</div>
@@ -3404,7 +3409,7 @@ export function setupOpticalSystemChangeListeners(scene) {
         function syncObjectOptionsFromOpener() {
             const openerSelect = getOpenerEl('wavefront-object-select');
             const popupSelect = document.getElementById('popup-wavefront-object-select');
-            if (!openerSelect || !popupSelect) return;
+            if (!popupSelect) return;
 
             const current = popupSelect.value;
             const nextOptions = [];
@@ -3443,12 +3448,18 @@ export function setupOpticalSystemChangeListeners(scene) {
             }
 
             // Fallback: clone opener select.
-            if (nextOptions.length === 0) {
+            if (nextOptions.length === 0 && openerSelect && openerSelect.options) {
                 Array.from(openerSelect.options).forEach(opt => {
                     nextOptions.push({ value: String(opt.value), label: String(opt.textContent ?? '') });
                 });
             }
-            if (nextOptions.length === 0) nextOptions.push({ value: '0', label: '0' });
+            // Last fallback: placeholder + schedule a retry (opener tables may not be ready yet).
+            if (nextOptions.length === 0) {
+                nextOptions.push({ value: '0', label: '1' });
+                setTimeout(() => {
+                    try { syncObjectOptionsFromOpener(); } catch (_) {}
+                }, 250);
+            }
 
             popupSelect.innerHTML = '';
             for (const opt of nextOptions) {
@@ -3504,6 +3515,7 @@ export function setupOpticalSystemChangeListeners(scene) {
             const popupObject = document.getElementById('popup-wavefront-object-select');
             const popupPlotType = document.getElementById('popup-wavefront-plot-type-select');
             const popupGrid = document.getElementById('popup-wavefront-grid-size-select');
+            const popupZernikeFit = document.getElementById('popup-zernike-fit-checkbox');
 
             const objectIndex = (() => {
                 if (!popupObject) return 0;
@@ -3575,7 +3587,186 @@ export function setupOpticalSystemChangeListeners(scene) {
                         cancelToken: popupCancelToken,
                         onProgress
                     });
-                    setProgress(100, 'Done');
+
+                    // Optional: Zernike fit + push report to System Data
+                    const shouldZernikeFit = !!(popupZernikeFit && popupZernikeFit.checked);
+                    if (shouldZernikeFit) {
+                        try {
+                            if (String(plotType) === 'multifield') {
+                                setProgress(100, 'Zernike fit is not available for Multi-field');
+                            } else {
+                                setProgress(98, 'Zernike fitting...');
+
+                                const opener = window.opener;
+                                const map = opener ? opener.__lastWavefrontMap : null;
+                                const meta = opener ? opener.__lastWavefrontMeta : null;
+                                if (!map || map?.error) {
+                                    throw new Error('No valid wavefrontMap to fit');
+                                }
+
+                                const coordsAll = Array.isArray(map?.pupilCoordinates) ? map.pupilCoordinates : [];
+                                const opdsAll = Array.isArray(map?.raw?.opds) ? map.raw.opds : (Array.isArray(map?.opds) ? map.opds : []);
+                                const n = Math.min(coordsAll.length, opdsAll.length);
+                                if (!n) {
+                                    throw new Error('No OPD samples found');
+                                }
+
+                                // Filter out invalid samples for fitting
+                                const coords = [];
+                                const opds = [];
+                                for (let i = 0; i < n; i++) {
+                                    const c = coordsAll[i];
+                                    const v = opdsAll[i];
+                                    const x = Number(c?.x);
+                                    const y = Number(c?.y);
+                                    const opd = Number(v);
+                                    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(opd)) continue;
+                                    coords.push({ x, y });
+                                    opds.push(opd);
+                                }
+                                if (coords.length < 5) {
+                                    throw new Error('Not enough valid samples for Zernike fitting');
+                                }
+
+                                const wavelength = Number(meta?.wavelength) || (() => {
+                                    try {
+                                        const w = Number(opener?.getPrimaryWavelength?.());
+                                        if (Number.isFinite(w) && w > 0) return w;
+                                    } catch (_) {}
+                                    return 0.5876;
+                                })();
+
+                                const opticalSystemRows = (typeof opener?.getOpticalSystemRows === 'function')
+                                    ? opener.getOpticalSystemRows()
+                                    : null;
+                                const calculator = opener?.createOPDCalculator
+                                    ? opener.createOPDCalculator(opticalSystemRows, wavelength)
+                                    : null;
+                                const analyzer = opener?.createWavefrontAnalyzer
+                                    ? opener.createWavefrontAnalyzer(calculator)
+                                    : null;
+
+                                if (!analyzer || typeof analyzer.fitZernikePolynomials !== 'function' || typeof analyzer.formatZernikeReportText !== 'function') {
+                                    throw new Error('Wavefront analyzer is not available for Zernike fitting');
+                                }
+
+                                const maxNoll = Math.max(1, Math.min(37, opds.length));
+                                const fit = analyzer.fitZernikePolynomials({ pupilCoordinates: coords, opds }, maxNoll);
+
+                                // Store coefficients for the main window Zernike Fit button
+                                try {
+                                    opener.__lastWavefrontMap = opener.__lastWavefrontMap || map;
+                                    opener.__lastWavefrontMap.zernike = fit;
+                                    opener.__lastWavefrontMap.statistics = opener.__lastWavefrontMap.statistics || (map.statistics || {});
+                                    opener.__lastWavefrontMap.statistics.skipZernikeFit = false;
+                                } catch (_) {}
+
+                                // Build a lightweight report map so formatting can rely on aligned sample arrays
+                                const reportMap = {
+                                    ...map,
+                                    pupilCoordinates: coords,
+                                    raw: { ...(map.raw || {}), opds },
+                                    opds,
+                                    zernike: fit
+                                };
+
+                                const reportText = analyzer.formatZernikeReportText(reportMap, { maxNoll });
+
+                                const pushSystemData = (text) => {
+                                    try {
+                                        const ta = opener?.document?.getElementById?.('system-data');
+                                        if (!ta || typeof ta.value !== 'string') return false;
+                                        // Replace (clear then push) so each run shows only the latest report.
+                                        ta.value = String(text || '');
+                                        return true;
+                                    } catch (_) {
+                                        return false;
+                                    }
+                                };
+
+                                const tryOpenSystemDataWindow = () => {
+                                    try {
+                                        const w = opener?.__systemDataPopup;
+                                        if (w && !w.closed) {
+                                            try { w.focus(); } catch (_) {}
+                                            return true;
+                                        }
+                                    } catch (_) {}
+
+                                    // Some browsers block popups triggered by synthetic clicks.
+                                    // We still try the main-window button first, but fall back to
+                                    // opening the System Data window directly from this user action.
+                                    try {
+                                        const btn = opener?.document?.getElementById?.('open-system-data-window-btn');
+                                        if (btn) {
+                                            btn.click();
+                                            // If the click worked, the opener should set __systemDataPopup.
+                                            try {
+                                                const w = opener?.__systemDataPopup;
+                                                if (w && !w.closed) {
+                                                    try { w.focus(); } catch (_) {}
+                                                    return true;
+                                                }
+                                            } catch (_) {}
+                                        }
+                                    } catch (_) {}
+
+                                    // Fallback: open and render a minimal System Data popup directly.
+                                    try {
+                                        const popup = opener?.open?.('', 'System Data', 'width=1200,height=600');
+                                        if (!popup) return false;
+                                        try { opener.__systemDataPopup = popup; } catch (_) {}
+                                        try { popup.document.open(); } catch (_) {}
+
+                                        const html = [
+                                            '<!DOCTYPE html>',
+                                            '<html>',
+                                            '<head>',
+                                            '  <meta charset="UTF-8" />',
+                                            '  <title>System Data</title>',
+                                            '  <style>',
+                                            '    html, body { height: 100%; }',
+                                            '    body { margin: 0; font-family: Arial, sans-serif; display: flex; flex-direction: column; height: 100vh; background: #f4f4f4; }',
+                                            '    .header { padding: 10px 12px; background: white; color: #333; font-weight: 600; border-bottom: 1px solid #ddd; }',
+                                            '    .content { flex: 1 1 auto; padding: 10px 12px; min-height: 0; display: flex; }',
+                                            '    textarea { flex: 1 1 auto; width: 100%; resize: none; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; line-height: 1.4; border: 1px solid #bbb; border-radius: 4px; padding: 10px; box-sizing: border-box; min-height: 0; background: white; }',
+                                            '  </style>',
+                                            '</head>',
+                                            '<body onload="(function(){function getOpenerEl(id){try{return window.opener&&window.opener.document?window.opener.document.getElementById(id):null;}catch(e){return null;}}function sync(){var src=getOpenerEl(\\\'system-data\\\');var dst=document.getElementById(\\\'popup-system-data\\\');if(dst&&src&&dst.value!==src.value){dst.value=src.value;}}setInterval(sync,500);window.addEventListener(\\\'focus\\\',sync);sync();})();">',
+                                            '  <div class="header">System Data</div>',
+                                            '  <div class="content">',
+                                            '    <textarea id="popup-system-data" placeholder="System information will appear here..."></textarea>',
+                                            '  </div>',
+                                            '</body>',
+                                            '</html>'
+                                        ].join('\\n');
+
+                                        popup.document.write(html);
+                                        try { popup.document.close(); } catch (_) {}
+                                        try { popup.focus(); } catch (_) {}
+                                        return true;
+                                    } catch (_) {}
+
+                                    return false;
+                                };
+
+                                const pushed = pushSystemData(reportText);
+                                const opened = tryOpenSystemDataWindow();
+                                if (pushed && opened) {
+                                    setProgress(100, 'Zernike report pushed to System Data');
+                                } else if (pushed) {
+                                    setProgress(100, 'Zernike report pushed. See System data.');
+                                } else {
+                                    setProgress(100, 'Zernike fit done (could not write System Data). See System data.');
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('⚠️ Zernike fit/push failed:', e);
+                            setProgress(100, 'Zernike fit failed. See console.');
+                        }
+                    }
+
+                    if (!shouldZernikeFit) setProgress(100, 'Done');
                     resizePlot();
                 } catch (err) {
                     if (err?.message?.includes('Cancelled')) {
@@ -3612,14 +3803,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                     stopBtn.textContent = 'Stopping...';
                 }
             }
-        });
-        document.getElementById('popup-draw-opd-rays-btn').addEventListener('click', () => {
-            const btn = getOpenerEl('draw-wavefront-rays-btn');
-            if (btn) btn.click();
-        });
-        document.getElementById('popup-clear-opd-rays-btn').addEventListener('click', () => {
-            const btn = getOpenerEl('clear-wavefront-rays-btn');
-            if (btn) btn.click();
         });
 
         function syncAll() {

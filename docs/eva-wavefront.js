@@ -7929,7 +7929,7 @@ export class WavefrontAberrationAnalyzer {
         
         const maxOrderFromPoints = Math.floor(Math.sqrt(filteredPoints.length / conservativeFactor));
         const maxOrderForFit = Math.min(
-            6,  // デフォルト最大次数を8→6に削減（より保守的）
+            8,  // Up to 45 terms (OSA j=0..44). System Data can still display a subset (e.g. 37 terms).
             maxOrderRequested,
             maxOrderFromPoints
         );
@@ -8067,7 +8067,8 @@ export class WavefrontAberrationAnalyzer {
                 if (!Array.isArray(arr) || arr.length === 0) {
                     return { count: 0, mean: NaN, rms: NaN, peakToPeak: NaN, min: NaN, max: NaN };
                 }
-                const valid = arr.filter(v => v !== 0 && Number.isFinite(v));
+                // Include 0.0 values (valid data). Only drop non-finite.
+                const valid = arr.filter(v => Number.isFinite(v));
                 if (!valid.length) {
                     return { count: 0, mean: NaN, rms: NaN, peakToPeak: NaN, min: NaN, max: NaN };
                 }
@@ -8091,7 +8092,6 @@ export class WavefrontAberrationAnalyzer {
             const lines = [];
             lines.push('=== Zernike Fitting (Orthonormal / Gram–Schmidt) ===');
             lines.push(`Field: ${wavefrontMap?.fieldSetting?.displayName || ''}`);
-            lines.push(`Method: Modified Gram–Schmidt on sampled basis vectors`);
             lines.push(`Basis: Normalized Zernike (Noll indexing)`);
             lines.push(`Max Noll used: ${maxUsed}`);
             lines.push(`OPD display removal: piston/tilt only (Noll ${displayRemovedNoll.join(', ')})`);
@@ -8142,54 +8142,163 @@ export class WavefrontAberrationAnalyzer {
                 lines.push(`  ${j}\t(${nm.n},${nm.m})\t${cStr}\t${wStr}`);
             }
 
-            // RMS comparison: OPD stats vs coefficient-derived RMS
+            // RMS comparison
             lines.push('');
             lines.push('=== RMS Comparison ===');
+
+            // Keep a minimal summary up-front (aligned columns).
+            lines.push('Summary (start here):');
+
+            // NOTE: In this codebase, the "primary" OPD stats remove piston (mean) only; tilt is NOT removed.
+            // For an apples-to-apples comparison against Zernike piston/tilt-removed RMS, also show a
+            // sample-based OPD RMS with piston+tilt removed via best-fit plane (view-transform).
+            const sumLabel1 = 'OPD RMS (sample, piston removed)';
+            const sumLabel2 = 'OPD RMS (sample, piston+tilt removed)';
+            const sumLabel3 = 'Zernike RMS (sample, piston/tilt removed)';
+            const sumLabel4 = 'Coeff RMS (area, piston/tilt removed)';
+
+            const col1W = Math.max(18, sumLabel1.length);
+            const col2W = Math.max(30, sumLabel2.length);
+            const col3W = Math.max(34, sumLabel3.length);
+            const col4W = Math.max(30, sumLabel4.length);
+
+            lines.push(`  ${sumLabel1.padEnd(col1W)} / ${sumLabel2.padEnd(col2W)} / ${sumLabel3.padEnd(col3W)} / ${sumLabel4.padEnd(col4W)}`);
+            const summaryValueLineIndex = lines.length;
+            lines.push(`  ${''.padStart(col1W)} / ${''.padStart(col2W)} / ${''.padStart(col3W)} / ${''.padStart(col4W)}`);
+
+            lines.push('OPD samples (units: waves λ):');
 
             const primaryOpdWaves = wavefrontMap?.statistics?.opdWavelengths;
             if (primaryOpdWaves && Number.isFinite(primaryOpdWaves.rms)) {
                 lines.push(
-                    `OPD stats (primary): count=${primaryOpdWaves.count}, mean=${primaryOpdWaves.mean.toFixed(6)} λ, rms=${primaryOpdWaves.rms.toFixed(6)} λ, P-P=${primaryOpdWaves.peakToPeak.toFixed(6)} λ, min=${primaryOpdWaves.min.toFixed(6)} λ, max=${primaryOpdWaves.max.toFixed(6)} λ`
+                    `  primary (piston removed; tilt kept): count=${primaryOpdWaves.count}, mean=${primaryOpdWaves.mean.toFixed(6)} λ, rms=${primaryOpdWaves.rms.toFixed(6)} λ, P-P=${primaryOpdWaves.peakToPeak.toFixed(6)} λ, min=${primaryOpdWaves.min.toFixed(6)} λ, max=${primaryOpdWaves.max.toFixed(6)} λ`
                 );
             } else {
                 const st = calcStatsWaves(wavefrontMap?.opdsInWavelengths);
-                lines.push(fmtStatsLine('OPD stats (primary, recomputed)', st));
+                lines.push(`  ${fmtStatsLine('primary (recomputed)', st)}`);
+            }
+
+            // OPD stats with piston+tilt removed (best-fit plane) for fair comparison.
+            let opdPistonTiltRemovedWavesStats = null;
+            try {
+                const ds = wavefrontMap?.statistics?.display;
+                if (ds && ds.mode === 'pistonTiltRemoved' && ds.opdWavelengths && Number.isFinite(ds.opdWavelengths.rms)) {
+                    opdPistonTiltRemovedWavesStats = ds.opdWavelengths;
+                } else if (Array.isArray(wavefrontMap?.pupilCoordinates) && Array.isArray(wavefrontMap?.opds) && wavefrontMap.pupilCoordinates.length === wavefrontMap.opds.length) {
+                    const fit = this._removeBestFitPlane(wavefrontMap.pupilCoordinates, wavefrontMap.opds);
+                    if (fit && Array.isArray(fit.residualWaves) && fit.residualWaves.length) {
+                        opdPistonTiltRemovedWavesStats = this.calculateStatistics(fit.residualWaves, { removePiston: false });
+                    }
+                }
+            } catch (_) {
+                opdPistonTiltRemovedWavesStats = null;
             }
 
             const rawStats = wavefrontMap?.statistics?.raw?.opdWavelengths;
             if (rawStats && Number.isFinite(rawStats.rms)) {
                 lines.push(
-                    `OPD stats (raw samples): count=${rawStats.count}, mean=${rawStats.mean.toFixed(6)} λ, rms=${rawStats.rms.toFixed(6)} λ, P-P=${rawStats.peakToPeak.toFixed(6)} λ, min=${rawStats.min.toFixed(6)} λ, max=${rawStats.max.toFixed(6)} λ`
+                    `  raw (no piston removal): count=${rawStats.count}, mean=${rawStats.mean.toFixed(6)} λ, rms=${rawStats.rms.toFixed(6)} λ, P-P=${rawStats.peakToPeak.toFixed(6)} λ, min=${rawStats.min.toFixed(6)} λ, max=${rawStats.max.toFixed(6)} λ`
                 );
             } else {
                 const st = calcStatsWaves(wavefrontMap?.raw?.opdsInWavelengths);
-                lines.push(fmtStatsLine('OPD stats (raw, recomputed)', st));
+                lines.push(`  ${fmtStatsLine('raw (recomputed)', st)}`);
             }
 
-            // Coefficient-derived RMS for *displayed OPD* (normalized Zernike):
-            // RMS^2 = Σ c_j^2 for the coefficients actually used for display.
-            let sum2 = 0;
-            for (let j = 1; j <= maxUsed; j++) {
-                const c = Number(displayCoeffs?.[j] ?? 0);
-                if (!Number.isFinite(c)) continue;
-                sum2 += c * c;
+            // Build a sampled Zernike model on the same pupil samples (basis-independent RMS).
+            const pr = (Number.isFinite(Number(wavefrontMap?.pupilRange)) && Number(wavefrontMap.pupilRange) > 0)
+                ? Number(wavefrontMap.pupilRange)
+                : 1.0;
+            const pupilCoords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
+            const buildSampledModelWaves = (coeffsMicrons, removedNoll = []) => {
+                if (!coeffsMicrons || !pupilCoords.length || !Number.isFinite(wavelength) || wavelength <= 0) return null;
+                const removedSet = new Set((Array.isArray(removedNoll) ? removedNoll : []).map(v => Math.floor(Number(v))));
+                const model = [];
+                for (let i = 0; i < pupilCoords.length; i++) {
+                    const p = pupilCoords[i];
+                    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) {
+                        model.push(NaN);
+                        continue;
+                    }
+                    const rho = Math.hypot(p.x, p.y) / pr;
+                    if (!(rho <= 1.0 + 1e-9)) {
+                        model.push(NaN);
+                        continue;
+                    }
+                    const theta = Math.atan2(p.y, p.x);
+                    let opdMicrons = 0;
+                    for (let j = 1; j <= maxUsed; j++) {
+                        if (removedSet.has(j)) continue;
+                        const c = Number(coeffsMicrons?.[j] ?? 0);
+                        if (!Number.isFinite(c) || c === 0) continue;
+                        opdMicrons += c * zernikeNoll(j, rho, theta);
+                    }
+                    model.push(opdMicrons / wavelength);
+                }
+                return model;
+            };
+
+            const modelWavesAll = Array.isArray(wavefrontMap?.zernikeModel?.opdsInWavelengths) && wavefrontMap.zernikeModel.opdsInWavelengths.length
+                ? wavefrontMap.zernikeModel.opdsInWavelengths
+                : buildSampledModelWaves(usedCoeffs, []);
+
+            const modelWavesDisplayRemoved = buildSampledModelWaves(usedCoeffs, displayRemovedNoll);
+
+            let stModelRemovedForSummary = null;
+            if (Array.isArray(modelWavesAll) && modelWavesAll.length) {
+                const stModel = calcStatsWaves(modelWavesAll);
+                lines.push('Zernike model (reconstructed on same samples):');
+                lines.push(`  ${fmtStatsLine('all fitted terms', stModel)}`);
+                if (Array.isArray(modelWavesDisplayRemoved) && modelWavesDisplayRemoved.length) {
+                    const stRemoved = calcStatsWaves(modelWavesDisplayRemoved);
+                    stModelRemovedForSummary = stRemoved;
+                    lines.push(`  ${fmtStatsLine(`piston/tilt removed (Noll ${displayRemovedNoll.join(', ')})`, stRemoved)}`);
+                }
             }
-            const rmsCoeffMicrons = Math.sqrt(sum2);
-            const rmsCoeffWaves = (Number.isFinite(rmsCoeffMicrons) && Number.isFinite(wavelength) && wavelength > 0)
-                ? (rmsCoeffMicrons / wavelength)
+
+            // Coefficient-derived RMS (ONLY valid as an area-mean RMS if the basis is orthonormal).
+            // For normalized (orthonormal) Zernike on the unit disk: E[W^2] = Σ c_j^2.
+            let sum2All = 0;
+            let sum2Removed = 0;
+            const removedSet = new Set(displayRemovedNoll.map(v => Math.floor(Number(v))));
+            for (let j = 1; j <= maxUsed; j++) {
+                const c = Number(usedCoeffs?.[j] ?? 0);
+                if (!Number.isFinite(c)) continue;
+                sum2All += c * c;
+                if (!removedSet.has(j)) sum2Removed += c * c;
+            }
+            const rmsCoeffAllMicrons = Math.sqrt(sum2All);
+            const rmsCoeffAllWaves = (Number.isFinite(rmsCoeffAllMicrons) && Number.isFinite(wavelength) && wavelength > 0)
+                ? (rmsCoeffAllMicrons / wavelength)
                 : NaN;
+            const rmsCoeffRemovedMicrons = Math.sqrt(sum2Removed);
+            const rmsCoeffRemovedWaves = (Number.isFinite(rmsCoeffRemovedMicrons) && Number.isFinite(wavelength) && wavelength > 0)
+                ? (rmsCoeffRemovedMicrons / wavelength)
+                : NaN;
+
+            lines.push('Zernike coefficients (normalized / orthonormal assumption):');
             lines.push(
-                `RMS from Zernike coefficients (normalized basis): rms=${Number.isFinite(rmsCoeffWaves) ? rmsCoeffWaves.toFixed(6) : rmsCoeffWaves} λ  (${Number.isFinite(rmsCoeffMicrons) ? rmsCoeffMicrons.toFixed(6) : rmsCoeffMicrons} μm)`
+                `  area-mean RMS from coefficients (all terms): rms=${Number.isFinite(rmsCoeffAllWaves) ? rmsCoeffAllWaves.toFixed(6) : rmsCoeffAllWaves} λ  (${Number.isFinite(rmsCoeffAllMicrons) ? rmsCoeffAllMicrons.toFixed(6) : rmsCoeffAllMicrons} μm)`
+            );
+            lines.push(
+                `  area-mean RMS excluding piston/tilt (Noll ${displayRemovedNoll.join(', ')}): rms=${Number.isFinite(rmsCoeffRemovedWaves) ? rmsCoeffRemovedWaves.toFixed(6) : rmsCoeffRemovedWaves} λ  (${Number.isFinite(rmsCoeffRemovedMicrons) ? rmsCoeffRemovedMicrons.toFixed(6) : rmsCoeffRemovedMicrons} μm)`
             );
 
-            // Sampled model RMS (if model values exist)
-            const modelWavesArr = wavefrontMap?.zernikeModel?.opdsInWavelengths;
-            if (Array.isArray(modelWavesArr) && modelWavesArr.length) {
-                const stModel = calcStatsWaves(modelWavesArr);
-                lines.push(fmtStatsLine('RMS of sampled Zernike model', stModel));
-            }
+            // Fill the summary line now that everything is computed.
+            const primaryRms = (primaryOpdWaves && Number.isFinite(primaryOpdWaves.rms)) ? primaryOpdWaves.rms : NaN;
+            const opdPistonTiltRemovedRms = (opdPistonTiltRemovedWavesStats && Number.isFinite(opdPistonTiltRemovedWavesStats.rms)) ? opdPistonTiltRemovedWavesStats.rms : NaN;
+            const modelRemovedRms = (stModelRemovedForSummary && Number.isFinite(stModelRemovedForSummary.rms)) ? stModelRemovedForSummary.rms : NaN;
+            const coeffRemovedRms = rmsCoeffRemovedWaves;
 
-            lines.push('Note: OPD stats are discrete-sample stats; coefficient RMS is area-mean RMS under normalized-Zernike orthonormality. Differences can arise from sampling/mask/weighting.');
+            const fmtSum = (v) => Number.isFinite(v) ? `${v.toFixed(6)} λ` : String(v);
+            const v1 = fmtSum(primaryRms).padStart(col1W);
+            const v2 = fmtSum(opdPistonTiltRemovedRms).padStart(col2W);
+            const v3 = fmtSum(modelRemovedRms).padStart(col3W);
+            const v4 = fmtSum(coeffRemovedRms).padStart(col4W);
+            lines[summaryValueLineIndex] = `  ${v1} / ${v2} / ${v3} / ${v4}`;
+
+            lines.push('Note:');
+            lines.push('  - The coefficient RMS (sqrt(Σ c^2)) is only valid as an area-mean RMS under an orthonormal normalized Zernike basis.');
+            lines.push('    If it differs from the discrete OPD sample RMS, use “Zernike model (reconstructed on same samples)” as the basis-independent comparison.');
 
             return lines.join('\n');
         } catch (e) {
