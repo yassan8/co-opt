@@ -85,146 +85,296 @@ const tableContainer = hasDocument ? document.getElementById('table-source') : n
 // 表の構成
 export let tableSource;
 
-// In non-browser environments (Node/tests) or when Tabulator isn't loaded yet,
-// skip table initialization rather than throwing at import time.
-const canInitTabulator = hasDocument && tableContainer && (typeof Tabulator !== 'undefined');
+// ---- Pure DOM Source table (Tabulator-free) --------------------------------
 
-if (!canInitTabulator) {
-  tableSource = null;
-}
+const safeCloneRows = (rows) => (Array.isArray(rows) ? rows.map(r => ({ ...r })) : []);
 
-try {
-  if (!canInitTabulator) {
-    throw new Error('Tabulator or DOM container is not available');
-  }
-  
-  tableSource = new Tabulator("#table-source", {
-    data: initialData,
-    layout: "fitColumns",
-    selectable: 1, // 1行のみ選択可能
-    validationMode: "manual", // バリデーションモードを手動に設定
-    editTriggerEvent: "click", // 編集トリガーをクリックに限定
-    tabEndNewRow: false, // タブでの新行作成を無効化
-    columns: [
-    { title: "Source", field: "id", width: 80, headerSort: false, mutator: function(value) {
-        try {
-          return value === "" ? "" : Number(value);
-        } catch (e) {
-          // console.warn("Mutator error for source id:", e);
-          return value;
-        }
-      }},
-    { title: "Wavelength (μm)", field: "wavelength", editor: "input", width: 150, headerSort: false, mutator: function(value) {
-        try {
-          return value === "" ? "" : Number(value);
-        } catch (e) {
-          // console.warn("Mutator error for wavelength:", e);
-          return value;
-        }
-      }},
-    { title: "Weight", field: "weight", editor: "input", width: 150, headerSort: false , mutator: function(value) {
-        try {
-          return value === "" ? "" : Number(value);
-        } catch (e) {
-          // console.warn("Mutator error for weight:", e);
-          return value;
-        }
-      }},
-    { 
-      title: "Primary Wavelength", 
-      field: "primary", 
-      width: 150, 
-      headerSort: false,
-      editor: "tickCross",
-      editorParams: {
-        trueValue: "Primary Wavelength",
-        falseValue: "",
-      },
+const createCellEvent = (field, value, rowData) => {
+  const rowObj = {
+    getData: () => ({ ...rowData }),
+  };
+  return {
+    getField: () => field,
+    getValue: () => value,
+    getRow: () => rowObj,
+  };
+};
+
+const createDOMTableSource = (container, initialRows) => {
+  let data = safeCloneRows(initialRows);
+  let selectedRowId = null;
+  let rowWrappers = [];
+  const listeners = new Map();
+
+  const on = (eventName, handler) => {
+    if (!eventName || typeof handler !== 'function') return;
+    if (!listeners.has(eventName)) listeners.set(eventName, []);
+    listeners.get(eventName).push(handler);
+  };
+
+  const emit = (eventName, ...args) => {
+    const handlers = listeners.get(eventName);
+    if (!handlers || handlers.length === 0) return;
+    handlers.forEach(fn => {
+      try {
+        fn(...args);
+      } catch (e) {
+        console.debug('⚠️ [TableSource] listener error:', e);
       }
-    ]
-  });
+    });
+  };
 
-  // Tabulatorエラーハンドリング
-  tableSource.on("error", function(error) {
-    // console.warn("Source Tabulator error:", error);
-  });
+  const getData = () => safeCloneRows(data);
 
-  // 初期化完了後の処理
-  tableSource.on("tableBuilt", function(){
-    // console.log("Source Tabulator initialized successfully");
-    
-    // グローバルウィンドウオブジェクトに設定（glass.jsの関数から参照できるように）
-    if (typeof window !== 'undefined') {
-      window.tableSource = tableSource;
-      // console.log('✅ tableSource set to window.tableSource');
-    }
-  });
+  const getDataCount = () => data.length;
 
-  // Primary Wavelength編集時の処理
-  tableSource.on("cellEdited", function(cell) {
-    const field = cell.getField();
-    const value = cell.getValue();
-    const row = cell.getRow();
-    const rowData = row.getData();
-    
-    // Primary Wavelengthが選択された場合
-    if (field === "primary" && value === "Primary Wavelength") {
-      console.log('🔧 Primary Wavelength selected, clearing other primary entries');
-      
-      // 他の全ての行のprimaryフィールドをクリア
-      const allData = tableSource.getData();
-      let changed = false;
-      
-      allData.forEach((rowItem, index) => {
-        if (rowItem.id !== rowData.id && rowItem.primary === "Primary Wavelength") {
-          rowItem.primary = "";
-          changed = true;
+  const getRows = () => rowWrappers.slice();
+
+  const deselectRow = () => {
+    selectedRowId = null;
+    rowWrappers.forEach(w => w._setSelected(false));
+  };
+
+  const selectRowById = (rowId) => {
+    selectedRowId = rowId;
+    rowWrappers.forEach(w => w._setSelected(w.getData().id === rowId));
+  };
+
+  const getSelectedRows = () => {
+    if (selectedRowId == null) return [];
+    const w = rowWrappers.find(r => r.getData().id === selectedRowId);
+    return w ? [w] : [];
+  };
+
+  const normalizeRow = (row, fallbackId) => {
+    const normalized = { ...row };
+    normalized.id = (normalized.id === '' || normalized.id == null)
+      ? fallbackId
+      : Number(normalized.id);
+    if (Number.isNaN(normalized.id)) normalized.id = fallbackId;
+    if (typeof normalized.primary !== 'string') normalized.primary = normalized.primary ? String(normalized.primary) : '';
+    if (!('angle' in normalized)) normalized.angle = 0;
+    if (!('wavelength' in normalized)) normalized.wavelength = '';
+    if (!('weight' in normalized)) normalized.weight = '';
+    return normalized;
+  };
+
+  const rerender = () => {
+    if (!container) return;
+    container.innerHTML = '';
+
+    const table = document.createElement('table');
+    table.className = 'glass-search-table';
+
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    const headers = ['Source', 'Wavelength (μm)', 'Weight', 'Primary Wavelength'];
+    headers.forEach(text => {
+      const th = document.createElement('th');
+      th.textContent = text;
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    rowWrappers = [];
+
+    data.forEach((rawRow, idx) => {
+      const rowData = normalizeRow(rawRow, idx + 1);
+      data[idx] = rowData;
+
+      const tr = document.createElement('tr');
+      if (rowData.id === selectedRowId) tr.classList.add('selected');
+
+      const wrapper = {
+        getData: () => ({ ...rowData }),
+        delete: () => {
+          const index = data.findIndex(r => Number(r.id) === Number(rowData.id));
+          if (index !== -1) {
+            data.splice(index, 1);
+            renumberIds(data);
+            if (selectedRowId === rowData.id) selectedRowId = null;
+            rerender();
+            saveTableData(getData());
+          }
+        },
+        select: () => {
+          deselectRow();
+          selectRowById(rowData.id);
+        },
+        _setSelected: (selected) => {
+          if (selected) tr.classList.add('selected');
+          else tr.classList.remove('selected');
+        },
+      };
+      rowWrappers.push(wrapper);
+
+      tr.addEventListener('click', (e) => {
+        deselectRow();
+        selectRowById(rowData.id);
+        emit('rowClick', e, wrapper);
+      });
+
+      // id
+      const tdId = document.createElement('td');
+      tdId.textContent = String(rowData.id ?? '');
+      tr.appendChild(tdId);
+
+      // wavelength
+      const tdWl = document.createElement('td');
+      const inputWl = document.createElement('input');
+      inputWl.type = 'text';
+      inputWl.value = (rowData.wavelength ?? '') === 0 ? '0' : (rowData.wavelength ?? '').toString();
+      inputWl.style.width = '100%';
+      inputWl.addEventListener('change', () => {
+        const raw = inputWl.value;
+        rowData.wavelength = raw === '' ? '' : Number(raw);
+        if (raw !== '' && Number.isNaN(rowData.wavelength)) rowData.wavelength = raw;
+
+        saveTableData(getData());
+        emit('cellEdited', createCellEvent('wavelength', rowData.wavelength, rowData));
+
+        if (rowData.primary === 'Primary Wavelength') {
+          console.log(`🔧 Primary wavelength value changed to: ${rowData.wavelength} μm`);
+          notifyPrimaryWavelengthChanged();
+          recalculateAutoSemiDiaIfAvailable();
         }
       });
-      
-      if (changed) {
-        tableSource.replaceData(allData);
-        console.log('✅ Cleared other primary wavelength entries');
-      }
-      
-      saveTableData(allData);
-      
-      // 主波長変更通知
-      notifyPrimaryWavelengthChanged();
-      
-      // Image面のSemi Dia自動計算をトリガー
-      recalculateAutoSemiDiaIfAvailable();
-    }
-    
-    // 主波長に設定されている行のwavelengthが変更された場合
-    if (field === "wavelength" && rowData.primary === "Primary Wavelength") {
-      console.log(`🔧 Primary wavelength value changed to: ${value} μm`);
-      saveTableData(tableSource.getData());
-      
-      // 主波長変更通知
-      notifyPrimaryWavelengthChanged();
-      
-      // Image面のSemi Dia自動計算をトリガー
-      recalculateAutoSemiDiaIfAvailable();
-    }
-  });
+      tdWl.appendChild(inputWl);
+      tr.appendChild(tdWl);
 
-} catch (error) {
-  // If we're in a headless environment or Tabulator isn't present, do not treat this as fatal.
-  // Keep logging concise to avoid noise.
-  if (canInitTabulator) {
-    console.error("❌ Failed to initialize Source Tabulator:", error);
-    console.error("❌ Stack trace:", error.stack);
-  }
-  tableSource = null;
+      // weight
+      const tdWeight = document.createElement('td');
+      const inputWeight = document.createElement('input');
+      inputWeight.type = 'text';
+      inputWeight.value = (rowData.weight ?? '') === 0 ? '0' : (rowData.weight ?? '').toString();
+      inputWeight.style.width = '100%';
+      inputWeight.addEventListener('change', () => {
+        const raw = inputWeight.value;
+        rowData.weight = raw === '' ? '' : Number(raw);
+        if (raw !== '' && Number.isNaN(rowData.weight)) rowData.weight = raw;
+
+        saveTableData(getData());
+        emit('cellEdited', createCellEvent('weight', rowData.weight, rowData));
+      });
+      tdWeight.appendChild(inputWeight);
+      tr.appendChild(tdWeight);
+
+      // primary
+      const tdPrimary = document.createElement('td');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = rowData.primary === 'Primary Wavelength';
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) {
+          console.log('🔧 Primary Wavelength selected, clearing other primary entries');
+          data.forEach(r => {
+            if (Number(r.id) === Number(rowData.id)) r.primary = 'Primary Wavelength';
+            else r.primary = '';
+          });
+          notifyPrimaryWavelengthChanged();
+          recalculateAutoSemiDiaIfAvailable();
+        } else {
+          rowData.primary = '';
+          notifyPrimaryWavelengthChanged();
+          recalculateAutoSemiDiaIfAvailable();
+        }
+
+        saveTableData(getData());
+        rerender();
+        emit('cellEdited', createCellEvent('primary', rowData.primary, rowData));
+      });
+      tdPrimary.appendChild(checkbox);
+      tr.appendChild(tdPrimary);
+
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    container.appendChild(table);
+  };
+
+  const replaceData = async (rows) => {
+    data = safeCloneRows(rows);
+    // Keep ids as-is; callers may intentionally preserve them.
+    rerender();
+    return Promise.resolve();
+  };
+
+  const setData = async (rows) => replaceData(rows);
+
+  const addRow = (row, _addToTop = false, position = null) => {
+    const newRow = normalizeRow(row || {}, data.length + 1);
+
+    let insertIndex = data.length;
+    if (typeof position === 'number' && Number.isFinite(position)) {
+      insertIndex = Math.max(0, Math.min(data.length, Math.floor(position)));
+    } else if (position && typeof position.getData === 'function') {
+      const posId = position.getData()?.id;
+      const idx = data.findIndex(r => Number(r.id) === Number(posId));
+      if (idx !== -1) insertIndex = idx + 1;
+    }
+
+    data.splice(insertIndex, 0, newRow);
+    renumberIds(data);
+    rerender();
+    saveTableData(getData());
+    return Promise.resolve();
+  };
+
+  rerender();
+
+  const api = {
+    on,
+    getData,
+    setData,
+    replaceData,
+    getDataCount,
+    getSelectedRows,
+    getRows,
+    addRow,
+    deselectRow,
+    redraw: () => {},
+    blockRedraw: () => {},
+    restoreRedraw: () => {},
+  };
+
+  // Back-compat: some code probes DOM element for a tabulator instance.
+  try {
+    if (container) container.tabulator = api;
+  } catch (_) {}
+
+  // Inform any listeners that the table is ready.
+  setTimeout(() => emit('tableBuilt'), 0);
+
+  return api;
+};
+
+if (hasDocument && tableContainer) {
+  tableSource = createDOMTableSource(tableContainer, initialData);
+} else {
+  // Headless fallback (Node/tests)
+  let _data = safeCloneRows(initialData);
+  tableSource = {
+    on() {},
+    getData: () => safeCloneRows(_data),
+    setData: async (d) => { _data = safeCloneRows(d); return Promise.resolve(); },
+    replaceData: async (d) => { _data = safeCloneRows(d); return Promise.resolve(); },
+    getDataCount: () => _data.length,
+    getSelectedRows: () => [],
+    getRows: () => [],
+    addRow: async (row) => { _data.push({ ...row }); renumberIds(_data); return Promise.resolve(); },
+    deselectRow: () => {},
+    redraw: () => {},
+    blockRedraw: () => {},
+    restoreRedraw: () => {},
+  };
 }
 
-// クリックで1行だけ選択状態にする
-if (tableSource) {
-  tableSource.on("rowClick", function(e, row){
-    tableSource.deselectRow(); // すべての選択を解除
-    row.select();        // クリックした行のみ選択
-  });
+// Expose to global scope for legacy callers
+if (typeof window !== 'undefined') {
+  window.tableSource = tableSource;
 }
 
 // 面を追加

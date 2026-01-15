@@ -88,163 +88,351 @@ const initialData = loadTableData();
 
 const hasDocument = (typeof document !== 'undefined') && document && typeof document.getElementById === 'function';
 const hasWindow = (typeof window !== 'undefined') && window;
+const tableContainer = hasDocument ? document.getElementById('table-object') : null;
 
 // 表の構成
 export let tableObject;
 
-try {
-  // Check if Tabulator is available
-  if (typeof Tabulator === 'undefined') {
-    throw new Error('Tabulator is not available');
-  }
-  
-  // Check if DOM element exists
-  const tableElement = hasDocument ? document.getElementById('table-object') : null;
-  if (!tableElement) {
-    throw new Error('DOM element #table-object not found');
-  }
-  
-  tableObject = new Tabulator("#table-object", {
-    data: initialData,
-    layout: "fitColumns",
-    selectable: 1, // 1行のみ選択可能
-    validationMode: "manual", // バリデーションモードを手動に設定
-    editTriggerEvent: "click", // 編集トリガーをクリックに限定
-    tabEndNewRow: false, // タブでの新行作成を無効化
-    columns: [
-    { title: "Object", field: "id", width: 80, headerSort: false },
-    { title: "X value", field: "xHeightAngle", editor: "input", width: 150, headerSort: false, mutator: function(value) {
-        try {
-          return value === "" ? "" : Number(value);
-        } catch (e) {
-          console.warn("Mutator error for xHeightAngle:", e);
-          return value;
-        }
-      }},
-    { title: "Y value", field: "yHeightAngle", editor: "input", width: 150, headerSort: false, mutator: function(value) {
-        try {
-          return value === "" ? "" : Number(value);
-        } catch (e) {
-          console.warn("Mutator error for yHeightAngle:", e);
-          return value;
-        }
-      }},
-    { 
-      title: "Position", 
-      field: "position", 
-      editor: "select", 
-      editorParams: { values: ["Point", "Angle", "Rectangle"] },
-      width: 120, 
-      headerSort: false
-    }
-  ]
-  });
+// ---- Pure DOM Object table (Tabulator-free) --------------------------------
 
+const safeCloneRows = (rows) => (Array.isArray(rows) ? rows.map(r => ({ ...r })) : []);
 
+const createCellEvent = (field, value, rowData) => {
+  const rowObj = {
+    getData: () => ({ ...rowData }),
+  };
+  return {
+    getField: () => field,
+    getValue: () => value,
+    getRow: () => rowObj,
+  };
+};
 
-  // Tabulatorエラーハンドリング
-  tableObject.on("error", function(error) {
-    console.warn("Object Tabulator error:", error);
-  });
+const normalizeNumberLike = (v) => {
+  if (v === '' || v == null) return '';
+  const n = Number(v);
+  return Number.isFinite(n) ? n : v;
+};
 
-  // 初期化完了後の処理
-  tableObject.on("tableBuilt", function(){
-    console.log('✅ [TableObject] Table built successfully');
-    
-    // windowオブジェクトにtableObjectをセット
-    window.tableObject = tableObject;
-    window.objectTabulator = tableObject; // 互換性のため
-    
-    console.log('✅ [TableObject] tableObject set to window');
-    console.log('📋 [TableObject] Table data count:', tableObject.getDataCount());
-    
-    // データの内容を確認
-    const currentData = tableObject.getData();
-    console.log('📋 [TableObject] Current data:', currentData);
-  });
+const normalizeRow = (row, fallbackId) => {
+  const normalized = { ...row };
+  normalized.id = (normalized.id === '' || normalized.id == null) ? fallbackId : Number(normalized.id);
+  if (Number.isNaN(normalized.id)) normalized.id = fallbackId;
+  normalized.xHeightAngle = normalizeNumberLike(normalized.xHeightAngle);
+  normalized.yHeightAngle = normalizeNumberLike(normalized.yHeightAngle);
+  if (typeof normalized.position !== 'string') normalized.position = normalized.position ? String(normalized.position) : 'Angle';
+  if (!normalized.position) normalized.position = 'Angle';
+  // Spec: Position should be Angle or Rectangle only. Migrate legacy Point -> Angle.
+  if (normalized.position === 'Point') normalized.position = 'Angle';
+  if (!('angle' in normalized)) normalized.angle = 0;
+  return normalized;
+};
 
-} catch (error) {
-  console.error("❌ [TableObject] Failed to initialize Object Tabulator:", error);
-  tableObject = null;
-  
-  // Fallback: setTimeout to retry initialization
-  if (hasWindow && hasDocument) {
-    setTimeout(() => {
-      console.log('🔄 [TableObject] Retrying initialization...');
+const createDOMTableObject = (container, initialRows) => {
+  let data = safeCloneRows(initialRows);
+  let selectedRowId = null;
+  let rowWrappers = [];
+  const listeners = new Map();
+
+  let xTitle = 'X value';
+  let yTitle = 'Y value';
+
+  const on = (eventName, handler) => {
+    if (!eventName || typeof handler !== 'function') return;
+    if (!listeners.has(eventName)) listeners.set(eventName, []);
+    listeners.get(eventName).push(handler);
+  };
+
+  const emit = (eventName, ...args) => {
+    const handlers = listeners.get(eventName);
+    if (!handlers || handlers.length === 0) return;
+    handlers.forEach(fn => {
       try {
-        if (typeof Tabulator !== 'undefined' && document.getElementById('table-object') && window?.location?.reload) {
-          // Retry the initialization
-          window.location.reload(); // Simple solution: reload the page
-        }
-      } catch (retryError) {
-        console.error("❌ [TableObject] Retry failed:", retryError);
+        fn(...args);
+      } catch (e) {
+        console.debug('⚠️ [TableObject] listener error:', e);
       }
-    }, 3000);
-  }
+    });
+  };
+
+  const getData = () => safeCloneRows(data);
+  const getDataCount = () => data.length;
+  const getRows = () => rowWrappers.slice();
+
+  const deselectRow = () => {
+    selectedRowId = null;
+    rowWrappers.forEach(w => w._setSelected(false));
+  };
+
+  const selectRowById = (rowId) => {
+    selectedRowId = rowId;
+    rowWrappers.forEach(w => w._setSelected(Number(w.getData().id) === Number(rowId)));
+  };
+
+  const getSelectedRows = () => {
+    if (selectedRowId == null) return [];
+    const w = rowWrappers.find(r => Number(r.getData().id) === Number(selectedRowId));
+    return w ? [w] : [];
+  };
+
+  const setColumnTitles = (nextXTitle, nextYTitle) => {
+    if (typeof nextXTitle === 'string') xTitle = nextXTitle;
+    if (typeof nextYTitle === 'string') yTitle = nextYTitle;
+    rerender();
+  };
+
+  const applyGlobalPosition = (positionValue) => {
+    const rows = getData();
+    rows.forEach(r => {
+      r.position = positionValue;
+      if (positionValue === 'Angle') {
+        r.angle = (r.yHeightAngle === '' || r.yHeightAngle == null) ? '' : r.yHeightAngle;
+      }
+    });
+    replaceData(rows);
+  };
+
+  const rerender = () => {
+    if (!container) return;
+    container.innerHTML = '';
+
+    const table = document.createElement('table');
+    table.className = 'glass-search-table';
+
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    const headers = ['Object', xTitle, yTitle, 'Position'];
+    headers.forEach(text => {
+      const th = document.createElement('th');
+      th.textContent = text;
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    rowWrappers = [];
+
+    data.forEach((rawRow, idx) => {
+      const rowData = normalizeRow(rawRow, idx + 1);
+      data[idx] = rowData;
+
+      const tr = document.createElement('tr');
+      if (Number(rowData.id) === Number(selectedRowId)) tr.classList.add('selected');
+
+      const wrapper = {
+        getData: () => ({ ...rowData }),
+        delete: () => {
+          const index = data.findIndex(r => Number(r.id) === Number(rowData.id));
+          if (index !== -1) {
+            data.splice(index, 1);
+            renumberIds(data);
+            if (Number(selectedRowId) === Number(rowData.id)) selectedRowId = null;
+            rerender();
+            saveTableData(getData());
+            emit('rowDeleted');
+            emit('dataChanged');
+          }
+        },
+        select: () => {
+          deselectRow();
+          selectRowById(rowData.id);
+        },
+        _setSelected: (selected) => {
+          if (selected) tr.classList.add('selected');
+          else tr.classList.remove('selected');
+        },
+      };
+      rowWrappers.push(wrapper);
+
+      tr.addEventListener('click', (e) => {
+        deselectRow();
+        selectRowById(rowData.id);
+        emit('rowClick', e, wrapper);
+      });
+
+      // id
+      const tdId = document.createElement('td');
+      tdId.textContent = String(rowData.id ?? '');
+      tr.appendChild(tdId);
+
+      // xHeightAngle
+      const tdX = document.createElement('td');
+      const inputX = document.createElement('input');
+      inputX.type = 'text';
+      inputX.value = (rowData.xHeightAngle ?? '') === 0 ? '0' : (rowData.xHeightAngle ?? '').toString();
+      inputX.style.width = '100%';
+      inputX.addEventListener('change', () => {
+        rowData.xHeightAngle = normalizeNumberLike(inputX.value);
+        saveTableData(getData());
+        emit('cellEdited', createCellEvent('xHeightAngle', rowData.xHeightAngle, rowData));
+        emit('dataChanged');
+      });
+      tdX.appendChild(inputX);
+      tr.appendChild(tdX);
+
+      // yHeightAngle
+      const tdY = document.createElement('td');
+      const inputY = document.createElement('input');
+      inputY.type = 'text';
+      inputY.value = (rowData.yHeightAngle ?? '') === 0 ? '0' : (rowData.yHeightAngle ?? '').toString();
+      inputY.style.width = '100%';
+      inputY.addEventListener('change', () => {
+        rowData.yHeightAngle = normalizeNumberLike(inputY.value);
+        if (rowData.position === 'Angle') {
+          rowData.angle = rowData.yHeightAngle;
+        }
+        saveTableData(getData());
+        emit('cellEdited', createCellEvent('yHeightAngle', rowData.yHeightAngle, rowData));
+        emit('dataChanged');
+      });
+      tdY.appendChild(inputY);
+      tr.appendChild(tdY);
+
+      // position
+      const tdPos = document.createElement('td');
+      const selectPos = document.createElement('select');
+      ['Angle', 'Rectangle'].forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        selectPos.appendChild(opt);
+      });
+      selectPos.value = rowData.position;
+      selectPos.style.width = '100%';
+      selectPos.addEventListener('change', () => {
+        rowData.position = selectPos.value;
+        if (rowData.position === 'Angle') {
+          rowData.angle = rowData.yHeightAngle;
+        }
+        saveTableData(getData());
+        emit('cellEdited', createCellEvent('position', rowData.position, rowData));
+        emit('dataChanged');
+      });
+      tdPos.appendChild(selectPos);
+      tr.appendChild(tdPos);
+
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    container.appendChild(table);
+  };
+
+  const replaceData = (rows) => {
+    data = safeCloneRows(rows).map((r, idx) => normalizeRow(r, idx + 1));
+    renumberIds(data);
+    rerender();
+    saveTableData(getData());
+    emit('dataChanged');
+    return Promise.resolve();
+  };
+
+  const setData = (rows) => replaceData(rows);
+
+  const addRowAt = (row, _top = false, index = null) => {
+    const insertIndex = (typeof index === 'number' && index >= 0) ? index : data.length;
+    const next = normalizeRow(row, data.length + 1);
+    data.splice(insertIndex, 0, next);
+    renumberIds(data);
+    rerender();
+    saveTableData(getData());
+    emit('rowAdded');
+    emit('dataChanged');
+    return Promise.resolve();
+  };
+
+  // Initial render
+  rerender();
+
+  return {
+    on,
+    getData,
+    setData,
+    replaceData,
+    getDataCount,
+    getRows,
+    getSelectedRows,
+    addRow: addRowAt,
+    deselectRow,
+    _setColumnTitles: setColumnTitles,
+    _applyGlobalPosition: applyGlobalPosition,
+  };
+};
+
+const createNoopObjectTable = (initialRows) => {
+  let data = safeCloneRows(initialRows);
+  const listeners = new Map();
+  const on = (eventName, handler) => {
+    if (!eventName || typeof handler !== 'function') return;
+    if (!listeners.has(eventName)) listeners.set(eventName, []);
+    listeners.get(eventName).push(handler);
+  };
+  const emit = (eventName, ...args) => {
+    const handlers = listeners.get(eventName);
+    if (!handlers) return;
+    handlers.forEach(fn => { try { fn(...args); } catch (_) {} });
+  };
+  const getData = () => safeCloneRows(data);
+  const replaceData = (rows) => { data = safeCloneRows(rows); emit('dataChanged'); return Promise.resolve(); };
+  return {
+    on,
+    getData,
+    setData: replaceData,
+    replaceData,
+    getDataCount: () => data.length,
+    getRows: () => [],
+    getSelectedRows: () => [],
+    addRow: () => Promise.resolve(),
+    deselectRow: () => {},
+    _setColumnTitles: () => {},
+    _applyGlobalPosition: () => {},
+  };
+};
+
+tableObject = tableContainer
+  ? createDOMTableObject(tableContainer, initialData)
+  : createNoopObjectTable(initialData);
+
+if (hasWindow) {
+  window.tableObject = tableObject;
+  window.objectTabulator = tableObject; // legacy name
+  window.objectTable = tableObject;
 }
 
-// クリックで1行だけ選択状態にする
-if (tableObject) {
-  tableObject.on("rowClick", function(e, row){
-    tableObject.deselectRow();
-    row.select();
-  });
-} else {
-  console.warn('❌ [TableObject] Cannot add rowClick event - tableObject is null');
+if (tableContainer) {
+  // Back-compat: some code probes the element for .tabulator
+  tableContainer.tabulator = tableObject;
 }
 
 // 行追加
 const addObjectBtn = hasDocument ? document.getElementById("add-object-btn") : null;
 if (addObjectBtn) addObjectBtn.addEventListener("click", function(){
-  if (!tableObject) {
-    console.error('❌ [TableObject] Cannot add row - tableObject is null');
-    alert('テーブルが初期化されていません。ページを再読み込みしてください。');
-    return;
-  }
-  
-  const selectedRows = tableObject.getSelectedRows();
-  let insertIndex = tableObject.getDataCount();
+  if (!tableObject || typeof tableObject.addRow !== 'function') return;
 
-  if(selectedRows.length > 0){
+  const selectedRows = (typeof tableObject.getSelectedRows === 'function') ? tableObject.getSelectedRows() : [];
+  let insertIndex = (typeof tableObject.getDataCount === 'function') ? tableObject.getDataCount() : 0;
+  if (selectedRows.length > 0 && typeof tableObject.getRows === 'function') {
     const selectedRow = selectedRows[0];
     insertIndex = tableObject.getRows().indexOf(selectedRow) + 1;
+    if (!Number.isFinite(insertIndex) || insertIndex < 0) insertIndex = (typeof tableObject.getDataCount === 'function') ? tableObject.getDataCount() : 0;
   }
-  
-  tableObject.addRow({
-      id: tableObject.getDataCount() + 1,
-      xHeightAngle: "",
-      yHeightAngle: "",
-      position: "Point"
-      }, false, insertIndex).then(() => {
-    const data = tableObject.getData();
-    renumberIds(data);
-    tableObject.replaceData(data);
-    saveTableData(data);
-    console.log('✅ [TableObject] Row added successfully');
-  }).catch(error => {
-    console.error('❌ [TableObject] Error adding row:', error);
-  });
+
+  Promise.resolve(tableObject.addRow({
+    id: (typeof tableObject.getDataCount === 'function') ? (tableObject.getDataCount() + 1) : 1,
+    xHeightAngle: "",
+    yHeightAngle: "",
+    position: "Angle"
+  }, false, insertIndex)).catch(() => {});
 });
 
 // 行削除
 const deleteObjectBtn = hasDocument ? document.getElementById("delete-object-btn") : null;
 if (deleteObjectBtn) deleteObjectBtn.addEventListener("click", function(){
-  if (!tableObject) {
-    console.error('❌ [TableObject] Cannot delete row - tableObject is null');
-    alert('テーブルが初期化されていません。ページを再読み込みしてください。');
-    return;
-  }
-  
+  if (!tableObject || typeof tableObject.getSelectedRows !== 'function') return;
   const selectedRows = tableObject.getSelectedRows();
-  if(selectedRows.length > 0){
+  if (selectedRows.length > 0 && selectedRows[0] && typeof selectedRows[0].delete === 'function') {
     selectedRows[0].delete();
-    setTimeout(() => {
-      const data = tableObject.getData();
-      renumberIds(data);
-      tableObject.replaceData(data);
-      saveTableData(data);
-      console.log('✅ [TableObject] Row deleted successfully');
-    }, 0);
   } else {
     alert("削除する行を選択してください。");
   }
@@ -252,26 +440,15 @@ if (deleteObjectBtn) deleteObjectBtn.addEventListener("click", function(){
 
 // タイトル変更用関数
 function setAngleTitles() {
-  if (!tableObject) {
-    console.error('❌ [TableObject] Cannot set angle titles - tableObject is null');
-    return;
-  }
-  
+  if (!tableObject) return;
   try {
-    tableObject.getColumn("xHeightAngle").updateDefinition({ title: "X angle (deg)" });
-    tableObject.getColumn("yHeightAngle").updateDefinition({ title: "Y angle (deg)" });
-
-    // すべての行のpositionを"Angle"にする
-    const data = tableObject.getData();
-    data.forEach(row => {
-      row.position = "Angle";
-    });
-    tableObject.replaceData(data);
-    saveTableData(data);
-    console.log('✅ [TableObject] Angle titles set successfully');
-  } catch (error) {
-    console.error('❌ [TableObject] Error setting angle titles:', error);
-  }
+    if (typeof tableObject._setColumnTitles === 'function') {
+      tableObject._setColumnTitles('X angle (deg)', 'Y angle (deg)');
+    }
+    if (typeof tableObject._applyGlobalPosition === 'function') {
+      tableObject._applyGlobalPosition('Angle');
+    }
+  } catch (_) {}
 }
 
 // function setHeightCircleTitles() {
@@ -288,25 +465,15 @@ function setAngleTitles() {
 // }
 
 function setHeightRectTitles() {
-  if (!tableObject) {
-    console.error('❌ [TableObject] Cannot set rectangle titles - tableObject is null');
-    return;
-  }
-  
+  if (!tableObject) return;
   try {
-    tableObject.getColumn("xHeightAngle").updateDefinition({ title: "X height rect (mm)" });
-    tableObject.getColumn("yHeightAngle").updateDefinition({ title: "Y height rect (mm)" });
-    // すべての行のpositionを"Rectangle"にする
-    const data = tableObject.getData();
-    data.forEach(row => {
-      row.position = "Rectangle";
-    });
-    tableObject.replaceData(data);
-    saveTableData(data);
-    console.log('✅ [TableObject] Rectangle titles set successfully');
-  } catch (error) {
-    console.error('❌ [TableObject] Error setting rectangle titles:', error);
-  }
+    if (typeof tableObject._setColumnTitles === 'function') {
+      tableObject._setColumnTitles('X height rect (mm)', 'Y height rect (mm)');
+    }
+    if (typeof tableObject._applyGlobalPosition === 'function') {
+      tableObject._applyGlobalPosition('Rectangle');
+    }
+  } catch (_) {}
 }
 
 // PSF選択肢更新機能
@@ -318,7 +485,7 @@ function updatePSFObjectSelectIfAvailable() {
 }
 
 // テーブルデータ変更時のコールバック
-if (tableObject) {
+if (tableObject && typeof tableObject.on === 'function') {
   tableObject.on("dataChanged", function() {
     updatePSFObjectSelectIfAvailable();
     updateWavefrontObjectOptionsIfAvailable();
@@ -337,12 +504,8 @@ if (tableObject) {
   tableObject.on("cellEdited", function() {
     updatePSFObjectSelectIfAvailable();
     updateWavefrontObjectOptionsIfAvailable();
-    
-    // Image面のSemi Dia自動計算をトリガー
     recalculateAutoSemiDiaIfAvailable();
   });
-} else {
-  console.warn('❌ [TableObject] Cannot add change listeners - tableObject is null');
 }
 
 /**
