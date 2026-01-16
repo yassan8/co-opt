@@ -768,7 +768,13 @@ export class PSFCalculator {
         // 4. PSF評価指標を計算（計測）
         emitProgress(92, 'psf-metrics', 'Computing metrics...');
         const metricsStartTime = performance.now();
-        const usedPixelSize = pixelSize || this.calculatePixelSize(effectiveWavelength, focalLength, pupilDiameter, targetSize);
+        const usedPixelSize = pixelSize || this.calculatePixelSize(
+            effectiveWavelength,
+            focalLength,
+            pupilDiameter,
+            samplingSize,
+            targetSize
+        );
         const metrics = this.calculatePSFMetrics(psfData, {
             wavelength: effectiveWavelength,
             pupilDiameter,
@@ -926,193 +932,7 @@ export class PSFCalculator {
                     for (let j = 0; j < samplingSize; j++) grid.yCoords[j] = (j / (samplingSize - 1 || 1)) * 2 - 1;
                 }
 
-                // gridData 経路でも、格子上の孤立スパイクを無効化して PSF を安定化（任意）
-                // - outlierセルは pupilMask=false, amplitude=0 として FFT 入力から除外
-                // - OPDは0に潰す（振幅0なので位相は寄与しない／NaN伝播を避ける）
-                try {
-                    const enableGridOutlierRemoval = (typeof globalThis !== 'undefined' && globalThis.__PSF_GRID_REMOVE_OUTLIERS !== false);
-                    const outlierMode = (typeof globalThis !== 'undefined' && typeof globalThis.__PSF_GRID_OUTLIER_MODE === 'string')
-                        ? String(globalThis.__PSF_GRID_OUTLIER_MODE)
-                        : 'local'; // default: local-median residual MAD (defocus等に強い)
-                    const windowRadius = (typeof globalThis !== 'undefined' && Number.isFinite(globalThis.__PSF_GRID_OUTLIER_WINDOW))
-                        ? Math.max(1, Math.min(4, Math.floor(globalThis.__PSF_GRID_OUTLIER_WINDOW)))
-                        : 1; // 1 => 3x3
-                    const maxOutlierFraction = (typeof globalThis !== 'undefined' && typeof globalThis.__PSF_GRID_OUTLIER_MAX_FRACTION === 'number')
-                        ? Math.max(0, Math.min(0.5, globalThis.__PSF_GRID_OUTLIER_MAX_FRACTION))
-                        : 0.10; // safety: never mask more than 10% by default
-                    const outlierSigmaMultiplier = (typeof globalThis !== 'undefined' && typeof globalThis.__PSF_GRID_OUTLIER_SIGMA === 'number')
-                        ? globalThis.__PSF_GRID_OUTLIER_SIGMA
-                        : 6.0;
-                    const outlierMinAbs = (typeof globalThis !== 'undefined' && typeof globalThis.__PSF_GRID_OUTLIER_MIN_ABS === 'number')
-                        ? Math.max(0, globalThis.__PSF_GRID_OUTLIER_MIN_ABS)
-                        : 0.0;
-                    const outlierMinPoints = (typeof globalThis !== 'undefined' && Number.isFinite(globalThis.__PSF_GRID_OUTLIER_MIN_POINTS))
-                        ? Math.max(10, Math.floor(globalThis.__PSF_GRID_OUTLIER_MIN_POINTS))
-                        : 30;
-                    const maxSamplesForStats = (typeof globalThis !== 'undefined' && Number.isFinite(globalThis.__PSF_GRID_OUTLIER_MAX_SAMPLES))
-                        ? Math.max(1000, Math.floor(globalThis.__PSF_GRID_OUTLIER_MAX_SAMPLES))
-                        : 20000;
-
-                    const median = (arr) => {
-                        const vals = Array.isArray(arr) ? arr.filter(Number.isFinite).slice() : [];
-                        if (vals.length === 0) return NaN;
-                        vals.sort((a, b) => a - b);
-                        const mid = Math.floor(vals.length / 2);
-                        return (vals.length % 2 === 0) ? (vals[mid - 1] + vals[mid]) / 2 : vals[mid];
-                    };
-                    const fmt = (v) => Number.isFinite(v) ? v.toExponential(3) : String(v);
-
-                    if (enableGridOutlierRemoval) {
-                        const samples = [];
-                        const residuals = [];
-
-                        const collectLocalMedian = (ii, jj) => {
-                            const neigh = [];
-                            for (let di = -windowRadius; di <= windowRadius; di++) {
-                                const i2 = ii + di;
-                                if (i2 < 0 || i2 >= samplingSize) continue;
-                                const maskRow2 = grid.pupilMask[i2];
-                                const opdRow2 = grid.opd[i2];
-                                for (let dj = -windowRadius; dj <= windowRadius; dj++) {
-                                    const j2 = jj + dj;
-                                    if (j2 < 0 || j2 >= samplingSize) continue;
-                                    // leave-one-out: 自点を含めると median が自点になりやすく、残差が0に潰れやすい
-                                    if (di === 0 && dj === 0) continue;
-                                    if (!maskRow2[j2]) continue;
-                                    const v2 = opdRow2[j2];
-                                    if (!Number.isFinite(v2)) continue;
-                                    neigh.push(v2);
-                                }
-                            }
-                            if (neigh.length < 4) return NaN; // not enough local context
-                            return median(neigh);
-                        };
-
-                        // gather samples (global) and/or local residual samples
-                        for (let i = 0; i < samplingSize; i++) {
-                            const maskRow = grid.pupilMask[i];
-                            const opdRow = grid.opd[i];
-                            for (let j = 0; j < samplingSize; j++) {
-                                if (!maskRow[j]) continue;
-                                const v = opdRow[j];
-                                if (!Number.isFinite(v)) continue;
-                                samples.push(v);
-
-                                if (outlierMode === 'local') {
-                                    const m = collectLocalMedian(i, j);
-                                    if (Number.isFinite(m)) {
-                                        residuals.push(v - m);
-                                    }
-                                }
-                            }
-                        }
-
-                        const downsampleDeterministic = (arr) => {
-                            if (arr.length <= maxSamplesForStats) return arr;
-                            const step = Math.max(1, Math.floor(arr.length / maxSamplesForStats));
-                            const ds = [];
-                            for (let k = 0; k < arr.length; k += step) ds.push(arr[k]);
-                            return ds;
-                        };
-
-                        const statsBase = (outlierMode === 'local' && residuals.length >= outlierMinPoints)
-                            ? downsampleDeterministic(residuals)
-                            : downsampleDeterministic(samples);
-
-                        const effectiveMode = (outlierMode === 'local' && residuals.length >= outlierMinPoints) ? 'local' : 'global';
-
-                        if (statsBase.length >= outlierMinPoints) {
-                            const med = median(statsBase);
-                            const absDev = statsBase.map(v => Math.abs(v - med));
-                            const mad = median(absDev);
-                            let robustSigma;
-                            if (Number.isFinite(mad) && mad > 0) {
-                                robustSigma = 1.4826 * mad;
-                            } else if (Number.isFinite(mad) && mad === 0) {
-                                // MAD=0 のときでも、非ゼロ偏差があればスケールとして利用する
-                                const nonZero = absDev.filter(d => Number.isFinite(d) && d > 0);
-                                const nzMed = median(nonZero);
-                                robustSigma = (Number.isFinite(nzMed) && nzMed > 0) ? (1.4826 * nzMed) : 0;
-                            } else {
-                                robustSigma = NaN;
-                            }
-                            const threshold = (Number.isFinite(robustSigma) && robustSigma > 0)
-                                ? Math.max(outlierMinAbs, outlierSigmaMultiplier * robustSigma)
-                                : NaN;
-
-                            if (logOutlierFilter) {
-                                const nInfo = (effectiveMode === 'local')
-                                    ? `${statsBase.length}/${residuals.length} (residuals)`
-                                    : `${statsBase.length}/${samples.length} (values)`;
-                                console.log(`🔍 [PSF] gridData outlier filter (MAD/${effectiveMode}): n=${nInfo}, med=${fmt(med)}, mad=${fmt(mad)}, robustSigma=${fmt(robustSigma)}, threshold=${fmt(threshold)} (sigmaMult=${outlierSigmaMultiplier}, minAbs=${outlierMinAbs}, minPts=${outlierMinPoints}, win=${windowRadius})`);
-                            }
-
-                            if (Number.isFinite(threshold) && threshold > 0) {
-                                // First pass: compute deviations and cap removal by fraction (prevents wiping most of the pupil)
-                                const candidates = [];
-                                const deviations = [];
-                                for (let i = 0; i < samplingSize; i++) {
-                                    const maskRow = grid.pupilMask[i];
-                                    const opdRow = grid.opd[i];
-                                    for (let j = 0; j < samplingSize; j++) {
-                                        if (!maskRow[j]) continue;
-                                        const v = opdRow[j];
-                                        if (!Number.isFinite(v)) continue;
-
-                                        let metric;
-                                        let localMed = NaN;
-                                        if (effectiveMode === 'local') {
-                                            localMed = collectLocalMedian(i, j);
-                                            if (!Number.isFinite(localMed)) continue;
-                                            metric = v - localMed;
-                                        } else {
-                                            metric = v;
-                                        }
-                                        const dev = Math.abs(metric - med);
-                                        if (!Number.isFinite(dev)) continue;
-                                        candidates.push({ i, j, localMed, v, dev });
-                                        deviations.push(dev);
-                                    }
-                                }
-
-                                let thresholdFinal = threshold;
-                                const nCand = candidates.length;
-                                const maxRemove = Math.floor(nCand * maxOutlierFraction);
-                                if (maxRemove > 0 && nCand > 0) {
-                                    const sorted = deviations.slice().sort((a, b) => a - b);
-                                    const cutoffIndex = Math.max(0, nCand - maxRemove - 1);
-                                    const cutoff = sorted[cutoffIndex];
-                                    thresholdFinal = Math.max(threshold, cutoff);
-                                    if (logOutlierFilter) {
-                                        console.log(`🔍 [PSF] gridData outlier cap: maxFrac=${maxOutlierFraction}, nCand=${nCand}, maxRemove=${maxRemove}, cutoff=${fmt(cutoff)}, thresholdMAD=${fmt(threshold)} => thresholdFinal=${fmt(thresholdFinal)}`);
-                                    }
-                                } else if (logOutlierFilter) {
-                                    console.log(`🔍 [PSF] gridData outlier cap: maxFrac=${maxOutlierFraction}, nCand=${nCand}, maxRemove=${maxRemove} (no cap)`);
-                                }
-
-                                let removed = 0;
-                                for (const c of candidates) {
-                                    if (c.dev <= thresholdFinal) continue;
-                                    const maskRow = grid.pupilMask[c.i];
-                                    const opdRow = grid.opd[c.i];
-                                    const ampRow = grid.amplitude[c.i];
-                                    if (!maskRow[c.j]) continue;
-                                    maskRow[c.j] = false;
-                                    ampRow[c.j] = 0.0;
-                                    opdRow[c.j] = 0.0;
-                                    removed++;
-                                }
-                                if (logOutlierFilter) {
-                                    console.log(`ℹ️ [PSF] gridData outlier filter result: removed=${removed} (mode=${effectiveMode}, thresholdFinal=${fmt(thresholdFinal)})`);
-                                }
-                            }
-                        } else if (logOutlierFilter) {
-                            console.log(`ℹ️ [PSF] gridData outlier filter: skipped (n=${statsBase.length} < minPts=${outlierMinPoints}, mode=${outlierMode})`);
-                        }
-                    }
-                } catch (_) {
-                    // ignore
-                }
+                // NOTE: gridData が与えられた場合は、そのまま使用する（追加の安定化/外れ値除去は行わない）
 
                 if (logOutlierFilter) {
                     console.log('ℹ️ [PSF] convertOPDToGrid: gridData provided; skipping rayData outlier filter');
@@ -1898,7 +1718,7 @@ export class PSFCalculator {
      * @param {number} samplingSize - サンプリングサイズ
      * @returns {number} ピクセルサイズ（μm）
      */
-    calculatePixelSize(wavelength, focalLength, pupilDiameter, samplingSize) {
+    calculatePixelSize(wavelength, focalLength, pupilDiameter, pupilGridSize, fftSize = null) {
         const wl = Number(wavelength);
         const fl = Number(focalLength);
         const pd = Number(pupilDiameter);
@@ -1910,8 +1730,14 @@ export class PSFCalculator {
         const safeFl = (Number.isFinite(fl) && Math.abs(fl) > 0) ? Math.abs(fl) : 100.0;
         const safeWl = (Number.isFinite(wl) && wl > 0) ? wl : 0.5876;
 
-        void samplingSize; // retained for backward compatibility
-        return (safeWl * safeFl) / safePd;
+        const basePitch = (safeWl * safeFl) / safePd;
+
+        const nPupil = Number(pupilGridSize);
+        const nFft = (fftSize === null || fftSize === undefined) ? nPupil : Number(fftSize);
+        if (Number.isFinite(nPupil) && Number.isFinite(nFft) && nPupil > 0 && nFft > 0) {
+            return basePitch * (nPupil / nFft);
+        }
+        return basePitch;
     }
 
     /**

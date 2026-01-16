@@ -1048,7 +1048,6 @@ function normalizeRequirementRow(raw, systemConfig, activeConfigId) {
       enabled = !!r.enabled;
     }
   }
-  const severity = (String(r.severity || '').trim().toLowerCase() === 'soft') ? 'soft' : 'hard';
   const op0 = String(r.op || '').trim();
   const op = (op0 === '<=' || op0 === '>=' || op0 === '=') ? op0 : '=';
   const tol = toFiniteNumber(r.tol, 0);
@@ -1063,7 +1062,6 @@ function normalizeRequirementRow(raw, systemConfig, activeConfigId) {
   return {
     id: r.id,
     enabled,
-    severity,
     operand,
     configId: configIdRaw,
     param1: r.param1,
@@ -1244,18 +1242,12 @@ function evaluateRequirementsAllScenarios({
         weight: w,
         current,
         amount,
-        severity: r.severity,
         reason: evaluated.reason
       };
 
-      if (r.severity === 'soft') {
-        softPenalty += w * amount; // linear
-        softViolations.push(entry);
-      } else {
-        feasible = false;
-        violationScore += w * amount; // linear
-        hardViolations.push(entry);
-      }
+      feasible = false;
+      violationScore += w * amount; // linear
+      hardViolations.push(entry);
     }
   };
 
@@ -1401,18 +1393,12 @@ function evaluateRequirementsAllConfigsAllScenarios({
         weight: w,
         current,
         amount,
-        severity: r.severity,
         reason: evaluated.reason
       };
 
-      if (r.severity === 'soft') {
-        softPenalty += w * amount;
-        softViolations.push(entry);
-      } else {
-        feasible = false;
-        violationScore += w * amount;
-        hardViolations.push(entry);
-      }
+      feasible = false;
+      violationScore += w * amount;
+      hardViolations.push(entry);
     }
 
     return { feasible, violationScore, softPenalty, hardViolations, softViolations };
@@ -2578,17 +2564,12 @@ export async function runOptimizationMVP(options = {}) {
               weight: w,
               current,
               amount,
-              severity: r?.severity,
               reason: worstReason
             };
-            if (String(r?.severity) === 'soft') {
-              softPenalty += w * amount;
-              softViolations.push(entry);
-            } else {
-              feasible = false;
-              violationScore += w * amount;
-              hardViolations.push(entry);
-            }
+
+            feasible = false;
+            violationScore += w * amount;
+            hardViolations.push(entry);
           }
         } catch (_) {}
 

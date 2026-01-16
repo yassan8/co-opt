@@ -2,8 +2,87 @@
 // 仕様書に基づくスポットダイアグラム機能
 
 import { traceRay, calculateSurfaceOrigins, transformPointToLocal } from './ray-tracing.js';
-import { findStopSurfaceIndex } from './ray-paraxial.js';
+import { findStopSurfaceIndex, calculateFocalLength, calculateParaxialData } from './ray-paraxial.js';
 import { generateRayStartPointsForObject } from './optical/ray-renderer.js';
+
+function derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthMicrons, preferEntrancePupil) {
+    let pupilDiameterMm = 10.0;
+    let focalLengthMm = 100.0;
+
+    // Prefer paraxial pupils (EnPD/ExPD). Fallback to Stop.semidia/aperture.
+    try {
+        const paraxial = calculateParaxialData(opticalSystemRows, wavelengthMicrons);
+        const enpd = Number(paraxial?.entrancePupilDiameter);
+        const expd = Number(paraxial?.exitPupilDiameter);
+
+        const preferred = preferEntrancePupil ? enpd : expd;
+        const alternate = preferEntrancePupil ? expd : enpd;
+        if (Number.isFinite(preferred) && preferred > 0) {
+            pupilDiameterMm = Math.abs(preferred);
+        } else if (Number.isFinite(alternate) && alternate > 0) {
+            pupilDiameterMm = Math.abs(alternate);
+        }
+
+        const fl = Number(paraxial?.focalLength);
+        if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) {
+            focalLengthMm = Math.abs(fl);
+        }
+    } catch (_) {
+        // ignore; fallback below
+    }
+
+    // Stop-based fallback for pupil diameter
+    try {
+        const stopIndex = findStopSurfaceIndex(opticalSystemRows);
+        const stopRow = (stopIndex >= 0) ? opticalSystemRows?.[stopIndex] : null;
+        const sd = Math.abs(parseFloat(stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.['Semi Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? NaN));
+        if (Number.isFinite(sd) && sd > 0) {
+            const isApertureField = stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined);
+            const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
+            if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
+                pupilDiameterMm = stopRadiusMm * 2;
+            }
+        }
+    } catch (_) {
+        // ignore
+    }
+
+    // Focal length fallback
+    try {
+        const fl = calculateFocalLength(opticalSystemRows, wavelengthMicrons);
+        if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) {
+            focalLengthMm = Math.abs(fl);
+        }
+    } catch (_) {
+        // ignore
+    }
+
+    return { pupilDiameterMm, focalLengthMm };
+}
+
+function computeAiryInfo(primaryWavelengthMicrons, pupilDiameterMm, focalLengthMm) {
+    const wavelength = Number(primaryWavelengthMicrons);
+    const pupilDiameter = Number(pupilDiameterMm);
+    const focalLength = Number(focalLengthMm);
+    if (![wavelength, pupilDiameter, focalLength].every(Number.isFinite)) return null;
+    if (wavelength <= 0 || pupilDiameter <= 0 || focalLength <= 0) return null;
+
+    const fNumber = focalLength / pupilDiameter;
+    if (!Number.isFinite(fNumber) || fNumber <= 0) return null;
+
+    // Airy radius to first minimum: r = 1.22 * λ * F#
+    const airyRadiusUm = 1.22 * wavelength * fNumber;
+    if (!Number.isFinite(airyRadiusUm) || airyRadiusUm <= 0) return null;
+
+    return {
+        wavelengthMicrons: wavelength,
+        pupilDiameterMm: pupilDiameter,
+        focalLengthMm: focalLength,
+        fNumber,
+        airyRadiusUm,
+        airyDiameterUm: airyRadiusUm * 2
+    };
+}
 
 function normalizeVectorSafe(vec, fallback = { x: 0, y: 0, z: 1 }) {
     if (!vec || !Number.isFinite(vec.x) || !Number.isFinite(vec.y) || !Number.isFinite(vec.z)) {
@@ -156,6 +235,10 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         primaryWavelength = { wavelength: 0.5876, name: 'Default d-line', index: 0 };
         // console.warn('⚠️ Primary wavelength not properly set, using default d-line');
     }
+
+    const primaryWavelengthMicrons = Number(primaryWavelength?.wavelength) || 0.5876;
+    const derived = derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, primaryWavelengthMicrons, true);
+    const airy = computeAiryInfo(primaryWavelengthMicrons, derived.pupilDiameterMm, derived.focalLengthMm);
     
     // console.log('📊 Wavelength configuration:', {
     //     totalWavelengths: wavelengths.length,
@@ -514,6 +597,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         spotData: spotData,
         primaryWavelength: primaryWavelength,
         wavelengths: wavelengths,
+        airy: airy,
         selectedRingCount: ringCount,
         surfaceInfoList: surfaceInfoList
     };
@@ -575,6 +659,10 @@ export async function generateSpotDiagramAsync(
     if (!primaryWavelength || !primaryWavelength.wavelength) {
         primaryWavelength = { wavelength: 0.5876, name: 'Default d-line', index: 0 };
     }
+
+    const primaryWavelengthMicrons = Number(primaryWavelength?.wavelength) || 0.5876;
+    const derived = derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, primaryWavelengthMicrons, true);
+    const airy = computeAiryInfo(primaryWavelengthMicrons, derived.pupilDiameterMm, derived.focalLengthMm);
 
     const spotData = [];
     const totalObjects = objectRows.length;
@@ -835,6 +923,7 @@ export async function generateSpotDiagramAsync(
         spotData: spotData,
         primaryWavelength: primaryWavelength,
         wavelengths: wavelengths,
+        airy: airy,
         selectedRingCount: ringCount,
         surfaceInfoList: surfaceInfoList
     };
@@ -847,6 +936,7 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
     // If spotData is an object with spotData property, extract the actual array
     let actualSpotData = spotData;
     let surfaceInfoList = null;
+    let airyInfo = null;
     if (spotData && typeof spotData === 'object') {
         if (spotData.spotData) {
             console.log('🔄 [SPOT DIAGRAM] Extracting spotData from returned object');
@@ -858,6 +948,9 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
         }
         if (Array.isArray(spotData.surfaceInfoList)) {
             surfaceInfoList = spotData.surfaceInfoList;
+        }
+        if (spotData.airy && typeof spotData.airy === 'object') {
+            airyInfo = spotData.airy;
         }
     }
     
@@ -1146,7 +1239,9 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
 
         const maxAbsX = Math.max(...adjustedXValuesUm.map(x => Math.abs(x)), 1);
         const maxAbsY = Math.max(...adjustedYValuesUm.map(y => Math.abs(y)), 1);
-        const maxRange = Math.max(maxAbsX, maxAbsY) * (objectData.spotPoints.length > 1 ? 1.1 : 1.2);
+        const airyRadiusUm = Number(airyInfo?.airyRadiusUm);
+        const rangeBase = Math.max(maxAbsX, maxAbsY, Number.isFinite(airyRadiusUm) ? airyRadiusUm : 0);
+        const maxRange = rangeBase * (objectData.spotPoints.length > 1 ? 1.1 : 1.2);
         const xRangePadding = maxRange;
         const yRangePadding = maxRange;
 
@@ -1187,7 +1282,8 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             margin: { l: 60, r: 35, t: 20, b: 60 },
             xaxis: {
                 title: 'X (µm)',
-                autorange: true,
+                autorange: false,
+                range: [-xRangePadding, xRangePadding],
                 zeroline: false,
                 showgrid: true,
                 gridcolor: '#e5e5e5',
@@ -1197,7 +1293,8 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             },
             yaxis: {
                 title: 'Y (µm)',
-                autorange: true,
+                autorange: false,
+                range: [-yRangePadding, yRangePadding],
                 zeroline: false,
                 showgrid: true,
                 gridcolor: '#e5e5e5',
@@ -1230,9 +1327,24 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             ]
         };
 
-        if (primaryWavelength) {
+        if (Number.isFinite(airyRadiusUm) && airyRadiusUm > 0) {
+            layout.shapes.push({
+                type: 'circle',
+                xref: 'x',
+                yref: 'y',
+                x0: -airyRadiusUm,
+                y0: -airyRadiusUm,
+                x1: airyRadiusUm,
+                y1: airyRadiusUm,
+                line: { color: '#000000', width: 1 },
+                fillcolor: 'rgba(0,0,0,0)'
+            });
+        }
+
+        const primaryWavelengthMicronsForDisplay = Number(primaryWavelength?.wavelength ?? primaryWavelength);
+        if (Number.isFinite(primaryWavelengthMicronsForDisplay) && primaryWavelengthMicronsForDisplay > 0) {
             layout.annotations.push({
-                text: `Primary: ${Number(primaryWavelength.wavelength).toFixed(4)} μm`,
+                text: `Primary: ${primaryWavelengthMicronsForDisplay.toFixed(4)} μm`,
                 x: 0,
                 y: 1.12,
                 xref: 'paper',
@@ -1510,7 +1622,11 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             if (![dir.i, dir.j, dir.k].every(Number.isFinite)) return '';
             return `<div>Analysis direction vector: (${dir.i.toFixed(6)}, ${dir.j.toFixed(6)}, ${dir.k.toFixed(6)})</div>`;
         })();
-        
+
+        const airyDiameterText = (Number.isFinite(Number(airyInfo?.airyDiameterUm)) && Number(airyInfo?.airyDiameterUm) > 0)
+            ? `<div>Airy diameter (1st min): ${Number(airyInfo.airyDiameterUm).toFixed(3)} µm</div>`
+            : '';
+
         // Create stats DOM element
         const stats = doc.createElement('div');
         stats.style.cssText = 'padding: 10px; background: #f9f9f9; border-left: 3px solid #0066cc; margin: 10px 0;';
@@ -1522,6 +1638,7 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             <div>RMS Y: ${rmsYUm.toFixed(3)} µm</div>
             <div>RMS Total: ${rmsTotalUm.toFixed(3)} µm</div>
             <div>Spot diameter: ${spotDiameterUm.toFixed(3)} µm</div>
+            ${airyDiameterText}
             ${alignmentShiftText}
             ${chiefErrorText}
             ${chiefMethodDisplay}

@@ -482,6 +482,15 @@
             <option value="2048">2048x2048</option>
             <option value="4096">4096x4096</option>
           </select>
+          <label for="psf-zeropad-select" title="Zero-padding increases PSF sampling resolution by enlarging FFT size without increasing OPD ray grid.">Zero pad:</label>
+          <select id="psf-zeropad-select" title="Auto: pad to at least 512. None: no padding (fast). Or choose an explicit FFT size.">
+            <option value="auto" selected>Auto (≥512)</option>
+            <option value="none">None</option>
+            <option value="512">512</option>
+            <option value="1024">1024</option>
+            <option value="2048">2048</option>
+            <option value="4096">4096</option>
+          </select>
           <label for="psf-zernike-sampling-select">OPD grid:</label>
           <select id="psf-zernike-sampling-select" title="Ray-traced OPD grid size (number of rays traced across pupil)">
             <option value="32">32x32</option>

@@ -450,7 +450,6 @@ export async function getSystemContext() {
             .map(r => ({
                 id: r.id ?? null,
                 enabled: (r.enabled === undefined || r.enabled === null) ? true : !!r.enabled,
-                severity: (String(r.severity || '').trim().toLowerCase() === 'soft') ? 'soft' : 'hard',
                 operand: r.operand ?? null,
                 op: r.op ?? null,
                 tol: toNumberOrNull(r.tol),

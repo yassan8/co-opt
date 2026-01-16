@@ -16,7 +16,20 @@ import { findFiniteSystemChiefRayDirection } from './gen-ray-cross-finite.js';
 import { findInfiniteSystemChiefRayOrigin } from './gen-ray-cross-infinite.js';
 import { fitZernikeWeighted, reconstructOPD, jToNM, nmToJ, getZernikeName } from './zernike-fitting.js';
 
-const OPD_DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis.__OPD_DEBUG || globalThis.__PSF_DEBUG));
+function __cooptIsOPDDebugNow() {
+    try {
+        const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+        if (g && (g.__OPD_DEBUG || g.__PSF_DEBUG)) return true;
+
+        // Popup windows do not share globalThis with the opener.
+        // If same-origin, mirror the opener's debug flags.
+        const opener = g && g.opener;
+        if (opener && (opener.__OPD_DEBUG || opener.__PSF_DEBUG)) return true;
+    } catch (_) {}
+    return false;
+}
+
+const OPD_DEBUG = __cooptIsOPDDebugNow();
 
 function __getActiveWavefrontProfile() {
     try {
@@ -505,9 +518,26 @@ export class OpticalPathDifferenceCalculator {
         this._cachedEntranceRadiusMm = null;
         this._cachedFirstSurfaceZ = null;
 
-        if (OPD_DEBUG) {
+        if (__cooptIsOPDDebugNow()) {
             console.log(`🔍 OPD Calculator 初期化: 波長=${wavelength}μm, 絞り面インデックス=${this.stopSurfaceIndex}`);
             console.log(`🔍 光学系行数: ${opticalSystemRows ? opticalSystemRows.length : 'null'}`);
+
+            try {
+                console.log(`🔍 評価面インデックス=${this.evaluationSurfaceIndex}, traceMaxSurfaceIndex=${this.traceMaxSurfaceIndex}`);
+                const evalRow = (Array.isArray(opticalSystemRows) && Number.isFinite(this.evaluationSurfaceIndex))
+                    ? opticalSystemRows[this.evaluationSurfaceIndex]
+                    : null;
+                if (evalRow) {
+                    console.log(`🔍 評価面詳細 (面${this.evaluationSurfaceIndex + 1}):`, {
+                        object: evalRow.object ?? evalRow.Object,
+                        objectType: evalRow['object type'] ?? evalRow.objectType,
+                        surfType: evalRow.surfType ?? evalRow['surf type'] ?? evalRow.surfTypeName,
+                        thickness: evalRow.thickness ?? evalRow.Thickness,
+                        material: evalRow.material ?? evalRow.Material,
+                        comment: evalRow.comment ?? evalRow.Comment
+                    });
+                }
+            } catch (_) {}
 
             // NOTE: 有限系/無限系の判定は fieldSetting に依存するため、ここ（コンストラクタ）では判定しない。
 
@@ -1364,9 +1394,13 @@ export class OpticalPathDifferenceCalculator {
 
             const surfType = String(row?.surfType ?? row?.['surf type'] ?? row?.surfTypeName ?? '').toLowerCase();
             const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').toLowerCase();
-            const comment = String(row?.comment ?? row?.Comment ?? '').toLowerCase();
 
-            if (surfType.includes('image') || objectType.includes('image') || comment.includes('image')) {
+            // IMPORTANT:
+            // Do NOT treat comment text as authoritative for Image-plane detection.
+            // Block/table rows may include phrases like "before image" in AirGap comments,
+            // and if we stop tracing at that surface then its thickness (distance to next
+            // surface) will not affect OPD.
+            if (surfType.includes('image') || objectType.includes('image')) {
                 lastImageIndex = i;
             }
         }
@@ -6019,6 +6053,7 @@ export class WavefrontAberrationAnalyzer {
         const maxSamplingPasses = (isInfiniteField && !forcedInfinitePupilMode) ? 2 : 1;
         let restartedDueToModeSwitch = false;
         let restartedDueToStopUnreachable = false;
+        let restartedDueToStopMiss = false;
 
         for (let samplingPass = 0; samplingPass < maxSamplingPasses; samplingPass++) {
             throwIfCancelled();
@@ -6072,6 +6107,7 @@ export class WavefrontAberrationAnalyzer {
             let modeSwitchedMidPass = false;
             let switchedTo = null;
             let sawStopUnreachableThisPass = false;
+            let stopMissCountThisPass = 0;
 
             for (let pointIndex = 0; pointIndex < gridPoints.length; pointIndex++) {
 
@@ -6199,7 +6235,45 @@ export class WavefrontAberrationAnalyzer {
                     const isStopUnreachable = err.includes('stop unreachable');
                     const isStopRelated = (isStopMiss || isStopUnreachable);
 
-                    if (isStopRelated) {
+                    // Forced stop-mode safety: when the user forces stop sampling, we cannot switch
+                    // to entrance mode. However, a large stop-miss population makes the pupil
+                    // extremely holey and can collapse PSF rendering (“sandstorm”). As a best-effort,
+                    // retry ONCE per point with relaxStopMissTol to accept near-miss rays.
+                    // This does not change the sampling mode; it only relaxes the gate.
+                    if (isStopMiss && forcedInfinitePupilMode === 'stop') {
+                        let okToRetryRelax = true;
+                        try {
+                            const m = /stop miss \(([0-9.+-eE]+)mm\s*>\s*([0-9.+-eE]+)mm\)/.exec(err);
+                            if (m) {
+                                const errMm = Number(m[1]);
+                                const thrMm = Number(m[2]);
+                                if (Number.isFinite(errMm) && Number.isFinite(thrMm) && thrMm > 0) {
+                                    // If the mismatch is wildly outside the stop gate, don't accept it.
+                                    okToRetryRelax = (errMm <= 2.0 * thrMm) || (errMm <= 0.35);
+                                }
+                            }
+                        } catch (_) {
+                            // keep default okToRetryRelax
+                        }
+
+                        if (okToRetryRelax) {
+                            if (prof) prof.forcedStopRelaxStopMissRetry = (prof.forcedStopRelaxStopMissRetry || 0) + 1;
+                            const withRelax = (o) => (o ? { ...o, relaxStopMissTol: true } : { relaxStopMissTol: true });
+                            const relaxOpts = withRelax(usedSolveOptions);
+                            usedSolveOptions = relaxOpts;
+                            opd = computeOPD(relaxOpts);
+                            if (prof) {
+                                if (isFinite(opd) && !isNaN(opd)) prof.forcedStopRelaxStopMissRetryOk = (prof.forcedStopRelaxStopMissRetryOk || 0) + 1;
+                                else prof.forcedStopRelaxStopMissRetryNg = (prof.forcedStopRelaxStopMissRetryNg || 0) + 1;
+                            }
+                        }
+                    }
+
+                    // If relax retry fixed it, skip other retries.
+                    if (isFinite(opd) && !isNaN(opd)) {
+                        // no-op
+                    } else if (isStopRelated) {
+
                         if (prof) {
                             prof.fastToSlowRetryStopRelated = (prof.fastToSlowRetryStopRelated || 0) + 1;
                             if (err.includes('stop miss')) {
@@ -6272,6 +6346,10 @@ export class WavefrontAberrationAnalyzer {
                 const lastCalc = this.opdCalculator.getLastRayCalculation?.();
                 const reason = (lastCalc && typeof lastCalc.error === 'string' && lastCalc.error) ? lastCalc.error : 'NaN';
                 invalidReasonCounts[reason] = (invalidReasonCounts[reason] || 0) + 1;
+
+                if (isInfiniteField && passMode === 'stop' && typeof reason === 'string' && reason.includes('stop miss')) {
+                    stopMissCountThisPass++;
+                }
 
                 // For infinite systems in stop mode: if the CHIEF RAY (pupil=0,0) reports stop unreachable,
                 // restart the entire map in entrance mode. Peripheral rays may naturally be vignetted,
@@ -6489,6 +6567,52 @@ export class WavefrontAberrationAnalyzer {
                 continue;
             }
 
+            // If stop-mode sampling produces many "stop miss" failures, prefer entrance mode.
+            // Rationale: stop miss means the pupil coordinate does not correspond to the requested stop position;
+            // in such cases the stop-mode mapping is often unstable and leads to a holey pupil.
+            if (!forcedInfinitePupilMode && isInfiniteField && passMode === 'stop' && samplingPass + 1 < maxSamplingPasses) {
+                const total = validPointCount + invalidPointCount;
+                const frac = total > 0 ? (stopMissCountThisPass / total) : 0;
+                const minFrac = (typeof globalThis !== 'undefined' && Number.isFinite(globalThis.__WAVEFRONT_STOPMISS_FALLBACK_FRAC))
+                    ? Math.max(0, Math.min(1, Number(globalThis.__WAVEFRONT_STOPMISS_FALLBACK_FRAC)))
+                    : 0.05;
+                const minCount = (typeof globalThis !== 'undefined' && Number.isFinite(globalThis.__WAVEFRONT_STOPMISS_FALLBACK_MIN_COUNT))
+                    ? Math.max(1, Math.floor(Number(globalThis.__WAVEFRONT_STOPMISS_FALLBACK_MIN_COUNT)))
+                    : 250;
+
+                if (stopMissCountThisPass >= minCount && frac >= minFrac) {
+                    console.warn('🟣 [Wavefront] stop miss dominant in stop mode; restarting in entrance pupil mode', {
+                        fieldSetting,
+                        stopMissCount: stopMissCountThisPass,
+                        total,
+                        frac,
+                        minFrac,
+                        minCount
+                    });
+                    restartedDueToStopMiss = true;
+                    try {
+                        this.opdCalculator._setInfinitePupilMode(fieldSetting, 'entrance');
+                        // Best effort: clear per-field caches so entrance config is rebuilt cleanly.
+                        const k = this.opdCalculator.getFieldCacheKey?.(fieldSetting);
+                        if (k) this.opdCalculator._chiefRayCache?.delete(k);
+                        const ek = this.opdCalculator._getInfinitePupilModeKey?.(fieldSetting);
+                        if (ek) this.opdCalculator._entrancePupilConfigCache?.delete(ek);
+                    } catch (_) {
+                        // ignore
+                    }
+                    try {
+                        this.opdCalculator.referenceOpticalPath = null;
+                        this.opdCalculator.setReferenceRay(fieldSetting);
+                    } catch (e) {
+                        console.warn('⚠️ [Wavefront] failed to reset reference ray for entrance mode (stop miss fallback)', { error: String(e?.message || e) });
+                    }
+                    wavefrontMap.pupilSamplingMode = 'entrance';
+                    wavefrontMap.bestEffortVignettedPupil = true;
+                    await this._yieldToUI();
+                    continue;
+                }
+            }
+
             // Completed a full pass without switching.
             break;
         }
@@ -6518,6 +6642,7 @@ export class WavefrontAberrationAnalyzer {
         wavefrontMap.invalidReasonCounts = invalidReasonCounts;
         wavefrontMap.restartedDueToModeSwitch = restartedDueToModeSwitch;
         wavefrontMap.restartedDueToStopUnreachable = restartedDueToStopUnreachable;
+        wavefrontMap.restartedDueToStopMiss = restartedDueToStopMiss;
         try {
             const top = Object.entries(invalidReasonCounts)
                 .sort((a, b) => (b[1] || 0) - (a[1] || 0))

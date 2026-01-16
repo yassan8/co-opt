@@ -177,6 +177,76 @@ h3 {
     box-sizing: border-box;
 }
 
+/* System Requirements (DOM table) */
+#table-system-requirements {
+    margin: 10px 1px;
+    width: 100%;
+    border-collapse: collapse;
+    background-color: white;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    padding: 6px;
+    box-sizing: border-box;
+}
+
+#table-system-requirements .sr-table {
+    font-family: inherit;
+    font-size: 13px;
+}
+
+#table-system-requirements .sr-table td {
+    background-color: inherit;
+}
+
+#table-system-requirements .sr-table tbody tr {
+    background: white;
+}
+
+/* Hover: match Design Intent grey + pointer cursor */
+#table-system-requirements .sr-table tbody tr:hover {
+    background: #f5f5f5;
+    cursor: pointer;
+}
+
+/* Inputs/selects cover the cell background; apply hover bg to cells and controls too */
+#table-system-requirements .sr-table tbody tr:hover td,
+#table-system-requirements .sr-table tbody tr:hover input,
+#table-system-requirements .sr-table tbody tr:hover select,
+#table-system-requirements .sr-table tbody tr:hover textarea,
+#table-system-requirements .sr-table tbody tr:hover div {
+    background: #f5f5f5;
+}
+
+#table-system-requirements .sr-table input,
+#table-system-requirements .sr-table select,
+#table-system-requirements .sr-table textarea {
+    font-family: inherit;
+    font-size: 13px;
+    padding: 2px 6px;
+    height: 22px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+#table-system-requirements .sr-table textarea {
+    height: auto;
+}
+
+/* Selected row: ensure Num→Status (sticky) also shows the blue background */
+#table-system-requirements .sr-table tbody tr.sr-selected {
+    background-color: #e7f3ff;
+}
+
+#table-system-requirements .sr-table tbody tr.sr-selected:hover,
+#table-system-requirements .sr-table tbody tr.sr-selected:hover td,
+#table-system-requirements .sr-table tbody tr.sr-selected:hover input,
+#table-system-requirements .sr-table tbody tr.sr-selected:hover select,
+#table-system-requirements .sr-table tbody tr.sr-selected:hover textarea,
+#table-system-requirements .sr-table tbody tr.sr-selected:hover div {
+    background-color: #e7f3ff;
+}
+
 #table-optical-system {
     margin: 10px 1px;
     width: 100%;
@@ -2012,8 +2082,31 @@ h4 {
     cursor: pointer;
 }
 
+/* Source/Object tables: match Design Intent hover + disable selected-row blue */
+#table-source .glass-search-table tr:hover,
+#table-object .glass-search-table tr:hover {
+    background: #f5f5f5;
+}
+
+/* Inputs/selects cover the cell background; apply hover bg to cells and controls too */
+#table-source .glass-search-table tbody tr:hover td,
+#table-object .glass-search-table tbody tr:hover td {
+    background: #f5f5f5;
+}
+
+#table-source .glass-search-table tbody tr:hover input,
+#table-object .glass-search-table tbody tr:hover input,
+#table-object .glass-search-table tbody tr:hover select {
+    background-color: #f5f5f5;
+}
+
 .glass-search-table tr.selected {
     background: #cfe2ff;
+}
+
+#table-source .glass-search-table tr.selected,
+#table-object .glass-search-table tr.selected {
+    background: transparent !important;
 }
 
 .glass-rank {

@@ -19,6 +19,7 @@ const duWarn = (...args) => { if (DATA_UTILS_DEBUG) console.warn(...args); };
 
 let warnedUsingDummyOpticalSystemData = false;
 let warnedUsingLocalStorageOpticalSystemData = false;
+let warnedUsingBlocksOpticalSystemData = false;
 
 function __du_isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -233,8 +234,22 @@ export function getOpticalSystemRows(tableOpticalSystem) {
     // Blocks-first mode: if Design Intent (blocks) exists, it is the source of truth.
     // This intentionally bypasses the Expanded Optical System (Tabulator/localStorage) to
     // prevent drift between Requirements/Optimize/Evaluation.
-    const blockRows = __du_expandActiveBlocksToRows();
-    if (Array.isArray(blockRows) && blockRows.length > 0) return blockRows;
+    //
+    // IMPORTANT: This can surprise users when they manually tweak the Optical System table
+    // (e.g. moving image plane by ±1–2mm) and evaluations (OPD/PSF/etc) don't change.
+    // For debugging / manual sweeps, you can force using the table via:
+    //   globalThis.__cooptPreferTableOpticalSystemRows = true
+    const preferTable = !!(typeof globalThis !== 'undefined' && globalThis.__cooptPreferTableOpticalSystemRows === true);
+    if (!preferTable) {
+      const blockRows = __du_expandActiveBlocksToRows();
+      if (Array.isArray(blockRows) && blockRows.length > 0) {
+        if (!warnedUsingBlocksOpticalSystemData) {
+          console.warn('⚠️ Using Design Intent (blocks) as the optical system source of truth; Optical System table edits are ignored. Set globalThis.__cooptPreferTableOpticalSystemRows=true to force using the table rows.');
+          warnedUsingBlocksOpticalSystemData = true;
+        }
+        return blockRows;
+      }
+    }
 
     // First try with provided table instance
     if (tableOpticalSystem && typeof tableOpticalSystem.getData === 'function') {

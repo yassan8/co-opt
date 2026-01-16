@@ -3907,16 +3907,14 @@ export function setupOpticalSystemChangeListeners(scene) {
     <div class="controls">
         <label for="popup-psf-object-select">Object:</label>
         <select id="popup-psf-object-select"><option value="0">1</option></select>
-        <label for="popup-psf-sampling-select">FFT grid:</label>
-        <select id="popup-psf-sampling-select">
-            <option value="32">32x32</option>
-            <option value="64">64x64</option>
-            <option value="128">128x128</option>
-            <option value="256">256x256</option>
-            <option value="512">512x512</option>
-            <option value="1024" selected>1024x1024</option>
-            <option value="2048">2048x2048</option>
-            <option value="4096">4096x4096</option>
+        <label for="popup-psf-sampling-select" title="Zero-padding increases FFT size without increasing OPD ray grid.">Zero pad:</label>
+        <select id="popup-psf-sampling-select" title="Auto: pad to at least 512. None: no padding (FFT size = OPD grid). Or choose an explicit FFT size.">
+            <option value="auto">Auto (≥512)</option>
+            <option value="none">None</option>
+            <option value="512">512</option>
+            <option value="1024" selected>1024</option>
+            <option value="2048">2048</option>
+            <option value="4096">4096</option>
         </select>
         <label for="popup-psf-zernike-sampling-select">OPD grid:</label>
         <select id="popup-psf-zernike-sampling-select" title="Ray-traced OPD grid size (number of rays traced across pupil)">
@@ -4117,21 +4115,18 @@ export function setupOpticalSystemChangeListeners(scene) {
         }
 
         function syncInputsFromOpener() {
-            const openerSampling = getOpenerEl('psf-sampling-select');
+            const openerZeroPad = getOpenerEl('psf-zeropad-select');
             const openerZernikeSampling = getOpenerEl('psf-zernike-sampling-select');
             const openerLog = getOpenerEl('psf-log-scale-checkbox');
             const popupSampling = document.getElementById('popup-psf-sampling-select');
             const popupZernikeSampling = document.getElementById('popup-psf-zernike-sampling-select');
             const popupLog = document.getElementById('popup-psf-log-scale-checkbox');
-            if (openerSampling && popupSampling) popupSampling.value = openerSampling.value;
-            if (popupZernikeSampling) {
-                if (openerZernikeSampling && openerZernikeSampling.value) {
-                    popupZernikeSampling.value = openerZernikeSampling.value;
-                } else if (popupSampling && popupSampling.value) {
-                    // Fallback: keep Zernike sampling aligned with PSF sampling.
-                    popupZernikeSampling.value = popupSampling.value;
+            if (openerZeroPad && popupSampling && openerZeroPad.value) {
+                if (Array.from(popupSampling.options || []).some(o => String(o.value) === String(openerZeroPad.value))) {
+                    popupSampling.value = openerZeroPad.value;
                 }
             }
+            if (popupZernikeSampling && openerZernikeSampling && openerZernikeSampling.value) popupZernikeSampling.value = openerZernikeSampling.value;
             // Default: Log scale should start unchecked for PSF.
             try {
                 if (openerLog) openerLog.checked = false;
@@ -4187,18 +4182,24 @@ export function setupOpticalSystemChangeListeners(scene) {
             if (!Number.isFinite(objectIndex) && popupObject && Number.isFinite(popupObject.selectedIndex)) {
                 objectIndex = popupObject.selectedIndex;
             }
-            const sampling = popupSampling ? parseInt(popupSampling.value, 10) : 128;
-            const zernikeSampling = popupZernikeSampling ? parseInt(popupZernikeSampling.value, 10) : sampling;
+            const zernikeSampling = popupZernikeSampling ? parseInt(popupZernikeSampling.value, 10) : 128;
+            const zeroPadRaw = popupSampling ? String(popupSampling.value || 'auto') : 'auto';
             const logScale = !!(popupLog && popupLog.checked);
             const forceWasm = !!(popupForceWasm && popupForceWasm.checked);
             const PSF_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__PSF_DEBUG);
 
             const openerObject = getOpenerEl('psf-object-select');
             const openerSampling = getOpenerEl('psf-sampling-select');
+            const openerZeroPad = getOpenerEl('psf-zeropad-select');
             const openerZernikeSampling = getOpenerEl('psf-zernike-sampling-select');
             const openerLog = getOpenerEl('psf-log-scale-checkbox');
             if (openerObject && Number.isFinite(objectIndex)) openerObject.value = String(objectIndex);
-            if (openerSampling && Number.isFinite(sampling)) openerSampling.value = String(sampling);
+            if (openerSampling && Number.isFinite(zernikeSampling)) openerSampling.value = String(zernikeSampling);
+            if (openerZeroPad && zeroPadRaw) {
+                if (Array.from(openerZeroPad.options || []).some(o => String(o.value) === String(zeroPadRaw))) {
+                    openerZeroPad.value = zeroPadRaw;
+                }
+            }
             if (openerZernikeSampling && Number.isFinite(zernikeSampling)) openerZernikeSampling.value = String(zernikeSampling);
             if (openerLog) openerLog.checked = logScale;
 
@@ -4485,7 +4486,9 @@ export function setupOpticalSystemChangeListeners(scene) {
                     }
                     
                     onProgress({ percent: 0, phase: 'opd', message: 'OPD...' });
-                    const wavefrontGridSize = Number.isFinite(zernikeSampling) ? Math.max(16, Math.floor(Number(zernikeSampling))) : Math.max(16, Math.floor(Number(sampling) || 128));
+                    const wavefrontGridSize = Number.isFinite(zernikeSampling)
+                        ? Math.max(16, Math.floor(Number(zernikeSampling)))
+                        : 128;
                     const wavefrontMap = await raceWithCancel(analyzer.generateWavefrontMap(fieldSetting, wavefrontGridSize, 'circular', {
                         // Match OPD display pipeline:
                         // - referenceSphere
@@ -4535,7 +4538,7 @@ export function setupOpticalSystemChangeListeners(scene) {
 
                     // Convert to PSF calculator format (gridData)
                     // Build OPD grid from the wavefront map samples (piston+tilt removed display OPD).
-                    const gridSize = Number.isFinite(sampling) ? Math.max(16, Math.floor(Number(sampling))) : 128;
+                    const gridSize = wavefrontGridSize;
                     const s = Math.max(2, Math.floor(Number(gridSize)));
                     const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
                     const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
@@ -4695,9 +4698,15 @@ export function setupOpticalSystemChangeListeners(scene) {
 
                     if (!window.__popupPsfCalculator) window.__popupPsfCalculator = new PSFCalculator();
                     const psfCalculator = window.__popupPsfCalculator;
-                    const psfSamplingSize = Number.isFinite(sampling) ? sampling : 128;
+                    const psfSamplingSize = Number.isFinite(zernikeSampling) ? zernikeSampling : 128;
+                    const zeroPadTo = (zeroPadRaw === 'none')
+                        ? psfSamplingSize
+                        : (zeroPadRaw === 'auto')
+                            ? 0
+                            : (Number.isFinite(parseInt(zeroPadRaw)) ? parseInt(zeroPadRaw) : 0);
                     const psfResult = await raceWithCancel(psfCalculator.calculatePSF(opdData, {
                         samplingSize: psfSamplingSize,
+                        zeroPadTo,
                         pupilDiameter: pupilDiameterMm,
                         focalLength: focalLengthMm,
                         forceImplementation: forceWasm ? 'wasm' : null,

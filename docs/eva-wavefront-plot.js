@@ -244,6 +244,34 @@ export class WavefrontPlotter {
                 this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
             }
 
+            // Debug: report effective pupil coverage.
+            try {
+                const dbg = (typeof globalThis !== 'undefined') && (globalThis.__OPD_DEBUG === true);
+                if (dbg) {
+                    const pcs = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
+                    let maxRho = 0;
+                    let minRho = Infinity;
+                    let finite = 0;
+                    for (const c of pcs) {
+                        const x = Number(c?.x);
+                        const y = Number(c?.y);
+                        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                        const r = Math.hypot(x, y);
+                        if (!Number.isFinite(r)) continue;
+                        finite++;
+                        if (r > maxRho) maxRho = r;
+                        if (r < minRho) minRho = r;
+                    }
+                    console.log('🔍 [OPD] Pupil coverage', {
+                        pupilSamplingMode: wavefrontMap?.pupilSamplingMode,
+                        bestEffortVignettedPupil: !!wavefrontMap?.bestEffortVignettedPupil,
+                        points: finite,
+                        maxRho,
+                        minRho: Number.isFinite(minRho) ? minRho : null
+                    });
+                }
+            } catch (_) {}
+
             // If display mode is enabled, plot the transformed OPD arrays.
             const displayMode = 'pistonTiltRemoved';
             const mapForPlot = (displayMode === 'pistonTiltRemoved' && wavefrontMap?.display?.opdsInWavelengths)

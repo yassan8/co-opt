@@ -1,5 +1,5 @@
 /**
- * System Requirements Editor (Tabulator)
+ * System Requirements Editor (DOM)
  * - Requirements are the source of truth (pass/fail constraints)
  * - System Evaluation UI is deprecated (no transfer)
  */
@@ -12,6 +12,14 @@ class SystemRequirementsEditor {
     this.table = null;
     this._evalTimer = null;
     this._meritHookInstalled = false;
+    this._isEditingCell = false;
+    this._pendingEvalAfterEdit = false;
+    this._tableRoot = null;
+    this._tbody = null;
+    this._selectedId = null;
+    this._selectedTr = null;
+    this._paramHeaderEls = { param1: null, param2: null, param3: null, param4: null };
+    this._operandKeys = [];
     this.inspector = new InspectorManager('requirement-inspector', 'requirement-inspector-content');
 
     this.loadFromStorage();
@@ -68,17 +76,11 @@ class SystemRequirementsEditor {
   }
 
   _getLiveRequirementsData() {
-    try {
-      if (this.table && typeof this.table.getData === 'function') {
-        const d = this.table.getData();
-        if (Array.isArray(d)) return d;
-      }
-    } catch (_) {}
     return Array.isArray(this.requirements) ? this.requirements : [];
   }
 
   initializeTable() {
-    const operandKeys = (() => {
+    this._operandKeys = (() => {
       try {
         const keys = InspectorManager.getAvailableOperands?.();
         return Array.isArray(keys) ? keys : Object.keys(OPERAND_DEFINITIONS);
@@ -86,6 +88,47 @@ class SystemRequirementsEditor {
         return Object.keys(OPERAND_DEFINITIONS);
       }
     })();
+
+    const escapeHtml = (s) => String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    const formatNumberShort = (v) => {
+      if (v === null || v === undefined) return '';
+      const s = String(v).trim();
+      if (!s) return '';
+      const n = Number(s);
+      if (!Number.isFinite(n)) return s;
+      if (n !== 0 && Math.abs(n) < 1e-6) return n.toExponential(3);
+      if (Math.abs(n) >= 1e6) return n.toExponential(3);
+      return String(n);
+    };
+
+    const makeSpecSummary = (row) => {
+      const op = String(row?.op || '=').trim();
+      const targetS = formatNumberShort(row?.target ?? 0);
+      const tolRaw = row?.tol;
+      const tol = Number(String(tolRaw ?? '').trim() === '' ? 0 : tolRaw);
+      const tolS = formatNumberShort(tolRaw ?? 0);
+      if (Number.isFinite(tol) && tol > 0) {
+        if (op === '=') return `${op} ${targetS} ± ${tolS}`;
+        if (op === '<=') return `${op} ${targetS} + ${tolS}`;
+        if (op === '>=') return `${op} ${targetS} - ${tolS}`;
+        return `${op} ${targetS} (tol ${tolS})`;
+      }
+      return `${op} ${targetS}`;
+    };
+
+    const rationalePreview = (v, maxLen = 64) => {
+      const s = (v === null || v === undefined) ? '' : String(v);
+      const oneLine = s.split(/\r?\n/)[0].trim();
+      if (!oneLine) return '';
+      if (oneLine.length <= maxLen) return oneLine;
+      return oneLine.slice(0, Math.max(0, maxLen - 1)) + '…';
+    };
 
     const ensureEflBlocksDatalist = (blockIds) => {
       try {
@@ -110,208 +153,441 @@ class SystemRequirementsEditor {
       }
     };
 
-    const param2Editor = (cell, onRendered, success, cancel) => {
-      const row = cell?.getRow?.() ? cell.getRow().getData() : null;
-      const operand = String(row?.operand ?? '').trim();
+    const container = document.getElementById('table-system-requirements');
+    if (!container) return;
+    container.innerHTML = '';
 
-      // Default: plain input
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.style.width = '100%';
-      input.style.boxSizing = 'border-box';
-      input.value = (cell.getValue() === undefined || cell.getValue() === null) ? '' : String(cell.getValue());
+    const wrap = document.createElement('div');
+    wrap.className = 'sr-table-wrap';
+    wrap.style.height = '300px';
+    wrap.style.overflow = 'auto';
+    wrap.style.resize = 'vertical';
+    wrap.style.boxSizing = 'border-box';
 
-      // EFL: attach block list suggestions (datalist)
-      if (operand === 'EFL') {
-        const configIdHint = row?.configId;
-        const blockIds = this._getBlocksForConfigHint(configIdHint);
-        const dlId = ensureEflBlocksDatalist(blockIds);
-        if (dlId) input.setAttribute('list', dlId);
-        input.placeholder = 'ALL or blockId (comma separated allowed)';
+    const table = document.createElement('table');
+    table.className = 'sr-table';
+    table.style.borderCollapse = 'collapse';
+    table.style.width = 'max-content';
+    table.style.minWidth = '100%';
+
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    const mkTh = (text, widthPx, stickyLeftPx = null) => {
+      const th = document.createElement('th');
+      th.textContent = text;
+      th.style.padding = '4px 6px';
+      th.style.borderBottom = '1px solid #ddd';
+      th.style.background = '#f9f9f9';
+      th.style.fontSize = '12px';
+      th.style.fontWeight = '600';
+      th.style.position = 'sticky';
+      th.style.top = '0px';
+      th.style.zIndex = '10';
+      th.style.whiteSpace = 'nowrap';
+      if (widthPx) {
+        th.style.width = `${widthPx}px`;
+        th.style.minWidth = `${widthPx}px`;
+        th.style.maxWidth = `${widthPx}px`;
       }
-
-      onRendered(() => {
-        try {
-          input.focus();
-          input.select();
-        } catch (_) {}
-      });
-
-      const finish = () => success(input.value);
-      input.addEventListener('change', finish);
-      input.addEventListener('blur', finish);
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          finish();
-        }
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          cancel();
-        }
-      });
-
-      return input;
+      if (stickyLeftPx !== null) {
+        th.style.left = `${stickyLeftPx}px`;
+        th.style.zIndex = '11';
+      }
+      return th;
     };
 
-    const columns = [
-      { title: 'Num', field: 'id', width: 80, hozAlign: 'center', headerSort: true },
-      {
-        title: 'On',
-        field: 'enabled',
-        width: 70,
-        hozAlign: 'center',
-        editor: 'tickCross',
-        formatter: 'tickCross',
-        cellEdited: () => this.saveToStorage()
-      },
-      {
-        title: 'Type',
-        field: 'severity',
-        width: 90,
-        hozAlign: 'center',
-        editor: 'list',
-        editorParams: { values: { hard: 'hard', soft: 'soft' } },
-        cellEdited: () => this.saveToStorage()
-      },
-      {
-        title: 'Requirement',
-        field: 'operand',
-        width: 200,
-        editor: 'list',
-        editorParams: {
-          values: operandKeys.reduce((acc, key) => {
-            acc[key] = OPERAND_DEFINITIONS[key].name;
-            return acc;
-          }, {})
-        },
-        formatter: (cell) => {
-          const value = cell.getValue();
-          return OPERAND_DEFINITIONS[value]?.name || value;
-        },
-        cellEdited: () => this.saveToStorage()
-      },
-      {
-        title: 'Rationale',
-        field: 'rationale',
-        width: 260,
-        editor: 'textarea',
-        formatter: (cell) => {
-          const v = cell.getValue();
-          if (v === null || v === undefined) return '';
-          return String(v);
-        },
-        cellEdited: () => this.saveToStorage()
-      },
-      {
-        title: 'Config',
-        field: 'configId',
-        width: 120,
-        editor: 'list',
-        editorParams: () => ({ values: this.getConfigurationList() }),
-        formatter: (cell) => {
-          const configId = cell.getValue();
-          if (configId === null || configId === undefined) return '';
-          return this.getConfigName(configId) || 'Current';
-        },
-        hozAlign: 'center',
-        cellEdited: () => this.saveToStorage()
-      },
-      { title: '-', field: 'param1', width: 100, editor: 'input', hozAlign: 'center' },
-      { title: '-', field: 'param2', width: 100, editor: param2Editor, hozAlign: 'center' },
-      { title: '-', field: 'param3', width: 100, editor: 'input', hozAlign: 'center' },
-      { title: '-', field: 'param4', width: 100, editor: 'input', hozAlign: 'center' },
-      {
-        title: 'Op',
-        field: 'op',
-        width: 80,
-        editor: 'list',
-        editorParams: { values: { '=': '=', '<=': '<=', '>=': '>=' } },
-        hozAlign: 'center',
-        cellEdited: () => this.saveToStorage()
-      },
-      { title: 'Tol', field: 'tol', width: 90, editor: 'input', hozAlign: 'center' },
-      { title: 'Target', field: 'target', width: 100, editor: 'input', hozAlign: 'center' },
-      { title: 'Weight', field: 'weight', width: 100, editor: 'input', hozAlign: 'center' },
-      {
-        title: 'Current',
-        field: 'current',
-        width: 120,
-        hozAlign: 'center',
-        formatter: (cell) => {
-          const v = cell.getValue();
-          if (v === null || v === undefined) return '';
-          const n = Number(v);
-          return Number.isFinite(n) ? n.toFixed(6) : String(v);
-        }
-      },
-      {
-        title: 'Status',
-        field: 'status',
-        width: 100,
-        hozAlign: 'center',
-        formatter: (cell) => {
-          const v = String(cell.getValue() ?? '').trim();
-          if (!v) return '';
-          return v;
-        }
-      }
+    // Sticky (left) columns
+    const widths = {
+      id: 70,
+      enabled: 60,
+      operand: 220,
+      spec: 190,
+      current: 120,
+      status: 90,
+      rationale: 220,
+      configId: 120,
+      param: 100,
+      param2: 120,
+      op: 80,
+      tol: 90,
+      target: 100,
+      weight: 100
+    };
+    const stickyOrder = [
+      { key: 'id', label: 'Num', width: widths.id },
+      { key: 'enabled', label: 'On', width: widths.enabled },
+      { key: 'operand', label: 'Requirement', width: widths.operand },
+      { key: '_spec', label: 'Spec', width: widths.spec },
+      { key: 'current', label: 'Current', width: widths.current },
+      { key: 'status', label: 'Status', width: widths.status }
     ];
 
-    this.table = new Tabulator('#table-system-requirements', {
-      data: this.requirements,
-      columns,
-      layout: 'fitColumns',
-      height: '300px',
-      selectable: true
-    });
+    let left = 0;
+    for (const c of stickyOrder) {
+      headRow.appendChild(mkTh(c.label, c.width, left));
+      left += c.width;
+    }
+    headRow.appendChild(mkTh('Config', widths.configId, null));
+    const thP1 = mkTh('-', widths.param, null);
+    const thP2 = mkTh('-', widths.param2, null);
+    const thP3 = mkTh('-', widths.param, null);
+    const thP4 = mkTh('-', widths.param, null);
+    this._paramHeaderEls = { param1: thP1, param2: thP2, param3: thP3, param4: thP4 };
+    headRow.appendChild(thP1);
+    headRow.appendChild(thP2);
+    headRow.appendChild(thP3);
+    headRow.appendChild(thP4);
+    headRow.appendChild(mkTh('Op', widths.op, null));
+    headRow.appendChild(mkTh('Tol', widths.tol, null));
+    headRow.appendChild(mkTh('Target', widths.target, null));
+    headRow.appendChild(mkTh('Weight', widths.weight, null));
+    headRow.appendChild(mkTh('Rationale', widths.rationale, null));
 
-    // Make selection single, similar to other tables
-    this.table.on('rowClick', (_e, row) => {
-      try {
-        this.table.deselectRow();
-        row.select();
-      } catch (_) {}
-    });
+    thead.appendChild(headRow);
 
-    // Mirror System Evaluation: update param headers based on selected operand
-    this.table.on('rowSelected', (row) => {
-      try {
-        this.updateParameterHeaders(row.getData());
-      } catch (_) {}
+    const tbody = document.createElement('tbody');
+    this._tbody = tbody;
+    this._tableRoot = table;
 
-      try {
-        if (this.inspector && typeof this.inspector.show === 'function') {
-          this.inspector.show(row.getData());
+    const setEditing = (editing) => {
+      this._isEditingCell = !!editing;
+      if (!editing && this._pendingEvalAfterEdit) {
+        this._pendingEvalAfterEdit = false;
+        this.scheduleEvaluateAndUpdate();
+      }
+    };
+
+    const onCellFocus = () => setEditing(true);
+    const onCellBlur = () => setEditing(false);
+
+    const formatCurrentCell = (v) => {
+      if (v === null || v === undefined) return '';
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toFixed(6) : String(v);
+    };
+
+    const setSelectedRow = (rowId) => {
+      this._selectedId = rowId;
+      if (!this._tbody) return;
+
+      if (this._selectedTr) this._selectedTr.classList.remove('sr-selected');
+      const tr = this._tbody.querySelector(`tr[data-id="${String(rowId)}"]`);
+      if (tr) {
+        tr.classList.add('sr-selected');
+        this._selectedTr = tr;
+      } else {
+        this._selectedTr = null;
+      }
+
+      const row = this.requirements.find(r => r && String(r.id) === String(rowId)) || null;
+      if (row) {
+        try { this.updateParameterHeaders(row); } catch (_) {}
+        try {
+          if (this.inspector && typeof this.inspector.show === 'function') this.inspector.show(row);
+        } catch (_) {}
+      }
+    };
+
+    const renderRow = (row) => {
+      const tr = document.createElement('tr');
+      tr.dataset.id = String(row.id);
+      if (String(this._selectedId) === String(row.id)) tr.classList.add('sr-selected');
+
+      const mkTd = (widthPx, stickyLeftPx = null) => {
+        const td = document.createElement('td');
+        td.style.padding = '3px 6px';
+        td.style.borderBottom = '1px solid #eee';
+        td.style.fontSize = '12px';
+        td.style.whiteSpace = 'nowrap';
+        if (widthPx) {
+          td.style.width = `${widthPx}px`;
+          td.style.minWidth = `${widthPx}px`;
+          td.style.maxWidth = `${widthPx}px`;
         }
-      } catch (_) {}
-    });
-
-    this.table.on('rowDeselected', () => {
-      try {
-        this.resetParameterHeaders();
-      } catch (_) {}
-
-      try {
-        if (this.inspector && typeof this.inspector.hide === 'function') {
-          this.inspector.hide();
+        if (stickyLeftPx !== null) {
+          td.style.position = 'sticky';
+          td.style.left = `${stickyLeftPx}px`;
+          td.style.zIndex = '5';
+          td.style.background = 'inherit';
         }
-      } catch (_) {}
-    });
+        return td;
+      };
 
-    // Persist on any edit
-    this.table.on('cellEdited', (cell) => {
-      try {
-        if (cell && typeof cell.getField === 'function' && cell.getField() === 'operand') {
-          const row = cell.getRow && cell.getRow();
-          if (row && typeof row.isSelected === 'function' && row.isSelected()) {
-            this.updateParameterHeaders(row.getData());
+      tr.addEventListener('click', (e) => {
+        // Keep selection behavior but don't break inline edits.
+        const t = e?.target;
+        if (t && typeof t.closest === 'function' && t.closest('input,select,textarea')) {
+          if (String(this._selectedId) !== String(row.id)) setSelectedRow(row.id);
+          return;
+        }
+        setSelectedRow(row.id);
+      });
+
+      // Sticky cells
+      let leftPx = 0;
+      const tdId = mkTd(widths.id, leftPx);
+      tdId.textContent = String(row.id);
+      tr.appendChild(tdId);
+      leftPx += widths.id;
+
+      const tdOn = mkTd(widths.enabled, leftPx);
+      const onCb = document.createElement('input');
+      onCb.type = 'checkbox';
+      onCb.checked = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
+      onCb.addEventListener('change', () => {
+        row.enabled = !!onCb.checked;
+        this.saveToStorage();
+        this.scheduleEvaluateAndUpdate();
+      });
+      onCb.addEventListener('focus', onCellFocus);
+      onCb.addEventListener('blur', onCellBlur);
+      tdOn.style.textAlign = 'center';
+      tdOn.appendChild(onCb);
+      tr.appendChild(tdOn);
+      leftPx += widths.enabled;
+
+      const tdOpd = mkTd(widths.operand, leftPx);
+      const operandSel = document.createElement('select');
+      operandSel.style.width = '100%';
+      operandSel.style.fontSize = '12px';
+      operandSel.addEventListener('focus', onCellFocus);
+      operandSel.addEventListener('blur', onCellBlur);
+      for (const key of this._operandKeys) {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = OPERAND_DEFINITIONS[key]?.name || key;
+        operandSel.appendChild(opt);
+      }
+      operandSel.value = String(row.operand || '').trim();
+      operandSel.addEventListener('change', () => {
+        row.operand = operandSel.value;
+        this.saveToStorage();
+        try { this.updateParameterHeaders(row); } catch (_) {}
+
+        // Update Spec cell inline.
+        const specEl = tr.querySelector('td[data-role="spec"]');
+        if (specEl) specEl.textContent = makeSpecSummary(row);
+
+        // Update EFL datalist suggestion for param2 if needed.
+        try {
+          const p2Input = tr.querySelector('input[data-role="param2"]');
+          if (p2Input) {
+            if (String(row?.operand ?? '').trim() === 'EFL') {
+              const blockIds = this._getBlocksForConfigHint(row?.configId);
+              const dlId = ensureEflBlocksDatalist(blockIds);
+              if (dlId) p2Input.setAttribute('list', dlId);
+              p2Input.placeholder = 'ALL or blockId (comma separated allowed)';
+            } else {
+              p2Input.removeAttribute('list');
+              p2Input.placeholder = '';
+            }
           }
+        } catch (_) {}
+        this.scheduleEvaluateAndUpdate();
+      });
+      tdOpd.appendChild(operandSel);
+      tr.appendChild(tdOpd);
+      leftPx += widths.operand;
+
+      const tdSpec = mkTd(widths.spec, leftPx);
+      tdSpec.textContent = makeSpecSummary(row);
+      tdSpec.dataset.role = 'spec';
+      tr.appendChild(tdSpec);
+      leftPx += widths.spec;
+
+      const tdCur = mkTd(widths.current, leftPx);
+      tdCur.style.textAlign = 'center';
+      tdCur.textContent = formatCurrentCell(row.current);
+      tdCur.dataset.role = 'current';
+      tr.appendChild(tdCur);
+      leftPx += widths.current;
+
+      const tdSt = mkTd(widths.status, leftPx);
+      tdSt.style.textAlign = 'center';
+      tdSt.textContent = String(row.status ?? '').trim();
+      tdSt.dataset.role = 'status';
+      tr.appendChild(tdSt);
+      leftPx += widths.status;
+
+      // Non-sticky cells
+      const tdCfg = mkTd(widths.configId, null);
+      tdCfg.style.textAlign = 'center';
+      const cfgSel = document.createElement('select');
+      cfgSel.style.width = '100%';
+      cfgSel.style.fontSize = '12px';
+      cfgSel.addEventListener('focus', onCellFocus);
+      cfgSel.addEventListener('blur', onCellBlur);
+      const cfgValues = this.getConfigurationList();
+      for (const [val, label] of Object.entries(cfgValues || {})) {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = label;
+        cfgSel.appendChild(opt);
+      }
+      cfgSel.value = (row.configId === undefined || row.configId === null) ? '' : String(row.configId);
+      cfgSel.addEventListener('change', () => {
+        row.configId = cfgSel.value;
+        this.saveToStorage();
+
+        // If operand is EFL, refresh param2 datalist options.
+        try {
+          if (String(row?.operand ?? '').trim() === 'EFL') {
+            const blockIds = this._getBlocksForConfigHint(row?.configId);
+            const dlId = ensureEflBlocksDatalist(blockIds);
+            const p2Input = tr.querySelector('input[data-role="param2"]');
+            if (p2Input && dlId) p2Input.setAttribute('list', dlId);
+          }
+        } catch (_) {}
+        this.scheduleEvaluateAndUpdate();
+      });
+      tdCfg.appendChild(cfgSel);
+      tr.appendChild(tdCfg);
+
+      const mkInput = (field, widthPx, placeholder = '') => {
+        const td = mkTd(widthPx, null);
+        td.style.textAlign = 'center';
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.value = (row[field] === undefined || row[field] === null) ? '' : String(row[field]);
+        inp.placeholder = placeholder;
+        inp.style.width = '100%';
+        inp.style.fontSize = '12px';
+        inp.style.boxSizing = 'border-box';
+        inp.dataset.role = field;
+        inp.addEventListener('focus', onCellFocus);
+        inp.addEventListener('blur', () => {
+          row[field] = inp.value;
+          this.saveToStorage();
+
+          if (field === 'tol' || field === 'target') {
+            const specEl = tr.querySelector('td[data-role="spec"]');
+            if (specEl) specEl.textContent = makeSpecSummary(row);
+          }
+
+          this.scheduleEvaluateAndUpdate();
+          onCellBlur();
+        });
+        td.appendChild(inp);
+        return { td, input: inp };
+      };
+
+      const p1 = mkInput('param1', widths.param);
+      tr.appendChild(p1.td);
+      const p2 = mkInput('param2', widths.param2);
+      // EFL: attach datalist
+      try {
+        const operand = String(row?.operand ?? '').trim();
+        if (operand === 'EFL') {
+          const configIdHint = row?.configId;
+          const blockIds = this._getBlocksForConfigHint(configIdHint);
+          const dlId = ensureEflBlocksDatalist(blockIds);
+          if (dlId) p2.input.setAttribute('list', dlId);
+          p2.input.placeholder = 'ALL or blockId (comma separated allowed)';
         }
       } catch (_) {}
-      this.saveToStorage();
-      this.scheduleEvaluateAndUpdate();
-    });
+      tr.appendChild(p2.td);
+      const p3 = mkInput('param3', widths.param);
+      tr.appendChild(p3.td);
+      const p4 = mkInput('param4', widths.param);
+      tr.appendChild(p4.td);
+
+      const tdOp = mkTd(widths.op, null);
+      tdOp.style.textAlign = 'center';
+      const opSel = document.createElement('select');
+      opSel.style.width = '100%';
+      opSel.style.fontSize = '12px';
+      for (const v of ['=', '<=', '>=']) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        opSel.appendChild(opt);
+      }
+      opSel.value = String(row.op || '=').trim() || '=';
+      opSel.addEventListener('focus', onCellFocus);
+      opSel.addEventListener('blur', onCellBlur);
+      opSel.addEventListener('change', () => {
+        row.op = opSel.value;
+        this.saveToStorage();
+        const specEl = tr.querySelector('td[data-role="spec"]');
+        if (specEl) specEl.textContent = makeSpecSummary(row);
+        this.scheduleEvaluateAndUpdate();
+      });
+      tdOp.appendChild(opSel);
+      tr.appendChild(tdOp);
+
+      tr.appendChild(mkInput('tol', widths.tol).td);
+      tr.appendChild(mkInput('target', widths.target).td);
+      tr.appendChild(mkInput('weight', widths.weight).td);
+
+      // Rationale is the right-most column
+      const tdRat = mkTd(widths.rationale, null);
+
+      const ratPreview = document.createElement('div');
+      ratPreview.textContent = rationalePreview(row.rationale);
+      ratPreview.title = (row.rationale === undefined || row.rationale === null) ? '' : String(row.rationale);
+      ratPreview.style.cursor = 'text';
+      ratPreview.style.height = '22px';
+      ratPreview.style.display = 'flex';
+      ratPreview.style.alignItems = 'center';
+      ratPreview.style.overflow = 'hidden';
+
+      const ratTa = document.createElement('textarea');
+      ratTa.rows = 4;
+      ratTa.value = (row.rationale === undefined || row.rationale === null) ? '' : String(row.rationale);
+      ratTa.style.width = '100%';
+      ratTa.style.fontSize = '12px';
+      ratTa.style.boxSizing = 'border-box';
+      ratTa.style.display = 'none';
+      ratTa.addEventListener('focus', onCellFocus);
+      ratTa.addEventListener('blur', () => {
+        row.rationale = ratTa.value;
+        ratPreview.textContent = rationalePreview(row.rationale);
+        ratPreview.title = (row.rationale === undefined || row.rationale === null) ? '' : String(row.rationale);
+        ratTa.style.display = 'none';
+        ratPreview.style.display = 'flex';
+        this.saveToStorage();
+        onCellBlur();
+      });
+
+      ratPreview.addEventListener('click', () => {
+        setSelectedRow(row.id);
+        ratTa.value = (row.rationale === undefined || row.rationale === null) ? '' : String(row.rationale);
+        ratPreview.style.display = 'none';
+        ratTa.style.display = 'block';
+        try { ratTa.focus(); } catch (_) {}
+      });
+
+      tdRat.appendChild(ratPreview);
+      tdRat.appendChild(ratTa);
+      tr.appendChild(tdRat);
+
+      return tr;
+    };
+
+    this._renderBody = (specFn, ratPrevFn, ensureDl) => {
+      if (!this._tbody) return;
+      this._tbody.innerHTML = '';
+      for (const r of this.requirements) {
+        const tr = renderRow(r);
+        this._tbody.appendChild(tr);
+      }
+
+      // Update header labels for selected operand if any.
+      const sel = this.requirements.find(x => x && String(x.id) === String(this._selectedId)) || null;
+      if (sel) {
+        setSelectedRow(sel.id);
+      } else {
+        try { this.resetParameterHeaders(); } catch (_) {}
+      }
+    };
+
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    container.appendChild(wrap);
+
+    // Initial render
+    this._renderBody(makeSpecSummary, rationalePreview, ensureEflBlocksDatalist);
   }
 
   updateParameterHeaders(rowData) {
@@ -326,12 +602,7 @@ class SystemRequirementsEditor {
 
     const paramFields = ['param1', 'param2', 'param3', 'param4'];
     paramFields.forEach((field) => {
-      const column = (this.table && typeof this.table.getColumn === 'function') ? this.table.getColumn(field) : null;
-      if (!column || typeof column.getElement !== 'function') return;
-
-      const el = column.getElement();
-      if (!el || typeof el.querySelector !== 'function') return;
-      const headerElement = el.querySelector('.tabulator-col-title');
+      const headerElement = this._paramHeaderEls ? this._paramHeaderEls[field] : null;
       if (!headerElement) return;
 
       const paramDef = Array.isArray(definition.parameters)
@@ -351,11 +622,7 @@ class SystemRequirementsEditor {
     };
 
     Object.entries(defaultTitles).forEach(([field, title]) => {
-      const column = (this.table && typeof this.table.getColumn === 'function') ? this.table.getColumn(field) : null;
-      if (!column || typeof column.getElement !== 'function') return;
-      const el = column.getElement();
-      if (!el || typeof el.querySelector !== 'function') return;
-      const headerElement = el.querySelector('.tabulator-col-title');
+      const headerElement = this._paramHeaderEls ? this._paramHeaderEls[field] : null;
       if (headerElement) headerElement.textContent = title;
     });
   }
@@ -387,7 +654,6 @@ class SystemRequirementsEditor {
     return {
       id: this.requirements.length + 1,
       enabled: true,
-      severity: 'hard',
       operand: 'EFFL',
       rationale: '',
       configId: activeConfigId,
@@ -405,41 +671,35 @@ class SystemRequirementsEditor {
   addRequirement() {
     const newRow = this.createDefaultRequirementRow();
 
-    const selectedRows = this.table ? this.table.getSelectedRows() : [];
-    if (selectedRows.length > 0) {
-      const selected = selectedRows[0];
-      const selectedIndex = this.requirements.findIndex(r => r.id === selected.getData().id);
-      if (selectedIndex !== -1) {
-        this.requirements.splice(selectedIndex + 1, 0, newRow);
-        this.updateRowNumbers();
-        this.table.addRow(newRow, false, selected);
-        this.saveToStorage();
-        return;
-      }
+    const selectedIndex = this.requirements.findIndex(r => r && String(r.id) === String(this._selectedId));
+    if (selectedIndex !== -1) {
+      this.requirements.splice(selectedIndex + 1, 0, newRow);
+    } else {
+      this.requirements.push(newRow);
     }
-
-    this.requirements.push(newRow);
     this.updateRowNumbers();
-    this.table.addRow(newRow);
     this.saveToStorage();
+    if (typeof this._renderBody === 'function') this._renderBody(() => '', () => '', () => null);
   }
 
   deleteRequirement() {
-    if (!this.table) return;
-    const selectedRows = this.table.getSelectedRows();
-    if (selectedRows.length === 0) {
+    if (this._selectedId === null || this._selectedId === undefined || String(this._selectedId).trim() === '') {
       alert('削除する行を選択してください');
       return;
     }
 
-    selectedRows.forEach(row => {
-      const idx = this.requirements.findIndex(r => r.id === row.getData().id);
-      if (idx !== -1) this.requirements.splice(idx, 1);
-    });
+    const idx = this.requirements.findIndex(r => r && String(r.id) === String(this._selectedId));
+    if (idx !== -1) this.requirements.splice(idx, 1);
+    this._selectedId = null;
 
     this.updateRowNumbers();
-    this.table.setData(this.requirements);
     this.saveToStorage();
+    if (typeof this._renderBody === 'function') this._renderBody(() => '', () => '', () => null);
+
+    try { this.resetParameterHeaders(); } catch (_) {}
+    try {
+      if (this.inspector && typeof this.inspector.hide === 'function') this.inspector.hide();
+    } catch (_) {}
   }
 
   transferSelectedToEvaluation() {
@@ -472,10 +732,14 @@ class SystemRequirementsEditor {
       window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'enter' };
     } catch (_) {}
 
-    if (!this.table) {
-      try { window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'no-table' }; } catch (_) {}
+    if (this._isEditingCell) {
+      this._pendingEvalAfterEdit = true;
+      try {
+        window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'deferred-edit' };
+      } catch (_) {}
       return;
     }
+
     const editor = window.meritFunctionEditor;
     if (!editor || typeof editor.calculateOperandValue !== 'function') {
       try { window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'no-merit-editor' }; } catch (_) {}
@@ -502,7 +766,6 @@ class SystemRequirementsEditor {
       if (!row || typeof row !== 'object') continue;
 
       const enabled = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
-      const severity = (String(row.severity || '').trim().toLowerCase() === 'soft') ? 'soft' : 'hard';
       const operand = String(row.operand || '').trim();
       const op = String(row.op || '=').trim();
       const tol = (row.tol === undefined || row.tol === null || String(row.tol).trim() === '') ? 0 : Number(row.tol);
@@ -549,11 +812,11 @@ class SystemRequirementsEditor {
       if (wEff <= 0) {
         status = 'OFF';
       } else if (!sanitized.ok) {
-        status = (severity === 'soft') ? 'SOFT' : 'NG';
+        status = 'NG';
       } else if (!Number.isFinite(amount)) {
         status = '—';
       } else if (amount > 0) {
-        status = (severity === 'soft') ? 'SOFT' : 'NG';
+        status = 'NG';
       }
 
       // Current: raw operand value (e.g., Spot size in µm).
@@ -563,20 +826,34 @@ class SystemRequirementsEditor {
 
     try {
       if (Array.isArray(updates) && updates.length > 0) {
-        this.table.updateData(updates);
-      }
-    } catch (_) {
-      // Fallback (older Tabulator versions)
-      try {
         for (const u of updates) {
           const r = this.requirements.find(x => x && x.id === u.id);
           if (r) {
             r.current = u.current;
             r.status = u.status;
+            r._violation = u._violation;
+            r._contribution = u._contribution;
           }
         }
-        this.table.setData(this.requirements);
-      } catch (_) {}
+
+        // Patch DOM for Current/Status only to preserve focus.
+        if (this._tbody) {
+          for (const u of updates) {
+            const tr = this._tbody.querySelector(`tr[data-id="${String(u.id)}"]`);
+            if (!tr) continue;
+            const curEl = tr.querySelector('td[data-role="current"]');
+            const stEl = tr.querySelector('td[data-role="status"]');
+            if (curEl) {
+              const v = u.current;
+              const n = Number(v);
+              curEl.textContent = (v === null || v === undefined) ? '' : (Number.isFinite(n) ? n.toFixed(6) : String(v));
+            }
+            if (stEl) stEl.textContent = String(u.status ?? '').trim();
+          }
+        }
+      }
+    } catch (_) {
+      // ignore
     }
 
     try {
@@ -680,6 +957,9 @@ class SystemRequirementsEditor {
     this.requirements = data.map(row => {
       const r = row && typeof row === 'object' ? { ...row } : {};
 
+      // Migration: Type (severity) removed.
+      try { delete r.severity; } catch (_) {}
+
       // Migration: SPOT_SIZE was replaced by explicit sampling variants.
       if (typeof r.operand === 'string' && r.operand.trim() === 'SPOT_SIZE') {
         r.operand = 'SPOT_SIZE_ANNULAR';
@@ -697,7 +977,7 @@ class SystemRequirementsEditor {
       return r;
     });
     this.updateRowNumbers();
-    if (this.table) this.table.setData(this.requirements);
+    if (typeof this._renderBody === 'function') this._renderBody(() => '', () => '', () => null);
   }
 
   loadFromStorage() {
@@ -720,6 +1000,9 @@ class SystemRequirementsEditor {
       this.requirements = (Array.isArray(data) ? data : []).map(row => {
         const r = row && typeof row === 'object' ? { ...row } : {};
 
+        // Migration: Type (severity) removed.
+        try { delete r.severity; } catch (_) {}
+
         // Migration: SPOT_SIZE was replaced by explicit sampling variants.
         if (typeof r.operand === 'string' && r.operand.trim() === 'SPOT_SIZE') {
           r.operand = 'SPOT_SIZE_ANNULAR';
@@ -734,7 +1017,6 @@ class SystemRequirementsEditor {
 
         // Defaults for new fields (backward compatible)
         if (r.enabled === undefined || r.enabled === null) r.enabled = true;
-        if (!r.severity) r.severity = 'hard';
         if (!r.op) r.op = '=';
         if (r.tol === undefined || r.tol === null || String(r.tol).trim() === '') r.tol = 0;
 
@@ -763,7 +1045,6 @@ class SystemRequirementsEditor {
         const {
           id,
           enabled,
-          severity,
           operand,
           rationale,
           configId,
@@ -776,7 +1057,7 @@ class SystemRequirementsEditor {
           target,
           weight
         } = r;
-        return { id, enabled, severity, operand, rationale, configId, param1, param2, param3, param4, op, tol, target, weight };
+        return { id, enabled, operand, rationale, configId, param1, param2, param3, param4, op, tol, target, weight };
       });
       localStorage.setItem('systemRequirementsData', JSON.stringify(toSave));
     } catch (e) {

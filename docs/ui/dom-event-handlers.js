@@ -3487,14 +3487,17 @@ async function handlePSFCalculation(debugMode = false) {
     const wavelengthSelect = document.getElementById('psf-wavelength-select'); // 現在存在しない
     const gridSizeSelect = document.getElementById('psf-grid-size-select'); // 現在存在しない
     const samplingSelect = document.getElementById('psf-sampling-select'); // PSF UIのサンプリングサイズ
+    const zeroPadSelect = document.getElementById('psf-zeropad-select'); // PSF UIのゼロパディング設定
     const zernikeSamplingSelect = document.getElementById('psf-zernike-sampling-select'); // Zernikeフィット用サンプリングサイズ
     
     // デバッグモードの場合は設定を上書き
-    let wavelength, psfSamplingSize, zernikeFitSamplingSize;
+    let wavelength, psfSamplingSize, zernikeFitSamplingSize, zeroPadTo;
     if (debugMode) {
         wavelength = '0.5876'; // d線固定
         psfSamplingSize = 16; // 16×16グリッド固定（高速）
         zernikeFitSamplingSize = 16;
+        // Debug mode should stay fast by default.
+        zeroPadTo = psfSamplingSize;
         console.log('🔧 [DEBUG] デバッグモード: wavelength=0.5876μm, gridSize=16×16に固定');
     } else {
         // 光源データから波長を取得
@@ -3510,6 +3513,16 @@ async function handlePSFCalculation(debugMode = false) {
         psfSamplingSize = samplingSelect ? parseInt(samplingSelect.value) : 64;
         // Zernikeフィット用のサンプリング（未設定ならPSFと同じ）
         zernikeFitSamplingSize = zernikeSamplingSelect ? parseInt(zernikeSamplingSelect.value) : psfSamplingSize;
+
+        const zpRaw = zeroPadSelect ? String(zeroPadSelect.value || 'auto') : 'auto';
+        if (zpRaw === 'none') {
+            zeroPadTo = psfSamplingSize;
+        } else if (zpRaw === 'auto') {
+            zeroPadTo = 0;
+        } else {
+            const zpN = parseInt(zpRaw);
+            zeroPadTo = Number.isFinite(zpN) ? zpN : 0;
+        }
         console.log(`📊 [NORMAL] 通常モード: wavelength=${wavelength}μm (source), psfSampling=${psfSamplingSize}×${psfSamplingSize}, fitGrid=${zernikeFitSamplingSize}×${zernikeFitSamplingSize}`);
     }
     
@@ -3680,22 +3693,81 @@ async function handlePSFCalculation(debugMode = false) {
                 throw err;
             }
 
-            // 生の光線データを取得
-            const rawRays = wavefrontMap?.rayData || [];
-            if (!Array.isArray(rawRays) || rawRays.length === 0) {
+            // PSF入力点は、ray path 依存の wavefrontMap.rayData ではなく、
+            // 収差サンプリングの本体である pupilCoordinates/opds を優先する。
+            // （rayData は ray.path が取れない点が落ちて疎になることがあり、補間が不安定化しやすい）
+            const pupilCoords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
+            const opdsMicrons = Array.isArray(wavefrontMap?.opds) ? wavefrontMap.opds : [];
+            const validPupilMask = Array.isArray(wavefrontMap?.validPupilMask) ? wavefrontMap.validPupilMask : null;
+            const maskG = validPupilMask ? validPupilMask.length : 0;
+
+            const buildRayDataFromWavefront = () => {
+                const n = Math.min(pupilCoords.length, opdsMicrons.length);
+                const rays = [];
+                for (let k = 0; k < n; k++) {
+                    const c = pupilCoords[k];
+                    const pupilX = Number(c?.x);
+                    const pupilY = Number(c?.y);
+                    const opd = Number(opdsMicrons[k]);
+                    if (!Number.isFinite(pupilX) || !Number.isFinite(pupilY) || !Number.isFinite(opd)) continue;
+
+                    // Extra safety: if a validity mask exists and indices are present, respect it.
+                    if (validPupilMask && Number.isInteger(c?.ix) && Number.isInteger(c?.iy)) {
+                        const ix = c.ix;
+                        const iy = c.iy;
+                        if (ix >= 0 && iy >= 0 && ix < maskG && iy < maskG && !validPupilMask[iy][ix]) continue;
+                    }
+
+                    rays.push({
+                        pupilX,
+                        pupilY,
+                        opd,
+                        isVignetted: false
+                    });
+                }
+                return rays;
+            };
+
+            let rayData = buildRayDataFromWavefront();
+            let rayDataSource = 'pupilCoordinates/opds';
+            if (!Array.isArray(rayData) || rayData.length === 0) {
+                // Fallback: use recorded rayData when legacy maps are missing coordinate arrays.
+                const rawRays = wavefrontMap?.rayData || [];
+                rayData = Array.isArray(rawRays)
+                    ? rawRays.map(ray => ({
+                        pupilX: ray?.pupilX ?? ray?.x ?? 0,
+                        pupilY: ray?.pupilY ?? ray?.y ?? 0,
+                        opd: ray?.opd ?? 0,
+                        isVignetted: !!ray?.isVignetted
+                    }))
+                    : [];
+                rayDataSource = 'rayData(fallback)';
+            }
+
+            if (!Array.isArray(rayData) || rayData.length === 0) {
                 throw new Error('光線データが取得できませんでした');
             }
 
-            // PSF計算器用のデータ形式に変換
-            // Use raw pupil coordinates as-is (already normalized by generateWavefrontMap)
+            if (PSF_DEBUG) {
+                const validMaskCount = (() => {
+                    if (!validPupilMask || !Array.isArray(validPupilMask)) return null;
+                    let cnt = 0;
+                    for (const row of validPupilMask) for (const v of (row || [])) if (v) cnt++;
+                    return cnt;
+                })();
+                console.log('📊 [PSF] PSF input sampling:', {
+                    source: rayDataSource,
+                    rayDataCount: rayData.length,
+                    pupilCoordsCount: pupilCoords.length,
+                    opdsCount: opdsMicrons.length,
+                    validPupilMaskGrid: validPupilMask ? `${maskG}x${maskG}` : null,
+                    validPupilMaskCount: validMaskCount
+                });
+            }
+
             const opdData = {
                 wavelength: wl,
-                rayData: rawRays.map(ray => ({
-                    pupilX: ray.pupilX || ray.x || 0,
-                    pupilY: ray.pupilY || ray.y || 0,
-                    opd: ray.opd || 0,
-                    isVignetted: ray.isVignetted || false
-                }))
+                rayData
             };
 
             // Prefer Zernike-fit piston+tilt removal for PSF input.
@@ -3753,10 +3825,17 @@ async function handlePSFCalculation(debugMode = false) {
             
             // PSFを計算
             if (PSF_DEBUG) console.log(`🔬 [PSF] PSF計算中... (${psfSamplingSize}x${psfSamplingSize}, mode: ${performanceMode})`);
+            // Use paraxial-derived pupil diameter & focal length for correct PSF pixel scaling.
+            const preferEntrancePupilForPSF = /\bangle\b/.test(objectTypeLower);
+            const derivedPSFScale = derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wl, preferEntrancePupilForPSF);
+            const pupilDiameterMm = Number(derivedPSFScale?.pupilDiameterMm);
+            const focalLengthMm = Number(derivedPSFScale?.focalLengthMm);
+
             const result = await raceWithCancel(psfCalculator.calculatePSF(opdData, {
                 samplingSize: psfSamplingSize,
-                pupilDiameter: 10.0, // mm（適切な値に調整）
-                focalLength: 100.0,   // mm（適切な値に調整）
+                pupilDiameter: (Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0) ? pupilDiameterMm : 10.0,
+                focalLength: (Number.isFinite(focalLengthMm) && focalLengthMm > 0) ? focalLengthMm : 100.0,
+                zeroPadTo: (typeof zeroPadTo !== 'undefined') ? zeroPadTo : 0,
                 forceImplementation: performanceMode === 'auto' ? null : performanceMode,
                 // If piston+tilt were already removed via Zernike fit, avoid removing again in PSF.
                 removeTilt: !removePistonTiltByZernikeFit
@@ -5098,6 +5177,19 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
         
         const psfSamplingSize = Number.isFinite(Number(samplingSize)) ? Math.max(16, Math.floor(Number(samplingSize))) : 64;
 
+        // Zero-padding selection (shared with main PSF UI)
+        const zeroPadSelect = document.getElementById('psf-zeropad-select');
+        const zpRaw = zeroPadSelect ? String(zeroPadSelect.value || 'auto') : 'auto';
+        let zeroPadTo;
+        if (zpRaw === 'none') {
+            zeroPadTo = psfSamplingSize;
+        } else if (zpRaw === 'auto') {
+            zeroPadTo = 0;
+        } else {
+            const zpN = parseInt(zpRaw);
+            zeroPadTo = Number.isFinite(zpN) ? zpN : 0;
+        }
+
         emitProgress(0, 'wavefront', 'Wavefront start');
         const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, psfSamplingSize, 'circular', {
             recordRays: false,
@@ -5232,6 +5324,7 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
             samplingSize: psfSamplingSize,
             pupilDiameter: pupilDiameterMm,
             focalLength: focalLengthMm,
+            zeroPadTo: (typeof zeroPadTo !== 'undefined') ? zeroPadTo : 0,
             forceImplementation: performanceMode === 'auto' ? null : performanceMode,
             // Zernike render already removes piston+tilt (Noll 1..3) in eva-wavefront.js.
             // Avoid double-detrending here.
