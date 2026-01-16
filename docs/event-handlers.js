@@ -5404,7 +5404,7 @@ export function setupOpticalSystemChangeListeners(scene) {
 
         const sanitizeMfrList = (list) => {
             if (!Array.isArray(list)) return [];
-            const allow = new Set(['SCHOTT', 'HOYA', 'OHARA', 'SUMITA', 'CDGM', 'SPECIAL']);
+            const allow = new Set(['SCHOTT', 'HOYA', 'HIKARI', 'OHARA', 'SUMITA', 'CDGM', 'SPECIAL']);
             const out = [];
             for (const v of list) {
                 const s = String(v ?? '').trim();
