@@ -5366,6 +5366,7 @@ export function setupOpticalSystemChangeListeners(scene) {
         <div class="checkbox-group" style="display:flex;flex-direction:column;gap:8px;margin:8px 0 14px 0;">
             <label><input type="checkbox" class="glassmap-mfr-cb" value="SCHOTT" /> SCHOTT</label>
             <label><input type="checkbox" class="glassmap-mfr-cb" value="HOYA" /> HOYA</label>
+            <label><input type="checkbox" class="glassmap-mfr-cb" value="HIKARI" /> HIKARI</label>
             <label><input type="checkbox" class="glassmap-mfr-cb" value="OHARA" /> OHARA</label>
             <label><input type="checkbox" class="glassmap-mfr-cb" value="Sumita" /> Sumita</label>
             <label><input type="checkbox" class="glassmap-mfr-cb" value="CDGM" /> CDGM</label>
