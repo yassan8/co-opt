@@ -8,6 +8,8 @@
 // Normalization:
 // - priceIndexNormalization[manufacturer].scaleToNBK7 scales that vendor's index so its BK7-equivalent is 1.0.
 // - For vendors without a price column, scaleToNBK7 is null.
+import { hikariGlassDB } from './hikari_catalog.js';
+
 const priceIndexByManufacturer = {
   "CDGM": {
     "BaF4": 24.0,
@@ -685,6 +687,9 @@ const priceIndexByManufacturer = {
     "SF6G05": 2.9,
     "SF6HT": 2.6
   },
+  "HIKARI": {
+    "J-BK7A": 1.0
+  },
   "Special": {},
   "Sumita": {}
 };
@@ -708,6 +713,11 @@ const priceIndexNormalization = {
   "SCHOTT": {
     "rawReferencePrice": 1.0,
     "referenceGlass": "N-BK7",
+    "scaleToNBK7": 1.0
+  },
+  "HIKARI": {
+    "rawReferencePrice": 1.0,
+    "referenceGlass": "J-BK7A",
     "scaleToNBK7": 1.0
   },
   "Special": {
@@ -12991,7 +13001,7 @@ export const cdgmGlassDB = [
 
 
 export function getAllGlassDatabases() {
-  return [miscellaneousDB, oharaGlassDB, schottGlassDB, hoyaGlassDB, sumitaGlassDB, cdgmGlassDB];
+  return [miscellaneousDB, oharaGlassDB, schottGlassDB, hoyaGlassDB, hikariGlassDB, sumitaGlassDB, cdgmGlassDB];
 }
 
 function __applyPriceIndexToGlassDb() {

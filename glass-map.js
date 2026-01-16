@@ -137,10 +137,51 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
         const priced = [];
         const missing = [];
         for (const p of points) {
-          if (Number.isFinite(p.price)) priced.push(p);
+          // For log-scaled coloring, require strictly positive price values.
+          if (Number.isFinite(p.price) && p.price > 0) priced.push(p);
           else missing.push(p);
         }
         return { priced, missing };
+      }
+
+      function log10Safe(x) {
+        if (!Number.isFinite(x) || x <= 0) return NaN;
+        // Math.log10 is widely supported, but keep a fallback.
+        return (typeof Math.log10 === 'function') ? Math.log10(x) : (Math.log(x) / Math.LN10);
+      }
+
+      function buildLogTickValues(minPrice, maxPrice) {
+        // Nice tick candidates for typical relative-price indices.
+        const candidates = [
+          1, 2, 3, 5,
+          8, 10,
+          13, 20,
+          34, 50,
+          80, 100,
+          130, 200,
+          340, 500,
+          800, 1000
+        ];
+
+        /** @type {number[]} */
+        const ticks = candidates.filter(v => v >= minPrice && v <= maxPrice);
+        if (!ticks.includes(minPrice)) ticks.unshift(minPrice);
+        if (!ticks.includes(maxPrice)) ticks.push(maxPrice);
+
+        // Deduplicate (e.g., when min/max coincide with candidates).
+        const unique = Array.from(new Set(ticks)).sort((a, b) => a - b);
+
+        // Avoid overlapping tick labels near the upper end (e.g., 34 vs 36.7).
+        // If two adjacent ticks are too close in log space, drop the lower one.
+        while (unique.length >= 2) {
+          const last = unique[unique.length - 1];
+          const prev = unique[unique.length - 2];
+          const d = log10Safe(last) - log10Safe(prev);
+          if (!Number.isFinite(d) || d >= 0.06) break; // ~15% ratio
+          unique.splice(unique.length - 2, 1);
+        }
+
+        return unique;
       }
 
       function makeHover(p) {
@@ -197,15 +238,23 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
         const missingY = missing.map(p => p.nd);
         const missingText = missing.map(makeHover);
 
-        const pricedMin = pricedC.length ? Math.min.apply(null, pricedC) : 0;
+        const pricedMin = pricedC.length ? Math.min.apply(null, pricedC) : 1;
         const pricedMax = pricedC.length ? Math.max.apply(null, pricedC) : 1;
 
-        // Match PSF Intensity colorscale (low->high: blue->green->red).
+        // Log-scaled coloring emphasizes relative (ratio) differences.
+        const pricedMinLog = log10Safe(pricedMin);
+        const pricedMaxLog = log10Safe(pricedMax);
+
+        // Match original co-opt price colorscale (low->high: blue->green->red).
         const PRICE_COLORSCALE = [
           [0.0, 'rgb(0, 0, 255)'],
           [0.5, 'rgb(0, 255, 0)'],
           [1.0, 'rgb(255, 0, 0)']
         ];
+
+        const tickPrices = buildLogTickValues(pricedMin, pricedMax);
+        const tickVals = tickPrices.map(v => log10Safe(v)).filter(v => Number.isFinite(v));
+        const tickText = tickPrices.map(v => String(v));
 
         const traces = [];
 
@@ -222,12 +271,17 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
           marker: {
             size: 1,
             opacity: 0,
-            color: [pricedMin, pricedMax],
-            cmin: pricedMin,
-            cmax: pricedMax,
+            color: [pricedMinLog, pricedMaxLog],
+            cmin: pricedMinLog,
+            cmax: pricedMaxLog,
             colorscale: PRICE_COLORSCALE,
             showscale: true,
-            colorbar: { title: 'price' },
+            colorbar: {
+              title: 'price (log)',
+              tickmode: 'array',
+              tickvals: tickVals,
+              ticktext: tickText,
+            },
             line: { width: 0 }
           }
         });
@@ -241,8 +295,8 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
 
         for (const mfr of manufacturers) {
           const arr = byMfr.get(mfr) || [];
-          const pricedLocal = arr.filter(p => Number.isFinite(p.price));
-          const missingLocal = arr.filter(p => !Number.isFinite(p.price));
+          const pricedLocal = arr.filter(p => Number.isFinite(p.price) && p.price > 0);
+          const missingLocal = arr.filter(p => !(Number.isFinite(p.price) && p.price > 0));
 
           const mfrUpper = String(mfr).toUpperCase();
           const isSelected = !hasDefaultSelection || defaultSelectedUpper.has(mfrUpper);
@@ -278,11 +332,11 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
               text: pricedLocal.map(makeHover),
               hoverinfo: 'text',
               marker: {
-                size: 7,
+                size: 10,
                 opacity: 0.9,
-                color: pricedLocal.map(p => p.price),
-                cmin: pricedMin,
-                cmax: pricedMax,
+                color: pricedLocal.map(p => log10Safe(p.price)),
+                cmin: pricedMinLog,
+                cmax: pricedMaxLog,
                 colorscale: PRICE_COLORSCALE,
                 showscale: false,
                 line: { width: 0 }
@@ -304,7 +358,7 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
               text: missingLocal.map(makeHover),
               hoverinfo: 'text',
               marker: {
-                size: 7,
+                size: 10,
                 opacity: 0.75,
                 color: 'rgba(160,160,160,0.9)',
                 line: { width: 0 }
