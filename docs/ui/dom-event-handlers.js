@@ -599,16 +599,11 @@ function __blocks_setBlockGlassRegionConstraint(blockId, region) {
         activeCfg.metadata.modified = new Date().toISOString();
     } catch (_) {}
 
-    // Validate whole config; if fatal, rollback.
     try {
         const issues = validateBlocksConfiguration(activeCfg);
         const fatals = issues.filter(i => i && i.severity === 'fatal');
-        if (fatals.length > 0) {
-            return { ok: false, reason: 'block validation failed.' };
-        }
-    } catch (_) {
-        // ignore
-    }
+        if (fatals.length > 0) return { ok: false, reason: 'block validation failed.' };
+    } catch (_) {}
 
     try {
         if (typeof saveSystemConfigurations === 'function') {
@@ -908,6 +903,24 @@ function setupSaveButton() {
             // Configurationsデータを取得
             const systemConfigurations = localStorage.getItem('systemConfigurations');
             const parsedConfig = systemConfigurations ? JSON.parse(systemConfigurations) : null;
+
+            // Normalize configurations payload for export:
+            // - Source is global (top-level), so omit per-config source.
+            // - Merit/systemRequirements are exported at top-level, so omit duplicates inside the wrapper.
+            const sanitizedConfig = parsedConfig ? JSON.parse(JSON.stringify(parsedConfig)) : null;
+            if (sanitizedConfig) {
+                try { delete sanitizedConfig.meritFunction; } catch (_) {}
+                try { delete sanitizedConfig.systemRequirements; } catch (_) {}
+                try {
+                    if (Array.isArray(sanitizedConfig.configurations)) {
+                        for (const cfg of sanitizedConfig.configurations) {
+                            if (cfg && typeof cfg === 'object') {
+                                try { delete cfg.source; } catch (_) {}
+                            }
+                        }
+                    }
+                } catch (_) {}
+            }
             
             // Reference Focal Length を取得
             const refFLInput = document.getElementById('reference-focal-length');
@@ -923,7 +936,7 @@ function setupSaveButton() {
                     referenceFocalLength: referenceFocalLength
                 },
                 // Configurationsデータ（meritFunctionはグローバル）
-                configurations: parsedConfig
+                configurations: sanitizedConfig
             };
 
             // 現在Loadされているファイル名を取得
@@ -1064,7 +1077,10 @@ function setupImportZemaxButton() {
         }
 
         // Only overwrite source/object if present in the .zmx.
-        if (Array.isArray(sourceRows) && sourceRows.length > 0) activeCfg.source = sourceRows;
+        // Source is global (shared across configurations), so persist to the shared key.
+        if (Array.isArray(sourceRows) && sourceRows.length > 0) {
+            try { localStorage.setItem('sourceTableData', JSON.stringify(sourceRows)); } catch (_) {}
+        }
         if (Array.isArray(objectRows) && objectRows.length > 0) activeCfg.object = objectRows;
 
         // Detect whether imported data contains any semidia info.
@@ -2594,7 +2610,10 @@ function setupClearStorageButton() {
                             const activeCfg = cfgList.find(c => c.id === activeId) || cfgList[0] || null;
                             // Prefer per-config tables for the active config. Some JSONs may also include
                             // top-level `source/object/opticalSystem`, which can belong to a different config.
-                            const effectiveSource = (activeCfg && Array.isArray(activeCfg.source)) ? activeCfg.source : (allData.source ?? []);
+                            // Source is global: prefer top-level; fall back to legacy per-config source only if needed.
+                            const effectiveSource = Array.isArray(allData.source)
+                                ? allData.source
+                                : ((activeCfg && Array.isArray(activeCfg.source)) ? activeCfg.source : []);
                             const effectiveObject = (activeCfg && Array.isArray(activeCfg.object)) ? activeCfg.object : (allData.object ?? []);
                             const effectiveOpticalSystem = (activeCfg && configurationHasBlocks(activeCfg) && Array.isArray(activeCfg.opticalSystem))
                                 ? activeCfg.opticalSystem
@@ -3576,6 +3595,10 @@ async function handlePSFCalculation(debugMode = false) {
         // Zernikeフィット用のサンプリング（未設定ならPSFと同じ）
         zernikeFitSamplingSize = zernikeSamplingSelect ? parseInt(zernikeSamplingSelect.value) : psfSamplingSize;
 
+        // Zero padding control:
+        // - auto: follow PSFCalculator default (>=512)
+        // - none: disable padding (set to samplingSize)
+        // - number: explicit FFT size (if > samplingSize and supported)
         const zpRaw = zeroPadSelect ? String(zeroPadSelect.value || 'auto') : 'auto';
         if (zpRaw === 'none') {
             zeroPadTo = psfSamplingSize;
@@ -4387,6 +4410,7 @@ function setupTableChangeListeners() {
             tab.on('dataChanged', refreshSurfaceNumberSelect);
             tab.on('rowAdded', refreshSurfaceNumberSelect);
             tab.on('rowDeleted', refreshSurfaceNumberSelect);
+            // Some edits (e.g., quick insert/delete flows) may not always emit dataChanged immediately.
             tab.on('cellEdited', refreshSurfaceNumberSelect);
             state[key] = true;
             return true;
@@ -5325,19 +5349,6 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
         
         const psfSamplingSize = Number.isFinite(Number(samplingSize)) ? Math.max(16, Math.floor(Number(samplingSize))) : 64;
 
-        // Zero-padding selection (shared with main PSF UI)
-        const zeroPadSelect = document.getElementById('psf-zeropad-select');
-        const zpRaw = zeroPadSelect ? String(zeroPadSelect.value || 'auto') : 'auto';
-        let zeroPadTo;
-        if (zpRaw === 'none') {
-            zeroPadTo = psfSamplingSize;
-        } else if (zpRaw === 'auto') {
-            zeroPadTo = 0;
-        } else {
-            const zpN = parseInt(zpRaw);
-            zeroPadTo = Number.isFinite(zpN) ? zpN : 0;
-        }
-
         emitProgress(0, 'wavefront', 'Wavefront start');
         const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, psfSamplingSize, 'circular', {
             recordRays: false,
@@ -5468,11 +5479,20 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
         const focalLengthMm = derivedPSFScale.focalLengthMm;
 
         if (PSF_DEBUG) console.log(`🔬 [PSF] PSF計算中... (${psfSamplingSize}x${psfSamplingSize}) D=${pupilDiameterMm}mm f=${focalLengthMm}mm`);
+        // Zero padding selection (shared with main PSF UI).
+        const zeroPadSelect = document.getElementById('psf-zeropad-select');
+        const zpRaw = zeroPadSelect ? String(zeroPadSelect.value || 'auto') : 'auto';
+        const zeroPadTo = (zpRaw === 'none')
+            ? psfSamplingSize
+            : (zpRaw === 'auto')
+                ? 0
+                : (Number.isFinite(parseInt(zpRaw)) ? parseInt(zpRaw) : 0);
+
         const psfResult = await raceWithCancel(psfCalculator.calculatePSF(opdData, {
             samplingSize: psfSamplingSize,
             pupilDiameter: pupilDiameterMm,
             focalLength: focalLengthMm,
-            zeroPadTo: (typeof zeroPadTo !== 'undefined') ? zeroPadTo : 0,
+            zeroPadTo,
             forceImplementation: performanceMode === 'auto' ? null : performanceMode,
             // Zernike render already removes piston+tilt (Noll 1..3) in eva-wavefront.js.
             // Avoid double-detrending here.
@@ -6810,7 +6830,11 @@ export function saveCurrentToActiveConfiguration() {
   }
   
   // 各テーブルからデータを取得
-  activeConfig.source = window.tableSource ? window.tableSource.getData() : [];
+    // Source is global (shared across configurations). Persist it separately.
+    try {
+        const globalSource = window.tableSource ? window.tableSource.getData() : [];
+        localStorage.setItem('sourceTableData', JSON.stringify(globalSource));
+    } catch (_) {}
   activeConfig.object = window.tableObject ? window.tableObject.getData() : [];
   activeConfig.opticalSystem = window.tableOpticalSystem ? window.tableOpticalSystem.getData() : [];
   activeConfig.meritFunction = window.meritFunctionEditor ? window.meritFunctionEditor.getData() : [];
@@ -6843,9 +6867,15 @@ export function loadActiveConfigurationToTables() {
   }
   
   // 各テーブルのlocalStorageに書き込み
-  if (activeConfig.source) {
-    localStorage.setItem('sourceTableData', JSON.stringify(activeConfig.source));
-  }
+    // Source is global. Do not override it on configuration switches.
+    // Back-compat: if global source is missing but config has legacy source, seed it once.
+    try {
+        const hasGlobal = !!localStorage.getItem('sourceTableData');
+        const legacy = Array.isArray(activeConfig.source) ? activeConfig.source : null;
+        if (!hasGlobal && legacy && legacy.length > 0) {
+            localStorage.setItem('sourceTableData', JSON.stringify(legacy));
+        }
+    } catch (_) {}
   if (activeConfig.object) {
     localStorage.setItem('objectTableData', JSON.stringify(activeConfig.object));
   }
@@ -6872,7 +6902,6 @@ export function addConfiguration(name) {
   // 現在のアクティブなConfigurationのデータをコピー
   const activeConfig = getActiveConfiguration();
   if (activeConfig) {
-    newConfig.source = JSON.parse(JSON.stringify(activeConfig.source));
     newConfig.object = JSON.parse(JSON.stringify(activeConfig.object));
     newConfig.opticalSystem = JSON.parse(JSON.stringify(activeConfig.opticalSystem));
     newConfig.meritFunction = JSON.parse(JSON.stringify(activeConfig.meritFunction));
@@ -9055,7 +9084,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
                         try {
                             openGlassMapWindow((region) => {
-                                // region: { ndMin, ndMax, vdMin, vdMax }
                                 const res = __blocks_setBlockGlassRegionConstraint(String(blockId), {
                                     minNd: region?.ndMin,
                                     maxNd: region?.ndMax,

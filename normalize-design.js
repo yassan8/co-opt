@@ -259,6 +259,16 @@ export function normalizeDesign(raw) {
     return { normalized: null, issues };
   }
 
+  // Compatibility: promote per-configuration source -> top-level source.
+  // The app treats Source as a shared (global) table across configurations.
+  if (!Array.isArray(raw.source) && isPlainObject(raw.configurations) && Array.isArray(raw.configurations.configurations)) {
+    const firstConfigWithSource = raw.configurations.configurations.find(c => isPlainObject(c) && Array.isArray(c.source));
+    if (firstConfigWithSource && Array.isArray(firstConfigWithSource.source)) {
+      raw.source = firstConfigWithSource.source;
+      issues.push({ severity: 'warning', phase: 'normalize', message: 'Configuration-level source detected; promoted to top-level source.' });
+    }
+  }
+
   // Case 1: already canonical save wrapper: { configurations: <systemConfigurations> }
   if (isPlainObject(raw.configurations) && Array.isArray(raw.configurations.configurations)) {
     // Compatibility: allow top-level systemRequirements field and merge into configurations.

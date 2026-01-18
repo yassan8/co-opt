@@ -612,9 +612,8 @@ export class PSFCalculator {
             // NOTE: this effectively hides tilt-driven PSF shift, so when removeTilt=false
             // the default is to NOT recenter unless explicitly requested.
             recenterIfWrapped = undefined,
-            // Zero-padding target size (e.g., 256, 512) to increase PSF resolution.
-            // NOTE: For parity with the local build, 0/undefined enables auto padding to a
-            // recommended minimum (currently 512) rather than disabling.
+            // Zero-padding target size (e.g., 256, 512) to increase PSF resolution
+            // Set to samplingSize or 0 to disable zero-padding
             zeroPadTo = 0
         } = options;
 
@@ -633,8 +632,10 @@ export class PSFCalculator {
             }
         };
 
+        // Force recentering for consistent PSF position across different sampling sizes
+        // This ensures that PSF peak is always at the center, regardless of optical aberrations
         const shouldRecenterIfWrapped = (recenterIfWrapped === undefined)
-            ? (removeTilt ? true : false)
+            ? true  // Always recenter by default for position stability
             : !!recenterIfWrapped;
 
         // console.log('🔬 [PSF] JavaScript PSF計算開始');
@@ -681,23 +682,28 @@ export class PSFCalculator {
         let complexAmplitude = this.calculateComplexAmplitude(gridData, effectiveWavelength, { removeTilt });
         breakdown.complexAmplitudeTime = performance.now() - complexStartTime;
         emitProgress(35, 'psf-amplitude', 'Complex amplitude ready');
-
+        
         // 2.5. Zero-padding for higher PSF resolution (optional)
-        // Keep behavior aligned with the local build.
+        // Auto zero-pad to minimum 512x512 for better resolution, unless disabled
         const minRecommendedSize = 512;
+        // If zeroPadTo is 0 or undefined, enable auto zero-padding
         const autoZeroPad = (!zeroPadTo || zeroPadTo === 0);
         let targetSize = autoZeroPad
             ? Math.max(samplingSize, minRecommendedSize)
             : ((zeroPadTo > samplingSize && this.supportedSamplings.includes(zeroPadTo)) ? zeroPadTo : samplingSize);
-
+        
         if (targetSize > samplingSize) {
+            console.log(`🔍 [PSF] Zero-padding from ${samplingSize}×${samplingSize} to ${targetSize}×${targetSize} (${autoZeroPad ? 'auto' : 'manual'})`);
             emitProgress(40, 'psf-zeropad', `Zero-padding to ${targetSize}×${targetSize}...`);
             const padStartTime = performance.now();
             complexAmplitude = this.zeroPadComplexAmplitude(complexAmplitude, samplingSize, targetSize);
             breakdown.zeroPadTime = performance.now() - padStartTime;
             emitProgress(45, 'psf-zeropad', 'Zero-padding done');
+            console.log(`✅ [PSF] Zero-padding completed, new size: ${complexAmplitude.real.length}×${complexAmplitude.real[0].length}`);
         } else {
+            // No zero-padding applied
             targetSize = samplingSize;
+            console.log(`ℹ️ [PSF] No zero-padding (samplingSize=${samplingSize}, targetSize=${targetSize})`);
         }
 
         // Strehl比: ピーク正規化前のピーク強度を、同一スケーリングの回折限界ピークと比較
@@ -715,11 +721,14 @@ export class PSFCalculator {
             });
             const aberratedPeak = aberrated?.maxIntensity ?? 0;
 
+            // Use targetSize (after zero-padding) for ideal PSF calculation
             const idealSize = targetSize > samplingSize ? targetSize : samplingSize;
             const idealReal = Array(idealSize).fill().map(() => Array(idealSize).fill(0));
             const idealImag = Array(idealSize).fill().map(() => Array(idealSize).fill(0));
-
-            const offset = (targetSize > samplingSize) ? Math.floor((targetSize - samplingSize) / 2) : 0;
+            
+            // Calculate offset if zero-padded
+            const offset = targetSize > samplingSize ? Math.floor((targetSize - samplingSize) / 2) : 0;
+            
             for (let i = 0; i < samplingSize; i++) {
                 for (let j = 0; j < samplingSize; j++) {
                     if (gridData.pupilMask[i][j]) {
@@ -750,6 +759,7 @@ export class PSFCalculator {
         // 3. フーリエ変換でPSFを計算（計測）
         const fftStartTime = performance.now();
         emitProgress(60, 'psf-fft', 'FFT...');
+        console.log(`🔬 [PSF] Performing FFT on ${complexAmplitude.real.length}×${complexAmplitude.real[0].length} grid`);
         let psfData = await this.performFFTAsync(complexAmplitude, {
             onProgress: (evt) => {
                 const p = Number(evt?.percent);
@@ -768,6 +778,9 @@ export class PSFCalculator {
         // 4. PSF評価指標を計算（計測）
         emitProgress(92, 'psf-metrics', 'Computing metrics...');
         const metricsStartTime = performance.now();
+        // Pixel size scaling:
+        // - Base pitch is set by λ * f / D.
+        // - If we zero-pad (FFT size > pupil grid size), the pitch shrinks by (pupilGridSize / fftSize).
         const usedPixelSize = pixelSize || this.calculatePixelSize(
             effectiveWavelength,
             focalLength,
@@ -775,6 +788,7 @@ export class PSFCalculator {
             samplingSize,
             targetSize
         );
+        console.log(`📏 [PSF] Pixel size: ${(usedPixelSize * 1000).toFixed(3)} nm (grid ${samplingSize}→FFT ${targetSize})`);
         const metrics = this.calculatePSFMetrics(psfData, {
             wavelength: effectiveWavelength,
             pupilDiameter,
@@ -799,7 +813,7 @@ export class PSFCalculator {
                 totalTime,
                 method: 'javascript',
                 samplingSize,
-                fftSize: targetSize,
+                fftSize: targetSize,  // Actual FFT size (after zero-padding)
                 wavelength: effectiveWavelength,
                 pixelSize: usedPixelSize
             }
@@ -1483,13 +1497,13 @@ export class PSFCalculator {
         if (dstSize === srcSize) {
             return complexAmplitude;
         }
-
+        
         const offset = Math.floor((dstSize - srcSize) / 2);
-
+        
         // Create zero-filled arrays
         const paddedReal = Array(dstSize).fill().map(() => Array(dstSize).fill(0));
         const paddedImag = Array(dstSize).fill().map(() => Array(dstSize).fill(0));
-
+        
         // Copy original data to center
         for (let i = 0; i < srcSize; i++) {
             for (let j = 0; j < srcSize; j++) {
@@ -1497,7 +1511,7 @@ export class PSFCalculator {
                 paddedImag[i + offset][j + offset] = complexAmplitude.imag[i][j];
             }
         }
-
+        
         return { real: paddedReal, imag: paddedImag };
     }
 
@@ -1510,6 +1524,8 @@ export class PSFCalculator {
         const size = data.length;
         const shifted = Array(size).fill().map(() => Array(size).fill(0));
         const half = Math.floor(size / 2);
+        
+        console.log(`🔄 [FFTShift] size=${size}, half=${half}`);
         
         // 正しいFFTシフト実装
         for (let i = 0; i < size; i++) {
@@ -1730,6 +1746,8 @@ export class PSFCalculator {
         const safeFl = (Number.isFinite(fl) && Math.abs(fl) > 0) ? Math.abs(fl) : 100.0;
         const safeWl = (Number.isFinite(wl) && wl > 0) ? wl : 0.5876;
 
+        // Δx (μm/px) ≈ λ(μm) * f(mm) / D(mm)
+        // If FFT is larger than the pupil grid (zero-padding), Δx shrinks by (Npupil / Nfft).
         const basePitch = (safeWl * safeFl) / safePd;
 
         const nPupil = Number(pupilGridSize);

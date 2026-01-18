@@ -44,9 +44,8 @@ export async function getSystemContext() {
     const objectRows = (activeCfg && Array.isArray(activeCfg.object) && activeCfg.object.length)
         ? activeCfg.object
         : getObjectRows();
-    const sourceRows = (activeCfg && Array.isArray(activeCfg.source) && activeCfg.source.length)
-        ? activeCfg.source
-        : getSourceRows();
+    // Source is global (shared across configurations).
+    const sourceRows = getSourceRows();
 
     const toNumberOrNull = (v) => {
         if (v === '' || v === null || v === undefined) return null;

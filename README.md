@@ -16,6 +16,17 @@ One of the core philosophies of `co-opt` is its **"Hackability."** All optical s
 2. **Note:** If you don't see any data on startup, click the **"Clear Cache"** button to load the default sample lens data.
 3. Use the table interface to add, delete, and modify lens parameters (radius, thickness, material, etc.) and visualize the resulting light paths.
 
+## 📦 GitHub Pages (docs/)
+This repo publishes the web app via GitHub Pages using the `docs/` folder.
+
+- `docs/` is treated as a generated build artifact.
+- To regenerate it from the repo root:
+	- `node tools/build-pages-docs.mjs`
+- Quick sanity check that a few key files match:
+	- `node quick-cross-test.js`
+
+Note: the build script deletes and recreates `docs/`. If you use a custom domain, keep `docs/CNAME` safe (re-add it after build, or adjust the script to preserve it).
+
 ## ✨ Features
 - **Dynamic Lens Management:** Add and delete lens blocks as needed.
 - **Parameter Control:** Modify curvature, thickness, and glass materials via a table interface.

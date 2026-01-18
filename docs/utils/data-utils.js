@@ -142,6 +142,8 @@ function __du_preserveLegacySemidiaIntoExpandedRows(expandedRows, legacyRows, bl
     }
   } catch (_) {}
 
+  // Prefer provenance-based mapping when available, otherwise do a stable two-pointer
+  // walk that skips non-physical rows (Object/Image/Stop/CoordBreak).
   const legacyByKey = new Map();
   try {
     for (const l of legacyRows) {

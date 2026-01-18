@@ -802,6 +802,13 @@ class SystemRequirementsEditor {
     } catch (_) {}
 
     try {
+      let globalSourceRows = [];
+      try {
+        const json = localStorage.getItem('sourceTableData');
+        const parsed = json ? JSON.parse(json) : null;
+        globalSourceRows = Array.isArray(parsed) ? parsed : [];
+      } catch (_) {}
+
       for (let i = 0; i < configs.length; i++) {
         const cfg = configs[i];
         const cfgId = (cfg && cfg.id !== undefined && cfg.id !== null) ? String(cfg.id) : '';
@@ -821,8 +828,11 @@ class SystemRequirementsEditor {
           } catch (_) {}
         }
 
-        const sourceRows = Array.isArray(cfg?.source) ? cfg.source : [];
-        this._upsertSpotDiagramSettingsForConfig(cfgId, Array.isArray(opticalRows) ? opticalRows : (Array.isArray(cfg?.opticalSystem) ? cfg.opticalSystem : []), sourceRows);
+        this._upsertSpotDiagramSettingsForConfig(
+          cfgId,
+          Array.isArray(opticalRows) ? opticalRows : (Array.isArray(cfg?.opticalSystem) ? cfg.opticalSystem : []),
+          globalSourceRows
+        );
 
         try {
           this._setProgress('Updating config snapshots…', i + 1, Math.max(1, configs.length));

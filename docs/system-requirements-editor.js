@@ -743,6 +743,7 @@ class SystemRequirementsEditor {
       const map = rawMap ? (JSON.parse(rawMap) || {}) : {};
       const existing = map[cfgKey];
       if (existing && typeof existing === 'object') {
+        // Keep user-chosen values if present; only fill missing fields.
         if (existing.surfaceIndex === undefined || existing.surfaceIndex === null) existing.surfaceIndex = imageIdx;
         if (existing.rayCount === undefined || existing.rayCount === null) existing.rayCount = 501;
         if (existing.ringCount === undefined || existing.ringCount === null) existing.ringCount = 3;
@@ -768,6 +769,8 @@ class SystemRequirementsEditor {
   }
 
   async updateAllConfigsAndEvaluate() {
+    // Ensure each configuration has an up-to-date expanded opticalSystem snapshot
+    // and has a per-config Spot Diagram settings entry.
     const editor = window.meritFunctionEditor;
     if (!editor || typeof editor.getOpticalSystemDataByConfigId !== 'function') {
       try { await this.evaluateAndUpdateNow({ reason: 'no-merit-editor' }); } catch (_) {}
@@ -787,6 +790,7 @@ class SystemRequirementsEditor {
     const updateBtn = document.getElementById('update-requirement-btn');
     try { if (updateBtn) updateBtn.disabled = true; } catch (_) {}
 
+    // Show progress during the refresh, then reuse the same bar for evaluation.
     let showTimer = null;
     try {
       showTimer = setTimeout(() => {
@@ -798,6 +802,13 @@ class SystemRequirementsEditor {
     } catch (_) {}
 
     try {
+      let globalSourceRows = [];
+      try {
+        const json = localStorage.getItem('sourceTableData');
+        const parsed = json ? JSON.parse(json) : null;
+        globalSourceRows = Array.isArray(parsed) ? parsed : [];
+      } catch (_) {}
+
       for (let i = 0; i < configs.length; i++) {
         const cfg = configs[i];
         const cfgId = (cfg && cfg.id !== undefined && cfg.id !== null) ? String(cfg.id) : '';
@@ -817,8 +828,11 @@ class SystemRequirementsEditor {
           } catch (_) {}
         }
 
-        const sourceRows = Array.isArray(cfg?.source) ? cfg.source : [];
-        this._upsertSpotDiagramSettingsForConfig(cfgId, Array.isArray(opticalRows) ? opticalRows : (Array.isArray(cfg?.opticalSystem) ? cfg.opticalSystem : []), sourceRows);
+        this._upsertSpotDiagramSettingsForConfig(
+          cfgId,
+          Array.isArray(opticalRows) ? opticalRows : (Array.isArray(cfg?.opticalSystem) ? cfg.opticalSystem : []),
+          globalSourceRows
+        );
 
         try {
           this._setProgress('Updating config snapshots…', i + 1, Math.max(1, configs.length));
@@ -972,6 +986,7 @@ class SystemRequirementsEditor {
     const live = this._getLiveRequirementsData();
     this.requirements = live;
 
+    // Progress bar (only show if evaluation takes noticeable time)
     let showTimer = null;
     let progressVisible = false;
     try {
@@ -1160,6 +1175,7 @@ class SystemRequirementsEditor {
     } catch (_) {}
     this._evalTimer = setTimeout(() => {
       try {
+        // Fire-and-forget; evaluation is async.
         const p = this.evaluateAndUpdateNow({ reason: 'scheduled' });
         if (p && typeof p.catch === 'function') p.catch(() => {});
       } catch (_) {}

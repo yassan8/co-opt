@@ -1180,26 +1180,6 @@
       {
         "id": 1,
         "name": "Wide",
-        "source": [
-          {
-            "id": 1,
-            "wavelength": 0.4358343,
-            "weight": 1,
-            "primary": ""
-          },
-          {
-            "id": 2,
-            "wavelength": 0.5875618,
-            "weight": 1,
-            "primary": "Primary Wavelength"
-          },
-          {
-            "id": 3,
-            "wavelength": 0.6562725,
-            "weight": 1,
-            "primary": ""
-          }
-        ],
         "object": [
           {
             "id": 1,
@@ -2882,26 +2862,6 @@
       {
         "id": 2,
         "name": "Middle",
-        "source": [
-          {
-            "id": 1,
-            "wavelength": 0.4358343,
-            "weight": 1,
-            "primary": ""
-          },
-          {
-            "id": 2,
-            "wavelength": 0.5875618,
-            "weight": 1,
-            "primary": "Primary Wavelength"
-          },
-          {
-            "id": 3,
-            "wavelength": 0.6562725,
-            "weight": 1,
-            "primary": ""
-          }
-        ],
         "object": [
           {
             "id": 1,
@@ -4584,26 +4544,6 @@
       {
         "id": 3,
         "name": "Tele",
-        "source": [
-          {
-            "id": 1,
-            "wavelength": 0.4358343,
-            "weight": 1,
-            "primary": ""
-          },
-          {
-            "id": 2,
-            "wavelength": 0.5875618,
-            "weight": 1,
-            "primary": "Primary Wavelength"
-          },
-          {
-            "id": 3,
-            "wavelength": 0.6562725,
-            "weight": 1,
-            "primary": ""
-          }
-        ],
         "object": [
           {
             "id": 1,
@@ -6286,112 +6226,6 @@
     ],
     "activeConfigId": 1,
     "optimizationRules": {},
-    "meritFunction": [],
-    "systemRequirements": [
-      {
-        "id": 1,
-        "enabled": true,
-        "severity": "hard",
-        "operand": "SPOT_SIZE_RECT",
-        "rationale": "",
-        "configId": "1",
-        "param1": "2",
-        "param2": "1",
-        "param3": "rms",
-        "param4": "501",
-        "op": "<=",
-        "tol": 0,
-        "target": "10",
-        "weight": 1,
-        "current": 12.807147387002164,
-        "status": "NG"
-      },
-      {
-        "id": 2,
-        "enabled": true,
-        "severity": "hard",
-        "operand": "SPOT_SIZE_RECT",
-        "rationale": "",
-        "configId": "1",
-        "param1": "2",
-        "param2": "2",
-        "param3": "rms",
-        "param4": "501",
-        "op": "<=",
-        "tol": 0,
-        "target": "10",
-        "weight": 1,
-        "current": 4.840947257509325,
-        "status": "OK"
-      },
-      {
-        "id": 3,
-        "enabled": true,
-        "severity": "hard",
-        "operand": "SPOT_SIZE_RECT",
-        "rationale": "",
-        "configId": "2",
-        "param1": "2",
-        "param2": "1",
-        "param3": "rms",
-        "param4": "501",
-        "op": "<=",
-        "tol": 0,
-        "target": "10",
-        "weight": 1,
-        "current": 9.29094813201491,
-        "status": "OK"
-      },
-      {
-        "id": 4,
-        "enabled": true,
-        "severity": "hard",
-        "operand": "SPOT_SIZE_RECT",
-        "rationale": "",
-        "configId": "2",
-        "param1": "2",
-        "param2": "2",
-        "param3": "rms",
-        "param4": "501",
-        "op": "<=",
-        "tol": 0,
-        "target": "10",
-        "weight": 1,
-        "current": 2.5306747958983773,
-        "status": "OK"
-      },
-      {
-        "id": 5,
-        "enabled": true,
-        "severity": "hard",
-        "operand": "SPOT_SIZE_RECT",
-        "rationale": "",
-        "configId": "3",
-        "param1": "2",
-        "param2": "1",
-        "param3": "rms",
-        "param4": "501",
-        "op": "<=",
-        "tol": 0,
-        "target": "10",
-        "weight": 1
-      },
-      {
-        "id": 6,
-        "enabled": true,
-        "severity": "hard",
-        "operand": "SPOT_SIZE_RECT",
-        "rationale": "",
-        "configId": "3",
-        "param1": "2",
-        "param2": "2",
-        "param3": "rms",
-        "param4": "501",
-        "op": "<=",
-        "tol": 0,
-        "target": "10",
-        "weight": 1
-      }
-    ]
+    "meritFunction": []
   }
 }

@@ -1677,8 +1677,6 @@ export async function generateSpotDiagramAsync(
                 objects: Array.isArray(spotData)
                     ? spotData.map((o) => {
                         const chief = Array.isArray(o?.spotPoints) ? o.spotPoints.find(p => p && p.isChiefRay) : null;
-                        const dir = o?.expectedChiefDir || o?.objectDir || null;
-                        const origin = o?.emissionBasis?.origin || o?.expectedChiefOrigin || null;
                         return {
                             objectId: o?.objectId ?? null,
                             objectType: o?.objectType ?? null,
@@ -1688,10 +1686,7 @@ export async function generateSpotDiagramAsync(
                             totalRays: o?.totalRays ?? null,
                             successRate: o?.successRate ?? null,
                             chiefLocalX: (chief && Number.isFinite(Number(chief.x))) ? Number(chief.x) : null,
-                            chiefLocalY: (chief && Number.isFinite(Number(chief.y))) ? Number(chief.y) : null,
-                            chiefDirY: (dir && Number.isFinite(Number(dir.y))) ? Number(dir.y) : null,
-                            chiefDirZ: (dir && Number.isFinite(Number(dir.z))) ? Number(dir.z) : null,
-                            emissionOriginY: (origin && Number.isFinite(Number(origin.y))) ? Number(origin.y) : null,
+                            chiefLocalY: (chief && Number.isFinite(Number(chief.y))) ? Number(chief.y) : null
                         };
                     })
                     : null

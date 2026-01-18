@@ -2708,10 +2708,6 @@ async function applyActionPlan(actions) {
             const r = await tool_set_surface_field(a);
             appliedCount++;
             logs.push(`set_surface_field surf=${r.applied.surf} ${r.applied.key}=${JSON.stringify(r.applied.value)}`);
-        } else if (type === 'set_surface_color') {
-            const r = await tool_set_surface_color(a);
-            appliedCount++;
-            logs.push(`set_surface_color ${r.applied.key}=${JSON.stringify(r.applied.color)}`);
         } else {
             logs.push(`skip unknown action type: ${type || '(missing)'}`);
         }

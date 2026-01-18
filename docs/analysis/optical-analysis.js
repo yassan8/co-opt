@@ -159,6 +159,7 @@ export async function showSpotDiagram(options = {}) {
             const tableOpticalSystem = getTableOpticalSystem();
             const opticalSystemData = getOpticalSystemRows(tableOpticalSystem);
             if (opticalSystemData && opticalSystemData.length > 0) {
+                // Fallback: choose the last non-CB surface id (approx).
                 surfaceIndex = opticalSystemData.length - 1;
                 console.log(`📊 Using last surface (fallback) as default: ${surfaceIndex}`);
             } else {
@@ -353,7 +354,16 @@ export async function showSpotDiagram(options = {}) {
                 return {
                     opticalSystemRows: Array.isArray(expandedOptical) ? expandedOptical : (Array.isArray(cfg?.opticalSystem) ? cfg.opticalSystem : []),
                     objectRows: Array.isArray(cfg?.object) ? cfg.object : [],
-                    sourceRows: Array.isArray(cfg?.source) ? cfg.source : []
+                    // Source is global (shared across configurations).
+                    sourceRows: (() => {
+                        try {
+                            const json = localStorage.getItem('sourceTableData');
+                            const parsed = json ? JSON.parse(json) : null;
+                            return Array.isArray(parsed) ? parsed : [];
+                        } catch (_) {
+                            return [];
+                        }
+                    })()
                 };
             } catch (e) {
                 console.warn('⚠️ Failed to load Spot Diagram config snapshot, falling back to active tables:', e);
@@ -370,6 +380,7 @@ export async function showSpotDiagram(options = {}) {
 
         let { opticalSystemRows, objectRows, sourceRows } = loadRowsForSelectedConfig();
 
+        // Resolve CB-invariant surfaceId -> actual rowIndex in opticalSystemRows.
         let resolvedSurfaceRowIndex = null;
         try {
             const { generateSurfaceOptions } = await import('../eva-spot-diagram.js');
@@ -382,6 +393,7 @@ export async function showSpotDiagram(options = {}) {
                 resolvedSurfaceRowIndex = Number.isInteger(img?.rowIndex) ? img.rowIndex : opts[opts.length - 1].rowIndex;
             }
         } catch (e) {
+            // As a last resort, keep the original number as an index.
             resolvedSurfaceRowIndex = Number.isInteger(surfaceId) ? surfaceId : 0;
         }
         if (!Number.isInteger(resolvedSurfaceRowIndex) || resolvedSurfaceRowIndex < 0) {

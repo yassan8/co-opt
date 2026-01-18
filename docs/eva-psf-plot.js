@@ -127,7 +127,9 @@ export class PSFPlotter {
             // 重心計算用に線形スケールデータを保持
             const linearData = this.preprocessPSFData(psfData, false); // 常に線形スケール
             const plotData = this.preprocessPSFData(psfData, logScale); // 表示用
-
+            
+            console.log(`📊 [PSF-Plot] Input data size: ${size}×${size}, logScale=${logScale}`);
+            
             // まず線形データを転置して重心を計算
             const linearTransposed = Array(size).fill().map(() => Array(size).fill(0));
             for (let i = 0; i < size; i++) {
@@ -135,7 +137,7 @@ export class PSFPlotter {
                     linearTransposed[j][i] = linearData[i][j];
                 }
             }
-
+            
             // 表示用データも転置
             const transposed = Array(size).fill().map(() => Array(size).fill(0));
             for (let i = 0; i < size; i++) {
@@ -143,7 +145,8 @@ export class PSFPlotter {
                     transposed[j][i] = plotData[i][j];
                 }
             }
-
+            console.log(`📊 [PSF-Plot] Data transposed`);
+            
             // 線形データで最大値を検出
             let maxVal = -Infinity;
             for (let i = 0; i < size; i++) {
@@ -153,10 +156,12 @@ export class PSFPlotter {
                     }
                 }
             }
-
+            
             // 線形データで高強度領域（ピークの30%以上）の重心を計算
             const threshold = maxVal * 0.3;
             let sumI = 0, sumJ = 0, sumWeight = 0;
+            let countAboveThreshold = 0;
+            
             for (let i = 0; i < size; i++) {
                 for (let j = 0; j < size; j++) {
                     const val = linearTransposed[i][j];
@@ -164,19 +169,28 @@ export class PSFPlotter {
                         sumI += i * val;
                         sumJ += j * val;
                         sumWeight += val;
+                        countAboveThreshold++;
                     }
                 }
             }
-
-            const center = Math.floor(size / 2);
-            const centroidI = sumWeight > 0 ? sumI / sumWeight : center;
-            const centroidJ = sumWeight > 0 ? sumJ / sumWeight : center;
-
+            
+            const centroidI = sumWeight > 0 ? sumI / sumWeight : Math.floor(size / 2);
+            const centroidJ = sumWeight > 0 ? sumJ / sumWeight : Math.floor(size / 2);
+            
+            console.log(`📊 [PSF-Plot] Linear max: ${maxVal.toExponential(3)}, threshold (30%): ${threshold.toExponential(3)}`);
+            console.log(`📊 [PSF-Plot] Pixels above threshold: ${countAboveThreshold}`);
+            console.log(`📊 [PSF-Plot] Centroid (from linear data): [${centroidI.toFixed(2)}][${centroidJ.toFixed(2)}]`);
+            
             // 表示用データをシフトして重心を中心に配置
+            const center = Math.floor(size / 2);
             const shiftI = Math.round(center - centroidI);
             const shiftJ = Math.round(center - centroidJ);
+            
+            console.log(`📊 [PSF-Plot] Center=${center}, shift needed: (${shiftI}, ${shiftJ})`);
+            
             let finalData = transposed;
             if (shiftI !== 0 || shiftJ !== 0) {
+                console.log(`📊 [PSF-Plot] Applying centroid-based shift to transposed data...`);
                 finalData = Array(size).fill().map(() => Array(size).fill(0));
                 for (let i = 0; i < size; i++) {
                     for (let j = 0; j < size; j++) {
@@ -185,9 +199,15 @@ export class PSFPlotter {
                         finalData[i][j] = transposed[srcI][srcJ];
                     }
                 }
+                // 検証
+                const checkVal = finalData[center][center];
+                console.log(`✅ [PSF-Plot] Shift complete, finalData[${center}][${center}]=${checkVal.toExponential(3)}`);
+            } else {
+                console.log(`📊 [PSF-Plot] No shift needed, centroid already at center`);
             }
-
+            
             // 軸の座標を生成
+            const extent = (size / 2) * pixelSize;
             const x = [];
             const y = [];
             
@@ -195,6 +215,9 @@ export class PSFPlotter {
                 x.push((i - center) * pixelSize);
                 y.push((i - center) * pixelSize);
             }
+            
+            console.log(`📊 [PSF-Plot] Axes generated: x[${center}]=${x[center]?.toFixed(2)}μm, y[${center}]=${y[center]?.toFixed(2)}μm`);
+            console.log(`📊 [PSF-Plot] PSF centroid will be at plot coordinates: (0.00, 0.00)μm`);
 
             // PSF画像全体を左回り90°回転（表示の向き調整）
             const rotatedZ = PSFPlotter.rotateZ90CCW(finalData);
@@ -202,6 +225,7 @@ export class PSFPlotter {
             const yForPlot = (rotatedZ.length === y.length && (rotatedZ[0]?.length ?? 0) === x.length) ? y : [...x].reverse();
 
             // Plotlyのヒートマップデータ
+            // z[row][col] where row=Y-axis, col=X-axis
             const trace = {
                 z: rotatedZ,
                 x: xForPlot,

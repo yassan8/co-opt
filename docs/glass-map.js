@@ -19,7 +19,6 @@ function buildGlassPoints() {
       const nd = g.nd;
       const vd = g.vd;
       if (!isFiniteNumber(nd) || !isFiniteNumber(vd)) continue;
-      // Filter out non-glass entries like AIR/MIRROR which have non-physical or sentinel values.
       if (vd <= 0 || nd <= 0) continue;
 
       points.push({
@@ -63,12 +62,10 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
 
   const w = window.open('', 'coopt_glass_map', 'popup=yes,width=800,height=600');
   if (!w) {
-    // Popup is likely blocked.
     alert('Popup was blocked. Please allow popups for this site and try again.');
     return null;
   }
 
-  // Expose data + callback to the child window.
   w.__COOPT_GLASS_POINTS__ = points;
   w.__COOPT_ON_REGION_SELECTED__ = onRegionSelected;
   w.__COOPT_ON_GLASS_SELECTED__ = typeof onGlassSelected === 'function' ? onGlassSelected : null;
@@ -119,9 +116,7 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
             window.Plotly = window.opener.Plotly;
             return Promise.resolve(window.Plotly);
           }
-        } catch (e) {
-          // Cross-origin opener or access blocked.
-        }
+        } catch (e) {}
         return new Promise((resolve, reject) => {
           const start = Date.now();
           const timer = setInterval(() => {
@@ -151,10 +146,12 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
 
       function log10Safe(x) {
         if (!Number.isFinite(x) || x <= 0) return NaN;
+        // Math.log10 is widely supported, but keep a fallback.
         return (typeof Math.log10 === 'function') ? Math.log10(x) : (Math.log(x) / Math.LN10);
       }
 
       function buildLogTickValues(minPrice, maxPrice) {
+        // Nice tick candidates for typical relative-price indices.
         const candidates = [
           1, 2, 3, 5,
           8, 10,
@@ -171,14 +168,16 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
         if (!ticks.includes(minPrice)) ticks.unshift(minPrice);
         if (!ticks.includes(maxPrice)) ticks.push(maxPrice);
 
+        // Deduplicate (e.g., when min/max coincide with candidates).
         const unique = Array.from(new Set(ticks)).sort((a, b) => a - b);
 
         // Avoid overlapping tick labels near the upper end (e.g., 34 vs 36.7).
+        // If two adjacent ticks are too close in log space, drop the lower one.
         while (unique.length >= 2) {
           const last = unique[unique.length - 1];
           const prev = unique[unique.length - 2];
           const d = log10Safe(last) - log10Safe(prev);
-          if (!Number.isFinite(d) || d >= 0.06) break;
+          if (!Number.isFinite(d) || d >= 0.06) break; // ~15% ratio
           unique.splice(unique.length - 2, 1);
         }
 
@@ -242,6 +241,7 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
         const pricedMin = pricedC.length ? Math.min.apply(null, pricedC) : 1;
         const pricedMax = pricedC.length ? Math.max.apply(null, pricedC) : 1;
 
+        // Log-scaled coloring emphasizes relative (ratio) differences.
         const pricedMinLog = log10Safe(pricedMin);
         const pricedMaxLog = log10Safe(pricedMax);
 
@@ -286,6 +286,7 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
           }
         });
 
+        // Per-manufacturer traces so legend can toggle vendors (useful when nd/vd overlap).
         const byMfr = groupByManufacturer(points);
         const manufacturers = Array.from(byMfr.keys()).sort((a, b) => a.localeCompare(b));
 
@@ -301,6 +302,7 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
           const isSelected = !hasDefaultSelection || defaultSelectedUpper.has(mfrUpper);
           const initialVisible = isSelected ? true : 'legendonly';
 
+          // Legend entry: always black marker; when toggled off, Plotly greys it.
           traces.push({
             type: 'scatter',
             mode: 'markers',
@@ -308,6 +310,8 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
             legendgroup: mfr,
             showlegend: true,
             visible: initialVisible,
+            // Plotly may hide legend items for traces with zero points.
+            // Keep a single dummy point outside the fixed axis ranges.
             x: [0],
             y: [0],
             hoverinfo: 'skip',

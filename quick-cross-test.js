@@ -56,8 +56,7 @@ function main() {
   const pairs = [
     ['eva-wavefront.js', 'docs/eva-wavefront.js'],
     ['eva-wavefront-plot.js', 'docs/eva-wavefront-plot.js'],
-    ['ui/event-handlers.js', 'docs/ui/event-handlers.js'],
-    ['ui/event-handlers.js', 'docs/event-handlers.js']
+    ['ui/event-handlers.js', 'docs/ui/event-handlers.js']
   ];
 
   const results = pairs.map(([a, b]) => comparePair(a, b));

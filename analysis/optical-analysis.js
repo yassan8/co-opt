@@ -354,7 +354,16 @@ export async function showSpotDiagram(options = {}) {
                 return {
                     opticalSystemRows: Array.isArray(expandedOptical) ? expandedOptical : (Array.isArray(cfg?.opticalSystem) ? cfg.opticalSystem : []),
                     objectRows: Array.isArray(cfg?.object) ? cfg.object : [],
-                    sourceRows: Array.isArray(cfg?.source) ? cfg.source : []
+                    // Source is global (shared across configurations).
+                    sourceRows: (() => {
+                        try {
+                            const json = localStorage.getItem('sourceTableData');
+                            const parsed = json ? JSON.parse(json) : null;
+                            return Array.isArray(parsed) ? parsed : [];
+                        } catch (_) {
+                            return [];
+                        }
+                    })()
                 };
             } catch (e) {
                 console.warn('⚠️ Failed to load Spot Diagram config snapshot, falling back to active tables:', e);

@@ -43,6 +43,7 @@ export function updateSurfaceNumberSelect() {
         return;
     }
     
+    // Add options using Spot Diagram's CB-invariant surface ids.
     const opts = generateSurfaceOptions(opticalSystemData);
     let imageValue = null;
     let lastValue = null;

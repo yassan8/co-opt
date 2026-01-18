@@ -1054,6 +1054,7 @@ function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLi
                         const L = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
                         dir = { x: dx / L, y: dy / L, z: dz / L };
                     }
+
                     rayStartData.push({
                         startP: { ...centerPoint },
                         dir,

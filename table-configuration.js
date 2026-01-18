@@ -171,7 +171,12 @@ export function saveCurrentToActiveConfiguration() {
   }
   
   // 各テーブルからデータを取得
-  activeConfig.source = window.tableSource ? window.tableSource.getData() : [];
+  // Source is global (shared across configurations).
+  // Persist it to the shared storage key, but do not store it per-config.
+  try {
+    const globalSource = window.tableSource ? window.tableSource.getData() : [];
+    localStorage.setItem('sourceTableData', JSON.stringify(globalSource));
+  } catch (_) {}
   activeConfig.object = window.tableObject ? window.tableObject.getData() : [];
 
   // Expanded Optical System is derived from Blocks.
@@ -421,9 +426,15 @@ export async function loadActiveConfigurationToTables(options = {}) {
   }
   
   // 各テーブルのlocalStorageに書き込み
-  if (activeConfig.source) {
-    localStorage.setItem('sourceTableData', JSON.stringify(activeConfig.source));
-  }
+  // Source is global. Do not override it on configuration switches.
+  // Back-compat: if global source is missing but this config has legacy source, seed it once.
+  try {
+    const hasGlobal = !!localStorage.getItem('sourceTableData');
+    const legacy = Array.isArray(activeConfig.source) ? activeConfig.source : null;
+    if (!hasGlobal && legacy && legacy.length > 0) {
+      localStorage.setItem('sourceTableData', JSON.stringify(legacy));
+    }
+  } catch (_) {}
   if (activeConfig.object) {
     localStorage.setItem('objectTableData', JSON.stringify(activeConfig.object));
   }
@@ -499,7 +510,15 @@ export async function loadActiveConfigurationToTables(options = {}) {
     };
 
     // Update tabulator tables if present
-    await applyTableData(globalThis.tableSource, activeConfig.source || []);
+    // Source is global; do not swap per config.
+    let globalSourceRows = [];
+    try {
+      const json = localStorage.getItem('sourceTableData');
+      const parsed = json ? JSON.parse(json) : null;
+      globalSourceRows = Array.isArray(parsed) ? parsed : [];
+    } catch (_) {}
+
+    await applyTableData(globalThis.tableSource, globalSourceRows);
     await applyTableData(globalThis.tableObject, activeConfig.object || []);
     await applyTableData(globalThis.tableOpticalSystem, effectiveOpticalSystem || []);
 
@@ -528,7 +547,6 @@ export function addConfiguration(name) {
   // 現在のアクティブなConfigurationのデータをコピー
   const activeConfig = getActiveConfiguration();
   if (activeConfig) {
-    newConfig.source = JSON.parse(JSON.stringify(activeConfig.source));
     newConfig.object = JSON.parse(JSON.stringify(activeConfig.object));
     newConfig.opticalSystem = JSON.parse(JSON.stringify(activeConfig.opticalSystem));
     newConfig.meritFunction = JSON.parse(JSON.stringify(activeConfig.meritFunction));
