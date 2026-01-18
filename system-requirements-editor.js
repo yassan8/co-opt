@@ -20,11 +20,15 @@ class SystemRequirementsEditor {
     this._selectedTr = null;
     this._paramHeaderEls = { param1: null, param2: null, param3: null, param4: null };
     this._operandKeys = [];
+    this._isEvaluating = false;
+    this._pendingEvalRequested = false;
+    this._progressEls = null;
     this.inspector = new InspectorManager('requirement-inspector', 'requirement-inspector-content');
 
     this.loadFromStorage();
     this.initializeTable();
     this.initializeEventListeners();
+    this._ensureProgressUI();
 
     // Auto-update status when Merit is recalculated
     this.installMeritHook();
@@ -636,12 +640,206 @@ class SystemRequirementsEditor {
 
     const updateBtn = document.getElementById('update-requirement-btn');
     if (updateBtn) {
-      updateBtn.addEventListener('click', () => {
+      updateBtn.addEventListener('click', async () => {
         try {
-          this.evaluateAndUpdateNow();
+          await this.updateAllConfigsAndEvaluate();
         } catch (_) {}
       });
     }
+  }
+
+  _ensureProgressUI() {
+    try {
+      if (this._progressEls) return this._progressEls;
+      const btns = document.querySelector('.merit-function-buttons-container');
+      if (!btns || !btns.parentElement) return null;
+
+      const wrap = document.createElement('div');
+      wrap.id = 'requirements-progress-wrap';
+      wrap.style.display = 'none';
+      wrap.style.marginTop = '6px';
+
+      const label = document.createElement('div');
+      label.id = 'requirements-progress-label';
+      label.className = 'merit-function-help';
+      label.textContent = '';
+
+      const prog = document.createElement('progress');
+      prog.id = 'requirements-progress';
+      prog.max = 1;
+      prog.value = 0;
+      prog.style.width = '320px';
+
+      wrap.appendChild(label);
+      wrap.appendChild(prog);
+
+      btns.parentElement.insertBefore(wrap, btns.nextSibling);
+      this._progressEls = { wrap, label, prog };
+      return this._progressEls;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  _setProgressVisible(visible) {
+    try {
+      const els = this._ensureProgressUI();
+      if (!els || !els.wrap) return;
+      els.wrap.style.display = visible ? 'block' : 'none';
+    } catch (_) {}
+  }
+
+  _setProgress(labelText, value, max) {
+    try {
+      const els = this._ensureProgressUI();
+      if (!els) return;
+      if (els.label) els.label.textContent = String(labelText ?? '');
+      if (els.prog) {
+        const m = Number(max);
+        els.prog.max = (Number.isFinite(m) && m > 0) ? m : 1;
+        const v = Number(value);
+        els.prog.value = (Number.isFinite(v) && v >= 0) ? v : 0;
+      }
+    } catch (_) {}
+  }
+
+  async _yieldToUI() {
+    try {
+      await new Promise(resolve => requestAnimationFrame(() => resolve()));
+    } catch (_) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+
+  _upsertSpotDiagramSettingsForConfig(configId, opticalRows, sourceRows) {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const cfgKey = String(configId ?? '').trim();
+      if (!cfgKey) return;
+
+      const isImageRow = (row) => {
+        if (!row || typeof row !== 'object') return false;
+        const t1 = String(row['object type'] ?? '').trim();
+        const t2 = String(row.object ?? '').trim();
+        const st = String(row.surfType ?? '').trim().toLowerCase();
+        if (t1 === 'Image' || t2 === 'Image') return true;
+        return st === 'image' || st.includes('image');
+      };
+
+      const imageIdx = (() => {
+        if (!Array.isArray(opticalRows) || opticalRows.length === 0) return 0;
+        const i = opticalRows.findIndex(r => isImageRow(r));
+        return (i >= 0) ? i : Math.max(0, opticalRows.length - 1);
+      })();
+
+      const primaryWavelengthUm = (() => {
+        if (!Array.isArray(sourceRows) || sourceRows.length === 0) return 0.5876;
+        const primaryRow = sourceRows.find(r => r && r.primary && String(r.primary).toLowerCase().includes('primary'));
+        const wl = Number(primaryRow ? primaryRow.wavelength : sourceRows[0]?.wavelength);
+        return (Number.isFinite(wl) && wl > 0) ? wl : 0.5876;
+      })();
+
+      const rawMap = localStorage.getItem('spotDiagramSettingsByConfigId');
+      const map = rawMap ? (JSON.parse(rawMap) || {}) : {};
+      const existing = map[cfgKey];
+      if (existing && typeof existing === 'object') {
+        // Keep user-chosen values if present; only fill missing fields.
+        if (existing.surfaceIndex === undefined || existing.surfaceIndex === null) existing.surfaceIndex = imageIdx;
+        if (existing.rayCount === undefined || existing.rayCount === null) existing.rayCount = 501;
+        if (existing.ringCount === undefined || existing.ringCount === null) existing.ringCount = 3;
+        if (existing.primaryWavelengthUm === undefined || existing.primaryWavelengthUm === null) existing.primaryWavelengthUm = primaryWavelengthUm;
+        if (existing.configId === undefined || existing.configId === null) existing.configId = cfgKey;
+        existing.updatedAt = Date.now();
+        map[cfgKey] = existing;
+      } else {
+        map[cfgKey] = {
+          surfaceIndex: imageIdx,
+          rayCount: 501,
+          ringCount: 3,
+          pattern: null,
+          primaryWavelengthUm,
+          configId: cfgKey,
+          updatedAt: Date.now()
+        };
+      }
+      localStorage.setItem('spotDiagramSettingsByConfigId', JSON.stringify(map));
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  async updateAllConfigsAndEvaluate() {
+    // Ensure each configuration has an up-to-date expanded opticalSystem snapshot
+    // and has a per-config Spot Diagram settings entry.
+    const editor = window.meritFunctionEditor;
+    if (!editor || typeof editor.getOpticalSystemDataByConfigId !== 'function') {
+      try { await this.evaluateAndUpdateNow({ reason: 'no-merit-editor' }); } catch (_) {}
+      return;
+    }
+
+    let systemConfig = null;
+    try {
+      systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+    } catch (_) {}
+    const configs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
+    if (!systemConfig || configs.length === 0) {
+      await this.evaluateAndUpdateNow({ reason: 'no-configs' });
+      return;
+    }
+
+    const updateBtn = document.getElementById('update-requirement-btn');
+    try { if (updateBtn) updateBtn.disabled = true; } catch (_) {}
+
+    // Show progress during the refresh, then reuse the same bar for evaluation.
+    let showTimer = null;
+    try {
+      showTimer = setTimeout(() => {
+        try {
+          this._setProgressVisible(true);
+          this._setProgress('Updating config snapshots…', 0, Math.max(1, configs.length));
+        } catch (_) {}
+      }, 150);
+    } catch (_) {}
+
+    try {
+      for (let i = 0; i < configs.length; i++) {
+        const cfg = configs[i];
+        const cfgId = (cfg && cfg.id !== undefined && cfg.id !== null) ? String(cfg.id) : '';
+        if (!cfgId) continue;
+
+        let opticalRows = null;
+        try {
+          opticalRows = editor.getOpticalSystemDataByConfigId(cfgId);
+        } catch (_) {
+          opticalRows = null;
+        }
+        if (Array.isArray(opticalRows) && opticalRows.length > 0) {
+          cfg.opticalSystem = opticalRows;
+          try {
+            if (!cfg.metadata || typeof cfg.metadata !== 'object') cfg.metadata = {};
+            cfg.metadata.modified = new Date().toISOString();
+          } catch (_) {}
+        }
+
+        const sourceRows = Array.isArray(cfg?.source) ? cfg.source : [];
+        this._upsertSpotDiagramSettingsForConfig(cfgId, Array.isArray(opticalRows) ? opticalRows : (Array.isArray(cfg?.opticalSystem) ? cfg.opticalSystem : []), sourceRows);
+
+        try {
+          this._setProgress('Updating config snapshots…', i + 1, Math.max(1, configs.length));
+        } catch (_) {}
+
+        if (i % 2 === 0) await this._yieldToUI();
+      }
+
+      try {
+        localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
+      } catch (_) {}
+    } finally {
+      try { if (showTimer) clearTimeout(showTimer); } catch (_) {}
+      try { if (updateBtn) updateBtn.disabled = false; } catch (_) {}
+    }
+
+    await this.evaluateAndUpdateNow({ reason: 'update-button' });
   }
 
   createDefaultRequirementRow() {
@@ -719,15 +917,30 @@ class SystemRequirementsEditor {
   }
 
   _sanitizeCurrentForUI(rawCurrent) {
+    // Preserve non-empty string diagnostics (e.g. explicit failure labels)
+    // rather than collapsing them to an empty cell.
+    if (typeof rawCurrent === 'string' && rawCurrent.trim() !== '') {
+      const asNum = Number(rawCurrent);
+      if (!Number.isFinite(asNum)) return { current: rawCurrent.trim(), ok: false };
+    }
+
     const v = Number(rawCurrent);
-    if (!Number.isFinite(v)) return { current: null, ok: false };
+    if (!Number.isFinite(v)) return { current: 'FAIL', ok: false };
+
     // Many operands historically returned ~1e9 on ray-trace failure.
-    // Showing that number as a measured “Current” is misleading.
-    if (Math.abs(v) >= 1e8) return { current: null, ok: false };
+    // Hiding it entirely is confusing in System Requirements, so show a marker.
+    if (Math.abs(v) >= 1e8) return { current: 'FAIL', ok: false };
+
     return { current: v, ok: true };
   }
 
-  evaluateAndUpdateNow() {
+  async evaluateAndUpdateNow(options = null) {
+    if (this._isEvaluating) {
+      this._pendingEvalRequested = true;
+      return;
+    }
+    this._isEvaluating = true;
+
     try {
       window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'enter' };
     } catch (_) {}
@@ -737,12 +950,14 @@ class SystemRequirementsEditor {
       try {
         window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'deferred-edit' };
       } catch (_) {}
+      this._isEvaluating = false;
       return;
     }
 
     const editor = window.meritFunctionEditor;
     if (!editor || typeof editor.calculateOperandValue !== 'function') {
       try { window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'no-merit-editor' }; } catch (_) {}
+      this._isEvaluating = false;
       return;
     }
 
@@ -761,8 +976,37 @@ class SystemRequirementsEditor {
     const live = this._getLiveRequirementsData();
     this.requirements = live;
 
+    // Progress bar (only show if evaluation takes noticeable time)
+    let showTimer = null;
+    let progressVisible = false;
+    try {
+      showTimer = setTimeout(() => {
+        try {
+          progressVisible = true;
+          this._setProgressVisible(true);
+          this._setProgress('Evaluating requirements…', 0, Math.max(1, live.length));
+        } catch (_) {}
+      }, 150);
+    } catch (_) {}
+
+    // Requirements are a pass/fail spec. They should reflect the same semantics as the UI analyses
+    // (e.g., Spot Diagram) rather than any optimization/fast-mode heuristics.
+    const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+    const prevFast = g ? g.__cooptMeritFastMode : null;
+    const prevReqFlag = g ? g.__COOPT_EVALUATING_REQUIREMENTS : undefined;
+    try {
+      if (g && prevFast && typeof prevFast === 'object') {
+        g.__cooptMeritFastMode = { ...prevFast, enabled: false };
+      }
+      if (g) {
+        g.__COOPT_EVALUATING_REQUIREMENTS = true;
+      }
+    } catch (_) {}
+
     const updates = [];
-    for (const row of live) {
+    try {
+    for (let i = 0; i < live.length; i++) {
+      const row = live[i];
       if (!row || typeof row !== 'object') continue;
 
       const enabled = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
@@ -782,6 +1026,13 @@ class SystemRequirementsEditor {
       const opObj = {
         operand,
         configId,
+        __reqRowId: row.id,
+        __reqRowIndex: i,
+        __reqOp: op,
+        __reqTarget: target,
+        __reqTol: tol,
+        __reqWeight: weight,
+        __reqEnabled: enabled,
         param1: row.param1,
         param2: row.param2,
         param3: row.param3,
@@ -793,6 +1044,31 @@ class SystemRequirementsEditor {
       let current = null;
       try {
         current = editor.calculateOperandValue(opObj);
+
+        // If this is a Spot Size operand, capture its debug snapshot keyed by requirement row id.
+        // This prevents "last debug wins" confusion when multiple configs/rows are evaluated.
+        try {
+          if (typeof window !== 'undefined') {
+            const opName = String(operand || '').trim();
+            if (opName.startsWith('SPOT_SIZE')) {
+              const sd = (window.__cooptLastSpotSizeDebug && typeof window.__cooptLastSpotSizeDebug === 'object')
+                ? window.__cooptLastSpotSizeDebug
+                : null;
+              const rid = row.id;
+              if (sd && rid !== undefined && rid !== null && Number(sd.reqRowId) === Number(rid)) {
+                const map = (window.__cooptSpotSizeDebugByReqRowId && typeof window.__cooptSpotSizeDebugByReqRowId === 'object')
+                  ? window.__cooptSpotSizeDebugByReqRowId
+                  : {};
+                let snap = sd;
+                try {
+                  snap = (typeof structuredClone === 'function') ? structuredClone(sd) : JSON.parse(JSON.stringify(sd));
+                } catch (_) {}
+                map[String(rid)] = snap;
+                window.__cooptSpotSizeDebugByReqRowId = map;
+              }
+            }
+          }
+        } catch (_) {}
       } catch (_) {
         current = null;
       }
@@ -822,6 +1098,22 @@ class SystemRequirementsEditor {
       // Current: raw operand value (e.g., Spot size in µm).
       // _violation/_contribution are available for debugging/consistency checks.
       updates.push({ id: row.id, current, status, _violation: sanitized.ok ? amount : null, _contribution: sanitized.ok ? contribution : null });
+
+      if (progressVisible) {
+        try {
+          this._setProgress('Evaluating requirements…', i + 1, Math.max(1, live.length));
+        } catch (_) {}
+      }
+      if (i % 2 === 0) await this._yieldToUI();
+    }
+    } finally {
+      try {
+        if (g) g.__cooptMeritFastMode = prevFast;
+        if (g) g.__COOPT_EVALUATING_REQUIREMENTS = prevReqFlag;
+      } catch (_) {}
+
+      try { if (showTimer) clearTimeout(showTimer); } catch (_) {}
+      try { this._setProgressVisible(false); } catch (_) {}
     }
 
     try {
@@ -859,6 +1151,12 @@ class SystemRequirementsEditor {
     try {
       window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'done', updated: Array.isArray(updates) ? updates.length : 0 };
     } catch (_) {}
+
+    this._isEvaluating = false;
+    if (this._pendingEvalRequested) {
+      this._pendingEvalRequested = false;
+      try { await this.evaluateAndUpdateNow({ reason: 'pending' }); } catch (_) {}
+    }
   }
 
   scheduleEvaluateAndUpdate() {
@@ -866,7 +1164,11 @@ class SystemRequirementsEditor {
       if (this._evalTimer) clearTimeout(this._evalTimer);
     } catch (_) {}
     this._evalTimer = setTimeout(() => {
-      try { this.evaluateAndUpdateNow(); } catch (_) {}
+      try {
+        // Fire-and-forget; evaluation is async.
+        const p = this.evaluateAndUpdateNow({ reason: 'scheduled' });
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      } catch (_) {}
     }, 50);
   }
 

@@ -11,7 +11,7 @@
  * 作成日: 2025/07/15
  */
 
-import { traceRay } from './ray-tracing.js';
+import { traceRay, calculateSurfaceOrigins } from './ray-tracing.js';
 
 // Runtime build stamp (for cache/stale-module diagnostics)
 const GEN_RAY_CROSS_INFINITE_BUILD = '2025-12-31a';
@@ -27,6 +27,12 @@ function isCoordBreakRow(row) {
 function isObjectRow(row) {
     const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').toLowerCase();
     return t === 'object';
+}
+
+function isStopRow(row) {
+    const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? row?.Type ?? '';
+    const t = String(raw ?? '').trim().toLowerCase();
+    return t === 'stop' || t === 'sto';
 }
 
 // traceRay の rayPath は Object 行 / Coord Break 行を交点として記録しない。
@@ -126,24 +132,15 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
     
     for (let i = 0; i < opticalSystemRows.length; i++) {
         const surface = opticalSystemRows[i];
-        
-        // 両方のフィールド名をチェック
-        if (surface.type === 'Stop' || surface['object type'] === 'Stop') {
-            // Stop面のz位置を計算
-            let stopZ = 0;
-            if (surfaceOrigins && surfaceOrigins[i]) {
-                stopZ = surfaceOrigins[i].z;
-            } else {
-                // surfaceOriginsが無い場合は累積距離で計算
-                for (let j = 0; j < i; j++) {
-                    const thickness = opticalSystemRows[j].thickness;
-                    if (thickness !== undefined && thickness !== null && thickness !== 'INF' && thickness !== 'Infinity') {
-                        stopZ += parseFloat(thickness) || 0;
-                    }
-                }
-            }
-            
-            stopZ = parseFloat(stopZ) || 0;
+
+        if (isStopRow(surface) || (String(surface?.comment ?? surface?.Comment ?? '').toLowerCase().includes('stop'))) {
+            const oRaw = (surfaceOrigins && surfaceOrigins[i]) ? surfaceOrigins[i] : null;
+            const o = (oRaw && oRaw.origin) ? oRaw.origin : oRaw;
+            const stopCenter = {
+                x: (o && Number.isFinite(o.x)) ? o.x : 0,
+                y: (o && Number.isFinite(o.y)) ? o.y : 0,
+                z: (o && Number.isFinite(o.z)) ? o.z : 0
+            };
             
             // Stop面の半径を取得
             let stopRadius = 10; // デフォルト値
@@ -172,10 +169,10 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
             return {
                 surface: surface,
                 index: i,
-                center: { x: 0, y: 0, z: stopZ },
-                position: { x: 0, y: 0, z: stopZ },
+                center: stopCenter,
+                position: stopCenter,
                 radius: stopRadius,
-                origin: surfaceOrigins ? surfaceOrigins[i] : null
+                origin: o
             };
         }
     }
@@ -918,19 +915,14 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         }
 
         // 2. Stop面情報の取得
-        const surfaceOrigins = [];
-        let cumulativeZ = 0;
-        for (let i = 0; i < opticalSystemRows.length; i++) {
-            surfaceOrigins.push({ x: 0, y: 0, z: cumulativeZ });
-            
-            // thickness値を安全に数値に変換
-            const thickness = opticalSystemRows[i].thickness;
-            if (thickness !== undefined && thickness !== null && thickness !== 'INF' && thickness !== 'Infinity') {
-                const numericThickness = parseFloat(thickness);
-                if (!isNaN(numericThickness)) {
-                    cumulativeZ += numericThickness;
-                }
+        let surfaceOrigins = null;
+        try {
+            const sd = calculateSurfaceOrigins(opticalSystemRows);
+            if (Array.isArray(sd) && sd.length === opticalSystemRows.length) {
+                surfaceOrigins = sd.map(d => d?.origin ?? { x: 0, y: 0, z: 0 });
             }
+        } catch (_) {
+            surfaceOrigins = null;
         }
         
         const stopSurfaceInfo = findStopSurface(opticalSystemRows, surfaceOrigins);

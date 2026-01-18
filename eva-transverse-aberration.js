@@ -432,7 +432,9 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
         }
         
         // 横収差計算用のrayGroups形式に変換（絞り面インデックスを渡す）
-        return convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex);
+        // NOTE: ray.path は Object/Coord Break 行を交点として記録しないため、
+        // 以降の分類/評価で表面インデックス→rayPath点インデックス変換が必要。
+        return convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSystemRows);
         
     } catch (error) {
         console.error('❌ 十字光線生成エラー:', error);
@@ -446,7 +448,7 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
  * @param {number} stopSurfaceIndex - 絞り面インデックス
  * @returns {Object} rayGroups形式のデータ
  */
-function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex) {
+function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSystemRows = null) {
     try {
         const rayGroups = [];
         
@@ -542,7 +544,7 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex) {
                 });
                 
                 // 十字光線の詳細分類を行う
-                classifyCrossBeamRays(rays, stopSurfaceIndex);
+                classifyCrossBeamRays(rays, stopSurfaceIndex, opticalSystemRows);
                 
                 if (failureCount > 0 || partialCount > 0) {
                     console.log(`📊 Object ${objectIndex}: 成功=${successCount}, 部分=${partialCount}, 失敗=${failureCount}`);
@@ -643,7 +645,7 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex) {
                 });
                 
                 // 十字光線の詳細分類を行う
-                classifyCrossBeamRays(rays, stopSurfaceIndex);
+                classifyCrossBeamRays(rays, stopSurfaceIndex, opticalSystemRows);
                 
                 if (failureCount > 0 || partialCount > 0) {
                     console.log(`📊 Angle ${angleIndex}: 成功=${successCount}, 部分=${partialCount}, 失敗=${failureCount}`);
@@ -781,14 +783,14 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     
     console.log(`🎯 主光線評価面座標: (${chiefIntersection.x.toFixed(4)}, ${chiefIntersection.y.toFixed(4)})`);
     
+    const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
+    const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
+
     // メリディオナル光線の絞り面でのX座標とY座標統計を収集（オフセット補正用のみ）
     const stopXCoordinates = [];
     const stopYCoordinates = [];
     meridionalRays.forEach(ray => {
-        // 光線パスの長さをチェックして適切な面インデックスを決定（横収差計算用パスを使用）
-        const targetPath = ray.rayPathToTarget || ray.path;
-        const actualStopIndex = Math.min(stopSurfaceIndex, targetPath ? targetPath.length - 1 : 0);
-        const stopIntersection = getIntersectionAtSurface(ray, actualStopIndex, opticalSystemRows);
+        const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
         if (stopIntersection) {
             stopXCoordinates.push(stopIntersection.x);
             stopYCoordinates.push(stopIntersection.y);
@@ -833,10 +835,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
         const intersection = getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows);
         if (intersection) {
             // 絞り面での座標を取得
-            // 光線パスの長さをチェックして適切な面インデックスを決定（横収差計算用パスを使用）
-            const targetPath = ray.rayPathToTarget || ray.path;
-            const actualStopIndex = Math.min(stopSurfaceIndex, targetPath ? targetPath.length - 1 : 0);
-            const stopIntersection = getIntersectionAtSurface(ray, actualStopIndex, opticalSystemRows);
+            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
             if (stopIntersection) {
                 // Y座標はオフセット補正なしで直接使用
                 const stopY = stopIntersection.y;
@@ -873,20 +872,24 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                     });
                 }
             }
-        } else if (ray.isPartial && ray.path && ray.path.length > Math.min(targetSurfaceIndex, stopSurfaceIndex)) {
+        } else if (ray.isPartial && ray.path) {
             // 🔧 FIX: 絞り面に実際に到達しているかチェック（ケラレ検出）
             // 部分的な光線でも絞り面まで到達していれば処理する
-            const rayReachedStop = ray.path.length - 1 >= stopSurfaceIndex;
-            
-            if (!rayReachedStop) {
+            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
+            if (!stopIntersection) {
                 // 絞り面に到達していない = ケラレている
                 vignetteCount++;
                 return; // この光線はスキップ
             }
             
             // 部分的な光線パスから最大限の情報を取得
-            const maxSurfaceIndex = Math.min(ray.path.length - 1, Math.max(targetSurfaceIndex, stopSurfaceIndex));
-            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
+            const maxSurfaceIndex = Math.min(
+                ray.path.length - 1,
+                Math.max(
+                    Number.isInteger(targetPointIndex) ? targetPointIndex : 0,
+                    Number.isInteger(stopPointIndex) ? stopPointIndex : 0
+                )
+            );
             
             if (stopIntersection) {
                 const correctedStopY = stopIntersection.y - yOffset; // Y座標をオフセット補正
@@ -899,7 +902,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                     partialButReachedStop++;
                     // 評価面まで到達していない場合は外挿して推定
                     let estimatedIntersection = null;
-                    if (targetSurfaceIndex <= maxSurfaceIndex) {
+                    if (Number.isInteger(targetPointIndex) && targetPointIndex <= maxSurfaceIndex) {
                         estimatedIntersection = getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows);
                     } else {
                         // 外挿による推定（最後の2面から推定）
@@ -1188,13 +1191,13 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
         };
     }
     
+    const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
+    const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
+
     // サジタル光線の絞り面でのX座標統計を収集（デバッグ用）
     const stopXCoordinates = [];
     sagittalRays.forEach(ray => {
-        // 光線パスの長さをチェックして適切な面インデックスを決定（横収差計算用パスを使用）
-        const targetPath = ray.rayPathToTarget || ray.path;
-        const actualStopIndex = Math.min(stopSurfaceIndex, targetPath ? targetPath.length - 1 : 0);
-        const stopIntersection = getIntersectionAtSurface(ray, actualStopIndex, opticalSystemRows);
+        const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
         if (stopIntersection) {
             stopXCoordinates.push(stopIntersection.x);
         }
@@ -1202,10 +1205,12 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     
     // 🔧 FIX: オフセット補正は不要（メリディオナルと同じロジック）
     // 絞り面X座標を直接使用して正規化する
+    // NOTE: xOffset はデバッグ/部分光線用のみに使用
+    let xOffset = 0;
     if (stopXCoordinates.length > 0) {
         const minX = Math.min(...stopXCoordinates);
         const maxX = Math.max(...stopXCoordinates);
-        const xOffset = (minX + maxX) / 2; // デバッグ用のみ
+        xOffset = (minX + maxX) / 2; // デバッグ用のみ
         console.log(`🎯 サジタル絞り面X座標: min=${minX.toFixed(3)}, max=${maxX.toFixed(3)}, オフセット=${xOffset.toFixed(3)}`);
     }
     
@@ -1225,10 +1230,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
         const intersection = getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows);
         if (intersection) {
             // 絞り面での座標を取得
-            // 光線パスの長さをチェックして適切な面インデックスを決定（横収差計算用パスを使用）
-            const targetPath = ray.rayPathToTarget || ray.path;
-            const actualStopIndex = Math.min(stopSurfaceIndex, targetPath ? targetPath.length - 1 : 0);
-            const stopIntersection = getIntersectionAtSurface(ray, actualStopIndex, opticalSystemRows);
+            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
             if (stopIntersection) {
                 // 🔧 FIX: X座標をオフセット補正せずに直接使用（メリディオナルと同じロジック）
                 const stopX = stopIntersection.x;
@@ -1265,20 +1267,24 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                     });
                 }
             }
-        } else if (ray.isPartial && ray.path && ray.path.length > Math.min(targetSurfaceIndex, stopSurfaceIndex)) {
+        } else if (ray.isPartial && ray.path) {
             // 🔧 FIX: 絞り面に実際に到達しているかチェック（ケラレ検出）
             // 部分的な光線でも絞り面まで到達していれば処理する
-            const rayReachedStop = ray.path.length - 1 >= stopSurfaceIndex;
-            
-            if (!rayReachedStop) {
+            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
+            if (!stopIntersection) {
                 // 絞り面に到達していない = ケラレている
                 vignetteCount++;
                 return; // この光線はスキップ
             }
             
             // 部分的な光線パスから最大限の情報を取得
-            const maxSurfaceIndex = Math.min(ray.path.length - 1, Math.max(targetSurfaceIndex, stopSurfaceIndex));
-            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
+            const maxSurfaceIndex = Math.min(
+                ray.path.length - 1,
+                Math.max(
+                    Number.isInteger(targetPointIndex) ? targetPointIndex : 0,
+                    Number.isInteger(stopPointIndex) ? stopPointIndex : 0
+                )
+            );
             
             if (stopIntersection) {
                 const correctedStopX = stopIntersection.x - xOffset; // X座標をオフセット補正
@@ -1291,7 +1297,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                     partialButReachedStop++;
                     // 評価面まで到達していない場合は外挿して推定
                     let estimatedIntersection = null;
-                    if (targetSurfaceIndex <= maxSurfaceIndex) {
+                    if (Number.isInteger(targetPointIndex) && targetPointIndex <= maxSurfaceIndex) {
                         estimatedIntersection = getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows);
                     } else {
                         // 外挿による推定（最後の2面から推定）
@@ -1510,6 +1516,31 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
  * @param {Array} opticalSystemRows - 光学系データ
  * @returns {Object|null} 交点座標 {x, y, z} またはnull
  */
+function isCoordBreakRow(row) {
+    const st = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').toLowerCase();
+    return st === 'coord break' || st === 'coordinate break' || st === 'cb';
+}
+
+function isObjectRow(row) {
+    const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? row?.surface_type ?? '').toLowerCase();
+    return t === 'object';
+}
+
+// traceRay の rayPath は Object 行 / Coord Break 行を交点として記録しない。
+// surfaceIndex(テーブル行) -> rayPath の point index への変換を行う。
+function surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex) {
+    if (!Array.isArray(opticalSystemRows) || surfaceIndex === null || surfaceIndex === undefined) return null;
+    const sIdx = Math.max(0, Math.min(surfaceIndex, opticalSystemRows.length - 1));
+    let count = 0;
+    for (let i = 0; i <= sIdx; i++) {
+        const row = opticalSystemRows[i];
+        if (isCoordBreakRow(row)) continue;
+        if (isObjectRow(row)) continue;
+        count++;
+    }
+    return count > 0 ? count : null;
+}
+
 function getIntersectionAtSurface(ray, surfaceIndex, opticalSystemRows) {
     try {
         // 横収差計算用の評価面までのパスを優先使用
@@ -1520,12 +1551,19 @@ function getIntersectionAtSurface(ray, surfaceIndex, opticalSystemRows) {
             return null;
         }
         
-        if (surfaceIndex < 0 || surfaceIndex >= targetPath.length) {
-            console.warn(`⚠️ 面インデックス ${surfaceIndex} が範囲外です (パス長: ${targetPath.length})`);
+        let pointIndex = surfaceIndex;
+        if (opticalSystemRows && Array.isArray(opticalSystemRows)) {
+            const mapped = surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex);
+            if (mapped === null) return null;
+            pointIndex = mapped;
+        }
+
+        if (pointIndex < 0 || pointIndex >= targetPath.length) {
+            // 到達していない（ケラレ等）
             return null;
         }
-        
-        const intersection = targetPath[surfaceIndex];
+
+        const intersection = targetPath[pointIndex];
         if (intersection && typeof intersection.x === 'number' && typeof intersection.y === 'number') {
             return {
                 x: intersection.x,
@@ -2944,7 +2982,7 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
  * @param {Array} rays - 光線配列
  * @param {number} stopSurfaceIndex - 絞り面インデックス
  */
-function classifyCrossBeamRays(rays, stopSurfaceIndex) {
+function classifyCrossBeamRays(rays, stopSurfaceIndex, opticalSystemRows = null) {
     console.log(`🔄 classifyCrossBeamRays開始: ${rays.length}本の光線を分析`);
     console.log(`🔄 使用絞り面インデックス: ${stopSurfaceIndex}`);
     
@@ -2975,8 +3013,13 @@ function classifyCrossBeamRays(rays, stopSurfaceIndex) {
                 let stopCoord = null;
                 
                 // 絞り面インデックスが指定されていて有効な場合はそれを使用
-                if (stopSurfaceIndex !== null && stopSurfaceIndex >= 0 && stopSurfaceIndex < ray.path.length) {
-                    stopCoord = ray.path[stopSurfaceIndex];
+                let stopPointIndex = stopSurfaceIndex;
+                if (opticalSystemRows && Array.isArray(opticalSystemRows)) {
+                    stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
+                }
+
+                if (stopPointIndex !== null && stopPointIndex >= 0 && stopPointIndex < ray.path.length) {
+                    stopCoord = ray.path[stopPointIndex];
                 } else {
                     // 絞り面が指定されていない場合は光学系の中央付近を使用
                     const midIndex = Math.floor(ray.path.length / 2);

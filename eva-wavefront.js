@@ -16,6 +16,12 @@ import { findFiniteSystemChiefRayDirection } from './gen-ray-cross-finite.js';
 import { findInfiniteSystemChiefRayOrigin } from './gen-ray-cross-infinite.js';
 import { fitZernikeWeighted, reconstructOPD, jToNM, nmToJ, getZernikeName } from './zernike-fitting.js';
 
+// Runtime build stamp (for cache/stale-module diagnostics)
+const EVA_WAVEFRONT_BUILD = '2026-01-17a';
+try {
+    if (typeof window !== 'undefined') window.__EVA_WAVEFRONT_BUILD = EVA_WAVEFRONT_BUILD;
+} catch (_) {}
+
 function __cooptIsOPDDebugNow() {
     try {
         const g = (typeof globalThis !== 'undefined') ? globalThis : null;
@@ -167,10 +173,34 @@ function brent(f, a, b, tol = 1e-8, maxIter = 100) {
  * @returns {Object|null} ヤコビアン行列 {J11, J12, J21, J22, det} または null
  */
 function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceIndex, opticalSystemRows, stepSize, wavelength) {
+    const isCoordBreakRow = (row) => {
+        const st = String(row?.surfType ?? row?.['surf type'] ?? row?.type ?? '').trim().toLowerCase();
+        return st === 'coord break' || st === 'coordinate break' || st === 'cb';
+    };
+    const isObjectRow = (row) => {
+        const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+        return t === 'object';
+    };
+    const getRayPathPointIndexForSurfaceIndex = (rows, surfaceIndex) => {
+        if (!Array.isArray(rows) || surfaceIndex === null || surfaceIndex === undefined) return null;
+        const sIdx = Math.max(0, Math.min(Number(surfaceIndex) || 0, rows.length - 1));
+        let count = 0;
+        for (let i = 0; i <= sIdx; i++) {
+            const row = rows[i];
+            if (isCoordBreakRow(row)) continue;
+            if (isObjectRow(row)) continue;
+            count++;
+        }
+        return count;
+    };
+
     // direction may be {x,y,z} or {i,j,k} format, support both
     const dirX = direction.x !== undefined ? direction.x : direction.i;
     const dirY = direction.y !== undefined ? direction.y : direction.j;
     const dirZ = direction.z !== undefined ? direction.z : direction.k;
+
+    const pIdx = getRayPathPointIndexForSurfaceIndex(opticalSystemRows, stopSurfaceIndex);
+    if (pIdx === null) return null;
     
     // ベースライン
     const baseRay = {
@@ -179,9 +209,9 @@ function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceInd
         wavelength: wavelength
     };
     const basePath = traceRay(opticalSystemRows, baseRay, 1.0, null, stopSurfaceIndex + 1);
-    if (!basePath || !Array.isArray(basePath) || basePath.length <= stopSurfaceIndex) return null;
+    if (!basePath || !Array.isArray(basePath) || basePath.length <= pIdx) return null;
     
-    const basePos = basePath[stopSurfaceIndex];
+    const basePos = basePath[pIdx];
     if (!basePos || !Number.isFinite(basePos.x) || !Number.isFinite(basePos.y)) return null;
     
     // X方向偏微分
@@ -191,9 +221,9 @@ function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceInd
         wavelength: wavelength
     };
     const pathDx = traceRay(opticalSystemRows, rayDx, 1.0, null, stopSurfaceIndex + 1);
-    if (!pathDx || !Array.isArray(pathDx) || pathDx.length <= stopSurfaceIndex) return null;
+    if (!pathDx || !Array.isArray(pathDx) || pathDx.length <= pIdx) return null;
     
-    const posDx = pathDx[stopSurfaceIndex];
+    const posDx = pathDx[pIdx];
     if (!posDx || !Number.isFinite(posDx.x) || !Number.isFinite(posDx.y)) return null;
     
     // Y方向偏微分
@@ -203,9 +233,9 @@ function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceInd
         wavelength: wavelength
     };
     const pathDy = traceRay(opticalSystemRows, rayDy, 1.0, null, stopSurfaceIndex + 1);
-    if (!pathDy || !Array.isArray(pathDy) || pathDy.length <= stopSurfaceIndex) return null;
+    if (!pathDy || !Array.isArray(pathDy) || pathDy.length <= pIdx) return null;
     
-    const posDy = pathDy[stopSurfaceIndex];
+    const posDy = pathDy[pIdx];
     if (!posDy || !Number.isFinite(posDy.x) || !Number.isFinite(posDy.y)) return null;
     
     // ヤコビアン行列
@@ -234,6 +264,29 @@ function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceInd
  * @returns {Object} {success: boolean, origin?: {x,y,z}, actualStopPoint?: {x,y,z}, error?: number, iterations?: number}
  */
 function calculateApertureRayNewton(chiefRayOrigin, direction, targetStopPoint, stopSurfaceIndex, opticalSystemRows, maxIterations, tolerance, wavelength, debugMode) {
+    const isCoordBreakRow = (row) => {
+        const st = String(row?.surfType ?? row?.['surf type'] ?? row?.type ?? '').trim().toLowerCase();
+        return st === 'coord break' || st === 'coordinate break' || st === 'cb';
+    };
+    const isObjectRow = (row) => {
+        const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+        return t === 'object';
+    };
+    const getRayPathPointIndexForSurfaceIndex = (rows, surfaceIndex) => {
+        if (!Array.isArray(rows) || surfaceIndex === null || surfaceIndex === undefined) return null;
+        const sIdx = Math.max(0, Math.min(Number(surfaceIndex) || 0, rows.length - 1));
+        let count = 0;
+        for (let i = 0; i <= sIdx; i++) {
+            const row = rows[i];
+            if (isCoordBreakRow(row)) continue;
+            if (isObjectRow(row)) continue;
+            count++;
+        }
+        return count;
+    };
+
+    const pIdx = getRayPathPointIndexForSurfaceIndex(opticalSystemRows, stopSurfaceIndex);
+    if (pIdx === null) return { success: false };
     const __prof = __getActiveWavefrontProfile();
     if (__prof) {
         __prof.newtonChiefCalls = (__prof.newtonChiefCalls || 0) + 1;
@@ -277,12 +330,12 @@ function calculateApertureRayNewton(chiefRayOrigin, direction, targetStopPoint, 
         
         const rayPath = traceRay(opticalSystemRows, ray, 1.0, null, stopSurfaceIndex + 1);
         
-        if (!rayPath || !Array.isArray(rayPath) || rayPath.length <= stopSurfaceIndex) {
+        if (!rayPath || !Array.isArray(rayPath) || rayPath.length <= pIdx) {
             if (debugMode) console.log(`⚠️ [Newton] 反復${iteration}: 光線追跡失敗 (length=${rayPath?.length || 0})`);
             return { success: false };
         }
         
-        const actualStopPoint = rayPath[stopSurfaceIndex];
+        const actualStopPoint = rayPath[pIdx];
         if (!actualStopPoint || !Number.isFinite(actualStopPoint.x) || !Number.isFinite(actualStopPoint.y)) {
             if (debugMode) console.log(`⚠️ [Newton] 反復${iteration}: 絞り面交点が無効`);
             return { success: false };
@@ -1776,6 +1829,17 @@ export class OpticalPathDifferenceCalculator {
                     const name = (s.comment || s.surfType || '').toString().trim();
                     term = `; termination=trace became null at surfaceIndex=${diag.failSurfaceIndex}${name ? ` (${name})` : ''}`;
 
+                    // Surface aperture fields (helps confirm whether the limit comes from this surface or was mis-assigned).
+                    try {
+                        const sd = Number(s.semidia);
+                        const ap = Number(s.aperture);
+                        const sdStr = Number.isFinite(sd) ? sd.toFixed(6) : null;
+                        const apStr = Number.isFinite(ap) ? ap.toFixed(6) : null;
+                        if (sdStr !== null || apStr !== null) {
+                            term += `; surfaceAperture(semiDia=${sdStr ?? 'null'}mm, aperture=${apStr ?? 'null'}mm)`;
+                        }
+                    } catch (_) {}
+
                     const f = diag.failure;
                     if (f && f.kind) {
                         if (f.kind === 'PHYSICAL_APERTURE_BLOCK') {
@@ -2042,20 +2106,22 @@ export class OpticalPathDifferenceCalculator {
         // 「Stop中心に到達する射出座標を探索する」方針に揃える。
         // draw-cross の Stop中心は x=y=0 を固定し、z は calculateSurfaceOrigins の origin.z を使う。
         // 
-        // ⚠️ CRITICAL FOR OPD: The reference ray MUST pass through stop center (0,0,z) to maintain
-        // consistency with marginal ray pupil coordinates. Off-center reference rays will cause
-        // all marginal rays to fail with "stop unreachable" errors.
-        const getCrossStyleStopCenter = () => {
+        // Stop center must reflect Coord Break decenter/tilt.
+        // Using a forced (0,0,*) center can make chief-ray solve target the wrong point
+        // when the stop coordinate frame is shifted.
+        const getEffectiveStopCenter = () => {
             const sIdx = this.stopSurfaceIndex;
-            const z = (this._surfaceOrigins && this._surfaceOrigins[sIdx] && this._surfaceOrigins[sIdx].origin && Number.isFinite(this._surfaceOrigins[sIdx].origin.z))
-                ? this._surfaceOrigins[sIdx].origin.z
-                : (this.getSurfaceOrigin(sIdx)?.z ?? 0);
-            return { x: 0, y: 0, z };
+            const o = (this._surfaceOrigins && this._surfaceOrigins[sIdx] && this._surfaceOrigins[sIdx].origin)
+                ? this._surfaceOrigins[sIdx].origin
+                : this.getSurfaceOrigin(sIdx);
+            return {
+                x: (o && Number.isFinite(o.x)) ? o.x : 0,
+                y: (o && Number.isFinite(o.y)) ? o.y : 0,
+                z: (o && Number.isFinite(o.z)) ? o.z : 0
+            };
         };
 
-        // For OPD calculation, ALWAYS use stop center (0,0,z), not effectiveStopCenter.
-        // This ensures the reference ray is consistent with marginal ray pupil sampling.
-        const stopCenter = getCrossStyleStopCenter();
+        const stopCenter = getEffectiveStopCenter();
 
         const tryMakeRay = (stopCenter) => {
             if (!stopCenter || !Number.isFinite(stopCenter.z)) return null;
@@ -3779,13 +3845,13 @@ export class OpticalPathDifferenceCalculator {
         }
 
         // Stop geometry (cached)
+        // stopCenterBase: nominal stop origin from calculateSurfaceOrigins() (no per-field override)
+        // stopCenter: effective stop origin (may be overridden for vignetted off-axis fields)
         const stopCenterBase = this.getSurfaceOrigin(this.stopSurfaceIndex);
-        
-        // ✅ CRITICAL FIX: For OPD calculation consistency, ALWAYS use stop center (0,0,z)
-        // as the reference point for pupil sampling. This matches the reference ray definition.
-        // Using effectiveStopCenter (which may be off-center for off-axis fields) causes
-        // marginal rays to fail with "stop unreachable" errors.
-        const stopCenter = { x: 0, y: 0, z: stopCenterBase.z };
+        // IMPORTANT: Coord Break can decenter/tilt the stop. For OPD to remain consistent with
+        // rendering and other evaluators, pupil sampling must use the actual stop origin from
+        // calculateSurfaceOrigins() (and a per-field override if the nominal center is vignetted).
+        const stopCenter = this.getEffectiveStopCenter(fieldSetting);
         
         const stopZ = stopCenter.z;
         const stopRadius = this._getCachedStopRadiusMm();

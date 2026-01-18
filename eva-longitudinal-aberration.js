@@ -17,9 +17,184 @@
 
 import { generateFiniteSystemCrossBeam } from './gen-ray-cross-finite.js';
 import { generateInfiniteSystemCrossBeam } from './gen-ray-cross-infinite.js';
-import { traceRay } from './ray-tracing.js';
+import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from './ray-tracing.js';
 import { getObjectRows } from './utils/data-utils.js';
 import { calculateBackFocalLength, getRefractiveIndex } from './ray-paraxial.js';
+
+function applyRotationMatrixToVector(matrix, v) {
+    if (!matrix) return { x: v.x, y: v.y, z: v.z };
+    const x = matrix[0][0] * v.x + matrix[0][1] * v.y + matrix[0][2] * v.z;
+    const y = matrix[1][0] * v.x + matrix[1][1] * v.y + matrix[1][2] * v.z;
+    const z = matrix[2][0] * v.x + matrix[2][1] * v.y + matrix[2][2] * v.z;
+    return { x, y, z };
+}
+
+function normalizeVector3(v, fallback = { x: 1, y: 0, z: 0 }) {
+    const L = Math.hypot(v?.x ?? 0, v?.y ?? 0, v?.z ?? 0);
+    if (!(L > 0)) return { ...fallback };
+    return { x: v.x / L, y: v.y / L, z: v.z / L };
+}
+
+function dot3(a, b) {
+    return (a.x * b.x) + (a.y * b.y) + (a.z * b.z);
+}
+
+function getStopLocalOffsets(stopPoint3d, stopPlaneCenter3d, stopPlaneU, stopPlaneV) {
+    if (!stopPoint3d || !stopPlaneCenter3d || !stopPlaneU || !stopPlaneV) return null;
+    const d = {
+        x: stopPoint3d.x - stopPlaneCenter3d.x,
+        y: stopPoint3d.y - stopPlaneCenter3d.y,
+        z: stopPoint3d.z - stopPlaneCenter3d.z
+    };
+    return {
+        u: dot3(d, stopPlaneU),
+        v: dot3(d, stopPlaneV)
+    };
+}
+
+function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm) {
+    const stopIdx = Number(stopSurfaceIndex);
+    if (!Number.isInteger(stopIdx) || stopIdx < 0) return null;
+    if (!centerPoint || !stopTarget3d) return null;
+
+    const dx0 = Number(stopTarget3d.x) - Number(centerPoint.x);
+    const dy0 = Number(stopTarget3d.y) - Number(centerPoint.y);
+    const dz0 = Number(stopTarget3d.z) - Number(centerPoint.z);
+    if (!Number.isFinite(dx0) || !Number.isFinite(dy0) || !Number.isFinite(dz0)) return null;
+    if (Math.abs(dz0) < 1e-9) return null;
+
+    const buildDirFromSlopes = (u, v) => {
+        const zSign = dz0 >= 0 ? 1 : -1;
+        return normalizeVector3({ x: u, y: v, z: zSign }, { x: 0, y: 0, z: zSign });
+    };
+
+    const initial = normalizeVector3({ x: dx0, y: dy0, z: dz0 }, { x: 0, y: 0, z: 1 });
+    let u = (Math.abs(initial.z) > 1e-9) ? (initial.x / initial.z) : 0;
+    let v = (Math.abs(initial.z) > 1e-9) ? (initial.y / initial.z) : 0;
+
+    const maxIter = 6;
+    const tolMm = 1e-3;
+    const eps = 1e-4;
+    const maxSlope = 2.5;
+
+    for (let iter = 0; iter < maxIter; iter++) {
+        u = Math.max(-maxSlope, Math.min(maxSlope, u));
+        v = Math.max(-maxSlope, Math.min(maxSlope, v));
+
+        const dir = buildDirFromSlopes(u, v);
+        const ray = { wavelength: wavelengthUm, pos: { ...centerPoint }, dir };
+        const hit = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopIdx);
+        if (!hit) return null;
+
+        const ex = Number(hit.x) - Number(stopTarget3d.x);
+        const ey = Number(hit.y) - Number(stopTarget3d.y);
+        if (!Number.isFinite(ex) || !Number.isFinite(ey)) return null;
+        const err = Math.hypot(ex, ey);
+        if (err < tolMm) return dir;
+
+        const hitU = traceRayHitPoint(
+            opticalSystemRows,
+            { wavelength: wavelengthUm, pos: { ...centerPoint }, dir: buildDirFromSlopes(u + eps, v) },
+            1.0,
+            stopIdx
+        );
+        const hitV = traceRayHitPoint(
+            opticalSystemRows,
+            { wavelength: wavelengthUm, pos: { ...centerPoint }, dir: buildDirFromSlopes(u, v + eps) },
+            1.0,
+            stopIdx
+        );
+        if (!hitU || !hitV) return null;
+
+        const j11 = (Number(hitU.x) - Number(hit.x)) / eps;
+        const j21 = (Number(hitU.y) - Number(hit.y)) / eps;
+        const j12 = (Number(hitV.x) - Number(hit.x)) / eps;
+        const j22 = (Number(hitV.y) - Number(hit.y)) / eps;
+        if (![j11, j12, j21, j22].every(Number.isFinite)) return null;
+
+        const det = j11 * j22 - j12 * j21;
+        if (!Number.isFinite(det) || Math.abs(det) < 1e-12) {
+            u -= 0.05 * ex;
+            v -= 0.05 * ey;
+            continue;
+        }
+
+        let du = (-j22 * ex + j12 * ey) / det;
+        let dv = (j21 * ex - j11 * ey) / det;
+        const stepNorm = Math.hypot(du, dv);
+        if (stepNorm > 0.5) {
+            const scale = 0.5 / stepNorm;
+            du *= scale;
+            dv *= scale;
+        }
+        u += du;
+        v += dv;
+    }
+
+    return buildDirFromSlopes(u, v);
+}
+
+function solveChiefRayDirectionToStopCenterFast(centerPoint, stopCenter3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm) {
+    return solveRayDirectionToStopPointFast(centerPoint, stopCenter3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm);
+}
+
+function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm) {
+    const stopIdx = Number(stopSurfaceIndex);
+    if (!Number.isInteger(stopIdx) || stopIdx < 0) return null;
+    if (!initialOrigin || !dirVector || !stopTarget3d) return null;
+
+    const baseDir = normalizeVector3(dirVector, { x: 0, y: 0, z: 1 });
+    if (!Number.isFinite(baseDir.x) || !Number.isFinite(baseDir.y) || !Number.isFinite(baseDir.z)) return null;
+
+    let origin = { x: Number(initialOrigin.x), y: Number(initialOrigin.y), z: Number(initialOrigin.z) };
+    if (![origin.x, origin.y, origin.z].every(Number.isFinite)) return null;
+
+    const eps = 1e-3;
+    const tolMm = 1e-3;
+    const maxIter = 10;
+
+    const hitAt = (o) => traceRayHitPoint(
+        opticalSystemRows,
+        { wavelength: wavelengthUm, pos: { ...o }, dir: { ...baseDir } },
+        1.0,
+        stopIdx
+    );
+
+    for (let iter = 0; iter < maxIter; iter++) {
+        const hit = hitAt(origin);
+        if (!hit) return null;
+        const ex = Number(hit.x) - Number(stopTarget3d.x);
+        const ey = Number(hit.y) - Number(stopTarget3d.y);
+        if (!Number.isFinite(ex) || !Number.isFinite(ey)) return null;
+        const err = Math.hypot(ex, ey);
+        if (err < tolMm) return origin;
+
+        const hitX = hitAt({ x: origin.x + eps, y: origin.y, z: origin.z });
+        const hitY = hitAt({ x: origin.x, y: origin.y + eps, z: origin.z });
+        if (!hitX || !hitY) return null;
+
+        const j11 = (Number(hitX.x) - Number(hit.x)) / eps;
+        const j21 = (Number(hitX.y) - Number(hit.y)) / eps;
+        const j12 = (Number(hitY.x) - Number(hit.x)) / eps;
+        const j22 = (Number(hitY.y) - Number(hit.y)) / eps;
+        if (![j11, j12, j21, j22].every(Number.isFinite)) return null;
+
+        const det = j11 * j22 - j12 * j21;
+        if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return null;
+
+        let dx = (-j22 * ex + j12 * ey) / det;
+        let dy = (j21 * ex - j11 * ey) / det;
+        const stepNorm = Math.hypot(dx, dy);
+        if (stepNorm > 5.0) {
+            const scale = 5.0 / stepNorm;
+            dx *= scale;
+            dy *= scale;
+        }
+        origin = { x: origin.x + dx, y: origin.y + dy, z: origin.z };
+    }
+
+    return origin;
+}
 
 /**
  * 指定した正規化瞳座標に補間点を追加する
@@ -111,6 +286,31 @@ function traceRayWrapped(opticalSystemRows, ray0, targetSurfaceIndex, originalRa
             error
         };
     }
+}
+
+// Convert an optical table surface index to a rayPath point index.
+// NOTE: Object rows and Coord Break rows do not create intersection points in rayPath.
+function surfaceIndexToRayPathPointIndex(rows, surfaceIndex) {
+    const idx = Number(surfaceIndex);
+    if (!Array.isArray(rows) || !Number.isInteger(idx) || idx < 0) return null;
+    let pointIndex = 0;
+    for (let s = 0; s <= idx; s++) {
+        const r = rows[s] || {};
+        const objTypeRaw = r?.['object type'] ?? r?.objectType ?? r?.object ?? '';
+        const surfTypeRaw = r?.surfType ?? r?.surface_type ?? r?.['surf type'] ?? r?.type ?? '';
+        const nObj = String(objTypeRaw ?? '').trim().toLowerCase();
+        const nSurf = String(surfTypeRaw ?? '').trim().toLowerCase();
+        const compact = (v) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, '');
+
+        const isObject = (nObj === 'object' || compact(nObj) === 'object') || (nSurf === 'object' || compact(nSurf) === 'object');
+        const isCoordBreak =
+            nObj === 'coord break' || nObj === 'coordinate break' || compact(nObj) === 'coordbreak' ||
+            nSurf === 'coord break' || nSurf === 'coordinate break' || compact(nSurf) === 'coordbreak';
+
+        if (isObject || isCoordBreak) continue;
+        pointIndex++;
+    }
+    return pointIndex;
 }
 
 function bisectionSolve01(getValueAtT, targetValue, maxIter = 40, tol = 1e-6) {
@@ -300,14 +500,35 @@ function calculateSineConditionViolation(tracedRay, mParax, nObj = 1.0, nImg = 1
  * 絞り面を見つける
  */
 function findStopSurface(opticalSystemRows) {
+    const normalize = (v) => String(v ?? '').trim().toLowerCase();
+    const compact = (v) => normalize(v).replace(/[\s_-]+/g, '');
+
+    const isStopType = (v) => {
+        const n = normalize(v);
+        const c = compact(v);
+        if (!n && !c) return false;
+        return n === 'stop' || c === 'stop' || n.includes('stop');
+    };
+
+    // 1) explicit stop flag
     for (let i = 0; i < opticalSystemRows.length; i++) {
-        const surface = opticalSystemRows[i];
-        if (surface.stop === 'Yes' || surface.Stop === 'Yes' || 
-            surface.stop === true || surface.Stop === true) {
+        const surface = opticalSystemRows[i] || {};
+        if (surface.stop === 'Yes' || surface.Stop === 'Yes' || surface.stop === true || surface.Stop === true) {
             return i;
         }
     }
-    // 絞り面が見つからない場合は中央の面を返す
+
+    // 2) object type / surfType contains Stop
+    for (let i = 0; i < opticalSystemRows.length; i++) {
+        const surface = opticalSystemRows[i] || {};
+        const objTypeRaw = surface?.['object type'] ?? surface?.objectType ?? surface?.object ?? '';
+        const surfTypeRaw = surface?.surfType ?? surface?.['surf type'] ?? surface?.type ?? '';
+        if (isStopType(objTypeRaw) || isStopType(surfTypeRaw)) {
+            return i;
+        }
+    }
+
+    // fallback: middle surface (historical behavior)
     return Math.floor(opticalSystemRows.length / 2);
 }
 
@@ -503,6 +724,13 @@ export function calculateLongitudinalAberration(
     if (silent) {
         console.log = () => {};
     }
+    const debugSA = !silent && (
+        (options && typeof options === 'object' && options.debugSA === true) ||
+        (typeof globalThis !== 'undefined' && globalThis && globalThis.__COOPT_DEBUG_SA)
+    );
+    const dbg = (...args) => {
+        if (debugSA) console.log(...args);
+    };
     try {
     // 波長がnullまたは未指定の場合、Source tableから取得
     if (!wavelengths || wavelengths.length === 0) {
@@ -516,6 +744,12 @@ export function calculateLongitudinalAberration(
     
     const isFinite = isFiniteSystem(opticalSystemRows);
     console.log(`📊 光学系タイプ: ${isFinite ? '有限系' : '無限系'}`);
+        dbg('🐞 [SA] debug enabled', {
+            isFinite,
+            targetSurfaceIndex,
+            rayCount,
+            wavelengths: Array.isArray(wavelengths) ? wavelengths.slice() : wavelengths
+        });
     
     // 像面のZ座標を取得（近似値）
     let imagePlaneZ = 0;
@@ -573,6 +807,7 @@ export function calculateLongitudinalAberration(
     for (let wlIndex = 0; wlIndex < wavelengths.length; wlIndex++) {
         const wavelength = wavelengths[wlIndex];
         console.log(`\n📊 ========== 波長 ${wlIndex + 1}/${wavelengths.length}: ${wavelength.toFixed(4)} μm ==========`);
+            dbg('🐞 [SA] wavelength start', { wlIndex, wavelength });
         
         // この波長のBFLを計算
         const currentBFL = calculateBackFocalLength(opticalSystemRows, wavelength);
@@ -629,6 +864,10 @@ export function calculateLongitudinalAberration(
         
         if (successfulRays.length === 0) {
             console.warn(`⚠️ 波長 ${wavelength.toFixed(4)} μm: 成功した光線がありません`);
+                if (debugSA && typeof globalThis !== 'undefined' && globalThis.__cooptLastRayTraceFailure) {
+                    const f = globalThis.__cooptLastRayTraceFailure;
+                    dbg('🐞 [SA] last raytrace failure snapshot', { kind: f.kind, targetSurfaceIndex: f.targetSurfaceIndex, details: f.details });
+                }
             continue;
         }
         
@@ -652,13 +891,55 @@ export function calculateLongitudinalAberration(
         
         // 絞り面のインデックスを取得
         const stopSurfaceIndex = findStopSurface(opticalSystemRows);
+        const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
         const stopSurface = opticalSystemRows[stopSurfaceIndex];
-        const stopRadius = parseFloat(stopSurface.semiDiameter || stopSurface['Semi-Diameter'] || 10);
+        const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+        const stopPlaneCenter3d = surfaceOrigins?.[stopSurfaceIndex]?.origin || null;
+        const stopPlaneRotation = surfaceOrigins?.[stopSurfaceIndex]?.rotationMatrix || null;
+        const stopPlaneU = normalizeVector3(
+            applyRotationMatrixToVector(stopPlaneRotation, { x: 1, y: 0, z: 0 }),
+            { x: 1, y: 0, z: 0 }
+        );
+        const stopPlaneV = normalizeVector3(
+            applyRotationMatrixToVector(stopPlaneRotation, { x: 0, y: 1, z: 0 }),
+            { x: 0, y: 1, z: 0 }
+        );
+        const stopRadius = parseFloat(
+            stopSurface.semidia ??
+            stopSurface.semiDiameter ??
+            stopSurface['Semi-Diameter'] ??
+            stopSurface.semidiameter ??
+            stopSurface['semi-diameter'] ??
+            10
+        );
+        const stopSolveMax = (Number.isFinite(stopRadius) && stopRadius > 0) ? stopRadius : 10;
+        dbg('🐞 [SA] stop config', {
+            stopSurfaceIndex,
+            stopPointIndex,
+            stopRadius,
+            stopPlaneCenter3d,
+            hasStopPlaneRotation: !!stopPlaneRotation
+        });
+        if (stopPointIndex === null) {
+            console.warn('⚠️ [Longitudinal] Stop point index mapping failed');
+            return null;
+        }
 
         // rayCount で正規化瞳座標を分割（0.001を含める）し、その正規化瞳座標を「実際の絞り面高さ」に一致させるように光線を狙い撃ち
         const normalizedSamples = buildNormalizedPupilSamples(rayCount);
 
         const buildAimedRaysForDirection = (axis /* 'meridional'|'sagittal' */) => {
+            const diag = debugSA ? {
+                axis,
+                mode: isFinite ? 'finite' : 'infinite',
+                stopSolveAttempt: 0,
+                stopSolveSolved: 0,
+                stopSolveNull: 0,
+                stopSolveTraceFail: 0,
+                stopSolveTraceOk: 0,
+                firstNull: null,
+                firstTraceFail: null
+            } : null;
             // +側の境界（最大）を定義
             if (isFinite) {
                 const crossBeamRays = crossBeamResult.allCrossBeamRays || [];
@@ -666,11 +947,85 @@ export function calculateLongitudinalAberration(
                 const upper = crossBeamRays.find(r => r.type === 'upper_marginal');
                 const right = crossBeamRays.find(r => r.type === 'right_marginal');
                 const boundary = axis === 'meridional' ? upper : right;
-                if (!chief || !boundary) return null;
+                if (!chief || !boundary) {
+                    // Fallback: do not depend on cross-beam metadata; directly solve rays to the stop plane.
+                    const originFallback = surfaceOrigins?.[0]?.origin
+                        ? { x: surfaceOrigins[0].origin.x, y: surfaceOrigins[0].origin.y, z: surfaceOrigins[0].origin.z }
+                        : { x: 0, y: 0, z: 0 };
+                    const axisVec = axis === 'meridional' ? stopPlaneV : stopPlaneU;
+                    const canStopSolve = !!(stopPlaneCenter3d && Number.isInteger(stopSurfaceIndex) && axisVec);
+                    if (!canStopSolve) return null;
 
-                const chiefDir = chief.direction;
-                const boundaryDir = boundary.direction;
+                    const aimed = [];
+                    if (diag) {
+                        diag.mode = 'finite-fallback';
+                    }
+
+                    for (let idx = 0; idx < normalizedSamples.length; idx++) {
+                        const pNorm = normalizedSamples[idx];
+                        const targetStop = pNorm * stopSolveMax;
+                        if (diag) diag.stopSolveAttempt++;
+                        const stopTarget = {
+                            x: stopPlaneCenter3d.x + axisVec.x * targetStop,
+                            y: stopPlaneCenter3d.y + axisVec.y * targetStop,
+                            z: stopPlaneCenter3d.z + axisVec.z * targetStop
+                        };
+                        const solvedDir = solveRayDirectionToStopPointFast(originFallback, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength);
+                        if (!solvedDir) {
+                            if (diag) {
+                                diag.stopSolveNull++;
+                                if (!diag.firstNull) diag.firstNull = { pNorm, targetStop, origin: originFallback, stopTarget };
+                            }
+                            continue;
+                        }
+                        if (diag) diag.stopSolveSolved++;
+                        const trSolved = traceRayWrapped(
+                            opticalSystemRows,
+                            { pos: originFallback, dir: solvedDir, wavelength },
+                            targetSurfaceIndex,
+                            {
+                                type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross',
+                                role: axis,
+                                wavelength,
+                                pupilCoordinateRequested: pNorm,
+                                aimParameter: 'stop-solve'
+                            }
+                        );
+                        if (trSolved.success) {
+                            if (diag) diag.stopSolveTraceOk++;
+                            aimed.push(trSolved);
+                        } else {
+                            if (diag) {
+                                diag.stopSolveTraceFail++;
+                                if (!diag.firstTraceFail) diag.firstTraceFail = { pNorm, targetStop, origin: originFallback, stopTarget };
+                            }
+                        }
+                    }
+
+                    if (diag && diag.stopSolveAttempt > 0) {
+                        dbg('🐞 [SA] stop-solve summary (finite-fallback)', diag);
+                    }
+                    return aimed.length > 0 ? aimed : null;
+                }
+
                 const origin = chief.position; // object point
+                const axisVec = axis === 'meridional' ? stopPlaneV : stopPlaneU;
+                const canStopSolve = !!(stopPlaneCenter3d && Number.isInteger(stopSurfaceIndex) && axisVec);
+
+                const chiefDir = canStopSolve
+                    ? (solveChiefRayDirectionToStopCenterFast(origin, stopPlaneCenter3d, stopSurfaceIndex, opticalSystemRows, wavelength) || chief.direction)
+                    : chief.direction;
+
+                const boundaryTarget = (canStopSolve && Number.isFinite(stopRadius))
+                    ? {
+                        x: stopPlaneCenter3d.x + axisVec.x * stopRadius,
+                        y: stopPlaneCenter3d.y + axisVec.y * stopRadius,
+                        z: stopPlaneCenter3d.z + axisVec.z * stopRadius
+                    }
+                    : null;
+                const boundaryDir = (canStopSolve && boundaryTarget)
+                    ? (solveRayDirectionToStopPointFast(origin, boundaryTarget, stopSurfaceIndex, opticalSystemRows, wavelength) || boundary.direction)
+                    : boundary.direction;
 
                 // 最大絞り面高さ（境界光線の stop 通過高さ）を実測
                 const boundaryTr = traceRayWrapped(
@@ -679,9 +1034,14 @@ export function calculateLongitudinalAberration(
                     targetSurfaceIndex,
                     { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: 'boundary', wavelength }
                 );
-                if (!boundaryTr.success || !boundaryTr.rayPath || boundaryTr.rayPath.length <= stopSurfaceIndex) return null;
-                const bStop = boundaryTr.rayPath[stopSurfaceIndex];
-                const maxStop = Math.abs(axis === 'meridional' ? bStop.y : bStop.x);
+                if (!boundaryTr.success || !boundaryTr.rayPath || boundaryTr.rayPath.length <= stopPointIndex) return null;
+                const bStop = boundaryTr.rayPath[stopPointIndex];
+                const bStopLocal = getStopLocalOffsets(bStop, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
+                const maxStop = Math.abs(
+                    axis === 'meridional'
+                        ? (bStopLocal ? bStopLocal.v : bStop.y)
+                        : (bStopLocal ? bStopLocal.u : bStop.x)
+                );
                 if (!(maxStop > 0)) return null;
 
                 // 0 側（chief）の stop 高さ
@@ -697,6 +1057,47 @@ export function calculateLongitudinalAberration(
                     const pNorm = normalizedSamples[idx];
                     const targetStop = pNorm * maxStop;
 
+                    // OPD/Spot-style: solve direction so the ray passes through the stop target.
+                    if (canStopSolve && Number.isFinite(targetStop)) {
+                        if (diag) diag.stopSolveAttempt++;
+                        const stopTarget = {
+                            x: stopPlaneCenter3d.x + axisVec.x * targetStop,
+                            y: stopPlaneCenter3d.y + axisVec.y * targetStop,
+                            z: stopPlaneCenter3d.z + axisVec.z * targetStop
+                        };
+                        const solvedDir = solveRayDirectionToStopPointFast(origin, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength);
+                        if (!solvedDir) {
+                            if (diag) {
+                                diag.stopSolveNull++;
+                                if (!diag.firstNull) diag.firstNull = { pNorm, targetStop, origin, stopTarget };
+                            }
+                        } else {
+                            if (diag) diag.stopSolveSolved++;
+                            const trSolved = traceRayWrapped(
+                                opticalSystemRows,
+                                { pos: origin, dir: solvedDir, wavelength },
+                                targetSurfaceIndex,
+                                {
+                                    type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross',
+                                    role: axis,
+                                    wavelength,
+                                    pupilCoordinateRequested: pNorm,
+                                    aimParameter: 'stop-solve'
+                                }
+                            );
+                            if (trSolved.success) {
+                                if (diag) diag.stopSolveTraceOk++;
+                                aimed.push(trSolved);
+                            } else {
+                                if (diag) {
+                                    diag.stopSolveTraceFail++;
+                                    if (!diag.firstTraceFail) diag.firstTraceFail = { pNorm, targetStop, origin, stopTarget };
+                                }
+                            }
+                            continue;
+                        }
+                    }
+
                     const getStopAtT = (t) => {
                         // chief→boundary の方向を t で補間し、stop高さが targetStop になるようにtを解く
                         const dir = {
@@ -710,9 +1111,14 @@ export function calculateLongitudinalAberration(
                             targetSurfaceIndex,
                             { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: `aim_${pNorm}`, wavelength }
                         );
-                        if (!tr.success || !tr.rayPath || tr.rayPath.length <= stopSurfaceIndex) return NaN;
-                        const s = tr.rayPath[stopSurfaceIndex];
-                        return Math.abs(axis === 'meridional' ? s.y : s.x);
+                        if (!tr.success || !tr.rayPath || tr.rayPath.length <= stopPointIndex) return NaN;
+                        const s = tr.rayPath[stopPointIndex];
+                        const local = getStopLocalOffsets(s, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
+                        return Math.abs(
+                            axis === 'meridional'
+                                ? (local ? local.v : s.y)
+                                : (local ? local.u : s.x)
+                        );
                     };
 
                     let tSolved;
@@ -754,14 +1160,84 @@ export function calculateLongitudinalAberration(
                     if (!hasZero) aimed.unshift(chiefTr);
                 }
 
+                if (diag && diag.stopSolveAttempt > 0) {
+                    dbg('🐞 [SA] stop-solve summary (finite)', diag);
+                }
                 return aimed;
             } else {
-                // 無限系：chiefOrigin と boundaryOrigin の間で origin を動かし、stop通過高さが target に一致するようにtを解く
+                // Infinite system: prefer OPD/Spot-style stop solve (origin solve) even if cross-beam metadata is missing.
                 const obj0 = (crossBeamResult.objectResults && crossBeamResult.objectResults[0]) || null;
-                if (!obj0 || !obj0.chiefRayOrigin || !obj0.apertureBoundaryRays || !obj0.direction) return null;
+                const axisVec = axis === 'meridional' ? stopPlaneV : stopPlaneU;
+                const canStopSolve = !!(stopPlaneCenter3d && Number.isInteger(stopSurfaceIndex) && axisVec);
+                const direction = (obj0 && obj0.direction)
+                    ? { x: obj0.direction.i, y: obj0.direction.j, z: obj0.direction.k }
+                    : { x: 0, y: 0, z: 1 };
+                const baseZ = (obj0 && obj0.chiefRayOrigin && Number.isFinite(obj0.chiefRayOrigin.z))
+                    ? Number(obj0.chiefRayOrigin.z)
+                    : -25;
+                const chiefOrigin = (obj0 && obj0.chiefRayOrigin)
+                    ? obj0.chiefRayOrigin
+                    : { x: 0, y: 0, z: baseZ };
 
-                const chiefOrigin = obj0.chiefRayOrigin;
-                const direction = { x: obj0.direction.i, y: obj0.direction.j, z: obj0.direction.k };
+                if (canStopSolve) {
+                    if (diag) {
+                        diag.mode = 'infinite-stop-solve';
+                    }
+                    const aimed = [];
+                    for (let idx = 0; idx < normalizedSamples.length; idx++) {
+                        const pNorm = normalizedSamples[idx];
+                        const targetStop = pNorm * stopSolveMax;
+                        if (diag) diag.stopSolveAttempt++;
+                        const stopTarget = {
+                            x: stopPlaneCenter3d.x + axisVec.x * targetStop,
+                            y: stopPlaneCenter3d.y + axisVec.y * targetStop,
+                            z: stopPlaneCenter3d.z + axisVec.z * targetStop
+                        };
+                        const guess = {
+                            x: Number(chiefOrigin.x) + axisVec.x * targetStop,
+                            y: Number(chiefOrigin.y) + axisVec.y * targetStop,
+                            z: baseZ
+                        };
+                        const refined = solveRayOriginToStopPointFast(guess, direction, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength);
+                        if (!refined) {
+                            if (diag) {
+                                diag.stopSolveNull++;
+                                if (!diag.firstNull) diag.firstNull = { pNorm, targetStop, guess, stopTarget };
+                            }
+                        } else {
+                            if (diag) diag.stopSolveSolved++;
+                        }
+                        const posSolved = refined || guess;
+                        const trSolved = traceRayWrapped(
+                            opticalSystemRows,
+                            { pos: posSolved, dir: direction, wavelength },
+                            targetSurfaceIndex,
+                            {
+                                type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross',
+                                role: axis,
+                                wavelength,
+                                pupilCoordinateRequested: pNorm,
+                                aimParameter: 'stop-solve'
+                            }
+                        );
+                        if (trSolved.success) {
+                            if (diag) diag.stopSolveTraceOk++;
+                            aimed.push(trSolved);
+                        } else {
+                            if (diag) {
+                                diag.stopSolveTraceFail++;
+                                if (!diag.firstTraceFail) diag.firstTraceFail = { pNorm, targetStop, posSolved, stopTarget };
+                            }
+                        }
+                    }
+                    if (diag && diag.stopSolveAttempt > 0) {
+                        dbg('🐞 [SA] stop-solve summary (infinite-stop-solve)', diag);
+                    }
+                    return aimed.length > 0 ? aimed : null;
+                }
+
+                // Fallback: origin interpolation between chief and boundary (requires cross-beam metadata).
+                if (!obj0 || !obj0.chiefRayOrigin || !obj0.apertureBoundaryRays || !obj0.direction) return null;
                 const boundaryRay = obj0.apertureBoundaryRays.find(r => r.direction === (axis === 'meridional' ? 'upper' : 'right'));
                 if (!boundaryRay || !boundaryRay.origin) return null;
 
@@ -781,15 +1257,67 @@ export function calculateLongitudinalAberration(
                     targetSurfaceIndex,
                     { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: 'boundary', wavelength }
                 );
-                if (!boundaryTr.success || !boundaryTr.rayPath || boundaryTr.rayPath.length <= stopSurfaceIndex) return null;
-                const bStop = boundaryTr.rayPath[stopSurfaceIndex];
-                const maxStop = Math.abs(axis === 'meridional' ? bStop.y : bStop.x);
+                if (!boundaryTr.success || !boundaryTr.rayPath || boundaryTr.rayPath.length <= stopPointIndex) return null;
+                const bStop = boundaryTr.rayPath[stopPointIndex];
+                const bStopLocal = getStopLocalOffsets(bStop, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
+                const maxStop = Math.abs(
+                    axis === 'meridional'
+                        ? (bStopLocal ? bStopLocal.v : bStop.y)
+                        : (bStopLocal ? bStopLocal.u : bStop.x)
+                );
                 if (!(maxStop > 0)) return null;
 
                 const aimed = [];
                 for (let idx = 0; idx < normalizedSamples.length; idx++) {
                     const pNorm = normalizedSamples[idx];
                     const targetStop = pNorm * maxStop;
+
+                    // OPD/Spot-style: solve origin so the ray hits the stop target.
+                    if (canStopSolve && Number.isFinite(targetStop)) {
+                        if (diag) diag.stopSolveAttempt++;
+                        const stopTarget = {
+                            x: stopPlaneCenter3d.x + axisVec.x * targetStop,
+                            y: stopPlaneCenter3d.y + axisVec.y * targetStop,
+                            z: stopPlaneCenter3d.z + axisVec.z * targetStop
+                        };
+                        const guess = {
+                            x: chiefOrigin.x + deltaUnit.x * (pNorm * deltaLen),
+                            y: chiefOrigin.y + deltaUnit.y * (pNorm * deltaLen),
+                            z: chiefOrigin.z + deltaUnit.z * (pNorm * deltaLen)
+                        };
+                        const refined = solveRayOriginToStopPointFast(guess, direction, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength);
+                        if (diag) {
+                            if (!refined) {
+                                diag.stopSolveNull++;
+                                if (!diag.firstNull) diag.firstNull = { pNorm, targetStop, guess, stopTarget };
+                            } else {
+                                diag.stopSolveSolved++;
+                            }
+                        }
+                        const posSolved = refined || guess;
+                        const trSolved = traceRayWrapped(
+                            opticalSystemRows,
+                            { pos: posSolved, dir: direction, wavelength },
+                            targetSurfaceIndex,
+                            {
+                                type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross',
+                                role: axis,
+                                wavelength,
+                                pupilCoordinateRequested: pNorm,
+                                aimParameter: 'stop-solve'
+                            }
+                        );
+                        if (trSolved.success) {
+                            if (diag) diag.stopSolveTraceOk++;
+                            aimed.push(trSolved);
+                        } else {
+                            if (diag) {
+                                diag.stopSolveTraceFail++;
+                                if (!diag.firstTraceFail) diag.firstTraceFail = { pNorm, targetStop, posSolved, stopTarget };
+                            }
+                        }
+                        continue;
+                    }
 
                     const getStopAtT = (t) => {
                         const pos = {
@@ -803,9 +1331,14 @@ export function calculateLongitudinalAberration(
                             targetSurfaceIndex,
                             { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: `aim_${pNorm}`, wavelength }
                         );
-                        if (!tr.success || !tr.rayPath || tr.rayPath.length <= stopSurfaceIndex) return NaN;
-                        const s = tr.rayPath[stopSurfaceIndex];
-                        return Math.abs(axis === 'meridional' ? s.y : s.x);
+                        if (!tr.success || !tr.rayPath || tr.rayPath.length <= stopPointIndex) return NaN;
+                        const s = tr.rayPath[stopPointIndex];
+                        const local = getStopLocalOffsets(s, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
+                        return Math.abs(
+                            axis === 'meridional'
+                                ? (local ? local.v : s.y)
+                                : (local ? local.u : s.x)
+                        );
                     };
 
                     let tSolved;
@@ -836,12 +1369,21 @@ export function calculateLongitudinalAberration(
                     );
                     if (trSolved.success) aimed.push(trSolved);
                 }
+                if (diag && diag.stopSolveAttempt > 0) {
+                    dbg('🐞 [SA] stop-solve summary (infinite)', diag);
+                }
                 return aimed;
             }
         };
 
         const aimedMeridionalRays = buildAimedRaysForDirection('meridional');
         const aimedSagittalRays = buildAimedRaysForDirection('sagittal');
+
+        dbg('🐞 [SA] aimed rays counts', {
+            wavelength,
+            meridional: aimedMeridionalRays ? aimedMeridionalRays.length : null,
+            sagittal: aimedSagittalRays ? aimedSagittalRays.length : null
+        });
 
         // メリジオナル光線の縦収差を計算（垂直クロス光線）
         const meridionalRays = (aimedMeridionalRays && aimedMeridionalRays.length > 0)
@@ -866,11 +1408,12 @@ export function calculateLongitudinalAberration(
             // const sc = calculateSineConditionViolation(tracedRay, mParax, nObj, nImg);
             const sc = null;
             
-            if (focusZ !== null && transverseAb !== null && tracedRay.rayPath && tracedRay.rayPath.length > stopSurfaceIndex) {
+            if (focusZ !== null && transverseAb !== null && tracedRay.rayPath && tracedRay.rayPath.length > stopPointIndex) {
                 // 縦収差 = 最終面からの距離（実際の焦点位置 - 最終面Z座標）
                 const longitudinalAberration = focusZ - lastSurfaceZ;
-                const stopPoint = tracedRay.rayPath[stopSurfaceIndex];
-                const pupilHeight = Math.abs(stopPoint.y); // 絶対値（0から1の範囲で表示）
+                const stopPoint = tracedRay.rayPath[stopPointIndex];
+                const stopLocal = getStopLocalOffsets(stopPoint, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
+                const pupilHeight = Math.abs(stopLocal ? stopLocal.v : stopPoint.y); // 絶対値（0から1の範囲で表示）
                 
                 // 光軸上の光線（瞳高さ≈0）は球面収差図から除外
                 if (pupilHeight < 1e-6) {
@@ -919,6 +1462,13 @@ export function calculateLongitudinalAberration(
             console.log(`  メリジオナル最大正規化座標: ${maxNormalizedCoord.toFixed(6)}`);
             console.log(`  ストップ半径: ${stopRadius.toFixed(6)} mm`);
             console.log(`  pupilHeight/stopRadius 比: ${(maxMeridionalHeight/stopRadius).toFixed(6)}`);
+        }
+        if (debugSA && tempMeridionalPoints.length === 0) {
+            dbg('🐞 [SA] meridional: no usable points', { wavelength, stopPointIndex, stopSurfaceIndex });
+            if (typeof globalThis !== 'undefined' && globalThis.__cooptLastRayTraceFailure) {
+                const f = globalThis.__cooptLastRayTraceFailure;
+                dbg('🐞 [SA] last raytrace failure snapshot', { kind: f.kind, targetSurfaceIndex: f.targetSurfaceIndex, details: f.details });
+            }
         }
         
         meridionalPoints.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
@@ -995,11 +1545,12 @@ export function calculateLongitudinalAberration(
             // const sc = calculateSineConditionViolation(tracedRay, mParax, nObj, nImg);
             const sc = null;
             
-            if (focusZ !== null && transverseAb !== null && tracedRay.rayPath && tracedRay.rayPath.length > stopSurfaceIndex) {
+            if (focusZ !== null && transverseAb !== null && tracedRay.rayPath && tracedRay.rayPath.length > stopPointIndex) {
                 // 縦収差 = 最終面からの距離（実際の焦点位置 - 最終面Z座標）
                 const longitudinalAberration = focusZ - lastSurfaceZ;
-                const stopPoint = tracedRay.rayPath[stopSurfaceIndex];
-                const pupilHeight = Math.abs(stopPoint.x); // 絶対値（0から1の範囲で表示）
+                const stopPoint = tracedRay.rayPath[stopPointIndex];
+                const stopLocal = getStopLocalOffsets(stopPoint, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
+                const pupilHeight = Math.abs(stopLocal ? stopLocal.u : stopPoint.x); // 絶対値（0から1の範囲で表示）
                 
                 // 光軸上の光線（瞳高さ≈0）は球面収差図から除外
                 if (pupilHeight < 1e-6) {
@@ -1043,6 +1594,13 @@ export function calculateLongitudinalAberration(
             console.log(`  サジタル最大正規化座標: ${maxNormalizedCoord.toFixed(6)}`);
             console.log(`  ストップ半径: ${stopRadius.toFixed(6)} mm`);
             console.log(`  pupilHeight/stopRadius 比: ${(maxSagittalHeight/stopRadius).toFixed(6)}`);
+        }
+        if (debugSA && tempSagittalPoints.length === 0) {
+            dbg('🐞 [SA] sagittal: no usable points', { wavelength, stopPointIndex, stopSurfaceIndex });
+            if (typeof globalThis !== 'undefined' && globalThis.__cooptLastRayTraceFailure) {
+                const f = globalThis.__cooptLastRayTraceFailure;
+                dbg('🐞 [SA] last raytrace failure snapshot', { kind: f.kind, targetSurfaceIndex: f.targetSurfaceIndex, details: f.details });
+            }
         }
         
         sagittalPoints.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);

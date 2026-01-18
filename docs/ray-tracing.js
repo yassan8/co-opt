@@ -886,7 +886,10 @@ function createCoordinateTransform(row, rotationCenterZ = 0) {
   // 正しいマッピング（座標変換説明.md準拠）
   const decenterX = Number(row.semidia ?? 0);   // Semi Dia → Decenter X
   const decenterY = Number(row.material ?? 0);  // Material → Decenter Y (CB面専用)
-  const decenterZ = Number(row.thickness ?? 0); // Thickness → Decenter Z
+  // NOTE: decenterZ is intentionally disabled (always 0).
+  // CB rows reuse thickness for other purposes in legacy designs; treating it as Z-decenter
+  // causes confusing behavior and breaks object visualization.
+  const decenterZ = 0;
   
   // Tilt X, Y, Z の値 (degrees)
   const tiltX = Number(row.rindex ?? 0);        // Ref Index → Tilt X
@@ -1070,6 +1073,12 @@ function calculateCumulativeTransform(surfaceIndex, surfaces) {
     };
 }
 
+function __rtIsCoordBreakRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  const st = String(row.surfType ?? row.type ?? row.surfaceType ?? '').trim().toLowerCase();
+  return st === 'coord break' || st === 'coordinate break' || st === 'coordbreak' || st === 'cb';
+}
+
 // --- 座標変換1.5.md仕様: 各面の原点O(s)と回転行列R(s)の算出 ---
 export function calculateSurfaceOrigins(opticalSystemRows) {
   const surfaceData = [];
@@ -1089,11 +1098,12 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
     
     let surfaceOrigin, surfaceRotMatrix;
     
-    if (surface.surfType === 'Coord Break') {
+    if (__rtIsCoordBreakRow(surface)) {
       // CB面の場合
       const cbParams = parseCoordBreakParams(surface);
       const decenterX = cbParams.decenterX !== undefined ? cbParams.decenterX : 0;
       const decenterY = cbParams.decenterY !== undefined ? cbParams.decenterY : 0;
+      const decenterZ = cbParams.decenterZ !== undefined ? cbParams.decenterZ : 0;
       const tiltX = cbParams.tiltX !== undefined ? cbParams.tiltX : 0;
       const tiltY = cbParams.tiltY !== undefined ? cbParams.tiltY : 0;
       const tiltZ = cbParams.tiltZ !== undefined ? cbParams.tiltZ : 0;
@@ -1116,23 +1126,31 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
         // Order 0: O(s) = O(r) + DX(s)*R(r).ex + DY(s)*R(r).ey + t(r)*R(r).ez
         const dx_term = scale(applyMatrixToVector(previousRotMatrix, ex), decenterX);
         const dy_term = scale(applyMatrixToVector(previousRotMatrix, ey), decenterY);
+        const dz_term = scale(applyMatrixToVector(previousRotMatrix, ez), decenterZ);
         const tz_term = scale(applyMatrixToVector(previousRotMatrix, ez), thickness);
         
-        surfaceOrigin = add(add(add(currentOrigin, dx_term), dy_term), tz_term);
+        surfaceOrigin = add(add(add(add(currentOrigin, dx_term), dy_term), dz_term), tz_term);
       } else {
         // Order 1: O(s) = O(r) + DX(s)*R(s).ex + DY(s)*R(s).ey + t(r)*R(r).ez
         const dx_term = scale(applyMatrixToVector(newRotMatrix, ex), decenterX);
         const dy_term = scale(applyMatrixToVector(newRotMatrix, ey), decenterY);
+        const dz_term = scale(applyMatrixToVector(newRotMatrix, ez), decenterZ);
         const tz_term = scale(applyMatrixToVector(previousRotMatrix, ez), thickness);
         
-        surfaceOrigin = add(add(add(currentOrigin, dx_term), dy_term), tz_term);
+        surfaceOrigin = add(add(add(add(currentOrigin, dx_term), dy_term), dz_term), tz_term);
       }
       
       surfaceRotMatrix = newRotMatrix;
       
     } else {
       // 通常面の場合
+      // Thickness for a normal surface is taken from the *previous* row.
+      // However, Coord Break rows reuse thickness for other purposes and must NOT
+      // contribute to physical spacing.
       let thickness = previousSurface ? getSafeThickness(previousSurface) : 0;
+      if (previousSurface && __rtIsCoordBreakRow(previousSurface)) {
+        thickness = 0;
+      }
       
       // NaN validation and Infinity handling for normal surface thickness
       if (!isFinite(thickness)) {
@@ -1163,7 +1181,7 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
     };
     
     // CB面の場合は変換パラメータも追加
-    if (surface.surfType === 'Coord Break') {
+    if (__rtIsCoordBreakRow(surface)) {
       const cbParams = parseCoordBreakParams(surface);
       debugInfo.cbParams = cbParams;
       debugInfo.previousOrigin = currentOrigin;
@@ -1261,19 +1279,62 @@ function applyMatrixToVector(matrix, vec) {
 
 // CB面パラメータ解析
 function parseCoordBreakParams(surface) {
-  // 正しいマッピング（座標変換説明.md準拠）
-  const decenterX = parseFloat(surface.semidia) || 0;   // Semi Dia → Decenter X
-  const decenterY = parseFloat(surface.material) || 0;  // Material → Decenter Y (CB面専用)
-  const decenterZ = parseFloat(surface.thickness) || 0; // Thickness → Decenter Z
-  
-  // Tilt X, Y, Z の値 (degrees)
-  const tiltX = parseFloat(surface.rindex) || 0;        // Ref Index → Tilt X
-  const tiltY = parseFloat(surface.abbe) || 0;          // Abbe → Tilt Y
-  const tiltZ = parseFloat(surface.conic) || 0;         // Conic → Tilt Z
-  
-  // 変換順序の制御 (coef1 field: 0=Tilt→Decenter, 1=Decenter→Tilt)
-  const transformOrder = parseInt(surface.coef1) || 1;
-  
+  const toFiniteNumber = (...candidates) => {
+    for (const v of candidates) {
+      if (v === null || v === undefined) continue;
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+      const s = String(v).trim();
+      if (s === '') continue;
+      const n = Number(s);
+      if (Number.isFinite(n)) return n;
+    }
+    return 0;
+  };
+
+  // New rule (root-cause fix): Prefer dedicated CoordBreak fields when present.
+  // This prevents accidental decenter from non-CB fields like semidia/material.
+  // Legacy field-reuse remains as a fallback for older designs.
+  const hasExplicit = (() => {
+    const keys = ['decenterX', 'decenterY', 'tiltX', 'tiltY', 'tiltZ', 'order'];
+    if (!surface || typeof surface !== 'object') return false;
+
+    // If the dedicated keys exist at all (even as empty strings), treat this as
+    // an explicit CB schema and avoid legacy fallbacks.
+    // This is important for newly inserted Coord Break rows where semidia/material
+    // may contain non-CB data and would otherwise be misinterpreted as decenter/tilt.
+    const hasDedicatedKeys = keys.some((k) => Object.prototype.hasOwnProperty.call(surface, k));
+    if (hasDedicatedKeys) return true;
+
+    // Otherwise, detect explicit numeric values.
+    for (const k of keys) {
+      const v = surface[k];
+      if (v === null || v === undefined) continue;
+      if (typeof v === 'number' && Number.isFinite(v)) return true;
+      const s = String(v).trim();
+      if (s !== '' && Number.isFinite(Number(s))) return true;
+    }
+    return false;
+  })();
+
+  // IMPORTANT: When dedicated CoordBreak fields are present, do NOT fall back to
+  // legacy reused columns (semidia/material/rindex/abbe/conic/coef1).
+  // Otherwise, a CB row with only `order` set can accidentally pick up a non-zero
+  // semidia/material and introduce an unintended decenter/tilt.
+  const decenterX = hasExplicit ? toFiniteNumber(surface.decenterX) : toFiniteNumber(surface.semidia, surface.decenterX);
+  const decenterY = hasExplicit ? toFiniteNumber(surface.decenterY) : toFiniteNumber(surface.material, surface.decenterY);
+  // decenterZ is disabled (always 0)
+  const decenterZ = 0;
+
+  const tiltX = hasExplicit ? toFiniteNumber(surface.tiltX) : toFiniteNumber(surface.rindex, surface.tiltX);
+  const tiltY = hasExplicit ? toFiniteNumber(surface.tiltY) : toFiniteNumber(surface.abbe, surface.tiltY);
+  const tiltZ = hasExplicit ? toFiniteNumber(surface.tiltZ) : toFiniteNumber(surface.conic, surface.tiltZ);
+
+  const orderCandidate = hasExplicit
+    ? surface.order
+    : ((surface.coef1 !== undefined && surface.coef1 !== null) ? surface.coef1 : surface.order);
+  const orderRaw = Number(String(orderCandidate ?? '').trim());
+  const transformOrder = (orderRaw === 0 || orderRaw === 1) ? orderRaw : 1;
+
   return { decenterX, decenterY, decenterZ, tiltX, tiltY, tiltZ, transformOrder };
 }
 
@@ -1403,17 +1464,19 @@ function __computeSurfaceOriginsSignature(opticalSystemRows) {
       const prev = s > 0 ? (rows[s - 1] || {}) : null;
 
       // surfType discriminator
-      const isCB = String(surface.surfType || '') === 'Coord Break';
+      const isCB = __rtIsCoordBreakRow(surface);
       mix(isCB ? 1 : 0);
 
       // thickness used by calculateSurfaceOrigins comes from previous surface
-      const tPrev = prev ? getSafeThickness(prev) : 0;
+      let tPrev = prev ? getSafeThickness(prev) : 0;
+      if (prev && __rtIsCoordBreakRow(prev)) tPrev = 0;
       mix(q(tPrev, 1e6));
 
       if (isCB) {
         const cbParams = parseCoordBreakParams(surface) || {};
         mix(q(cbParams.decenterX, 1e6));
         mix(q(cbParams.decenterY, 1e6));
+        mix(q(cbParams.decenterZ, 1e6));
         mix(q(cbParams.tiltX, 1e6));
         mix(q(cbParams.tiltY, 1e6));
         mix(q(cbParams.tiltZ, 1e6));
@@ -1652,63 +1715,26 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
     }
 
     // Coordinate Break面の特別処理
-    if (row.surfType === "Coord Break") {
+    if (__rtIsCoordBreakRow(row)) {
       // 座標変換1.5.md仕様: CB面では座標系変換のみ、O(s)/R(s)システムを使用
       
       if (isDetailedDebug) {
+        const cb = parseCoordBreakParams(row) || {};
         debugLog.push(`Coord Break Parameters:`);
-        debugLog.push(`  material: "${row.material}" → decenterY: ${parseFloat(row.material) || 0} (CB面専用: coordinate transform)`);
-        debugLog.push(`  rindex: ${row.rindex} → tiltX: ${parseFloat(row.rindex) || 0}° (CB面専用: rotation parameter)`);
-        debugLog.push(`  abbe: ${row.abbe} → tiltY: ${parseFloat(row.abbe) || 0}° (CB面専用: rotation parameter)`);
-        debugLog.push(`  conic: ${row.conic} → tiltZ: ${parseFloat(row.conic) || 0}° (CB面専用: rotation parameter)`);
-        debugLog.push(`  coef1: ${row.coef1} → transformOrder: ${parseInt(row.coef1) || 0}`);
-        debugLog.push(`  thickness: ${row.thickness} → decenterZ: ${parseFloat(row.thickness) || 0}`);
+        debugLog.push(`  decenterX=${Number(cb.decenterX) || 0}, decenterY=${Number(cb.decenterY) || 0}, decenterZ=${Number(cb.decenterZ) || 0}`);
+        debugLog.push(`  tiltX=${Number(cb.tiltX) || 0}°, tiltY=${Number(cb.tiltY) || 0}°, tiltZ=${Number(cb.tiltZ) || 0}°, order=${Number(cb.transformOrder) || 1}`);
         
         const rayBefore = { pos: { ...ray.pos }, dir: { ...ray.dir } };
         debugLog.push(`Ray BEFORE Coord Break: pos=(${rayBefore.pos.x.toFixed(6)}, ${rayBefore.pos.y.toFixed(6)}, ${rayBefore.pos.z.toFixed(6)}), dir=(${rayBefore.dir.x.toFixed(6)}, ${rayBefore.dir.y.toFixed(6)}, ${rayBefore.dir.z.toFixed(6)})`);
       }
       
-      // CB面では交点や反射・屈折は行わず、単に座標系変換のみ
-      // 次の面への移動距離はthickness（通常は0）
-      const thickness = parseFloat(row.thickness) || 0;
-      if (thickness !== 0) {
-        const newPos = add(safeRay0.pos, scale(safeRay0.dir, thickness));
-        safeRay0.pos = newPos;
-        
-        // CB面のthickness移動後の位置は記録しない
-        // （前面の交点Rと次面の交点Rを直接結ぶ光線経路にするため）
-        
-        // thickness移動後の位置を記録（前の位置と異なる場合のみ） - 無効化
-        /*
-        const lastPoint = rayPath[rayPath.length - 1];
-        const distance = Math.sqrt(
-          Math.pow(newPos.x - lastPoint.x, 2) + 
-          Math.pow(newPos.y - lastPoint.y, 2) + 
-          Math.pow(newPos.z - lastPoint.z, 2)
-        );
-        
-        // CB面のthickness移動は通常物理的意味がないので、
-        // より厳しい条件（5mm以上）で記録
-        const hasNextSurface = i < opticalSystemRows.length - 1;
-        if (distance > 5.0 && hasNextSurface) {
-          rayPath.push({ ...newPos });
-          if (isDetailedDebug) {
-            debugLog.push(`CB thickness advancement: ${thickness}mm, distance: ${distance.toFixed(6)}mm (recorded)`);
-          }
-        } else if (isDetailedDebug) {
-          const reason = !hasNextSurface ? "no next surface" : `distance too small (${distance.toFixed(6)}mm < 5.0mm)`;
-          debugLog.push(`CB thickness advancement: ${thickness}mm, distance: ${distance.toFixed(6)}mm (skipped: ${reason})`);
-        }
-        */
-        
-        if (isDetailedDebug) {
-          debugLog.push(`CB thickness advancement: ${thickness}mm (intermediate position not recorded for clean ray paths)`);
-        }
-      }
+      // CB面では交点や反射・屈折は行わず、単に座標系変換のみ。
+      // NOTE: このアプリでは CB 行の thickness フィールドは decenterZ として再利用されるため、
+      //       「次面までの物理距離」として前進させてはいけない。
       
       if (isDetailedDebug) {
         debugLog.push(`Ray AFTER Coord Break: pos=(${ray.pos.x.toFixed(6)}, ${ray.pos.y.toFixed(6)}, ${ray.pos.z.toFixed(6)}), dir=(${ray.dir.x.toFixed(6)}, ${ray.dir.y.toFixed(6)}, ${ray.dir.z.toFixed(6)})`);
-        debugLog.push(`CB面 ${i + 1}: 座標系変換のみ、thickness=${thickness}mm進行`);
+        debugLog.push(`CB面 ${i + 1}: 座標系変換のみ（物理前進なし）`);
       }
       
       continue;
@@ -1855,6 +1881,45 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
           surfType: row.surfType || '',
           hitRadiusMm: hitRadius,
           apertureLimitMm: apertureLimit,
+          hitPointLocalMm: {
+            x: Number.isFinite(Number(hitPoint?.x)) ? Number(hitPoint.x) : null,
+            y: Number.isFinite(Number(hitPoint?.y)) ? Number(hitPoint.y) : null,
+            z: Number.isFinite(Number(hitPoint?.z)) ? Number(hitPoint.z) : null,
+          },
+          hitPointGlobalMm: (() => {
+            try {
+              const p = transformPointToGlobal(hitPoint, surfaceInfo);
+              return {
+                x: Number.isFinite(Number(p?.x)) ? Number(p.x) : null,
+                y: Number.isFinite(Number(p?.y)) ? Number(p.y) : null,
+                z: Number.isFinite(Number(p?.z)) ? Number(p.z) : null,
+              };
+            } catch (_) {
+              return null;
+            }
+          })(),
+          localRayAtSurface: {
+            pos: {
+              x: Number.isFinite(Number(localRay?.pos?.x)) ? Number(localRay.pos.x) : null,
+              y: Number.isFinite(Number(localRay?.pos?.y)) ? Number(localRay.pos.y) : null,
+              z: Number.isFinite(Number(localRay?.pos?.z)) ? Number(localRay.pos.z) : null,
+            },
+            dir: {
+              x: Number.isFinite(Number(localRay?.dir?.x)) ? Number(localRay.dir.x) : null,
+              y: Number.isFinite(Number(localRay?.dir?.y)) ? Number(localRay.dir.y) : null,
+              z: Number.isFinite(Number(localRay?.dir?.z)) ? Number(localRay.dir.z) : null,
+            }
+          },
+          surfaceOriginMm: {
+            x: Number.isFinite(Number(surfaceInfo?.origin?.x)) ? Number(surfaceInfo.origin.x) : null,
+            y: Number.isFinite(Number(surfaceInfo?.origin?.y)) ? Number(surfaceInfo.origin.y) : null,
+            z: Number.isFinite(Number(surfaceInfo?.origin?.z)) ? Number(surfaceInfo.origin.z) : null,
+          },
+          cbState: {
+            isInTransformedCoordinates: !!isInTransformedCoordinates,
+            transformCount: Array.isArray(coordinateTransforms) ? coordinateTransforms.length : null,
+          },
+          thickness: row.thickness,
           semidia: row.semidia,
           aperture: row.aperture ?? row.Aperture
         });
@@ -1979,6 +2044,45 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
           surfType: row.surfType || '',
           hitRadiusMm: hitRadius,
           apertureLimitMm: apertureLimit,
+          hitPointLocalMm: {
+            x: Number.isFinite(Number(hitPoint?.x)) ? Number(hitPoint.x) : null,
+            y: Number.isFinite(Number(hitPoint?.y)) ? Number(hitPoint.y) : null,
+            z: Number.isFinite(Number(hitPoint?.z)) ? Number(hitPoint.z) : null,
+          },
+          hitPointGlobalMm: (() => {
+            try {
+              const p = transformPointToGlobal(hitPoint, surfaceInfo);
+              return {
+                x: Number.isFinite(Number(p?.x)) ? Number(p.x) : null,
+                y: Number.isFinite(Number(p?.y)) ? Number(p.y) : null,
+                z: Number.isFinite(Number(p?.z)) ? Number(p.z) : null,
+              };
+            } catch (_) {
+              return null;
+            }
+          })(),
+          localRayAtSurface: {
+            pos: {
+              x: Number.isFinite(Number(localRay?.pos?.x)) ? Number(localRay.pos.x) : null,
+              y: Number.isFinite(Number(localRay?.pos?.y)) ? Number(localRay.pos.y) : null,
+              z: Number.isFinite(Number(localRay?.pos?.z)) ? Number(localRay.pos.z) : null,
+            },
+            dir: {
+              x: Number.isFinite(Number(localRay?.dir?.x)) ? Number(localRay.dir.x) : null,
+              y: Number.isFinite(Number(localRay?.dir?.y)) ? Number(localRay.dir.y) : null,
+              z: Number.isFinite(Number(localRay?.dir?.z)) ? Number(localRay.dir.z) : null,
+            }
+          },
+          surfaceOriginMm: {
+            x: Number.isFinite(Number(surfaceInfo?.origin?.x)) ? Number(surfaceInfo.origin.x) : null,
+            y: Number.isFinite(Number(surfaceInfo?.origin?.y)) ? Number(surfaceInfo.origin.y) : null,
+            z: Number.isFinite(Number(surfaceInfo?.origin?.z)) ? Number(surfaceInfo.origin.z) : null,
+          },
+          cbState: {
+            isInTransformedCoordinates: !!isInTransformedCoordinates,
+            transformCount: Array.isArray(coordinateTransforms) ? coordinateTransforms.length : null,
+          },
+          thickness: row.thickness,
           semidia: row.semidia,
           aperture: row.aperture ?? row.Aperture
         });

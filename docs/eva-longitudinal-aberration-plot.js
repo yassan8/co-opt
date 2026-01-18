@@ -219,8 +219,10 @@ export function plotLongitudinalAberration(containerId, aberrationData, options 
         }
     });
     
-    // 横軸範囲を固定±0.5mmに設定（非点収差図と揃える）
-    const symmetricRange = 0.5;
+    // 横軸範囲: 通常は±0.5mm（非点収差図と揃える）。
+    // ただし値が大きい場合は自動で拡張し、プロットが空に見えるのを避ける。
+    const maxAbsLong = allXValues.length > 0 ? Math.max(...allXValues.map(x => Math.abs(x))) : 0.5;
+    const symmetricRange = Math.max(0.5, (Number.isFinite(maxAbsLong) && maxAbsLong > 0) ? maxAbsLong * 1.1 : 0.5);
     
     const maxAbsSC = allSCValues.length > 0 ? Math.max(...allSCValues.map(x => Math.abs(x))) : 1;
     const symmetricRangeSC = maxAbsSC * 1.1; // 10%のマージンを追加
@@ -429,8 +431,10 @@ export function plotSineConditionViolation(containerId, aberrationData, options 
         });
     });
     
-    // 横軸範囲を固定±0.5mmに設定（非点収差図と揃える）
-    const symmetricRange = 0.5;
+    // 横軸範囲: 通常は±0.5mm（非点収差図と揃える）。
+    // ただし値が大きい場合は自動で拡張し、プロットが空に見えるのを避ける。
+    const maxAbsLong = allXValues.length > 0 ? Math.max(...allXValues.map(x => Math.abs(x))) : 0.5;
+    const symmetricRange = Math.max(0.5, (Number.isFinite(maxAbsLong) && maxAbsLong > 0) ? maxAbsLong * 1.1 : 0.5);
     
     // レイアウト設定
     const xAxisTitle = asPercentage ? 'Sine Condition Violation (%)' : 'Sine Condition Violation';

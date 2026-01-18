@@ -114,6 +114,15 @@ export function getSafeThickness(surface) {
     // // console.warn('getSafeThickness: surface is null/undefined, returning 0');
     return 0;
   }
+
+  // Coord Break rows reuse the thickness field for decenterZ.
+  // They are non-physical rows and must not contribute spacing to the next surface.
+  try {
+    const st = String(surface.surfType ?? '').trim().toLowerCase();
+    if (st === 'coord break' || st === 'coordinate break' || st === 'cb') {
+      return 0;
+    }
+  } catch (_) {}
   
   let thickness = surface.thickness;
   if (thickness === undefined || thickness === null || thickness === "") {

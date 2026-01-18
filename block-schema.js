@@ -1145,6 +1145,21 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const tiltZ = getParamOrVarValue(params, vars, 'tiltZ');
       const order = getParamOrVarValue(params, vars, 'order');
 
+      // Also store explicit CoordBreak params to avoid collisions with reused table fields.
+      // (Rendering / ray-tracing prefer these when present.)
+      cb.decenterX = (typeof decenterX === 'number') ? decenterX : (isNumericString(String(decenterX ?? '').trim()) ? Number(decenterX) : 0);
+      cb.decenterY = (typeof decenterY === 'number') ? decenterY : (isNumericString(String(decenterY ?? '').trim()) ? Number(decenterY) : 0);
+      cb.decenterZ = (typeof decenterZ === 'number') ? decenterZ : (isNumericString(String(decenterZ ?? '').trim()) ? Number(decenterZ) : 0);
+      cb.tiltX = (typeof tiltX === 'number') ? tiltX : (isNumericString(String(tiltX ?? '').trim()) ? Number(tiltX) : 0);
+      cb.tiltY = (typeof tiltY === 'number') ? tiltY : (isNumericString(String(tiltY ?? '').trim()) ? Number(tiltY) : 0);
+      cb.tiltZ = (typeof tiltZ === 'number') ? tiltZ : (isNumericString(String(tiltZ ?? '').trim()) ? Number(tiltZ) : 0);
+      cb.order = (() => {
+        const s = String(order ?? '').trim();
+        if (s === '') return 1;
+        const n = (typeof order === 'number') ? order : (isNumericString(s) ? Number(s) : NaN);
+        return (n === 0 || n === 1) ? n : 1;
+      })();
+
       // Coord Break field reuse (see specification/ray-tracing.md)
       cb.semidia = normalizeOptionalNumberToRowValue(decenterX);
       cb.material = normalizeOptionalNumberToRowValue(decenterY);

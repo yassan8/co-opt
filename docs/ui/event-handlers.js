@@ -2330,6 +2330,25 @@ export function setupOpticalSystemChangeListeners(scene) {
             const popupSelect = document.getElementById('popup-surface-number-select');
             if (!popupSelect) return;
 
+            const normalizeLabel = (text) => {
+                const t = String(text || '').trim();
+                // Drop leading "Surf N:" / "Surface N:" / "面 N" etc.
+                return t
+                    .replace(/^Surf\s*\d+\s*[:\-]?\s*/i, '')
+                    .replace(/^Surface\s*\d+\s*[:\-]?\s*/i, '')
+                    .replace(/^面\s*\d+\s*[:\-]?\s*/i, '')
+                    .trim();
+            };
+
+            const prevValue = popupSelect.value;
+            const prevText = popupSelect.options && popupSelect.selectedIndex >= 0
+                ? popupSelect.options[popupSelect.selectedIndex]?.textContent
+                : '';
+            const prevKey = normalizeLabel(prevText);
+            const prevWasLast = popupSelect.options && popupSelect.options.length > 0
+                ? popupSelect.selectedIndex === (popupSelect.options.length - 1)
+                : false;
+
             popupSelect.innerHTML = '';
             if (!openerSelect || !openerSelect.options) {
                 const opt = document.createElement('option');
@@ -2348,7 +2367,25 @@ export function setupOpticalSystemChangeListeners(scene) {
                 popupSelect.appendChild(opt);
             }
 
-            // mirror selected value
+            // Preserve selection robustly across insert/delete (e.g., Image surface shifts index).
+            const hasValue = (v) => Array.from(popupSelect.options || []).some((opt) => String(opt.value) === String(v));
+            if (prevValue !== '' && hasValue(prevValue)) {
+                popupSelect.value = prevValue;
+                return;
+            }
+            if (prevKey) {
+                const opts = Array.from(popupSelect.options || []);
+                const match = opts.find((opt) => normalizeLabel(opt.textContent) === prevKey);
+                if (match) {
+                    popupSelect.value = match.value;
+                    return;
+                }
+            }
+            if (prevWasLast && popupSelect.options && popupSelect.options.length > 0) {
+                popupSelect.selectedIndex = popupSelect.options.length - 1;
+                return;
+            }
+            // Fallback: mirror opener selection.
             popupSelect.value = openerSelect.value;
         }
 
@@ -2434,6 +2471,9 @@ export function setupOpticalSystemChangeListeners(scene) {
             const popupContainer = document.getElementById('popup-spot-diagram-container');
             if (popupContainer) popupContainer.innerHTML = '';
 
+            // Ensure surface indices/options are up-to-date (CB insert/delete shifts indices).
+            try { syncSurfaceOptionsFromOpener(); } catch (_) {}
+
             const progressWrapper = document.getElementById('popup-spot-progress-wrapper');
             const progressBarEl = document.getElementById('popup-spot-progressbar');
             const progressTextEl = document.getElementById('popup-spot-progress-text');
@@ -2499,6 +2539,20 @@ export function setupOpticalSystemChangeListeners(scene) {
             syncSurfaceOptionsFromOpener();
             syncInputsFromOpener();
         }
+
+        // Allow the opener to request a resync after table edits (e.g., CB insert/delete).
+        try {
+            window.__cooptSpotPopupSyncAll = syncAll;
+        } catch (_) {}
+        window.addEventListener('message', (ev) => {
+            try {
+                const data = ev && ev.data;
+                if (!data || data.action !== 'coopt-spot-sync') return;
+                syncAll();
+            } catch (_) {
+                // ignore
+            }
+        });
 
         window.addEventListener('focus', syncAll);
         syncAll();

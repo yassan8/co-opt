@@ -368,7 +368,7 @@ export function drawLensSurface(scene, params, mode = "even", segments = 100, zO
 
   const mesh = new THREE_CTX.Mesh(geometry, material);
   // mesh.position.z = zOffset; // 不要 - 頂点ですでにzOffsetが適用済み
-  mesh.userData = { type: 'lensSurface' };
+  mesh.userData = { type: 'lensSurface', isLensSurface: true, surfaceType: '3DSurface' };
   scene.add(mesh);
   
   debugLog(`✅ drawLensSurface: Added 3D lens surface to scene, vertices: ${positions.length/3}, faces: ${indices.length/3}`);
@@ -513,7 +513,7 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
   });
 
   const mesh = new THREE_CTX.Mesh(geometry, material);
-  mesh.userData = { type: 'lensSurface' };
+  mesh.userData = { type: 'lensSurface', isLensSurface: true, surfaceType: '3DSurface' };
   scene.add(mesh);
   
   debugLog(`✅ drawLensSurfaceWithOrigin: Added 3D lens surface to scene, vertices: ${positions.length/3}, faces: ${indices.length/3}`);
@@ -689,15 +689,23 @@ function applyInvRotation3D(vector, rotationRad) {
 
 // --- Coordinate Break情報を蓄積する構造体 ---
 export function createCoordinateTransform(decenterX, decenterY, decenterZ, tiltX, tiltY, tiltZ, order, zOffset) {
+  const nx = Number(decenterX);
+  const ny = Number(decenterY);
+  const nz = Number(decenterZ);
+  const tx = Number(tiltX);
+  const ty = Number(tiltY);
+  const tz = Number(tiltZ);
+  const o = Number(order);
+  const zo = Number(zOffset);
   return {
-    decenterX: decenterX || 0,
-    decenterY: decenterY || 0,
-    decenterZ: decenterZ || 0,
-    tiltX: (tiltX || 0) * Math.PI / 180, // ラジアンに変換
-    tiltY: (tiltY || 0) * Math.PI / 180,
-    tiltZ: (tiltZ || 0) * Math.PI / 180,
-    order: order || 0, // 0: Tilt→Decenter, 1: Decenter→Tilt
-    zOffset: zOffset || 0
+    decenterX: Number.isFinite(nx) ? nx : 0,
+    decenterY: Number.isFinite(ny) ? ny : 0,
+    decenterZ: Number.isFinite(nz) ? nz : 0,
+    tiltX: (Number.isFinite(tx) ? tx : 0) * Math.PI / 180, // ラジアンに変換
+    tiltY: (Number.isFinite(ty) ? ty : 0) * Math.PI / 180,
+    tiltZ: (Number.isFinite(tz) ? tz : 0) * Math.PI / 180,
+    order: (o === 1) ? 1 : 0, // 0: Tilt→Decenter, 1: Decenter→Tilt
+    zOffset: Number.isFinite(zo) ? zo : 0
   };
 }
 

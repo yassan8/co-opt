@@ -1207,6 +1207,115 @@ tableOpticalSystem.on("cellEdited", function(cell){
     const rowData = row.getData();
     const value = cell.getValue();
 
+    // If a user switches an existing surface to Coord Break, the row often already has
+    // semidia/material/etc from a refractive surface. Because Coord Break reuses these
+    // fields (semidia->decenterX, material->decenterY, ...), keeping the old values
+    // causes an immediate unintended decenter (e.g., 4-5mm). Normalize defaults here.
+    try {
+      if (field === 'surfType' && rowData && typeof rowData === 'object') {
+        const oldSurfType = String((typeof cell.getOldValue === 'function' ? cell.getOldValue() : '') ?? '').trim();
+        const newSurfType = String(value ?? '').trim();
+
+        const isOldCB = oldSurfType === 'Coord Break';
+        const isNewCB = newSurfType === 'Coord Break';
+
+        // Fields to preserve/restore when toggling CB on/off.
+        const LENS_FIELDS = [
+          'radius', 'thickness', 'semidia', 'material', 'rindex', 'abbe', 'conic',
+          'coef1', 'coef2', 'coef3', 'coef4', 'coef5', 'coef6', 'coef7', 'coef8', 'coef9', 'coef10'
+        ];
+
+        if (!isOldCB && isNewCB) {
+          // Stash previous refractive values so the user can switch back without losing data.
+          const saved = {};
+          for (const k of LENS_FIELDS) saved[k] = rowData[k];
+
+          const patch = {
+            __cooptSavedBeforeCoordBreak: saved,
+            radius: 'INF',
+            semidia: 0,
+            material: 0,
+            thickness: 0,
+            rindex: 0,
+            abbe: 0,
+            conic: 0,
+            coef1: 0,
+            // Dedicated CoordBreak storage (stop reusing lens fields in core math)
+            decenterX: 0,
+            decenterY: 0,
+            tiltX: 0,
+            tiltY: 0,
+            tiltZ: 0,
+            order: 0,
+            coef2: '',
+            coef3: '',
+            coef4: '',
+            coef5: '',
+            coef6: '',
+            coef7: '',
+            coef8: '',
+            coef9: '',
+            coef10: ''
+          };
+
+          try {
+            const rid = (typeof rowData.id === 'number') ? rowData.id : Number(rowData.id);
+            if (Number.isFinite(rid)) tableOpticalSystem.updateRow(rid, patch);
+          } catch (e) {
+            console.warn('⚠️ Failed to normalize Coord Break defaults:', e);
+          }
+        } else if (isOldCB && !isNewCB) {
+          // Restore previous refractive values if we have them.
+          const saved = rowData.__cooptSavedBeforeCoordBreak;
+          if (saved && typeof saved === 'object') {
+            const patch = { __cooptSavedBeforeCoordBreak: null };
+            for (const k of LENS_FIELDS) {
+              if (Object.prototype.hasOwnProperty.call(saved, k)) patch[k] = saved[k];
+            }
+            try {
+              const rid = (typeof rowData.id === 'number') ? rowData.id : Number(rowData.id);
+              if (Number.isFinite(rid)) tableOpticalSystem.updateRow(rid, patch);
+            } catch (e) {
+              console.warn('⚠️ Failed to restore values after leaving Coord Break:', e);
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    // Root fix: even if the UI continues to show CB values in legacy columns,
+    // always mirror edits into dedicated CB fields so ray-tracing/rendering
+    // never depend on semidia/material/thickness for Coord Break behavior.
+    try {
+      const st = String(rowData?.surfType ?? '').trim();
+      if (st === 'Coord Break') {
+        const FIELD_TO_EXPLICIT = {
+          semidia: 'decenterX',
+          material: 'decenterY',
+          rindex: 'tiltX',
+          abbe: 'tiltY',
+          conic: 'tiltZ',
+          coef1: 'order'
+        };
+
+        const targetKey = FIELD_TO_EXPLICIT[String(field)];
+        if (targetKey) {
+          const rid = (typeof rowData.id === 'number') ? rowData.id : Number(rowData.id);
+          if (Number.isFinite(rid)) {
+            let v = cell.getValue();
+            const s = String(v ?? '').trim();
+            const n = (s === '') ? 0 : Number(s);
+            if (targetKey === 'order') {
+              const o = (n === 1) ? 1 : 0;
+              tableOpticalSystem.updateRow(rid, { order: o });
+            } else {
+              tableOpticalSystem.updateRow(rid, { [targetKey]: Number.isFinite(n) ? n : 0 });
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
     // Surface Type edits should refresh dynamic headers immediately.
     // (rowSelected won't fire if the row was already selected.)
     try {
@@ -1225,6 +1334,17 @@ tableOpticalSystem.on("cellEdited", function(cell){
           updateTitlesForCoordBreak(false);
           updateCoefTitles();
         }
+
+        // Keep Spot Diagram Surf dropdown in sync (CB insert/delete/toggle can shift numbering).
+        try {
+          setTimeout(() => {
+            try {
+              if (typeof window !== 'undefined' && typeof window.updateSurfaceNumberSelect === 'function') {
+                window.updateSurfaceNumberSelect();
+              }
+            } catch (_) {}
+          }, 0);
+        } catch (_) {}
       }
     } catch (_) {}
     
@@ -1774,6 +1894,17 @@ setTimeout(() => {
           updateObjectTypes(data);
           tableOpticalSystem.replaceData(data);
           saveTableData(data);
+
+          // Refresh Surf dropdown immediately (otherwise it only updates after reload).
+          try {
+            setTimeout(() => {
+              try {
+                if (typeof window !== 'undefined' && typeof window.updateSurfaceNumberSelect === 'function') {
+                  window.updateSurfaceNumberSelect();
+                }
+              } catch (_) {}
+            }, 0);
+          } catch (_) {}
         }).catch((e) => {
           console.error('❌ Failed to add optical system row:', e);
         });
@@ -1813,6 +1944,17 @@ setTimeout(() => {
           updateObjectTypes(data);
           tableOpticalSystem.replaceData(data);
           saveTableData(data);
+
+          // Refresh Surf dropdown immediately (otherwise it only updates after reload).
+          try {
+            setTimeout(() => {
+              try {
+                if (typeof window !== 'undefined' && typeof window.updateSurfaceNumberSelect === 'function') {
+                  window.updateSurfaceNumberSelect();
+                }
+              } catch (_) {}
+            }, 0);
+          } catch (_) {}
         }, 0);
       } catch (e) {
         console.error('❌ Del Surf error:', e);
@@ -1969,9 +2111,36 @@ async function calculateImageSemiDiaFromChiefRays() {
             let maxHeight = 0;
             let computedAny = false;
             console.log(`🔍 取得した光線数: ${rays.length}`);
+
+            // traceRay() rayPath convention:
+            // rayPath[0] = start point; then hit points for each non-Object, non-CB surface.
+            const __isCoordBreakRow = (row) => {
+              const st = String(row?.surfType ?? row?.['surf type'] ?? '').trim().toLowerCase();
+              return st === 'coord break' || st === 'coordinate break' || st === 'cb' || st === 'coordbreak';
+            };
+            const __isObjectRow = (row) => {
+              const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+              return t === 'object';
+            };
+            const __rayPathPointIndexForSurfaceIndex = (rows, surfaceIndex0) => {
+              if (!Array.isArray(rows)) return null;
+              const sIdx = Number(surfaceIndex0);
+              if (!Number.isInteger(sIdx) || sIdx < 0 || sIdx >= rows.length) return null;
+              const row = rows[sIdx];
+              if (__isObjectRow(row) || __isCoordBreakRow(row)) return null;
+              let count = 0;
+              for (let i = 0; i <= sIdx; i++) {
+                const r = rows[i];
+                if (__isObjectRow(r) || __isCoordBreakRow(r)) continue;
+                count++;
+              }
+              return count > 0 ? count : null;
+            };
+            const imageRayPathIndex = __rayPathPointIndexForSurfaceIndex(opticalSystemRows, imageSurfaceIndex);
+
             rays.forEach((ray, rayIndex) => {
-              if (ray.rayPath && ray.rayPath.length > imageSurfaceIndex) {
-                const imagePoint = ray.rayPath[imageSurfaceIndex];
+              if (ray.rayPath && Array.isArray(ray.rayPath) && imageRayPathIndex !== null && ray.rayPath.length > imageRayPathIndex) {
+                const imagePoint = ray.rayPath[imageRayPathIndex];
                 console.log(`  Ray ${rayIndex}: Image面での位置 x=${imagePoint?.x}, y=${imagePoint?.y}`);
                 if (imagePoint && isFinite(imagePoint.x) && isFinite(imagePoint.y)) {
                   computedAny = true;

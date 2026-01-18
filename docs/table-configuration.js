@@ -236,7 +236,6 @@ export async function loadActiveConfigurationToTables(options = {}) {
 
     const preserveLegacySemidiaIntoExpanded = (expandedRows, legacyRows) => {
       if (!Array.isArray(expandedRows) || !Array.isArray(legacyRows)) return;
-      const n = Math.min(expandedRows.length, legacyRows.length);
       const hasValue = (v) => {
         if (v === null || v === undefined) return false;
         const s = String(v).trim();
@@ -250,15 +249,50 @@ export async function loadActiveConfigurationToTables(options = {}) {
         const t = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
         return t;
       };
-      for (let i = 0; i < n; i++) {
-        const e = expandedRows[i];
-        const l = legacyRows[i];
-        if (!e || typeof e !== 'object' || !l || typeof l !== 'object') continue;
 
-        // Blocks only model Stop.semiDiameter; per-surface semidia is a table-level detail.
-        // Therefore, always preserve legacy semidia for non-Stop / non-Image rows.
-        const t = rowType(e);
-        if (t === 'stop' || t === 'image') continue;
+      const isSkippableRow = (row) => {
+        const t = rowType(row);
+        return t === 'stop' || t === 'sto' || t === 'image' || t === 'object'
+          || t === 'coordbreak' || t === 'coord break' || t === 'cb';
+      };
+      const keyFor = (row) => {
+        if (!row || typeof row !== 'object') return '';
+        const bid = String(row._blockId ?? '').trim();
+        const role = String(row._surfaceRole ?? '').trim();
+        return (bid && role) ? `${bid}|${role}` : '';
+      };
+
+      const legacyByKey = new Map();
+      try {
+        for (const l of legacyRows) {
+          if (!l || typeof l !== 'object') continue;
+          if (isSkippableRow(l)) continue;
+          const k = keyFor(l);
+          if (k) legacyByKey.set(k, l);
+        }
+      } catch (_) {}
+
+      let li = 0;
+      for (let ei = 0; ei < expandedRows.length; ei++) {
+        const e = expandedRows[ei];
+        if (!e || typeof e !== 'object') continue;
+
+        // Preserve legacy semidia only for physical surfaces.
+        if (isSkippableRow(e)) continue;
+
+        let l = null;
+        try {
+          const k = keyFor(e);
+          if (k && legacyByKey.has(k)) l = legacyByKey.get(k);
+        } catch (_) {
+          l = null;
+        }
+        if (!l) {
+          while (li < legacyRows.length && isSkippableRow(legacyRows[li])) li++;
+          l = (li < legacyRows.length) ? legacyRows[li] : null;
+          li++;
+        }
+        if (!l || typeof l !== 'object') continue;
 
         const lsRaw = getLegacySemidia(l);
         if (hasValue(lsRaw)) e.semidia = lsRaw;

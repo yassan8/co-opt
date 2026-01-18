@@ -9,6 +9,26 @@ import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurface
          drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from '../surface.js';
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
+const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordBreak';
+
+function __coopt_isCoordBreakDebugEnabled() {
+    try {
+        const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+        if (g && g.__COOPT_DEBUG_COORD_BREAK) return true;
+        // If running inside an iframe, allow enabling from parent.
+        try {
+            if (g && g.parent && g.parent !== g && g.parent.__COOPT_DEBUG_COORD_BREAK) return true;
+        } catch (_) {}
+        // Also allow enabling via localStorage so both parent/child frames can see it.
+        try {
+            if (typeof localStorage !== 'undefined') {
+                const v = String(localStorage.getItem(COORD_BREAK_DEBUG_STORAGE_KEY) ?? '').trim();
+                if (v && v !== '0' && v.toLowerCase() !== 'false') return true;
+            }
+        } catch (_) {}
+    } catch (_) {}
+    return false;
+}
 
 function __coopt_isPlainObject(v) {
     return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -102,6 +122,73 @@ export function drawOpticalSystemSurfaces(options = {}) {
     const surfaceOrigins = calculateSurfaceOrigins(opticalSystemData);
     console.log('🔍 Surface origins calculated:', surfaceOrigins ? surfaceOrigins.length : 'None');
 
+    // Opt-in Coord Break debug: helps verify that decenter params are numeric at render time.
+    try {
+        const DEBUG_CB = __coopt_isCoordBreakDebugEnabled();
+        if (DEBUG_CB && Array.isArray(surfaceOrigins)) {
+            console.log('🧭 [CO-OPT] Coord Break debug enabled');
+            const cbRows = [];
+            for (let i = 0; i < opticalSystemData.length; i++) {
+                const row = opticalSystemData[i];
+                if (!row) continue;
+                if (String(row.surfType || '') !== 'Coord Break') continue;
+                const origin = surfaceOrigins[i]?.origin;
+                const cbParams = surfaceOrigins[i]?.cbParams;
+                cbRows.push({
+                    i,
+                    blockId: row._blockId || null,
+                    raw: {
+                        semidia: row.semidia,
+                        material: row.material,
+                        thickness: row.thickness,
+                        rindex: row.rindex,
+                        abbe: row.abbe,
+                        conic: row.conic,
+                        coef1: row.coef1,
+                        decenterX: row.decenterX,
+                        decenterY: row.decenterY,
+                        decenterZ: row.decenterZ,
+                        tiltX: row.tiltX,
+                        tiltY: row.tiltY,
+                        tiltZ: row.tiltZ,
+                        order: row.order
+                    },
+                    parsed: cbParams || null,
+                    origin: origin ? { x: origin.x, y: origin.y, z: origin.z } : null
+                });
+            }
+            if (cbRows.length) {
+                const tableRows = cbRows.map(r => ({
+                    i: r.i,
+                    blockId: r.blockId,
+                    raw_material: r.raw.material,
+                    raw_semidia: r.raw.semidia,
+                    raw_thickness: r.raw.thickness,
+                    decX: r.parsed?.decenterX,
+                    decY: r.parsed?.decenterY,
+                    decZ: r.parsed?.decenterZ,
+                    tiltX: r.parsed?.tiltX,
+                    tiltY: r.parsed?.tiltY,
+                    tiltZ: r.parsed?.tiltZ,
+                    order: r.parsed?.transformOrder,
+                    ox: r.origin?.x,
+                    oy: r.origin?.y,
+                    oz: r.origin?.z
+                }));
+
+                // Print table outside of groups so it's visible even when groups are collapsed.
+                console.table(tableRows);
+
+                console.groupCollapsed(`🧭 [CO-OPT] Coord Break debug (${cbRows.length} rows)`);
+                for (const r of tableRows) {
+                    console.log('🧭 [CO-OPT] CB row:', JSON.stringify(r));
+                }
+                console.log(cbRows);
+                console.groupEnd();
+            }
+        }
+    } catch (_) {}
+
     const surfaceColorOverrides = __coopt_loadSurfaceColorOverrides();
     
     // Debug: Show all surface origins
@@ -151,6 +238,13 @@ export function drawOpticalSystemSurfaces(options = {}) {
                 } else {
                     console.log(`🔸 3D Surface ${i}: Object面（有限系、thickness=${objectThickness}）、3D描画実行`);
                 }
+            }
+
+            // Coord Break surfaces are transform-only and must not be drawn in 3D.
+            const surfType = String(surface?.surfType ?? '').trim();
+            if (surfType === 'Coord Break' || surfType === 'Coordinate Break' || surfType === 'CB') {
+                console.log(`🔸 3D Surface ${i}: Coord Break (${surfType})、3D描画スキップ`);
+                continue;
             }
             
             try {
@@ -315,10 +409,19 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
         if (surface.type === 'Stop' || surface['object type'] === 'Stop') {
             // console.log(`🎯 [findStopSurface] Stop面発見! Surface ${i}`);
             
-            // Stop面のz位置を計算
+            // Stop面の位置を計算（CB対応）
+            let stopX = 0;
+            let stopY = 0;
             let stopZ = 0;
             if (surfaceOrigins && surfaceOrigins[i]) {
-                stopZ = surfaceOrigins[i].z;
+                // calculateSurfaceOrigins() returns entries like { origin: {x,y,z}, rotationMatrix, ... }
+                const o = surfaceOrigins[i].origin || surfaceOrigins[i];
+                const ox = Number(o?.x);
+                const oy = Number(o?.y);
+                const oz = Number(o?.z);
+                if (Number.isFinite(ox)) stopX = ox;
+                if (Number.isFinite(oy)) stopY = oy;
+                if (Number.isFinite(oz)) stopZ = oz;
             } else {
                 // surfaceOriginsが無い場合は累積距離で計算
                 for (let j = 0; j < i; j++) {
@@ -377,8 +480,8 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
             return {
                 surface: surface,
                 index: i,
-                center: { x: 0, y: 0, z: stopZ },  // centerプロパティを追加
-                position: { x: 0, y: 0, z: stopZ },  // 互換性のために保持
+                center: { x: stopX, y: stopY, z: stopZ },  // centerプロパティを追加（CB対応）
+                position: { x: stopX, y: stopY, z: stopZ },  // 互換性のために保持
                 radius: stopRadius,  // 正しい半径値を使用
                 origin: surfaceOrigins ? surfaceOrigins[i] : null
             };
@@ -482,22 +585,25 @@ function clearExistingOpticalElements(scene) {
     const elementsToRemove = [];
     
     scene.traverse((child) => {
-        if (child.isMesh || child.isLine) {
-            // Remove optical surfaces, rings, and markers
-            if (child.userData && (
-                child.userData.isLensSurface ||
-                child.userData.surfaceType === '3DSurface' ||
-                child.userData.type === 'ring' ||
-                child.userData.type === 'semidiaRing' ||
-                child.userData.type === 'pupil' ||
-                child.userData.type === 'surface-origin-marker' ||
-                child.name.includes('LensSurface') ||
-                child.name.includes('Surface') ||
-                child.name.includes('semidiaRing') ||
-                child.userData.surfaceIndex !== undefined
-            )) {
-                elementsToRemove.push(child);
-            }
+        // Clear renderables (Mesh/Line/Sprite/Points) created by the optical renderer.
+        // Sprites are used for labels (e.g., mirrorBackText) and must be cleared too.
+        if (!(child.isMesh || child.isLine || child.isSprite || child.isPoints)) return;
+
+        const ud = child.userData;
+        const isOptical = !!(ud && ud.isOpticalElement);
+
+        // Remove optical surfaces, rings, markers, and labels
+        if (isOptical || (ud && (
+            ud.type === 'lensSurface' ||
+            ud.isLensSurface ||
+            ud.surfaceType === '3DSurface' ||
+            ud.type === 'ring' ||
+            ud.type === 'semidiaRing' ||
+            ud.type === 'pupil' ||
+            ud.type === 'surface-origin-marker' ||
+            ud.surfaceIndex !== undefined
+        )) || child.name.includes('LensSurface') || child.name.includes('Surface') || child.name.includes('semidiaRing')) {
+            elementsToRemove.push(child);
         }
     });
     
@@ -511,6 +617,14 @@ function clearExistingOpticalElements(scene) {
                 element.material.dispose();
             }
         }
+        // Sprites often own a texture map that should be disposed.
+        try {
+            const m = element.material;
+            const mats = Array.isArray(m) ? m : (m ? [m] : []);
+            for (const mm of mats) {
+                if (mm && mm.map && typeof mm.map.dispose === 'function') mm.map.dispose();
+            }
+        } catch (_) {}
     });
     
     console.log(`🧹 Cleared ${elementsToRemove.length} existing optical elements`);

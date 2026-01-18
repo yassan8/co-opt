@@ -102,7 +102,6 @@ function __du_pickLegacyRowsForSemidia(activeCfg) {
 
 function __du_preserveLegacySemidiaIntoExpandedRows(expandedRows, legacyRows, blocksForExplicitAperture) {
   if (!Array.isArray(expandedRows) || !Array.isArray(legacyRows)) return;
-  const n = Math.min(expandedRows.length, legacyRows.length);
   const hasValue = (v) => {
     if (v === null || v === undefined) return false;
     const s = String(v).trim();
@@ -111,6 +110,19 @@ function __du_preserveLegacySemidiaIntoExpandedRows(expandedRows, legacyRows, bl
   const getLegacySemidia = (row) => {
     if (!row || typeof row !== 'object') return null;
     return row.semidia ?? row['Semi Diameter'] ?? row['semi diameter'] ?? row.semiDiameter ?? row.semiDia;
+  };
+
+  const rowType = (row) => String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+  const isSkippableRow = (row) => {
+    const t = rowType(row);
+    return t === 'stop' || t === 'sto' || t === 'image' || t === 'object'
+      || t === 'coordbreak' || t === 'coord break' || t === 'cb';
+  };
+  const keyFor = (row) => {
+    if (!row || typeof row !== 'object') return '';
+    const bid = String(row._blockId ?? '').trim();
+    const role = String(row._surfaceRole ?? '').trim();
+    return (bid && role) ? `${bid}|${role}` : '';
   };
 
   // Build a quick lookup so explicit Design Intent aperture overrides win.
@@ -130,12 +142,37 @@ function __du_preserveLegacySemidiaIntoExpandedRows(expandedRows, legacyRows, bl
     }
   } catch (_) {}
 
-  for (let i = 0; i < n; i++) {
-    const e = expandedRows[i];
-    const l = legacyRows[i];
-    if (!e || typeof e !== 'object' || !l || typeof l !== 'object') continue;
-    const t = String(e['object type'] ?? e.object ?? '').trim().toLowerCase();
-    if (t === 'stop' || t === 'image') continue;
+  const legacyByKey = new Map();
+  try {
+    for (const l of legacyRows) {
+      if (!l || typeof l !== 'object') continue;
+      if (isSkippableRow(l)) continue;
+      const k = keyFor(l);
+      if (k) legacyByKey.set(k, l);
+    }
+  } catch (_) {}
+
+  let li = 0;
+  for (let ei = 0; ei < expandedRows.length; ei++) {
+    const e = expandedRows[ei];
+    if (!e || typeof e !== 'object') continue;
+    if (isSkippableRow(e)) continue;
+
+    let l = null;
+    try {
+      const k = keyFor(e);
+      if (k && legacyByKey.has(k)) l = legacyByKey.get(k);
+    } catch (_) {
+      l = null;
+    }
+
+    if (!l) {
+      while (li < legacyRows.length && isSkippableRow(legacyRows[li])) li++;
+      l = (li < legacyRows.length) ? legacyRows[li] : null;
+      li++;
+    }
+
+    if (!l || typeof l !== 'object') continue;
 
     // If Design Intent explicitly specified this surface semidia, never override it.
     try {

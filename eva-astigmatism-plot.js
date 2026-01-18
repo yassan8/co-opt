@@ -325,8 +325,8 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
         showLegend: true,
         width: 800,
         height: 600,
-        // 横軸の標準表示範囲（±0.5mm）
-        xRange: [-0.5, 0.5]
+        // 横軸はデータから自動拡張（最低でも±0.5mmは確保）
+        xRange: null
     };
     
     const plotOptions = { ...defaultOptions, ...options };
@@ -423,6 +423,18 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
     
     console.log(`   トレース数: ${traces.length}`);
 
+    // 横軸（像面位置）はデータから自動算出（SAと同じ思想：最低±0.5mm、必要なら拡張）
+    const xValues = [];
+    traces.forEach(t => {
+        if (Array.isArray(t.x)) xValues.push(...t.x.filter(v => Number.isFinite(v)));
+    });
+    const maxAbsX = xValues.length ? Math.max(...xValues.map(v => Math.abs(v))) : 0;
+    const symmetricMin = 0.5;
+    const symmetricRange = (Number.isFinite(maxAbsX) && maxAbsX > symmetricMin)
+        ? Math.max(symmetricMin, maxAbsX * 1.1)
+        : symmetricMin;
+    const computedXRange = [-symmetricRange, symmetricRange];
+
     // 縦軸（画角/物体高）はデータから自動算出
     const yValues = [];
     traces.forEach(t => {
@@ -463,7 +475,7 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
             zeroline: true,
             zerolinecolor: '#000000',
             zerolinewidth: 1,
-            range: plotOptions.xRange,
+            range: Array.isArray(plotOptions.xRange) ? plotOptions.xRange : computedXRange,
             dtick: 0.1
         },
         yaxis: {

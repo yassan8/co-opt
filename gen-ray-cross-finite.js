@@ -24,6 +24,12 @@ function isObjectRow(row) {
     return t === 'object';
 }
 
+function isStopRow(row) {
+    const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? row?.Type ?? '';
+    const t = String(raw ?? '').trim().toLowerCase();
+    return t === 'stop' || t === 'sto';
+}
+
 // traceRay の rayPath は Object 行 / Coord Break 行を交点として記録しない。
 // surfaceIndex(テーブル行) -> rayPath の point index への変換を行う。
 function getRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
@@ -62,25 +68,16 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
     
     for (let i = 0; i < opticalSystemRows.length; i++) {
         const surface = opticalSystemRows[i];
-        
-        // 両方のフィールド名をチェック
-        if (surface.type === 'Stop' || surface['object type'] === 'Stop') {
-            console.log(`✅ [findStopSurface] Surface ${i}: type="${surface.type}", object type="${surface['object type']}", semidia="${surface.semidia}"`);
-            // Stop面のz位置を計算
-            let stopZ = 0;
-            if (surfaceOrigins && surfaceOrigins[i]) {
-                stopZ = surfaceOrigins[i].z;
-            } else {
-                // surfaceOriginsが無い場合は累積距離で計算
-                for (let j = 0; j < i; j++) {
-                    const thickness = opticalSystemRows[j].thickness;
-                    if (thickness !== undefined && thickness !== null && thickness !== 'INF' && thickness !== 'Infinity') {
-                        stopZ += parseFloat(thickness) || 0;
-                    }
-                }
-            }
-            
-            stopZ = parseFloat(stopZ) || 0;
+
+        if (isStopRow(surface) || (String(surface?.comment ?? surface?.Comment ?? '').toLowerCase().includes('stop'))) {
+            console.log(`✅ [findStopSurface] Surface ${i}: object="${surface.object ?? surface['object type'] ?? surface.type}", semidia="${surface.semidia}"`);
+
+            const o = (surfaceOrigins && surfaceOrigins[i]) ? surfaceOrigins[i] : null;
+            const stopCenter = {
+                x: (o && Number.isFinite(o.x)) ? o.x : 0,
+                y: (o && Number.isFinite(o.y)) ? o.y : 0,
+                z: (o && Number.isFinite(o.z)) ? o.z : 0
+            };
             
             // Stop面の半径を取得
             let stopRadius = 10; // デフォルト値
@@ -109,10 +106,10 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
             return {
                 surface: surface,
                 index: i,
-                center: { x: 0, y: 0, z: stopZ },
-                position: { x: 0, y: 0, z: stopZ },
+                center: stopCenter,
+                position: stopCenter,
                 radius: stopRadius,
-                origin: surfaceOrigins ? surfaceOrigins[i] : null
+                origin: o
             };
         }
     }
@@ -1136,10 +1133,14 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
             }
         }
         
-        // Stop面中心位置を設定
+        // Stop面中心位置を設定（CB対応: decenter/tilt により光軸上とは限らない）
         const stopCenter = {
-            x: 0, // Stop面は通常光軸上
-            y: 0,
+            x: (surfaceOrigins && surfaceOrigins[stopSurfaceIndex] && surfaceOrigins[stopSurfaceIndex].origin && Number.isFinite(surfaceOrigins[stopSurfaceIndex].origin.x))
+                ? surfaceOrigins[stopSurfaceIndex].origin.x
+                : 0,
+            y: (surfaceOrigins && surfaceOrigins[stopSurfaceIndex] && surfaceOrigins[stopSurfaceIndex].origin && Number.isFinite(surfaceOrigins[stopSurfaceIndex].origin.y))
+                ? surfaceOrigins[stopSurfaceIndex].origin.y
+                : 0,
             z: stopZ
         };
 

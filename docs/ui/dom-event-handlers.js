@@ -3215,6 +3215,16 @@ function updateSurfaceNumberSelectLegacy() {
     const surfaceSelect = document.getElementById('surface-number-select');
     
     if (!surfaceSelect) return;
+
+    const prevValueRaw = (surfaceSelect.value !== undefined && surfaceSelect.value !== null)
+        ? String(surfaceSelect.value)
+        : '';
+    const prevSelectedOption = (surfaceSelect.selectedIndex >= 0 && surfaceSelect.options)
+        ? surfaceSelect.options[surfaceSelect.selectedIndex]
+        : null;
+    const prevRowIdRaw = prevSelectedOption && prevSelectedOption.dataset && prevSelectedOption.dataset.rowId
+        ? String(prevSelectedOption.dataset.rowId)
+        : '';
     
     // 既存のオプションをクリア
     surfaceSelect.innerHTML = '<option value="">面を選択...</option>';
@@ -3224,7 +3234,18 @@ function updateSurfaceNumberSelectLegacy() {
             try {
                 const cfgSel = document.getElementById('spot-diagram-config-select');
                 const selected = cfgSel && cfgSel.value !== undefined && cfgSel.value !== null ? String(cfgSel.value).trim() : '';
-                if (!selected) return getOpticalSystemRows();
+                // Current (active) config: prefer live UI table rows so Surf ids match Requirements.
+                if (!selected) {
+                    try {
+                        const live = (window.tableOpticalSystem && typeof window.tableOpticalSystem.getData === 'function')
+                            ? window.tableOpticalSystem.getData()
+                            : (window.opticalSystemTabulator && typeof window.opticalSystemTabulator.getData === 'function')
+                                ? window.opticalSystemTabulator.getData()
+                                : null;
+                        if (Array.isArray(live) && live.length > 0) return live;
+                    } catch (_) {}
+                    return getOpticalSystemRows();
+                }
 
                 const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
                 if (!raw) return getOpticalSystemRows();
@@ -3237,7 +3258,17 @@ function updateSurfaceNumberSelectLegacy() {
                 const activeId = (sys && sys.activeConfigId !== undefined && sys.activeConfigId !== null)
                     ? String(sys.activeConfigId)
                     : '';
-                if (activeId && selected === activeId) return getOpticalSystemRows();
+                if (activeId && selected === activeId) {
+                    try {
+                        const live = (window.tableOpticalSystem && typeof window.tableOpticalSystem.getData === 'function')
+                            ? window.tableOpticalSystem.getData()
+                            : (window.opticalSystemTabulator && typeof window.opticalSystemTabulator.getData === 'function')
+                                ? window.opticalSystemTabulator.getData()
+                                : null;
+                        if (Array.isArray(live) && live.length > 0) return live;
+                    } catch (_) {}
+                    return getOpticalSystemRows();
+                }
 
                 // Prefer expanded blocks (with active scenario overrides) when available,
                 // to keep Spot Diagram surface options consistent with evaluation.
@@ -3313,12 +3344,26 @@ function updateSurfaceNumberSelectLegacy() {
             const surfaceOptions = generateSurfaceOptions(opticalSystemRows);
             let imageSurfaceValue = null;
             let lastSurfaceValue = null;
+            let desiredByRowId = '';
+
+            const prevRowId = prevRowIdRaw || (prevValueRaw !== ''
+                ? (surfaceOptions.find(o => String(o?.value) === String(prevValueRaw))?.rowId ? String(surfaceOptions.find(o => String(o?.value) === String(prevValueRaw)).rowId) : '')
+                : '');
             
             surfaceOptions.forEach(option => {
                 // スポットダイアグラム用のセレクト
                 const optionElement = document.createElement('option');
                 optionElement.value = option.value;
                 optionElement.textContent = option.label;
+                if (option.rowId !== undefined && option.rowId !== null && String(option.rowId) !== '') {
+                    optionElement.dataset.rowId = String(option.rowId);
+                    if (prevRowId && String(option.rowId) === String(prevRowId)) {
+                        desiredByRowId = String(option.value);
+                    }
+                }
+                if (Number.isInteger(option.rowIndex)) {
+                    optionElement.dataset.rowIndex = String(option.rowIndex);
+                }
                 surfaceSelect.appendChild(optionElement);
                 
                 // Image面を探す
@@ -3333,14 +3378,31 @@ function updateSurfaceNumberSelectLegacy() {
             // Image面が見つかった場合、それを初期選択値として設定
             const defaultValue = imageSurfaceValue !== null ? imageSurfaceValue : lastSurfaceValue;
             
-            if (defaultValue !== null) {
+            // Prefer restoring by stable rowId (survives insert/delete renumbering),
+            // then fallback to previous numeric value if it still exists.
+            const desired = (desiredByRowId !== '' ? desiredByRowId : '') || (prevValueRaw !== '' ? prevValueRaw : '');
+            if (desired !== '' && surfaceSelect.querySelector(`option[value="${CSS.escape(desired)}"]`)) {
+                surfaceSelect.value = desired;
+            } else if (defaultValue !== null) {
                 surfaceSelect.value = defaultValue;
             }
 
-            const sig = `${surfaceOptions.length}::${String(defaultValue ?? '')}`;
+            const sig = `${surfaceOptions.length}::${String(surfaceSelect.value ?? '')}`;
             if (window.__lastSurfaceSelectSignature !== sig) {
                 window.__lastSurfaceSelectSignature = sig;
             }
+
+            // Notify Spot Diagram popup (if open) to resync Surf options.
+            try {
+                const p = window.__spotDiagramPopup;
+                if (p && !p.closed) {
+                    if (typeof p.__cooptSpotPopupSyncAll === 'function') {
+                        p.__cooptSpotPopupSyncAll();
+                    } else if (typeof p.postMessage === 'function') {
+                        p.postMessage({ action: 'coopt-spot-sync' }, '*');
+                    }
+                }
+            } catch (_) {}
         }
     } catch (error) {
         console.error('❌ 面選択更新エラー:', error);
@@ -4289,20 +4351,106 @@ export function updatePSFInfo(psfResult, objectData, wavelength, gridSize) {
  * テーブル変更イベントリスナーを設定
  */
 function setupTableChangeListeners() {
-    // Guard against duplicate Tabulator .on registrations.
-    if (window.__tableChangeListenersBound) return;
-    window.__tableChangeListenersBound = true;
+    // Bind once per Tabulator instance, but allow retries in case this runs
+    // before the table globals are assigned (common during startup).
+    if (!window.__cooptSurfaceSelectListenerState || typeof window.__cooptSurfaceSelectListenerState !== 'object') {
+        window.__cooptSurfaceSelectListenerState = {
+            opticalSystemTabulator: false,
+            tableOpticalSystem: false,
+            initialRefreshDone: false,
+            attempts: 0,
+            retryScheduled: false,
+        };
+    }
+    const state = window.__cooptSurfaceSelectListenerState;
+    if (state.opticalSystemTabulator && state.tableOpticalSystem) return;
 
     // 面選択の初期更新
-    setTimeout(updateSurfaceNumberSelectLegacy, 1500);
-    
+    if (!state.initialRefreshDone) {
+        state.initialRefreshDone = true;
+        setTimeout(() => {
+            try { updateSurfaceNumberSelectLegacy(); } catch (_) {}
+            try { updateSurfaceNumberSelect(); } catch (_) {}
+        }, 1500);
+    }
+
+    const refreshSurfaceNumberSelect = () => {
+        // Prefer the modern implementation (rowId-aware) last.
+        try { updateSurfaceNumberSelectLegacy(); } catch (_) {}
+        try { updateSurfaceNumberSelect(); } catch (_) {}
+    };
+
+    const bindSurfaceSelectRefresh = (tab, key, name) => {
+        if (state[key]) return true;
+        if (!tab || typeof tab.on !== 'function') return false;
+        try {
+            tab.on('dataChanged', refreshSurfaceNumberSelect);
+            tab.on('rowAdded', refreshSurfaceNumberSelect);
+            tab.on('rowDeleted', refreshSurfaceNumberSelect);
+            tab.on('cellEdited', refreshSurfaceNumberSelect);
+            state[key] = true;
+            return true;
+        } catch (e) {
+            console.warn(`⚠️ Failed to bind surface select refresh on ${name}:`, e);
+            return false;
+        }
+    };
+
     // 光学系テーブル変更時に面選択を更新
-    if (window.opticalSystemTabulator && typeof window.opticalSystemTabulator.on === 'function') {
-        window.opticalSystemTabulator.on('dataChanged', updateSurfaceNumberSelectLegacy);
-        window.opticalSystemTabulator.on('rowAdded', updateSurfaceNumberSelectLegacy);
-        window.opticalSystemTabulator.on('rowDeleted', updateSurfaceNumberSelectLegacy);
-    } else {
-        console.warn('⚠️ opticalSystemTabulator is not initialized or does not have .on method');
+    state.attempts++;
+    const okLegacy = bindSurfaceSelectRefresh(window.opticalSystemTabulator, 'opticalSystemTabulator', 'opticalSystemTabulator');
+    const okCurrent = bindSurfaceSelectRefresh(window.tableOpticalSystem, 'tableOpticalSystem', 'tableOpticalSystem');
+    if (!okLegacy && !okCurrent) {
+        console.warn('⚠️ Optical system table is not initialized or does not have .on method');
+    }
+
+    // Safety net: some update paths may mutate rows without emitting Tabulator events.
+    // Poll a compact signature and refresh Surf options when it changes.
+    try {
+        if (!window.__cooptSurfSelectPollId) {
+            const computeSig = () => {
+                try {
+                    const rows = (window.tableOpticalSystem && typeof window.tableOpticalSystem.getData === 'function')
+                        ? window.tableOpticalSystem.getData()
+                        : (window.opticalSystemTabulator && typeof window.opticalSystemTabulator.getData === 'function')
+                            ? window.opticalSystemTabulator.getData()
+                            : null;
+                    if (!Array.isArray(rows) || rows.length === 0) return '';
+                    let s = '';
+                    for (let i = 0; i < rows.length; i++) {
+                        const r = rows[i] || {};
+                        const id = (r.id !== undefined && r.id !== null) ? r.id : i;
+                        const ot = String(r['object type'] ?? r.object ?? r.objectType ?? '');
+                        const st = String(r.surfType ?? r['surf type'] ?? r.type ?? '');
+                        s += `${id}:${ot}:${st}|`;
+                    }
+                    return s;
+                } catch (_) {
+                    return '';
+                }
+            };
+
+            window.__cooptSurfSelectPollId = setInterval(() => {
+                try {
+                    const sig = computeSig();
+                    if (sig && sig !== window.__cooptLastSurfSelectDataSig) {
+                        window.__cooptLastSurfSelectDataSig = sig;
+                        refreshSurfaceNumberSelect();
+                    }
+                } catch (_) {}
+            }, 1000);
+        }
+    } catch (_) {}
+
+    // If one of the two table globals is assigned later, retry binding briefly.
+    if ((!state.opticalSystemTabulator || !state.tableOpticalSystem) && state.attempts < 50) {
+        if (!state.retryScheduled) {
+            state.retryScheduled = true;
+            setTimeout(() => {
+                try { state.retryScheduled = false; } catch (_) {}
+                try { setupTableChangeListeners(); } catch (_) {}
+            }, 200);
+        }
     }
     
     // PSF関連の機能は削除されました
@@ -9030,10 +9178,12 @@ function refreshBlockInspector() {
             // so dumpOpticalSystemProvenance() would return empty. Instead, derive counts
             // from the deterministic Blocks->Rows expansion.
             const countById = new Map();
+            let expandedRowsForUI = null;
             try {
                 if (typeof expandBlocksToOpticalSystemRows === 'function') {
                     const exp = expandBlocksToOpticalSystemRows(blocks);
                     const rows = exp && Array.isArray(exp.rows) ? exp.rows : [];
+                    expandedRowsForUI = rows;
                     for (const r of rows) {
                         const bid = r?._blockId;
                         if (bid === null || bid === undefined) continue;
@@ -9041,6 +9191,40 @@ function refreshBlockInspector() {
                         if (!id || id === '(none)') continue;
                         countById.set(id, (countById.get(id) || 0) + 1);
                     }
+                }
+            } catch (_) {}
+
+            // Keep the evaluation/Spot UI in sync with live Blocks edits (e.g., add/delete CoordBreak)
+            // without requiring a full page reload.
+            try {
+                if (Array.isArray(expandedRowsForUI) && expandedRowsForUI.length > 0) {
+                    const rowsForTable = expandedRowsForUI.map((r, idx) => {
+                        const row = (r && typeof r === 'object') ? { ...r } : {};
+                        row.id = idx;
+                        // Ensure first/last rows stay Object/Image for downstream assumptions.
+                        if (idx === 0) row['object type'] = 'Object';
+                        else if (idx === expandedRowsForUI.length - 1) row['object type'] = 'Image';
+                        return row;
+                    });
+
+                    const tab = (window.tableOpticalSystem && typeof window.tableOpticalSystem.getData === 'function')
+                        ? window.tableOpticalSystem
+                        : (window.opticalSystemTabulator && typeof window.opticalSystemTabulator.getData === 'function')
+                            ? window.opticalSystemTabulator
+                            : null;
+
+                    if (tab) {
+                        if (typeof tab.replaceData === 'function') {
+                            tab.replaceData(rowsForTable);
+                        } else if (typeof tab.setData === 'function') {
+                            tab.setData(rowsForTable);
+                        }
+                    }
+
+                    // Force Surf dropdown refresh immediately.
+                    try {
+                        if (typeof updateSurfaceNumberSelect === 'function') updateSurfaceNumberSelect();
+                    } catch (_) {}
                 }
             } catch (_) {}
 

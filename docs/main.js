@@ -1037,6 +1037,7 @@ function setCameraForYZCrossSection(options = {}) {
         const fitMaxZ = sceneBounds ? Math.max(effectiveMaxZ, sceneBounds.max.z) : effectiveMaxZ;
         const fitTotalLength = fitMaxZ - fitMinZ;
         const fitCenterZ = (fitMinZ + fitMaxZ) / 2;
+        const fitCenterY = sceneBounds ? ((sceneBounds.min.y + sceneBounds.max.y) / 2) : 0;
         const fitMaxY = (() => {
             let y = maxY;
             if (sceneBounds) {
@@ -1132,9 +1133,22 @@ function setCameraForYZCrossSection(options = {}) {
         
         // カメラをX軸負方向に配置（Y-Z断面の正面）- 距離は任意（正投影なので影響なし）
         const cameraDistance = 300; // 正投影カメラでは距離は見た目に影響しない
-        const targetX = targetOverride ? targetOverride.x : 0;
-        const targetY = targetOverride ? targetOverride.y : 0;
-        const targetZ = targetOverride ? targetOverride.z : systemCenterZ;
+        // When the popup user has panned/zoomed, it sends us an absolute OrbitControls target.
+        // If we reuse that absolute target across optical edits (e.g., CoordBreak -> 0), the view can
+        // appear "stuck" even though geometry returned. Preserve pan *relative to the content center*.
+        const lastFitCenter = camera?.userData?.__drawCrossLastFitCenter;
+        const hasLastFitCenter = !!(lastFitCenter && Number.isFinite(lastFitCenter.y) && Number.isFinite(lastFitCenter.z));
+
+        const baseTargetX = 0;
+        const baseTargetY = fitCenterY;
+        const baseTargetZ = systemCenterZ;
+
+        const panDeltaY = (targetOverride && hasLastFitCenter) ? (targetOverride.y - lastFitCenter.y) : 0;
+        const panDeltaZ = (targetOverride && hasLastFitCenter) ? (targetOverride.z - lastFitCenter.z) : 0;
+
+        const targetX = baseTargetX;
+        const targetY = targetOverride ? (baseTargetY + panDeltaY) : baseTargetY;
+        const targetZ = targetOverride ? (baseTargetZ + panDeltaZ) : baseTargetZ;
 
         camera.position.set(targetX - cameraDistance, targetY, targetZ);
         camera.lookAt(targetX, targetY, targetZ);
@@ -1146,6 +1160,9 @@ function setCameraForYZCrossSection(options = {}) {
         
         // カメラ投影行列を更新
         camera.updateProjectionMatrix();
+
+        // Remember the latest content center used for relative-pan preservation.
+        camera.userData.__drawCrossLastFitCenter = { x: 0, y: baseTargetY, z: baseTargetZ };
 
         if (options.storeDrawCrossBounds === true && camera.isOrthographicCamera) {
             camera.userData.__drawCrossOrthoBounds = {
@@ -1205,6 +1222,7 @@ function setCameraForXZCrossSection(options = {}) {
         const fitMaxZ = sceneBounds ? Math.max(effectiveMaxZ, sceneBounds.max.z) : effectiveMaxZ;
         const fitTotalLength = fitMaxZ - fitMinZ;
         const fitCenterZ = (fitMinZ + fitMaxZ) / 2;
+        const fitCenterX = sceneBounds ? ((sceneBounds.min.x + sceneBounds.max.x) / 2) : 0;
         const fitMaxX = (() => {
             let x = maxY;
             if (sceneBounds) {
@@ -1273,9 +1291,19 @@ function setCameraForXZCrossSection(options = {}) {
         }
 
         const cameraDistance = options.cameraDistance || 300;
-        const targetX = targetOverride ? targetOverride.x : 0;
-        const targetY = targetOverride ? targetOverride.y : 0;
-        const targetZ = targetOverride ? targetOverride.z : targetCenterZ;
+        const lastFitCenter = camera?.userData?.__drawCrossLastFitCenter;
+        const hasLastFitCenter = !!(lastFitCenter && Number.isFinite(lastFitCenter.x) && Number.isFinite(lastFitCenter.z));
+
+        const baseTargetX = fitCenterX;
+        const baseTargetY = 0;
+        const baseTargetZ = targetCenterZ;
+
+        const panDeltaX = (targetOverride && hasLastFitCenter) ? (targetOverride.x - lastFitCenter.x) : 0;
+        const panDeltaZ = (targetOverride && hasLastFitCenter) ? (targetOverride.z - lastFitCenter.z) : 0;
+
+        const targetX = targetOverride ? (baseTargetX + panDeltaX) : baseTargetX;
+        const targetY = baseTargetY;
+        const targetZ = targetOverride ? (baseTargetZ + panDeltaZ) : baseTargetZ;
 
         camera.position.set(targetX, targetY + cameraDistance, targetZ);
         camera.lookAt(targetX, targetY, targetZ);
@@ -1284,6 +1312,8 @@ function setCameraForXZCrossSection(options = {}) {
 
         controls.target.set(targetX, targetY, targetZ);
         controls.update();
+
+        camera.userData.__drawCrossLastFitCenter = { x: baseTargetX, y: 0, z: baseTargetZ };
 
         if (renderer && scene) {
             renderer.render(scene, camera);

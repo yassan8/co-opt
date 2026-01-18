@@ -140,25 +140,27 @@ export async function showSpotDiagram(options = {}) {
         const selectedConfigId = providedConfigId || (configSelect && configSelect.value !== undefined && configSelect.value !== null ? String(configSelect.value).trim() : '');
         
         // Use defaults if form elements not found
-        let surfaceIndex = 0;  // Default to image surface
+        // NOTE: Spot Diagram UI uses a CB-invariant "surface id" (Object=0, first physical surface=1, ...).
+        // We resolve that id to an actual row index after loading opticalSystemRows.
+        let surfaceIndex = 0;  // temporarily treated as surfaceId
         let rayCount = 501;    // Default ray count
         let wavelength = 550;  // Default wavelength (nm)
         let ringCount = 3;     // Default annular ring count
         
         if (providedSurfaceIndex !== null && providedSurfaceIndex >= 0) {
             surfaceIndex = providedSurfaceIndex;
-            console.log(`📊 Using surface from options: ${surfaceIndex} (0-indexed)`);
+            console.log(`📊 Using surface id from options: ${surfaceIndex}`);
         } else if (surfaceSelect && surfaceSelect.value !== '') {
-            surfaceIndex = parseInt(surfaceSelect.value); // Already 0-indexed from select
-            console.log(`📊 Using surface from select: ${surfaceIndex} (0-indexed)`);
+            surfaceIndex = parseInt(surfaceSelect.value, 10);
+            console.log(`📊 Using surface id from select: ${surfaceIndex}`);
         } else {
             console.warn('⚠️ Surface select not found, using default (image surface)');
             // Get optical system data to determine last surface
             const tableOpticalSystem = getTableOpticalSystem();
             const opticalSystemData = getOpticalSystemRows(tableOpticalSystem);
             if (opticalSystemData && opticalSystemData.length > 0) {
-                surfaceIndex = opticalSystemData.length - 1; // Last surface (image) - 0-indexed
-                console.log(`📊 Using last surface as default: surface ${surfaceIndex} (0-indexed)`);
+                surfaceIndex = opticalSystemData.length - 1;
+                console.log(`📊 Using last surface (fallback) as default: ${surfaceIndex}`);
             } else {
                 console.warn('⚠️ No optical system data available for default surface calculation');
             }
@@ -191,10 +193,11 @@ export async function showSpotDiagram(options = {}) {
         
         if (isNaN(surfaceIndex) || surfaceIndex < 0) {
             surfaceIndex = 0;
-            console.warn('⚠️ Invalid surface index, using default (0)');
+            console.warn('⚠️ Invalid surface id, using default (0)');
         }
-        
-        console.log(`🎯 Generating spot diagram for surface ${surfaceIndex}, ${rayCount} rays, ${wavelength}nm, ring count ${ringCount}`);
+
+        const surfaceId = surfaceIndex;
+        console.log(`🎯 Generating spot diagram for surfaceId ${surfaceId}, ${rayCount} rays, ${wavelength}nm, ring count ${ringCount}`);
         
         // Get data either from active UI tables or from a selected configuration snapshot.
         const loadRowsForSelectedConfig = () => {
@@ -367,6 +370,25 @@ export async function showSpotDiagram(options = {}) {
 
         let { opticalSystemRows, objectRows, sourceRows } = loadRowsForSelectedConfig();
 
+        let resolvedSurfaceRowIndex = null;
+        try {
+            const { generateSurfaceOptions } = await import('../eva-spot-diagram.js');
+            const opts = generateSurfaceOptions(opticalSystemRows || []);
+            const match = opts.find(o => Number(o?.value) === Number(surfaceId));
+            if (match && Number.isInteger(match.rowIndex)) {
+                resolvedSurfaceRowIndex = match.rowIndex;
+            } else if (opts.length > 0) {
+                const img = opts.find(o => typeof o?.label === 'string' && o.label.includes('(Image)'));
+                resolvedSurfaceRowIndex = Number.isInteger(img?.rowIndex) ? img.rowIndex : opts[opts.length - 1].rowIndex;
+            }
+        } catch (e) {
+            resolvedSurfaceRowIndex = Number.isInteger(surfaceId) ? surfaceId : 0;
+        }
+        if (!Number.isInteger(resolvedSurfaceRowIndex) || resolvedSurfaceRowIndex < 0) {
+            resolvedSurfaceRowIndex = 0;
+        }
+        surfaceIndex = resolvedSurfaceRowIndex;
+
         // Persist the current spot-diagram settings for other modules (e.g., Requirements spot size operands).
         // This also bridges main window vs popup window differences by using shared localStorage.
         try {
@@ -388,7 +410,8 @@ export async function showSpotDiagram(options = {}) {
             }
 
             localStorage.setItem('lastSpotDiagramSettings', JSON.stringify({
-                surfaceIndex,
+                surfaceId,
+                surfaceRowIndex: surfaceIndex,
                 rayCount,
                 ringCount,
                 pattern: pattern || null,
@@ -396,6 +419,39 @@ export async function showSpotDiagram(options = {}) {
                 configId: selectedConfigId || null,
                 updatedAt: Date.now()
             }));
+
+            // Also persist per-config settings so Requirements can evaluate
+            // non-active configs without depending on whichever config was last opened.
+            try {
+                let cfgKey = selectedConfigId ? String(selectedConfigId).trim() : '';
+                if (!cfgKey) {
+                    const sysRaw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
+                    const sys = sysRaw ? JSON.parse(sysRaw) : null;
+                    cfgKey = (sys && sys.activeConfigId !== undefined && sys.activeConfigId !== null)
+                        ? String(sys.activeConfigId).trim()
+                        : '';
+                }
+
+                if (cfgKey) {
+                    const rawMap = (typeof localStorage !== 'undefined') ? localStorage.getItem('spotDiagramSettingsByConfigId') : null;
+                    const map = rawMap ? (JSON.parse(rawMap) || {}) : {};
+                    map[cfgKey] = {
+                        // Backward compat: surfaceIndex was historically a row index.
+                        surfaceIndex,
+                        surfaceId,
+                        surfaceRowIndex: surfaceIndex,
+                        rayCount,
+                        ringCount,
+                        pattern: pattern || null,
+                        primaryWavelengthUm,
+                        configId: cfgKey,
+                        updatedAt: Date.now()
+                    };
+                    localStorage.setItem('spotDiagramSettingsByConfigId', JSON.stringify(map));
+                }
+            } catch (_) {
+                // ignore
+            }
         } catch (_) {
             // ignore
         }
@@ -462,7 +518,7 @@ export async function showSpotDiagram(options = {}) {
                 surfaceNumber,
                 rayCount,
                 ringCount,
-                { onProgress }
+                { onProgress, physicalVignetting: true }
             );
             
             if (!spotDiagramData) {
@@ -490,7 +546,7 @@ export async function showSpotDiagram(options = {}) {
                 surfaceNumber,
                 rayCount,
                 ringCount,
-                { onProgress }
+                { onProgress, physicalVignetting: true }
             );
             
             if (!spotDiagramData) {
@@ -804,10 +860,28 @@ export async function showLongitudinalAberrationDiagram(options = {}) {
         let surfaceIndex = 0;  // Default to image surface
         let rayCount = 51;     // Default ray count for spherical aberration
         
-        // Get all wavelengths from Source table for spherical aberration diagram
+        // Get wavelengths from Source table for spherical aberration diagram.
+        // Normalize nm→μm (e.g. 587.6nm → 0.5876μm) and drop invalid/≤0 entries.
         const sourceRows = getSourceRows();
-        const wavelengths = sourceRows.map(row => parseFloat(row.wavelength || row.Wavelength || 0.5876));
-        
+        const wavelengths = (() => {
+            const normalizeUm = (raw) => {
+                const n = Number(raw);
+                if (!Number.isFinite(n) || n <= 0) return null;
+                if (n > 10) return n / 1000;
+                return n;
+            };
+
+            const rows = Array.isArray(sourceRows) ? sourceRows : [];
+            const unique = [];
+            for (const row of rows) {
+                const wl = normalizeUm(row?.wavelength ?? row?.Wavelength);
+                if (!Number.isFinite(wl) || wl <= 0) continue;
+                if (!unique.some(w => Math.abs(w - wl) < 1e-12)) unique.push(wl);
+                if (unique.length >= 6) break;
+            }
+            return unique.length > 0 ? unique : [0.5876];
+        })();
+
         console.log(`📊 Wavelengths from Source table: ${wavelengths.map(w => w.toFixed(4)).join(', ')} μm`);
         
         // For longitudinal aberration, always use the last surface (image surface) as default
@@ -868,7 +942,7 @@ export async function showLongitudinalAberrationDiagram(options = {}) {
             surfaceIndex,
             wavelengths, // Array of wavelengths from Source table
             rayCount,
-            { onProgress }
+            { onProgress, debugSA: Boolean(globalThis.__COOPT_DEBUG_SA) }
         );
         
         if (!aberrationData) {
