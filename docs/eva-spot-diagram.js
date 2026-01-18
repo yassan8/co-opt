@@ -1829,6 +1829,9 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
     }
     
     console.log(`📊 [SPOT DIAGRAM] Processing ${actualSpotData.length} objects`);
+
+    // Lightweight debug snapshot for comparing against Requirements spot-size evaluation.
+    const __cooptSpotUiMetrics = [];
     
     // 各Objectのデータを詳細にログ出力
     actualSpotData.forEach((obj, idx) => {
@@ -1954,12 +1957,35 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
         const colors = objectData.spotPoints.map((point, pointIndex) => getSpotColor(point, objectData.objectId, pointIndex));
         
         // 主光線交点を取得
-        const chiefRayPoint = objectData.spotPoints.find(p => p.isChiefRay);
-        const chiefXMm = chiefRayPoint ? chiefRayPoint.x : 0;
-        const chiefYMm = chiefRayPoint ? chiefRayPoint.y : 0;
-        
+        // Note: for heavily vignetted fields the intended chief ray can fail to reach the target surface,
+        // leaving no point with isChiefRay=true. In that case, fall back to the spot point closest to the
+        // centroid (matches Requirements-side SPOT_SIZE_RECT behavior).
+        const hasChiefFlag = objectData.spotPoints.some(p => p && p.isChiefRay);
+        let chiefRayPoint = objectData.spotPoints.find(p => p && p.isChiefRay);
         if (!chiefRayPoint) {
-            console.warn(`⚠️ Object ${objectData.objectId}: Chief ray not found! Using centroid instead.`);
+            const pts = objectData.spotPoints;
+            const cx = pts.reduce((sum, p) => sum + Number(p?.x || 0), 0) / pts.length;
+            const cy = pts.reduce((sum, p) => sum + Number(p?.y || 0), 0) / pts.length;
+            let bestIdx = 0;
+            let bestDist = Infinity;
+            for (let i = 0; i < pts.length; i++) {
+                const p = pts[i];
+                const x = Number(p?.x);
+                const y = Number(p?.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                const d = Math.hypot(x - cx, y - cy);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestIdx = i;
+                }
+            }
+            chiefRayPoint = pts[bestIdx] || pts[0] || null;
+        }
+        const chiefXMm = chiefRayPoint ? Number(chiefRayPoint.x) : 0;
+        const chiefYMm = chiefRayPoint ? Number(chiefRayPoint.y) : 0;
+        
+        if (!hasChiefFlag) {
+            console.warn(`⚠️ Object ${objectData.objectId}: Chief ray not found! Using centroid-closest point instead.`);
             console.warn(`   spotPoints count: ${objectData.spotPoints.length}`);
             console.warn(`   isChiefRay flags: ${objectData.spotPoints.map(p => p.isChiefRay).join(', ')}`);
         } else {
@@ -2471,6 +2497,27 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             ? Math.sqrt(adjustedYValuesUm.reduce((sum, y) => sum + y * y, 0) / adjustedYValuesUm.length)
             : 0;
         const rmsTotalUm = Math.sqrt(rmsXUm * rmsXUm + rmsYUm * rmsYUm);
+
+        // Store per-object debug snapshot (for console comparison)
+        try {
+            __cooptSpotUiMetrics.push({
+                objectId: objectData.objectId ?? null,
+                objectType: objectData.objectType ?? null,
+                surfaceNumber: surfaceNumber,
+                emissionPattern,
+                alignRectWithCross,
+                chiefSelection: hasChiefFlag ? 'flagged-chief' : 'centroid-closest',
+                chiefXMm: Number.isFinite(chiefXMm) ? chiefXMm : null,
+                chiefYMm: Number.isFinite(chiefYMm) ? chiefYMm : null,
+                nPoints: Array.isArray(objectData.spotPoints) ? objectData.spotPoints.length : null,
+                totalRays: objectData.totalRays ?? null,
+                successfulRays: objectData.successfulRays ?? null,
+                rmsXUm: Number.isFinite(rmsXUm) ? rmsXUm : null,
+                rmsYUm: Number.isFinite(rmsYUm) ? rmsYUm : null,
+                rmsTotalUm: Number.isFinite(rmsTotalUm) ? rmsTotalUm : null,
+                diameterUm: Number.isFinite(spotDiameterUm) ? spotDiameterUm : null,
+            });
+        } catch (_) {}
         
         // Calculate centroid positions (used for display in adjusted/plotting coordinates)
         const centroidXUm = adjustedXValuesUm && adjustedXValuesUm.length > 0 
@@ -2539,6 +2586,18 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
     
     console.log(`📊 [SPOT DIAGRAM] Total graphs created: ${graphsCreated} out of ${actualSpotData.length} objects`);
     container.appendChild(mainContainer);
+
+    // Publish debug snapshot for SD vs Requirements comparisons.
+    try {
+        if (typeof globalThis !== 'undefined') {
+            globalThis.__cooptLastSpotDiagramMetrics = {
+                at: Date.now(),
+                surfaceNumber,
+                selectedRingCount: (spotData && typeof spotData === 'object') ? (spotData.selectedRingCount ?? null) : null,
+                objects: __cooptSpotUiMetrics
+            };
+        }
+    } catch (_) {}
 }
 
 // Ray colors by設定に従った色を取得

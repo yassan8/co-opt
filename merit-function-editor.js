@@ -1572,22 +1572,24 @@ class MeritFunctionEditor {
                     lastRayTraceFailure: getLastRayTraceFailureForThisEval()
                 });
 
-                // Prefer UI table rows only when the operand targets the active configuration.
-                // For non-active configs, keep using the config snapshot tables but still use Spot Diagram settings.
+                // For spot-size operands, match Spot Diagram's config selection behavior:
+                // - Active config: prefer live UI tables (immediate updates)
+                // - Non-active config: evaluate against the stored configuration snapshot/blocks
+                //   (NOT the active config's live tables, and NOT a stale cached UI snapshot)
                 const uiRows = getUiTableRowsForSpot();
-
-                // If config is inactive, try cached live tables for that config.
-                const cached = (!useUiTables && useUiDefaults && operandCfgId) ? loadSpotTablesCache(operandCfgId) : null;
+                const configOpticalRows = (!isOperandActiveConfig && operandCfgId)
+                    ? this.getOpticalSystemDataByConfigId(operandCfgId)
+                    : opticalSystemData;
 
                 const spotOpticalRows = (useUiTables && uiRows.optical)
                     ? uiRows.optical
-                    : (cached && cached.optical ? cached.optical : opticalSystemData);
+                    : configOpticalRows;
                 const spotObjectRows = (useUiTables && uiRows.object)
                     ? uiRows.object
-                    : (cached && cached.object ? cached.object : objectRows);
+                    : objectRows;
                 const spotSourceRows = (useUiTables && uiRows.source)
                     ? uiRows.source
-                    : (cached && cached.source ? cached.source : sourceRows);
+                    : sourceRows;
 
                 // Update cache whenever we successfully read live UI rows for an explicit config.
                 if (useUiTables && operandCfgId) {
@@ -1682,14 +1684,9 @@ class MeritFunctionEditor {
                 if (imgIdx2 < 0) return 1e9;
 
                 const uiSurfaceIdx2 = (() => {
-                    // Requirements should be evaluated at the Image plane deterministically.
-                    // Do not let the Spot Diagram UI's current surface selection (or lastSpotSettings)
-                    // change which surface a requirement is evaluated on.
-                    const isRequirementEval = (operand && operand.__reqRowId !== undefined && operand.__reqRowId !== null);
-                    if (isRequirementEval) {
-                        try { stampSpotDebug({ requirementForcesImageSurface: true }); } catch (_) {}
-                        return null;
-                    }
+                    // Spot size operands are intended to match the Spot Diagram UI.
+                    // So even during Requirements evaluation, honor the Spot Diagram surface selection
+                    // (UI selection for active config, otherwise lastSpotSettings/per-config settings).
 
                     const resolveSurfaceIdToRowIndex = (sid) => {
                         try {
@@ -1781,6 +1778,7 @@ class MeritFunctionEditor {
                         ? pattern
                         : ((currentPattern === 'grid' || currentPattern === 'annular') ? currentPattern : 'annular');
                     if (forced) setRayEmissionPattern(forced);
+                    try { stampSpotDebug({ spotDiagPatternForced: forced }); } catch (_) {}
                 } catch (_) {}
 
                 let spot;
@@ -1794,8 +1792,21 @@ class MeritFunctionEditor {
                             rayCount,
                             // Ring count is used for annular sampling.
                             // (For grid sampling it is ignored by the generator.)
-                            effectiveAnnularRingCount
+                            effectiveAnnularRingCount,
+                            // Match Spot Diagram UI behavior: do NOT shrink pupil to "make rays pass".
+                            { physicalVignetting: true }
                         );
+
+                        try {
+                            stampSpotDebug({
+                                spotDiagInputs: {
+                                    surfaceNumber: surfaceNumber1,
+                                    rayCount,
+                                    ringCount: effectiveAnnularRingCount,
+                                    physicalVignetting: true
+                                }
+                            });
+                        } catch (_) {}
 
                         // Surface-level diagnostics (pupil-scale / aimThroughStop retries) for debugging.
                         try {
@@ -1870,6 +1881,7 @@ class MeritFunctionEditor {
                 }
 
                 let chiefPt = spotPoints.find(p => p && p.isChiefRay) || null;
+                const chiefFound = !!chiefPt;
                 if (!chiefPt) {
                     // Spot Diagram fallback behavior: centroid-closest.
                     const cx = spotPoints.reduce((sum, p) => sum + Number(p?.x || 0), 0) / spotPoints.length;
@@ -1922,6 +1934,29 @@ class MeritFunctionEditor {
                 const rmsY = Math.sqrt(sumY2 / n);
                 const rmsTotal = Math.sqrt(rmsX * rmsX + rmsY * rmsY);
                 const diameter = 2 * maxRUm;
+
+                // Debug signature for SD vs Requirements comparison.
+                try {
+                    const sample = spotPoints.slice(0, 8).map(p => ({
+                        x: Number(p?.x),
+                        y: Number(p?.y),
+                        isChiefRay: !!p?.isChiefRay
+                    }));
+                    stampSpotDebug({
+                        spotDiagMetrics: {
+                            chiefSelection: chiefFound ? 'flagged-chief' : 'centroid-closest',
+                            chiefXmm: chiefX,
+                            chiefYmm: chiefY,
+                            n,
+                            rmsXUm: rmsX,
+                            rmsYUm: rmsY,
+                            rmsTotalUm: rmsTotal,
+                            diameterUm: diameter,
+                            maxRUm,
+                        },
+                        spotDiagPointSample: sample
+                    });
+                } catch (_) {}
 
                 const valueUm = (metric === 'diameter') ? diameter : rmsTotal;
                 stampSpotDebug({ ok: true, reason: 'ok', hits: n, resultUm: valueUm, lastRayTraceFailure: getLastRayTraceFailureForThisEval() });
