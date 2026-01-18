@@ -1145,12 +1145,10 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
     } else {
       // 通常面の場合
       // Thickness for a normal surface is taken from the *previous* row.
-      // However, Coord Break rows reuse thickness for other purposes and must NOT
-      // contribute to physical spacing.
+      // Coord Break rows sit between surfaces. When a CB row is inserted, users
+      // typically put the spacing-to-next-surface in the CB row's thickness.
+      // Therefore, CB thickness MUST contribute to physical spacing.
       let thickness = previousSurface ? getSafeThickness(previousSurface) : 0;
-      if (previousSurface && __rtIsCoordBreakRow(previousSurface)) {
-        thickness = 0;
-      }
       
       // NaN validation and Infinity handling for normal surface thickness
       if (!isFinite(thickness)) {
