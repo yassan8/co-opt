@@ -20,6 +20,7 @@ import { traceRay, traceRayHitPoint } from '../ray-tracing.js';
 import { findInfiniteSystemChiefRayOrigin, findApertureBoundaryRays } from '../gen-ray-cross-infinite.js';
 import { generateZMXText, downloadZMX } from '../zemax-export.js';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../zemax-import.js';
+import { buildShareUrlFromCompressedString, decodeAllDataFromCompressedString, encodeAllDataToCompressedString, getCompressedStringFromLocationHash } from '../utils/url-share.js';
 
 function __zmxPickPrimaryWavelengthMicrons(sourceRows) {
     try {
@@ -900,44 +901,7 @@ function setupSaveButton() {
         saveBtn.addEventListener('click', function() {
             if (document.activeElement) document.activeElement.blur();
 
-            // Configurationsデータを取得
-            const systemConfigurations = localStorage.getItem('systemConfigurations');
-            const parsedConfig = systemConfigurations ? JSON.parse(systemConfigurations) : null;
-
-            // Normalize configurations payload for export:
-            // - Source is global (top-level), so omit per-config source.
-            // - Merit/systemRequirements are exported at top-level, so omit duplicates inside the wrapper.
-            const sanitizedConfig = parsedConfig ? JSON.parse(JSON.stringify(parsedConfig)) : null;
-            if (sanitizedConfig) {
-                try { delete sanitizedConfig.meritFunction; } catch (_) {}
-                try { delete sanitizedConfig.systemRequirements; } catch (_) {}
-                try {
-                    if (Array.isArray(sanitizedConfig.configurations)) {
-                        for (const cfg of sanitizedConfig.configurations) {
-                            if (cfg && typeof cfg === 'object') {
-                                try { delete cfg.source; } catch (_) {}
-                            }
-                        }
-                    }
-                } catch (_) {}
-            }
-            
-            // Reference Focal Length を取得
-            const refFLInput = document.getElementById('reference-focal-length');
-            const referenceFocalLength = refFLInput ? refFLInput.value : '';
-            
-            const allData = {
-                source: window.tableSource ? window.tableSource.getData() : [],
-                object: window.tableObject ? window.tableObject.getData() : [],
-                opticalSystem: window.tableOpticalSystem ? window.tableOpticalSystem.getData() : [],
-                meritFunction: window.meritFunctionEditor ? window.meritFunctionEditor.getData() : [],
-                systemRequirements: window.systemRequirementsEditor ? window.systemRequirementsEditor.getData() : [],
-                systemData: {
-                    referenceFocalLength: referenceFocalLength
-                },
-                // Configurationsデータ（meritFunctionはグローバル）
-                configurations: sanitizedConfig
-            };
+            const allData = buildAllDataForExport();
 
             // 現在Loadされているファイル名を取得
             const loadedFileName = localStorage.getItem('loadedFileName');
@@ -973,6 +937,452 @@ function setupSaveButton() {
             console.log('✅ データが保存されました:', filename);
         });
     }
+}
+
+function getSanitizedConfigurationsForExport() {
+    // Configurationsデータを取得
+    const systemConfigurations = localStorage.getItem('systemConfigurations');
+    const parsedConfig = systemConfigurations ? JSON.parse(systemConfigurations) : null;
+
+    // Normalize configurations payload for export:
+    // - Source is global (top-level), so omit per-config source.
+    // - Merit/systemRequirements are exported at top-level, so omit duplicates inside the wrapper.
+    const sanitizedConfig = parsedConfig ? JSON.parse(JSON.stringify(parsedConfig)) : null;
+    if (sanitizedConfig) {
+        try { delete sanitizedConfig.meritFunction; } catch (_) {}
+        try { delete sanitizedConfig.systemRequirements; } catch (_) {}
+        try {
+            if (Array.isArray(sanitizedConfig.configurations)) {
+                for (const cfg of sanitizedConfig.configurations) {
+                    if (cfg && typeof cfg === 'object') {
+                        try { delete cfg.source; } catch (_) {}
+                    }
+                }
+            }
+        } catch (_) {}
+    }
+    return sanitizedConfig;
+}
+
+function buildAllDataForExport() {
+    // Reference Focal Length を取得
+    const refFLInput = document.getElementById('reference-focal-length');
+    const referenceFocalLength = refFLInput ? refFLInput.value : '';
+
+    return {
+        source: window.tableSource ? window.tableSource.getData() : [],
+        object: window.tableObject ? window.tableObject.getData() : [],
+        opticalSystem: window.tableOpticalSystem ? window.tableOpticalSystem.getData() : [],
+        meritFunction: window.meritFunctionEditor ? window.meritFunctionEditor.getData() : [],
+        systemRequirements: window.systemRequirementsEditor ? window.systemRequirementsEditor.getData() : [],
+        systemData: {
+            referenceFocalLength: referenceFocalLength
+        },
+        // Configurationsデータ（meritFunctionはグローバル）
+        configurations: getSanitizedConfigurationsForExport()
+    };
+}
+
+function setupShareUrlButton() {
+    const shareBtn = document.getElementById('share-url-btn');
+    if (!shareBtn) return;
+
+    const WARN_LEN = 2000;
+    const MAX_LEN = 30000;
+
+    shareBtn.addEventListener('click', async () => {
+        if (document.activeElement) document.activeElement.blur();
+
+        let compressed;
+        try {
+            const allData = buildAllDataForExport();
+            compressed = encodeAllDataToCompressedString(allData);
+        } catch (e) {
+            console.warn('❌ [Share] Failed to encode:', e);
+            alert(e?.message || 'Failed to generate share URL');
+            return;
+        }
+
+        const base = `${location.origin}${location.pathname}`;
+        let url;
+        try {
+            url = buildShareUrlFromCompressedString(compressed, base);
+        } catch (e) {
+            console.warn('❌ [Share] Failed to build URL:', e);
+            alert(e?.message || 'Failed to generate share URL');
+            return;
+        }
+
+        const len = url.length;
+        if (len > MAX_LEN) {
+            alert(`Share URL is too long (${len} chars). Please use Save instead.`);
+            return;
+        }
+        if (len >= WARN_LEN) {
+            const ok = confirm(`Share URL is long (${len} chars) and may not work in some apps.\n\nContinue?`);
+            if (!ok) return;
+        }
+
+        try {
+            await navigator.clipboard.writeText(url);
+            alert('Share URL copied to clipboard.');
+        } catch (e) {
+            // Fallback: let user copy manually.
+            prompt('Copy this URL:', url);
+        }
+    });
+}
+
+async function __loadAllDataObjectIntoApp(allData, { filename }) {
+    const displayName = filename || 'shared-link.json';
+
+    // New load attempt: clear any previous warning marker; warnings will re-set it.
+    setLoadWarnUIFlag(false);
+
+    // Normalize phase: accept multiple input shapes but continue with a single canonical shape.
+    try {
+        const normalizedResult = normalizeDesign(allData);
+        if (!showLoadErrors(normalizedResult.issues, { filename: displayName })) {
+            return false;
+        }
+        allData = normalizedResult.normalized;
+    } catch (err) {
+        showLoadErrors([
+            { severity: 'fatal', phase: 'normalize', message: `Unexpected normalize error: ${err?.message || String(err)}` }
+        ], { filename: displayName });
+        return false;
+    }
+
+    // Build candidate configuration object but do NOT save yet.
+    /** @type {any} */
+    let candidateConfig;
+    if (allData && allData.configurations) {
+        candidateConfig = allData.configurations;
+    } else {
+        showLoadErrors([
+            { severity: 'fatal', phase: 'normalize', message: 'Normalization did not produce configurations wrapper.' }
+        ], { filename: displayName });
+        return false;
+    }
+
+    // Validate phase (block schema)
+    /** @type {Array<any>} */
+    const issues = [];
+
+    const cfgList = Array.isArray(candidateConfig?.configurations) ? candidateConfig.configurations : [];
+
+    const countBlocksByType = (blocks) => {
+        const out = { Lens: 0, Doublet: 0, Triplet: 0, AirGap: 0, Stop: 0, ImagePlane: 0, Other: 0 };
+        if (!Array.isArray(blocks)) return out;
+        for (const b of blocks) {
+            const t = String(b?.blockType ?? '');
+            if (Object.prototype.hasOwnProperty.call(out, t)) out[t]++;
+            else out.Other++;
+        }
+        return out;
+    };
+
+    const blocksLookSuspicious = (cfg) => {
+        try {
+            const blocks = cfg?.blocks;
+            if (!Array.isArray(blocks) || blocks.length === 0) return false;
+            const isNumericish = (v) => {
+                if (typeof v === 'number') return Number.isFinite(v);
+                const s = String(v ?? '').trim();
+                if (!s) return false;
+                return /^[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?$/i.test(s);
+            };
+            for (const b of blocks) {
+                const type = String(b?.blockType ?? '');
+                if (type === 'Lens') {
+                    const mat = b?.parameters?.material;
+                    // A lens material should be a glass name, not a refractive index number.
+                    if (isNumericish(mat)) return true;
+                }
+                if (type === 'Doublet' || type === 'Triplet') {
+                    const m1 = b?.parameters?.material1;
+                    const m2 = b?.parameters?.material2;
+                    const m3 = b?.parameters?.material3;
+                    if (isNumericish(m1) || isNumericish(m2) || isNumericish(m3)) return true;
+                }
+            }
+            return false;
+        } catch (_) {
+            return false;
+        }
+    };
+
+    // If blocks are missing, or embedded blocks look inconsistent, try to auto-derive Blocks.
+    // This enables Apply-to-Design-Intent even for cemented lenses (Doublet/Triplet).
+    for (const cfg of cfgList) {
+        try {
+            const legacyRows = Array.isArray(cfg?.opticalSystem) ? cfg.opticalSystem : null;
+            if (!legacyRows || legacyRows.length === 0) continue;
+
+            const hasBlocks = configurationHasBlocks(cfg);
+            const suspicious = hasBlocks && blocksLookSuspicious(cfg);
+            const existingCounts = hasBlocks ? countBlocksByType(cfg.blocks) : null;
+
+            // Always do a best-effort derive for comparison.
+            const derived = deriveBlocksFromLegacyOpticalSystemRows(legacyRows);
+            const hasFatal = Array.isArray(derived?.issues) && derived.issues.some(i => i && i.severity === 'fatal');
+            if (hasFatal) {
+                if (!hasBlocks) {
+                    // Do not fail the Load; keep legacy surface workflow.
+                    const converted = (derived.issues || []).map(i => ({
+                        ...i,
+                        severity: 'warning',
+                        message: `Blocks conversion skipped: ${i?.message || String(i)}`
+                    }));
+                    issues.push(...converted);
+                    if (!cfg.metadata || typeof cfg.metadata !== 'object') cfg.metadata = {};
+                    cfg.metadata.importAnalyzeMode = true;
+                }
+                continue;
+            }
+
+            const derivedCounts = countBlocksByType(derived?.blocks);
+            const wouldIncreaseDoublets = !!existingCounts && (derivedCounts.Doublet > existingCounts.Doublet);
+
+            // Decide whether to set/replace blocks:
+            // - if blocks missing: set
+            // - if suspicious: replace
+            // - if derived yields more Doublets: replace (user expectation: cemented groups preserved)
+            if (!hasBlocks || suspicious || wouldIncreaseDoublets) {
+                cfg.schemaVersion = cfg.schemaVersion || BLOCK_SCHEMA_VERSION;
+                cfg.blocks = Array.isArray(derived?.blocks) ? derived.blocks : [];
+                if (!cfg.metadata || typeof cfg.metadata !== 'object') cfg.metadata = {};
+                cfg.metadata.importAnalyzeMode = false;
+                if (suspicious) cfg.metadata.importBlocksRepaired = true;
+                if (wouldIncreaseDoublets) cfg.metadata.importBlocksRebuiltForCemented = true;
+
+                if (hasBlocks && (suspicious || wouldIncreaseDoublets)) {
+                    issues.push({
+                        severity: 'warning',
+                        phase: 'validate',
+                        message: 'Blocks were rebuilt from opticalSystem to better preserve cemented groups (Doublet/Triplet) during Design Intent load.'
+                    });
+                }
+
+                // Carry over non-fatal conversion warnings.
+                if (Array.isArray(derived?.issues) && derived.issues.length > 0) {
+                    issues.push(...derived.issues);
+                }
+            } else {
+                // Keep existing blocks; still report non-fatal derive issues if any.
+                if (Array.isArray(derived?.issues) && derived.issues.length > 0) {
+                    const converted = (derived.issues || []).map(i => ({
+                        ...i,
+                        severity: 'warning',
+                        message: `Blocks check (kept embedded blocks): ${i?.message || String(i)}`
+                    }));
+                    issues.push(...converted);
+                }
+            }
+        } catch (e) {
+            issues.push({ severity: 'warning', phase: 'validate', message: `Blocks conversion failed unexpectedly: ${e?.message || String(e)}` });
+        }
+    }
+
+    for (const cfg of cfgList) {
+        if (configurationHasBlocks(cfg)) {
+            issues.push(...validateBlocksConfiguration(cfg));
+        }
+    }
+
+    if (!showLoadErrors(issues, { filename: displayName })) {
+        return false;
+    }
+
+    // Expand phase (only active config needs derived opticalSystem right now)
+    try {
+        const activeId = candidateConfig?.activeConfigId || 1;
+        const activeCfg = cfgList.find(c => c.id === activeId) || cfgList[0];
+        if (activeCfg && configurationHasBlocks(activeCfg)) {
+            const legacyBeforeExpand = Array.isArray(activeCfg.opticalSystem) ? activeCfg.opticalSystem : null;
+            // validate already ran above; avoid re-validating here to prevent duplicate warnings.
+            const expanded = expandBlocksToOpticalSystemRows(activeCfg.blocks);
+            issues.push(...expanded.issues);
+            if (!showLoadErrors(expanded.issues, { filename: displayName })) {
+                return false;
+            }
+            // IMPORTANT: keep legacy surface rows as-is (preserve per-surface fields like semidia),
+            // and only overlay provenance so Apply-to-Design-Intent can reverse-map edits.
+            if (Array.isArray(legacyBeforeExpand) && legacyBeforeExpand.length > 0) {
+                try { __blocks_overlayExpandedProvenanceIntoLegacyRows(legacyBeforeExpand, expanded.rows); } catch (_) {}
+                // Preserve object row thickness/semidia even if indices don't align.
+                try { __blocks_mergeLegacyIndexFieldsIntoExpandedRows(legacyBeforeExpand, legacyBeforeExpand); } catch (_) {}
+                // Normalize ids to current indices (Tabulator expects numeric ids).
+                try {
+                    for (let ii = 0; ii < legacyBeforeExpand.length; ii++) {
+                        if (legacyBeforeExpand[ii] && typeof legacyBeforeExpand[ii] === 'object') legacyBeforeExpand[ii].id = ii;
+                    }
+                } catch (_) {}
+                activeCfg.opticalSystem = legacyBeforeExpand;
+            } else {
+                activeCfg.opticalSystem = expanded.rows;
+            }
+        }
+    } catch (err) {
+        showLoadErrors([
+            { severity: 'fatal', phase: 'expand', message: `Unexpected expand error: ${err?.message || String(err)}` }
+        ], { filename: displayName });
+        return false;
+    }
+
+    // Determine the effective payload to load into the tables.
+    // Prefer top-level fields; fall back to active config in candidateConfig.
+    let effectiveSource = allData.source;
+    let effectiveObject = allData.object;
+    let effectiveOpticalSystem = allData.opticalSystem;
+    let effectiveMeritFunction = allData.meritFunction;
+    let effectiveSystemRequirements = allData.systemRequirements;
+    let effectiveSystemData = allData.systemData;
+
+    // If blocks exist, the expanded active configuration is the source of truth.
+    // Do NOT allow top-level legacy opticalSystem to override derived rows.
+    try {
+        const activeId = candidateConfig?.activeConfigId || 1;
+        const activeCfg = cfgList.find(c => c.id === activeId) || cfgList[0];
+        if (activeCfg && configurationHasBlocks(activeCfg) && Array.isArray(activeCfg.opticalSystem)) {
+            effectiveOpticalSystem = activeCfg.opticalSystem;
+        }
+    } catch (_) {}
+
+    if (!effectiveSource || !effectiveObject || !effectiveOpticalSystem || !effectiveSystemData) {
+        try {
+            const activeId = candidateConfig?.activeConfigId || 1;
+            const activeCfg = cfgList.find(c => c.id === activeId) || cfgList[0];
+
+            if (activeCfg) {
+                if (!effectiveSource && activeCfg.source) effectiveSource = activeCfg.source;
+                if (!effectiveObject && activeCfg.object) effectiveObject = activeCfg.object;
+                if (!effectiveOpticalSystem && activeCfg.opticalSystem) effectiveOpticalSystem = activeCfg.opticalSystem;
+                if (!effectiveSystemData && activeCfg.systemData) effectiveSystemData = activeCfg.systemData;
+            }
+
+            if (!effectiveMeritFunction && candidateConfig?.meritFunction) effectiveMeritFunction = candidateConfig.meritFunction;
+            if (!effectiveSystemRequirements && candidateConfig?.systemRequirements) effectiveSystemRequirements = candidateConfig.systemRequirements;
+        } catch (e) {
+            console.warn('⚠️ [Load] Failed to derive table data from configurations:', e);
+        }
+    }
+
+    // At this point, validation/expansion succeeded: write to localStorage.
+    try {
+        localStorage.setItem('systemConfigurations', JSON.stringify(candidateConfig));
+        console.log('🔵 [Load] Configurations data saved');
+    } catch (e) {
+        showLoadErrors([
+            { severity: 'fatal', phase: 'validate', message: `Failed to persist configurations: ${e?.message || String(e)}` }
+        ], { filename: displayName });
+        return false;
+    }
+
+    // System Data を復元（Reference Focal Length）
+    if (effectiveSystemData) {
+        const refFLInput = document.getElementById('reference-focal-length');
+        if (refFLInput) {
+            refFLInput.value = effectiveSystemData.referenceFocalLength || '';
+        }
+    }
+
+    saveSourceTableData(effectiveSource || []);
+    saveObjectTableData(effectiveObject || []);
+    saveLensTableData(effectiveOpticalSystem || []);
+
+    if (effectiveMeritFunction) {
+        localStorage.setItem('meritFunctionData', JSON.stringify(effectiveMeritFunction));
+    }
+
+    if (effectiveSystemRequirements) {
+        localStorage.setItem('systemRequirementsData', JSON.stringify(effectiveSystemRequirements));
+    }
+
+    // ファイル名を保存
+    localStorage.setItem('loadedFileName', displayName);
+
+    // Update file name UI immediately.
+    try {
+        const fileNameElement = document.getElementById('loaded-file-name');
+        if (fileNameElement) {
+            fileNameElement.textContent = displayName;
+            fileNameElement.style.color = '#1a4d8f';
+        }
+    } catch (_) {}
+
+    console.log('✅ [Load] Applying to UI (no reload)...');
+
+    // Push new data into existing Tabulator instances.
+    try { globalThis.__configurationAutoSaveDisabled = true; } catch (_) {}
+    try {
+        const tasks = [];
+        if (window.tableSource && typeof window.tableSource.setData === 'function') {
+            tasks.push(Promise.resolve(window.tableSource.setData(effectiveSource || [])));
+        }
+        if (window.tableObject && typeof window.tableObject.setData === 'function') {
+            tasks.push(Promise.resolve(window.tableObject.setData(effectiveObject || [])));
+        }
+        if (window.tableOpticalSystem && typeof window.tableOpticalSystem.setData === 'function') {
+            tasks.push(Promise.resolve(window.tableOpticalSystem.setData(effectiveOpticalSystem || [])));
+        }
+
+        if (window.systemRequirementsEditor && typeof window.systemRequirementsEditor.setData === 'function') {
+            tasks.push(Promise.resolve(window.systemRequirementsEditor.setData(effectiveSystemRequirements || [])));
+        }
+
+        Promise.allSettled(tasks).finally(() => {
+            try { globalThis.__configurationAutoSaveDisabled = false; } catch (_) {}
+            try { updateSurfaceNumberSelect(); } catch (_) {}
+            try { if (typeof window.refreshConfigurationUI === 'function') window.refreshConfigurationUI(); } catch (_) {}
+            try { if (typeof window.updatePSFObjectOptions === 'function') window.updatePSFObjectOptions(); } catch (_) {}
+            // Wavefront Object dropdown is derived from tableObject; refresh explicitly.
+            // (Tabulator setData does not always fire dataChanged.)
+            try { if (typeof window.updateWavefrontObjectSelect === 'function') window.updateWavefrontObjectSelect(); } catch (_) {}
+            try { refreshBlockInspector(); } catch (_) {}
+            // Auto redraw 3D popup after Load (no manual Render click)
+            try {
+                const popup = window.popup3DWindow;
+                if (popup && !popup.closed && typeof popup.postMessage === 'function') {
+                    popup.postMessage({ action: 'request-redraw' }, '*');
+                }
+            } catch (_) {}
+            console.log('✅ [Load] UI updated without reload');
+        });
+    } catch (e) {
+        try { globalThis.__configurationAutoSaveDisabled = false; } catch (_) {}
+        console.warn('⚠️ [Load] Failed to apply data to UI immediately:', e);
+    }
+
+    return true;
+}
+
+export async function loadFromCompressedDataHashIfPresent() {
+    const compressed = getCompressedStringFromLocationHash(location.hash);
+    if (!compressed) return { ok: false, reason: 'no_hash' };
+
+    const confirmed = confirm(
+        'リンクから設計を読み込みます。現在の設計は上書きされます。続行しますか？\n\n' +
+        'Load design from URL? Current design will be overwritten.'
+    );
+    if (!confirmed) return { ok: false, reason: 'cancelled' };
+
+    let allData;
+    try {
+        allData = decodeAllDataFromCompressedString(compressed);
+    } catch (e) {
+        console.warn('❌ [URL Load] Decode failed:', e);
+        alert(e?.message || 'Failed to load design from URL');
+        return { ok: false, reason: 'decode_failed' };
+    }
+
+    const ok = await __loadAllDataObjectIntoApp(allData, { filename: 'shared-link.json' });
+    if (ok) {
+        try {
+            history.replaceState(null, '', `${location.origin}${location.pathname}${location.search}`);
+        } catch (_) {}
+    }
+    return { ok };
 }
 
 /**
@@ -1959,7 +2369,7 @@ function setupLoadButton() {
                     return;
                 }
                 const reader = new FileReader();
-                reader.onload = evt => {
+                reader.onload = async evt => {
                     console.log('🔵 [Load] File read complete, parsing JSON...');
                     let allData;
                     try {
@@ -2329,6 +2739,11 @@ function setupLoadButton() {
                         try { globalThis.__configurationAutoSaveDisabled = false; } catch (_) {}
                         console.warn('⚠️ [Load] Failed to apply data to UI immediately:', e);
                     }
+                    console.log('🔵 [Load] JSON parsed successfully');
+                    await __loadAllDataObjectIntoApp(allData, { filename: file.name });
+
+                    // Clean up file input (we no longer reload).
+                    document.body.removeChild(input);
                 };
                 reader.onerror = () => {
                     console.error('❌ [Load] FileReader error:', reader.error);
@@ -5058,6 +5473,7 @@ export function setupDOMEventHandlers() {
         // UIイベントハンドラーを設定
         setupSaveButton();
         setupLoadButton();
+        setupShareUrlButton();
         setupImportZemaxButton();
         setupExportZemaxButton();
         setupClearStorageButton();

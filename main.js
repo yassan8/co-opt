@@ -57,7 +57,7 @@ import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayCo
 // UI modules
 import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons } from './ui/event-handlers.js?v=2026-01-15l';
 import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListeners } from './ui/ui-updates.js';
-import { setupDOMEventHandlers } from './ui/dom-event-handlers.js?v=2026-01-14b';
+import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers } from './ui/dom-event-handlers.js?v=2026-01-14b';
 import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.js';
 
 // Suggest (Design Intent) implementation (adds window.SuggestDesignIntent)
@@ -1430,6 +1430,18 @@ document.addEventListener('DOMContentLoaded', async function() {
         window.tableSource = tableSource;
         
         console.log('✅ Application initialization completed');
+
+        // URL share load (hash: #compressed_data=...)
+        // Run on next tick so other DOMContentLoaded listeners can finish too.
+        setTimeout(() => {
+            try {
+                Promise.resolve(loadFromCompressedDataHashIfPresent()).catch((e) => {
+                    console.warn('⚠️ [URL Load] Failed:', e);
+                });
+            } catch (e) {
+                console.warn('⚠️ [URL Load] Failed:', e);
+            }
+        }, 0);
         
         // (removed) OPD Rays drawing feature
         

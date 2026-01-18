@@ -14,6 +14,9 @@
   
   <!-- Plotly.js最新版を追加 -->
   <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+
+  <!-- URL Share compression (global LZString) -->
+  <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
   
   <!-- WASM Module (V3 with memory management) -->
   <script src="ray-tracing-wasm-v3.js?v=20260103a"></script>
@@ -105,6 +108,7 @@
     <div class="top-buttons-row">
       <button id="save-all-btn">Save</button>
       <button id="load-all-btn">Load</button>
+      <button id="share-url-btn">SHARE</button>
       <button id="clear-storage-btn">Clear Cache</button>
       <button id="import-zemax-btn" title="Import a Zemax .zmx file (minimal subset)">Import Zemax</button>
       <button id="export-zemax-btn" title="Export current optical system as Zemax .zmx">Export Zemax</button>
