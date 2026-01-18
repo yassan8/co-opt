@@ -321,7 +321,9 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         const targetSurfaceIndex = surfaceNumber - 1;
         const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
 
-        const pupilScalesToTry = physicalVignetting ? [1] : [1, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12];
+        // physicalVignetting: allow shrinking the effective pupil to find rays that pass through
+        // the physical apertures (matches OPD/spot behavior and avoids "0 rays reached" for angled fields).
+        const pupilScalesToTry = physicalVignetting ? [1, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12] : [1];
         let rayStartPoints = null;
         let annularRingsUsed = 0;
         let selectedRingOverride = Number(ringCount ?? 0);
