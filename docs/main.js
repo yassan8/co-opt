@@ -550,12 +550,8 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                     } catch (error) {
                         console.error(`❌ 正確光線${rayIndex}でエラー:`, error.message);
                     }
-                    
+
                     rayIndex++;
-                } catch (error) {
-                    console.error(`❌ 正確光線${rayIndex}でエラー:`, error.message);
-                    rayIndex++;
-                }
             }
         });
         
