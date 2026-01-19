@@ -985,6 +985,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                         out.push({
                             surfaceNumber: si + 1,
                             surfType: row?.surfType ?? null,
+                            // Raw row fields that can (in legacy) be re-used for CB params
                             raw: {
                                 semidia: row?.semidia ?? null,
                                 material: row?.material ?? null,
@@ -995,6 +996,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                                 thickness: row?.thickness ?? null,
                             },
                             prevSemidia: prev?.semidia ?? null,
+                            // Parsed cbParams as used by calculateSurfaceOrigins/traceRay
                             cbParams: (info && typeof info === 'object') ? (info.cbParams ?? null) : null,
                         });
                     }

@@ -1331,6 +1331,9 @@ function parseCoordBreakParams(surface, previousSurface = null) {
   // semidia/material and introduce an unintended decenter/tilt.
   const decenterX = (() => {
     if (hasExplicit) return toFiniteNumber(surface.decenterX);
+    // Legacy fallback: semidia/material columns were historically reused for CB decenter.
+    // But newly inserted CB rows often inherit semidia from the previous surface (e.g. 12mm).
+    // That inherited semidia MUST NOT become an unintended decenterX.
     const semidiaN = toFiniteOrNull(surface?.semidia);
     const prevSemidiaN = toFiniteOrNull(previousSurface?.semidia);
     const semidiaLooksInherited = (semidiaN !== null && prevSemidiaN !== null && Math.abs(semidiaN - prevSemidiaN) < 1e-12);
@@ -1842,8 +1845,7 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       
       // 2. semidia制限（"Auto"/未指定の場合は制限なし）
       // NOTE: semidia 未指定時に thickness を代用すると、物理的に存在しない開口制限を
-      //       誤って導入してしまい、軸外で大量に光線がブロックされる。
-      // CB rows propagate the prior surface's semidia in __cooptActualSemidia
+      //       誤って導入してしまい、軸外で大量に光線がブロックされる。n      // CB rows propagate the prior surface's semidia in __cooptActualSemidia
       // (since semidia column is reused for decenterX).
       const semiDiaValue = row.__cooptActualSemidia ?? row.semidia;
       const semiDiaNum = Number(semiDiaValue);

@@ -518,40 +518,40 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                     console.log(
                         `🔍 正確光線${rayIndex} for object ${objIndex}: start=(${ray.pos.x}, ${ray.pos.y}, ${ray.pos.z}), dir=(${ray.dir.x}, ${ray.dir.y}, ${ray.dir.z})`
                     );
-                        
-                        // window.traceRayと同じ呼び出し方法
-                        const rayPath = window.traceRay ? window.traceRay(opticalSystemRows, ray, 1.0) : null;
-                        
-                        if (rayPath && rayPath.length > 1) {
-                            console.log(`✅ 正確光線${rayIndex}追跡成功: ${rayPath.length}点`);
-                            console.log(`   開始位置確認: (${rayPath[0].x.toFixed(3)}, ${rayPath[0].y.toFixed(3)}, ${rayPath[0].z.toFixed(3)})`);
-                            
-                            // 光線の描画（正確な方法で）
-                            const points = rayPath.map(point => new window.THREE.Vector3(point.x, point.y, point.z));
-                            const geometry = new window.THREE.BufferGeometry().setFromPoints(points);
-                            const material = new window.THREE.LineBasicMaterial({ 
-                                color: 0x00ff00 + objIndex * 0x003300  // オブジェクト別に色分け
-                            });
-                            const line = new window.THREE.Line(geometry, material);
-                            line.userData = { 
-                                type: 'optical-ray',  // 正確な光線追跡識別子
-                                objectId: objIndex, 
-                                rayNumber: rayIndex,
-                                rayType: 'accurate',  // 正確な光線追跡識別子
-                                isRayLine: true,
-                                accurateRayTracing: true  // 正確な光線追跡であることを示す
-                            };
-                            scene.add(line);
-                            
-                            console.log(`🎨 正確光線${rayIndex}描画完了 (Object${objIndex})`);
-                        } else {
-                            console.log(`❌ 正確光線${rayIndex}追跡失敗`);
-                        }
-                    } catch (error) {
-                        console.error(`❌ 正確光線${rayIndex}でエラー:`, error.message);
-                    }
 
-                    rayIndex++;
+                    // window.traceRayと同じ呼び出し方法
+                    const rayPath = window.traceRay ? window.traceRay(opticalSystemRows, ray, 1.0) : null;
+
+                    if (rayPath && rayPath.length > 1) {
+                        console.log(`✅ 正確光線${rayIndex}追跡成功: ${rayPath.length}点`);
+                        console.log(`   開始位置確認: (${rayPath[0].x.toFixed(3)}, ${rayPath[0].y.toFixed(3)}, ${rayPath[0].z.toFixed(3)})`);
+
+                        // 光線の描画（正確な方法で）
+                        const points = rayPath.map(point => new window.THREE.Vector3(point.x, point.y, point.z));
+                        const geometry = new window.THREE.BufferGeometry().setFromPoints(points);
+                        const material = new window.THREE.LineBasicMaterial({
+                            color: 0x00ff00 + objIndex * 0x003300  // オブジェクト別に色分け
+                        });
+                        const line = new window.THREE.Line(geometry, material);
+                        line.userData = {
+                            type: 'optical-ray',  // 正確な光線追跡識別子
+                            objectId: objIndex,
+                            rayNumber: rayIndex,
+                            rayType: 'accurate',  // 正確な光線追跡識別子
+                            isRayLine: true,
+                            accurateRayTracing: true  // 正確な光線追跡であることを示す
+                        };
+                        scene.add(line);
+
+                        console.log(`🎨 正確光線${rayIndex}描画完了 (Object${objIndex})`);
+                    } else {
+                        console.log(`❌ 正確光線${rayIndex}追跡失敗`);
+                    }
+                } catch (error) {
+                    console.error(`❌ 正確光線${rayIndex}でエラー:`, error.message);
+                }
+
+                rayIndex++;
             }
         });
         
