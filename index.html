@@ -569,7 +569,7 @@
       console.warn('⚠️ [Startup] Failed to pre-load active configuration:', e);
     }
   </script>
-  <script type="module" src="main.js?v=2026-01-15l"></script>
+  <script type="module" src="main.js?v=2026-01-19a"></script>
   
   <!-- Configuration System -->
   <script type="module" src="table-configuration.js"></script>
@@ -634,7 +634,7 @@
         // ray-tracing.jsの関数をグローバルに公開
         setTimeout(async () => {
           try {
-            const main = await import('./main.js?v=2026-01-15l');
+            const main = await import('./main.js?v=2026-01-19a');
             const rayTracing = await import('./ray-tracing.js');
             const debugUtils = await import('./debug/debug-utils.js');
             
