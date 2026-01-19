@@ -1417,12 +1417,6 @@ export function calculateLongitudinalAberration(
                 const stopLocal = getStopLocalOffsets(stopPoint, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
                 const pupilHeight = Math.abs(stopLocal ? stopLocal.v : stopPoint.y); // 絶対値（0から1の範囲で表示）
                 
-                // 光軸に非常に近い光線（光軸交点計算の精度が悪い）は球面収差図から除外
-                // 最小瞳座標0.0001以上のみプロット
-                if (pupilHeight < 1e-6) {
-                    continue;
-                }
-                
                 // 横収差（メリジオナルなのでY方向）
                 const transverseAberration = transverseAb.y;
                 
@@ -1556,12 +1550,6 @@ export function calculateLongitudinalAberration(
                 const stopPoint = tracedRay.rayPath[stopPointIndex];
                 const stopLocal = getStopLocalOffsets(stopPoint, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
                 const pupilHeight = Math.abs(stopLocal ? stopLocal.u : stopPoint.x); // 絶対値（0から1の範囲で表示）
-                
-                // 光軸に非常に近い光線（光軸交点計算の精度が悪い）は球面収差図から除外
-                // 最小瞳座標0.0001以上のみプロット
-                if (pupilHeight < 1e-6) {
-                    continue;
-                }
                 
                 // 横収差（サジタルなのでX方向）
                 const transverseAberration = transverseAb.x;
