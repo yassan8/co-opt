@@ -688,7 +688,7 @@ class MeritFunctionEditor {
     }
 
     calculateOperandValue(operand) {
-        // operandのconfigIdに対応する光学系データを取得
+        // Get optical system data for operand's config (respects scenarios for each config)
         const opticalSystemData = this.getOpticalSystemDataByConfigId(operand.configId);
 
         // Spot Size operands can mirror the Spot Diagram algorithm and settings.
@@ -1237,6 +1237,13 @@ class MeritFunctionEditor {
                     const loadPerConfig = (cfgId) => {
                         try {
                             if (!cfgId) return null;
+                            // CRITICAL: Prefer in-memory cache (updated immediately after CB insertion)
+                            // over localStorage (may have stale data during the same evaluation cycle).
+                            const memCache = (typeof window !== 'undefined') ? window.__cooptSpotDiagramSettingsByConfigId : null;
+                            if (memCache && typeof memCache === 'object') {
+                                const s = memCache[String(cfgId)];
+                                if (s && typeof s === 'object') return s;
+                            }
                             const rawMap = localStorage.getItem('spotDiagramSettingsByConfigId');
                             if (!rawMap) return null;
                             const map = JSON.parse(rawMap) || {};
@@ -1375,7 +1382,27 @@ class MeritFunctionEditor {
             const fieldIndex0 = (objCount > 0)
                 ? Math.max(0, Math.min(objCount - 1, fieldIdx1 - 1))
                 : 0;
-            const obj = (objCount > 0) ? objectRows[fieldIndex0] : null;
+            let obj = (objCount > 0) ? objectRows[fieldIndex0] : null;
+            if (!obj) {
+                // Fallback: if non-active config lacks object rows, use active config's UI object rows.
+                // This avoids false FAIL when per-config object tables are missing or stale.
+                try {
+                    if (!isOperandActiveConfig) {
+                        const activeObjRows = (typeof window !== 'undefined' && typeof window.getObjectRows === 'function')
+                            ? window.getObjectRows()
+                            : (window.tableObject ? window.tableObject.getData() : []);
+                        const activeCount = Array.isArray(activeObjRows) ? activeObjRows.length : 0;
+                        const activeIdx0 = (activeCount > 0)
+                            ? Math.max(0, Math.min(activeCount - 1, fieldIdx1 - 1))
+                            : 0;
+                        const activeObj = (activeCount > 0) ? activeObjRows[activeIdx0] : null;
+                        if (activeObj) {
+                            obj = activeObj;
+                            stampSpotDebug({ reason: 'fallback-active-object-rows', objectRowsLength: objCount, fieldIndex0, activeObjectRowsLength: activeCount, activeFieldIndex0: activeIdx0 });
+                        }
+                    }
+                } catch (_) {}
+            }
             if (!obj) {
                 stampSpotDebug({ reason: 'no-object-row', objectRowsLength: objCount, fieldIndex0 });
                 return 1e9;
@@ -1566,6 +1593,7 @@ class MeritFunctionEditor {
             // This avoids subtle mismatches (ray start generation, filtering, chief-ray flagging, etc.).
             if (useUiDefaults && (pattern === 'current' || pattern === '' || pattern === 'annular' || pattern === 'grid')) {
                 stampSpotDebug({ impl: 'spot-diagram' });
+                try { stampSpotDebug({ spotDiagStage: 'entered' }); } catch (_) {}
                 stampSpotDebug({
                     fastModeEnabled,
                     rayCountRequested: rayCount,
@@ -1574,25 +1602,31 @@ class MeritFunctionEditor {
 
                 // For spot-size operands, match Spot Diagram's config selection behavior:
                 // - Active config: prefer live UI tables (immediate updates)
-                // - Non-active config: evaluate against the stored configuration snapshot/blocks
-                //   (NOT the active config's live tables, and NOT a stale cached UI snapshot)
+                // - Non-active config: USE ACTIVE CONFIG'S OPTICAL ROWS (CB insertion is shared)
+                //   (CB insertion adds rows to active config's UI table only; Design Intent blocks
+                //    are not yet synchronized, so non-active config's blocks expansion is stale)
                 const uiRows = getUiTableRowsForSpot();
-                const configOpticalRows = (!isOperandActiveConfig && operandCfgId)
-                    ? this.getOpticalSystemDataByConfigId(operandCfgId)
-                    : opticalSystemData;
+                
+                // CRITICAL FIX: Non-active configs should use active config's optical rows
+                // because CB insertion updates the active config's UI table immediately,
+                // but the Design Intent blocks are not updated until saveSystemConfigurations.
+                // Using blocks expansion for non-active configs returns stale data (no CB).
+                const useUiTablesEffective = !!(useUiTables && isOperandActiveConfig);
+                try { stampSpotDebug({ useUiTablesEffective }); } catch (_) {}
 
-                const spotOpticalRows = (useUiTables && uiRows.optical)
+                // Use active config's optical rows for all configs (CB insertion shared)
+                const spotOpticalRows = (useUiTablesEffective && uiRows.optical)
                     ? uiRows.optical
-                    : configOpticalRows;
-                const spotObjectRows = (useUiTables && uiRows.object)
+                    : opticalSystemData;
+                const spotObjectRows = (useUiTablesEffective && uiRows.object)
                     ? uiRows.object
                     : objectRows;
-                const spotSourceRows = (useUiTables && uiRows.source)
+                const spotSourceRows = (useUiTablesEffective && uiRows.source)
                     ? uiRows.source
                     : sourceRows;
 
                 // Update cache whenever we successfully read live UI rows for an explicit config.
-                if (useUiTables && operandCfgId) {
+                if (useUiTablesEffective && operandCfgId) {
                     saveSpotTablesCache(operandCfgId, {
                         optical: uiRows.optical,
                         object: uiRows.object,
@@ -1636,7 +1670,16 @@ class MeritFunctionEditor {
                 const obj2 = (objCount2 > 0)
                     ? spotObjectRows[fieldIndex0ForSpot]
                     : null;
-                if (!obj2) return 1e9;
+                if (!obj2) {
+                    stampSpotDebug({
+                        ok: false,
+                        reason: 'no-object-row-for-spot-diagram',
+                        objectRowsLength: objCount2,
+                        fieldIndex0: fieldIndex0ForSpot,
+                        fieldIdx1
+                    });
+                    return 1e9;
+                }
 
                 // Capture a compact “object prototype” snapshot for debugging.
                 try {
@@ -1676,23 +1719,54 @@ class MeritFunctionEditor {
                 } catch (_) {}
 
                 // Recompute target surface index against the rows we're actually using.
+                // Important: if there's no explicit Image row, fall back to the last *non-CB* surface.
+                // Otherwise a CB insertion at the end can accidentally become the default target.
+                const findLastNonSpecialSurfaceIndex = (rows) => {
+                    try {
+                        if (!Array.isArray(rows) || rows.length === 0) return -1;
+                        for (let i = rows.length - 1; i >= 0; i--) {
+                            const r = rows[i];
+                            if (isObjectRow(r) || isCoordinateBreakRow(r)) continue;
+                            return i;
+                        }
+                        return -1;
+                    } catch (_) {
+                        return -1;
+                    }
+                };
+
                 let imgIdx2 = -1;
                 for (let i = 0; i < spotOpticalRows.length; i++) {
                     if (isImageRow(spotOpticalRows[i])) { imgIdx2 = i; break; }
                 }
-                if (imgIdx2 < 0) imgIdx2 = spotOpticalRows.length - 1;
-                if (imgIdx2 < 0) return 1e9;
+                const imgIdx2Source = (imgIdx2 >= 0) ? 'image-row' : 'last-non-special';
+                if (imgIdx2 < 0) imgIdx2 = findLastNonSpecialSurfaceIndex(spotOpticalRows);
+                if (imgIdx2 >= 0 && (isObjectRow(spotOpticalRows[imgIdx2]) || isCoordinateBreakRow(spotOpticalRows[imgIdx2]))) {
+                    imgIdx2 = findLastNonSpecialSurfaceIndex(spotOpticalRows.slice(0, imgIdx2));
+                }
+                if (imgIdx2 < 0) {
+                    stampSpotDebug({ ok: false, reason: 'no-valid-default-target-surface' });
+                    return 1e9;
+                }
+                try { stampSpotDebug({ imageSurfaceIndexSource: imgIdx2Source }); } catch (_) {}
 
-                const uiSurfaceIdx2 = (() => {
+                const uiSurfaceSelection2 = (() => {
                     // Spot size operands are intended to match the Spot Diagram UI.
                     // So even during Requirements evaluation, honor the Spot Diagram surface selection
                     // (UI selection for active config, otherwise lastSpotSettings/per-config settings).
 
-                    const resolveSurfaceIdToRowIndex = (sid) => {
+                    let opts = [];
+                    try { opts = generateSurfaceOptions(spotOpticalRows || []); } catch (_) { opts = []; }
+
+                    // NOTE:
+                    // - Spot Diagram's surface select uses option.value = (rowIndex + 1)
+                    //   (a 1-based row index into opticalSystemRows, a.k.a. surfaceNumber).
+                    // - We ALSO carry `surfaceId` metadata (Design Intent numbering that counts CB).
+                    //   Older saved settings may store this `surfaceId`.
+                    const resolveSelectValueToRowIndex = (val) => {
                         try {
-                            const n = Number(sid);
+                            const n = Number(val);
                             if (!Number.isFinite(n)) return null;
-                            const opts = generateSurfaceOptions(spotOpticalRows || []);
                             const match = opts.find(o => Number(o?.value) === Number(n));
                             return (match && Number.isInteger(match.rowIndex)) ? match.rowIndex : null;
                         } catch (_) {
@@ -1700,25 +1774,97 @@ class MeritFunctionEditor {
                         }
                     };
 
+                    const resolveSurfaceIdToRowIndex = (sid) => {
+                        try {
+                            const n = Number(sid);
+                            if (!Number.isFinite(n)) return null;
+                            // Prefer explicit surfaceId metadata when present.
+                            const bySid = opts.find(o => Number(o?.surfaceId) === Number(n));
+                            if (bySid && Number.isInteger(bySid.rowIndex)) return bySid.rowIndex;
+                            // Backward fallback: some builds stored surfaceId in option.value.
+                            const byVal = opts.find(o => Number(o?.value) === Number(n));
+                            return (byVal && Number.isInteger(byVal.rowIndex)) ? byVal.rowIndex : null;
+                        } catch (_) {
+                            return null;
+                        }
+                    };
+
+                    const resolveRowIndexToSurfaceId = (rowIndex) => {
+                        try {
+                            const idx = Number(rowIndex);
+                            if (!Number.isInteger(idx)) return null;
+                            const match = opts.find(o => Number.isInteger(o?.rowIndex) && Number(o.rowIndex) === idx);
+                            const sid = match ? Number(match.surfaceId ?? null) : null;
+                            return Number.isFinite(sid) && sid > 0 ? sid : null;
+                        } catch (_) {
+                            return null;
+                        }
+                    };
+
                     let uiSurfaceIdUsed = null;
 
-                    // For the active configuration, honor the current UI surface selection FIRST.
-                    // This avoids legacy/stale row-index settings accidentally targeting a CB row after insert/delete.
-                    if (isOperandActiveConfig) {
+                    const makeResult = (rowIndex, surfaceId) => {
+                        if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= spotOpticalRows.length) return null;
+                        if (isObjectRow(spotOpticalRows[rowIndex]) || isCoordinateBreakRow(spotOpticalRows[rowIndex])) return null;
+                        const sid = (Number.isFinite(Number(surfaceId)) && Number(surfaceId) > 0)
+                            ? Number(surfaceId)
+                            : resolveRowIndexToSurfaceId(rowIndex);
+                        return { rowIndex, surfaceId: (Number.isFinite(sid) && sid > 0) ? sid : null };
+                    };
+
+                    // For the active configuration, honor the current UI surface selection FIRST
+                    // (unless we are evaluating System Requirements, which should not depend
+                    // on potentially stale UI selection after CB insertion).
+                    const isRequirementsEval = !!(typeof globalThis !== 'undefined' && globalThis.__COOPT_EVALUATING_REQUIREMENTS);
+                    if (isOperandActiveConfig && !isRequirementsEval) {
                         try {
                             if (typeof document !== 'undefined') {
                                 const el = document.getElementById('surface-number-select');
                                 if (el && el.value !== undefined && el.value !== null) {
-                                    // surface-number-select holds Surf id (not raw row index).
-                                    const sid = parseInt(String(el.value), 10);
-                                    if (Number.isInteger(sid) && sid > 0) {
-                                        uiSurfaceIdUsed = sid;
-                                        const idx = resolveSurfaceIdToRowIndex(sid);
-                                        if (Number.isInteger(idx) && idx >= 0 && idx < spotOpticalRows.length) {
-                                            if (!isObjectRow(spotOpticalRows[idx]) && !isCoordinateBreakRow(spotOpticalRows[idx])) {
-                                                try { stampSpotDebug({ uiSurfaceIdUsed }); } catch (_) {}
-                                                return idx;
+                                    // Prefer rowId-based resolution (stable across CB insert/delete).
+                                    try {
+                                        const optEl = (el.selectedIndex >= 0 && el.options) ? el.options[el.selectedIndex] : null;
+                                        const rid = optEl && optEl.dataset && optEl.dataset.rowId ? String(optEl.dataset.rowId) : '';
+                                        if (rid) {
+                                            const m = opts.find(o => o && o.rowId !== null && o.rowId !== undefined && String(o.rowId) === rid);
+                                            if (m && Number.isInteger(m.rowIndex)) {
+                                                uiSurfaceIdUsed = Number(m.value);
+                                                const res = makeResult(Number(m.rowIndex), Number(m.value));
+                                                if (res) {
+                                                    try { stampSpotDebug({ uiSurfaceIdUsed, uiSurfaceRowIdUsed: rid }); } catch (_) {}
+                                                    return res;
+                                                }
                                             }
+                                        }
+                                    } catch (_) {}
+
+                                    // Next best: rowSig-based resolution (stable-ish across insert/delete).
+                                    try {
+                                        const optEl = (el.selectedIndex >= 0 && el.options) ? el.options[el.selectedIndex] : null;
+                                        const sig = optEl && optEl.dataset && optEl.dataset.rowSig ? String(optEl.dataset.rowSig) : '';
+                                        if (sig) {
+                                            const m = opts.find(o => o && o.rowSig !== null && o.rowSig !== undefined && String(o.rowSig) === sig);
+                                            if (m && Number.isInteger(m.rowIndex)) {
+                                                uiSurfaceIdUsed = Number(m.value);
+                                                const res = makeResult(Number(m.rowIndex), Number(m.value));
+                                                if (res) {
+                                                    try { stampSpotDebug({ uiSurfaceIdUsed, uiSurfaceRowSigUsed: sig }); } catch (_) {}
+                                                    return res;
+                                                }
+                                            }
+                                        }
+                                    } catch (_) {}
+
+                                    // surface-number-select holds Surf id (not raw row index).
+                                    // surface-number-select holds option.value (surfaceNumber = rowIndex + 1).
+                                    const selVal = parseInt(String(el.value), 10);
+                                    if (Number.isInteger(selVal) && selVal > 0) {
+                                        uiSurfaceIdUsed = selVal;
+                                        const idx = resolveSelectValueToRowIndex(selVal);
+                                        const res = makeResult(idx, selVal);
+                                        if (res) {
+                                            try { stampSpotDebug({ uiSurfaceIdUsed }); } catch (_) {}
+                                            return res;
                                         }
                                     }
                                 }
@@ -1726,28 +1872,98 @@ class MeritFunctionEditor {
                         } catch (_) {}
                     }
 
-                    // Next, prefer settings.surfaceId (Surf numbering), then fall back to row-index fields.
-                    const fromSettingsSurfaceId = lastSpotSettings?.surfaceId;
-                    const fromSettingsRowIdx = Number(lastSpotSettings?.surfaceRowIndex ?? lastSpotSettings?.surfaceIndex);
-                    const resolvedFromSettings = (fromSettingsSurfaceId !== undefined && fromSettingsSurfaceId !== null)
+                    // Use per-config Spot Diagram settings when available.
+                    // Fall back to active config settings only if per-config settings are missing.
+                    let effectiveSettings = lastSpotSettings;
+                    try {
+                        if (!isOperandActiveConfig && operandCfgId) {
+                            const systemConfig = (() => {
+                                let memSys = null;
+                                let lsSys = null;
+                                try {
+                                    if (typeof window !== 'undefined' && window.__cooptSystemConfig) {
+                                        memSys = window.__cooptSystemConfig;
+                                    }
+                                } catch (_) {}
+                                try {
+                                    if (typeof localStorage !== 'undefined') {
+                                        lsSys = JSON.parse(localStorage.getItem('systemConfigurations'));
+                                    }
+                                } catch (_) {}
+                                if (memSys && lsSys) {
+                                    const memActive = (memSys.activeConfigId !== undefined && memSys.activeConfigId !== null)
+                                        ? String(memSys.activeConfigId)
+                                        : '';
+                                    const lsActive = (lsSys.activeConfigId !== undefined && lsSys.activeConfigId !== null)
+                                        ? String(lsSys.activeConfigId)
+                                        : '';
+                                    return (memActive && lsActive && memActive !== lsActive) ? lsSys : memSys;
+                                }
+                                return memSys || lsSys;
+                            })();
+                            const activeConfigId = (systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null)
+                                ? String(systemConfig.activeConfigId)
+                                : '';
+
+                            const memCache = (typeof window !== 'undefined') ? window.__cooptSpotDiagramSettingsByConfigId : null;
+                            let allSettings = null;
+                            if (memCache && typeof memCache === 'object') {
+                                allSettings = memCache;
+                            } else if (typeof localStorage !== 'undefined') {
+                                try { allSettings = JSON.parse(localStorage.getItem('spotDiagramSettingsByConfigId') || '{}'); } catch { allSettings = {}; }
+                            }
+
+                            // Prefer operand's config settings.
+                            if (allSettings && typeof allSettings === 'object' && allSettings[operandCfgId]) {
+                                effectiveSettings = allSettings[operandCfgId];
+                            } else if (activeConfigId && allSettings && typeof allSettings === 'object' && allSettings[activeConfigId]) {
+                                // Fallback to active config settings if per-config missing.
+                                effectiveSettings = allSettings[activeConfigId];
+                            }
+                        }
+                    } catch (_) {}
+
+                    const fromSettingsSurfaceId = effectiveSettings?.surfaceId;
+                    const fromSettingsRowIdx = Number(effectiveSettings?.surfaceRowIndex ?? effectiveSettings?.surfaceIndex);
+                    let resolvedFromSettings = (fromSettingsSurfaceId !== undefined && fromSettingsSurfaceId !== null)
                         ? resolveSurfaceIdToRowIndex(fromSettingsSurfaceId)
                         : (Number.isInteger(fromSettingsRowIdx) ? fromSettingsRowIdx : null);
-                    if (resolvedFromSettings !== null && Number.isInteger(resolvedFromSettings) && resolvedFromSettings >= 0 && resolvedFromSettings < spotOpticalRows.length) {
-                        if (!isObjectRow(spotOpticalRows[resolvedFromSettings]) && !isCoordinateBreakRow(spotOpticalRows[resolvedFromSettings])) {
-                            try {
-                                stampSpotDebug({
-                                    uiSurfaceIdUsed: uiSurfaceIdUsed,
-                                    settingsSurfaceIdUsed: (fromSettingsSurfaceId !== undefined && fromSettingsSurfaceId !== null) ? String(fromSettingsSurfaceId) : null,
-                                    settingsRowIndexUsed: Number.isInteger(fromSettingsRowIdx) ? fromSettingsRowIdx : null
-                                });
-                            } catch (_) {}
-                            return resolvedFromSettings;
-                        }
+                    
+                    // If surfaceId resolution failed (e.g., CB insertion changed numbering),
+                    // fall back to the explicit Image surface to prevent evaluating at CB-1.
+                    if (resolvedFromSettings === null && (fromSettingsSurfaceId !== undefined && fromSettingsSurfaceId !== null)) {
+                        try {
+                            for (let i = 0; i < spotOpticalRows.length; i++) {
+                                if (isImageRow(spotOpticalRows[i])) {
+                                    resolvedFromSettings = i;
+                                    try { stampSpotDebug({ surfaceIdResolutionFailed: true, fallbackToImageRow: i }); } catch (_) {}
+                                    break;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+                    
+                    const res2 = makeResult(resolvedFromSettings, fromSettingsSurfaceId);
+                    if (res2) {
+                        try {
+                            stampSpotDebug({
+                                uiSurfaceIdUsed: uiSurfaceIdUsed,
+                                settingsSurfaceIdUsed: (fromSettingsSurfaceId !== undefined && fromSettingsSurfaceId !== null) ? String(fromSettingsSurfaceId) : null,
+                                settingsRowIndexUsed: Number.isInteger(fromSettingsRowIdx) ? fromSettingsRowIdx : null,
+                                usedConfigSpecificSettings: !isOperandActiveConfig && operandCfgId && effectiveSettings !== lastSpotSettings
+                            });
+                            const dbg = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_DEBUG_REQUIREMENTS : false;
+                            if (dbg) {
+                                console.log(`🧪 [ReqDebug] spot cfg=${String(operandCfgId || '')} active=${isOperandActiveConfig} surfaceId=${fromSettingsSurfaceId} rowIdx=${fromSettingsRowIdx} resolved=${res2.rowIndex}`);
+                            }
+                        } catch (_) {}
+                        return res2;
                     }
                     return null;
                 })();
 
-                const targetSurfaceIdx2 = (uiSurfaceIdx2 !== null) ? uiSurfaceIdx2 : imgIdx2;
+                const targetSurfaceIdx2 = (uiSurfaceSelection2 !== null) ? uiSurfaceSelection2.rowIndex : imgIdx2;
+                // Spot Diagram implementation uses 1-based index into opticalSystemRows.
                 const surfaceNumber1 = targetSurfaceIdx2 + 1;
 
                 // Record the effective target surface for the spot-diagram implementation.
@@ -1759,7 +1975,9 @@ class MeritFunctionEditor {
                     stampSpotDebug({
                         targetSurfaceIndex: targetSurfaceIdx2,
                         imageSurfaceIndex: imgIdx2,
-                        uiSurfaceIndexResolved: uiSurfaceIdx2,
+                        uiSurfaceIndexResolved: uiSurfaceSelection2 ? uiSurfaceSelection2.rowIndex : null,
+                        // Surf-id (CB-invariant) used by the Spot Diagram UI, for reference.
+                        targetSurfaceIdUsed: uiSurfaceSelection2 && Number.isFinite(Number(uiSurfaceSelection2.surfaceId)) ? Number(uiSurfaceSelection2.surfaceId) : null,
                         opticalSystemSurfaceCount: Array.isArray(spotOpticalRows) ? spotOpticalRows.length : null,
                         objectIndex0: fieldIndex0ForSpot,
                         targetRowObjectType: trObjType !== null ? String(trObjType) : null,
@@ -1784,6 +2002,7 @@ class MeritFunctionEditor {
                 let spot;
                 try {
                     try {
+                        try { stampSpotDebug({ spotDiagStage: 'before-generate' }); } catch (_) {}
                         spot = generateSpotDiagram(
                             spotOpticalRows,
                             Array.isArray(spotSourceRowsForOperand) ? spotSourceRowsForOperand : [],
@@ -1796,6 +2015,8 @@ class MeritFunctionEditor {
                             // Match Spot Diagram UI behavior: do NOT shrink pupil to "make rays pass".
                             { physicalVignetting: true }
                         );
+
+                        try { stampSpotDebug({ spotDiagStage: 'after-generate' }); } catch (_) {}
 
                         try {
                             stampSpotDebug({
@@ -1824,9 +2045,138 @@ class MeritFunctionEditor {
                     } catch (err) {
                         // Requirements should not crash when a configuration/object is fully vignetted.
                         // Convert generator errors into a large penalty value so the row can be marked NG.
+                        const msg = String(err?.message ?? err ?? '');
+                        const noRays = msg.includes('成功した光線数: 0') || msg.includes('No rays reached') || msg.includes('no rays reached');
+
+                        // Always capture a compact summary of the latest Spot Diagram failure object.
+                        // This must not depend on later best-effort parsing.
+                        const spotFailureAnySummary = (() => {
+                            try {
+                                const fAny = (typeof globalThis !== 'undefined') ? globalThis.__cooptLastSpotDiagramFailure : null;
+                                if (!fAny || typeof fAny !== 'object') return null;
+                                const o0 = Array.isArray(fAny.objects) ? fAny.objects[0] : null;
+                                const retry0 = o0?.retry;
+                                const tried0 = retry0?.pupilScaleTried;
+                                const triedMeta = Array.isArray(tried0)
+                                    ? (() => {
+                                        try {
+                                            const meta = {
+                                                total: tried0.length,
+                                                anyAimThroughStopFalse: tried0.some(x => x?.aimThroughStop === false),
+                                                anyAimThroughStopTrue: tried0.some(x => x?.aimThroughStop === true),
+                                                anyDisableAngleOptTrue: tried0.some(x => x?.disableAngleObjectPositionOptimizationRequested === true),
+                                                anyDisableAngleOptFalse: tried0.some(x => x?.disableAngleObjectPositionOptimizationRequested === false),
+                                                anyAllowOriginSolveTrue: tried0.some(x => x?.allowStopBasedOriginSolveRequested === true),
+                                                anyAllowOriginSolveFalse: tried0.some(x => x?.allowStopBasedOriginSolveRequested === false),
+                                                okCount: tried0.reduce((acc, x) => acc + (Number(x?.ok) > 0 ? 1 : 0), 0),
+                                            };
+                                            return meta;
+                                        } catch (_) {
+                                            return { total: tried0.length };
+                                        }
+                                    })()
+                                    : null;
+
+                                const triedSample = Array.isArray(tried0)
+                                    ? (() => {
+                                        const n = tried0.length;
+                                        const pickIdx = new Set();
+                                        const push = (i) => {
+                                            const ii = Math.max(0, Math.min(n - 1, Math.floor(i)));
+                                            pickIdx.add(ii);
+                                        };
+                                        // Sample across the table: first 4, middle 4, last 4
+                                        for (let i = 0; i < Math.min(4, n); i++) push(i);
+                                        const mid = Math.floor((n - 1) / 2);
+                                        for (let i = 0; i < 4; i++) push(mid - 1 - i);
+                                        for (let i = 0; i < Math.min(4, n); i++) push(n - 1 - i);
+                                        const idx = Array.from(pickIdx).sort((a, b) => a - b).slice(0, 16);
+                                        return idx.map(i => {
+                                            const t = tried0[i];
+                                            return {
+                                                i,
+                                                pupilScale: t?.pupilScale ?? null,
+                                                aimThroughStop: t?.aimThroughStop ?? null,
+                                                ok: t?.ok ?? null,
+                                                topKind: t?.topKind ?? null,
+                                                topSurface: t?.topSurface ?? null,
+                                                firstRayStartP: t?.firstRayStartP ?? null,
+                                                firstRayDir: t?.firstRayDir ?? null,
+                                                emissionOrigin: t?.emissionOrigin ?? null,
+                                                stopIndex: t?.stopIndex ?? null,
+                                                stopZ: t?.stopZ ?? null,
+                                                stopRadius: t?.stopRadius ?? null,
+                                                stopCenter: t?.stopCenter ?? null,
+                                                allowStopBasedOriginSolveRequested: t?.allowStopBasedOriginSolveRequested ?? null,
+                                                disableAngleObjectPositionOptimizationRequested: t?.disableAngleObjectPositionOptimizationRequested ?? null,
+                                            };
+                                        });
+                                    })()
+                                    : null;
+
+                                const blockerSurfaceRowSummary = (() => {
+                                    try {
+                                        const sn = Number(o0?.exampleSummary?.surfaceNumber);
+                                        if (!Number.isFinite(sn) || sn < 1) return null;
+                                        const rows = o0?.topSurfaceRowSummaries;
+                                        if (!Array.isArray(rows)) return null;
+                                        const hit = rows.find(r => Number(r?.surfaceNumber) === sn) || null;
+                                        return hit?.row ?? null;
+                                    } catch (_) {
+                                        return null;
+                                    }
+                                })();
+                                return {
+                                    surfaceNumber: Number.isFinite(Number(fAny.surfaceNumber)) ? Number(fAny.surfaceNumber) : null,
+                                    totalRays: Number.isFinite(Number(fAny.totalRays)) ? Number(fAny.totalRays) : null,
+                                    totalSuccessfulRays: Number.isFinite(Number(fAny.totalSuccessfulRays)) ? Number(fAny.totalSuccessfulRays) : null,
+                                    object0: o0 ? {
+                                        objectId: o0.objectId ?? null,
+                                        objectType: o0.objectType ?? null,
+                                        topKinds: o0.topKinds ?? null,
+                                        topSurfaces: o0.topSurfaces ?? null,
+                                        exampleSummary: o0.exampleSummary ?? null,
+                                        blockerSurfaceRowSummary,
+                                        topSurfaceRowSummariesSample: Array.isArray(o0.topSurfaceRowSummaries)
+                                            ? o0.topSurfaceRowSummaries.slice(0, 4)
+                                            : null,
+                                        retry: retry0 ? {
+                                            aimThroughStopUsed: retry0.aimThroughStopUsed ?? null,
+                                            pupilScaleUsed: retry0.pupilScaleUsed ?? null,
+                                        } : null,
+                                        triedCount: Array.isArray(tried0) ? tried0.length : null,
+                                        triedMeta,
+                                        triedSample
+                                    } : null
+                                };
+                            } catch (_) {
+                                return null;
+                            }
+                        })();
+
+                        // Always stamp a minimal terminal reason first.
+                        // (Diagnostic extraction below is best-effort and must not suppress stamping.)
                         try {
-                            const msg = String(err?.message ?? err ?? '');
-                            const noRays = msg.includes('成功した光線数: 0') || msg.includes('No rays reached') || msg.includes('no rays reached');
+                            stampSpotDebug({
+                                ok: false,
+                                reason: noRays ? 'no-rays-reached' : 'exception',
+                                hits: 0,
+                                error: msg,
+                                spotDiagStage: 'caught-error',
+                                spotDiagFailureAnySummary: spotFailureAnySummary,
+                                lastRayTraceFailure: getLastRayTraceFailureForThisEval()
+                            });
+                        } catch (_) {}
+
+                        // Convenience alias for console inspection.
+                        // Note: do not rely on this for logic; it's debug-only.
+                        try {
+                            if (typeof globalThis !== 'undefined') {
+                                globalThis.__cooptLastSpotDiagFailureAnySummary = spotFailureAnySummary;
+                            }
+                        } catch (_) {}
+
+                        try {
                             let totalRays = null;
                             try {
                                 const mTotal = /-\s*総光線数:\s*(\d+)/.exec(msg);
@@ -1854,14 +2204,53 @@ class MeritFunctionEditor {
                                 }
                             } catch (_) {}
 
+                            const spotRetry = (() => {
+                                try {
+                                    const r0 = spotFailure?.objects?.[0]?.retry;
+                                    if (!r0 || typeof r0 !== 'object') return null;
+                                    return {
+                                        aimThroughStopUsed: r0.aimThroughStopUsed,
+                                        pupilScaleUsed: r0.pupilScaleUsed,
+                                        pupilScaleTried: r0.pupilScaleTried
+                                    };
+                                } catch (_) {
+                                    return null;
+                                }
+                            })();
+
+                            const spotRetryAttemptSample = (() => {
+                                try {
+                                    const tried = spotFailure?.objects?.[0]?.retry?.pupilScaleTried;
+                                    if (!Array.isArray(tried) || tried.length === 0) return null;
+                                    const sample = tried.slice(0, 10).map(t => ({
+                                        pupilScale: t?.pupilScale ?? null,
+                                        aimThroughStop: t?.aimThroughStop ?? null,
+                                        ok: t?.ok ?? null,
+                                        raysGenerated: t?.raysGenerated ?? null,
+                                        topKind: t?.topKind ?? null,
+                                        topSurface: t?.topSurface ?? null,
+                                        allowStopBasedOriginSolveRequested: t?.allowStopBasedOriginSolveRequested ?? null,
+                                        disableAngleObjectPositionOptimizationRequested: t?.disableAngleObjectPositionOptimizationRequested ?? null,
+                                        firstRayStartP: t?.firstRayStartP ?? null,
+                                        firstRayDir: t?.firstRayDir ?? null,
+                                        emissionOrigin: t?.emissionOrigin ?? null,
+                                        stopIndex: t?.stopIndex ?? null,
+                                        stopZ: t?.stopZ ?? null,
+                                        stopRadius: t?.stopRadius ?? null,
+                                    }));
+                                    return { count: tried.length, sample };
+                                } catch (_) {
+                                    return null;
+                                }
+                            })();
                             stampSpotDebug({
-                                ok: false,
-                                reason: noRays ? 'no-rays-reached' : 'exception',
-                                hits: 0,
-                                error: msg,
                                 totalRays,
                                 spotDiagFailure: spotFailure,
-                                lastRayTraceFailure: getLastRayTraceFailureForThisEval()
+                                spotDiagRetry: spotRetry,
+                                spotDiagRetryAttemptSample,
+                                spotDiagFailureAnySummary: spotFailureAnySummary,
+                                lastRayTraceFailure: getLastRayTraceFailureForThisEval(),
+                                spotDiagStage: 'caught-error'
                             });
                         } catch (_) {}
                         return 1e9;
@@ -1875,6 +2264,7 @@ class MeritFunctionEditor {
 
                 const spotDataArr = (spot && typeof spot === 'object' && Array.isArray(spot.spotData)) ? spot.spotData : null;
                 const spotPoints = (spotDataArr && spotDataArr[0] && Array.isArray(spotDataArr[0].spotPoints)) ? spotDataArr[0].spotPoints : null;
+                try { stampSpotDebug({ spotDiagStage: 'after-spot-points-extract' }); } catch (_) {}
                 if (!spotPoints || spotPoints.length === 0) {
                     stampSpotDebug({ ok: false, reason: 'no-spot-points', hits: 0 });
                     return 1e9;
@@ -1959,6 +2349,7 @@ class MeritFunctionEditor {
                 } catch (_) {}
 
                 const valueUm = (metric === 'diameter') ? diameter : rmsTotal;
+                try { stampSpotDebug({ spotDiagStage: 'success' }); } catch (_) {}
                 stampSpotDebug({ ok: true, reason: 'ok', hits: n, resultUm: valueUm, lastRayTraceFailure: getLastRayTraceFailureForThisEval() });
                 return valueUm;
             }
@@ -2632,6 +3023,22 @@ class MeritFunctionEditor {
                 errorStack: (err && err.stack) ? String(err.stack) : ''
             });
             return 1e9;
+        } finally {
+            // If we returned early without stamping a terminal reason,
+            // mark it explicitly so Requirements debug doesn't get stuck at "started".
+            try {
+                if (typeof window !== 'undefined' && window.__cooptLastSpotSizeDebug && typeof window.__cooptLastSpotSizeDebug === 'object') {
+                    const r = String(window.__cooptLastSpotSizeDebug.reason ?? '');
+                    const ok = window.__cooptLastSpotSizeDebug.ok;
+                    if (r === 'started' && ok === false) {
+                        window.__cooptLastSpotSizeDebug.reason = 'early-return-without-stamp';
+                        window.__cooptLastSpotSizeDebug.ok = false;
+                        window.__cooptLastSpotSizeDebug.resultUm = window.__cooptLastSpotSizeDebug.resultUm ?? 1e9;
+                        window.__cooptLastSpotSizeDebug.earlyReturnStage = window.__cooptLastSpotSizeDebug.spotDiagStage ?? null;
+                        window.__cooptLastSpotSizeDebug.lastRayTraceFailure = window.__cooptLastSpotSizeDebug.lastRayTraceFailure ?? getLastRayTraceFailureForThisEval?.();
+                    }
+                }
+            } catch (_) {}
         }
     }
 
@@ -3167,7 +3574,45 @@ class MeritFunctionEditor {
      */
     getOpticalSystemDataByConfigId(configId) {
         try {
-            const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+            // CRITICAL: Prefer in-memory cache (updated immediately after CB insertion)
+            // over systemConfig.opticalSystem (may be stale during the same evaluation cycle).
+            try {
+                if (typeof window !== 'undefined' && window.__cooptOpticalSystemByConfigId) {
+                    const cfgId = (configId !== undefined && configId !== null) ? String(configId).trim() : '';
+                    if (cfgId) {
+                        const cached = window.__cooptOpticalSystemByConfigId[cfgId];
+                        if (Array.isArray(cached) && cached.length > 0) {
+                            return cached;
+                        }
+                    }
+                }
+            } catch (_) {}
+            
+            // CRITICAL: Prefer in-memory systemConfig only if it matches localStorage.
+            // This avoids stale activeConfigId after UI config switches.
+            let systemConfig = null;
+            let memSystemConfig = null;
+            let lsSystemConfig = null;
+            try {
+                if (typeof window !== 'undefined' && window.__cooptSystemConfig) {
+                    memSystemConfig = window.__cooptSystemConfig;
+                }
+            } catch (_) {}
+            try {
+                lsSystemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+            } catch (_) {}
+
+            if (memSystemConfig && lsSystemConfig) {
+                const memActive = (memSystemConfig.activeConfigId !== undefined && memSystemConfig.activeConfigId !== null)
+                    ? String(memSystemConfig.activeConfigId)
+                    : '';
+                const lsActive = (lsSystemConfig.activeConfigId !== undefined && lsSystemConfig.activeConfigId !== null)
+                    ? String(lsSystemConfig.activeConfigId)
+                    : '';
+                systemConfig = (memActive && lsActive && memActive !== lsActive) ? lsSystemConfig : memSystemConfig;
+            } else {
+                systemConfig = memSystemConfig || lsSystemConfig;
+            }
 
             const activeConfigId = (systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null)
                 ? String(systemConfig.activeConfigId)
@@ -3184,14 +3629,18 @@ class MeritFunctionEditor {
 
             // 対応するConfigurationを検索
             const config = systemConfig?.configurations?.find(c => String(c.id) === String(targetIdStr));
-
-            // "Current" should reflect the *canonical* current design.
-            // If the active config is blocks-based, evaluate from expanded blocks so that
-            // requirements like IMD/BFL stay consistent with Design Intent edits (blocks-only mode).
-            // Only when there are no blocks do we fall back to the live Optical System table.
-            if (wantsCurrent && activeConfigId && targetIdStr && targetIdStr === activeConfigId) {
+            
+            // CRITICAL FIX for CB insertion:
+            // When target config is active OR when evaluating non-active configs,
+            // use the live UI table (which reflects CB insertion immediately).
+            // For non-active configs, also apply their scenario overrides.
+            const isActiveConfig = activeConfigId && targetIdStr && targetIdStr === activeConfigId;
+            
+            if (isActiveConfig || wantsCurrent) {
+                // Active config: use live UI table directly
                 const hasBlocksForActive = Array.isArray(config?.blocks);
                 if (!hasBlocksForActive) return getOpticalSystemRows();
+                // If has blocks, continue to expansion below (for consistency with Design Intent)
             }
             
             if (!config) {
@@ -3199,6 +3648,7 @@ class MeritFunctionEditor {
                 return getOpticalSystemRows();
             }
             
+            // Original logic for active config or when blocks are available
             // Blocks canonical: if blocks exist, optionally apply scenario overrides and expand on the fly.
             // Optional non-persistent override hook (for Suggest/tests):
             // window.__cooptBlocksOverride = { [configId]: blocksArray }
@@ -3245,51 +3695,10 @@ class MeritFunctionEditor {
 
                 const expanded = expandBlocksToOpticalSystemRows(blocksToExpand);
                 if (expanded && Array.isArray(expanded.rows)) {
-                    // Preserve semidia (aperture) from persisted opticalSystem when available.
-                    // Without this, Blocks schema defaults can vignette rays compared to the saved surface table.
-                    try {
-                        const legacyRows = Array.isArray(config?.opticalSystem) ? config.opticalSystem : null;
-                        const rows = expanded.rows;
-
-                        const normType = (r) => String(r?.['object type'] ?? r?.object ?? '').trim().toLowerCase();
-                        const findBlockById = (blockId) => {
-                            if (!blockId) return null;
-                            const bid = String(blockId);
-                            return Array.isArray(blocksToExpand)
-                                ? blocksToExpand.find(b => b && String(b.blockId) === bid)
-                                : null;
-                        };
-                        const getExplicitStopSemiDiameter = (blockId) => {
-                            const b = findBlockById(blockId);
-                            const v = b?.parameters?.semiDiameter;
-                            const n = Number(v);
-                            return Number.isFinite(n) && n > 0 ? n : null;
-                        };
-
-                        if (legacyRows && rows.length > 0) {
-                            const legacyObj = legacyRows[0];
-                            const lo = String(legacyObj?.semidia ?? '').trim();
-                            if (lo !== '') rows[0] = { ...rows[0], semidia: legacyObj.semidia };
-
-                            const n = Math.min(legacyRows.length, rows.length);
-                            for (let i = 0; i < n; i++) {
-                                const legacy = legacyRows[i];
-                                const row = rows[i];
-                                if (!legacy || typeof legacy !== 'object' || !row || typeof row !== 'object') continue;
-
-                                const lsRaw = legacy.semidia;
-                                const ls = String(lsRaw ?? '').trim();
-                                if (ls === '') continue;
-
-                                const t = normType(row);
-                                if (t === 'stop') {
-                                    const explicit = getExplicitStopSemiDiameter(row._blockId);
-                                    if (explicit !== null) continue;
-                                }
-                                row.semidia = lsRaw;
-                            }
-                        }
-                    } catch (_) {}
+                    // NOTE: Legacy per-surface semidia is preserved via block-schema.js's
+                    // provenance-based mechanism (__captureBlockApertureFromLegacyRows).
+                    // Do NOT use index-based copying here, as CB surface insertion shifts indices
+                    // and causes incorrect semidia to be applied.
 
                     // Preserve Object thickness to keep evaluation consistent with the UI table.
                     // Blocks expansion currently creates a default Object row (thickness may be 100).
@@ -3735,6 +4144,7 @@ try {
                     objectIndex0: v.objectIndex0,
                     hits: v.hits,
                     resultUm: v.resultUm,
+                    spotDiagFailureAnySummary: v.spotDiagFailureAnySummary,
                     targetSurfaceIndex: v.targetSurfaceIndex,
                     uiSurfaceIdUsed: v.uiSurfaceIdUsed,
                     uiSurfaceIndexResolved: v.uiSurfaceIndexResolved,

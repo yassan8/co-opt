@@ -530,17 +530,28 @@ export function optimizeAngleObjectPosition(angleX, angleY, opticalSystemRows) {
         thicknessStr === 'INFINITY' ||
         thicknessStr === '∞' ||
         (Number.isFinite(objectThicknessVal) && Math.abs(objectThicknessVal) > 1e6)) {
-        
-        // console.log('🔍 [ANGLE OPTIMIZATION] Object thickness is INF - using simple angle positioning');
-        
-        // 無限遠物体の場合は、簡単な位置最適化を使用
-        // 小さな角度に対しては原点付近の位置を使用
-        const maxOffset = 1.0; // 最大オフセット 1mm
-        
-        return {
-            x: Math.tan(angleX * Math.PI / 180) * maxOffset,
-            y: Math.tan(angleY * Math.PI / 180) * maxOffset
-        };
+
+        // Infinite object: pick an emission origin so that a ray with the requested field
+        // direction passes through the stop center (straight-line back-projection).
+        // This is a fast, deterministic fallback that avoids the fragile 1mm heuristic.
+        const stopOrigin = stopInfo.origin?.origin ?? stopInfo.origin ?? stopInfo.center ?? stopInfo.position;
+        const stopX = Number(stopOrigin?.x ?? 0);
+        const stopY = Number(stopOrigin?.y ?? 0);
+        const stopZ = Number(stopOrigin?.z ?? stopInfo.zPosition);
+
+        const objectZ = -25.0;
+        const dir = buildDirectionFromFieldAngles(angleX, angleY);
+        const safeK = Math.abs(dir.z) > 1e-12 ? dir.z : (dir.z >= 0 ? 1e-12 : -1e-12);
+        if (!Number.isFinite(stopZ)) {
+            return { x: 0, y: 0 };
+        }
+        const dz = stopZ - objectZ;
+        const x0 = stopX - (dir.x / safeK) * dz;
+        const y0 = stopY - (dir.y / safeK) * dz;
+        if (!Number.isFinite(x0) || !Number.isFinite(y0) || Math.abs(x0) > 1e8 || Math.abs(y0) > 1e8) {
+            return { x: 0, y: 0 };
+        }
+        return { x: x0, y: y0 };
     }
     
     // 通常の有限物体距離の場合
@@ -836,11 +847,13 @@ export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount
         ? wavelengthUmRaw
         : 0.5876;
     
-    if (obj.position === "Point") {
+    const posNorm = String(obj?.position ?? '').trim().toLowerCase();
+
+    if (posNorm === "point") {
         return generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLimit, rayEmissionPattern, annularRingCount, wavelengthUm, options);
-    } else if (obj.position === "Angle") {
-        return generateRaysForAngleObject(obj, opticalSystemRows, rayCount, rayEmissionPattern, annularRingCount, { ...options, wavelengthUm });
-    } else if (obj.position === "Rectangle") {
+    } else if (posNorm === "angle") {
+        return generateRaysForAngleObject(obj, opticalSystemRows, rayCount, rayEmissionPattern, annularRingCount, { ...options, wavelengthUm, apertureLimitMm: apertureLimit });
+    } else if (posNorm === "rectangle") {
         return generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, rayEmissionPattern, apertureLimit, annularRingCount, wavelengthUm);
     } else {
         console.warn(`⚠️ Unknown object position type: ${obj.position}`);
@@ -1284,7 +1297,11 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         //   not shift the emission origin by geometric back-projection.
         const aimThroughStop = options?.aimThroughStop === true;
         const useChiefRayAnalysis = options?.useChiefRayAnalysis !== false;
-        const allowStopBasedOriginSolve = options?.allowStopBasedOriginSolve === true;
+        // For Angle objects, field angle defines the ray DIRECTION. To make the chief ray pass
+        // through the stop center, we should solve/adjust the emission ORIGIN (not override
+        // the direction to point at the stop center).
+        // Default to enabled unless explicitly disabled.
+        const allowStopBasedOriginSolve = options?.allowStopBasedOriginSolve !== false;
         
         // 軸上オブジェクトかどうかを判定
         const isOnAxis = (Math.abs(angleX) < 1e-10 && Math.abs(angleY) < 1e-10);
@@ -1310,8 +1327,24 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
             // 軸上オブジェクトの場合は確実に厳密な(0,0)から出射
             optimizedPosition = { x: 0.0, y: 0.0 };
         } else {
-            // Object距離に関わらず最適化計算を試みる
-            optimizedPosition = optimizeAngleObjectPosition(angleX, angleY, opticalSystemRows);
+            // For infinite Angle objects:
+            // - Nominal mode keeps emission near the axis (small heuristic).
+            // - aimThroughStop mode relies on chief-ray analysis to find a valid origin; do not
+            //   pre-shift the origin with a geometric back-projection that can clip early apertures.
+            if (isInfiniteObject) {
+                const maxOffset = 1.0;
+                if (aimThroughStop) {
+                    optimizedPosition = { x: 0.0, y: 0.0 };
+                } else {
+                    optimizedPosition = {
+                        x: Math.tan(angleX * Math.PI / 180) * maxOffset,
+                        y: Math.tan(angleY * Math.PI / 180) * maxOffset
+                    };
+                }
+            } else {
+                // Object距離に関わらず最適化計算を試みる
+                optimizedPosition = optimizeAngleObjectPosition(angleX, angleY, opticalSystemRows);
+            }
         }
         
         // 最適化位置の妥当性チェック
@@ -1394,22 +1427,9 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
             }
         }
 
-        // OPD/Wavefront-style fallback: geometric back-projection only for the *initial guess*.
-        if (allowStopBasedOriginSolve && aimThroughStop
-            && (!chiefRayOrigin || !Number.isFinite(chiefRayOrigin.x) || !Number.isFinite(chiefRayOrigin.y) || !Number.isFinite(chiefRayOrigin.z))
-            && stopSurfaceCenter3d && Number.isInteger(stopSurfaceIndex)) {
-            const stopCenter3d = stopSurfaceCenter3d;
-            const safeK = Math.abs(chiefDir.z) > 1e-12 ? chiefDir.z : (chiefDir.z >= 0 ? 1e-12 : -1e-12);
-            const initialZ = -25;
-            const dzToStop = (stopCenter3d?.z ?? 0) - initialZ;
-            chiefRayOrigin = {
-                x: (stopCenter3d?.x ?? 0) - (chiefDir.x / safeK) * dzToStop,
-                y: (stopCenter3d?.y ?? 0) - (chiefDir.y / safeK) * dzToStop,
-                z: initialZ
-            };
-            optimizedPosition = { x: chiefRayOrigin.x, y: chiefRayOrigin.y };
-            objectZ = chiefRayOrigin.z;
-        }
+        // NOTE: We intentionally do not apply geometric back-projection fallback here.
+        // If chief-ray analysis fails, forcing a straight-line origin often pushes the ray
+        // far off-axis and causes earlier physical-aperture clipping.
 
         let centerSag = computeCenterSag(optimizedPosition);
 
@@ -1418,7 +1438,11 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
             ? Number(surf.semidia)
             : 10;
         const stopConfig = resolveStopConfig(opticalSystemRows, surfaceOrigins, objectZ + (Number(surf.thickness) || 10), apertureRadius);
-        const stopRadiusLimited = Math.min(stopConfig.radius, apertureRadius);
+        let stopRadiusLimited = Math.min(stopConfig.radius, apertureRadius);
+        const extApLim = Number(options?.apertureLimitMm ?? options?.apertureLimit);
+        if (Number.isFinite(extApLim) && extApLim > 0) {
+            stopRadiusLimited = Math.min(stopRadiusLimited, extApLim);
+        }
         const stopCenter = stopConfig.center || { x: 0, y: 0 };
         let startZ = objectZ + centerSag;
         let stopDeltaZ = stopConfig.z - startZ;
@@ -1452,17 +1476,10 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
 
         const emissionOrigin = { x: optimizedPosition.x, y: optimizedPosition.y, z: startZ };
 
-        // If requested, solve the chief-ray DIRECTION to pass through the stop center.
-        // This keeps the emission origin stable (avoids huge back-projection offsets).
-        let chiefDirUsed = chiefDir;
-        if (aimThroughStop && useChiefRayAnalysis && Number.isInteger(stopConfig?.index)) {
-            const w = Number(options?.wavelengthUm ?? options?.wavelength ?? 0.5876);
-            const stopCenter3d = { x: Number(stopCenter.x) || 0, y: Number(stopCenter.y) || 0, z: Number(stopConfig.z) || 0 };
-            const solved = solveChiefRayDirectionToStopCenterFast(emissionOrigin, stopCenter3d, stopConfig.index, opticalSystemRows, w);
-            if (solved && Number.isFinite(solved.x) && Number.isFinite(solved.y) && Number.isFinite(solved.z)) {
-                chiefDirUsed = solved;
-            }
-        }
+        // Keep direction defined by the field angle.
+        // When aimThroughStop is requested, origin solving (above) is responsible for passing
+        // the chief ray through the stop center.
+        const chiefDirUsed = chiefDir;
 
         const basis = buildPerpendicularBasis(chiefDirUsed);
         const unitChief = basis.dir;

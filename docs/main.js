@@ -474,49 +474,50 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
             return;
         }
         
-        // 正確な光線追跡を実行（test-z25-rays.jsと同じ方法）
+        // 正確な光線追跡を実行（generateRayStartPointsForObject を使用して Angle も正しく扱う）
         objectRows.forEach((obj, objIndex) => {
             console.log(`🔍 Processing object ${objIndex}:`, obj);
-            
+
             // Get ray count from UI input
             const rayCountInput = document.getElementById('draw-ray-count-input');
             const rayCount = rayCountInput ? (parseInt(rayCountInput.value, 10) || 5) : 5;
             console.log(`📊 Ray count for object ${objIndex}: ${rayCount}`);
-            
-            // z=-25mmから開始する光線を生成（正確な方法）
-            const objectX = Number(obj.xHeightAngle) || 0;
-            const objectY = Number(obj.yHeightAngle) || 0;
-            
-            // 簡単なグリッド配置で光線を生成
-            const gridSize = Math.ceil(Math.sqrt(rayCount));
-            const spacing = 2.0; // 2mm間隔
-            const halfExtent = gridSize > 1 ? (gridSize - 1) * spacing / 2 : 0;
-            
+
+            const isAngle = (obj?.position === 'Angle' || obj?.position === 'angle');
+            const rayStartPoints = generateRayStartPointsForObject(
+                obj,
+                opticalSystemRows,
+                rayCount,
+                null,
+                {
+                    // For Angle objects, aim the chief ray through stop center by solving origin.
+                    aimThroughStop: !!isAngle,
+                    useChiefRayAnalysis: true,
+                    allowStopBasedOriginSolve: true,
+                    // Keep this consistent with analysis/spot behavior.
+                    disableCrossExtent: true,
+                }
+            );
+
+            if (!Array.isArray(rayStartPoints) || rayStartPoints.length === 0) {
+                console.warn(`⚠️ No rayStartPoints generated for object ${objIndex}`);
+                return;
+            }
+
             let rayIndex = 0;
-            for (let i = 0; i < gridSize && rayIndex < rayCount; i++) {
-                for (let j = 0; j < gridSize && rayIndex < rayCount; j++) {
-                    // z=-25mmから開始（正確な光線追跡と同じ）
-                    const rayStartPos = {
-                        x: objectX + (gridSize > 1 ? (i * spacing - halfExtent) : 0),
-                        y: objectY + (gridSize > 1 ? (j * spacing - halfExtent) : 0),
-                        z: -25.0  // 固定でz=-25mmから開始
+            for (const rayStart of rayStartPoints) {
+                if (!rayStart || !rayStart.startP || !rayStart.dir) continue;
+                if (rayIndex >= rayCount) break;
+
+                try {
+                    const ray = {
+                        pos: rayStart.startP,
+                        dir: rayStart.dir
                     };
-                    
-                    // 基本的に正のZ方向に向かう
-                    const rayDir = {
-                        x: 0,
-                        y: 0,
-                        z: 1
-                    };
-                    
-                    try {
-                        // 光線追跡実行（window.traceRayと同じ方法）
-                        const ray = {
-                            pos: rayStartPos,
-                            dir: rayDir
-                        };
-                        
-                        console.log(`🔍 正確光線${rayIndex} for object ${objIndex}: start=(${ray.pos.x}, ${ray.pos.y}, ${ray.pos.z}), dir=(${ray.dir.x}, ${ray.dir.y}, ${ray.dir.z})`);
+
+                    console.log(
+                        `🔍 正確光線${rayIndex} for object ${objIndex}: start=(${ray.pos.x}, ${ray.pos.y}, ${ray.pos.z}), dir=(${ray.dir.x}, ${ray.dir.y}, ${ray.dir.z})`
+                    );
                         
                         // window.traceRayと同じ呼び出し方法
                         const rayPath = window.traceRay ? window.traceRay(opticalSystemRows, ray, 1.0) : null;
@@ -550,6 +551,9 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                         console.error(`❌ 正確光線${rayIndex}でエラー:`, error.message);
                     }
                     
+                    rayIndex++;
+                } catch (error) {
+                    console.error(`❌ 正確光線${rayIndex}でエラー:`, error.message);
                     rayIndex++;
                 }
             }
@@ -1399,7 +1403,7 @@ window.updateSurfaceNumberSelect = updateSurfaceNumberSelect;
 // =============================================================================
 
 // Initialize application on DOM content loaded
-document.addEventListener('DOMContentLoaded', async function() {
+if (typeof document !== 'undefined' && document?.addEventListener) document.addEventListener('DOMContentLoaded', async function() {
     try {
         // Initialize the main application
 

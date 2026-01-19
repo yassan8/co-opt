@@ -1443,33 +1443,35 @@ function renderChatHistory() {
 }
 
 // One-time event delegation for Apply button
-document.addEventListener('click', async (e) => {
-    const t = e?.target;
-    if (!(t instanceof HTMLElement)) return;
-    if (t.dataset?.aiAction !== 'apply') return;
+if (typeof document !== 'undefined' && document?.addEventListener) {
+    document.addEventListener('click', async (e) => {
+        const t = e?.target;
+        if (!(t instanceof HTMLElement)) return;
+        if (t.dataset?.aiAction !== 'apply') return;
 
-    const msgId = Number(t.dataset.aiMsgId);
-    if (!Number.isFinite(msgId)) return;
-    const msg = chatHistory.find(m => m && m.id === msgId);
-    const actions = msg?.actions;
-    if (!Array.isArray(actions) || actions.length === 0) return;
+        const msgId = Number(t.dataset.aiMsgId);
+        if (!Number.isFinite(msgId)) return;
+        const msg = chatHistory.find(m => m && m.id === msgId);
+        const actions = msg?.actions;
+        if (!Array.isArray(actions) || actions.length === 0) return;
 
-    t.setAttribute('disabled', 'true');
-    try {
-        const out = await applyActionPlan(actions);
-        const appended = [
-            msg.content,
-            '\n\n---\n適用結果:',
-            out.ok ? `✅ OK: ${out.appliedCount} actions` : `❌ Failed: ${out.reason || 'unknown reason'}`,
-            ...(Array.isArray(out.logs) ? out.logs.map(s => `- ${s}`) : [])
-        ].join('\n');
-        updateMessage(msgId, { content: appended, actions: null });
-    } catch (err) {
-        updateMessage(msgId, { content: `${msg.content}\n\n❌ Apply error: ${err?.message || err}` });
-    } finally {
-        try { t.removeAttribute('disabled'); } catch (_) {}
-    }
-});
+        t.setAttribute('disabled', 'true');
+        try {
+            const out = await applyActionPlan(actions);
+            const appended = [
+                msg.content,
+                '\n\n---\n適用結果:',
+                out.ok ? `✅ OK: ${out.appliedCount} actions` : `❌ Failed: ${out.reason || 'unknown reason'}`,
+                ...(Array.isArray(out.logs) ? out.logs.map(s => `- ${s}`) : [])
+            ].join('\n');
+            updateMessage(msgId, { content: appended, actions: null });
+        } catch (err) {
+            updateMessage(msgId, { content: `${msg.content}\n\n❌ Apply error: ${err?.message || err}` });
+        } finally {
+            try { t.removeAttribute('disabled'); } catch (_) {}
+        }
+    });
+}
 
 /**
  * Utility to escape HTML

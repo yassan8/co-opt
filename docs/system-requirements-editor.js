@@ -5,6 +5,7 @@
  */
 
 import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.js?v=2026-01-06c';
+import { getOpticalSystemRows } from './utils/data-utils.js';
 
 class SystemRequirementsEditor {
   constructor() {
@@ -726,11 +727,70 @@ class SystemRequirementsEditor {
         return st === 'image' || st.includes('image');
       };
 
+      const isCoordBreakRow = (row) => {
+        if (!row || typeof row !== 'object') return false;
+        const st = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
+        const t1 = String(row['object type'] ?? '').trim().toLowerCase();
+        const t2 = String(row.object ?? '').trim().toLowerCase();
+        const compact = (v) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, '');
+        const stc = compact(st);
+        const t1c = compact(t1);
+        const t2c = compact(t2);
+        const isCb = (v) => v === 'cb' || v === 'coordbreak' || v === 'coordinatebreak';
+        return isCb(stc) || isCb(t1c) || isCb(t2c) || st === 'coord break' || st === 'coordinate break' || t1 === 'coord break' || t1 === 'coordinate break' || t2 === 'coord break' || t2 === 'coordinate break';
+      };
+
       const imageIdx = (() => {
         if (!Array.isArray(opticalRows) || opticalRows.length === 0) return 0;
         const i = opticalRows.findIndex(r => isImageRow(r));
         return (i >= 0) ? i : Math.max(0, opticalRows.length - 1);
       })();
+
+      const imageSurfaceIdRaw = (() => {
+        if (!Array.isArray(opticalRows) || opticalRows.length === 0) return 1;
+        let sid = 0;
+        let foundImageAt = -1;
+        for (let i = 0; i < opticalRows.length; i++) {
+          const r = opticalRows[i];
+          const ot = String(r?.['object type'] ?? r?.object ?? '').trim().toLowerCase();
+          // Only skip the true Object row (typically index 0). Count everything else,
+          // even if object type is mislabeled, so CB rows are not skipped.
+          if (i === 0 && ot === 'object') continue;
+          sid++;
+          if (isImageRow(r)) {
+            foundImageAt = i;
+            try {
+              console.log(`🎯 Image面検出: rowIndex=${i}, surfaceId=${sid}, config=${cfgKey}`);
+              console.log(`   surfType=${r?.surfType}, object type=${ot}`);
+            } catch (_) {}
+            return sid;
+          }
+        }
+        try {
+          console.warn(`⚠️ Image面が見つかりません: config=${cfgKey}, rows=${opticalRows.length}, returning sid=${Math.max(1, sid)}`);
+        } catch (_) {}
+        return Math.max(1, sid);
+      })();
+
+      // If the first row is Object, surfaceId should equal imageIdx (1-based on non-object rows).
+      // Guard against mislabeled rows by aligning surfaceId to imageIdx when they disagree.
+      let resolvedSurfaceId = imageSurfaceIdRaw;
+      try {
+        const row0 = opticalRows && opticalRows.length > 0 ? opticalRows[0] : null;
+        const row0Type = String(row0?.['object type'] ?? row0?.object ?? '').trim().toLowerCase();
+        if (row0Type === 'object' && Number.isInteger(imageIdx) && imageIdx > 0) {
+          if (resolvedSurfaceId !== imageIdx) {
+            resolvedSurfaceId = imageIdx;
+          }
+        }
+      } catch (_) {}
+
+      try {
+        const dbg = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_DEBUG_REQUIREMENTS : false;
+        if (dbg) {
+          console.log(`🧪 [ReqDebug] surfaceIdRaw=${imageSurfaceIdRaw} resolvedSurfaceId=${resolvedSurfaceId} imageIdx=${imageIdx} cfg=${cfgKey}`);
+        }
+      } catch (_) {}
 
       const primaryWavelengthUm = (() => {
         if (!Array.isArray(sourceRows) || sourceRows.length === 0) return 0.5876;
@@ -744,7 +804,39 @@ class SystemRequirementsEditor {
       const existing = map[cfgKey];
       if (existing && typeof existing === 'object') {
         // Keep user-chosen values if present; only fill missing fields.
-        if (existing.surfaceIndex === undefined || existing.surfaceIndex === null) existing.surfaceIndex = imageIdx;
+        // CRITICAL: If existing.surfaceId doesn't match current Image surface ID,
+        // force update (e.g., CB insertion shifted surface IDs).
+        const needsIdUpdate = (
+          existing.surfaceId !== undefined &&
+          existing.surfaceId !== null &&
+          existing.surfaceId !== resolvedSurfaceId
+        );
+        const needsIndexUpdate = (
+          existing.surfaceRowIndex !== undefined &&
+          existing.surfaceRowIndex !== null &&
+          Number(existing.surfaceRowIndex) !== imageIdx
+        ) || (
+          existing.surfaceIndex !== undefined &&
+          existing.surfaceIndex !== null &&
+          Number(existing.surfaceIndex) !== imageIdx
+        );
+        if (needsIdUpdate) {
+          try {
+            console.log(`🔧 Updating Spot Diagram settings for config ${cfgKey}:`);
+            console.log(`   surfaceId: ${existing.surfaceId} → ${imageSurfaceId}`);
+            console.log(`   surfaceIndex: ${existing.surfaceIndex} → ${imageIdx}`);
+            console.log(`   Image row found at index ${imageIdx} with surfaceId ${imageSurfaceId}`);
+          } catch (_) {}
+        }
+        if (needsIdUpdate || needsIndexUpdate || existing.surfaceIndex === undefined || existing.surfaceIndex === null) {
+          existing.surfaceIndex = imageIdx;
+        }
+        if (needsIdUpdate || needsIndexUpdate || existing.surfaceId === undefined || existing.surfaceId === null) {
+          existing.surfaceId = resolvedSurfaceId;
+        }
+        if (needsIdUpdate || needsIndexUpdate || existing.surfaceRowIndex === undefined || existing.surfaceRowIndex === null) {
+          existing.surfaceRowIndex = imageIdx;
+        }
         if (existing.rayCount === undefined || existing.rayCount === null) existing.rayCount = 501;
         if (existing.ringCount === undefined || existing.ringCount === null) existing.ringCount = 3;
         if (existing.primaryWavelengthUm === undefined || existing.primaryWavelengthUm === null) existing.primaryWavelengthUm = primaryWavelengthUm;
@@ -754,6 +846,8 @@ class SystemRequirementsEditor {
       } else {
         map[cfgKey] = {
           surfaceIndex: imageIdx,
+          surfaceId: resolvedSurfaceId,
+          surfaceRowIndex: imageIdx,
           rayCount: 501,
           ringCount: 3,
           pattern: null,
@@ -763,12 +857,38 @@ class SystemRequirementsEditor {
         };
       }
       localStorage.setItem('spotDiagramSettingsByConfigId', JSON.stringify(map));
+      
+      // CRITICAL: Also update in-memory cache so merit evaluation uses the latest settings immediately.
+      // This prevents CB insertion from causing stale surfaceId resolution during the next evaluation.
+      try {
+        if (typeof window !== 'undefined') {
+          window.__cooptSpotDiagramSettingsByConfigId = map;
+        }
+      } catch (_) {}
     } catch (_) {
       // ignore
     }
   }
 
   async updateAllConfigsAndEvaluate() {
+    // Force using UI table rows during this update cycle (blocks may be stale after CB insertion).
+    let prevPreferTable = undefined;
+    try {
+      if (typeof globalThis !== 'undefined') {
+        prevPreferTable = globalThis.__cooptPreferTableOpticalSystemRows;
+        globalThis.__cooptPreferTableOpticalSystemRows = true;
+      }
+    } catch (_) {}
+
+    // CRITICAL: Clear memory caches at the start to force fresh data load.
+    // Keep __cooptOpticalSystemByConfigId so non-active configs retain CB-aware rows.
+    try {
+      if (typeof window !== 'undefined') {
+        delete window.__cooptSystemConfig;
+        delete window.__cooptSpotDiagramSettingsByConfigId;
+      }
+    } catch (_) {}
+
     // Ensure each configuration has an up-to-date expanded opticalSystem snapshot
     // and has a per-config Spot Diagram settings entry.
     const editor = window.meritFunctionEditor;
@@ -808,15 +928,76 @@ class SystemRequirementsEditor {
         const parsed = json ? JSON.parse(json) : null;
         globalSourceRows = Array.isArray(parsed) ? parsed : [];
       } catch (_) {}
+      
+      // CRITICAL: Get active config's optical rows first (CB-aware).
+      // This will be used for Spot Diagram settings across ALL configs.
+      // MUST read UI table directly, bypassing blocks expansion (which may be stale after CB insertion).
+      let activeConfigOpticalRows = null;
+      const activeConfigId = (systemConfig.activeConfigId !== undefined && systemConfig.activeConfigId !== null)
+        ? String(systemConfig.activeConfigId)
+        : '';
+      
+      if (activeConfigId) {
+        try {
+          // Directly access UI table, bypassing blocks-first logic in getOpticalSystemRows
+          if (window.tableOpticalSystem && typeof window.tableOpticalSystem.getData === 'function') {
+            activeConfigOpticalRows = window.tableOpticalSystem.getData();
+          } else if (window.opticalSystemTabulator && typeof window.opticalSystemTabulator.getData === 'function') {
+            activeConfigOpticalRows = window.opticalSystemTabulator.getData();
+          }
+          
+          if (Array.isArray(activeConfigOpticalRows) && activeConfigOpticalRows.length > 0) {
+            console.log(`✅ Got ${activeConfigOpticalRows.length} rows from active config UI table (CB-aware, bypassing blocks)`);
+          }
+        } catch (_) {}
+        
+        // Fallback: Set temporary flag to force table reading, then call getOpticalSystemRows
+        if (!Array.isArray(activeConfigOpticalRows) || activeConfigOpticalRows.length === 0) {
+          try {
+            if (typeof globalThis !== 'undefined') {
+              globalThis.__cooptPreferTableOpticalSystemRows = true;
+            }
+            const fn = (typeof getOpticalSystemRows === 'function') ? getOpticalSystemRows : null;
+            if (fn) activeConfigOpticalRows = fn();
+            if (typeof globalThis !== 'undefined') {
+              delete globalThis.__cooptPreferTableOpticalSystemRows;
+            }
+          } catch (_) {}
+        }
+      }
 
       for (let i = 0; i < configs.length; i++) {
         const cfg = configs[i];
         const cfgId = (cfg && cfg.id !== undefined && cfg.id !== null) ? String(cfg.id) : '';
         if (!cfgId) continue;
 
+        const isActiveCfg = activeConfigId && String(activeConfigId) === cfgId;
+
+        const cachedRows = (() => {
+          try {
+            if (typeof window !== 'undefined' && window.__cooptOpticalSystemByConfigId) {
+              const c = window.__cooptOpticalSystemByConfigId[cfgId];
+              return (Array.isArray(c) && c.length > 0) ? c : null;
+            }
+          } catch (_) {}
+          return null;
+        })();
+
         let opticalRows = null;
         try {
-          opticalRows = editor.getOpticalSystemDataByConfigId(cfgId);
+          // CRITICAL: Active config must read from live UI table (CB insertion updates UI first).
+          // Non-active configs should prefer cached rows if they differ from the active UI rows
+          // (e.g., CB inserted in a different config), otherwise fall back to blocks expansion.
+          if (isActiveCfg) {
+            // Use the active config rows we already fetched
+            opticalRows = activeConfigOpticalRows;
+          } else if (cachedRows) {
+            // Non-active: prefer cached rows to avoid mixing with active config UI rows.
+            opticalRows = cachedRows;
+          } else {
+            // Non-active: use blocks expansion (deterministic snapshot).
+            opticalRows = editor.getOpticalSystemDataByConfigId(cfgId);
+          }
         } catch (_) {
           opticalRows = null;
         }
@@ -826,13 +1007,35 @@ class SystemRequirementsEditor {
             if (!cfg.metadata || typeof cfg.metadata !== 'object') cfg.metadata = {};
             cfg.metadata.modified = new Date().toISOString();
           } catch (_) {}
+          
+          // CRITICAL: Store latest opticalRows in memory cache so merit evaluation
+          // uses fresh data immediately after CB insertion (before localStorage reload).
+          try {
+            if (typeof window !== 'undefined') {
+              if (!window.__cooptOpticalSystemByConfigId) window.__cooptOpticalSystemByConfigId = {};
+              window.__cooptOpticalSystemByConfigId[cfgId] = opticalRows;
+            }
+          } catch (_) {}
         }
 
+        // CRITICAL: Use active config's optical rows for ALL configs' Spot Diagram settings.
+        // This ensures all configs use the CB-aware Image surface ID.
+        const rowsForSpotSettings = cachedRows
+          ? cachedRows
+          : (Array.isArray(opticalRows) ? opticalRows : (Array.isArray(cfg?.opticalSystem) ? cfg.opticalSystem : []));
+        
         this._upsertSpotDiagramSettingsForConfig(
           cfgId,
-          Array.isArray(opticalRows) ? opticalRows : (Array.isArray(cfg?.opticalSystem) ? cfg.opticalSystem : []),
+          rowsForSpotSettings,
           globalSourceRows
         );
+
+        try {
+          const debugFlag = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_DEBUG_REQUIREMENTS : false;
+          if (debugFlag) {
+            console.log(`🧪 [ReqDebug] cfg=${cfgId} active=${isActiveCfg} rowsForSpot=${Array.isArray(rowsForSpotSettings) ? rowsForSpotSettings.length : 'null'}`);
+          }
+        } catch (_) {}
 
         try {
           this._setProgress('Updating config snapshots…', i + 1, Math.max(1, configs.length));
@@ -841,8 +1044,67 @@ class SystemRequirementsEditor {
         if (i % 2 === 0) await this._yieldToUI();
       }
 
+      // NOTE: Do not overwrite per-config Spot Diagram settings with active config values.
+      // Only create missing entries.
+      try {
+        const activeId = (systemConfig.activeConfigId !== undefined && systemConfig.activeConfigId !== null)
+          ? String(systemConfig.activeConfigId)
+          : '';
+        if (activeId) {
+          const rawMap = localStorage.getItem('spotDiagramSettingsByConfigId');
+          const map = rawMap ? (JSON.parse(rawMap) || {}) : {};
+          const activeCfgSettings = map[activeId];
+          
+          try {
+            console.log(`🔍 Checking active config (${activeId}) settings:`, activeCfgSettings);
+          } catch (_) {}
+          
+          if (activeCfgSettings && typeof activeCfgSettings === 'object' && activeCfgSettings.surfaceId) {
+            const activeImageSurfaceId = activeCfgSettings.surfaceId;
+            
+            try {
+              console.log(`🎯 Active config Image surfaceId: ${activeImageSurfaceId}`);
+            } catch (_) {}
+            
+            for (const cfg of configs) {
+              const cfgId = (cfg && cfg.id !== undefined && cfg.id !== null) ? String(cfg.id) : '';
+              if (!cfgId || cfgId === activeId) continue;
+              
+              let existing = map[cfgId];
+              // If settings don't exist for this config, create them.
+              if (!existing || typeof existing !== 'object') {
+                try {
+                  console.log(`✨ Creating Spot Diagram settings for config ${cfgId} (synced from active)`);
+                } catch (_) {}
+                existing = {
+                  surfaceIndex: activeCfgSettings.surfaceIndex,
+                  surfaceId: activeImageSurfaceId,
+                  rayCount: activeCfgSettings.rayCount || 501,
+                  ringCount: activeCfgSettings.ringCount || 3,
+                  pattern: activeCfgSettings.pattern || null,
+                  primaryWavelengthUm: activeCfgSettings.primaryWavelengthUm || 0.5876,
+                  configId: cfgId,
+                  updatedAt: Date.now()
+                };
+                map[cfgId] = existing;
+              }
+            }
+            
+            localStorage.setItem('spotDiagramSettingsByConfigId', JSON.stringify(map));
+            if (typeof window !== 'undefined') {
+              window.__cooptSpotDiagramSettingsByConfigId = map;
+            }
+          }
+        }
+      } catch (_) {}
+
       try {
         localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
+        // CRITICAL: Also cache in memory so getOpticalSystemDataByConfigId
+        // reads fresh data immediately after CB insertion (before localStorage sync).
+        if (typeof window !== 'undefined') {
+          window.__cooptSystemConfig = systemConfig;
+        }
       } catch (_) {}
     } finally {
       try { if (showTimer) clearTimeout(showTimer); } catch (_) {}
@@ -850,6 +1112,17 @@ class SystemRequirementsEditor {
     }
 
     await this.evaluateAndUpdateNow({ reason: 'update-button' });
+
+    // Restore previous preferTable flag
+    try {
+      if (typeof globalThis !== 'undefined') {
+        if (prevPreferTable === undefined) {
+          delete globalThis.__cooptPreferTableOpticalSystemRows;
+        } else {
+          globalThis.__cooptPreferTableOpticalSystemRows = prevPreferTable;
+        }
+      }
+    } catch (_) {}
   }
 
   createDefaultRequirementRow() {

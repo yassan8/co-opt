@@ -1835,6 +1835,7 @@ function showGlassSearchDialog(rowData, rowIndex) {
 
 // ガラス検索ボタンのイベントリスナー
 setTimeout(() => {
+  if (typeof document === 'undefined') return;
   const addSurfBtn = document.getElementById('add-optical-system-btn');
   if (addSurfBtn) {
     addSurfBtn.addEventListener('click', () => {

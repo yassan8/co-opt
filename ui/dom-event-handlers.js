@@ -3422,10 +3422,24 @@ function updateSurfaceNumberSelectLegacy() {
             let imageSurfaceValue = null;
             let lastSurfaceValue = null;
             let desiredByRowId = '';
+            let desiredByRowSig = '';
 
             const prevRowId = prevRowIdRaw || (prevValueRaw !== ''
                 ? (surfaceOptions.find(o => String(o?.value) === String(prevValueRaw))?.rowId ? String(surfaceOptions.find(o => String(o?.value) === String(prevValueRaw)).rowId) : '')
                 : '');
+
+            const prevRowSig = (() => {
+                try {
+                    const prevOpt = prevSelectedOption;
+                    const fromDataset = prevOpt && prevOpt.dataset && prevOpt.dataset.rowSig ? String(prevOpt.dataset.rowSig) : '';
+                    if (fromDataset) return fromDataset;
+                    if (prevValueRaw === '') return '';
+                    const m = surfaceOptions.find(o => String(o?.value) === String(prevValueRaw));
+                    return m && m.rowSig ? String(m.rowSig) : '';
+                } catch (_) {
+                    return '';
+                }
+            })();
             
             surfaceOptions.forEach(option => {
                 // スポットダイアグラム用のセレクト
@@ -3436,6 +3450,12 @@ function updateSurfaceNumberSelectLegacy() {
                     optionElement.dataset.rowId = String(option.rowId);
                     if (prevRowId && String(option.rowId) === String(prevRowId)) {
                         desiredByRowId = String(option.value);
+                    }
+                }
+                if (option.rowSig !== undefined && option.rowSig !== null && String(option.rowSig) !== '') {
+                    optionElement.dataset.rowSig = String(option.rowSig);
+                    if (!desiredByRowId && prevRowSig && String(option.rowSig) === String(prevRowSig)) {
+                        desiredByRowSig = String(option.value);
                     }
                 }
                 if (Number.isInteger(option.rowIndex)) {
@@ -3456,8 +3476,8 @@ function updateSurfaceNumberSelectLegacy() {
             const defaultValue = imageSurfaceValue !== null ? imageSurfaceValue : lastSurfaceValue;
             
             // Prefer restoring by stable rowId (survives insert/delete renumbering),
-            // then fallback to previous numeric value if it still exists.
-            const desired = (desiredByRowId !== '' ? desiredByRowId : '') || (prevValueRaw !== '' ? prevValueRaw : '');
+            // then rowSig, then fallback to previous numeric value if it still exists.
+            const desired = (desiredByRowId !== '' ? desiredByRowId : '') || (desiredByRowSig !== '' ? desiredByRowSig : '') || (prevValueRaw !== '' ? prevValueRaw : '');
             if (desired !== '' && surfaceSelect.querySelector(`option[value="${CSS.escape(desired)}"]`)) {
                 surfaceSelect.value = desired;
             } else if (defaultValue !== null) {

@@ -257,22 +257,34 @@ export async function showSpotDiagram(options = {}) {
                     ? String(sys.activeConfigId)
                     : '';
 
-                // If the user explicitly selected the active config, prefer live tables
-                // (keeps Spot Diagram consistent with Requirements/Editor behavior).
-                if (activeId && String(selectedConfigId) === String(activeId)) {
-                    const tableOpticalSystem = getTableOpticalSystem();
-                    const tableObject = getTableObject();
-                    const tableSource = getTableSource();
-                    return {
-                        opticalSystemRows: getOpticalSystemRows(tableOpticalSystem),
-                        objectRows: getObjectRows(tableObject),
-                        sourceRows: getSourceRows(tableSource)
-                    };
-                }
+                // Always use the selected config snapshot (not active UI tables).
+                // This keeps Spot Diagram independent of ActiveConfig selection.
 
                 const cfg = Array.isArray(sys?.configurations)
                     ? sys.configurations.find(c => String(c?.id) === String(selectedConfigId))
                     : null;
+
+                // Prefer cached optical rows for the selected config (avoids mixing after CB insertion).
+                try {
+                    if (cfg && typeof window !== 'undefined' && window.__cooptOpticalSystemByConfigId) {
+                        const cached = window.__cooptOpticalSystemByConfigId[String(selectedConfigId)];
+                        if (Array.isArray(cached) && cached.length > 0) {
+                            return {
+                                opticalSystemRows: cached,
+                                objectRows: Array.isArray(cfg?.object) ? cfg.object : [],
+                                sourceRows: (() => {
+                                    try {
+                                        const json = localStorage.getItem('sourceTableData');
+                                        const parsed = json ? JSON.parse(json) : null;
+                                        return Array.isArray(parsed) ? parsed : [];
+                                    } catch (_) {
+                                        return [];
+                                    }
+                                })()
+                            };
+                        }
+                    }
+                } catch (_) {}
 
                 const expandedOptical = (() => {
                     try {
@@ -460,6 +472,15 @@ export async function showSpotDiagram(options = {}) {
                         updatedAt: Date.now()
                     };
                     localStorage.setItem('spotDiagramSettingsByConfigId', JSON.stringify(map));
+                    
+                    // CRITICAL: Also update in-memory cache so merit evaluation uses latest settings immediately.
+                    // This prevents Spot Diagram execution from requiring browser reload to update UR values.
+                    if (typeof window !== 'undefined') {
+                        if (!window.__cooptSpotDiagramSettingsByConfigId || typeof window.__cooptSpotDiagramSettingsByConfigId !== 'object') {
+                            window.__cooptSpotDiagramSettingsByConfigId = {};
+                        }
+                        window.__cooptSpotDiagramSettingsByConfigId[cfgKey] = map[cfgKey];
+                    }
                 }
             } catch (_) {
                 // ignore

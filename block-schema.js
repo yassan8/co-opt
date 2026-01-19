@@ -133,7 +133,10 @@ function normalizeSemidia(prevRow) {
       if (Number.isFinite(n)) return String(n);
     }
   }
-  return DEFAULT_SEMIDIA;
+  // Unspecified semidia should stay unspecified.
+  // Treating missing semidia as a numeric default (e.g., 10mm) silently introduces
+  // a physical aperture limit and can incorrectly vignette off-axis rays.
+  return '';
 }
 
 function __semidiaHasValue(v) {
@@ -149,6 +152,14 @@ function __getRowSemidia(row) {
 
 function __rowTypeLower(row) {
   return String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+}
+
+function __isCoordBreakRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  const ot = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+  if (ot === 'cb' || ot === 'coord break' || ot === 'coordinate break') return true;
+  const st = String(row?.surfType ?? row?.['surface type'] ?? row?.surfaceType ?? '').trim().toLowerCase();
+  return st === 'cb' || st === 'coord break' || st === 'coordinate break' || st === 'coordbreak' || st === 'coordinatebreak';
 }
 
 function __provenanceKey(row) {
@@ -168,7 +179,7 @@ function __captureSemidiaOverridesFromRows(rows, existingOverrides) {
     const row = rows[i];
     if (!row || typeof row !== 'object') continue;
     const t = __rowTypeLower(row);
-    if (t === 'stop' || t === 'image') continue;
+    if (t === 'stop' || t === 'image' || __isCoordBreakRow(row)) continue;
     const v = __getRowSemidia(row);
     if (!__semidiaHasValue(v)) continue;
     const pk = __provenanceKey(row);
@@ -190,7 +201,7 @@ function __applySemidiaOverridesToRows(rows, overrides) {
     const row = rows[i];
     if (!row || typeof row !== 'object') continue;
     const t = __rowTypeLower(row);
-    if (t === 'stop' || t === 'image') continue;
+    if (t === 'stop' || t === 'image' || __isCoordBreakRow(row)) continue;
     const pk = __provenanceKey(row);
     let v = null;
     if (pk && __semidiaHasValue(overrides[pk])) v = overrides[pk];
@@ -214,7 +225,7 @@ function __captureBlockApertureFromLegacyRows(blocks, legacyRows) {
   for (const row of legacyRows) {
     if (!row || typeof row !== 'object') continue;
     const t = __rowTypeLower(row);
-    if (t === 'stop' || t === 'image') continue;
+    if (t === 'stop' || t === 'image' || __isCoordBreakRow(row)) continue;
     const blockId = String(row._blockId ?? '').trim();
     const role = String(row._surfaceRole ?? '').trim();
     if (!blockId || !role) continue;
@@ -784,7 +795,7 @@ function createDefaultObjectRow() {
     optimizeR: '',
     thickness: 100,
     optimizeT: '',
-    semidia: DEFAULT_SEMIDIA,
+    semidia: '',
     optimizeSemiDia: '',
     material: 'AIR',
     optimizeMaterial: '',
@@ -1075,11 +1086,20 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       back._surfaceRole = 'back';
 
       // Persisted aperture (semidia) stored in Design Intent.
+      // If aperture is not defined, clear inherited semidia to match Design Intent.
       try {
         const vFront = aperture ? aperture.front : null;
         const vBack = aperture ? aperture.back : null;
-        if (vFront !== null && vFront !== undefined && String(vFront).trim() !== '') front.semidia = vFront;
-        if (vBack !== null && vBack !== undefined && String(vBack).trim() !== '') back.semidia = vBack;
+        if (vFront !== null && vFront !== undefined && String(vFront).trim() !== '') {
+          front.semidia = vFront;
+        } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 'front')) {
+          front.semidia = '';
+        }
+        if (vBack !== null && vBack !== undefined && String(vBack).trim() !== '') {
+          back.semidia = vBack;
+        } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 'back')) {
+          back.semidia = '';
+        }
       } catch (_) {}
 
       const frontRadius = getParamOrVarValue(params, vars, 'frontRadius');
@@ -1175,6 +1195,17 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       cb.conic = normalizeOptionalNumberToRowValue(tiltZ);
       cb.coef1 = normalizeOptionalNumberToRowValue(order);
 
+      // IMPORTANT: CB rows reuse semidia for decenterX, so their visible semidia column
+      // MUST NOT vignette subsequent rays. Propagate the last non-CB/non-Stop semidia
+      // so rendering/ray-tracing can use it for clearance checks after the CB.
+      // Store it in a dedicated field so it doesn't overwrite decenterX.
+      try {
+        const prev = getLastNonCoordBreakRow();
+        if (prev && prev.semidia !== undefined && prev.semidia !== null && String(prev.semidia).trim() !== '') {
+          cb.__cooptActualSemidia = prev.semidia;
+        }
+      } catch (_) {}
+
       rows.push(cb);
       continue;
     }
@@ -1192,13 +1223,27 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       s2._surfaceRole = 's2';
       s3._surfaceRole = 's3';
 
+      // Persisted aperture (semidia) stored in Design Intent.
+      // If aperture is not defined, clear inherited semidia to match Design Intent.
       try {
         const v1 = aperture ? aperture.s1 : null;
         const v2 = aperture ? aperture.s2 : null;
         const v3 = aperture ? aperture.s3 : null;
-        if (v1 !== null && v1 !== undefined && String(v1).trim() !== '') s1.semidia = v1;
-        if (v2 !== null && v2 !== undefined && String(v2).trim() !== '') s2.semidia = v2;
-        if (v3 !== null && v3 !== undefined && String(v3).trim() !== '') s3.semidia = v3;
+        if (v1 !== null && v1 !== undefined && String(v1).trim() !== '') {
+          s1.semidia = v1;
+        } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's1')) {
+          s1.semidia = '';
+        }
+        if (v2 !== null && v2 !== undefined && String(v2).trim() !== '') {
+          s2.semidia = v2;
+        } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's2')) {
+          s2.semidia = '';
+        }
+        if (v3 !== null && v3 !== undefined && String(v3).trim() !== '') {
+          s3.semidia = v3;
+        } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's3')) {
+          s3.semidia = '';
+        }
       } catch (_) {}
 
       const radius1 = getParamOrVarValue(params, vars, 'radius1');
@@ -1264,15 +1309,33 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       s3._surfaceRole = 's3';
       s4._surfaceRole = 's4';
 
+      // Persisted aperture (semidia) stored in Design Intent.
+      // If aperture is not defined, clear inherited semidia to match Design Intent.
       try {
         const v1 = aperture ? aperture.s1 : null;
         const v2 = aperture ? aperture.s2 : null;
         const v3 = aperture ? aperture.s3 : null;
         const v4 = aperture ? aperture.s4 : null;
-        if (v1 !== null && v1 !== undefined && String(v1).trim() !== '') s1.semidia = v1;
-        if (v2 !== null && v2 !== undefined && String(v2).trim() !== '') s2.semidia = v2;
-        if (v3 !== null && v3 !== undefined && String(v3).trim() !== '') s3.semidia = v3;
-        if (v4 !== null && v4 !== undefined && String(v4).trim() !== '') s4.semidia = v4;
+        if (v1 !== null && v1 !== undefined && String(v1).trim() !== '') {
+          s1.semidia = v1;
+        } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's1')) {
+          s1.semidia = '';
+        }
+        if (v2 !== null && v2 !== undefined && String(v2).trim() !== '') {
+          s2.semidia = v2;
+        } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's2')) {
+          s2.semidia = '';
+        }
+        if (v3 !== null && v3 !== undefined && String(v3).trim() !== '') {
+          s3.semidia = v3;
+        } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's3')) {
+          s3.semidia = '';
+        }
+        if (v4 !== null && v4 !== undefined && String(v4).trim() !== '') {
+          s4.semidia = v4;
+        } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 's4')) {
+          s4.semidia = '';
+        }
       } catch (_) {}
 
       const radius1 = getParamOrVarValue(params, vars, 'radius1');
@@ -1949,19 +2012,30 @@ export function expandBlocksIntoConfiguration(config) {
   issues.push(...expanded.issues);
   if (expanded.issues.some(i => i.severity === 'fatal')) return { expandedOpticalSystem: null, issues };
 
+  // Preserve semidia from existing opticalSystem rows using provenance keys.
+  // (Index-based copying breaks when a CB surface is inserted/deleted.)
   try {
     if (Array.isArray(legacyRows) && Array.isArray(expanded?.rows)) {
-      const n = Math.min(legacyRows.length, expanded.rows.length);
-      for (let i = 0; i < n; i++) {
-        const lr = legacyRows[i];
-        const er = expanded.rows[i];
-        if (!lr || typeof lr !== 'object' || !er || typeof er !== 'object') continue;
-        const t = String(er['object type'] ?? er.object ?? '').trim().toLowerCase();
-        if (t === 'stop') continue;
-        if (t === 'image') continue;
-        const lsRaw = __getRowSemidia(lr);
-        const ls = String(lsRaw ?? '').trim();
-        if (ls !== '') er.semidia = lsRaw;
+      /** @type {Map<string, any>} */
+      const legacyByProv = new Map();
+      for (const lr of legacyRows) {
+        if (!lr || typeof lr !== 'object') continue;
+        const t = __rowTypeLower(lr);
+        if (t === 'stop' || t === 'image' || __isCoordBreakRow(lr)) continue;
+        const pk = __provenanceKey(lr);
+        if (!pk) continue;
+        const v = __getRowSemidia(lr);
+        if (!__semidiaHasValue(v)) continue;
+        legacyByProv.set(pk, v);
+      }
+
+      for (const er of expanded.rows) {
+        if (!er || typeof er !== 'object') continue;
+        const t = __rowTypeLower(er);
+        if (t === 'stop' || t === 'image' || __isCoordBreakRow(er)) continue;
+        const pk = __provenanceKey(er);
+        if (!pk) continue;
+        if (legacyByProv.has(pk)) er.semidia = legacyByProv.get(pk);
       }
     }
   } catch (_) {}

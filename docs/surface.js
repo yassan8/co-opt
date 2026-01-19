@@ -12,6 +12,55 @@ function debugLog(...args) {
   }
 }
 
+function __coopt_parseNumberOrNull(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function __coopt_getSemidiaMm(params) {
+  if (!params || typeof params !== 'object') return null;
+
+  // CB rows propagate the prior surface's semidia in a dedicated field
+  // to avoid confusing it with decenterX (which reuses the semidia column).
+  const cbActual = __coopt_parseNumberOrNull(params.__cooptActualSemidia);
+  if (cbActual !== null && cbActual > 0) return cbActual;
+
+  const candidates = [
+    params.semidia,
+    params.SemiDia,
+    params['Semi Dia'],
+    params['semi dia'],
+    params['Semi Diameter'],
+    params['semi diameter'],
+    params.semiDia,
+    params.semiDiameter,
+    params.semidiameter,
+    params['semi_diameter'],
+    params['semi-diameter'],
+  ];
+
+  for (const c of candidates) {
+    const n = __coopt_parseNumberOrNull(c);
+    if (n !== null && n > 0) return n;
+  }
+
+  // Stop surfaces sometimes provide diameter-like aperture. Use half as a last resort.
+  try {
+    const objType = String(params?.['object type'] ?? params?.object ?? params?.type ?? '').trim().toLowerCase();
+    const isStop = objType === 'stop' || objType === 'sto';
+    if (isStop) {
+      const ap = __coopt_parseNumberOrNull(params.aperture ?? params.Aperture ?? params.diameter);
+      if (ap !== null && ap > 0) return ap / 2;
+    }
+  } catch (_) {}
+
+  return null;
+}
+
 const GLOBAL_FALLBACK = typeof window !== 'undefined' ? window : globalThis;
 
 function getSceneThreeContext(scene) {
@@ -168,8 +217,8 @@ export function asphericSagDerivative(r, params, mode = "even") {
 export function drawAsphericProfile(scene, params, mode = "even", segments = 100, colorY = 0x000000, zOffset = 0, colorX = 0xff0000) {
   debugLog('🔸 drawAsphericProfile called:', { params, mode, segments, zOffset, colorY, colorX });
   
-  const semidia = Number(params["semidia"]);
-  if (!isFinite(semidia) || semidia <= 0) {
+  const semidia = __coopt_getSemidiaMm(params);
+  if (semidia === null) {
     debugLog('❌ Invalid semidia in drawAsphericProfile:', semidia);
     return;
   }
@@ -253,8 +302,8 @@ export function drawPlaneProfile(scene, semidia = 20, segments = 100, colorY = 0
 // --- レンズ表面（回転体）を描画（Z軸回転） ---
 export function drawLensSurface(scene, params, mode = "even", segments = 100, zOffset = 0, color = 0x00ccff, opacity = 0.5, coordinateTransforms = []) {
   const { THREE: THREE_CTX, globalScope } = getSceneThreeContext(scene);
-  const semidia = Number(params["semidia"]);
-  if (!isFinite(semidia) || semidia <= 0) return;
+  const semidia = __coopt_getSemidiaMm(params);
+  if (semidia === null) return;
 
   const positions = [];
   const indices = [];
@@ -394,11 +443,8 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
     debugLog(`🔸 Rotation matrix:`, rotationMatrix);
   }
   
-  const semidia = Number(params.semidia || params["semidia"]);
-  if (!isFinite(semidia) || semidia <= 0) {
-    // console.warn(`Invalid semidia (${semidia}) for 3D surface, skipping. Params:`, params);
-    return;
-  }
+  const semidia = __coopt_getSemidiaMm(params);
+  if (semidia === null) return;
 
   const positions = [];
   const indices = [];
@@ -1384,8 +1430,8 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             const endOrigin = surfaceOrigins[nextSurfaceIndex];
             
             if (startOrigin && endOrigin && startOrigin.origin && endOrigin.origin) {
-                const startSemidia = parseFloat(currentSurf.semidia) || 0;
-                const endSemidia = parseFloat(nextSurf.semidia) || 0;
+              const startSemidia = __coopt_getSemidiaMm(currentSurf) ?? 0;
+              const endSemidia = __coopt_getSemidiaMm(nextSurf) ?? 0;
                 
                 if (startSemidia > 0 && endSemidia > 0) {
                     // sag計算関数（非球面対応）
@@ -1551,8 +1597,8 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             continue;
         }
         
-        const semidia = parseFloat(surf.semidia) || 0;
-        if (semidia <= 0) {
+        const semidia = __coopt_getSemidiaMm(surf);
+        if (!semidia) {
             console.log(`🔸 Surface ${i}: semidia無効(${semidia})、スキップ`);
             continue;
         }

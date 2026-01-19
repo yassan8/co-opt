@@ -1100,7 +1100,7 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
     
     if (__rtIsCoordBreakRow(surface)) {
       // CB面の場合
-      const cbParams = parseCoordBreakParams(surface);
+      const cbParams = parseCoordBreakParams(surface, previousSurface);
       const decenterX = cbParams.decenterX !== undefined ? cbParams.decenterX : 0;
       const decenterY = cbParams.decenterY !== undefined ? cbParams.decenterY : 0;
       const decenterZ = cbParams.decenterZ !== undefined ? cbParams.decenterZ : 0;
@@ -1145,10 +1145,12 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
     } else {
       // 通常面の場合
       // Thickness for a normal surface is taken from the *previous* row.
-      // Coord Break rows sit between surfaces. When a CB row is inserted, users
-      // typically put the spacing-to-next-surface in the CB row's thickness.
-      // Therefore, CB thickness MUST contribute to physical spacing.
-      let thickness = previousSurface ? getSafeThickness(previousSurface) : 0;
+      // IMPORTANT: Coord Break rows reuse the thickness field for decenterZ in this app.
+      // They must NOT introduce physical spacing. Therefore, when the previous row is a
+      // Coord Break, treat the spacing to this surface as 0.
+      let thickness = (previousSurface && __rtIsCoordBreakRow(previousSurface))
+        ? 0
+        : (previousSurface ? getSafeThickness(previousSurface) : 0);
       
       // NaN validation and Infinity handling for normal surface thickness
       if (!isFinite(thickness)) {
@@ -1180,7 +1182,7 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
     
     // CB面の場合は変換パラメータも追加
     if (__rtIsCoordBreakRow(surface)) {
-      const cbParams = parseCoordBreakParams(surface);
+      const cbParams = parseCoordBreakParams(surface, previousSurface);
       debugInfo.cbParams = cbParams;
       debugInfo.previousOrigin = currentOrigin;
       debugInfo.thickness = previousSurface ? previousSurface.thickness : 0;
@@ -1276,7 +1278,7 @@ function applyMatrixToVector(matrix, vec) {
 }
 
 // CB面パラメータ解析
-function parseCoordBreakParams(surface) {
+function parseCoordBreakParams(surface, previousSurface = null) {
   const toFiniteNumber = (...candidates) => {
     for (const v of candidates) {
       if (v === null || v === undefined) continue;
@@ -1287,6 +1289,15 @@ function parseCoordBreakParams(surface) {
       if (Number.isFinite(n)) return n;
     }
     return 0;
+  };
+
+  const toFiniteOrNull = (v) => {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    const s = String(v).trim();
+    if (s === '') return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
   };
 
   // New rule (root-cause fix): Prefer dedicated CoordBreak fields when present.
@@ -1318,7 +1329,17 @@ function parseCoordBreakParams(surface) {
   // legacy reused columns (semidia/material/rindex/abbe/conic/coef1).
   // Otherwise, a CB row with only `order` set can accidentally pick up a non-zero
   // semidia/material and introduce an unintended decenter/tilt.
-  const decenterX = hasExplicit ? toFiniteNumber(surface.decenterX) : toFiniteNumber(surface.semidia, surface.decenterX);
+  const decenterX = (() => {
+    if (hasExplicit) return toFiniteNumber(surface.decenterX);
+    // Legacy fallback: semidia/material columns were historically reused for CB decenter.
+    // But newly inserted CB rows often inherit semidia from the previous surface (e.g. 12mm).
+    // That inherited semidia MUST NOT become an unintended decenterX.
+    const semidiaN = toFiniteOrNull(surface?.semidia);
+    const prevSemidiaN = toFiniteOrNull(previousSurface?.semidia);
+    const semidiaLooksInherited = (semidiaN !== null && prevSemidiaN !== null && Math.abs(semidiaN - prevSemidiaN) < 1e-12);
+    if (semidiaLooksInherited) return 0;
+    return toFiniteNumber(surface.semidia, surface.decenterX);
+  })();
   const decenterY = hasExplicit ? toFiniteNumber(surface.decenterY) : toFiniteNumber(surface.material, surface.decenterY);
   // decenterZ is disabled (always 0)
   const decenterZ = 0;
@@ -1471,7 +1492,7 @@ function __computeSurfaceOriginsSignature(opticalSystemRows) {
       mix(q(tPrev, 1e6));
 
       if (isCB) {
-        const cbParams = parseCoordBreakParams(surface) || {};
+        const cbParams = parseCoordBreakParams(surface, prev) || {};
         mix(q(cbParams.decenterX, 1e6));
         mix(q(cbParams.decenterY, 1e6));
         mix(q(cbParams.decenterZ, 1e6));
@@ -1717,7 +1738,8 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       // 座標変換1.5.md仕様: CB面では座標系変換のみ、O(s)/R(s)システムを使用
       
       if (isDetailedDebug) {
-        const cb = parseCoordBreakParams(row) || {};
+        const prevRow = (i > 0 && Array.isArray(opticalSystemRows)) ? opticalSystemRows[i - 1] : null;
+        const cb = parseCoordBreakParams(row, prevRow) || {};
         debugLog.push(`Coord Break Parameters:`);
         debugLog.push(`  decenterX=${Number(cb.decenterX) || 0}, decenterY=${Number(cb.decenterY) || 0}, decenterZ=${Number(cb.decenterZ) || 0}`);
         debugLog.push(`  tiltX=${Number(cb.tiltX) || 0}°, tiltY=${Number(cb.tiltY) || 0}°, tiltZ=${Number(cb.tiltZ) || 0}°, order=${Number(cb.transformOrder) || 1}`);
@@ -1748,33 +1770,6 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       if (thickness !== 0) {
         const newPos = add(safeRay0.pos, scale(safeRay0.dir, thickness));
         safeRay0.pos = newPos;
-        
-        // Object面のthickness移動後の位置は記録しない
-        // （前面の交点Rと次面の交点Rを直接結ぶ光線経路にするため）
-        
-        // thickness移動後の位置を記録（前の位置と異なる場合のみ） - 無効化
-        /*
-        const lastPoint = rayPath[rayPath.length - 1];
-        const distance = Math.sqrt(
-          Math.pow(newPos.x - lastPoint.x, 2) + 
-          Math.pow(newPos.y - lastPoint.y, 2) + 
-          Math.pow(newPos.z - lastPoint.z, 2)
-        );
-        
-        // Object面のthickness移動は物理的に意味があるので、
-        // 1mm以上で記録（不要な微小移動を排除）
-        const hasNextSurface = i < opticalSystemRows.length - 1;
-        if (distance > 1.0 && hasNextSurface) {
-          rayPath.push({ ...newPos });
-          if (isDetailedDebug) {
-            debugLog.push(`Object surface thickness advancement: ${thickness}mm, distance: ${distance.toFixed(6)}mm (recorded)`);
-          }
-        } else if (isDetailedDebug) {
-          const reason = !hasNextSurface ? "no next surface" : `distance too small (${distance.toFixed(6)}mm < 1.0mm)`;
-          debugLog.push(`Object surface thickness advancement: ${thickness}mm, distance: ${distance.toFixed(6)}mm (skipped: ${reason})`);
-        }
-        */
-        
         if (isDetailedDebug) {
           debugLog.push(`Object surface thickness advancement: ${thickness}mm (intermediate position not recorded for clean ray paths)`);
         }
@@ -1850,8 +1845,9 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       
       // 2. semidia制限（"Auto"/未指定の場合は制限なし）
       // NOTE: semidia 未指定時に thickness を代用すると、物理的に存在しない開口制限を
-      //       誤って導入してしまい、軸外で大量に光線がブロックされる。
-      const semiDiaValue = row.semidia;
+      //       誤って導入してしまい、軸外で大量に光線がブロックされる。n      // CB rows propagate the prior surface's semidia in __cooptActualSemidia
+      // (since semidia column is reused for decenterX).
+      const semiDiaValue = row.__cooptActualSemidia ?? row.semidia;
       const semiDiaNum = Number(semiDiaValue);
       const semiDia = (semiDiaValue === 'Auto' || semiDiaValue === '' || !Number.isFinite(semiDiaNum) || semiDiaNum <= 0)
         ? Infinity
@@ -1946,8 +1942,10 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
         coef10: Number(row.coef10) || 0,
         // NOTE: semidia 未指定時に thickness を代用すると、物理的に存在しない開口制限を
         //       誤って導入してしまい、軸外で大量に光線がブロックされる。
+        // CB rows propagate the prior surface's semidia in __cooptActualSemidia
+        // (since semidia column is reused for decenterX).
         semidia: (() => {
-          const semiDiaValue = row.semidia;
+          const semiDiaValue = row.__cooptActualSemidia ?? row.semidia;
           const semiDiaNum = Number(semiDiaValue);
           return (semiDiaValue === 'Auto' || semiDiaValue === '' || !Number.isFinite(semiDiaNum) || semiDiaNum <= 0)
             ? Infinity
@@ -2014,7 +2012,9 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       // 2. semidia制限（"Auto"/未指定の場合は制限なし）
       // NOTE: semidia 未指定時に thickness を代用すると、物理的に存在しない開口制限を
       //       誤って導入してしまい、軸外で大量に光線がブロックされる。
-      const semiDiaValue = row.semidia;
+      // CB rows propagate the prior surface's semidia in __cooptActualSemidia
+      // (since semidia column is reused for decenterX).
+      const semiDiaValue = row.__cooptActualSemidia ?? row.semidia;
       const semiDiaNum = Number(semiDiaValue);
       const semiDia = (semiDiaValue === 'Auto' || semiDiaValue === '' || !Number.isFinite(semiDiaNum) || semiDiaNum <= 0)
         ? Infinity
@@ -2185,38 +2185,11 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
     // 次の面への移動（thickness分の前進）
     const thickness = parseFloat(row.thickness) || 0;
     if (thickness !== 0) {
-  const newPos = add(safeRay0.pos, scale(safeRay0.dir, thickness));
+      const newPos = add(safeRay0.pos, scale(safeRay0.dir, thickness));
       safeRay0.pos = newPos;
-      
+
       // thickness移動後の位置は記録しない
       // （前面の交点Rと次面の交点Rを直接結ぶ光線経路にするため）
-      // 次の面での実際の交点計算時に正しい光線経路が描画される
-      
-      // thickness移動後の位置を記録（交点と異なる場合のみ） - 無効化
-      /*
-      const lastPoint = rayPath[rayPath.length - 1];
-      const distance = Math.sqrt(
-        Math.pow(newPos.x - lastPoint.x, 2) + 
-        Math.pow(newPos.y - lastPoint.y, 2) + 
-        Math.pow(newPos.z - lastPoint.z, 2)
-      );
-      
-      // thickness移動を記録する条件を厳しくする：
-      // 1. 1mm以上の移動がある場合のみ記録（従来の1μmから変更）
-      // 2. 次の面が存在する場合のみ記録（最後の面のthickness移動は無意味）
-      const hasNextSurface = i < opticalSystemRows.length - 1;
-      
-      if (distance > 1.0 && hasNextSurface) {
-        rayPath.push({ ...newPos });
-        if (isDetailedDebug) {
-          debugLog.push(`Thickness advancement: ${thickness}mm, distance from hit point: ${distance.toFixed(6)}mm (recorded)`);
-        }
-      } else if (isDetailedDebug) {
-        const reason = !hasNextSurface ? "no next surface" : `distance too small (${distance.toFixed(6)}mm < 1.0mm)`;
-        debugLog.push(`Thickness advancement: ${thickness}mm, distance: ${distance.toFixed(6)}mm (skipped: ${reason})`);
-      }
-      */
-      
       if (isDetailedDebug) {
         debugLog.push(`Thickness advancement: ${thickness}mm (intermediate position not recorded for clean ray paths)`);
       }

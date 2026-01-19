@@ -60,6 +60,56 @@ function __coopt_surfaceColorKey(surface, index0) {
     return `i:${Math.floor(Number(index0) || 0)}`;
 }
 
+function __coopt_parseNumberOrNull(v) {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    const s = String(v).trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+}
+
+function __coopt_getRenderSemidiaMm(surface) {
+    if (!surface || typeof surface !== 'object') return null;
+
+    // CB rows propagate the prior surface's semidia in a dedicated field
+    // to avoid confusing it with decenterX (which reuses the semidia column).
+    const cbActual = __coopt_parseNumberOrNull(surface.__cooptActualSemidia);
+    if (cbActual !== null && cbActual > 0) return cbActual;
+
+    const candidates = [
+        surface.semidia,
+        surface.SemiDia,
+        surface['Semi Dia'],
+        surface['semi dia'],
+        surface['Semi Diameter'],
+        surface['semi diameter'],
+        surface.semiDia,
+        surface.semiDiameter,
+        surface.semidiameter,
+        surface['semi_diameter'],
+        surface['semi-diameter'],
+    ];
+
+    for (const c of candidates) {
+        const n = __coopt_parseNumberOrNull(c);
+        if (n !== null && n > 0) return n;
+    }
+
+    // Stop surfaces may supply diameter-like aperture.
+    try {
+        const objTypeRaw = surface['object type'] ?? surface.object ?? surface.objectType ?? surface.type;
+        const objType = String(objTypeRaw ?? '').trim().toLowerCase();
+        const isStop = objType === 'stop' || objType === 'sto';
+        if (isStop) {
+            const ap = __coopt_parseNumberOrNull(surface.aperture ?? surface.Aperture ?? surface.diameter);
+            if (ap !== null && ap > 0) return ap / 2;
+        }
+    } catch (_) {}
+
+    return null;
+}
+
 function __coopt_loadSurfaceColorOverrides() {
     try {
         if (typeof localStorage === 'undefined') return {};
@@ -241,9 +291,16 @@ export function drawOpticalSystemSurfaces(options = {}) {
             }
 
             // Coord Break surfaces are transform-only and must not be drawn in 3D.
-            const surfType = String(surface?.surfType ?? '').trim();
-            if (surfType === 'Coord Break' || surfType === 'Coordinate Break' || surfType === 'CB') {
-                console.log(`🔸 3D Surface ${i}: Coord Break (${surfType})、3D描画スキップ`);
+            const surfType = String(surface?.surfType ?? surface?.type ?? '').trim().toLowerCase();
+            const objType = String(surface?.['object type'] ?? surface?.object ?? '').trim().toLowerCase();
+            const isCB = (
+                surfType === 'coord break' || surfType === 'coordinate break' || surfType === 'cb' ||
+                surfType === 'coordbreak' || surfType === 'coordinatebreak' ||
+                objType === 'coord break' || objType === 'coordinate break' || objType === 'cb' ||
+                objType === 'coordbreak' || objType === 'coordinatebreak'
+            );
+            if (isCB) {
+                console.log(`🔸 3D Surface ${i}: Coord Break (surfType=${surfType}, objType=${objType})、三次元描画スキップ`);
                 continue;
             }
             
@@ -254,9 +311,13 @@ export function drawOpticalSystemSurfaces(options = {}) {
                     if (showSemidiaRing) {
                         console.log(`⭕ Drawing Stop ring for surface ${i}, semidia: ${surface.semidia}`);
                         try {
+                            const ringSemidia = __coopt_getRenderSemidiaMm(surface);
+                            if (ringSemidia === null) {
+                                console.log(`⏭️ Stop ring skipped (no semidia) for surface ${i}`);
+                            } else {
                             drawSemidiaRingWithOriginAndSurface(
                                 scene, 
-                                surface.semidia || 20,   // semidia値
+                                ringSemidia,
                                 100,                     // segments
                                 0x000000,               // color (黒)
                                 surfaceOrigins[i]?.origin || {x: 0, y: 0, z: 0},       // origin オブジェクト
@@ -264,6 +325,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
                                 surface                  // surf オブジェクト
                             );
                             console.log(`✅ Stop ring drawn for surface ${i}`);
+                            }
                         } catch (stopRingError) {
                             console.error(`❌ Error drawing Stop ring for surface ${i}:`, stopRingError);
                         }
@@ -338,9 +400,13 @@ export function drawOpticalSystemSurfaces(options = {}) {
                     console.log(`⭕ Surface type: ${surface.type}, material: ${surface.material}`);
                     
                     try {
+                        const ringSemidia = __coopt_getRenderSemidiaMm(surface);
+                        if (ringSemidia === null) {
+                            console.log(`⏭️ Semidia ring skipped (no semidia) for surface ${i}`);
+                        } else {
                         drawSemidiaRingWithOriginAndSurface(
                             scene, 
-                            surface.semidia || 20,   // semidia 値
+                            ringSemidia,
                             100,                     // segments
                             0x000000,               // color (黒)
                             surfaceOrigins[i]?.origin || {x: 0, y: 0, z: 0},       // origin オブジェクト
@@ -348,6 +414,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             surface                  // surf オブジェクト
                         );
                         console.log(`✅ Semidia ring drawn for surface ${i}`);
+                        }
                     } catch (ringError) {
                         console.error(`❌ Error drawing semidia ring for surface ${i}:`, ringError);
                     }
@@ -405,8 +472,13 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
         // console.log(`🔍 [findStopSurface] Surface ${i} type:`, surface.type);
         // console.log(`🔍 [findStopSurface] Surface ${i} object type:`, surface['object type']);
         
-        // 両方のフィールド名をチェック
-        if (surface.type === 'Stop' || surface['object type'] === 'Stop') {
+        // Stop surface can be tagged in multiple ways depending on the import/source:
+        // - type: 'Stop'
+        // - object type: 'Stop'
+        // - Zemax-style: object/object type: 'STO'
+        const objTypeRaw = surface['object type'] ?? surface.object ?? surface.objectType;
+        const objTypeNorm = String(objTypeRaw ?? '').trim().toUpperCase();
+        if (surface.type === 'Stop' || surface['object type'] === 'Stop' || objTypeNorm === 'STO') {
             // console.log(`🎯 [findStopSurface] Stop面発見! Surface ${i}`);
             
             // Stop面の位置を計算（CB対応）

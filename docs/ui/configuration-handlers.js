@@ -258,6 +258,18 @@ async function handleConfigurationChange(event) {
   updateConfigurationSelect();
   updateConfigInfo();
 
+  // Sync Spot Diagram config selection with active config and refresh surface list.
+  try {
+    const spotCfg = document.getElementById('spot-diagram-config-select');
+    if (spotCfg) {
+      const desired = String(newConfigId);
+      const has = Array.from(spotCfg.options || []).some(o => String(o.value) === desired);
+      spotCfg.value = has ? desired : '';
+    }
+  } catch (_) {}
+  try { updateSurfaceNumberSelectLegacy(); } catch (_) {}
+  try { updateSurfaceNumberSelect(); } catch (_) {}
+
   // Spot Diagram config selector may exist and should mirror available configs.
   try {
     if (typeof window !== 'undefined' && typeof window.updateSpotDiagramConfigSelect === 'function') {

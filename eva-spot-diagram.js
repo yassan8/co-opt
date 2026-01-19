@@ -313,17 +313,38 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         
         // positionプロパティをチェック（Objectテーブルの実際の構造に合わせる）
         const objectType = obj.position || 'Unknown';
+        const objectTypeNorm = String(objectType ?? '').trim().toLowerCase();
+        const isAngleObject = objectTypeNorm === 'angle';
         const objectId = obj.id || 'Unknown';
-        const opdCompatibleAngle = physicalVignetting && objectType === 'Angle';
+        const opdCompatibleAngle = physicalVignetting && isAngleObject;
         
         // console.log(`📊 Processing Object ${objectId}: ${objectType}`, obj);
         
         const targetSurfaceIndex = surfaceNumber - 1;
         const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
 
+        const hasCoordinateBreak = (() => {
+            try {
+                const norm = (v) => String(v ?? '').trim().toLowerCase();
+                const compact = (v) => norm(v).replace(/\s+/g, '');
+                return (opticalSystemRows || []).some((row) => {
+                    const t = row && typeof row === 'object'
+                        ? (row.surfType ?? row['surf type'] ?? row.type ?? row.objectType ?? row['object type'] ?? '')
+                        : '';
+                    const n = norm(t);
+                    const c = compact(t);
+                    return n === 'cb' || n === 'coord break' || n === 'coordinate break' || c === 'coordbreak' || c === 'coordinatebreak';
+                });
+            } catch (_) {
+                return false;
+            }
+        })();
+
         // physicalVignetting: allow shrinking the effective pupil to find rays that pass through
         // the physical apertures (matches OPD/spot behavior and avoids "0 rays reached" for angled fields).
-        const pupilScalesToTry = physicalVignetting ? [1, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12] : [1];
+        const pupilScalesToTry = physicalVignetting
+            ? [1, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12, 0.085, 0.06, 0.04, 0.03, 0.02, 0.015, 0.01]
+            : [1];
         let rayStartPoints = null;
         let annularRingsUsed = 0;
         let selectedRingOverride = Number(ringCount ?? 0);
@@ -332,7 +353,10 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         let diagnostics = null;
         let pupilScaleUsed = null;
 
-        const traceOnceWithScale = (scale, aimThroughStop) => {
+        const traceOnceWithScale = (scale, aimThroughStop, disableAngleObjectPositionOptimization, allowStopBasedOriginSolveOverride) => {
+            const allowStopBasedOriginSolve = (typeof allowStopBasedOriginSolveOverride === 'boolean')
+                ? allowStopBasedOriginSolveOverride
+                : (opdCompatibleAngle && !!aimThroughStop);
             const starts = generateRayStartPointsForSpot(
                 obj,
                 opticalSystemRows,
@@ -344,7 +368,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                     useChiefRayAnalysis: !!aimThroughStop,
                     chiefRaySolveMode: (aimThroughStop ? 'fast' : 'legacy'),
                     aimThroughStop: !!aimThroughStop,
-                    allowStopBasedOriginSolve: opdCompatibleAngle && !!aimThroughStop,
+                    allowStopBasedOriginSolve,
                     wavelengthUm: Number(primaryWavelength?.wavelength) || 0.5876,
                     pupilScale: scale,
                     // Spot-diagram should be based on the physical stop/pupil, not on any temporary
@@ -352,7 +376,8 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                     disableCrossExtent: true,
                     // When evaluating physical vignetting, keep the Angle object's emission origin stable.
                     // (optimizeAngleObjectPosition can otherwise shift the field and destroy angle↔chief correlation.)
-                    disableAngleObjectPositionOptimization: physicalVignetting
+                    // However, CB systems often require this optimization to avoid 0-hit rays.
+                    disableAngleObjectPositionOptimization: !!disableAngleObjectPositionOptimization
                 }
             );
 
@@ -373,6 +398,8 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                 retry: {
                     pupilScaleRequested: scale,
                     aimThroughStopRequested: !!aimThroughStop,
+                    allowStopBasedOriginSolveRequested: !!allowStopBasedOriginSolve,
+                    disableAngleObjectPositionOptimizationRequested: !!disableAngleObjectPositionOptimization,
                     firstRayStartP: (starts?.[0]?.startP && typeof starts[0].startP === 'object')
                         ? { x: Number(starts[0].startP.x), y: Number(starts[0].startP.y), z: Number(starts[0].startP.z) }
                         : null,
@@ -454,45 +481,141 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         // If aiming through stop fails completely, retry without aiming-through-stop.
         const attempts = [];
         let aimThroughStopUsed = null;
+        const baseDisableAngleOpt = physicalVignetting && !hasCoordinateBreak;
+        const angleOptDisableToggles = (() => {
+            // Default behavior tries to keep Angle emission stable in physical mode.
+            // But some designs (including CB systems) need the opposite setting to get any rays through.
+            // Therefore, for Angle objects in physical-vignetting mode, always try both.
+            const list = [baseDisableAngleOpt];
+            if (isAngleObject && physicalVignetting) {
+                const other = !baseDisableAngleOpt;
+                if (!list.includes(other)) list.push(other);
+            }
+            return list;
+        })();
+
         const tryPupilScales = (aim) => {
-            for (const s of pupilScalesToTry) {
-                const r = traceOnceWithScale(s, aim);
-                const rr = (r && r.diagnostics && r.diagnostics.retry) ? r.diagnostics.retry : null;
-                attempts.push({
-                    pupilScale: s,
-                    aimThroughStop: !!aim,
-                    ok: r.ok,
-                    raysGenerated: Array.isArray(r.starts) ? r.starts.length : 0,
-                    firstRayStartP: rr?.firstRayStartP ?? null,
-                    firstRayDir: rr?.firstRayDir ?? null,
-                    emissionOrigin: rr?.emissionBasis?.origin ?? null,
-                    stopIndex: rr?.emissionBasis?.stopIndex ?? null,
-                    stopZ: rr?.emissionBasis?.stopZ ?? null,
-                    stopRadius: rr?.emissionBasis?.stopRadius ?? null,
-                });
-                if (r.ok > 0) {
-                    rayStartPoints = r.starts;
-                    spotPoints = r.spotPoints;
-                    successfulRays = r.ok;
-                    diagnostics = r.diagnostics;
-                    pupilScaleUsed = s;
-                    aimThroughStopUsed = !!aim;
-                    return true;
+            for (const disableAngleOpt of angleOptDisableToggles) {
+                for (const s of pupilScalesToTry) {
+                    const allowOriginSolveToggles = (() => {
+                        if (!aim) return [false];
+                        if (isAngleObject) {
+                            // For Angle objects, aiming-through-stop without origin solving is often ineffective:
+                            // the chief ray can remain clipped by physical apertures.
+                            // Try both to recover at least one passing ray.
+                            return [true, false];
+                        }
+                        if (!physicalVignetting) return [opdCompatibleAngle && !!aim];
+                        return [opdCompatibleAngle && !!aim];
+                    })();
+
+                    for (const allowOriginSolve of allowOriginSolveToggles) {
+                        const r = traceOnceWithScale(s, aim, disableAngleOpt, allowOriginSolve);
+                        const rr = (r && r.diagnostics && r.diagnostics.retry) ? r.diagnostics.retry : null;
+                        const topKind = (() => {
+                            try {
+                                const kc = r?.diagnostics?.kindCounts;
+                                if (!kc || typeof kc !== 'object') return null;
+                                let bestK = null;
+                                let bestV = -1;
+                                for (const [k, v] of Object.entries(kc)) {
+                                    const vv = Number(v);
+                                    if (Number.isFinite(vv) && vv > bestV) {
+                                        bestV = vv;
+                                        bestK = k;
+                                    }
+                                }
+                                return bestK;
+                            } catch (_) {
+                                return null;
+                            }
+                        })();
+                        const topSurface = (() => {
+                            try {
+                                const sc = r?.diagnostics?.surfaceCounts;
+                                if (!sc || typeof sc !== 'object') return null;
+                                let bestK = null;
+                                let bestV = -1;
+                                for (const [k, v] of Object.entries(sc)) {
+                                    const vv = Number(v);
+                                    if (Number.isFinite(vv) && vv > bestV) {
+                                        bestV = vv;
+                                        bestK = k;
+                                    }
+                                }
+                                return bestK;
+                            } catch (_) {
+                                return null;
+                            }
+                        })();
+                        const ex = (() => {
+                            try {
+                                const examples = r?.diagnostics?.examples;
+                                if (!Array.isArray(examples) || examples.length === 0) return null;
+                                const pick = examples.find(e => e && e.kind === 'PHYSICAL_APERTURE_BLOCK') || examples[0];
+                                if (!pick || typeof pick !== 'object') return null;
+                                return {
+                                    kind: pick.kind ?? null,
+                                    surfaceIndex: (pick.surfaceIndex ?? pick.surface ?? pick.surfaceNumber ?? null),
+                                    note: pick.note ?? null
+                                };
+                            } catch (_) {
+                                return null;
+                            }
+                        })();
+
+                        attempts.push({
+                            pupilScale: s,
+                            aimThroughStop: !!aim,
+                            allowStopBasedOriginSolveRequested: rr?.allowStopBasedOriginSolveRequested ?? allowOriginSolve,
+                            disableAngleObjectPositionOptimizationRequested: rr?.disableAngleObjectPositionOptimizationRequested ?? !!disableAngleOpt,
+                            ok: r.ok,
+                            raysGenerated: Array.isArray(r.starts) ? r.starts.length : 0,
+                            topKind,
+                            topSurface,
+                            example: ex,
+                            firstRayStartP: rr?.firstRayStartP ?? null,
+                            firstRayDir: rr?.firstRayDir ?? null,
+                            emissionOrigin: rr?.emissionBasis?.origin ?? null,
+                            stopIndex: rr?.emissionBasis?.stopIndex ?? null,
+                            stopZ: rr?.emissionBasis?.stopZ ?? null,
+                            stopRadius: rr?.emissionBasis?.stopRadius ?? null,
+                            stopCenter: rr?.emissionBasis?.stopCenter ?? null,
+                        });
+
+                        if (r.ok > 0) {
+                            rayStartPoints = r.starts;
+                            spotPoints = r.spotPoints;
+                            successfulRays = r.ok;
+                            diagnostics = r.diagnostics;
+                            pupilScaleUsed = s;
+                            aimThroughStopUsed = !!aim;
+                            return true;
+                        }
+
+                        // keep last diagnostics for reporting
+                        diagnostics = r.diagnostics || diagnostics;
+                        rayStartPoints = r.starts || rayStartPoints;
+                    }
                 }
-                // keep last diagnostics for reporting
-                diagnostics = r.diagnostics || diagnostics;
-                rayStartPoints = r.starts || rayStartPoints;
             }
             return false;
         };
 
         // Prefer the nominal field definition first (aimThroughStop=false).
         // In physical-vignetting mode, do NOT fall back to aimThroughStop=true by default.
-        // However, for Angle objects in physical mode, match OPD behavior by aiming through stop.
+        // However, for Angle objects in physical mode, OPD mode often prefers aiming through stop.
+        // If that produces 0 hits (common with strong vignetting), fall back to the nominal mode.
         if (opdCompatibleAngle) {
-            tryPupilScales(true);
-        } else if (!tryPupilScales(false) && !physicalVignetting) {
-            tryPupilScales(true);
+            if (!tryPupilScales(true)) {
+                tryPupilScales(false);
+            }
+        } else {
+            if (!tryPupilScales(false)) {
+                // Last resort: allow aim-through-stop only when the default mode fails.
+                // (Keeps existing semantics for most systems but avoids 0-hit errors.)
+                tryPupilScales(true);
+            }
         }
 
         if (diagnostics && typeof diagnostics === 'object') {
@@ -839,6 +962,50 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                 };
             });
 
+            const coordBreakSummaries = (() => {
+                try {
+                    const norm = (v) => String(v ?? '').trim().toLowerCase();
+                    const compact = (v) => norm(v).replace(/\s+/g, '');
+                    const isCB = (row) => {
+                        const t = row && typeof row === 'object'
+                            ? (row.surfType ?? row['surf type'] ?? row.type ?? row.objectType ?? row['object type'] ?? '')
+                            : '';
+                        const n = norm(t);
+                        const c = compact(t);
+                        return n === 'cb' || n === 'coord break' || n === 'coordinate break' || c === 'coordbreak' || c === 'coordinatebreak';
+                    };
+
+                    const sd = calculateSurfaceOrigins(opticalSystemRows);
+                    const out = [];
+                    for (let si = 0; si < opticalSystemRows.length; si++) {
+                        const row = opticalSystemRows[si];
+                        if (!isCB(row)) continue;
+                        const prev = (si > 0) ? opticalSystemRows[si - 1] : null;
+                        const info = Array.isArray(sd) ? sd[si] : null;
+                        out.push({
+                            surfaceNumber: si + 1,
+                            surfType: row?.surfType ?? null,
+                            // Raw row fields that can (in legacy) be re-used for CB params
+                            raw: {
+                                semidia: row?.semidia ?? null,
+                                material: row?.material ?? null,
+                                rindex: row?.rindex ?? null,
+                                abbe: row?.abbe ?? null,
+                                conic: row?.conic ?? null,
+                                coef1: row?.coef1 ?? null,
+                                thickness: row?.thickness ?? null,
+                            },
+                            prevSemidia: prev?.semidia ?? null,
+                            // Parsed cbParams as used by calculateSurfaceOrigins/traceRay
+                            cbParams: (info && typeof info === 'object') ? (info.cbParams ?? null) : null,
+                        });
+                    }
+                    return out;
+                } catch (_) {
+                    return null;
+                }
+            })();
+
             if (typeof globalThis !== 'undefined') {
                 globalThis.__cooptLastSpotDiagramFailure = {
                     at: Date.now(),
@@ -846,7 +1013,8 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                     opticalSystemSurfaceCount: Array.isArray(opticalSystemRows) ? opticalSystemRows.length : null,
                     totalRays,
                     totalSuccessfulRays,
-                    objects: objDiag
+                    objects: objDiag,
+                    coordBreakSummaries
                 };
             }
 
@@ -1122,7 +1290,12 @@ export async function generateSpotDiagramAsync(
 
         const targetSurfaceIndex = surfaceNumber - 1;
         const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
-        const pupilScalesToTry = physicalVignetting ? [1] : [1, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12];
+        // NOTE: Even in physical-vignetting mode, we may shrink pupilScale to avoid 0-hit results.
+        // This mirrors the synchronous spot-diagram/requirements pathway and prevents Angle+CB cases
+        // from failing with PHYSICAL_APERTURE_BLOCK×N.
+        const pupilScalesToTry = physicalVignetting
+            ? [1, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12, 0.08, 0.06, 0.04, 0.03, 0.02, 0.015, 0.01]
+            : [1];
 
         let rayStartPoints = null;
         let annularRingsUsed = 0;
@@ -1133,7 +1306,9 @@ export async function generateSpotDiagramAsync(
         let pupilScaleUsed = null;
         const attempts = [];
 
-        const traceOnceWithScale = async (scale, aimThroughStop) => {
+        const traceOnceWithScale = async (scale, aimThroughStop, opts) => {
+            const disableAngleObjectPositionOptimizationRequested = !!opts?.disableAngleObjectPositionOptimizationRequested;
+            const allowStopBasedOriginSolveRequested = !!opts?.allowStopBasedOriginSolveRequested;
             const starts = generateRayStartPointsForSpot(
                 obj,
                 opticalSystemRows,
@@ -1145,7 +1320,7 @@ export async function generateSpotDiagramAsync(
                     useChiefRayAnalysis: !!aimThroughStop,
                     chiefRaySolveMode: (aimThroughStop ? 'fast' : 'legacy'),
                     aimThroughStop: !!aimThroughStop,
-                    allowStopBasedOriginSolve: opdCompatibleAngle && !!aimThroughStop,
+                    allowStopBasedOriginSolve: opdCompatibleAngle && !!aimThroughStop && allowStopBasedOriginSolveRequested,
                     wavelengthUm: Number(primaryWavelength?.wavelength) || 0.5876,
                     pupilScale: scale,
                     // Spot-diagram should be based on the physical stop/pupil, not on any temporary
@@ -1153,7 +1328,7 @@ export async function generateSpotDiagramAsync(
                     disableCrossExtent: true,
                     // When evaluating physical vignetting, keep the Angle object's emission origin stable.
                     // (optimizeAngleObjectPosition can otherwise shift the field and destroy angle↔chief correlation.)
-                    disableAngleObjectPositionOptimization: physicalVignetting
+                    disableAngleObjectPositionOptimization: physicalVignetting && disableAngleObjectPositionOptimizationRequested
                 }
             );
             if (!starts || !Array.isArray(starts) || starts.length === 0) {
@@ -1173,6 +1348,8 @@ export async function generateSpotDiagramAsync(
                 retry: {
                     pupilScaleRequested: scale,
                     aimThroughStopRequested: !!aimThroughStop,
+                    allowStopBasedOriginSolveRequested: opdCompatibleAngle && !!aimThroughStop ? !!allowStopBasedOriginSolveRequested : null,
+                    disableAngleObjectPositionOptimizationRequested: physicalVignetting ? !!disableAngleObjectPositionOptimizationRequested : null,
                     firstRayStartP: (starts?.[0]?.startP && typeof starts[0].startP === 'object')
                         ? { x: Number(starts[0].startP.x), y: Number(starts[0].startP.y), z: Number(starts[0].startP.z) }
                         : null,
@@ -1269,27 +1446,112 @@ export async function generateSpotDiagramAsync(
         let aimThroughStopUsed = null;
         const tryPupilScales = async (aim) => {
             for (const s of pupilScalesToTry) {
-                const r = await traceOnceWithScale(s, aim);
-                const rr = (r && r.diagnostics && r.diagnostics.retry) ? r.diagnostics.retry : null;
-                attempts.push({
-                    pupilScale: s,
-                    aimThroughStop: !!aim,
-                    ok: r.ok,
-                    raysGenerated: Array.isArray(r.starts) ? r.starts.length : 0,
-                    firstRayStartP: rr?.firstRayStartP ?? null,
-                    firstRayDir: rr?.firstRayDir ?? null,
-                    emissionOrigin: rr?.emissionBasis?.origin ?? null,
-                    stopIndex: rr?.emissionBasis?.stopIndex ?? null,
-                    stopZ: rr?.emissionBasis?.stopZ ?? null,
-                    stopRadius: rr?.emissionBasis?.stopRadius ?? null,
-                });
-                diagnostics = r.diagnostics || diagnostics;
-                rayStartPoints = r.starts || rayStartPoints;
-                if (r.ok > 0) {
-                    spotPoints = r.spotPoints;
-                    successfulRays = r.ok;
-                    pupilScaleUsed = s;
-                    aimThroughStopUsed = !!aim;
+                // For Angle objects under physical vignetting, we sometimes need to try multiple
+                // origin-solve strategies and/or disable the Angle emission optimization.
+                const disableAngleObjectPositionOptimizationModes = (opdCompatibleAngle && physicalVignetting)
+                    ? [true, false]
+                    : [true];
+                const allowStopBasedOriginSolveModes = (opdCompatibleAngle && !!aim)
+                    ? [true, false]
+                    : [true];
+
+                let r = null;
+                let succeeded = false;
+
+                for (const disableAngleObjectPositionOptimizationRequested of disableAngleObjectPositionOptimizationModes) {
+                    for (const allowStopBasedOriginSolveRequested of allowStopBasedOriginSolveModes) {
+                        r = await traceOnceWithScale(s, aim, {
+                            disableAngleObjectPositionOptimizationRequested,
+                            allowStopBasedOriginSolveRequested
+                        });
+
+                        const rr = (r && r.diagnostics && r.diagnostics.retry) ? r.diagnostics.retry : null;
+                        const topKind = (() => {
+                            try {
+                                const kc = r?.diagnostics?.kindCounts;
+                                if (!kc || typeof kc !== 'object') return null;
+                                let bestK = null;
+                                let bestV = -1;
+                                for (const [k, v] of Object.entries(kc)) {
+                                    const vv = Number(v);
+                                    if (Number.isFinite(vv) && vv > bestV) {
+                                        bestV = vv;
+                                        bestK = k;
+                                    }
+                                }
+                                return bestK;
+                            } catch (_) {
+                                return null;
+                            }
+                        })();
+                        const topSurface = (() => {
+                            try {
+                                const sc = r?.diagnostics?.surfaceCounts;
+                                if (!sc || typeof sc !== 'object') return null;
+                                let bestK = null;
+                                let bestV = -1;
+                                for (const [k, v] of Object.entries(sc)) {
+                                    const vv = Number(v);
+                                    if (Number.isFinite(vv) && vv > bestV) {
+                                        bestV = vv;
+                                        bestK = k;
+                                    }
+                                }
+                                return bestK;
+                            } catch (_) {
+                                return null;
+                            }
+                        })();
+                        const ex = (() => {
+                            try {
+                                const examples = r?.diagnostics?.examples;
+                                if (!Array.isArray(examples) || examples.length === 0) return null;
+                                const pick = examples.find(e => e && e.kind === 'PHYSICAL_APERTURE_BLOCK') || examples[0];
+                                if (!pick || typeof pick !== 'object') return null;
+                                return {
+                                    kind: pick.kind ?? null,
+                                    surfaceIndex: (pick.surfaceIndex ?? pick.surface ?? pick.surfaceNumber ?? null),
+                                    note: pick.note ?? null
+                                };
+                            } catch (_) {
+                                return null;
+                            }
+                        })();
+
+                        attempts.push({
+                            pupilScale: s,
+                            aimThroughStop: !!aim,
+                            allowStopBasedOriginSolveRequested: rr?.allowStopBasedOriginSolveRequested ?? null,
+                            disableAngleObjectPositionOptimizationRequested: rr?.disableAngleObjectPositionOptimizationRequested ?? null,
+                            ok: r.ok,
+                            raysGenerated: Array.isArray(r.starts) ? r.starts.length : 0,
+                            topKind,
+                            topSurface,
+                            example: ex,
+                            firstRayStartP: rr?.firstRayStartP ?? null,
+                            firstRayDir: rr?.firstRayDir ?? null,
+                            emissionOrigin: rr?.emissionBasis?.origin ?? null,
+                            stopIndex: rr?.emissionBasis?.stopIndex ?? null,
+                            stopZ: rr?.emissionBasis?.stopZ ?? null,
+                            stopRadius: rr?.emissionBasis?.stopRadius ?? null,
+                        });
+
+                        diagnostics = r.diagnostics || diagnostics;
+                        rayStartPoints = r.starts || rayStartPoints;
+
+                        if (r.ok > 0) {
+                            spotPoints = r.spotPoints;
+                            successfulRays = r.ok;
+                            pupilScaleUsed = s;
+                            aimThroughStopUsed = !!aim;
+                            succeeded = true;
+                            break;
+                        }
+                    }
+                    if (succeeded) break;
+                }
+
+                if (succeeded) {
                     return true;
                 }
             }
@@ -2774,6 +3036,31 @@ export function generateSurfaceOptions(opticalSystemRows) {
         const rowId = (surfaceData && surfaceData.id !== undefined && surfaceData.id !== null)
             ? String(surfaceData.id)
             : null;
+
+        const rowSig = (() => {
+            try {
+                const norm = (v) => String(v ?? '').trim().toLowerCase();
+                const n0 = (v) => {
+                    const x = Number(v);
+                    return Number.isFinite(x) ? String(x) : norm(v);
+                };
+                // Prefer explicit ids when present.
+                if (rowId && rowId !== '') return `id:${rowId}`;
+                const mat = surfaceData?.material ?? surfaceData?.glass ?? surfaceData?.['glass'] ?? surfaceData?.refractiveIndex ?? '';
+                const cmt = surfaceData?.comment ?? surfaceData?.name ?? '';
+                // Do NOT include rowIndex so CB insert/delete doesn't change the signature.
+                return [
+                    `t:${norm(surfaceType)}`,
+                    `r:${n0(surfaceData?.radius ?? surfaceData?.R ?? radius)}`,
+                    `th:${n0(surfaceData?.thickness ?? surfaceData?.T ?? '')}`,
+                    `sd:${n0(surfaceData?.semidia ?? surfaceData?.semiDia ?? '')}`,
+                    `m:${norm(mat)}`,
+                    `c:${norm(cmt)}`
+                ].join('|');
+            } catch (_) {
+                return null;
+            }
+        })();
         
         // Stop面、通常の光学面、Image面は選択可能
         const isStop = isStopType(objTypeRaw) || isStopType(surfTypeRaw) || isStopType(surfaceType);
@@ -2792,10 +3079,17 @@ export function generateSurfaceOptions(opticalSystemRows) {
             displayName += `, R=${radius}`;
         }
         
+        // IMPORTANT:
+        // - `surfaceId` is the UI-friendly label number (counts non-object rows, including CB).
+        // - `value` must match the evaluator's expected surfaceNumber, which is the 1-based row index
+        //   into `opticalSystemRows` (because the evaluator uses `rows[surfaceNumber - 1]`).
+        // Using `surfaceId` as `value` breaks when Coord Break rows exist.
         options.push({
-            value: surfaceId,
+            value: i + 1,
+            surfaceId,
             label: displayName,
             rowId,
+            rowSig,
             rowIndex: i
         });
         
