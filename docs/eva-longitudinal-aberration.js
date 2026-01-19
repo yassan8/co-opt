@@ -304,8 +304,10 @@ function surfaceIndexToRayPathPointIndex(rows, surfaceIndex) {
 
         const isObject = (nObj === 'object' || compact(nObj) === 'object') || (nSurf === 'object' || compact(nSurf) === 'object');
         const isCoordBreak =
-            nObj === 'coord break' || nObj === 'coordinate break' || compact(nObj) === 'coordbreak' ||
-            nSurf === 'coord break' || nSurf === 'coordinate break' || compact(nSurf) === 'coordbreak';
+            nObj === 'coord break' || nObj === 'coordinate break' || nObj === 'cb' ||
+            compact(nObj) === 'coordbreak' || compact(nObj) === 'coordinatebreak' ||
+            nSurf === 'coord break' || nSurf === 'coordinate break' || nSurf === 'cb' ||
+            compact(nSurf) === 'coordbreak' || compact(nSurf) === 'coordinatebreak';
 
         if (isObject || isCoordBreak) continue;
         pointIndex++;
