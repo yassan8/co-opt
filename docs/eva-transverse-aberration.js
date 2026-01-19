@@ -1517,8 +1517,9 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
  * @returns {Object|null} 交点座標 {x, y, z} またはnull
  */
 function isCoordBreakRow(row) {
-    const st = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').toLowerCase();
-    return st === 'coord break' || st === 'coordinate break' || st === 'cb';
+    const stRaw = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').toLowerCase();
+    const st = stRaw.trim();
+    return st === 'coord break' || st === 'coordinate break' || st === 'coordbreak' || st === 'coordinatebreak' || st === 'cb';
 }
 
 function isObjectRow(row) {

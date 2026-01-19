@@ -20,8 +20,9 @@ if (typeof window !== 'undefined') {
 }
 
 function isCoordBreakRow(row) {
-    const st = String(row?.surfType ?? row?.['surf type'] ?? '').toLowerCase();
-    return st === 'coord break' || st === 'coordinate break' || st === 'cb';
+    const stRaw = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').toLowerCase();
+    const st = stRaw.trim();
+    return st === 'coord break' || st === 'coordinate break' || st === 'coordbreak' || st === 'coordinatebreak' || st === 'cb';
 }
 
 function isObjectRow(row) {
@@ -399,8 +400,11 @@ function canTraceToFinalSurface(origin, direction, opticalSystemRows, wavelength
             effectiveTargetIndex
         );
         
-        // NOTE: 「何か座標が返った」ではなく「指定面まで到達した」を成功とする。
-        if (rayPath && Array.isArray(rayPath) && rayPath.length > effectiveTargetIndex) {
+        // traceRay() with maxSurfaceIndex returns a path up to (and including) that surface.
+        // After CB insertion, rayPath.length != effectiveTargetIndex because CB rows are skipped in the path.
+        // Therefore, we check: (1) rayPath exists, (2) has at least one point, (3) last point is valid.
+        // The presence of a non-empty rayPath implies the ray reached the target surface successfully.
+        if (rayPath && Array.isArray(rayPath) && rayPath.length > 0) {
             const lastPoint = rayPath[rayPath.length - 1];
             return !!(lastPoint && typeof lastPoint.x === 'number' && typeof lastPoint.y === 'number' && typeof lastPoint.z === 'number');
         }
