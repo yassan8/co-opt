@@ -1417,7 +1417,8 @@ export function calculateLongitudinalAberration(
                 const stopLocal = getStopLocalOffsets(stopPoint, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
                 const pupilHeight = Math.abs(stopLocal ? stopLocal.v : stopPoint.y); // 絶対値（0から1の範囲で表示）
                 
-                // 光軸上の光線（瞳高さ≈0）は球面収差図から除外
+                // 光軸に非常に近い光線（光軸交点計算の精度が悪い）は球面収差図から除外
+                // 最小瞳座標0.0001以上のみプロット
                 if (pupilHeight < 1e-6) {
                     continue;
                 }
@@ -1443,18 +1444,20 @@ export function calculateLongitudinalAberration(
         // 規格化瞳座標0.001の人工光線追加は異常値を生むため削除（実測データのみプロット）
         
         // 正規化してデータポイントを作成（SCは既に計算済み）
-        const meridionalPoints = tempMeridionalPoints.map(p => {
-            const normalizedPupil = maxMeridionalHeight > 0 ? p.pupilHeight / maxMeridionalHeight : 0;
-            
-            return {
-                pupilCoordinate: normalizedPupil,
-                longitudinalAberration: p.longitudinalAberration,
-                focusPosition: p.focusPosition,
-                stopHeight: p.pupilHeight,
-                transverseAberration: p.transverseAberration,
-                sineConditionViolation: p.sineConditionViolation
-            };
-        });
+        const meridionalPoints = tempMeridionalPoints
+            .map(p => {
+                const normalizedPupil = maxMeridionalHeight > 0 ? p.pupilHeight / maxMeridionalHeight : 0;
+                
+                return {
+                    pupilCoordinate: normalizedPupil,
+                    longitudinalAberration: p.longitudinalAberration,
+                    focusPosition: p.focusPosition,
+                    stopHeight: p.pupilHeight,
+                    transverseAberration: p.transverseAberration,
+                    sineConditionViolation: p.sineConditionViolation
+                };
+            })
+            .filter(p => p.pupilCoordinate >= 0.0001); // 最小瞳座標0.0001未満を除外
         
         // デバッグ: 正規化情報を確認
         if (tempMeridionalPoints.length > 0) {
@@ -1519,8 +1522,8 @@ export function calculateLongitudinalAberration(
             i = j;
         }
 
-        // 正規化瞳座標0.001の縦収差を補間で追加（実測データのみ使用）
-        insertInterpolatedPoint(uniqueMeridionalPoints, 0.001);
+        // 正規化瞳座標0.0001の縦収差を補間で追加（光線高さ0.0001から描画）
+        insertInterpolatedPoint(uniqueMeridionalPoints, 0.0001);
         
         meridionalData.push({
             wavelength: wavelength,
@@ -1554,7 +1557,8 @@ export function calculateLongitudinalAberration(
                 const stopLocal = getStopLocalOffsets(stopPoint, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
                 const pupilHeight = Math.abs(stopLocal ? stopLocal.u : stopPoint.x); // 絶対値（0から1の範囲で表示）
                 
-                // 光軸上の光線（瞳高さ≈0）は球面収差図から除外
+                // 光軸に非常に近い光線（光軸交点計算の精度が悪い）は球面収差図から除外
+                // 最小瞳座標0.0001以上のみプロット
                 if (pupilHeight < 1e-6) {
                     continue;
                 }
@@ -1576,18 +1580,20 @@ export function calculateLongitudinalAberration(
         const maxSagittalHeight = Math.max(...tempSagittalPoints.map(p => p.pupilHeight));
         
         // 正規化してデータポイントを作成（SCは既に計算済み）
-        const sagittalPoints = tempSagittalPoints.map(p => {
-            const normalizedPupil = maxSagittalHeight > 0 ? p.pupilHeight / maxSagittalHeight : 0;
-            
-            return {
-                pupilCoordinate: normalizedPupil,
-                longitudinalAberration: p.longitudinalAberration,
-                focusPosition: p.focusPosition,
-                stopHeight: p.pupilHeight,
-                transverseAberration: p.transverseAberration,
-                sineConditionViolation: p.sineConditionViolation
-            };
-        });
+        const sagittalPoints = tempSagittalPoints
+            .map(p => {
+                const normalizedPupil = maxSagittalHeight > 0 ? p.pupilHeight / maxSagittalHeight : 0;
+                
+                return {
+                    pupilCoordinate: normalizedPupil,
+                    longitudinalAberration: p.longitudinalAberration,
+                    focusPosition: p.focusPosition,
+                    stopHeight: p.pupilHeight,
+                    transverseAberration: p.transverseAberration,
+                    sineConditionViolation: p.sineConditionViolation
+                };
+            })
+            .filter(p => p.pupilCoordinate >= 0.0001); // 最小瞳座標0.0001未満を除外
         
         // デバッグ: 正規化情報を確認
         if (tempSagittalPoints.length > 0) {
@@ -1650,8 +1656,8 @@ export function calculateLongitudinalAberration(
             k = m;
         }
 
-        // 正規化瞳座標0.001の縦収差を補間で追加（実測データのみ使用）
-        insertInterpolatedPoint(uniqueSagittalPoints, 0.001);
+        // 正規化瞳座標0.0001の縦収差を補間で追加（光線高さ0.0001から描画）
+        insertInterpolatedPoint(uniqueSagittalPoints, 0.0001);
         
         sagittalData.push({
             wavelength: wavelength,
