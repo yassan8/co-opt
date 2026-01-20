@@ -2,6 +2,8 @@
  * Optical system renderer for 3D visualization
  */
 
+console.log('🚀 system-renderer.js loaded at', new Date().toISOString());
+
 import * as THREE from 'three';
 import { calculateSurfaceOrigins } from '../ray-tracing.js';
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin,
@@ -135,6 +137,13 @@ function __coopt_loadSurfaceColorOverrides() {
  * @param {Array} options.opticalSystemData - Optical system data
  */
 export function drawOpticalSystemSurfaces(options = {}) {
+    console.log('🎨 drawOpticalSystemSurfaces called:', {
+        hasScene: !!options.scene,
+        surfaceCount: options.opticalSystemData?.length,
+        crossSectionOnly: options.crossSectionOnly,
+        timestamp: new Date().toISOString()
+    });
+    
     const {
         crossSectionOnly = false,
         scene,
@@ -260,12 +269,14 @@ export function drawOpticalSystemSurfaces(options = {}) {
             
             // Object面のスキップ判定
             const objectType = surface["object type"] || "";
+            console.log(`🔍 Surface ${i}: objectType="${objectType}"`);
             if (objectType === "Object") {
+                console.log(`✨ Surface ${i}: Object面を検出しました`);
                 const objectThickness = surface.thickness;
                 const isInfiniteThickness = objectThickness === 'INF' || objectThickness === 'Infinity' || objectThickness === Infinity;
                 
                 if (isInfiniteThickness) {
-                    // Objectデータを取得してangle判定も行う
+                    // 無限系のObject面はスキップ（angle判定も考慮）
                     let isAngleObject = false;
                     try {
                         const objectRows = window.getObjectRows ? window.getObjectRows() : [];
@@ -279,16 +290,224 @@ export function drawOpticalSystemSurfaces(options = {}) {
                         console.warn(`⚠️ 3D Surface ${i}: Object data取得エラー:`, error);
                     }
                     
-                    if (isAngleObject) {
-                        console.log(`🔸 3D Surface ${i}: Object面（無限系 + angle）、3D描画スキップ`);
-                        continue;
-                    } else {
-                        console.log(`🔸 3D Surface ${i}: Object面（無限系 but not angle）、3D描画実行`);
-                    }
+                    // 無限系のObject面は常にスキップ
+                    console.log(`🔸 3D Surface ${i}: Object面（無限系）、3D描画スキップ`);
+                    continue;
                 } else {
+                    // 有限系のObject面を描画
                     console.log(`🔸 3D Surface ${i}: Object面（有限系、thickness=${objectThickness}）、3D描画実行`);
+                    
+                    try {
+                        // surfaceOriginsの確認
+                        console.log(`🔍 surfaceOrigins[${i}]:`, surfaceOrigins[i]);
+                        
+                        // semidiaの取得（ObjectテーブルのRectangle座標から計算）
+                        let planeSemidia = __coopt_getRenderSemidiaMm(surface);
+                        if (planeSemidia === null) {
+                            const objectRows = window.getObjectRows ? window.getObjectRows() : [];
+                            if (objectRows && objectRows.length > 0) {
+                                let maxCoord = 0;
+                                objectRows.forEach(obj => {
+                                    const xHeight = Math.abs(Number(obj.xHeightAngle) || 0);
+                                    const yHeight = Math.abs(Number(obj.yHeightAngle) || 0);
+                                    maxCoord = Math.max(maxCoord, xHeight, yHeight);
+                                });
+                                if (maxCoord > 0) {
+                                    planeSemidia = maxCoord;
+                                    console.log(`🔍 Object plane semidia from Rectangle: ${planeSemidia.toFixed(2)}mm`);
+                                }
+                            }
+                        }
+                        if (planeSemidia === null) planeSemidia = 20;
+                        
+                        // Object面は通常、座標変換が不要なため、単純な座標で描画
+                        const objOrigin = { x: 0, y: 0, z: 0 };
+                        const objRotMat = null; // Object面には回転を適用しない
+                        
+                        console.log(`🔍 Object plane drawing params: semidia=${planeSemidia}, origin=`, objOrigin);
+                        
+                        // リング描画
+                        drawSemidiaRingWithOriginAndSurface(
+                            scene, 
+                            planeSemidia,
+                            100,
+                            0x808080, // グレー
+                            objOrigin,
+                            objRotMat,
+                            surface
+                        );
+                        
+                        // 十字線描画
+                        console.log(`🎯 [OBJECT] Crosshair drawing: surface=${i}, planeSemidia=${planeSemidia}`);
+                        
+                        // 縦線（Y方向、黒）
+                        const pointsVertical = [];
+                        for (let j = 0; j <= 1; j++) {
+                            const y = -planeSemidia + (2 * planeSemidia * j);
+                            const point = new THREE.Vector3(0, y, 0);
+                            pointsVertical.push(point);
+                        }
+                        if (pointsVertical.length === 2) {
+                            const geometryV = new THREE.BufferGeometry().setFromPoints(pointsVertical);
+                            const materialV = new THREE.LineBasicMaterial({ 
+                                color: 0x000000, 
+                                linewidth: 2,
+                                depthTest: false
+                            });
+                            const lineV = new THREE.Line(geometryV, materialV);
+                            lineV.renderOrder = 999;
+                            lineV.userData = { type: 'plane-crosshair', direction: 'vertical', surfaceIndex: i };
+                            scene.add(lineV);
+                            console.log(`🔍 Object plane vertical crosshair added at surface ${i}, points:`, pointsVertical);
+                        }
+                        
+                        // 横線（X方向、赤）
+                        const pointsHorizontal = [];
+                        for (let j = 0; j <= 1; j++) {
+                            const x = -planeSemidia + (2 * planeSemidia * j);
+                            const point = new THREE.Vector3(x, 0, 0);
+                            pointsHorizontal.push(point);
+                        }
+                        if (pointsHorizontal.length === 2) {
+                            const geometryH = new THREE.BufferGeometry().setFromPoints(pointsHorizontal);
+                            const materialH = new THREE.LineBasicMaterial({ 
+                                color: 0xff0000, 
+                                linewidth: 2,
+                                depthTest: false
+                            });
+                            const lineH = new THREE.Line(geometryH, materialH);
+                            lineH.renderOrder = 999;
+                            lineH.userData = { type: 'plane-crosshair', direction: 'horizontal', surfaceIndex: i };
+                            scene.add(lineH);
+                            console.log(`🔍 Object plane horizontal crosshair added at surface ${i}, points:`, pointsHorizontal);
+                        }
+                        
+                        console.log(`✅ Object plane ring and crosshair drawn for surface ${i}`);
+                    } catch (error) {
+                        console.error(`❌ Error drawing Object plane for surface ${i}:`, error);
+                    }
+                    continue; // Object面の処理終了
                 }
             }
+
+            // Image面のスキップ判定（無限系のみスキップ、有限系では描画）
+            if (objectType === "Image") {
+                // 有限系かどうかを判定するため、Object面のthicknessを確認
+                const firstSurface = opticalSystemData[0];
+                const objectThickness = firstSurface?.thickness;
+                const isInfiniteSystem = objectThickness === 'INF' || objectThickness === 'Infinity' || objectThickness === Infinity;
+                
+                console.log(`🔸 3D Surface ${i}: Image面（${isInfiniteSystem ? '無限系' : '有限系'}）、3D描画実行`);
+                
+                try {
+                        // semidiaの取得
+                        let planeSemidia = __coopt_getRenderSemidiaMm(surface);
+                        if (planeSemidia === null) {
+                            // 近くの面からsemidiaを取得
+                            for (let j = 0; j < opticalSystemData.length; j++) {
+                                const nearSemidia = __coopt_getRenderSemidiaMm(opticalSystemData[j]);
+                                if (nearSemidia !== null) {
+                                    planeSemidia = nearSemidia;
+                                    break;
+                                }
+                            }
+                        }
+                        if (planeSemidia === null) planeSemidia = 20;
+                        
+                        // Image面の位置を計算（surfaceOriginsから取得）
+                        let imgOrigin = { x: 0, y: 0, z: 0 };
+                        let imgRotMat = null;
+                        
+                        if (surfaceOrigins && surfaceOrigins[i]) {
+                            imgOrigin = surfaceOrigins[i].origin || imgOrigin;
+                            imgRotMat = surfaceOrigins[i].rotationMatrix || null;
+                            console.log(`🔍 Image plane using surfaceOrigins[${i}]: origin=`, imgOrigin);
+                        } else {
+                            console.log(`🔍 Image plane: no surfaceOrigins available, using default origin`);
+                        }
+                        
+                        // リング描画
+                        drawSemidiaRingWithOriginAndSurface(
+                            scene, 
+                            planeSemidia,
+                            100,
+                            0x404040, // 暗いグレー
+                            imgOrigin,
+                            imgRotMat,
+                            surface
+                        );
+                        
+                        // 十字線描画
+                        console.log(`🎯 [IMAGE] Crosshair drawing: surface=${i}, planeSemidia=${planeSemidia}`);
+                        
+                        // 縦線（Y方向、黒）
+                        const pointsVertical = [];
+                        for (let j = 0; j <= 1; j++) {
+                            const y = -planeSemidia + (2 * planeSemidia * j);
+                            let point = new THREE.Vector3(0, y, 0);
+                            if (imgRotMat && Array.isArray(imgRotMat) && imgRotMat.length >= 3) {
+                                // 回転行列を適用
+                                const newX = imgRotMat[0][0] * point.x + imgRotMat[0][1] * point.y + imgRotMat[0][2] * point.z;
+                                const newY = imgRotMat[1][0] * point.x + imgRotMat[1][1] * point.y + imgRotMat[1][2] * point.z;
+                                const newZ = imgRotMat[2][0] * point.x + imgRotMat[2][1] * point.y + imgRotMat[2][2] * point.z;
+                                point = new THREE.Vector3(newX, newY, newZ);
+                            }
+                            point.x += imgOrigin.x;
+                            point.y += imgOrigin.y;
+                            point.z += imgOrigin.z;
+                            pointsVertical.push(point);
+                        }
+                        if (pointsVertical.length === 2) {
+                            const geometryV = new THREE.BufferGeometry().setFromPoints(pointsVertical);
+                            const materialV = new THREE.LineBasicMaterial({ 
+                                color: 0x000000, 
+                                linewidth: 2,
+                                depthTest: false
+                            });
+                            const lineV = new THREE.Line(geometryV, materialV);
+                            lineV.renderOrder = 999;
+                            lineV.userData = { type: 'plane-crosshair', direction: 'vertical', surfaceIndex: i };
+                            scene.add(lineV);
+                            console.log(`🔍 Image plane vertical crosshair added at surface ${i}, points:`, pointsVertical);
+                        }
+                        
+                        // 横線（X方向、赤）
+                        const pointsHorizontal = [];
+                        for (let j = 0; j <= 1; j++) {
+                            const x = -planeSemidia + (2 * planeSemidia * j);
+                            let point = new THREE.Vector3(x, 0, 0);
+                            if (imgRotMat && Array.isArray(imgRotMat) && imgRotMat.length >= 3) {
+                                // 回転行列を適用
+                                const newX = imgRotMat[0][0] * point.x + imgRotMat[0][1] * point.y + imgRotMat[0][2] * point.z;
+                                const newY = imgRotMat[1][0] * point.x + imgRotMat[1][1] * point.y + imgRotMat[1][2] * point.z;
+                                const newZ = imgRotMat[2][0] * point.x + imgRotMat[2][1] * point.y + imgRotMat[2][2] * point.z;
+                                point = new THREE.Vector3(newX, newY, newZ);
+                            }
+                            point.x += imgOrigin.x;
+                            point.y += imgOrigin.y;
+                            point.z += imgOrigin.z;
+                            pointsHorizontal.push(point);
+                        }
+                        if (pointsHorizontal.length === 2) {
+                            const geometryH = new THREE.BufferGeometry().setFromPoints(pointsHorizontal);
+                            const materialH = new THREE.LineBasicMaterial({ 
+                                color: 0xff0000, 
+                                linewidth: 2,
+                                depthTest: false
+                            });
+                            const lineH = new THREE.Line(geometryH, materialH);
+                            lineH.renderOrder = 999;
+                            lineH.userData = { type: 'plane-crosshair', direction: 'horizontal', surfaceIndex: i };
+                            scene.add(lineH);
+                            console.log(`🔍 Image plane horizontal crosshair added at surface ${i}, points:`, pointsHorizontal);
+                        }
+                        
+                        console.log(`✅ Image plane ring and crosshair drawn for surface ${i}`);
+                    } catch (error) {
+                        console.error(`❌ Error drawing Image plane for surface ${i}:`, error);
+                    }
+                    continue; // Image面の処理終了
+                }
 
             // Coord Break surfaces are transform-only and must not be drawn in 3D.
             const surfType = String(surface?.surfType ?? surface?.type ?? '').trim().toLowerCase();
