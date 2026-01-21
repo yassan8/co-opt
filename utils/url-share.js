@@ -11,10 +11,13 @@ function __requireLZString() {
     return lz;
 }
 
-export function parseQueryParams(queryString) {
-    const raw = String(queryString ?? '');
-    // ? または # で始まる場合は削除
-    const s = raw.startsWith('?') || raw.startsWith('#') ? raw.slice(1) : raw;
+export function parseHashbangParams(hashString) {
+    const raw = String(hashString ?? '');
+    // #!, #, ? で始まる場合は削除
+    let s = raw;
+    if (s.startsWith('#!')) s = s.slice(2);
+    else if (s.startsWith('#') || s.startsWith('?')) s = s.slice(1);
+    
     /** @type {Record<string, string>} */
     const out = {};
     if (!s) return out;
@@ -34,7 +37,8 @@ export function parseQueryParams(queryString) {
 }
 
 // 後方互換性のため残す
-export const parseHashParams = parseQueryParams;
+export const parseHashParams = parseHashbangParams;
+export const parseQueryParams = parseHashbangParams;
 
 export function encodeAllDataToCompressedString(allData) {
     const lz = __requireLZString();
@@ -58,22 +62,24 @@ export function decodeAllDataFromCompressedString(compressed) {
 export function buildShareUrlFromCompressedString(compressed, baseUrl) {
     const base = String(baseUrl ?? '').trim();
     if (!base) throw new Error('Missing baseUrl');
-    return `${base}?${COMPRESSED_DATA_HASH_KEY}=${compressed}`;
+    return `${base}#!${COMPRESSED_DATA_HASH_KEY}=${compressed}`;
 }
 
 export function getCompressedStringFromLocationHash(hashOrSearch) {
-    const params = parseQueryParams(hashOrSearch);
+    const params = parseHashbangParams(hashOrSearch);
     return params[COMPRESSED_DATA_HASH_KEY] ?? '';
 }
 
 export function getCompressedStringFromLocation() {
-    // 新しいクエリパラメータ形式（?）を優先、後方互換のためハッシュ（#）もチェック
-    const search = typeof window !== 'undefined' ? window.location.search : '';
+    // 新しいHashbang形式(#!)を優先、後方互換のため?(query)と#(hash)もチェック
     const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    const search = typeof window !== 'undefined' ? window.location.search : '';
     
-    let compressed = getCompressedStringFromLocationHash(search);
+    // まずhashをチェック（#! または # 形式）
+    let compressed = getCompressedStringFromLocationHash(hash);
+    // なければsearchをチェック（? 形式、旧バージョン互換）
     if (!compressed) {
-        compressed = getCompressedStringFromLocationHash(hash);
+        compressed = getCompressedStringFromLocationHash(search);
     }
     return compressed;
 }
