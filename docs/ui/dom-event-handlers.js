@@ -20,7 +20,7 @@ import { traceRay, traceRayHitPoint } from '../ray-tracing.js';
 import { findInfiniteSystemChiefRayOrigin, findApertureBoundaryRays } from '../gen-ray-cross-infinite.js';
 import { generateZMXText, downloadZMX } from '../zemax-export.js';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../zemax-import.js';
-import { buildShareUrlFromCompressedString, decodeAllDataFromCompressedString, encodeAllDataToCompressedString, getCompressedStringFromLocationHash } from '../utils/url-share.js';
+import { buildShareUrlFromCompressedString, decodeAllDataFromCompressedString, encodeAllDataToCompressedString, getCompressedStringFromLocationHash, getCompressedStringFromLocation } from '../utils/url-share.js';
 
 function __zmxPickPrimaryWavelengthMicrons(sourceRows) {
     try {
@@ -1358,7 +1358,7 @@ async function __loadAllDataObjectIntoApp(allData, { filename }) {
 }
 
 export async function loadFromCompressedDataHashIfPresent() {
-    const compressed = getCompressedStringFromLocationHash(location.hash);
+    const compressed = getCompressedStringFromLocation();
     if (!compressed) return { ok: false, reason: 'no_hash' };
 
     const confirmed = confirm(

@@ -11,9 +11,10 @@ function __requireLZString() {
     return lz;
 }
 
-export function parseHashParams(hash) {
-    const raw = String(hash ?? '');
-    const s = raw.startsWith('#') ? raw.slice(1) : raw;
+export function parseQueryParams(queryString) {
+    const raw = String(queryString ?? '');
+    // ? または # で始まる場合は削除
+    const s = raw.startsWith('?') || raw.startsWith('#') ? raw.slice(1) : raw;
     /** @type {Record<string, string>} */
     const out = {};
     if (!s) return out;
@@ -31,6 +32,9 @@ export function parseHashParams(hash) {
     }
     return out;
 }
+
+// 後方互換性のため残す
+export const parseHashParams = parseQueryParams;
 
 export function encodeAllDataToCompressedString(allData) {
     const lz = __requireLZString();
@@ -54,10 +58,22 @@ export function decodeAllDataFromCompressedString(compressed) {
 export function buildShareUrlFromCompressedString(compressed, baseUrl) {
     const base = String(baseUrl ?? '').trim();
     if (!base) throw new Error('Missing baseUrl');
-    return `${base}#${COMPRESSED_DATA_HASH_KEY}=${compressed}`;
+    return `${base}?${COMPRESSED_DATA_HASH_KEY}=${compressed}`;
 }
 
-export function getCompressedStringFromLocationHash(hash) {
-    const params = parseHashParams(hash);
+export function getCompressedStringFromLocationHash(hashOrSearch) {
+    const params = parseQueryParams(hashOrSearch);
     return params[COMPRESSED_DATA_HASH_KEY] ?? '';
+}
+
+export function getCompressedStringFromLocation() {
+    // 新しいクエリパラメータ形式（?）を優先、後方互換のためハッシュ（#）もチェック
+    const search = typeof window !== 'undefined' ? window.location.search : '';
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    
+    let compressed = getCompressedStringFromLocationHash(search);
+    if (!compressed) {
+        compressed = getCompressedStringFromLocationHash(hash);
+    }
+    return compressed;
 }
