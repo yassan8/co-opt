@@ -1075,8 +1075,19 @@ function calculateCumulativeTransform(surfaceIndex, surfaces) {
 
 function __rtIsCoordBreakRow(row) {
   if (!row || typeof row !== 'object') return false;
-  const st = String(row.surfType ?? row.type ?? row.surfaceType ?? '').trim().toLowerCase();
-  return st === 'coord break' || st === 'coordinate break' || st === 'coordbreak' || st === 'cb';
+  const fields = [
+    row.surfType, row.type, row.surfaceType, row.surface_type, row.surfTypeName,
+    row['object type'], row.object, row.Object,
+    row.comment, row.Comment,
+    row.blockType, row.block_type, row.blockTypeName
+  ];
+  const isCb = (v) => {
+    const s = String(v ?? '').trim().toLowerCase();
+    if (!s) return false;
+    if (s === 'cb' || s === 'coordbreak' || s === 'coordinatebreak' || s === 'coord break' || s === 'coordinate break') return true;
+    return s.includes('coord break') || s.includes('coordinate break');
+  };
+  return fields.some(isCb);
 }
 
 // --- 座標変換1.5.md仕様: 各面の原点O(s)と回転行列R(s)の算出 ---

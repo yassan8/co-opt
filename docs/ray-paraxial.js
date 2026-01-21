@@ -1232,13 +1232,11 @@ export function findStopSurfaceIndex(opticalSystemRows) {
   // 明示的に絞り面が指定されている場合（Objectカラムで"Stop"を検索）
   for (let i = 0; i < opticalSystemRows.length; i++) {
     const surface = opticalSystemRows[i];
-    if (surface.object === "Stop" || 
-        surface.object === "STOP" || 
-        surface["object type"] === "Stop" ||
-        surface["object type"] === "STOP" ||
-        surface.comment === "Stop" || 
-        surface.comment === "STOP" || 
-        surface.comment === "Aperture Stop") {
+    if (isCoordBreakSurface(surface)) continue;
+    const objectRaw = String(surface.object ?? surface["object type"] ?? '').trim().toLowerCase();
+    const commentRaw = String(surface.comment ?? '').trim().toLowerCase();
+    if (objectRaw === 'sto' || objectRaw === 'stop' || objectRaw.includes('stop') ||
+        commentRaw === 'stop' || commentRaw === 'aperture stop' || commentRaw.includes('stop')) {
     // console.log(`絞り面が見つかりました: インデックス ${i}（面${surface.id}）`);
       return i;
     }
@@ -1492,14 +1490,19 @@ export function calculateMarginalAlphaAtStop(opticalSystemRows, stopIndex, wavel
 function isCoordBreakSurface(surface) {
   if (!surface) return false;
   
-  // surfTypeがCoord Breakの場合
-  if (surface.surfType === 'Coord Break' || 
-      surface.surfType === 'Coordinate Break' || 
-      surface.surfType === 'CB') {
-    return true;
-  }
-  
-  return false;
+  const fields = [
+    surface.surfType, surface.type, surface.surfaceType, surface.surface_type, surface.surfTypeName,
+    surface['object type'], surface.object, surface.Object,
+    surface.comment, surface.Comment,
+    surface.blockType, surface.block_type, surface.blockTypeName
+  ];
+  const isCb = (v) => {
+    const s = String(v ?? '').trim().toLowerCase();
+    if (!s) return false;
+    if (s === 'cb' || s === 'coordbreak' || s === 'coordinatebreak' || s === 'coord break' || s === 'coordinate break') return true;
+    return s.includes('coord break') || s.includes('coordinate break');
+  };
+  return fields.some(isCb);
 }
 
 /**

@@ -678,8 +678,38 @@ export async function showTransverseAberrationDiagram(options = {}) {
             throw new Error('光学系データが見つかりません');
         }
 
-        // Use last surface (image surface) as evaluation surface
-        const targetSurfaceIndex = opticalSystemRows.length - 1;
+        const isCoordBreakRow = (row) => {
+            const stRaw = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').toLowerCase();
+            const st = stRaw.trim();
+            return st === 'coord break' || st === 'coordinate break' || st === 'coordbreak' || st === 'coordinatebreak' || st === 'cb';
+        };
+        const isObjectRow = (row) => {
+            const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? row?.surface_type ?? '').toLowerCase();
+            return t === 'object';
+        };
+        const isImageRow = (row) => {
+            const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').toLowerCase();
+            return t === 'image';
+        };
+
+        // Prefer explicit Image surface; otherwise fall back to last non-CB/non-Object surface.
+        let targetSurfaceIndex = -1;
+        for (let i = 0; i < opticalSystemRows.length; i++) {
+            if (isImageRow(opticalSystemRows[i])) {
+                targetSurfaceIndex = i;
+            }
+        }
+        if (targetSurfaceIndex < 0) {
+            for (let i = opticalSystemRows.length - 1; i >= 0; i--) {
+                const row = opticalSystemRows[i];
+                if (isCoordBreakRow(row) || isObjectRow(row)) continue;
+                targetSurfaceIndex = i;
+                break;
+            }
+        }
+        if (targetSurfaceIndex < 0) {
+            targetSurfaceIndex = opticalSystemRows.length - 1;
+        }
         console.log(`📊 評価面: Surface ${targetSurfaceIndex + 1}`);
         console.log(`📊 光線本数: ${rayCount}本`);
 

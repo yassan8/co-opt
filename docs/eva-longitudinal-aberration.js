@@ -566,31 +566,65 @@ function findRayAxisIntersection(tracedRay, imagePlaneZ) {
     const path = tracedRay.rayPath;
     const lastPoint = path[path.length - 1];
     
-    // 【改善版】複数点を使った重み付き最小二乗フィッティング
-    // 像面に近い複数の点を使用することで、光軸付近の光線でも精度向上
+    // Thickness 0またはごく小さい値の面がある場合に対応
+    // 十分に離れた点を探す（Z差が実用的に計算可能な点を優先）
+    let secondLastPoint = null;
+    let selectionStage = 0;  // デバッグ用
     
-    // 像面付近の有効な点を収集（最大5点、Z差が0.01mm以上）
-    const fitPoints = [];
-    for (let i = path.length - 1; i >= 0 && fitPoints.length < 5; i--) {
-        if (fitPoints.length === 0) {
-            fitPoints.push(path[i]);
-        } else {
-            const deltaZ = Math.abs(path[i].z - fitPoints[fitPoints.length - 1].z);
-            if (deltaZ > 0.01) {  // 10μm以上の差がある点のみ追加
-                fitPoints.push(path[i]);
+    // 第1段階: Z座標が実用的に異なる点を探す（1mm以上）
+    // on-axis rayで極小deltaZを避けるために閾値を大幅に上げる
+    for (let i = path.length - 2; i >= 0; i--) {
+        const deltaZ = Math.abs(path[i].z - lastPoint.z);
+        if (deltaZ > 1.0) {  // 1mm以上
+            secondLastPoint = path[i];
+            selectionStage = 1;
+            break;
+        }
+    }
+    
+    // 第2段階: 見つからなければ100μm以上の点を探す
+    if (!secondLastPoint) {
+        for (let i = path.length - 2; i >= 0; i--) {
+            const deltaZ = Math.abs(path[i].z - lastPoint.z);
+            if (deltaZ > 0.1) {  // 100μm以上
+                secondLastPoint = path[i];
+                selectionStage = 2;
+                break;
             }
         }
     }
     
-    // 最低2点必要
-    if (fitPoints.length < 2) {
-        // フォールバック: 最初と最後の点を使用
-        fitPoints.length = 0;
-        fitPoints.push(path[path.length - 1]);
-        if (path.length >= 2) fitPoints.push(path[0]);
+    // 第3段階: 1μm以上
+    if (!secondLastPoint) {
+        for (let i = path.length - 2; i >= 0; i--) {
+            const deltaZ = Math.abs(path[i].z - lastPoint.z);
+            if (deltaZ > 0.001) {  // 1μm以上
+                secondLastPoint = path[i];
+                selectionStage = 3;
+                break;
+            }
+        }
     }
     
-    // デバッグ情報
+    // 第4段階: 最後の手段として最も遠い点を使う
+    if (!secondLastPoint && path.length >= 2) {
+        secondLastPoint = path[0];  // 最初の点を使用
+        selectionStage = 4;
+    }
+    
+    if (!secondLastPoint) {
+        console.warn('⚠️ 適切な前の点が見つかりません（光線パスが不正）');
+        return null;
+    }
+    
+    // 方向ベクトル
+    const direction = {
+        x: lastPoint.x - secondLastPoint.x,
+        y: lastPoint.y - secondLastPoint.y,
+        z: lastPoint.z - secondLastPoint.z
+    };
+    
+    // デバッグ: 各波長の最初の1本だけログ出力
     const rayId = tracedRay.originalRay ? 
         `${tracedRay.originalRay.wavelength}_${tracedRay.originalRay.py || tracedRay.originalRay.px || 0}` : 
         'unknown';
@@ -599,109 +633,75 @@ function findRayAxisIntersection(tracedRay, imagePlaneZ) {
         window._sphericalAberDebugCount = 0;
     }
     
-    const debugThis = window._sphericalAberDebugCount < 3;
-    if (debugThis) {
+    if (window._sphericalAberDebugCount < 3) {  // 最初の3本（各波長1本ずつ）
         window._sphericalAberDebugCount++;
-        console.log(`🔍 [DEBUG ${window._sphericalAberDebugCount}] Multi-point fitting (ray: ${rayId})`);
-        console.log(`   Using ${fitPoints.length} points for fitting`);
+        const deltaZ = Math.abs(direction.z);
+        const pointIndex = path.findIndex(p => p === secondLastPoint);
+        console.log(`🔍 [DEBUG ${window._sphericalAberDebugCount}] Stage ${selectionStage} selected (ray: ${rayId})`);
+        console.log(`   deltaZ=${deltaZ.toExponential(3)}, pointIndex=${pointIndex}/${path.length-1}`);
+        console.log(`   lastPoint: (${lastPoint.x.toFixed(6)}, ${lastPoint.y.toFixed(6)}, ${lastPoint.z.toFixed(6)})`);
+        console.log(`   secondLastPoint: (${secondLastPoint.x.toFixed(6)}, ${secondLastPoint.y.toFixed(6)}, ${secondLastPoint.z.toFixed(6)})`);
+        console.log(`   direction: dx=${direction.x.toExponential(3)}, dy=${direction.y.toExponential(3)}, dz=${direction.z.toExponential(3)}`);
         console.log(`   rayPath length: ${path.length}`);
     }
     
-    // 光軸上にあるかチェック（全点が光軸から0.001mm以内）
-    const allOnAxis = fitPoints.every(p => Math.sqrt(p.x * p.x + p.y * p.y) < 0.001);
-    if (allOnAxis) {
-        // 完全に光軸上の光線: 最終点のZ座標を返す
-        if (debugThis) console.log('   → Ray is on optical axis, using last point Z');
+    // 光軸に平行な場合（x, y方向の変化がほぼゼロ）
+    // 注意：無限遠物体では軸上光線が光軸に近いため、閾値を緩和
+    const xyMagnitude = Math.sqrt(direction.x * direction.x + direction.y * direction.y);
+    if (xyMagnitude < 1e-12) {  // 1e-10 → 1e-12 に変更
+        // 完全に平行な場合は、最終点のZ座標を返す
         return lastPoint.z;
     }
     
-    // 重み付き最小二乗法で光軸交点を求める
-    // 各点について、光軸までの距離 r = sqrt(x^2 + y^2) をZ座標の関数として近似
-    // 線形近似: r = a*z + b を最小二乗フィットし、r=0となるzを求める
-    // より安定した計算のため、重み付き回帰を使用（最終点に大きな重み）
+    // 光軸との交点を求める（x = 0, y = 0 となるz座標）
+    // パラメトリック方程式: P = lastPoint + t * direction
+    // x = 0: lastPoint.x + t * direction.x = 0 → t_x = -lastPoint.x / direction.x
+    // y = 0: lastPoint.y + t * direction.y = 0 → t_y = -lastPoint.y / direction.y
     
-    let sumW = 0, sumWZ = 0, sumWR = 0, sumWZZ = 0, sumWZR = 0;
+    // 最小二乗法で最適なtを求める（x=0とy=0の両方に最も近い点）
+    // 目的関数: f(t) = (lastPoint.x + t*direction.x)^2 + (lastPoint.y + t*direction.y)^2
+    // f'(t) = 0 を解く:
+    // 2*(lastPoint.x + t*direction.x)*direction.x + 2*(lastPoint.y + t*direction.y)*direction.y = 0
+    // t*(direction.x^2 + direction.y^2) = -(lastPoint.x*direction.x + lastPoint.y*direction.y)
     
-    for (let i = 0; i < fitPoints.length; i++) {
-        const p = fitPoints[i];
-        const r = Math.sqrt(p.x * p.x + p.y * p.y);
-        const z = p.z;
-        
-        // 重み: 最終点ほど大きく（指数関数的に減衰）
-        const weight = Math.exp(-i * 0.5);
-        
-        sumW += weight;
-        sumWZ += weight * z;
-        sumWR += weight * r;
-        sumWZZ += weight * z * z;
-        sumWZR += weight * z * r;
-    }
+    const numerator = -(lastPoint.x * direction.x + lastPoint.y * direction.y);
+    const denominator = direction.x * direction.x + direction.y * direction.y;
     
-    // 線形回帰の係数を計算: r = a*z + b
-    const denominator = sumW * sumWZZ - sumWZ * sumWZ;
-    
-    if (Math.abs(denominator) < 1e-20) {
-        // すべての点がほぼ同じZ座標（ありえないケース）
-        if (debugThis) console.log('   → All points at same Z, using last point Z');
-        return lastPoint.z;
-    }
-    
-    const a = (sumW * sumWZR - sumWZ * sumWR) / denominator;
-    const b = (sumWZZ * sumWR - sumWZ * sumWZR) / denominator;
-    
-    // r = 0 となるz座標を計算: 0 = a*z + b → z = -b/a
-    if (Math.abs(a) < 1e-15) {
-        // 光軸との交差がないか、光軸に平行（ほぼ軸上光線）
-        // 光軸に最も近い点のZ座標を返す
-        let minDist = Infinity;
-        let bestZ = lastPoint.z;
-        for (const p of fitPoints) {
-            const dist = Math.sqrt(p.x * p.x + p.y * p.y);
-            if (dist < minDist) {
-                minDist = dist;
-                bestZ = p.z;
-            }
+    if (Math.abs(denominator) < 1e-12) {
+        // xy成分がゼロの場合（軸上光線または非常に光軸に近い光線）
+        // lastPointが既に光軸上にあるかチェック
+        const distanceFromAxis = Math.sqrt(lastPoint.x * lastPoint.x + lastPoint.y * lastPoint.y);
+        if (distanceFromAxis < 0.1) {
+            // 光軸上またはほぼ光軸上なので、そのZ座標を返す
+            return lastPoint.z;
+        } else {
+            console.warn('⚠️ 方向ベクトルのxy成分がゼロだが、光線が光軸から離れています');
+            return null;
         }
-        if (debugThis) console.log(`   → Nearly parallel to axis (a=${a.toExponential(3)}), using closest point Z=${bestZ.toFixed(6)}`);
-        return bestZ;
     }
     
-    const intersectionZ = -b / a;
+    const t = numerator / denominator;
     
-    // 検証: フィット誤差を計算
-    let maxResidual = 0;
-    for (const p of fitPoints) {
-        const r = Math.sqrt(p.x * p.x + p.y * p.y);
-        const rFit = a * p.z + b;
-        const residual = Math.abs(r - rFit);
-        if (residual > maxResidual) maxResidual = residual;
+    // 交点のz座標と位置
+    const intersectionZ = lastPoint.z + t * direction.z;
+    const intersectionX = lastPoint.x + t * direction.x;
+    const intersectionY = lastPoint.y + t * direction.y;
+    const distanceFromAxis = Math.sqrt(intersectionX * intersectionX + intersectionY * intersectionY);
+    
+    // 交点が光軸に十分近いか確認（数値誤差の確認用）
+    if (distanceFromAxis > 0.01) {
+        console.warn(`⚠️ 光軸交点の精度が低い: 光軸からの距離 = ${distanceFromAxis.toFixed(6)} mm`);
     }
     
-    if (debugThis) {
-        console.log(`   Linear fit: r = ${a.toExponential(6)} * z + ${b.toExponential(6)}`);
-        console.log(`   Intersection Z: ${intersectionZ.toFixed(6)} mm`);
-        console.log(`   Max residual: ${maxResidual.toExponential(3)} mm`);
-    }
-    
-    // 妥当性チェック1: 像面から極端に離れた位置は除外
+    // 妥当性チェック：像面から極端に離れた位置は除外
     const maxDeviation = 1000; // mm
     if (Math.abs(intersectionZ - imagePlaneZ) > maxDeviation) {
-        if (debugThis) console.warn(`⚠️ 焦点位置が像面から極端に離れています: ${intersectionZ.toFixed(3)} mm (像面: ${imagePlaneZ.toFixed(3)} mm)`);
+        console.warn(`⚠️ 焦点位置が像面から極端に離れています: ${intersectionZ.toFixed(3)} mm (像面: ${imagePlaneZ.toFixed(3)} mm)`);
         return null;
     }
     
-    // 妥当性チェック2: フィット点の範囲外に大きく外挿していないかチェック
-    const zMin = Math.min(...fitPoints.map(p => p.z));
-    const zMax = Math.max(...fitPoints.map(p => p.z));
-    const zRange = zMax - zMin;
-    const extrapolation = Math.max(0, zMin - intersectionZ, intersectionZ - zMax);
-    
-    if (extrapolation > zRange * 2) {
-        // 外挿が範囲の2倍を超える場合は信頼性が低い
-        if (debugThis) console.warn(`⚠️ 過度な外挿: ${extrapolation.toFixed(3)} mm (範囲: ${zRange.toFixed(3)} mm)`);
-        // それでも最良の推定値として返す
-    }
-    
+    // デバッグ情報は詳細度を下げる
+    // console.log(`✓ 光軸交点 Z座標: ${intersectionZ.toFixed(6)} mm (t=${t.toFixed(6)})`);
     return intersectionZ;
 }
 
@@ -1415,12 +1415,7 @@ export function calculateLongitudinalAberration(
                 const longitudinalAberration = focusZ - lastSurfaceZ;
                 const stopPoint = tracedRay.rayPath[stopPointIndex];
                 const stopLocal = getStopLocalOffsets(stopPoint, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
-                const pupilHeight = Math.abs(stopLocal ? stopLocal.v : stopPoint.y); // 絶対値（物理単位: mm）
-                
-                // 瞳高さ0.01mm未満の光線を除外（規格化瞳座標の始まりを0.01mm付近に設定）
-                if (pupilHeight < 0.01) {
-                    continue;
-                }
+                const pupilHeight = Math.abs(stopLocal ? stopLocal.v : stopPoint.y); // 絶対値（0から1の範囲で表示）
                 
                 // 横収差（メリジオナルなのでY方向）
                 const transverseAberration = transverseAb.y;
@@ -1521,8 +1516,8 @@ export function calculateLongitudinalAberration(
             i = j;
         }
 
-        // 最小瞳高さ0.01mm以上でフィルタリング済みのため、補間点追加は不要
-        // insertInterpolatedPoint(uniqueMeridionalPoints, 0.0001);
+        // 正規化瞳座標0.0001の縦収差を補間で追加（光線高さ0.0001から描画）
+        insertInterpolatedPoint(uniqueMeridionalPoints, 0.0001);
         
         meridionalData.push({
             wavelength: wavelength,
@@ -1554,12 +1549,7 @@ export function calculateLongitudinalAberration(
                 const longitudinalAberration = focusZ - lastSurfaceZ;
                 const stopPoint = tracedRay.rayPath[stopPointIndex];
                 const stopLocal = getStopLocalOffsets(stopPoint, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
-                const pupilHeight = Math.abs(stopLocal ? stopLocal.u : stopPoint.x); // 絶対値（物理単位: mm）
-                
-                // 瞳高さ0.01mm未満の光線を除外（規格化瞳座標の始まりを0.01mm付近に設定）
-                if (pupilHeight < 0.01) {
-                    continue;
-                }
+                const pupilHeight = Math.abs(stopLocal ? stopLocal.u : stopPoint.x); // 絶対値（0から1の範囲で表示）
                 
                 // 横収差（サジタルなのでX方向）
                 const transverseAberration = transverseAb.x;
@@ -1578,18 +1568,20 @@ export function calculateLongitudinalAberration(
         const maxSagittalHeight = Math.max(...tempSagittalPoints.map(p => p.pupilHeight));
         
         // 正規化してデータポイントを作成（SCは既に計算済み）
-        const sagittalPoints = tempSagittalPoints.map(p => {
-            const normalizedPupil = maxSagittalHeight > 0 ? p.pupilHeight / maxSagittalHeight : 0;
-            
-            return {
-                pupilCoordinate: normalizedPupil,
-                longitudinalAberration: p.longitudinalAberration,
-                focusPosition: p.focusPosition,
-                stopHeight: p.pupilHeight,
-                transverseAberration: p.transverseAberration,
-                sineConditionViolation: p.sineConditionViolation
-            };
-        });
+        const sagittalPoints = tempSagittalPoints
+            .map(p => {
+                const normalizedPupil = maxSagittalHeight > 0 ? p.pupilHeight / maxSagittalHeight : 0;
+                
+                return {
+                    pupilCoordinate: normalizedPupil,
+                    longitudinalAberration: p.longitudinalAberration,
+                    focusPosition: p.focusPosition,
+                    stopHeight: p.pupilHeight,
+                    transverseAberration: p.transverseAberration,
+                    sineConditionViolation: p.sineConditionViolation
+                };
+            })
+            .filter(p => p.pupilCoordinate >= 0.0001); // 最小瞳座標0.0001未満を除外
         
         // デバッグ: 正規化情報を確認
         if (tempSagittalPoints.length > 0) {
@@ -1652,8 +1644,8 @@ export function calculateLongitudinalAberration(
             k = m;
         }
 
-        // 最小瞳高さ0.01mm以上でフィルタリング済みのため、補間点追加は不要
-        // insertInterpolatedPoint(uniqueSagittalPoints, 0.0001);
+        // 正規化瞳座標0.0001の縦収差を補間で追加（光線高さ0.0001から描画）
+        insertInterpolatedPoint(uniqueSagittalPoints, 0.0001);
         
         sagittalData.push({
             wavelength: wavelength,
