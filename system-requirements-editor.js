@@ -7,6 +7,48 @@
 import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.js?v=2026-01-06c';
 import { getOpticalSystemRows } from './utils/data-utils.js';
 
+// Zernike Noll index names (0-37)
+const ZERNIKE_NOLL_NAMES = [
+  '0: RMS (Remove P&T)',
+  '1: Piston [0,0]',
+  '2: Tilt Y [1,-1]',
+  '3: Tilt X [1,1]',
+  '4: Astigmatism [2,-2]',
+  '5: Defocus [2,0]',
+  '6: Astigmatism [2,2]',
+  '7: Coma Y [3,-1]',
+  '8: Coma X [3,1]',
+  '9: Trefoil Y [3,-3]',
+  '10: Trefoil X [3,3]',
+  '11: Spherical [4,0]',
+  '12: Secondary Astig [4,2]',
+  '13: Secondary Astig [4,-2]',
+  '14: Secondary Coma [4,4]',
+  '15: Secondary Coma [4,-4]',
+  '16: [5,-1]',
+  '17: [5,1]',
+  '18: [5,-3]',
+  '19: [5,3]',
+  '20: [5,-5]',
+  '21: [5,5]',
+  '22: Secondary Spherical [6,0]',
+  '23: [6,2]',
+  '24: [6,-2]',
+  '25: [6,4]',
+  '26: [6,-4]',
+  '27: [6,6]',
+  '28: [6,-6]',
+  '29: [7,-1]',
+  '30: [7,1]',
+  '31: [7,-3]',
+  '32: [7,3]',
+  '33: [7,-5]',
+  '34: [7,5]',
+  '35: [7,-7]',
+  '36: [7,7]',
+  '37: Tertiary Spherical [8,0]'
+];
+
 class SystemRequirementsEditor {
   constructor() {
     this.requirements = [];
@@ -233,15 +275,26 @@ class SystemRequirementsEditor {
       left += c.width;
     }
     headRow.appendChild(mkTh('Config', widths.configId, null));
-    const thP1 = mkTh('-', widths.param, null);
-    const thP2 = mkTh('-', widths.param2, null);
-    const thP3 = mkTh('-', widths.param, null);
-    const thP4 = mkTh('-', widths.param, null);
-    this._paramHeaderEls = { param1: thP1, param2: thP2, param3: thP3, param4: thP4 };
-    headRow.appendChild(thP1);
-    headRow.appendChild(thP2);
-    headRow.appendChild(thP3);
-    headRow.appendChild(thP4);
+    
+    // Parameters column with toggle button (support up to 5 params)
+    const thParams = mkTh('Parameters', widths.param * 5 + widths.param2, null);
+    const toggleBtn = document.createElement('button');
+    toggleBtn.textContent = '▼';
+    toggleBtn.style.marginLeft = '8px';
+    toggleBtn.style.fontSize = '10px';
+    toggleBtn.style.padding = '2px 6px';
+    toggleBtn.style.cursor = 'pointer';
+    toggleBtn.style.border = '1px solid #ccc';
+    toggleBtn.style.borderRadius = '3px';
+    toggleBtn.style.background = '#f5f5f5';
+    toggleBtn.setAttribute('aria-expanded', 'true');
+    toggleBtn.title = 'Toggle parameter visibility';
+    thParams.appendChild(toggleBtn);
+    headRow.appendChild(thParams);
+    
+    this._paramsExpanded = true;
+    this._paramToggleBtn = toggleBtn;
+    
     headRow.appendChild(mkTh('Op', widths.op, null));
     headRow.appendChild(mkTh('Tol', widths.tol, null));
     headRow.appendChild(mkTh('Target', widths.target, null));
@@ -286,7 +339,6 @@ class SystemRequirementsEditor {
 
       const row = this.requirements.find(r => r && String(r.id) === String(rowId)) || null;
       if (row) {
-        try { this.updateParameterHeaders(row); } catch (_) {}
         try {
           if (this.inspector && typeof this.inspector.show === 'function') this.inspector.show(row);
         } catch (_) {}
@@ -367,27 +419,9 @@ class SystemRequirementsEditor {
       operandSel.addEventListener('change', () => {
         row.operand = operandSel.value;
         this.saveToStorage();
-        try { this.updateParameterHeaders(row); } catch (_) {}
-
-        // Update Spec cell inline.
-        const specEl = tr.querySelector('td[data-role="spec"]');
-        if (specEl) specEl.textContent = makeSpecSummary(row);
-
-        // Update EFL datalist suggestion for param2 if needed.
-        try {
-          const p2Input = tr.querySelector('input[data-role="param2"]');
-          if (p2Input) {
-            if (String(row?.operand ?? '').trim() === 'EFL') {
-              const blockIds = this._getBlocksForConfigHint(row?.configId);
-              const dlId = ensureEflBlocksDatalist(blockIds);
-              if (dlId) p2Input.setAttribute('list', dlId);
-              p2Input.placeholder = 'ALL or blockId (comma separated allowed)';
-            } else {
-              p2Input.removeAttribute('list');
-              p2Input.placeholder = '';
-            }
-          }
-        } catch (_) {}
+        
+        // Operand change affects parameter types (dropdown vs text), so re-render entire table
+        this.renderTable();
         this.scheduleEvaluateAndUpdate();
       });
       tdOpd.appendChild(operandSel);
@@ -448,53 +482,290 @@ class SystemRequirementsEditor {
       tdCfg.appendChild(cfgSel);
       tr.appendChild(tdCfg);
 
-      const mkInput = (field, widthPx, placeholder = '') => {
+      const mkInput = (field, widthPx, placeholder = '', paramDef = null) => {
         const td = mkTd(widthPx, null);
         td.style.textAlign = 'center';
-        const inp = document.createElement('input');
-        inp.type = 'text';
-        inp.value = (row[field] === undefined || row[field] === null) ? '' : String(row[field]);
-        inp.placeholder = placeholder;
-        inp.style.width = '100%';
-        inp.style.fontSize = '12px';
-        inp.style.boxSizing = 'border-box';
-        inp.dataset.role = field;
-        inp.addEventListener('focus', onCellFocus);
-        inp.addEventListener('blur', () => {
-          row[field] = inp.value;
-          this.saveToStorage();
-
-          if (field === 'tol' || field === 'target') {
-            const specEl = tr.querySelector('td[data-role="spec"]');
-            if (specEl) specEl.textContent = makeSpecSummary(row);
+        td.dataset.paramField = field; // Mark for dynamic visibility
+        
+        let control = null;
+        const paramLabel = paramDef?.label || '';
+        const paramDesc = paramDef?.description || '';
+        
+        // Determine if this should be a dropdown
+        const isWavelengthParam = paramLabel.includes('λ') || paramDesc.toLowerCase().includes('source row');
+        const isObjectParam = paramLabel.includes('Field idx') || paramLabel.includes('Object idx');
+        const isMetricParam = paramLabel === 'Metric';
+        const isUnitParam = paramLabel === 'Unit';
+        const isModeParam = paramLabel === 'Mode' || paramDesc.includes('0=Imaging, 1=Afocal');
+        const isNollParam = paramLabel === 'n (Noll)';
+        const isSamplingParam = paramLabel === 'Sampling';
+        
+        if (isNollParam) {
+          // Zernike Noll index dropdown (0-37)
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          for (let i = 0; i < ZERNIKE_NOLL_NAMES.length; i++) {
+            const el = document.createElement('option');
+            el.value = String(i);
+            el.textContent = ZERNIKE_NOLL_NAMES[i];
+            control.appendChild(el);
           }
+          control.value = String(row[field] || '0');
+        } else if (isSamplingParam) {
+          // Sampling grid size dropdown (powers of 2)
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          const options = [
+            { value: '', label: '(default 32)' },
+            { value: '32', label: '32×32' },
+            { value: '64', label: '64×64' },
+            { value: '128', label: '128×128' },
+            { value: '256', label: '256×256' },
+            { value: '512', label: '512×512' }
+          ];
+          for (const opt of options) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+          control.value = String(row[field] || '');
+        } else if (isModeParam) {
+          // Mode dropdown: Imaging or Afocal
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          const options = [
+            { value: '0', label: 'Imaging' },
+            { value: '1', label: 'Afocal' }
+          ];
+          for (const opt of options) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+          control.value = String(row[field] || '0');
+        } else if (isMetricParam) {
+          // Metric dropdown: rms or dia
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          const options = [
+            { value: '', label: '(default rms)' },
+            { value: 'rms', label: 'RMS' },
+            { value: 'dia', label: 'Diameter' }
+          ];
+          for (const opt of options) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+          control.value = String(row[field] || '');
+        } else if (isUnitParam) {
+          // Unit dropdown: waves or um
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          const options = [
+            { value: '', label: '(default waves)' },
+            { value: 'waves', label: 'waves' },
+            { value: 'um', label: 'µm' }
+          ];
+          for (const opt of options) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+          control.value = String(row[field] || '');
+        } else if (isWavelengthParam) {
+          // Wavelength dropdown
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          const wavelengths = this._getWavelengthOptions();
+          for (const opt of wavelengths) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+          control.value = String(row[field] || '');
+        } else if (isObjectParam) {
+          // Object index dropdown
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          const objects = this._getObjectOptions();
+          for (const opt of objects) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+          control.value = String(row[field] || '');
+        } else {
+          // Standard text input
+          control = document.createElement('input');
+          control.type = 'text';
+          control.placeholder = placeholder;
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          control.value = (row[field] === undefined || row[field] === null) ? '' : String(row[field]);
+        }
+        
+        control.dataset.role = field;
+        control.addEventListener('focus', onCellFocus);
+        
+        if (control.tagName === 'SELECT') {
+          control.addEventListener('change', () => {
+            row[field] = control.value;
+            this.saveToStorage();
+            this.scheduleEvaluateAndUpdate();
+          });
+          control.addEventListener('blur', onCellBlur);
+        } else {
+          control.addEventListener('blur', () => {
+            row[field] = control.value;
+            this.saveToStorage();
 
-          this.scheduleEvaluateAndUpdate();
-          onCellBlur();
-        });
-        td.appendChild(inp);
-        return { td, input: inp };
+            if (field === 'tol' || field === 'target') {
+              const specEl = tr.querySelector('td[data-role="spec"]');
+              if (specEl) specEl.textContent = makeSpecSummary(row);
+            }
+
+            this.scheduleEvaluateAndUpdate();
+            onCellBlur();
+          });
+        }
+        
+        td.appendChild(control);
+        return { td, input: control };
       };
 
-      const p1 = mkInput('param1', widths.param);
-      tr.appendChild(p1.td);
-      const p2 = mkInput('param2', widths.param2);
-      // EFL: attach datalist
-      try {
-        const operand = String(row?.operand ?? '').trim();
-        if (operand === 'EFL') {
-          const configIdHint = row?.configId;
-          const blockIds = this._getBlocksForConfigHint(configIdHint);
-          const dlId = ensureEflBlocksDatalist(blockIds);
-          if (dlId) p2.input.setAttribute('list', dlId);
-          p2.input.placeholder = 'ALL or blockId (comma separated allowed)';
+      // Get parameter count for current operand
+      const operand = String(row?.operand ?? '').trim();
+      const definition = operand ? OPERAND_DEFINITIONS[operand] : null;
+      const paramCount = (definition && Array.isArray(definition.parameters)) ? definition.parameters.length : 4;
+      const paramDefs = (definition && Array.isArray(definition.parameters)) ? definition.parameters : [];
+
+      // Parameters cell (combined, collapsible) - support up to 5 params
+      const tdParams = mkTd(widths.param * 5 + widths.param2, null);
+      tdParams.dataset.role = 'params-container';
+      
+      // Collapsed view: summary
+      const paramsSummary = document.createElement('div');
+      paramsSummary.className = 'params-summary';
+      paramsSummary.style.display = 'none';
+      paramsSummary.style.fontSize = '11px';
+      paramsSummary.style.color = '#666';
+      paramsSummary.style.cursor = 'pointer';
+      paramsSummary.style.padding = '4px';
+      
+      const updateSummary = () => {
+        const values = [];
+        for (let i = 1; i <= paramCount; i++) {
+          const val = row[`param${i}`];
+          if (val !== undefined && val !== null && String(val).trim() !== '') {
+            const paramDef = paramDefs[i - 1];
+            const label = paramDef?.label || `P${i}`;
+            values.push(`${label}=${val}`);
+          }
         }
-      } catch (_) {}
-      tr.appendChild(p2.td);
-      const p3 = mkInput('param3', widths.param);
-      tr.appendChild(p3.td);
-      const p4 = mkInput('param4', widths.param);
-      tr.appendChild(p4.td);
+        paramsSummary.textContent = values.length > 0 ? values.join(', ') : `${paramCount} param${paramCount !== 1 ? 's' : ''}`;
+      };
+      updateSummary();
+      
+      // Expanded view: individual inputs
+      const paramsExpanded = document.createElement('div');
+      paramsExpanded.className = 'params-expanded';
+      paramsExpanded.style.display = 'flex';
+      paramsExpanded.style.gap = '4px';
+      
+      const paramInputs = [];
+      for (let i = 1; i <= 5; i++) {
+        const field = `param${i}`;
+        const paramDef = paramDefs[i - 1];
+        const container = document.createElement('div');
+        container.style.flex = i === 2 ? '1.2' : '1';
+        container.style.display = i <= paramCount ? '' : 'none';
+        
+        // Label
+        if (paramDef && paramDef.label) {
+          const label = document.createElement('div');
+          label.textContent = paramDef.label;
+          label.style.fontSize = '9px';
+          label.style.color = '#888';
+          label.style.height = '12px';
+          label.style.lineHeight = '12px';
+          label.style.marginBottom = '1px';
+          container.appendChild(label);
+        }
+        
+        const { td: _, input: control } = mkInput(field, i === 2 ? widths.param2 : widths.param, '', paramDef);
+        control.style.width = '100%';
+        
+        // Override blur to update summary
+        const origOnBlur = control.onblur;
+        control.addEventListener('blur', () => {
+          updateSummary();
+        });
+        
+        // For EFL param2
+        if (operand === 'EFL' && i === 2 && control.tagName === 'INPUT') {
+          try {
+            const configIdHint = row?.configId;
+            const blockIds = this._getBlocksForConfigHint(configIdHint);
+            const dlId = ensureEflBlocksDatalist(blockIds);
+            if (dlId) control.setAttribute('list', dlId);
+            control.placeholder = 'ALL or blockId (comma separated allowed)';
+          } catch (_) {}
+        }
+        
+        container.appendChild(control);
+        paramsExpanded.appendChild(container);
+        paramInputs.push({ container, control });
+      }
+      
+      tdParams.appendChild(paramsSummary);
+      tdParams.appendChild(paramsExpanded);
+      tr.appendChild(tdParams);
 
       const tdOp = mkTd(widths.op, null);
       tdOp.style.textAlign = 'center';
@@ -572,6 +843,8 @@ class SystemRequirementsEditor {
     this._renderBody = (specFn, ratPrevFn, ensureDl) => {
       if (!this._tbody) return;
       this._tbody.innerHTML = '';
+      
+      // Render all requirements
       for (const r of this.requirements) {
         const tr = renderRow(r);
         this._tbody.appendChild(tr);
@@ -581,55 +854,109 @@ class SystemRequirementsEditor {
       const sel = this.requirements.find(x => x && String(x.id) === String(this._selectedId)) || null;
       if (sel) {
         setSelectedRow(sel.id);
-      } else {
-        try { this.resetParameterHeaders(); } catch (_) {}
       }
     };
+
+    this._renderRow = renderRow;
 
     table.appendChild(thead);
     table.appendChild(tbody);
     wrap.appendChild(table);
     container.appendChild(wrap);
 
+    // Parameter toggle functionality
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._paramsExpanded = !this._paramsExpanded;
+        toggleBtn.textContent = this._paramsExpanded ? '▼' : '▶';
+        toggleBtn.setAttribute('aria-expanded', this._paramsExpanded ? 'true' : 'false');
+        
+        // Toggle all parameter containers
+        const allParamContainers = this._tbody.querySelectorAll('[data-role="params-container"]');
+        for (const container of allParamContainers) {
+          const summary = container.querySelector('.params-summary');
+          const expanded = container.querySelector('.params-expanded');
+          if (summary && expanded) {
+            summary.style.display = this._paramsExpanded ? 'none' : 'block';
+            expanded.style.display = this._paramsExpanded ? 'flex' : 'none';
+          }
+        }
+      });
+    }
+
     // Initial render
     this._renderBody(makeSpecSummary, rationalePreview, ensureEflBlocksDatalist);
   }
 
-  updateParameterHeaders(rowData) {
-    const operand = rowData?.operand;
-    const definition = operand ? OPERAND_DEFINITIONS[operand] : null;
-
-    // If operand is unset/unknown, keep all as '-'
-    if (!operand || !definition || !definition.parameters) {
-      this.resetParameterHeaders();
-      return;
+  _getWavelengthOptions() {
+    try {
+      // Try to get from global source first
+      let sourceRows = null;
+      try {
+        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+        if (systemConfig && Array.isArray(systemConfig.source)) {
+          sourceRows = systemConfig.source;
+        }
+      } catch (_) {}
+      
+      // Fallback to sourceTableData
+      if (!sourceRows) {
+        sourceRows = JSON.parse(localStorage.getItem('sourceTableData') || '[]');
+      }
+      
+      const options = [{ value: '', label: '(Primary)' }];
+      
+      if (Array.isArray(sourceRows) && sourceRows.length > 0) {
+        sourceRows.forEach((row, idx) => {
+          const wl = row?.wavelength;
+          const isPrimary = row?.primary;
+          const label = `${idx + 1}: ${wl}µm${isPrimary ? ' (Primary)' : ''}`;
+          options.push({ value: String(idx + 1), label });
+        });
+      }
+      
+      return options;
+    } catch (e) {
+      console.warn('Failed to get wavelength options:', e);
+      return [{ value: '', label: '(Primary)' }];
     }
-
-    const paramFields = ['param1', 'param2', 'param3', 'param4'];
-    paramFields.forEach((field) => {
-      const headerElement = this._paramHeaderEls ? this._paramHeaderEls[field] : null;
-      if (!headerElement) return;
-
-      const paramDef = Array.isArray(definition.parameters)
-        ? definition.parameters.find(p => p && p.key === field)
-        : null;
-
-      headerElement.textContent = (paramDef && paramDef.label) ? paramDef.label : '-';
-    });
   }
 
-  resetParameterHeaders() {
-    const defaultTitles = {
-      param1: '-',
-      param2: '-',
-      param3: '-',
-      param4: '-'
-    };
-
-    Object.entries(defaultTitles).forEach(([field, title]) => {
-      const headerElement = this._paramHeaderEls ? this._paramHeaderEls[field] : null;
-      if (headerElement) headerElement.textContent = title;
-    });
+  _getObjectOptions() {
+    try {
+      // Try to get from active config first
+      let objectRows = null;
+      try {
+        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+        const activeId = systemConfig?.activeConfigId;
+        const activeConfig = systemConfig?.configurations?.find(c => c.id === activeId);
+        if (activeConfig && Array.isArray(activeConfig.object)) {
+          objectRows = activeConfig.object;
+        }
+      } catch (_) {}
+      
+      // Fallback to objectTableData
+      if (!objectRows) {
+        objectRows = JSON.parse(localStorage.getItem('objectTableData') || '[]');
+      }
+      
+      const options = [{ value: '', label: '(default 1)' }];
+      
+      if (Array.isArray(objectRows) && objectRows.length > 0) {
+        objectRows.forEach((row, idx) => {
+          const y = row?.y || 0;
+          const angle = row?.angle || 0;
+          const label = `${idx + 1}: y=${y}, angle=${angle}°`;
+          options.push({ value: String(idx + 1), label });
+        });
+      }
+      
+      return options;
+    } catch (e) {
+      console.warn('Failed to get object options:', e);
+      return [{ value: '', label: '(default 1)' }];
+    }
   }
 
   initializeEventListeners() {
@@ -646,6 +973,12 @@ class SystemRequirementsEditor {
           await this.updateAllConfigsAndEvaluate();
         } catch (_) {}
       });
+    }
+  }
+
+  renderTable() {
+    if (typeof this._renderBody === 'function') {
+      this._renderBody(() => '', () => '', () => null);
     }
   }
 
@@ -1142,6 +1475,7 @@ class SystemRequirementsEditor {
       param2: '',
       param3: '',
       param4: '',
+      param5: '',
       op: '=',
       tol: 0,
       target: 0,
@@ -1177,7 +1511,6 @@ class SystemRequirementsEditor {
     this.saveToStorage();
     if (typeof this._renderBody === 'function') this._renderBody(() => '', () => '', () => null);
 
-    try { this.resetParameterHeaders(); } catch (_) {}
     try {
       if (this.inspector && typeof this.inspector.hide === 'function') this.inspector.hide();
     } catch (_) {}
@@ -1320,6 +1653,7 @@ class SystemRequirementsEditor {
         param2: row.param2,
         param3: row.param3,
         param4: row.param4,
+        param5: row.param5,
         target,
         weight
       };
@@ -1604,6 +1938,7 @@ class SystemRequirementsEditor {
         if (r.enabled === undefined || r.enabled === null) r.enabled = true;
         if (!r.op) r.op = '=';
         if (r.tol === undefined || r.tol === null || String(r.tol).trim() === '') r.tol = 0;
+        if (r.param5 === undefined || r.param5 === null) r.param5 = '';
 
         if (r && (r.configId === undefined || r.configId === null)) {
           r.configId = activeConfigId;
@@ -1637,12 +1972,13 @@ class SystemRequirementsEditor {
           param2,
           param3,
           param4,
+          param5,
           op,
           tol,
           target,
           weight
         } = r;
-        return { id, enabled, operand, rationale, configId, param1, param2, param3, param4, op, tol, target, weight };
+        return { id, enabled, operand, rationale, configId, param1, param2, param3, param4, param5, op, tol, target, weight };
       });
       localStorage.setItem('systemRequirementsData', JSON.stringify(toSave));
     } catch (e) {

@@ -229,6 +229,26 @@ h3 {
     box-sizing: border-box;
 }
 
+/* Parameters collapsible styling */
+#table-system-requirements .params-summary {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#table-system-requirements .params-summary:hover {
+    background-color: #f9f9f9;
+}
+
+#table-system-requirements .params-expanded {
+    flex-wrap: nowrap;
+}
+
+#table-system-requirements .params-expanded input,
+#table-system-requirements .params-expanded select {
+    min-width: 0;
+}
+
 #table-system-requirements .sr-table textarea {
     height: auto;
 }

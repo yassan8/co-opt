@@ -121,7 +121,7 @@ function sampleUnitDiskPoints({ rings = 4, spokes = 12 } = {}) {
     return pts;
 }
 
-function computeZernikeFitLive({ opticalSystemData, wavelengthUm, fieldSetting, zernikeMaxNoll = 15 }) {
+function computeZernikeFitLive({ opticalSystemData, wavelengthUm, fieldSetting, zernikeMaxNoll = 15, samplingSize = 32 }) {
     if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return null;
     if (!Number.isFinite(wavelengthUm) || wavelengthUm <= 0) return null;
     if (!fieldSetting || typeof fieldSetting !== 'object') return null;
@@ -135,40 +135,40 @@ function computeZernikeFitLive({ opticalSystemData, wavelengthUm, fieldSetting, 
         return null;
     }
 
-    const pts = sampleUnitDiskPoints({ rings: 4, spokes: 12 });
-
-    const sampleWithOptions = (opts) => {
-        const pupilCoordinates = [];
-        const opds = [];
-        for (const p of pts) {
-            const x = p.x;
-            const y = p.y;
-            let opd = NaN;
-            try {
-                // Use reference-sphere OPD for physically meaningful low-order terms.
-                opd = opdCalculator.calculateOPDReferenceSphere(x, y, fieldSetting, false, opts);
-            } catch (_) {
-                opd = NaN;
+    // **CRITICAL: Use SAME sampling method as OPD Analysis**
+    // OPD uses rectangular grid (gridSize × gridSize) with circular mask
+    // This ensures IDENTICAL Zernike coefficients between OPD display and Requirements
+    const gridSize = samplingSize;
+    const pupilRange = 1.0; // Same as OPD Analysis
+    
+    const pupilCoordinates = [];
+    const opds = [];
+    
+    // Generate rectangular grid with circular mask (same as eva-wavefront.js line 5984)
+    for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+            const pupilX = (i / (gridSize - 1)) * 2 * pupilRange - pupilRange;
+            const pupilY = (j / (gridSize - 1)) * 2 * pupilRange - pupilRange;
+            
+            // Check if point is within circular pupil range
+            const pupilRadius = Math.sqrt(pupilX * pupilX + pupilY * pupilY);
+            if (pupilRadius <= pupilRange) {
+                let opd = NaN;
+                try {
+                    // Use reference-sphere OPD (same as OPD Analysis)
+                    opd = opdCalculator.calculateOPDReferenceSphere(pupilX, pupilY, fieldSetting, false, { fastMarginalRay: true });
+                } catch (_) {
+                    opd = NaN;
+                }
+                if (Number.isFinite(opd)) {
+                    pupilCoordinates.push({ x: pupilX, y: pupilY, r: pupilRadius });
+                    opds.push(opd);
+                }
             }
-            if (!Number.isFinite(opd)) continue;
-            pupilCoordinates.push({ x, y, r: Math.sqrt(x * x + y * y) });
-            opds.push(opd);
         }
-        return { pupilCoordinates, opds };
-    };
-
-    // Fast path first (may fail for some systems due to aggressive approximations).
-    const fast = sampleWithOptions({ fastMarginalRay: true });
-
-    // Retry with full marginal ray generation if too few valid points.
-    const slow = (fast.pupilCoordinates.length < 6) ? sampleWithOptions({ fastMarginalRay: false }) : null;
-
-    let sampled = fast;
-    if (slow && slow.pupilCoordinates.length > fast.pupilCoordinates.length) {
-        sampled = slow;
     }
 
-    if (sampled.pupilCoordinates.length < 6) {
+    if (pupilCoordinates.length < 6) {
         try {
             if (typeof window !== 'undefined') {
                 window.__cooptLastZernikeLiveDebug = {
@@ -177,10 +177,7 @@ function computeZernikeFitLive({ opticalSystemData, wavelengthUm, fieldSetting, 
                     wavelengthUm,
                     zernikeMaxNoll,
                     fieldSetting,
-                    fastValid: fast.pupilCoordinates.length,
-                    slowValid: slow ? slow.pupilCoordinates.length : null,
-                    lastMarginalRayGenFailure: opdCalculator?._lastMarginalRayGenFailure ?? null,
-                    lastRayCalculation: opdCalculator?.lastRayCalculation ?? null
+                    validCount: pupilCoordinates.length
                 };
             }
         } catch (_) {}
@@ -188,8 +185,8 @@ function computeZernikeFitLive({ opticalSystemData, wavelengthUm, fieldSetting, 
     }
 
     const wavefrontMap = {
-        pupilCoordinates: sampled.pupilCoordinates,
-        opds: sampled.opds
+        pupilCoordinates,
+        opds
     };
 
     try {
@@ -835,54 +832,127 @@ class MeritFunctionEditor {
                 return this.calculateLongitudinalAberrationRmsUm(operand, opticalSystemData);
             case 'ZERN_COEFF': {
                 const FAIL = 1e9;
-                const nollRaw = Number(operand?.param1);
+                
+                // New parameter order: λ idx, Object idx, Unit, Sampling, n (Noll)
+                const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand?.configId);
+                
+                // param1: λ idx (1-based, blank=Primary)
+                const wavelength = this.getSystemWavelengthFromOperandOrPrimary({ param1: operand?.param1 }, sourceRows);
+                
+                // param2: Object idx (1-based, default 1)
+                const fieldIdx1 = Number.isFinite(Number(operand?.param2)) ? Math.max(1, Math.floor(Number(operand.param2))) : 1;
+                const objRow = Array.isArray(objectRows) ? objectRows[Math.max(0, Math.min(objectRows.length - 1, fieldIdx1 - 1))] : null;
+                const isInf = isInfiniteSystemFromRows(opticalSystemData);
+                const fieldSetting = toFieldSettingFromObjectRow(objRow || {}, fieldIdx1 - 1, isInf);
+                
+                // param3: Unit (waves or um)
+                const unit = parseZernikeUnit(operand?.param3);
+                
+                // param4: Sampling (grid size, default 32)
+                const samplingSize = Number.isFinite(Number(operand?.param4)) && Number(operand.param4) > 0 
+                    ? Math.floor(Number(operand.param4)) 
+                    : 32;
+                
+                // param5: n (Noll) - coefficient index
+                const param5Value = operand?.param5;
+                const nollRaw = param5Value !== undefined && param5Value !== null && String(param5Value).trim() !== '' 
+                    ? Number(param5Value) 
+                    : 0;  // Default to 0 (RMS) if not specified
+                
                 if (!Number.isFinite(nollRaw)) return FAIL;
                 const noll = Math.floor(nollRaw);
                 if (noll < 0) return FAIL;
 
-                const unit = parseZernikeUnit(operand?.param2);
-                const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand?.configId);
-                // param3: λ idx (1-based, blank=Primary)
-                const wavelength = this.getSystemWavelengthFromOperandOrPrimary({ param1: operand?.param3 }, sourceRows);
-                const fieldIdx1 = Number.isFinite(Number(operand?.param4)) ? Math.max(1, Math.floor(Number(operand.param4))) : 1;
-                const objRow = Array.isArray(objectRows) ? objectRows[Math.max(0, Math.min(objectRows.length - 1, fieldIdx1 - 1))] : null;
-                const isInf = isInfiniteSystemFromRows(opticalSystemData);
-                const fieldSetting = toFieldSettingFromObjectRow(objRow || {}, fieldIdx1 - 1, isInf);
-
-                const cfgKey = operand?.configId ? String(operand.configId) : 'active';
-                const maxNollRequested = 15;
-                const cacheKey = `zernike-fit:${cfgKey}:wl=${wavelength}:max=${maxNollRequested}:${fieldSettingCacheKey(fieldSetting)}`;
-                const zernike = (() => {
-                    const cached = this._runtimeCache ? this._runtimeCache.get(cacheKey) : null;
-                    if (cached) return cached;
-                    const fit = computeZernikeFitLive({ opticalSystemData, wavelengthUm: wavelength, fieldSetting, zernikeMaxNoll: maxNollRequested });
-                    if (fit && this._runtimeCache) this._runtimeCache.set(cacheKey, fit);
-                    return fit;
-                })();
+                // CRITICAL: Use EXACT SAME wavefrontMap as OPD Analysis if available
+                // This ensures 100% identical Zernike coefficients
+                const useExistingOPDMap = (typeof window !== 'undefined' && window.__lastWavefrontMap?.zernike);
+                
+                let zernike = null;
+                let coeffWaves = null;
+                let coeffUm = null;
+                
+                if (useExistingOPDMap) {
+                    // Use the SAME wavefrontMap that OPD Analysis calculated
+                    const existingMap = window.__lastWavefrontMap;
+                    console.log('[ZERN_COEFF] Using existing OPD wavefrontMap:');
+                    console.log('[ZERN_COEFF]   - pupilCoordinates count:', existingMap?.pupilCoordinates?.length);
+                    console.log('[ZERN_COEFF]   - raw.opds count:', existingMap?.raw?.opds?.length);
+                    console.log('[ZERN_COEFF]   - zernike.maxNoll:', existingMap?.zernike?.maxNoll);
+                    console.log('[ZERN_COEFF]   - gridSizeRequested:', existingMap?.gridSizeRequested);
+                    console.log('[ZERN_COEFF]   - Sample coefficients (OSA indexed):');
+                    const coeffs = existingMap?.zernike?.coefficientsWaves;
+                    if (coeffs) {
+                        for (let i = 0; i <= 10; i++) {
+                            console.log(`[ZERN_COEFF]     OSA ${i}:`, coeffs[i]);
+                        }
+                    }
+                    
+                    zernike = existingMap.zernike;
+                    coeffWaves = zernike?.coefficientsWaves || null;
+                    coeffUm = zernike?.coefficientsMicrons || null;
+                } else {
+                    // Fallback: compute our own Zernike fit
+                    const cfgKey = operand?.configId ? String(operand.configId) : 'active';
+                    const maxNollRequested = 37;
+                    const cacheKey = `zernike-opd:${cfgKey}:wl=${wavelength}:max=${maxNollRequested}:grid=${samplingSize}:${fieldSettingCacheKey(fieldSetting)}`;
+                    zernike = (() => {
+                        const cached = this._runtimeCache ? this._runtimeCache.get(cacheKey) : null;
+                        if (cached) return cached;
+                        const fit = computeZernikeFitLive({ opticalSystemData, wavelengthUm: wavelength, fieldSetting, zernikeMaxNoll: maxNollRequested, samplingSize });
+                        if (fit && this._runtimeCache) this._runtimeCache.set(cacheKey, fit);
+                        return fit;
+                    })();
+                    if (!zernike) return FAIL;
+                    
+                    coeffWaves = zernike?.coefficientsWaves || null;
+                    coeffUm = zernike?.coefficientsMicrons || null;
+                }
+                
                 if (!zernike) return FAIL;
 
-                const coeffWaves = zernike?.coefficientsWaves || null;
-                const coeffUm = zernike?.coefficientsMicrons || null;
+                const readCoeff = (container, osaIndex) => {
+                    if (!container || typeof container !== 'object') return null;
+                    const v = container[osaIndex];
+                    return (v !== undefined && v !== null && Number.isFinite(Number(v))) ? Number(v) : null;
+                };
+
+                const nollToOSA = (nollIndex) => {
+                    if (nollIndex === 0) return -1;
+                    const jj = Math.floor(Number(nollIndex));
+                    if (!Number.isFinite(jj) || jj < 1) return -1;
+                    
+                    // Noll → (n,m) conversion (from eva-wavefront.js nollToNM_deprecated)
+                    let n = 0;
+                    while (((n + 1) * (n + 2)) / 2 < jj) n++;
+                    const j0 = (n * (n + 1)) / 2 + 1;
+                    const k = jj - j0; // 0..n
+                    const m = -n + 2 * k;
+                    
+                    // (n,m) → OSA index
+                    const osaIndex = (n * (n + 2) + m) / 2;
+                    return Math.floor(osaIndex);
+                };
 
                 const maxNoll = Number(zernike?.maxNoll);
                 const termMax = Number.isFinite(maxNoll) ? Math.max(1, Math.floor(maxNoll)) : null;
 
-                const getCoeffInUnit = (j) => {
+                const getCoeffInUnit = (nollIndex) => {
+                    const osaIndex = nollToOSA(nollIndex);
+                    if (osaIndex < 0) return null;
+                    
                     if (unit === 'um') {
-                        const direct = readCoeff(coeffUm, j);
+                        const direct = readCoeff(coeffUm, osaIndex);
                         if (direct !== null) return direct;
-                        const w = readCoeff(coeffWaves, j);
+                        const w = readCoeff(coeffWaves, osaIndex);
                         if (w === null) return null;
                         if (!(Number.isFinite(wavelength) && wavelength > 0)) return null;
                         return w * wavelength;
                     }
-                    return readCoeff(coeffWaves, j);
+                    return readCoeff(coeffWaves, osaIndex);
                 };
 
                 if (noll === 0) {
-                    // RMS of coefficients: sqrt(sum c_j^2). Exclude piston (j=1) and tilt (j=2,3).
                     let sumSq = 0;
-
                     if (termMax !== null) {
                         for (let j = 4; j <= termMax; j++) {
                             const c = getCoeffInUnit(j);
@@ -891,8 +961,6 @@ class MeritFunctionEditor {
                         }
                         return Number.isFinite(sumSq) ? Math.sqrt(sumSq) : FAIL;
                     }
-
-                    // Fallback: iterate keys
                     const container = (unit === 'um' && coeffUm) ? coeffUm : coeffWaves;
                     if (!container || typeof container !== 'object') return FAIL;
                     for (const [k, v] of Object.entries(container)) {

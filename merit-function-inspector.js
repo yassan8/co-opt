@@ -10,19 +10,20 @@ export const OPERAND_DEFINITIONS = {
     notes: "Measures meridional MTF at specified frequency. Target 1.0 for diffraction limit.",
     description: "Nth Zernike coefficient (Noll index) for the current system (live). n=0 returns RMS over coefficients.",
     parameters: [
-      { key: "param1", label: "n (Noll)", description: "0 = RMS, 1.. = coefficient index" },
-      { key: "param2", label: "Unit", description: "waves | um (default waves)" },
-      { key: "param3", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
-      { key: "param4", label: "Field idx", description: "Object row (1-based, default 1)" }
+      { key: "param1", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
+      { key: "param2", label: "Object idx", description: "Object row (1-based, default 1)" },
+      { key: "param3", label: "Unit", description: "waves | um (default waves)" },
+      { key: "param4", label: "Sampling", description: "OPD sampling grid (default 32)" },
+      { key: "param5", label: "n (Noll)", description: "0 = RMS, 1-37 = coefficient index" }
     ],
-    notes: "現在の光学系に対してOPDをサンプリングし、Zernikeフィットで係数を推定します。\n\n- Unit=waves: coefficientsWaves を使用\n- Unit=um: coefficientsMicrons を使用\n\nparam1=0 の場合: piston(n=1) と tilt(n=2,3) を除いた係数の RMS を返します（RMS = sqrt(Σ c_n^2)）。\n\n注: この実装のNoll順では defocus は n=5 です（n=4 は m=-2 成分）。\n注: 重い評価です（最適化やRequirements更新で頻繁に呼ばれます）。"
+    notes: "現在の光学系に対してOPDをサンプリングし、Zernikeフィットで係数を推定します。\n\n- Unit=waves: coefficientsWaves を使用\n- Unit=um: coefficientsMicrons を使用\n- Sampling: OPDサンプリングのグリッドサイズ（2の倍数: 32, 64, 128, 256, 512）\n\nparam5=0 の場合: piston(n=1) と tilt(n=2,3) を除いた係数の RMS を返します（RMS = sqrt(Σ c_n^2)）。\n\n注: この実装のNoll順では defocus は n=5 です（n=4 は m=-2 成分）。\n注: 重い評価です（最適化やRequirements更新で頻繁に呼ばれます）。"
   },
   "SPOT_SIZE_ANNULAR": {
     name: "Spot Size Annular (µm)",
     description: "Spot size (µm) using Spot Diagram-equivalent sampling, forced to Annular.",
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
-      { key: "param2", label: "Field idx", description: "Object row (1-based, default 1)" },
+      { key: "param2", label: "Object idx", description: "Object row (1-based, default 1)" },
       { key: "param3", label: "Metric", description: "'rms' or 'dia' (default 'rms')" },
       { key: "param4", label: "Rays", description: "Ray count (default 501)" }
     ],
@@ -33,7 +34,7 @@ export const OPERAND_DEFINITIONS = {
     description: "Spot size (µm) using Spot Diagram-equivalent sampling, forced to Rectangle/Grid.",
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
-      { key: "param2", label: "Field idx", description: "Object row (1-based, default 1)" },
+      { key: "param2", label: "Object idx", description: "Object row (1-based, default 1)" },
       { key: "param3", label: "Metric", description: "'rms' or 'dia' (default 'rms')" },
       { key: "param4", label: "Rays", description: "Ray count (default 501)" }
     ],
@@ -43,7 +44,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Spherical Aberration RMS (µm)",
     description: "RMS of longitudinal aberration across pupil (µm), computed from the Spherical Aberration Diagram (meridional only).",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (1-based) or wavelength in µm (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (1-based) or wavelength in µm (blank=Primary)" }
     ],
     notes: "球面収差図（Spherical Aberration Diagram）のメリジオナル光線データから縦収差を集約してRMSを返します。\n\n定義（Option B）:\n- 縦収差 L(r) は図のX軸と同じ（最終面からの焦点位置までの距離, mm）\n- pupil coordinate r は正規化瞳座標（0..1）\n- 面積重み 2r dr で平均 L̄ を計算し、RMS = sqrt(E[(L-L̄)^2])\n- 返り値は µm（= mm * 1000）\n\nパラメータ: λ idx のみ（Sourceテーブル行番号, 1始まり）。空欄/0はPrimary Wavelength。\n\n注: 現状は meridional のみ（片側）で評価します。"
   },
@@ -51,7 +52,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Focal Length (FL)",
     description: "Paraxial focal length (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataの近軸計算と同じ経路でFLを返します。\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
@@ -59,7 +60,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Effective Focal Length (EFL)",
     description: "EFL = 1/α(final) with h[1]=1 (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" },
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" },
       { key: "param2", label: "Blocks", description: "blank/ALL = full system, or blockId list (comma/space separated)" }
     ],
     notes: "System Dataに表示しているEFL（h[1]=1なのでEFL=1/α[final]）を返します。\n\nBlocks(param2):\n- 空欄 / ALL: 全系EFL\n- blockId: そのブロック単体のEFL（ブロックを空気中のサブシステムとして評価）\n- blockId,blockId,... : 選択ブロック連結サブシステムのEFL（系内順序で抽出）\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
@@ -68,7 +69,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Back Focal Length (BFL)",
     description: "Back focal length (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataの近軸計算と同じ経路でBFLを返します。\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
@@ -76,7 +77,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Image Distance",
     description: "Paraxial image distance (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System DataのImage Distanceを返します。\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
@@ -100,7 +101,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Exit Pupil Magnification (βexp)",
     description: "Exit pupil magnification (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataで使用している射出瞳倍率（βexp）を返します。\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
@@ -108,7 +109,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Exit Pupil Diameter (ExPD)",
     description: "Exit pupil diameter in mm (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataで表示している射出瞳径(mm)を返します。\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
@@ -116,7 +117,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Exit Pupil Position (from Image)",
     description: "Exit pupil position from Image plane (mm)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataの「Exit Pupil Position: ... (from Image)」と同じ定義（posOrigin - imageDistance）で返します。"
   },
@@ -124,7 +125,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Entrance Pupil Diameter (EnPD)",
     description: "Entrance pupil diameter in mm (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataで表示している入射瞳径(mm)を返します。\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
@@ -132,7 +133,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Entrance Pupil Position",
     description: "Entrance pupil position (mm)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataで表示している入射瞳位置(mm)を返します。\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
@@ -140,7 +141,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Entrance Pupil Magnification",
     description: "Entrance pupil magnification (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataで表示している入射瞳倍率を返します。\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
@@ -148,7 +149,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Paraxial Magnification",
     description: "Paraxial magnification β (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataで表示している近軸倍率βを返します。有限物体ではβ=α[1]/α[final]（h[1]=1, n=1）、無限物体(INF)は0を返します。"
   },
@@ -156,7 +157,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Object Space F#",
     description: "Object space F-number (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataで表示しているObject Space F#を返します。"
   },
@@ -164,7 +165,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Image Space F#",
     description: "Image space F-number (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataで表示しているImage Space F#を返します。"
   },
@@ -172,7 +173,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Paraxial Working F#",
     description: "Working F-number (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataで表示しているParaxial Working F#を返します。"
   },
@@ -180,7 +181,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Object Space NA",
     description: "Object space numerical aperture (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataで表示しているObject Space NAを返します。"
   },
@@ -188,7 +189,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Image Space NA",
     description: "Image space numerical aperture (System Data)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row (blank=Primary)" }
+      { key: "param1", label: "λ idx", description: "Source row (blank=Primary)" }
     ],
     notes: "System Dataで表示しているImage Space NAを返します。"
   },
@@ -197,7 +198,7 @@ export const OPERAND_DEFINITIONS = {
     description: "Clearance constraint: max(0, |rayY| + margin - semidia)",
     parameters: [
       { key: "param1", label: "Surface", description: "Surface number (Optical System id)" },
-      { key: "param2", label: "λ", description: "Source row (blank=Primary)" },
+      { key: "param2", label: "λ idx", description: "Source row (blank=Primary)" },
       { key: "param3", label: "Margin", description: "Margin (mm, default 0)" },
       { key: "param4", label: "Reserved", description: "Reserved" }
     ],
@@ -207,7 +208,7 @@ export const OPERAND_DEFINITIONS = {
     name: "3rd Order Spherical",
     description: "3rd-order spherical aberration",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row" },
+      { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
       { key: "param3", label: "S1", description: "Surface (0=Total)" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
@@ -218,7 +219,7 @@ export const OPERAND_DEFINITIONS = {
     name: "3rd Order Coma",
     description: "3rd-order coma aberration",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row" },
+      { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
       { key: "param3", label: "S1", description: "Surface (0=Total)" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
@@ -229,7 +230,7 @@ export const OPERAND_DEFINITIONS = {
     name: "3rd Order Astigmatism",
     description: "3rd-order astigmatism",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row" },
+      { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
       { key: "param3", label: "S1", description: "Surface (0=Total)" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
@@ -240,7 +241,7 @@ export const OPERAND_DEFINITIONS = {
     name: "3rd Order Field Curvature",
     description: "3rd-order field curvature",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row" },
+      { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
       { key: "param3", label: "S1", description: "Surface (0=Total)" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
@@ -251,7 +252,7 @@ export const OPERAND_DEFINITIONS = {
     name: "3rd Order Distortion",
     description: "3rd-order distortion",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row" },
+      { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
       { key: "param3", label: "S1", description: "Surface (0=Total)" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
@@ -282,7 +283,7 @@ export const OPERAND_DEFINITIONS = {
     name: "Effective Focal Length (S1–S2)",
     description: "Effective focal length for a surface range (S1–S2)",
     parameters: [
-      { key: "param1", label: "λ", description: "Source row" },
+      { key: "param1", label: "λ idx", description: "Source row" },
       { key: "param2", label: "S1", description: "Start Surface" },
       { key: "param3", label: "S2", description: "End Surface" }
     ],
@@ -505,7 +506,7 @@ export class InspectorManager {
         <strong>Description:</strong> ${definition.description}
       </div>
       <div class="inspector-row">
-        <strong>Context Role:</strong>
+        <strong>Context Role:</strong> ${data.contextRole || 'Unassigned'}
       </div>
     `;
     
