@@ -245,10 +245,10 @@ class SystemRequirementsEditor {
 
     // Sticky (left) columns
     const widths = {
-      id: 70,
+      id: 30,
       enabled: 60,
-      operand: 220,
-      spec: 190,
+      operand: 200,
+      spec: 50,
       current: 120,
       status: 90,
       rationale: 220,

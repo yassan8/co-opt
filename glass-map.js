@@ -372,7 +372,8 @@ export function openGlassMapWindow(onRegionSelected, onGlassSelected) {
           dragmode: 'select',
           xaxis: {
             title: { text: 'V<sub>d</sub>' },
-            range: [95, 15],
+            range: [105, 15],
+            dtick: 10,
             zeroline: false,
             showgrid: true
           },
