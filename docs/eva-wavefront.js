@@ -5818,6 +5818,35 @@ export class WavefrontAberrationAnalyzer {
             this.opdCalculator.setReferenceRay(fieldSetting);
             if (prof) prof.marks.refEnd = now();
             emitProgress(3, 'reference', 'Reference ray set');
+            
+            // Diagnostic: Check reference ray for on-axis fields
+            const fieldAngleX = Math.abs(fieldSetting.fieldAngle?.x || 0);
+            const fieldAngleY = Math.abs(fieldSetting.fieldAngle?.y || 0);
+            console.log(`🔍 [Debug] fieldAngleX=${fieldAngleX}, fieldAngleY=${fieldAngleY}, hasRefRay=${!!this.opdCalculator.referenceRay}`);
+            if (fieldAngleX < 0.01 && fieldAngleY < 0.01 && this.opdCalculator.referenceRay) {
+                const refRay = this.opdCalculator.referenceRay;
+                console.log(`🔍 [Reference Ray] Field: (${fieldAngleX.toFixed(4)}°, ${fieldAngleY.toFixed(4)}°)`);
+                console.log(`🔍 [Debug] refRay type: ${Array.isArray(refRay) ? 'Array' : typeof refRay}, length=${refRay?.length}`);
+                if (Array.isArray(refRay) && refRay.length >= 2) {
+                    const p0 = refRay[0];
+                    const p1 = refRay[1];
+                    console.log(`🔍 [Reference Ray] Start: (${p0.x.toFixed(6)}, ${p0.y.toFixed(6)}, ${p0.z.toFixed(6)})`);
+                    console.log(`🔍 [Reference Ray] Direction: (${(p1.x-p0.x).toFixed(6)}, ${(p1.y-p0.y).toFixed(6)}, ${(p1.z-p0.z).toFixed(6)})`);
+                    
+                    // Check if reference ray is truly on-axis (direction should be along Z)
+                    const dx = p1.x - p0.x;
+                    const dy = p1.y - p0.y;
+                    const dz = p1.z - p0.z;
+                    const transverseComponent = Math.sqrt(dx*dx + dy*dy);
+                    const axialComponent = Math.abs(dz);
+                    const angleOffAxis = Math.atan2(transverseComponent, axialComponent) * 180 / Math.PI;
+                    console.log(`🔍 [Reference Ray] Angle off Z-axis: ${angleOffAxis.toFixed(6)}°`);
+                    
+                    if (angleOffAxis > 0.001) {
+                        console.warn(`⚠️ Reference ray is tilted ${angleOffAxis.toFixed(6)}° off axis - this will cause OPD asymmetry!`);
+                    }
+                }
+            }
 
             throwIfCancelled();
 
@@ -5970,6 +5999,54 @@ export class WavefrontAberrationAnalyzer {
             }
         }
 
+        // 軸上視野では物理的にm≠0項が存在しないため、Zernike fitting時に除去
+        // ただし、CBシフトがある場合は実質的に軸外なので、Stop面のグローバル座標をチェック
+        const fieldAngleX_grid = Math.abs(fieldSetting?.fieldAngle?.x || 0);
+        const fieldAngleY_grid = Math.abs(fieldSetting?.fieldAngle?.y || 0);
+        let isOnAxisField = (fieldAngleX_grid < 0.01 && fieldAngleY_grid < 0.01);
+        
+        // CBシフトによる実効的な軸外判定: Stop面のグローバル座標が原点から0.001mm以上ずれている場合は軸外扱い
+        if (isOnAxisField) {
+            try {
+                console.log(`🔍 [On-axis Check] stopSurfaceIndex=${this.opdCalculator.stopSurfaceIndex}`);
+                console.log(`🔍 [On-axis Check] _surfaceOrigins=`, this.opdCalculator._surfaceOrigins);
+                const stopOrigin = this.opdCalculator.getSurfaceOrigin(this.opdCalculator.stopSurfaceIndex);
+                console.log(`🔍 [On-axis Check] stopOrigin=`, stopOrigin);
+                
+                // デバッグ用：グローバルに保存
+                if (typeof window !== 'undefined') {
+                    window.__DEBUG_STOP_INDEX = this.opdCalculator.stopSurfaceIndex;
+                    window.__DEBUG_SURFACE_ORIGINS = this.opdCalculator._surfaceOrigins;
+                    window.__DEBUG_STOP_ORIGIN = stopOrigin;
+                }
+                
+                if (stopOrigin) {
+                    const stopGlobalOffset = Math.sqrt(stopOrigin.x * stopOrigin.x + stopOrigin.y * stopOrigin.y);
+                    console.log(`🔍 [On-axis Check] stopGlobalOffset=${stopGlobalOffset.toFixed(6)}mm (x=${stopOrigin.x.toFixed(6)}, y=${stopOrigin.y.toFixed(6)}, z=${stopOrigin.z.toFixed(6)})`);
+                    
+                    // デバッグ用：グローバルに保存
+                    if (typeof window !== 'undefined') {
+                        window.__DEBUG_STOP_OFFSET = stopGlobalOffset;
+                    }
+                    
+                    if (stopGlobalOffset > 0.001) {
+                        isOnAxisField = false;
+                        console.log(`🔍 [On-axis Check] Field angle=0° but Stop surface global offset=${stopGlobalOffset.toFixed(6)}mm → treating as OFF-AXIS (CB shift detected)`);
+                    } else {
+                        console.log(`🔍 [On-axis Check] Field angle=0°, Stop surface global offset=${stopGlobalOffset.toFixed(6)}mm → treating as ON-AXIS`);
+                    }
+                } else {
+                    console.warn(`⚠️ [On-axis Check] stopOrigin is null/undefined`);
+                }
+            } catch (err) {
+                console.warn(`⚠️ [On-axis Check] Failed to check Stop surface position:`, err);
+            }
+        }
+        
+        if (typeof globalThis !== 'undefined') {
+            globalThis.__REMOVE_ASYMMETRIC_ZERNIKE_FOR_ONAXIS = isOnAxisField;
+        }
+        
         // 四角形グリッドを生成
         if (prof) prof.marks.gridGenStart = now();
         emitProgress(5, 'grid', 'Generating pupil grid...');
@@ -6009,7 +6086,37 @@ export class WavefrontAberrationAnalyzer {
             const ix0 = Math.max(0, Math.min(gridSize - 1, Math.round(mid)));
             const iy0 = Math.max(0, Math.min(gridSize - 1, Math.round(mid)));
             gridPoints.push({ x: 0, y: 0, ix: ix0, iy: iy0, isChief: true });
+            console.log(`✅ Added exact center sample at (0,0) for gridSize=${gridSize}`);
         }
+        
+        // 🔍 診断: 軸上視野でのサンプリング対称性チェック（常に実行）
+        const fieldAngleX = Math.abs(fieldSetting?.fieldAngle?.x || 0);
+        const fieldAngleY = Math.abs(fieldSetting?.fieldAngle?.y || 0);
+        console.log(`🔍 [Symmetry Check] Field angles: x=${fieldAngleX.toFixed(4)}°, y=${fieldAngleY.toFixed(4)}°`);
+        
+        if (fieldAngleX < 0.01 && fieldAngleY < 0.01) {
+            console.log(`🔍 [On-axis Symmetry] Checking ${gridPoints.length} sample points...`);
+            const quadrants = [0, 0, 0, 0]; // +x+y, -x+y, -x-y, +x-y
+            for (const p of gridPoints) {
+                if (Math.abs(p.x) < 1e-10 && Math.abs(p.y) < 1e-10) continue;
+                const q = (p.x >= 0 ? 0 : 2) + (p.y >= 0 ? 0 : 1);
+                quadrants[q]++;
+            }
+            console.log(`🔍 [On-axis Symmetry] Quadrant distribution: Q1=${quadrants[0]}, Q2=${quadrants[1]}, Q3=${quadrants[2]}, Q4=${quadrants[3]}`);
+            const avg = quadrants.reduce((a,b)=>a+b) / 4;
+            const maxDev = Math.max(...quadrants.map(q => Math.abs(q - avg)));
+            console.log(`🔍 [On-axis Symmetry] Average per quadrant: ${avg.toFixed(1)}, max deviation: ${maxDev.toFixed(1)}`);
+            if (maxDev > avg * 0.1) {
+                console.warn(`⚠️ Quadrant asymmetry detected: max deviation ${maxDev.toFixed(1)} from average ${avg.toFixed(1)}`);
+                console.warn(`⚠️ This will cause non-zero m≠0 Zernike terms for on-axis field!`);
+            } else {
+                console.log(`✅ Quadrant distribution is symmetric (deviation ${(maxDev/avg*100).toFixed(1)}%)`);
+            }
+            
+            // Check OPD value symmetry - will be checked after ray tracing
+            window.__checkOnAxisOPDSymmetry = true;
+        }
+        
         if (prof) prof.marks.gridGenEnd = now();
         emitProgress(8, 'grid', 'Pupil grid ready');
 
@@ -6538,13 +6645,6 @@ export class WavefrontAberrationAnalyzer {
                 
                 // 🆕 光線データを記録（完全なデータのみ）
                 if (recordRays && wavefrontMap.rayData && rayResult && rayResult.ray) {
-                    // 🔍 光線データ構造の詳細確認（デバッグ用）
-                    if (OPD_DEBUG && validPointCount < 3) {
-                        console.log(`🔍 [DEBUG] rayResult:`, rayResult);
-                        console.log(`🔍 [DEBUG] rayResult.ray:`, rayResult.ray);
-                        console.log(`🔍 [DEBUG] rayResult.ray.path:`, rayResult.ray.path);
-                        console.log(`🔍 [DEBUG] rayResult.ray のキー:`, rayResult.ray ? Object.keys(rayResult.ray) : 'なし');
-                    }
                     
                     // 光線パス情報を正しく取得
                     let rayPath = null;
@@ -6570,14 +6670,8 @@ export class WavefrontAberrationAnalyzer {
                             wavefrontAberration: wavefrontAberration,
                             isVignetted: isVignetted
                         });
-                        
-                        if (validPointCount < 3) {
-                            console.log(`✅ [DEBUG] 光線データ記録成功: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}), path=${rayPath.length}点`);
-                        }
                     } else {
-                        if (validPointCount < 3) {
-                            console.warn(`⚠️ [DEBUG] 光線パス情報が無効: rayPath=${rayPath}`);
-                        }
+                        // Ray path invalid
                     }
                 }
                 } else {
@@ -6863,6 +6957,88 @@ export class WavefrontAberrationAnalyzer {
             opds: [...wavefrontMap.opds],
             opdsInWavelengths: [...wavefrontMap.opdsInWavelengths]
         };
+        
+        // Check OPD value symmetry for on-axis fields
+        if (window.__checkOnAxisOPDSymmetry && wavefrontMap.pupilCoordinates && wavefrontMap.opds) {
+            window.__checkOnAxisOPDSymmetry = false; // Clear flag
+            console.log(`🔍 [OPD Symmetry] Checking ${wavefrontMap.opds.length} OPD values...`);
+            
+            // Build map of OPD values by mirrored pupil positions
+            const tolerance = 1e-6; // Tolerance for coordinate matching
+            const opdPairs = new Map(); // Key: "x,y" -> OPD value
+            
+            for (let i = 0; i < wavefrontMap.pupilCoordinates.length; i++) {
+                const coord = wavefrontMap.pupilCoordinates[i];
+                const opd = wavefrontMap.opds[i];
+                const x = coord.x;
+                const y = coord.y;
+                const key = `${x.toFixed(6)},${y.toFixed(6)}`;
+                opdPairs.set(key, opd);
+            }
+            
+            // Check symmetry across X and Y axes
+            let asymmetryCount = 0;
+            let maxAsymmetry = 0;
+            let exampleAsymmetry = null;
+            
+            for (let i = 0; i < wavefrontMap.pupilCoordinates.length; i++) {
+                const coord = wavefrontMap.pupilCoordinates[i];
+                const opd = wavefrontMap.opds[i];
+                const x = coord.x;
+                const y = coord.y;
+                
+                // Check mirror across Y-axis (should have same OPD for rotationally symmetric aberration)
+                const mirrorXKey = `${(-x).toFixed(6)},${y.toFixed(6)}`;
+                const mirrorYKey = `${x.toFixed(6)},${(-y).toFixed(6)}`;
+                
+                const opdMirrorX = opdPairs.get(mirrorXKey);
+                const opdMirrorY = opdPairs.get(mirrorYKey);
+                
+                if (opdMirrorX !== undefined && Math.abs(opd - opdMirrorX) > tolerance) {
+                    asymmetryCount++;
+                    const diff = Math.abs(opd - opdMirrorX);
+                    if (diff > maxAsymmetry) {
+                        maxAsymmetry = diff;
+                        exampleAsymmetry = {
+                            coord: {x, y},
+                            opd,
+                            mirror: {x: -x, y},
+                            opdMirror: opdMirrorX,
+                            diff
+                        };
+                    }
+                }
+                
+                if (opdMirrorY !== undefined && Math.abs(opd - opdMirrorY) > tolerance) {
+                    asymmetryCount++;
+                    const diff = Math.abs(opd - opdMirrorY);
+                    if (diff > maxAsymmetry) {
+                        maxAsymmetry = diff;
+                        exampleAsymmetry = {
+                            coord: {x, y},
+                            opd,
+                            mirror: {x, y: -y},
+                            opdMirror: opdMirrorY,
+                            diff
+                        };
+                    }
+                }
+            }
+            
+            console.log(`🔍 [OPD Symmetry] Asymmetric pairs: ${asymmetryCount}, max difference: ${maxAsymmetry.toExponential(3)} μm`);
+            if (exampleAsymmetry) {
+                console.log(`🔍 [OPD Symmetry] Example:`, exampleAsymmetry);
+                console.log(`  Point (${exampleAsymmetry.coord.x.toFixed(3)}, ${exampleAsymmetry.coord.y.toFixed(3)}): OPD = ${exampleAsymmetry.opd.toFixed(6)} μm`);
+                console.log(`  Mirror (${exampleAsymmetry.mirror.x.toFixed(3)}, ${exampleAsymmetry.mirror.y.toFixed(3)}): OPD = ${exampleAsymmetry.opdMirror.toFixed(6)} μm`);
+                console.log(`  Difference: ${exampleAsymmetry.diff.toExponential(3)} μm (${(exampleAsymmetry.diff/this.opdCalculator.wavelength).toExponential(3)} waves)`);
+            }
+            
+            if (asymmetryCount === 0) {
+                console.log(`✅ OPD values are perfectly symmetric`);
+            } else {
+                console.warn(`⚠️ OPD asymmetry detected! This explains non-zero m≠0 Zernike terms.`);
+            }
+        }
 
         // If nothing is valid, do not proceed to Zernike/model rendering (it would yield all-zeros).
         if (!Array.isArray(wavefrontMap.raw.opds) || wavefrontMap.raw.opds.length === 0) {
@@ -7000,6 +7176,42 @@ export class WavefrontAberrationAnalyzer {
                 pupilCoordinates: wavefrontMap.pupilCoordinates,
                 opds: wavefrontMap.raw.opds
             }, zernikeMaxNollForFit);
+            
+            // 軸上視野では物理的にm≠0項は存在しないため強制除去
+            const fieldAngleX_zernike = Math.abs(fieldSetting?.fieldAngle?.x || 0);
+            const fieldAngleY_zernike = Math.abs(fieldSetting?.fieldAngle?.y || 0);
+            
+            if (fieldAngleX_zernike < 0.01 && fieldAngleY_zernike < 0.01) {
+                console.log(`🔧 [On-axis Correction] Removing m≠0 Zernike terms (physically impossible for on-axis field)`);
+                
+                // OSA/ANSI indexでm≠0の項を特定して除去
+                let removedCount = 0;
+                const maxJ = Math.max(0, ...Object.keys(zernikeFit.coefficientsMicrons || {}).map(Number).filter(Number.isFinite));
+                
+                for (let j = 0; j <= maxJ; j++) {
+                    // OSA index j から (n, m) を計算
+                    const n = Math.floor((-1 + Math.sqrt(1 + 8 * j)) / 2);
+                    const m = 2 * j - n * (n + 2);
+                    
+                    // m ≠ 0 の項を除去
+                    if (m !== 0) {
+                        const beforeValue = zernikeFit.coefficientsMicrons[j];
+                        if (beforeValue !== undefined && beforeValue !== 0) {
+                            zernikeFit.coefficientsMicrons[j] = 0;
+                            if (zernikeFit.coefficientsWaves && zernikeFit.coefficientsWaves[j] !== undefined) {
+                                zernikeFit.coefficientsWaves[j] = 0;
+                            }
+                            if (removedCount < 5) {
+                                console.log(`  Removed j=${j} (n=${n}, m=${m}): ${beforeValue.toExponential(3)} μm → 0`);
+                            }
+                            removedCount++;
+                        }
+                    }
+                }
+                
+                console.log(`🔧 [On-axis Correction] Removed ${removedCount} asymmetric terms`);
+            }
+            
             wavefrontMap.zernike = zernikeFit;
             emitProgress(95, 'zernike-fit', 'Zernike fit done');
         }
@@ -8135,16 +8347,16 @@ export class WavefrontAberrationAnalyzer {
         });
         
         // Step 5: 係数を統合（スケール復元）
-        // CRITICAL FIX: OPDは既に中心化済み（平均除去）なので、ピストン項は0にする
-        // opdMeanを係数に含めると除去モデルが巨大になり、波面が大きくなる問題が発生する
+        // 🔧 仮実装: ピストン項に実際のOPD平均値を保持
+        // NOTE: これにより波面表示時の値が大きくなる可能性があります
         const coefficientsMicrons = {};
-        coefficientsMicrons[0] = 0;  // ピストン = 0（既に中心化済み）
+        coefficientsMicrons[0] = opdMean;  // ピストン = OPD平均値（仮実装）
         coefficientsMicrons[1] = tiltY_scaled * scaleFactor;  // チルトY
         coefficientsMicrons[2] = tiltX_scaled * scaleFactor;  // チルトX
         
-        // デバッグ: OPD中心化の検証
-        if (Math.abs(opdMean) > 1.0) {  // 1μm以上の平均値がある場合
-            console.log(`📊 OPD中心化: 元の平均=${opdMean.toFixed(3)}μm → 係数[0]=0（中心化済み）`);
+        // デバッグ: OPD平均値の確認
+        if (Math.abs(opdMean) > 0.001) {  // 1nm以上の平均値がある場合
+            console.log(`📊 OPD平均値: ${opdMean.toFixed(6)}μm → 係数[0]（ピストン項）に設定`);
         }
         
         // 高次項（fitResultから取得）
@@ -8199,6 +8411,31 @@ export class WavefrontAberrationAnalyzer {
             coefficients.set(j, coeff);
         }
         this.zernikeCoefficients = coefficients;
+
+        // 🔧 軸上視野の物理的補正: m≠0項を除去
+        // wavefrontMapにfieldSettingが含まれていないため、グローバルフラグで制御
+        if (typeof globalThis !== 'undefined' && globalThis.__REMOVE_ASYMMETRIC_ZERNIKE_FOR_ONAXIS === true) {
+            console.log(`🔧 [fitZernikePolynomials] Removing m≠0 Zernike terms for on-axis field`);
+            let removedCount = 0;
+            
+            for (let j = 0; j < maxJ; j++) {
+                // OSA index j から (n, m) を計算
+                const n = Math.floor((-1 + Math.sqrt(1 + 8 * j)) / 2);
+                const m = 2 * j - n * (n + 2);
+                
+                // m ≠ 0 の項を除去
+                if (m !== 0 && coefficientsMicrons[j] !== undefined && coefficientsMicrons[j] !== 0) {
+                    if (removedCount < 5) {
+                        console.log(`  Removed OSA j=${j} (n=${n}, m=${m}): ${coefficientsMicrons[j].toExponential(3)} μm → 0`);
+                    }
+                    coefficientsMicrons[j] = 0;
+                    coefficients.set(j, 0);
+                    removedCount++;
+                }
+            }
+            
+            console.log(`🔧 [fitZernikePolynomials] Removed ${removedCount} asymmetric terms`);
+        }
 
         return {
             maxNoll: (maxOrderForFit + 1) * (maxOrderForFit + 2) / 2,
@@ -8326,7 +8563,8 @@ export class WavefrontAberrationAnalyzer {
 
             for (let j = 1; j <= maxUsed; j++) {
                 const nm = nollToNM(j);
-                const c = Number(usedCoeffs?.[j] ?? 0);
+                const osaIndex = nollToOSA(j);
+                const c = Number(usedCoeffs?.[osaIndex] ?? 0);
                 const cw = (Number.isFinite(c) && Number.isFinite(wavelength) && wavelength > 0) ? (c / wavelength) : NaN;
                 const cStr = Number.isFinite(c) ? c.toExponential(6) : String(c);
                 const wStr = Number.isFinite(cw) ? cw.toExponential(6) : String(cw);
@@ -8505,6 +8743,15 @@ export class WavefrontAberrationAnalyzer {
 // Noll index → (n, m) 変換関数（eva-wavefront-plot.jsで使用）
 function nollToNM(j) {
     return nollToNM_deprecated(j);
+}
+
+// Noll index → OSA/ANSI index 変換関数
+function nollToOSA(nollIndex) {
+    const nm = nollToNM(nollIndex);
+    if (!nm || !Number.isFinite(nm.n) || !Number.isFinite(nm.m)) return -1;
+    // OSA/ANSI index: j = (n*(n+2) + m) / 2
+    const osaIndex = (nm.n * (nm.n + 2) + nm.m) / 2;
+    return Math.floor(osaIndex);
 }
 
 function nollToNM_deprecated(j) {
