@@ -106,14 +106,51 @@
       <button id="open-settings-btn" class="top-settings-btn" title="Settings">⚙️</button>
     </div>
     <div class="top-buttons-row">
-      <button id="save-all-btn">Save</button>
-      <button id="load-all-btn">Load</button>
-      <button id="share-url-btn">SHARE</button>
-      <button id="clear-storage-btn">Clear Cache</button>
-      <button id="import-zemax-btn" title="Import a Zemax .zmx file (minimal subset)">Import Zemax</button>
-      <button id="export-zemax-btn" title="Export current optical system as Zemax .zmx">Export Zemax</button>
-      <button id="open-3d-window-btn" title="Render 3D view in popup window">Render</button>
-      <button id="open-system-data-window-btn" title="Open System Data in popup window">System Data</button>
+      <!-- File Operations Group -->
+      <div class="button-group">
+        <span class="button-group-label">File</span>
+        <button id="save-all-btn">Save</button>
+        <button id="load-all-btn">Load</button>
+        <button id="share-url-btn">SHARE</button>
+        <button id="clear-storage-btn">Clear Cache</button>
+      </div>
+
+      <!-- Data Exchange Group -->
+      <div class="button-group">
+        <span class="button-group-label">Data</span>
+        <button id="import-zemax-btn" title="Import a Zemax .zmx file (minimal subset)">Import Zemax</button>
+        <button id="export-zemax-btn" title="Export current optical system as Zemax .zmx">Export Zemax</button>
+      </div>
+
+      <!-- Visualization Group -->
+      <div class="button-group">
+        <span class="button-group-label">View</span>
+        <button id="open-3d-window-btn" title="Render 3D view in popup window">Render</button>
+        <button id="open-system-data-window-btn" title="Open System Data in popup window">System Data</button>
+      </div>
+
+      <!-- Tools & Analysis Group -->
+      <div class="button-group">
+        <span class="button-group-label">Tools</span>
+        <button id="optimize-design-intent-btn" title="Optimize marked variables (V) to satisfy System Requirements (all scenarios).">Optimize</button>
+        <label for="analysis-select" style="margin-left: 8px; font-size: 14px; color: #333;">Analysis:</label>
+        <select id="analysis-select" style="min-width: 180px;">
+          <option value="">Select Analysis...</option>
+          <option value="spot-diagram">Spot Diagram</option>
+          <option value="spherical-aberration">Spherical Aberration</option>
+          <option value="astigmatism">Astigmatism</option>
+          <option value="distortion">Distortion</option>
+          <option value="integrated-aberration">Integrated Aberration</option>
+          <option value="transverse-aberration">Transverse Aberration</option>
+          <option value="opd">Optical Path Difference</option>
+          <option value="psf">Point Spread Function</option>
+          <option value="mtf">Modulation Transfer Function</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Hidden analysis buttons (triggered by dropdown) -->
+    <div style="display: none;">
       <button id="open-spot-diagram-window-btn" title="Open Spot Diagram in popup window">Spot Diagram</button>
       <button id="open-spherical-aberration-window-btn" title="Open Spherical Aberration in popup window">Spherical Aberration</button>
       <button id="open-astigmatism-window-btn" title="Open Astigmatism in popup window">Astigmatism</button>
@@ -123,11 +160,6 @@
       <button id="open-opd-window-btn" title="Open Optical Path Difference in popup window">Optical Path Difference</button>
       <button id="open-psf-window-btn" title="Open Point Spread Function in popup window">Point Spread Function</button>
       <button id="open-mtf-window-btn" title="Open Modulation Transfer Function in popup window">Modulation Transfer Function</button>
-    </div>
-
-    <!-- Suggest / Optimize (Design Intent workflow) -->
-    <div class="top-buttons-row">
-      <button id="optimize-design-intent-btn" title="Optimize marked variables (V) to satisfy System Requirements (all scenarios).">Optimize</button>
     </div>
   </div>
 

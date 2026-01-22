@@ -2233,3 +2233,40 @@ export function getWASMSystem() {
 
 // Global access to WASM system
 window.getWASMSystem = getWASMSystem;
+
+// =============================================================================
+// ANALYSIS DROPDOWN HANDLER
+// =============================================================================
+
+// Setup analysis dropdown to trigger existing button handlers
+const analysisSelect = document.getElementById('analysis-select');
+if (analysisSelect) {
+    analysisSelect.addEventListener('change', (e) => {
+        const value = e.target.value;
+        if (!value) return;
+        
+        // Map dropdown values to existing button IDs
+        const buttonMap = {
+            'spot-diagram': 'open-spot-diagram-window-btn',
+            'spherical-aberration': 'open-spherical-aberration-window-btn',
+            'astigmatism': 'open-astigmatism-window-btn',
+            'distortion': 'open-distortion-window-btn',
+            'integrated-aberration': 'open-integrated-aberration-window-btn',
+            'transverse-aberration': 'open-transverse-aberration-window-btn',
+            'opd': 'open-opd-window-btn',
+            'psf': 'open-psf-window-btn',
+            'mtf': 'open-mtf-window-btn'
+        };
+        
+        const btnId = buttonMap[value];
+        if (btnId) {
+            const btn = document.getElementById(btnId);
+            if (btn) {
+                btn.click();
+            }
+        }
+        
+        // Reset dropdown to placeholder
+        e.target.value = '';
+    });
+}
