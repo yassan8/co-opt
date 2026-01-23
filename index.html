@@ -667,8 +667,8 @@
         setTimeout(async () => {
           try {
             const main = await import('./main.js?v=2026-01-19a');
-            const rayTracing = await import('./raytracing/core/ray-tracing.js');
-            const debugUtils = await import('./debug/debug-utils.js');
+            const rayTracing = await import('./raytracing/core/ray-tracing.js?v=2026-01-23a');
+            const debugUtils = await import('./debug/debug-utils.js?v=2026-01-23a');
             
             // まずmain.jsからgetWASMSystemをグローバルに公開
             if (typeof main.getWASMSystem === 'function') {
@@ -731,7 +731,7 @@
             }
             
             // 絞り周辺光線モジュールを読み込み
-            import('./raytracing/core/ray-marginal.js').then(marginalRayModule => {
+            import('./raytracing/core/ray-marginal.js?v=2026-01-23a').then(marginalRayModule => {
               window.calculateMarginalRay = marginalRayModule.calculateMarginalRay;
               window.calculateAllMarginalRays = marginalRayModule.calculateAllMarginalRays;
             }).catch(error => {
@@ -744,7 +744,7 @@
   </script>
 
   <!-- 絞り周辺光線計算スクリプト -->
-  <script type="module" src="raytracing/core/ray-aperture-edge.js"></script>
+  <script type="module" src="raytracing/core/ray-aperture-edge.js?v=2026-01-23a"></script>
 
   <!-- WASM最適化モジュール -->
   <script src="force-wasm-system.js"></script>
