@@ -7202,6 +7202,7 @@ function __blocks_normalizeProvenanceBlockType(raw) {
     if (key === 'doublet' || key === 'cementeddoublet') return 'Doublet';
     if (key === 'triplet' || key === 'cementedtriplet') return 'Triplet';
     if (key === 'stop' || key === 'aperturestop' || key === 'aperture') return 'Stop';
+    if (key === 'mirror' || key === 'mir' || key === 'reflector') return 'Mirror';
     if (key === 'gap' || key === 'airgap' || key === 'space' || key === 'air') return 'Gap';
     if (key === 'imageplane' || key === 'image') return 'ImagePlane';
     return s;
@@ -7596,6 +7597,30 @@ function __blocks_makeDefaultBlock(blockType, blockId) {
         base.parameters = { semiDiameter: DEFAULT_STOP_SEMI_DIAMETER };
         return base;
     }
+    if (type === 'Mirror') {
+        base.parameters = {
+            radius: 'INF',
+            thickness: 10,
+            material: 'MIRROR',
+            surfType: 'Spherical',
+            conic: 0,
+            coef1: 0,
+            coef2: 0,
+            coef3: 0,
+            coef4: 0,
+            coef5: 0,
+            coef6: 0,
+            coef7: 0,
+            coef8: 0,
+            coef9: 0,
+            coef10: 0,
+            apertureShape: 'Circular',
+            semidia: 10,
+            apertureWidth: 20,
+            apertureHeight: 20
+        };
+        return base;
+    }
     if (type === 'CoordBreak') {
         base.parameters = {
             decenterX: 0,
@@ -7783,6 +7808,7 @@ function __blocks_coerceParamValue(blockType, key, raw) {
 
     // Materials and surf types are strings
     if (/^material\d*$/i.test(key) || /^material$/i.test(key)) return s;
+    if (/^apertureshape$/i.test(key)) return s;
     if (/surftype$/i.test(key)) return s;
 
     // Numeric: parse when possible
@@ -8470,6 +8496,21 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 return `${String(prefix)} coefA${a}`;
             };
 
+            const normalizeApertureShape = (v) => {
+                const s = String(v ?? '').trim();
+                if (!s) return 'Circular';
+                const key = s.replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+                if (key === 'circle' || key === 'circular') return 'Circular';
+                if (key === 'square' || key === 'sq') return 'Square';
+                if (key === 'rect' || key === 'rectangle' || key === 'rectangular') return 'Rectangular';
+                return s;
+            };
+
+            const mirrorShape = (blockType === 'Mirror') ? normalizeApertureShape(getValue('apertureShape')) : null;
+            const isMirrorCircular = mirrorShape === 'Circular';
+            const isMirrorSquare = mirrorShape === 'Square';
+            const isMirrorRect = mirrorShape === 'Rectangular';
+
             if (blockType === 'ObjectPlane') {
                 items.push(
                     { kind: 'objectMode', key: 'objectDistanceMode', label: 'object (INF/finite)', noOptimize: true },
@@ -8550,6 +8591,25 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             } else if (blockType === 'Stop') {
                 // UX alias: the surface table uses "semidia"; Blocks store it as Stop.parameters.semiDiameter.
                 items.push({ key: 'semiDiameter', label: 'semidia' });
+            } else if (blockType === 'Mirror') {
+                items.push(
+                    { kind: 'apertureShape', key: 'apertureShape', label: 'apertureShape', noOptimize: true },
+                    { key: 'semidia', label: 'semidia', noOptimize: true },
+                    { key: 'apertureWidth', label: 'apertureWidth', noOptimize: true },
+                    { key: 'apertureHeight', label: 'apertureHeight', noOptimize: true },
+                    { key: 'radius', label: 'radius' },
+                    { key: 'thickness', label: 'thickness' },
+                    { key: 'surfType', label: 'surfType' },
+                    { key: 'conic', label: 'conic' }
+                );
+
+                if (shouldShowCoefsForSurfTypeKey('surfType')) {
+                    const st = getValue('surfType');
+                    for (let i = 1; i <= 10; i++) {
+                        const fb = `coef${i}`;
+                        items.push({ key: fb, label: asphereCoefLabel('mirror', st, i, fb) });
+                    }
+                }
             } else if (blockType === 'CoordBreak') {
                 items.push(
                     { key: 'decenterX', label: 'decenterX' },
@@ -8570,9 +8630,17 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 const isObjectDistanceItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'objectDistance';
                 const isImageSemiDiaModeItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'imageSemiDiaMode';
                 const isGapThicknessModeItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'gapThicknessMode';
+                const isApertureShapeItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'apertureShape';
                 const isSurfTypeItem = !isApertureItem && it && typeof it === 'object' && typeof it.key === 'string' && /surftype$/i.test(String(it.key));
                 const isMaterialItem = !isApertureItem && it && typeof it === 'object' && typeof it.key === 'string' && /^material\d*$/i.test(String(it.key));
                 const allowOptimize = !isApertureItem && !(it && typeof it === 'object' && it.noOptimize);
+
+                if (blockType === 'Mirror') {
+                    const k = String(it?.key ?? '');
+                    if (k === 'semidia' && !isMirrorCircular) continue;
+                    if (k === 'apertureWidth' && !(isMirrorSquare || isMirrorRect)) continue;
+                    if (k === 'apertureHeight' && !isMirrorRect) continue;
+                }
                 const line = document.createElement('div');
                 line.style.display = 'flex';
                 line.style.alignItems = 'center';
@@ -8649,7 +8717,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 };
 
                 let valueEl;
-                if (isObjectModeItem || isImageSemiDiaModeItem || isGapThicknessModeItem) {
+                if (isObjectModeItem || isImageSemiDiaModeItem || isGapThicknessModeItem || isApertureShapeItem) {
                     const sel = document.createElement('select');
                     sel.style.flex = '0 0 180px';
                     sel.style.fontSize = '12px';
@@ -8702,7 +8770,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                 })();
                             }
                         });
-                    } else {
+                    } else if (isGapThicknessModeItem) {
                         // Gap.thicknessMode (pre-image gap only)
                         sel.innerHTML = [
                             '<option value="">(manual)</option>',
@@ -8777,6 +8845,27 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                 }
                                 try { refreshBlockInspector(); } catch (_) {}
                             })();
+                        });
+                    } else {
+                        // Mirror.apertureShape
+                        sel.innerHTML = [
+                            '<option value="Circular">Circular</option>',
+                            '<option value="Square">Square</option>',
+                            '<option value="Rectangular">Rectangular</option>'
+                        ].join('');
+
+                        const cur = normalizeApertureShape(currentValue);
+                        sel.value = cur;
+
+                        sel.addEventListener('change', (e) => {
+                            e.stopPropagation();
+                            const desired = String(sel.value ?? 'Circular');
+                            const ok = commitValue(desired);
+                            if (!ok) {
+                                sel.value = cur;
+                                return;
+                            }
+                            try { refreshBlockInspector(); } catch (_) {}
                         });
                     }
 
@@ -9401,6 +9490,35 @@ function __blocks_mapSurfaceEditToBlockChange(edit) {
             const stRaw = row?.surfType ?? row?.['surf type'] ?? row?.surfTypeName ?? row?.type;
             return normalizeSurfType(stRaw);
         } catch (_) {
+            return null;
+        }
+
+        if (blockType === 'Mirror') {
+            if (field === 'semidia') {
+                return { blockId: String(blockId), blockType: 'Mirror', variable: 'semidia', oldValue, newValue };
+            }
+            if (field === 'surftype') {
+                const normalized = normalizeSurfType(newValue);
+                if (!normalized) return null;
+                return { blockId: String(blockId), blockType: 'Mirror', variable: 'surfType', oldValue, newValue: normalized };
+            }
+            if (field === 'conic') {
+                const stCh = maybeSurfTypeChange('surfType');
+                return stCh ? [stCh, { blockId: String(blockId), blockType: 'Mirror', variable: 'conic', oldValue, newValue }] : { blockId: String(blockId), blockType: 'Mirror', variable: 'conic', oldValue, newValue };
+            }
+            const m = /^coef(\d+)$/.exec(field);
+            if (m) {
+                const idx = Number(m[1]);
+                if (!Number.isFinite(idx) || idx < 1 || idx > 10) return null;
+                const stCh = maybeSurfTypeChange('surfType');
+                return stCh ? [stCh, { blockId: String(blockId), blockType: 'Mirror', variable: `coef${idx}`, oldValue, newValue }] : { blockId: String(blockId), blockType: 'Mirror', variable: `coef${idx}`, oldValue, newValue };
+            }
+            if (field === 'radius') {
+                return { blockId: String(blockId), blockType: 'Mirror', variable: 'radius', oldValue, newValue };
+            }
+            if (field === 'thickness') {
+                return { blockId: String(blockId), blockType: 'Mirror', variable: 'thickness', oldValue, newValue };
+            }
             return null;
         }
     };

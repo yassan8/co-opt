@@ -434,11 +434,11 @@ export function validateBlocksConfiguration(config) {
     }
 
     const blockType = block.blockType;
-    if (blockType !== 'ObjectPlane' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordBreak' && blockType !== 'ImagePlane') {
+    if (blockType !== 'ObjectPlane' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordBreak' && blockType !== 'Mirror' && blockType !== 'ImagePlane') {
       issues.push({
         severity: 'fatal',
         phase: 'validate',
-        message: `Unsupported blockType: ${blockType} (MVP supports ObjectPlane, Lens, Doublet, Triplet, Gap, Stop, CoordBreak, ImagePlane only).`,
+        message: `Unsupported blockType: ${blockType} (MVP supports ObjectPlane, Lens, Doublet, Triplet, Gap, Stop, CoordBreak, Mirror, ImagePlane only).`,
         blockId: block.blockId
       });
       continue;
@@ -558,6 +558,63 @@ export function validateBlocksConfiguration(config) {
             message: 'Lens.centerThickness is INF; this is unusual. Treating as INF.',
             blockId: block.blockId
           });
+        }
+      }
+    }
+
+    if (blockType === 'Mirror') {
+      const radius = getParamOrVarValue(parameters, variables, 'radius');
+      const thickness = getParamOrVarValue(parameters, variables, 'thickness');
+      const material = getParamOrVarValue(parameters, variables, 'material');
+
+      const surfType = normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, 'surfType'));
+      if (surfType && !ALLOWED_SURF_TYPES.has(surfType)) {
+        issues.push({ severity: 'fatal', phase: 'validate', message: `Mirror.surfType must be one of: Spherical, Aspheric even, Aspheric odd. Got: ${surfType}`, blockId: block.blockId });
+      }
+
+      if (radius === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Mirror.radius is required.', blockId: block.blockId });
+      if (thickness === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Mirror.thickness is required.', blockId: block.blockId });
+
+      if (typeof material !== 'string' || material.trim() === '') {
+        issues.push({ severity: 'warning', phase: 'validate', message: 'Mirror.material is missing; MIRROR will be assumed.', blockId: block.blockId });
+      } else if (String(material).trim().toUpperCase() !== 'MIRROR') {
+        issues.push({ severity: 'warning', phase: 'validate', message: `Mirror.material should be MIRROR (got: ${String(material)})`, blockId: block.blockId });
+      }
+
+      const normalizeShape = (v) => {
+        const s = String(v ?? '').trim();
+        if (!s) return 'Circular';
+        const key = s.replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+        if (key === 'circle' || key === 'circular') return 'Circular';
+        if (key === 'square' || key === 'sq') return 'Square';
+        if (key === 'rect' || key === 'rectangle' || key === 'rectangular') return 'Rectangular';
+        return s;
+      };
+
+      const shape = normalizeShape(getParamOrVarValue(parameters, variables, 'apertureShape'));
+      if (shape !== 'Circular' && shape !== 'Square' && shape !== 'Rectangular') {
+        issues.push({ severity: 'warning', phase: 'validate', message: `Mirror.apertureShape is unknown (${shape}).`, blockId: block.blockId });
+      }
+
+      const semidiaRaw = getParamOrVarValue(parameters, variables, 'semidia');
+      const widthRaw = getParamOrVarValue(parameters, variables, 'apertureWidth');
+      const heightRaw = getParamOrVarValue(parameters, variables, 'apertureHeight');
+      const semidiaVal = Number(String(semidiaRaw ?? '').trim());
+      const widthVal = Number(String(widthRaw ?? '').trim());
+      const heightVal = Number(String(heightRaw ?? '').trim());
+
+      if (shape === 'Circular') {
+        if (semidiaRaw !== undefined && (!Number.isFinite(semidiaVal) || semidiaVal <= 0)) {
+          issues.push({ severity: 'warning', phase: 'validate', message: `Mirror.semidia should be positive for Circular aperture (${String(semidiaRaw)}).`, blockId: block.blockId });
+        }
+      } else if (shape === 'Square') {
+        const side = Number.isFinite(widthVal) ? widthVal : heightVal;
+        if (!Number.isFinite(side) || side <= 0) {
+          issues.push({ severity: 'warning', phase: 'validate', message: `Mirror.apertureWidth should be positive for Square aperture (${String(widthRaw ?? heightRaw)}).`, blockId: block.blockId });
+        }
+      } else if (shape === 'Rectangular') {
+        if (!Number.isFinite(widthVal) || widthVal <= 0 || !Number.isFinite(heightVal) || heightVal <= 0) {
+          issues.push({ severity: 'warning', phase: 'validate', message: `Mirror.apertureWidth/Height should be positive for Rectangular aperture (w=${String(widthRaw)}, h=${String(heightRaw)}).`, blockId: block.blockId });
         }
       }
     }
@@ -975,6 +1032,13 @@ export function expandBlocksToOpticalSystemRows(blocks) {
   let sawImagePlane = false;
   let imagePlaneBlockId = null;
   let imagePlaneOverrides = null;
+  let currentZSign = 1;
+
+  const applySignedThickness = (value) => {
+    if (value === 'INF') return 'INF';
+    if (typeof value === 'number' && Number.isFinite(value)) return value * currentZSign;
+    return value;
+  };
 
   for (const block of blocks) {
     const blockId = isPlainObject(block) ? block.blockId : undefined;
@@ -1072,6 +1136,16 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       }
     };
 
+    const normalizeApertureShape = (value) => {
+      const s = String(value ?? '').trim();
+      if (!s) return 'Circular';
+      const key = s.replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+      if (key === 'circle' || key === 'circular') return 'Circular';
+      if (key === 'square' || key === 'sq') return 'Square';
+      if (key === 'rect' || key === 'rectangle' || key === 'rectangular') return 'Rectangular';
+      return s;
+    };
+
     if (type === 'Lens' || type === 'PositiveLens') {
       const front = createBlankSurfaceRow(rows.length, getLastNonStopRow());
       const back = createBlankSurfaceRow(rows.length + 1, front);
@@ -1116,7 +1190,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const backCoefsRaw = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `backCoef${i + 1}`));
 
       front.radius = normalizeRadiusToRowValue(frontRadius);
-      front.thickness = normalizeThicknessToRowValue(centerThickness);
+      front.thickness = applySignedThickness(normalizeThicknessToRowValue(centerThickness));
       front.material = String(material ?? '').trim();
 
       applyDerivedGlassDisplay(front);
@@ -1255,12 +1329,12 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const material2 = getParamOrVarValue(params, vars, 'material2');
 
       s1.radius = normalizeRadiusToRowValue(radius1);
-      s1.thickness = normalizeThicknessToRowValue(thickness1);
+      s1.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness1));
       s1.material = String(material1 ?? '').trim();
       applyDerivedGlassDisplay(s1);
 
       s2.radius = normalizeRadiusToRowValue(radius2);
-      s2.thickness = normalizeThicknessToRowValue(thickness2);
+      s2.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness2));
       s2.material = String(material2 ?? '').trim();
       applyDerivedGlassDisplay(s2);
 
@@ -1350,17 +1424,17 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const material3 = getParamOrVarValue(params, vars, 'material3');
 
       s1.radius = normalizeRadiusToRowValue(radius1);
-      s1.thickness = normalizeThicknessToRowValue(thickness1);
+      s1.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness1));
       s1.material = String(material1 ?? '').trim();
       applyDerivedGlassDisplay(s1);
 
       s2.radius = normalizeRadiusToRowValue(radius2);
-      s2.thickness = normalizeThicknessToRowValue(thickness2);
+      s2.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness2));
       s2.material = String(material2 ?? '').trim();
       applyDerivedGlassDisplay(s2);
 
       s3.radius = normalizeRadiusToRowValue(radius3);
-      s3.thickness = normalizeThicknessToRowValue(thickness3);
+      s3.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness3));
       s3.material = String(material3 ?? '').trim();
       applyDerivedGlassDisplay(s3);
 
@@ -1401,6 +1475,62 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       continue;
     }
 
+    if (type === 'Mirror') {
+      const mirror = createBlankSurfaceRow(rows.length, getLastNonStopRow());
+      mirror._blockType = 'Mirror';
+      mirror._blockId = blockId || null;
+      mirror._surfaceRole = 'mirror';
+
+      const radius = getParamOrVarValue(params, vars, 'radius');
+      const thickness = getParamOrVarValue(params, vars, 'thickness');
+      const matRaw = getParamOrVarValue(params, vars, 'material');
+
+      mirror.radius = normalizeRadiusToRowValue(radius);
+
+      const surfTypeRaw = getParamOrVarValue(params, vars, 'surfType');
+      const conicRaw = getParamOrVarValue(params, vars, 'conic');
+      const coefsRaw = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `coef${i + 1}`));
+      applyAsphereFieldsFromParams(mirror, surfTypeRaw, conicRaw, coefsRaw);
+
+      const mat = String(matRaw ?? '').trim();
+      mirror.material = mat ? mat : 'MIRROR';
+      if (mirror.material.toUpperCase() !== 'MIRROR') mirror.material = 'MIRROR';
+      applyDerivedGlassDisplay(mirror);
+
+      const shape = normalizeApertureShape(getParamOrVarValue(params, vars, 'apertureShape'));
+      const semidiaRaw = getParamOrVarValue(params, vars, 'semidia');
+      const widthRaw = getParamOrVarValue(params, vars, 'apertureWidth');
+      const heightRaw = getParamOrVarValue(params, vars, 'apertureHeight');
+      const widthVal = Number(String(widthRaw ?? '').trim());
+      const heightVal = Number(String(heightRaw ?? '').trim());
+
+      mirror._apertureShape = shape;
+      if (shape === 'Circular') {
+        if (semidiaRaw !== null && semidiaRaw !== undefined && String(semidiaRaw).trim() !== '') {
+          mirror.semidia = semidiaRaw;
+        } else {
+          mirror.semidia = '';
+        }
+      } else {
+        const w = Number.isFinite(widthVal) && widthVal > 0 ? widthVal : NaN;
+        const h = Number.isFinite(heightVal) && heightVal > 0 ? heightVal : NaN;
+        const side = (shape === 'Square') ? (Number.isFinite(w) ? w : h) : NaN;
+        const finalW = (shape === 'Square') ? side : w;
+        const finalH = (shape === 'Square') ? side : h;
+        if (Number.isFinite(finalW)) mirror._apertureWidth = finalW;
+        if (Number.isFinite(finalH)) mirror._apertureHeight = finalH;
+        const maxDim = Math.max(Number.isFinite(finalW) ? finalW : 0, Number.isFinite(finalH) ? finalH : 0);
+        mirror.semidia = (maxDim > 0) ? String(maxDim / 2) : '';
+      }
+
+      // Mirror flips propagation direction for subsequent thickness values.
+      currentZSign *= -1;
+      mirror.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness));
+
+      rows.push(mirror);
+      continue;
+    }
+
     if (type === 'Gap' || type === 'AirGap') {
       if (rows.length <= 1) {
         issues.push({
@@ -1438,7 +1568,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       }
 
       const thickness = getParamOrVarValue(params, vars, 'thickness');
-      prev.thickness = normalizeThicknessToRowValue(thickness);
+      prev.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness));
 
       const matRaw = getParamOrVarValue(params, vars, 'material');
       const mat = String(matRaw ?? '').trim();

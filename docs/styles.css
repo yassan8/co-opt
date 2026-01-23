@@ -198,6 +198,16 @@ h3 {
     background-color: inherit;
 }
 
+#table-system-requirements .sr-table.sr-params-expanded td {
+    padding-top: 12px;
+    padding-bottom: 3px;
+    vertical-align: top;
+}
+
+#table-system-requirements .sr-table.sr-params-expanded tbody tr {
+    height: 38px;
+}
+
 #table-system-requirements .sr-table tbody tr {
     background: white;
 }
@@ -242,6 +252,24 @@ h3 {
 
 #table-system-requirements .params-expanded {
     flex-wrap: nowrap;
+    align-items: stretch;
+}
+
+#table-system-requirements .params-expanded .param-input-container {
+    position: relative;
+    display: block;
+}
+
+#table-system-requirements .params-expanded .param-input-label {
+    position: absolute;
+    top: -10px;
+    left: 2px;
+    font-size: 9px;
+    line-height: 9px;
+    height: 9px;
+    color: #888;
+    white-space: nowrap;
+    pointer-events: none;
 }
 
 #table-system-requirements .params-expanded input,

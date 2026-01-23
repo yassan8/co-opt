@@ -684,6 +684,118 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
   }
 }
 
+// Sag計算を含む矩形アパーチャ描画関数（サグ追従）
+export function drawRectApertureWithOriginAndSurface(scene, width = 20, height = 20, segmentsPerEdge = 128, color = 0x000000, origin = {x: 0, y: 0, z: 0}, rotationMatrix = null, surf = null) {
+  const { THREE: THREE_CTX } = getSceneThreeContext(scene);
+  if (!origin || typeof origin !== 'object') origin = { x: 0, y: 0, z: 0 };
+  if (typeof origin.x !== 'number') origin.x = 0;
+  if (typeof origin.y !== 'number') origin.y = 0;
+  if (typeof origin.z !== 'number') origin.z = 0;
+
+  if (!isFinite(width) || !isFinite(height) || width <= 0 || height <= 0) return;
+
+  const halfW = width / 2;
+  const halfH = height / 2;
+  const seg = Math.max(4, Math.floor(segmentsPerEdge || 0));
+
+  // 非球面パラメータを準備
+  let asphericParams = null;
+  let asphereMode = 'even';
+  if (surf && surf.radius && surf.radius !== 'INF') {
+    const radius = parseFloat(surf.radius);
+    if (isFinite(radius) && Math.abs(radius) > 0.001) {
+      asphericParams = {
+        radius: radius,
+        conic: Number(surf.conic) || 0,
+        coef1: Number(surf.coef1) || 0,
+        coef2: Number(surf.coef2) || 0,
+        coef3: Number(surf.coef3) || 0,
+        coef4: Number(surf.coef4) || 0,
+        coef5: Number(surf.coef5) || 0,
+        coef6: Number(surf.coef6) || 0,
+        coef7: Number(surf.coef7) || 0,
+        coef8: Number(surf.coef8) || 0,
+        coef9: Number(surf.coef9) || 0,
+        coef10: Number(surf.coef10) || 0
+      };
+      try {
+        const st = String(surf.surfType ?? '').toLowerCase();
+        if (st.includes('odd')) asphereMode = 'odd';
+      } catch (_) {}
+    }
+  }
+
+  const positions = [];
+  const pushPoint = (x, y) => {
+    let sagZ = 0;
+    if (asphericParams) {
+      const r = Math.sqrt(x * x + y * y);
+      sagZ = asphericSurfaceZ(r, asphericParams, asphereMode);
+      if (!isFinite(sagZ)) sagZ = 0;
+    }
+
+    let localPoint = new THREE_CTX.Vector3(x, y, sagZ);
+    if (rotationMatrix && Array.isArray(rotationMatrix) && rotationMatrix.length >= 3) {
+      const R = rotationMatrix;
+      const newX = R[0][0] * localPoint.x + R[0][1] * localPoint.y + R[0][2] * localPoint.z;
+      const newY = R[1][0] * localPoint.x + R[1][1] * localPoint.y + R[1][2] * localPoint.z;
+      const newZ = R[2][0] * localPoint.x + R[2][1] * localPoint.y + R[2][2] * localPoint.z;
+      localPoint = new THREE_CTX.Vector3(newX, newY, newZ);
+    }
+
+    positions.push(
+      origin.x + localPoint.x,
+      origin.y + localPoint.y,
+      origin.z + localPoint.z
+    );
+  };
+
+  // Top edge
+  for (let i = 0; i < seg; i++) {
+    const t = i / seg;
+    const x = -halfW + (2 * halfW) * t;
+    pushPoint(x, halfH);
+  }
+  // Right edge
+  for (let i = 0; i < seg; i++) {
+    const t = i / seg;
+    const y = halfH - (2 * halfH) * t;
+    pushPoint(halfW, y);
+  }
+  // Bottom edge
+  for (let i = 0; i < seg; i++) {
+    const t = i / seg;
+    const x = halfW - (2 * halfW) * t;
+    pushPoint(x, -halfH);
+  }
+  // Left edge
+  for (let i = 0; i < seg; i++) {
+    const t = i / seg;
+    const y = -halfH + (2 * halfH) * t;
+    pushPoint(-halfW, y);
+  }
+
+  const geometry = new THREE_CTX.BufferGeometry();
+  geometry.setAttribute('position', new THREE_CTX.Float32BufferAttribute(positions, 3));
+
+  const material = new THREE_CTX.LineBasicMaterial({
+    color: color,
+    linewidth: 3,
+    transparent: true,
+    opacity: 1.0
+  });
+
+  const line = new THREE_CTX.LineLoop(geometry, material);
+  line.userData = {
+    type: 'apertureRect',
+    width,
+    height,
+    isOpticalElement: true
+  };
+
+  scene.add(line);
+}
+
 // --- 座標変換ヘルパー関数（ray-tracing.jsと同様） ---
 function applyRotation3D(vector, rotationRad) {
   // 回転順: Z→Y→X

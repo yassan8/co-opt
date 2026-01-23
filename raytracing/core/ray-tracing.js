@@ -1842,6 +1842,32 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       
       // 🆕 実絞り面の特別処理（aperture制限）
       let apertureLimit = Infinity;
+
+      // Rectangular/Square aperture support (Design Intent)
+      const apertureShapeRaw = row._apertureShape ?? row.apertureShape ?? row.ApertureShape;
+      const shapeKey = String(apertureShapeRaw ?? '').trim().replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+      const isSquareShape = shapeKey === 'square' || shapeKey === 'sq';
+      const isRectShape = isSquareShape || shapeKey === 'rect' || shapeKey === 'rectangle' || shapeKey === 'rectangular';
+
+      let rectHalfW = NaN;
+      let rectHalfH = NaN;
+      if (isRectShape) {
+        const wRaw = row._apertureWidth ?? row.apertureWidth ?? row.apertureX ?? row.apertureWidthMm;
+        const hRaw = row._apertureHeight ?? row.apertureHeight ?? row.apertureY ?? row.apertureHeightMm;
+        const wNum = Number(wRaw);
+        const hNum = Number(hRaw);
+        if (isSquareShape) {
+          const side = Number.isFinite(wNum) ? wNum : (Number.isFinite(hNum) ? hNum : NaN);
+          if (Number.isFinite(side) && side > 0) {
+            rectHalfW = side / 2;
+            rectHalfH = side / 2;
+          }
+        } else {
+          if (Number.isFinite(wNum) && wNum > 0) rectHalfW = wNum / 2;
+          if (Number.isFinite(hNum) && hNum > 0) rectHalfH = hNum / 2;
+        }
+      }
+      const useRectAperture = Number.isFinite(rectHalfW) && Number.isFinite(rectHalfH);
       
       // 1. object type が "STO" の場合（実絞り面）
       if (row["object type"] === "STO" || String(row.object).toUpperCase() === "STO") {
@@ -1858,21 +1884,60 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       // NOTE: semidia 未指定時に thickness を代用すると、物理的に存在しない開口制限を
       //       誤って導入してしまい、軸外で大量に光線がブロックされる。n      // CB rows propagate the prior surface's semidia in __cooptActualSemidia
       // (since semidia column is reused for decenterX).
-      const semiDiaValue = row.__cooptActualSemidia ?? row.semidia;
-      const semiDiaNum = Number(semiDiaValue);
-      const semiDia = (semiDiaValue === 'Auto' || semiDiaValue === '' || !Number.isFinite(semiDiaNum) || semiDiaNum <= 0)
-        ? Infinity
-        : semiDiaNum;
-      if (isFinite(semiDia)) {
-        apertureLimit = Math.min(apertureLimit, semiDia);
-        if (isDetailedDebug) {
-          debugLog.push(`📐 平面semidia制限: ${semiDia.toFixed(3)}mm → 最終制限=${apertureLimit.toFixed(3)}mm`);
+      if (!useRectAperture) {
+        const semiDiaValue = row.__cooptActualSemidia ?? row.semidia;
+        const semiDiaNum = Number(semiDiaValue);
+        const semiDia = (semiDiaValue === 'Auto' || semiDiaValue === '' || !Number.isFinite(semiDiaNum) || semiDiaNum <= 0)
+          ? Infinity
+          : semiDiaNum;
+        if (isFinite(semiDia)) {
+          apertureLimit = Math.min(apertureLimit, semiDia);
+          if (isDetailedDebug) {
+            debugLog.push(`📐 平面semidia制限: ${semiDia.toFixed(3)}mm → 最終制限=${apertureLimit.toFixed(3)}mm`);
+          }
         }
       }
       
       // 🆕 物理的開口制限の適用（Image面は除く）
       const isImageSurface = row["object type"] === "Image" || row.object === "Image";
-      if (!isImageSurface && isFinite(apertureLimit) && hitRadius > apertureLimit) {
+      if (!isImageSurface && useRectAperture) {
+        const hitX = Math.abs(hitPoint.x);
+        const hitY = Math.abs(hitPoint.y);
+        if (hitX > rectHalfW || hitY > rectHalfH) {
+          if (isDetailedDebug) {
+            debugLog.push(`❌ PHYSICAL APERTURE BLOCK: Ray blocked by rectangular aperture on Surface ${i + 1}`);
+            debugLog.push(`   Hit: (${hitPoint.x.toFixed(6)}, ${hitPoint.y.toFixed(6)})mm > halfSize=(${rectHalfW.toFixed(6)}, ${rectHalfH.toFixed(6)})mm`);
+          }
+          __captureRayTraceFailure('PHYSICAL_APERTURE_BLOCK', {
+            surfaceIndex: i,
+            surfaceNumber: i + 1,
+            surfaceType: row["object type"] || row.object || '',
+            surfType: row.surfType || '',
+            hitPointLocalMm: {
+              x: Number.isFinite(Number(hitPoint?.x)) ? Number(hitPoint.x) : null,
+              y: Number.isFinite(Number(hitPoint?.y)) ? Number(hitPoint.y) : null,
+              z: Number.isFinite(Number(hitPoint?.z)) ? Number(hitPoint.z) : null,
+            },
+            localRayAtSurface: {
+              pos: {
+                x: Number.isFinite(Number(localRay?.pos?.x)) ? Number(localRay.pos.x) : null,
+                y: Number.isFinite(Number(localRay?.pos?.y)) ? Number(localRay.pos.y) : null,
+                z: Number.isFinite(Number(localRay?.pos?.z)) ? Number(localRay.pos.z) : null,
+              },
+              dir: {
+                x: Number.isFinite(Number(localRay?.dir?.x)) ? Number(localRay.dir.x) : null,
+                y: Number.isFinite(Number(localRay?.dir?.y)) ? Number(localRay.dir.y) : null,
+                z: Number.isFinite(Number(localRay?.dir?.z)) ? Number(localRay.dir.z) : null,
+              },
+            },
+            apertureRectHalfMm: {
+              x: rectHalfW,
+              y: rectHalfH
+            }
+          });
+          return null;
+        }
+      } else if (!isImageSurface && isFinite(apertureLimit) && hitRadius > apertureLimit) {
         if (isDetailedDebug) {
           debugLog.push(`❌ PHYSICAL APERTURE BLOCK: Ray physically blocked on PLANE Surface ${i + 1}`);
           debugLog.push(`   Hit radius: ${hitRadius.toFixed(6)}mm > Aperture limit: ${apertureLimit.toFixed(6)}mm`);

@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.js';
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin,
          drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, 
-         drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './surface.js';
+         drawSemidiaRingWithOriginAndSurface, drawRectApertureWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './surface.js';
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordBreak';
@@ -110,6 +110,47 @@ function __coopt_getRenderSemidiaMm(surface) {
     } catch (_) {}
 
     return null;
+}
+
+function __coopt_getRenderApertureShape(surface) {
+    const raw = surface?._apertureShape ?? surface?.apertureShape ?? surface?.ApertureShape;
+    const s = String(raw ?? '').trim();
+    if (!s) return 'Circular';
+    const key = s.replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+    if (key === 'circle' || key === 'circular') return 'Circular';
+    if (key === 'square' || key === 'sq') return 'Square';
+    if (key === 'rect' || key === 'rectangle' || key === 'rectangular') return 'Rectangular';
+    return 'Circular';
+}
+
+function __coopt_getRenderApertureDims(surface) {
+    const wRaw = surface?._apertureWidth ?? surface?.apertureWidth ?? surface?.apertureX ?? surface?.apertureWidthMm;
+    const hRaw = surface?._apertureHeight ?? surface?.apertureHeight ?? surface?.apertureY ?? surface?.apertureHeightMm;
+    const w = __coopt_parseNumberOrNull(wRaw);
+    const h = __coopt_parseNumberOrNull(hRaw);
+    return { width: w, height: h };
+}
+
+function __coopt_drawApertureOutline(scene, surface, semidia, origin, rotationMatrix, color) {
+    const shape = __coopt_getRenderApertureShape(surface);
+    const { width, height } = __coopt_getRenderApertureDims(surface);
+
+    if (shape === 'Square') {
+        const side = (width !== null) ? width : height;
+        if (side !== null && side > 0) {
+            drawRectApertureWithOriginAndSurface(scene, side, side, 128, color, origin, rotationMatrix, surface);
+            return;
+        }
+    }
+
+    if (shape === 'Rectangular') {
+        if (width !== null && width > 0 && height !== null && height > 0) {
+            drawRectApertureWithOriginAndSurface(scene, width, height, 128, color, origin, rotationMatrix, surface);
+            return;
+        }
+    }
+
+    __coopt_drawApertureOutline(scene, surface, semidia, origin, rotationMatrix, color);
 }
 
 function __coopt_loadSurfaceColorOverrides() {
@@ -327,14 +368,13 @@ export function drawOpticalSystemSurfaces(options = {}) {
                         console.log(`🔍 Object plane drawing params: semidia=${planeSemidia}, origin=`, objOrigin);
                         
                         // リング描画
-                        drawSemidiaRingWithOriginAndSurface(
-                            scene, 
+                        __coopt_drawApertureOutline(
+                            scene,
+                            surface,
                             planeSemidia,
-                            100,
-                            0x808080, // グレー
                             objOrigin,
                             objRotMat,
-                            surface
+                            0x808080 // グレー
                         );
                         
                         // 十字線描画
@@ -426,15 +466,14 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             console.log(`🔍 Image plane: no surfaceOrigins available, using default origin`);
                         }
                         
-                        // リング描画
-                        drawSemidiaRingWithOriginAndSurface(
-                            scene, 
+                        // アパーチャ枠描画
+                        __coopt_drawApertureOutline(
+                            scene,
+                            surface,
                             planeSemidia,
-                            100,
-                            0x404040, // 暗いグレー
                             imgOrigin,
                             imgRotMat,
-                            surface
+                            0x404040 // 暗いグレー
                         );
                         
                         // 十字線描画
@@ -534,14 +573,13 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             if (ringSemidia === null) {
                                 console.log(`⏭️ Stop ring skipped (no semidia) for surface ${i}`);
                             } else {
-                            drawSemidiaRingWithOriginAndSurface(
-                                scene, 
+                            __coopt_drawApertureOutline(
+                                scene,
+                                surface,
                                 ringSemidia,
-                                100,                     // segments
-                                0x000000,               // color (黒)
-                                surfaceOrigins[i]?.origin || {x: 0, y: 0, z: 0},       // origin オブジェクト
-                                surfaceOrigins[i]?.rotationMatrix || null,            // rotationMatrix
-                                surface                  // surf オブジェクト
+                                surfaceOrigins[i]?.origin || {x: 0, y: 0, z: 0},
+                                surfaceOrigins[i]?.rotationMatrix || null,
+                                0x000000
                             );
                             console.log(`✅ Stop ring drawn for surface ${i}`);
                             }
@@ -623,14 +661,13 @@ export function drawOpticalSystemSurfaces(options = {}) {
                         if (ringSemidia === null) {
                             console.log(`⏭️ Semidia ring skipped (no semidia) for surface ${i}`);
                         } else {
-                        drawSemidiaRingWithOriginAndSurface(
-                            scene, 
+                        __coopt_drawApertureOutline(
+                            scene,
+                            surface,
                             ringSemidia,
-                            100,                     // segments
-                            0x000000,               // color (黒)
-                            surfaceOrigins[i]?.origin || {x: 0, y: 0, z: 0},       // origin オブジェクト
-                            surfaceOrigins[i]?.rotationMatrix || null,            // rotationMatrix
-                            surface                  // surf オブジェクト
+                            surfaceOrigins[i]?.origin || {x: 0, y: 0, z: 0},
+                            surfaceOrigins[i]?.rotationMatrix || null,
+                            0x000000
                         );
                         console.log(`✅ Semidia ring drawn for surface ${i}`);
                         }
