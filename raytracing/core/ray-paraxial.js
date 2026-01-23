@@ -1,7 +1,7 @@
 // ray-paraxial.js
 // 近軸光線追跡による光学系の主要諸量計算関数
 
-import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex } from './glass.js';
+import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex } from '../../glass.js';
 
 // デバッグレベル設定（0: エラーのみ、1: 警告+エラー、2: 情報+警告+エラー、3: すべて）
 const DEBUG_LEVEL = 1;
