@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.js';
 import { findStopSurface } from './system-renderer.js';
-import { asphericSurfaceZ } from '../surface.js';
+import { asphericSurfaceZ } from './surface.js';
 import { findInfiniteSystemChiefRayOrigin } from '../raytracing/generation/gen-ray-cross-infinite.js';
 import { findFiniteSystemChiefRayDirection } from '../raytracing/generation/gen-ray-cross-finite.js';
 

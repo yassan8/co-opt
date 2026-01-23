@@ -6,7 +6,7 @@ import { clearAllOpticalElements } from '../optical/system-renderer.js';
 import { setRayEmissionPattern, setRayColorMode } from '../optical/ray-renderer.js';
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.js';
 import { calculateOpticalSystemOffset } from '../utils/math.js';
-import { drawLensCrossSectionWithSurfaceOrigins, harmonizeSceneGeometry } from '../surface.js';
+import { drawLensCrossSectionWithSurfaceOrigins, harmonizeSceneGeometry } from '../optical/surface.js';
 
 const __COOPT_FORCE_INFINITE_PUPIL_MODE_KEY = 'coopt.forceInfinitePupilMode';
 

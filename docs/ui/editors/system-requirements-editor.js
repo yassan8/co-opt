@@ -5,7 +5,7 @@
  */
 
 import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.js';
-import { getOpticalSystemRows } from './utils/data-utils.js';
+import { getOpticalSystemRows } from '../../utils/data-utils.js';
 
 // Zernike Noll index names (0-37)
 const ZERNIKE_NOLL_NAMES = [

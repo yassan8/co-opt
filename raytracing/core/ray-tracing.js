@@ -6,7 +6,7 @@ if (typeof window !== 'undefined') {
 
 // Import functions from ray-paraxial.js without destructuring for compatibility
 import * as rayParaxial from './ray-paraxial.js';
-import { asphericSagDerivative } from '../../surface-math.js';
+import { asphericSagDerivative } from '../../optical/surface-math.js';
 const getSafeThickness = rayParaxial.getSafeThickness;
 const getRefractiveIndex = rayParaxial.getRefractiveIndex;
 // 循環依存を避けるため、main.jsからのimportを削除

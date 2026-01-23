@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.js';
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin,
          drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, 
-         drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from '../surface.js';
+         drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './surface.js';
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordBreak';

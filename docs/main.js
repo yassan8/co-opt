@@ -20,7 +20,7 @@ import { loadTableData as loadOpticalSystemTableData, saveTableData as saveLensT
 
 // Optical system modules
 import { drawOpticalSystemSurfaces, clearAllOpticalElements, findStopSurface } from './optical/system-renderer.js';
-import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './surface.js';
+import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './optical/surface.js';
 
 // Ray tracing modules
 import { traceRay, calculateSurfaceOrigins } from './raytracing/core/ray-tracing.js';

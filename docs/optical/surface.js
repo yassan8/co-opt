@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'OrbitControls';
-import { getWASMSystem } from './main.js';
+import { getWASMSystem } from '../main.js';
 
 // Debug control: Set to true to enable all 🔸 debug logs
 const ENABLE_DEBUG_LOGS = true;
