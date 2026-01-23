@@ -138,6 +138,21 @@
     })();
   </script>
 
+  <script>
+    // Log resource load failures with concrete URLs.
+    window.addEventListener('error', (event) => {
+      try {
+        const target = event?.target;
+        const url = target?.src || target?.href || null;
+        if (url) {
+          console.warn('❌ [Resource Error]', url);
+        }
+      } catch (_) {
+        // ignore
+      }
+    }, true);
+  </script>
+
 </head>
 <body>
 
