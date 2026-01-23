@@ -969,10 +969,26 @@ function buildAllDataForExport() {
     const refFLInput = document.getElementById('reference-focal-length');
     const referenceFocalLength = refFLInput ? refFLInput.value : '';
 
+    // Prefer expanded Blocks for opticalSystem when available to avoid stale surface tables.
+    let opticalSystemData = window.tableOpticalSystem ? window.tableOpticalSystem.getData() : [];
+    try {
+        const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
+        const activeId = systemConfig?.activeConfigId;
+        const activeCfg = Array.isArray(systemConfig?.configurations)
+            ? (systemConfig.configurations.find(c => String(c?.id) === String(activeId)) || systemConfig.configurations[0])
+            : null;
+        if (activeCfg && configurationHasBlocks(activeCfg)) {
+            const expanded = expandBlocksToOpticalSystemRows(activeCfg.blocks);
+            if (expanded && Array.isArray(expanded.rows)) {
+                opticalSystemData = expanded.rows;
+            }
+        }
+    } catch (_) {}
+
     return {
         source: window.tableSource ? window.tableSource.getData() : [],
         object: window.tableObject ? window.tableObject.getData() : [],
-        opticalSystem: window.tableOpticalSystem ? window.tableOpticalSystem.getData() : [],
+        opticalSystem: opticalSystemData,
         meritFunction: window.meritFunctionEditor ? window.meritFunctionEditor.getData() : [],
         systemRequirements: window.systemRequirementsEditor ? window.systemRequirementsEditor.getData() : [],
         systemData: {
@@ -7766,6 +7782,21 @@ function __blocks_deleteBlockFromActiveConfig(blockId) {
     } catch (_) {
         // ignore
     }
+
+    // Sync expanded optical system with updated blocks so Save/export won't reintroduce deleted surfaces.
+    try {
+        const expanded = expandBlocksToOpticalSystemRows(activeCfg.blocks);
+        if (expanded && Array.isArray(expanded.rows)) {
+            activeCfg.opticalSystem = expanded.rows;
+            try { localStorage.setItem('OpticalSystemTableData', JSON.stringify(expanded.rows)); } catch (_) {}
+            try { if (typeof saveLensTableData === 'function') saveLensTableData(expanded.rows); } catch (_) {}
+            try {
+                if (window.tableOpticalSystem && typeof window.tableOpticalSystem.setData === 'function') {
+                    window.tableOpticalSystem.setData(expanded.rows);
+                }
+            } catch (_) {}
+        }
+    } catch (_) {}
 
     try {
         if (typeof saveSystemConfigurations === 'function') {
