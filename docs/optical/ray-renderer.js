@@ -712,23 +712,23 @@ export function drawRayWithSegmentColors(rayPath, objectId, rayNumber, scene) {
     'chief-obj0': 0x0000ff,                 // Object0 主光線 - 青
     'chief-obj1': 0x00cc00,                 // Object1 主光線 - 緑（周辺光線と同じ）
         'cross-horizontal-obj1': 0x00cc00,      // Object1 横方向 - 緑
-        'cross-vertical-obj1': 0x00aa00,        // Object1 縦方向 - 緑
+        'cross-vertical-obj1': 0x00cc00,        // Object1 縦方向 - 緑
         'cross-horizontal-obj2': 0xff8000,      // Object2 横方向 - オレンジ
-        'cross-vertical-obj2': 0xcc6600,        // Object2 縦方向 - オレンジ
+        'cross-vertical-obj2': 0xff8000,        // Object2 縦方向 - オレンジ
         'cross-horizontal-obj3': 0x8000ff,      // Object3 横方向 - 紫
-        'cross-vertical-obj3': 0x6600cc,        // Object3 縦方向 - 紫
+        'cross-vertical-obj3': 0x8000ff,        // Object3 縦方向 - 紫
         'cross-horizontal-obj4': 0xff0080,      // Object4 横方向 - ピンク
-        'cross-vertical-obj4': 0xcc0066,        // Object4 縦方向 - ピンク
+        'cross-vertical-obj4': 0xff0080,        // Object4 縦方向 - ピンク
         'cross-horizontal-obj5': 0x00ff80,      // Object5 横方向 - 青緑
-        'cross-vertical-obj5': 0x00cc66,        // Object5 縦方向 - 青緑
+        'cross-vertical-obj5': 0x00ff80,        // Object5 縦方向 - 青緑
         'cross-horizontal-obj6': 0xffff00,      // Object6 横方向 - 黄
-        'cross-vertical-obj6': 0xcccc00,        // Object6 縦方向 - 黄
+        'cross-vertical-obj6': 0xffff00,        // Object6 縦方向 - 黄
         'cross-horizontal-obj7': 0xaa00ff,      // Object7 横方向 - マゼンタ
-        'cross-vertical-obj7': 0x8800cc,        // Object7 縦方向 - マゼンタ
+        'cross-vertical-obj7': 0xaa00ff,        // Object7 縦方向 - マゼンタ
         'cross-horizontal-obj8': 0xffaa00,      // Object8 横方向 - 黄オレンジ
-        'cross-vertical-obj8': 0xcc8800,        // Object8 縦方向 - 黄オレンジ
+        'cross-vertical-obj8': 0xffaa00,        // Object8 縦方向 - 黄オレンジ
         'cross-horizontal-obj9': 0x00aaff,      // Object9 横方向 - 水色
-        'cross-vertical-obj9': 0x0088cc         // Object9 縦方向 - 水色
+        'cross-vertical-obj9': 0x00aaff         // Object9 縦方向 - 水色
     };
     
     for (let i = 0; i < segmentsToShow; i++) {
@@ -767,7 +767,15 @@ export function drawRayWithSegmentColors(rayPath, objectId, rayNumber, scene) {
                 // クロスビーム専用の色を使用
                 color = crossBeamColors[objectId];
                 // console.log(`🎨 CrossBeam color for ${objectId}: 0x${color.toString(16)}`);
-            } else {
+            } else if (typeof objectId === 'string' && objectId.startsWith('chief-obj')) {
+                // 主光線は同一Objectのクロス光線色に合わせる
+                const objIndex = objectId.replace('chief-obj', '');
+                const fallbackId = `cross-horizontal-obj${objIndex}`;
+                if (crossBeamColors[fallbackId]) {
+                    color = crossBeamColors[fallbackId];
+                }
+            }
+            if (color === undefined) {
                 // 通常のオブジェクト色を使用
                 let colorIndex;
                 if (typeof objectId === 'string') {
