@@ -3,7 +3,7 @@
  * α1, h1, ᾱ1, h̄1 の計算値を確認
  */
 
-import { getOpticalSystemRows } from './utils/data-utils.js';
+import { getOpticalSystemRows } from '../utils/data-utils.js';
 
 /**
  * 近軸光線追跡（主光線・子午光線）

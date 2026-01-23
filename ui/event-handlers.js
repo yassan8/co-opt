@@ -4311,12 +4311,12 @@ export function setupOpticalSystemChangeListeners(scene) {
                     };
 
                     const [{ getOpticalSystemRows, getObjectRows, getSourceRows }, { PSFPlotter }, { createOPDCalculator, WavefrontAberrationAnalyzer }, { PSFCalculator }, { calculateFocalLength, findStopSurfaceIndex }, { DEFAULT_STOP_SEMI_DIAMETER }] = await Promise.all([
-                        import(moduleURL('./utils/data-utils.js')),
-                        import(moduleURL('./eva-psf-plot.js')),
-                        import(moduleURL('./eva-wavefront.js')),
-                        import(moduleURL('./eva-psf.js')),
-                        import(moduleURL('./raytracing/core/ray-paraxial.js')),
-                        import(moduleURL('./data/block-schema.js'))
+                        import(moduleURL('../utils/data-utils.js')),
+                        import(moduleURL('../evaluation/psf/psf-plot.js')),
+                        import(moduleURL('../evaluation/wavefront/wavefront.js')),
+                        import(moduleURL('../evaluation/psf/psf-calculator.js')),
+                        import(moduleURL('../raytracing/core/ray-paraxial.js')),
+                        import(moduleURL('../data/block-schema.js'))
                     ]);
 
                     const cloneRows = (rows) => {

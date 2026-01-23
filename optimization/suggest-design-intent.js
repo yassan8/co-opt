@@ -6,7 +6,7 @@
  * - 結果は System Data (#system-data) にテキスト出力
  */
 
-import { expandBlocksToOpticalSystemRows } from './data/block-schema.js';
+import { expandBlocksToOpticalSystemRows } from '../data/block-schema.js';
 
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
