@@ -36,6 +36,16 @@ function shouldMarkV(variableEntry) {
   return opt.mode === 'V';
 }
 
+function isUnsupportedCategoricalKey(key) {
+  const s = String(key ?? '').trim().toLowerCase();
+  if (!s) return false;
+  if (s === 'surftype' || s === 'frontsurftype' || s === 'backsurftype') return true;
+  if (/^surf\d+surftype$/.test(s)) return true;
+  if (s === 'objectdistancemode' || s === 'thicknessmode') return true;
+  if (s === 'apertureshape' || s === 'imagesemidiamode') return true;
+  return false;
+}
+
 function getValueFromBlock(block, key) {
   if (!isPlainObject(block)) return '';
   // Canonical source of truth is parameters.* when present.
@@ -88,6 +98,7 @@ export function listDesignVariablesFromBlocks(blocksOrConfig) {
     for (const key of Object.keys(vars)) {
       const entry = vars[key];
       if (!shouldMarkV(entry)) continue;
+      if (isUnsupportedCategoricalKey(key)) continue;
 
       const value = normalizeMaybeNumber(getValueFromBlock(b, key));
       out.push({
