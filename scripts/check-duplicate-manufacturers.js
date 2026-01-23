@@ -4,7 +4,7 @@
 
 import fs from 'fs';
 
-const filePath = './data/glass.js';
+const filePath = '../data/glass.js';
 let content = fs.readFileSync(filePath, 'utf8');
 const lines = content.split('\n');
 

@@ -19,7 +19,7 @@
   <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
   
   <!-- WASM Module (V3 with memory management) -->
-  <script src="ray-tracing-wasm-v3.js?v=20260103a"></script>
+  <script src="wasm/raytracing/ray-tracing-wasm-v3.js?v=20260103a"></script>
 
   <script type="importmap">
     {
@@ -658,7 +658,7 @@
       };
     })();
   </script>
-  <script src="psf-wasm.js"></script>
+  <script src="wasm/psf/psf-wasm.js"></script>
 
   <!-- Core functionality scripts -->
   <script>
@@ -747,7 +747,7 @@
   <script type="module" src="raytracing/core/ray-aperture-edge.js?v=2026-01-23a"></script>
 
   <!-- WASM最適化モジュール -->
-  <script src="force-wasm-system.js"></script>
+  <script src="wasm/raytracing/force-wasm-system.js"></script>
     <!-- NOTE: Do not load legacy ray-tracing-wasm.js here.
       It overwrites the global RayTracingWASM symbol and can hide newer exports
       (e.g. _aspheric_sag_rt10) provided by ray-tracing-wasm-v3.js. -->
@@ -762,7 +762,7 @@
           
           // 手動でforce-wasm-system.jsを再読み込み
           const script = document.createElement('script');
-          script.src = 'force-wasm-system.js';
+          script.src = 'wasm/raytracing/force-wasm-system.js';
           script.onload = () => {
             console.log('✅ ForceWASMSystem 手動読み込み完了');
             

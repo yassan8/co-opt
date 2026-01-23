@@ -7,15 +7,14 @@
 ## 📦 ファイル構成
 
 ```
-├── eva-psf.js                 # メインPSF計算システム（WASM統合済み）
-├── psf-wasm-wrapper.js        # WebAssemblyラッパークラス
-├── psf-wasm-examples.js       # 使用例とサンプルコード
-├── psf-wasm-demo.html         # デモ・テスト用HTML
-├── build-wasm.sh             # WebAssemblyビルドスクリプト
+├── evaluation/psf/psf-calculator.js   # メインPSF計算システム（WASM統合済み）
+├── wasm/psf/psf-wasm-wrapper.js       # WebAssemblyラッパークラス
+├── wasm/psf/psf-wasm-demo.html        # デモ・テスト用HTML
+├── scripts/build-wasm.sh              # WebAssemblyビルドスクリプト
 └── wasm/
-    ├── psf-wasm.c            # C言語PSF計算エンジン
-    ├── Makefile              # Emscriptenビルド設定
-    └── pre.js                # WASM初期化スクリプト
+    ├── psf-wasm.c                     # C言語PSF計算エンジン
+    ├── Makefile                       # Emscriptenビルド設定
+    └── pre.js                         # WASM初期化スクリプト
 ```
 
 ## 🚀 セットアップ
@@ -32,7 +31,7 @@ source ./emsdk_env.sh
 
 # PSF WebAssemblyをビルド
 cd "/path/to/your/project"
-./build-wasm.sh
+./scripts/build-wasm.sh
 ```
 
 ### 2. HTMLファイルでの使用
@@ -41,14 +40,12 @@ cd "/path/to/your/project"
 <!DOCTYPE html>
 <html>
 <head>
-    <script src="psf-wasm.js"></script>
+    <script src="wasm/psf/psf-wasm.js"></script>
 </head>
 <body>
     <script type="module">
-        import { PSFCalculatorAuto } from './psf-wasm-wrapper.js';
-        
+        import { PSFCalculatorAuto } from './wasm/psf/psf-wasm-wrapper.js';
         const calculator = new PSFCalculatorAuto();
-        // 使用例は下記参照
     </script>
 </body>
 </html>
@@ -59,23 +56,23 @@ cd "/path/to/your/project"
 ### 基本的な使用法
 
 ```javascript
-import { PSFCalculatorAuto } from './psf-wasm-wrapper.js';
+import { PSFCalculatorAuto } from './wasm/psf/psf-wasm-wrapper.js';
 
 // 1. 計算器を初期化
 const calculator = new PSFCalculatorAuto();
 
 // 2. OPDデータを準備
 const opdData = {
-    rayData: [
-        { pupilX: 0.1, pupilY: 0.2, opd: 0.05, isVignetted: false },
-        // ... 他の光線データ
-    ]
+        rayData: [
+                { pupilX: 0.1, pupilY: 0.2, opd: 0.05, isVignetted: false },
+                // ... 他の光線データ
+        ]
 };
 
 // 3. PSF計算を実行（自動的にWASM/JSを選択）
 const result = await calculator.calculatePSF(opdData, {
-    samplingSize: 128,
-    wavelength: 0.55
+        samplingSize: 128,
+        wavelength: 0.55
 });
 
 console.log('PSF計算結果:', result);
@@ -109,7 +106,7 @@ console.log(`JSフォールバック回数: ${performanceData.jsFallbacks}`);
 
 ### エラーハンドリング
 
-```javascript
+`wasm/psf/psf-wasm-demo.html` をブラウザで開いて、インタラクティブなテストを実行できます。
 try {
     const result = await calculator.calculatePSF(opdData, options);
     console.log('成功:', result.metadata.method); // 'wasm' または 'javascript'
@@ -131,10 +128,6 @@ try {
 *実際の性能はブラウザと環境に依存します*
 
 ## 🔧 サンプルコード実行
-
-### ブラウザコンソールで直接実行
-
-```javascript
 // サンプルコードを読み込み
 import('./psf-wasm-examples.js');
 
@@ -142,9 +135,6 @@ import('./psf-wasm-examples.js');
 PSFWasmExamples.runAllExamples();
 
 // 個別実行
-PSFWasmExamples.example1_AutoMode();           // 自動選択モード
-PSFWasmExamples.example4_PerformanceBenchmark(); // ベンチマーク
-PSFWasmExamples.diagnosticWasmStatus();        // WASM状況診断
 ```
 
 ### デモページ
@@ -184,7 +174,7 @@ ALLOW_MEMORY_GROWTH=1      # 動的メモリ拡張
    ```
 
 2. **ファイルパス確認**
-   - `psf-wasm.js` と `psf-wasm.wasm` が同じディレクトリにあるか
+    - `wasm/psf/psf-wasm.js` と `wasm/psf/psf-wasm.wasm` が同じディレクトリにあるか
    - HTTPSまたはlocalhostで実行しているか
 
 3. **コンソールエラー確認**

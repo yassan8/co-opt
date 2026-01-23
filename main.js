@@ -73,7 +73,7 @@ import { clearAllDrawing, showSpotDiagram, showTransverseAberrationDiagram, show
 // import { performanceMonitor } from './performance-monitor.js';
 
 // WASM acceleration system
-// import { ForceWASMSystem } from './force-wasm-system.js';
+// import { ForceWASMSystem } from './wasm/raytracing/force-wasm-system.js';
 // グローバルスコープのForceWASMSystemを使用（スクリプトタグで読み込み済み）
 
 // THREE.js and OrbitControls imports
@@ -106,7 +106,7 @@ async function initializeApplication() {
         // ForceWASMSystemがグローバルに利用可能かチェック
         const ForceWASMSystemClass = globalThis.ForceWASMSystem || window?.ForceWASMSystem;
         if (!ForceWASMSystemClass) {
-            throw new Error('ForceWASMSystem not available. Make sure force-wasm-system.js is loaded.');
+            throw new Error('ForceWASMSystem not available. Make sure wasm/raytracing/force-wasm-system.js is loaded.');
         }
         
         wasmSystem = new ForceWASMSystemClass();

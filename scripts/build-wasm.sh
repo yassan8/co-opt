@@ -15,7 +15,8 @@ fi
 echo "✅ [WASM] Emscripten found: $(emcc --version | head -n1)"
 
 # wasmディレクトリに移動
-cd wasm
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT_DIR/wasm"
 
 # makeを実行
 echo "🔄 [WASM] Compiling C source to WebAssembly..."
@@ -31,13 +32,13 @@ if [ $? -eq 0 ]; then
         ls -la psf-wasm.js psf-wasm.wasm
         
         # 親ディレクトリにコピー
-        echo "🔄 [WASM] Installing to parent directory..."
+        echo "🔄 [WASM] Installing to wasm/psf directory..."
         make install
         
         echo "✅ [WASM] WebAssembly PSF calculator ready!"
         echo ""
         echo "📋 Usage in JavaScript:"
-        echo "  import { PSFCalculatorAuto } from './psf-wasm-wrapper.js';"
+        echo "  import { PSFCalculatorAuto } from './wasm/psf/psf-wasm-wrapper.js';"
         echo "  const calculator = new PSFCalculatorAuto();"
         echo "  const result = await calculator.calculatePSF(opdData, options);"
         echo ""
@@ -57,6 +58,6 @@ fi
 
 echo ""
 echo "🔍 [Info] To test WebAssembly integration:"
-echo "  1. Include psf-wasm.js in your HTML"
+echo "  1. Include wasm/psf/psf-wasm.js in your HTML"
 echo "  2. Use PSFCalculatorAuto for automatic WASM/JS selection"
 echo "  3. Monitor console for performance statistics"

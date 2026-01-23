@@ -4,7 +4,7 @@ set -euo pipefail
 # Ray Tracing WebAssembly Build Script
 # ray-tracing-wasm.c -> ray-tracing-wasm-v3.js / ray-tracing-wasm-v3.wasm
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 echo "🔨 [WASM] Ray Tracing WebAssembly Build"
@@ -18,8 +18,8 @@ fi
 
 echo "✅ [WASM] emcc found: $(emcc --version | head -n1)"
 
-SRC="ray-tracing-wasm.c"
-OUT_JS="ray-tracing-wasm-v3.js"
+SRC="wasm/raytracing/ray-tracing-wasm.c"
+OUT_JS="wasm/raytracing/ray-tracing-wasm-v3.js"
 
 if [ ! -f "$SRC" ]; then
   echo "❌ [Error] Missing source: $SRC"
@@ -27,6 +27,8 @@ if [ ! -f "$SRC" ]; then
 fi
 
 echo "🔄 [WASM] Compiling $SRC -> $OUT_JS"
+
+mkdir -p "$(dirname "$OUT_JS")"
 
 # Notes:
 # - MODULARIZE + EXPORT_NAME=RayTracingWASM matches existing loader expectations
@@ -43,13 +45,13 @@ emcc "$SRC" \
 
 echo "✅ [WASM] Build complete"
 
-if [ -f "ray-tracing-wasm-v3.wasm" ]; then
-  echo "✅ [WASM] Output: ray-tracing-wasm-v3.js + ray-tracing-wasm-v3.wasm"
-  ls -la ray-tracing-wasm-v3.js ray-tracing-wasm-v3.wasm
+if [ -f "wasm/raytracing/ray-tracing-wasm-v3.wasm" ]; then
+  echo "✅ [WASM] Output: wasm/raytracing/ray-tracing-wasm-v3.js + wasm/raytracing/ray-tracing-wasm-v3.wasm"
+  ls -la wasm/raytracing/ray-tracing-wasm-v3.js wasm/raytracing/ray-tracing-wasm-v3.wasm
 else
   echo "⚠️  [Warn] ray-tracing-wasm-v3.wasm not found next to JS output."
   echo "    (If you built with SINGLE_FILE, it may be embedded in the JS.)"
-  ls -la ray-tracing-wasm-v3.js
+  ls -la wasm/raytracing/ray-tracing-wasm-v3.js
 fi
 
 echo ""

@@ -33,8 +33,9 @@ $(TARGET).js: $(SOURCES)
 clean:
 	rm -f $(TARGET).js $(TARGET).wasm
 
-# インストール（親ディレクトリにコピー）
+# インストール（wasm/psf にコピー）
 install: $(TARGET).js
-	cp $(TARGET).js $(TARGET).wasm ../
+    @mkdir -p ../wasm/psf
+    cp $(TARGET).js $(TARGET).wasm ../wasm/psf/
 
 .PHONY: all clean install

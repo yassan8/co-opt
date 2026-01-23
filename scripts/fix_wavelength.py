@@ -4,7 +4,7 @@ gen-ray-cross-finite.jsのtraceRay呼び出しにwavelengthプロパティを追
 """
 import re
 
-file_path = 'gen-ray-cross-finite.js'
+file_path = '../raytracing/generation/gen-ray-cross-finite.js'
 
 with open(file_path, 'r', encoding='utf-8') as f:
     content = f.read()

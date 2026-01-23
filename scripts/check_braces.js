@@ -1,5 +1,5 @@
 const fs = require('fs');
-const s = fs.readFileSync('data/table-optical-system.js', 'utf8');
+const s = fs.readFileSync('../data/table-optical-system.js', 'utf8');
 let stack = [];
 const lines = s.split('\n');
 for (let i = 0; i < lines.length; i++) {

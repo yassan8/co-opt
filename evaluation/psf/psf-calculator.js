@@ -24,7 +24,7 @@ let WasmCalculatorClass = null;
 async function loadWasmCalculatorDirect() {
     if (!WasmCalculatorClass) {
         try {
-            const wasmModule = await import('./psf-wasm-wrapper.js');
+            const wasmModule = await import('../../wasm/psf/psf-wasm-wrapper.js');
             WasmCalculatorClass = wasmModule.PSFCalculatorWasm;
             // console.log('📦 [PSF] WASM calculator module loaded directly');
             return WasmCalculatorClass;
