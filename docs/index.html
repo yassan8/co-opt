@@ -113,6 +113,10 @@
     // Dev diagnostics: verify legacy module URLs resolve after reorg.
     (async () => {
       try {
+        console.log('✅ [Startup] co-opt docs build 2026-01-23d', {
+          href: window.location.href,
+          baseURI: document.baseURI
+        });
         const targets = [
           './block-schema.js',
           './data-utils.js',
@@ -123,9 +127,7 @@
         await Promise.all(targets.map(async (rel) => {
           try {
             const res = await fetch(rel, { method: 'HEAD' });
-            if (!res.ok) {
-              console.warn(`⚠️ [Startup] Missing module: ${rel} (${res.status})`);
-            }
+            console.log(`🔎 [Startup] ${rel} -> ${res.status}`);
           } catch (e) {
             console.warn(`⚠️ [Startup] Failed to reach ${rel}:`, e);
           }
