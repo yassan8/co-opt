@@ -454,6 +454,10 @@ class SystemRequirementsEditor {
       const cfgSel = document.createElement('select');
       cfgSel.style.width = '100%';
       cfgSel.style.fontSize = '12px';
+      cfgSel.style.height = '24px';
+      cfgSel.style.lineHeight = '24px';
+      cfgSel.style.padding = '2px 4px';
+      cfgSel.style.boxSizing = 'border-box';
       cfgSel.addEventListener('focus', onCellFocus);
       cfgSel.addEventListener('blur', onCellBlur);
       const cfgValues = this.getConfigurationList();
@@ -723,20 +727,15 @@ class SystemRequirementsEditor {
         const field = `param${i}`;
         const paramDef = paramDefs[i - 1];
         const container = document.createElement('div');
+        container.className = 'param-input-container';
         container.style.flex = i === 2 ? '1.2' : '1';
         container.style.display = i <= paramCount ? '' : 'none';
         
-        // Label
-        if (paramDef && paramDef.label) {
-          const label = document.createElement('div');
-          label.textContent = paramDef.label;
-          label.style.fontSize = '9px';
-          label.style.color = '#888';
-          label.style.height = '12px';
-          label.style.lineHeight = '12px';
-          label.style.marginBottom = '1px';
-          container.appendChild(label);
-        }
+        // Label (always reserve height for alignment)
+        const label = document.createElement('div');
+        label.className = 'param-input-label';
+        label.textContent = (paramDef && paramDef.label) ? paramDef.label : '';
+        container.appendChild(label);
         
         const { td: _, input: control } = mkInput(field, i === 2 ? widths.param2 : widths.param, '', paramDef);
         control.style.width = '100%';
@@ -859,10 +858,31 @@ class SystemRequirementsEditor {
 
     this._renderRow = renderRow;
 
+    table.classList.toggle('sr-params-expanded', this._paramsExpanded);
     table.appendChild(thead);
     table.appendChild(tbody);
     wrap.appendChild(table);
     container.appendChild(wrap);
+
+    const applyParamsExpandedLayout = () => {
+      if (!this._tbody) return;
+      const expanded = !!this._paramsExpanded;
+      const rows = this._tbody.querySelectorAll('tr');
+      for (const row of rows) {
+        const cells = row.querySelectorAll('td');
+        for (const td of cells) {
+          if (expanded) {
+            td.style.paddingTop = '12px';
+            td.style.paddingBottom = '3px';
+            td.style.verticalAlign = 'top';
+          } else {
+            td.style.paddingTop = '3px';
+            td.style.paddingBottom = '3px';
+            td.style.verticalAlign = 'middle';
+          }
+        }
+      }
+    };
 
     // Parameter toggle functionality
     if (toggleBtn) {
@@ -871,6 +891,8 @@ class SystemRequirementsEditor {
         this._paramsExpanded = !this._paramsExpanded;
         toggleBtn.textContent = this._paramsExpanded ? '▼' : '▶';
         toggleBtn.setAttribute('aria-expanded', this._paramsExpanded ? 'true' : 'false');
+        table.classList.toggle('sr-params-expanded', this._paramsExpanded);
+        applyParamsExpandedLayout();
         
         // Toggle all parameter containers
         const allParamContainers = this._tbody.querySelectorAll('[data-role="params-container"]');
@@ -887,6 +909,7 @@ class SystemRequirementsEditor {
 
     // Initial render
     this._renderBody(makeSpecSummary, rationalePreview, ensureEflBlocksDatalist);
+    applyParamsExpandedLayout();
   }
 
   _getWavelengthOptions() {
@@ -942,12 +965,33 @@ class SystemRequirementsEditor {
       }
       
       const options = [{ value: '', label: '(default 1)' }];
-      
+
+      const fmtNum = (value) => {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return null;
+        const abs = Math.abs(n);
+        let s = (abs >= 1000 || (abs > 0 && abs < 1e-3)) ? n.toExponential(3) : n.toFixed(4);
+        s = s.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+        return s;
+      };
+
+      const buildObjectLabel = (row, idx) => {
+        if (!row || typeof row !== 'object') return `${idx + 1}`;
+
+        const xRaw = row?.xHeightAngle ?? row?.xHeight ?? row?.x ?? row?.X ?? 0;
+        const yRaw = row?.yHeightAngle ?? row?.yHeight ?? row?.y ?? row?.Y ?? 0;
+        const xStr = fmtNum(xRaw);
+        const yStr = fmtNum(yRaw);
+
+        const xText = (xStr !== null) ? xStr : '0';
+        const yText = (yStr !== null) ? yStr : '0';
+
+        return `${idx + 1}: x=${xText}, y=${yText}`;
+      };
+
       if (Array.isArray(objectRows) && objectRows.length > 0) {
         objectRows.forEach((row, idx) => {
-          const y = row?.y || 0;
-          const angle = row?.angle || 0;
-          const label = `${idx + 1}: y=${y}, angle=${angle}°`;
+          const label = buildObjectLabel(row, idx);
           options.push({ value: String(idx + 1), label });
         });
       }
