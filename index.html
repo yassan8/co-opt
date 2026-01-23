@@ -25,7 +25,12 @@
     {
       "imports": {
         "three": "https://unpkg.com/three@0.138.0/build/three.module.js",
-        "OrbitControls": "https://unpkg.com/three@0.138.0/examples/jsm/controls/OrbitControls.js"
+        "OrbitControls": "https://unpkg.com/three@0.138.0/examples/jsm/controls/OrbitControls.js",
+        "./block-schema.js": "./data/block-schema.js",
+        "./data-utils.js": "./utils/data-utils.js",
+        "./seidel-coefficients.js": "./evaluation/aberrations/seidel-coefficients.js",
+        "./ray-paraxial.js": "./raytracing/core/ray-paraxial.js",
+        "./ray-tracing.js": "./raytracing/core/ray-tracing.js"
       }
     }
   </script>
@@ -103,6 +108,33 @@
           const regs = await navigator.serviceWorker.getRegistrations();
           await Promise.all(regs.map(r => r.unregister()));
         }
+      } catch (_) {
+        // ignore
+      }
+    })();
+  </script>
+
+  <script>
+    // Dev diagnostics: verify legacy module URLs resolve after reorg.
+    (async () => {
+      try {
+        const targets = [
+          './block-schema.js',
+          './data-utils.js',
+          './seidel-coefficients.js',
+          './ray-paraxial.js',
+          './ray-tracing.js'
+        ];
+        await Promise.all(targets.map(async (rel) => {
+          try {
+            const res = await fetch(rel, { method: 'HEAD' });
+            if (!res.ok) {
+              console.warn(`⚠️ [Startup] Missing module: ${rel} (${res.status})`);
+            }
+          } catch (e) {
+            console.warn(`⚠️ [Startup] Failed to reach ${rel}:`, e);
+          }
+        }));
       } catch (_) {
         // ignore
       }
