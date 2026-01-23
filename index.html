@@ -95,6 +95,20 @@
     })();
   </script>
 
+  <script>
+    // Ensure stale Service Workers do not serve outdated module paths.
+    (async () => {
+      try {
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map(r => r.unregister()));
+        }
+      } catch (_) {
+        // ignore
+      }
+    })();
+  </script>
+
 </head>
 <body>
 
