@@ -713,8 +713,8 @@ export async function showTransverseAberrationDiagram(options = {}) {
         console.log(`📊 評価面: Surface ${targetSurfaceIndex + 1}`);
         console.log(`📊 光線本数: ${rayCount}本`);
 
-        const { getPrimaryWavelengthForAberration, calculateTransverseAberrationAsync } = await import('../eva-transverse-aberration.js');
-        const { plotTransverseAberrationDiagram } = await import('../eva-transverse-aberration-plot.js');
+        const { getPrimaryWavelengthForAberration, calculateTransverseAberrationAsync } = await import('../evaluation/aberrations/transverse-aberration.js');
+        const { plotTransverseAberrationDiagram } = await import('../evaluation/aberrations/transverse-aberration-plot.js');
 
         const wavelength = getPrimaryWavelengthForAberration(); // μm
         console.log(`📊 Wavelength: ${wavelength} μm`);
@@ -849,8 +849,8 @@ export async function showAstigmatismDiagram(options = {}) {
         const targetSurfaceIndex = opticalSystemRows.length - 1;
         console.log(`📊 評価面: Surface ${targetSurfaceIndex + 1}`);
 
-        const { calculateAstigmatismData } = await import('../eva-astigmatism.js');
-        const { plotAstigmaticFieldCurves } = await import('../eva-astigmatism-plot.js');
+        const { calculateAstigmatismData } = await import('../evaluation/aberrations/astigmatism.js');
+        const { plotAstigmaticFieldCurves } = await import('../evaluation/aberrations/astigmatism-plot.js');
 
         console.log('🎯 非点収差曲線データ生成中（RMS最小値探索）...');
         const fieldCurvesData = await calculateAstigmatismData(
@@ -1363,7 +1363,7 @@ export async function showIntegratedAberrationDiagram(options = {}) {
         
         // 2. 非点収差データを計算
         console.log('📊 Calculating astigmatism...');
-        const { calculateAstigmatismData } = await import('../eva-astigmatism.js');
+        const { calculateAstigmatismData } = await import('../evaluation/aberrations/astigmatism.js');
         
         const astigmatismData = await calculateAstigmatismData(
             opticalSystemRows,
@@ -1379,8 +1379,8 @@ export async function showIntegratedAberrationDiagram(options = {}) {
         
         // 3. 歪曲収差データを計算
         console.log('📊 Calculating distortion...');
-        const { calculateDistortionData } = await import('../eva-distortion.js');
-        const { deriveMaxFieldAngleFromObjects } = await import('../eva-distortion-plot.js');
+        const { calculateDistortionData } = await import('../evaluation/aberrations/distortion.js');
+        const { deriveMaxFieldAngleFromObjects } = await import('../evaluation/aberrations/distortion-plot.js');
         
         // Decide field sweep (object angles vs object heights) based on Object table setting
         const inferObjectFieldMode = (objects) => {
@@ -1461,7 +1461,7 @@ export async function showIntegratedAberrationDiagram(options = {}) {
         
         // 4. 統合収差図を表示
         console.log('📊 Plotting integrated aberration diagram...');
-        const { plotIntegratedAberrationDiagram } = await import('../eva-integrated-aberration-plot.js');
+        const { plotIntegratedAberrationDiagram } = await import('../evaluation/aberrations/integrated-aberration-plot.js');
 
         try { onProgress?.({ percent: 96, message: 'Rendering...' }); } catch (_) {}
         
