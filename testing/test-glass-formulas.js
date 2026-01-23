@@ -9,7 +9,7 @@ import {
   calculateRefractiveIndexSumita,
   calculateGlassRefractiveIndex,
   getGlassDataWithSellmeier
-} from './data/glass.js';
+} from '../data/glass.js';
 
 console.log('=== Glass Refractive Index Formula Tests ===\n');
 

@@ -6,7 +6,7 @@
  *   displayZernikeAnalysis(window.zernikeResult);
  */
 
-import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './opd-zernike-analysis.js';
+import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from '../evaluation/wavefront/opd-zernike-analysis.js';
 
 /**
  * Test Zernike fitting on current optical system

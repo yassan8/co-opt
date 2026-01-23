@@ -23,7 +23,7 @@ This repo publishes the web app via GitHub Pages using the `docs/` folder.
 - To regenerate it from the repo root:
 	- `node tools/build-pages-docs.mjs`
 - Quick sanity check that a few key files match:
-	- `node quick-cross-test.js`
+	- `node testing/quick-cross-test.js`
 
 Note: the build script deletes and recreates `docs/`. If you use a custom domain, keep `docs/CNAME` safe (re-add it after build, or adjust the script to preserve it).
 

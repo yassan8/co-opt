@@ -54,8 +54,8 @@ function comparePair(leftRel, rightRel) {
 
 function main() {
   const pairs = [
-    ['eva-wavefront.js', 'docs/eva-wavefront.js'],
-    ['eva-wavefront-plot.js', 'docs/eva-wavefront-plot.js'],
+    ['evaluation/wavefront/wavefront.js', 'docs/eva-wavefront.js'],
+    ['evaluation/wavefront/wavefront-plot.js', 'docs/eva-wavefront-plot.js'],
     ['ui/event-handlers.js', 'docs/ui/event-handlers.js']
   ];
 
