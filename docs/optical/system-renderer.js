@@ -150,7 +150,7 @@ function __coopt_drawApertureOutline(scene, surface, semidia, origin, rotationMa
         }
     }
 
-    __coopt_drawApertureOutline(scene, surface, semidia, origin, rotationMatrix, color);
+    drawSemidiaRingWithOriginAndSurface(scene, semidia, 100, color, origin, rotationMatrix, surface);
 }
 
 function __coopt_loadSurfaceColorOverrides() {
