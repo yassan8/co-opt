@@ -1,0 +1,33 @@
+{
+  "blocks": [
+    {
+      "blockType": "aperture_stop",
+      "semiDiameter": 4.5,
+      "variables": {
+        "semiDiameter": "4.5"
+      }
+    },
+    {
+      "blockType": "positive_lens",
+      "variables": {
+        "frontRadius": 50,
+        "backRadius": -50,
+        "centerThickness": "5",
+        "material": "N-BK7"
+      }
+    },
+    {
+      "blockType": "space",
+      "variables": {
+        "thickness": { "value": 50, "optimize": { "mode": "V" } }
+      }
+    },
+    {
+      "blockType": "image",
+      "variables": {
+        "note": "AI sometimes emits extra fields"
+      }
+    }
+  ],
+  "meritFunction": []
+}

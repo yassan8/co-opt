@@ -33,10 +33,10 @@ import { calculateAdaptiveMarginalRay, calculateAllMarginalRays } from './raytra
 import { generateSpotDiagram, drawSpotDiagram, generateSurfaceOptions } from './evaluation/spot-diagram.js';
 import { calculateTransverseAberration, getFieldAnglesFromSource, getPrimaryWavelengthForAberration, validateAberrationData, calculateChiefRayNewton, getEstimatedEntrancePupilDiameter } from './evaluation/aberrations/transverse-aberration.js';
 import { plotTransverseAberrationDiagram, showTransverseAberrationInNewWindow } from './evaluation/aberrations/transverse-aberration-plot.js';
-import { showWavefrontDiagram } from './evaluation/wavefront/wavefront-plot.js?v=2026-01-15b';
-import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './evaluation/wavefront/wavefront.js?v=2026-01-15l';
-import { PSFCalculator } from './evaluation/psf/psf-calculator.js?v=2026-01-14b';
-import { PSFPlotter, PSFDisplayManager } from './evaluation/psf/psf-plot.js?v=2026-01-14b';
+import { showWavefrontDiagram } from './evaluation/wavefront/wavefront-plot.js';
+import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './evaluation/wavefront/wavefront.js';
+import { PSFCalculator } from './evaluation/psf/psf-calculator.js';
+import { PSFPlotter, PSFDisplayManager } from './evaluation/psf/psf-plot.js';
 import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './evaluation/wavefront/zernike-fitting.js';
 import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './evaluation/wavefront/opd-zernike-analysis.js';
 import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './raytracing/generation/gen-ray-cross-finite.js';
@@ -55,9 +55,9 @@ import { initAIAssistant } from './ai/ai-assistant.js';
 import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayColorMode, optimizeObjectPositionForStop, optimizeAngleObjectPosition, generateRayStartPointsForObject, drawRayWithSegmentColors } from './optical/ray-renderer.js';
 
 // UI modules
-import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons } from './ui/event-handlers.js?v=2026-01-15l';
+import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons } from './ui/event-handlers.js';
 import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListeners } from './ui/ui-updates.js';
-import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers } from './ui/dom-event-handlers.js?v=2026-01-14b';
+import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers } from './ui/dom-event-handlers.js';
 import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.js';
 
 // Suggest (Design Intent) implementation (adds window.SuggestDesignIntent)

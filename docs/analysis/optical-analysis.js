@@ -5,7 +5,7 @@
 
 import * as THREE from 'three';
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.js';
-import { expandBlocksToOpticalSystemRows } from '../block-schema.js';
+import { expandBlocksToOpticalSystemRows } from '../data/block-schema.js';
 import { getScene, getCamera, getRenderer, getControls, getTableOpticalSystem, getTableObject, getTableSource,
          getIsGeneratingSpotDiagram, getIsGeneratingTransverseAberration,
          setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration } from '../core/app-config.js';
@@ -395,7 +395,7 @@ export async function showSpotDiagram(options = {}) {
         // Resolve CB-invariant surfaceId -> actual rowIndex in opticalSystemRows.
         let resolvedSurfaceRowIndex = null;
         try {
-            const { generateSurfaceOptions } = await import('../eva-spot-diagram.js');
+            const { generateSurfaceOptions } = await import('../evaluation/spot-diagram.js');
             const opts = generateSurfaceOptions(opticalSystemRows || []);
             const match = opts.find(o => Number(o?.value) === Number(surfaceId));
             if (match && Number.isInteger(match.rowIndex)) {
@@ -570,7 +570,7 @@ export async function showSpotDiagram(options = {}) {
             
         } else {
             // Generate spot diagram with existing object data
-            const { generateSpotDiagramAsync, drawSpotDiagram } = await import('../eva-spot-diagram.js');
+            const { generateSpotDiagramAsync, drawSpotDiagram } = await import('../evaluation/spot-diagram.js');
             
             const spotDiagramData = await generateSpotDiagramAsync(
                 opticalSystemRows,
@@ -997,8 +997,8 @@ export async function showLongitudinalAberrationDiagram(options = {}) {
         }
         
         // Calculate longitudinal aberration using async wrapper (allows progress UI repaint)
-        const { calculateLongitudinalAberrationAsync } = await import('../eva-longitudinal-aberration.js');
-        const { plotLongitudinalAberrationDiagram } = await import('../eva-longitudinal-aberration-plot.js');
+        const { calculateLongitudinalAberrationAsync } = await import('../evaluation/aberrations/longitudinal-aberration.js');
+        const { plotLongitudinalAberrationDiagram } = await import('../evaluation/aberrations/longitudinal-aberration-plot.js');
         
         const aberrationData = await calculateLongitudinalAberrationAsync(
             opticalSystemRows,
@@ -1347,7 +1347,7 @@ export async function showIntegratedAberrationDiagram(options = {}) {
         
         // 1. 球面収差データを計算
         console.log('📊 Calculating spherical aberration...');
-        const { calculateLongitudinalAberrationAsync } = await import('../eva-longitudinal-aberration.js');
+        const { calculateLongitudinalAberrationAsync } = await import('../evaluation/aberrations/longitudinal-aberration.js');
         
         const longitudinalData = await calculateLongitudinalAberrationAsync(
             opticalSystemRows,

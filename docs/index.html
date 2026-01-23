@@ -19,13 +19,18 @@
   <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
   
   <!-- WASM Module (V3 with memory management) -->
-  <script src="ray-tracing-wasm-v3.js?v=20260103a"></script>
+  <script src="wasm/raytracing/ray-tracing-wasm-v3.js"></script>
 
   <script type="importmap">
     {
       "imports": {
         "three": "https://unpkg.com/three@0.138.0/build/three.module.js",
-        "OrbitControls": "https://unpkg.com/three@0.138.0/examples/jsm/controls/OrbitControls.js"
+        "OrbitControls": "https://unpkg.com/three@0.138.0/examples/jsm/controls/OrbitControls.js",
+        "./block-schema.js": "./data/block-schema.js",
+        "./data-utils.js": "./utils/data-utils.js",
+        "./seidel-coefficients.js": "./evaluation/aberrations/seidel-coefficients.js",
+        "./ray-paraxial.js": "./raytracing/core/ray-paraxial.js",
+        "./ray-tracing.js": "./raytracing/core/ray-tracing.js"
       }
     }
   </script>
@@ -103,35 +108,6 @@
           const regs = await navigator.serviceWorker.getRegistrations();
           await Promise.all(regs.map(r => r.unregister()));
         }
-      } catch (_) {
-        // ignore
-      }
-    })();
-  </script>
-
-  <script>
-    // Dev diagnostics: verify legacy module URLs resolve after reorg.
-    (async () => {
-      try {
-        console.log('✅ [Startup] co-opt docs build 2026-01-23d', {
-          href: window.location.href,
-          baseURI: document.baseURI
-        });
-        const targets = [
-          './block-schema.js',
-          './data-utils.js',
-          './seidel-coefficients.js',
-          './ray-paraxial.js',
-          './ray-tracing.js'
-        ];
-        await Promise.all(targets.map(async (rel) => {
-          try {
-            const res = await fetch(rel, { method: 'HEAD' });
-            console.log(`🔎 [Startup] ${rel} -> ${res.status}`);
-          } catch (e) {
-            console.warn(`⚠️ [Startup] Failed to reach ${rel}:`, e);
-          }
-        }));
       } catch (_) {
         // ignore
       }
@@ -647,7 +623,7 @@
         try {
           const parsed = JSON.parse(systemConfigurationsJson);
           if (parsed && Array.isArray(parsed.configurations) && parsed.configurations.length > 0) {
-            const { loadActiveConfigurationToTables } = await import('./table-configuration.js');
+            const { loadActiveConfigurationToTables } = await import('./data/table-configuration.js');
             loadActiveConfigurationToTables();
             console.log('✅ [Startup] Active configuration expanded to table storage keys');
           }
@@ -662,7 +638,7 @@
   <script type="module" src="main.js"></script>
   
   <!-- Configuration System -->
-  <script type="module" src="table-configuration.js"></script>
+  <script type="module" src="data/table-configuration.js"></script>
   <script type="module" src="ui/configuration-handlers.js"></script>
   
   <!-- Merit Function Inspector (must load before editor) -->
@@ -681,10 +657,10 @@
   <script type="module" src="system-requirements-editor.js"></script>
   
   <!-- PSFプロット機能を読み込み -->
-  <script type="module" src="eva-psf-plot.js"></script>
+  <script type="module" src="evaluation/psf/psf-plot.js"></script>
   
   <!-- OPDプロファイル実行ハーネス（コンソールから runOPDProfiling(...) を呼び出し） -->
-  <script type="module" src="opd-profiler.js"></script>
+  <script type="module" src="evaluation/wavefront/opd-profiler.js"></script>
   
   <!-- PSF WASM計算器を読み込み -->
   <script>
@@ -716,7 +692,7 @@
       };
     })();
   </script>
-  <script src="psf-wasm.js"></script>
+  <script src="wasm/psf/psf-wasm.js"></script>
 
   <!-- Core functionality scripts -->
   <script>
@@ -724,7 +700,7 @@
         // ray-tracing.jsの関数をグローバルに公開
         setTimeout(async () => {
           try {
-            const main = await import('./main.js?v=2026-01-19a');
+            const main = await import('./main.js');
             const rayTracing = await import('./raytracing/core/ray-tracing.js');
             const debugUtils = await import('./debug/debug-utils.js');
             
@@ -805,7 +781,7 @@
   <script type="module" src="raytracing/core/ray-aperture-edge.js"></script>
 
   <!-- WASM最適化モジュール -->
-  <script src="force-wasm-system.js"></script>
+  <script src="wasm/raytracing/force-wasm-system.js"></script>
     <!-- NOTE: Do not load legacy ray-tracing-wasm.js here.
       It overwrites the global RayTracingWASM symbol and can hide newer exports
       (e.g. _aspheric_sag_rt10) provided by ray-tracing-wasm-v3.js. -->
@@ -820,7 +796,7 @@
           
           // 手動でforce-wasm-system.jsを再読み込み
           const script = document.createElement('script');
-          script.src = 'force-wasm-system.js';
+          script.src = 'wasm/raytracing/force-wasm-system.js';
           script.onload = () => {
             console.log('✅ ForceWASMSystem 手動読み込み完了');
             
@@ -1050,7 +1026,7 @@
       
       try {
         // PSFCalculatorを動的インポート
-        const { PSFCalculator } = await import('./eva-psf.js');
+        const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.js');
         const psfCalculator = new PSFCalculator();
         
         // 初期化を待機

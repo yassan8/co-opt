@@ -11,7 +11,7 @@ import {
   duplicateConfiguration,
   renameConfiguration,
   getConfigurationList
-} from '../table-configuration.js';
+} from '../data/table-configuration.js';
 
 let autoSaveIntervalId = null;
 let isConfigurationSwitching = false;

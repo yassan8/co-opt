@@ -1,0 +1,42 @@
+{
+  "system": {
+    "wavelengths": [0.4358343, 0.5875618, 0.6562725],
+    "fields": [
+      { "type": "Angle", "value": 0 },
+      { "type": "Angle", "value": 5 },
+      { "type": "Angle", "value": 10 }
+    ]
+  },
+  "blocks": [
+    {
+      "blockId": "S1",
+      "blockType": "Stop",
+      "parameters": {
+        "semiDiameter": 5
+      },
+      "variables": {}
+    },
+    {
+      "blockId": "L1",
+      "blockType": "Lens",
+      "variables": {
+        "frontRadius": { "value": "50", "optimize": { "mode": "V" } },
+        "backRadius": { "value": "-50", "optimize": { "mode": "V" } },
+        "centerThickness": { "value": "5", "optimize": { "mode": "V" } },
+        "material": { "value": "N-BK7", "optimize": { "mode": "" } }
+      }
+    },
+    {
+      "blockId": "G1",
+      "blockType": "AirGap",
+      "variables": {
+        "thickness": { "value": "50", "optimize": { "mode": "V" } }
+      }
+    },
+    {
+      "blockId": "I1",
+      "blockType": "ImagePlane",
+      "variables": {}
+    }
+  ]
+}

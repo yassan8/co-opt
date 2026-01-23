@@ -4,7 +4,7 @@
  * - System Evaluation UI is deprecated (no transfer)
  */
 
-import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.js?v=2026-01-06c';
+import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.js';
 import { getOpticalSystemRows } from './utils/data-utils.js';
 
 // Zernike Noll index names (0-37)

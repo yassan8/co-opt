@@ -828,7 +828,7 @@ let _psfCalculatorSingletonPromise = null;
 async function getPSFCalculatorSingleton() {
     if (!_psfCalculatorSingletonPromise) {
         _psfCalculatorSingletonPromise = (async () => {
-            const { PSFCalculator } = await import('../evaluation/psf/psf-calculator.js?v=2026-01-14b');
+            const { PSFCalculator } = await import('../evaluation/psf/psf-calculator.js');
             return new PSFCalculator();
         })();
     }
@@ -3826,7 +3826,7 @@ async function handlePSFCalculation(debugMode = false) {
             
             // 必要なモジュールを動的インポート
             // PSFCalculator はシングルトンで再利用（WASM初期化を使い回す）
-            const { createOPDCalculator, WavefrontAberrationAnalyzer } = await import('../evaluation/wavefront/wavefront.js?v=2026-01-14b');
+            const { createOPDCalculator, WavefrontAberrationAnalyzer } = await import('../evaluation/wavefront/wavefront.js');
 
             // PSF入力のOPDは生の光線追跡データから直接補間して作る
             // - Zernike近似を経由しないため、サンプリングの非対称性に影響されない
@@ -5293,8 +5293,8 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
         
         // 必要なモジュールを動的インポート
         // PSFCalculator はシングルトンで再利用（WASM初期化を使い回す）
-        const { PSFPlotter } = await import('../evaluation/psf/psf-plot.js?v=2026-01-14b');
-        const { createOPDCalculator } = await import('../evaluation/wavefront/wavefront.js?v=2026-01-14b');
+        const { PSFPlotter } = await import('../evaluation/psf/psf-plot.js');
+        const { createOPDCalculator } = await import('../evaluation/wavefront/wavefront.js');
         
         // 光学システムデータを取得（live table を優先）
         const opticalSystemRows = getOpticalSystemRows(window.tableOpticalSystem);
@@ -5375,7 +5375,7 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
         // - Zernike fit なし
         // - piston+tilt removed
         if (PSF_DEBUG) console.log('📊 [PSF] Fixed wavefront map (referenceSphere/no-Zernike/piston+tilt removed) からOPD格子を生成中...');
-        const { WavefrontAberrationAnalyzer } = await import('../eva-wavefront.js?v=2026-01-14b');
+        const { WavefrontAberrationAnalyzer } = await import('../evaluation/wavefront/wavefront.js');
         const opdCalculator = createOPDCalculator(opticalSystemRows, wavelength);
         const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
         
@@ -5883,9 +5883,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     reportProgress(5, 'Loading modules...');
 
     // Dynamic imports (reuse the same infra as PSF)
-    const { createOPDCalculator } = await import('../evaluation/wavefront/wavefront.js?v=2026-01-14b');
-    const { WavefrontAberrationAnalyzer } = await import('../evaluation/wavefront/wavefront.js?v=2026-01-14b');
-    const { SimpleFFT } = await import('../evaluation/psf/psf-calculator.js?v=2026-01-14b');
+    const { createOPDCalculator } = await import('../evaluation/wavefront/wavefront.js');
+    const { WavefrontAberrationAnalyzer } = await import('../evaluation/wavefront/wavefront.js');
+    const { SimpleFFT } = await import('../evaluation/psf/psf-calculator.js');
 
     reportProgress(10, 'Preparing optical system...');
 
@@ -6514,7 +6514,7 @@ if (typeof window !== 'undefined') {
         };
 
         const calcWavefrontMetrics = async (rows) => {
-            const { createOPDCalculator, WavefrontAberrationAnalyzer } = await import('../evaluation/wavefront/wavefront.js?v=2026-01-14b');
+            const { createOPDCalculator, WavefrontAberrationAnalyzer } = await import('../evaluation/wavefront/wavefront.js');
             const opdCalculator = createOPDCalculator(rows, wavelength);
             const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
             try {

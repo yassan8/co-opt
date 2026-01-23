@@ -6,12 +6,12 @@
 import { 
     calculateParaxialData,
     calculateFullSystemParaxialTrace
-} from '../ray-paraxial.js';
-import { calculateSurfaceOrigins } from '../ray-tracing.js';
-import { getPrimaryWavelength } from '../glass.js';
-import { calculateSeidelCoefficients, formatSeidelCoefficients } from '../eva-seidel-coefficients.js';
-import { getActiveConfiguration } from '../table-configuration.js';
-import { configurationHasBlocks, expandBlocksToOpticalSystemRows } from '../block-schema.js';
+} from '../raytracing/core/ray-paraxial.js';
+import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.js';
+import { getPrimaryWavelength } from '../data/glass.js';
+import { calculateSeidelCoefficients, formatSeidelCoefficients } from '../evaluation/aberrations/seidel-coefficients.js';
+import { getActiveConfiguration } from '../data/table-configuration.js';
+import { configurationHasBlocks, expandBlocksToOpticalSystemRows } from '../data/block-schema.js';
 
 const DATA_UTILS_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__DATA_UTILS_DEBUG);
 const duLog = (...args) => { if (DATA_UTILS_DEBUG) console.log(...args); };

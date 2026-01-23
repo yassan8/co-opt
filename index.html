@@ -19,7 +19,7 @@
   <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
   
   <!-- WASM Module (V3 with memory management) -->
-  <script src="wasm/raytracing/ray-tracing-wasm-v3.js?v=20260103a"></script>
+  <script src="wasm/raytracing/ray-tracing-wasm-v3.js"></script>
 
   <script type="importmap">
     {
@@ -108,35 +108,6 @@
           const regs = await navigator.serviceWorker.getRegistrations();
           await Promise.all(regs.map(r => r.unregister()));
         }
-      } catch (_) {
-        // ignore
-      }
-    })();
-  </script>
-
-  <script>
-    // Dev diagnostics: verify legacy module URLs resolve after reorg.
-    (async () => {
-      try {
-        console.log('✅ [Startup] co-opt build 2026-01-23d', {
-          href: window.location.href,
-          baseURI: document.baseURI
-        });
-        const targets = [
-          './block-schema.js',
-          './data-utils.js',
-          './seidel-coefficients.js',
-          './ray-paraxial.js',
-          './ray-tracing.js'
-        ];
-        await Promise.all(targets.map(async (rel) => {
-          try {
-            const res = await fetch(rel, { method: 'HEAD' });
-            console.log(`🔎 [Startup] ${rel} -> ${res.status}`);
-          } catch (e) {
-            console.warn(`⚠️ [Startup] Failed to reach ${rel}:`, e);
-          }
-        }));
       } catch (_) {
         // ignore
       }
@@ -729,9 +700,9 @@
         // ray-tracing.jsの関数をグローバルに公開
         setTimeout(async () => {
           try {
-            const main = await import('./main.js?v=2026-01-19a');
-            const rayTracing = await import('./raytracing/core/ray-tracing.js?v=2026-01-23a');
-            const debugUtils = await import('./debug/debug-utils.js?v=2026-01-23a');
+            const main = await import('./main.js');
+            const rayTracing = await import('./raytracing/core/ray-tracing.js');
+            const debugUtils = await import('./debug/debug-utils.js');
             
             // まずmain.jsからgetWASMSystemをグローバルに公開
             if (typeof main.getWASMSystem === 'function') {
@@ -794,7 +765,7 @@
             }
             
             // 絞り周辺光線モジュールを読み込み
-            import('./raytracing/core/ray-marginal.js?v=2026-01-23a').then(marginalRayModule => {
+            import('./raytracing/core/ray-marginal.js').then(marginalRayModule => {
               window.calculateMarginalRay = marginalRayModule.calculateMarginalRay;
               window.calculateAllMarginalRays = marginalRayModule.calculateAllMarginalRays;
             }).catch(error => {
@@ -807,7 +778,7 @@
   </script>
 
   <!-- 絞り周辺光線計算スクリプト -->
-  <script type="module" src="raytracing/core/ray-aperture-edge.js?v=2026-01-23a"></script>
+  <script type="module" src="raytracing/core/ray-aperture-edge.js"></script>
 
   <!-- WASM最適化モジュール -->
   <script src="wasm/raytracing/force-wasm-system.js"></script>

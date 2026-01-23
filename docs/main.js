@@ -14,54 +14,54 @@ import { APP_CONFIG, initializeReferences, setIsGeneratingSpotDiagram, setIsGene
 import { initializeThreeJS, initializeLighting, renderScene, animate } from './core/scene-setup.js';
 
 // Table data modules
-import { loadTableData as loadSourceTableData, saveTableData as saveSourceTableData, tableSource } from './table-source.js';
-import { loadTableData as loadObjectTableData, saveTableData as saveObjectTableData, tableObject } from './table-object.js';
-import { loadTableData as loadOpticalSystemTableData, saveTableData as saveLensTableData, tableOpticalSystem, updateAllRefractiveIndices, updateOpticalPropertiesFromMaterial } from './table-optical-system.js';
+import { loadTableData as loadSourceTableData, saveTableData as saveSourceTableData, tableSource } from './data/table-source.js';
+import { loadTableData as loadObjectTableData, saveTableData as saveObjectTableData, tableObject } from './data/table-object.js';
+import { loadTableData as loadOpticalSystemTableData, saveTableData as saveLensTableData, tableOpticalSystem, updateAllRefractiveIndices, updateOpticalPropertiesFromMaterial } from './data/table-optical-system.js';
 
 // Optical system modules
 import { drawOpticalSystemSurfaces, clearAllOpticalElements, findStopSurface } from './optical/system-renderer.js';
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './surface.js';
 
 // Ray tracing modules
-import { traceRay, calculateSurfaceOrigins } from './ray-tracing.js';
-import { calculateFocalLength, calculateBackFocalLength, calculateImageDistance, calculateEntrancePupilDiameter, calculateExitPupilDiameter, calculateFullSystemParaxialTrace, calculateParaxialData, debugParaxialRayTrace, calculatePupilsByNewSpec, findStopSurfaceIndex } from './ray-paraxial.js';
+import { traceRay, calculateSurfaceOrigins } from './raytracing/core/ray-tracing.js';
+import { calculateFocalLength, calculateBackFocalLength, calculateImageDistance, calculateEntrancePupilDiameter, calculateExitPupilDiameter, calculateFullSystemParaxialTrace, calculateParaxialData, debugParaxialRayTrace, calculatePupilsByNewSpec, findStopSurfaceIndex } from './raytracing/core/ray-paraxial.js';
 
 // Marginal ray modules
-import { calculateAdaptiveMarginalRay, calculateAllMarginalRays } from './ray-marginal.js';
+import { calculateAdaptiveMarginalRay, calculateAllMarginalRays } from './raytracing/core/ray-marginal.js';
 
 // Analysis modules
-import { generateSpotDiagram, drawSpotDiagram, generateSurfaceOptions } from './eva-spot-diagram.js';
-import { calculateTransverseAberration, getFieldAnglesFromSource, getPrimaryWavelengthForAberration, validateAberrationData, calculateChiefRayNewton, getEstimatedEntrancePupilDiameter } from './eva-transverse-aberration.js';
-import { plotTransverseAberrationDiagram, showTransverseAberrationInNewWindow } from './eva-transverse-aberration-plot.js';
-import { showWavefrontDiagram } from './eva-wavefront-plot.js?v=2026-01-15b';
-import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './eva-wavefront.js?v=2026-01-15l';
-import { PSFCalculator } from './eva-psf.js?v=2026-01-14b';
-import { PSFPlotter, PSFDisplayManager } from './eva-psf-plot.js?v=2026-01-14b';
-import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './zernike-fitting.js';
-import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './opd-zernike-analysis.js';
-import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './gen-ray-cross-finite.js';
-import { generateInfiniteSystemCrossBeam, RayColorSystem as InfiniteRayColorSystem } from './gen-ray-cross-infinite.js';
+import { generateSpotDiagram, drawSpotDiagram, generateSurfaceOptions } from './evaluation/spot-diagram.js';
+import { calculateTransverseAberration, getFieldAnglesFromSource, getPrimaryWavelengthForAberration, validateAberrationData, calculateChiefRayNewton, getEstimatedEntrancePupilDiameter } from './evaluation/aberrations/transverse-aberration.js';
+import { plotTransverseAberrationDiagram, showTransverseAberrationInNewWindow } from './evaluation/aberrations/transverse-aberration-plot.js';
+import { showWavefrontDiagram } from './evaluation/wavefront/wavefront-plot.js';
+import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './evaluation/wavefront/wavefront.js';
+import { PSFCalculator } from './evaluation/psf/psf-calculator.js';
+import { PSFPlotter, PSFDisplayManager } from './evaluation/psf/psf-plot.js';
+import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './evaluation/wavefront/zernike-fitting.js';
+import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './evaluation/wavefront/opd-zernike-analysis.js';
+import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './raytracing/generation/gen-ray-cross-finite.js';
+import { generateInfiniteSystemCrossBeam, RayColorSystem as InfiniteRayColorSystem } from './raytracing/generation/gen-ray-cross-infinite.js';
 // Distortion analysis
-import { calculateDistortionData } from './eva-distortion.js';
-import { plotDistortionPercent, generateDistortionPlots, plotGridDistortion, generateGridDistortionPlot } from './eva-distortion-plot.js';
+import { calculateDistortionData } from './evaluation/aberrations/distortion.js';
+import { plotDistortionPercent, generateDistortionPlots, plotGridDistortion, generateGridDistortionPlot } from './evaluation/aberrations/distortion-plot.js';
 
 // Utility modules
-import { getGlassDataWithSellmeier, calculateRefractiveIndex, getPrimaryWavelength } from './glass.js';
+import { getGlassDataWithSellmeier, calculateRefractiveIndex, getPrimaryWavelength } from './data/glass.js';
 import { multiplyMatrices, createRotationMatrixX, createRotationMatrixY, createRotationMatrixZ, createRotationMatrix, calculateLocalCoordinateTransforms, applyMatrixToVector, calculateOpticalSystemOffset } from './utils/math.js';
 import { getOpticalSystemRows, getObjectRows, getSourceRows, outputParaxialDataToDebug, outputSeidelCoefficientsToDebug, outputDebugSystemData, displayCoordinateTransformMatrix, debugTableStatus, initializeTablesWithDummyData, renderBlockContributionSummaryFromSeidel, renderSystemConstraintsFromSurfaceRows } from './utils/data-utils.js';
-import { initAIAssistant } from './ai-assistant.js';
+import { initAIAssistant } from './ai/ai-assistant.js';
 
 // Ray rendering modules
 import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayColorMode, optimizeObjectPositionForStop, optimizeAngleObjectPosition, generateRayStartPointsForObject, drawRayWithSegmentColors } from './optical/ray-renderer.js';
 
 // UI modules
-import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons } from './ui/event-handlers.js?v=2026-01-15l';
+import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons } from './ui/event-handlers.js';
 import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListeners } from './ui/ui-updates.js';
-import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers } from './ui/dom-event-handlers.js?v=2026-01-14b';
+import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers } from './ui/dom-event-handlers.js';
 import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.js';
 
 // Suggest (Design Intent) implementation (adds window.SuggestDesignIntent)
-import './suggest-design-intent.js';
+import './optimization/suggest-design-intent.js';
 
 // Debug modules
 import { debugSceneContents, debugDrawingIssues, adjustCameraView, showSceneBoundingBox } from './debug/debug-utils.js';
@@ -73,7 +73,7 @@ import { clearAllDrawing, showSpotDiagram, showTransverseAberrationDiagram, show
 // import { performanceMonitor } from './performance-monitor.js';
 
 // WASM acceleration system
-// import { ForceWASMSystem } from './force-wasm-system.js';
+// import { ForceWASMSystem } from './wasm/raytracing/force-wasm-system.js';
 // グローバルスコープのForceWASMSystemを使用（スクリプトタグで読み込み済み）
 
 // THREE.js and OrbitControls imports
@@ -106,7 +106,7 @@ async function initializeApplication() {
         // ForceWASMSystemがグローバルに利用可能かチェック
         const ForceWASMSystemClass = globalThis.ForceWASMSystem || window?.ForceWASMSystem;
         if (!ForceWASMSystemClass) {
-            throw new Error('ForceWASMSystem not available. Make sure force-wasm-system.js is loaded.');
+            throw new Error('ForceWASMSystem not available. Make sure wasm/raytracing/force-wasm-system.js is loaded.');
         }
         
         wasmSystem = new ForceWASMSystemClass();

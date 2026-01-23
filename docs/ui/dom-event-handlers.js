@@ -6,20 +6,20 @@
 import { getOpticalSystemRows, getObjectRows, getSourceRows, outputParaxialDataToDebug, displayCoordinateTransformMatrix } from '../utils/data-utils.js';
 import { showSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, createFieldSettingFromObject } from '../analysis/optical-analysis.js';
 import { updateSurfaceNumberSelect } from './ui-updates.js';
-import { generateSurfaceOptions } from '../eva-spot-diagram.js';
-import { saveTableData as saveSourceTableData } from '../table-source.js';
-import { saveTableData as saveObjectTableData } from '../table-object.js';
-import { saveTableData as saveLensTableData } from '../table-optical-system.js';
-import { tableSource } from '../table-source.js';
-import { tableObject } from '../table-object.js';
-import { tableOpticalSystem } from '../table-optical-system.js';
+import { generateSurfaceOptions } from '../evaluation/spot-diagram.js';
+import { saveTableData as saveSourceTableData } from '../data/table-source.js';
+import { saveTableData as saveObjectTableData } from '../data/table-object.js';
+import { saveTableData as saveLensTableData } from '../data/table-optical-system.js';
+import { tableSource } from '../data/table-source.js';
+import { tableObject } from '../data/table-object.js';
+import { tableOpticalSystem } from '../data/table-optical-system.js';
 import { debugWASMSystem, quickWASMComparison } from '../debug/debug-utils.js';
-import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows, deriveBlocksFromLegacyOpticalSystemRows } from '../block-schema.js';
-import { calculateBackFocalLength, calculateImageDistance, calculateFocalLength, calculateParaxialData, findStopSurfaceIndex } from '../ray-paraxial.js';
-import { traceRay, traceRayHitPoint } from '../ray-tracing.js';
-import { findInfiniteSystemChiefRayOrigin, findApertureBoundaryRays } from '../gen-ray-cross-infinite.js';
-import { generateZMXText, downloadZMX } from '../zemax-export.js';
-import { parseZMXArrayBufferToOpticalSystemRows } from '../zemax-import.js';
+import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows, deriveBlocksFromLegacyOpticalSystemRows } from '../data/block-schema.js';
+import { calculateBackFocalLength, calculateImageDistance, calculateFocalLength, calculateParaxialData, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.js';
+import { traceRay, traceRayHitPoint } from '../raytracing/core/ray-tracing.js';
+import { findInfiniteSystemChiefRayOrigin, findApertureBoundaryRays } from '../raytracing/generation/gen-ray-cross-infinite.js';
+import { generateZMXText, downloadZMX } from '../import-export/zemax-export.js';
+import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.js';
 import { buildShareUrlFromCompressedString, decodeAllDataFromCompressedString, encodeAllDataToCompressedString, getCompressedStringFromLocationHash, getCompressedStringFromLocation } from '../utils/url-share.js';
 
 function __zmxPickPrimaryWavelengthMicrons(sourceRows) {
@@ -558,9 +558,9 @@ function derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthMi
 
     return { pupilDiameterMm, focalLengthMm };
 }
-import { getGlassDataWithSellmeier, findSimilarGlassesByNdVd, findSimilarGlassNames } from '../glass.js';
-import { openGlassMapWindow } from '../glass-map.js';
-import { normalizeDesign } from '../normalize-design.js';
+import { getGlassDataWithSellmeier, findSimilarGlassesByNdVd, findSimilarGlassNames } from '../data/glass.js';
+import { openGlassMapWindow } from '../data/glass-map.js';
+import { normalizeDesign } from '../optimization/normalize-design.js';
 
 function __blocks_setBlockGlassRegionConstraint(blockId, region) {
     const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
@@ -828,7 +828,7 @@ let _psfCalculatorSingletonPromise = null;
 async function getPSFCalculatorSingleton() {
     if (!_psfCalculatorSingletonPromise) {
         _psfCalculatorSingletonPromise = (async () => {
-            const { PSFCalculator } = await import('../eva-psf.js?v=2026-01-14b');
+            const { PSFCalculator } = await import('../evaluation/psf/psf-calculator.js');
             return new PSFCalculator();
         })();
     }
@@ -2782,8 +2782,8 @@ async function setupSeidelAfocalButton() {
         seidelAfocalBtn.addEventListener('click', async function() {
             console.log('🔬 Seidel係数計算（アフォーカル）ボタンがクリックされました');
             try {
-                const { calculateAfocalSeidelCoefficientsIntegrated } = await import('../eva-seidel-coefficients-afocal.js');
-                const { formatSeidelCoefficients } = await import('../eva-seidel-coefficients.js');
+                const { calculateAfocalSeidelCoefficientsIntegrated } = await import('../evaluation/aberrations/seidel-coefficients-afocal.js');
+                const { formatSeidelCoefficients } = await import('../evaluation/aberrations/seidel-coefficients.js');
                 
                 const opticalSystemRows = window.getOpticalSystemRows ? window.getOpticalSystemRows() : [];
                 const objectRows = window.getObjectTableRows ? window.getObjectTableRows() : [];
@@ -3826,7 +3826,7 @@ async function handlePSFCalculation(debugMode = false) {
             
             // 必要なモジュールを動的インポート
             // PSFCalculator はシングルトンで再利用（WASM初期化を使い回す）
-            const { createOPDCalculator, WavefrontAberrationAnalyzer } = await import('../eva-wavefront.js?v=2026-01-14b');
+            const { createOPDCalculator, WavefrontAberrationAnalyzer } = await import('../evaluation/wavefront/wavefront.js');
 
             // PSF入力のOPDは生の光線追跡データから直接補間して作る
             // - Zernike近似を経由しないため、サンプリングの非対称性に影響されない
@@ -5293,8 +5293,8 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
         
         // 必要なモジュールを動的インポート
         // PSFCalculator はシングルトンで再利用（WASM初期化を使い回す）
-        const { PSFPlotter } = await import('../eva-psf-plot.js?v=2026-01-14b');
-        const { createOPDCalculator } = await import('../eva-wavefront.js?v=2026-01-14b');
+        const { PSFPlotter } = await import('../evaluation/psf/psf-plot.js');
+        const { createOPDCalculator } = await import('../evaluation/wavefront/wavefront.js');
         
         // 光学システムデータを取得（live table を優先）
         const opticalSystemRows = getOpticalSystemRows(window.tableOpticalSystem);
@@ -5375,7 +5375,7 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
         // - Zernike fit なし
         // - piston+tilt removed
         if (PSF_DEBUG) console.log('📊 [PSF] Fixed wavefront map (referenceSphere/no-Zernike/piston+tilt removed) からOPD格子を生成中...');
-        const { WavefrontAberrationAnalyzer } = await import('../eva-wavefront.js?v=2026-01-14b');
+        const { WavefrontAberrationAnalyzer } = await import('../evaluation/wavefront/wavefront.js');
         const opdCalculator = createOPDCalculator(opticalSystemRows, wavelength);
         const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
         
@@ -5883,9 +5883,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     reportProgress(5, 'Loading modules...');
 
     // Dynamic imports (reuse the same infra as PSF)
-    const { createOPDCalculator } = await import('../eva-wavefront.js?v=2026-01-14b');
-    const { WavefrontAberrationAnalyzer } = await import('../eva-wavefront.js?v=2026-01-14b');
-    const { SimpleFFT } = await import('../eva-psf.js?v=2026-01-14b');
+    const { createOPDCalculator } = await import('../evaluation/wavefront/wavefront.js');
+    const { WavefrontAberrationAnalyzer } = await import('../evaluation/wavefront/wavefront.js');
+    const { SimpleFFT } = await import('../evaluation/psf/psf-calculator.js');
 
     reportProgress(10, 'Preparing optical system...');
 
@@ -6514,7 +6514,7 @@ if (typeof window !== 'undefined') {
         };
 
         const calcWavefrontMetrics = async (rows) => {
-            const { createOPDCalculator, WavefrontAberrationAnalyzer } = await import('../eva-wavefront.js?v=2026-01-14b');
+            const { createOPDCalculator, WavefrontAberrationAnalyzer } = await import('../evaluation/wavefront/wavefront.js');
             const opdCalculator = createOPDCalculator(rows, wavelength);
             const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
             try {

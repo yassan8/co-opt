@@ -1,2 +1,3 @@
-// Compatibility re-export (docs build).
-export * from './eva-seidel-coefficients.js';
+// Compatibility re-export (deprecated).
+// TODO: update import paths to use ./evaluation/aberrations/seidel-coefficients.js
+export * from './evaluation/aberrations/seidel-coefficients.js';

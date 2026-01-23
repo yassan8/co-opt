@@ -4,16 +4,16 @@
  */
 
 import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.js';
-import { calculateFullSystemParaxialTrace, calculateParaxialData, findStopSurfaceIndex } from './ray-paraxial.js';
-import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, transformPointToLocal } from './ray-tracing.js';
+import { calculateFullSystemParaxialTrace, calculateParaxialData, findStopSurfaceIndex } from './raytracing/core/ray-paraxial.js';
+import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, transformPointToLocal } from './raytracing/core/ray-tracing.js';
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from './utils/data-utils.js';
-import { calculateSeidelCoefficients } from './eva-seidel-coefficients.js';
-import { calculateAfocalSeidelCoefficientsIntegrated } from './eva-seidel-coefficients-afocal.js';
-import { generateSpotDiagram, generateSurfaceOptions } from './eva-spot-diagram.js';
-import { createOPDCalculator, WavefrontAberrationAnalyzer } from './eva-wavefront.js';
-import { expandBlocksToOpticalSystemRows } from './block-schema.js';
+import { calculateSeidelCoefficients } from './evaluation/aberrations/seidel-coefficients.js';
+import { calculateAfocalSeidelCoefficientsIntegrated } from './evaluation/aberrations/seidel-coefficients-afocal.js';
+import { generateSpotDiagram, generateSurfaceOptions } from './evaluation/spot-diagram.js';
+import { createOPDCalculator, WavefrontAberrationAnalyzer } from './evaluation/wavefront/wavefront.js';
+import { expandBlocksToOpticalSystemRows } from './data/block-schema.js';
 import { generateRayStartPointsForObject, setRayEmissionPattern, getRayEmissionPattern } from './optical/ray-renderer.js';
-import { calculateLongitudinalAberration } from './eva-longitudinal-aberration.js';
+import { calculateLongitudinalAberration } from './evaluation/aberrations/longitudinal-aberration.js';
 import { getTableOpticalSystem, getTableObject, getTableSource } from './core/app-config.js';
 
 function isPlainObject(value) {

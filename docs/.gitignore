@@ -1,0 +1,19 @@
+.DS_Store
+
+# Editor / tooling
+.vscode/
+
+# Node
+node_modules/
+
+# Python
+.venv/
+
+# Local reference docs (commit only if you have rights)
+*.pdf
+
+# Local data directory (not required to run)
+glass data/
+glass data/
+*.xls
+*.xlsx
