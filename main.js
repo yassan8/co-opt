@@ -49,7 +49,7 @@ import { plotDistortionPercent, generateDistortionPlots, plotGridDistortion, gen
 import { getGlassDataWithSellmeier, calculateRefractiveIndex, getPrimaryWavelength } from './data/glass.js';
 import { multiplyMatrices, createRotationMatrixX, createRotationMatrixY, createRotationMatrixZ, createRotationMatrix, calculateLocalCoordinateTransforms, applyMatrixToVector, calculateOpticalSystemOffset } from './utils/math.js';
 import { getOpticalSystemRows, getObjectRows, getSourceRows, outputParaxialDataToDebug, outputSeidelCoefficientsToDebug, outputDebugSystemData, displayCoordinateTransformMatrix, debugTableStatus, initializeTablesWithDummyData, renderBlockContributionSummaryFromSeidel, renderSystemConstraintsFromSurfaceRows } from './utils/data-utils.js';
-import { initAIAssistant } from './ai-assistant.js';
+import { initAIAssistant } from './ai/ai-assistant.js';
 
 // Ray rendering modules
 import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayColorMode, optimizeObjectPositionForStop, optimizeAngleObjectPosition, generateRayStartPointsForObject, drawRayWithSegmentColors } from './optical/ray-renderer.js';
@@ -61,7 +61,7 @@ import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers } from './ui
 import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.js';
 
 // Suggest (Design Intent) implementation (adds window.SuggestDesignIntent)
-import './suggest-design-intent.js';
+import './optimization/suggest-design-intent.js';
 
 // Debug modules
 import { debugSceneContents, debugDrawingIssues, adjustCameraView, showSceneBoundingBox } from './debug/debug-utils.js';

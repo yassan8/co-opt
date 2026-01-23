@@ -126,8 +126,8 @@ async function runOnce(label, moduleUrl) {
 installBrowserStubs();
 
 // Use URLs relative to this script (stable even when cwd changes).
-const srcUrl = new URL('../ai-assistant.js', import.meta.url).href;
-const docsUrl = new URL('../docs/ai-assistant.js', import.meta.url).href;
+const srcUrl = new URL('../ai/ai-assistant.js', import.meta.url).href;
+const docsUrl = new URL('../docs/ai/ai-assistant.js', import.meta.url).href;
 
 const reports = [];
 try {

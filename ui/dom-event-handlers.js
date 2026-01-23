@@ -18,8 +18,8 @@ import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlock
 import { calculateBackFocalLength, calculateImageDistance, calculateFocalLength, calculateParaxialData, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.js';
 import { traceRay, traceRayHitPoint } from '../raytracing/core/ray-tracing.js';
 import { findInfiniteSystemChiefRayOrigin, findApertureBoundaryRays } from '../raytracing/generation/gen-ray-cross-infinite.js';
-import { generateZMXText, downloadZMX } from '../zemax-export.js';
-import { parseZMXArrayBufferToOpticalSystemRows } from '../zemax-import.js';
+import { generateZMXText, downloadZMX } from '../import-export/zemax-export.js';
+import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.js';
 import { buildShareUrlFromCompressedString, decodeAllDataFromCompressedString, encodeAllDataToCompressedString, getCompressedStringFromLocationHash, getCompressedStringFromLocation } from '../utils/url-share.js';
 
 function __zmxPickPrimaryWavelengthMicrons(sourceRows) {
@@ -560,7 +560,7 @@ function derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthMi
 }
 import { getGlassDataWithSellmeier, findSimilarGlassesByNdVd, findSimilarGlassNames } from '../data/glass.js';
 import { openGlassMapWindow } from '../data/glass-map.js';
-import { normalizeDesign } from '../normalize-design.js';
+import { normalizeDesign } from '../optimization/normalize-design.js';
 
 function __blocks_setBlockGlassRegionConstraint(blockId, region) {
     const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
