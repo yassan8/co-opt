@@ -589,7 +589,7 @@
         try {
           const parsed = JSON.parse(systemConfigurationsJson);
           if (parsed && Array.isArray(parsed.configurations) && parsed.configurations.length > 0) {
-            const { loadActiveConfigurationToTables } = await import('./table-configuration.js');
+            const { loadActiveConfigurationToTables } = await import('./data/table-configuration.js');
             loadActiveConfigurationToTables();
             console.log('✅ [Startup] Active configuration expanded to table storage keys');
           }
@@ -604,7 +604,7 @@
   <script type="module" src="main.js?v=2026-01-19a"></script>
   
   <!-- Configuration System -->
-  <script type="module" src="table-configuration.js"></script>
+  <script type="module" src="data/table-configuration.js"></script>
   <script type="module" src="ui/configuration-handlers.js"></script>
   
   <!-- Merit Function Inspector (must load before editor) -->

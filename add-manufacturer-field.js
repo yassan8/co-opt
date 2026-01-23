@@ -4,7 +4,7 @@
 
 import fs from 'fs';
 
-const filePath = './glass.js';
+const filePath = './data/glass.js';
 let content = fs.readFileSync(filePath, 'utf8');
 
 // Define manufacturer patterns with their database patterns

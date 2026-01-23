@@ -7,14 +7,14 @@ import { getOpticalSystemRows, getObjectRows, getSourceRows, outputParaxialDataT
 import { showSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, createFieldSettingFromObject } from '../analysis/optical-analysis.js';
 import { updateSurfaceNumberSelect } from './ui-updates.js';
 import { generateSurfaceOptions } from '../evaluation/spot-diagram.js';
-import { saveTableData as saveSourceTableData } from '../table-source.js';
-import { saveTableData as saveObjectTableData } from '../table-object.js';
-import { saveTableData as saveLensTableData } from '../table-optical-system.js';
-import { tableSource } from '../table-source.js';
-import { tableObject } from '../table-object.js';
-import { tableOpticalSystem } from '../table-optical-system.js';
+import { saveTableData as saveSourceTableData } from '../data/table-source.js';
+import { saveTableData as saveObjectTableData } from '../data/table-object.js';
+import { saveTableData as saveLensTableData } from '../data/table-optical-system.js';
+import { tableSource } from '../data/table-source.js';
+import { tableObject } from '../data/table-object.js';
+import { tableOpticalSystem } from '../data/table-optical-system.js';
 import { debugWASMSystem, quickWASMComparison } from '../debug/debug-utils.js';
-import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows, deriveBlocksFromLegacyOpticalSystemRows } from '../block-schema.js';
+import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows, deriveBlocksFromLegacyOpticalSystemRows } from '../data/block-schema.js';
 import { calculateBackFocalLength, calculateImageDistance, calculateFocalLength, calculateParaxialData, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.js';
 import { traceRay, traceRayHitPoint } from '../raytracing/core/ray-tracing.js';
 import { findInfiniteSystemChiefRayOrigin, findApertureBoundaryRays } from '../raytracing/generation/gen-ray-cross-infinite.js';
@@ -558,8 +558,8 @@ function derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthMi
 
     return { pupilDiameterMm, focalLengthMm };
 }
-import { getGlassDataWithSellmeier, findSimilarGlassesByNdVd, findSimilarGlassNames } from '../glass.js';
-import { openGlassMapWindow } from '../glass-map.js';
+import { getGlassDataWithSellmeier, findSimilarGlassesByNdVd, findSimilarGlassNames } from '../data/glass.js';
+import { openGlassMapWindow } from '../data/glass-map.js';
 import { normalizeDesign } from '../normalize-design.js';
 
 function __blocks_setBlockGlassRegionConstraint(blockId, region) {

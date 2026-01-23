@@ -12,7 +12,7 @@
  *   "<blockId>.<paramKey>" (same as design-variables variableId)
  */
 
-import { expandBlocksToOpticalSystemRows } from './block-schema.js';
+import { expandBlocksToOpticalSystemRows } from './data/block-schema.js';
 
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);

@@ -6,7 +6,7 @@ Check for duplicate "manufacturer" fields in glass.js
 import re
 import sys
 
-with open('glass.js', 'r') as f:
+with open('data/glass.js', 'r') as f:
     content = f.read()
 
 # Pattern to match glass objects

@@ -14,9 +14,9 @@ import { APP_CONFIG, initializeReferences, setIsGeneratingSpotDiagram, setIsGene
 import { initializeThreeJS, initializeLighting, renderScene, animate } from './core/scene-setup.js';
 
 // Table data modules
-import { loadTableData as loadSourceTableData, saveTableData as saveSourceTableData, tableSource } from './table-source.js';
-import { loadTableData as loadObjectTableData, saveTableData as saveObjectTableData, tableObject } from './table-object.js';
-import { loadTableData as loadOpticalSystemTableData, saveTableData as saveLensTableData, tableOpticalSystem, updateAllRefractiveIndices, updateOpticalPropertiesFromMaterial } from './table-optical-system.js';
+import { loadTableData as loadSourceTableData, saveTableData as saveSourceTableData, tableSource } from './data/table-source.js';
+import { loadTableData as loadObjectTableData, saveTableData as saveObjectTableData, tableObject } from './data/table-object.js';
+import { loadTableData as loadOpticalSystemTableData, saveTableData as saveLensTableData, tableOpticalSystem, updateAllRefractiveIndices, updateOpticalPropertiesFromMaterial } from './data/table-optical-system.js';
 
 // Optical system modules
 import { drawOpticalSystemSurfaces, clearAllOpticalElements, findStopSurface } from './optical/system-renderer.js';
@@ -46,7 +46,7 @@ import { calculateDistortionData } from './evaluation/aberrations/distortion.js'
 import { plotDistortionPercent, generateDistortionPlots, plotGridDistortion, generateGridDistortionPlot } from './evaluation/aberrations/distortion-plot.js';
 
 // Utility modules
-import { getGlassDataWithSellmeier, calculateRefractiveIndex, getPrimaryWavelength } from './glass.js';
+import { getGlassDataWithSellmeier, calculateRefractiveIndex, getPrimaryWavelength } from './data/glass.js';
 import { multiplyMatrices, createRotationMatrixX, createRotationMatrixY, createRotationMatrixZ, createRotationMatrix, calculateLocalCoordinateTransforms, applyMatrixToVector, calculateOpticalSystemOffset } from './utils/math.js';
 import { getOpticalSystemRows, getObjectRows, getSourceRows, outputParaxialDataToDebug, outputSeidelCoefficientsToDebug, outputDebugSystemData, displayCoordinateTransformMatrix, debugTableStatus, initializeTablesWithDummyData, renderBlockContributionSummaryFromSeidel, renderSystemConstraintsFromSurfaceRows } from './utils/data-utils.js';
 import { initAIAssistant } from './ai-assistant.js';

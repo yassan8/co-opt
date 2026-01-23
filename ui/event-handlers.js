@@ -4315,8 +4315,8 @@ export function setupOpticalSystemChangeListeners(scene) {
                         import(moduleURL('./eva-psf-plot.js')),
                         import(moduleURL('./eva-wavefront.js')),
                         import(moduleURL('./eva-psf.js')),
-                        import(moduleURL('./ray-paraxial.js')),
-                        import(moduleURL('./block-schema.js'))
+                        import(moduleURL('./raytracing/core/ray-paraxial.js')),
+                        import(moduleURL('./data/block-schema.js'))
                     ]);
 
                     const cloneRows = (rows) => {

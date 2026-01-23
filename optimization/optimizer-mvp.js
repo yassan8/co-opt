@@ -8,9 +8,9 @@
  * No UI is added; the entrypoint is exposed as window.OptimizationMVP.
  */
 
-import { expandBlocksToOpticalSystemRows } from '../block-schema.js';
+import { expandBlocksToOpticalSystemRows } from '../data/block-schema.js';
 import { listDesignVariablesFromBlocks, setDesignVariableValue } from './design-variables.js';
-import { getGlassDataWithSellmeier } from '../glass.js';
+import { getGlassDataWithSellmeier } from '../data/glass.js';
 
 let __optimizerStopRequested = false;
 

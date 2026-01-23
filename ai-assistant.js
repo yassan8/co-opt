@@ -5,7 +5,7 @@
  */
 
 import { getSystemContext } from './ai-context.js';
-import { BLOCK_SCHEMA_VERSION, expandBlocksToOpticalSystemRows, deriveBlocksFromLegacyOpticalSystemRows } from './block-schema.js';
+import { BLOCK_SCHEMA_VERSION, expandBlocksToOpticalSystemRows, deriveBlocksFromLegacyOpticalSystemRows } from './data/block-schema.js';
 
 const AI_CONFIG_KEY = 'ai_assistant_config';
 const AI_HISTORY_KEY = 'ai_assistant_history';

@@ -5,7 +5,7 @@
 
 import { calculateDistortionData, calculateGridDistortion } from './distortion.js';
 import { getObjectRows, getOpticalSystemRows, getSourceRows } from '../../utils/data-utils.js';
-import { getPrimaryWavelength } from '../../glass.js';
+import { getPrimaryWavelength } from '../../data/glass.js';
 
 function inferObjectFieldMode(objects) {
   const rows = Array.isArray(objects) ? objects : [];

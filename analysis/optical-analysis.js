@@ -5,7 +5,7 @@
 
 import * as THREE from 'three';
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.js';
-import { expandBlocksToOpticalSystemRows } from '../block-schema.js';
+import { expandBlocksToOpticalSystemRows } from '../data/block-schema.js';
 import { getScene, getCamera, getRenderer, getControls, getTableOpticalSystem, getTableObject, getTableSource,
          getIsGeneratingSpotDiagram, getIsGeneratingTransverseAberration,
          setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration } from '../core/app-config.js';

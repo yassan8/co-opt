@@ -13,7 +13,7 @@
  * - TCA: Transverse Chromatic Aberration (normalized)
  */
 
-import { calculateRefractiveIndex, getGlassDataWithSellmeier } from '../../glass.js';
+import { calculateRefractiveIndex, getGlassDataWithSellmeier } from '../../data/glass.js';
 import { 
     getSafeRadius, 
     getSafeThickness, 
@@ -24,7 +24,7 @@ import {
     calculatePupilsByNewSpec,
     calculateFullSystemParaxialTrace
 } from '../../raytracing/core/ray-paraxial.js';
-import { tableSource, loadTableData as loadSourceTableData } from '../../table-source.js';
+import { tableSource, loadTableData as loadSourceTableData } from '../../data/table-source.js';
 
 function getSourceRowsSafe() {
     try {
