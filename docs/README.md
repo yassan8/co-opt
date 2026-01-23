@@ -39,5 +39,8 @@ Contributions are welcome! Whether it's adding more glass data, improving the ra
 2. Open an **Issue** for bug reports or feature requests.
 3. Join the discussion in the **GitHub Discussions** tab.
 
-## 📄 License
+## � Privacy Policy
+This website uses Google Analytics to analyze traffic and improve user experience. Google Analytics uses cookies to collect data anonymously. This data does not identify individual users.
+
+## �📄 License
 This project is licensed under the MIT License.
