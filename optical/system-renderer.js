@@ -131,6 +131,26 @@ function __coopt_getRenderApertureDims(surface) {
     return { width: w, height: h };
 }
 
+function __coopt_getCrosshairHalfExtents(surface, fallbackSemidia) {
+    const shape = __coopt_getRenderApertureShape(surface);
+    const { width, height } = __coopt_getRenderApertureDims(surface);
+    const fallback = (Number.isFinite(fallbackSemidia) && fallbackSemidia > 0) ? fallbackSemidia : 0;
+
+    if (shape === 'Square') {
+        const side = (width !== null && width > 0) ? width : ((height !== null && height > 0) ? height : (fallback > 0 ? fallback * 2 : 0));
+        const half = side > 0 ? side / 2 : fallback;
+        return { halfX: half, halfY: half };
+    }
+
+    if (shape === 'Rectangular') {
+        const w = (width !== null && width > 0) ? width : ((height !== null && height > 0) ? height : (fallback > 0 ? fallback * 2 : 0));
+        const h = (height !== null && height > 0) ? height : ((width !== null && width > 0) ? width : (fallback > 0 ? fallback * 2 : 0));
+        return { halfX: w > 0 ? w / 2 : fallback, halfY: h > 0 ? h / 2 : fallback };
+    }
+
+    return { halfX: fallback, halfY: fallback };
+}
+
 function __coopt_drawApertureOutline(scene, surface, semidia, origin, rotationMatrix, color) {
     const shape = __coopt_getRenderApertureShape(surface);
     const { width, height } = __coopt_getRenderApertureDims(surface);
@@ -380,10 +400,12 @@ export function drawOpticalSystemSurfaces(options = {}) {
                         // 十字線描画
                         console.log(`🎯 [OBJECT] Crosshair drawing: surface=${i}, planeSemidia=${planeSemidia}`);
                         
+                        const { halfX: crossHalfX, halfY: crossHalfY } = __coopt_getCrosshairHalfExtents(surface, planeSemidia);
+
                         // 縦線（Y方向、黒）
                         const pointsVertical = [];
                         for (let j = 0; j <= 1; j++) {
-                            const y = -planeSemidia + (2 * planeSemidia * j);
+                            const y = -crossHalfY + (2 * crossHalfY * j);
                             const point = new THREE.Vector3(0, y, 0);
                             pointsVertical.push(point);
                         }
@@ -404,7 +426,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
                         // 横線（X方向、赤）
                         const pointsHorizontal = [];
                         for (let j = 0; j <= 1; j++) {
-                            const x = -planeSemidia + (2 * planeSemidia * j);
+                            const x = -crossHalfX + (2 * crossHalfX * j);
                             const point = new THREE.Vector3(x, 0, 0);
                             pointsHorizontal.push(point);
                         }
@@ -476,13 +498,15 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             0x404040 // 暗いグレー
                         );
                         
+                        const { halfX: crossHalfX, halfY: crossHalfY } = __coopt_getCrosshairHalfExtents(surface, planeSemidia);
+
                         // 十字線描画
                         console.log(`🎯 [IMAGE] Crosshair drawing: surface=${i}, planeSemidia=${planeSemidia}`);
                         
                         // 縦線（Y方向、黒）
                         const pointsVertical = [];
                         for (let j = 0; j <= 1; j++) {
-                            const y = -planeSemidia + (2 * planeSemidia * j);
+                            const y = -crossHalfY + (2 * crossHalfY * j);
                             let point = new THREE.Vector3(0, y, 0);
                             if (imgRotMat && Array.isArray(imgRotMat) && imgRotMat.length >= 3) {
                                 // 回転行列を適用
@@ -513,7 +537,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
                         // 横線（X方向、赤）
                         const pointsHorizontal = [];
                         for (let j = 0; j <= 1; j++) {
-                            const x = -planeSemidia + (2 * planeSemidia * j);
+                            const x = -crossHalfX + (2 * crossHalfX * j);
                             let point = new THREE.Vector3(x, 0, 0);
                             if (imgRotMat && Array.isArray(imgRotMat) && imgRotMat.length >= 3) {
                                 // 回転行列を適用

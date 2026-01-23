@@ -61,6 +61,45 @@ function __coopt_getSemidiaMm(params) {
   return null;
 }
 
+function __coopt_getApertureShape(params) {
+  const raw = params?._apertureShape ?? params?.apertureShape ?? params?.ApertureShape;
+  const s = String(raw ?? '').trim();
+  if (!s) return 'Circular';
+  const key = s.replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+  if (key === 'circle' || key === 'circular') return 'Circular';
+  if (key === 'square' || key === 'sq') return 'Square';
+  if (key === 'rect' || key === 'rectangle' || key === 'rectangular') return 'Rectangular';
+  return 'Circular';
+}
+
+function __coopt_getApertureDims(params) {
+  const wRaw = params?._apertureWidth ?? params?.apertureWidth ?? params?.apertureX ?? params?.apertureWidthMm;
+  const hRaw = params?._apertureHeight ?? params?.apertureHeight ?? params?.apertureY ?? params?.apertureHeightMm;
+  const w = __coopt_parseNumberOrNull(wRaw);
+  const h = __coopt_parseNumberOrNull(hRaw);
+  return { width: w, height: h };
+}
+
+function __coopt_getProfileHalfExtents(params, fallbackSemidia) {
+  const shape = __coopt_getApertureShape(params);
+  const { width, height } = __coopt_getApertureDims(params);
+  const fallback = (Number.isFinite(fallbackSemidia) && fallbackSemidia > 0) ? fallbackSemidia : 0;
+
+  if (shape === 'Square') {
+    const side = (width !== null && width > 0) ? width : ((height !== null && height > 0) ? height : (fallback > 0 ? fallback * 2 : 0));
+    const half = side > 0 ? side / 2 : fallback;
+    return { halfX: half, halfY: half };
+  }
+
+  if (shape === 'Rectangular') {
+    const w = (width !== null && width > 0) ? width : ((height !== null && height > 0) ? height : (fallback > 0 ? fallback * 2 : 0));
+    const h = (height !== null && height > 0) ? height : ((width !== null && width > 0) ? width : (fallback > 0 ? fallback * 2 : 0));
+    return { halfX: w > 0 ? w / 2 : fallback, halfY: h > 0 ? h / 2 : fallback };
+  }
+
+  return { halfX: fallback, halfY: fallback };
+}
+
 const GLOBAL_FALLBACK = typeof window !== 'undefined' ? window : globalThis;
 
 function getSceneThreeContext(scene) {
@@ -446,6 +485,9 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
   const semidia = __coopt_getSemidiaMm(params);
   if (semidia === null) return;
 
+  const apertureShape = __coopt_getApertureShape(params);
+  const { width: apertureWidth, height: apertureHeight } = __coopt_getApertureDims(params);
+
   const positions = [];
   const indices = [];
 
@@ -479,46 +521,96 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
     coef10: Number(params.coef10) || 0,
   };
 
-  for (let i = 0; i <= segments; i++) {
-    const theta = (i / segments) * 2 * Math.PI;
-    for (let j = 0; j <= segments; j++) {
-      const r = (semidia * j) / segments;
-      const x = r * Math.cos(theta);
-      const y = r * Math.sin(theta);
-      let z = asphericSurfaceZ(r, paramsForZ, mode);
-      if (!isFinite(z)) z = 0;
-      
-      // 座標変換を適用（回転行列と原点オフセット）
-      let vertex = new THREE_CTX.Vector3(x, y, z);
-      
-      // 回転行列が指定されている場合は適用 with NaN validation
-      if (rotationMatrix) {
-        const R = rotationMatrix;
-        const newX = R[0][0] * vertex.x + R[0][1] * vertex.y + R[0][2] * vertex.z;
-        const newY = R[1][0] * vertex.x + R[1][1] * vertex.y + R[1][2] * vertex.z;
-        const newZ = R[2][0] * vertex.x + R[2][1] * vertex.y + R[2][2] * vertex.z;
-        
-        if (isFinite(newX) && isFinite(newY) && isFinite(newZ)) {
-          vertex = new THREE_CTX.Vector3(newX, newY, newZ);
+  const shouldUseRect = apertureShape === 'Square' || apertureShape === 'Rectangular';
+  let rectWidth = apertureWidth;
+  let rectHeight = apertureHeight;
+  if (apertureShape === 'Square') {
+    const side = rectWidth ?? rectHeight ?? (semidia > 0 ? semidia * 2 : null);
+    rectWidth = side;
+    rectHeight = side;
+  } else if (apertureShape === 'Rectangular') {
+    const fallback = (semidia > 0 ? semidia * 2 : null);
+    rectWidth = rectWidth ?? rectHeight ?? fallback;
+    rectHeight = rectHeight ?? rectWidth ?? fallback;
+  }
+
+  const useRectMesh = shouldUseRect && rectWidth !== null && rectHeight !== null && rectWidth > 0 && rectHeight > 0;
+
+  if (useRectMesh) {
+    const halfW = rectWidth / 2;
+    const halfH = rectHeight / 2;
+    for (let iy = 0; iy <= segments; iy++) {
+      const y = -halfH + (2 * halfH * iy / segments);
+      for (let ix = 0; ix <= segments; ix++) {
+        const x = -halfW + (2 * halfW * ix / segments);
+        const r = Math.sqrt(x * x + y * y);
+        let z = asphericSurfaceZ(r, paramsForZ, mode);
+        if (!isFinite(z)) z = 0;
+
+        let vertex = new THREE_CTX.Vector3(x, y, z);
+        if (rotationMatrix) {
+          const R = rotationMatrix;
+          const newX = R[0][0] * vertex.x + R[0][1] * vertex.y + R[0][2] * vertex.z;
+          const newY = R[1][0] * vertex.x + R[1][1] * vertex.y + R[1][2] * vertex.z;
+          const newZ = R[2][0] * vertex.x + R[2][1] * vertex.y + R[2][2] * vertex.z;
+          if (isFinite(newX) && isFinite(newY) && isFinite(newZ)) {
+            vertex = new THREE_CTX.Vector3(newX, newY, newZ);
+          }
+        }
+
+        vertex.x += origin.x;
+        vertex.y += origin.y;
+        vertex.z += origin.z;
+
+        if (isFinite(vertex.x) && isFinite(vertex.y) && isFinite(vertex.z)) {
+          positions.push(vertex.x, vertex.y, vertex.z);
         } else {
-          // console.warn(`❌ NaN in rotation for surface vertex at (${i}, ${j}):`, 
-          //            `(${newX}, ${newY}, ${newZ}), using original vertex`);
+          positions.push(origin.x, origin.y, origin.z);
         }
       }
-      
-      // 原点オフセットを適用 with NaN validation
-      vertex.x += origin.x;
-      vertex.y += origin.y;
-      vertex.z += origin.z;
-      
-      // NaN validation before adding to positions array
-      if (isFinite(vertex.x) && isFinite(vertex.y) && isFinite(vertex.z)) {
-        positions.push(vertex.x, vertex.y, vertex.z);
-      } else {
-        // console.warn(`❌ NaN vertex in drawLensSurfaceWithOrigin at (${i}, ${j}):`, 
-        //            `(${vertex.x}, ${vertex.y}, ${vertex.z}), using fallback`);
-        // Use a fallback position (origin)
-        positions.push(origin.x, origin.y, origin.z);
+    }
+  } else {
+    for (let i = 0; i <= segments; i++) {
+      const theta = (i / segments) * 2 * Math.PI;
+      for (let j = 0; j <= segments; j++) {
+        const r = (semidia * j) / segments;
+        const x = r * Math.cos(theta);
+        const y = r * Math.sin(theta);
+        let z = asphericSurfaceZ(r, paramsForZ, mode);
+        if (!isFinite(z)) z = 0;
+        
+        // 座標変換を適用（回転行列と原点オフセット）
+        let vertex = new THREE_CTX.Vector3(x, y, z);
+        
+        // 回転行列が指定されている場合は適用 with NaN validation
+        if (rotationMatrix) {
+          const R = rotationMatrix;
+          const newX = R[0][0] * vertex.x + R[0][1] * vertex.y + R[0][2] * vertex.z;
+          const newY = R[1][0] * vertex.x + R[1][1] * vertex.y + R[1][2] * vertex.z;
+          const newZ = R[2][0] * vertex.x + R[2][1] * vertex.y + R[2][2] * vertex.z;
+          
+          if (isFinite(newX) && isFinite(newY) && isFinite(newZ)) {
+            vertex = new THREE_CTX.Vector3(newX, newY, newZ);
+          } else {
+            // console.warn(`❌ NaN in rotation for surface vertex at (${i}, ${j}):`, 
+            //            `(${newX}, ${newY}, ${newZ}), using original vertex`);
+          }
+        }
+        
+        // 原点オフセットを適用 with NaN validation
+        vertex.x += origin.x;
+        vertex.y += origin.y;
+        vertex.z += origin.z;
+        
+        // NaN validation before adding to positions array
+        if (isFinite(vertex.x) && isFinite(vertex.y) && isFinite(vertex.z)) {
+          positions.push(vertex.x, vertex.y, vertex.z);
+        } else {
+          // console.warn(`❌ NaN vertex in drawLensSurfaceWithOrigin at (${i}, ${j}):`, 
+          //            `(${vertex.x}, ${vertex.y}, ${vertex.z}), using fallback`);
+          // Use a fallback position (origin)
+          positions.push(origin.x, origin.y, origin.z);
+        }
       }
     }
   }
@@ -1711,9 +1803,11 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         
         const semidia = __coopt_getSemidiaMm(surf);
         if (!semidia) {
-            console.log(`🔸 Surface ${i}: semidia無効(${semidia})、スキップ`);
-            continue;
+          console.log(`🔸 Surface ${i}: semidia無効(${semidia})、スキップ`);
+          continue;
         }
+
+        const { halfX: profileHalfX, halfY: profileHalfY } = __coopt_getProfileHalfExtents(surf, semidia);
         
         // console.log(`🔸 Surface ${i}: 描画対象、semidia=${semidia}`);
         
@@ -1721,7 +1815,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         const yzPoints = [];
         const yzSteps = 40; // より細かい分割
         for (let i = 0; i <= yzSteps; i++) {
-            const y = -semidia + (2 * semidia * i / yzSteps); // 均等分割
+          const y = -profileHalfY + (2 * profileHalfY * i / yzSteps); // 均等分割
             const r = Math.abs(y);
             let z = 0;
             
@@ -1799,7 +1893,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         const xzPoints = [];
         const xzSteps = 40; // より細かい分割
         for (let i = 0; i <= xzSteps; i++) {
-            const x = -semidia + (2 * semidia * i / xzSteps); // 均等分割
+          const x = -profileHalfX + (2 * profileHalfX * i / xzSteps); // 均等分割
             const r = Math.abs(x);
             let z = 0;
             
