@@ -158,7 +158,7 @@
  */
 
 import * as THREE from 'https://unpkg.com/three@0.153.0/build/three.module.js';
-import { drawRayWithSegmentColors } from './optical/ray-renderer.js';
+import { drawRayWithSegmentColors } from '../../optical/ray-renderer.js';
 
 function getThreeForScene(scene) {
     try {

@@ -9,7 +9,7 @@ let RayTracingModule = null;
 async function loadRayTracingModule() {
   if (!RayTracingModule) {
     try {
-      RayTracingModule = await import('./ray-tracing.js');
+      RayTracingModule = await import('./raytracing/core/ray-tracing.js');
       console.log('📦 ray-tracing.js モジュールを読み込みました');
     } catch (error) {
       console.error('❌ ray-tracing.js モジュールの読み込みに失敗:', error);
