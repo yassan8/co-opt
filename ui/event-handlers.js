@@ -3886,6 +3886,11 @@ export function setupOpticalSystemChangeListeners(scene) {
                         }
 
                         const popup = window.open('', 'Point Spread Function', 'width=800,height=600');
+                        if (!popup || !popup.document) {
+                            try { popup?.close(); } catch (_) {}
+                            alert('Popup could not be opened. Please allow popups for this site.');
+                            return;
+                        }
                         window.__psfPopup = popup;
 
                         try { popup.document.open(); } catch (_) {}

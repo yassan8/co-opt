@@ -557,7 +557,10 @@ function openAIAssistantPopup() {
                 ].join(',');
 
                 const popup = window.open('', 'coopt-ai-assistant', features);
-                if (!popup) return false;
+                if (!popup || !popup.document) {
+                    try { popup?.close(); } catch (_) {}
+                    return false;
+                }
 
                 _aiPopupWindow = popup;
 
@@ -580,10 +583,10 @@ function openAIAssistantPopup() {
 </body>
 </html>`;
 
-                popup.document.open();
-                popup.document.write(html);
-                popup.document.close();
-                popup.focus();
+                try { popup.document.open(); } catch (_) {}
+                try { popup.document.write(html); } catch (_) {}
+                try { popup.document.close(); } catch (_) {}
+                try { popup.focus(); } catch (_) {}
                 return true;
         } catch (e) {
                 console.warn('Failed to open AI Assistant popup:', e);
