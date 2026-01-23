@@ -1020,8 +1020,8 @@ export function expandBlocksToOpticalSystemRows(blocks) {
     return rows[0];
   };
 
-  // Gap blocks attach thickness/material to the previous *physical* surface.
-  // Coord Break rows reuse thickness/material for decenter parameters, so never attach a Gap to a Coord Break.
+  // Gap blocks attach thickness/material to the previous surface row.
+  // Coord Break rows reuse thickness/material for decenter parameters, so we store gap spacing separately.
   const getLastNonCoordBreakRow = () => {
     for (let i = rows.length - 1; i >= 0; i--) {
       if (!isCoordBreakRow(rows[i])) return rows[i];
@@ -1543,7 +1543,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
         continue;
       }
 
-      const prev = getLastNonCoordBreakRow();
+      const prev = getLastRow();
       // Never touch Image surface auto fields (Image row is appended later; this is a safety check).
       if (prev && (prev['object type'] === 'Image' || prev.object === 'Image')) {
         issues.push({
@@ -1568,19 +1568,35 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       }
 
       const thickness = getParamOrVarValue(params, vars, 'thickness');
-      prev.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness));
+      const signedThickness = applySignedThickness(normalizeThicknessToRowValue(thickness));
 
       const matRaw = getParamOrVarValue(params, vars, 'material');
       const mat = String(matRaw ?? '').trim();
       const matKey = mat.replace(/\s+/g, '').toUpperCase();
-      prev.material = (mat === '' || matKey === 'AIR') ? 'AIR' : mat;
-      applyDerivedGlassDisplay(prev);
+      const gapMaterial = (mat === '' || matKey === 'AIR') ? 'AIR' : mat;
 
-      if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness') && shouldMarkV(vars.thickness)) {
-        applyVFlag(prev, 'optimizeT');
-      }
-      if (vars && Object.prototype.hasOwnProperty.call(vars, 'material') && shouldMarkV(vars.material)) {
-        applyVFlag(prev, 'optimizeMaterial');
+      if (prev && isCoordBreakRow(prev)) {
+        // Coord Break rows reuse thickness/material for decenter parameters;
+        // store gap spacing separately to avoid clobbering CB fields.
+        prev.__cooptGapThickness = signedThickness;
+        prev.__cooptGapMaterial = gapMaterial;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness') && shouldMarkV(vars.thickness)) {
+          prev.__cooptGapOptimizeT = 'V';
+        }
+        if (vars && Object.prototype.hasOwnProperty.call(vars, 'material') && shouldMarkV(vars.material)) {
+          prev.__cooptGapOptimizeMaterial = 'V';
+        }
+      } else {
+        prev.thickness = signedThickness;
+        prev.material = gapMaterial;
+        applyDerivedGlassDisplay(prev);
+
+        if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness') && shouldMarkV(vars.thickness)) {
+          applyVFlag(prev, 'optimizeT');
+        }
+        if (vars && Object.prototype.hasOwnProperty.call(vars, 'material') && shouldMarkV(vars.material)) {
+          applyVFlag(prev, 'optimizeMaterial');
+        }
       }
       continue;
     }
@@ -1658,6 +1674,15 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows) {
     return { blocks, issues };
   }
 
+  const legacyRows = rows.filter(r => !__isCoordBreakRow(r));
+  if (legacyRows.length !== rows.length) {
+    issues.push({ severity: 'warning', phase: 'validate', message: 'Coord Break rows are excluded from legacy-to-blocks conversion.' });
+  }
+  if (legacyRows.length < 2) {
+    issues.push({ severity: 'fatal', phase: 'validate', message: 'opticalSystem rows must contain at least Object and Image rows after filtering.' });
+    return { blocks, issues };
+  }
+
   const isStopRow = (r) => {
     const t = String(r?.['object type'] ?? r?.object ?? '').trim().toLowerCase();
     return t === 'stop';
@@ -1715,16 +1740,16 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows) {
   let gapCount = 0;
 
   // We skip the first Object row and stop before the final Image row if present.
-  let end = rows.length;
-  for (let k = rows.length - 1; k >= 0; k--) {
-    if (isImageRow(rows[k])) {
+  let end = legacyRows.length;
+  for (let k = legacyRows.length - 1; k >= 0; k--) {
+    if (isImageRow(legacyRows[k])) {
       end = k;
       break;
     }
   }
 
   for (let i = 1; i < end; i++) {
-    const r = rows[i];
+    const r = legacyRows[i];
     if (!r || typeof r !== 'object') {
       issues.push({ severity: 'warning', phase: 'validate', message: `Row ${i} is not an object (skipped during Blocks conversion).` });
       continue;
@@ -1795,7 +1820,7 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows) {
       issues.push({ severity: 'fatal', phase: 'validate', message: `Lens front at row ${i} has no following back surface row.` });
       continue;
     }
-    const back = rows[i + 1];
+    const back = legacyRows[i + 1];
     if (!back || typeof back !== 'object') {
       issues.push({ severity: 'fatal', phase: 'validate', message: `Lens back row ${i + 1} is not an object.` });
       continue;

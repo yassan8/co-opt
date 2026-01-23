@@ -116,10 +116,17 @@ export function getSafeThickness(surface) {
   }
 
   // Coord Break rows reuse the thickness field for decenterZ.
-  // They are non-physical rows and must not contribute spacing to the next surface.
+  // When a dedicated gap thickness is present, allow spacing; otherwise treat as 0.
   try {
     const st = String(surface.surfType ?? '').trim().toLowerCase();
     if (st === 'coord break' || st === 'coordinate break' || st === 'cb') {
+      const gapRaw = surface.__cooptGapThickness;
+      if (gapRaw !== undefined && gapRaw !== null && String(gapRaw).trim() !== '') {
+        const gapStr = String(gapRaw).toUpperCase();
+        if (gapStr === 'INF' || gapStr === 'INFINITY') return Infinity;
+        const gapVal = parseFloat(gapRaw);
+        return isFinite(gapVal) ? gapVal : 0;
+      }
       return 0;
     }
   } catch (_) {}

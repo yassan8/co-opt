@@ -1156,12 +1156,8 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
     } else {
       // 通常面の場合
       // Thickness for a normal surface is taken from the *previous* row.
-      // IMPORTANT: Coord Break rows reuse the thickness field for decenterZ in this app.
-      // They must NOT introduce physical spacing. Therefore, when the previous row is a
-      // Coord Break, treat the spacing to this surface as 0.
-      let thickness = (previousSurface && __rtIsCoordBreakRow(previousSurface))
-        ? 0
-        : (previousSurface ? getSafeThickness(previousSurface) : 0);
+      // Coord Break rows may carry a dedicated gap thickness; otherwise spacing is 0.
+      let thickness = previousSurface ? getSafeThickness(previousSurface) : 0;
       
       // NaN validation and Infinity handling for normal surface thickness
       if (!isFinite(thickness)) {
@@ -1767,6 +1763,19 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
         debugLog.push(`Ray AFTER Coord Break: pos=(${ray.pos.x.toFixed(6)}, ${ray.pos.y.toFixed(6)}, ${ray.pos.z.toFixed(6)}), dir=(${ray.dir.x.toFixed(6)}, ${ray.dir.y.toFixed(6)}, ${ray.dir.z.toFixed(6)})`);
         debugLog.push(`CB面 ${i + 1}: 座標系変換のみ（物理前進なし）`);
       }
+
+      // If a Gap is attached to this Coord Break, update the medium for subsequent surfaces.
+      try {
+        const gapMatRaw = row.__cooptGapMaterial;
+        const gapMat = String(gapMatRaw ?? '').trim();
+        if (gapMat !== '') {
+          if (gapMat.replace(/\s+/g, '').toUpperCase() === 'AIR') {
+            n = 1.0;
+          } else {
+            n = getCorrectRefractiveIndex({ material: gapMat }, safeRay0.wavelength);
+          }
+        }
+      } catch (_) {}
       
       continue;
     }
