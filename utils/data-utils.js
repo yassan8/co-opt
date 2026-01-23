@@ -133,11 +133,23 @@ function __du_preserveLegacySemidiaIntoExpandedRows(expandedRows, legacyRows, bl
         const id = b && typeof b === 'object' ? String(b.blockId ?? '').trim() : '';
         if (!id) continue;
         const ap = (b && typeof b === 'object' && b.aperture && typeof b.aperture === 'object') ? b.aperture : null;
-        if (!ap) continue;
-        for (const [role, v] of Object.entries(ap)) {
-          if (!hasValue(v)) continue;
-          explicit.set(`p:${id}|${String(role)}`, v);
+        if (ap) {
+          for (const [role, v] of Object.entries(ap)) {
+            if (!hasValue(v)) continue;
+            explicit.set(`p:${id}|${String(role)}`, v);
+          }
         }
+
+        // Mirror uses parameters.semidia (not block.aperture). Treat it as explicit.
+        try {
+          const bt = String(b?.blockType ?? '').trim();
+          if (bt === 'Mirror') {
+            const v = b?.parameters?.semidia;
+            if (hasValue(v)) {
+              explicit.set(`p:${id}|mirror`, v);
+            }
+          }
+        } catch (_) {}
       }
     }
   } catch (_) {}
@@ -211,10 +223,13 @@ function __du_expandActiveBlocksToRows() {
     const rows = expanded && Array.isArray(expanded.rows) ? expanded.rows : null;
     if (!rows || rows.length === 0) return null;
 
-    // Preserve legacy per-surface semidia for non-Stop rows (table-level detail).
+    // Legacy semidia merge is now opt-in only.
     try {
-      const legacyRows = __du_pickLegacyRowsForSemidia(activeCfg);
-      if (legacyRows) __du_preserveLegacySemidiaIntoExpandedRows(rows, legacyRows, blocksToExpand);
+      const allowLegacySemidia = !!(typeof globalThis !== 'undefined' && globalThis.__cooptEnableLegacySemidiaMerge === true);
+      if (allowLegacySemidia) {
+        const legacyRows = __du_pickLegacyRowsForSemidia(activeCfg);
+        if (legacyRows) __du_preserveLegacySemidiaIntoExpandedRows(rows, legacyRows, blocksToExpand);
+      }
     } catch (_) {}
 
     const __du_blocksHaveObjectPlane = (blocks) => {

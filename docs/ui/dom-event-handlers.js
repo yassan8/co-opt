@@ -9523,35 +9523,6 @@ function __blocks_mapSurfaceEditToBlockChange(edit) {
         } catch (_) {
             return null;
         }
-
-        if (blockType === 'Mirror') {
-            if (field === 'semidia') {
-                return { blockId: String(blockId), blockType: 'Mirror', variable: 'semidia', oldValue, newValue };
-            }
-            if (field === 'surftype') {
-                const normalized = normalizeSurfType(newValue);
-                if (!normalized) return null;
-                return { blockId: String(blockId), blockType: 'Mirror', variable: 'surfType', oldValue, newValue: normalized };
-            }
-            if (field === 'conic') {
-                const stCh = maybeSurfTypeChange('surfType');
-                return stCh ? [stCh, { blockId: String(blockId), blockType: 'Mirror', variable: 'conic', oldValue, newValue }] : { blockId: String(blockId), blockType: 'Mirror', variable: 'conic', oldValue, newValue };
-            }
-            const m = /^coef(\d+)$/.exec(field);
-            if (m) {
-                const idx = Number(m[1]);
-                if (!Number.isFinite(idx) || idx < 1 || idx > 10) return null;
-                const stCh = maybeSurfTypeChange('surfType');
-                return stCh ? [stCh, { blockId: String(blockId), blockType: 'Mirror', variable: `coef${idx}`, oldValue, newValue }] : { blockId: String(blockId), blockType: 'Mirror', variable: `coef${idx}`, oldValue, newValue };
-            }
-            if (field === 'radius') {
-                return { blockId: String(blockId), blockType: 'Mirror', variable: 'radius', oldValue, newValue };
-            }
-            if (field === 'thickness') {
-                return { blockId: String(blockId), blockType: 'Mirror', variable: 'thickness', oldValue, newValue };
-            }
-            return null;
-        }
     };
 
     const maybeSurfTypeChange = (variableKey) => {
@@ -9569,6 +9540,35 @@ function __blocks_mapSurfaceEditToBlockChange(edit) {
             newValue: normalized || 'Aspheric even'
         };
     };
+
+    if (blockType === 'Mirror') {
+        if (field === 'semidia') {
+            return { blockId: String(blockId), blockType: 'Mirror', variable: 'semidia', oldValue, newValue };
+        }
+        if (field === 'surftype') {
+            const normalized = normalizeSurfType(newValue);
+            if (!normalized) return null;
+            return { blockId: String(blockId), blockType: 'Mirror', variable: 'surfType', oldValue, newValue: normalized };
+        }
+        if (field === 'conic') {
+            const stCh = maybeSurfTypeChange('surfType');
+            return stCh ? [stCh, { blockId: String(blockId), blockType: 'Mirror', variable: 'conic', oldValue, newValue }] : { blockId: String(blockId), blockType: 'Mirror', variable: 'conic', oldValue, newValue };
+        }
+        const m = /^coef(\d+)$/.exec(field);
+        if (m) {
+            const idx = Number(m[1]);
+            if (!Number.isFinite(idx) || idx < 1 || idx > 10) return null;
+            const stCh = maybeSurfTypeChange('surfType');
+            return stCh ? [stCh, { blockId: String(blockId), blockType: 'Mirror', variable: `coef${idx}`, oldValue, newValue }] : { blockId: String(blockId), blockType: 'Mirror', variable: `coef${idx}`, oldValue, newValue };
+        }
+        if (field === 'radius') {
+            return { blockId: String(blockId), blockType: 'Mirror', variable: 'radius', oldValue, newValue };
+        }
+        if (field === 'thickness') {
+            return { blockId: String(blockId), blockType: 'Mirror', variable: 'thickness', oldValue, newValue };
+        }
+        return null;
+    }
 
     if (blockType === 'Lens') {
         if (field === 'semidia') {
