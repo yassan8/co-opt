@@ -103,7 +103,7 @@
                 await new Promise(resolve => setTimeout(resolve, 500)); // 少し待機
                 
                 // JavaScriptフォールバック版PSF計算器を作成
-                const { PSFCalculator } = await import('./eva-psf.js');
+                const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.js');
                 psfCalculator = new PSFCalculator();
                 
                 // WASMラッパーが利用可能かチェック
@@ -170,7 +170,7 @@
                 
                 // 最後の手段として基本的なPSF計算器を試行
                 try {
-                    const { PSFCalculator } = await import('./eva-psf.js');
+                    const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.js');
                     psfCalculator = new PSFCalculator();
                     document.getElementById('wasmStatus').textContent = 'Basic JS Only';
                     document.getElementById('currentImpl').textContent = 'Basic JavaScript';

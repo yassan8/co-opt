@@ -9,7 +9,7 @@ import {
 } from '../ray-paraxial.js';
 import { calculateSurfaceOrigins } from '../ray-tracing.js';
 import { getPrimaryWavelength } from '../glass.js';
-import { calculateSeidelCoefficients, formatSeidelCoefficients } from '../eva-seidel-coefficients.js';
+import { calculateSeidelCoefficients, formatSeidelCoefficients } from '../evaluation/aberrations/seidel-coefficients.js';
 import { getActiveConfiguration } from '../table-configuration.js';
 import { configurationHasBlocks, expandBlocksToOpticalSystemRows } from '../block-schema.js';
 

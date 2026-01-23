@@ -6,8 +6,8 @@
 // This module sweeps either field angles (deg) or object heights (mm, Y) and traces the chief ray.
 // Returns both absolute heights and distortion ratio (percentage).
 
-import { calculateParaxialData } from './ray-paraxial.js';
-import { calculateChiefRayNewton } from './eva-transverse-aberration.js';
+import { calculateParaxialData } from '../../ray-paraxial.js';
+import { calculateChiefRayNewton } from './transverse-aberration.js';
 
 // Helper to get object rows (avoid circular dependency)
 function getObjectRowsLocal() {

@@ -30,20 +30,20 @@ import { calculateFocalLength, calculateBackFocalLength, calculateImageDistance,
 import { calculateAdaptiveMarginalRay, calculateAllMarginalRays } from './ray-marginal.js';
 
 // Analysis modules
-import { generateSpotDiagram, drawSpotDiagram, generateSurfaceOptions } from './eva-spot-diagram.js';
-import { calculateTransverseAberration, getFieldAnglesFromSource, getPrimaryWavelengthForAberration, validateAberrationData, calculateChiefRayNewton, getEstimatedEntrancePupilDiameter } from './eva-transverse-aberration.js';
-import { plotTransverseAberrationDiagram, showTransverseAberrationInNewWindow } from './eva-transverse-aberration-plot.js';
-import { showWavefrontDiagram } from './eva-wavefront-plot.js?v=2026-01-15b';
-import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './eva-wavefront.js?v=2026-01-15l';
-import { PSFCalculator } from './eva-psf.js?v=2026-01-14b';
-import { PSFPlotter, PSFDisplayManager } from './eva-psf-plot.js?v=2026-01-14b';
-import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './zernike-fitting.js';
-import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './opd-zernike-analysis.js';
+import { generateSpotDiagram, drawSpotDiagram, generateSurfaceOptions } from './evaluation/spot-diagram.js';
+import { calculateTransverseAberration, getFieldAnglesFromSource, getPrimaryWavelengthForAberration, validateAberrationData, calculateChiefRayNewton, getEstimatedEntrancePupilDiameter } from './evaluation/aberrations/transverse-aberration.js';
+import { plotTransverseAberrationDiagram, showTransverseAberrationInNewWindow } from './evaluation/aberrations/transverse-aberration-plot.js';
+import { showWavefrontDiagram } from './evaluation/wavefront/wavefront-plot.js?v=2026-01-15b';
+import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './evaluation/wavefront/wavefront.js?v=2026-01-15l';
+import { PSFCalculator } from './evaluation/psf/psf-calculator.js?v=2026-01-14b';
+import { PSFPlotter, PSFDisplayManager } from './evaluation/psf/psf-plot.js?v=2026-01-14b';
+import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './evaluation/wavefront/zernike-fitting.js';
+import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './evaluation/wavefront/opd-zernike-analysis.js';
 import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './gen-ray-cross-finite.js';
 import { generateInfiniteSystemCrossBeam, RayColorSystem as InfiniteRayColorSystem } from './gen-ray-cross-infinite.js';
 // Distortion analysis
-import { calculateDistortionData } from './eva-distortion.js';
-import { plotDistortionPercent, generateDistortionPlots, plotGridDistortion, generateGridDistortionPlot } from './eva-distortion-plot.js';
+import { calculateDistortionData } from './evaluation/aberrations/distortion.js';
+import { plotDistortionPercent, generateDistortionPlots, plotGridDistortion, generateGridDistortionPlot } from './evaluation/aberrations/distortion-plot.js';
 
 // Utility modules
 import { getGlassDataWithSellmeier, calculateRefractiveIndex, getPrimaryWavelength } from './glass.js';

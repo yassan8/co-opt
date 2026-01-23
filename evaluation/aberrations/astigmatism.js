@@ -25,9 +25,9 @@
  * 更新日: 2025/11/14 - Draw Cross光線を直接使用する簡潔な実装に変更
  */
 
-import { calculateChiefRayNewton } from './eva-transverse-aberration.js';
-import { getObjectRows, getSourceRows } from './utils/data-utils.js';
-import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from './ray-tracing.js';
+import { calculateChiefRayNewton } from './transverse-aberration.js';
+import { getObjectRows, getSourceRows } from '../../utils/data-utils.js';
+import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../../ray-tracing.js';
 
 function __pickPrimaryWavelengthMicrons(sourceRows, fallback = 0.5876) {
     try {

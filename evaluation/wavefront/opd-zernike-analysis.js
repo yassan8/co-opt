@@ -5,14 +5,14 @@
  * Displays wavefront aberration in terms of Zernike coefficients
  */
 
-import { OpticalPathDifferenceCalculator } from './eva-wavefront.js';
+import { OpticalPathDifferenceCalculator } from './wavefront.js';
 import { 
   fitZernikeWeighted, 
   reconstructOPD, 
   getZernikeName,
   jToNM 
 } from './zernike-fitting.js';
-import { getOpticalSystemRows } from './utils/data-utils.js';
+import { getOpticalSystemRows } from '../../utils/data-utils.js';
 
 /**
  * Calculate OPD grid with Zernike fitting

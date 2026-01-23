@@ -3,9 +3,9 @@
 // Automatically derives field sweep from Object table (angles or object heights).
 // Supports multi-wavelength plotting from Source table.
 
-import { calculateDistortionData, calculateGridDistortion } from './eva-distortion.js';
-import { getObjectRows, getOpticalSystemRows, getSourceRows } from './utils/data-utils.js';
-import { getPrimaryWavelength } from './glass.js';
+import { calculateDistortionData, calculateGridDistortion } from './distortion.js';
+import { getObjectRows, getOpticalSystemRows, getSourceRows } from '../../utils/data-utils.js';
+import { getPrimaryWavelength } from '../../glass.js';
 
 function inferObjectFieldMode(objects) {
   const rows = Array.isArray(objects) ? objects : [];

@@ -3,7 +3,7 @@
  * Handles updating UI elements based on data changes
  */
 
-import { generateSurfaceOptions } from '../eva-spot-diagram.js';
+import { generateSurfaceOptions } from '../evaluation/spot-diagram.js';
 
 /**
  * Update surface number select options

@@ -28,7 +28,7 @@ if (typeof globalThis.window.setRayEmissionPattern !== 'function') {
   };
 }
 
-const { generateSpotDiagram } = await import('./eva-spot-diagram.js');
+const { generateSpotDiagram } = await import('./evaluation/spot-diagram.js');
 
 function cloneJson(x) {
   return JSON.parse(JSON.stringify(x));

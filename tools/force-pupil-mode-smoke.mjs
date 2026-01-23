@@ -1,4 +1,4 @@
-import { OpticalPathDifferenceCalculator } from '../eva-wavefront.js';
+import { OpticalPathDifferenceCalculator } from '../evaluation/wavefront/wavefront.js';
 
 function makeMinimalOpticalSystemRows() {
   // Minimal, non-empty rows array to satisfy constructor invariants.

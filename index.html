@@ -623,10 +623,10 @@
   <script type="module" src="system-requirements-editor.js?v=2026-01-06c"></script>
   
   <!-- PSFプロット機能を読み込み -->
-  <script type="module" src="eva-psf-plot.js"></script>
+  <script type="module" src="evaluation/psf/psf-plot.js"></script>
   
   <!-- OPDプロファイル実行ハーネス（コンソールから runOPDProfiling(...) を呼び出し） -->
-  <script type="module" src="opd-profiler.js"></script>
+  <script type="module" src="evaluation/wavefront/opd-profiler.js"></script>
   
   <!-- PSF WASM計算器を読み込み -->
   <script>
@@ -992,7 +992,7 @@
       
       try {
         // PSFCalculatorを動的インポート
-        const { PSFCalculator } = await import('./eva-psf.js');
+        const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.js');
         const psfCalculator = new PSFCalculator();
         
         // 初期化を待機

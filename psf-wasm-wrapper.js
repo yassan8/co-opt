@@ -1158,7 +1158,7 @@ export class PSFCalculatorAuto {
 
         // JavaScript版にフォールバック
         try {
-            const { PSFCalculator } = await import('./eva-psf.js');
+            const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.js');
             this.jsCalculator = new PSFCalculator();
             this.isInitialized = true;
             // console.log('📱 [PSF] Using JavaScript implementation');
@@ -1218,7 +1218,7 @@ export class PSFCalculatorAuto {
         if (!this.jsCalculator) {
             // JavaScript計算器が初期化されていない場合は緊急作成
             try {
-                const { PSFCalculator } = await import('./eva-psf.js');
+                const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.js');
                 this.jsCalculator = new PSFCalculator();
                 // console.log('🔧 [PSF] Emergency JavaScript calculator created');
             } catch (importError) {

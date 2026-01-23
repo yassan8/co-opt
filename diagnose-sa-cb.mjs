@@ -16,7 +16,7 @@ if (!globalThis.localStorage || typeof globalThis.localStorage.getItem !== 'func
 }
 
 // Load Longitudinal Aberration module
-const { calculateLongitudinalAberration } = await import('./eva-longitudinal-aberration.js');
+const { calculateLongitudinalAberration } = await import('./evaluation/aberrations/longitudinal-aberration.js');
 
 function cloneJson(x) {
   return JSON.parse(JSON.stringify(x));
