@@ -575,6 +575,29 @@ export class InspectorManager {
       return;
     }
 
+    const displayLabelById = (() => {
+      const labelById = new Map();
+      try {
+        const counts = new Map();
+        for (const b of blocks || []) {
+          if (!b || typeof b !== 'object') continue;
+          const id = String(b.blockId ?? '').trim();
+          if (!id) continue;
+          const tRaw = String(b.blockType ?? '').trim();
+          if (!tRaw) continue;
+          if (tRaw === 'ObjectPlane' || tRaw === 'ImagePlane') {
+            labelById.set(id, tRaw);
+            continue;
+          }
+          const baseType = (tRaw === 'PositiveLens') ? 'Lens' : tRaw;
+          const next = (counts.get(baseType) || 0) + 1;
+          counts.set(baseType, next);
+          labelById.set(id, `${baseType}-${next}`);
+        }
+      } catch (_) {}
+      return labelById;
+    })();
+
     const selRaw = (data?.param2 !== undefined && data?.param2 !== null) ? String(data.param2).trim() : '';
     const explicitAll = (!selRaw || /^all$/i.test(selRaw) || /^full$/i.test(selRaw));
     const selectedIds = new Set(
@@ -593,7 +616,8 @@ export class InspectorManager {
         const btype = String(b?.blockType ?? '').trim();
         const checked = selectedIds.has(bid) ? 'checked' : '';
         const cid = `${listId}-b-${idx}`;
-        const label = btype ? `${bid} (${btype})` : bid;
+        const disp = displayLabelById.get(bid) || bid;
+        const label = btype ? `${disp} (${btype})` : disp;
         return `
           <label style="display:flex; gap:8px; align-items:center; padding:2px 0;">
             <input type="checkbox" id="${cid}" data-block-id="${bid}" ${checked} />
@@ -683,8 +707,22 @@ export class InspectorManager {
 
   _getBlocksForConfigHint(configIdHint) {
     try {
-      const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
-      const sys = raw ? JSON.parse(raw) : null;
+      let sys = null;
+      try {
+        if (typeof loadSystemConfigurationsFromTableConfig === 'function') {
+          sys = loadSystemConfigurationsFromTableConfig();
+        } else if (typeof window !== 'undefined' && window.ConfigurationManager && typeof window.ConfigurationManager.loadSystemConfigurations === 'function') {
+          sys = window.ConfigurationManager.loadSystemConfigurations();
+        } else if (typeof loadSystemConfigurations === 'function') {
+          sys = loadSystemConfigurations();
+        }
+      } catch (_) {
+        sys = null;
+      }
+      if (!sys) {
+        const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
+        sys = raw ? JSON.parse(raw) : null;
+      }
       const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
       const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null) ? String(sys.activeConfigId) : '';
 

@@ -23,7 +23,7 @@ import { drawOpticalSystemSurfaces, clearAllOpticalElements, findStopSurface } f
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './optical/surface.js';
 
 // Ray tracing modules
-import { traceRay, calculateSurfaceOrigins } from './raytracing/core/ray-tracing.js';
+import { traceRay, calculateSurfaceOrigins, transformPointToLocal } from './raytracing/core/ray-tracing.js';
 import { calculateFocalLength, calculateBackFocalLength, calculateImageDistance, calculateEntrancePupilDiameter, calculateExitPupilDiameter, calculateFullSystemParaxialTrace, calculateParaxialData, debugParaxialRayTrace, calculatePupilsByNewSpec, findStopSurfaceIndex } from './raytracing/core/ray-paraxial.js';
 
 // Marginal ray modules
@@ -771,9 +771,43 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
             return;
         }
         
+        const isCoordBreakRow = (row) => {
+            const stRaw = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').toLowerCase();
+            const st = stRaw.trim();
+            return st === 'coord break' || st === 'coordinate break' || st === 'coordbreak' || st === 'coordinatebreak' || st === 'cb';
+        };
+
+        const isObjectRow = (row) => {
+            const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').toLowerCase();
+            return t === 'object';
+        };
+
+        const getRayPathPointIndexForSurfaceIndex = (rows, surfaceIndex) => {
+            if (!Array.isArray(rows) || surfaceIndex === null || surfaceIndex === undefined) return null;
+            const sIdx = Math.max(0, Math.min(surfaceIndex, rows.length - 1));
+            let count = 0;
+            for (let i = 0; i <= sIdx; i++) {
+                const row = rows[i];
+                if (isCoordBreakRow(row)) continue;
+                if (isObjectRow(row)) continue;
+                count++;
+            }
+            return count > 0 ? count : null;
+        };
+
+        const getRayPointAtSurfaceIndex = (rayPath, rows, surfaceIndex) => {
+            if (!Array.isArray(rayPath)) return null;
+            const pIdx = getRayPathPointIndexForSurfaceIndex(rows, surfaceIndex);
+            if (pIdx === null) return null;
+            if (pIdx >= 0 && pIdx < rayPath.length) return rayPath[pIdx];
+            return null;
+        };
+
         // Image面（最終面）を見つける
         const imageSurfaceIndex = opticalSystemRows.length - 1;
         const imageSurface = opticalSystemRows[imageSurfaceIndex];
+        const surfaceInfos = calculateSurfaceOrigins(opticalSystemRows);
+        const imageSurfaceInfo = Array.isArray(surfaceInfos) ? surfaceInfos[imageSurfaceIndex] : null;
         
         // optimizeSemiDiaが"U"またはsemidiaが"Auto"かチェック
         const isAutoUpdate = imageSurface.optimizeSemiDia === 'U' || imageSurface.semidia === 'Auto';
@@ -806,14 +840,23 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
                 return;
             }
             
-            // Image面（最終面）のポイントを取得
-            if (imageSurfaceIndex < ray.rayPath.length) {
-                const imagePoint = ray.rayPath[imageSurfaceIndex];
-                if (imagePoint && isFinite(imagePoint.y)) {
-                    const height = Math.abs(imagePoint.y);
-                    console.log(`   主光線${index}: Image面でのY高さ = ${height.toFixed(6)}`);
-                    maxHeight = Math.max(maxHeight, height);
+            // Image面（最終面）のポイントを取得 (Coord Break/Object行はrayPathに含まれない)
+            const imagePoint = getRayPointAtSurfaceIndex(ray.rayPath, opticalSystemRows, imageSurfaceIndex);
+            if (imagePoint && Number.isFinite(imagePoint.x) && Number.isFinite(imagePoint.y)) {
+                const localPoint = imageSurfaceInfo ? transformPointToLocal(imagePoint, imageSurfaceInfo) : imagePoint;
+                const objPos = ray.objectPosition || ray.originalRay?.objectPosition || null;
+                let height = 0;
+                if (objPos && (objPos.x || objPos.y)) {
+                    const objX = Math.abs(Number(objPos.x) || 0);
+                    const objY = Math.abs(Number(objPos.y) || 0);
+                    height = (objX > objY)
+                        ? Math.abs(Number(localPoint.x) || 0)
+                        : Math.abs(Number(localPoint.y) || 0);
+                } else {
+                    height = Math.max(Math.abs(Number(localPoint.x) || 0), Math.abs(Number(localPoint.y) || 0));
                 }
+                console.log(`   主光線${index}: Image面ローカル高さ = ${height.toFixed(6)}`);
+                maxHeight = Math.max(maxHeight, height);
             }
         });
         

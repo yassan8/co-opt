@@ -80,8 +80,22 @@ class SystemRequirementsEditor {
 
   _getBlocksForConfigHint(configIdValue) {
     try {
-      const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
-      const sys = raw ? JSON.parse(raw) : null;
+      let sys = null;
+      try {
+        if (typeof loadSystemConfigurationsFromTableConfig === 'function') {
+          sys = loadSystemConfigurationsFromTableConfig();
+        } else if (typeof window !== 'undefined' && window.ConfigurationManager && typeof window.ConfigurationManager.loadSystemConfigurations === 'function') {
+          sys = window.ConfigurationManager.loadSystemConfigurations();
+        } else if (typeof loadSystemConfigurations === 'function') {
+          sys = loadSystemConfigurations();
+        }
+      } catch (_) {
+        sys = null;
+      }
+      if (!sys) {
+        const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
+        sys = raw ? JSON.parse(raw) : null;
+      }
       const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
       const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null)
         ? String(sys.activeConfigId)
@@ -98,9 +112,7 @@ class SystemRequirementsEditor {
       if (!cfg) cfg = configs[0] || null;
 
       const blocks = cfg && Array.isArray(cfg.blocks) ? cfg.blocks : [];
-      return blocks
-        .map(b => String(b?.blockId ?? '').trim())
-        .filter(Boolean);
+      return Array.isArray(blocks) ? blocks : [];
     } catch (_) {
       return [];
     }
@@ -177,7 +189,30 @@ class SystemRequirementsEditor {
       return oneLine.slice(0, Math.max(0, maxLen - 1)) + '…';
     };
 
-    const ensureEflBlocksDatalist = (blockIds) => {
+    const getEflDisplayLabelByBlockId = (blocks) => {
+      const labelById = new Map();
+      try {
+        const counts = new Map();
+        for (const b of blocks || []) {
+          if (!b || typeof b !== 'object') continue;
+          const id = String(b.blockId ?? '').trim();
+          if (!id) continue;
+          const tRaw = String(b.blockType ?? '').trim();
+          if (!tRaw) continue;
+          if (tRaw === 'ObjectPlane' || tRaw === 'ImagePlane') {
+            labelById.set(id, tRaw);
+            continue;
+          }
+          const baseType = (tRaw === 'PositiveLens') ? 'Lens' : tRaw;
+          const next = (counts.get(baseType) || 0) + 1;
+          counts.set(baseType, next);
+          labelById.set(id, `${baseType}-${next}`);
+        }
+      } catch (_) {}
+      return labelById;
+    };
+
+    const ensureEflBlocksDatalist = (blocks) => {
       try {
         const id = 'coopt-efl-blocks-datalist';
         let dl = document.getElementById(id);
@@ -187,13 +222,19 @@ class SystemRequirementsEditor {
           document.body.appendChild(dl);
         }
         dl.innerHTML = '';
-        const addOpt = (v) => {
+        const displayLabelById = getEflDisplayLabelByBlockId(blocks || []);
+        const addOpt = (value) => {
           const o = document.createElement('option');
-          o.value = v;
+          o.value = value;
           dl.appendChild(o);
         };
         addOpt('ALL');
-        for (const bid of blockIds || []) addOpt(bid);
+        for (const b of blocks || []) {
+          const bid = String(b?.blockId ?? '').trim();
+          if (!bid) continue;
+          const label = displayLabelById.get(bid) || bid;
+          addOpt(label);
+        }
         return id;
       } catch (_) {
         return null;
@@ -491,8 +532,8 @@ class SystemRequirementsEditor {
         // If operand is EFL, refresh param2 datalist options.
         try {
           if (String(row?.operand ?? '').trim() === 'EFL') {
-            const blockIds = this._getBlocksForConfigHint(row?.configId);
-            const dlId = ensureEflBlocksDatalist(blockIds);
+            const blocks = this._getBlocksForConfigHint(row?.configId);
+            const dlId = ensureEflBlocksDatalist(blocks);
             const p2Input = tr.querySelector('input[data-role="param2"]');
             if (p2Input && dlId) p2Input.setAttribute('list', dlId);
           }
@@ -689,7 +730,28 @@ class SystemRequirementsEditor {
           control.addEventListener('blur', onCellBlur);
         } else {
           control.addEventListener('blur', () => {
-            row[field] = control.value;
+            let nextVal = control.value;
+            try {
+              if (field === 'param2' && String(row?.operand ?? '').trim() === 'EFL') {
+                const blocks = this._getBlocksForConfigHint(row?.configId);
+                const displayLabelById = getEflDisplayLabelByBlockId(blocks);
+                const labelToId = new Map();
+                for (const [id, label] of displayLabelById.entries()) {
+                  if (label) labelToId.set(String(label), String(id));
+                }
+                const raw = String(nextVal ?? '').trim();
+                if (/^all$/i.test(raw)) {
+                  nextVal = 'ALL';
+                } else if (raw) {
+                  const tokens = raw.split(/[\s,]+/).map(s => String(s).trim()).filter(Boolean);
+                  const mapped = tokens.map(t => labelToId.get(t) || t);
+                  if (mapped.some(t => /^all$/i.test(String(t)))) nextVal = 'ALL';
+                  else nextVal = mapped.join(',');
+                }
+              }
+            } catch (_) {}
+            row[field] = nextVal;
+            if (nextVal !== control.value) control.value = nextVal;
             this.saveToStorage();
 
             if (field === 'tol' || field === 'target') {
@@ -773,8 +835,8 @@ class SystemRequirementsEditor {
         if (operand === 'EFL' && i === 2 && control.tagName === 'INPUT') {
           try {
             const configIdHint = row?.configId;
-            const blockIds = this._getBlocksForConfigHint(configIdHint);
-            const dlId = ensureEflBlocksDatalist(blockIds);
+            const blocks = this._getBlocksForConfigHint(configIdHint);
+            const dlId = ensureEflBlocksDatalist(blocks);
             if (dlId) control.setAttribute('list', dlId);
             control.placeholder = 'ALL or blockId (comma separated allowed)';
           } catch (_) {}
