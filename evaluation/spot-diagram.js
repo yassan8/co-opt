@@ -1,8 +1,8 @@
 // Spot Diagram Evaluation Module
 // 仕様書に基づくスポットダイアグラム機能
 
-import { traceRay, calculateSurfaceOrigins, transformPointToLocal } from './ray-tracing.js';
-import { findStopSurfaceIndex, calculateFocalLength, calculateParaxialData } from './ray-paraxial.js';
+import { traceRay, calculateSurfaceOrigins, transformPointToLocal } from '../raytracing/core/ray-tracing.js';
+import { findStopSurfaceIndex, calculateFocalLength, calculateParaxialData } from '../raytracing/core/ray-paraxial.js';
 import { generateRayStartPointsForObject } from './optical/ray-renderer.js';
 
 function derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthMicrons, preferEntrancePupil) {

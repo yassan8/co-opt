@@ -6,7 +6,7 @@
 
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from './utils/data-utils.js';
 import { calculateSeidelCoefficients } from './evaluation/aberrations/seidel-coefficients.js';
-import { calculateParaxialData } from './ray-paraxial.js';
+import { calculateParaxialData } from './raytracing/core/ray-paraxial.js';
 
 function loadSystemConfigurationsRaw() {
     try {

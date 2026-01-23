@@ -15,11 +15,11 @@
  * - Y軸: 正規化瞳座標（Normalized Pupil Coordinate）- 絞り面での高さを半径で正規化
  */
 
-import { generateFiniteSystemCrossBeam } from './gen-ray-cross-finite.js';
-import { generateInfiniteSystemCrossBeam } from './gen-ray-cross-infinite.js';
-import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from './ray-tracing.js';
-import { getObjectRows } from './utils/data-utils.js';
-import { calculateBackFocalLength, getRefractiveIndex } from './ray-paraxial.js';
+import { generateFiniteSystemCrossBeam } from '../../raytracing/generation/gen-ray-cross-finite.js';
+import { generateInfiniteSystemCrossBeam } from '../../raytracing/generation/gen-ray-cross-infinite.js';
+import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../../raytracing/core/ray-tracing.js';
+import { getObjectRows } from '../../utils/data-utils.js';
+import { calculateBackFocalLength, getRefractiveIndex } from '../../raytracing/core/ray-paraxial.js';
 
 function applyRotationMatrixToVector(matrix, v) {
     if (!matrix) return { x: v.x, y: v.y, z: v.z };

@@ -13,8 +13,8 @@ import {
     getSafeRadius,
     getSafeThickness,
     calculateFullSystemParaxialTrace
-} from './ray-paraxial.js';
-import { tableSource } from './table-source.js';
+} from '../../raytracing/core/ray-paraxial.js';
+import { tableSource } from '../../table-source.js';
 
 // ガラス情報の補完: Ref Index/Abbeが無い場合でも、Materialが数値ならndとして扱う
 function getNdAbbeAfocal(surf) {

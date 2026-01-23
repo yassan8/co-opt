@@ -12,9 +12,9 @@
  */
 
 import { traceRay } from './ray-tracing.js';
-import { calculateChiefRayNewton } from './evaluation/aberrations/transverse-aberration.js';
+import { calculateChiefRayNewton } from '../../evaluation/aberrations/transverse-aberration.js';
 // ray-tracing.jsが依存するutils/math.jsも確実にロード
-import './utils/math.js';
+import '../../utils/math.js';
 
 /**
  * 絞り面のインデックスを検出

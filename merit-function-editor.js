@@ -4,8 +4,8 @@
  */
 
 import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.js';
-import { calculateFullSystemParaxialTrace, calculateParaxialData, findStopSurfaceIndex } from './ray-paraxial.js';
-import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, transformPointToLocal } from './ray-tracing.js';
+import { calculateFullSystemParaxialTrace, calculateParaxialData, findStopSurfaceIndex } from './raytracing/core/ray-paraxial.js';
+import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, transformPointToLocal } from './raytracing/core/ray-tracing.js';
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from './utils/data-utils.js';
 import { calculateSeidelCoefficients } from './evaluation/aberrations/seidel-coefficients.js';
 import { calculateAfocalSeidelCoefficientsIntegrated } from './evaluation/aberrations/seidel-coefficients-afocal.js';

@@ -11,7 +11,7 @@
  */
 
 import { traceRay } from './ray-tracing.js';
-import { calculateChiefRayNewton } from './evaluation/aberrations/transverse-aberration.js';
+import { calculateChiefRayNewton } from '../../evaluation/aberrations/transverse-aberration.js';
 
 /**
  * 絞り周辺光線の4方向計算（上下左右）

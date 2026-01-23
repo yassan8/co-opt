@@ -3,11 +3,11 @@
  */
 
 import * as THREE from 'three';
-import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../ray-tracing.js';
+import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.js';
 import { findStopSurface } from './system-renderer.js';
 import { asphericSurfaceZ } from '../surface.js';
-import { findInfiniteSystemChiefRayOrigin } from '../gen-ray-cross-infinite.js';
-import { findFiniteSystemChiefRayDirection } from '../gen-ray-cross-finite.js';
+import { findInfiniteSystemChiefRayOrigin } from '../raytracing/generation/gen-ray-cross-infinite.js';
+import { findFiniteSystemChiefRayDirection } from '../raytracing/generation/gen-ray-cross-finite.js';
 
 // Global variables for ray pattern and color mode
 let rayEmissionPattern = 'annular'; // 'grid' or 'annular'

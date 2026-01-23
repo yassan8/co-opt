@@ -4,7 +4,7 @@
 //   await runOPDProfiling({ gridSizes: [64,128], fields: [{ fieldAngle: {x:0,y:0} }, { fieldAngle: {x:10,y:0} }] })
 // 結果はオブジェクトで返り、詳細はコンソールに整形出力されます。
 
-import { enableRayTracingProfiler, getRayTracingProfile } from '../../ray-tracing.js';
+import { enableRayTracingProfiler, getRayTracingProfile } from '../../raytracing/core/ray-tracing.js';
 import { OpticalPathDifferenceCalculator } from './wavefront.js';
 import { getOpticalSystemRows } from '../../utils/data-utils.js';
 

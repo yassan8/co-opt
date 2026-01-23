@@ -6,8 +6,8 @@
 import { 
     calculateParaxialData,
     calculateFullSystemParaxialTrace
-} from '../ray-paraxial.js';
-import { calculateSurfaceOrigins } from '../ray-tracing.js';
+} from '../raytracing/core/ray-paraxial.js';
+import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.js';
 import { getPrimaryWavelength } from '../glass.js';
 import { calculateSeidelCoefficients, formatSeidelCoefficients } from '../evaluation/aberrations/seidel-coefficients.js';
 import { getActiveConfiguration } from '../table-configuration.js';

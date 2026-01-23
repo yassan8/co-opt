@@ -11,7 +11,7 @@
  * 作成日: 2025/07/15
  */
 
-import { traceRay, calculateSurfaceOrigins } from './ray-tracing.js';
+import { traceRay, calculateSurfaceOrigins } from '../core/ray-tracing.js';
 
 // Runtime build stamp (for cache/stale-module diagnostics)
 const GEN_RAY_CROSS_INFINITE_BUILD = '2025-12-31a';

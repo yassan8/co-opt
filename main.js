@@ -23,11 +23,11 @@ import { drawOpticalSystemSurfaces, clearAllOpticalElements, findStopSurface } f
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './surface.js';
 
 // Ray tracing modules
-import { traceRay, calculateSurfaceOrigins } from './ray-tracing.js';
-import { calculateFocalLength, calculateBackFocalLength, calculateImageDistance, calculateEntrancePupilDiameter, calculateExitPupilDiameter, calculateFullSystemParaxialTrace, calculateParaxialData, debugParaxialRayTrace, calculatePupilsByNewSpec, findStopSurfaceIndex } from './ray-paraxial.js';
+import { traceRay, calculateSurfaceOrigins } from './raytracing/core/ray-tracing.js';
+import { calculateFocalLength, calculateBackFocalLength, calculateImageDistance, calculateEntrancePupilDiameter, calculateExitPupilDiameter, calculateFullSystemParaxialTrace, calculateParaxialData, debugParaxialRayTrace, calculatePupilsByNewSpec, findStopSurfaceIndex } from './raytracing/core/ray-paraxial.js';
 
 // Marginal ray modules
-import { calculateAdaptiveMarginalRay, calculateAllMarginalRays } from './ray-marginal.js';
+import { calculateAdaptiveMarginalRay, calculateAllMarginalRays } from './raytracing/core/ray-marginal.js';
 
 // Analysis modules
 import { generateSpotDiagram, drawSpotDiagram, generateSurfaceOptions } from './evaluation/spot-diagram.js';
@@ -39,8 +39,8 @@ import { PSFCalculator } from './evaluation/psf/psf-calculator.js?v=2026-01-14b'
 import { PSFPlotter, PSFDisplayManager } from './evaluation/psf/psf-plot.js?v=2026-01-14b';
 import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './evaluation/wavefront/zernike-fitting.js';
 import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './evaluation/wavefront/opd-zernike-analysis.js';
-import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './gen-ray-cross-finite.js';
-import { generateInfiniteSystemCrossBeam, RayColorSystem as InfiniteRayColorSystem } from './gen-ray-cross-infinite.js';
+import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './raytracing/generation/gen-ray-cross-finite.js';
+import { generateInfiniteSystemCrossBeam, RayColorSystem as InfiniteRayColorSystem } from './raytracing/generation/gen-ray-cross-infinite.js';
 // Distortion analysis
 import { calculateDistortionData } from './evaluation/aberrations/distortion.js';
 import { plotDistortionPercent, generateDistortionPlots, plotGridDistortion, generateGridDistortionPlot } from './evaluation/aberrations/distortion-plot.js';

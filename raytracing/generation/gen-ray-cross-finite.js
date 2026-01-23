@@ -12,7 +12,7 @@
  * 作成日: 2025/07/23 (Brent法対応)
  */
 
-import { traceRay, calculateSurfaceOrigins, asphericSag } from './ray-tracing.js';
+import { traceRay, calculateSurfaceOrigins, asphericSag } from '../core/ray-tracing.js';
 
 function isCoordBreakRow(row) {
     const st = String(row?.surfType ?? row?.['surf type'] ?? '').toLowerCase();

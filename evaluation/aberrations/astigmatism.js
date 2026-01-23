@@ -27,7 +27,7 @@
 
 import { calculateChiefRayNewton } from './transverse-aberration.js';
 import { getObjectRows, getSourceRows } from '../../utils/data-utils.js';
-import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../../ray-tracing.js';
+import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../../raytracing/core/ray-tracing.js';
 
 function __pickPrimaryWavelengthMicrons(sourceRows, fallback = 0.5876) {
     try {

@@ -10,10 +10,10 @@
  * このファイルは `eva-wavefront-plot.js` などの描画スクリプトから import して使用される。
  */
 
-import { traceRay, calculateSurfaceOrigins } from './ray-tracing.js';
-import { getRefractiveIndex as getCatalogRefractiveIndex } from './ray-paraxial.js';
-import { findFiniteSystemChiefRayDirection } from './gen-ray-cross-finite.js';
-import { findInfiniteSystemChiefRayOrigin } from './gen-ray-cross-infinite.js';
+import { traceRay, calculateSurfaceOrigins } from '../../raytracing/core/ray-tracing.js';
+import { getRefractiveIndex as getCatalogRefractiveIndex } from '../../raytracing/core/ray-paraxial.js';
+import { findFiniteSystemChiefRayDirection } from '../../raytracing/generation/gen-ray-cross-finite.js';
+import { findInfiniteSystemChiefRayOrigin } from '../../raytracing/generation/gen-ray-cross-infinite.js';
 import { fitZernikeWeighted, reconstructOPD, jToNM, nmToJ, getZernikeName } from './zernike-fitting.js';
 
 // Runtime build stamp (for cache/stale-module diagnostics)

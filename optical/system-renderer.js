@@ -5,7 +5,7 @@
 console.log('🚀 system-renderer.js loaded at', new Date().toISOString());
 
 import * as THREE from 'three';
-import { calculateSurfaceOrigins } from '../ray-tracing.js';
+import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.js';
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin,
          drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, 
          drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from '../surface.js';

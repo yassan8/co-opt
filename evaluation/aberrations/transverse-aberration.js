@@ -12,11 +12,11 @@
  * 作成日: 2025/07/24
  */
 
-import { generateFiniteSystemCrossBeam } from './gen-ray-cross-finite.js';
-import { generateInfiniteSystemCrossBeam } from './gen-ray-cross-infinite.js';
-import { traceRay, calculateSurfaceOrigins } from './ray-tracing.js';
-import { getObjectRows, getSourceRows } from './utils/data-utils.js';
-import { calculateEntrancePupilDiameter, calculateParaxialData } from './ray-paraxial.js';
+import { generateFiniteSystemCrossBeam } from '../../raytracing/generation/gen-ray-cross-finite.js';
+import { generateInfiniteSystemCrossBeam } from '../../raytracing/generation/gen-ray-cross-infinite.js';
+import { traceRay, calculateSurfaceOrigins } from '../../raytracing/core/ray-tracing.js';
+import { getObjectRows, getSourceRows } from '../../utils/data-utils.js';
+import { calculateEntrancePupilDiameter, calculateParaxialData } from '../../raytracing/core/ray-paraxial.js';
 
 const TRANSVERSE_DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis.__TRANSVERSE_DEBUG || globalThis.__OPD_DEBUG || globalThis.__PSF_DEBUG));
 
