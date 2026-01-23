@@ -468,6 +468,22 @@ class SystemRequirementsEditor {
         cfgSel.appendChild(opt);
       }
       cfgSel.value = (row.configId === undefined || row.configId === null) ? '' : String(row.configId);
+      const populateObjectSelect = (selectEl, cfgId) => {
+        if (!selectEl) return;
+        const prev = selectEl.value;
+        const objects = this._getObjectOptions(cfgId);
+        while (selectEl.firstChild) selectEl.removeChild(selectEl.firstChild);
+        for (const opt of objects) {
+          const el = document.createElement('option');
+          el.value = opt.value;
+          el.textContent = opt.label;
+          selectEl.appendChild(el);
+        }
+        if (prev !== undefined && prev !== null && prev !== '') {
+          selectEl.value = prev;
+        }
+      };
+
       cfgSel.addEventListener('change', () => {
         row.configId = cfgSel.value;
         this.saveToStorage();
@@ -481,6 +497,12 @@ class SystemRequirementsEditor {
             if (p2Input && dlId) p2Input.setAttribute('list', dlId);
           }
         } catch (_) {}
+        // Refresh Object idx dropdowns for this row
+        try {
+          const objSelects = tr.querySelectorAll('select[data-is-object-param="1"]');
+          for (const sel of objSelects) populateObjectSelect(sel, row.configId);
+        } catch (_) {}
+
         this.scheduleEvaluateAndUpdate();
       });
       tdCfg.appendChild(cfgSel);
@@ -632,7 +654,8 @@ class SystemRequirementsEditor {
           control.style.lineHeight = '24px';
           control.style.padding = '2px 4px';
           control.style.boxSizing = 'border-box';
-          const objects = this._getObjectOptions();
+          control.dataset.isObjectParam = '1';
+          const objects = this._getObjectOptions(row?.configId);
           for (const opt of objects) {
             const el = document.createElement('option');
             el.value = opt.value;
@@ -946,17 +969,19 @@ class SystemRequirementsEditor {
     }
   }
 
-  _getObjectOptions() {
+  _getObjectOptions(configId = null) {
     try {
       // Try to get from active config first
       let objectRows = null;
       try {
         const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
         const activeId = systemConfig?.activeConfigId;
-        const activeConfig = systemConfig?.configurations?.find(c => c.id === activeId);
-        if (activeConfig && Array.isArray(activeConfig.object)) {
-          objectRows = activeConfig.object;
-        }
+        const desiredId = (configId !== undefined && configId !== null && String(configId).trim() !== '')
+          ? String(configId)
+          : String(activeId ?? '');
+        const cfgList = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
+        const activeConfig = cfgList.find(c => String(c?.id ?? '') === desiredId);
+        if (activeConfig && Array.isArray(activeConfig.object)) objectRows = activeConfig.object;
       } catch (_) {}
       
       // Fallback to objectTableData
