@@ -611,7 +611,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             console.error(`❌ Error drawing Stop ring for surface ${i}:`, stopRingError);
                         }
                     }
-                } else if (surface.type === 'Mirror') {
+                } else if (surface.type === 'Mirror' || surface.material === 'MIRROR') {
                     // Mirror面の処理
                     console.log(`🪞 Drawing 3D Mirror surface ${i} with origin and rotation`);
                     const mirrorDefaultColor = 0xc0c0c0;
@@ -674,8 +674,8 @@ export function drawOpticalSystemSurfaces(options = {}) {
                     scene.add(marker);
                 }
                 
-                // Semidia ring表示
-                if (showSemidiaRing && surface.type !== 'Stop' && surface['object type'] !== 'Stop') {
+                // Semidia ring表示（Coord Trans面は除外）
+                if (showSemidiaRing && surface.type !== 'Stop' && surface['object type'] !== 'Stop' && !isCB) {
                     console.log(`⭕ Drawing semidia ring for surface ${i}, semidia: ${surface.semidia}`);
                     console.log(`⭕ Ring origin for ${i}:`, surfaceOrigins[i]);
                     console.log(`⭕ Surface type: ${surface.type}, material: ${surface.material}`);

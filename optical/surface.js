@@ -466,6 +466,26 @@ export function drawLensSurface(scene, params, mode = "even", segments = 100, zO
 // 座標変換1.5.md仕様準拠: 原点O(s)・回転行列R(s)を使用した3Dレンズサーフェス描画
 export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z: 0}, rotationMatrix = null, mode = "even", segments = 100, color = 0x00ccff, opacity = 0.5, surfaceType = 'Spherical') {
   const { THREE: THREE_CTX, globalScope } = getSceneThreeContext(scene);
+  
+  // Coord Trans / Coord Break面のチェック（描画を抑制）
+  if (params) {
+    const surfType = String(params.surfType || params.type || '').trim().toLowerCase();
+    const objType = String(params['object type'] || '').trim().toLowerCase();
+    const isCB = (
+      surfType === 'coord break' || surfType === 'coordinate break' || 
+      surfType === 'cb' || surfType === 'coordtrans' || 
+      surfType === 'coordinatebreak' || surfType === 'coord trans' ||
+      surfType === 'coordinate transform' || surfType === 'ct' ||
+      objType === 'coord break' || objType === 'coordinate break' ||
+      objType === 'cb' || objType === 'coordtrans' ||
+      objType === 'coordinatebreak'
+    );
+    if (isCB) {
+      debugLog('🔸 Skipping 3D surface drawing for Coord Trans surface');
+      return;
+    }
+  }
+  
   // originが undefined の場合は デフォルト値を設定
   if (!origin || typeof origin !== 'object') {
     origin = {x: 0, y: 0, z: 0};
@@ -661,6 +681,26 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
 // Sag計算を含むリング描画関数
 export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segments = 100, color = 0x000000, origin = {x: 0, y: 0, z: 0}, rotationMatrix = null, surf = null) {
   const { THREE: THREE_CTX } = getSceneThreeContext(scene);
+  
+  // Coord Trans / Coord Break面のチェック（描画を抑制）
+  if (surf) {
+    const surfType = String(surf.surfType || surf.type || '').trim().toLowerCase();
+    const objType = String(surf['object type'] || '').trim().toLowerCase();
+    const isCB = (
+      surfType === 'coord break' || surfType === 'coordinate break' || 
+      surfType === 'cb' || surfType === 'coordtrans' || 
+      surfType === 'coordinatebreak' || surfType === 'coord trans' ||
+      surfType === 'coordinate transform' || surfType === 'ct' ||
+      objType === 'coord break' || objType === 'coordinate break' ||
+      objType === 'cb' || objType === 'coordtrans' ||
+      objType === 'coordinatebreak'
+    );
+    if (isCB) {
+      debugLog('🔸 Skipping ring drawing for Coord Trans surface');
+      return;
+    }
+  }
+  
   // originが undefined の場合は デフォルト値を設定
   if (!origin || typeof origin !== 'object') {
     origin = {x: 0, y: 0, z: 0};
@@ -779,6 +819,26 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
 // Sag計算を含む矩形アパーチャ描画関数（サグ追従）
 export function drawRectApertureWithOriginAndSurface(scene, width = 20, height = 20, segmentsPerEdge = 128, color = 0x000000, origin = {x: 0, y: 0, z: 0}, rotationMatrix = null, surf = null) {
   const { THREE: THREE_CTX } = getSceneThreeContext(scene);
+  
+  // Coord Trans / Coord Break面のチェック（描画を抑制）
+  if (surf) {
+    const surfType = String(surf.surfType || surf.type || '').trim().toLowerCase();
+    const objType = String(surf['object type'] || '').trim().toLowerCase();
+    const isCB = (
+      surfType === 'coord break' || surfType === 'coordinate break' || 
+      surfType === 'cb' || surfType === 'coordtrans' || 
+      surfType === 'coordinatebreak' || surfType === 'coord trans' ||
+      surfType === 'coordinate transform' || surfType === 'ct' ||
+      objType === 'coord break' || objType === 'coordinate break' ||
+      objType === 'cb' || objType === 'coordtrans' ||
+      objType === 'coordinatebreak'
+    );
+    if (isCB) {
+      debugLog('🔸 Skipping rect aperture drawing for Coord Trans surface');
+      return;
+    }
+  }
+  
   if (!origin || typeof origin !== 'object') origin = { x: 0, y: 0, z: 0 };
   if (typeof origin.x !== 'number') origin.x = 0;
   if (typeof origin.y !== 'number') origin.y = 0;
@@ -1609,13 +1669,35 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             continue;
         }
         
-        // CB面はスキップ
-        if (currentSurf.surfType === 'Coord Break') {
+        // CB面はスキップ（Coord Trans / Coord Break / CT の全バリエーションに対応）
+        const currentSurfType = String(currentSurf.surfType || currentSurf.type || '').trim().toLowerCase();
+        const currentObjType = String(currentSurf['object type'] || '').trim().toLowerCase();
+        const isCurrentCB = (
+            currentSurfType === 'coord break' || currentSurfType === 'coordinate break' || 
+            currentSurfType === 'cb' || currentSurfType === 'coordtrans' || 
+            currentSurfType === 'coordinatebreak' || currentSurfType === 'coord trans' ||
+            currentSurfType === 'coordinate transform' || currentSurfType === 'ct' ||
+            currentObjType === 'coord break' || currentObjType === 'coordinate break' ||
+            currentObjType === 'cb' || currentObjType === 'coordtrans' ||
+            currentObjType === 'coordinatebreak'
+        );
+        if (isCurrentCB) {
             continue;
         }
         
         // 次の面もCB面ならスキップ
-        if (nextSurf.surfType === 'Coord Break') {
+        const nextSurfType = String(nextSurf.surfType || nextSurf.type || '').trim().toLowerCase();
+        const nextObjType = String(nextSurf['object type'] || '').trim().toLowerCase();
+        const isNextCB = (
+            nextSurfType === 'coord break' || nextSurfType === 'coordinate break' || 
+            nextSurfType === 'cb' || nextSurfType === 'coordtrans' || 
+            nextSurfType === 'coordinatebreak' || nextSurfType === 'coord trans' ||
+            nextSurfType === 'coordinate transform' || nextSurfType === 'ct' ||
+            nextObjType === 'coord break' || nextObjType === 'coordinate break' ||
+            nextObjType === 'cb' || nextObjType === 'coordtrans' ||
+            nextObjType === 'coordinatebreak'
+        );
+        if (isNextCB) {
             continue;
         }
         
@@ -1795,8 +1877,19 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
           continue;
         }
         
-        // CB面はスキップ
-        if (surf.surfType === 'Coord Break') {
+        // CB面はスキップ（Coord Trans / Coord Break / CT の全バリエーションに対応）
+        const surfType = String(surf.surfType || surf.type || '').trim().toLowerCase();
+        const objType = String(surf['object type'] || '').trim().toLowerCase();
+        const isCB = (
+            surfType === 'coord break' || surfType === 'coordinate break' || 
+            surfType === 'cb' || surfType === 'coordtrans' || 
+            surfType === 'coordinatebreak' || surfType === 'coord trans' ||
+            surfType === 'coordinate transform' || surfType === 'ct' ||
+            objType === 'coord break' || objType === 'coordinate break' ||
+            objType === 'cb' || objType === 'coordtrans' ||
+            objType === 'coordinatebreak'
+        );
+        if (isCB) {
             console.log(`🔸 Surface ${i}: CB面、スキップ`);
             continue;
         }

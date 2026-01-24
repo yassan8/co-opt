@@ -5,6 +5,8 @@
  * It initializes the application using modular components and sets up the main functionality.
  */
 
+console.log('🚀 [Main] main.js loading...');
+
 // =============================================================================
 // IMPORTS
 // =============================================================================
@@ -59,6 +61,9 @@ import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOp
 import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListeners } from './ui/ui-updates.js';
 import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers } from './ui/dom-event-handlers.js';
 import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.js';
+import { initializeConfigurationUI } from './ui/configuration-handlers.js';
+
+console.log('✅ [Main] All imports loaded, initializeConfigurationUI:', typeof initializeConfigurationUI);
 
 // Suggest (Design Intent) implementation (adds window.SuggestDesignIntent)
 import './optimization/suggest-design-intent.js';
@@ -214,6 +219,14 @@ async function initializeApplication() {
 
         } catch (error) {
             console.error('❌ Error setting up DOM event handlers:', error);
+        }
+        
+        // Configuration UI初期化
+        try {
+            initializeConfigurationUI();
+            console.log('✅ Configuration UI initialized');
+        } catch (error) {
+            console.error('❌ Error initializing configuration UI:', error);
         }
         
         // 波面収差図Object選択UI初期化
