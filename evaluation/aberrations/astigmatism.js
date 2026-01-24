@@ -50,9 +50,9 @@ function __pickPrimaryWavelengthMicrons(sourceRows, fallback = 0.5876) {
     return fallback;
 }
 
-function isCoordBreakRow(row) {
+function isCoordTransRow(row) {
     const st = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').toLowerCase();
-    return st === 'coord break' || st === 'coordinate break' || st === 'cb';
+    return st === 'coord break' || st === 'coordinate break' || st === 'ct';
 }
 
 function isObjectRow(row) {
@@ -68,7 +68,7 @@ function surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex) {
     let count = 0;
     for (let i = 0; i <= sIdx; i++) {
         const row = opticalSystemRows[i];
-        if (isCoordBreakRow(row)) continue;
+        if (isCoordTransRow(row)) continue;
         if (isObjectRow(row)) continue;
         count++;
     }
@@ -364,7 +364,7 @@ function findStopSurfaceIndex(opticalSystemRows) {
     
     for (let i = 0; i < opticalSystemRows.length; i++) {
         const row = opticalSystemRows[i];
-        if (isCoordBreakRow(row) || isObjectRow(row)) {
+        if (isCoordTransRow(row) || isObjectRow(row)) {
             continue;
         }
         const surfType = String(row?.surfType ?? row?.surface_type ?? row?.['surf type'] ?? '').toLowerCase();

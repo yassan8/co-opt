@@ -11,9 +11,9 @@ import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurface
          drawSemidiaRingWithOriginAndSurface, drawRectApertureWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './surface.js';
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
-const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordBreak';
+const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordTrans';
 
-function __coopt_isCoordBreakDebugEnabled() {
+function __coopt_isCoordTransDebugEnabled() {
     try {
         const g = (typeof globalThis !== 'undefined') ? globalThis : null;
         if (g && g.__COOPT_DEBUG_COORD_BREAK) return true;
@@ -244,7 +244,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
 
     // Opt-in Coord Break debug: helps verify that decenter params are numeric at render time.
     try {
-        const DEBUG_CB = __coopt_isCoordBreakDebugEnabled();
+        const DEBUG_CB = __coopt_isCoordTransDebugEnabled();
         if (DEBUG_CB && Array.isArray(surfaceOrigins)) {
             console.log('🧭 [CO-OPT] Coord Break debug enabled');
             const cbRows = [];
@@ -577,9 +577,9 @@ export function drawOpticalSystemSurfaces(options = {}) {
             const objType = String(surface?.['object type'] ?? surface?.object ?? '').trim().toLowerCase();
             const isCB = (
                 surfType === 'coord break' || surfType === 'coordinate break' || surfType === 'cb' ||
-                surfType === 'coordbreak' || surfType === 'coordinatebreak' ||
+                surfType === 'coordtrans' || surfType === 'coordinatebreak' ||
                 objType === 'coord break' || objType === 'coordinate break' || objType === 'cb' ||
-                objType === 'coordbreak' || objType === 'coordinatebreak'
+                objType === 'coordtrans' || objType === 'coordinatebreak'
             );
             if (isCB) {
                 console.log(`🔸 3D Surface ${i}: Coord Break (surfType=${surfType}, objType=${objType})、三次元描画スキップ`);

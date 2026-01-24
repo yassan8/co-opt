@@ -115,11 +115,11 @@ export function getSafeThickness(surface) {
     return 0;
   }
 
-  // Coord Break rows reuse the thickness field for decenterZ.
+  // Coord Trans rows reuse the thickness field for decenterZ.
   // When a dedicated gap thickness is present, allow spacing; otherwise treat as 0.
   try {
     const st = String(surface.surfType ?? '').trim().toLowerCase();
-    if (st === 'coord break' || st === 'coordinate break' || st === 'cb') {
+    if (st === 'coord trans' || st === 'coordinate break' || st === 'ct') {
       const gapRaw = surface.__cooptGapThickness;
       if (gapRaw !== undefined && gapRaw !== null && String(gapRaw).trim() !== '') {
         const gapStr = String(gapRaw).toUpperCase();
@@ -220,9 +220,9 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
         break;
       }
       
-      // Coord Breakサーフェスをスキップ
-      if (isCoordBreakSurface(surface)) {
-        // console.log(`面${j}: Coord Break - スキップ`);
+      // Coord Transサーフェスをスキップ
+      if (isCoordTransSurface(surface)) {
+        // console.log(`面${j}: Coord Trans - スキップ`);
         continue;
       }
       
@@ -1074,9 +1074,9 @@ export function traceParaxialRayFromStopInternal(opticalSystemRows, stopIndex, w
         break;
       }
       
-      // Coord Break面はスキップ
-      if (isCoordBreakSurface(surface)) {
-        debugLog(2, `面${i}（面${surface.id}）: Coord Break面をスキップ`);
+      // Coord Trans面はスキップ
+      if (isCoordTransSurface(surface)) {
+        debugLog(2, `面${i}（面${surface.id}）: Coord Trans面をスキップ`);
         continue;
       }
       
@@ -1239,7 +1239,7 @@ export function findStopSurfaceIndex(opticalSystemRows) {
   // 明示的に絞り面が指定されている場合（Objectカラムで"Stop"を検索）
   for (let i = 0; i < opticalSystemRows.length; i++) {
     const surface = opticalSystemRows[i];
-    if (isCoordBreakSurface(surface)) continue;
+    if (isCoordTransSurface(surface)) continue;
     const objectRaw = String(surface.object ?? surface["object type"] ?? '').trim().toLowerCase();
     const commentRaw = String(surface.comment ?? '').trim().toLowerCase();
     if (objectRaw === 'sto' || objectRaw === 'stop' || objectRaw.includes('stop') ||
@@ -1250,13 +1250,13 @@ export function findStopSurfaceIndex(opticalSystemRows) {
   }
 
   // 明示的な絞り面が見つからない場合、光学系の中央付近を絞り面とする
-  // Object面、Image面、Coord Break面を除外した有効面の中央
+  // Object面、Image面、Coord Trans面を除外した有効面の中央
   let validSurfaces = [];
   for (let i = 1; i < opticalSystemRows.length - 1; i++) {
     const surface = opticalSystemRows[i];
     if (surface.comment !== "Object" && 
         surface.comment !== "Image" && 
-        !isCoordBreakSurface(surface)) {
+        !isCoordTransSurface(surface)) {
       validSurfaces.push(i);
     }
   }
@@ -1490,11 +1490,11 @@ export function calculateMarginalAlphaAtStop(opticalSystemRows, stopIndex, wavel
 }
 
 /**
- * Coord Break面かどうかを判定
+ * Coord Trans面かどうかを判定
  * @param {Object} surface - 面データ
- * @returns {boolean} Coord Break面の場合true
+ * @returns {boolean} Coord Trans面の場合true
  */
-function isCoordBreakSurface(surface) {
+function isCoordTransSurface(surface) {
   if (!surface) return false;
   
   const fields = [
@@ -1506,8 +1506,8 @@ function isCoordBreakSurface(surface) {
   const isCb = (v) => {
     const s = String(v ?? '').trim().toLowerCase();
     if (!s) return false;
-    if (s === 'cb' || s === 'coordbreak' || s === 'coordinatebreak' || s === 'coord break' || s === 'coordinate break') return true;
-    return s.includes('coord break') || s.includes('coordinate break');
+    if (s === 'ct' || s === 'coordtrans' || s === 'coordinatebreak' || s === 'coord trans' || s === 'coordinate break') return true;
+    return s.includes('coord trans') || s.includes('coordinate break');
   };
   return fields.some(isCb);
 }
@@ -1533,8 +1533,8 @@ function calculateEFLTrace(opticalSystemRows, wavelength = 0.5875618) {
       break;
     }
     
-    // Coord Breakサーフェスをスキップ
-    if (isCoordBreakSurface(surface)) {
+    // Coord Transサーフェスをスキップ
+    if (isCoordTransSurface(surface)) {
       continue;
     }
     

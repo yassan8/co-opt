@@ -116,7 +116,7 @@ function __du_preserveLegacySemidiaIntoExpandedRows(expandedRows, legacyRows, bl
   const isSkippableRow = (row) => {
     const t = rowType(row);
     return t === 'stop' || t === 'sto' || t === 'image' || t === 'object'
-      || t === 'coordbreak' || t === 'coord break' || t === 'cb';
+      || t === 'coordtrans' || t === 'coord trans' || t === 'ct';
   };
   const keyFor = (row) => {
     if (!row || typeof row !== 'object') return '';
@@ -155,7 +155,7 @@ function __du_preserveLegacySemidiaIntoExpandedRows(expandedRows, legacyRows, bl
   } catch (_) {}
 
   // Prefer provenance-based mapping when available, otherwise do a stable two-pointer
-  // walk that skips non-physical rows (Object/Image/Stop/CoordBreak).
+  // walk that skips non-physical rows (Object/Image/Stop/CoordTrans).
   const legacyByKey = new Map();
   try {
     for (const l of legacyRows) {

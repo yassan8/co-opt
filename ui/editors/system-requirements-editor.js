@@ -1202,7 +1202,7 @@ class SystemRequirementsEditor {
         return st === 'image' || st.includes('image');
       };
 
-      const isCoordBreakRow = (row) => {
+      const isCoordTransRow = (row) => {
         if (!row || typeof row !== 'object') return false;
         const st = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
         const t1 = String(row['object type'] ?? '').trim().toLowerCase();
@@ -1211,8 +1211,8 @@ class SystemRequirementsEditor {
         const stc = compact(st);
         const t1c = compact(t1);
         const t2c = compact(t2);
-        const isCb = (v) => v === 'cb' || v === 'coordbreak' || v === 'coordinatebreak';
-        return isCb(stc) || isCb(t1c) || isCb(t2c) || st === 'coord break' || st === 'coordinate break' || t1 === 'coord break' || t1 === 'coordinate break' || t2 === 'coord break' || t2 === 'coordinate break';
+        const isCb = (v) => v === 'ct' || v === 'coordtrans' || v === 'coordinatebreak';
+        return isCb(stc) || isCb(t1c) || isCb(t2c) || st === 'coord trans' || st === 'coordinate transform' || t1 === 'coord trans' || t1 === 'coordinate transform' || t2 === 'coord trans' || t2 === 'coordinate transform';
       };
 
       const imageIdx = (() => {

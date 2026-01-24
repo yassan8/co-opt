@@ -60,7 +60,7 @@ function insertZeroCBBetween(opticalRows, insertAfterSurfaceNumber1Based) {
     coef8: '',
     coef9: '',
     coef10: '',
-    // Explicit CB schema (so parseCoordBreakParams never falls back to legacy reused columns)
+    // Explicit CB schema (so parseCoordTransParams never falls back to legacy reused columns)
     decenterX: 0,
     decenterY: 0,
     decenterZ: 0,
@@ -89,7 +89,7 @@ function summarizeFailure(sd) {
     topKinds: o0?.topKinds ?? null,
     topSurfaces: o0?.topSurfaces ?? null,
     example: o0?.example ?? null,
-    coordBreakSummaries: sd.coordBreakSummaries ?? null,
+    coordTransSummaries: sd.coordTransSummaries ?? null,
     retryTried: o0?.retry?.pupilScaleTried ? o0.retry.pupilScaleTried.length : null,
   };
 }

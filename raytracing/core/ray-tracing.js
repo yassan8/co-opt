@@ -1073,7 +1073,7 @@ function calculateCumulativeTransform(surfaceIndex, surfaces) {
     };
 }
 
-function __rtIsCoordBreakRow(row) {
+function __rtIsCoordTransRow(row) {
   if (!row || typeof row !== 'object') return false;
   const fields = [
     row.surfType, row.type, row.surfaceType, row.surface_type, row.surfTypeName,
@@ -1084,8 +1084,8 @@ function __rtIsCoordBreakRow(row) {
   const isCb = (v) => {
     const s = String(v ?? '').trim().toLowerCase();
     if (!s) return false;
-    if (s === 'cb' || s === 'coordbreak' || s === 'coordinatebreak' || s === 'coord break' || s === 'coordinate break') return true;
-    return s.includes('coord break') || s.includes('coordinate break');
+    if (s === 'ct' || s === 'coordtrans' || s === 'coordinatebreak' || s === 'coord trans' || s === 'coordinate break') return true;
+    return s.includes('coord trans') || s.includes('coordinate break');
   };
   return fields.some(isCb);
 }
@@ -1109,9 +1109,9 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
     
     let surfaceOrigin, surfaceRotMatrix;
     
-    if (__rtIsCoordBreakRow(surface)) {
+    if (__rtIsCoordTransRow(surface)) {
       // CB面の場合
-      const cbParams = parseCoordBreakParams(surface, previousSurface);
+      const cbParams = parseCoordTransParams(surface, previousSurface);
       const decenterX = cbParams.decenterX !== undefined ? cbParams.decenterX : 0;
       const decenterY = cbParams.decenterY !== undefined ? cbParams.decenterY : 0;
       const decenterZ = cbParams.decenterZ !== undefined ? cbParams.decenterZ : 0;
@@ -1188,8 +1188,8 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
     };
     
     // CB面の場合は変換パラメータも追加
-    if (__rtIsCoordBreakRow(surface)) {
-      const cbParams = parseCoordBreakParams(surface, previousSurface);
+    if (__rtIsCoordTransRow(surface)) {
+      const cbParams = parseCoordTransParams(surface, previousSurface);
       debugInfo.cbParams = cbParams;
       debugInfo.previousOrigin = currentOrigin;
       debugInfo.thickness = previousSurface ? previousSurface.thickness : 0;
@@ -1285,7 +1285,7 @@ function applyMatrixToVector(matrix, vec) {
 }
 
 // CB面パラメータ解析
-function parseCoordBreakParams(surface, previousSurface = null) {
+function parseCoordTransParams(surface, previousSurface = null) {
   const toFiniteNumber = (...candidates) => {
     for (const v of candidates) {
       if (v === null || v === undefined) continue;
@@ -1307,7 +1307,7 @@ function parseCoordBreakParams(surface, previousSurface = null) {
     return Number.isFinite(n) ? n : null;
   };
 
-  // New rule (root-cause fix): Prefer dedicated CoordBreak fields when present.
+  // New rule (root-cause fix): Prefer dedicated CoordTrans fields when present.
   // This prevents accidental decenter from non-CB fields like semidia/material.
   // Legacy field-reuse remains as a fallback for older designs.
   const hasExplicit = (() => {
@@ -1332,7 +1332,7 @@ function parseCoordBreakParams(surface, previousSurface = null) {
     return false;
   })();
 
-  // IMPORTANT: When dedicated CoordBreak fields are present, do NOT fall back to
+  // IMPORTANT: When dedicated CoordTrans fields are present, do NOT fall back to
   // legacy reused columns (semidia/material/rindex/abbe/conic/coef1).
   // Otherwise, a CB row with only `order` set can accidentally pick up a non-zero
   // semidia/material and introduce an unintended decenter/tilt.
@@ -1490,16 +1490,16 @@ function __computeSurfaceOriginsSignature(opticalSystemRows) {
       const prev = s > 0 ? (rows[s - 1] || {}) : null;
 
       // surfType discriminator
-      const isCB = __rtIsCoordBreakRow(surface);
+      const isCB = __rtIsCoordTransRow(surface);
       mix(isCB ? 1 : 0);
 
       // thickness used by calculateSurfaceOrigins comes from previous surface
       let tPrev = prev ? getSafeThickness(prev) : 0;
-      if (prev && __rtIsCoordBreakRow(prev)) tPrev = 0;
+      if (prev && __rtIsCoordTransRow(prev)) tPrev = 0;
       mix(q(tPrev, 1e6));
 
       if (isCB) {
-        const cbParams = parseCoordBreakParams(surface, prev) || {};
+        const cbParams = parseCoordTransParams(surface, prev) || {};
         mix(q(cbParams.decenterX, 1e6));
         mix(q(cbParams.decenterY, 1e6));
         mix(q(cbParams.decenterZ, 1e6));
@@ -1741,12 +1741,12 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
     }
 
     // Coordinate Break面の特別処理
-    if (__rtIsCoordBreakRow(row)) {
+    if (__rtIsCoordTransRow(row)) {
       // 座標変換1.5.md仕様: CB面では座標系変換のみ、O(s)/R(s)システムを使用
       
       if (isDetailedDebug) {
         const prevRow = (i > 0 && Array.isArray(opticalSystemRows)) ? opticalSystemRows[i - 1] : null;
-        const cb = parseCoordBreakParams(row, prevRow) || {};
+        const cb = parseCoordTransParams(row, prevRow) || {};
         debugLog.push(`Coord Break Parameters:`);
         debugLog.push(`  decenterX=${Number(cb.decenterX) || 0}, decenterY=${Number(cb.decenterY) || 0}, decenterZ=${Number(cb.decenterZ) || 0}`);
         debugLog.push(`  tiltX=${Number(cb.tiltX) || 0}°, tiltY=${Number(cb.tiltY) || 0}°, tiltZ=${Number(cb.tiltZ) || 0}°, order=${Number(cb.transformOrder) || 1}`);

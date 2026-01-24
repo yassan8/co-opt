@@ -165,7 +165,7 @@ function __zmxSolveCrossRayToStopCoordAxis(opticalSystemRows, stopIndex, targetC
     return bestRay0;
 }
 
-function __zmxIsCoordBreakRow(row) {
+function __zmxIsCoordTransRow(row) {
     const st = String(row?.surfType ?? row?.['surf type'] ?? '').toLowerCase();
     return st === 'coord break' || st === 'coordinate break' || st === 'cb';
 }
@@ -183,7 +183,7 @@ function __zmxGetRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceInde
     let count = 0;
     for (let i = 0; i <= sIdx; i++) {
         const row = opticalSystemRows[i];
-        if (__zmxIsCoordBreakRow(row)) continue;
+        if (__zmxIsCoordTransRow(row)) continue;
         if (__zmxIsObjectRow(row)) continue;
         count++;
     }
@@ -270,7 +270,7 @@ function __zmxApplySemidiaOverridesFromMarginalRays(activeCfg, rowsToApply, sour
                 r.semidia = stopRadiusMm;
                 continue;
             }
-            if (__zmxIsCoordBreakRow(r)) continue;
+            if (__zmxIsCoordTransRow(r)) continue;
             r.semidia = BIG_SEMIDIA_MM;
         }
     } catch (_) {}
@@ -7550,7 +7550,7 @@ function formatBlockPreview(block) {
         return String(sd) !== '' ? `SD=${String(sd)}` : '';
     }
 
-    if (type === 'CoordBreak') {
+    if (type === 'CoordTrans') {
         const dx = pick('decenterX');
         const dy = pick('decenterY');
         const dz = pick('decenterZ');
@@ -7682,7 +7682,7 @@ function __blocks_makeDefaultBlock(blockType, blockId) {
         };
         return base;
     }
-    if (type === 'CoordBreak') {
+    if (type === 'CoordTrans') {
         base.parameters = {
             decenterX: 0,
             decenterY: 0,
@@ -8686,7 +8686,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                         items.push({ key: fb, label: asphereCoefLabel('mirror', st, i, fb) });
                     }
                 }
-            } else if (blockType === 'CoordBreak') {
+            } else if (blockType === 'CoordTrans') {
                 items.push(
                     { key: 'decenterX', label: 'decenterX' },
                     { key: 'decenterY', label: 'decenterY' },
@@ -9466,7 +9466,7 @@ function refreshBlockInspector() {
                 }
             } catch (_) {}
 
-            // Keep the evaluation/Spot UI in sync with live Blocks edits (e.g., add/delete CoordBreak)
+            // Keep the evaluation/Spot UI in sync with live Blocks edits (e.g., add/delete CoordTrans)
             // without requiring a full page reload.
             try {
                 if (Array.isArray(expandedRowsForUI) && expandedRowsForUI.length > 0) {
@@ -9800,17 +9800,17 @@ function __blocks_mapSurfaceEditToBlockChange(edit) {
         return null;
     }
 
-    if (blockType === 'CoordBreak') {
+    if (blockType === 'CoordTrans') {
         // Expanded Coord Break row field reuse:
         // semidia->decenterX, material->decenterY, thickness->decenterZ,
         // rindex->tiltX, abbe->tiltY, conic->tiltZ, coef1->order
-        if (field === 'semidia') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'decenterX', oldValue, newValue };
-        if (field === 'material') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'decenterY', oldValue, newValue };
-        if (field === 'thickness') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'decenterZ', oldValue, newValue };
-        if (field === 'rindex') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'tiltX', oldValue, newValue };
-        if (field === 'abbe') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'tiltY', oldValue, newValue };
-        if (field === 'conic') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'tiltZ', oldValue, newValue };
-        if (field === 'coef1') return { blockId: String(blockId), blockType: 'CoordBreak', variable: 'order', oldValue, newValue };
+        if (field === 'semidia') return { blockId: String(blockId), blockType: 'CoordTrans', variable: 'decenterX', oldValue, newValue };
+        if (field === 'material') return { blockId: String(blockId), blockType: 'CoordTrans', variable: 'decenterY', oldValue, newValue };
+        if (field === 'thickness') return { blockId: String(blockId), blockType: 'CoordTrans', variable: 'decenterZ', oldValue, newValue };
+        if (field === 'rindex') return { blockId: String(blockId), blockType: 'CoordTrans', variable: 'tiltX', oldValue, newValue };
+        if (field === 'abbe') return { blockId: String(blockId), blockType: 'CoordTrans', variable: 'tiltY', oldValue, newValue };
+        if (field === 'conic') return { blockId: String(blockId), blockType: 'CoordTrans', variable: 'tiltZ', oldValue, newValue };
+        if (field === 'coef1') return { blockId: String(blockId), blockType: 'CoordTrans', variable: 'order', oldValue, newValue };
         return null;
     }
 

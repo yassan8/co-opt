@@ -80,7 +80,7 @@ function runOneTA(label, opticalRows, objectRow, surfaceNumber) {
     // Dump all CB rows to inspect their properties
     const cbRows = opticalRows.filter((r, i) => {
         const st = String(r?.surfType ?? '').toLowerCase();
-        const isCB = st.includes('coord break') || st === 'cb' || st === 'coordbreak';
+        const isCB = st.includes('coord trans') || st === 'ct' || st === 'coordtrans';
         if (isCB) {
             console.log(`  CB Row at index ${i}:`, {
                 surfType: r.surfType,

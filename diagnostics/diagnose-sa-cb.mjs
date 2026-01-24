@@ -78,7 +78,7 @@ function runOneSA(label, opticalRows, objectRow, surfaceIndex) {
     // Dump all CB rows to inspect their properties
     const cbRows = opticalRows.filter((r, i) => {
         const st = String(r?.surfType ?? '').toLowerCase();
-        const isCB = st.includes('coord break') || st === 'cb' || st === 'coordbreak';
+        const isCB = st.includes('coord trans') || st === 'ct' || st === 'coordtrans';
         if (isCB) {
             console.log(`  CB Row at index ${i}:`, {
                 surfType: r.surfType,

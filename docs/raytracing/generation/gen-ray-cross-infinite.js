@@ -19,10 +19,10 @@ if (typeof window !== 'undefined') {
     window.__GEN_RAY_CROSS_INFINITE_BUILD = GEN_RAY_CROSS_INFINITE_BUILD;
 }
 
-function isCoordBreakRow(row) {
+function isCoordTransRow(row) {
     const stRaw = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').toLowerCase();
     const st = stRaw.trim();
-    return st === 'coord break' || st === 'coordinate break' || st === 'coordbreak' || st === 'coordinatebreak' || st === 'cb';
+    return st === 'coord trans' || st === 'coordinate transform' || st === 'coordtrans' || st === 'coordinatebreak' || st === 'ct';
 }
 
 function isObjectRow(row) {
@@ -44,7 +44,7 @@ function getRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
     let count = 0;
     for (let i = 0; i <= sIdx; i++) {
         const row = opticalSystemRows[i];
-        if (isCoordBreakRow(row)) continue;
+        if (isCoordTransRow(row)) continue;
         if (isObjectRow(row)) continue;
         count++;
     }

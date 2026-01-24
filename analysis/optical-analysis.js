@@ -678,10 +678,10 @@ export async function showTransverseAberrationDiagram(options = {}) {
             throw new Error('光学系データが見つかりません');
         }
 
-        const isCoordBreakRow = (row) => {
+        const isCoordTransRow = (row) => {
             const stRaw = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').toLowerCase();
             const st = stRaw.trim();
-            return st === 'coord break' || st === 'coordinate break' || st === 'coordbreak' || st === 'coordinatebreak' || st === 'cb';
+            return st === 'coord trans' || st === 'coordinate break' || st === 'coordtrans' || st === 'coordinatebreak' || st === 'ct';
         };
         const isObjectRow = (row) => {
             const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? row?.surface_type ?? '').toLowerCase();
@@ -702,7 +702,7 @@ export async function showTransverseAberrationDiagram(options = {}) {
         if (targetSurfaceIndex < 0) {
             for (let i = opticalSystemRows.length - 1; i >= 0; i--) {
                 const row = opticalSystemRows[i];
-                if (isCoordBreakRow(row) || isObjectRow(row)) continue;
+                if (isCoordTransRow(row) || isObjectRow(row)) continue;
                 targetSurfaceIndex = i;
                 break;
             }

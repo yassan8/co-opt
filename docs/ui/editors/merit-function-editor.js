@@ -1553,7 +1553,7 @@ class MeritFunctionEditor {
                 if (!st) return false;
                 return (
                     st === 'cb' ||
-                    st === 'coordbreak' ||
+                    st === 'coordtrans' ||
                     st === 'coord break' ||
                     st === 'coordinate break' ||
                     st.includes('coord break') ||

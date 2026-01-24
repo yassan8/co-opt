@@ -14,9 +14,9 @@
 
 import { traceRay, calculateSurfaceOrigins, asphericSag } from '../core/ray-tracing.js';
 
-function isCoordBreakRow(row) {
+function isCoordTransRow(row) {
     const st = String(row?.surfType ?? row?.['surf type'] ?? '').toLowerCase();
-    return st === 'coord break' || st === 'coordinate break' || st === 'cb';
+    return st === 'coord trans' || st === 'coordinate transform' || st === 'ct' || st === 'coordtrans' || st === 'coordinatetransform';
 }
 
 function isObjectRow(row) {
@@ -30,7 +30,7 @@ function isStopRow(row) {
     return t === 'stop' || t === 'sto';
 }
 
-// traceRay の rayPath は Object 行 / Coord Break 行を交点として記録しない。
+// traceRay の rayPath は Object 行 / Coord Trans 行を交点として記録しない。
 // surfaceIndex(テーブル行) -> rayPath の point index への変換を行う。
 function getRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
     if (!Array.isArray(opticalSystemRows) || surfaceIndex === null || surfaceIndex === undefined) return null;
@@ -38,7 +38,7 @@ function getRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
     let count = 0;
     for (let i = 0; i <= sIdx; i++) {
         const row = opticalSystemRows[i];
-        if (isCoordBreakRow(row)) continue;
+        if (isCoordTransRow(row)) continue;
         if (isObjectRow(row)) continue;
         count++;
     }

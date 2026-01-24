@@ -771,10 +771,10 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
             return;
         }
         
-        const isCoordBreakRow = (row) => {
+        const isCoordTransRow = (row) => {
             const stRaw = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').toLowerCase();
             const st = stRaw.trim();
-            return st === 'coord break' || st === 'coordinate break' || st === 'coordbreak' || st === 'coordinatebreak' || st === 'cb';
+            return st === 'coord trans' || st === 'coordinate break' || st === 'coordtrans' || st === 'coordinatebreak' || st === 'ct';
         };
 
         const isObjectRow = (row) => {
@@ -788,7 +788,7 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
             let count = 0;
             for (let i = 0; i <= sIdx; i++) {
                 const row = rows[i];
-                if (isCoordBreakRow(row)) continue;
+                if (isCoordTransRow(row)) continue;
                 if (isObjectRow(row)) continue;
                 count++;
             }
@@ -1177,7 +1177,7 @@ function setCameraForYZCrossSection(options = {}) {
         // カメラをX軸負方向に配置（Y-Z断面の正面）- 距離は任意（正投影なので影響なし）
         const cameraDistance = 300; // 正投影カメラでは距離は見た目に影響しない
         // When the popup user has panned/zoomed, it sends us an absolute OrbitControls target.
-        // If we reuse that absolute target across optical edits (e.g., CoordBreak -> 0), the view can
+        // If we reuse that absolute target across optical edits (e.g., CoordTrans -> 0), the view can
         // appear "stuck" even though geometry returned. Preserve pan *relative to the content center*.
         const lastFitCenter = camera?.userData?.__drawCrossLastFitCenter;
         const hasLastFitCenter = !!(lastFitCenter && Number.isFinite(lastFitCenter.y) && Number.isFinite(lastFitCenter.z));

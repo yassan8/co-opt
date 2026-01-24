@@ -1553,11 +1553,11 @@ class MeritFunctionEditor {
                 if (!st) return false;
                 return (
                     st === 'cb' ||
-                    st === 'coordbreak' ||
-                    st === 'coord break' ||
-                    st === 'coordinate break' ||
-                    st.includes('coord break') ||
-                    st.includes('coordinate break')
+                    st === 'coordtrans' ||
+                    st === 'coord trans' ||
+                    st === 'coordinate transform' ||
+                    st.includes('coord trans') ||
+                    st.includes('coordinate transform')
                 );
             };
 
@@ -2444,7 +2444,7 @@ class MeritFunctionEditor {
                             const t2 = String(row.object ?? '').trim();
                             if (t1 === 'Object' || t2 === 'Object') continue;
                             const st = String(row.surfType ?? '').trim().toLowerCase();
-                            if (st === 'cb' || st === 'coordinate break' || st === 'coord break') continue;
+                            if (st === 'cb' || st === 'coordinate transform' || st === 'coord trans') continue;
 
                             const sd = Number(row.semidia);
                             if (Number.isFinite(sd) && sd > 0 && sd < minSemidia) {

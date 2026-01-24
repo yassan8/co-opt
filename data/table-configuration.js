@@ -274,7 +274,7 @@ export async function loadActiveConfigurationToTables(options = {}) {
       const isSkippableRow = (row) => {
         const t = rowType(row);
         return t === 'stop' || t === 'sto' || t === 'image' || t === 'object'
-          || t === 'coordbreak' || t === 'coord break' || t === 'cb';
+          || t === 'coordtrans' || t === 'coord trans' || t === 'ct';
       };
       const keyFor = (row) => {
         if (!row || typeof row !== 'object') return '';

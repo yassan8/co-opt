@@ -19,10 +19,10 @@ if (typeof window !== 'undefined') {
     window.__GEN_RAY_CROSS_INFINITE_BUILD = GEN_RAY_CROSS_INFINITE_BUILD;
 }
 
-function isCoordBreakRow(row) {
+function isCoordTransRow(row) {
     const stRaw = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').toLowerCase();
     const st = stRaw.trim();
-    return st === 'coord break' || st === 'coordinate break' || st === 'coordbreak' || st === 'coordinatebreak' || st === 'cb';
+    return st === 'coord trans' || st === 'coordinate transform' || st === 'coordtrans' || st === 'coordinatebreak' || st === 'ct';
 }
 
 function isObjectRow(row) {
@@ -36,7 +36,7 @@ function isStopRow(row) {
     return t === 'stop' || t === 'sto';
 }
 
-// traceRay の rayPath は Object 行 / Coord Break 行を交点として記録しない。
+// traceRay の rayPath は Object 行 / Coord Trans 行を交点として記録しない。
 // surfaceIndex(テーブル行) -> rayPath の point index への変換を行う。
 function getRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
     if (!Array.isArray(opticalSystemRows) || surfaceIndex === null || surfaceIndex === undefined) return null;
@@ -44,7 +44,7 @@ function getRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
     let count = 0;
     for (let i = 0; i <= sIdx; i++) {
         const row = opticalSystemRows[i];
-        if (isCoordBreakRow(row)) continue;
+        if (isCoordTransRow(row)) continue;
         if (isObjectRow(row)) continue;
         count++;
     }
@@ -1077,7 +1077,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                     for (let i = 0; i < rows.length; i++) {
                         const r = rows[i];
                         if (!r) continue;
-                        if (String(r.surfType || '') === 'Coord Break') continue;
+                        if (String(r.surfType || '') === 'Coord Trans') continue;
                         if ((r['object type'] === 'Object') || (r.object === 'Object')) continue;
                         const semidia = parseFloat(r.semidia ?? r.SemiDia ?? r['semi dia'] ?? r['Semi Dia'] ?? '');
                         const aperture = parseFloat(r.aperture ?? r.Aperture ?? '');
@@ -3070,7 +3070,7 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
         ? targetSurfaceIndex
         : Math.max(0, (systemRowsForTrace?.length ?? 1) - 1);
 
-    // traceRay の rayPath は Object/Coord Break 行を交点として記録しないため、
+    // traceRay の rayPath は Object/Coord Trans 行を交点として記録しないため、
     // テーブル行インデックス(=surfaceIndex) → rayPath point index に変換して判定する。
     const effectiveTargetPointIndex = getRayPathPointIndexForSurfaceIndex(systemRowsForTrace, effectiveTargetIndex);
     

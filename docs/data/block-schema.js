@@ -154,12 +154,12 @@ function __rowTypeLower(row) {
   return String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
 }
 
-function __isCoordBreakRow(row) {
+function __isCoordTransRow(row) {
   if (!row || typeof row !== 'object') return false;
   const ot = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
-  if (ot === 'cb' || ot === 'coord break' || ot === 'coordinate break') return true;
+  if (ot === 'ct' || ot === 'coord trans' || ot === 'coordinate transform') return true;
   const st = String(row?.surfType ?? row?.['surface type'] ?? row?.surfaceType ?? '').trim().toLowerCase();
-  return st === 'cb' || st === 'coord break' || st === 'coordinate break' || st === 'coordbreak' || st === 'coordinatebreak';
+  return st === 'ct' || st === 'coord trans' || st === 'coordinate transform' || st === 'coordtrans' || st === 'coordinatetransform';
 }
 
 function __provenanceKey(row) {
@@ -179,7 +179,7 @@ function __captureSemidiaOverridesFromRows(rows, existingOverrides) {
     const row = rows[i];
     if (!row || typeof row !== 'object') continue;
     const t = __rowTypeLower(row);
-    if (t === 'stop' || t === 'image' || __isCoordBreakRow(row)) continue;
+    if (t === 'stop' || t === 'image' || __isCoordTransRow(row)) continue;
     const v = __getRowSemidia(row);
     if (!__semidiaHasValue(v)) continue;
     const pk = __provenanceKey(row);
@@ -201,7 +201,7 @@ function __applySemidiaOverridesToRows(rows, overrides) {
     const row = rows[i];
     if (!row || typeof row !== 'object') continue;
     const t = __rowTypeLower(row);
-    if (t === 'stop' || t === 'image' || __isCoordBreakRow(row)) continue;
+    if (t === 'stop' || t === 'image' || __isCoordTransRow(row)) continue;
     const pk = __provenanceKey(row);
     let v = null;
     if (pk && __semidiaHasValue(overrides[pk])) v = overrides[pk];
@@ -225,7 +225,7 @@ function __captureBlockApertureFromLegacyRows(blocks, legacyRows) {
   for (const row of legacyRows) {
     if (!row || typeof row !== 'object') continue;
     const t = __rowTypeLower(row);
-    if (t === 'stop' || t === 'image' || __isCoordBreakRow(row)) continue;
+    if (t === 'stop' || t === 'image' || __isCoordTransRow(row)) continue;
     const blockId = String(row._blockId ?? '').trim();
     const role = String(row._surfaceRole ?? '').trim();
     if (!blockId || !role) continue;
@@ -434,11 +434,11 @@ export function validateBlocksConfiguration(config) {
     }
 
     const blockType = block.blockType;
-    if (blockType !== 'ObjectPlane' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordBreak' && blockType !== 'Mirror' && blockType !== 'ImagePlane') {
+    if (blockType !== 'ObjectPlane' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordTrans' && blockType !== 'Mirror' && blockType !== 'ImagePlane') {
       issues.push({
         severity: 'fatal',
         phase: 'validate',
-        message: `Unsupported blockType: ${blockType} (MVP supports ObjectPlane, Lens, Doublet, Triplet, Gap, Stop, CoordBreak, Mirror, ImagePlane only).`,
+        message: `Unsupported blockType: ${blockType} (MVP supports ObjectPlane, Lens, Doublet, Triplet, Gap, Stop, CoordTrans, Mirror, ImagePlane only).`,
         blockId: block.blockId
       });
       continue;
@@ -749,8 +749,8 @@ export function validateBlocksConfiguration(config) {
       }
     }
 
-    if (blockType === 'CoordBreak') {
-      // CoordBreak is a non-refractive row that applies a coordinate transform.
+    if (blockType === 'CoordTrans') {
+      // CoordTrans is a non-refractive row that applies a coordinate transform.
       // Mapping to expanded Optical System (ray-tracing.md):
       // semidia->decenterX, material->decenterY, thickness->decenterZ,
       // rindex->tiltX, abbe->tiltY, conic->tiltZ, coef1->order (0/1)
@@ -777,7 +777,7 @@ export function validateBlocksConfiguration(config) {
         const s = String(v ?? '').trim();
         if (s === '') continue;
         if (!isNumericString(s) && !(typeof v === 'number' && Number.isFinite(v))) {
-          issues.push({ severity: 'fatal', phase: 'validate', message: `CoordBreak.${k} must be numeric when provided (got: ${String(v)})`, blockId: block.blockId });
+          issues.push({ severity: 'fatal', phase: 'validate', message: `CoordTrans.${k} must be numeric when provided (got: ${String(v)})`, blockId: block.blockId });
         }
       }
 
@@ -786,7 +786,7 @@ export function validateBlocksConfiguration(config) {
         if (s !== '') {
           const n = (typeof orderRaw === 'number') ? orderRaw : (isNumericString(s) ? Number(s) : NaN);
           if (!Number.isFinite(n) || (n !== 0 && n !== 1)) {
-            issues.push({ severity: 'fatal', phase: 'validate', message: `CoordBreak.order must be 0 or 1 when provided (got: ${String(orderRaw)})`, blockId: block.blockId });
+            issues.push({ severity: 'fatal', phase: 'validate', message: `CoordTrans.order must be 0 or 1 when provided (got: ${String(orderRaw)})`, blockId: block.blockId });
           }
         }
       } catch (_) {}
@@ -1002,29 +1002,29 @@ export function expandBlocksToOpticalSystemRows(blocks) {
 
   const isStopRow = (r) => r && (r['object type'] === 'Stop' || r.object === 'Stop');
 
-  const isCoordBreakRow = (r) => {
+  const isCoordTransRow = (r) => {
     try {
       const st = String(r?.surfType ?? r?.['surf type'] ?? r?.type ?? '').trim().toLowerCase();
-      return st === 'coord break' || st === 'coordinate break' || st === 'cb';
+      return st === 'coord trans' || st === 'coordinate transform' || st === 'ct';
     } catch (_) {
       return false;
     }
   };
 
   // For semidia inheritance, skip Stop and Coord Break rows so their special fields
-  // (Stop.semiDiameter / CoordBreak decenterX) do not "bleed" into following surfaces.
+  // (Stop.semiDiameter / CoordTrans decenterX) do not "bleed" into following surfaces.
   const getLastNonStopRow = () => {
     for (let i = rows.length - 1; i >= 0; i--) {
-      if (!isStopRow(rows[i]) && !isCoordBreakRow(rows[i])) return rows[i];
+      if (!isStopRow(rows[i]) && !isCoordTransRow(rows[i])) return rows[i];
     }
     return rows[0];
   };
 
   // Gap blocks attach thickness/material to the previous surface row.
   // Coord Break rows reuse thickness/material for decenter parameters, so we store gap spacing separately.
-  const getLastNonCoordBreakRow = () => {
+  const getLastNonCoordTransRow = () => {
     for (let i = rows.length - 1; i >= 0; i--) {
-      if (!isCoordBreakRow(rows[i])) return rows[i];
+      if (!isCoordTransRow(rows[i])) return rows[i];
     }
     return rows[0];
   };
@@ -1221,12 +1221,12 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       continue;
     }
 
-    if (type === 'CoordBreak') {
+    if (type === 'CoordTrans') {
       const cb = createBlankSurfaceRow(rows.length, getLastNonStopRow());
 
-      cb._blockType = 'CoordBreak';
+      cb._blockType = 'CoordTrans';
       cb._blockId = blockId || null;
-      cb._surfaceRole = 'cb';
+      cb._surfaceRole = 'ct';
 
       cb.surfType = 'Coord Break';
       cb.radius = 'INF';
@@ -1239,7 +1239,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const tiltZ = getParamOrVarValue(params, vars, 'tiltZ');
       const order = getParamOrVarValue(params, vars, 'order');
 
-      // Also store explicit CoordBreak params to avoid collisions with reused table fields.
+      // Also store explicit CoordTrans params to avoid collisions with reused table fields.
       // (Rendering / ray-tracing prefer these when present.)
       cb.decenterX = (typeof decenterX === 'number') ? decenterX : (isNumericString(String(decenterX ?? '').trim()) ? Number(decenterX) : 0);
       cb.decenterY = (typeof decenterY === 'number') ? decenterY : (isNumericString(String(decenterY ?? '').trim()) ? Number(decenterY) : 0);
@@ -1274,7 +1274,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       // so rendering/ray-tracing can use it for clearance checks after the CB.
       // Store it in a dedicated field so it doesn't overwrite decenterX.
       try {
-        const prev = getLastNonCoordBreakRow();
+        const prev = getLastNonCoordTransRow();
         if (prev && prev.semidia !== undefined && prev.semidia !== null && String(prev.semidia).trim() !== '') {
           cb.__cooptActualSemidia = prev.semidia;
         }
@@ -1586,7 +1586,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const matKey = mat.replace(/\s+/g, '').toUpperCase();
       const gapMaterial = (mat === '' || matKey === 'AIR') ? 'AIR' : mat;
 
-      if (prev && isCoordBreakRow(prev)) {
+      if (prev && isCoordTransRow(prev)) {
         // Coord Break rows reuse thickness/material for decenter parameters;
         // store gap spacing separately to avoid clobbering CB fields.
         prev.__cooptGapThickness = signedThickness;
@@ -1687,7 +1687,7 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows) {
     return { blocks, issues };
   }
 
-  const legacyRows = rows.filter(r => !__isCoordBreakRow(r));
+  const legacyRows = rows.filter(r => !__isCoordTransRow(r));
   if (legacyRows.length !== rows.length) {
     issues.push({ severity: 'warning', phase: 'validate', message: 'Coord Break rows are excluded from legacy-to-blocks conversion.' });
   }
@@ -2198,7 +2198,7 @@ export function expandBlocksIntoConfiguration(config) {
       for (const lr of legacyRows) {
         if (!lr || typeof lr !== 'object') continue;
         const t = __rowTypeLower(lr);
-        if (t === 'stop' || t === 'image' || __isCoordBreakRow(lr)) continue;
+        if (t === 'stop' || t === 'image' || __isCoordTransRow(lr)) continue;
         const pk = __provenanceKey(lr);
         if (!pk) continue;
         const v = __getRowSemidia(lr);
@@ -2209,7 +2209,7 @@ export function expandBlocksIntoConfiguration(config) {
       for (const er of expanded.rows) {
         if (!er || typeof er !== 'object') continue;
         const t = __rowTypeLower(er);
-        if (t === 'stop' || t === 'image' || __isCoordBreakRow(er)) continue;
+        if (t === 'stop' || t === 'image' || __isCoordTransRow(er)) continue;
         const pk = __provenanceKey(er);
         if (!pk) continue;
         if (legacyByProv.has(pk)) er.semidia = legacyByProv.get(pk);

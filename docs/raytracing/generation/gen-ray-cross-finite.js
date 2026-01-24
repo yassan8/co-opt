@@ -14,9 +14,9 @@
 
 import { traceRay, calculateSurfaceOrigins, asphericSag } from '../core/ray-tracing.js';
 
-function isCoordBreakRow(row) {
+function isCoordTransRow(row) {
     const st = String(row?.surfType ?? row?.['surf type'] ?? '').toLowerCase();
-    return st === 'coord break' || st === 'coordinate break' || st === 'cb';
+    return st === 'coord trans' || st === 'coordinate transform' || st === 'ct';
 }
 
 function isObjectRow(row) {
@@ -38,7 +38,7 @@ function getRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
     let count = 0;
     for (let i = 0; i <= sIdx; i++) {
         const row = opticalSystemRows[i];
-        if (isCoordBreakRow(row)) continue;
+        if (isCoordTransRow(row)) continue;
         if (isObjectRow(row)) continue;
         count++;
     }
