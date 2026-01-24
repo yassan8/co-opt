@@ -2906,7 +2906,7 @@ export class OpticalPathDifferenceCalculator {
             }
             
             // Check if reference sphere is degenerate (radius too small or infinite)
-            const MIN_RADIUS = 0.1; // mm - minimum acceptable radius
+            const MIN_RADIUS = 1e-6; // mm - minimum acceptable radius (essentially non-zero)
             const MAX_RADIUS = 1e6; // mm - maximum acceptable radius
             
             let referenceSphereCenter;
@@ -2978,13 +2978,28 @@ export class OpticalPathDifferenceCalculator {
             let opd, spherePathDifference, referenceOpticalPathCorrected;
             
             if (useSimplifiedMode) {
-                // Simplified mode: direct optical path difference at image plane
-                // No geometric correction needed when reference is at image plane
-                opd = marginalOpticalPath - this.referenceOpticalPath;
-                spherePathDifference = 0; // mm - no sphere correction in this mode
+                // Simplified mode: image plane reference with geometric correction
+                // Even without a reference sphere, we need to correct for position differences
+                // on the image plane. Use chief ray image point as reference.
+                
+                // Calculate distance from marginal image point to chief image point
+                const dx = marginalImagePoint.x - chiefImagePoint.x;
+                const dy = marginalImagePoint.y - chiefImagePoint.y;
+                const dz = marginalImagePoint.z - chiefImagePoint.z;
+                const imagePlaneDistance = Math.sqrt(dx*dx + dy*dy + dz*dz); // mm
+                
+                // Geometric correction: subtract the straight-line distance on image plane
+                const geometricCorrection = imagePlaneDistance * nImg * 1000; // mm to μm
+                
+                // OPD = optical path difference - geometric distance difference
+                opd = (marginalOpticalPath - this.referenceOpticalPath) - geometricCorrection;
+                spherePathDifference = imagePlaneDistance; // mm
                 referenceOpticalPathCorrected = this.referenceOpticalPath;
                 
-                console.log(`📌 像面基準モード: OPD = ${opd.toFixed(6)} μm (直接光路差)`);
+                console.log(`📌 像面基準モード: 
+  光路差: ${(marginalOpticalPath - this.referenceOpticalPath).toFixed(3)} μm
+  幾何補正: ${geometricCorrection.toFixed(3)} μm
+  OPD: ${opd.toFixed(6)} μm`);
             } else {
                 // Standard mode: OPD calculation based on reference sphere
                 // OPD = (marginal optical path - marginal geometric distance to sphere)
