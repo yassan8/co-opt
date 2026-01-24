@@ -157,7 +157,7 @@ function __rowTypeLower(row) {
 function __isCoordTransRow(row) {
   if (!row || typeof row !== 'object') return false;
   const ot = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
-  if (ot === 'ct' || ot === 'coord trans' || ot === 'coordinate transform') return true;
+  if (ot === 'ct' || ot === 'coord trans' || ot === 'coordinate transform' || ot === 'coordtrans' || ot === 'coordinatetransform') return true;
   const st = String(row?.surfType ?? row?.['surface type'] ?? row?.surfaceType ?? '').trim().toLowerCase();
   return st === 'ct' || st === 'coord trans' || st === 'coordinate transform' || st === 'coordtrans' || st === 'coordinatetransform';
 }
@@ -1005,13 +1005,13 @@ export function expandBlocksToOpticalSystemRows(blocks) {
   const isCoordTransRow = (r) => {
     try {
       const st = String(r?.surfType ?? r?.['surf type'] ?? r?.type ?? '').trim().toLowerCase();
-      return st === 'coord trans' || st === 'coordinate transform' || st === 'ct';
+      return st === 'coord trans' || st === 'coordinate transform' || st === 'ct' || st === 'coordtrans' || st === 'coordinatetransform';
     } catch (_) {
       return false;
     }
   };
 
-  // For semidia inheritance, skip Stop and Coord Break rows so their special fields
+  // For semidia inheritance, skip Stop and Coord Trans rows so their special fields
   // (Stop.semiDiameter / CoordTrans decenterX) do not "bleed" into following surfaces.
   const getLastNonStopRow = () => {
     for (let i = rows.length - 1; i >= 0; i--) {
@@ -1021,7 +1021,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
   };
 
   // Gap blocks attach thickness/material to the previous surface row.
-  // Coord Break rows reuse thickness/material for decenter parameters, so we store gap spacing separately.
+  // Coord Trans rows reuse thickness/material for decenter parameters, so we store gap spacing separately.
   const getLastNonCoordTransRow = () => {
     for (let i = rows.length - 1; i >= 0; i--) {
       if (!isCoordTransRow(rows[i])) return rows[i];
@@ -1228,7 +1228,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       cb._blockId = blockId || null;
       cb._surfaceRole = 'ct';
 
-      cb.surfType = 'Coord Break';
+      cb.surfType = 'Coord Trans';
       cb.radius = 'INF';
 
       const decenterX = getParamOrVarValue(params, vars, 'decenterX');
@@ -1254,7 +1254,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
         return (n === 0 || n === 1) ? n : 1;
       })();
 
-      // Coord Break field reuse (see specification/ray-tracing.md)
+      // Coord Trans field reuse (see specification/ray-tracing.md)
       cb.semidia = normalizeOptionalNumberToRowValue(decenterX);
       cb.material = normalizeOptionalNumberToRowValue(decenterY);
       cb.thickness = (() => {
@@ -1269,9 +1269,9 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       cb.conic = normalizeOptionalNumberToRowValue(tiltZ);
       cb.coef1 = normalizeOptionalNumberToRowValue(order);
 
-      // IMPORTANT: CB rows reuse semidia for decenterX, so their visible semidia column
-      // MUST NOT vignette subsequent rays. Propagate the last non-CB/non-Stop semidia
-      // so rendering/ray-tracing can use it for clearance checks after the CB.
+      // IMPORTANT: CT rows reuse semidia for decenterX, so their visible semidia column
+      // MUST NOT vignette subsequent rays. Propagate the last non-CT/non-Stop semidia
+      // so rendering/ray-tracing can use it for clearance checks after the CT.
       // Store it in a dedicated field so it doesn't overwrite decenterX.
       try {
         const prev = getLastNonCoordTransRow();
@@ -1587,8 +1587,8 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const gapMaterial = (mat === '' || matKey === 'AIR') ? 'AIR' : mat;
 
       if (prev && isCoordTransRow(prev)) {
-        // Coord Break rows reuse thickness/material for decenter parameters;
-        // store gap spacing separately to avoid clobbering CB fields.
+        // Coord Trans rows reuse thickness/material for decenter parameters;
+        // store gap spacing separately to avoid clobbering CT fields.
         prev.__cooptGapThickness = signedThickness;
         prev.__cooptGapMaterial = gapMaterial;
         prev.__cooptGapApplied = true;
@@ -1689,7 +1689,7 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows) {
 
   const legacyRows = rows.filter(r => !__isCoordTransRow(r));
   if (legacyRows.length !== rows.length) {
-    issues.push({ severity: 'warning', phase: 'validate', message: 'Coord Break rows are excluded from legacy-to-blocks conversion.' });
+    issues.push({ severity: 'warning', phase: 'validate', message: 'Coord Trans rows are excluded from legacy-to-blocks conversion.' });
   }
   if (legacyRows.length < 2) {
     issues.push({ severity: 'fatal', phase: 'validate', message: 'opticalSystem rows must contain at least Object and Image rows after filtering.' });

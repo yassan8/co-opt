@@ -2,6 +2,8 @@
 
 # Editor / tooling
 .vscode/
+co-opt_1.9.6.code-workspace
+co-opt_1.9.6.code-workspace.json
 
 # Node
 node_modules/

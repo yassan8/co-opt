@@ -5,7 +5,7 @@
  */
 
 import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.js';
-import { getOpticalSystemRows } from '../../utils/data-utils.js';
+import { getOpticalSystemRows } from './utils/data-utils.js';
 
 // Zernike Noll index names (0-37)
 const ZERNIKE_NOLL_NAMES = [
@@ -495,10 +495,6 @@ class SystemRequirementsEditor {
       const cfgSel = document.createElement('select');
       cfgSel.style.width = '100%';
       cfgSel.style.fontSize = '12px';
-      cfgSel.style.height = '24px';
-      cfgSel.style.lineHeight = '24px';
-      cfgSel.style.padding = '2px 4px';
-      cfgSel.style.boxSizing = 'border-box';
       cfgSel.addEventListener('focus', onCellFocus);
       cfgSel.addEventListener('blur', onCellBlur);
       const cfgValues = this.getConfigurationList();
@@ -509,22 +505,6 @@ class SystemRequirementsEditor {
         cfgSel.appendChild(opt);
       }
       cfgSel.value = (row.configId === undefined || row.configId === null) ? '' : String(row.configId);
-      const populateObjectSelect = (selectEl, cfgId) => {
-        if (!selectEl) return;
-        const prev = selectEl.value;
-        const objects = this._getObjectOptions(cfgId);
-        while (selectEl.firstChild) selectEl.removeChild(selectEl.firstChild);
-        for (const opt of objects) {
-          const el = document.createElement('option');
-          el.value = opt.value;
-          el.textContent = opt.label;
-          selectEl.appendChild(el);
-        }
-        if (prev !== undefined && prev !== null && prev !== '') {
-          selectEl.value = prev;
-        }
-      };
-
       cfgSel.addEventListener('change', () => {
         row.configId = cfgSel.value;
         this.saveToStorage();
@@ -538,12 +518,6 @@ class SystemRequirementsEditor {
             if (p2Input && dlId) p2Input.setAttribute('list', dlId);
           }
         } catch (_) {}
-        // Refresh Object idx dropdowns for this row
-        try {
-          const objSelects = tr.querySelectorAll('select[data-is-object-param="1"]');
-          for (const sel of objSelects) populateObjectSelect(sel, row.configId);
-        } catch (_) {}
-
         this.scheduleEvaluateAndUpdate();
       });
       tdCfg.appendChild(cfgSel);
@@ -695,8 +669,7 @@ class SystemRequirementsEditor {
           control.style.lineHeight = '24px';
           control.style.padding = '2px 4px';
           control.style.boxSizing = 'border-box';
-          control.dataset.isObjectParam = '1';
-          const objects = this._getObjectOptions(row?.configId);
+          const objects = this._getObjectOptions();
           for (const opt of objects) {
             const el = document.createElement('option');
             el.value = opt.value;
@@ -720,17 +693,6 @@ class SystemRequirementsEditor {
         
         control.dataset.role = field;
         control.addEventListener('focus', onCellFocus);
-        if (field === 'param2') {
-          control.addEventListener('focus', () => {
-            try {
-              if (String(row?.operand ?? '').trim() === 'EFL' && control.tagName === 'INPUT') {
-                const blocks = this._getBlocksForConfigHint(row?.configId);
-                const dlId = ensureEflBlocksDatalist(blocks);
-                if (dlId) control.setAttribute('list', dlId);
-              }
-            } catch (_) {}
-          });
-        }
         
         if (control.tagName === 'SELECT') {
           control.addEventListener('change', () => {
@@ -823,15 +785,20 @@ class SystemRequirementsEditor {
         const field = `param${i}`;
         const paramDef = paramDefs[i - 1];
         const container = document.createElement('div');
-        container.className = 'param-input-container';
         container.style.flex = i === 2 ? '1.2' : '1';
         container.style.display = i <= paramCount ? '' : 'none';
         
-        // Label (always reserve height for alignment)
-        const label = document.createElement('div');
-        label.className = 'param-input-label';
-        label.textContent = (paramDef && paramDef.label) ? paramDef.label : '';
-        container.appendChild(label);
+        // Label
+        if (paramDef && paramDef.label) {
+          const label = document.createElement('div');
+          label.textContent = paramDef.label;
+          label.style.fontSize = '9px';
+          label.style.color = '#888';
+          label.style.height = '12px';
+          label.style.lineHeight = '12px';
+          label.style.marginBottom = '1px';
+          container.appendChild(label);
+        }
         
         const { td: _, input: control } = mkInput(field, i === 2 ? widths.param2 : widths.param, '', paramDef);
         control.style.width = '100%';
@@ -954,31 +921,10 @@ class SystemRequirementsEditor {
 
     this._renderRow = renderRow;
 
-    table.classList.toggle('sr-params-expanded', this._paramsExpanded);
     table.appendChild(thead);
     table.appendChild(tbody);
     wrap.appendChild(table);
     container.appendChild(wrap);
-
-    const applyParamsExpandedLayout = () => {
-      if (!this._tbody) return;
-      const expanded = !!this._paramsExpanded;
-      const rows = this._tbody.querySelectorAll('tr');
-      for (const row of rows) {
-        const cells = row.querySelectorAll('td');
-        for (const td of cells) {
-          if (expanded) {
-            td.style.paddingTop = '12px';
-            td.style.paddingBottom = '3px';
-            td.style.verticalAlign = 'top';
-          } else {
-            td.style.paddingTop = '3px';
-            td.style.paddingBottom = '3px';
-            td.style.verticalAlign = 'middle';
-          }
-        }
-      }
-    };
 
     // Parameter toggle functionality
     if (toggleBtn) {
@@ -987,8 +933,6 @@ class SystemRequirementsEditor {
         this._paramsExpanded = !this._paramsExpanded;
         toggleBtn.textContent = this._paramsExpanded ? '▼' : '▶';
         toggleBtn.setAttribute('aria-expanded', this._paramsExpanded ? 'true' : 'false');
-        table.classList.toggle('sr-params-expanded', this._paramsExpanded);
-        applyParamsExpandedLayout();
         
         // Toggle all parameter containers
         const allParamContainers = this._tbody.querySelectorAll('[data-role="params-container"]');
@@ -1005,7 +949,6 @@ class SystemRequirementsEditor {
 
     // Initial render
     this._renderBody(makeSpecSummary, rationalePreview, ensureEflBlocksDatalist);
-    applyParamsExpandedLayout();
   }
 
   _getWavelengthOptions() {
@@ -1042,19 +985,17 @@ class SystemRequirementsEditor {
     }
   }
 
-  _getObjectOptions(configId = null) {
+  _getObjectOptions() {
     try {
       // Try to get from active config first
       let objectRows = null;
       try {
         const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
         const activeId = systemConfig?.activeConfigId;
-        const desiredId = (configId !== undefined && configId !== null && String(configId).trim() !== '')
-          ? String(configId)
-          : String(activeId ?? '');
-        const cfgList = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
-        const activeConfig = cfgList.find(c => String(c?.id ?? '') === desiredId);
-        if (activeConfig && Array.isArray(activeConfig.object)) objectRows = activeConfig.object;
+        const activeConfig = systemConfig?.configurations?.find(c => c.id === activeId);
+        if (activeConfig && Array.isArray(activeConfig.object)) {
+          objectRows = activeConfig.object;
+        }
       } catch (_) {}
       
       // Fallback to objectTableData
@@ -1063,33 +1004,12 @@ class SystemRequirementsEditor {
       }
       
       const options = [{ value: '', label: '(default 1)' }];
-
-      const fmtNum = (value) => {
-        const n = Number(value);
-        if (!Number.isFinite(n)) return null;
-        const abs = Math.abs(n);
-        let s = (abs >= 1000 || (abs > 0 && abs < 1e-3)) ? n.toExponential(3) : n.toFixed(4);
-        s = s.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
-        return s;
-      };
-
-      const buildObjectLabel = (row, idx) => {
-        if (!row || typeof row !== 'object') return `${idx + 1}`;
-
-        const xRaw = row?.xHeightAngle ?? row?.xHeight ?? row?.x ?? row?.X ?? 0;
-        const yRaw = row?.yHeightAngle ?? row?.yHeight ?? row?.y ?? row?.Y ?? 0;
-        const xStr = fmtNum(xRaw);
-        const yStr = fmtNum(yRaw);
-
-        const xText = (xStr !== null) ? xStr : '0';
-        const yText = (yStr !== null) ? yStr : '0';
-
-        return `${idx + 1}: x=${xText}, y=${yText}`;
-      };
-
+      
       if (Array.isArray(objectRows) && objectRows.length > 0) {
         objectRows.forEach((row, idx) => {
-          const label = buildObjectLabel(row, idx);
+          const y = row?.y || 0;
+          const angle = row?.angle || 0;
+          const label = `${idx + 1}: y=${y}, angle=${angle}°`;
           options.push({ value: String(idx + 1), label });
         });
       }
@@ -1212,7 +1132,7 @@ class SystemRequirementsEditor {
         const t1c = compact(t1);
         const t2c = compact(t2);
         const isCb = (v) => v === 'ct' || v === 'coordtrans' || v === 'coordinatebreak';
-        return isCb(stc) || isCb(t1c) || isCb(t2c) || st === 'coord trans' || st === 'coordinate transform' || t1 === 'coord trans' || t1 === 'coordinate transform' || t2 === 'coord trans' || t2 === 'coordinate transform';
+        return isCb(stc) || isCb(t1c) || isCb(t2c) || st === 'coord break' || st === 'coordinate break' || t1 === 'coord break' || t1 === 'coordinate break' || t2 === 'coord break' || t2 === 'coordinate break';
       };
 
       const imageIdx = (() => {

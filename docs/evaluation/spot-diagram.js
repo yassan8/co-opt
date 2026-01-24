@@ -333,7 +333,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                         : '';
                     const n = norm(t);
                     const c = compact(t);
-                    return n === 'cb' || n === 'coord break' || n === 'coordinate break' || c === 'coordbreak' || c === 'coordinatebreak';
+                    return n === 'ct' || n === 'coord trans' || n === 'coordinate break' || c === 'coordtrans' || c === 'coordinatebreak';
                 });
             } catch (_) {
                 return false;
@@ -962,7 +962,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                 };
             });
 
-            const coordBreakSummaries = (() => {
+            const coordTransSummaries = (() => {
                 try {
                     const norm = (v) => String(v ?? '').trim().toLowerCase();
                     const compact = (v) => norm(v).replace(/\s+/g, '');
@@ -972,7 +972,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                             : '';
                         const n = norm(t);
                         const c = compact(t);
-                        return n === 'cb' || n === 'coord break' || n === 'coordinate break' || c === 'coordbreak' || c === 'coordinatebreak';
+                        return n === 'ct' || n === 'coord trans' || n === 'coordinate break' || c === 'coordtrans' || c === 'coordinatebreak';
                     };
 
                     const sd = calculateSurfaceOrigins(opticalSystemRows);
@@ -1014,7 +1014,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                     totalRays,
                     totalSuccessfulRays,
                     objects: objDiag,
-                    coordBreakSummaries
+                    coordTransSummaries
                 };
             }
 
@@ -1099,7 +1099,7 @@ function __spot_isSkippableRayPathRow(row) {
     if (ot === 'object') return true;
     // Coord Break rows are transforms only; traceRay() does not record hit points for them.
     const st = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
-    if (st === 'coord break' || st === 'coordbreak' || st === 'cb') return true;
+    if (st === 'coord trans' || st === 'coordtrans' || st === 'ct') return true;
     return false;
 }
 
@@ -2972,15 +2972,15 @@ export function generateSurfaceOptions(opticalSystemRows) {
 
     const normalizeType = (v) => String(v ?? '').trim().toLowerCase();
     const compactType = (v) => normalizeType(v).replace(/[\s_-]+/g, '');
-    const isCoordBreakType = (v) => {
+    const isCoordTransType = (v) => {
         const n = normalizeType(v);
         const c = compactType(v);
         return (
-            n === 'cb' ||
-            n === 'coord break' ||
+            n === 'ct' ||
+            n === 'coord trans' ||
             n === 'coordinate break' ||
-            c === 'cb' ||
-            c === 'coordbreak' ||
+            c === 'ct' ||
+            c === 'coordtrans' ||
             c === 'coordinatebreak'
         );
     };
@@ -3030,7 +3030,7 @@ export function generateSurfaceOptions(opticalSystemRows) {
         surfaceId++;
 
         // CB surfaces are not selectable, but they DO count in the numbering.
-        if (isCoordBreakType(objTypeRaw) || isCoordBreakType(surfTypeRaw) || isCoordBreakType(surfaceType)) {
+        if (isCoordTransType(objTypeRaw) || isCoordTransType(surfTypeRaw) || isCoordTransType(surfaceType)) {
             continue;
         }
         const rowId = (surfaceData && surfaceData.id !== undefined && surfaceData.id !== null)

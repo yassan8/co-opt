@@ -303,13 +303,13 @@ function surfaceIndexToRayPathPointIndex(rows, surfaceIndex) {
         const compact = (v) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, '');
 
         const isObject = (nObj === 'object' || compact(nObj) === 'object') || (nSurf === 'object' || compact(nSurf) === 'object');
-        const isCoordBreak =
+        const isCoordTrans =
             nObj === 'coord break' || nObj === 'coordinate break' || nObj === 'cb' ||
             compact(nObj) === 'coordtrans' || compact(nObj) === 'coordinatebreak' ||
             nSurf === 'coord break' || nSurf === 'coordinate break' || nSurf === 'cb' ||
             compact(nSurf) === 'coordtrans' || compact(nSurf) === 'coordinatebreak';
 
-        if (isObject || isCoordBreak) continue;
+        if (isObject || isCoordTrans) continue;
         pointIndex++;
     }
     return pointIndex;

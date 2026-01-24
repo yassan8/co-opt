@@ -1050,6 +1050,250 @@ function setupShareUrlButton() {
     });
 }
 
+/**
+ * Auto-calculate missing semidia values using chief ray tracing (similar to Zemax import behavior)
+ * @param {Array} sourceRows - Source wavelength data
+ * @param {Array} objectRows - Object field data
+ */
+async function autoCalculateMissingSemidia(sourceRows, objectRows) {
+    console.log('🎯 [AutoSemidia] Starting auto-calculation of missing semidia values');
+    
+    // Get current optical system data from table
+    const opticalSystemRows = (typeof window.getOpticalSystemRows === 'function')
+        ? window.getOpticalSystemRows(window.tableOpticalSystem)
+        : (window.tableOpticalSystem ? window.tableOpticalSystem.getData() : []);
+    
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+        console.log('⚠️ [AutoSemidia] No optical system data available');
+        return;
+    }
+
+    console.log(`🔍 [AutoSemidia] Checking ${opticalSystemRows.length} surfaces for missing semidia`);
+
+    // Find surfaces with missing or empty semidia
+    const surfacesNeedingSemidia = [];
+    for (let i = 0; i < opticalSystemRows.length; i++) {
+        const row = opticalSystemRows[i];
+        if (!row) continue;
+        
+        const semidiaValue = String(row.semidia || '').trim();
+        const isObject = row['object type'] === 'Object' || row.object === 'Object';
+        const isImage = row['object type'] === 'Image' || row.object === 'Image';
+        
+        // Skip Object surface, but calculate for Image and other surfaces with missing semidia
+        if (!isObject && semidiaValue === '') {
+            surfacesNeedingSemidia.push(i);
+            console.log(`  📍 Surface ${i} (${row['object type'] || row.object || 'Surface'}): semidia = "${semidiaValue}" (empty)`);
+        }
+    }
+
+    if (surfacesNeedingSemidia.length === 0) {
+        console.log('✅ [AutoSemidia] All surfaces have semidia values');
+        return;
+    }
+
+    console.log(`🎯 [AutoSemidia] Found ${surfacesNeedingSemidia.length} surfaces with missing semidia:`, surfacesNeedingSemidia);
+
+    // Get primary wavelength
+    const primaryWavelength = (() => {
+        if (!Array.isArray(sourceRows) || sourceRows.length === 0) return 0.5876;
+        const primary = sourceRows.find(s => s && (s.primary === 'Primary Wavelength' || s.primary));
+        if (primary && Number.isFinite(Number(primary.wavelength))) return Number(primary.wavelength);
+        if (sourceRows[0] && Number.isFinite(Number(sourceRows[0].wavelength))) return Number(sourceRows[0].wavelength);
+        return 0.5876;
+    })();
+
+    console.log(`🌈 [AutoSemidia] Using wavelength: ${primaryWavelength} μm`);
+
+    // Get object positions
+    const allObjectPositions = Array.isArray(objectRows) && objectRows.length > 0
+        ? objectRows.map(obj => ({
+            x: parseFloat(obj.xHeightAngle) || 0,
+            y: parseFloat(obj.yHeightAngle) || 0,
+            z: 0
+        }))
+        : [{ x: 0, y: 0, z: 0 }];
+
+    // Determine if system is infinite or finite
+    const objectSurface = opticalSystemRows[0];
+    const objectThickness = objectSurface?.thickness;
+    const isInfiniteSystem = objectThickness === 'INF' || objectThickness === 'Infinity' || objectThickness === Infinity;
+
+    console.log(`🔍 [AutoSemidia] System type: ${isInfiniteSystem ? 'Infinite' : 'Finite'}`);
+
+    // Trace chief rays once for all surfaces
+    let crossBeamResult;
+    try {
+        if (isInfiniteSystem) {
+            // For infinite system, use normalized thickness
+            const tracingRows = opticalSystemRows.map((r, idx) => {
+                if (idx !== 0) return r;
+                const o = (r && typeof r === 'object') ? r : {};
+                return { ...o, thickness: 0 };
+            });
+            const objectAngles = allObjectPositions.map(pos => ({ x: pos.x || 0, y: pos.y || 0 }));
+            
+            crossBeamResult = await window.generateInfiniteSystemCrossBeam(tracingRows, objectAngles, {
+                rayCount: 1,  // Chief ray only
+                debugMode: false,
+                wavelength: primaryWavelength,
+                crossType: 'both',
+                angleUnit: 'deg',
+                chiefZ: -20
+            });
+        } else {
+            crossBeamResult = await window.generateCrossBeam(opticalSystemRows, allObjectPositions, {
+                rayCount: 1,  // Chief ray only
+                debugMode: false,
+                wavelength: primaryWavelength,
+                crossType: 'both'
+            });
+        }
+    } catch (e) {
+        console.warn('⚠️ [AutoSemidia] Failed to trace rays:', e);
+        return;
+    }
+
+    // Extract rays from result
+    let rays = [];
+    if (crossBeamResult) {
+        if (crossBeamResult.rays && crossBeamResult.rays.length > 0) {
+            rays = crossBeamResult.rays;
+        } else if (crossBeamResult.allTracedRays && Array.isArray(crossBeamResult.allTracedRays)) {
+            rays = crossBeamResult.allTracedRays;
+        } else if (crossBeamResult.objectResults && crossBeamResult.objectResults.length > 0) {
+            crossBeamResult.objectResults.forEach(obj => {
+                const traced = Array.isArray(obj?.tracedRays) ? obj.tracedRays : [];
+                for (const r of traced) {
+                    if (r && r.rayPath) rays.push(r);
+                }
+            });
+        }
+    }
+
+    if (rays.length === 0) {
+        console.warn('⚠️ [AutoSemidia] No rays traced');
+        return;
+    }
+
+    console.log(`🔍 [AutoSemidia] Traced ${rays.length} chief rays successfully`);
+
+    // Helper functions for ray path indexing
+    const __isCoordTransRow = (row) => {
+        const st = String(row?.surfType ?? row?.['surf type'] ?? '').trim().toLowerCase();
+        return st === 'coord trans' || st === 'coordinate break' || st === 'ct' || st === 'coordtrans';
+    };
+    const __isObjectRow = (row) => {
+        const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+        return t === 'object';
+    };
+    const __rayPathPointIndexForSurfaceIndex = (rows, surfaceIndex0) => {
+        if (!Array.isArray(rows)) return null;
+        const sIdx = Number(surfaceIndex0);
+        if (!Number.isInteger(sIdx) || sIdx < 0 || sIdx >= rows.length) return null;
+        const row = rows[sIdx];
+        if (__isObjectRow(row) || __isCoordTransRow(row)) return null;
+        let count = 0;
+        for (let i = 0; i <= sIdx; i++) {
+            const r = rows[i];
+            if (__isObjectRow(r) || __isCoordTransRow(r)) continue;
+            count++;
+        }
+        return count > 0 ? count : null;
+    };
+
+    // Calculate semidia for each surface that needs it
+    for (const surfaceIndex of surfacesNeedingSemidia) {
+        try {
+            const rayPathIndex = __rayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex);
+            if (rayPathIndex === null) {
+                console.warn(`⚠️ [AutoSemidia] Cannot determine ray path index for surface ${surfaceIndex}`);
+                continue;
+            }
+
+            let maxHeight = 0;
+            let validPointsFound = 0;
+
+            rays.forEach((ray) => {
+                if (ray.rayPath && Array.isArray(ray.rayPath) && ray.rayPath.length > rayPathIndex) {
+                    const point = ray.rayPath[rayPathIndex];
+                    if (point && isFinite(point.x) && isFinite(point.y)) {
+                        validPointsFound++;
+                        const height = Math.sqrt(point.x * point.x + point.y * point.y);
+                        if (height > maxHeight) {
+                            maxHeight = height;
+                        }
+                    }
+                }
+            });
+
+            if (validPointsFound > 0 && maxHeight > 0) {
+                const calculatedSemidia = maxHeight;
+                
+                console.log(`✅ [AutoSemidia] Surface ${surfaceIndex}: calculated semidia = ${calculatedSemidia.toFixed(3)} mm (from ${validPointsFound} chief rays)`);
+                
+                // Update the optical system row
+                opticalSystemRows[surfaceIndex].semidia = calculatedSemidia;
+                
+                // Save to table immediately
+                try {
+                    if (window.tableOpticalSystem && typeof window.tableOpticalSystem.updateData === 'function') {
+                        // Use updateData to update the specific row
+                        window.tableOpticalSystem.updateData([{
+                            id: opticalSystemRows[surfaceIndex].id,
+                            semidia: calculatedSemidia
+                        }]);
+                        console.log(`  💾 Updated table row ${opticalSystemRows[surfaceIndex].id}`);
+                    }
+                } catch (e) {
+                    console.warn(`⚠️ [AutoSemidia] Failed to update table for surface ${surfaceIndex}:`, e);
+                }
+
+                // Also update in configurations if blocks are present
+                try {
+                    if (typeof loadSystemConfigurations === 'function' && typeof saveSystemConfigurations === 'function') {
+                        const systemConfig = loadSystemConfigurations();
+                        const activeId = systemConfig?.activeConfigId;
+                        const cfgIdx = Array.isArray(systemConfig?.configurations)
+                            ? systemConfig.configurations.findIndex(c => c && c.id === activeId)
+                            : -1;
+                        const activeCfg = cfgIdx >= 0 ? systemConfig.configurations[cfgIdx] : null;
+                        
+                        if (activeCfg && Array.isArray(activeCfg.opticalSystem) && activeCfg.opticalSystem[surfaceIndex]) {
+                            activeCfg.opticalSystem[surfaceIndex].semidia = calculatedSemidia;
+                            
+                            if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') {
+                                activeCfg.metadata = {};
+                            }
+                            activeCfg.metadata.modified = new Date().toISOString();
+                            
+                            saveSystemConfigurations(systemConfig);
+                        }
+                    }
+                } catch (e) {
+                    console.warn(`⚠️ [AutoSemidia] Failed to persist to blocks for surface ${surfaceIndex}:`, e);
+                }
+            } else {
+                console.warn(`⚠️ [AutoSemidia] Could not calculate semidia for surface ${surfaceIndex} (no valid ray intersections)`);
+            }
+        } catch (e) {
+            console.warn(`⚠️ [AutoSemidia] Failed to calculate semidia for surface ${surfaceIndex}:`, e);
+        }
+    }
+
+    // Save updated optical system data to localStorage
+    try {
+        if (typeof saveLensTableData === 'function') {
+            saveLensTableData(opticalSystemRows);
+            console.log('💾 [AutoSemidia] Updated optical system data saved to localStorage');
+        }
+    } catch (e) {
+        console.warn('⚠️ [AutoSemidia] Failed to save updated optical system data:', e);
+    }
+    
+    console.log('✅ [AutoSemidia] Auto-calculation completed');
+}
+
 async function __loadAllDataObjectIntoApp(allData, { filename }) {
     const displayName = filename || 'shared-link.json';
 
@@ -1348,7 +1592,7 @@ async function __loadAllDataObjectIntoApp(allData, { filename }) {
             tasks.push(Promise.resolve(window.systemRequirementsEditor.setData(effectiveSystemRequirements || [])));
         }
 
-        Promise.allSettled(tasks).finally(() => {
+        Promise.allSettled(tasks).finally(async () => {
             try { globalThis.__configurationAutoSaveDisabled = false; } catch (_) {}
             try { updateSurfaceNumberSelect(); } catch (_) {}
             try { if (typeof window.refreshConfigurationUI === 'function') window.refreshConfigurationUI(); } catch (_) {}
@@ -1364,6 +1608,14 @@ async function __loadAllDataObjectIntoApp(allData, { filename }) {
                     popup.postMessage({ action: 'request-redraw' }, '*');
                 }
             } catch (_) {}
+            
+            // Auto-calculate missing semidia values after tables are updated
+            try {
+                await autoCalculateMissingSemidia(effectiveSource, effectiveObject);
+            } catch (e) {
+                console.warn('⚠️ [Load] Failed to auto-calculate semidia:', e);
+            }
+            
             console.log('✅ [Load] UI updated without reload');
         });
     } catch (e) {
@@ -1548,11 +1800,31 @@ function setupImportZemaxButton() {
                     try {
                         const hasObjectPlane = activeCfg.blocks.some(b => b && String(b.blockType ?? '').trim() === 'ObjectPlane');
                         if (!hasObjectPlane) {
+                            // Check if Object surface (rows[0]) has finite or infinite thickness
+                            const objThickness = rows?.[0]?.thickness;
+                            const objThicknessStr = String(objThickness ?? '').trim().toUpperCase();
+                            const isInfiniteObject = objThickness === 'INF' || 
+                                                     objThickness === Infinity || 
+                                                     objThicknessStr === 'INF' || 
+                                                     objThicknessStr === 'INFINITY';
+                            
                             const newId = __blocks_generateUniqueBlockId(activeCfg.blocks, 'ObjectPlane');
                             const objBlock = __blocks_makeDefaultBlock('ObjectPlane', newId);
                             if (objBlock && objBlock.metadata && typeof objBlock.metadata === 'object') {
                                 objBlock.metadata.source = 'zemax-import';
                             }
+                            
+                            // Set objectDistanceMode based on imported thickness
+                            if (isInfiniteObject) {
+                                objBlock.parameters.objectDistanceMode = 'INF';
+                                // objectDistance is not needed for INF mode
+                                delete objBlock.parameters.objectDistance;
+                            } else {
+                                objBlock.parameters.objectDistanceMode = 'Finite';
+                                const numThickness = Number(objThickness);
+                                objBlock.parameters.objectDistance = Number.isFinite(numThickness) && numThickness > 0 ? numThickness : 100;
+                            }
+                            
                             activeCfg.blocks.unshift(objBlock);
                         }
                     } catch (_) {
@@ -1943,6 +2215,94 @@ function setupSuggestOptimizeButtons() {
         <input id="opt-max-iter" type="number" min="1" step="1" value="1000" style="width:100px; padding:4px 6px;" />
     </label>
 </div>
+<details style="margin-bottom:10px; font-size:12px; color:#555;">
+    <summary style="font-weight:600; margin-bottom:6px; cursor:pointer;">Stability Tuning</summary>
+    <div style="display:grid; grid-template-columns: 180px 140px 1fr; gap:6px 10px; align-items:center; margin-top:6px;">
+        <div>stepFraction</div>
+        <input id="opt-step-fraction" type="number" step="0.001" value="0.02" style="width:120px; padding:4px 6px;" />
+        <div>CDの初期ステップ比率（小さくすると安定）</div>
+
+        <div>minStep</div>
+        <input id="opt-min-step" type="number" step="1e-7" value="1e-6" style="width:120px; padding:4px 6px;" />
+        <div>CDの最小ステップ</div>
+
+        <div>stepDecay</div>
+        <input id="opt-step-decay" type="number" step="0.05" value="0.5" style="width:120px; padding:4px 6px;" />
+        <div>CDの失敗時縮小率</div>
+
+        <div>lmLambda0</div>
+        <input id="opt-lm-lambda0" type="number" step="1e-4" value="1e-3" style="width:120px; padding:4px 6px;" />
+        <div>LM初期ダンピング</div>
+
+        <div>lmLambdaUp</div>
+        <input id="opt-lm-lambdaup" type="number" step="1" value="10" style="width:120px; padding:4px 6px;" />
+        <div>LM拒否時の増加係数</div>
+
+        <div>lmLambdaDown</div>
+        <input id="opt-lm-lambdadown" type="number" step="0.05" value="0.3" style="width:120px; padding:4px 6px;" />
+        <div>LM受理時の減少係数</div>
+
+        <div>trustRegion</div>
+        <input id="opt-trust-region" type="checkbox" checked style="width:16px; height:16px;" />
+        <div>信頼領域を有効化</div>
+
+        <div>trustRegionDelta</div>
+        <input id="opt-trust-region-delta" type="number" step="0.01" value="0.05" style="width:120px; padding:4px 6px;" />
+        <div>信頼領域の基本半径</div>
+
+        <div>trustRegionDeltaMax</div>
+        <input id="opt-trust-region-delta-max" type="number" step="0.1" value="1.0" style="width:120px; padding:4px 6px;" />
+        <div>信頼領域の最大半径</div>
+
+        <div>backtracking</div>
+        <input id="opt-backtracking" type="checkbox" checked style="width:16px; height:16px;" />
+        <div>LMのバックトラック探索</div>
+
+        <div>backtrackingMaxTries</div>
+        <input id="opt-backtracking-max-tries" type="number" step="1" value="8" style="width:120px; padding:4px 6px;" />
+        <div>バックトラック試行回数</div>
+
+        <div>fdStepFraction</div>
+        <input id="opt-fd-step-fraction" type="number" step="1e-5" value="1e-4" style="width:120px; padding:4px 6px;" />
+        <div>数値微分の相対ステップ</div>
+
+        <div>fdMinStep</div>
+        <input id="opt-fd-min-step" type="number" step="1e-19" value="1e-18" style="width:120px; padding:4px 6px;" />
+        <div>数値微分の最小ステップ</div>
+
+        <div>fdScaledStep</div>
+        <input id="opt-fd-scaled-step" type="number" step="1e-4" value="1e-3" style="width:120px; padding:4px 6px;" />
+        <div>スケール付き微分ステップ</div>
+
+        <div>staged</div>
+        <input id="opt-staged" type="checkbox" checked style="width:16px; height:16px;" />
+        <div>係数の段階的解放</div>
+
+        <div>stageStallLimit</div>
+        <input id="opt-stage-stall-limit" type="number" step="1" value="2" style="width:120px; padding:4px 6px;" />
+        <div>段階の停滞許容回数</div>
+
+        <div>restartOnRejectStreak</div>
+        <input id="opt-restart-on-reject-streak" type="number" step="1" value="8" style="width:120px; padding:4px 6px;" />
+        <div>連続拒否でリスタート</div>
+
+        <div>restartMaxCount</div>
+        <input id="opt-restart-max-count" type="number" step="1" value="2" style="width:120px; padding:4px 6px;" />
+        <div>リスタートの最大回数</div>
+
+        <div>restartJitterScaled</div>
+        <input id="opt-restart-jitter-scaled" type="number" step="0.005" value="0.035" style="width:120px; padding:4px 6px;" />
+        <div>リスタート時のジッタ量</div>
+
+        <div>lmExploreWhenFlat</div>
+        <input id="opt-lm-explore-when-flat" type="checkbox" style="width:16px; height:16px;" />
+        <div>LMが平坦時に探索を許可</div>
+
+        <div>lmExploreTries</div>
+        <input id="opt-lm-explore-tries" type="number" step="1" value="3" style="width:120px; padding:4px 6px;" />
+        <div>探索ステップ試行回数</div>
+    </div>
+</details>
 <div style="display:flex; gap:10px; flex-direction:column;">
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Phase</span><span id="opt-phase" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Decision</span><span id="opt-decision" style="margin-left:8px;">-</span></div>
@@ -2287,7 +2647,59 @@ function setupSuggestOptimizeButtons() {
                         return n;
                     };
 
+                    const resolveOptParams = () => {
+                        const readNum = (id, fallback) => {
+                            let v = fallback;
+                            try {
+                                if (popup && !popup.closed) {
+                                    const el = popup.document.getElementById(id);
+                                    const n = el ? Number(el.value) : NaN;
+                                    if (Number.isFinite(n)) v = n;
+                                }
+                            } catch (_) {}
+                            return v;
+                        };
+                        const readBool = (id, fallback) => {
+                            let v = fallback;
+                            try {
+                                if (popup && !popup.closed) {
+                                    const el = popup.document.getElementById(id);
+                                    if (el && typeof el.checked === 'boolean') v = !!el.checked;
+                                }
+                            } catch (_) {}
+                            return v;
+                        };
+
+                        const trustRegionDelta = readNum('opt-trust-region-delta', 0.05);
+                        const trustRegionDeltaMax = Math.max(trustRegionDelta, readNum('opt-trust-region-delta-max', 1.0));
+
+                        return {
+                            stepFraction: readNum('opt-step-fraction', 0.02),
+                            minStep: readNum('opt-min-step', 1e-6),
+                            stepDecay: readNum('opt-step-decay', 0.5),
+                            lmLambda0: readNum('opt-lm-lambda0', 1e-3),
+                            lmLambdaUp: readNum('opt-lm-lambdaup', 10),
+                            lmLambdaDown: readNum('opt-lm-lambdadown', 0.3),
+                            trustRegion: readBool('opt-trust-region', true),
+                            trustRegionDelta,
+                            trustRegionDeltaMax,
+                            backtracking: readBool('opt-backtracking', true),
+                            backtrackingMaxTries: Math.max(1, Math.floor(readNum('opt-backtracking-max-tries', 8))),
+                            fdStepFraction: readNum('opt-fd-step-fraction', 1e-4),
+                            fdMinStep: readNum('opt-fd-min-step', 1e-18),
+                            fdScaledStep: readNum('opt-fd-scaled-step', 1e-3),
+                            staged: readBool('opt-staged', true),
+                            stageStallLimit: Math.max(1, Math.floor(readNum('opt-stage-stall-limit', 2))),
+                            restartOnRejectStreak: Math.max(1, Math.floor(readNum('opt-restart-on-reject-streak', 8))),
+                            restartMaxCount: Math.max(0, Math.floor(readNum('opt-restart-max-count', 2))),
+                            restartJitterScaled: Math.max(0, readNum('opt-restart-jitter-scaled', 0.035)),
+                            lmExploreWhenFlat: readBool('opt-lm-explore-when-flat', false),
+                            lmExploreTries: Math.max(1, Math.floor(readNum('opt-lm-explore-tries', 3)))
+                        };
+                    };
+
                     const maxIterations = resolveMaxIterations();
+                    const optParams = resolveOptParams();
 
                     let result = null;
                     try {
@@ -2316,6 +2728,7 @@ function setupSuggestOptimizeButtons() {
                             maxIterations,
                             method: 'lm',
                             stageMaxCoef: [10], // unlock all asphere coef at once
+                            ...optParams,
                             onProgress: updateProgressUI,
                             shouldStop: shouldStopNow
                         });

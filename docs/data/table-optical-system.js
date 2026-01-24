@@ -316,7 +316,7 @@ if (__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) {
 }
 
 // --- Dynamic column header support (surfType-dependent) ---
-// Some UI paths (row/cell selection, surfType edit) call updateCoefTitles()/updateTitlesForCoordBreak().
+// Some UI paths (row/cell selection, surfType edit) call updateCoefTitles()/updateTitlesForCoordTrans().
 // These functions were missing, which made header switching a no-op.
 
 const DEFAULT_COLUMN_TITLES = Object.freeze({
@@ -338,7 +338,7 @@ const DEFAULT_COLUMN_TITLES = Object.freeze({
   coef10: 'Coef10',
 });
 
-const COORDBREAK_COLUMN_TITLES = Object.freeze({
+const COORDTRANS_COLUMN_TITLES = Object.freeze({
   // In this UI, Coord Break reuses these numeric fields to store decenter/tilt.
   semidia: 'Decenter X',
   material: 'Decenter Y',
@@ -416,9 +416,9 @@ function setTabulatorColumnTitle(field, title) {
   return false;
 }
 
-function updateTitlesForCoordBreak(enabled) {
-  const isCoordBreak = !!enabled;
-  const titles = isCoordBreak ? COORDBREAK_COLUMN_TITLES : DEFAULT_COLUMN_TITLES;
+function updateTitlesForCoordTrans(enabled) {
+  const isCoordTrans = !!enabled;
+  const titles = isCoordTrans ? COORDTRANS_COLUMN_TITLES : DEFAULT_COLUMN_TITLES;
 
   // Only touch the columns whose semantics change.
   setTabulatorColumnTitle('semidia', titles.semidia);
@@ -428,7 +428,7 @@ function updateTitlesForCoordBreak(enabled) {
   setTabulatorColumnTitle('abbe', titles.abbe);
   setTabulatorColumnTitle('conic', titles.conic);
 
-  // Keep coef1 consistent if caller doesn't also invoke updateCoefTitles('coordbreak').
+  // Keep coef1 consistent if caller doesn't also invoke updateCoefTitles('coordtrans').
   setTabulatorColumnTitle('coef1', titles.coef1);
 }
 
@@ -447,9 +447,9 @@ function updateCoefTitles(mode) {
     for (let i = 1; i <= 10; i++) {
       titles[`coef${i}`] = `A${2 * i + 1}`;
     }
-  } else if (m === 'coordbreak') {
+  } else if (m === 'coordtrans') {
     // Coord Break uses coef1 as an order flag; other coefs are not used.
-    titles.coef1 = COORDBREAK_COLUMN_TITLES.coef1;
+    titles.coef1 = COORDTRANS_COLUMN_TITLES.coef1;
     for (let i = 2; i <= 10; i++) {
       titles[`coef${i}`] = DEFAULT_COLUMN_TITLES[`coef${i}`];
     }
@@ -728,16 +728,16 @@ let tabulatorOptions = {
       try {
         const st = String(surfTypeValue ?? '').trim();
         if (st === 'Coord Break') {
-          updateTitlesForCoordBreak(true);
-          updateCoefTitles('coordbreak');
+          updateTitlesForCoordTrans(true);
+          updateCoefTitles('coordtrans');
         } else if (st === 'Aspheric even') {
-          updateTitlesForCoordBreak(false);
+          updateTitlesForCoordTrans(false);
           updateCoefTitles('even');
         } else if (st === 'Aspheric odd') {
-          updateTitlesForCoordBreak(false);
+          updateTitlesForCoordTrans(false);
           updateCoefTitles('odd');
         } else {
-          updateTitlesForCoordBreak(false);
+          updateTitlesForCoordTrans(false);
           updateCoefTitles();
         }
       } catch (_) {
@@ -1231,7 +1231,7 @@ tableOpticalSystem.on("cellEdited", function(cell){
           for (const k of LENS_FIELDS) saved[k] = rowData[k];
 
           const patch = {
-            __cooptSavedBeforeCoordBreak: saved,
+            __cooptSavedBeforeCoordTrans: saved,
             radius: 'INF',
             semidia: 0,
             material: 0,
@@ -1240,7 +1240,7 @@ tableOpticalSystem.on("cellEdited", function(cell){
             abbe: 0,
             conic: 0,
             coef1: 0,
-            // Dedicated CoordBreak storage (stop reusing lens fields in core math)
+            // Dedicated CoordTrans storage (stop reusing lens fields in core math)
             decenterX: 0,
             decenterY: 0,
             tiltX: 0,
@@ -1266,9 +1266,9 @@ tableOpticalSystem.on("cellEdited", function(cell){
           }
         } else if (isOldCB && !isNewCB) {
           // Restore previous refractive values if we have them.
-          const saved = rowData.__cooptSavedBeforeCoordBreak;
+          const saved = rowData.__cooptSavedBeforeCoordTrans;
           if (saved && typeof saved === 'object') {
-            const patch = { __cooptSavedBeforeCoordBreak: null };
+            const patch = { __cooptSavedBeforeCoordTrans: null };
             for (const k of LENS_FIELDS) {
               if (Object.prototype.hasOwnProperty.call(saved, k)) patch[k] = saved[k];
             }
@@ -1322,16 +1322,16 @@ tableOpticalSystem.on("cellEdited", function(cell){
       if (field === 'surfType') {
         const st = String(value ?? '').trim();
         if (st === 'Coord Break') {
-          updateTitlesForCoordBreak(true);
-          updateCoefTitles('coordbreak');
+          updateTitlesForCoordTrans(true);
+          updateCoefTitles('coordtrans');
         } else if (st === 'Aspheric even') {
-          updateTitlesForCoordBreak(false);
+          updateTitlesForCoordTrans(false);
           updateCoefTitles('even');
         } else if (st === 'Aspheric odd') {
-          updateTitlesForCoordBreak(false);
+          updateTitlesForCoordTrans(false);
           updateCoefTitles('odd');
         } else {
-          updateTitlesForCoordBreak(false);
+          updateTitlesForCoordTrans(false);
           updateCoefTitles();
         }
 
@@ -2115,9 +2115,9 @@ async function calculateImageSemiDiaFromChiefRays() {
 
             // traceRay() rayPath convention:
             // rayPath[0] = start point; then hit points for each non-Object, non-CB surface.
-            const __isCoordBreakRow = (row) => {
+            const __isCoordTransRow = (row) => {
               const st = String(row?.surfType ?? row?.['surf type'] ?? '').trim().toLowerCase();
-              return st === 'coord break' || st === 'coordinate break' || st === 'cb' || st === 'coordbreak';
+              return st === 'coord trans' || st === 'coordinate break' || st === 'ct' || st === 'coordtrans';
             };
             const __isObjectRow = (row) => {
               const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
@@ -2128,11 +2128,11 @@ async function calculateImageSemiDiaFromChiefRays() {
               const sIdx = Number(surfaceIndex0);
               if (!Number.isInteger(sIdx) || sIdx < 0 || sIdx >= rows.length) return null;
               const row = rows[sIdx];
-              if (__isObjectRow(row) || __isCoordBreakRow(row)) return null;
+              if (__isObjectRow(row) || __isCoordTransRow(row)) return null;
               let count = 0;
               for (let i = 0; i <= sIdx; i++) {
                 const r = rows[i];
-                if (__isObjectRow(r) || __isCoordBreakRow(r)) continue;
+                if (__isObjectRow(r) || __isCoordTransRow(r)) continue;
                 count++;
               }
               return count > 0 ? count : null;
