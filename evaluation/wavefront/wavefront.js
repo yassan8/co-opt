@@ -2888,89 +2888,86 @@ export class OpticalPathDifferenceCalculator {
             if (!this.referenceChiefRay) {
                 throw new Error('主光線データが設定されていません');
             }
-            // Prompt-3 reference sphere definition:
-            //  - Center: exit pupil center (射出瞳中心)
-            //  - Radius: distance from exit pupil center to chief ray image point
+            // Standard reference sphere definition (Zemax/CODE V convention):
+            //  - Center: point where chief ray intersects optical axis (主光線が光軸と交わる点)
+            //  - Radius: distance from axis intersection to chief ray image point
             //  - The sphere passes through the image point
             const imagePoint = (precomputed && precomputed.imageSphereCenter) ? precomputed.imageSphereCenter : this.getChiefRayImagePoint();
             if (!imagePoint) {
                 throw new Error('主光線の像面交点を取得できません');
             }
 
-            const exitPupilCenter = this.getSurfaceOrigin(this.stopSurfaceIndex) || { x: 0, y: 0, z: 0 };
-            const dxE = imagePoint.x - exitPupilCenter.x;
-            const dyE = imagePoint.y - exitPupilCenter.y;
-            const dzE = imagePoint.z - exitPupilCenter.z;
-            const referenceSphereRadius = Math.sqrt(dxE * dxE + dyE * dyE + dzE * dzE); // mm
-            if (!Number.isFinite(referenceSphereRadius) || referenceSphereRadius <= 0) {
-                throw new Error('参照球半径が不正です');
+            // Calculate reference sphere geometry (center on axis + radius)
+            let referenceSphereGeometry;
+            if (precomputed && precomputed._imageSphereGeometry) {
+                referenceSphereGeometry = precomputed._imageSphereGeometry;
+            } else {
+                referenceSphereGeometry = this.calculateImageSphereGeometry(imagePoint);
+            }
+            
+            // Check if reference sphere is degenerate (radius too small or infinite)
+            const MIN_RADIUS = 0.1; // mm - minimum acceptable radius
+            const MAX_RADIUS = 1e6; // mm - maximum acceptable radius
+            
+            let referenceSphereCenter;
+            let referenceSphereRadius;
+            let useSimplifiedMode = false;
+            
+            if (!referenceSphereGeometry || 
+                !referenceSphereGeometry.referenceSphereCenter ||
+                !Number.isFinite(referenceSphereGeometry.imageSphereRadius) ||
+                referenceSphereGeometry.imageSphereRadius < MIN_RADIUS ||
+                referenceSphereGeometry.imageSphereRadius > MAX_RADIUS) {
+                
+                // Fallback: use simplified reference at image plane
+                // This happens when chief ray is nearly on-axis or parallel to axis
+                console.warn(`⚠️ 参照球半径が異常 (${referenceSphereGeometry?.imageSphereRadius?.toFixed(6)} mm), 像面基準モードに切替`);
+                referenceSphereCenter = imagePoint; // Reference at image point
+                referenceSphereRadius = 0.001; // Nominal small radius
+                useSimplifiedMode = true;
+            } else {
+                referenceSphereCenter = referenceSphereGeometry.referenceSphereCenter;
+                referenceSphereRadius = referenceSphereGeometry.imageSphereRadius;
             }
 
-            // Reference sphere center is at exit pupil, not at image point
-            const referenceSphereCenter = exitPupilCenter;
-
-            const getRayEndAndDir = (rayData) => {
+            const getRayImagePoint = (rayData) => {
                 const path = this.getPathData(rayData);
-                if (!Array.isArray(path) || path.length < 2) return null;
-                // Use second-to-last point (last optical surface before image plane)
-                // and trace forward to reference sphere
-                const secondLast = path[path.length - 2];
-                const last = path[path.length - 1];
-                const dx = last.x - secondLast.x;
-                const dy = last.y - secondLast.y;
-                const dz = last.z - secondLast.z;
-                const mag = Math.hypot(dx, dy, dz) || 0;
-                if (!Number.isFinite(mag) || mag <= 0) return null;
-                return {
-                    point: { x: secondLast.x, y: secondLast.y, z: secondLast.z }, // Start from last optical surface
-                    dir: { x: dx / mag, y: dy / mag, z: dz / mag },
-                    imagePoint: { x: last.x, y: last.y, z: last.z }, // Keep image point for reference
-                    path
-                };
+                if (!Array.isArray(path) || path.length < 1) return null;
+                const last = path[path.length - 1]; // Image plane point
+                return { x: last.x, y: last.y, z: last.z };
             };
 
-            const chief = getRayEndAndDir(this.referenceChiefRay);
-            if (!chief) throw new Error('主光線の像面情報が不足しています');
+            const chiefImagePoint = getRayImagePoint(this.referenceChiefRay);
+            if (!chiefImagePoint) throw new Error('主光線の像面交点が不足しています');
 
-            const marginal = getRayEndAndDir(marginalRay);
-            if (!marginal) throw new Error('周辺光線の像面情報が不足しています');
+            const marginalImagePoint = getRayImagePoint(marginalRay);
+            if (!marginalImagePoint) throw new Error('周辺光線の像面交点が不足しています');
 
-            const solveDelta = (p, k) => {
-                const rx = p.x - referenceSphereCenter.x;
-                const ry = p.y - referenceSphereCenter.y;
-                const rz = p.z - referenceSphereCenter.z;
-                const B = 2 * (rx * k.x + ry * k.y + rz * k.z);
-                const C = (rx * rx + ry * ry + rz * rz) - referenceSphereRadius * referenceSphereRadius;
-                const disc = B * B - 4 * C;
-                if (!Number.isFinite(disc) || disc < 0) return null;
-                const s = Math.sqrt(disc);
-                const d1 = (-B + s) / 2;
-                const d2 = (-B - s) / 2;
-                return (Math.abs(d1) <= Math.abs(d2)) ? d1 : d2;
-            };
-
-            const deltaMarginal = solveDelta(marginal.point, marginal.dir);
-            const deltaChief = solveDelta(chief.point, chief.dir);
-            if (!Number.isFinite(deltaMarginal) || !Number.isFinite(deltaChief)) {
-                throw new Error('参照球との交点が解けません');
-            }
-
-            // DEBUG: Check chief ray delta (should be close to 0 if image point is on sphere)
-            const chiefImageDist = Math.sqrt(
-                (chief.point.x - referenceSphereCenter.x)**2 + 
-                (chief.point.y - referenceSphereCenter.y)**2 + 
-                (chief.point.z - referenceSphereCenter.z)**2
+            // Calculate distances from image points to reference sphere center
+            const chiefDist = Math.sqrt(
+                (chiefImagePoint.x - referenceSphereCenter.x)**2 + 
+                (chiefImagePoint.y - referenceSphereCenter.y)**2 + 
+                (chiefImagePoint.z - referenceSphereCenter.z)**2
             );
+            
+            const marginalDist = Math.sqrt(
+                (marginalImagePoint.x - referenceSphereCenter.x)**2 + 
+                (marginalImagePoint.y - referenceSphereCenter.y)**2 + 
+                (marginalImagePoint.z - referenceSphereCenter.z)**2
+            );
+
+            // DEBUG: Check sphere geometry
             console.log(`🔍 参照球チェック:
   半径: ${referenceSphereRadius.toFixed(3)} mm
-  主光線像点の球中心からの距離: ${chiefImageDist.toFixed(3)} mm
-  差: ${(chiefImageDist - referenceSphereRadius).toFixed(6)} mm
-  δ_chief: ${deltaChief.toFixed(6)} mm
-  δ_marginal: ${deltaMarginal.toFixed(6)} mm`);
+  主光線像点の球中心からの距離: ${chiefDist.toFixed(3)} mm
+  差: ${(chiefDist - referenceSphereRadius).toFixed(6)} mm
+  周辺光線像点の球中心からの距離: ${marginalDist.toFixed(3)} mm`);
 
+            // Refractive index in image space
             const nImg = (() => {
                 try {
-                    const segIdx = Math.max(0, (marginal.path?.length || 2) - 2);
+                    const margPath = this.getPathData(marginalRay);
+                    const segIdx = Math.max(0, (margPath?.length || 2) - 2);
                     const n = this.getRefractiveIndex(segIdx);
                     return (Number.isFinite(n) && n > 0) ? n : 1.0;
                 } catch (_) {
@@ -2978,15 +2975,28 @@ export class OpticalPathDifferenceCalculator {
                 }
             })();
 
-            const deltaMarginalUm = deltaMarginal * 1000;
-            const deltaChiefUm = deltaChief * 1000;
-            const opd = (marginalOpticalPath + nImg * deltaMarginalUm) - (this.referenceOpticalPath + nImg * deltaChiefUm);
-
-            const dxM = marginal.point.x - referenceSphereCenter.x;
-            const dyM = marginal.point.y - referenceSphereCenter.y;
-            const dzM = marginal.point.z - referenceSphereCenter.z;
-            const distanceToCenter = Math.sqrt(dxM * dxM + dyM * dyM + dzM * dzM);
-            const spherePathDifference = distanceToCenter - referenceSphereRadius; // mm
+            let opd, spherePathDifference, referenceOpticalPathCorrected;
+            
+            if (useSimplifiedMode) {
+                // Simplified mode: direct optical path difference at image plane
+                // No geometric correction needed when reference is at image plane
+                opd = marginalOpticalPath - this.referenceOpticalPath;
+                spherePathDifference = 0; // mm - no sphere correction in this mode
+                referenceOpticalPathCorrected = this.referenceOpticalPath;
+                
+                console.log(`📌 像面基準モード: OPD = ${opd.toFixed(6)} μm (直接光路差)`);
+            } else {
+                // Standard mode: OPD calculation based on reference sphere
+                // OPD = (marginal optical path - marginal geometric distance to sphere)
+                //     - (chief optical path - chief geometric distance to sphere)
+                // Since chief ray defines the sphere (chiefDist ≈ radius), the second term ≈ 0
+                const marginalGeometricCorrection = (marginalDist - referenceSphereRadius) * nImg * 1000; // mm to μm
+                const chiefGeometricCorrection = (chiefDist - referenceSphereRadius) * nImg * 1000; // mm to μm
+                
+                opd = (marginalOpticalPath - marginalGeometricCorrection) - (this.referenceOpticalPath - chiefGeometricCorrection);
+                spherePathDifference = marginalDist - referenceSphereRadius; // mm
+                referenceOpticalPathCorrected = this.referenceOpticalPath - chiefGeometricCorrection;
+            }
 
             return {
                 success: true,
@@ -2996,13 +3006,13 @@ export class OpticalPathDifferenceCalculator {
                 imageSphereCenter: imagePoint,
                 imageSphereRadius: referenceSphereRadius,
                 referenceSphereCenter: referenceSphereCenter,
-                marginalImagePoint: marginal.point,
-                distanceToCenter,
+                marginalImagePoint: marginalImagePoint,
+                distanceToCenter: marginalDist,
                 spherePathDifference,
-                referenceOpticalPathCorrected: this.referenceOpticalPath + nImg * deltaChiefUm,
+                referenceOpticalPathCorrected: referenceOpticalPathCorrected,
                 marginalOpticalPath,
                 referenceChiefPath: this.referenceOpticalPath,
-                referenceMode: 'prompt3_exitPupil'
+                referenceMode: useSimplifiedMode ? 'imagePlaneSimplified' : 'axisCenterStandardSphere'
             };
         } catch (error) {
             console.warn(`⚠️ 参照球計算に失敗: ${error.message}`);
