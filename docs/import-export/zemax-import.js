@@ -59,13 +59,31 @@ function normalizeImportedMaterialName(material) {
 
 function decodeZmxArrayBuffer(arrayBuffer) {
   const bytes = new Uint8Array(arrayBuffer);
+
+  const decodeUtf16Fallback = (isLittleEndian) => {
+    try {
+      const start = (bytes.length >= 2 && ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff))) ? 2 : 0;
+      let out = '';
+      for (let i = start; i + 1 < bytes.length; i += 2) {
+        const code = isLittleEndian
+          ? (bytes[i] | (bytes[i + 1] << 8))
+          : ((bytes[i] << 8) | bytes[i + 1]);
+        out += String.fromCharCode(code);
+      }
+      return out;
+    } catch (_) {
+      return '';
+    }
+  };
+
   if (bytes.length >= 2) {
     // UTF-16LE BOM
     if (bytes[0] === 0xff && bytes[1] === 0xfe) {
       try {
         return new TextDecoder('utf-16le').decode(bytes);
       } catch (_) {
-        // Fallback: manual decode
+        const fallback = decodeUtf16Fallback(true);
+        if (fallback) return fallback;
       }
     }
     // UTF-16BE BOM
@@ -73,7 +91,8 @@ function decodeZmxArrayBuffer(arrayBuffer) {
       try {
         return new TextDecoder('utf-16be').decode(bytes);
       } catch (_) {
-        // Fallback below
+        const fallback = decodeUtf16Fallback(false);
+        if (fallback) return fallback;
       }
     }
   }
@@ -94,11 +113,17 @@ function decodeZmxArrayBuffer(arrayBuffer) {
     if (zerosOdd > zerosEven) {
       try {
         return new TextDecoder('utf-16le').decode(bytes);
-      } catch (_) {}
+      } catch (_) {
+        const fallback = decodeUtf16Fallback(true);
+        if (fallback) return fallback;
+      }
     } else {
       try {
         return new TextDecoder('utf-16be').decode(bytes);
-      } catch (_) {}
+      } catch (_) {
+        const fallback = decodeUtf16Fallback(false);
+        if (fallback) return fallback;
+      }
     }
   }
 

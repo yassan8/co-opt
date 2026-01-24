@@ -21,6 +21,7 @@ import { findInfiniteSystemChiefRayOrigin, findApertureBoundaryRays } from '../r
 import { generateZMXText, downloadZMX } from '../import-export/zemax-export.js';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.js';
 import { buildShareUrlFromCompressedString, decodeAllDataFromCompressedString, encodeAllDataToCompressedString, getCompressedStringFromLocationHash, getCompressedStringFromLocation } from '../utils/url-share.js';
+import { listDesignVariablesFromBlocks } from '../optimization/design-variables.js';
 
 function __zmxPickPrimaryWavelengthMicrons(sourceRows) {
     try {
@@ -1542,6 +1543,23 @@ function setupImportZemaxButton() {
                 if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
                 activeCfg.metadata.importAnalyzeMode = false;
 
+                // Ensure ObjectPlane exists and is first in Design Intent after Zemax import.
+                if (Array.isArray(activeCfg.blocks)) {
+                    try {
+                        const hasObjectPlane = activeCfg.blocks.some(b => b && String(b.blockType ?? '').trim() === 'ObjectPlane');
+                        if (!hasObjectPlane) {
+                            const newId = __blocks_generateUniqueBlockId(activeCfg.blocks, 'ObjectPlane');
+                            const objBlock = __blocks_makeDefaultBlock('ObjectPlane', newId);
+                            if (objBlock && objBlock.metadata && typeof objBlock.metadata === 'object') {
+                                objBlock.metadata.source = 'zemax-import';
+                            }
+                            activeCfg.blocks.unshift(objBlock);
+                        }
+                    } catch (_) {
+                        // ignore
+                    }
+                }
+
                 // If the imported file has no semidia/DIAM records, enable ImagePlane auto semidia (chief ray)
                 // so the Image semidia can be derived later via `calculateImageSemiDiaFromChiefRays()`.
                 if (!importedHasAnySemidia && Array.isArray(activeCfg.blocks)) {
@@ -1875,16 +1893,29 @@ function setupSuggestOptimizeButtons() {
 
                 // Auto-detect scenarios: if 2+ scenarios exist, evaluate weighted sum.
                 let multiScenario = false;
+                let activeCfg = null;
+                let variableCount = 0;
+                let numericVarCount = 0;
+                let categoricalVarCount = 0;
                 try {
                     const systemConfig = (typeof loadSystemConfigurationsFromTableConfig === 'function')
                         ? loadSystemConfigurationsFromTableConfig()
                         : JSON.parse(localStorage.getItem('systemConfigurations'));
                     const activeId = systemConfig?.activeConfigId;
-                    const activeCfg = systemConfig?.configurations?.find(c => c && c.id === activeId)
-                        || systemConfig?.configurations?.[0];
+                    activeCfg = systemConfig?.configurations?.find(c => c && c.id === activeId)
+                        || systemConfig?.configurations?.[0]
+                        || null;
                     if (activeCfg && Array.isArray(activeCfg.scenarios) && activeCfg.scenarios.length >= 2) {
                         multiScenario = true;
                     }
+
+                    const allVars = listDesignVariablesFromBlocks(activeCfg || {});
+                    const numericVars = Array.isArray(allVars)
+                        ? allVars.filter(v => typeof v?.value === 'number' && Number.isFinite(v.value))
+                        : [];
+                    variableCount = Array.isArray(allVars) ? allVars.length : 0;
+                    numericVarCount = numericVars.length;
+                    categoricalVarCount = Math.max(0, variableCount - numericVarCount);
                 } catch (_) {}
 
                 // Progress popup window
@@ -1917,6 +1948,7 @@ function setupSuggestOptimizeButtons() {
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Decision</span><span id="opt-decision" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Accept/Reject</span><span id="opt-decision-count" style="margin-left:8px;">0 / 0</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Iter</span><span id="opt-iter" style="margin-left:8px;">0</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Vars</span><span id="opt-vars" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Req</span><span id="opt-req" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Res</span><span id="opt-res" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Score</span><span id="opt-cur" style="margin-left:8px;">-</span></div>
@@ -1927,6 +1959,18 @@ function setupSuggestOptimizeButtons() {
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Issue</span><span id="opt-issue" style="margin-left:8px;">-</span></div>
 </div>
 `;
+
+                        try {
+                            const varsEl = popup.document.getElementById('opt-vars');
+                            if (varsEl) {
+                                const parts = [];
+                                if (Number.isFinite(variableCount)) parts.push(String(variableCount));
+                                if (Number.isFinite(numericVarCount) || Number.isFinite(categoricalVarCount)) {
+                                    parts.push(`(num ${numericVarCount}, cat ${categoricalVarCount})`);
+                                }
+                                varsEl.textContent = parts.length ? parts.join(' ') : '-';
+                            }
+                        } catch (_) {}
 
                         try {
                             const stopBtn = popup.document.getElementById('opt-stop');
@@ -3254,12 +3298,13 @@ function setupWavefrontAberrationButton() {
             lines.push(`3 tilt y : ${fmt(cMic[3])} μm  (${wfmt(cWav[3])} waves)`);
             lines.push(`5 defocus: ${fmt(cMic[5])} μm  (${wfmt(cWav[5])} waves)`);
 
-            if (map.statistics?.raw?.opdMicrons && map.statistics?.opdMicrons) {
+            if (map.statistics?.raw?.opdMicrons && (map.statistics?.display?.opdMicrons || map.statistics?.opdMicrons)) {
                 const raw = map.statistics.raw.opdMicrons;
-                const corr = map.statistics.opdMicrons;
+                const corr = map.statistics.display?.opdMicrons || map.statistics.opdMicrons;
+                const corrLabel = map.statistics.display?.opdMicrons ? 'piston+tilt removed' : 'piston removed';
                 lines.push('');
-                lines.push(`OPD RMS: raw=${raw.rms.toFixed(6)} μm, corrected=${corr.rms.toFixed(6)} μm`);
-                lines.push(`OPD P-V:  raw=${raw.peakToPeak.toFixed(6)} μm, corrected=${corr.peakToPeak.toFixed(6)} μm`);
+                lines.push(`OPD RMS: raw=${raw.rms.toFixed(6)} μm, corrected(${corrLabel})=${corr.rms.toFixed(6)} μm`);
+                lines.push(`OPD P-V:  raw=${raw.peakToPeak.toFixed(6)} μm, corrected(${corrLabel})=${corr.peakToPeak.toFixed(6)} μm`);
             }
 
             alert(lines.join('\n'));

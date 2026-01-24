@@ -2696,6 +2696,21 @@ export class OpticalPathDifferenceCalculator {
                 const geom = this.calculateImageSphereGeometry(cachedCenter);
                 cachedRadius = geom?.imageSphereRadius;
                 cachedSphereCenter = geom?.referenceSphereCenter;
+                // On-axis fallback: if chief ray is exactly on-axis, geometry returns Infinity.
+                // Use a tiny off-axis probe ray to estimate the axis intersection instead.
+                if (!Number.isFinite(cachedRadius) || cachedRadius === Infinity || !cachedSphereCenter) {
+                    const probe = this._estimateAxisIntersectionZFromProbe(fieldSetting, options);
+                    if (probe && Number.isFinite(probe.axisIntersectionZ)) {
+                        cachedSphereCenter = { x: 0, y: 0, z: probe.axisIntersectionZ };
+                        const dx = (cachedCenter?.x ?? 0) - cachedSphereCenter.x;
+                        const dy = (cachedCenter?.y ?? 0) - cachedSphereCenter.y;
+                        const dz = (cachedCenter?.z ?? 0) - cachedSphereCenter.z;
+                        cachedRadius = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                        if (OPD_DEBUG) {
+                            console.log(`🟦 [RefSphere] on-axis probe fallback: axisZ=${cachedSphereCenter.z.toFixed(6)}mm, R=${cachedRadius.toFixed(6)}mm, probe=(${probe.probePupil.x},${probe.probePupil.y})`);
+                        }
+                    }
+                }
                 try {
                     this._referenceSphereCache?.set?.(currentFieldKey, { center: cachedCenter, radius: cachedRadius, sphereCenter: cachedSphereCenter });
                 } catch (_) {}
@@ -2873,239 +2888,122 @@ export class OpticalPathDifferenceCalculator {
             if (!this.referenceChiefRay) {
                 throw new Error('主光線データが設定されていません');
             }
-
-            // 2. 像参照球の定義点: 主光線が像面と交わる点（実像高 H'）【図面準拠】
-            // NOTE: これは「球面上の点」であり、球の中心ではない。
-            const imageSpherePoint = (precomputed && precomputed.imageSphereCenter) ? precomputed.imageSphereCenter : this.getChiefRayImagePoint();
-            if (!imageSpherePoint) {
+            // Prompt-3 reference sphere definition:
+            //  - Center: exit pupil center (射出瞳中心)
+            //  - Radius: distance from exit pupil center to chief ray image point
+            //  - The sphere passes through the image point
+            const imagePoint = (precomputed && precomputed.imageSphereCenter) ? precomputed.imageSphereCenter : this.getChiefRayImagePoint();
+            if (!imagePoint) {
                 throw new Error('主光線の像面交点を取得できません');
             }
 
-            // 3. 像参照球の幾何
-            // - 球中心: 主光線を逆延長して光軸と交わる点 (0,0,z0)
-            // - 半径: H'（imageSpherePoint）から球中心までの距離 Rex
-            const geom = (precomputed && precomputed._imageSphereGeometry)
-                ? precomputed._imageSphereGeometry
-                : this.calculateImageSphereGeometry(imageSpherePoint);
-
-            const imageSphereRadius = geom?.imageSphereRadius;
-            const referenceSphereCenter = geom?.referenceSphereCenter;
-            if (imageSphereRadius === null) {
-                throw new Error('像参照球半径を計算できません');
+            const exitPupilCenter = this.getSurfaceOrigin(this.stopSurfaceIndex) || { x: 0, y: 0, z: 0 };
+            const dxE = imagePoint.x - exitPupilCenter.x;
+            const dyE = imagePoint.y - exitPupilCenter.y;
+            const dzE = imagePoint.z - exitPupilCenter.z;
+            const referenceSphereRadius = Math.sqrt(dxE * dxE + dyE * dyE + dzE * dzE); // mm
+            if (!Number.isFinite(referenceSphereRadius) || referenceSphereRadius <= 0) {
+                throw new Error('参照球半径が不正です');
             }
 
-            // Afocal / collimated case: the chief ray may be (nearly) parallel to the optical axis,
-            // so the "intersection with axis" is at infinity and a finite reference sphere is undefined.
-            // In that situation, use a plane-wave reference (equivalent to infinite-radius sphere).
-            // This keeps wavefront usable (and Zernike removal can still remove piston/tilt/defocus).
-            if (!Number.isFinite(imageSphereRadius)) {
-                const opdPlane = marginalOpticalPath - this.referenceOpticalPath;
+            // Reference sphere center is at exit pupil, not at image point
+            const referenceSphereCenter = exitPupilCenter;
+
+            const getRayEndAndDir = (rayData) => {
+                const path = this.getPathData(rayData);
+                if (!Array.isArray(path) || path.length < 2) return null;
+                // Use second-to-last point (last optical surface before image plane)
+                // and trace forward to reference sphere
+                const secondLast = path[path.length - 2];
+                const last = path[path.length - 1];
+                const dx = last.x - secondLast.x;
+                const dy = last.y - secondLast.y;
+                const dz = last.z - secondLast.z;
+                const mag = Math.hypot(dx, dy, dz) || 0;
+                if (!Number.isFinite(mag) || mag <= 0) return null;
                 return {
-                    success: true,
-                    opd: opdPlane,
-                    opdWithoutTilt: opdPlane,
-                    tiltComponent: 0,
-                    imageSphereCenter: imageSpherePoint,
-                    imageSphereRadius,
-                    referenceSphereCenter,
-                    marginalImagePoint: null,
-                    distanceToCenter: NaN,
-                    spherePathDifference: NaN,
-                    referenceOpticalPathCorrected: this.referenceOpticalPath,
-                    marginalOpticalPath,
-                    referenceChiefPath: this.referenceOpticalPath,
-                    referenceMode: 'afocalPlane'
+                    point: { x: secondLast.x, y: secondLast.y, z: secondLast.z }, // Start from last optical surface
+                    dir: { x: dx / mag, y: dy / mag, z: dz / mag },
+                    imagePoint: { x: last.x, y: last.y, z: last.z }, // Keep image point for reference
+                    path
                 };
+            };
+
+            const chief = getRayEndAndDir(this.referenceChiefRay);
+            if (!chief) throw new Error('主光線の像面情報が不足しています');
+
+            const marginal = getRayEndAndDir(marginalRay);
+            if (!marginal) throw new Error('周辺光線の像面情報が不足しています');
+
+            const solveDelta = (p, k) => {
+                const rx = p.x - referenceSphereCenter.x;
+                const ry = p.y - referenceSphereCenter.y;
+                const rz = p.z - referenceSphereCenter.z;
+                const B = 2 * (rx * k.x + ry * k.y + rz * k.z);
+                const C = (rx * rx + ry * ry + rz * rz) - referenceSphereRadius * referenceSphereRadius;
+                const disc = B * B - 4 * C;
+                if (!Number.isFinite(disc) || disc < 0) return null;
+                const s = Math.sqrt(disc);
+                const d1 = (-B + s) / 2;
+                const d2 = (-B - s) / 2;
+                return (Math.abs(d1) <= Math.abs(d2)) ? d1 : d2;
+            };
+
+            const deltaMarginal = solveDelta(marginal.point, marginal.dir);
+            const deltaChief = solveDelta(chief.point, chief.dir);
+            if (!Number.isFinite(deltaMarginal) || !Number.isFinite(deltaChief)) {
+                throw new Error('参照球との交点が解けません');
             }
 
-            // Extremely large radii are numerically ill-conditioned (near-afocal / near-collimated).
-            // In those cases, the geometric correction becomes dominated by cancellation and can explode.
-            // Prefer a plane-wave reference instead.
-            if (Math.abs(imageSphereRadius) > 1e6) { // 1000 m
-                const opdPlane = marginalOpticalPath - this.referenceOpticalPath;
-                return {
-                    success: true,
-                    opd: opdPlane,
-                    opdWithoutTilt: opdPlane,
-                    tiltComponent: 0,
-                    imageSphereCenter: imageSpherePoint,
-                    imageSphereRadius,
-                    referenceSphereCenter,
-                    marginalImagePoint: null,
-                    distanceToCenter: NaN,
-                    spherePathDifference: NaN,
-                    referenceOpticalPathCorrected: this.referenceOpticalPath,
-                    marginalOpticalPath,
-                    referenceChiefPath: this.referenceOpticalPath,
-                    referenceMode: 'nearAfocalPlane'
-                };
-            }
-            
-            // 参照球半径の妥当性チェック
-            if (Math.abs(imageSphereRadius) > 10000) { // 10m以上は異常
-                if (OPD_DEBUG) {
-                    console.warn(`⚠️ 異常に大きな参照球半径: ${imageSphereRadius.toFixed(1)}mm`);
-                    console.warn(`   主光線像点: (${imageSpherePoint.x.toFixed(3)}, ${imageSpherePoint.y.toFixed(3)}, ${imageSpherePoint.z.toFixed(3)})mm`);
-                    console.warn(`   これは光学系設定に問題がある可能性があります`);
+            // DEBUG: Check chief ray delta (should be close to 0 if image point is on sphere)
+            const chiefImageDist = Math.sqrt(
+                (chief.point.x - referenceSphereCenter.x)**2 + 
+                (chief.point.y - referenceSphereCenter.y)**2 + 
+                (chief.point.z - referenceSphereCenter.z)**2
+            );
+            console.log(`🔍 参照球チェック:
+  半径: ${referenceSphereRadius.toFixed(3)} mm
+  主光線像点の球中心からの距離: ${chiefImageDist.toFixed(3)} mm
+  差: ${(chiefImageDist - referenceSphereRadius).toFixed(6)} mm
+  δ_chief: ${deltaChief.toFixed(6)} mm
+  δ_marginal: ${deltaMarginal.toFixed(6)} mm`);
+
+            const nImg = (() => {
+                try {
+                    const segIdx = Math.max(0, (marginal.path?.length || 2) - 2);
+                    const n = this.getRefractiveIndex(segIdx);
+                    return (Number.isFinite(n) && n > 0) ? n : 1.0;
+                } catch (_) {
+                    return 1.0;
                 }
-            }
+            })();
 
-            // 4. 周辺光線の像面交点を取得
-            const marginalImagePoint = this.getRayImagePoint(marginalRay);
-            if (!marginalImagePoint) {
-                throw new Error('周辺光線の像面交点を取得できません');
-            }
+            const deltaMarginalUm = deltaMarginal * 1000;
+            const deltaChiefUm = deltaChief * 1000;
+            const opd = (marginalOpticalPath + nImg * deltaMarginalUm) - (this.referenceOpticalPath + nImg * deltaChiefUm);
 
-            // 5. 周辺光線の像点から像参照球中心までの距離
-            // 【図面対応】軸外では周辺光線が像参照球 Rex からずれることを測定
-            if (!referenceSphereCenter) {
-                throw new Error('参照球中心を取得できません');
-            }
-            const dx = marginalImagePoint.x - referenceSphereCenter.x;
-            const dy = marginalImagePoint.y - referenceSphereCenter.y;
-            const dz = marginalImagePoint.z - referenceSphereCenter.z;
-            const distanceToCenter = Math.sqrt(dx*dx + dy*dy + dz*dz); // mm
-
-            // 6. 軸外OPD計算の正しい理論【文献準拠修正版】
-            // 
-            // 【問題】現在の実装では参照球面が物理的に不合理な値になっている
-            // 【解決】標準的なOPD定義に基づく正しい計算方法
-            // 
-            // 軸外OPD = 周辺光線光路長 - 参照光路長
-            // 参照光路長 = 主光線光路長 + 幾何学的光路差補正
-            // 
-            // 幾何学的光路差補正 = 周辺光線が参照球面からずれる分の光路差
-            // = (周辺光線像点から参照球中心までの距離) - (参照球半径)
-            const spherePathDifference = distanceToCenter - imageSphereRadius; // mm
-            
-            // 正しい参照光路長の計算（理論修正版）：
-            // 💡 重要：OPDの正しい定義
-            // OPD = 実際の光路長 - 理想球面波の光路長
-            // 理想球面波 = 参照球面上での光路長
-            
-            // 単位統一：すべてμm単位で計算
-            const spherePathDifferenceμm = spherePathDifference * 1000; // mm → μm
-            
-            // 修正された理論：
-            // 参照球面からの光路差 = 周辺光線の実際光路長 - 参照球面上の対応光路長
-            // 参照球面上の光路長 = 主光線光路長 + 球面幾何補正
-            
-            // 球面幾何補正の符号チェック（重要な修正）
-            let geometricCorrection = spherePathDifferenceμm;
-
-            // If the correction is huge, we're almost certainly in an afocal/invalid reference-sphere regime.
-            // Instead of clamping (which still yields meaningless OPD), fall back to plane-wave reference.
-            if (Math.abs(geometricCorrection) > 10000) { // >10mm equivalent in OPD is unusable
-                const opdPlane = marginalOpticalPath - this.referenceOpticalPath;
-                return {
-                    success: true,
-                    opd: opdPlane,
-                    opdWithoutTilt: opdPlane,
-                    tiltComponent: 0,
-                    imageSphereCenter: imageSpherePoint,
-                    imageSphereRadius,
-                    referenceSphereCenter,
-                    marginalImagePoint,
-                    distanceToCenter,
-                    spherePathDifference,
-                    referenceOpticalPathCorrected: this.referenceOpticalPath,
-                    marginalOpticalPath,
-                    referenceChiefPath: this.referenceOpticalPath,
-                    referenceMode: 'fallbackPlaneHugeGeom'
-                };
-            }
-            
-            const referenceOpticalPathCorrected = this.referenceOpticalPath + geometricCorrection;
-
-            // 7. 正しいOPD計算
-            const opd = marginalOpticalPath - referenceOpticalPathCorrected;
-            
-            // 8. 軸外tilt成分の評価と除去オプション
-            // 軸外では大きなtilt成分が発生するのは物理的に正常だが、
-            // 波面収差解析では除去して評価することも多い
-            let opdWithoutTilt = opd;
-            let tiltComponent = 0;
-            
-            // Tilt成分の推定（より高精度版）
-            if (removeTilt && (Math.abs(imageSpherePoint.x) > 0.1 || Math.abs(imageSpherePoint.y) > 0.1)) {
-                // 軸外での瞳座標に比例するtilt成分を推定
-                // 主光線角度から予想されるtilt成分を計算
-                const fieldRadius = Math.sqrt(imageSpherePoint.x*imageSpherePoint.x + imageSpherePoint.y*imageSpherePoint.y);
-                
-                // より物理的なtilt成分推定
-                // 主光線の角度から予想される1次収差（tilt）成分
-                const chiefRayAngle = Math.atan2(fieldRadius, imageSphereRadius);
-                tiltComponent = fieldRadius * Math.sin(chiefRayAngle) * 500; // 調整係数
-                
-                opdWithoutTilt = opd - tiltComponent;
-                
-                if (OPD_DEBUG) {
-                    console.log(`🟦 Tilt除去有効:`);
-                    console.log(`  計算tilt成分: ${tiltComponent.toFixed(3)}μm (${(tiltComponent/this.wavelength).toFixed(3)}λ)`);
-                    console.log(`  Tilt除去後OPD: ${opdWithoutTilt.toFixed(6)}μm (${(opdWithoutTilt/this.wavelength).toFixed(3)}λ)`);
-                }
-            } else if (!removeTilt && (Math.abs(imageSpherePoint.x) > 0.1 || Math.abs(imageSpherePoint.y) > 0.1)) {
-                // tilt除去しない場合の参考情報
-                const fieldRadius = Math.sqrt(imageSpherePoint.x*imageSpherePoint.x + imageSpherePoint.y*imageSpherePoint.y);
-                if (OPD_DEBUG) {
-                    console.log(`📊 Tilt成分情報（除去無効）:`);
-                    console.log(`  軸外Field距離: ${fieldRadius.toFixed(3)}mm`);
-                    console.log(`  Total OPD: ${opd.toFixed(6)}μm (${(opd/this.wavelength).toFixed(3)}λ)`);
-                }
-            }
-            
-            // デバッグ情報（軸外OPD計算の確認用）
-            if (OPD_DEBUG && (Math.abs(imageSpherePoint.x) > 0.1 || Math.abs(imageSpherePoint.y) > 0.1)) {
-                const fieldRadius = Math.sqrt(imageSpherePoint.x*imageSpherePoint.x + imageSpherePoint.y*imageSpherePoint.y);
-                console.log(`📐 軸外OPD詳細（修正版2）(像高H'=${fieldRadius.toFixed(3)}mm):`);
-                console.log(`  像参照球半径: ${imageSphereRadius.toFixed(6)}mm`);
-                console.log(`  周辺光線から球心距離: ${distanceToCenter.toFixed(6)}mm`);
-                console.log(`  幾何学的光路差: ${spherePathDifference.toFixed(6)}mm = ${spherePathDifferenceμm.toFixed(1)}μm`);
-                console.log(`  幾何学補正: ${geometricCorrection.toFixed(1)}μm`);
-                console.log(`  主光線光路長: ${this.referenceOpticalPath.toFixed(3)}μm`);
-                console.log(`  周辺光線光路長: ${marginalOpticalPath.toFixed(3)}μm`);
-                console.log(`  修正参照光路長: ${referenceOpticalPathCorrected.toFixed(3)}μm`);
-                console.log(`  生OPD: ${opd.toFixed(6)}μm (${(opd/this.wavelength).toFixed(3)}λ)`);
-                
-                // 計算妥当性の詳細チェック
-                const sphereRadiusCheck = Math.abs(imageSphereRadius);
-                const distanceCheck = Math.abs(distanceToCenter);
-                const pathDiffCheck = Math.abs(spherePathDifference);
-                
-                console.log(`🔍 妥当性チェック:`);
-                console.log(`  球半径妥当性: ${sphereRadiusCheck < 10000 ? '✅' : '❌'} (${sphereRadiusCheck.toFixed(1)}mm < 10000mm)`);
-                console.log(`  距離妥当性: ${distanceCheck < 10000 ? '✅' : '❌'} (${distanceCheck.toFixed(1)}mm < 10000mm)`);
-                console.log(`  光路差妥当性: ${pathDiffCheck < 10 ? '✅' : '❌'} (${pathDiffCheck.toFixed(3)}mm < 10mm)`);
-                
-                // 理論的妥当性チェック
-                const opdInWavelengths = Math.abs(opd / this.wavelength);
-                if (opdInWavelengths > 100) {
-                    console.error(`❌ 極度に異常なOPD: ${opdInWavelengths.toFixed(1)}λ - 計算方法根本見直し必要`);
-                } else if (opdInWavelengths > 10) {
-                    console.warn(`⚠️ 異常に大きなOPD: ${opdInWavelengths.toFixed(1)}λ - 計算方法要確認`);
-                } else if (opdInWavelengths > 2) {
-                    console.log(`📊 軸外OPD（正常範囲）: ${opdInWavelengths.toFixed(1)}λ`);
-                } else {
-                    console.log(`✅ 適正なOPD: ${opdInWavelengths.toFixed(1)}λ`);
-                }
-            }
+            const dxM = marginal.point.x - referenceSphereCenter.x;
+            const dyM = marginal.point.y - referenceSphereCenter.y;
+            const dzM = marginal.point.z - referenceSphereCenter.z;
+            const distanceToCenter = Math.sqrt(dxM * dxM + dyM * dyM + dzM * dzM);
+            const spherePathDifference = distanceToCenter - referenceSphereRadius; // mm
 
             return {
                 success: true,
                 opd: opd,
-                opdWithoutTilt: opdWithoutTilt,  // tilt除去版
-                tiltComponent: tiltComponent,  // tilt成分
-                imageSphereCenter: imageSpherePoint,
-                imageSphereRadius: imageSphereRadius,
+                opdWithoutTilt: opd,
+                tiltComponent: 0,
+                imageSphereCenter: imagePoint,
+                imageSphereRadius: referenceSphereRadius,
                 referenceSphereCenter: referenceSphereCenter,
-                marginalImagePoint: marginalImagePoint,
-                distanceToCenter: distanceToCenter,
-                spherePathDifference: spherePathDifference,
-                referenceOpticalPathCorrected: referenceOpticalPathCorrected,
-                marginalOpticalPath: marginalOpticalPath,
-                referenceChiefPath: this.referenceOpticalPath
+                marginalImagePoint: marginal.point,
+                distanceToCenter,
+                spherePathDifference,
+                referenceOpticalPathCorrected: this.referenceOpticalPath + nImg * deltaChiefUm,
+                marginalOpticalPath,
+                referenceChiefPath: this.referenceOpticalPath,
+                referenceMode: 'prompt3_exitPupil'
             };
-
         } catch (error) {
             console.warn(`⚠️ 参照球計算に失敗: ${error.message}`);
             return {
@@ -3177,6 +3075,58 @@ export class OpticalPathDifferenceCalculator {
             console.error(`❌ 像参照球幾何計算エラー: ${error.message}`);
             return { imageSphereRadius: null, referenceSphereCenter: null, axisIntersectionZ: null };
         }
+    }
+
+    /**
+     * On-axis fallback: estimate axis intersection using a tiny off-axis probe ray.
+     * This avoids infinite reference sphere when the chief ray is exactly on-axis.
+     */
+    _estimateAxisIntersectionZFromProbe(fieldSetting, options = undefined) {
+        try {
+            const probePairs = [
+                { x: 1e-3, y: 0 },
+                { x: 0, y: 1e-3 },
+                { x: 1e-2, y: 0 },
+                { x: 0, y: 1e-2 }
+            ];
+            for (const p of probePairs) {
+                let ray = null;
+                try {
+                    ray = this.generateMarginalRay(p.x, p.y, fieldSetting, options);
+                } catch (_) {
+                    ray = null;
+                }
+                const path = this.getPathData(ray);
+                if (!Array.isArray(path) || path.length < 2) continue;
+                const last = path[path.length - 1];
+                const prev = path[path.length - 2];
+                if (!last || !prev) continue;
+
+                const dirX = prev.x - last.x;
+                const dirY = prev.y - last.y;
+                const dirZ = prev.z - last.z;
+
+                let t = null;
+                if (Math.abs(dirX) > 1e-12) {
+                    t = -last.x / dirX;
+                } else if (Math.abs(dirY) > 1e-12) {
+                    t = -last.y / dirY;
+                } else {
+                    continue;
+                }
+
+                const axisIntersectionZ = last.z + t * dirZ;
+                if (Number.isFinite(axisIntersectionZ)) {
+                    return {
+                        axisIntersectionZ,
+                        probePupil: { x: p.x, y: p.y }
+                    };
+                }
+            }
+        } catch (_) {
+            // ignore
+        }
+        return null;
     }
 
     /**
@@ -8520,6 +8470,14 @@ export class WavefrontAberrationAnalyzer {
             const lines = [];
             lines.push('=== Zernike Fitting (Orthonormal / Gram–Schmidt) ===');
             lines.push(`Field: ${wavefrontMap?.fieldSetting?.displayName || ''}`);
+            if (wavefrontMap?.statistics?.opdWavelengths?.opdMode || wavefrontMap?.opdMode) {
+                const mode = wavefrontMap?.statistics?.opdWavelengths?.opdMode || wavefrontMap?.opdMode;
+                lines.push(`OPD mode: ${mode}`);
+            }
+            if (wavefrontMap?.statistics?.display?.opdWavelengths?.opdDisplayMode || wavefrontMap?.opdDisplayModeRequested) {
+                const dmode = wavefrontMap?.statistics?.display?.opdWavelengths?.opdDisplayMode || wavefrontMap?.opdDisplayModeRequested;
+                lines.push(`OPD display mode: ${dmode}`);
+            }
             lines.push(`Basis: Normalized Zernike (Noll indexing)`);
             lines.push(`Max Noll used: ${maxUsed}`);
             lines.push(`OPD display removal: piston/tilt only (Noll ${displayRemovedNoll.join(', ')})`);
@@ -8581,8 +8539,8 @@ export class WavefrontAberrationAnalyzer {
             // NOTE: In this codebase, the "primary" OPD stats remove piston (mean) only; tilt is NOT removed.
             // For an apples-to-apples comparison against Zernike piston/tilt-removed RMS, also show a
             // sample-based OPD RMS with piston+tilt removed via best-fit plane (view-transform).
-            const sumLabel1 = 'OPD RMS (sample, piston removed)';
-            const sumLabel2 = 'OPD RMS (sample, piston+tilt removed)';
+            const sumLabel1 = 'OPD RMS (sample, piston+tilt removed)';
+            const sumLabel2 = 'OPD RMS (sample, piston removed)';
             const sumLabel3 = 'Zernike RMS (sample, piston/tilt removed)';
             const sumLabel4 = 'Coeff RMS (area, piston/tilt removed)';
 
@@ -8719,8 +8677,8 @@ export class WavefrontAberrationAnalyzer {
             const coeffRemovedRms = rmsCoeffRemovedWaves;
 
             const fmtSum = (v) => Number.isFinite(v) ? `${v.toFixed(6)} λ` : String(v);
-            const v1 = fmtSum(primaryRms).padStart(col1W);
-            const v2 = fmtSum(opdPistonTiltRemovedRms).padStart(col2W);
+            const v1 = fmtSum(opdPistonTiltRemovedRms).padStart(col1W);
+            const v2 = fmtSum(primaryRms).padStart(col2W);
             const v3 = fmtSum(modelRemovedRms).padStart(col3W);
             const v4 = fmtSum(coeffRemovedRms).padStart(col4W);
             lines[summaryValueLineIndex] = `  ${v1} / ${v2} / ${v3} / ${v4}`;

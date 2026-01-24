@@ -97,6 +97,22 @@ export function loadSystemConfigurations() {
   if (json) {
     try {
       const parsed = JSON.parse(json);
+        // Normalize legacy configs to avoid UI crashes (missing metadata/systemData).
+        if (parsed && Array.isArray(parsed.configurations)) {
+          for (const cfg of parsed.configurations) {
+            if (!cfg || typeof cfg !== 'object') continue;
+            if (!cfg.metadata || typeof cfg.metadata !== 'object') cfg.metadata = {};
+            if (!cfg.metadata.created) cfg.metadata.created = new Date().toISOString();
+            if (!cfg.metadata.modified) cfg.metadata.modified = cfg.metadata.created;
+            if (cfg.metadata.locked === undefined) cfg.metadata.locked = false;
+            if (!cfg.systemData || typeof cfg.systemData !== 'object') {
+              cfg.systemData = { referenceFocalLength: '' };
+            }
+            if (cfg.name === undefined || cfg.name === null) {
+              cfg.name = `Config ${String(cfg.id ?? '') || ''}`.trim() || 'Config';
+            }
+          }
+        }
       cfgLog('🔵 [Configuration] Loaded configurations:', parsed.configurations.length);
       return parsed;
     } catch (e) {

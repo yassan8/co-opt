@@ -2696,6 +2696,21 @@ export class OpticalPathDifferenceCalculator {
                 const geom = this.calculateImageSphereGeometry(cachedCenter);
                 cachedRadius = geom?.imageSphereRadius;
                 cachedSphereCenter = geom?.referenceSphereCenter;
+                // On-axis fallback: if chief ray is exactly on-axis, geometry returns Infinity.
+                // Use a tiny off-axis probe ray to estimate the axis intersection instead.
+                if (!Number.isFinite(cachedRadius) || cachedRadius === Infinity || !cachedSphereCenter) {
+                    const probe = this._estimateAxisIntersectionZFromProbe(fieldSetting, options);
+                    if (probe && Number.isFinite(probe.axisIntersectionZ)) {
+                        cachedSphereCenter = { x: 0, y: 0, z: probe.axisIntersectionZ };
+                        const dx = (cachedCenter?.x ?? 0) - cachedSphereCenter.x;
+                        const dy = (cachedCenter?.y ?? 0) - cachedSphereCenter.y;
+                        const dz = (cachedCenter?.z ?? 0) - cachedSphereCenter.z;
+                        cachedRadius = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                        if (OPD_DEBUG) {
+                            console.log(`🟦 [RefSphere] on-axis probe fallback: axisZ=${cachedSphereCenter.z.toFixed(6)}mm, R=${cachedRadius.toFixed(6)}mm, probe=(${probe.probePupil.x},${probe.probePupil.y})`);
+                        }
+                    }
+                }
                 try {
                     this._referenceSphereCache?.set?.(currentFieldKey, { center: cachedCenter, radius: cachedRadius, sphereCenter: cachedSphereCenter });
                 } catch (_) {}
@@ -3177,6 +3192,58 @@ export class OpticalPathDifferenceCalculator {
             console.error(`❌ 像参照球幾何計算エラー: ${error.message}`);
             return { imageSphereRadius: null, referenceSphereCenter: null, axisIntersectionZ: null };
         }
+    }
+
+    /**
+     * On-axis fallback: estimate axis intersection using a tiny off-axis probe ray.
+     * This avoids infinite reference sphere when the chief ray is exactly on-axis.
+     */
+    _estimateAxisIntersectionZFromProbe(fieldSetting, options = undefined) {
+        try {
+            const probePairs = [
+                { x: 1e-3, y: 0 },
+                { x: 0, y: 1e-3 },
+                { x: 1e-2, y: 0 },
+                { x: 0, y: 1e-2 }
+            ];
+            for (const p of probePairs) {
+                let ray = null;
+                try {
+                    ray = this.generateMarginalRay(p.x, p.y, fieldSetting, options);
+                } catch (_) {
+                    ray = null;
+                }
+                const path = this.getPathData(ray);
+                if (!Array.isArray(path) || path.length < 2) continue;
+                const last = path[path.length - 1];
+                const prev = path[path.length - 2];
+                if (!last || !prev) continue;
+
+                const dirX = prev.x - last.x;
+                const dirY = prev.y - last.y;
+                const dirZ = prev.z - last.z;
+
+                let t = null;
+                if (Math.abs(dirX) > 1e-12) {
+                    t = -last.x / dirX;
+                } else if (Math.abs(dirY) > 1e-12) {
+                    t = -last.y / dirY;
+                } else {
+                    continue;
+                }
+
+                const axisIntersectionZ = last.z + t * dirZ;
+                if (Number.isFinite(axisIntersectionZ)) {
+                    return {
+                        axisIntersectionZ,
+                        probePupil: { x: p.x, y: p.y }
+                    };
+                }
+            }
+        } catch (_) {
+            // ignore
+        }
+        return null;
     }
 
     /**
@@ -8520,6 +8587,14 @@ export class WavefrontAberrationAnalyzer {
             const lines = [];
             lines.push('=== Zernike Fitting (Orthonormal / Gram–Schmidt) ===');
             lines.push(`Field: ${wavefrontMap?.fieldSetting?.displayName || ''}`);
+            if (wavefrontMap?.statistics?.opdWavelengths?.opdMode || wavefrontMap?.opdMode) {
+                const mode = wavefrontMap?.statistics?.opdWavelengths?.opdMode || wavefrontMap?.opdMode;
+                lines.push(`OPD mode: ${mode}`);
+            }
+            if (wavefrontMap?.statistics?.display?.opdWavelengths?.opdDisplayMode || wavefrontMap?.opdDisplayModeRequested) {
+                const dmode = wavefrontMap?.statistics?.display?.opdWavelengths?.opdDisplayMode || wavefrontMap?.opdDisplayModeRequested;
+                lines.push(`OPD display mode: ${dmode}`);
+            }
             lines.push(`Basis: Normalized Zernike (Noll indexing)`);
             lines.push(`Max Noll used: ${maxUsed}`);
             lines.push(`OPD display removal: piston/tilt only (Noll ${displayRemovedNoll.join(', ')})`);
@@ -8581,8 +8656,8 @@ export class WavefrontAberrationAnalyzer {
             // NOTE: In this codebase, the "primary" OPD stats remove piston (mean) only; tilt is NOT removed.
             // For an apples-to-apples comparison against Zernike piston/tilt-removed RMS, also show a
             // sample-based OPD RMS with piston+tilt removed via best-fit plane (view-transform).
-            const sumLabel1 = 'OPD RMS (sample, piston removed)';
-            const sumLabel2 = 'OPD RMS (sample, piston+tilt removed)';
+            const sumLabel1 = 'OPD RMS (sample, piston+tilt removed)';
+            const sumLabel2 = 'OPD RMS (sample, piston removed)';
             const sumLabel3 = 'Zernike RMS (sample, piston/tilt removed)';
             const sumLabel4 = 'Coeff RMS (area, piston/tilt removed)';
 
@@ -8719,8 +8794,8 @@ export class WavefrontAberrationAnalyzer {
             const coeffRemovedRms = rmsCoeffRemovedWaves;
 
             const fmtSum = (v) => Number.isFinite(v) ? `${v.toFixed(6)} λ` : String(v);
-            const v1 = fmtSum(primaryRms).padStart(col1W);
-            const v2 = fmtSum(opdPistonTiltRemovedRms).padStart(col2W);
+            const v1 = fmtSum(opdPistonTiltRemovedRms).padStart(col1W);
+            const v2 = fmtSum(primaryRms).padStart(col2W);
             const v3 = fmtSum(modelRemovedRms).padStart(col3W);
             const v4 = fmtSum(coeffRemovedRms).padStart(col4W);
             lines[summaryValueLineIndex] = `  ${v1} / ${v2} / ${v3} / ${v4}`;

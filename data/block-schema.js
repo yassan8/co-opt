@@ -1543,7 +1543,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
         continue;
       }
 
-      const prev = getLastRow();
+      let prev = getLastRow();
       // Never touch Image surface auto fields (Image row is appended later; this is a safety check).
       if (prev && (prev['object type'] === 'Image' || prev.object === 'Image')) {
         issues.push({
@@ -1567,6 +1567,17 @@ export function expandBlocksToOpticalSystemRows(blocks) {
         continue;
       }
 
+      // If multiple Gap blocks are consecutive, each must create its own spacing.
+      // The legacy model stores spacing on the previous surface, so we insert a
+      // blank air surface to attach the next gap without overwriting the prior one.
+      if (prev && prev.__cooptGapApplied) {
+        const blank = createBlankSurfaceRow(rows.length, prev);
+        blank._blockType = 'Gap';
+        blank._blockId = blockId || null;
+        rows.push(blank);
+        prev = blank;
+      }
+
       const thickness = getParamOrVarValue(params, vars, 'thickness');
       const signedThickness = applySignedThickness(normalizeThicknessToRowValue(thickness));
 
@@ -1580,6 +1591,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
         // store gap spacing separately to avoid clobbering CB fields.
         prev.__cooptGapThickness = signedThickness;
         prev.__cooptGapMaterial = gapMaterial;
+        prev.__cooptGapApplied = true;
         if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness') && shouldMarkV(vars.thickness)) {
           prev.__cooptGapOptimizeT = 'V';
         }
@@ -1590,6 +1602,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
         prev.thickness = signedThickness;
         prev.material = gapMaterial;
         applyDerivedGlassDisplay(prev);
+        prev.__cooptGapApplied = true;
 
         if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness') && shouldMarkV(vars.thickness)) {
           applyVFlag(prev, 'optimizeT');
@@ -1765,7 +1778,9 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows) {
       });
     }
 
-    if (isStopRow(r)) {
+    const material = __normalizeLegacyMaterialForBlocks(r, i, issues);
+    const stopRowHasGlass = isStopRow(r) && material !== '' && !isAirName(material);
+    if (isStopRow(r) && !stopRowHasGlass) {
       stopCount++;
       const blockId = `Stop-${stopCount}`;
       const sd = parseSemiDiameterNumber(r.semidia);
@@ -1802,11 +1817,18 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows) {
       continue;
     }
 
+    if (stopRowHasGlass) {
+      issues.push({
+        severity: 'warning',
+        phase: 'validate',
+        message: `Stop row ${i} has glass material and will be treated as a lens surface (Stop block omitted).`
+      });
+    }
+
     // Lens detection (legacy convention): a singlet is typically represented as two consecutive
     // spherical rows with the SAME glass name in the "material" column (often repeated on both surfaces).
     // Some files leave the back-surface material empty; treat that as "same as front".
     // We also allow back-surface material AIR (some tables encode medium-after-surface), but do not require it.
-    const material = __normalizeLegacyMaterialForBlocks(r, i, issues);
     if (material === '' || isAirName(material)) {
       // Not a lens front. In legacy files, AIR/empty rows can exist; skip them.
       continue;

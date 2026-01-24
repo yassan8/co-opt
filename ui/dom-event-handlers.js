@@ -21,6 +21,7 @@ import { findInfiniteSystemChiefRayOrigin, findApertureBoundaryRays } from '../r
 import { generateZMXText, downloadZMX } from '../import-export/zemax-export.js';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.js';
 import { buildShareUrlFromCompressedString, decodeAllDataFromCompressedString, encodeAllDataToCompressedString, getCompressedStringFromLocationHash, getCompressedStringFromLocation } from '../utils/url-share.js';
+import { listDesignVariablesFromBlocks } from '../optimization/design-variables.js';
 
 function __zmxPickPrimaryWavelengthMicrons(sourceRows) {
     try {
@@ -1542,6 +1543,23 @@ function setupImportZemaxButton() {
                 if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
                 activeCfg.metadata.importAnalyzeMode = false;
 
+                // Ensure ObjectPlane exists and is first in Design Intent after Zemax import.
+                if (Array.isArray(activeCfg.blocks)) {
+                    try {
+                        const hasObjectPlane = activeCfg.blocks.some(b => b && String(b.blockType ?? '').trim() === 'ObjectPlane');
+                        if (!hasObjectPlane) {
+                            const newId = __blocks_generateUniqueBlockId(activeCfg.blocks, 'ObjectPlane');
+                            const objBlock = __blocks_makeDefaultBlock('ObjectPlane', newId);
+                            if (objBlock && objBlock.metadata && typeof objBlock.metadata === 'object') {
+                                objBlock.metadata.source = 'zemax-import';
+                            }
+                            activeCfg.blocks.unshift(objBlock);
+                        }
+                    } catch (_) {
+                        // ignore
+                    }
+                }
+
                 // If the imported file has no semidia/DIAM records, enable ImagePlane auto semidia (chief ray)
                 // so the Image semidia can be derived later via `calculateImageSemiDiaFromChiefRays()`.
                 if (!importedHasAnySemidia && Array.isArray(activeCfg.blocks)) {
@@ -1875,16 +1893,29 @@ function setupSuggestOptimizeButtons() {
 
                 // Auto-detect scenarios: if 2+ scenarios exist, evaluate weighted sum.
                 let multiScenario = false;
+                let activeCfg = null;
+                let variableCount = 0;
+                let numericVarCount = 0;
+                let categoricalVarCount = 0;
                 try {
                     const systemConfig = (typeof loadSystemConfigurationsFromTableConfig === 'function')
                         ? loadSystemConfigurationsFromTableConfig()
                         : JSON.parse(localStorage.getItem('systemConfigurations'));
                     const activeId = systemConfig?.activeConfigId;
-                    const activeCfg = systemConfig?.configurations?.find(c => c && c.id === activeId)
-                        || systemConfig?.configurations?.[0];
+                    activeCfg = systemConfig?.configurations?.find(c => c && c.id === activeId)
+                        || systemConfig?.configurations?.[0]
+                        || null;
                     if (activeCfg && Array.isArray(activeCfg.scenarios) && activeCfg.scenarios.length >= 2) {
                         multiScenario = true;
                     }
+
+                    const allVars = listDesignVariablesFromBlocks(activeCfg || {});
+                    const numericVars = Array.isArray(allVars)
+                        ? allVars.filter(v => typeof v?.value === 'number' && Number.isFinite(v.value))
+                        : [];
+                    variableCount = Array.isArray(allVars) ? allVars.length : 0;
+                    numericVarCount = numericVars.length;
+                    categoricalVarCount = Math.max(0, variableCount - numericVarCount);
                 } catch (_) {}
 
                 // Progress popup window
@@ -1912,11 +1943,100 @@ function setupSuggestOptimizeButtons() {
         <input id="opt-max-iter" type="number" min="1" step="1" value="1000" style="width:100px; padding:4px 6px;" />
     </label>
 </div>
+<details style="margin-bottom:10px; font-size:12px; color:#555;">
+    <summary style="font-weight:600; margin-bottom:6px; cursor:pointer;">Stability Tuning</summary>
+    <div style="display:grid; grid-template-columns: 180px 140px 1fr; gap:6px 10px; align-items:center; margin-top:6px;">
+        <div>stepFraction</div>
+        <input id="opt-step-fraction" type="number" step="0.001" value="0.02" style="width:120px; padding:4px 6px;" />
+        <div>CDの初期ステップ比率（小さくすると安定）</div>
+
+        <div>minStep</div>
+        <input id="opt-min-step" type="number" step="1e-7" value="1e-6" style="width:120px; padding:4px 6px;" />
+        <div>CDの最小ステップ</div>
+
+        <div>stepDecay</div>
+        <input id="opt-step-decay" type="number" step="0.05" value="0.5" style="width:120px; padding:4px 6px;" />
+        <div>CDの失敗時縮小率</div>
+
+        <div>lmLambda0</div>
+        <input id="opt-lm-lambda0" type="number" step="1e-4" value="1e-3" style="width:120px; padding:4px 6px;" />
+        <div>LM初期ダンピング</div>
+
+        <div>lmLambdaUp</div>
+        <input id="opt-lm-lambdaup" type="number" step="1" value="10" style="width:120px; padding:4px 6px;" />
+        <div>LM拒否時の増加係数</div>
+
+        <div>lmLambdaDown</div>
+        <input id="opt-lm-lambdadown" type="number" step="0.05" value="0.3" style="width:120px; padding:4px 6px;" />
+        <div>LM受理時の減少係数</div>
+
+        <div>trustRegion</div>
+        <input id="opt-trust-region" type="checkbox" checked style="width:16px; height:16px;" />
+        <div>信頼領域を有効化</div>
+
+        <div>trustRegionDelta</div>
+        <input id="opt-trust-region-delta" type="number" step="0.01" value="0.05" style="width:120px; padding:4px 6px;" />
+        <div>信頼領域の基本半径</div>
+
+        <div>trustRegionDeltaMax</div>
+        <input id="opt-trust-region-delta-max" type="number" step="0.1" value="1.0" style="width:120px; padding:4px 6px;" />
+        <div>信頼領域の最大半径</div>
+
+        <div>backtracking</div>
+        <input id="opt-backtracking" type="checkbox" checked style="width:16px; height:16px;" />
+        <div>LMのバックトラック探索</div>
+
+        <div>backtrackingMaxTries</div>
+        <input id="opt-backtracking-max-tries" type="number" step="1" value="8" style="width:120px; padding:4px 6px;" />
+        <div>バックトラック試行回数</div>
+
+        <div>fdStepFraction</div>
+        <input id="opt-fd-step-fraction" type="number" step="1e-5" value="1e-4" style="width:120px; padding:4px 6px;" />
+        <div>数値微分の相対ステップ</div>
+
+        <div>fdMinStep</div>
+        <input id="opt-fd-min-step" type="number" step="1e-19" value="1e-18" style="width:120px; padding:4px 6px;" />
+        <div>数値微分の最小ステップ</div>
+
+        <div>fdScaledStep</div>
+        <input id="opt-fd-scaled-step" type="number" step="1e-4" value="1e-3" style="width:120px; padding:4px 6px;" />
+        <div>スケール付き微分ステップ</div>
+
+        <div>staged</div>
+        <input id="opt-staged" type="checkbox" checked style="width:16px; height:16px;" />
+        <div>係数の段階的解放</div>
+
+        <div>stageStallLimit</div>
+        <input id="opt-stage-stall-limit" type="number" step="1" value="2" style="width:120px; padding:4px 6px;" />
+        <div>段階の停滞許容回数</div>
+
+        <div>restartOnRejectStreak</div>
+        <input id="opt-restart-on-reject-streak" type="number" step="1" value="8" style="width:120px; padding:4px 6px;" />
+        <div>連続拒否でリスタート</div>
+
+        <div>restartMaxCount</div>
+        <input id="opt-restart-max-count" type="number" step="1" value="2" style="width:120px; padding:4px 6px;" />
+        <div>リスタートの最大回数</div>
+
+        <div>restartJitterScaled</div>
+        <input id="opt-restart-jitter-scaled" type="number" step="0.005" value="0.035" style="width:120px; padding:4px 6px;" />
+        <div>リスタート時のジッタ量</div>
+
+        <div>lmExploreWhenFlat</div>
+        <input id="opt-lm-explore-when-flat" type="checkbox" style="width:16px; height:16px;" />
+        <div>LMが平坦時に探索を許可</div>
+
+        <div>lmExploreTries</div>
+        <input id="opt-lm-explore-tries" type="number" step="1" value="3" style="width:120px; padding:4px 6px;" />
+        <div>探索ステップ試行回数</div>
+    </div>
+</details>
 <div style="display:flex; gap:10px; flex-direction:column;">
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Phase</span><span id="opt-phase" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Decision</span><span id="opt-decision" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Accept/Reject</span><span id="opt-decision-count" style="margin-left:8px;">0 / 0</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Iter</span><span id="opt-iter" style="margin-left:8px;">0</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Vars</span><span id="opt-vars" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Req</span><span id="opt-req" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Res</span><span id="opt-res" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Score</span><span id="opt-cur" style="margin-left:8px;">-</span></div>
@@ -1927,6 +2047,18 @@ function setupSuggestOptimizeButtons() {
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Issue</span><span id="opt-issue" style="margin-left:8px;">-</span></div>
 </div>
 `;
+
+                        try {
+                            const varsEl = popup.document.getElementById('opt-vars');
+                            if (varsEl) {
+                                const parts = [];
+                                if (Number.isFinite(variableCount)) parts.push(String(variableCount));
+                                if (Number.isFinite(numericVarCount) || Number.isFinite(categoricalVarCount)) {
+                                    parts.push(`(num ${numericVarCount}, cat ${categoricalVarCount})`);
+                                }
+                                varsEl.textContent = parts.length ? parts.join(' ') : '-';
+                            }
+                        } catch (_) {}
 
                         try {
                             const stopBtn = popup.document.getElementById('opt-stop');
@@ -2243,7 +2375,59 @@ function setupSuggestOptimizeButtons() {
                         return n;
                     };
 
+                    const resolveOptParams = () => {
+                        const readNum = (id, fallback) => {
+                            let v = fallback;
+                            try {
+                                if (popup && !popup.closed) {
+                                    const el = popup.document.getElementById(id);
+                                    const n = el ? Number(el.value) : NaN;
+                                    if (Number.isFinite(n)) v = n;
+                                }
+                            } catch (_) {}
+                            return v;
+                        };
+                        const readBool = (id, fallback) => {
+                            let v = fallback;
+                            try {
+                                if (popup && !popup.closed) {
+                                    const el = popup.document.getElementById(id);
+                                    if (el && typeof el.checked === 'boolean') v = !!el.checked;
+                                }
+                            } catch (_) {}
+                            return v;
+                        };
+
+                        const trustRegionDelta = readNum('opt-trust-region-delta', 0.05);
+                        const trustRegionDeltaMax = Math.max(trustRegionDelta, readNum('opt-trust-region-delta-max', 1.0));
+
+                        return {
+                            stepFraction: readNum('opt-step-fraction', 0.02),
+                            minStep: readNum('opt-min-step', 1e-6),
+                            stepDecay: readNum('opt-step-decay', 0.5),
+                            lmLambda0: readNum('opt-lm-lambda0', 1e-3),
+                            lmLambdaUp: readNum('opt-lm-lambdaup', 10),
+                            lmLambdaDown: readNum('opt-lm-lambdadown', 0.3),
+                            trustRegion: readBool('opt-trust-region', true),
+                            trustRegionDelta,
+                            trustRegionDeltaMax,
+                            backtracking: readBool('opt-backtracking', true),
+                            backtrackingMaxTries: Math.max(1, Math.floor(readNum('opt-backtracking-max-tries', 8))),
+                            fdStepFraction: readNum('opt-fd-step-fraction', 1e-4),
+                            fdMinStep: readNum('opt-fd-min-step', 1e-18),
+                            fdScaledStep: readNum('opt-fd-scaled-step', 1e-3),
+                            staged: readBool('opt-staged', true),
+                            stageStallLimit: Math.max(1, Math.floor(readNum('opt-stage-stall-limit', 2))),
+                            restartOnRejectStreak: Math.max(1, Math.floor(readNum('opt-restart-on-reject-streak', 8))),
+                            restartMaxCount: Math.max(0, Math.floor(readNum('opt-restart-max-count', 2))),
+                            restartJitterScaled: Math.max(0, readNum('opt-restart-jitter-scaled', 0.035)),
+                            lmExploreWhenFlat: readBool('opt-lm-explore-when-flat', false),
+                            lmExploreTries: Math.max(1, Math.floor(readNum('opt-lm-explore-tries', 3)))
+                        };
+                    };
+
                     const maxIterations = resolveMaxIterations();
+                    const optParams = resolveOptParams();
 
                     let result = null;
                     try {
@@ -2272,6 +2456,7 @@ function setupSuggestOptimizeButtons() {
                             maxIterations,
                             method: 'lm',
                             stageMaxCoef: [10], // unlock all asphere coef at once
+                            ...optParams,
                             onProgress: updateProgressUI,
                             shouldStop: shouldStopNow
                         });
@@ -3254,12 +3439,13 @@ function setupWavefrontAberrationButton() {
             lines.push(`3 tilt y : ${fmt(cMic[3])} μm  (${wfmt(cWav[3])} waves)`);
             lines.push(`5 defocus: ${fmt(cMic[5])} μm  (${wfmt(cWav[5])} waves)`);
 
-            if (map.statistics?.raw?.opdMicrons && map.statistics?.opdMicrons) {
+            if (map.statistics?.raw?.opdMicrons && (map.statistics?.display?.opdMicrons || map.statistics?.opdMicrons)) {
                 const raw = map.statistics.raw.opdMicrons;
-                const corr = map.statistics.opdMicrons;
+                const corr = map.statistics.display?.opdMicrons || map.statistics.opdMicrons;
+                const corrLabel = map.statistics.display?.opdMicrons ? 'piston+tilt removed' : 'piston removed';
                 lines.push('');
-                lines.push(`OPD RMS: raw=${raw.rms.toFixed(6)} μm, corrected=${corr.rms.toFixed(6)} μm`);
-                lines.push(`OPD P-V:  raw=${raw.peakToPeak.toFixed(6)} μm, corrected=${corr.peakToPeak.toFixed(6)} μm`);
+                lines.push(`OPD RMS: raw=${raw.rms.toFixed(6)} μm, corrected(${corrLabel})=${corr.rms.toFixed(6)} μm`);
+                lines.push(`OPD P-V:  raw=${raw.peakToPeak.toFixed(6)} μm, corrected(${corrLabel})=${corr.peakToPeak.toFixed(6)} μm`);
             }
 
             alert(lines.join('\n'));

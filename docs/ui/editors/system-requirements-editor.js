@@ -720,6 +720,17 @@ class SystemRequirementsEditor {
         
         control.dataset.role = field;
         control.addEventListener('focus', onCellFocus);
+        if (field === 'param2') {
+          control.addEventListener('focus', () => {
+            try {
+              if (String(row?.operand ?? '').trim() === 'EFL' && control.tagName === 'INPUT') {
+                const blocks = this._getBlocksForConfigHint(row?.configId);
+                const dlId = ensureEflBlocksDatalist(blocks);
+                if (dlId) control.setAttribute('list', dlId);
+              }
+            } catch (_) {}
+          });
+        }
         
         if (control.tagName === 'SELECT') {
           control.addEventListener('change', () => {

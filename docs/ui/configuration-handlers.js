@@ -50,6 +50,12 @@ function stopAutoSave() {
  * Configuration UIを初期化
  */
 export function initializeConfigurationUI() {
+  try {
+    if (typeof window !== 'undefined') {
+      if (window.__configurationUIInitialized) return;
+      window.__configurationUIInitialized = true;
+    }
+  } catch (_) {}
   
   // 既存のConfigurationシステムを初期化（初回起動時）
   initializeConfigurationSystem();
@@ -61,6 +67,20 @@ export function initializeConfigurationUI() {
   // イベントリスナー設定
   setupConfigurationEventListeners();
 }
+
+// Auto-init as a fallback if the host page doesn't call initializeConfigurationUI.
+try {
+  if (typeof window !== 'undefined') {
+    const boot = () => {
+      try { initializeConfigurationUI(); } catch (_) {}
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', boot, { once: true });
+    } else {
+      boot();
+    }
+  }
+} catch (_) {}
 
 // Allow other modules (e.g. Load flow) to refresh the config dropdown/info
 // without re-initializing event listeners or requiring a browser reload.
