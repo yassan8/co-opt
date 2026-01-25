@@ -53,8 +53,8 @@ function tryGetLocalStorageArray(key) {
 
 function pickPreservedObjectThickness(cfg, systemConfig, configId) {
   try {
-    const hasObjectPlane = Array.isArray(cfg?.blocks) && cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectPlane');
-    if (hasObjectPlane) return undefined;
+    const hasObjectSurface = Array.isArray(cfg?.blocks) && cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface');
+    if (hasObjectSurface) return undefined;
   } catch (_) {}
 
   // Prefer persisted config.opticalSystem[0].thickness.
@@ -589,10 +589,10 @@ function summarizeBlocks(blocks) {
     if (!isPlainObject(b)) continue;
     const t = String(b.blockType ?? '').trim();
     if (!t) continue;
-    if (t === 'ImagePlane') continue;
+    if (t === 'ImageSurface') continue;
     parts.push(`${t}${b.blockId ? `(${b.blockId})` : ''}`);
   }
-  parts.push('ImagePlane');
+  parts.push('ImageSurface');
   return parts.join(' → ');
 }
 

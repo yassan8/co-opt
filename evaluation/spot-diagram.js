@@ -2992,7 +2992,7 @@ export function generateSurfaceOptions(opticalSystemRows) {
         // Be strict: avoid treating unrelated strings containing "object" as Object.
         // Accept common tokens/prefixes used by the table and block schema.
         if (n === 'object' || c === 'object') return true;
-        if (c === 'objectplane' || c === 'objectsurface') return true;
+        if (c === 'objectsurface' || c === 'objectsurface') return true;
         if (n.startsWith('object ') || n.startsWith('object-') || n.startsWith('object_')) return true;
         return false;
     };

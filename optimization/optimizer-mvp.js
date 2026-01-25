@@ -389,8 +389,8 @@ function getActiveConfigRef(systemConfig) {
 function updateExpandedOpticalSystemInConfig(config) {
   if (!config || !Array.isArray(config.blocks)) return;
 
-  const blocksHaveObjectPlane = (() => {
-    try { return config.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectPlane'); } catch (_) { return false; }
+  const blocksHaveObjectSurface = (() => {
+    try { return config.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface'); } catch (_) { return false; }
   })();
 
   const pickPreservedSemidiaRows = () => {
@@ -411,8 +411,8 @@ function updateExpandedOpticalSystemInConfig(config) {
   };
 
   const pickPreservedObjectThickness = () => {
-    // ObjectPlane is canonical for object distance in Blocks-only mode.
-    if (blocksHaveObjectPlane) return null;
+    // ObjectSurface is canonical for object distance in Blocks-only mode.
+    if (blocksHaveObjectSurface) return null;
 
     // Prefer the current config.opticalSystem (may include user edits not represented in Blocks)
     try {

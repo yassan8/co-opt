@@ -1,7 +1,7 @@
 // Block-based optical design schema (MVP)
 // - Canonical storage: blocks[] in configuration
 // - Deterministic expansion: blocks -> OpticalSystemTableData row array
-// - Supported blocks (MVP): ObjectPlane, Lens, Stop, AirGap, ImagePlane
+// - Supported blocks (MVP): ObjectSurface, Lens, Stop, AirGap, ImageSurface
 // - Glass material must exist in glass.js DB; numeric refractive index is disallowed.
 
 import { getAllGlassDatabases, getGlassDataWithSellmeier } from './glass.js';
@@ -403,14 +403,14 @@ export function validateBlocksConfiguration(config) {
     return issues;
   }
 
-  // ObjectPlane rules: at most one.
+  // ObjectSurface rules: at most one.
   try {
-    const nObjectPlane = (config.blocks || []).filter(b => String(b?.blockType ?? '').trim() === 'ObjectPlane').length;
-    if (nObjectPlane > 1) {
+    const nObjectSurface = (config.blocks || []).filter(b => String(b?.blockType ?? '').trim() === 'ObjectSurface').length;
+    if (nObjectSurface > 1) {
       issues.push({
         severity: 'fatal',
         phase: 'validate',
-        message: 'Only one ObjectPlane block is supported.'
+        message: 'Only one ObjectSurface block is supported.'
       });
     }
   } catch (_) {}
@@ -434,11 +434,11 @@ export function validateBlocksConfiguration(config) {
     }
 
     const blockType = block.blockType;
-    if (blockType !== 'ObjectPlane' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordTrans' && blockType !== 'Mirror' && blockType !== 'ImagePlane') {
+    if (blockType !== 'ObjectSurface' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordTrans' && blockType !== 'Mirror' && blockType !== 'SingleSurface' && blockType !== 'ImageSurface') {
       issues.push({
         severity: 'fatal',
         phase: 'validate',
-        message: `Unsupported blockType: ${blockType} (MVP supports ObjectPlane, Lens, Doublet, Triplet, Gap, Stop, CoordTrans, Mirror, ImagePlane only).`,
+        message: `Unsupported blockType: ${blockType} (MVP supports ObjectSurface, Lens, SingleSurface, Doublet, Triplet, Gap, Stop, CoordTrans, Mirror, ImageSurface only).`,
         blockId: block.blockId
       });
       continue;
@@ -447,7 +447,7 @@ export function validateBlocksConfiguration(config) {
     const parameters = isPlainObject(block.parameters) ? block.parameters : {};
     const variables = block.variables;
 
-    if (blockType !== 'ImagePlane') {
+    if (blockType !== 'ImageSurface') {
       const hasParams = isPlainObject(block.parameters);
       const hasVars = isPlainObject(block.variables);
       if (!hasParams && !hasVars) {
@@ -461,7 +461,7 @@ export function validateBlocksConfiguration(config) {
       continue;
     }
 
-    if (blockType === 'ObjectPlane') {
+    if (blockType === 'ObjectSurface') {
       const modeRaw = getParamOrVarValue(parameters, variables, 'objectDistanceMode');
       const mode = String(modeRaw ?? '').trim();
       const modeKey = mode.replace(/\s+/g, '').toUpperCase();
@@ -472,7 +472,7 @@ export function validateBlocksConfiguration(config) {
         issues.push({
           severity: 'fatal',
           phase: 'validate',
-          message: `ObjectPlane.objectDistanceMode must be Finite or INF (got: ${mode})`,
+          message: `ObjectSurface.objectDistanceMode must be Finite or INF (got: ${mode})`,
           blockId: block.blockId
         });
       }
@@ -480,13 +480,64 @@ export function validateBlocksConfiguration(config) {
       if (!isInf) {
         const d = getParamOrVarValue(parameters, variables, 'objectDistance');
         if (d === undefined) {
-          issues.push({ severity: 'fatal', phase: 'validate', message: 'ObjectPlane.objectDistance is required when mode is Finite.', blockId: block.blockId });
+          issues.push({ severity: 'fatal', phase: 'validate', message: 'ObjectSurface.objectDistance is required when mode is Finite.', blockId: block.blockId });
         } else {
           const v = normalizeThicknessToRowValue(d);
           if (v === 'INF') {
-            issues.push({ severity: 'warning', phase: 'validate', message: 'ObjectPlane.objectDistance is INF; treating as INF.', blockId: block.blockId });
+            issues.push({ severity: 'warning', phase: 'validate', message: 'ObjectSurface.objectDistance is INF; treating as INF.', blockId: block.blockId });
           } else if (typeof v === 'number' && Number.isFinite(v) && v <= 0) {
-            issues.push({ severity: 'warning', phase: 'validate', message: `ObjectPlane.objectDistance is <= 0 (${String(v)}).`, blockId: block.blockId });
+            issues.push({ severity: 'warning', phase: 'validate', message: `ObjectSurface.objectDistance is <= 0 (${String(v)}).`, blockId: block.blockId });
+          }
+        }
+      }
+    }
+
+    if (blockType === 'SingleSurface') {
+      const radius = getParamOrVarValue(parameters, variables, 'radius');
+      const thickness = getParamOrVarValue(parameters, variables, 'thickness');
+      const material = getParamOrVarValue(parameters, variables, 'material');
+
+      // Optional asphere parameters
+      const surfType = normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, 'surfType'));
+
+      if (surfType && !ALLOWED_SURF_TYPES.has(surfType)) {
+        issues.push({ severity: 'fatal', phase: 'validate', message: `SingleSurface.surfType must be one of: Spherical, Aspheric even, Aspheric odd. Got: ${surfType}`, blockId: block.blockId });
+      }
+
+      if (radius === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'SingleSurface.radius is required.', blockId: block.blockId });
+      if (thickness === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'SingleSurface.thickness is required.', blockId: block.blockId });
+
+      // Material is optional for SingleSurface (can be air/vacuum)
+      if (material !== undefined && material !== null && material !== '') {
+        if (typeof material === 'string' && __isNumericMaterialName(material)) {
+          issues.push({
+            severity: 'warning',
+            phase: 'validate',
+            message: `SingleSurface.material is numeric (${material}). Treated as synthetic glass; dispersion may be inaccurate.`,
+            blockId: block.blockId
+          });
+        } else if (typeof material === 'string' && !isKnownGlassNameOnly(material) && material.trim() !== 'AIR' && material.trim() !== '') {
+          issues.push({
+            severity: 'warning',
+            phase: 'validate',
+            message: `Unknown glass name (allowed for imported/legacy designs): ${material}`,
+            blockId: block.blockId
+          });
+        }
+      }
+
+      // Check optimize modes
+      if (isPlainObject(variables)) {
+        for (const [k, v] of Object.entries(variables)) {
+          if (!isPlainObject(v) || !isPlainObject(v.optimize) || v.optimize.mode === undefined) continue;
+          const mode = v.optimize.mode;
+          if (mode !== 'V' && mode !== '' && mode !== undefined && mode !== null) {
+            issues.push({
+              severity: 'warning',
+              phase: 'validate',
+              message: `variables.${k}.optimize.mode=${String(v.optimize.mode)} is not supported yet; treating as fixed.`,
+              blockId: block.blockId
+            });
           }
         }
       }
@@ -804,7 +855,7 @@ export function validateBlocksConfiguration(config) {
       }
     }
 
-    if (blockType === 'ImagePlane') {
+    if (blockType === 'ImageSurface') {
       // Optional parameters supported:
       // - semidia: numeric (image semi diameter)
       // - optimizeSemiDia: 'A' to auto-update semidia by chief ray tracing (UI-triggered)
@@ -812,7 +863,7 @@ export function validateBlocksConfiguration(config) {
       if (semidiaRaw !== undefined && semidiaRaw !== null && String(semidiaRaw).trim() !== '') {
         const n = (typeof semidiaRaw === 'number') ? semidiaRaw : (isNumericString(String(semidiaRaw)) ? Number(semidiaRaw) : NaN);
         if (!Number.isFinite(n) || n <= 0) {
-          issues.push({ severity: 'fatal', phase: 'validate', message: `ImagePlane.parameters.semidia must be a positive number when provided (got: ${String(semidiaRaw)})`, blockId: block.blockId });
+          issues.push({ severity: 'fatal', phase: 'validate', message: `ImageSurface.parameters.semidia must be a positive number when provided (got: ${String(semidiaRaw)})`, blockId: block.blockId });
         }
       }
 
@@ -820,7 +871,7 @@ export function validateBlocksConfiguration(config) {
       if (optRaw !== undefined && optRaw !== null && String(optRaw).trim() !== '') {
         const s = String(optRaw).trim();
         if (s !== 'A' && s !== 'a') {
-          issues.push({ severity: 'warning', phase: 'validate', message: `ImagePlane.parameters.optimizeSemiDia supports only 'A' (got: ${s}); ignoring.`, blockId: block.blockId });
+          issues.push({ severity: 'warning', phase: 'validate', message: `ImageSurface.parameters.optimizeSemiDia supports only 'A' (got: ${s}); ignoring.`, blockId: block.blockId });
         }
       }
 
@@ -828,7 +879,7 @@ export function validateBlocksConfiguration(config) {
         issues.push({
           severity: 'warning',
           phase: 'validate',
-          message: 'ImagePlane.variables is ignored (Image plane is not a design variable).',
+          message: 'ImageSurface.variables is ignored (Image plane is not a design variable).',
           blockId: block.blockId
         });
       }
@@ -1029,7 +1080,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
     return rows[0];
   };
 
-  let sawImagePlane = false;
+  let sawImageSurface = false;
   let imagePlaneBlockId = null;
   let imagePlaneOverrides = null;
   let currentZSign = 1;
@@ -1053,8 +1104,8 @@ export function expandBlocksToOpticalSystemRows(blocks) {
     const vars = isPlainObject(block.variables) ? block.variables : null;
     const aperture = isPlainObject(block.aperture) ? block.aperture : null;
 
-    if (type === 'ObjectPlane') {
-      // ObjectPlane is a non-surface block that defines the distance from the object plane
+    if (type === 'ObjectSurface') {
+      // ObjectSurface is a non-surface block that defines the distance from the object plane
       // to the first surface (stored as Object row thickness).
       try {
         const modeRaw = getParamOrVarValue(params, vars, 'objectDistanceMode');
@@ -1071,21 +1122,21 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       continue;
     }
 
-    if (sawImagePlane) {
+    if (sawImageSurface) {
       issues.push({
         severity: 'warning',
         phase: 'expand',
-        message: 'Blocks after ImagePlane are ignored.',
+        message: 'Blocks after ImageSurface are ignored.',
         blockId
       });
       continue;
     }
 
-    if (type === 'ImagePlane') {
-      sawImagePlane = true;
+    if (type === 'ImageSurface') {
+      sawImageSurface = true;
       imagePlaneBlockId = blockId || null;
 
-      // Optional ImagePlane row overrides (applied to the appended Image row).
+      // Optional ImageSurface row overrides (applied to the appended Image row).
       try {
         const p = isPlainObject(params) ? params : {};
         const ov = {};
@@ -1218,6 +1269,63 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       }
 
       rows.push(front, back);
+      continue;
+    }
+
+    if (type === 'SingleSurface') {
+      const surf = createBlankSurfaceRow(rows.length, getLastNonStopRow());
+
+      surf._blockType = 'SingleSurface';
+      surf._blockId = blockId || null;
+      surf._surfaceRole = 'single';
+
+      // Persisted aperture (semidia) stored in Design Intent
+      try {
+        const vSemidia = aperture ? aperture.semidia : null;
+        if (vSemidia !== null && vSemidia !== undefined && String(vSemidia).trim() !== '') {
+          surf.semidia = vSemidia;
+        } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 'semidia')) {
+          surf.semidia = '';
+        }
+      } catch (_) {}
+
+      const radius = getParamOrVarValue(params, vars, 'radius');
+      const thickness = getParamOrVarValue(params, vars, 'thickness');
+      const material = getParamOrVarValue(params, vars, 'material');
+
+      // Optional asphere parameters
+      const surfTypeRaw = getParamOrVarValue(params, vars, 'surfType');
+      const conicRaw = getParamOrVarValue(params, vars, 'conic');
+      const coefsRaw = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `coef${i + 1}`));
+
+      surf.radius = normalizeRadiusToRowValue(radius);
+      surf.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness));
+      surf.material = String(material ?? '').trim();
+
+      applyDerivedGlassDisplay(surf);
+      applyAsphereFieldsFromParams(surf, surfTypeRaw, conicRaw, coefsRaw);
+
+      // V flags for optimization
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius') && shouldMarkV(vars.radius)) {
+        applyVFlag(surf, 'optimizeR');
+      }
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness') && shouldMarkV(vars.thickness)) {
+        applyVFlag(surf, 'optimizeT');
+      }
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'material') && shouldMarkV(vars.material)) {
+        applyVFlag(surf, 'optimizeMaterial');
+      }
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'conic') && shouldMarkV(vars.conic)) {
+        applyVFlag(surf, 'optimizeConic');
+      }
+      for (let i = 1; i <= 10; i++) {
+        const key = `coef${i}`;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, key) && shouldMarkV(vars[key])) {
+          applyVFlag(surf, `optimizeCoef${i}`);
+        }
+      }
+
+      rows.push(surf);
       continue;
     }
 
@@ -1642,10 +1750,10 @@ export function expandBlocksToOpticalSystemRows(blocks) {
     });
   }
 
-  // Append Image row (do not force AUTO/A/INF here; honor ImagePlane overrides if provided).
+  // Append Image row (do not force AUTO/A/INF here; honor ImageSurface overrides if provided).
   const imageRow = createDefaultImageRow(rows.length, imagePlaneOverrides);
   if (imagePlaneBlockId) {
-    imageRow._blockType = 'ImagePlane';
+    imageRow._blockType = 'ImageSurface';
     imageRow._blockId = imagePlaneBlockId;
   } else {
     imageRow._blockType = 'Image';
@@ -1672,7 +1780,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
  * - Stop rows -> Stop block (spacing after Stop is converted into a Gap block)
  * - A lens is detected as: a non-Stop row with material != AIR followed by a row with material == AIR
  *   (front row thickness becomes centerThickness; back row thickness becomes a Gap block)
- * - ImagePlane marker is always appended.
+ * - ImageSurface marker is always appended.
  *
  * @param {any[]} rows legacy OpticalSystemTableData-like rows
  * @returns {{ blocks: any[], issues: LoadIssue[] }}
@@ -2148,8 +2256,8 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows) {
 
   // Marker block
   blocks.push({
-    blockId: 'ImagePlane-1',
-    blockType: 'ImagePlane',
+    blockId: 'ImageSurface-1',
+    blockType: 'ImageSurface',
     role: null,
     constraints: {},
     parameters: undefined,

@@ -1047,7 +1047,6 @@ button:active {
 .optical-system-section {
     margin: 20px;
     margin-top: 20px;
-    border-top: 1px solid #ddd !important;
     padding-top: 15px;
 }
 
@@ -1379,6 +1378,9 @@ button:active {
 
 /* Save, Load, Clear Storage ボタン用の横並びスタイル */
 .top-buttons-container {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -1411,11 +1413,35 @@ button:active {
     min-width: 30px;
 }
 
+.top-toggle-btn {
+    padding: 4px 10px;
+    min-width: 30px;
+    font-size: 14px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background-color 0.2s, transform 0.3s;
+    user-select: none;
+}
+
+.top-toggle-btn:hover {
+    background-color: #f0f0f0;
+}
+
+.top-toggle-btn.collapsed {
+    transform: rotate(-90deg);
+}
+
 .top-buttons-row {
     display: flex;
     gap: 10px;
     flex-wrap: wrap;
     align-items: center;
+}
+
+.top-buttons-row.collapsed {
+    display: none;
 }
 
 /* Button Group Styling */

@@ -199,7 +199,7 @@ class SystemRequirementsEditor {
           if (!id) continue;
           const tRaw = String(b.blockType ?? '').trim();
           if (!tRaw) continue;
-          if (tRaw === 'ObjectPlane' || tRaw === 'ImagePlane') {
+          if (tRaw === 'ObjectSurface' || tRaw === 'ImageSurface') {
             labelById.set(id, tRaw);
             continue;
           }

@@ -1333,7 +1333,7 @@ async function __loadAllDataObjectIntoApp(allData, { filename }) {
     const cfgList = Array.isArray(candidateConfig?.configurations) ? candidateConfig.configurations : [];
 
     const countBlocksByType = (blocks) => {
-        const out = { Lens: 0, Doublet: 0, Triplet: 0, AirGap: 0, Stop: 0, ImagePlane: 0, Other: 0 };
+        const out = { Lens: 0, Doublet: 0, Triplet: 0, AirGap: 0, Stop: 0, ImageSurface: 0, Other: 0 };
         if (!Array.isArray(blocks)) return out;
         for (const b of blocks) {
             const t = String(b?.blockType ?? '');
@@ -1795,11 +1795,11 @@ function setupImportZemaxButton() {
                 if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
                 activeCfg.metadata.importAnalyzeMode = false;
 
-                // Ensure ObjectPlane exists and is first in Design Intent after Zemax import.
+                // Ensure ObjectSurface exists and is first in Design Intent after Zemax import.
                 if (Array.isArray(activeCfg.blocks)) {
                     try {
-                        const hasObjectPlane = activeCfg.blocks.some(b => b && String(b.blockType ?? '').trim() === 'ObjectPlane');
-                        if (!hasObjectPlane) {
+                        const hasObjectSurface = activeCfg.blocks.some(b => b && String(b.blockType ?? '').trim() === 'ObjectSurface');
+                        if (!hasObjectSurface) {
                             // Check if Object surface (rows[0]) has finite or infinite thickness
                             const objThickness = rows?.[0]?.thickness;
                             const objThicknessStr = String(objThickness ?? '').trim().toUpperCase();
@@ -1808,8 +1808,8 @@ function setupImportZemaxButton() {
                                                      objThicknessStr === 'INF' || 
                                                      objThicknessStr === 'INFINITY';
                             
-                            const newId = __blocks_generateUniqueBlockId(activeCfg.blocks, 'ObjectPlane');
-                            const objBlock = __blocks_makeDefaultBlock('ObjectPlane', newId);
+                            const newId = __blocks_generateUniqueBlockId(activeCfg.blocks, 'ObjectSurface');
+                            const objBlock = __blocks_makeDefaultBlock('ObjectSurface', newId);
                             if (objBlock && objBlock.metadata && typeof objBlock.metadata === 'object') {
                                 objBlock.metadata.source = 'zemax-import';
                             }
@@ -1832,14 +1832,14 @@ function setupImportZemaxButton() {
                     }
                 }
 
-                // If the imported file has no semidia/DIAM records, enable ImagePlane auto semidia (chief ray)
+                // If the imported file has no semidia/DIAM records, enable ImageSurface auto semidia (chief ray)
                 // so the Image semidia can be derived later via `calculateImageSemiDiaFromChiefRays()`.
                 if (!importedHasAnySemidia && Array.isArray(activeCfg.blocks)) {
                     try {
                         for (const b of activeCfg.blocks) {
                             if (!b || typeof b !== 'object') continue;
                             const bt = String(b?.blockType ?? b?.type ?? '').trim();
-                            if (bt !== 'ImagePlane') continue;
+                            if (bt !== 'ImageSurface') continue;
                             if (!b.parameters || typeof b.parameters !== 'object') b.parameters = {};
                             b.parameters.optimizeSemiDia = 'A';
                         }
@@ -2002,7 +2002,7 @@ function setupImportZemaxButton() {
                                         .catch(() => {})
                                         .finally(() => {
                                             try { globalThis.alert = prevAlert; } catch (_) {}
-                                            // Ensure Design Intent reflects computed ImagePlane semidia without requiring a Render click.
+                                            // Ensure Design Intent reflects computed ImageSurface semidia without requiring a Render click.
                                             try { refreshBlockInspector(); } catch (_) {}
                                         });
                                 } catch (_) {
@@ -2215,7 +2215,22 @@ function setupSuggestOptimizeButtons() {
         <input id="opt-max-iter" type="number" min="1" step="1" value="1000" style="width:100px; padding:4px 6px;" />
     </label>
 </div>
-<details style="margin-bottom:10px; font-size:12px; color:#555;">
+<div style="display:flex; gap:10px; flex-direction:column;">
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Phase</span><span id="opt-phase" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Decision</span><span id="opt-decision" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Accept/Reject</span><span id="opt-decision-count" style="margin-left:8px;">0 / 0</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Iter</span><span id="opt-iter" style="margin-left:8px;">0</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Vars</span><span id="opt-vars" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Req</span><span id="opt-req" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Res</span><span id="opt-res" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Score</span><span id="opt-cur" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Violation</span><span id="opt-vio" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Soft</span><span id="opt-soft" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Best</span><span id="opt-best" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Rho</span><span id="opt-rho" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Issue</span><span id="opt-issue" style="margin-left:8px;">-</span></div>
+</div>
+<details style="margin-top:10px; margin-bottom:10px; font-size:12px; color:#555;">
     <summary style="font-weight:600; margin-bottom:6px; cursor:pointer;">Stability Tuning</summary>
     <div style="display:grid; grid-template-columns: 180px 140px 1fr; gap:6px 10px; align-items:center; margin-top:6px;">
         <div>stepFraction</div>
@@ -2303,21 +2318,6 @@ function setupSuggestOptimizeButtons() {
         <div>探索ステップ試行回数</div>
     </div>
 </details>
-<div style="display:flex; gap:10px; flex-direction:column;">
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Phase</span><span id="opt-phase" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Decision</span><span id="opt-decision" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Accept/Reject</span><span id="opt-decision-count" style="margin-left:8px;">0 / 0</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Iter</span><span id="opt-iter" style="margin-left:8px;">0</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Vars</span><span id="opt-vars" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Req</span><span id="opt-req" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Res</span><span id="opt-res" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Score</span><span id="opt-cur" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Violation</span><span id="opt-vio" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Soft</span><span id="opt-soft" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Best</span><span id="opt-best" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Rho</span><span id="opt-rho" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Issue</span><span id="opt-issue" style="margin-left:8px;">-</span></div>
-</div>
 `;
 
                         try {
@@ -2370,11 +2370,34 @@ function setupSuggestOptimizeButtons() {
                     try {
                         if (typeof globalThis !== 'undefined') {
                             globalThis.__cooptOptimizerSchedulerWindow = popup;
+                            globalThis.__cooptOptimizerIsRunning = false;
                         }
                     } catch (_) {}
+                    
+                    // Warn user if trying to close window during optimization
+                    try {
+                        popup.onbeforeunload = function(e) {
+                            if (globalThis && globalThis.__cooptOptimizerIsRunning) {
+                                const message = 'Optimization is still running. Closing this window may cause instability. Are you sure?';
+                                e.returnValue = message;
+                                return message;
+                            }
+                        };
+                    } catch (_) {}
+                    
                     try {
                         popupWatchTimer = window.setInterval(() => {
                             if (!popup || popup.closed) {
+                                // Warn if window was closed during optimization
+                                if (globalThis && globalThis.__cooptOptimizerIsRunning) {
+                                    alert('⚠️ Warning: Optimize Progress window was closed while optimization was running.\nThis may cause instability. Use the Stop button before closing the window.');
+                                    stopFlag.stop = true;
+                                    try {
+                                        const opt = window.OptimizationMVP;
+                                        if (opt && typeof opt.stop === 'function') opt.stop();
+                                    } catch (_) {}
+                                }
+                                
                                 if (popupWatchTimer) {
                                     try { window.clearInterval(popupWatchTimer); } catch (_) {}
                                     popupWatchTimer = null;
@@ -2602,6 +2625,18 @@ function setupSuggestOptimizeButtons() {
                 const startRun = async () => {
                     if (isRunning) return;
                     isRunning = true;
+                    if (typeof globalThis !== 'undefined') {
+                        globalThis.__cooptOptimizerIsRunning = true;
+                    }
+
+                    // Save state before optimization for undo
+                    let beforeOptimizationState = null;
+                    try {
+                        const json = localStorage.getItem('systemConfigurations');
+                        if (json) {
+                            beforeOptimizationState = JSON.parse(json);
+                        }
+                    } catch (_) {}
 
                     stopFlag.stop = false;
                     acceptCount = 0;
@@ -2703,6 +2738,11 @@ function setupSuggestOptimizeButtons() {
 
                     let result = null;
                     try {
+                        // Prevent undo recording during optimization
+                        if (window.undoHistory) {
+                            window.undoHistory.isExecuting = true;
+                        }
+                        
                         // Force-disable ray-tracing detailed debug logs during optimization.
                         // This prevents WASM intersection fast-path from being bypassed.
                         let __prevDisableRayTraceDebug;
@@ -2747,6 +2787,36 @@ function setupSuggestOptimizeButtons() {
                                 }
                             }
                         } catch (_) {}
+                        
+                        // Re-enable undo recording after optimization
+                        if (window.undoHistory) {
+                            window.undoHistory.isExecuting = false;
+                        }
+                        
+                        // Record optimization as a single undo operation
+                        try {
+                            if (beforeOptimizationState && window.undoHistory && result?.ok) {
+                                const afterOptimizationState = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+                                if (JSON.stringify(beforeOptimizationState) !== JSON.stringify(afterOptimizationState)) {
+                                    const command = {
+                                        name: 'Optimization',
+                                        execute: () => {
+                                            localStorage.setItem('systemConfigurations', JSON.stringify(afterOptimizationState));
+                                            window.location.reload();
+                                        },
+                                        undo: () => {
+                                            localStorage.setItem('systemConfigurations', JSON.stringify(beforeOptimizationState));
+                                            window.location.reload();
+                                        },
+                                        redo: function() { this.execute(); }
+                                    };
+                                    window.undoHistory.record(command);
+                                    console.log('[Undo] Recorded: Optimization');
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('[Undo] Failed to record optimization:', e);
+                        }
                     } catch (e) {
                         console.warn('⚠️ [Optimize] Failed:', e);
                         result = { ok: false, reason: e?.message ?? String(e) };
@@ -2764,10 +2834,18 @@ function setupSuggestOptimizeButtons() {
                                 }
                             }
                         } catch (_) {}
+                        
+                        // Re-enable undo recording even on error
+                        if (window.undoHistory) {
+                            window.undoHistory.isExecuting = false;
+                        }
                     }
 
                     // Ensure UI is consistent after the run.
                     isRunning = false;
+                    if (typeof globalThis !== 'undefined') {
+                        globalThis.__cooptOptimizerIsRunning = false;
+                    }
                     try { optimizeBtn.disabled = false; } catch (_) {}
                     try {
                         if (popup && !popup.closed) {
@@ -3038,7 +3116,7 @@ function setupClearStorageButton() {
 
                             const issues = [];
                             const countBlocksByType = (blocks) => {
-                                const out = { Lens: 0, Doublet: 0, Triplet: 0, Gap: 0, AirGap: 0, Stop: 0, ImagePlane: 0, Other: 0 };
+                                const out = { Lens: 0, Doublet: 0, Triplet: 0, Gap: 0, AirGap: 0, Stop: 0, ImageSurface: 0, Other: 0 };
                                 if (!Array.isArray(blocks)) return out;
                                 for (const b of blocks) {
                                     const t = String(b?.blockType ?? '');
@@ -3859,8 +3937,8 @@ function updateSurfaceNumberSelectLegacy() {
 
                 try {
                     if (cfg && Array.isArray(cfg.blocks) && cfg.blocks.length > 0 && typeof expandBlocksToOpticalSystemRows === 'function') {
-                        const blocksHaveObjectPlane = (() => {
-                            try { return cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectPlane'); } catch (_) { return false; }
+                        const blocksHaveObjectSurface = (() => {
+                            try { return cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface'); } catch (_) { return false; }
                         })();
                         const scenarios = Array.isArray(cfg.scenarios) ? cfg.scenarios : null;
                         const scenarioId = cfg.activeScenarioId ? String(cfg.activeScenarioId) : '';
@@ -3872,7 +3950,7 @@ function updateSurfaceNumberSelectLegacy() {
                         const exp = expandBlocksToOpticalSystemRows(blocksToExpand);
                         const expRows = exp && Array.isArray(exp.rows) ? exp.rows : null;
                         if (expRows && expRows.length > 0) {
-                            if (!blocksHaveObjectPlane) {
+                            if (!blocksHaveObjectSurface) {
                                 const preferredThickness = cfg?.opticalSystem?.[0]?.thickness;
                                 if (preferredThickness !== undefined && preferredThickness !== null && String(preferredThickness).trim() !== '') {
                                     expRows[0] = { ...expRows[0], thickness: preferredThickness };
@@ -7244,8 +7322,8 @@ const STORAGE_KEY = "systemConfigurations";
 function createDefaultConfiguration(id, name) {
     const defaultBlocks = [
         {
-            blockId: 'ObjectPlane-1',
-            blockType: 'ObjectPlane',
+            blockId: 'ObjectSurface-1',
+            blockType: 'ObjectSurface',
             role: null,
             constraints: {},
             parameters: {
@@ -7266,8 +7344,8 @@ function createDefaultConfiguration(id, name) {
             metadata: { source: 'default' }
         },
         {
-            blockId: 'ImagePlane-1',
-            blockType: 'ImagePlane',
+            blockId: 'ImageSurface-1',
+            blockType: 'ImageSurface',
             role: null,
             constraints: {},
             parameters: undefined,
@@ -7678,7 +7756,7 @@ function __blocks_normalizeProvenanceBlockType(raw) {
     if (key === 'stop' || key === 'aperturestop' || key === 'aperture') return 'Stop';
     if (key === 'mirror' || key === 'mir' || key === 'reflector') return 'Mirror';
     if (key === 'gap' || key === 'airgap' || key === 'space' || key === 'air') return 'Gap';
-    if (key === 'imageplane' || key === 'image') return 'ImagePlane';
+    if (key === 'imagesurface' || key === 'image') return 'ImageSurface';
     return s;
 }
 
@@ -7950,7 +8028,7 @@ function formatBlockPreview(block) {
         return parts.join(' ');
     }
 
-    if (type === 'ObjectPlane') {
+    if (type === 'ObjectSurface') {
         const modeRaw = pick('objectDistanceMode');
         const mode = String(modeRaw ?? '').trim().replace(/\s+/g, '').toUpperCase();
         if (mode === 'INF' || mode === 'INFINITY') return 'INF';
@@ -8060,7 +8138,7 @@ function __blocks_makeDefaultBlock(blockType, blockId) {
         base.parameters = { thickness: 1, material: 'AIR', thicknessMode: '' };
         return base;
     }
-    if (type === 'ObjectPlane') {
+    if (type === 'ObjectSurface') {
         base.parameters = {
             objectDistanceMode: 'Finite',
             objectDistance: 100
@@ -8107,18 +8185,18 @@ function __blocks_makeDefaultBlock(blockType, blockId) {
         };
         return base;
     }
-    if (type === 'ImagePlane') {
+    if (type === 'ImageSurface') {
         // Optional parameters supported: semidia + optimizeSemiDia.
         base.parameters = {
             semidia: '',
             optimizeSemiDia: ''
         };
-        // Keep variables absent (ImagePlane is not a design variable).
+        // Keep variables absent (ImageSurface is not a design variable).
         delete base.variables;
         return base;
     }
 
-    // Fallback: keep empty parameters to satisfy validation rule for non-ImagePlane.
+    // Fallback: keep empty parameters to satisfy validation rule for non-ImageSurface.
     base.parameters = {};
     return base;
 }
@@ -8138,27 +8216,27 @@ function __blocks_addBlockToActiveConfig(blockType, insertAfterBlockId = null) {
     const type = String(blockType ?? '').trim();
     if (!type) return { ok: false, reason: 'blockType is required.' };
 
-    if (type === 'ImagePlane') {
-        const already = blocks.some(b => b && String(b.blockType ?? '').trim() === 'ImagePlane');
-        if (already) return { ok: false, reason: 'ImagePlane already exists (only one is supported).' };
+    if (type === 'ImageSurface') {
+        const already = blocks.some(b => b && String(b.blockType ?? '').trim() === 'ImageSurface');
+        if (already) return { ok: false, reason: 'ImageSurface already exists (only one is supported).' };
     }
 
-    if (type === 'ObjectPlane') {
-        const already = blocks.some(b => b && String(b.blockType ?? '').trim() === 'ObjectPlane');
-        if (already) return { ok: false, reason: 'ObjectPlane already exists (only one is supported).' };
+    if (type === 'ObjectSurface') {
+        const already = blocks.some(b => b && String(b.blockType ?? '').trim() === 'ObjectSurface');
+        if (already) return { ok: false, reason: 'ObjectSurface already exists (only one is supported).' };
     }
 
     const newId = __blocks_generateUniqueBlockId(blocks, type);
     const newBlock = __blocks_makeDefaultBlock(type, newId);
 
-    // Insert position: after selected block, but never after ImagePlane.
-    let imageIdx = blocks.findIndex(b => b && String(b.blockType ?? '').trim() === 'ImagePlane');
+    // Insert position: after selected block, but never after ImageSurface.
+    let imageIdx = blocks.findIndex(b => b && String(b.blockType ?? '').trim() === 'ImageSurface');
     if (imageIdx < 0) imageIdx = blocks.length;
 
-    let insertIdx = imageIdx; // default: before ImagePlane (or end)
+    let insertIdx = imageIdx; // default: before ImageSurface (or end)
 
-    // ObjectPlane defines the object-to-first-surface distance; keep it first since there is no reorder UI.
-    if (type === 'ObjectPlane') {
+    // ObjectSurface defines the object-to-first-surface distance; keep it first since there is no reorder UI.
+    if (type === 'ObjectSurface') {
         insertIdx = 0;
     }
     const afterId = String(insertAfterBlockId ?? '').trim();
@@ -8219,7 +8297,7 @@ function __blocks_deleteBlockFromActiveConfig(blockId) {
     if (idx < 0) return { ok: false, reason: `block not found: ${id}` };
 
     const type = String(blocks[idx]?.blockType ?? '').trim();
-    if (type === 'ImagePlane') return { ok: false, reason: 'ImagePlane cannot be deleted.' };
+    if (type === 'ImageSurface') return { ok: false, reason: 'ImageSurface cannot be deleted.' };
 
     const removed = blocks.splice(idx, 1);
 
@@ -8284,7 +8362,7 @@ function __blocks_coerceParamValue(blockType, key, raw) {
     // Allow blank to mean "unset" for optional fields.
     if (s === '') return '';
 
-    // Special-case: ImagePlane.optimizeSemiDia uses a single-letter token 'A'
+    // Special-case: ImageSurface.optimizeSemiDia uses a single-letter token 'A'
     // (not the generic 'AUTO' token used elsewhere).
     if (String(key ?? '') === 'optimizeSemiDia') {
         if (/^(a|auto|u)$/i.test(s)) return 'A';
@@ -8307,6 +8385,10 @@ function __blocks_coerceParamValue(blockType, key, raw) {
 }
 
 function __blocks_setBlockParamValue(blockId, key, rawValue) {
+    console.log(`[Undo] __blocks_setBlockParamValue called: blockId=${blockId}, key=${key}, rawValue=${rawValue}`);
+    console.log(`[Undo] window.SetBlockParameterCommand exists:`, !!window.SetBlockParameterCommand);
+    console.log(`[Undo] window.undoHistory exists:`, !!window.undoHistory);
+    
     const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
     if (!systemConfig || !Array.isArray(systemConfig.configurations)) return { ok: false, reason: 'systemConfigurations not found.' };
 
@@ -8333,6 +8415,18 @@ function __blocks_setBlockParamValue(blockId, key, rawValue) {
     if (!b.parameters || typeof b.parameters !== 'object') b.parameters = {};
 
     const coerced = __blocks_coerceParamValue(String(b.blockType ?? ''), String(key ?? ''), rawValue);
+    
+    // Record undo command
+    const oldValue = b.parameters[String(key)];
+    const newValue = coerced;
+    if (oldValue !== newValue && window.undoHistory && !window.undoHistory.isExecuting) {
+        console.log(`[Undo] Recording block param change: ${blockId}.${key} from ${oldValue} to ${newValue}`);
+        const cmd = new SetBlockParameterCommand(activeId, blockId, `parameters.${String(key)}`, oldValue, newValue);
+        window.undoHistory.record(cmd);
+    } else {
+        console.log(`[Undo] Not recording: oldValue=${oldValue}, newValue=${newValue}, undoHistory=${!!window.undoHistory}, isExecuting=${window.undoHistory?.isExecuting}`);
+    }
+    
     b.parameters[String(key)] = coerced;
 
     // If SurfType was explicitly set to Spherical, auto-clear any leftover asphere params.
@@ -8574,6 +8668,20 @@ function __blocks_setBlockApertureValue(blockId, role, rawValue) {
     if (!r) return { ok: false, reason: 'role is required.' };
 
     const coerced = __blocks_coerceApertureValue(rawValue);
+    
+    // Record undo command
+    const oldValue = b.aperture[r];
+    const newValue = (String(coerced ?? '').trim() === '') ? undefined : coerced;
+    console.log(`[Undo] Aperture change: ${blockId}.aperture.${r} from ${oldValue} to ${newValue}`);
+    console.log(`[Undo] Check: oldValue !== newValue = ${oldValue !== newValue}, undoHistory = ${!!window.undoHistory}, isExecuting = ${window.undoHistory?.isExecuting}`);
+    if (oldValue !== newValue && window.undoHistory && !window.undoHistory.isExecuting) {
+        console.log(`[Undo] Recording aperture command`);
+        const cmd = new SetBlockParameterCommand(activeId, blockId, `aperture.${r}`, oldValue, newValue);
+        window.undoHistory.record(cmd);
+    } else {
+        console.log(`[Undo] NOT recording aperture command`);
+    }
+    
     if (String(coerced ?? '').trim() === '') {
         // Unset
         try { delete b.aperture[r]; } catch (_) { b.aperture[r] = ''; }
@@ -8796,8 +8904,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
     const formatSingletonBlockLabel = (blockType, blockIdRaw) => {
         const t = String(blockType ?? '').trim();
         const id = String(blockIdRaw ?? '').trim();
-        if (t === 'ObjectPlane' || t === 'ImagePlane') return t;
-        const m = /^(ObjectPlane|ImagePlane)-\d+$/i.exec(id);
+        if (t === 'ObjectSurface' || t === 'ImageSurface') return t;
+        const m = /^(ObjectSurface|ImageSurface)-\d+$/i.exec(id);
         if (m) return m[1];
         return id || '(none)';
     };
@@ -8817,7 +8925,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             if (!tRaw) continue;
 
             // Singletons: show without numbering.
-            if (tRaw === 'ObjectPlane' || tRaw === 'ImagePlane') {
+            if (tRaw === 'ObjectSurface' || tRaw === 'ImageSurface') {
                 displayLabelByBlockId.set(realId, tRaw);
                 continue;
             }
@@ -8844,8 +8952,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             const rawId = String(b.blockId ?? '(none)');
             const label = displayLabelByBlockId.get(rawId) || formatSingletonBlockLabel(b.blockType, rawId);
 
-            // Special-case: ObjectPlane corresponds to the Object surface (Surf 0).
-            if (String(b.blockType ?? '').trim() === 'ObjectPlane') {
+            // Special-case: ObjectSurface corresponds to the Object surface (Surf 0).
+            if (String(b.blockType ?? '').trim() === 'ObjectSurface') {
                 colId.textContent = `${label} → Surf 0`;
             } else {
                 const range = surfRangeByBlockId.get(String(b.blockId ?? '').trim());
@@ -9000,7 +9108,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             const isMirrorSquare = mirrorShape === 'Square';
             const isMirrorRect = mirrorShape === 'Rectangular';
 
-            if (blockType === 'ObjectPlane') {
+            if (blockType === 'ObjectSurface') {
                 items.push(
                     { kind: 'objectMode', key: 'objectDistanceMode', label: 'object (INF/finite)', noOptimize: true },
                     { kind: 'objectDistance', key: 'objectDistance', label: 'distance to 1st lens', noOptimize: true }
@@ -9058,11 +9166,11 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     }
                 }
             } else if (blockType === 'Gap' || blockType === 'AirGap') {
-                // Only show thicknessMode for the last Gap before ImagePlane.
+                // Only show thicknessMode for the last Gap before ImageSurface.
                 try {
                     const blocks = Array.isArray(blocksInOrder) ? blocksInOrder : [];
                     const myIdx = blocks.findIndex(b => b && String(b.blockId ?? '') === String(blockId));
-                    const imgIdx = blocks.findIndex(b => b && String(b.blockType ?? '') === 'ImagePlane');
+                    const imgIdx = blocks.findIndex(b => b && String(b.blockType ?? '') === 'ImageSurface');
                     let isPreImageGap = false;
                     if (myIdx >= 0 && imgIdx > myIdx) {
                         isPreImageGap = true;
@@ -9109,7 +9217,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     { key: 'tiltZ', label: 'tiltZ (deg)' },
                     { key: 'order', label: 'order (0/1)' }
                 );
-            } else if (blockType === 'ImagePlane') {
+            } else if (blockType === 'ImageSurface') {
                 items.push({ kind: 'imageSemiDiaMode', key: 'optimizeSemiDia', label: 'auto semidia (chief ray)', noOptimize: true });
                 items.push({ key: 'semidia', label: 'semidia', noOptimize: true });
             }
@@ -9188,14 +9296,21 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
                 // Editable value (Design Intent canonical edits)
                 const currentValue = isApertureItem ? getApertureDisplayValue(it.role) : getDisplayValue(it.key);
+                console.log(`[Undo] Getting current value for ${it.key || it.role}:`, currentValue, 'isAperture:', isApertureItem);
 
                 const commitValue = (nextRaw) => {
+                    console.log('[Undo] commitValue called:', { blockId, key: it.key, role: it.role, nextRaw, currentValue, isApertureItem });
                     const next = String(nextRaw ?? '');
                     const current = currentValue;
-                    if (next === current) return;
+                    if (next === current) {
+                        console.log('[Undo] Value unchanged, skipping');
+                        return;
+                    }
+                    console.log('[Undo] Calling', isApertureItem ? '__blocks_setBlockApertureValue' : '__blocks_setBlockParamValue');
                     const res = isApertureItem
                         ? __blocks_setBlockApertureValue(blockId, it.role, next)
                         : __blocks_setBlockParamValue(blockId, it.key, next);
+                    console.log('[Undo] Function returned:', res);
                     if (!res || res.ok !== true) {
                         const desc = isApertureItem ? `${blockId}.aperture.${String(it.role ?? '')}` : `${blockId}.${it.key}`;
                         alert(`Failed to update ${desc}: ${res?.reason || 'unknown error'}`);
@@ -9230,7 +9345,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             if (!ok) sel.value = normalized;
                         });
                     } else if (isImageSemiDiaModeItem) {
-                        // ImagePlane.optimizeSemiDia
+                        // ImageSurface.optimizeSemiDia
                         sel.innerHTML = [
                             '<option value="">(manual)</option>',
                             '<option value="A">Auto (chief ray)</option>'
@@ -9399,6 +9514,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     const valueInput = document.createElement('input');
                     valueInput.type = 'text';
                     valueInput.value = currentValue;
+                    console.log(`[Undo] Creating input for ${it.key || it.role}, value:`, currentValue);
                     valueInput.placeholder = '';
                     valueInput.style.flex = '0 0 180px';
                     valueInput.style.fontSize = '12px';
@@ -9835,7 +9951,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
     }
 }
 
-function refreshBlockInspector() {
+export function refreshBlockInspector() {
+    console.log('[Undo] refreshBlockInspector() called - starting UI rebuild');
     const banner = document.getElementById('import-analyze-mode-banner');
     const setBannerVisible = (isVisible) => {
         if (!banner) return;
@@ -9847,6 +9964,7 @@ function refreshBlockInspector() {
         // A missing active config here makes the UI falsely fall back into Import/Analyze mode.
         const activeCfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
         const blocks = activeCfg && Array.isArray(activeCfg.blocks) ? activeCfg.blocks : null;
+        console.log('[Undo] refreshBlockInspector() - blocks count:', blocks ? blocks.length : 0);
 
         try {
             // Show Import/Analyze banner only when blocks are actually unavailable.
@@ -10236,8 +10354,8 @@ function __blocks_mapSurfaceEditToBlockChange(edit) {
         return null;
     }
 
-    if (blockType === 'ImagePlane') {
-        // ImagePlane itself typically doesn't have thickness, but the air space before it does
+    if (blockType === 'ImageSurface') {
+        // ImageSurface itself typically doesn't have thickness, but the air space before it does
         if (field === 'optimizeT') {
             const mode = String(newValue ?? '').trim().toUpperCase() === 'V' ? 'V' : 'F';
             const airGapId = __blocks_findFollowingAirGapBlockId(blockId);
@@ -10251,16 +10369,16 @@ function __blocks_mapSurfaceEditToBlockChange(edit) {
             if (airGapId) {
                 return { blockId: String(airGapId), blockType: 'AirGap', variable: 'thickness', oldValue, newValue };
             }
-            // ImagePlane is usually the last block, so no following AirGap is expected
+            // ImageSurface is usually the last block, so no following AirGap is expected
             // Try to apply to the block itself in case it has a thickness parameter
-            console.warn('⚠️ ImagePlane thickness edit: no following AirGap found, attempting to apply to ImagePlane itself');
-            return { blockId: String(blockId), blockType: 'ImagePlane', variable: 'thickness', oldValue, newValue };
+            console.warn('⚠️ ImageSurface thickness edit: no following AirGap found, attempting to apply to ImageSurface itself');
+            return { blockId: String(blockId), blockType: 'ImageSurface', variable: 'thickness', oldValue, newValue };
         }
         if (field === 'semidia') {
-            return { blockId: String(blockId), blockType: 'ImagePlane', variable: 'semidia', oldValue, newValue };
+            return { blockId: String(blockId), blockType: 'ImageSurface', variable: 'semidia', oldValue, newValue };
         }
         if (field === 'optimizeSemiDia') {
-            return { blockId: String(blockId), blockType: 'ImagePlane', variable: 'optimizeSemiDia', oldValue, newValue };
+            return { blockId: String(blockId), blockType: 'ImageSurface', variable: 'optimizeSemiDia', oldValue, newValue };
         }
         return null;
     }

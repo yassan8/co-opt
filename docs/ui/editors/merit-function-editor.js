@@ -3775,8 +3775,8 @@ class MeritFunctionEditor {
                     try {
                         const rows = expanded.rows;
                         if (rows.length > 0) {
-                            const hasObjectPlane = Array.isArray(config?.blocks) && config.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectPlane');
-                            if (hasObjectPlane) return expanded.rows;
+                            const hasObjectSurface = Array.isArray(config?.blocks) && config.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface');
+                            if (hasObjectSurface) return expanded.rows;
 
                             let preferredThickness = undefined;
 

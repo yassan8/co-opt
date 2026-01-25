@@ -349,8 +349,8 @@ export async function showSpotDiagram(options = {}) {
                         // Preserve Object thickness from persisted opticalSystem when possible.
                         try {
                             const rows = exp.rows;
-                            const hasObjectPlane = Array.isArray(cfg?.blocks) && cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectPlane');
-                            if (!hasObjectPlane) {
+                            const hasObjectSurface = Array.isArray(cfg?.blocks) && cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface');
+                            if (!hasObjectSurface) {
                                 const preferredThickness = cfg?.opticalSystem?.[0]?.thickness;
                                 if (rows.length > 0 && preferredThickness !== undefined && preferredThickness !== null && String(preferredThickness).trim() !== '') {
                                     rows[0] = { ...rows[0], thickness: preferredThickness };

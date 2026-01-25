@@ -228,9 +228,26 @@ const createDOMTableSource = (container, initialRows) => {
       inputWl.value = (rowData.wavelength ?? '') === 0 ? '0' : (rowData.wavelength ?? '').toString();
       inputWl.style.width = '100%';
       inputWl.addEventListener('change', () => {
+        const oldValue = rowData.wavelength;
         const raw = inputWl.value;
         rowData.wavelength = raw === '' ? '' : Number(raw);
         if (raw !== '' && Number.isNaN(rowData.wavelength)) rowData.wavelength = raw;
+
+        // Record undo command
+        if (window.undoHistory && !window.undoHistory.isExecuting && oldValue !== rowData.wavelength) {
+          const cfg = window.getActiveConfiguration?.();
+          if (cfg) {
+            const cmd = new window.SetSourceFieldCommand(
+              cfg.id,
+              rowData.id,
+              'wavelength',
+              oldValue,
+              rowData.wavelength
+            );
+            window.undoHistory.record(cmd);
+            console.log(`[Undo] Recorded: Set Source ${rowData.id}.wavelength from ${oldValue} to ${rowData.wavelength}`);
+          }
+        }
 
         saveTableData(getData());
         emit('cellEdited', createCellEvent('wavelength', rowData.wavelength, rowData));
@@ -251,9 +268,26 @@ const createDOMTableSource = (container, initialRows) => {
       inputWeight.value = (rowData.weight ?? '') === 0 ? '0' : (rowData.weight ?? '').toString();
       inputWeight.style.width = '100%';
       inputWeight.addEventListener('change', () => {
+        const oldValue = rowData.weight;
         const raw = inputWeight.value;
         rowData.weight = raw === '' ? '' : Number(raw);
         if (raw !== '' && Number.isNaN(rowData.weight)) rowData.weight = raw;
+
+        // Record undo command
+        if (window.undoHistory && !window.undoHistory.isExecuting && oldValue !== rowData.weight) {
+          const cfg = window.getActiveConfiguration?.();
+          if (cfg) {
+            const cmd = new window.SetSourceFieldCommand(
+              cfg.id,
+              rowData.id,
+              'weight',
+              oldValue,
+              rowData.weight
+            );
+            window.undoHistory.record(cmd);
+            console.log(`[Undo] Recorded: Set Source ${rowData.id}.weight from ${oldValue} to ${rowData.weight}`);
+          }
+        }
 
         saveTableData(getData());
         emit('cellEdited', createCellEvent('weight', rowData.weight, rowData));
@@ -267,6 +301,7 @@ const createDOMTableSource = (container, initialRows) => {
       checkbox.type = 'checkbox';
       checkbox.checked = rowData.primary === 'Primary Wavelength';
       checkbox.addEventListener('change', () => {
+        const oldValue = rowData.primary;
         if (checkbox.checked) {
           console.log('🔧 Primary Wavelength selected, clearing other primary entries');
           data.forEach(r => {
@@ -279,6 +314,22 @@ const createDOMTableSource = (container, initialRows) => {
           rowData.primary = '';
           notifyPrimaryWavelengthChanged();
           recalculateAutoSemiDiaIfAvailable();
+        }
+
+        // Record undo command
+        if (window.undoHistory && !window.undoHistory.isExecuting && oldValue !== rowData.primary) {
+          const cfg = window.getActiveConfiguration?.();
+          if (cfg) {
+            const cmd = new window.SetSourceFieldCommand(
+              cfg.id,
+              rowData.id,
+              'primary',
+              oldValue,
+              rowData.primary
+            );
+            window.undoHistory.record(cmd);
+            console.log(`[Undo] Recorded: Set Source ${rowData.id}.primary from ${oldValue} to ${rowData.primary}`);
+          }
         }
 
         saveTableData(getData());

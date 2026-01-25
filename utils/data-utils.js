@@ -232,18 +232,18 @@ function __du_expandActiveBlocksToRows() {
       }
     } catch (_) {}
 
-    const __du_blocksHaveObjectPlane = (blocks) => {
+    const __du_blocksHaveObjectSurface = (blocks) => {
       try {
-        return Array.isArray(blocks) && blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectPlane');
+        return Array.isArray(blocks) && blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface');
       } catch (_) {
         return false;
       }
     };
 
     // Preserve object thickness if present in config.opticalSystem.
-    // BUT: when ObjectPlane exists, blocks are canonical for object distance.
+    // BUT: when ObjectSurface exists, blocks are canonical for object distance.
     try {
-      if (!__du_blocksHaveObjectPlane(blocksToExpand)) {
+      if (!__du_blocksHaveObjectSurface(blocksToExpand)) {
         const preferredThickness = activeCfg?.opticalSystem?.[0]?.thickness;
         if (preferredThickness !== undefined && preferredThickness !== null && String(preferredThickness).trim() !== '') {
           rows[0] = { ...rows[0], thickness: preferredThickness };
@@ -907,7 +907,7 @@ function aggregateBlockContributionFromSeidel(seidelData, opticalSystemRows) {
     const blockType = row?._blockType;
     const role = row?._surfaceRole ?? '(none)';
     if (!blockId) continue;
-    if (blockType === 'ImagePlane' || blockType === 'Image') continue;
+    if (blockType === 'ImageSurface' || blockType === 'Image') continue;
 
     const key = String(blockId);
     const current = groups.get(key) || {
@@ -997,7 +997,7 @@ function formatBlockContributionSummary(seidelData, opticalSystemRows) {
     const blockType = row?._blockType;
     const role = row?._surfaceRole ?? '(none)';
     if (!blockId) continue;
-    if (blockType === 'ImagePlane' || blockType === 'Image') continue;
+    if (blockType === 'ImageSurface' || blockType === 'Image') continue;
 
     const key = String(blockId);
     const current = groups.get(key) || {

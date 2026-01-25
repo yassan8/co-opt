@@ -63,7 +63,7 @@ function normalizeBlockType(rawType) {
   // Gap (legacy alias: AirGap)
   if (key === 'gap' || key === 'airgap' || key === 'air' || key === 'space' || key === 'freespace') return 'Gap';
   if (key === 'stop' || key === 'aperturestop' || key === 'aperture') return 'Stop';
-  if (key === 'imageplane' || key === 'image' || key === 'image_surface' || key === 'imagesurface') return 'ImagePlane';
+  if (key === 'imagesurface' || key === 'image' || key === 'image_surface' || key === 'imagesurface') return 'ImageSurface';
   return t;
 }
 
@@ -190,7 +190,7 @@ function ensureBlockIds(blocks, issues) {
       autoAssigned.push({ blockId, blockType, index: i });
     }
 
-    const parameters = blockType === 'ImagePlane' ? undefined : coerceParametersShape(b.parameters);
+    const parameters = blockType === 'ImageSurface' ? undefined : coerceParametersShape(b.parameters);
     const variables = coerceVariablesShape(b.variables);
 
     // Stop.semiDiameter: canonical source is parameters.semiDiameter.

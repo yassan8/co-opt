@@ -2057,8 +2057,8 @@ function getActiveConfig(systemConfig) {
  
 function pickPreservedObjectThickness(cfg, systemConfig) {
     try {
-        const hasObjectPlane = Array.isArray(cfg?.blocks) && cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectPlane');
-        if (hasObjectPlane) return undefined;
+        const hasObjectSurface = Array.isArray(cfg?.blocks) && cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface');
+        if (hasObjectSurface) return undefined;
     } catch (_) {}
 
     // Prefer persisted config.opticalSystem[0].thickness.
@@ -2209,7 +2209,7 @@ function getAllowedKeysForBlockType(blockType) {
     if (t === 'Triplet') return TRIPLET_KEYS;
     if (t === 'AirGap') return AIRGAP_KEYS;
     if (t === 'Stop') return STOP_KEYS;
-    // ImagePlane has no editable params.
+    // ImageSurface has no editable params.
     return null;
 }
 
@@ -2419,8 +2419,8 @@ async function tool_set_block_param(args) {
         if (!b) return { ok: false, configId: oneCfg?.id, error: `blockId not found: ${resolvedBlockId}` };
 
         const blockType = String(b.blockType || '').trim();
-        if (blockType === 'ImagePlane') {
-            return { ok: false, configId: oneCfg?.id, error: 'ImagePlane is not editable' };
+        if (blockType === 'ImageSurface') {
+            return { ok: false, configId: oneCfg?.id, error: 'ImageSurface is not editable' };
         }
 
         // Some block types have a single authoritative storage location.
@@ -2545,8 +2545,8 @@ async function tool_set_block_param(args) {
     if (!b) throw new Error(`blockId not found: ${blockId}`);
 
     const blockType = String(b.blockType || '').trim();
-    if (blockType === 'ImagePlane') {
-        throw new Error('ImagePlane is not editable (marker block).');
+    if (blockType === 'ImageSurface') {
+        throw new Error('ImageSurface is not editable (marker block).');
     }
 
     // Some block types have a single authoritative storage location.

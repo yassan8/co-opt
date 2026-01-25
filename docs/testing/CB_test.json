@@ -1116,8 +1116,8 @@
       "optimizeCoef9": "",
       "coef10": "",
       "optimizeCoef10": "",
-      "_blockType": "ImagePlane",
-      "_blockId": "ImagePlane-1"
+      "_blockType": "ImageSurface",
+      "_blockId": "ImageSurface-1"
     }
   ],
   "meritFunction": [],
@@ -2289,8 +2289,8 @@
             "optimizeCoef9": "",
             "coef10": "",
             "optimizeCoef10": "",
-            "_blockType": "ImagePlane",
-            "_blockId": "ImagePlane-1"
+            "_blockType": "ImageSurface",
+            "_blockId": "ImageSurface-1"
           }
         ],
         "meritFunction": [
@@ -2380,8 +2380,8 @@
         "schemaVersion": "0.1",
         "blocks": [
           {
-            "blockId": "ObjectPlane-1",
-            "blockType": "ObjectPlane",
+            "blockId": "ObjectSurface-1",
+            "blockType": "ObjectSurface",
             "role": null,
             "constraints": {},
             "parameters": {
@@ -2929,8 +2929,8 @@
             }
           },
           {
-            "blockId": "ImagePlane-1",
-            "blockType": "ImagePlane",
+            "blockId": "ImageSurface-1",
+            "blockType": "ImageSurface",
             "role": null,
             "constraints": {},
             "variables": {},
@@ -4041,8 +4041,8 @@
             "optimizeCoef9": "",
             "coef10": "",
             "optimizeCoef10": "",
-            "_blockType": "ImagePlane",
-            "_blockId": "ImagePlane-1"
+            "_blockType": "ImageSurface",
+            "_blockId": "ImageSurface-1"
           }
         ],
         "meritFunction": [
@@ -4132,8 +4132,8 @@
         "schemaVersion": "0.1",
         "blocks": [
           {
-            "blockId": "ObjectPlane-1",
-            "blockType": "ObjectPlane",
+            "blockId": "ObjectSurface-1",
+            "blockType": "ObjectSurface",
             "role": null,
             "constraints": {},
             "parameters": {
@@ -4700,8 +4700,8 @@
             }
           },
           {
-            "blockId": "ImagePlane-1",
-            "blockType": "ImagePlane",
+            "blockId": "ImageSurface-1",
+            "blockType": "ImageSurface",
             "role": null,
             "constraints": {},
             "variables": {},
@@ -5762,8 +5762,8 @@
             "optimizeCoef9": "",
             "coef10": "",
             "optimizeCoef10": "",
-            "_blockType": "ImagePlane",
-            "_blockId": "ImagePlane-1"
+            "_blockType": "ImageSurface",
+            "_blockId": "ImageSurface-1"
           }
         ],
         "meritFunction": [
@@ -5853,8 +5853,8 @@
         "schemaVersion": "0.1",
         "blocks": [
           {
-            "blockId": "ObjectPlane-1",
-            "blockType": "ObjectPlane",
+            "blockId": "ObjectSurface-1",
+            "blockType": "ObjectSurface",
             "role": null,
             "constraints": {},
             "parameters": {
@@ -6402,8 +6402,8 @@
             }
           },
           {
-            "blockId": "ImagePlane-1",
-            "blockType": "ImagePlane",
+            "blockId": "ImageSurface-1",
+            "blockType": "ImageSurface",
             "role": null,
             "constraints": {},
             "variables": {},

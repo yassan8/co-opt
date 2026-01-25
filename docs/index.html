@@ -147,8 +147,9 @@
       <span class="top-file-icon">📁</span>
       <span id="loaded-file-name" class="top-file-name">No file loaded</span>
       <button id="open-settings-btn" class="top-settings-btn" title="Settings">⚙️</button>
+      <button id="toggle-toolbar-btn" class="top-toggle-btn" title="Toggle toolbar">▼</button>
     </div>
-    <div class="top-buttons-row">
+    <div class="top-buttons-row" id="top-buttons-row">
       <!-- File Operations Group -->
       <div class="button-group">
         <span class="button-group-label">File</span>
@@ -175,7 +176,9 @@
       <!-- Tools & Analysis Group -->
       <div class="button-group">
         <span class="button-group-label">Tools</span>
-        <button id="optimize-design-intent-btn" title="Optimize marked variables (V) to satisfy System Requirements (all scenarios).">Optimize</button>
+        <button id="undo-btn" title="Undo (Ctrl+Z / Cmd+Z)" disabled>↶ Undo</button>
+        <button id="redo-btn" title="Redo (Ctrl+Y / Cmd+Shift+Z)" disabled>↷ Redo</button>
+        <button id="optimize-design-intent-btn" title="Optimize marked variables (V) to satisfy Requirements (all scenarios).">Optimize</button>
         <label for="analysis-select" style="margin-left: 8px; font-size: 14px; color: #333;">Analysis:</label>
         <select id="analysis-select" style="min-width: 180px;">
           <option value="">Select Analysis...</option>
@@ -208,9 +211,9 @@
 
   <!-- System Configuration Section -->
   <div class="configuration-section">
-    <h2>System Configuration</h2>
+    <h2>Configuration</h2>
     <div class="merit-function-help">
-      <strong>Note:</strong> Source and System Requirements are shared across configurations.
+      <strong>Note:</strong> Source and Requirements are shared across configurations.
     </div>
     <div class="configuration-controls">
       <select id="config-select"></select>
@@ -311,7 +314,7 @@
 
   <!-- System Requirements Section -->
   <div class="merit-function-section">
-    <h2>System Requirements</h2>
+    <h2>Requirements</h2>
 
     <div class="merit-function-help">
       <strong>Note:</strong> Requirements are the pass/fail specification. All scenarios must pass.
@@ -347,7 +350,7 @@
     </div>
     <div id="table-merit-function"></div>
     <div class="merit-summary">
-      <strong>System Requirements Score:</strong> <span id="total-merit-value">0.000</span>
+      <strong>Requirements Score:</strong> <span id="total-merit-value">0.000</span>
     </div>
     <div id="operand-inspector" class="operand-inspector" style="display: none;">
       <h3>Evaluation Detail / Inspector</h3>
@@ -645,6 +648,10 @@
       console.warn('⚠️ [Startup] Failed to pre-load active configuration:', e);
     }
   </script>
+  
+  <!-- Undo/Redo System -->
+  <script src="core/undo-history.js"></script>
+  
   <script type="module" src="main.js"></script>
   
   <!-- Configuration System -->

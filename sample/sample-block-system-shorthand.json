@@ -35,7 +35,7 @@
     },
     {
       "blockId": "I1",
-      "blockType": "ImagePlane",
+      "blockType": "ImageSurface",
       "variables": {}
     }
   ]

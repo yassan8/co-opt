@@ -19,8 +19,8 @@ function idsEqual(a, b) {
 function createDefaultConfiguration(id, name) {
   const defaultBlocks = [
     {
-      blockId: 'ObjectPlane-1',
-      blockType: 'ObjectPlane',
+      blockId: 'ObjectSurface-1',
+      blockType: 'ObjectSurface',
       role: null,
       constraints: {},
       parameters: {
@@ -41,8 +41,8 @@ function createDefaultConfiguration(id, name) {
       metadata: { source: 'default' }
     },
     {
-      blockId: 'ImagePlane-1',
-      blockType: 'ImagePlane',
+      blockId: 'ImageSurface-1',
+      blockType: 'ImageSurface',
       role: null,
       constraints: {},
       parameters: undefined,
@@ -328,13 +328,13 @@ export async function loadActiveConfigurationToTables(options = {}) {
       }
     };
 
-    const blocksHaveObjectPlane = (() => {
-      try { return Array.isArray(activeConfig?.blocks) && activeConfig.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectPlane'); } catch (_) { return false; }
+    const blocksHaveObjectSurface = (() => {
+      try { return Array.isArray(activeConfig?.blocks) && activeConfig.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface'); } catch (_) { return false; }
     })();
 
     const pickPreservedObjectThickness = () => {
-      // ObjectPlane is canonical for object distance in Blocks-only mode.
-      if (blocksHaveObjectPlane) return null;
+      // ObjectSurface is canonical for object distance in Blocks-only mode.
+      if (blocksHaveObjectSurface) return null;
 
       try {
         const v = activeConfig?.opticalSystem?.[0]?.thickness;

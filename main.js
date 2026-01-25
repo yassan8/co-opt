@@ -59,9 +59,11 @@ import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayCo
 // UI modules
 import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons } from './ui/event-handlers.js';
 import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListeners } from './ui/ui-updates.js';
-import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers } from './ui/dom-event-handlers.js';
+import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers, loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables, refreshBlockInspector } from './ui/dom-event-handlers.js';
 import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.js';
 import { initializeConfigurationUI } from './ui/configuration-handlers.js';
+import { getActiveConfiguration } from './data/table-configuration.js';
+import { expandBlocksToOpticalSystemRows } from './data/block-schema.js';
 
 console.log('✅ [Main] All imports loaded, initializeConfigurationUI:', typeof initializeConfigurationUI);
 
@@ -300,6 +302,16 @@ async function initializeApplication() {
         window.getOpticalSystemRows = getOpticalSystemRows;
         window.getObjectRows = getObjectRows;
         window.getSourceRows = getSourceRows;
+        
+        // Export undo system dependencies
+        window.loadSystemConfigurations = loadSystemConfigurations;
+        window.saveSystemConfigurations = saveSystemConfigurations;
+        window.loadActiveConfigurationToTables = loadActiveConfigurationToTables;
+        window.refreshBlockInspector = refreshBlockInspector;
+        window.expandBlocksToOpticalSystemRows = expandBlocksToOpticalSystemRows;
+        window.getActiveConfiguration = getActiveConfiguration;
+        window.loadSourceTableData = loadSourceTableData;
+        window.loadObjectTableData = loadObjectTableData;
 
         // Initialize System Constraints (BFL) on startup.
         setTimeout(() => {
@@ -1908,7 +1920,67 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
             });
         }
 
+        // =============================================================================
+        // UNDO/REDO SYSTEM SETUP
+        // =============================================================================
+        
+        // Setup Undo/Redo button handlers
+        const undoBtn = document.getElementById('undo-btn');
+        const redoBtn = document.getElementById('redo-btn');
 
+        if (undoBtn) {
+            undoBtn.addEventListener('click', () => {
+                console.log('[Undo] Undo button clicked');
+                if (window.undoHistory) {
+                    const success = window.undoHistory.undo();
+                    if (success) {
+                        console.log('✅ Undo executed');
+                    }
+                } else {
+                    console.error('[Undo] window.undoHistory not found');
+                }
+            });
+        } else {
+            console.warn('[Undo] undo-btn not found');
+        }
+
+        if (redoBtn) {
+            redoBtn.addEventListener('click', () => {
+                console.log('[Undo] Redo button clicked');
+                if (window.undoHistory) {
+                    const success = window.undoHistory.redo();
+                    if (success) {
+                        console.log('✅ Redo executed');
+                    }
+                } else {
+                    console.error('[Undo] window.undoHistory not found');
+                }
+            });
+        } else {
+            console.warn('[Undo] redo-btn not found');
+        }
+
+        console.log('[Undo] Button handlers registered');
+        
+        // Setup Toolbar Toggle button
+        const toggleToolbarBtn = document.getElementById('toggle-toolbar-btn');
+        const topButtonsRow = document.getElementById('top-buttons-row');
+        
+        if (toggleToolbarBtn && topButtonsRow) {
+            toggleToolbarBtn.addEventListener('click', () => {
+                const isCollapsed = topButtonsRow.classList.toggle('collapsed');
+                toggleToolbarBtn.classList.toggle('collapsed', isCollapsed);
+                // Save state to localStorage
+                localStorage.setItem('toolbarCollapsed', isCollapsed ? '1' : '0');
+            });
+            
+            // Restore state from localStorage
+            const savedState = localStorage.getItem('toolbarCollapsed');
+            if (savedState === '1') {
+                topButtonsRow.classList.add('collapsed');
+                toggleToolbarBtn.classList.add('collapsed');
+            }
+        }
         
     } catch (error) {
         console.error('❌ Failed to initialize application:', error);
@@ -2326,3 +2398,44 @@ if (analysisSelect) {
         e.target.value = '';
     });
 }
+
+// Setup keyboard shortcuts for Undo/Redo
+document.addEventListener('keydown', (e) => {
+    // Check if we're in an input field - don't intercept undo in text inputs
+    const activeElement = document.activeElement;
+    const isInInput = activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.isContentEditable
+    );
+    
+    // Ctrl+Z / Cmd+Z for Undo
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey && !isInInput) {
+        e.preventDefault();
+        if (window.undoHistory) {
+            window.undoHistory.undo();
+        }
+    }
+    
+    // Ctrl+Y / Cmd+Shift+Z for Redo
+    if (!isInInput && (
+        ((e.ctrlKey || e.metaKey) && e.key === 'y') ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z')
+    )) {
+        e.preventDefault();
+        if (window.undoHistory) {
+            window.undoHistory.redo();
+        }
+    }
+});
+
+// Clear undo history on configuration switch, import, or load
+function clearUndoHistoryOnMajorChange(reason) {
+    if (window.undoHistory) {
+        window.undoHistory.clear();
+        console.log(`[Undo] History cleared: ${reason}`);
+    }
+}
+
+// Export for use in other modules
+window.clearUndoHistoryOnMajorChange = clearUndoHistoryOnMajorChange;

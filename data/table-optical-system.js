@@ -1180,6 +1180,24 @@ tableOpticalSystem.on("cellEdited", function(cell){
       }
       globalThis.__lastSurfaceEdit = { row: rowData, field, oldValue, newValue };
 
+      // Record undo command for this surface edit
+      try {
+        if (window.undoHistory && window.SetSurfaceFieldCommand && !window.undoHistory.isExecuting) {
+          const sysConfig = window.loadSystemConfigurations();
+          const activeConfigId = sysConfig.activeConfiguration;
+          const command = new window.SetSurfaceFieldCommand(
+            activeConfigId,
+            rowData.id,
+            field,
+            oldValue,
+            newValue
+          );
+          window.undoHistory.record(command);
+        }
+      } catch (undoError) {
+        console.warn('[Undo] Failed to record surface edit:', undoError);
+      }
+
       // Also track per-cell pending edits so Apply can fall back to the currently selected cell.
       // This stays in-memory only and is cleared after Apply triggers re-expand.
       if (rowData && typeof rowData.id === 'number') {
@@ -2020,7 +2038,7 @@ async function calculateImageSemiDiaFromChiefRays() {
                 ? systemConfig.configurations.find(c => c && c.id === activeId)
                 : null;
               const blocks = Array.isArray(cfg?.blocks) ? cfg.blocks : null;
-              const imgBlock = blocks ? [...blocks].reverse().find(b => b && String(b.blockType ?? '') === 'ImagePlane') : null;
+              const imgBlock = blocks ? [...blocks].reverse().find(b => b && String(b.blockType ?? '') === 'ImageSurface') : null;
               const blkOptRaw = imgBlock?.parameters?.optimizeSemiDia;
               const blkOpt = String(blkOptRaw ?? '').trim();
               if (blkOpt === 'A' || blkOpt === 'a' || blkOpt.toUpperCase() === 'AUTO') {
@@ -2064,7 +2082,7 @@ async function calculateImageSemiDiaFromChiefRays() {
         const isInfiniteSystem = objectThickness === 'INF' || objectThickness === 'Infinity' || objectThickness === Infinity;
         let crossBeamResult;
         if (isInfiniteSystem) {
-          // In Blocks-only mode, ObjectPlane with mode=INF expands to Object row thickness='INF'.
+          // In Blocks-only mode, ObjectSurface with mode=INF expands to Object row thickness='INF'.
           // That token is useful as a mode marker, but it breaks ray tracing because it makes
           // the next surface effectively unreachable. For infinite-system tracing, use a
           // normalized copy with a finite object-to-first-surface distance.
@@ -2171,7 +2189,7 @@ async function calculateImageSemiDiaFromChiefRays() {
                     : -1;
                   const activeCfg = cfgIdx >= 0 ? systemConfig.configurations[cfgIdx] : null;
                   if (activeCfg && Array.isArray(activeCfg.blocks)) {
-                    const imgBlock = [...activeCfg.blocks].reverse().find(b => b && String(b.blockType ?? '') === 'ImagePlane');
+                    const imgBlock = [...activeCfg.blocks].reverse().find(b => b && String(b.blockType ?? '') === 'ImageSurface');
                     if (imgBlock) {
                       if (!imgBlock.parameters || typeof imgBlock.parameters !== 'object') imgBlock.parameters = {};
                       imgBlock.parameters.semidia = maxHeight;

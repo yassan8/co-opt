@@ -2057,8 +2057,8 @@ function getActiveConfig(systemConfig) {
  
 function pickPreservedObjectThickness(cfg, systemConfig) {
     try {
-        const hasObjectPlane = Array.isArray(cfg?.blocks) && cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectPlane');
-        if (hasObjectPlane) return undefined;
+        const hasObjectSurface = Array.isArray(cfg?.blocks) && cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface');
+        if (hasObjectSurface) return undefined;
     } catch (_) {}
 
     // Prefer persisted config.opticalSystem[0].thickness.
@@ -2209,7 +2209,7 @@ function getAllowedKeysForBlockType(blockType) {
     if (t === 'Triplet') return TRIPLET_KEYS;
     if (t === 'AirGap') return AIRGAP_KEYS;
     if (t === 'Stop') return STOP_KEYS;
-    // ImagePlane has no editable params.
+    // ImageSurface has no editable params.
     return null;
 }
 
@@ -2419,8 +2419,8 @@ async function tool_set_block_param(args) {
         if (!b) return { ok: false, configId: oneCfg?.id, error: `blockId not found: ${resolvedBlockId}` };
 
         const blockType = String(b.blockType || '').trim();
-        if (blockType === 'ImagePlane') {
-            return { ok: false, configId: oneCfg?.id, error: 'ImagePlane is not editable' };
+        if (blockType === 'ImageSurface') {
+            return { ok: false, configId: oneCfg?.id, error: 'ImageSurface is not editable' };
         }
 
         // Some block types have a single authoritative storage location.
@@ -2464,10 +2464,50 @@ async function tool_set_block_param(args) {
         }
 
         const updateParameters = () => {
+            // Record undo command before modifying
+            try {
+                if (window.undoHistory && window.SetBlockParameterCommand && !window.undoHistory.isExecuting) {
+                    const oldValue = isPlainObject(b.parameters) ? b.parameters[k] : undefined;
+                    if (oldValue !== v) {
+                        const command = new window.SetBlockParameterCommand(
+                            oneCfg.id,
+                            resolvedBlockId,
+                            `parameters.${k}`,
+                            oldValue,
+                            v
+                        );
+                        window.undoHistory.record(command);
+                    }
+                }
+            } catch (undoError) {
+                console.warn('[Undo] Failed to record block parameter edit:', undoError);
+            }
+            
             if (!isPlainObject(b.parameters)) b.parameters = {};
             b.parameters[k] = v;
         };
         const updateVariables = () => {
+            // Record undo command before modifying
+            try {
+                if (window.undoHistory && window.SetBlockParameterCommand && !window.undoHistory.isExecuting) {
+                    const oldValue = isPlainObject(b.variables) && isPlainObject(b.variables[k]) 
+                        ? b.variables[k].value 
+                        : undefined;
+                    if (oldValue !== v) {
+                        const command = new window.SetBlockParameterCommand(
+                            oneCfg.id,
+                            resolvedBlockId,
+                            `variables.${k}.value`,
+                            oldValue,
+                            v
+                        );
+                        window.undoHistory.record(command);
+                    }
+                }
+            } catch (undoError) {
+                console.warn('[Undo] Failed to record block variable edit:', undoError);
+            }
+            
             if (!isPlainObject(b.variables)) b.variables = {};
             const existing = b.variables[k];
             if (isPlainObject(existing)) existing.value = v;
@@ -2545,8 +2585,8 @@ async function tool_set_block_param(args) {
     if (!b) throw new Error(`blockId not found: ${blockId}`);
 
     const blockType = String(b.blockType || '').trim();
-    if (blockType === 'ImagePlane') {
-        throw new Error('ImagePlane is not editable (marker block).');
+    if (blockType === 'ImageSurface') {
+        throw new Error('ImageSurface is not editable (marker block).');
     }
 
     // Some block types have a single authoritative storage location.
