@@ -2064,6 +2064,18 @@ function setupSuggestOptimizeButtons() {
                     return;
                 }
                 __blockInspectorExpandedBlockId = String(res.blockId ?? '') || null;
+                
+                // Record undo
+                try {
+                    if (window.undoHistory && window.AddBlockCommand && !window.undoHistory.isExecuting && res.blockData && typeof res.insertIndex === 'number') {
+                        const sysConfig = window.loadSystemConfigurations();
+                        const cmd = new window.AddBlockCommand(sysConfig.activeConfigId, res.blockData, res.insertIndex);
+                        window.undoHistory.record(cmd);
+                    }
+                } catch (undoError) {
+                    console.warn('[Undo] Failed to record block add:', undoError);
+                }
+                
                 try { refreshBlockInspector(); } catch (_) {}
                 try {
                     if (window.popup3DWindow && !window.popup3DWindow.closed) {
@@ -2089,6 +2101,18 @@ function setupSuggestOptimizeButtons() {
                     alert(`Failed to delete block: ${res?.reason || 'unknown error'}`);
                     return;
                 }
+                
+                // Record undo
+                try {
+                    if (window.undoHistory && window.DeleteBlockCommand && !window.undoHistory.isExecuting && res.blockData && typeof res.blockIndex === 'number') {
+                        const sysConfig = window.loadSystemConfigurations();
+                        const cmd = new window.DeleteBlockCommand(sysConfig.activeConfigId, res.blockData, res.blockIndex);
+                        window.undoHistory.record(cmd);
+                    }
+                } catch (undoError) {
+                    console.warn('[Undo] Failed to record block delete:', undoError);
+                }
+                
                 __blockInspectorExpandedBlockId = null;
                 try { refreshBlockInspector(); } catch (_) {}
                 try {
@@ -2953,6 +2977,174 @@ function setupLoadButton() {
             
             console.log('🔵 [Load] Triggering file dialog...');
             input.click();
+        });
+    }
+}
+
+/**
+ * 新規ファイルボタンのイベントハンドラーを設定
+ */
+function setupNewFileButton() {
+    const newBtn = document.getElementById('new-file-btn');
+    if (newBtn) {
+        newBtn.addEventListener('click', async function() {
+            console.log('🆕 [New] New file button clicked');
+            
+            // 保存確認ダイアログを表示（英語・日本語）
+            const confirmed = confirm(
+                'Create a new file?\n' +
+                'Current data will be discarded.\n' +
+                'Please save your data with the "Save" button if needed.\n\n' +
+                '新規ファイルを作成します。\n' +
+                '現在のデータは破棄されます。\n' +
+                '必要に応じて事前に「Save」ボタンでデータを保存してください。\n\n' +
+                'Continue? / 続行しますか？'
+            );
+            
+            if (!confirmed) {
+                console.log('🔵 [New] User cancelled');
+                return;
+            }
+            
+            // 完全に新しいシステムを作成（既存のすべてのConfigurationを削除）
+            const newSystemConfig = {
+                configurations: [
+                    {
+                        id: 1,
+                        name: 'Config 1',
+                        schemaVersion: BLOCK_SCHEMA_VERSION,
+                        blocks: [
+                            {
+                                blockId: 'ObjectSurface-1',
+                                blockType: 'ObjectSurface',
+                                role: null,
+                                constraints: {},
+                                parameters: { objectDistanceMode: 'INF' },
+                                variables: {},
+                                metadata: { source: 'default' }
+                            },
+                            {
+                                blockId: 'Stop-1',
+                                blockType: 'Stop',
+                                role: null,
+                                constraints: {},
+                                parameters: { semiDiameter: DEFAULT_STOP_SEMI_DIAMETER },
+                                variables: {},
+                                metadata: { source: 'default' }
+                            },
+                            {
+                                blockId: 'ImageSurface-1',
+                                blockType: 'ImageSurface',
+                                role: null,
+                                constraints: {},
+                                parameters: undefined,
+                                variables: {},
+                                metadata: { source: 'default' }
+                            }
+                        ],
+                        source: [],
+                        object: [
+                            { id: 1, xHeightAngle: 0, yHeightAngle: 0, position: 'Angle', angle: 0 }
+                        ],
+                        opticalSystem: [],
+                        systemData: {
+                            referenceFocalLength: ''
+                        },
+                        metadata: {
+                            created: new Date().toISOString(),
+                            modified: new Date().toISOString(),
+                            optimizationTarget: null,
+                            locked: false,
+                            designer: {
+                                type: "human",
+                                name: "user",
+                                confidence: null
+                            }
+                        }
+                    }
+                ],
+                activeConfigId: 1,
+                meritFunction: [],
+                systemRequirements: [
+                    {
+                        id: 1,
+                        enabled: true,
+                        operand: 'EFFL',
+                        rationale: '',
+                        configId: '1',
+                        param1: '',
+                        param2: '',
+                        param3: '',
+                        param4: '',
+                        param5: '',
+                        op: '=',
+                        tol: 0,
+                        target: 0,
+                        weight: 1,
+                        current: null,
+                        status: '',
+                        _violation: 0,
+                        _contribution: 0
+                    }
+                ],
+                optimizationRules: {}
+            };
+            
+            // デフォルトの波長を設定（g, d, C線）
+            const defaultWavelengths = [
+                { id: 1, wavelength: 0.4358343, weight: 1.0, primary: '', angle: 0 },
+                { id: 2, wavelength: 0.5875618, weight: 1.0, primary: 'Primary Wavelength', angle: 0 },
+                { id: 3, wavelength: 0.6562725, weight: 1.0, primary: '', angle: 0 }
+            ];
+            
+            // Configuration内のsourceにも設定（注：sourceはグローバル共有だが、一部の処理で参照される）
+            newSystemConfig.configurations[0].source = defaultWavelengths;
+            
+            // 保存
+            saveSystemConfigurations(newSystemConfig);
+            
+            // グローバルのsourceTableDataを更新（sourceは全Configで共有）
+            localStorage.setItem('sourceTableData', JSON.stringify(defaultWavelengths));
+            
+            // ファイル名をリセット
+            localStorage.removeItem('loadedFileName');
+            const fileNameElement = document.getElementById('loaded-file-name');
+            if (fileNameElement) {
+                fileNameElement.textContent = 'No file loaded';
+                fileNameElement.style.color = '#666';
+            }
+            
+            // アクティブConfigurationを設定して読み込み
+            setActiveConfiguration(1);
+            await loadActiveConfigurationToTables();
+            
+            // 明示的にテーブルにデータを設定
+            if (window.tableSource && typeof window.tableSource.setData === 'function') {
+                await window.tableSource.setData(defaultWavelengths);
+            }
+            if (window.tableObject && typeof window.tableObject.setData === 'function') {
+                await window.tableObject.setData([
+                    { id: 1, xHeightAngle: 0, yHeightAngle: 0, position: 'Angle', angle: 0 }
+                ]);
+            }
+            
+            // UIを更新
+            if (typeof window.updateConfigurationSelect === 'function') {
+                window.updateConfigurationSelect();
+            }
+            if (typeof window.updateConfigInfo === 'function') {
+                window.updateConfigInfo();
+            }
+            if (typeof window.refreshBlockInspector === 'function') {
+                window.refreshBlockInspector();
+            }
+            
+            // System Requirements Editorを更新
+            if (window.systemRequirementsEditor && typeof window.systemRequirementsEditor.setData === 'function') {
+                window.systemRequirementsEditor.setData(newSystemConfig.systemRequirements);
+            }
+            
+            console.log('✅ [New] Created new file with default configuration');
         });
     }
 }
@@ -5688,6 +5880,7 @@ export function setupDOMEventHandlers() {
         // UIイベントハンドラーを設定
         setupSaveButton();
         setupLoadButton();
+        setupNewFileButton();
         setupShareUrlButton();
         setupImportZemaxButton();
         setupExportZemaxButton();
@@ -8185,6 +8378,30 @@ function __blocks_makeDefaultBlock(blockType, blockId) {
         };
         return base;
     }
+    if (type === 'SingleSurface') {
+        base.parameters = {
+            radius: 'INF',
+            thickness: 10,
+            material: 'AIR',
+            surfType: 'Spherical',
+            conic: 0,
+            coef1: 0,
+            coef2: 0,
+            coef3: 0,
+            coef4: 0,
+            coef5: 0,
+            coef6: 0,
+            coef7: 0,
+            coef8: 0,
+            coef9: 0,
+            coef10: 0,
+            apertureShape: 'Circular',
+            semidia: 10,
+            apertureWidth: 20,
+            apertureHeight: 20
+        };
+        return base;
+    }
     if (type === 'ImageSurface') {
         // Optional parameters supported: semidia + optimizeSemiDia.
         base.parameters = {
@@ -8275,7 +8492,7 @@ function __blocks_addBlockToActiveConfig(blockType, insertAfterBlockId = null) {
         return { ok: false, reason: `failed to save: ${e?.message || String(e)}` };
     }
 
-    return { ok: true, blockId: newId };
+    return { ok: true, blockId: newId, blockData: JSON.parse(JSON.stringify(newBlock)), insertIndex: insertIdx };
 }
 
 function __blocks_deleteBlockFromActiveConfig(blockId) {
@@ -8299,6 +8516,7 @@ function __blocks_deleteBlockFromActiveConfig(blockId) {
     const type = String(blocks[idx]?.blockType ?? '').trim();
     if (type === 'ImageSurface') return { ok: false, reason: 'ImageSurface cannot be deleted.' };
 
+    const removedBlock = JSON.parse(JSON.stringify(blocks[idx])); // Deep copy for undo
     const removed = blocks.splice(idx, 1);
 
     try {
@@ -8344,7 +8562,7 @@ function __blocks_deleteBlockFromActiveConfig(blockId) {
         return { ok: false, reason: `failed to save: ${e?.message || String(e)}` };
     }
 
-    return { ok: true };
+    return { ok: true, blockData: removedBlock, blockIndex: idx };
 }
 
 function __blocks_setExpandedOpticalSystemUIVisible(visible) {
@@ -9108,6 +9326,11 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             const isMirrorSquare = mirrorShape === 'Square';
             const isMirrorRect = mirrorShape === 'Rectangular';
 
+            const singleSurfaceShape = (blockType === 'SingleSurface') ? normalizeApertureShape(getValue('apertureShape')) : null;
+            const isSingleSurfaceCircular = singleSurfaceShape === 'Circular';
+            const isSingleSurfaceSquare = singleSurfaceShape === 'Square';
+            const isSingleSurfaceRect = singleSurfaceShape === 'Rectangular';
+
             if (blockType === 'ObjectSurface') {
                 items.push(
                     { kind: 'objectMode', key: 'objectDistanceMode', label: 'object (INF/finite)', noOptimize: true },
@@ -9207,6 +9430,26 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                         items.push({ key: fb, label: asphereCoefLabel('mirror', st, i, fb) });
                     }
                 }
+            } else if (blockType === 'SingleSurface') {
+                items.push(
+                    { kind: 'apertureShape', key: 'apertureShape', label: 'apertureShape', noOptimize: true },
+                    { key: 'semidia', label: 'semidia', noOptimize: true },
+                    { key: 'apertureWidth', label: 'apertureWidth', noOptimize: true },
+                    { key: 'apertureHeight', label: 'apertureHeight', noOptimize: true },
+                    { key: 'radius', label: 'radius' },
+                    { key: 'thickness', label: 'thickness' },
+                    { key: 'material', label: 'material' },
+                    { key: 'surfType', label: 'surfType' },
+                    { key: 'conic', label: 'conic' }
+                );
+
+                if (shouldShowCoefsForSurfTypeKey('surfType')) {
+                    const st = getValue('surfType');
+                    for (let i = 1; i <= 10; i++) {
+                        const fb = `coef${i}`;
+                        items.push({ key: fb, label: asphereCoefLabel('surface', st, i, fb) });
+                    }
+                }
             } else if (blockType === 'CoordTrans') {
                 items.push(
                     { key: 'decenterX', label: 'decenterX' },
@@ -9237,6 +9480,12 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     if (k === 'semidia' && !isMirrorCircular) continue;
                     if (k === 'apertureWidth' && !(isMirrorSquare || isMirrorRect)) continue;
                     if (k === 'apertureHeight' && !isMirrorRect) continue;
+                }
+                if (blockType === 'SingleSurface') {
+                    const k = String(it?.key ?? '');
+                    if (k === 'semidia' && !isSingleSurfaceCircular) continue;
+                    if (k === 'apertureWidth' && !(isSingleSurfaceSquare || isSingleSurfaceRect)) continue;
+                    if (k === 'apertureHeight' && !isSingleSurfaceRect) continue;
                 }
                 const line = document.createElement('div');
                 line.style.display = 'flex';
@@ -10142,6 +10391,38 @@ function __blocks_mapSurfaceEditToBlockChange(edit) {
         }
         if (field === 'thickness') {
             return { blockId: String(blockId), blockType: 'Mirror', variable: 'thickness', oldValue, newValue };
+        }
+        return null;
+    }
+
+    if (blockType === 'SingleSurface') {
+        if (field === 'semidia') {
+            return { blockId: String(blockId), blockType: 'SingleSurface', variable: 'semidia', oldValue, newValue };
+        }
+        if (field === 'surftype') {
+            const normalized = normalizeSurfType(newValue);
+            if (!normalized) return null;
+            return { blockId: String(blockId), blockType: 'SingleSurface', variable: 'surfType', oldValue, newValue: normalized };
+        }
+        if (field === 'conic') {
+            const stCh = maybeSurfTypeChange('surfType');
+            return stCh ? [stCh, { blockId: String(blockId), blockType: 'SingleSurface', variable: 'conic', oldValue, newValue }] : { blockId: String(blockId), blockType: 'SingleSurface', variable: 'conic', oldValue, newValue };
+        }
+        const m = /^coef(\d+)$/.exec(field);
+        if (m) {
+            const idx = Number(m[1]);
+            if (!Number.isFinite(idx) || idx < 1 || idx > 10) return null;
+            const stCh = maybeSurfTypeChange('surfType');
+            return stCh ? [stCh, { blockId: String(blockId), blockType: 'SingleSurface', variable: `coef${idx}`, oldValue, newValue }] : { blockId: String(blockId), blockType: 'SingleSurface', variable: `coef${idx}`, oldValue, newValue };
+        }
+        if (field === 'radius') {
+            return { blockId: String(blockId), blockType: 'SingleSurface', variable: 'radius', oldValue, newValue };
+        }
+        if (field === 'thickness') {
+            return { blockId: String(blockId), blockType: 'SingleSurface', variable: 'thickness', oldValue, newValue };
+        }
+        if (field === 'material') {
+            return { blockId: String(blockId), blockType: 'SingleSurface', variable: 'material', oldValue, newValue };
         }
         return null;
     }

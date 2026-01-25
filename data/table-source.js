@@ -192,11 +192,22 @@ const createDOMTableSource = (container, initialRows) => {
         delete: () => {
           const index = data.findIndex(r => Number(r.id) === Number(rowData.id));
           if (index !== -1) {
+            const deletedRow = JSON.parse(JSON.stringify(rowData));
             data.splice(index, 1);
             renumberIds(data);
             if (selectedRowId === rowData.id) selectedRowId = null;
             rerender();
             saveTableData(getData());
+            
+            // Record undo
+            try {
+              if (window.undoHistory && window.DeleteRowCommand && !window.undoHistory.isExecuting) {
+                const cmd = new window.DeleteRowCommand('source', deletedRow, index);
+                window.undoHistory.record(cmd);
+              }
+            } catch (e) {
+              console.warn('[Undo] Failed to record source delete:', e);
+            }
           }
         },
         select: () => {
@@ -371,6 +382,17 @@ const createDOMTableSource = (container, initialRows) => {
     renumberIds(data);
     rerender();
     saveTableData(getData());
+    
+    // Record undo
+    try {
+      if (window.undoHistory && window.AddRowCommand && !window.undoHistory.isExecuting) {
+        const cmd = new window.AddRowCommand('source', JSON.parse(JSON.stringify(newRow)), insertIndex);
+        window.undoHistory.record(cmd);
+      }
+    } catch (e) {
+      console.warn('[Undo] Failed to record source add:', e);
+    }
+    
     return Promise.resolve();
   };
 

@@ -225,11 +225,23 @@ const createDOMTableObject = (container, initialRows) => {
         delete: () => {
           const index = data.findIndex(r => Number(r.id) === Number(rowData.id));
           if (index !== -1) {
+            const deletedRow = JSON.parse(JSON.stringify(rowData));
             data.splice(index, 1);
             renumberIds(data);
             if (Number(selectedRowId) === Number(rowData.id)) selectedRowId = null;
             rerender();
             saveTableData(getData());
+            
+            // Record undo
+            try {
+              if (window.undoHistory && window.DeleteRowCommand && !window.undoHistory.isExecuting) {
+                const cmd = new window.DeleteRowCommand('object', deletedRow, index);
+                window.undoHistory.record(cmd);
+              }
+            } catch (e) {
+              console.warn('[Undo] Failed to record object delete:', e);
+            }
+            
             emit('rowDeleted');
             emit('dataChanged');
           }
@@ -391,6 +403,17 @@ const createDOMTableObject = (container, initialRows) => {
     renumberIds(data);
     rerender();
     saveTableData(getData());
+    
+    // Record undo
+    try {
+      if (window.undoHistory && window.AddRowCommand && !window.undoHistory.isExecuting) {
+        const cmd = new window.AddRowCommand('object', JSON.parse(JSON.stringify(next)), insertIndex);
+        window.undoHistory.record(cmd);
+      }
+    } catch (e) {
+      console.warn('[Undo] Failed to record object add:', e);
+    }
+    
     emit('rowAdded');
     emit('dataChanged');
     return Promise.resolve();

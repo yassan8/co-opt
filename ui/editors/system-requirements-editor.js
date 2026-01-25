@@ -1733,17 +1733,63 @@ class SystemRequirementsEditor {
   }
 
   addRequirement() {
-    const newRow = this.createDefaultRequirementRow();
-
+    // Get current data from localStorage to ensure consistency
+    const storageData = JSON.parse(localStorage.getItem('systemRequirementsData') || '[]');
+    
+    // Calculate insertIndex based on current selection in this.requirements
     const selectedIndex = this.requirements.findIndex(r => r && String(r.id) === String(this._selectedId));
+    let insertIndex;
     if (selectedIndex !== -1) {
-      this.requirements.splice(selectedIndex + 1, 0, newRow);
+      insertIndex = selectedIndex + 1;
     } else {
-      this.requirements.push(newRow);
+      insertIndex = storageData.length; // Use localStorage length, not this.requirements.length
     }
-    this.updateRowNumbers();
-    this.saveToStorage();
-    if (typeof this._renderBody === 'function') this._renderBody(() => '', () => '', () => null);
+    
+    // Create new row with temporary ID (will be renumbered)
+    const newRow = this.createDefaultRequirementRow();
+    newRow.id = insertIndex + 1; // Temporary ID based on position
+    
+    console.log('[DEBUG addRequirement] Before command:', {
+      hasUndoHistory: !!window.undoHistory,
+      hasAddRowCommand: !!window.AddRowCommand,
+      isExecuting: window.undoHistory?.isExecuting,
+      insertIndex,
+      newRowId: newRow.id
+    });
+    
+    // Create command and execute, then record for undo
+    try {
+      if (window.undoHistory && window.AddRowCommand && !window.undoHistory.isExecuting) {
+        const cmd = new window.AddRowCommand('requirement', JSON.parse(JSON.stringify(newRow)), insertIndex, false);
+        cmd.execute(); // Execute first (this will update localStorage and refresh UI)
+        console.log('[DEBUG addRequirement] After execute, before record:', {
+          isExecuting: window.undoHistory.isExecuting,
+          undoStackLength: window.undoHistory.undoStack?.length || 0
+        });
+        window.undoHistory.record(cmd); // Then record for undo
+        console.log('[DEBUG addRequirement] After record:', {
+          undoStackLength: window.undoHistory.undoStack?.length || 0
+        });
+      } else {
+        console.warn('[DEBUG addRequirement] Fallback path taken:', {
+          hasUndoHistory: !!window.undoHistory,
+          hasAddRowCommand: !!window.AddRowCommand,
+          isExecuting: window.undoHistory?.isExecuting
+        });
+        // Fallback if undo system is not available
+        storageData.splice(insertIndex, 0, JSON.parse(JSON.stringify(newRow)));
+        localStorage.setItem('systemRequirementsData', JSON.stringify(storageData));
+        this.loadFromStorage();
+        this.renderTable();
+      }
+    } catch (e) {
+      console.warn('[Undo] Failed to add requirement:', e);
+      // Fallback
+      storageData.splice(insertIndex, 0, JSON.parse(JSON.stringify(newRow)));
+      localStorage.setItem('systemRequirementsData', JSON.stringify(storageData));
+      this.loadFromStorage();
+      this.renderTable();
+    }
   }
 
   deleteRequirement() {
@@ -1752,17 +1798,73 @@ class SystemRequirementsEditor {
       return;
     }
 
+    // Find index in current requirements (after any previous operations)
     const idx = this.requirements.findIndex(r => r && String(r.id) === String(this._selectedId));
-    if (idx !== -1) this.requirements.splice(idx, 1);
+    if (idx === -1) return;
+    
+    // Get the actual data from localStorage to ensure we're deleting the right row
+    const storageData = JSON.parse(localStorage.getItem('systemRequirementsData') || '[]');
+    if (idx >= storageData.length) {
+      console.warn('[Undo] Index out of bounds for delete');
+      return;
+    }
+    
+    const deletedRow = JSON.parse(JSON.stringify(storageData[idx])); // Use storage data, not this.requirements
     this._selectedId = null;
 
-    this.updateRowNumbers();
-    this.saveToStorage();
-    if (typeof this._renderBody === 'function') this._renderBody(() => '', () => '', () => null);
+    console.log('[DEBUG deleteRequirement] Before command:', {
+      hasUndoHistory: !!window.undoHistory,
+      hasDeleteRowCommand: !!window.DeleteRowCommand,
+      isExecuting: window.undoHistory?.isExecuting,
+      idx,
+      deletedRowId: deletedRow.id
+    });
 
+    // Create command and execute, then record for undo
     try {
-      if (this.inspector && typeof this.inspector.hide === 'function') this.inspector.hide();
-    } catch (_) {}
+      if (window.undoHistory && window.DeleteRowCommand && !window.undoHistory.isExecuting) {
+        const cmd = new window.DeleteRowCommand('requirement', deletedRow, idx, false);
+        cmd.execute(); // Execute first (this will update localStorage and refresh UI)
+        console.log('[DEBUG deleteRequirement] After execute, before record:', {
+          isExecuting: window.undoHistory.isExecuting,
+          undoStackLength: window.undoHistory.undoStack?.length || 0
+        });
+        window.undoHistory.record(cmd); // Then record for undo
+        console.log('[DEBUG deleteRequirement] After record:', {
+          undoStackLength: window.undoHistory.undoStack?.length || 0
+        });
+        
+        try {
+          if (this.inspector && typeof this.inspector.hide === 'function') this.inspector.hide();
+        } catch (_) {}
+      } else {
+        console.warn('[DEBUG deleteRequirement] Fallback path taken:', {
+          hasUndoHistory: !!window.undoHistory,
+          hasDeleteRowCommand: !!window.DeleteRowCommand,
+          isExecuting: window.undoHistory?.isExecuting
+        });
+        // Fallback if undo system is not available
+        storageData.splice(idx, 1);
+        localStorage.setItem('systemRequirementsData', JSON.stringify(storageData));
+        this.loadFromStorage();
+        this.renderTable();
+        
+        try {
+          if (this.inspector && typeof this.inspector.hide === 'function') this.inspector.hide();
+        } catch (_) {}
+      }
+    } catch (e) {
+      console.warn('[Undo] Failed to delete requirement:', e);
+      // Fallback
+      storageData.splice(idx, 1);
+      localStorage.setItem('systemRequirementsData', JSON.stringify(storageData));
+      this.loadFromStorage();
+      this.renderTable();
+      
+      try {
+        if (this.inspector && typeof this.inspector.hide === 'function') this.inspector.hide();
+      } catch (_) {}
+    }
   }
 
   transferSelectedToEvaluation() {
