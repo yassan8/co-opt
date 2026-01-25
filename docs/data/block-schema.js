@@ -434,11 +434,11 @@ export function validateBlocksConfiguration(config) {
     }
 
     const blockType = block.blockType;
-    if (blockType !== 'ObjectSurface' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordTrans' && blockType !== 'Mirror' && blockType !== 'ImageSurface') {
+    if (blockType !== 'ObjectSurface' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordTrans' && blockType !== 'Mirror' && blockType !== 'SingleSurface' && blockType !== 'ImageSurface') {
       issues.push({
         severity: 'fatal',
         phase: 'validate',
-        message: `Unsupported blockType: ${blockType} (MVP supports ObjectSurface, Lens, Doublet, Triplet, Gap, Stop, CoordTrans, Mirror, ImageSurface only).`,
+        message: `Unsupported blockType: ${blockType} (MVP supports ObjectSurface, Lens, SingleSurface, Doublet, Triplet, Gap, Stop, CoordTrans, Mirror, ImageSurface only).`,
         blockId: block.blockId
       });
       continue;
@@ -487,6 +487,95 @@ export function validateBlocksConfiguration(config) {
             issues.push({ severity: 'warning', phase: 'validate', message: 'ObjectSurface.objectDistance is INF; treating as INF.', blockId: block.blockId });
           } else if (typeof v === 'number' && Number.isFinite(v) && v <= 0) {
             issues.push({ severity: 'warning', phase: 'validate', message: `ObjectSurface.objectDistance is <= 0 (${String(v)}).`, blockId: block.blockId });
+          }
+        }
+      }
+    }
+
+    if (blockType === 'SingleSurface') {
+      const radius = getParamOrVarValue(parameters, variables, 'radius');
+      const thickness = getParamOrVarValue(parameters, variables, 'thickness');
+      const material = getParamOrVarValue(parameters, variables, 'material');
+
+      // Optional asphere parameters
+      const surfType = normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, 'surfType'));
+
+      if (surfType && !ALLOWED_SURF_TYPES.has(surfType)) {
+        issues.push({ severity: 'fatal', phase: 'validate', message: `SingleSurface.surfType must be one of: Spherical, Aspheric even, Aspheric odd. Got: ${surfType}`, blockId: block.blockId });
+      }
+
+      if (radius === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'SingleSurface.radius is required.', blockId: block.blockId });
+      if (thickness === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'SingleSurface.thickness is required.', blockId: block.blockId });
+
+      // Material is optional for SingleSurface (can be air/vacuum)
+      if (material !== undefined && material !== null && material !== '') {
+        if (typeof material === 'string' && __isNumericMaterialName(material)) {
+          issues.push({
+            severity: 'warning',
+            phase: 'validate',
+            message: `SingleSurface.material is numeric (${material}). Treated as synthetic glass; dispersion may be inaccurate.`,
+            blockId: block.blockId
+          });
+        } else if (typeof material === 'string' && !isKnownGlassNameOnly(material) && material.trim() !== 'AIR' && material.trim() !== '') {
+          issues.push({
+            severity: 'warning',
+            phase: 'validate',
+            message: `Unknown glass name (allowed for imported/legacy designs): ${material}`,
+            blockId: block.blockId
+          });
+        }
+      }
+
+      // Aperture shape validation (same as Mirror)
+      const normalizeShape = (v) => {
+        const s = String(v ?? '').trim();
+        if (!s) return 'Circular';
+        const key = s.replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+        if (key === 'circle' || key === 'circular') return 'Circular';
+        if (key === 'square' || key === 'sq') return 'Square';
+        if (key === 'rect' || key === 'rectangle' || key === 'rectangular') return 'Rectangular';
+        return s;
+      };
+
+      const shape = normalizeShape(getParamOrVarValue(parameters, variables, 'apertureShape'));
+      if (shape !== 'Circular' && shape !== 'Square' && shape !== 'Rectangular') {
+        issues.push({ severity: 'warning', phase: 'validate', message: `SingleSurface.apertureShape is unknown (${shape}).`, blockId: block.blockId });
+      }
+
+      const semidiaRaw = getParamOrVarValue(parameters, variables, 'semidia');
+      const widthRaw = getParamOrVarValue(parameters, variables, 'apertureWidth');
+      const heightRaw = getParamOrVarValue(parameters, variables, 'apertureHeight');
+      const semidiaVal = Number(String(semidiaRaw ?? '').trim());
+      const widthVal = Number(String(widthRaw ?? '').trim());
+      const heightVal = Number(String(heightRaw ?? '').trim());
+
+      if (shape === 'Circular') {
+        if (semidiaRaw !== undefined && (!Number.isFinite(semidiaVal) || semidiaVal <= 0)) {
+          issues.push({ severity: 'warning', phase: 'validate', message: `SingleSurface.semidia should be positive for Circular aperture (${String(semidiaRaw)}).`, blockId: block.blockId });
+        }
+      } else if (shape === 'Square') {
+        const side = Number.isFinite(widthVal) ? widthVal : heightVal;
+        if (!Number.isFinite(side) || side <= 0) {
+          issues.push({ severity: 'warning', phase: 'validate', message: `SingleSurface.apertureWidth should be positive for Square aperture (${String(widthRaw ?? heightRaw)}).`, blockId: block.blockId });
+        }
+      } else if (shape === 'Rectangular') {
+        if (!Number.isFinite(widthVal) || widthVal <= 0 || !Number.isFinite(heightVal) || heightVal <= 0) {
+          issues.push({ severity: 'warning', phase: 'validate', message: `SingleSurface.apertureWidth/Height should be positive for Rectangular aperture (w=${String(widthRaw)}, h=${String(heightRaw)}).`, blockId: block.blockId });
+        }
+      }
+
+      // Check optimize modes
+      if (isPlainObject(variables)) {
+        for (const [k, v] of Object.entries(variables)) {
+          if (!isPlainObject(v) || !isPlainObject(v.optimize) || v.optimize.mode === undefined) continue;
+          const mode = v.optimize.mode;
+          if (mode !== 'V' && mode !== '' && mode !== undefined && mode !== null) {
+            issues.push({
+              severity: 'warning',
+              phase: 'validate',
+              message: `variables.${k}.optimize.mode=${String(v.optimize.mode)} is not supported yet; treating as fixed.`,
+              blockId: block.blockId
+            });
           }
         }
       }
@@ -1218,6 +1307,86 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       }
 
       rows.push(front, back);
+      continue;
+    }
+
+    if (type === 'SingleSurface') {
+      const surf = createBlankSurfaceRow(rows.length, getLastNonStopRow());
+
+      surf._blockType = 'SingleSurface';
+      surf._blockId = blockId || null;
+      surf._surfaceRole = 'single';
+
+      const radius = getParamOrVarValue(params, vars, 'radius');
+      const thickness = getParamOrVarValue(params, vars, 'thickness');
+      const material = getParamOrVarValue(params, vars, 'material');
+
+      // Optional asphere parameters
+      const surfTypeRaw = getParamOrVarValue(params, vars, 'surfType');
+      const conicRaw = getParamOrVarValue(params, vars, 'conic');
+      const coefsRaw = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `coef${i + 1}`));
+
+      surf.radius = normalizeRadiusToRowValue(radius);
+      surf.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness));
+      surf.material = String(material ?? '').trim();
+
+      applyDerivedGlassDisplay(surf);
+      applyAsphereFieldsFromParams(surf, surfTypeRaw, conicRaw, coefsRaw);
+
+      // Aperture shape handling (same as Mirror)
+      const shape = normalizeApertureShape(getParamOrVarValue(params, vars, 'apertureShape'));
+      const semidiaRaw = getParamOrVarValue(params, vars, 'semidia');
+      const widthRaw = getParamOrVarValue(params, vars, 'apertureWidth');
+      const heightRaw = getParamOrVarValue(params, vars, 'apertureHeight');
+      const widthVal = Number(String(widthRaw ?? '').trim());
+      const heightVal = Number(String(heightRaw ?? '').trim());
+
+      surf._apertureShape = shape;
+      if (shape === 'Circular') {
+        // Persisted aperture (semidia) stored in Design Intent
+        if (semidiaRaw !== null && semidiaRaw !== undefined && String(semidiaRaw).trim() !== '') {
+          surf.semidia = semidiaRaw;
+        } else {
+          const vSemidia = aperture ? aperture.semidia : null;
+          if (vSemidia !== null && vSemidia !== undefined && String(vSemidia).trim() !== '') {
+            surf.semidia = vSemidia;
+          } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 'semidia')) {
+            surf.semidia = '';
+          }
+        }
+      } else {
+        const w = Number.isFinite(widthVal) && widthVal > 0 ? widthVal : NaN;
+        const h = Number.isFinite(heightVal) && heightVal > 0 ? heightVal : NaN;
+        const side = (shape === 'Square') ? (Number.isFinite(w) ? w : h) : NaN;
+        const finalW = (shape === 'Square') ? side : w;
+        const finalH = (shape === 'Square') ? side : h;
+        if (Number.isFinite(finalW)) surf._apertureWidth = finalW;
+        if (Number.isFinite(finalH)) surf._apertureHeight = finalH;
+        const maxDim = Math.max(Number.isFinite(finalW) ? finalW : 0, Number.isFinite(finalH) ? finalH : 0);
+        surf.semidia = (maxDim > 0) ? String(maxDim / 2) : '';
+      }
+
+      // V flags for optimization
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius') && shouldMarkV(vars.radius)) {
+        applyVFlag(surf, 'optimizeR');
+      }
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness') && shouldMarkV(vars.thickness)) {
+        applyVFlag(surf, 'optimizeT');
+      }
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'material') && shouldMarkV(vars.material)) {
+        applyVFlag(surf, 'optimizeMaterial');
+      }
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'conic') && shouldMarkV(vars.conic)) {
+        applyVFlag(surf, 'optimizeConic');
+      }
+      for (let i = 1; i <= 10; i++) {
+        const key = `coef${i}`;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, key) && shouldMarkV(vars[key])) {
+          applyVFlag(surf, `optimizeCoef${i}`);
+        }
+      }
+
+      rows.push(surf);
       continue;
     }
 

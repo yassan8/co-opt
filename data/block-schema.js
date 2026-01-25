@@ -526,6 +526,44 @@ export function validateBlocksConfiguration(config) {
         }
       }
 
+      // Aperture shape validation (same as Mirror)
+      const normalizeShape = (v) => {
+        const s = String(v ?? '').trim();
+        if (!s) return 'Circular';
+        const key = s.replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+        if (key === 'circle' || key === 'circular') return 'Circular';
+        if (key === 'square' || key === 'sq') return 'Square';
+        if (key === 'rect' || key === 'rectangle' || key === 'rectangular') return 'Rectangular';
+        return s;
+      };
+
+      const shape = normalizeShape(getParamOrVarValue(parameters, variables, 'apertureShape'));
+      if (shape !== 'Circular' && shape !== 'Square' && shape !== 'Rectangular') {
+        issues.push({ severity: 'warning', phase: 'validate', message: `SingleSurface.apertureShape is unknown (${shape}).`, blockId: block.blockId });
+      }
+
+      const semidiaRaw = getParamOrVarValue(parameters, variables, 'semidia');
+      const widthRaw = getParamOrVarValue(parameters, variables, 'apertureWidth');
+      const heightRaw = getParamOrVarValue(parameters, variables, 'apertureHeight');
+      const semidiaVal = Number(String(semidiaRaw ?? '').trim());
+      const widthVal = Number(String(widthRaw ?? '').trim());
+      const heightVal = Number(String(heightRaw ?? '').trim());
+
+      if (shape === 'Circular') {
+        if (semidiaRaw !== undefined && (!Number.isFinite(semidiaVal) || semidiaVal <= 0)) {
+          issues.push({ severity: 'warning', phase: 'validate', message: `SingleSurface.semidia should be positive for Circular aperture (${String(semidiaRaw)}).`, blockId: block.blockId });
+        }
+      } else if (shape === 'Square') {
+        const side = Number.isFinite(widthVal) ? widthVal : heightVal;
+        if (!Number.isFinite(side) || side <= 0) {
+          issues.push({ severity: 'warning', phase: 'validate', message: `SingleSurface.apertureWidth should be positive for Square aperture (${String(widthRaw ?? heightRaw)}).`, blockId: block.blockId });
+        }
+      } else if (shape === 'Rectangular') {
+        if (!Number.isFinite(widthVal) || widthVal <= 0 || !Number.isFinite(heightVal) || heightVal <= 0) {
+          issues.push({ severity: 'warning', phase: 'validate', message: `SingleSurface.apertureWidth/Height should be positive for Rectangular aperture (w=${String(widthRaw)}, h=${String(heightRaw)}).`, blockId: block.blockId });
+        }
+      }
+
       // Check optimize modes
       if (isPlainObject(variables)) {
         for (const [k, v] of Object.entries(variables)) {
@@ -1279,16 +1317,6 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       surf._blockId = blockId || null;
       surf._surfaceRole = 'single';
 
-      // Persisted aperture (semidia) stored in Design Intent
-      try {
-        const vSemidia = aperture ? aperture.semidia : null;
-        if (vSemidia !== null && vSemidia !== undefined && String(vSemidia).trim() !== '') {
-          surf.semidia = vSemidia;
-        } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 'semidia')) {
-          surf.semidia = '';
-        }
-      } catch (_) {}
-
       const radius = getParamOrVarValue(params, vars, 'radius');
       const thickness = getParamOrVarValue(params, vars, 'thickness');
       const material = getParamOrVarValue(params, vars, 'material');
@@ -1304,6 +1332,39 @@ export function expandBlocksToOpticalSystemRows(blocks) {
 
       applyDerivedGlassDisplay(surf);
       applyAsphereFieldsFromParams(surf, surfTypeRaw, conicRaw, coefsRaw);
+
+      // Aperture shape handling (same as Mirror)
+      const shape = normalizeApertureShape(getParamOrVarValue(params, vars, 'apertureShape'));
+      const semidiaRaw = getParamOrVarValue(params, vars, 'semidia');
+      const widthRaw = getParamOrVarValue(params, vars, 'apertureWidth');
+      const heightRaw = getParamOrVarValue(params, vars, 'apertureHeight');
+      const widthVal = Number(String(widthRaw ?? '').trim());
+      const heightVal = Number(String(heightRaw ?? '').trim());
+
+      surf._apertureShape = shape;
+      if (shape === 'Circular') {
+        // Persisted aperture (semidia) stored in Design Intent
+        if (semidiaRaw !== null && semidiaRaw !== undefined && String(semidiaRaw).trim() !== '') {
+          surf.semidia = semidiaRaw;
+        } else {
+          const vSemidia = aperture ? aperture.semidia : null;
+          if (vSemidia !== null && vSemidia !== undefined && String(vSemidia).trim() !== '') {
+            surf.semidia = vSemidia;
+          } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 'semidia')) {
+            surf.semidia = '';
+          }
+        }
+      } else {
+        const w = Number.isFinite(widthVal) && widthVal > 0 ? widthVal : NaN;
+        const h = Number.isFinite(heightVal) && heightVal > 0 ? heightVal : NaN;
+        const side = (shape === 'Square') ? (Number.isFinite(w) ? w : h) : NaN;
+        const finalW = (shape === 'Square') ? side : w;
+        const finalH = (shape === 'Square') ? side : h;
+        if (Number.isFinite(finalW)) surf._apertureWidth = finalW;
+        if (Number.isFinite(finalH)) surf._apertureHeight = finalH;
+        const maxDim = Math.max(Number.isFinite(finalW) ? finalW : 0, Number.isFinite(finalH) ? finalH : 0);
+        surf.semidia = (maxDim > 0) ? String(maxDim / 2) : '';
+      }
 
       // V flags for optimization
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius') && shouldMarkV(vars.radius)) {

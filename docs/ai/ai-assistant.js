@@ -2464,10 +2464,50 @@ async function tool_set_block_param(args) {
         }
 
         const updateParameters = () => {
+            // Record undo command before modifying
+            try {
+                if (window.undoHistory && window.SetBlockParameterCommand && !window.undoHistory.isExecuting) {
+                    const oldValue = isPlainObject(b.parameters) ? b.parameters[k] : undefined;
+                    if (oldValue !== v) {
+                        const command = new window.SetBlockParameterCommand(
+                            oneCfg.id,
+                            resolvedBlockId,
+                            `parameters.${k}`,
+                            oldValue,
+                            v
+                        );
+                        window.undoHistory.record(command);
+                    }
+                }
+            } catch (undoError) {
+                console.warn('[Undo] Failed to record block parameter edit:', undoError);
+            }
+            
             if (!isPlainObject(b.parameters)) b.parameters = {};
             b.parameters[k] = v;
         };
         const updateVariables = () => {
+            // Record undo command before modifying
+            try {
+                if (window.undoHistory && window.SetBlockParameterCommand && !window.undoHistory.isExecuting) {
+                    const oldValue = isPlainObject(b.variables) && isPlainObject(b.variables[k]) 
+                        ? b.variables[k].value 
+                        : undefined;
+                    if (oldValue !== v) {
+                        const command = new window.SetBlockParameterCommand(
+                            oneCfg.id,
+                            resolvedBlockId,
+                            `variables.${k}.value`,
+                            oldValue,
+                            v
+                        );
+                        window.undoHistory.record(command);
+                    }
+                }
+            } catch (undoError) {
+                console.warn('[Undo] Failed to record block variable edit:', undoError);
+            }
+            
             if (!isPlainObject(b.variables)) b.variables = {};
             const existing = b.variables[k];
             if (isPlainObject(existing)) existing.value = v;
