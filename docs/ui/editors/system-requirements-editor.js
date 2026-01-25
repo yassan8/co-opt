@@ -433,7 +433,21 @@ class SystemRequirementsEditor {
       onCb.type = 'checkbox';
       onCb.checked = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
       onCb.addEventListener('change', () => {
+        const oldValue = row.enabled;
         row.enabled = !!onCb.checked;
+        
+        // Record undo command
+        if (window.undoHistory && window.SetRequirementCommand && !window.undoHistory.isExecuting && oldValue !== row.enabled) {
+          const command = new window.SetRequirementCommand(
+            row.id,
+            'enabled',
+            oldValue,
+            row.enabled
+          );
+          window.undoHistory.record(command);
+          console.log(`[Undo] Recorded: Set Requirement ${row.id}.enabled from ${oldValue} to ${row.enabled}`);
+        }
+        
         this.saveToStorage();
         this.scheduleEvaluateAndUpdate();
       });
@@ -458,7 +472,38 @@ class SystemRequirementsEditor {
       }
       operandSel.value = String(row.operand || '').trim();
       operandSel.addEventListener('change', () => {
+        console.log('[Undo] operandSel change event fired');
+        console.log('[Undo] row.operand before change:', row.operand);
+        console.log('[Undo] operandSel.value:', operandSel.value);
+        console.log('[Undo] window.undoHistory exists:', !!window.undoHistory);
+        console.log('[Undo] window.SetRequirementCommand exists:', !!window.SetRequirementCommand);
+        console.log('[Undo] window.undoHistory.isExecuting:', window.undoHistory?.isExecuting);
+        
+        const oldValue = row.operand;
         row.operand = operandSel.value;
+        
+        console.log('[Undo] oldValue:', oldValue);
+        console.log('[Undo] new value (row.operand):', row.operand);
+        console.log('[Undo] values are different:', oldValue !== row.operand);
+        
+        // Record undo command
+        if (window.undoHistory && window.SetRequirementCommand && !window.undoHistory.isExecuting && oldValue !== row.operand) {
+          const command = new window.SetRequirementCommand(
+            row.id,
+            'operand',
+            oldValue,
+            row.operand
+          );
+          window.undoHistory.record(command);
+          console.log(`[Undo] Recorded: Set Requirement ${row.id}.operand from ${oldValue} to ${row.operand}`);
+        } else {
+          console.log('[Undo] NOT recording operand change, reason:', 
+            !window.undoHistory ? 'undoHistory missing' :
+            !window.SetRequirementCommand ? 'SetRequirementCommand missing' :
+            window.undoHistory.isExecuting ? 'isExecuting=true' :
+            oldValue === row.operand ? 'values are same' : 'unknown');
+        }
+        
         this.saveToStorage();
         
         // Operand change affects parameter types (dropdown vs text), so re-render entire table
@@ -526,7 +571,21 @@ class SystemRequirementsEditor {
       };
 
       cfgSel.addEventListener('change', () => {
+        const oldValue = row.configId;
         row.configId = cfgSel.value;
+        
+        // Record undo command
+        if (window.undoHistory && window.SetRequirementCommand && !window.undoHistory.isExecuting && oldValue !== row.configId) {
+          const command = new window.SetRequirementCommand(
+            row.id,
+            'configId',
+            oldValue,
+            row.configId
+          );
+          window.undoHistory.record(command);
+          console.log(`[Undo] Recorded: Set Requirement ${row.id}.configId from ${oldValue} to ${row.configId}`);
+        }
+        
         this.saveToStorage();
 
         // If operand is EFL, refresh param2 datalist options.
@@ -734,13 +793,31 @@ class SystemRequirementsEditor {
         
         if (control.tagName === 'SELECT') {
           control.addEventListener('change', () => {
+            const oldValue = row[field];
             row[field] = control.value;
+            
+            // Record undo command
+            try {
+              if (window.undoHistory && window.SetRequirementCommand && !window.undoHistory.isExecuting && oldValue !== control.value) {
+                const command = new window.SetRequirementCommand(
+                  row.id,
+                  field,
+                  oldValue,
+                  control.value
+                );
+                window.undoHistory.record(command);
+              }
+            } catch (undoError) {
+              console.warn('[Undo] Failed to record requirement edit:', undoError);
+            }
+            
             this.saveToStorage();
             this.scheduleEvaluateAndUpdate();
           });
           control.addEventListener('blur', onCellBlur);
         } else {
           control.addEventListener('blur', () => {
+            const oldValue = row[field];
             let nextVal = control.value;
             try {
               if (field === 'param2' && String(row?.operand ?? '').trim() === 'EFL') {
@@ -763,6 +840,22 @@ class SystemRequirementsEditor {
             } catch (_) {}
             row[field] = nextVal;
             if (nextVal !== control.value) control.value = nextVal;
+            
+            // Record undo command
+            try {
+              if (window.undoHistory && window.SetRequirementCommand && !window.undoHistory.isExecuting && oldValue !== nextVal) {
+                const command = new window.SetRequirementCommand(
+                  row.id,
+                  field,
+                  oldValue,
+                  nextVal
+                );
+                window.undoHistory.record(command);
+              }
+            } catch (undoError) {
+              console.warn('[Undo] Failed to record requirement edit:', undoError);
+            }
+            
             this.saveToStorage();
 
             if (field === 'tol' || field === 'target') {
@@ -877,7 +970,21 @@ class SystemRequirementsEditor {
       opSel.addEventListener('focus', onCellFocus);
       opSel.addEventListener('blur', onCellBlur);
       opSel.addEventListener('change', () => {
+        const oldValue = row.op;
         row.op = opSel.value;
+        
+        // Record undo command
+        if (window.undoHistory && window.SetRequirementCommand && !window.undoHistory.isExecuting && oldValue !== row.op) {
+          const command = new window.SetRequirementCommand(
+            row.id,
+            'op',
+            oldValue,
+            row.op
+          );
+          window.undoHistory.record(command);
+          console.log(`[Undo] Recorded: Set Requirement ${row.id}.op from ${oldValue} to ${row.op}`);
+        }
+        
         this.saveToStorage();
         const specEl = tr.querySelector('td[data-role="spec"]');
         if (specEl) specEl.textContent = makeSpecSummary(row);

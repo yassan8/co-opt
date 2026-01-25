@@ -1180,6 +1180,24 @@ tableOpticalSystem.on("cellEdited", function(cell){
       }
       globalThis.__lastSurfaceEdit = { row: rowData, field, oldValue, newValue };
 
+      // Record undo command for this surface edit
+      try {
+        if (window.undoHistory && window.SetSurfaceFieldCommand && !window.undoHistory.isExecuting) {
+          const sysConfig = window.loadSystemConfigurations();
+          const activeConfigId = sysConfig.activeConfiguration;
+          const command = new window.SetSurfaceFieldCommand(
+            activeConfigId,
+            rowData.id,
+            field,
+            oldValue,
+            newValue
+          );
+          window.undoHistory.record(command);
+        }
+      } catch (undoError) {
+        console.warn('[Undo] Failed to record surface edit:', undoError);
+      }
+
       // Also track per-cell pending edits so Apply can fall back to the currently selected cell.
       // This stays in-memory only and is cleared after Apply triggers re-expand.
       if (rowData && typeof rowData.id === 'number') {
