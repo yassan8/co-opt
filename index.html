@@ -651,6 +651,15 @@
   
   <!-- Undo/Redo System -->
   <script src="core/undo-history.js"></script>
+  <script>
+    // Initialize undo history system
+    if (typeof UndoHistory !== 'undefined') {
+      window.undoHistory = new UndoHistory();
+      console.log('✅ [Undo] UndoHistory initialized');
+    } else {
+      console.warn('⚠️ [Undo] UndoHistory class not found');
+    }
+  </script>
   
   <script type="module" src="main.js"></script>
   
