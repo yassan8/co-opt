@@ -9511,7 +9511,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     { key: 'tiltX', label: 'tiltX (deg)' },
                     { key: 'tiltY', label: 'tiltY (deg)' },
                     { key: 'tiltZ', label: 'tiltZ (deg)' },
-                    { key: 'order', label: 'order (0/1)' }
+                    { kind: 'coordTransOrder', key: 'order', label: 'order', noOptimize: true }
                 );
             } else if (blockType === 'ImageSurface') {
                 items.push({ kind: 'imageSemiDiaMode', key: 'optimizeSemiDia', label: 'auto semidia (chief ray)', noOptimize: true });
@@ -9524,6 +9524,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 const isImageSemiDiaModeItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'imageSemiDiaMode';
                 const isGapThicknessModeItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'gapThicknessMode';
                 const isApertureShapeItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'apertureShape';
+                const isCoordTransOrderItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'coordTransOrder';
                 const isSurfTypeItem = !isApertureItem && it && typeof it === 'object' && typeof it.key === 'string' && /surftype$/i.test(String(it.key));
                 const isMaterialItem = !isApertureItem && it && typeof it === 'object' && typeof it.key === 'string' && /^material\d*$/i.test(String(it.key));
                 const allowOptimize = !isApertureItem && !(it && typeof it === 'object' && it.noOptimize);
@@ -9623,7 +9624,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 };
 
                 let valueEl;
-                if (isObjectModeItem || isImageSemiDiaModeItem || isGapThicknessModeItem || isApertureShapeItem) {
+                if (isObjectModeItem || isImageSemiDiaModeItem || isGapThicknessModeItem || isApertureShapeItem || isCoordTransOrderItem) {
                     const sel = document.createElement('select');
                     sel.style.flex = '0 0 180px';
                     sel.style.fontSize = '12px';
@@ -9751,6 +9752,27 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                 }
                                 try { refreshBlockInspector(); } catch (_) {}
                             })();
+                        });
+                    } else if (isCoordTransOrderItem) {
+                        // CoordTrans.order
+                        sel.innerHTML = [
+                            '<option value="0">Order 0: Decenter → Tilt</option>',
+                            '<option value="1">Order 1: Tilt → Decenter</option>'
+                        ].join('');
+
+                        const cur = String(currentValue ?? '').trim();
+                        const normalized = (cur === '0' || cur === '1') ? cur : '1';
+                        sel.value = normalized;
+
+                        sel.addEventListener('change', (e) => {
+                            e.stopPropagation();
+                            const desired = String(sel.value ?? '1');
+                            const ok = commitValue(desired);
+                            if (!ok) {
+                                sel.value = normalized;
+                                return;
+                            }
+                            try { refreshBlockInspector(); } catch (_) {}
                         });
                     } else {
                         // Mirror.apertureShape
