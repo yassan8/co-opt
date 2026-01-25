@@ -2178,12 +2178,27 @@ function setupSuggestOptimizeButtons() {
     const optimizeBtn = document.getElementById('optimize-design-intent-btn');
     if (optimizeBtn) {
         optimizeBtn.addEventListener('click', async () => {
+            const isRunningFlag = (typeof globalThis !== 'undefined') ? !!globalThis.__cooptOptimizerIsRunning : false;
+            const schedulerWindow = (typeof globalThis !== 'undefined') ? globalThis.__cooptOptimizerSchedulerWindow : null;
+            const isStaleRunning = isRunningFlag && (!schedulerWindow || schedulerWindow.closed);
+            console.log('[Optimize] Button clicked, checking if already running:', isRunningFlag, { isStaleRunning });
+            // Check if optimization is already running
+            if (isRunningFlag && !isStaleRunning) {
+                alert('Optimization is already running. Please wait for it to complete or stop it first.');
+                return;
+            }
+            if (isStaleRunning && typeof globalThis !== 'undefined') {
+                // Clear stale flag to allow a fresh run
+                globalThis.__cooptOptimizerIsRunning = false;
+            }
+            
             const prevDisabled = optimizeBtn.disabled;
             optimizeBtn.disabled = true;
             try {
                 const opt = window.OptimizationMVP;
                 if (!opt || typeof opt.run !== 'function') {
                     alert('OptimizationMVP が利用できません。');
+                    optimizeBtn.disabled = false;
                     return;
                 }
 
@@ -2222,10 +2237,18 @@ function setupSuggestOptimizeButtons() {
                 try {
                     popup = window.open('', 'coopt-optimizer-progress', 'width=500,height=550,resizable=yes,scrollbars=no');
                     if (popup && popup.document) {
-                        popup.document.title = 'Optimize Progress';
-                        popup.document.body.style.fontFamily = 'system-ui, -apple-system, Segoe UI, sans-serif';
-                        popup.document.body.style.margin = '12px';
-                        popup.document.body.innerHTML = `
+                        const baseOrigin = (window && window.location && window.location.origin) ? window.location.origin : '';
+                        const faviconHref = `${baseOrigin}/favicon.svg`;
+                        popup.document.open();
+                        popup.document.write(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Optimize Progress</title>
+  <base href="${baseOrigin}/" />
+  <link rel="icon" type="image/svg+xml" href="${faviconHref}" />
+</head>
+<body style="font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 12px;">
 <div style="font-size:14px; font-weight:600; margin-bottom:8px;">Optimize Progress</div>
 <div style="font-size:12px; color:#555; margin-bottom:10px;">Updates per candidate evaluation (±step)</div>
 <div style="margin-bottom:10px; display:flex; align-items:center; gap:6px;">
@@ -2342,7 +2365,9 @@ function setupSuggestOptimizeButtons() {
         <div>探索ステップ試行回数</div>
     </div>
 </details>
-`;
+     </body>
+    </html>`);
+                            popup.document.close();
 
                         try {
                             const varsEl = popup.document.getElementById('opt-vars');
@@ -2420,6 +2445,8 @@ function setupSuggestOptimizeButtons() {
                                         const opt = window.OptimizationMVP;
                                         if (opt && typeof opt.stop === 'function') opt.stop();
                                     } catch (_) {}
+                                    // Reset the running flag to allow re-running optimization
+                                    globalThis.__cooptOptimizerIsRunning = false;
                                 }
                                 
                                 if (popupWatchTimer) {
@@ -2647,53 +2674,56 @@ function setupSuggestOptimizeButtons() {
                 };
 
                 const startRun = async () => {
-                    if (isRunning) return;
+                    // isRunning check removed - it's always false on each click due to new scope
+                    // if (isRunning) return;
                     isRunning = true;
+                    console.log('[Optimize] startRun called, setting flags to true');
                     if (typeof globalThis !== 'undefined') {
                         globalThis.__cooptOptimizerIsRunning = true;
                     }
 
-                    // Save state before optimization for undo
-                    let beforeOptimizationState = null;
                     try {
-                        const json = localStorage.getItem('systemConfigurations');
-                        if (json) {
-                            beforeOptimizationState = JSON.parse(json);
-                        }
-                    } catch (_) {}
+                        // Save state before optimization for undo
+                        let beforeOptimizationState = null;
+                        try {
+                            const json = localStorage.getItem('systemConfigurations');
+                            if (json) {
+                                beforeOptimizationState = JSON.parse(json);
+                            }
+                        } catch (_) {}
 
-                    stopFlag.stop = false;
-                    acceptCount = 0;
-                    rejectCount = 0;
-                    lastIssueText = '-';
-                    lastReqText = '-';
-                    lastResText = '-';
-                    lastRhoText = '-';
-                    lastVioText = '-';
-                    lastSoftText = '-';
-                    lastDecisionText = '-';
+                        stopFlag.stop = false;
+                        acceptCount = 0;
+                        rejectCount = 0;
+                        lastIssueText = '-';
+                        lastReqText = '-';
+                        lastResText = '-';
+                        lastRhoText = '-';
+                        lastVioText = '-';
+                        lastSoftText = '-';
+                        lastDecisionText = '-';
 
-                    try {
-                        // Sync popup button states
-                        if (popup && !popup.closed) {
-                            const doc = popup.document;
-                            const stopBtn = doc.getElementById('opt-stop');
-                            const runBtn = doc.getElementById('opt-run');
-                            const stopState = doc.getElementById('opt-stop-state');
-                            if (stopBtn) stopBtn.disabled = false;
-                            if (runBtn) runBtn.disabled = true;
-                            if (stopState) stopState.textContent = 'Running...';
-                        }
-                    } catch (_) {}
+                        try {
+                            // Sync popup button states
+                            if (popup && !popup.closed) {
+                                const doc = popup.document;
+                                const stopBtn = doc.getElementById('opt-stop');
+                                const runBtn = doc.getElementById('opt-run');
+                                const stopState = doc.getElementById('opt-stop-state');
+                                if (stopBtn) stopBtn.disabled = false;
+                                if (runBtn) runBtn.disabled = true;
+                                if (stopState) stopState.textContent = 'Running...';
+                            }
+                        } catch (_) {}
 
-                    try { optimizeBtn.disabled = true; } catch (_) {}
+                        try { optimizeBtn.disabled = true; } catch (_) {}
 
-                    console.log('🛠️ [Optimize] Running OptimizationMVP...', { multiScenario });
-                    const shouldStopNow = () => {
-                        return !!stopFlag.stop;
-                    };
+                        console.log('🛠️ [Optimize] Running OptimizationMVP...', { multiScenario });
+                        const shouldStopNow = () => {
+                            return !!stopFlag.stop;
+                        };
 
-                    const resolveMaxIterations = () => {
+                        const resolveMaxIterations = () => {
                         let n = 1000;
                         try {
                             if (popup && !popup.closed) {
@@ -2757,34 +2787,30 @@ function setupSuggestOptimizeButtons() {
                         };
                     };
 
-                    const maxIterations = resolveMaxIterations();
-                    const optParams = resolveOptParams();
+                        const maxIterations = resolveMaxIterations();
+                        const optParams = resolveOptParams();
 
-                    let result = null;
-                    try {
-                        // Prevent undo recording during optimization
-                        if (window.undoHistory) {
-                            window.undoHistory.isExecuting = true;
-                        }
-                        
-                        // Force-disable ray-tracing detailed debug logs during optimization.
-                        // This prevents WASM intersection fast-path from being bypassed.
-                        let __prevDisableRayTraceDebug;
-                        let __prevOptimizerIsRunning;
+                        let result = null;
                         try {
-                            __prevDisableRayTraceDebug = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG : undefined;
-                        } catch (_) { __prevDisableRayTraceDebug = undefined; }
-                        try {
-                            __prevOptimizerIsRunning = (typeof globalThis !== 'undefined') ? globalThis.__cooptOptimizerIsRunning : undefined;
-                        } catch (_) { __prevOptimizerIsRunning = undefined; }
-                        try {
-                            if (typeof globalThis !== 'undefined') {
-                                globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG = true;
-                                globalThis.__cooptOptimizerIsRunning = true;
+                            // Prevent undo recording during optimization
+                            if (window.undoHistory) {
+                                window.undoHistory.isExecuting = true;
                             }
-                        } catch (_) {}
+                            
+                            // Force-disable ray-tracing detailed debug logs during optimization.
+                            // This prevents WASM intersection fast-path from being bypassed.
+                            let __prevDisableRayTraceDebug;
+                            try {
+                                __prevDisableRayTraceDebug = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG : undefined;
+                            } catch (_) { __prevDisableRayTraceDebug = undefined; }
+                            try {
+                                if (typeof globalThis !== 'undefined') {
+                                    globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG = true;
+                                    // __cooptOptimizerIsRunning is already set to true at the start of startRun()
+                                }
+                            } catch (_) {}
 
-                        result = await opt.run({
+                            result = await opt.run({
                             multiScenario,
                             // Run a bounded number of iterations by default so
                             // the optimizer does not depend on the popup staying open.
@@ -2795,105 +2821,126 @@ function setupSuggestOptimizeButtons() {
                             ...optParams,
                             onProgress: updateProgressUI,
                             shouldStop: shouldStopNow
-                        });
-                        console.log('✅ [Optimize] Done', result);
+                            });
+                            console.log('✅ [Optimize] Done', result);
 
-                        // Restore flags after successful completion.
-                        try {
-                            if (typeof globalThis !== 'undefined') {
-                                if (__prevDisableRayTraceDebug !== undefined) globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG = __prevDisableRayTraceDebug;
-                                else {
-                                    try { delete globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG; } catch (_) {}
+                            // Restore flags after successful completion.
+                            try {
+                                if (typeof globalThis !== 'undefined') {
+                                    if (__prevDisableRayTraceDebug !== undefined) globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG = __prevDisableRayTraceDebug;
+                                    else {
+                                        try { delete globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG; } catch (_) {}
+                                    }
+                                    // Always reset to false after optimization completes
+                                    globalThis.__cooptOptimizerIsRunning = false;
                                 }
-                                if (__prevOptimizerIsRunning !== undefined) globalThis.__cooptOptimizerIsRunning = __prevOptimizerIsRunning;
-                                else {
-                                    try { delete globalThis.__cooptOptimizerIsRunning; } catch (_) {}
-                                }
+                            } catch (_) {}
+                            
+                            // Re-enable undo recording after optimization
+                            if (window.undoHistory) {
+                                window.undoHistory.isExecuting = false;
                             }
-                        } catch (_) {}
-                        
-                        // Re-enable undo recording after optimization
-                        if (window.undoHistory) {
-                            window.undoHistory.isExecuting = false;
-                        }
-                        
-                        // Record optimization as a single undo operation
-                        try {
-                            if (beforeOptimizationState && window.undoHistory && result?.ok) {
-                                const afterOptimizationState = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
-                                if (JSON.stringify(beforeOptimizationState) !== JSON.stringify(afterOptimizationState)) {
-                                    const command = {
-                                        name: 'Optimization',
-                                        execute: () => {
-                                            localStorage.setItem('systemConfigurations', JSON.stringify(afterOptimizationState));
-                                            window.location.reload();
-                                        },
-                                        undo: () => {
-                                            localStorage.setItem('systemConfigurations', JSON.stringify(beforeOptimizationState));
-                                            window.location.reload();
-                                        },
-                                        redo: function() { this.execute(); }
-                                    };
-                                    window.undoHistory.record(command);
-                                    console.log('[Undo] Recorded: Optimization');
+                            
+                            // Record optimization as a single undo operation
+                            try {
+                                if (beforeOptimizationState && window.undoHistory && result?.ok) {
+                                    const afterOptimizationState = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+                                    if (JSON.stringify(beforeOptimizationState) !== JSON.stringify(afterOptimizationState)) {
+                                        const command = {
+                                            name: 'Optimization',
+                                            execute: async () => {
+                                                localStorage.setItem('systemConfigurations', JSON.stringify(afterOptimizationState));
+                                                // Refresh UI without reloading
+                                                try {
+                                                    if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+                                                        await window.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
+                                                    }
+                                                } catch (_) {}
+                                                try {
+                                                    if (typeof window.refreshBlockInspector === 'function') window.refreshBlockInspector();
+                                                } catch (_) {}
+                                            },
+                                            undo: async () => {
+                                                localStorage.setItem('systemConfigurations', JSON.stringify(beforeOptimizationState));
+                                                // Refresh UI without reloading
+                                                try {
+                                                    if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+                                                        await window.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
+                                                    }
+                                                } catch (_) {}
+                                                try {
+                                                    if (typeof window.refreshBlockInspector === 'function') window.refreshBlockInspector();
+                                                } catch (_) {}
+                                            },
+                                            redo: function() { return this.execute(); }
+                                        };
+                                        window.undoHistory.record(command);
+                                        console.log('[Undo] Recorded: Optimization');
+                                    }
                                 }
+                            } catch (e) {
+                                console.warn('[Undo] Failed to record optimization:', e);
                             }
                         } catch (e) {
-                            console.warn('[Undo] Failed to record optimization:', e);
-                        }
-                    } catch (e) {
-                        console.warn('⚠️ [Optimize] Failed:', e);
-                        result = { ok: false, reason: e?.message ?? String(e) };
+                            console.warn('⚠️ [Optimize] Failed:', e);
+                            result = { ok: false, reason: e?.message ?? String(e) };
 
-                        // Restore flags on error too.
-                        try {
+                            // Restore flags on error too.
+                            try {
+                                if (typeof globalThis !== 'undefined') {
+                                    if (__prevDisableRayTraceDebug !== undefined) globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG = __prevDisableRayTraceDebug;
+                                    else {
+                                        try { delete globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG; } catch (_) {}
+                                    }
+                                    // Always reset to false on error
+                                    globalThis.__cooptOptimizerIsRunning = false;
+                                }
+                            } catch (_) {}
+                            
+                            // Re-enable undo recording even on error
+                            if (window.undoHistory) {
+                                window.undoHistory.isExecuting = false;
+                            }
+                        } finally {
+                            // Ensure UI is consistent after the run.
+                            isRunning = false;
                             if (typeof globalThis !== 'undefined') {
-                                if (__prevDisableRayTraceDebug !== undefined) globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG = __prevDisableRayTraceDebug;
-                                else {
-                                    try { delete globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG; } catch (_) {}
-                                }
-                                if (__prevOptimizerIsRunning !== undefined) globalThis.__cooptOptimizerIsRunning = __prevOptimizerIsRunning;
-                                else {
-                                    try { delete globalThis.__cooptOptimizerIsRunning; } catch (_) {}
-                                }
+                                console.log('[Optimize] Optimization completed in finally block, resetting isRunning flag');
+                                globalThis.__cooptOptimizerIsRunning = false;
                             }
-                        } catch (_) {}
-                        
-                        // Re-enable undo recording even on error
-                        if (window.undoHistory) {
-                            window.undoHistory.isExecuting = false;
+                            try { optimizeBtn.disabled = false; } catch (_) {}
+                            try {
+                                if (popup && !popup.closed) {
+                                    const doc = popup.document;
+                                    const stopBtn = doc.getElementById('opt-stop');
+                                    const runBtn = doc.getElementById('opt-run');
+                                    const stopState = doc.getElementById('opt-stop-state');
+                                    if (stopBtn) stopBtn.disabled = true;
+                                    if (runBtn) runBtn.disabled = false;
+                                    if (stopState && stopFlag.stop) stopState.textContent = 'Stopped';
+                                }
+                            } catch (_) {}
                         }
-                    }
 
-                    // Ensure UI is consistent after the run.
-                    isRunning = false;
-                    if (typeof globalThis !== 'undefined') {
-                        globalThis.__cooptOptimizerIsRunning = false;
-                    }
-                    try { optimizeBtn.disabled = false; } catch (_) {}
-                    try {
-                        if (popup && !popup.closed) {
-                            const doc = popup.document;
-                            const stopBtn = doc.getElementById('opt-stop');
-                            const runBtn = doc.getElementById('opt-run');
-                            const stopState = doc.getElementById('opt-stop-state');
-                            if (stopBtn) stopBtn.disabled = true;
-                            if (runBtn) runBtn.disabled = false;
-                            if (stopState && stopFlag.stop) stopState.textContent = 'Stopped';
+                        if (result && result.ok === false) {
+                            const reason = String(result.reason || 'Optimize did not run.');
+                            try {
+                                if (popup && !popup.closed) {
+                                    const el = popup.document.getElementById('opt-phase');
+                                    if (el) el.textContent = 'error';
+                                    const cur = popup.document.getElementById('opt-cur');
+                                    if (cur) cur.textContent = reason;
+                                }
+                            } catch (_) {}
+                            alert(reason);
                         }
-                    } catch (_) {}
-
-                    if (result && result.ok === false) {
-                        const reason = String(result.reason || 'Optimize did not run.');
-                        try {
-                            if (popup && !popup.closed) {
-                                const el = popup.document.getElementById('opt-phase');
-                                if (el) el.textContent = 'error';
-                                const cur = popup.document.getElementById('opt-cur');
-                                if (cur) cur.textContent = reason;
-                            }
-                        } catch (_) {}
-                        alert(reason);
+                    } catch (outerError) {
+                        // Catch any errors from the outer try block
+                        console.warn('⚠️ [Optimize] Outer error:', outerError);
+                        if (typeof globalThis !== 'undefined') {
+                            globalThis.__cooptOptimizerIsRunning = false;
+                        }
+                        isRunning = false;
                     }
                 };
 
@@ -2904,6 +2951,7 @@ function setupSuggestOptimizeButtons() {
                 } catch (_) {}
 
                 // Initial run
+                console.log('[Optimize] Starting optimization, isRunning flag:', globalThis.__cooptOptimizerIsRunning);
                 await startRun();
 
             } catch (e) {
@@ -2913,6 +2961,11 @@ function setupSuggestOptimizeButtons() {
                 try {
                     optimizeBtn.disabled = false;
                 } catch (_) {}
+                // Ensure the running flag is reset even if an error occurred
+                if (typeof globalThis !== 'undefined') {
+                    console.log('[Optimize] Resetting isRunning flag in finally block');
+                    globalThis.__cooptOptimizerIsRunning = false;
+                }
             }
         });
     }
