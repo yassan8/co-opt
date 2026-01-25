@@ -263,7 +263,25 @@ const createDOMTableObject = (container, initialRows) => {
       inputX.value = (rowData.xHeightAngle ?? '') === 0 ? '0' : (rowData.xHeightAngle ?? '').toString();
       inputX.style.width = '100%';
       inputX.addEventListener('change', () => {
+        const oldValue = rowData.xHeightAngle;
         rowData.xHeightAngle = normalizeNumberLike(inputX.value);
+        
+        // Record undo command
+        if (window.undoHistory && !window.undoHistory.isExecuting && oldValue !== rowData.xHeightAngle) {
+          const cfg = window.getActiveConfiguration?.();
+          if (cfg) {
+            const cmd = new window.SetObjectFieldCommand(
+              cfg.id,
+              rowData.id,
+              'xHeightAngle',
+              oldValue,
+              rowData.xHeightAngle
+            );
+            window.undoHistory.record(cmd);
+            console.log(`[Undo] Recorded: Set Object ${rowData.id}.xHeightAngle from ${oldValue} to ${rowData.xHeightAngle}`);
+          }
+        }
+        
         saveTableData(getData());
         emit('cellEdited', createCellEvent('xHeightAngle', rowData.xHeightAngle, rowData));
         emit('dataChanged');
@@ -278,10 +296,28 @@ const createDOMTableObject = (container, initialRows) => {
       inputY.value = (rowData.yHeightAngle ?? '') === 0 ? '0' : (rowData.yHeightAngle ?? '').toString();
       inputY.style.width = '100%';
       inputY.addEventListener('change', () => {
+        const oldValue = rowData.yHeightAngle;
         rowData.yHeightAngle = normalizeNumberLike(inputY.value);
         if (rowData.position === 'Angle') {
           rowData.angle = rowData.yHeightAngle;
         }
+        
+        // Record undo command
+        if (window.undoHistory && !window.undoHistory.isExecuting && oldValue !== rowData.yHeightAngle) {
+          const cfg = window.getActiveConfiguration?.();
+          if (cfg) {
+            const cmd = new window.SetObjectFieldCommand(
+              cfg.id,
+              rowData.id,
+              'yHeightAngle',
+              oldValue,
+              rowData.yHeightAngle
+            );
+            window.undoHistory.record(cmd);
+            console.log(`[Undo] Recorded: Set Object ${rowData.id}.yHeightAngle from ${oldValue} to ${rowData.yHeightAngle}`);
+          }
+        }
+        
         saveTableData(getData());
         emit('cellEdited', createCellEvent('yHeightAngle', rowData.yHeightAngle, rowData));
         emit('dataChanged');
@@ -301,10 +337,28 @@ const createDOMTableObject = (container, initialRows) => {
       selectPos.value = rowData.position;
       selectPos.style.width = '100%';
       selectPos.addEventListener('change', () => {
+        const oldValue = rowData.position;
         rowData.position = selectPos.value;
         if (rowData.position === 'Angle') {
           rowData.angle = rowData.yHeightAngle;
         }
+        
+        // Record undo command
+        if (window.undoHistory && !window.undoHistory.isExecuting && oldValue !== rowData.position) {
+          const cfg = window.getActiveConfiguration?.();
+          if (cfg) {
+            const cmd = new window.SetObjectFieldCommand(
+              cfg.id,
+              rowData.id,
+              'position',
+              oldValue,
+              rowData.position
+            );
+            window.undoHistory.record(cmd);
+            console.log(`[Undo] Recorded: Set Object ${rowData.id}.position from ${oldValue} to ${rowData.position}`);
+          }
+        }
+        
         saveTableData(getData());
         emit('cellEdited', createCellEvent('position', rowData.position, rowData));
         emit('dataChanged');
