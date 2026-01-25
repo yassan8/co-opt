@@ -2703,6 +2703,46 @@ function setupSuggestOptimizeButtons() {
                         lastSoftText = '-';
                         lastDecisionText = '-';
 
+                        // Re-read all information for each Run
+                        // Update activeCfg, variableCount, and other stats
+                        try {
+                            const systemConfig = (typeof loadSystemConfigurationsFromTableConfig === 'function')
+                                ? loadSystemConfigurationsFromTableConfig()
+                                : JSON.parse(localStorage.getItem('systemConfigurations'));
+                            const activeId = systemConfig?.activeConfigId;
+                            activeCfg = systemConfig?.configurations?.find(c => c && c.id === activeId)
+                                || systemConfig?.configurations?.[0]
+                                || null;
+                            if (activeCfg && Array.isArray(activeCfg.scenarios) && activeCfg.scenarios.length >= 2) {
+                                multiScenario = true;
+                            } else {
+                                multiScenario = false;
+                            }
+
+                            const allVars = listDesignVariablesFromBlocks(activeCfg || {});
+                            const numericVars = Array.isArray(allVars)
+                                ? allVars.filter(v => typeof v?.value === 'number' && Number.isFinite(v.value))
+                                : [];
+                            variableCount = Array.isArray(allVars) ? allVars.length : 0;
+                            numericVarCount = numericVars.length;
+                            categoricalVarCount = Math.max(0, variableCount - numericVarCount);
+
+                            // Update the Vars display in the popup
+                            if (popup && !popup.closed) {
+                                try {
+                                    const varsEl = popup.document.getElementById('opt-vars');
+                                    if (varsEl) {
+                                        const parts = [];
+                                        if (Number.isFinite(variableCount)) parts.push(String(variableCount));
+                                        if (Number.isFinite(numericVarCount) || Number.isFinite(categoricalVarCount)) {
+                                            parts.push(`(num ${numericVarCount}, cat ${categoricalVarCount})`);
+                                        }
+                                        varsEl.textContent = parts.length ? parts.join(' ') : '-';
+                                    }
+                                } catch (_) {}
+                            }
+                        } catch (_) {}
+
                         try {
                             // Sync popup button states
                             if (popup && !popup.closed) {
@@ -2811,7 +2851,7 @@ function setupSuggestOptimizeButtons() {
                             } catch (_) {}
 
                             result = await opt.run({
-                            multiScenario,
+                            multiScenario, // Use the re-evaluated value from startRun
                             // Run a bounded number of iterations by default so
                             // the optimizer does not depend on the popup staying open.
                             runUntilStopped: false,

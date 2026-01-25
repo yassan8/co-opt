@@ -503,6 +503,22 @@ function getNumericVariables(activeCfg) {
       }
     }
 
+    // Treat INF (infinite radius) as curvature 0 (flat surface) for radius parameters.
+    // This allows optimization to start from a flat surface: Radius=∞ → Curvature=0.
+    if (/^inf(inity)?$/i.test(s)) {
+      if (
+        /^(front|back)radius$/i.test(key) ||
+        /^radius$/i.test(key) ||
+        /^surf\d+radius$/i.test(key)
+      ) {
+        // Note: We return radius=0 as a placeholder. The optimizer will need special
+        // handling to convert between radius and curvature when applying values.
+        // For now, we mark INF radius as non-optimizable by NOT converting it.
+        // Users should manually set a numeric value before optimizing.
+        return v;
+      }
+    }
+
     // Numeric string → number
     if (s !== '') {
       const n = Number(s);
