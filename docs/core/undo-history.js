@@ -494,6 +494,264 @@ class SetObjectFieldCommand extends Command {
 }
 
 /**
+ * Command for adding a block
+ */
+class AddBlockCommand extends Command {
+  constructor(configId, blockData, insertIndex) {
+    super(`Add block ${blockData.blockId}`);
+    this.configId = configId;
+    this.blockData = blockData;
+    this.insertIndex = insertIndex;
+  }
+  
+  execute() {
+    if (window.undoHistory) window.undoHistory.isExecuting = true;
+    try {
+      const sysConfig = window.loadSystemConfigurations();
+      const cfg = sysConfig.configurations.find(c => c.id === this.configId);
+      if (!cfg || !Array.isArray(cfg.blocks)) return;
+      
+      cfg.blocks.splice(this.insertIndex, 0, this.blockData);
+      this.refreshSystem(sysConfig, cfg);
+    } finally {
+      if (window.undoHistory) window.undoHistory.isExecuting = false;
+    }
+  }
+  
+  undo() {
+    if (window.undoHistory) window.undoHistory.isExecuting = true;
+    try {
+      const sysConfig = window.loadSystemConfigurations();
+      const cfg = sysConfig.configurations.find(c => c.id === this.configId);
+      if (!cfg || !Array.isArray(cfg.blocks)) return;
+      
+      cfg.blocks.splice(this.insertIndex, 1);
+      this.refreshSystem(sysConfig, cfg);
+    } finally {
+      if (window.undoHistory) window.undoHistory.isExecuting = false;
+    }
+  }
+  
+  refreshSystem(sysConfig, cfg) {
+    if (window.expandBlocksToOpticalSystemRows) {
+      const expanded = window.expandBlocksToOpticalSystemRows(cfg.blocks);
+      if (expanded && expanded.rows) cfg.opticalSystem = expanded.rows;
+    }
+    if (window.saveSystemConfigurations) window.saveSystemConfigurations(sysConfig);
+    if (window.refreshBlockInspector) window.refreshBlockInspector();
+    if (window.loadActiveConfigurationToTables) window.loadActiveConfigurationToTables();
+    if (window.refreshAllUI) window.refreshAllUI();
+  }
+}
+
+/**
+ * Command for deleting a block
+ */
+class DeleteBlockCommand extends Command {
+  constructor(configId, blockData, blockIndex) {
+    super(`Delete block ${blockData.blockId}`);
+    this.configId = configId;
+    this.blockData = blockData;
+    this.blockIndex = blockIndex;
+  }
+  
+  execute() {
+    if (window.undoHistory) window.undoHistory.isExecuting = true;
+    try {
+      const sysConfig = window.loadSystemConfigurations();
+      const cfg = sysConfig.configurations.find(c => c.id === this.configId);
+      if (!cfg || !Array.isArray(cfg.blocks)) return;
+      
+      cfg.blocks.splice(this.blockIndex, 1);
+      this.refreshSystem(sysConfig, cfg);
+    } finally {
+      if (window.undoHistory) window.undoHistory.isExecuting = false;
+    }
+  }
+  
+  undo() {
+    if (window.undoHistory) window.undoHistory.isExecuting = true;
+    try {
+      const sysConfig = window.loadSystemConfigurations();
+      const cfg = sysConfig.configurations.find(c => c.id === this.configId);
+      if (!cfg || !Array.isArray(cfg.blocks)) return;
+      
+      cfg.blocks.splice(this.blockIndex, 0, this.blockData);
+      this.refreshSystem(sysConfig, cfg);
+    } finally {
+      if (window.undoHistory) window.undoHistory.isExecuting = false;
+    }
+  }
+  
+  refreshSystem(sysConfig, cfg) {
+    if (window.expandBlocksToOpticalSystemRows) {
+      const expanded = window.expandBlocksToOpticalSystemRows(cfg.blocks);
+      if (expanded && expanded.rows) cfg.opticalSystem = expanded.rows;
+    }
+    if (window.saveSystemConfigurations) window.saveSystemConfigurations(sysConfig);
+    if (window.refreshBlockInspector) window.refreshBlockInspector();
+    if (window.loadActiveConfigurationToTables) window.loadActiveConfigurationToTables();
+    if (window.refreshAllUI) window.refreshAllUI();
+  }
+}
+
+/**
+ * Command for adding a source/object/requirement
+ */
+class AddRowCommand extends Command {
+  constructor(tableName, rowData, rowIndex, autoExecute = false) {
+    super(`Add ${tableName} row`);
+    this.tableName = tableName; // 'source', 'object', 'requirement'
+    this.rowData = rowData;
+    this.rowIndex = rowIndex;
+    if (autoExecute) {
+      this.execute();
+    }
+  }
+  
+  execute() {
+    if (window.undoHistory) window.undoHistory.isExecuting = true;
+    try {
+      const storageKey = this.getStorageKey();
+      const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      data.splice(this.rowIndex, 0, this.rowData);
+      localStorage.setItem(storageKey, JSON.stringify(data));
+      
+      // Temporarily set isExecuting to false for refreshUI to work properly
+      if (window.undoHistory) window.undoHistory.isExecuting = false;
+      this.refreshUI();
+      if (window.undoHistory) window.undoHistory.isExecuting = true;
+    } finally {
+      if (window.undoHistory) window.undoHistory.isExecuting = false;
+    }
+  }
+  
+  undo() {
+    console.log('[DEBUG AddRowCommand.undo] Called:', {
+      tableName: this.tableName,
+      rowIndex: this.rowIndex,
+      rowDataId: this.rowData?.id
+    });
+    
+    if (window.undoHistory) window.undoHistory.isExecuting = true;
+    try {
+      const storageKey = this.getStorageKey();
+      const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      console.log('[DEBUG AddRowCommand.undo] Before splice:', { dataLength: data.length });
+      data.splice(this.rowIndex, 1);
+      console.log('[DEBUG AddRowCommand.undo] After splice:', { dataLength: data.length });
+      localStorage.setItem(storageKey, JSON.stringify(data));
+      
+      // Temporarily set isExecuting to false for refreshUI to work properly
+      if (window.undoHistory) window.undoHistory.isExecuting = false;
+      this.refreshUI();
+      if (window.undoHistory) window.undoHistory.isExecuting = true;
+    } finally {
+      if (window.undoHistory) window.undoHistory.isExecuting = false;
+    }
+    console.log('[DEBUG AddRowCommand.undo] Completed');
+  }
+  
+  getStorageKey() {
+    const keyMap = {
+      'source': 'sourceTableData',
+      'object': 'objectTableData',
+      'requirement': 'systemRequirementsData'
+    };
+    return keyMap[this.tableName] || 'sourceTableData';
+  }
+  
+  refreshUI() {
+    if (this.tableName === 'source' && window.tableSource && window.loadSourceTableData) {
+      window.tableSource.replaceData(window.loadSourceTableData());
+    } else if (this.tableName === 'object' && window.tableObject && window.loadObjectTableData) {
+      window.tableObject.replaceData(window.loadObjectTableData());
+    } else if (this.tableName === 'requirement' && window.systemRequirementsEditor) {
+      window.systemRequirementsEditor.loadFromStorage();
+      window.systemRequirementsEditor.renderTable();
+    }
+  }
+}
+
+/**
+ * Command for deleting a source/object/requirement
+ */
+class DeleteRowCommand extends Command {
+  constructor(tableName, rowData, rowIndex, autoExecute = false) {
+    super(`Delete ${tableName} row`);
+    this.tableName = tableName;
+    this.rowData = rowData;
+    this.rowIndex = rowIndex;
+    if (autoExecute) {
+      this.execute();
+    }
+  }
+  
+  execute() {
+    if (window.undoHistory) window.undoHistory.isExecuting = true;
+    try {
+      const storageKey = this.getStorageKey();
+      const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      data.splice(this.rowIndex, 1);
+      localStorage.setItem(storageKey, JSON.stringify(data));
+      
+      // Temporarily set isExecuting to false for refreshUI to work properly
+      if (window.undoHistory) window.undoHistory.isExecuting = false;
+      this.refreshUI();
+      if (window.undoHistory) window.undoHistory.isExecuting = true;
+    } finally {
+      if (window.undoHistory) window.undoHistory.isExecuting = false;
+    }
+  }
+  
+  undo() {
+    console.log('[DEBUG DeleteRowCommand.undo] Called:', {
+      tableName: this.tableName,
+      rowIndex: this.rowIndex,
+      rowDataId: this.rowData?.id
+    });
+    
+    if (window.undoHistory) window.undoHistory.isExecuting = true;
+    try {
+      const storageKey = this.getStorageKey();
+      const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      console.log('[DEBUG DeleteRowCommand.undo] Before splice:', { dataLength: data.length });
+      data.splice(this.rowIndex, 0, this.rowData);
+      console.log('[DEBUG DeleteRowCommand.undo] After splice:', { dataLength: data.length });
+      localStorage.setItem(storageKey, JSON.stringify(data));
+      
+      // Temporarily set isExecuting to false for refreshUI to work properly
+      if (window.undoHistory) window.undoHistory.isExecuting = false;
+      this.refreshUI();
+      if (window.undoHistory) window.undoHistory.isExecuting = true;
+    } finally {
+      if (window.undoHistory) window.undoHistory.isExecuting = false;
+    }
+    console.log('[DEBUG DeleteRowCommand.undo] Completed');
+  }
+  
+  getStorageKey() {
+    const keyMap = {
+      'source': 'sourceTableData',
+      'object': 'objectTableData',
+      'requirement': 'systemRequirementsData'
+    };
+    return keyMap[this.tableName] || 'sourceTableData';
+  }
+  
+  refreshUI() {
+    if (this.tableName === 'source' && window.tableSource && window.loadSourceTableData) {
+      window.tableSource.replaceData(window.loadSourceTableData());
+    } else if (this.tableName === 'object' && window.tableObject && window.loadObjectTableData) {
+      window.tableObject.replaceData(window.loadObjectTableData());
+    } else if (this.tableName === 'requirement' && window.systemRequirementsEditor) {
+      window.systemRequirementsEditor.loadFromStorage();
+      window.systemRequirementsEditor.renderTable();
+    }
+  }
+}
+
+/**
  * Compound Command - groups multiple commands into one undo/redo action
  * Useful for operations that trigger multiple changes (e.g., gap auto-update)
  */
@@ -537,6 +795,12 @@ class UndoHistory {
    * Record a new command in the undo history
    */
   record(command) {
+    console.log('[DEBUG UndoHistory.record] Called:', {
+      commandType: command?.constructor?.name,
+      isExecuting: this.isExecuting,
+      willRecord: !this.isExecuting
+    });
+    
     if (this.isExecuting) return; // Don't record undo/redo operations
     
     this.undoStack.push(command);
@@ -675,6 +939,10 @@ if (typeof window !== 'undefined') {
   window.SetRequirementCommand = SetRequirementCommand;
   window.SetSourceFieldCommand = SetSourceFieldCommand;
   window.SetObjectFieldCommand = SetObjectFieldCommand;
+  window.AddBlockCommand = AddBlockCommand;
+  window.DeleteBlockCommand = DeleteBlockCommand;
+  window.AddRowCommand = AddRowCommand;
+  window.DeleteRowCommand = DeleteRowCommand;
   window.CompoundCommand = CompoundCommand;
   window.UndoHistory = UndoHistory;
   
