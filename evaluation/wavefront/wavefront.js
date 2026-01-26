@@ -16,6 +16,16 @@ import { findFiniteSystemChiefRayDirection } from '../../raytracing/generation/g
 import { findInfiniteSystemChiefRayOrigin } from '../../raytracing/generation/gen-ray-cross-infinite.js';
 import { fitZernikeWeighted, reconstructOPD, jToNM, nmToJ, getZernikeName } from './zernike-fitting.js';
 
+// Helper function to detect mirror surfaces
+function isMirrorRow(row) {
+    if (!row) return false;
+    if (row.material === 'MIRROR') return true;
+    if (row.type === 'Mirror') return true;
+    if (row._blockType === 'Mirror') return true;
+    const surfType = String(row.surfType ?? row.type ?? row.surfaceType ?? '').trim().toLowerCase();
+    return surfType === 'mirror';
+}
+
 // Runtime build stamp (for cache/stale-module diagnostics)
 const EVA_WAVEFRONT_BUILD = '2026-01-17a';
 try {
@@ -506,6 +516,15 @@ export class OpticalPathDifferenceCalculator {
         this.lastRayCalculation = null; // 🆕 最後の光線計算結果を記録
         this.lastFieldKey = null; // 🆕 前回の画角設定キー
         this._chiefRayCache = new Map();
+
+        // Detect mirrors and calculate sign flip for odd mirror count
+        const mirrorCount = Array.isArray(opticalSystemRows)
+            ? opticalSystemRows.filter(isMirrorRow).length
+            : 0;
+        this.mirrorSign = (mirrorCount % 2 === 1) ? -1 : 1;
+        if (OPD_DEBUG) {
+            console.log(`🔍 OPD: Detected ${mirrorCount} mirror(s), mirrorSign=${this.mirrorSign}`);
+        }
 
         // Per-field override of the effective stop-center point (in stop plane coordinates).
         // This is used for vignetted off-axis fields where the nominal chief ray through the
