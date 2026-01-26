@@ -1892,13 +1892,37 @@ export class OpticalPathDifferenceCalculator {
         // 光路長計算（μm）
         this.referenceOpticalPath = this.calculateOpticalPath(referenceRay);
         if (!isFinite(this.referenceOpticalPath) || isNaN(this.referenceOpticalPath) || this.referenceOpticalPath <= 0) {
-            console.error(`❌ 基準光路長計算失敗: ${this.referenceOpticalPath}`);
-            console.error(`📊 pathData length: ${pathData.length}`);
-            console.error(`📊 expectedPathPoints: ${1 + (Array.isArray(this._recordedSurfaceIndices) ? this._recordedSurfaceIndices.length : 0)}`);
-            if (pathData.length > 0) {
-                console.error(`📊 First point: (${pathData[0].x}, ${pathData[0].y}, ${pathData[0].z})`);
-                console.error(`📊 Last point: (${pathData[pathData.length-1].x}, ${pathData[pathData.length-1].y}, ${pathData[pathData.length-1].z})`);
-            }
+            const expected = 1 + (Array.isArray(this._recordedSurfaceIndices) ? this._recordedSurfaceIndices.length : 0);
+            const actual = pathData.length;
+            const first = pathData.length > 0 ? pathData[0] : null;
+            const last = pathData.length > 0 ? pathData[pathData.length-1] : null;
+            
+            console.error(`
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ OPD基準光路長計算エラー
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【結果】基準光路長: ${this.referenceOpticalPath} (無効)
+
+【光線パス情報】
+  実際の点数: ${actual} 点
+  期待する点数: ${expected} 点
+  ${actual < expected ? '⚠️ 光線が評価面まで到達していません' : '✅ 点数は十分'}
+
+【座標情報】
+  始点: ${first ? `(${first.x.toFixed(3)}, ${first.y.toFixed(3)}, ${first.z.toFixed(3)})` : 'N/A'}
+  終点: ${last ? `(${last.x.toFixed(3)}, ${last.y.toFixed(3)}, ${last.z.toFixed(3)})` : 'N/A'}
+
+【Mirror情報】
+  Mirror数: ${this.opticalSystemRows.filter(isMirrorRow).length}
+  mirrorSign: ${this.mirrorSign}
+
+【確認項目】
+  1. 光学系にCT/Mirror行が正しく設定されているか
+  2. 評価面インデックス: ${this.evaluationSurfaceIndex}
+  3. Stop面インデックス: ${this.stopSurfaceIndex}
+  4. 光線が途中で失敗していないか（点数チェック）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            `);
             throw new Error(`無効な基準光路長: ${this.referenceOpticalPath}`);
         }
         
