@@ -1515,8 +1515,12 @@ export class OpticalPathDifferenceCalculator {
         // 基準光線のデバッグログを強制的に有効にする
         const debugLog = [];
         console.warn(`🔍 traceRayToEval: maxIdx=${maxIdx}, evaluationSurfaceIndex=${this.evaluationSurfaceIndex}`);
+        console.warn(`   Ray start: (${ray0.pos.x.toFixed(3)}, ${ray0.pos.y.toFixed(3)}, ${ray0.pos.z.toFixed(3)})`);
+        console.warn(`   Ray dir: (${ray0.dir.x.toFixed(6)}, ${ray0.dir.y.toFixed(6)}, ${ray0.dir.z.toFixed(6)})`);
         
         const result = traceRay(this.opticalSystemRows, ray0, n0, debugLog, maxIdx);
+        
+        console.warn(`🔍 traceRayToEval result: ${result ? `${result.length} points` : 'null'}`);
         
         // デバッグログを表示（基準光線が失敗した場合）
         if (!result) {
@@ -1526,6 +1530,14 @@ export class OpticalPathDifferenceCalculator {
             console.error(`   評価面インデックス: ${maxIdx}`);
             console.error(`   光線開始位置: (${ray0.pos.x.toFixed(3)}, ${ray0.pos.y.toFixed(3)}, ${ray0.pos.z.toFixed(3)})`);
             console.error(`   光線方向: (${ray0.dir.x.toFixed(6)}, ${ray0.dir.y.toFixed(6)}, ${ray0.dir.z.toFixed(6)})`);
+            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.error('【デバッグログ】');
+            debugLog.forEach(line => console.error(line));
+            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        } else if (result.length < maxIdx + 2) {
+            // 光線が評価面まで到達していない場合もデバッグログを表示
+            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.error(`⚠️ 光線が評価面まで到達していません (${result.length}点, 期待: ${maxIdx + 2}点)`);
             console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.error('【デバッグログ】');
             debugLog.forEach(line => console.error(line));
