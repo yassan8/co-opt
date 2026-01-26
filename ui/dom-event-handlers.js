@@ -9650,8 +9650,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     { kind: 'coordTransOrder', key: 'order', label: 'order', noOptimize: true }
                 );
             } else if (blockType === 'ImageSurface') {
-                items.push({ kind: 'imageSemiDiaMode', key: 'optimizeSemiDia', label: 'auto semidia (chief ray)', noOptimize: true });
-                items.push({ key: 'semidia', label: 'semidia', noOptimize: true });
+                items.push({ key: 'semidia', label: 'semidia', noOptimize: true, hasImageSemiDiaMode: true });
             }
             for (const it of items) {
                 const isApertureItem = it && typeof it === 'object' && String(it.kind ?? '') === 'aperture';
@@ -10308,6 +10307,50 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     line.appendChild(spacer);
                 }
                 line.appendChild(name);
+                
+                // ImageSurface: insert optimizeSemiDia dropdown before semidia value input.
+                if (it && it.hasImageSemiDiaMode && blockType === 'ImageSurface') {
+                    const modeValue = getDisplayValue('optimizeSemiDia');
+                    const modeSel = document.createElement('select');
+                    modeSel.style.flex = '0 0 auto';
+                    modeSel.style.fontSize = '12px';
+                    modeSel.style.padding = '2px 6px';
+                    modeSel.style.border = '1px solid #ddd';
+                    modeSel.style.borderRadius = '4px';
+                    modeSel.style.marginRight = '4px';
+                    modeSel.innerHTML = [
+                        '<option value="">(manual)</option>',
+                        '<option value="A">Auto (chief ray)</option>'
+                    ].join('');
+                    const cur = String(modeValue ?? '').trim().toUpperCase();
+                    const normalized = cur === 'A' ? 'A' : '';
+                    modeSel.value = normalized;
+                    modeSel.addEventListener('click', (e) => e.stopPropagation());
+                    modeSel.addEventListener('change', (e) => {
+                        e.stopPropagation();
+                        const desired = String(modeSel.value ?? '');
+                        const res = __blocks_setBlockParamValue(blockId, 'optimizeSemiDia', desired);
+                        if (!res || res.ok !== true) {
+                            alert(`Failed to update ${blockId}.optimizeSemiDia: ${res?.reason || 'unknown error'}`);
+                            modeSel.value = normalized;
+                            return;
+                        }
+                        // If Auto was selected, run chief-ray semidia update immediately.
+                        if (desired === 'A' && typeof window.calculateImageSemiDiaFromChiefRays === 'function') {
+                            (async () => {
+                                try {
+                                    await window.calculateImageSemiDiaFromChiefRays();
+                                } catch (err) {
+                                    console.error('❌ calculateImageSemiDiaFromChiefRays failed:', err);
+                                }
+                                try { refreshBlockInspector(); } catch (_) {}
+                            })();
+                        } else {
+                            try { refreshBlockInspector(); } catch (_) {}
+                        }
+                    });
+                    line.appendChild(modeSel);
+                }
                 
                 // Gap blocks: insert thicknessMode dropdown before thickness value input.
                 if (it && it.hasThicknessMode && (blockType === 'Gap' || blockType === 'AirGap')) {
