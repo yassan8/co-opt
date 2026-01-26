@@ -2185,6 +2185,20 @@ async function calculateImageSemiDiaFromChiefRays() {
             const imageRayPathIndex = __rayPathPointIndexForSurfaceIndex(opticalSystemRows, imageSurfaceIndex);
             console.log(`📍 ImageSurface index: ${imageSurfaceIndex}, rayPath index: ${imageRayPathIndex}`);
 
+            // Get Image surface transformation info to convert global coordinates back to local
+            let imageSurfaceInfo = null;
+            if (typeof window !== 'undefined' && typeof window.buildSurfaceData === 'function') {
+              try {
+                const surfaceData = window.buildSurfaceData(opticalSystemRows);
+                if (surfaceData && surfaceData[imageSurfaceIndex]) {
+                  imageSurfaceInfo = surfaceData[imageSurfaceIndex];
+                  console.log(`✅ Got Image surface info: origin=(${imageSurfaceInfo.origin.x.toFixed(3)}, ${imageSurfaceInfo.origin.y.toFixed(3)}, ${imageSurfaceInfo.origin.z.toFixed(3)})`);
+                }
+              } catch (err) {
+                console.warn('⚠️ Failed to get surface data:', err);
+              }
+            }
+
             rays.forEach((ray, rayIndex) => {
               console.warn(`⚡ Ray ${rayIndex}: rayPath.length=${ray.rayPath?.length}, imageRayPathIndex=${imageRayPathIndex}`);
               console.log(`🔎 Ray ${rayIndex}: rayPath.length=${ray.rayPath?.length}, imageRayPathIndex=${imageRayPathIndex}`);
@@ -2192,6 +2206,25 @@ async function calculateImageSemiDiaFromChiefRays() {
                 const imagePoint = ray.rayPath[imageRayPathIndex];
                 console.warn(`⚡ Ray ${rayIndex} imagePoint at [${imageRayPathIndex}]: x=${imagePoint?.x?.toFixed(6)}, y=${imagePoint?.y?.toFixed(6)}, z=${imagePoint?.z?.toFixed(6)}`);
                 console.log(`  Ray ${rayIndex}: Image面での位置 x=${imagePoint?.x?.toFixed(6)}, y=${imagePoint?.y?.toFixed(6)}, z=${imagePoint?.z?.toFixed(6)}`);
+                
+                // Transform from global coordinates to Image surface local coordinates
+                let localX = imagePoint.x;
+                let localY = imagePoint.y;
+                if (imageSurfaceInfo && imageSurfaceInfo.origin && imageSurfaceInfo.rotationMatrix) {
+                  // Translate to surface origin
+                  const dx = imagePoint.x - imageSurfaceInfo.origin.x;
+                  const dy = imagePoint.y - imageSurfaceInfo.origin.y;
+                  const dz = imagePoint.z - imageSurfaceInfo.origin.z;
+                  
+                  // Apply inverse rotation (transpose of rotation matrix)
+                  const R = imageSurfaceInfo.rotationMatrix;
+                  localX = R[0][0] * dx + R[1][0] * dy + R[2][0] * dz;
+                  localY = R[0][1] * dx + R[1][1] * dy + R[2][1] * dz;
+                  const localZ = R[0][2] * dx + R[1][2] * dy + R[2][2] * dz;
+                  
+                  console.log(`    → Local coords: x=${localX.toFixed(6)}, y=${localY.toFixed(6)}, z=${localZ.toFixed(6)}`);
+                }
+                
                 // Also log some other points for comparison
                 if (ray.rayPath.length > 0) {
                   const p0 = ray.rayPath[0];
@@ -2201,11 +2234,11 @@ async function calculateImageSemiDiaFromChiefRays() {
                   const pLast = ray.rayPath[ray.rayPath.length - 1];
                   console.log(`    rayPath[last=${ray.rayPath.length-1}]: x=${pLast?.x?.toFixed(6)}, y=${pLast?.y?.toFixed(6)}, z=${pLast?.z?.toFixed(6)}`);
                 }
-                if (imagePoint && isFinite(imagePoint.x) && isFinite(imagePoint.y)) {
+                if (isFinite(localX) && isFinite(localY)) {
                   computedAny = true;
                   // X, Y両方を考慮した高さを計算（二次元の距離）
-                  const height = Math.sqrt(imagePoint.x * imagePoint.x + imagePoint.y * imagePoint.y);
-                  console.log(`    → 高さ=${height.toFixed(6)} mm`);
+                  const height = Math.sqrt(localX * localX + localY * localY);
+                  console.log(`    → 高さ=${height.toFixed(6)} mm (local coords)`);
                   if (height > maxHeight) {
                     maxHeight = height;
                     console.log(`    ✅ 最大高さ更新: ${maxHeight.toFixed(6)} mm`);
