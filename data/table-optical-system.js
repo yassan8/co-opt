@@ -2185,26 +2185,109 @@ async function calculateImageSemiDiaFromChiefRays() {
             const imageRayPathIndex = __rayPathPointIndexForSurfaceIndex(opticalSystemRows, imageSurfaceIndex);
             console.log(`📍 ImageSurface index: ${imageSurfaceIndex}, rayPath index: ${imageRayPathIndex}`);
 
-            // Get Image surface transformation info to convert global coordinates back to local
+            // Build Image surface transformation info inline to convert global coordinates back to local
             let imageSurfaceInfo = null;
-            console.warn(`⚡ Checking for buildSurfaceData: ${typeof window?.buildSurfaceData}`);
-            if (typeof window !== 'undefined' && typeof window.buildSurfaceData === 'function') {
-              try {
-                console.warn('⚡ Calling buildSurfaceData...');
-                const surfaceData = window.buildSurfaceData(opticalSystemRows);
-                console.warn(`⚡ buildSurfaceData returned: ${surfaceData ? 'array of ' + surfaceData.length : 'null/undefined'}`);
-                if (surfaceData && surfaceData[imageSurfaceIndex]) {
-                  imageSurfaceInfo = surfaceData[imageSurfaceIndex];
-                  console.warn(`⚡ Image surface origin: (${imageSurfaceInfo.origin.x.toFixed(3)}, ${imageSurfaceInfo.origin.y.toFixed(3)}, ${imageSurfaceInfo.origin.z.toFixed(3)})`);
-                  console.log(`✅ Got Image surface info: origin=(${imageSurfaceInfo.origin.x.toFixed(3)}, ${imageSurfaceInfo.origin.y.toFixed(3)}, ${imageSurfaceInfo.origin.z.toFixed(3)})`);
-                } else {
-                  console.warn('⚠️ surfaceData[imageSurfaceIndex] is null/undefined');
+            console.warn(`⚡ Building surface transformation data inline...`);
+            try {
+              // Helper functions
+              const vec3 = (x, y, z) => ({ x, y, z });
+              const createIdentityMatrix = () => [
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, 1, 0],
+                [0, 0, 0, 1]
+              ];
+              const multiplyMatrices = (a, b) => {
+                const result = Array(4).fill(null).map(() => Array(4).fill(0));
+                for (let i = 0; i < 4; i++) {
+                  for (let j = 0; j < 4; j++) {
+                    for (let k = 0; k < 4; k++) {
+                      result[i][j] += a[i][k] * b[k][j];
+                    }
+                  }
                 }
-              } catch (err) {
-                console.warn('⚠️ Failed to get surface data:', err);
+                return result;
+              };
+              const applyMatrixToVector = (matrix, vector) => {
+                const x = matrix[0][0] * vector.x + matrix[0][1] * vector.y + matrix[0][2] * vector.z;
+                const y = matrix[1][0] * vector.x + matrix[1][1] * vector.y + matrix[1][2] * vector.z;
+                const z = matrix[2][0] * vector.x + matrix[2][1] * vector.y + matrix[2][2] * vector.z;
+                return { x, y, z };
+              };
+              const add = (a, b) => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });
+              const scale = (v, s) => ({ x: v.x * s, y: v.y * s, z: v.z * s });
+              const isCoordTransRow = (r) => {
+                const st = String(r?.surfType ?? r?.['surf type'] ?? '').trim().toLowerCase();
+                return st === 'coord trans' || st === 'coordinate break' || st === 'ct' || st === 'coordtrans';
+              };
+              const createRotationMatrix = (tiltX, tiltY, tiltZ, order = 1) => {
+                const rx = tiltX * Math.PI / 180;
+                const ry = tiltY * Math.PI / 180;
+                const rz = tiltZ * Math.PI / 180;
+                const Rx = [[1,0,0,0],[0,Math.cos(rx),-Math.sin(rx),0],[0,Math.sin(rx),Math.cos(rx),0],[0,0,0,1]];
+                const Ry = [[Math.cos(ry),0,Math.sin(ry),0],[0,1,0,0],[-Math.sin(ry),0,Math.cos(ry),0],[0,0,0,1]];
+                const Rz = [[Math.cos(rz),-Math.sin(rz),0,0],[Math.sin(rz),Math.cos(rz),0,0],[0,0,1,0],[0,0,0,1]];
+                if (order === 0) return multiplyMatrices(multiplyMatrices(Rx, Ry), Rz);
+                return multiplyMatrices(multiplyMatrices(Rz, Ry), Rx);
+              };
+              
+              // Calculate surface origins
+              let currentOrigin = vec3(0, 0, 0);
+              let currentRotMatrix = createIdentityMatrix();
+              const ex = vec3(1, 0, 0), ey = vec3(0, 1, 0), ez = vec3(0, 0, 1);
+              
+              for (let s = 0; s <= imageSurfaceIndex; s++) {
+                const surface = opticalSystemRows[s];
+                const previousSurface = s > 0 ? opticalSystemRows[s - 1] : null;
+                let surfaceOrigin, surfaceRotMatrix;
+                
+                if (isCoordTransRow(surface)) {
+                  const decenterX = Number(surface.decenterX ?? surface['Decenter X'] ?? 0) || 0;
+                  const decenterY = Number(surface.decenterY ?? surface['Decenter Y'] ?? 0) || 0;
+                  const decenterZ = Number(surface.thickness ?? 0) || 0;
+                  const tiltX = Number(surface.tiltX ?? surface['Tilt X'] ?? 0) || 0;
+                  const tiltY = Number(surface.tiltY ?? surface['Tilt Y'] ?? 0) || 0;
+                  const tiltZ = Number(surface.tiltZ ?? surface['Tilt Z'] ?? 0) || 0;
+                  const transformOrder = Number(surface.transformOrder ?? surface['Transform Order'] ?? 1);
+                  let thickness = previousSurface ? (Number(previousSurface.__cooptGapThickness ?? previousSurface.thickness) || 0) : 0;
+                  if (!isFinite(thickness)) thickness = 0;
+                  
+                  const previousRotMatrix = currentRotMatrix;
+                  const singleRotMatrix = createRotationMatrix(tiltX, tiltY, tiltZ, transformOrder);
+                  const newRotMatrix = multiplyMatrices(singleRotMatrix, currentRotMatrix);
+                  
+                  if (transformOrder === 0) {
+                    const dx_term = scale(applyMatrixToVector(previousRotMatrix, ex), decenterX);
+                    const dy_term = scale(applyMatrixToVector(previousRotMatrix, ey), decenterY);
+                    const dz_term = scale(applyMatrixToVector(previousRotMatrix, ez), decenterZ);
+                    const tz_term = scale(applyMatrixToVector(previousRotMatrix, ez), thickness);
+                    surfaceOrigin = add(add(add(add(currentOrigin, dx_term), dy_term), dz_term), tz_term);
+                  } else {
+                    const dx_term = scale(applyMatrixToVector(newRotMatrix, ex), decenterX);
+                    const dy_term = scale(applyMatrixToVector(newRotMatrix, ey), decenterY);
+                    const dz_term = scale(applyMatrixToVector(newRotMatrix, ez), decenterZ);
+                    const tz_term = scale(applyMatrixToVector(previousRotMatrix, ez), thickness);
+                    surfaceOrigin = add(add(add(add(currentOrigin, dx_term), dy_term), dz_term), tz_term);
+                  }
+                  surfaceRotMatrix = newRotMatrix;
+                } else {
+                  let thickness = previousSurface ? (Number(previousSurface.__cooptGapThickness ?? previousSurface.thickness) || 0) : 0;
+                  if (!isFinite(thickness)) thickness = 0;
+                  const tz_term = scale(applyMatrixToVector(currentRotMatrix, ez), thickness);
+                  surfaceOrigin = add(currentOrigin, tz_term);
+                  surfaceRotMatrix = currentRotMatrix;
+                }
+                
+                if (s === imageSurfaceIndex) {
+                  imageSurfaceInfo = { origin: surfaceOrigin, rotationMatrix: surfaceRotMatrix };
+                  console.warn(`⚡ Image surface origin: (${surfaceOrigin.x.toFixed(3)}, ${surfaceOrigin.y.toFixed(3)}, ${surfaceOrigin.z.toFixed(3)})`);
+                }
+                
+                currentOrigin = surfaceOrigin;
+                currentRotMatrix = surfaceRotMatrix;
               }
-            } else {
-              console.warn('⚠️ buildSurfaceData function not available');
+            } catch (err) {
+              console.warn('⚠️ Failed to build surface data:', err);
             }
 
             rays.forEach((ray, rayIndex) => {
