@@ -1512,21 +1512,24 @@ export class OpticalPathDifferenceCalculator {
             ? this.traceMaxSurfaceIndex
             : this.evaluationSurfaceIndex;
         
-        // 基準光線のデバッグログを有効にする
+        // 基準光線のデバッグログを強制的に有効にする
         const debugLog = [];
-        const result = this.traceRayToSurface(ray0, maxIdx, n0);
+        console.warn(`🔍 traceRayToEval: maxIdx=${maxIdx}, evaluationSurfaceIndex=${this.evaluationSurfaceIndex}`);
         
-        // デバッグログを表示（基準光線が失敗した場合のみ）
-        if (!result && OPD_DEBUG) {
-            console.error('❌ 基準光線のトレースに失敗しました:');
+        const result = traceRay(this.opticalSystemRows, ray0, n0, debugLog, maxIdx);
+        
+        // デバッグログを表示（基準光線が失敗した場合）
+        if (!result) {
+            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.error('❌ 基準光線のトレースに失敗しました');
+            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.error(`   評価面インデックス: ${maxIdx}`);
             console.error(`   光線開始位置: (${ray0.pos.x.toFixed(3)}, ${ray0.pos.y.toFixed(3)}, ${ray0.pos.z.toFixed(3)})`);
             console.error(`   光線方向: (${ray0.dir.x.toFixed(6)}, ${ray0.dir.y.toFixed(6)}, ${ray0.dir.z.toFixed(6)})`);
-            
-            // デバッグログ付きで再トレース
-            const debugLog2 = [];
-            traceRay(this.opticalSystemRows, ray0, n0, debugLog2, maxIdx);
-            console.error('デバッグログ:', debugLog2.join('\n'));
+            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.error('【デバッグログ】');
+            debugLog.forEach(line => console.error(line));
+            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         }
         
         return result;
