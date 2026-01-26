@@ -289,7 +289,7 @@ class SystemRequirementsEditor {
       id: 30,
       enabled: 60,
       operand: 200,
-      spec: 50,
+      spec: 120,
       current: 120,
       status: 90,
       rationale: 220,
