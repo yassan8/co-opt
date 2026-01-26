@@ -927,6 +927,7 @@ export class OpticalPathDifferenceCalculator {
         const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
             ? () => performance.now()
             : () => Date.now();
+        const tStart = now();
         
         // Detect if system contains mirrors - they need more time for entrance pupil search
         const hasMirror = Array.isArray(this.opticalSystemRows) && this.opticalSystemRows.some(row => {
