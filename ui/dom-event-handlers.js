@@ -8438,7 +8438,7 @@ function __blocks_makeDefaultBlock(blockType, blockId) {
     if (type === 'Mirror') {
         base.parameters = {
             radius: 'INF',
-            thickness: 10,
+            thickness: 0,
             material: 'MIRROR',
             surfType: 'Spherical',
             conic: 0,
