@@ -2005,6 +2005,7 @@ setTimeout(() => {
  * optimizeSemiDia="A"の場合に呼び出される
  */
 async function calculateImageSemiDiaFromChiefRays() {
+    console.log('🎯🎯🎯 calculateImageSemiDiaFromChiefRays called!');
     console.log('🎯 Image面のSemi Dia自動計算を開始');
     
     try {
@@ -2014,10 +2015,13 @@ async function calculateImageSemiDiaFromChiefRays() {
       ? window.getOpticalSystemRows(tableOpticalSystem)
       : tableOpticalSystem.getData();
 
+    console.log(`📊 opticalSystemRows.length = ${opticalSystemRows?.length}`);
+
     // Image面を見つける
     const imageSurfaceIndex = opticalSystemRows.findIndex(data =>
       data["object type"] === "Image" || data.object === "Image"
     );
+        console.log(`🔍 imageSurfaceIndex = ${imageSurfaceIndex}`);
         if (imageSurfaceIndex === -1) {
             console.warn('⚠️ Image面が見つかりません');
             return false;
@@ -2027,7 +2031,9 @@ async function calculateImageSemiDiaFromChiefRays() {
         // In Blocks-first / Blocks-only mode, the canonical state lives in Design Intent blocks.
         // The expanded table row may not have synced optimizeSemiDia yet, so check blocks too.
         const rowOpt = String(imageSurface.optimizeSemiDia ?? '').trim();
+        console.log(`🔧 imageSurface.optimizeSemiDia = "${rowOpt}"`);
         let shouldAuto = (rowOpt === 'A' || rowOpt === 'a');
+        console.log(`🔧 shouldAuto (from row) = ${shouldAuto}`);
 
         if (!shouldAuto) {
           try {
@@ -2041,7 +2047,9 @@ async function calculateImageSemiDiaFromChiefRays() {
               const imgBlock = blocks ? [...blocks].reverse().find(b => b && String(b.blockType ?? '') === 'ImageSurface') : null;
               const blkOptRaw = imgBlock?.parameters?.optimizeSemiDia;
               const blkOpt = String(blkOptRaw ?? '').trim();
+              console.log(`🔧 ImageSurface block optimizeSemiDia = "${blkOpt}"`);
               if (blkOpt === 'A' || blkOpt === 'a' || blkOpt.toUpperCase() === 'AUTO') {
+                console.log(`✅ Setting shouldAuto = true from block`);
                 shouldAuto = true;
                 // Best-effort: keep table row consistent for later checks.
                 const imageId = imageSurface?.id;
@@ -2053,10 +2061,12 @@ async function calculateImageSemiDiaFromChiefRays() {
           } catch (_) {}
         }
 
+        console.log(`🎯 Final shouldAuto = ${shouldAuto}`);
         if (!shouldAuto) {
           console.log('📐 optimizeSemiDiaが"A"ではないのでスキップ');
           return false;
         }
+        console.log('✅ Proceeding with auto semidia calculation');
         // 光学系データとObjectデータを取得
         const objectRows = (typeof window !== 'undefined' && typeof window.getObjectRows === 'function')
           ? window.getObjectRows(window.tableObject)
