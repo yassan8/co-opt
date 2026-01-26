@@ -957,6 +957,9 @@ export class OpticalPathDifferenceCalculator {
                 }
                 return z;
             })();
+            // Add -25mm plane (same as renderer uses for infinite objects)
+            planeZCandidates.push(-25.0);
+            
             // Mirror systems may need more distant entrance planes
             const extra = hasMirror 
                 ? [firstZ - 500, firstZ - 1000, firstZ - 2000, firstZ - 5000, firstZ - 10000]
