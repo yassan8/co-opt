@@ -8693,6 +8693,93 @@ function __blocks_coerceParamValue(blockType, key, raw) {
     return s;
 }
 
+/**
+ * Auto-update dependent values after parameter changes.
+ * - ImageSurface auto semidia (when optimizeSemiDia='A')
+ * - Gap auto thickness (when thicknessMode='IMD' or 'BFL')
+ */
+async function __blocks_updateAutoValues() {
+    const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
+    if (!systemConfig || !Array.isArray(systemConfig.configurations)) return;
+
+    const activeId = systemConfig.activeConfigId;
+    const activeCfg = systemConfig.configurations.find(c => c && c.id === activeId);
+    if (!activeCfg || !Array.isArray(activeCfg.blocks)) return;
+
+    const blocks = activeCfg.blocks;
+
+    // 1. Update ImageSurface auto semidia (A = Auto chief ray)
+    try {
+        const imgBlock = blocks.find(b => b && String(b.blockType ?? '') === 'ImageSurface');
+        if (imgBlock && imgBlock.parameters) {
+            const mode = String(imgBlock.parameters.optimizeSemiDia ?? '').trim().toUpperCase();
+            if (mode === 'A' && typeof window.calculateImageSemiDiaFromChiefRays === 'function') {
+                await window.calculateImageSemiDiaFromChiefRays();
+            }
+        }
+    } catch (err) {
+        console.warn('⚠️ Failed to update ImageSurface auto semidia:', err);
+    }
+
+    // 2. Update Gap auto thickness (IMD/BFL)
+    try {
+        // Find the last Gap before ImageSurface
+        const imgIdx = blocks.findIndex(b => b && String(b.blockType ?? '') === 'ImageSurface');
+        if (imgIdx < 0) return;
+
+        for (let i = imgIdx - 1; i >= 0; i--) {
+            const b = blocks[i];
+            const bt = String(b?.blockType ?? '');
+            if (bt !== 'Gap' && bt !== 'AirGap') continue;
+
+            // Check if this is the last Gap before ImageSurface
+            let isPreImageGap = true;
+            for (let k = i + 1; k < imgIdx; k++) {
+                const bt2 = String(blocks[k]?.blockType ?? '');
+                if (bt2 === 'Gap' || bt2 === 'AirGap') {
+                    isPreImageGap = false;
+                    break;
+                }
+            }
+
+            if (isPreImageGap && b.parameters) {
+                const mode = String(b.parameters.thicknessMode ?? '').trim().toUpperCase();
+                if (mode === 'IMD' || mode === 'BFL') {
+                    const exp = (typeof expandBlocksToOpticalSystemRows === 'function')
+                        ? expandBlocksToOpticalSystemRows(blocks)
+                        : null;
+                    const rows = exp && Array.isArray(exp.rows) ? exp.rows : null;
+                    if (!rows || rows.length < 2) break;
+
+                    const primaryWavelength = (typeof window.getPrimaryWavelength === 'function')
+                        ? (Number(window.getPrimaryWavelength()) || 0.5876)
+                        : 0.5876;
+
+                    let val = __blocks_findRequirementTarget(mode, activeId);
+                    if (!Number.isFinite(val)) {
+                        val = (mode === 'BFL')
+                            ? calculateBackFocalLength(rows, primaryWavelength)
+                            : calculateImageDistance(rows, primaryWavelength);
+                    }
+
+                    if (Number.isFinite(val) && b.parameters.thickness !== val) {
+                        b.parameters.thickness = val;
+                        // Save the updated value
+                        try {
+                            if (typeof saveSystemConfigurations === 'function') {
+                                saveSystemConfigurations(systemConfig);
+                            }
+                        } catch (_) {}
+                    }
+                }
+            }
+            break; // Only process the last Gap
+        }
+    } catch (err) {
+        console.warn('⚠️ Failed to update Gap auto thickness:', err);
+    }
+}
+
 function __blocks_setBlockParamValue(blockId, key, rawValue) {
     console.log(`[Undo] __blocks_setBlockParamValue called: blockId=${blockId}, key=${key}, rawValue=${rawValue}`);
     console.log(`[Undo] window.SetBlockParameterCommand exists:`, !!window.SetBlockParameterCommand);
@@ -8802,6 +8889,13 @@ function __blocks_setBlockParamValue(blockId, key, rawValue) {
         }
     } catch (e) {
         return { ok: false, reason: `failed to save: ${e?.message || String(e)}` };
+    }
+
+    // Auto-recalculate dependent values after parameter changes.
+    try {
+        __blocks_updateAutoValues();
+    } catch (err) {
+        console.warn('⚠️ Failed to update auto values after parameter change:', err);
     }
 
     return { ok: true };
