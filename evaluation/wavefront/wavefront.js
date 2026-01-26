@@ -1897,6 +1897,33 @@ export class OpticalPathDifferenceCalculator {
             const first = pathData.length > 0 ? pathData[0] : null;
             const last = pathData.length > 0 ? pathData[pathData.length-1] : null;
             
+            // Determine which surface the ray stopped at
+            const recordedIndices = this._recordedSurfaceIndices || [];
+            const stoppedAtRecordedIndex = actual - 1; // path point index where ray stopped
+            const stoppedAtSurfaceIndex = stoppedAtRecordedIndex >= 0 && stoppedAtRecordedIndex < recordedIndices.length
+                ? recordedIndices[stoppedAtRecordedIndex]
+                : -1;
+            const nextSurfaceIndex = stoppedAtRecordedIndex + 1 < recordedIndices.length
+                ? recordedIndices[stoppedAtRecordedIndex + 1]
+                : -1;
+            
+            // Build surface type list for diagnosis
+            let surfaceTypeList = '\n【面構成】';
+            for (let i = 0; i < this.opticalSystemRows.length; i++) {
+                const row = this.opticalSystemRows[i];
+                const recIdx = recordedIndices.indexOf(i);
+                const marker = (i === stoppedAtSurfaceIndex) ? '✅最終到達' : 
+                              (i === nextSurfaceIndex) ? '❌ブロック面' :
+                              (i === this.evaluationSurfaceIndex) ? '🎯評価面' :
+                              (i === this.stopSurfaceIndex) ? '🛑Stop' : '';
+                const isRecorded = recIdx >= 0 ? `[記録${recIdx}]` : '';
+                const surfType = row.surfType || row.type || 'STD';
+                const material = row.material || '';
+                const isCT = this.isCoordTransRow(row);
+                const typeStr = isCT ? `${surfType}(CT)` : surfType;
+                surfaceTypeList += `\n  ${i}: ${typeStr} ${material} ${isRecorded} ${marker}`;
+            }
+            
             console.error(`
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ❌ OPD基準光路長計算エラー
@@ -1907,6 +1934,7 @@ export class OpticalPathDifferenceCalculator {
   実際の点数: ${actual} 点
   期待する点数: ${expected} 点
   ${actual < expected ? '⚠️ 光線が評価面まで到達していません' : '✅ 点数は十分'}
+  光線は面${stoppedAtSurfaceIndex}で停止 (次の面${nextSurfaceIndex}に到達できず)
 
 【座標情報】
   始点: ${first ? `(${first.x.toFixed(3)}, ${first.y.toFixed(3)}, ${first.z.toFixed(3)})` : 'N/A'}
@@ -1915,12 +1943,14 @@ export class OpticalPathDifferenceCalculator {
 【Mirror情報】
   Mirror数: ${this.opticalSystemRows.filter(isMirrorRow).length}
   mirrorSign: ${this.mirrorSign}
+${surfaceTypeList}
 
 【確認項目】
   1. 光学系にCT/Mirror行が正しく設定されているか
   2. 評価面インデックス: ${this.evaluationSurfaceIndex}
   3. Stop面インデックス: ${this.stopSurfaceIndex}
   4. 光線が途中で失敗していないか（点数チェック）
+  5. ブロック面${nextSurfaceIndex}のaperture/semidiaが適切か確認
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             `);
             throw new Error(`無効な基準光路長: ${this.referenceOpticalPath}`);
