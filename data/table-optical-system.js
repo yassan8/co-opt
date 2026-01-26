@@ -2007,20 +2007,24 @@ setTimeout(() => {
 async function calculateImageSemiDiaFromChiefRays() {
     console.log('🎯🎯🎯 calculateImageSemiDiaFromChiefRays called!');
     console.log('🎯 Image面のSemi Dia自動計算を開始');
+    console.warn('⚡⚡⚡ CHECKPOINT 1: Function entry');
     
     try {
     // Blocks-first / Blocks-only を含め、常に「評価系と同じ rows」を使う。
     // Expanded table は Blocks-only だと no-op / stale になり得るため。
+    console.warn('⚡⚡⚡ CHECKPOINT 2: About to get opticalSystemRows');
     const opticalSystemRows = (typeof window !== 'undefined' && typeof window.getOpticalSystemRows === 'function')
       ? window.getOpticalSystemRows(tableOpticalSystem)
       : tableOpticalSystem.getData();
 
+    console.warn(`⚡⚡⚡ CHECKPOINT 3: opticalSystemRows.length = ${opticalSystemRows?.length}`);
     console.log(`📊 opticalSystemRows.length = ${opticalSystemRows?.length}`);
 
     // Image面を見つける
     const imageSurfaceIndex = opticalSystemRows.findIndex(data =>
       data["object type"] === "Image" || data.object === "Image"
     );
+        console.warn(`⚡⚡⚡ CHECKPOINT 4: imageSurfaceIndex = ${imageSurfaceIndex}`);
         console.log(`🔍 imageSurfaceIndex = ${imageSurfaceIndex}`);
         if (imageSurfaceIndex === -1) {
             console.warn('⚠️ Image面が見つかりません');
@@ -2182,10 +2186,21 @@ async function calculateImageSemiDiaFromChiefRays() {
             console.log(`📍 ImageSurface index: ${imageSurfaceIndex}, rayPath index: ${imageRayPathIndex}`);
 
             rays.forEach((ray, rayIndex) => {
+              console.warn(`⚡ Ray ${rayIndex}: rayPath.length=${ray.rayPath?.length}, imageRayPathIndex=${imageRayPathIndex}`);
               console.log(`🔎 Ray ${rayIndex}: rayPath.length=${ray.rayPath?.length}, imageRayPathIndex=${imageRayPathIndex}`);
               if (ray.rayPath && Array.isArray(ray.rayPath) && imageRayPathIndex !== null && ray.rayPath.length > imageRayPathIndex) {
                 const imagePoint = ray.rayPath[imageRayPathIndex];
+                console.warn(`⚡ Ray ${rayIndex} imagePoint at [${imageRayPathIndex}]: x=${imagePoint?.x?.toFixed(6)}, y=${imagePoint?.y?.toFixed(6)}, z=${imagePoint?.z?.toFixed(6)}`);
                 console.log(`  Ray ${rayIndex}: Image面での位置 x=${imagePoint?.x?.toFixed(6)}, y=${imagePoint?.y?.toFixed(6)}, z=${imagePoint?.z?.toFixed(6)}`);
+                // Also log some other points for comparison
+                if (ray.rayPath.length > 0) {
+                  const p0 = ray.rayPath[0];
+                  console.log(`    rayPath[0]: x=${p0?.x?.toFixed(6)}, y=${p0?.y?.toFixed(6)}, z=${p0?.z?.toFixed(6)}`);
+                }
+                if (ray.rayPath.length > 1) {
+                  const pLast = ray.rayPath[ray.rayPath.length - 1];
+                  console.log(`    rayPath[last=${ray.rayPath.length-1}]: x=${pLast?.x?.toFixed(6)}, y=${pLast?.y?.toFixed(6)}, z=${pLast?.z?.toFixed(6)}`);
+                }
                 if (imagePoint && isFinite(imagePoint.x) && isFinite(imagePoint.y)) {
                   computedAny = true;
                   // X, Y両方を考慮した高さを計算（二次元の距離）
