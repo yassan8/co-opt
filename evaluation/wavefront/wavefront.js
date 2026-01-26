@@ -927,8 +927,15 @@ export class OpticalPathDifferenceCalculator {
         const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
             ? () => performance.now()
             : () => Date.now();
-        const tStart = now();
-        const budgetMs = (options && (options.fastSolve || options.fastMarginalRay)) ? 80 : 180;
+        
+        // Detect if system contains mirrors - they need more time for entrance pupil search
+        const hasMirror = Array.isArray(this.opticalSystemRows) && this.opticalSystemRows.some(row => {
+            const mat = String(row.material || row.glass || '').trim().toUpperCase();
+            return mat === 'MIRROR';
+        });
+        
+        // Mirror systems need longer timeout as entrance pupil may be in unexpected locations
+        const budgetMs = (options && (options.fastSolve || options.fastMarginalRay)) ? 80 : (hasMirror ? 500 : 180);
         let didTimeoutWarn = false;
         const timeExceeded = () => (now() - tStart) > budgetMs;
 
@@ -949,7 +956,10 @@ export class OpticalPathDifferenceCalculator {
                 }
                 return z;
             })();
-            const extra = [firstZ - 500, firstZ - 1000, firstZ - 2000];
+            // Mirror systems may need more distant entrance planes
+            const extra = hasMirror 
+                ? [firstZ - 500, firstZ - 1000, firstZ - 2000, firstZ - 5000, firstZ - 10000]
+                : [firstZ - 500, firstZ - 1000, firstZ - 2000];
             for (const z of extra) {
                 if (Number.isFinite(z)) planeZCandidates.push(z);
             }
@@ -1011,10 +1021,12 @@ export class OpticalPathDifferenceCalculator {
         // Prefer planes closer to the first physical surface first (then farther).
         uniqPlanes.sort((a, b) => Math.abs(a) - Math.abs(b));
 
+        // Mirror systems need wider search range as entrance pupil can be in unusual locations
+        const searchMultiplier = hasMirror ? 2.5 : 1.0;
         const samplePasses = [
-            { maxR: Math.max(80, entranceRadius * 4), n: 220 },
-            { maxR: Math.max(160, entranceRadius * 8), n: 360 },
-            { maxR: Math.max(320, entranceRadius * 12), n: 520 }
+            { maxR: Math.max(80, entranceRadius * 4 * searchMultiplier), n: 220 },
+            { maxR: Math.max(160, entranceRadius * 8 * searchMultiplier), n: 360 },
+            { maxR: Math.max(320, entranceRadius * 12 * searchMultiplier), n: 520 }
         ];
 
         for (const pass of samplePasses) {
