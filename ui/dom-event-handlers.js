@@ -9780,8 +9780,24 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                         sel.addEventListener('change', (e) => {
                             e.stopPropagation();
                             const desired = String(sel.value ?? 'Finite');
+                            
+                            // If changing to Finite, ensure objectDistance has a default value
+                            if (desired === 'Finite' && normalized === 'INF') {
+                                const currentDistance = getDisplayValue('objectDistance');
+                                if (!currentDistance || currentDistance === '' || currentDistance === 'INF') {
+                                    // Set a default objectDistance value before changing mode
+                                    const distanceRes = __blocks_setBlockParamValue(blockId, 'objectDistance', 100);
+                                    if (!distanceRes || distanceRes.ok !== true) {
+                                        alert(`Failed to set default objectDistance: ${distanceRes?.reason || 'unknown error'}`);
+                                        sel.value = normalized;
+                                        return;
+                                    }
+                                }
+                            }
+                            
                             const ok = commitValue(desired);
                             if (!ok) sel.value = normalized;
+                            else try { refreshBlockInspector(); } catch (_) {}
                         });
                     } else if (isImageSemiDiaModeItem) {
                         // ImageSurface.optimizeSemiDia
