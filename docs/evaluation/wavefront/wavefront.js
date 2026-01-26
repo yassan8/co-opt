@@ -1511,33 +1511,7 @@ export class OpticalPathDifferenceCalculator {
         const maxIdx = Number.isFinite(this.traceMaxSurfaceIndex)
             ? this.traceMaxSurfaceIndex
             : this.evaluationSurfaceIndex;
-        
-        // CT/Mirror変換後、評価面の座標系が回転しているため、aperture判定で光線がブロックされる可能性がある。
-        // OPD計算では評価面まで確実に光線を到達させる必要があるため、評価面のapertureを完全に無効化する。
-        const evalRow = this.opticalSystemRows[maxIdx];
-        let originalSemidia = null;
-        let originalAperture = null;
-        if (evalRow) {
-            originalSemidia = evalRow.semidia;
-            originalAperture = evalRow.aperture;
-            // apertureを空文字列にして無効化（これにより aperture check がスキップされる）
-            delete evalRow.semidia;
-            delete evalRow.aperture;
-        }
-        
-        try {
-            return this.traceRayToSurface(ray0, maxIdx, n0);
-        } finally {
-            // 元のaperture値を復元
-            if (evalRow) {
-                if (originalSemidia !== null && originalSemidia !== undefined) {
-                    evalRow.semidia = originalSemidia;
-                }
-                if (originalAperture !== null && originalAperture !== undefined) {
-                    evalRow.aperture = originalAperture;
-                }
-            }
-        }
+        return this.traceRayToSurface(ray0, maxIdx, n0);
     }
 
     getFieldCacheKey(fieldSetting) {

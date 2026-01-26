@@ -1688,6 +1688,10 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
     lastProcessedSurfaceIndex = i; // 現在処理中の面を記録
     const row = effectiveSystemRows[i];
 
+    // 評価面判定: maxSurfaceIndexが指定されていて、現在の面がそれと一致する場合は評価面
+    // CT/Mirror変換後の座標系では aperture 判定が正しく機能しないため、評価面では aperture チェックをスキップ
+    const isEvaluationSurface = (maxSurfaceIndex !== null && maxSurfaceIndex !== undefined && i === maxSurfaceIndex);
+
     // マテリアルタイプの判定（通常面では純粋にマテリアル判定のみ、CB面では座標変換パラメータとして使用）
     const materialType = (typeof row.material === 'string' && row.material === "MIRROR") ? "MIRROR" : "REFRACTIVE";
 
@@ -1907,9 +1911,9 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
         }
       }
       
-      // 🆕 物理的開口制限の適用（Image面は除く）
+      // 🆕 物理的開口制限の適用（Image面と評価面は除く）
       const isImageSurface = row["object type"] === "Image" || row.object === "Image";
-      if (!isImageSurface && useRectAperture) {
+      if (!isImageSurface && !isEvaluationSurface && useRectAperture) {
         const hitX = Math.abs(hitPoint.x);
         const hitY = Math.abs(hitPoint.y);
         if (hitX > rectHalfW || hitY > rectHalfH) {
@@ -1946,7 +1950,7 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
           });
           return null;
         }
-      } else if (!isImageSurface && isFinite(apertureLimit) && hitRadius > apertureLimit) {
+      } else if (!isImageSurface && !isEvaluationSurface && isFinite(apertureLimit) && hitRadius > apertureLimit) {
         if (isDetailedDebug) {
           debugLog.push(`❌ PHYSICAL APERTURE BLOCK: Ray physically blocked on PLANE Surface ${i + 1}`);
           debugLog.push(`   Hit radius: ${hitRadius.toFixed(6)}mm > Aperture limit: ${apertureLimit.toFixed(6)}mm`);
@@ -2111,9 +2115,9 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
         }
       }
       
-      // 🆕 物理的開口制限の適用（Image面は除く）
+      // 🆕 物理的開口制限の適用（Image面と評価面は除く）
       const isImageSurface = row["object type"] === "Image" || row.object === "Image";
-      if (!isImageSurface && isFinite(apertureLimit) && hitRadius > apertureLimit) {
+      if (!isImageSurface && !isEvaluationSurface && isFinite(apertureLimit) && hitRadius > apertureLimit) {
         if (isDetailedDebug) {
           debugLog.push(`❌ PHYSICAL APERTURE BLOCK: Ray physically blocked on Surface ${i + 1}`);
           debugLog.push(`   Hit radius: ${hitRadius.toFixed(6)}mm > Aperture limit: ${apertureLimit.toFixed(6)}mm`);
