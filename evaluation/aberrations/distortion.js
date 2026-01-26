@@ -8,6 +8,26 @@
 
 import { calculateParaxialData } from '../../raytracing/core/ray-paraxial.js';
 import { calculateChiefRayNewton } from './transverse-aberration.js';
+import { calculateSurfaceOrigins } from '../../raytracing/core/ray-tracing.js';
+
+// Helper function to detect mirror surfaces
+function isMirrorRow(row) {
+  if (!row) return false;
+  if (row.material === 'MIRROR') return true;
+  if (row.type === 'Mirror') return true;
+  if (row._blockType === 'Mirror') return true;
+  const surfType = String(row.surfType ?? row.type ?? row.surfaceType ?? '').trim().toLowerCase();
+  return surfType === 'mirror';
+}
+
+// Helper function to apply rotation matrix to vector
+function applyRotationMatrixToVector(matrix, v) {
+  if (!matrix) return { x: v.x, y: v.y, z: v.z };
+  const x = matrix[0][0] * v.x + matrix[0][1] * v.y + matrix[0][2] * v.z;
+  const y = matrix[1][0] * v.x + matrix[1][1] * v.y + matrix[1][2] * v.z;
+  const z = matrix[2][0] * v.x + matrix[2][1] * v.y + matrix[2][2] * v.z;
+  return { x, y, z };
+}
 
 // Helper to get object rows (avoid circular dependency)
 function getObjectRowsLocal() {
@@ -105,6 +125,28 @@ export async function calculateDistortionData(opticalSystemRows, fieldSamples, w
     return null;
   }
 
+  // Detect mirrors and calculate sign flip for odd mirror count
+  const mirrorCount = Array.isArray(opticalSystemRows)
+    ? opticalSystemRows.filter(isMirrorRow).length
+    : 0;
+  const mirrorSign = (mirrorCount % 2 === 1) ? -1 : 1;
+  console.log(`🔍 Distortion: Detected ${mirrorCount} mirror(s), mirrorSign=${mirrorSign}`);
+
+  // Calculate surface origins (for coordinate transformation support)
+  const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+
+  // Find image surface index (last non-CT surface)
+  let imageSurfaceIndex = opticalSystemRows.length - 1;
+  for (let i = opticalSystemRows.length - 1; i >= 0; i--) {
+    const row = opticalSystemRows[i];
+    const surfType = String(row?.surfType ?? row?.type ?? '').toLowerCase();
+    if (surfType === 'image') {
+      imageSurfaceIndex = i;
+      break;
+    }
+  }
+  const imageSurfaceInfo = surfaceOrigins?.[imageSurfaceIndex] || null;
+
   const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
   const fPrime = paraxial?.focalLength; // 有効焦点距離
   if (!fPrime || !isFinite(fPrime)) {
@@ -160,11 +202,27 @@ export async function calculateDistortionData(opticalSystemRows, fieldSamples, w
     try {
       const chief = calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelength, 'unified', { rayCount: 11 });
       if (chief?.success && chief?.ray?.path?.length) {
-        const lastPoint = chief.ray.path[chief.ray.path.length - 1];
+        const lastPointGlobal = chief.ray.path[chief.ray.path.length - 1];
+        
+        // Transform to local coordinates if CT/rotation is present
+        let lastPoint = lastPointGlobal;
+        if (imageSurfaceInfo?.rotationMatrix) {
+          const origin = imageSurfaceInfo.origin || { x: 0, y: 0, z: 0 };
+          const relative = {
+            x: lastPointGlobal.x - origin.x,
+            y: lastPointGlobal.y - origin.y,
+            z: lastPointGlobal.z - origin.z
+          };
+          lastPoint = applyRotationMatrixToVector(imageSurfaceInfo.rotationMatrix, relative);
+        }
+        
+        // Apply mirror sign to coordinates
+        const localY = lastPoint.y * mirrorSign;
+        
         // Use Y coordinate for height (since we varied y angle); fallback radial if x present.
-        hReal = Math.abs(lastPoint.y);
-        // Optionally radial: const r = Math.sqrt(lastPoint.x*lastPoint.x + lastPoint.y*lastPoint.y);
-        chiefRayDetails.push({ sample, thetaDeg, lastPoint });
+        hReal = Math.abs(localY);
+        // Optionally radial: const r = Math.sqrt(lastPoint.x*lastPoint.x + localY*localY);
+        chiefRayDetails.push({ sample, thetaDeg, lastPoint: { ...lastPoint, y: localY } });
       } else {
         chiefRayDetails.push({ sample, thetaDeg, error: chief?.finalError || 'chief ray failure' });
       }
@@ -241,6 +299,28 @@ export async function calculateGridDistortion(opticalSystemRows, gridSize = 20, 
     return null;
   }
 
+  // Detect mirrors and calculate sign flip for odd mirror count
+  const mirrorCount = Array.isArray(opticalSystemRows)
+    ? opticalSystemRows.filter(isMirrorRow).length
+    : 0;
+  const mirrorSign = (mirrorCount % 2 === 1) ? -1 : 1;
+  console.log(`🔍 Grid Distortion: Detected ${mirrorCount} mirror(s), mirrorSign=${mirrorSign}`);
+
+  // Calculate surface origins (for coordinate transformation support)
+  const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+
+  // Find image surface index (last non-CT surface)
+  let imageSurfaceIndex = opticalSystemRows.length - 1;
+  for (let i = opticalSystemRows.length - 1; i >= 0; i--) {
+    const row = opticalSystemRows[i];
+    const surfType = String(row?.surfType ?? row?.type ?? '').toLowerCase();
+    if (surfType === 'image') {
+      imageSurfaceIndex = i;
+      break;
+    }
+  }
+  const imageSurfaceInfo = surfaceOrigins?.[imageSurfaceIndex] || null;
+
   const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
   const fPrime = paraxial?.focalLength;
   if (!fPrime || !isFinite(fPrime)) {
@@ -310,15 +390,32 @@ export async function calculateGridDistortion(opticalSystemRows, gridSize = 20, 
           { rayCount: 11 }
         );
         if (chief?.success && chief?.ray?.path?.length) {
-          const lastPoint = chief.ray.path[chief.ray.path.length - 1];
+          const lastPointGlobal = chief.ray.path[chief.ray.path.length - 1];
+          
+          // Transform to local coordinates if CT/rotation is present
+          let lastPoint = lastPointGlobal;
+          if (imageSurfaceInfo?.rotationMatrix) {
+            const origin = imageSurfaceInfo.origin || { x: 0, y: 0, z: 0 };
+            const relative = {
+              x: lastPointGlobal.x - origin.x,
+              y: lastPointGlobal.y - origin.y,
+              z: lastPointGlobal.z - origin.z
+            };
+            lastPoint = applyRotationMatrixToVector(imageSurfaceInfo.rotationMatrix, relative);
+          }
+          
+          // Apply mirror sign to coordinates
+          const localX = lastPoint.x * mirrorSign;
+          const localY = lastPoint.y * mirrorSign;
+          
           // Validate that the coordinates are finite numbers
           // Also filter out the error sentinel value (-50, -50)
           if (lastPoint && 
-              typeof lastPoint.x === 'number' && isFinite(lastPoint.x) &&
-              typeof lastPoint.y === 'number' && isFinite(lastPoint.y) &&
-              !(lastPoint.x === -50 && lastPoint.y === -50)) {
-            hRealX = lastPoint.x;
-            hRealY = lastPoint.y;
+              typeof localX === 'number' && isFinite(localX) &&
+              typeof localY === 'number' && isFinite(localY) &&
+              !(localX === -50 && localY === -50)) {
+            hRealX = localX;
+            hRealY = localY;
           }
         }
       } catch (e) {
