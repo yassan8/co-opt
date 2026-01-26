@@ -2187,16 +2187,24 @@ async function calculateImageSemiDiaFromChiefRays() {
 
             // Get Image surface transformation info to convert global coordinates back to local
             let imageSurfaceInfo = null;
+            console.warn(`⚡ Checking for buildSurfaceData: ${typeof window?.buildSurfaceData}`);
             if (typeof window !== 'undefined' && typeof window.buildSurfaceData === 'function') {
               try {
+                console.warn('⚡ Calling buildSurfaceData...');
                 const surfaceData = window.buildSurfaceData(opticalSystemRows);
+                console.warn(`⚡ buildSurfaceData returned: ${surfaceData ? 'array of ' + surfaceData.length : 'null/undefined'}`);
                 if (surfaceData && surfaceData[imageSurfaceIndex]) {
                   imageSurfaceInfo = surfaceData[imageSurfaceIndex];
+                  console.warn(`⚡ Image surface origin: (${imageSurfaceInfo.origin.x.toFixed(3)}, ${imageSurfaceInfo.origin.y.toFixed(3)}, ${imageSurfaceInfo.origin.z.toFixed(3)})`);
                   console.log(`✅ Got Image surface info: origin=(${imageSurfaceInfo.origin.x.toFixed(3)}, ${imageSurfaceInfo.origin.y.toFixed(3)}, ${imageSurfaceInfo.origin.z.toFixed(3)})`);
+                } else {
+                  console.warn('⚠️ surfaceData[imageSurfaceIndex] is null/undefined');
                 }
               } catch (err) {
                 console.warn('⚠️ Failed to get surface data:', err);
               }
+            } else {
+              console.warn('⚠️ buildSurfaceData function not available');
             }
 
             rays.forEach((ray, rayIndex) => {
@@ -2210,7 +2218,9 @@ async function calculateImageSemiDiaFromChiefRays() {
                 // Transform from global coordinates to Image surface local coordinates
                 let localX = imagePoint.x;
                 let localY = imagePoint.y;
+                console.warn(`⚡ imageSurfaceInfo available: ${!!imageSurfaceInfo}`);
                 if (imageSurfaceInfo && imageSurfaceInfo.origin && imageSurfaceInfo.rotationMatrix) {
+                  console.warn('⚡ Transforming to local coordinates...');
                   // Translate to surface origin
                   const dx = imagePoint.x - imageSurfaceInfo.origin.x;
                   const dy = imagePoint.y - imageSurfaceInfo.origin.y;
@@ -2222,7 +2232,10 @@ async function calculateImageSemiDiaFromChiefRays() {
                   localY = R[0][1] * dx + R[1][1] * dy + R[2][1] * dz;
                   const localZ = R[0][2] * dx + R[1][2] * dy + R[2][2] * dz;
                   
+                  console.warn(`⚡ Local coords: x=${localX.toFixed(6)}, y=${localY.toFixed(6)}, z=${localZ.toFixed(6)}`);
                   console.log(`    → Local coords: x=${localX.toFixed(6)}, y=${localY.toFixed(6)}, z=${localZ.toFixed(6)}`);
+                } else {
+                  console.warn('⚠️ Cannot transform - imageSurfaceInfo not available, using global coords as fallback');
                 }
                 
                 // Also log some other points for comparison
