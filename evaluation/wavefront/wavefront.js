@@ -47,6 +47,16 @@ function __cooptIsOPDDebugNow() {
 
 const OPD_DEBUG = __cooptIsOPDDebugNow();
 
+function __cooptIsOPDDebugRuntime() {
+    try {
+        if (OPD_DEBUG) return true;
+        const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+        return !!(g && (g.__OPD_DEBUG || g.__PSF_DEBUG));
+    } catch (_) {
+        return false;
+    }
+}
+
 function __getActiveWavefrontProfile() {
     try {
         const g = (typeof globalThis !== 'undefined') ? globalThis : null;
@@ -750,6 +760,34 @@ export class OpticalPathDifferenceCalculator {
             }
         } catch (_) {}
 
+        // Prefer renderer's analytical solver for infinite object systems.
+        // Use it to seed centerOrigin (not as a config return value).
+        let solverCenterOrigin = null;
+        try {
+            const isInfiniteField = !this.isFiniteForField(fieldSetting);
+            if (isInfiniteField) {
+                const stopCenter = this.getEffectiveStopCenter(fieldSetting);
+                const dirForSolver = { i: direction.x, j: direction.y, k: direction.z };
+                const solved = findInfiniteSystemChiefRayOrigin(
+                    dirForSolver,
+                    stopCenter,
+                    this.stopSurfaceIndex,
+                    this.opticalSystemRows,
+                    !!OPD_DEBUG,
+                    this.stopSurfaceIndex,
+                    this.wavelength
+                );
+                if (solved && Number.isFinite(solved.x) && Number.isFinite(solved.y) && Number.isFinite(solved.z)) {
+                    solverCenterOrigin = { x: solved.x, y: solved.y, z: solved.z };
+                    if (OPD_DEBUG) {
+                        console.log('✅ [EntrancePupil] solver origin found', { origin: solverCenterOrigin });
+                    }
+                }
+            }
+        } catch (_) {
+            // fall through to search
+        }
+
         const planeZCandidates = [];
         // Prefer a plane slightly in front of the first physical surface.
         planeZCandidates.push(firstSurfaceZ - 10);
@@ -765,7 +803,7 @@ export class OpticalPathDifferenceCalculator {
         // Fast-path: if a traceable chief ray exists for this field, use its launch point as
         // the entrance pupil center. This avoids fragile/time-budgeted searches and aligns
         // better with Draw Cross' “chiefRayOrigin”.
-        let centerOrigin = null;
+        let centerOrigin = solverCenterOrigin;
         try {
             const chief = this.generateInfiniteChiefRay(fieldSetting);
             const chiefPath = this.extractPathData(chief);
@@ -980,7 +1018,17 @@ export class OpticalPathDifferenceCalculator {
 
         const scoreRay = (origin) => {
             const ray = { pos: origin, dir: direction, wavelength: this.wavelength };
+            
+            // For entrance pupil search, we only need to reach stop surface, not evaluation surface
+            // Save current traceMaxSurfaceIndex and temporarily set to stop
+            const savedTraceMax = this.traceMaxSurfaceIndex;
+            this.traceMaxSurfaceIndex = this.stopSurfaceIndex;
+            
             const toEval = this.traceRayToEval(ray, 1.0);
+            
+            // Restore original traceMaxSurfaceIndex
+            this.traceMaxSurfaceIndex = savedTraceMax;
+            
             const pathData = this.extractPathData(toEval);
             if (!pathData || pathData.length < 2) return { ok: false, score: -Infinity };
             // Prefer rays that reach farther (more recorded intersections).
@@ -1017,47 +1065,262 @@ export class OpticalPathDifferenceCalculator {
             // fall through to full search
         }
 
-        // Full search (bounded): spiral sampler around the geometric guess with a hard time budget.
-        // We deliberately avoid large coarse grids here because they can freeze the browser.
+        // Full search: Use renderer's proven Grid+Brent hybrid approach
+        // This analytical method is more reliable than spiral sampling for complex systems (CT/Mirror).
         let best = null;
-        const goldenAngle = Math.PI * (3 - Math.sqrt(5));
         const uniqPlanes = Array.from(new Set(planeZCandidates.filter(z => Number.isFinite(z)).map(z => Number(z))));
         // Prefer planes closer to the first physical surface first (then farther).
         uniqPlanes.sort((a, b) => Math.abs(a) - Math.abs(b));
 
-        // Mirror systems need wider search range as entrance pupil can be in unusual locations
-        const searchMultiplier = hasMirror ? 2.5 : 1.0;
-        const samplePasses = [
-            { maxR: Math.max(80, entranceRadius * 4 * searchMultiplier), n: 220 },
-            { maxR: Math.max(160, entranceRadius * 8 * searchMultiplier), n: 360 },
-            { maxR: Math.max(320, entranceRadius * 12 * searchMultiplier), n: 520 }
-        ];
+        // Helper: Brent's method for 1D optimization
+        const brent = (f, ax, bx, tol, maxIter) => {
+            const goldenRatio = (3 - Math.sqrt(5)) / 2;
+            let a = ax, b = bx;
+            let x = a + goldenRatio * (b - a);
+            let w = x, v = x;
+            let fx = f(x), fw = fx, fv = fx;
+            let d = 0, e = 0;
 
-        for (const pass of samplePasses) {
-            for (const planeZ of uniqPlanes) {
-                const g = guessXYAtPlane(planeZ);
-                const x0 = g.x;
-                const y0 = g.y;
-                for (let s = 0; s < pass.n; s++) {
-                    if (timeExceeded()) {
-                        didTimeoutWarn = true;
-                        break;
+            for (let iter = 0; iter < maxIter; iter++) {
+                const m = 0.5 * (a + b);
+                const tol1 = tol * Math.abs(x) + 1e-10;
+                const tol2 = 2 * tol1;
+
+                if (Math.abs(x - m) <= tol2 - 0.5 * (b - a)) return x;
+
+                let p = 0, q = 0, r = 0;
+                if (Math.abs(e) > tol1) {
+                    r = (x - w) * (fx - fv);
+                    q = (x - v) * (fx - fw);
+                    p = (x - v) * q - (x - w) * r;
+                    q = 2 * (q - r);
+                    if (q > 0) p = -p;
+                    q = Math.abs(q);
+                    const temp = e;
+                    e = d;
+                    if (Math.abs(p) < Math.abs(0.5 * q * temp) && p > q * (a - x) && p < q * (b - x)) {
+                        d = p / q;
+                        const u = x + d;
+                        if ((u - a) < tol2 || (b - u) < tol2) {
+                            d = (x < m) ? tol1 : -tol1;
+                        }
+                    } else {
+                        e = (x >= m) ? a - x : b - x;
+                        d = goldenRatio * e;
                     }
-                    const t = (pass.n <= 1) ? 0 : (s / (pass.n - 1));
-                    const r = pass.maxR * Math.sqrt(t);
-                    const th = s * goldenAngle;
-                    const origin = { x: x0 + r * Math.cos(th), y: y0 + r * Math.sin(th), z: planeZ };
-                    const res = scoreRay(origin);
-                    if (!res.ok) continue;
-                    // First success is enough to define the entrance pupil center.
-                    best = { origin, planeZ };
-                    break;
+                } else {
+                    e = (x >= m) ? a - x : b - x;
+                    d = goldenRatio * e;
                 }
-                if (best) break;
+
+                const u = (Math.abs(d) >= tol1) ? (x + d) : (x + ((d > 0) ? tol1 : -tol1));
+                const fu = f(u);
+
+                if (fu <= fx) {
+                    if (u >= x) a = x; else b = x;
+                    v = w; w = x; x = u;
+                    fv = fw; fw = fx; fx = fu;
+                } else {
+                    if (u < x) a = u; else b = u;
+                    if (fu <= fw || w === x) {
+                        v = w; w = u;
+                        fv = fw; fw = fu;
+                    } else if (fu <= fv || v === x || v === w) {
+                        v = u;
+                        fv = fu;
+                    }
+                }
+            }
+            return x;
+        };
+
+        // Try each Z plane using Grid+Brent hybrid method (same as renderer)
+        for (const planeZ of uniqPlanes) {
+            if (timeExceeded()) {
+                didTimeoutWarn = true;
+                break;
+            }
+
+            const g = guessXYAtPlane(planeZ);
+            const guessX = g.x;
+            const guessY = g.y;
+
+            // Estimate dynamic search range based on stop radius
+            const stopRadiusGuess = (() => {
+                try {
+                    const s = this.opticalSystemRows?.[this.stopSurfaceIndex];
+                    const semidia = parseFloat(s?.semidia ?? s?.semiDiameter ?? s?.['semi-diameter'] ?? '');
+                    const aperture = parseFloat(s?.aperture ?? s?.Aperture ?? '');
+                    if (Number.isFinite(semidia) && semidia > 0) return semidia;
+                    if (Number.isFinite(aperture) && aperture > 0) return aperture / 2;
+                } catch (_) {}
+                return 10;
+            })();
+
+            const guessAbs = Math.max(Math.abs(guessX), Math.abs(guessY), 0);
+            const dynamicHalfRange = Math.max(50, guessAbs + 2 * stopRadiusGuess + 10);
+
+            if (OPD_DEBUG) {
+                console.log(`🔍 [EntrancePupil] Grid+Brent search at Z=${planeZ.toFixed(3)}mm`, {
+                    guess: { x: guessX.toFixed(3), y: guessY.toFixed(3) },
+                    stopCenter: { x: stopCenter.x.toFixed(3), y: stopCenter.y.toFixed(3), z: stopCenter.z.toFixed(3) },
+                    stopSurfaceIndex: this.stopSurfaceIndex,
+                    dynamicHalfRange: dynamicHalfRange.toFixed(3),
+                    direction: { x: direction.x.toFixed(6), y: direction.y.toFixed(6), z: direction.z.toFixed(6) }
+                });
+            }
+
+            // Helper: Get ray path point index for a surface index (accounting for CT surfaces)
+            const getRayPathPointIndexForSurfaceIndex = (surfaceIndex) => {
+                if (surfaceIndex === null || surfaceIndex === undefined) return null;
+                const sIdx = Math.max(0, Math.min(surfaceIndex, this.opticalSystemRows.length - 1));
+                let count = 0;
+                for (let i = 0; i <= sIdx; i++) {
+                    const row = this.opticalSystemRows[i];
+                    if (this.isCoordTransRow(row)) continue;
+                    if (this.isObjectRow(row)) continue;
+                    count++;
+                }
+                return count > 0 ? count : null;
+            };
+
+            // Objective function: distance from stop center
+            const evaluateRayToStop = (x, y) => {
+                const origin = { x, y, z: planeZ };
+                const res = scoreRay(origin);
+                if (!res.ok) {
+                    if (OPD_DEBUG && x === guessX && y === guessY) {
+                        console.log(`⚠️ [EntrancePupil] scoreRay failed at guess point`, {
+                            origin: { x: x.toFixed(3), y: y.toFixed(3), z: planeZ.toFixed(3) },
+                            reason: 'ray did not reach evaluation surface'
+                        });
+                    }
+                    return { valid: false, error: Infinity, ray: null };
+                }
+
+                // Check if ray reaches stop surface
+                try {
+                    const pathData = this.extractPathData(res.ray);
+                    if (!pathData || pathData.length < 2) {
+                        if (OPD_DEBUG && x === guessX && y === guessY) {
+                            console.log(`⚠️ [EntrancePupil] pathData too short at guess point`, {
+                                pathLength: pathData?.length ?? 0
+                            });
+                        }
+                        return { valid: false, error: Infinity, ray: null };
+                    }
+
+                    // Get correct path array index for stop surface (excluding CT surfaces)
+                    const stopPointIdx = getRayPathPointIndexForSurfaceIndex(this.stopSurfaceIndex);
+                    if (stopPointIdx === null || stopPointIdx >= pathData.length) {
+                        if (OPD_DEBUG && x === guessX && y === guessY) {
+                            console.log(`⚠️ [EntrancePupil] stopPointIdx out of range at guess point`, {
+                                stopPointIdx,
+                                pathLength: pathData.length,
+                                stopSurfaceIndex: this.stopSurfaceIndex
+                            });
+                        }
+                        return { valid: false, error: Infinity, ray: null };
+                    }
+
+                    const stopPoint = pathData[stopPointIdx];
+                    if (!stopPoint || !stopPoint.pos) {
+                        if (OPD_DEBUG && x === guessX && y === guessY) {
+                            console.log(`⚠️ [EntrancePupil] stopPoint invalid at guess point`, {
+                                stopPoint: stopPoint ? 'exists' : 'null',
+                                hasPos: stopPoint?.pos ? 'yes' : 'no'
+                            });
+                        }
+                        return { valid: false, error: Infinity, ray: null };
+                    }
+
+                    const errorX = stopPoint.pos.x - stopCenter.x;
+                    const errorY = stopPoint.pos.y - stopCenter.y;
+                    return { valid: true, error: Math.hypot(errorX, errorY), ray: res.ray };
+                } catch (_) {
+                    return { valid: false, error: Infinity, ray: null };
+                }
+            };
+
+            // Phase 1: Grid search (coarse)
+            const gridRange = dynamicHalfRange;
+            const gridSize = 31; // 31x31 = 961 points (faster than renderer's 51x51)
+            const gridStep = (2 * gridRange) / (gridSize - 1);
+
+            let bestX = guessX, bestY = guessY, bestError = Infinity;
+            let foundAnyValid = false;
+            let validRayCount = 0;
+
+            for (let i = 0; i < gridSize; i++) {
+                const x = (guessX - gridRange) + i * gridStep;
+                for (let j = 0; j < gridSize; j++) {
+                    if (timeExceeded()) break;
+
+                    const y = (guessY - gridRange) + j * gridStep;
+                    const evalResult = evaluateRayToStop(x, y);
+
+                    if (evalResult.valid) {
+                        validRayCount++;
+                        if (evalResult.error < bestError) {
+                            foundAnyValid = true;
+                            bestError = evalResult.error;
+                            bestX = x;
+                            bestY = y;
+                        }
+                    }
+                }
                 if (timeExceeded()) break;
             }
-            if (best) break;
-            if (timeExceeded()) break;
+
+            if (OPD_DEBUG) {
+                console.log(`📊 [EntrancePupil] Grid search result`, {
+                    planeZ: planeZ.toFixed(3),
+                    validRays: validRayCount,
+                    foundAny: foundAnyValid,
+                    bestError: foundAnyValid ? bestError.toFixed(6) + 'mm' : 'N/A',
+                    best: foundAnyValid ? { x: bestX.toFixed(3), y: bestY.toFixed(3) } : null
+                });
+            }
+
+            if (!foundAnyValid) continue; // Try next Z plane
+
+            // Phase 2: Brent refinement (X then Y)
+            let optimalX = bestX;
+            let optimalY = bestY;
+
+            // Refine X (with Y fixed)
+            try {
+                const brentRange = Math.max(gridStep * 2, 0.5);
+                const objectiveFunctionX = (x) => {
+                    const result = evaluateRayToStop(x, optimalY);
+                    return result.valid ? result.error : 1e9;
+                };
+                optimalX = brent(objectiveFunctionX, bestX - brentRange, bestX + brentRange, 1e-6, 50);
+            } catch (_) {}
+
+            // Refine Y (with X fixed)
+            try {
+                const brentRange = Math.max(gridStep * 2, 0.5);
+                const objectiveFunctionY = (y) => {
+                    const result = evaluateRayToStop(optimalX, y);
+                    return result.valid ? result.error : 1e9;
+                };
+                optimalY = brent(objectiveFunctionY, bestY - brentRange, bestY + brentRange, 1e-6, 50);
+            } catch (_) {}
+
+            // Verify final solution
+            const finalResult = evaluateRayToStop(optimalX, optimalY);
+            if (finalResult.valid) {
+                best = { origin: { x: optimalX, y: optimalY, z: planeZ }, planeZ };
+                if (OPD_DEBUG) {
+                    console.log('✅ [EntrancePupil] Grid+Brent found origin', {
+                        planeZ,
+                        origin: best.origin,
+                        stopError: finalResult.error.toFixed(6) + 'mm'
+                    });
+                }
+                break; // Success!
+            }
         }
 
         if (!best && didTimeoutWarn) {
@@ -1325,8 +1588,14 @@ export class OpticalPathDifferenceCalculator {
     }
 
     isCoordTransRow(row) {
-        const st = String(row?.surfType ?? row?.['surf type'] ?? '').toLowerCase();
-        return st === 'coord break' || st === 'coordinate break' || st === 'cb';
+        const st = String(row?.surfType ?? row?.['surf type'] ?? '').toLowerCase().replace(/\s+/g, '');
+        return st === 'coordbreak'
+            || st === 'coordinatebreak'
+            || st === 'cb'
+            || st === 'coordtrans'
+            || st === 'coordinatetransform'
+            || st === 'ct'
+            || st === 'coordtransformation';
     }
 
     isObjectRow(row) {
@@ -1528,16 +1797,15 @@ export class OpticalPathDifferenceCalculator {
             ? this.traceMaxSurfaceIndex
             : this.evaluationSurfaceIndex;
         
-        // Count non-CT surfaces to get expected point count
-        // Coord Trans surfaces don't add points to the ray path
+        // Count recorded surfaces to get expected point count.
+        // Coord Trans and Object rows don't add points to the ray path.
         let nonCTCount = 0;
         if (Array.isArray(this.opticalSystemRows)) {
             for (let i = 0; i <= maxIdx && i < this.opticalSystemRows.length; i++) {
                 const row = this.opticalSystemRows[i];
-                const isCoordTrans = row && (row.surfType === 'Coord Trans' || row.type === 'Coord Trans');
-                if (!isCoordTrans) {
-                    nonCTCount++;
-                }
+                if (this.isCoordTransRow(row)) continue;
+                if (this.isObjectRow(row)) continue;
+                nonCTCount++;
             }
         }
         const expectedPointCount = nonCTCount + 1; // +1 for object point
@@ -1919,6 +2187,21 @@ export class OpticalPathDifferenceCalculator {
                 }
             } catch (_) {}
 
+            if (__cooptIsOPDDebugRuntime()) {
+                try {
+                    console.warn('❌ [ReferenceRay] generation failed', {
+                        field: { ax, ay, xh, yh },
+                        lastFail,
+                        hint,
+                        term,
+                        lastMarginalFailure: this._lastMarginalRayGenFailure,
+                        lastMarginalOrigin: this._lastMarginalRayOrigin,
+                        lastMarginalOriginGeom: this._lastMarginalRayOriginGeom,
+                        lastMarginalOriginDelta: this._lastMarginalRayOriginDelta,
+                        lastStopHitInfo: this._lastStopHitInfo
+                    });
+                } catch (_) {}
+            }
             throw new Error(`基準光線の生成に失敗しました（center/chief ray ともに失敗） field(angle=(${ax},${ay})deg height=(${xh},${yh})mm)${lastFail}${hint}${term}`);
         }
 
@@ -3935,6 +4218,55 @@ ${surfaceTypeList}
             const initialRay = { pos: origin, dir: direction, wavelength: this.wavelength };
             const toEval = this.traceRayToEval(initialRay, 1.0);
             if (!toEval) {
+                if (__cooptIsOPDDebugRuntime()) {
+                    try {
+                        // Capture low-level trace failure details (aperture block, TIR, etc.)
+                        const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+                        if (g) {
+                            g.__cooptLastRayTraceFailure = null;
+                            g.__COOPT_CAPTURE_RAYTRACE_FAILURE = true;
+                        }
+                        let debugLog = null;
+                        try {
+                            debugLog = [];
+                            traceRay(this.opticalSystemRows, initialRay, 1.0, debugLog, this.evaluationSurfaceIndex);
+                        } catch (_) {}
+                        if (g) {
+                            g.__COOPT_CAPTURE_RAYTRACE_FAILURE = false;
+                        }
+                        const rows = Array.isArray(this.opticalSystemRows) ? this.opticalSystemRows : [];
+                        const surfaceSummary = rows.map((r, i) => {
+                            const st = String(r?.surfType ?? r?.type ?? '').trim();
+                            const mat = String(r?.material ?? r?.glass ?? '').trim();
+                            const obj = String(r?.objectType ?? r?.['object type'] ?? r?.object ?? '').trim();
+                            const isCT = this.isCoordTransRow(r);
+                            const isObj = this.isObjectRow(r);
+                            const isMirror = isMirrorRow(r);
+                            let z = null;
+                            try {
+                                const o = this.getSurfaceOrigin(i);
+                                z = (o && Number.isFinite(o.z)) ? o.z : null;
+                            } catch (_) {}
+                            return { i, st, obj, mat, isCT, isObj, isMirror, z };
+                        });
+                        const surfaceSummaryText = surfaceSummary.map(s => {
+                            const flags = [s.isObj ? 'Obj' : null, s.isCT ? 'CT' : null, s.isMirror ? 'Mirror' : null].filter(Boolean).join('|');
+                            return `${s.i}: ${s.st || s.obj || '??'} ${s.mat ? `mat=${s.mat}` : ''} ${flags ? `[${flags}]` : ''} ${Number.isFinite(s.z) ? `z=${s.z}` : ''}`.trim();
+                        });
+                        console.warn('❌ [EntrancePupil] trace to eval failed (entrance pupil)', {
+                            origin,
+                            direction,
+                            stopSurfaceIndex: this.stopSurfaceIndex,
+                            evaluationSurfaceIndex: this.evaluationSurfaceIndex,
+                            traceMaxSurfaceIndex: this.traceMaxSurfaceIndex,
+                            recordedSurfaceIndices: this._recordedSurfaceIndices,
+                            surfaceSummary,
+                            surfaceSummaryText,
+                            lastRayTraceFailure: g?.__cooptLastRayTraceFailure || null,
+                            traceDebugLog: debugLog && debugLog.length ? debugLog.slice(0, 60) : null
+                        });
+                    } catch (_) {}
+                }
                 if (!this._lastMarginalRayGenFailure) {
                     this._lastMarginalRayGenFailure = 'infinite: trace to eval failed (entrance pupil)';
                 }
