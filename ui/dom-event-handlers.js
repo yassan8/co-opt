@@ -2094,8 +2094,6 @@ function setupSuggestOptimizeButtons() {
                     alert('Select (expand) a block first to delete.');
                     return;
                 }
-                const ok = confirm(`Delete block ${bid}?`);
-                if (!ok) return;
                 const res = __blocks_deleteBlockFromActiveConfig(bid);
                 if (!res || res.ok !== true) {
                     alert(`Failed to delete block: ${res?.reason || 'unknown error'}`);
