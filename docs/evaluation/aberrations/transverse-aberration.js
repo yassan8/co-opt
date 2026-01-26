@@ -1628,9 +1628,8 @@ function getIntersectionAtSurface(ray, surfaceIndex, opticalSystemRows, surfaceI
             if (surfaceInfo?.rotationMatrix) {
                 // 回転行列を適用して局所座標系に変換
                 intersection = applyRotationMatrixToVector(
-                    intersectionGlobal,
                     surfaceInfo.rotationMatrix,
-                    surfaceInfo.origin || { x: 0, y: 0, z: 0 }
+                    intersectionGlobal
                 );
             }
             
