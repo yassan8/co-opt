@@ -9498,7 +9498,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                         }
                     }
                     if (isPreImageGap) {
-                        items.push({ kind: 'gapThicknessMode', key: 'thicknessMode', label: 'thickness (IMD/BFL)', noOptimize: true });
+                        items.push({ kind: 'gapThicknessMode', key: 'thicknessMode', label: 'thickness', noOptimize: true });
                     }
                 } catch (_) {}
                 items.push({ key: 'thickness', label: 'thickness' });
