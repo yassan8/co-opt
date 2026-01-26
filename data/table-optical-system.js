@@ -2330,15 +2330,20 @@ async function calculateImageSemiDiaFromChiefRays() {
                   const pLast = ray.rayPath[ray.rayPath.length - 1];
                   console.log(`    rayPath[last=${ray.rayPath.length-1}]: x=${pLast?.x?.toFixed(6)}, y=${pLast?.y?.toFixed(6)}, z=${pLast?.z?.toFixed(6)}`);
                 }
+                console.warn(`⚡ About to check: isFinite(${localX}) && isFinite(${localY}) = ${isFinite(localX) && isFinite(localY)}`);
                 if (isFinite(localX) && isFinite(localY)) {
+                  console.warn(`⚡ Inside height calculation block`);
                   computedAny = true;
                   // X, Y両方を考慮した高さを計算（二次元の距離）
                   const height = Math.sqrt(localX * localX + localY * localY);
+                  console.warn(`⚡ Calculated height: ${height.toFixed(6)} mm, current maxHeight: ${maxHeight.toFixed(6)} mm`);
                   console.log(`    → 高さ=${height.toFixed(6)} mm (local coords)`);
                   if (height > maxHeight) {
                     maxHeight = height;
                     console.log(`    ✅ 最大高さ更新: ${maxHeight.toFixed(6)} mm`);
                   }
+                } else {
+                  console.warn(`⚠️ Skipped height calculation: localX=${localX}, localY=${localY}`);
                 }
               }
             });
