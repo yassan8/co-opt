@@ -2141,16 +2141,20 @@ async function calculateImageSemiDiaFromChiefRays() {
               const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
               return t === 'object';
             };
+            const __isGapRow = (row) => {
+              const blockType = String(row?._blockType ?? '').trim();
+              return blockType === 'Gap';
+            };
             const __rayPathPointIndexForSurfaceIndex = (rows, surfaceIndex0) => {
               if (!Array.isArray(rows)) return null;
               const sIdx = Number(surfaceIndex0);
               if (!Number.isInteger(sIdx) || sIdx < 0 || sIdx >= rows.length) return null;
               const row = rows[sIdx];
-              if (__isObjectRow(row) || __isCoordTransRow(row)) return null;
+              if (__isObjectRow(row) || __isCoordTransRow(row) || __isGapRow(row)) return null;
               let count = 0;
               for (let i = 0; i <= sIdx; i++) {
                 const r = rows[i];
-                if (__isObjectRow(r) || __isCoordTransRow(r)) continue;
+                if (__isObjectRow(r) || __isCoordTransRow(r) || __isGapRow(r)) continue;
                 count++;
               }
               return count > 0 ? count : null;
