@@ -2005,26 +2005,21 @@ setTimeout(() => {
  * optimizeSemiDia="A"の場合に呼び出される
  */
 async function calculateImageSemiDiaFromChiefRays() {
-    console.log('🎯🎯🎯 calculateImageSemiDiaFromChiefRays called!');
     console.log('🎯 Image面のSemi Dia自動計算を開始');
-    console.warn('⚡⚡⚡ CHECKPOINT 1: Function entry');
     
     try {
     // Blocks-first / Blocks-only を含め、常に「評価系と同じ rows」を使う。
     // Expanded table は Blocks-only だと no-op / stale になり得るため。
-    console.warn('⚡⚡⚡ CHECKPOINT 2: About to get opticalSystemRows');
     const opticalSystemRows = (typeof window !== 'undefined' && typeof window.getOpticalSystemRows === 'function')
       ? window.getOpticalSystemRows(tableOpticalSystem)
       : tableOpticalSystem.getData();
 
-    console.warn(`⚡⚡⚡ CHECKPOINT 3: opticalSystemRows.length = ${opticalSystemRows?.length}`);
     console.log(`📊 opticalSystemRows.length = ${opticalSystemRows?.length}`);
 
     // Image面を見つける
     const imageSurfaceIndex = opticalSystemRows.findIndex(data =>
       data["object type"] === "Image" || data.object === "Image"
     );
-        console.warn(`⚡⚡⚡ CHECKPOINT 4: imageSurfaceIndex = ${imageSurfaceIndex}`);
         console.log(`🔍 imageSurfaceIndex = ${imageSurfaceIndex}`);
         if (imageSurfaceIndex === -1) {
             console.warn('⚠️ Image面が見つかりません');
@@ -2166,20 +2161,11 @@ async function calculateImageSemiDiaFromChiefRays() {
               const row = rows[sIdx];
               if (__isObjectRow(row) || __isCoordTransRow(row) || __isGapRow(row)) return null;
               let count = 0;
-              console.log(`🔍 Calculating rayPath index for surface ${sIdx}:`);
               for (let i = 0; i <= sIdx; i++) {
                 const r = rows[i];
-                const isObj = __isObjectRow(r);
-                const isCT = __isCoordTransRow(r);
-                const isGap = __isGapRow(r);
-                const surfType = r?.surfType || r?.['surf type'] || '-';
-                const blockType = r?._blockType || '-';
-                const objType = r?.['object type'] || r?.object || '-';
-                console.log(`  [${i}] ${objType} / surfType=${surfType} / _blockType=${blockType} / skip=${isObj||isCT||isGap} / count=${count}`);
                 if (__isObjectRow(r) || __isCoordTransRow(r) || __isGapRow(r)) continue;
                 count++;
               }
-              console.log(`  → Final rayPath index: ${count}`);
               return count > 0 ? count : null;
             };
             const imageRayPathIndex = __rayPathPointIndexForSurfaceIndex(opticalSystemRows, imageSurfaceIndex);
@@ -2187,7 +2173,6 @@ async function calculateImageSemiDiaFromChiefRays() {
 
             // Build Image surface transformation info inline to convert global coordinates back to local
             let imageSurfaceInfo = null;
-            console.warn(`⚡ Building surface transformation data inline...`);
             try {
               // Helper functions
               const vec3 = (x, y, z) => ({ x, y, z });
@@ -2280,7 +2265,6 @@ async function calculateImageSemiDiaFromChiefRays() {
                 
                 if (s === imageSurfaceIndex) {
                   imageSurfaceInfo = { origin: surfaceOrigin, rotationMatrix: surfaceRotMatrix };
-                  console.warn(`⚡ Image surface origin: (${surfaceOrigin.x.toFixed(3)}, ${surfaceOrigin.y.toFixed(3)}, ${surfaceOrigin.z.toFixed(3)})`);
                 }
                 
                 currentOrigin = surfaceOrigin;
@@ -2291,19 +2275,13 @@ async function calculateImageSemiDiaFromChiefRays() {
             }
 
             rays.forEach((ray, rayIndex) => {
-              console.warn(`⚡ Ray ${rayIndex}: rayPath.length=${ray.rayPath?.length}, imageRayPathIndex=${imageRayPathIndex}`);
-              console.log(`🔎 Ray ${rayIndex}: rayPath.length=${ray.rayPath?.length}, imageRayPathIndex=${imageRayPathIndex}`);
               if (ray.rayPath && Array.isArray(ray.rayPath) && imageRayPathIndex !== null && ray.rayPath.length > imageRayPathIndex) {
                 const imagePoint = ray.rayPath[imageRayPathIndex];
-                console.warn(`⚡ Ray ${rayIndex} imagePoint at [${imageRayPathIndex}]: x=${imagePoint?.x?.toFixed(6)}, y=${imagePoint?.y?.toFixed(6)}, z=${imagePoint?.z?.toFixed(6)}`);
-                console.log(`  Ray ${rayIndex}: Image面での位置 x=${imagePoint?.x?.toFixed(6)}, y=${imagePoint?.y?.toFixed(6)}, z=${imagePoint?.z?.toFixed(6)}`);
                 
                 // Transform from global coordinates to Image surface local coordinates
                 let localX = imagePoint.x;
                 let localY = imagePoint.y;
-                console.warn(`⚡ imageSurfaceInfo available: ${!!imageSurfaceInfo}`);
                 if (imageSurfaceInfo && imageSurfaceInfo.origin && imageSurfaceInfo.rotationMatrix) {
-                  console.warn('⚡ Transforming to local coordinates...');
                   // Translate to surface origin
                   const dx = imagePoint.x - imageSurfaceInfo.origin.x;
                   const dy = imagePoint.y - imageSurfaceInfo.origin.y;
@@ -2313,46 +2291,20 @@ async function calculateImageSemiDiaFromChiefRays() {
                   const R = imageSurfaceInfo.rotationMatrix;
                   localX = R[0][0] * dx + R[1][0] * dy + R[2][0] * dz;
                   localY = R[0][1] * dx + R[1][1] * dy + R[2][1] * dz;
-                  const localZ = R[0][2] * dx + R[1][2] * dy + R[2][2] * dz;
-                  
-                  console.warn(`⚡ Local coords: x=${localX.toFixed(6)}, y=${localY.toFixed(6)}, z=${localZ.toFixed(6)}`);
-                  console.log(`    → Local coords: x=${localX.toFixed(6)}, y=${localY.toFixed(6)}, z=${localZ.toFixed(6)}`);
-                } else {
-                  console.warn('⚠️ Cannot transform - imageSurfaceInfo not available, using global coords as fallback');
                 }
                 
-                // Also log some other points for comparison
-                if (ray.rayPath.length > 0) {
-                  const p0 = ray.rayPath[0];
-                  console.log(`    rayPath[0]: x=${p0?.x?.toFixed(6)}, y=${p0?.y?.toFixed(6)}, z=${p0?.z?.toFixed(6)}`);
-                }
-                if (ray.rayPath.length > 1) {
-                  const pLast = ray.rayPath[ray.rayPath.length - 1];
-                  console.log(`    rayPath[last=${ray.rayPath.length-1}]: x=${pLast?.x?.toFixed(6)}, y=${pLast?.y?.toFixed(6)}, z=${pLast?.z?.toFixed(6)}`);
-                }
-                console.warn(`⚡ About to check: isFinite(${localX}) && isFinite(${localY}) = ${isFinite(localX) && isFinite(localY)}`);
                 if (isFinite(localX) && isFinite(localY)) {
-                  console.warn(`⚡ Inside height calculation block`);
                   computedAny = true;
                   // X, Y両方を考慮した高さを計算（二次元の距離）
                   const height = Math.sqrt(localX * localX + localY * localY);
-                  console.warn(`⚡ Calculated height: ${height.toFixed(6)} mm, current maxHeight: ${maxHeight.toFixed(6)} mm`);
-                  console.log(`    → 高さ=${height.toFixed(6)} mm (local coords)`);
                   if (height > maxHeight) {
                     maxHeight = height;
-                    console.log(`    ✅ 最大高さ更新: ${maxHeight.toFixed(6)} mm`);
                   }
-                } else {
-                  console.warn(`⚠️ Skipped height calculation: localX=${localX}, localY=${localY}`);
                 }
               }
-              console.warn(`⚡ Ray ${rayIndex} processing complete`);
             });
-            console.warn(`⚡⚡⚡ All rays processed. computedAny=${computedAny}, maxHeight=${maxHeight}`);
             console.log(`🎯 最終的な最大高さ: ${maxHeight.toFixed(6)} mm`);
-            console.warn(`⚡ About to check computedAny: ${computedAny}`);
             if (computedAny) {
-              console.warn(`⚡⚡⚡ Inside computedAny block`);
               console.log(`✅ Semi Diaを${maxHeight.toFixed(6)}に設定`);
               const imageId = imageSurface?.id;
               console.log(`🔍 更新するID: ${imageId}, Semi Dia値: ${maxHeight}`);
