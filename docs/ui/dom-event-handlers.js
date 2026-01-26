@@ -9195,10 +9195,10 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 const r = rows[i];
                 const bid = String(r?._blockId ?? '').trim();
                 if (!bid) continue;
-                // Gap blocks: skip rows created for consecutive Gaps (blank air surfaces).
+                // Gap and CoordTrans blocks: skip rows that don't represent physical surfaces.
                 // These are internal implementation details and shouldn't be counted as visible surfaces.
                 const rowBlockType = String(r?._blockType ?? '').trim();
-                if (rowBlockType === 'Gap') continue;
+                if (rowBlockType === 'Gap' || rowBlockType === 'CoordTrans') continue;
                 // Surface numbering convention here: Surf 0 = Object (row 0), then surfaces follow.
                 // So expanded row index i maps directly to Surf i.
                 const surfNo = i;
@@ -10358,10 +10358,10 @@ export function refreshBlockInspector() {
                         if (bid === null || bid === undefined) continue;
                         const id = String(bid).trim();
                         if (!id || id === '(none)') continue;
-                        // Gap blocks: skip rows created for consecutive Gaps (blank air surfaces).
+                        // Gap and CoordTrans blocks: skip rows that don't represent physical surfaces.
                         // These are internal implementation details and shouldn't be counted as visible surfaces.
                         const rowBlockType = String(r?._blockType ?? '').trim();
-                        if (rowBlockType === 'Gap') continue;
+                        if (rowBlockType === 'Gap' || rowBlockType === 'CoordTrans') continue;
                         countById.set(id, (countById.get(id) || 0) + 1);
                     }
                 }
