@@ -1511,7 +1511,25 @@ export class OpticalPathDifferenceCalculator {
         const maxIdx = Number.isFinite(this.traceMaxSurfaceIndex)
             ? this.traceMaxSurfaceIndex
             : this.evaluationSurfaceIndex;
-        return this.traceRayToSurface(ray0, maxIdx, n0);
+        
+        // 基準光線のデバッグログを有効にする
+        const debugLog = [];
+        const result = this.traceRayToSurface(ray0, maxIdx, n0);
+        
+        // デバッグログを表示（基準光線が失敗した場合のみ）
+        if (!result && OPD_DEBUG) {
+            console.error('❌ 基準光線のトレースに失敗しました:');
+            console.error(`   評価面インデックス: ${maxIdx}`);
+            console.error(`   光線開始位置: (${ray0.pos.x.toFixed(3)}, ${ray0.pos.y.toFixed(3)}, ${ray0.pos.z.toFixed(3)})`);
+            console.error(`   光線方向: (${ray0.dir.x.toFixed(6)}, ${ray0.dir.y.toFixed(6)}, ${ray0.dir.z.toFixed(6)})`);
+            
+            // デバッグログ付きで再トレース
+            const debugLog2 = [];
+            traceRay(this.opticalSystemRows, ray0, n0, debugLog2, maxIdx);
+            console.error('デバッグログ:', debugLog2.join('\n'));
+        }
+        
+        return result;
     }
 
     getFieldCacheKey(fieldSetting) {
