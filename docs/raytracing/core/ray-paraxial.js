@@ -229,19 +229,27 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       const radius = getSafeRadius(surface);
       const thickness = getSafeThickness(surface);
       
+      // Mirror面の検出
+      const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror');
+      
       // 次の媒質の屈折率を決定
       let nextN = 1.0; // デフォルトは空気
       
-      // 手動設定のRef Indexまたは材料名がある場合
-      const hasManualRefIndex = surface.rindex || surface['ref index'] || surface.refIndex || surface['Ref Index'];
-      const hasMaterial = surface.material && surface.material !== "" && surface.material !== "0";
-      
-      if (thickness > 0 && (hasManualRefIndex || hasMaterial)) {
-        // 手動設定の屈折率または材料が指定されている場合
-        nextN = getRefractiveIndex(surface, wavelength);
+      if (isMirror) {
+        // Mirror面: 反射なので符号反転 (n' = -n)
+        nextN = -prevN;
       } else {
-        // 材料なし、手動屈折率なし、またはthickness=0の場合は空気
-        nextN = 1.0;
+        // 手動設定のRef Indexまたは材料名がある場合
+        const hasManualRefIndex = surface.rindex || surface['ref index'] || surface.refIndex || surface['Ref Index'];
+        const hasMaterial = surface.material && surface.material !== "" && surface.material !== "0";
+        
+        if (thickness > 0 && (hasManualRefIndex || hasMaterial)) {
+          // 手動設定の屈折率または材料が指定されている場合
+          nextN = getRefractiveIndex(surface, wavelength);
+        } else {
+          // 材料なし、手動屈折率なし、またはthickness=0の場合は空気
+          nextN = 1.0;
+        }
       }
       
       // console.log(`面${j}: R=${radius.toFixed(6)}, t=${thickness.toFixed(6)}, n=${prevN.toFixed(6)}→${nextN.toFixed(6)}`);
