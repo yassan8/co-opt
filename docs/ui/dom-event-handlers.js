@@ -9484,7 +9484,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     }
                 }
             } else if (blockType === 'Gap' || blockType === 'AirGap') {
-                // Only show thicknessMode for the last Gap before ImageSurface.
+                // Check if this is the last Gap before ImageSurface.
+                let hasThicknessMode = false;
                 try {
                     const blocks = Array.isArray(blocksInOrder) ? blocksInOrder : [];
                     const myIdx = blocks.findIndex(b => b && String(b.blockId ?? '') === String(blockId));
@@ -9497,11 +9498,10 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             if (bt === 'Gap' || bt === 'AirGap') { isPreImageGap = false; break; }
                         }
                     }
-                    if (isPreImageGap) {
-                        items.push({ kind: 'gapThicknessMode', key: 'thicknessMode', label: 'thickness', noOptimize: true });
-                    }
+                    hasThicknessMode = isPreImageGap;
                 } catch (_) {}
-                items.push({ key: 'thickness', label: 'thickness' });
+                // Mark thickness item to include thicknessMode dropdown when applicable.
+                items.push({ key: 'thickness', label: 'thickness', hasThicknessMode });
                 items.push({ key: 'material', label: 'material' });
             } else if (blockType === 'Stop') {
                 // UX alias: the surface table uses "semidia"; Blocks store it as Stop.parameters.semiDiameter.
@@ -10198,6 +10198,82 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     line.appendChild(spacer);
                 }
                 line.appendChild(name);
+                
+                // Gap blocks: insert thicknessMode dropdown before thickness value input.
+                if (it && it.hasThicknessMode && (blockType === 'Gap' || blockType === 'AirGap')) {
+                    const modeValue = getDisplayValue('thicknessMode');
+                    const modeSel = document.createElement('select');
+                    modeSel.style.flex = '0 0 auto';
+                    modeSel.style.fontSize = '12px';
+                    modeSel.style.padding = '2px 6px';
+                    modeSel.style.border = '1px solid #ddd';
+                    modeSel.style.borderRadius = '4px';
+                    modeSel.style.marginRight = '4px';
+                    modeSel.innerHTML = [
+                        '<option value="">(manual)</option>',
+                        '<option value="IMD">Image Distance</option>',
+                        '<option value="BFL">Back Focal Length</option>'
+                    ].join('');
+                    const cur = String(modeValue ?? '').trim().replace(/\s+/g, '').toUpperCase();
+                    const normalized = (cur === 'IMD' || cur === 'BFL') ? cur : '';
+                    modeSel.value = normalized;
+                    modeSel.addEventListener('click', (e) => e.stopPropagation());
+                    modeSel.addEventListener('change', (e) => {
+                        e.stopPropagation();
+                        const desired = String(modeSel.value ?? '').toUpperCase();
+                        const res = __blocks_setBlockParamValue(blockId, 'thicknessMode', desired);
+                        if (!res || res.ok !== true) {
+                            alert(`Failed to update ${blockId}.thicknessMode: ${res?.reason || 'unknown error'}`);
+                            modeSel.value = normalized;
+                            return;
+                        }
+                        if (desired !== 'IMD' && desired !== 'BFL') {
+                            try { refreshBlockInspector(); } catch (_) {}
+                            return;
+                        }
+                        // Compute and write thickness immediately.
+                        (async () => {
+                            try {
+                                const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
+                                const activeId = systemConfig?.activeConfigId;
+                                const cfg = Array.isArray(systemConfig?.configurations)
+                                    ? systemConfig.configurations.find(c => c && c.id === activeId)
+                                    : null;
+                                const blocks = Array.isArray(cfg?.blocks) ? cfg.blocks : null;
+                                if (!blocks || typeof expandBlocksToOpticalSystemRows !== 'function') return;
+                                const exp = expandBlocksToOpticalSystemRows(blocks);
+                                const rows = exp && Array.isArray(exp.rows) ? exp.rows : null;
+                                if (!rows || rows.length < 2) return;
+                                const primaryWavelength = (typeof window.getPrimaryWavelength === 'function')
+                                    ? (Number(window.getPrimaryWavelength()) || 0.5876)
+                                    : 0.5876;
+                                let val = __blocks_findRequirementTarget(desired, activeId);
+                                if (!Number.isFinite(val)) {
+                                    val = (desired === 'BFL')
+                                        ? calculateBackFocalLength(rows, primaryWavelength)
+                                        : calculateImageDistance(rows, primaryWavelength);
+                                }
+                                if (!Number.isFinite(val)) {
+                                    alert(`${desired} の計算に失敗しました。`);
+                                    return;
+                                }
+                                const thScope = __blocks_getVarScope(vars?.thickness);
+                                const res2 = (thScope === 'global')
+                                    ? __blocks_setBlockParamValueAllConfigs(blockId, 'thickness', val)
+                                    : __blocks_setBlockParamValue(blockId, 'thickness', val);
+                                if (!res2 || res2.ok !== true) {
+                                    alert(`Failed to update ${blockId}.thickness: ${res2?.reason || 'unknown error'}`);
+                                    return;
+                                }
+                            } catch (err) {
+                                console.error('❌ Failed to compute/apply IMD/BFL thickness:', err);
+                            }
+                            try { refreshBlockInspector(); } catch (_) {}
+                        })();
+                    });
+                    line.appendChild(modeSel);
+                }
+                
                 line.appendChild(valueEl);
 
                 if (isMaterialItem) {
