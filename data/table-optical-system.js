@@ -2152,19 +2152,30 @@ async function calculateImageSemiDiaFromChiefRays() {
               const row = rows[sIdx];
               if (__isObjectRow(row) || __isCoordTransRow(row) || __isGapRow(row)) return null;
               let count = 0;
+              console.log(`🔍 Calculating rayPath index for surface ${sIdx}:`);
               for (let i = 0; i <= sIdx; i++) {
                 const r = rows[i];
+                const isObj = __isObjectRow(r);
+                const isCT = __isCoordTransRow(r);
+                const isGap = __isGapRow(r);
+                const surfType = r?.surfType || r?.['surf type'] || '-';
+                const blockType = r?._blockType || '-';
+                const objType = r?.['object type'] || r?.object || '-';
+                console.log(`  [${i}] ${objType} / surfType=${surfType} / _blockType=${blockType} / skip=${isObj||isCT||isGap} / count=${count}`);
                 if (__isObjectRow(r) || __isCoordTransRow(r) || __isGapRow(r)) continue;
                 count++;
               }
+              console.log(`  → Final rayPath index: ${count}`);
               return count > 0 ? count : null;
             };
             const imageRayPathIndex = __rayPathPointIndexForSurfaceIndex(opticalSystemRows, imageSurfaceIndex);
+            console.log(`📍 ImageSurface index: ${imageSurfaceIndex}, rayPath index: ${imageRayPathIndex}`);
 
             rays.forEach((ray, rayIndex) => {
+              console.log(`🔎 Ray ${rayIndex}: rayPath.length=${ray.rayPath?.length}, imageRayPathIndex=${imageRayPathIndex}`);
               if (ray.rayPath && Array.isArray(ray.rayPath) && imageRayPathIndex !== null && ray.rayPath.length > imageRayPathIndex) {
                 const imagePoint = ray.rayPath[imageRayPathIndex];
-                console.log(`  Ray ${rayIndex}: Image面での位置 x=${imagePoint?.x}, y=${imagePoint?.y}`);
+                console.log(`  Ray ${rayIndex}: Image面での位置 x=${imagePoint?.x?.toFixed(6)}, y=${imagePoint?.y?.toFixed(6)}, z=${imagePoint?.z?.toFixed(6)}`);
                 if (imagePoint && isFinite(imagePoint.x) && isFinite(imagePoint.y)) {
                   computedAny = true;
                   // X, Y両方を考慮した高さを計算（二次元の距離）
