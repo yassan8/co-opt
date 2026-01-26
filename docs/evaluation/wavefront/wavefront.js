@@ -1892,6 +1892,13 @@ export class OpticalPathDifferenceCalculator {
         // 光路長計算（μm）
         this.referenceOpticalPath = this.calculateOpticalPath(referenceRay);
         if (!isFinite(this.referenceOpticalPath) || isNaN(this.referenceOpticalPath) || this.referenceOpticalPath <= 0) {
+            console.error(`❌ 基準光路長計算失敗: ${this.referenceOpticalPath}`);
+            console.error(`📊 pathData length: ${pathData.length}`);
+            console.error(`📊 expectedPathPoints: ${1 + (Array.isArray(this._recordedSurfaceIndices) ? this._recordedSurfaceIndices.length : 0)}`);
+            if (pathData.length > 0) {
+                console.error(`📊 First point: (${pathData[0].x}, ${pathData[0].y}, ${pathData[0].z})`);
+                console.error(`📊 Last point: (${pathData[pathData.length-1].x}, ${pathData[pathData.length-1].y}, ${pathData[pathData.length-1].z})`);
+            }
             throw new Error(`無効な基準光路長: ${this.referenceOpticalPath}`);
         }
         
