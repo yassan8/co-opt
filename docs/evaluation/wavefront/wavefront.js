@@ -1512,36 +1512,31 @@ export class OpticalPathDifferenceCalculator {
             ? this.traceMaxSurfaceIndex
             : this.evaluationSurfaceIndex;
         
-        // 基準光線のデバッグログを強制的に有効にする
-        const debugLog = [];
-        console.warn(`🔍 traceRayToEval: maxIdx=${maxIdx}, evaluationSurfaceIndex=${this.evaluationSurfaceIndex}`);
-        console.warn(`   Ray start: (${ray0.pos.x.toFixed(3)}, ${ray0.pos.y.toFixed(3)}, ${ray0.pos.z.toFixed(3)})`);
-        console.warn(`   Ray dir: (${ray0.dir.x.toFixed(6)}, ${ray0.dir.y.toFixed(6)}, ${ray0.dir.z.toFixed(6)})`);
+        // Count non-CT surfaces to get expected point count
+        // Coord Trans surfaces don't add points to the ray path
+        let nonCTCount = 0;
+        if (Array.isArray(this.opticalSystemRows)) {
+            for (let i = 0; i <= maxIdx && i < this.opticalSystemRows.length; i++) {
+                const row = this.opticalSystemRows[i];
+                const isCoordTrans = row && (row.surfType === 'Coord Trans' || row.type === 'Coord Trans');
+                if (!isCoordTrans) {
+                    nonCTCount++;
+                }
+            }
+        }
+        const expectedPointCount = nonCTCount + 1; // +1 for object point
         
-        const result = traceRay(this.opticalSystemRows, ray0, n0, debugLog, maxIdx);
+        const result = traceRay(this.opticalSystemRows, ray0, n0, null, maxIdx);
         
-        console.warn(`🔍 traceRayToEval result: ${result ? `${result.length} points` : 'null'}`);
-        
-        // デバッグログを表示（基準光線が失敗した場合）
+        // Check if ray reached evaluation surface (comparing with non-CT surface count)
         if (!result) {
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.error('❌ 基準光線のトレースに失敗しました');
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.error(`   評価面インデックス: ${maxIdx}`);
-            console.error(`   光線開始位置: (${ray0.pos.x.toFixed(3)}, ${ray0.pos.y.toFixed(3)}, ${ray0.pos.z.toFixed(3)})`);
-            console.error(`   光線方向: (${ray0.dir.x.toFixed(6)}, ${ray0.dir.y.toFixed(6)}, ${ray0.dir.z.toFixed(6)})`);
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.error('【デバッグログ】');
-            debugLog.forEach(line => console.error(line));
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        } else if (result.length < maxIdx + 2) {
-            // 光線が評価面まで到達していない場合もデバッグログを表示
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.error(`⚠️ 光線が評価面まで到達していません (${result.length}点, 期待: ${maxIdx + 2}点)`);
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.error('【デバッグログ】');
-            debugLog.forEach(line => console.error(line));
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            return null;
+        }
+        
+        // CT surfaces don't contribute to ray path, so we only check against non-CT count
+        if (result.length < expectedPointCount) {
+            // Ray didn't reach evaluation surface
+            return null;
         }
         
         return result;
