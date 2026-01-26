@@ -2346,9 +2346,13 @@ async function calculateImageSemiDiaFromChiefRays() {
                   console.warn(`⚠️ Skipped height calculation: localX=${localX}, localY=${localY}`);
                 }
               }
+              console.warn(`⚡ Ray ${rayIndex} processing complete`);
             });
+            console.warn(`⚡⚡⚡ All rays processed. computedAny=${computedAny}, maxHeight=${maxHeight}`);
             console.log(`🎯 最終的な最大高さ: ${maxHeight.toFixed(6)} mm`);
+            console.warn(`⚡ About to check computedAny: ${computedAny}`);
             if (computedAny) {
+              console.warn(`⚡⚡⚡ Inside computedAny block`);
               console.log(`✅ Semi Diaを${maxHeight.toFixed(6)}に設定`);
               const imageId = imageSurface?.id;
               console.log(`🔍 更新するID: ${imageId}, Semi Dia値: ${maxHeight}`);
