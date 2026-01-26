@@ -20,6 +20,27 @@ import { calculateEntrancePupilDiameter, calculateParaxialData } from '../../ray
 
 const TRANSVERSE_DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis.__TRANSVERSE_DEBUG || globalThis.__OPD_DEBUG || globalThis.__PSF_DEBUG));
 
+console.log('🔍 Transverse Aberration module loaded - CT/Mirror support enabled');
+
+// Helper function to detect mirror surfaces
+function isMirrorRow(row) {
+    if (!row) return false;
+    if (row.material === 'MIRROR') return true;
+    if (row.type === 'Mirror') return true;
+    if (row._blockType === 'Mirror') return true;
+    const surfType = String(row.surfType ?? row.type ?? row.surfaceType ?? '').trim().toLowerCase();
+    return surfType === 'mirror';
+}
+
+// Helper function to apply rotation matrix to vector
+function applyRotationMatrixToVector(matrix, v) {
+    if (!matrix) return { x: v.x, y: v.y, z: v.z };
+    const x = matrix[0][0] * v.x + matrix[0][1] * v.y + matrix[0][2] * v.z;
+    const y = matrix[1][0] * v.x + matrix[1][1] * v.y + matrix[1][2] * v.z;
+    const z = matrix[2][0] * v.x + matrix[2][1] * v.y + matrix[2][2] * v.z;
+    return { x, y, z };
+}
+
 /**
  * 有限系・無限系の判定
  * @param {Array} opticalSystemRows - 光学系データ
@@ -53,6 +74,9 @@ function isFiniteSystem(opticalSystemRows) {
  * @returns {Object} 横収差データ
  */
 export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIndex, fieldSettings = null, wavelength = 0.5876, rayCount = 51) {
+    // CACHE BUSTER v2.0 - Force reload check
+    console.log('🔥 TRANSVERSE ABERRATION v2.0 - CT/MIRROR SUPPORT LOADED');
+    
     // デバッグモードの設定（デフォルトは静か）
     const debugMode = TRANSVERSE_DEBUG;
     
@@ -104,6 +128,22 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
     const stopSurfaceIndex = findStopSurfaceIndex(opticalSystemRows);
     if (stopSurfaceIndex === -1) {
         throw new Error('絞り面が見つかりません');
+    }
+    
+    // Detect mirrors and calculate sign flip for odd mirror count
+    const mirrorCount = Array.isArray(opticalSystemRows)
+        ? opticalSystemRows.filter(isMirrorRow).length
+        : 0;
+    const mirrorSign = (mirrorCount % 2 === 1) ? -1 : 1;
+    console.log(`🔍 Transverse: Detected ${mirrorCount} mirror(s), mirrorSign=${mirrorSign}`);
+    
+    // Calculate surface origins (for coordinate transformation support)
+    const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+    const targetSurfaceInfo = surfaceOrigins?.[targetSurfaceIndex] || null;
+    const stopSurfaceInfo = surfaceOrigins?.[stopSurfaceIndex] || null;
+    console.log(`🔍 Transverse: targetSurfaceInfo=${targetSurfaceInfo ? 'exists' : 'null'}, stopSurfaceInfo=${stopSurfaceInfo ? 'exists' : 'null'}`);
+    if (targetSurfaceInfo?.rotationMatrix) {
+        console.log(`🔍 Transverse: Target surface has rotation matrix (CT detected)`);
     }
     
     // 有限系・無限系の判定
@@ -164,11 +204,11 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
             if (crossBeamData) {
                 // メリジオナル・サジタル光線を分離して横収差を計算（絞り半径と入射瞳半径を別々に渡す）
                 const meridionalResult = calculateMeridionalAberrationFromCrossBeam(
-                    crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting
+                    crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo, stopSurfaceInfo, mirrorSign
                 );
                 
                 const sagittalResult = calculateSagittalAberrationFromCrossBeam(
-                    crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting
+                    crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo, stopSurfaceInfo, mirrorSign
                 );
                 
                 aberrationData.meridionalData.push(meridionalResult);
@@ -201,6 +241,7 @@ export async function calculateTransverseAberrationAsync(
     rayCount = 51,
     options = null
 ) {
+    console.log('🔥🔥 ASYNC VERSION v2.0 - CALLED', { targetSurfaceIndex, fieldSettings, wavelength, rayCount });
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
@@ -229,6 +270,7 @@ export async function calculateTransverseAberrationAsync(
         const name = fs?.displayName ? String(fs.displayName) : `Field ${i + 1}`;
         safeProgress(Math.min(95, Math.max(0, pct)), `Calculating ${name} (${i + 1}/${totalFields})...`);
 
+        console.log(`🎯 ASYNC calling SYNC version for field ${i + 1}/${totalFields}: ${name}`);
         const partial = calculateTransverseAberration(
             opticalSystemRows,
             targetSurfaceIndex,
@@ -236,6 +278,7 @@ export async function calculateTransverseAberrationAsync(
             wavelength,
             rayCount
         );
+        console.log(`✅ ASYNC received result from SYNC for field ${i + 1}`);
 
         if (partial && typeof partial === 'object') {
             if (!baseMeta) baseMeta = partial;
@@ -716,9 +759,12 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
  * @param {number} stopRadius - 絞り半径
  * @param {number} entrancePupilRadius - 入射瞳半径
  * @param {Object} fieldSetting - フィールド設定
+ * @param {Object} targetSurfaceInfo - 評価面の座標変換情報
+ * @param {Object} stopSurfaceInfo - 絞り面の座標変換情報
+ * @param {number} mirrorSign - ミラーによる符号反転 (1 or -1)
  * @returns {Object} メリジオナル横収差データ
  */
-function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting) {
+function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo = null, stopSurfaceInfo = null, mirrorSign = 1) {
     const points = [];
     
     if (!crossBeamData || !crossBeamData.rayGroups || crossBeamData.rayGroups.length === 0) {
@@ -771,7 +817,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     }
     
     // 主光線の評価面での座標を取得
-    const chiefIntersection = getIntersectionAtSurface(chiefRay, targetSurfaceIndex, opticalSystemRows);
+    const chiefIntersection = getIntersectionAtSurface(chiefRay, targetSurfaceIndex, opticalSystemRows, targetSurfaceInfo, mirrorSign);
     if (!chiefIntersection) {
         console.warn('⚠️ 主光線の評価面交点が見つかりません');
         return {
@@ -825,17 +871,17 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     console.log(`🎯 メリディオナル補正後正規化基準: 瞳半径=${maxCorrectedY.toFixed(3)}mm (絞り面半径)`);
     
     // 主光線の絞り面座標も取得（参考用）
-    const chiefStopIntersection = getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows);
+    const chiefStopIntersection = getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
     if (chiefStopIntersection) {
         console.log(`🎯 主光線絞り面: X=${chiefStopIntersection.x.toFixed(3)} (補正後=${(chiefStopIntersection.x - xOffset).toFixed(3)}), Y=${chiefStopIntersection.y.toFixed(3)}`);
     }
     
     // メリジオナル光線の横収差を計算（座標分布に基づく正規化）
     meridionalRays.forEach((ray, index) => {
-        const intersection = getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows);
+        const intersection = getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows, targetSurfaceInfo, mirrorSign);
         if (intersection) {
             // 絞り面での座標を取得
-            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
+            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
             if (stopIntersection) {
                 // Y座標はオフセット補正なしで直接使用
                 const stopY = stopIntersection.y;
@@ -844,6 +890,10 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                 const normalizedPupilCoord = maxAbsY > 0 ? stopY / maxAbsY : 0;
                 
                 const transverseAberration = intersection.y - chiefIntersection.y; // Y方向の収差
+                
+                if (index < 3) {
+                    console.log(`🔥 M-Ray ${index}: intersection.y=${intersection.y.toFixed(6)}, chief.y=${chiefIntersection.y.toFixed(6)}, aberration=${transverseAberration.toFixed(6)}, pupilCoord=${normalizedPupilCoord.toFixed(4)}`);
+                }
                 
                 // 規格化座標が±1以内の光線を含める
                 if (Math.abs(normalizedPupilCoord) <= 1.0) {
@@ -1123,9 +1173,12 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
  * @param {number} stopRadius - 絞り半径
  * @param {number} entrancePupilRadius - 入射瞳半径
  * @param {Object} fieldSetting - フィールド設定
+ * @param {Object} targetSurfaceInfo - 評価面の座標変換情報
+ * @param {Object} stopSurfaceInfo - 絞り面の座標変換情報
+ * @param {number} mirrorSign - ミラーによる符号反転 (1 or -1)
  * @returns {Object} サジタル横収差データ
  */
-function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting) {
+function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo = null, stopSurfaceInfo = null, mirrorSign = 1) {
     const points = [];
     
     if (!crossBeamData || !crossBeamData.rayGroups || crossBeamData.rayGroups.length === 0) {
@@ -1181,7 +1234,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     }
     
     // 主光線の評価面での座標を取得
-    const chiefIntersection = getIntersectionAtSurface(chiefRay, targetSurfaceIndex, opticalSystemRows);
+    const chiefIntersection = getIntersectionAtSurface(chiefRay, targetSurfaceIndex, opticalSystemRows, targetSurfaceInfo, mirrorSign);
     if (!chiefIntersection) {
         console.warn('⚠️ 主光線の評価面交点が見つかりません');
         return {
@@ -1220,17 +1273,17 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     console.log(`🎯 サジタル正規化基準: 瞳半径=${maxCorrectedX.toFixed(3)}mm (絞り面半径)`);
     
     // 主光線の絞り面X座標も取得（参考用）
-    const chiefStopIntersection = getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows);
+    const chiefStopIntersection = getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
     if (chiefStopIntersection) {
         console.log(`🎯 主光線絞り面X=${chiefStopIntersection.x.toFixed(3)}`);
     }
     
     // サジタル光線の横収差を計算（座標分布に基づく正規化）
     sagittalRays.forEach((ray, index) => {
-        const intersection = getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows);
+        const intersection = getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows, targetSurfaceInfo, mirrorSign);
         if (intersection) {
             // 絞り面での座標を取得
-            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
+            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
             if (stopIntersection) {
                 // 🔧 FIX: X座標をオフセット補正せずに直接使用（メリディオナルと同じロジック）
                 const stopX = stopIntersection.x;
@@ -1542,8 +1595,10 @@ function surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex) {
     return count > 0 ? count : null;
 }
 
-function getIntersectionAtSurface(ray, surfaceIndex, opticalSystemRows) {
+function getIntersectionAtSurface(ray, surfaceIndex, opticalSystemRows, surfaceInfo = null, mirrorSign = 1) {
     try {
+        console.log(`🔧🔧 getIntersection ENTRY: surfIdx=${surfaceIndex}, hasInfo=${!!surfaceInfo}, hasMatrix=${!!(surfaceInfo?.rotationMatrix)}`);
+        
         // 横収差計算用の評価面までのパスを優先使用
         const targetPath = ray.rayPathToTarget || ray.path;
         
@@ -1564,13 +1619,30 @@ function getIntersectionAtSurface(ray, surfaceIndex, opticalSystemRows) {
             return null;
         }
 
-        const intersection = targetPath[pointIndex];
-        if (intersection && typeof intersection.x === 'number' && typeof intersection.y === 'number') {
-            return {
+        const intersectionGlobal = targetPath[pointIndex];
+        if (intersectionGlobal && typeof intersectionGlobal.x === 'number' && typeof intersectionGlobal.y === 'number') {
+            // Transverse aberration: 評価面がCTで回転している場合、
+            // 評価面の局所座標系での座標を使用する必要がある
+            let intersection = intersectionGlobal;
+            
+            if (surfaceInfo?.rotationMatrix) {
+                // 回転行列を適用して局所座標系に変換
+                intersection = applyRotationMatrixToVector(
+                    intersectionGlobal,
+                    surfaceInfo.rotationMatrix,
+                    surfaceInfo.origin || { x: 0, y: 0, z: 0 }
+                );
+            }
+            
+            // Mirror signを適用（X軸周りの反射: Y座標のみ反転）
+            const result = {
                 x: intersection.x,
-                y: intersection.y,
+                y: intersection.y * mirrorSign,
                 z: intersection.z || 0
             };
+            
+            console.log(`🎯 getIntersection: surfIdx=${surfaceIndex}, mirrorSign=${mirrorSign}, global=(${intersectionGlobal.x.toFixed(4)}, ${intersectionGlobal.y.toFixed(4)}), local=(${intersection.x.toFixed(4)}, ${intersection.y.toFixed(4)}), result=(${result.x.toFixed(4)}, ${result.y.toFixed(4)})`);
+            return result;
         }
         
         return null;
