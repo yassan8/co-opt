@@ -407,6 +407,27 @@ function calculateTransverseAberration(tracedRay, imagePlaneZ) {
     }
     
     const path = tracedRay.rayPath;
+    const toLocal = (point) => {
+        if (!imageSurfaceInfo || !imageSurfaceInfo.origin || !imageSurfaceInfo.rotationMatrix) return point;
+        const dx = point.x - imageSurfaceInfo.origin.x;
+        const dy = point.y - imageSurfaceInfo.origin.y;
+        const dz = point.z - imageSurfaceInfo.origin.z;
+        const R = imageSurfaceInfo.rotationMatrix;
+        return {
+            x: R[0][0] * dx + R[1][0] * dy + R[2][0] * dz,
+            y: R[0][1] * dx + R[1][1] * dy + R[2][1] * dz,
+            z: R[0][2] * dx + R[1][2] * dy + R[2][2] * dz
+        };
+    };
+    const toGlobal = (point) => {
+        if (!imageSurfaceInfo || !imageSurfaceInfo.origin || !imageSurfaceInfo.rotationMatrix) return point;
+        const R = imageSurfaceInfo.rotationMatrix;
+        return {
+            x: R[0][0] * point.x + R[0][1] * point.y + R[0][2] * point.z + imageSurfaceInfo.origin.x,
+            y: R[1][0] * point.x + R[1][1] * point.y + R[1][2] * point.z + imageSurfaceInfo.origin.y,
+            z: R[2][0] * point.x + R[2][1] * point.y + R[2][2] * point.z + imageSurfaceInfo.origin.z
+        };
+    };
     const lastPoint = path[path.length - 1];
     const secondLastPoint = path[path.length - 2];
     
@@ -554,68 +575,88 @@ function isFiniteSystem(opticalSystemRows) {
  * 光線と光軸の交点（焦点位置）を求める
  * @param {Object} ray - 光線データ
  * @param {number} approximateZ - 近似的な像面Z座標
+ * @param {Object|null} imageSurfaceInfo - 像面の座標変換情報 {origin, rotationMatrix}
  * @returns {number} 光軸上の交点Z座標（焦点位置）
  */
-function findRayAxisIntersection(tracedRay, imagePlaneZ) {
+function findRayAxisIntersection(tracedRay, imagePlaneZ, imageSurfaceInfo = null) {
     // tracedRay は {success, originalRay, rayPath, ...} の構造
     if (!tracedRay || !tracedRay.rayPath || tracedRay.rayPath.length < 2) {
         console.warn('⚠️ 光線パスが不正:', tracedRay);
         return null;
     }
     
+    // Initialize debug object
+    const debugInfo = {
+        rayId: tracedRay.originalRay ? `${tracedRay.originalRay.wavelength}_${tracedRay.originalRay.py || tracedRay.originalRay.px || 0}` : 'unknown',
+        localTransformed: false,
+        imageSurfaceOrigin: null,
+        hasRotationMatrix: false,
+        lastPointGlobal: null,
+        lastPointLocal: null,
+        secondLastPointGlobal: null,
+        secondLastPointLocal: null,
+        selectionStage: 0,
+        direction: null,
+        xyMagnitude: null,
+        earlyReturn: null,
+        numerator: null,
+        denominator: null,
+        t: null,
+        localIntersection: null,
+        globalIntersection: null,
+        distanceFromAxis: null
+    };
+    
+    const toLocal = (point) => {
+        if (!imageSurfaceInfo || !imageSurfaceInfo.origin || !imageSurfaceInfo.rotationMatrix) return point;
+        const dx = point.x - imageSurfaceInfo.origin.x;
+        const dy = point.y - imageSurfaceInfo.origin.y;
+        const dz = point.z - imageSurfaceInfo.origin.z;
+        const R = imageSurfaceInfo.rotationMatrix;
+        return {
+            x: R[0][0] * dx + R[1][0] * dy + R[2][0] * dz,
+            y: R[0][1] * dx + R[1][1] * dy + R[2][1] * dz,
+            z: R[0][2] * dx + R[1][2] * dy + R[2][2] * dz
+        };
+    };
+    const toGlobal = (point) => {
+        if (!imageSurfaceInfo || !imageSurfaceInfo.origin || !imageSurfaceInfo.rotationMatrix) return point;
+        const R = imageSurfaceInfo.rotationMatrix;
+        return {
+            x: R[0][0] * point.x + R[0][1] * point.y + R[0][2] * point.z + imageSurfaceInfo.origin.x,
+            y: R[1][0] * point.x + R[1][1] * point.y + R[1][2] * point.z + imageSurfaceInfo.origin.y,
+            z: R[2][0] * point.x + R[2][1] * point.y + R[2][2] * point.z + imageSurfaceInfo.origin.z
+        };
+    };
+    
     const path = tracedRay.rayPath;
-    const lastPoint = path[path.length - 1];
-    
-    // Thickness 0またはごく小さい値の面がある場合に対応
-    // 十分に離れた点を探す（Z差が実用的に計算可能な点を優先）
+    debugInfo.pathLength = path.length;
+
+    // 像面直前の2点を選択（最後の重複点を除外して、直近の有効セグメントを使う）
+    let lastPoint = path[path.length - 1];
     let secondLastPoint = null;
-    let selectionStage = 0;  // デバッグ用
-    
-    // 第1段階: Z座標が実用的に異なる点を探す（1mm以上）
-    // on-axis rayで極小deltaZを避けるために閾値を大幅に上げる
+    let selectionStage = 0;
+
+    // ローカルZで十分に離れた直前点を選ぶ（像面上の重複点を回避）
+    const lastLocal = toLocal(lastPoint);
+    const minLocalZ = 1e-4;
     for (let i = path.length - 2; i >= 0; i--) {
-        const deltaZ = Math.abs(path[i].z - lastPoint.z);
-        if (deltaZ > 1.0) {  // 1mm以上
+        const candidateLocal = toLocal(path[i]);
+        if (Math.abs(candidateLocal.z - lastLocal.z) > minLocalZ) {
             secondLastPoint = path[i];
             selectionStage = 1;
             break;
         }
     }
-    
-    // 第2段階: 見つからなければ100μm以上の点を探す
+
     if (!secondLastPoint) {
-        for (let i = path.length - 2; i >= 0; i--) {
-            const deltaZ = Math.abs(path[i].z - lastPoint.z);
-            if (deltaZ > 0.1) {  // 100μm以上
-                secondLastPoint = path[i];
-                selectionStage = 2;
-                break;
-            }
-        }
-    }
-    
-    // 第3段階: 1μm以上
-    if (!secondLastPoint) {
-        for (let i = path.length - 2; i >= 0; i--) {
-            const deltaZ = Math.abs(path[i].z - lastPoint.z);
-            if (deltaZ > 0.001) {  // 1μm以上
-                secondLastPoint = path[i];
-                selectionStage = 3;
-                break;
-            }
-        }
-    }
-    
-    // 第4段階: 最後の手段として最も遠い点を使う
-    if (!secondLastPoint && path.length >= 2) {
-        secondLastPoint = path[0];  // 最初の点を使用
-        selectionStage = 4;
-    }
-    
-    if (!secondLastPoint) {
-        console.warn('⚠️ 適切な前の点が見つかりません（光線パスが不正）');
+        console.warn('⚠️ 有効な前の点が見つかりません（光線パスが短すぎる可能性）');
         return null;
     }
+    
+    debugInfo.lastPointGlobal = {...lastPoint};
+    debugInfo.secondLastPointGlobal = {...secondLastPoint};
+    debugInfo.selectionStage = selectionStage;
     
     // 方向ベクトル
     const direction = {
@@ -623,86 +664,80 @@ function findRayAxisIntersection(tracedRay, imagePlaneZ) {
         y: lastPoint.y - secondLastPoint.y,
         z: lastPoint.z - secondLastPoint.z
     };
+    debugInfo.direction = {...direction};
     
-    // デバッグ: 各波長の最初の1本だけログ出力
-    const rayId = tracedRay.originalRay ? 
-        `${tracedRay.originalRay.wavelength}_${tracedRay.originalRay.py || tracedRay.originalRay.px || 0}` : 
-        'unknown';
-    
-    if (!window._sphericalAberDebugCount) {
-        window._sphericalAberDebugCount = 0;
-    }
-    
-    if (window._sphericalAberDebugCount < 3) {  // 最初の3本（各波長1本ずつ）
-        window._sphericalAberDebugCount++;
-        const deltaZ = Math.abs(direction.z);
-        const pointIndex = path.findIndex(p => p === secondLastPoint);
-        console.log(`🔍 [DEBUG ${window._sphericalAberDebugCount}] Stage ${selectionStage} selected (ray: ${rayId})`);
-        console.log(`   deltaZ=${deltaZ.toExponential(3)}, pointIndex=${pointIndex}/${path.length-1}`);
-        console.log(`   lastPoint: (${lastPoint.x.toFixed(6)}, ${lastPoint.y.toFixed(6)}, ${lastPoint.z.toFixed(6)})`);
-        console.log(`   secondLastPoint: (${secondLastPoint.x.toFixed(6)}, ${secondLastPoint.y.toFixed(6)}, ${secondLastPoint.z.toFixed(6)})`);
-        console.log(`   direction: dx=${direction.x.toExponential(3)}, dy=${direction.y.toExponential(3)}, dz=${direction.z.toExponential(3)}`);
-        console.log(`   rayPath length: ${path.length}`);
-    }
-    
-    // 光軸に平行な場合（x, y方向の変化がほぼゼロ）
-    // 注意：無限遠物体では軸上光線が光軸に近いため、閾値を緩和
-    const xyMagnitude = Math.sqrt(direction.x * direction.x + direction.y * direction.y);
-    if (xyMagnitude < 1e-12) {  // 1e-10 → 1e-12 に変更
-        // 完全に平行な場合は、最終点のZ座標を返す
-        return lastPoint.z;
-    }
-    
-    // 光軸との交点を求める（x = 0, y = 0 となるz座標）
-    // パラメトリック方程式: P = lastPoint + t * direction
-    // x = 0: lastPoint.x + t * direction.x = 0 → t_x = -lastPoint.x / direction.x
-    // y = 0: lastPoint.y + t * direction.y = 0 → t_y = -lastPoint.y / direction.y
-    
-    // 最小二乗法で最適なtを求める（x=0とy=0の両方に最も近い点）
-    // 目的関数: f(t) = (lastPoint.x + t*direction.x)^2 + (lastPoint.y + t*direction.y)^2
-    // f'(t) = 0 を解く:
-    // 2*(lastPoint.x + t*direction.x)*direction.x + 2*(lastPoint.y + t*direction.y)*direction.y = 0
-    // t*(direction.x^2 + direction.y^2) = -(lastPoint.x*direction.x + lastPoint.y*direction.y)
-    
-    const numerator = -(lastPoint.x * direction.x + lastPoint.y * direction.y);
-    const denominator = direction.x * direction.x + direction.y * direction.y;
-    
-    if (Math.abs(denominator) < 1e-12) {
-        // xy成分がゼロの場合（軸上光線または非常に光軸に近い光線）
-        // lastPointが既に光軸上にあるかチェック
-        const distanceFromAxis = Math.sqrt(lastPoint.x * lastPoint.x + lastPoint.y * lastPoint.y);
-        if (distanceFromAxis < 0.1) {
-            // 光軸上またはほぼ光軸上なので、そのZ座標を返す
-            return lastPoint.z;
-        } else {
-            console.warn('⚠️ 方向ベクトルのxy成分がゼロだが、光線が光軸から離れています');
-            return null;
+    // 収束方向の検証：Y座標が0に向かっているか確認
+    if (Math.abs(lastPoint.y) > 0.01 && Math.abs(secondLastPoint.y) > 0.01) {
+        // lastPointとsecondLastPointの両方がY≠0なら、収束しているか確認
+        const isConverging = Math.abs(lastPoint.y) < Math.abs(secondLastPoint.y);
+        if (!isConverging) {
+            console.warn('⚠️ 光線が発散方向です。点の選択が不適切な可能性があります。');
+            console.warn(`   lastPoint.y=${lastPoint.y.toFixed(6)}, secondLastPoint.y=${secondLastPoint.y.toFixed(6)}`);
         }
     }
     
-    const t = numerator / denominator;
-    
-    // 交点のz座標と位置
-    const intersectionZ = lastPoint.z + t * direction.z;
-    const intersectionX = lastPoint.x + t * direction.x;
-    const intersectionY = lastPoint.y + t * direction.y;
-    const distanceFromAxis = Math.sqrt(intersectionX * intersectionX + intersectionY * intersectionY);
-    
-    // 交点が光軸に十分近いか確認（数値誤差の確認用）
-    if (distanceFromAxis > 0.01) {
-        console.warn(`⚠️ 光軸交点の精度が低い: 光軸からの距離 = ${distanceFromAxis.toFixed(6)} mm`);
+    // Flatten nested objects for easier viewing in console.table
+    debugInfo.lastPointGlobal_x = debugInfo.lastPointGlobal.x;
+    debugInfo.lastPointGlobal_y = debugInfo.lastPointGlobal.y;
+    debugInfo.lastPointGlobal_z = debugInfo.lastPointGlobal.z;
+    debugInfo.lastPointLocal_x = lastPoint.x;
+    debugInfo.lastPointLocal_y = lastPoint.y;
+    debugInfo.lastPointLocal_z = lastPoint.z;
+    debugInfo.secondLastPointLocal_x = secondLastPoint.x;
+    debugInfo.secondLastPointLocal_y = secondLastPoint.y;
+    debugInfo.secondLastPointLocal_z = secondLastPoint.z;
+    debugInfo.direction_x = direction.x;
+    debugInfo.direction_y = direction.y;
+    debugInfo.direction_z = direction.z;
+    if (imageSurfaceInfo && imageSurfaceInfo.origin) {
+        debugInfo.imageSurfaceOrigin_x = imageSurfaceInfo.origin.x;
+        debugInfo.imageSurfaceOrigin_y = imageSurfaceInfo.origin.y;
+        debugInfo.imageSurfaceOrigin_z = imageSurfaceInfo.origin.z;
     }
     
-    // 妥当性チェック：像面から極端に離れた位置は除外
-    const maxDeviation = 1000; // mm
-    if (Math.abs(intersectionZ - imagePlaneZ) > maxDeviation) {
-        console.warn(`⚠️ 焦点位置が像面から極端に離れています: ${intersectionZ.toFixed(3)} mm (像面: ${imagePlaneZ.toFixed(3)} mm)`);
-        return null;
+    // Store debug info globally for easy access
+    if (!globalThis.__sphericalAberrationDebug) {
+        globalThis.__sphericalAberrationDebug = [];
+    }
+    if (globalThis.__sphericalAberrationDebug.length < 20) {  // Keep first 20 rays
+        globalThis.__sphericalAberrationDebug.push(debugInfo);
     }
     
-    // デバッグ情報は詳細度を下げる
-    // console.log(`✓ 光軸交点 Z座標: ${intersectionZ.toFixed(6)} mm (t=${t.toFixed(6)})`);
-    return intersectionZ;
+    const secondLocal = toLocal(secondLastPoint);
+    const dirLocal = {
+        x: lastLocal.x - secondLocal.x,
+        y: lastLocal.y - secondLocal.y,
+        z: lastLocal.z - secondLocal.z
+    };
+    const xyMagnitude = Math.sqrt(dirLocal.x * dirLocal.x + dirLocal.y * dirLocal.y);
+    debugInfo.xyMagnitude = xyMagnitude;
+
+    let localIntersectionZ;
+    if (xyMagnitude < 1e-12) {
+        debugInfo.earlyReturn = 'PARALLEL_LOCAL';
+        localIntersectionZ = lastLocal.z;
+    } else {
+        const numerator = -(lastLocal.x * dirLocal.x + lastLocal.y * dirLocal.y);
+        const denominator = dirLocal.x * dirLocal.x + dirLocal.y * dirLocal.y;
+        debugInfo.numerator = numerator;
+        debugInfo.denominator = denominator;
+        if (Math.abs(denominator) < 1e-12) {
+            localIntersectionZ = lastLocal.z;
+        } else {
+            const t = numerator / denominator;
+            debugInfo.t = t;
+            localIntersectionZ = lastLocal.z + t * dirLocal.z;
+        }
+    }
+
+    const localIntersection = { x: 0, y: 0, z: localIntersectionZ };
+    const globalIntersection = toGlobal(localIntersection);
+    debugInfo.globalIntersection = { ...globalIntersection };
+    debugInfo.globalIntersection_x = globalIntersection.x;
+    debugInfo.globalIntersection_y = globalIntersection.y;
+    debugInfo.globalIntersection_z = globalIntersection.z;
+
+    return localIntersectionZ;
 }
 
 /**
@@ -721,6 +756,19 @@ export function calculateLongitudinalAberration(
     rayCount = 51,
     options = null
 ) {
+    const isMirrorRow = (row) => {
+        if (!row) return false;
+        if (row.material === 'MIRROR') return true;
+        if (row.type === 'Mirror') return true;
+        if (row._blockType === 'Mirror') return true;
+        const surfType = String(row.surfType ?? row.type ?? row.surfaceType ?? '').trim().toLowerCase();
+        return surfType === 'mirror';
+    };
+    const mirrorCount = Array.isArray(opticalSystemRows)
+        ? opticalSystemRows.filter(isMirrorRow).length
+        : 0;
+    const mirrorSign = (mirrorCount % 2 === 1) ? -1 : 1;
+
     const silent = !!(options && typeof options === 'object' && options.silent === true);
     const prevLog = console.log;
     if (silent) {
@@ -884,18 +932,22 @@ export function calculateLongitudinalAberration(
         );
         let chiefFocusZ = currentImageZ; // デフォルトはこの波長の近軸像点
         
-        if (chiefRay && chiefRay.rayPath) {
-            const chiefIntersection = findRayAxisIntersection(chiefRay, imagePlaneZ);
-            if (chiefIntersection !== null) {
-                chiefFocusZ = chiefIntersection;
-            }
-        }
-        
         // 絞り面のインデックスを取得
         const stopSurfaceIndex = findStopSurface(opticalSystemRows);
         const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
         const stopSurface = opticalSystemRows[stopSurfaceIndex];
         const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+        
+        // 像面の座標変換情報を取得（CoordTrans面がある場合に対応）
+        const imageSurfaceInfo = surfaceOrigins?.[targetSurfaceIndex] || null;
+        
+        if (chiefRay && chiefRay.rayPath) {
+            const chiefIntersection = findRayAxisIntersection(chiefRay, imagePlaneZ, imageSurfaceInfo);
+            if (chiefIntersection !== null) {
+                chiefFocusZ = chiefIntersection;
+            }
+        }
+        
         const stopPlaneCenter3d = surfaceOrigins?.[stopSurfaceIndex]?.origin || null;
         const stopPlaneRotation = surfaceOrigins?.[stopSurfaceIndex]?.rotationMatrix || null;
         const stopPlaneU = normalizeVector3(
@@ -1401,7 +1453,7 @@ export function calculateLongitudinalAberration(
         const tempMeridionalPoints = [];
         for (let i = 0; i < meridionalRays.length; i++) {
             const tracedRay = meridionalRays[i];
-            const focusZ = findRayAxisIntersection(tracedRay, imagePlaneZ);
+            const focusResult = findRayAxisIntersection(tracedRay, imagePlaneZ, imageSurfaceInfo);
             
             // 像面での横収差を計算
             const transverseAb = calculateTransverseAberration(tracedRay, evaluationPlaneZ);
@@ -1410,9 +1462,11 @@ export function calculateLongitudinalAberration(
             // const sc = calculateSineConditionViolation(tracedRay, mParax, nObj, nImg);
             const sc = null;
             
-            if (focusZ !== null && transverseAb !== null && tracedRay.rayPath && tracedRay.rayPath.length > stopPointIndex) {
-                // 縦収差 = 最終面からの距離（実際の焦点位置 - 最終面Z座標）
-                const longitudinalAberration = focusZ - lastSurfaceZ;
+            if (focusResult !== null && transverseAb !== null && tracedRay.rayPath && tracedRay.rayPath.length > stopPointIndex) {
+                // 縦収差 = ローカルZ方向の距離（像面中心を基準, local Z=0）
+                // Mirrorが奇数枚の場合は符号反転
+                const longitudinalAberration = mirrorSign * focusResult;
+                const focusPosition = mirrorSign * focusResult;
                 const stopPoint = tracedRay.rayPath[stopPointIndex];
                 const stopLocal = getStopLocalOffsets(stopPoint, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
                 const pupilHeight = Math.abs(stopLocal ? stopLocal.v : stopPoint.y); // 絶対値（0から1の範囲で表示）
@@ -1423,7 +1477,7 @@ export function calculateLongitudinalAberration(
                 tempMeridionalPoints.push({
                     pupilHeight: pupilHeight,
                     longitudinalAberration: longitudinalAberration,
-                    focusPosition: focusZ,
+                    focusPosition: focusPosition,
                     transverseAberration: transverseAberration,
                     sineConditionViolation: sc  // null も許容
                 });
@@ -1535,7 +1589,7 @@ export function calculateLongitudinalAberration(
         const tempSagittalPoints = [];
         for (let i = 0; i < sagittalRays.length; i++) {
             const tracedRay = sagittalRays[i];
-            const focusZ = findRayAxisIntersection(tracedRay, imagePlaneZ);
+            const focusResult = findRayAxisIntersection(tracedRay, imagePlaneZ, imageSurfaceInfo);
             
             // 像面での横収差を計算
             const transverseAb = calculateTransverseAberration(tracedRay, evaluationPlaneZ);
@@ -1544,9 +1598,10 @@ export function calculateLongitudinalAberration(
             // const sc = calculateSineConditionViolation(tracedRay, mParax, nObj, nImg);
             const sc = null;
             
-            if (focusZ !== null && transverseAb !== null && tracedRay.rayPath && tracedRay.rayPath.length > stopPointIndex) {
-                // 縦収差 = 最終面からの距離（実際の焦点位置 - 最終面Z座標）
-                const longitudinalAberration = focusZ - lastSurfaceZ;
+            if (focusResult !== null && transverseAb !== null && tracedRay.rayPath && tracedRay.rayPath.length > stopPointIndex) {
+                // 縦収差 = ローカルZ方向の距離（像面中心を基準, local Z=0）
+                // Mirrorが奇数枚の場合は符号反転
+                const longitudinalAberration = mirrorSign * focusResult;
                 const stopPoint = tracedRay.rayPath[stopPointIndex];
                 const stopLocal = getStopLocalOffsets(stopPoint, stopPlaneCenter3d, stopPlaneU, stopPlaneV);
                 const pupilHeight = Math.abs(stopLocal ? stopLocal.u : stopPoint.x); // 絶対値（0から1の範囲で表示）
@@ -1557,7 +1612,7 @@ export function calculateLongitudinalAberration(
                 tempSagittalPoints.push({
                     pupilHeight: pupilHeight,
                     longitudinalAberration: longitudinalAberration,
-                    focusPosition: focusZ,
+                    focusPosition: mirrorSign * focusResult,
                     transverseAberration: transverseAberration,
                     sineConditionViolation: sc  // null も許容
                 });
