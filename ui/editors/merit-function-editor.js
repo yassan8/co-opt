@@ -3601,8 +3601,12 @@ class MeritFunctionEditor {
         const referenceFocalLengthOverrideImaging = (Number.isFinite(refFLNum) && refFLNum !== 0) ? refFLNum : 0;
 
         const primaryWavelength = this.getPrimaryWavelengthFromSourceRows(sourceRows);
-        const sourceIndex = parseInt(operand.param1) || 1;
-        const selectedWavelength = this.getWavelengthFromSourceRows(sourceRows, sourceIndex);
+        
+        // param1 (λ): blank/empty => use Primary wavelength, else use specified wavelength index
+        const param1Raw = (operand && operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+        const selectedWavelength = (param1Raw === '') 
+            ? primaryWavelength 
+            : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
 
         // LCA/TCA は System Data の波長設定を使用（operand param1 では指定しない）
         const baseWavelength = (totalKey === 'LCA' || totalKey === 'TCA') ? primaryWavelength : selectedWavelength;
