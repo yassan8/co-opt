@@ -625,8 +625,57 @@ class SystemRequirementsEditor {
         const isModeParam = paramLabel === 'Mode' || paramDesc.includes('0=Imaging, 1=Afocal');
         const isNollParam = paramLabel === 'n (Noll)';
         const isSamplingParam = paramLabel === 'Sampling';
+        const isS1Param = paramLabel === 'S1' || (paramLabel.startsWith('S') && paramDesc.includes('Surface'));
         
-        if (isNollParam) {
+        if (isS1Param) {
+          // S1 (Surface) dropdown: 0=Total, then surfaces from Design Intent
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          
+          // Add "Total" option
+          const totalOpt = document.createElement('option');
+          totalOpt.value = '0';
+          totalOpt.textContent = '0: Total';
+          control.appendChild(totalOpt);
+          
+          // Get optical system rows from Design Intent
+          try {
+            const opticalRows = getOpticalSystemRows();
+            if (Array.isArray(opticalRows)) {
+              for (let i = 0; i < opticalRows.length; i++) {
+                const surfRow = opticalRows[i];
+                if (!surfRow) continue;
+                
+                // Skip Object, Coordinate Break (CT), GAP, and Image surfaces
+                const objType = String(surfRow['object type'] || surfRow.object || surfRow.surfType || '').trim();
+                const isObject = objType === 'Object';
+                const isImage = objType === 'Image';
+                const isCT = objType === 'CT' || objType.includes('Coordinate') || objType.includes('CoordTrans');
+                const isGap = objType === 'GAP' || objType.toLowerCase() === 'gap';
+                
+                if (isObject || isImage || isCT || isGap) continue;
+                
+                // Use surface id (not index)
+                const surfId = surfRow.id !== undefined && surfRow.id !== null ? String(surfRow.id) : String(i);
+                const surfLabel = surfRow.comment || surfRow.label || `Surface ${surfId}`;
+                
+                const opt = document.createElement('option');
+                opt.value = surfId;
+                opt.textContent = `${surfId}: ${surfLabel}`;
+                control.appendChild(opt);
+              }
+            }
+          } catch (err) {
+            console.warn('Failed to populate S1 dropdown:', err);
+          }
+          
+          control.value = String(row[field] || '0');
+        } else if (isNollParam) {
           // Zernike Noll index dropdown (0-37)
           control = document.createElement('select');
           control.style.width = '100%';

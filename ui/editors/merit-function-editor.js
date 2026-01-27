@@ -3549,9 +3549,43 @@ class MeritFunctionEditor {
         if (!opticalSystemData || opticalSystemData.length < 2) return 0;
 
         const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
-        const mode = parseInt(operand.param2) || 0;
+        
+        // Parse Mode parameter: accept single value (0 or 1) or comma-separated list (e.g., "0,1")
+        const modeRaw = (operand?.param2 !== undefined && operand?.param2 !== null) ? String(operand.param2).trim() : '';
+        const modeList = (() => {
+            if (modeRaw === '') return [0];
+            if (modeRaw.includes(',')) {
+                // Parse comma-separated list
+                return modeRaw.split(',')
+                    .map(s => parseInt(s.trim(), 10))
+                    .filter(n => n === 0 || n === 1);
+            }
+            const single = parseInt(modeRaw, 10);
+            return (single === 0 || single === 1) ? [single] : [0];
+        })();
+        
+        // If list contains multiple modes, compute RMS over all modes
+        if (modeList.length > 1) {
+            let sumSq = 0;
+            for (const mode of modeList) {
+                const isAfocal = mode === 1;
+                const value = this._calculateSeidelTotalSingleMode(
+                    operand, opticalSystemData, totalKey, sourceRows, objectRows, isAfocal
+                );
+                sumSq += value * value;
+            }
+            return Math.sqrt(sumSq);
+        }
+        
+        // Single mode: use existing logic
+        const mode = modeList[0] || 0;
         const isAfocal = mode === 1;
-
+        return this._calculateSeidelTotalSingleMode(
+            operand, opticalSystemData, totalKey, sourceRows, objectRows, isAfocal
+        );
+    }
+    
+    _calculateSeidelTotalSingleMode(operand, opticalSystemData, totalKey, sourceRows, objectRows, isAfocal) {
         // S1 (Context3): 0 => total, else surface
         const s1Num = Number.isFinite(Number(operand?.param3)) ? Math.floor(Number(operand.param3)) : 0;
         const s1 = (Number.isFinite(s1Num) && s1Num > 0) ? s1Num : 0;
@@ -3634,7 +3668,6 @@ class MeritFunctionEditor {
             return 0;
         }
     }
-    
     /**
      * ConfigIdに対応する光学系データを取得
      * @param {string} configId - Configuration ID（空文字列の場合は現在のアクティブなConfig）

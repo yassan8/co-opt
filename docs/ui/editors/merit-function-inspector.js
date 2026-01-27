@@ -4,50 +4,9 @@
  */
 
 // Operand definitions in JSON format
+// Order: 1. Paraxial (近軸) → 2. 3rd Order Aberrations → 3. Analysis
 export const OPERAND_DEFINITIONS = {
-  "ZERN_COEFF": {
-    name: "Zernike Coefficient (Noll)",
-    notes: "Measures meridional MTF at specified frequency. Target 1.0 for diffraction limit.",
-    description: "Nth Zernike coefficient (Noll index) for the current system (live). n=0 returns RMS over coefficients.",
-    parameters: [
-      { key: "param1", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
-      { key: "param2", label: "Object idx", description: "Object row (1-based, default 1)" },
-      { key: "param3", label: "Unit", description: "waves | um (default waves)" },
-      { key: "param4", label: "Sampling", description: "OPD sampling grid (default 32)" },
-      { key: "param5", label: "n (Noll)", description: "0 = RMS, 1-37 = coefficient index" }
-    ],
-    notes: "現在の光学系に対してOPDをサンプリングし、Zernikeフィットで係数を推定します。\n\n- Unit=waves: coefficientsWaves を使用\n- Unit=um: coefficientsMicrons を使用\n- Sampling: OPDサンプリングのグリッドサイズ（2の倍数: 32, 64, 128, 256, 512）\n\nparam5=0 の場合: piston(n=1) と tilt(n=2,3) を除いた係数の RMS を返します（RMS = sqrt(Σ c_n^2)）。\n\n注: この実装のNoll順では defocus は n=5 です（n=4 は m=-2 成分）。\n注: 重い評価です（最適化やRequirements更新で頻繁に呼ばれます）。"
-  },
-  "SPOT_SIZE_ANNULAR": {
-    name: "Spot Size Annular (µm)",
-    description: "Spot size (µm) using Spot Diagram-equivalent sampling, forced to Annular.",
-    parameters: [
-      { key: "param1", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
-      { key: "param2", label: "Object idx", description: "Object row (1-based, default 1)" },
-      { key: "param3", label: "Metric", description: "'rms' or 'dia' (default 'rms')" },
-      { key: "param4", label: "Rays", description: "Ray count (default 501)" }
-    ],
-    notes: "Spot Diagram と同じ生成経路（eva-spot-diagram.generateSpotDiagram）を使ってスポット点群を生成し、主光線基準でRMS/直径を計算します。\n\nRay pattern は Annular に固定します。Annular ring count は固定で 10。\n\nMetric: 'rms' または 'dia'（入力ゆれ許容: RMS/RMSTotal/R, Dia/Diam/D, Diameter）。\n定義: dia(diameter)=2*max(radius), rms=sqrt(mean(x^2)+mean(y^2))。単位µm。"
-  },
-  "SPOT_SIZE_RECT": {
-    name: "Spot Size Rectangle (µm)",
-    description: "Spot size (µm) using Spot Diagram-equivalent sampling, forced to Rectangle/Grid.",
-    parameters: [
-      { key: "param1", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
-      { key: "param2", label: "Object idx", description: "Object row (1-based, default 1)" },
-      { key: "param3", label: "Metric", description: "'rms' or 'dia' (default 'rms')" },
-      { key: "param4", label: "Rays", description: "Ray count (default 501)" }
-    ],
-    notes: "Spot Diagram と同じ生成経路（eva-spot-diagram.generateSpotDiagram）を使ってスポット点群を生成し、主光線基準でRMS/直径を計算します。\n\nRay pattern は Rectangle(Grid) に固定します。\n\nMetric: 'rms' または 'dia'（入力ゆれ許容: RMS/RMSTotal/R, Dia/Diam/D, Diameter）。\n定義: dia(diameter)=2*max(radius), rms=sqrt(mean(x^2)+mean(y^2))。単位µm。"
-  },
-  "LA_RMS_UM": {
-    name: "Spherical Aberration RMS (µm)",
-    description: "RMS of longitudinal aberration across pupil (µm), computed from the Spherical Aberration Diagram (meridional only).",
-    parameters: [
-      { key: "param1", label: "λ idx", description: "Source row (1-based) or wavelength in µm (blank=Primary)" }
-    ],
-    notes: "球面収差図（Spherical Aberration Diagram）のメリジオナル光線データから縦収差を集約してRMSを返します。\n\n定義（Option B）:\n- 縦収差 L(r) は図のX軸と同じ（最終面からの焦点位置までの距離, mm）\n- pupil coordinate r は正規化瞳座標（0..1）\n- 面積重み 2r dr で平均 L̄ を計算し、RMS = sqrt(E[(L-L̄)^2])\n- 返り値は µm（= mm * 1000）\n\nパラメータ: λ idx のみ（Sourceテーブル行番号, 1始まり）。空欄/0はPrimary Wavelength。\n\n注: 現状は meridional のみ（片側）で評価します。"
-  },
+  // ===== Paraxial (近軸関連) =====
   "FL": {
     name: "Focal Length (FL)",
     description: "Paraxial focal length (System Data)",
@@ -193,92 +152,129 @@ export const OPERAND_DEFINITIONS = {
     ],
     notes: "System Dataで表示しているImage Space NAを返します。"
   },
-  "CLRH": {
-    name: "Clearance vs SemiDia",
-    description: "Clearance constraint: max(0, |rayY| + margin - semidia)",
-    parameters: [
-      { key: "param1", label: "Surface", description: "Surface number (Optical System id)" },
-      { key: "param2", label: "λ idx", description: "Source row (blank=Primary)" },
-      { key: "param3", label: "Margin", description: "Margin (mm, default 0)" },
-      { key: "param4", label: "Reserved", description: "Reserved" }
-    ],
-    notes: "Returns a non-negative constraint violation in mm: max(0, |rayY| + margin - semidia).\n\nrayY is taken from REAL ray tracing (cross-ray style): we solve a ray that hits the STOP edge (Y=+StopSemiDia) and then read the ray Y at the specified surface. Use Target=0 and a large Weight to enforce clearance.\n\nSurface: Optical System Surface number (id).\nλ: Source table row (1-based). Blank uses Primary.\nMargin: Additional clearance (mm)."
-  },
+  
+  // ===== 3rd Order Aberrations (3次収差) =====
   "TOT3_SPH": {
     name: "3rd Order Spherical",
     description: "3rd-order spherical aberration",
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row" },
-      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
+      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal, or list (e.g., '0,1')" },
       { key: "param3", label: "S1", description: "Surface (0=Total)" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nS1: 0 returns the system total; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal, or comma-separated list '0,1' to evaluate both.\nS1: 0 returns the system total; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
   },
   "TOT3_COMA": {
     name: "3rd Order Coma",
     description: "3rd-order coma aberration",
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row" },
-      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
+      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal, or list (e.g., '0,1')" },
       { key: "param3", label: "S1", description: "Surface (0=Total)" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nS1: 0 returns the system total; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal, or comma-separated list '0,1' to evaluate both.\nS1: 0 returns the system total; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
   },
   "TOT3_ASTI": {
     name: "3rd Order Astigmatism",
     description: "3rd-order astigmatism",
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row" },
-      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
+      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal, or list (e.g., '0,1')" },
       { key: "param3", label: "S1", description: "Surface (0=Total)" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nS1: 0 returns the system total; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal, or comma-separated list '0,1' to evaluate both.\nS1: 0 returns the system total; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
   },
   "TOT3_FCUR": {
     name: "3rd Order Field Curvature",
     description: "3rd-order field curvature",
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row" },
-      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
+      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal, or list (e.g., '0,1')" },
       { key: "param3", label: "S1", description: "Surface (0=Total)" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nS1: 0 returns the system total; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal, or comma-separated list '0,1' to evaluate both.\nS1: 0 returns the system total; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
   },
   "TOT3_DIST": {
     name: "3rd Order Distortion",
     description: "3rd-order distortion",
     parameters: [
       { key: "param1", label: "λ idx", description: "Source row" },
-      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
+      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal, or list (e.g., '0,1')" },
       { key: "param3", label: "S1", description: "Surface (0=Total)" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal.\nS1: 0 returns the system total; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nλ: Source row.\nMode: 0=Imaging, 1=Afocal, or comma-separated list '0,1' to evaluate both.\nS1: 0 returns the system total; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
   },
   "TOT_LCA": {
     name: "Longitudinal Chromatic",
     description: "Longitudinal chromatic aberration",
     parameters: [
-      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
+      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal, or list (e.g., '0,1')" },
       { key: "param3", label: "S1", description: "Surface (0=Total)" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nUses System Data wavelength settings (no λ parameter).\nMode: 0=Imaging, 1=Afocal.\nS1: 0 returns the system value; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nUses System Data wavelength settings (no λ parameter).\nMode: 0=Imaging, 1=Afocal, or comma-separated list '0,1' to evaluate both.\nS1: 0 returns the system value; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
   },
   "TOT_TCA": {
     name: "Transverse Chromatic",
     description: "Transverse chromatic aberration",
     parameters: [
-      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal" },
+      { key: "param2", label: "Mode", description: "0=Imaging, 1=Afocal, or list (e.g., '0,1')" },
       { key: "param3", label: "S1", description: "Surface (0=Total)" },
       { key: "param4", label: "Ref FL", description: "Reference Focal Length (0=Auto)" }
     ],
-    notes: "Signed coefficient value.\n\nUses System Data wavelength settings (no λ parameter).\nMode: 0=Imaging, 1=Afocal.\nS1: 0 returns the system value; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
+    notes: "Signed coefficient value.\n\nUses System Data wavelength settings (no λ parameter).\nMode: 0=Imaging, 1=Afocal, or comma-separated list '0,1' to evaluate both.\nS1: 0 returns the system value; otherwise returns the value at the specified surface.\nReference Focal Length: Normalization scale used for coefficient calculations (0=Auto)."
   },
+  
+  // ===== Analysis (解析関連) =====
+  "SPOT_SIZE_ANNULAR": {
+    name: "Spot Size Annular (µm)",
+    description: "Spot size (µm) using Spot Diagram-equivalent sampling, forced to Annular.",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
+      { key: "param2", label: "Object idx", description: "Object row (1-based, default 1)" },
+      { key: "param3", label: "Metric", description: "'rms' or 'dia' (default 'rms')" },
+      { key: "param4", label: "Rays", description: "Ray count (default 501)" }
+    ],
+    notes: "Spot Diagram と同じ生成経路（eva-spot-diagram.generateSpotDiagram）を使ってスポット点群を生成し、主光線基準でRMS/直径を計算します。\n\nRay pattern は Annular に固定します。Annular ring count は固定で 10。\n\nMetric: 'rms' または 'dia'（入力ゆれ許容: RMS/RMSTotal/R, Dia/Diam/D, Diameter）。\n定義: dia(diameter)=2*max(radius), rms=sqrt(mean(x^2)+mean(y^2))。単位µm。"
+  },
+  "SPOT_SIZE_RECT": {
+    name: "Spot Size Rectangle (µm)",
+    description: "Spot size (µm) using Spot Diagram-equivalent sampling, forced to Rectangle/Grid.",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
+      { key: "param2", label: "Object idx", description: "Object row (1-based, default 1)" },
+      { key: "param3", label: "Metric", description: "'rms' or 'dia' (default 'rms')" },
+      { key: "param4", label: "Rays", description: "Ray count (default 501)" }
+    ],
+    notes: "Spot Diagram と同じ生成経路（eva-spot-diagram.generateSpotDiagram）を使ってスポット点群を生成し、主光線基準でRMS/直径を計算します。\n\nRay pattern は Rectangle(Grid) に固定します。\n\nMetric: 'rms' または 'dia'（入力ゆれ許容: RMS/RMSTotal/R, Dia/Diam/D, Diameter）。\n定義: dia(diameter)=2*max(radius), rms=sqrt(mean(x^2)+mean(y^2))。単位µm。"
+  },
+  "LA_RMS_UM": {
+    name: "Spherical Aberration RMS (µm)",
+    description: "RMS of longitudinal aberration across pupil (µm), computed from the Spherical Aberration Diagram (meridional only).",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row (1-based) or wavelength in µm (blank=Primary)" }
+    ],
+    notes: "球面収差図（Spherical Aberration Diagram）のメリジオナル光線データから縦収差を集約してRMSを返します。\n\n定義（Option B）:\n- 縦収差 L(r) は図のX軸と同じ（最終面からの焦点位置までの距離, mm）\n- pupil coordinate r は正規化瞳座標（0..1）\n- 面積重み 2r dr で平均 L̄ を計算し、RMS = sqrt(E[(L-L̄)^2])\n- 返り値は µm（= mm * 1000）\n\nパラメータ: λ idx のみ（Sourceテーブル行番号, 1始まり）。空欄/0はPrimary Wavelength。\n\n注: 現状は meridional のみ（片側）で評価します。"
+  },
+  "ZERN_COEFF": {
+    name: "Zernike Coefficient (Noll)",
+    description: "Nth Zernike coefficient (Noll index) for the current system (live). n=0 returns RMS over coefficients.",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
+      { key: "param2", label: "Object idx", description: "Object row (1-based, default 1)" },
+      { key: "param3", label: "Unit", description: "waves | um (default waves)" },
+      { key: "param4", label: "Sampling", description: "OPD sampling grid (default 32)" },
+      { key: "param5", label: "n (Noll)", description: "0 = RMS, 1-37 = coefficient index" }
+    ],
+    notes: "現在の光学系に対してOPDをサンプリングし、Zernikeフィットで係数を推定します。\n\n- Unit=waves: coefficientsWaves を使用\n- Unit=um: coefficientsMicrons を使用\n- Sampling: OPDサンプリングのグリッドサイズ（2の倍数: 32, 64, 128, 256, 512）\n\nparam5=0 の場合: piston(n=1) と tilt(n=2,3) を除いた係数の RMS を返します（RMS = sqrt(Σ c_n^2)）。\n\n注: この実装のNoll順では defocus は n=5 です（n=4 は m=-2 成分）。\n注: 重い評価です（最適化やRequirements更新で頻繁に呼ばれます）。"
+  },
+  
+  // ===== Other Operands (未実装/非表示) =====
   "EFFL": {
     name: "Effective Focal Length (S1–S2)",
     description: "Effective focal length for a surface range (S1–S2)",
@@ -457,7 +453,6 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'EFFL',
   'TOT3_SPH', 'TOT3_COMA', 'TOT3_ASTI', 'TOT3_FCUR', 'TOT3_DIST',
   'TOT_LCA', 'TOT_TCA',
-  'CLRH',
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
   'LA_RMS_UM',
   'ZERN_COEFF'
