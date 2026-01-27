@@ -405,27 +405,28 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
             currentMirrorIndex++;
             mirrorCount++;
           
-          // このミラーの次のCoordTransのgapを探す（ただしImage面直前は除外）
-          for (let k = j + 1; k < opticalSystemRows.length; k++) {
-            const nextSurface = opticalSystemRows[k];
-            if (nextSurface["object type"] === "Image" || nextSurface.comment === "Image") break;
-            if (isCoordTransSurface(nextSurface)) {
-              // Image面の直前のCoordTransかチェック
-              let isBeforeImage = false;
-              if (imageIndex !== -1 && k === imageIndex - 1) {
-                isBeforeImage = true;
-              }
-              
-              if (!isBeforeImage) {
-                const thickness = getSafeThickness(nextSurface);
-                if (thickness !== 0) {
-                  mirrorPathCorrection += Math.abs(thickness);
-                  console.log(`  折り返し光路補正: Mirror${currentMirrorIndex} 後の面${k} CoordTrans gap=${thickness.toFixed(3)}, 累積=${mirrorPathCorrection.toFixed(3)}`);
+            // このミラーの次のCoordTransのgapを探す（ただしImage面直前は除外）
+            for (let k = j + 1; k < opticalSystemRows.length; k++) {
+              const nextSurface = opticalSystemRows[k];
+              if (nextSurface["object type"] === "Image" || nextSurface.comment === "Image") break;
+              if (isCoordTransSurface(nextSurface)) {
+                // Image面の直前のCoordTransかチェック
+                let isBeforeImage = false;
+                if (imageIndex !== -1 && k === imageIndex - 1) {
+                  isBeforeImage = true;
                 }
-              } else {
-                console.log(`  Image面直前の面${k}のgapは補正から除外（Manual調整値）`);
+                
+                if (!isBeforeImage) {
+                  const thickness = getSafeThickness(nextSurface);
+                  if (thickness !== 0) {
+                    mirrorPathCorrection += Math.abs(thickness);
+                    console.log(`  折り返し光路補正: Mirror${currentMirrorIndex} 後の面${k} CoordTrans gap=${thickness.toFixed(3)}, 累積=${mirrorPathCorrection.toFixed(3)}`);
+                  }
+                } else {
+                  console.log(`  Image面直前の面${k}のgapは補正から除外（Manual調整値）`);
+                }
+                break; // 最初のCoordTransのみを対象
               }
-              break; // 最初のCoordTransのみを対象
             }
           }
         }
@@ -446,67 +447,72 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       
       // テレセントリック判定の閾値（rad）
       const TELECENTRIC_ALPHA_THRESHOLD = 1e-5;
-      const imdIsTelecentric = Math.abs(alpha) < TELECENTRIC_ALPHA_THRESHOLD;
+      // ミラーが存在する場合は最後のミラー直後のαを使用、そうでなければ最終α
+      const alphaForTelecentricCheck = (alphaAfterLastMirror !== null) ? alphaAfterLastMirror : alpha;
+      console.log(`[IMD Mirror補正判定] α = ${alphaForTelecentricCheck.toFixed(9)} rad (|α| = ${Math.abs(alphaForTelecentricCheck).toExponential(6)}), しきい値 = ${TELECENTRIC_ALPHA_THRESHOLD.toExponential(0)}`);
+      if (alphaAfterLastMirror !== null) {
+        console.log(`  → 最後のミラー直後のαを使用（最終α = ${alpha.toFixed(9)}）`);
+      }
+      const imdIsTelecentric = Math.abs(alphaForTelecentricCheck) < TELECENTRIC_ALPHA_THRESHOLD;
+      
+      // ミラー折り返し光路の補正
+      let imdMirrorPathCorrection = 0;
       
       if (imdIsTelecentric) {
         console.log(`テレセントリック光学系検出 (|α| = ${Math.abs(alpha).toExponential(3)} < ${TELECENTRIC_ALPHA_THRESHOLD.toExponential(0)})`);
         console.log(`Image Distance: ミラー折り返し補正をスキップ（テレセントリック系）`);
-      }
-      
-      // ミラー折り返し光路の補正を適用（Image面直前は除外、テレセントリック系も除外）
-      let imdMirrorPathCorrection = 0;
-      let imdMirrorCount = 0;
-      
-      // Image面のインデックスを探す
-      let imdImageIndex = -1;
-      for (let j = 0; j < opticalSystemRows.length; j++) {
-        const surface = opticalSystemRows[j];
-        if (surface["object type"] === "Image" || surface.comment === "Image") {
-          imdImageIndex = j;
-          break;
-        }
-      }
-      
-      if (!imdIsTelecentric) {
-        for (let j = 0; j < opticalSystemRows.length; j++) {
-          const surface = opticalSystemRows[j];
-          if (surface["object type"] === "Image" || surface.comment === "Image") break;
+      } else {
+        console.log(`[IMD Mirror補正] 非テレセントリック系 → ミラー光路補正を実行`);
+          let imdMirrorCount = 0;
           
-          const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror');
-          if (isMirror) {
-            imdMirrorCount++;
-            
-            // このミラーの次のCoordTransのgapを探す（ただしImage面直前は除外）
-            for (let k = j + 1; k < opticalSystemRows.length; k++) {
-              const nextSurface = opticalSystemRows[k];
-              if (nextSurface["object type"] === "Image" || nextSurface.comment === "Image") break;
-              if (isCoordTransSurface(nextSurface)) {
-                // Image面の直前のCoordTransかチェック
-                let isBeforeImage = false;
-                if (imdImageIndex !== -1 && k === imdImageIndex - 1) {
-                  isBeforeImage = true;
-                }
-                
-                if (!isBeforeImage) {
-                  const thickness = getSafeThickness(nextSurface);
-                  if (thickness !== 0) {
-                    imdMirrorPathCorrection += Math.abs(thickness);
-                    console.log(`  Image Distance補正: Mirror${imdMirrorCount} 後の面${k} CoordTrans gap=${thickness.toFixed(3)}, 累積=${imdMirrorPathCorrection.toFixed(3)}`);
-                  }
-                } else {
-                  console.log(`  Image面直前の面${k}のgapは補正から除外（Manual調整値）`);
-                }
-                break; // 最初のCoordTransのみを対象
-              }
+          // Image面のインデックスを探す
+          let imdImageIndex = -1;
+          for (let j = 0; j < opticalSystemRows.length; j++) {
+            const surface = opticalSystemRows[j];
+            if (surface["object type"] === "Image" || surface.comment === "Image") {
+              imdImageIndex = j;
+              break;
             }
           }
-        }
+          
+          for (let j = 0; j < opticalSystemRows.length; j++) {
+            const surface = opticalSystemRows[j];
+            if (surface["object type"] === "Image" || surface.comment === "Image") break;
+            
+            const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror');
+            if (isMirror) {
+                imdMirrorCount++;
+                
+                // このミラーの次のCoordTransのgapを探す
+                for (let k = j + 1; k < opticalSystemRows.length; k++) {
+                const nextSurface = opticalSystemRows[k];
+                if (nextSurface["object type"] === "Image" || nextSurface.comment === "Image") break;
+                if (isCoordTransSurface(nextSurface)) {
+                    // Image面の直前のCoordTransかチェック
+                    let isBeforeImage = false;
+                    if (imdImageIndex !== -1 && k === imdImageIndex - 1) {
+                    isBeforeImage = true;
+                    }
+                    
+                    if (!isBeforeImage) {
+                    const thickness = getSafeThickness(nextSurface);
+                    if (thickness !== 0) {
+                        imdMirrorPathCorrection += Math.abs(thickness);
+                        console.log(`  Image Distance補正: Mirror${imdMirrorCount} 後の面${k} CoordTrans gap=${thickness.toFixed(3)}, 累積=${imdMirrorPathCorrection.toFixed(3)}`);
+                    }
+                    } else {
+                    console.log(`  Image面直前の面${k}のgapは補正から除外（Manual調整値）`);
+                    }
+                    break; // 最初のCoordTransのみを対象
+                }
+                }
+            }
+          }
       }
       
       if (imdMirrorPathCorrection > 0) {
         console.log(`Image Distance補正: 光学的 ${imageDistance.toFixed(6)} - ミラー光路 ${imdMirrorPathCorrection.toFixed(6)} = ${(imageDistance - imdMirrorPathCorrection).toFixed(6)} mm`);
         imageDistance = imageDistance - imdMirrorPathCorrection;
-      }
       }
     } else {
       imageDistance = Infinity;
@@ -531,7 +537,7 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       finalAlpha: alpha
     };
   } catch (error) {
-    // console.error('全系近軸光線追跡エラー:', error);
+    console.error('全系近軸光線追跡エラー:', error);
     // console.error('スタックトレース:', error.stack);
     return null;
   }
@@ -1656,7 +1662,7 @@ export function calculateMarginalAlphaAtStop(opticalSystemRows, stopIndex, wavel
  * @param {Object} surface - 面データ
  * @returns {boolean} Coord Trans面の場合true
  */
-function isCoordTransSurface(surface) {
+export function isCoordTransSurface(surface) {
   if (!surface) return false;
   
   const fields = [

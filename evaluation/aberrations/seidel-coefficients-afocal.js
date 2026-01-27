@@ -12,7 +12,8 @@ import {
     getRefractiveIndex as getRefractiveIndexFromSurface,
     getSafeRadius,
     getSafeThickness,
-    calculateFullSystemParaxialTrace
+    calculateFullSystemParaxialTrace,
+    isCoordTransSurface
 } from '../../raytracing/core/ray-paraxial.js';
 import { tableSource } from '../../data/table-source.js';
 
@@ -476,6 +477,19 @@ export function performAfocalParaxialTrace(opticalSystemRows, wavelength, stopIn
         const prevSurf = normalizedRows[i - 1];
         const isStop = surf['object type'] === 'Stop' || surf.object === 'Stop';
 
+        // 元のopticalSystemRowsから各種判定
+        const origSurf = opticalSystemRows[i];
+        const isCoordTrans = isCoordTransSurface(origSurf);
+        const isGap = origSurf._blockType === 'Gap' || origSurf.blockType === 'Gap';
+        const isMirror = (
+            origSurf.material === 'MIRROR' || 
+            origSurf.material === 'Mirror' || 
+            origSurf.rindex === '-1' || 
+            origSurf.rindex === -1 ||
+            origSurf['ref index'] === '-1' ||
+            origSurf['ref index'] === -1
+        );
+
         // 厚み（正規化）
         const thickness = (i === 1) ? s1 : parseFloat(prevSurf.thickness);
 
@@ -488,17 +502,40 @@ export function performAfocalParaxialTrace(opticalSystemRows, wavelength, stopIn
         // 入射換算角（更新前を保持）
         const alpha_incident = alpha_marginal;
 
-        // 屈折率
-        const N_after = getRefractiveIndexFromSurface(surf, wavelength) || 1.0;
+        // 屈折率の取得
+        let N_after;
+        if (isCoordTrans || isGap) {
+            // CoordTrans面とGap面: 屈折率は変わらない
+            N_after = n_prev;
+            console.log(`📐 面${i}(Marginal): CoordTrans/Gap - 屈折率は変わらず n=${n_prev.toFixed(6)}`);
+        } else if (isMirror) {
+            // Mirror面: 反射なので屈折率は変わらない
+            N_after = n_prev;
+            console.log(`🪞 面${i}(Marginal): Mirror検出 - 屈折率は変わらず n=${n_prev.toFixed(6)}`);
+        } else {
+            // 通常の屈折面
+            N_after = getRefractiveIndexFromSurface(surf, wavelength) || 1.0;
+        }
+        
         const radius = surf.radius === 'INF' ? Infinity : parseFloat(surf.radius);
         let phi = 0;
         if (isFinite(radius) && radius !== 0) {
-            phi = (N_after - n_prev) / radius;
-            alpha_marginal = alpha_incident + phi * h_marginal; // 換算傾角更新（屈折後）
+            if (isMirror) {
+                // Mirror面: φ = -2/r (反射の公式)
+                phi = -2.0 / radius;
+            } else {
+                // 通常の屈折面
+                phi = (N_after - n_prev) / radius;
+            }
+            alpha_marginal = alpha_incident + phi * h_marginal; // 換算傾角更新（屈折/反射後）
         }
 
         // 屈折後の屈折率に更新
         n = N_after;
+        
+        if (isMirror) {
+            console.log(`🪞 面${i}(Marginal): n_before=${n_prev.toFixed(6)}, n_after=${N_after.toFixed(6)}, n=${n.toFixed(6)}`);
+        }
         
         marginalTrace.push({
             surface: i,
@@ -558,6 +595,19 @@ export function performAfocalParaxialTrace(opticalSystemRows, wavelength, stopIn
         const prevSurf = normalizedRows[i - 1];
         const isStop = surf['object type'] === 'Stop' || surf.object === 'Stop';
 
+        // 元のopticalSystemRowsから各種判定
+        const origSurf = opticalSystemRows[i];
+        const isCoordTrans = isCoordTransSurface(origSurf);
+        const isGap = origSurf._blockType === 'Gap' || origSurf.blockType === 'Gap';
+        const isMirror = (
+            origSurf.material === 'MIRROR' || 
+            origSurf.material === 'Mirror' || 
+            origSurf.rindex === '-1' || 
+            origSurf.rindex === -1 ||
+            origSurf['ref index'] === '-1' ||
+            origSurf['ref index'] === -1
+        );
+
         // 厚み（正規化）
         const thickness = (i === 1) ? s1 : parseFloat(prevSurf.thickness);
 
@@ -569,11 +619,31 @@ export function performAfocalParaxialTrace(opticalSystemRows, wavelength, stopIn
         // 入射換算角を保持
         const alpha_incident = alpha_chief;
 
-        const N_after = getRefractiveIndexFromSurface(surf, wavelength) || 1.0;
+        // 屈折率の取得
+        let N_after;
+        if (isCoordTrans || isGap) {
+            // CoordTrans面とGap面: 屈折率は変わらない
+            N_after = n_prev;
+            console.log(`📐 面${i}(Chief): CoordTrans/Gap - 屈折率は変わらず n=${n_prev.toFixed(6)}`);
+        } else if (isMirror) {
+            // Mirror面: 反射なので屈折率は変わらない
+            N_after = n_prev;
+            console.log(`🪞 面${i}(Chief): Mirror検出 - 屈折率は変わらず n=${n_prev.toFixed(6)}`);
+        } else {
+            // 通常の屈折面
+            N_after = getRefractiveIndexFromSurface(surf, wavelength) || 1.0;
+        }
+        
         const radius = surf.radius === 'INF' ? Infinity : parseFloat(surf.radius);
         let phi = 0;
         if (isFinite(radius) && radius !== 0) {
-            phi = (N_after - n_prev) / radius;
+            if (isMirror) {
+                // Mirror面: φ = -2/r (反射の公式)
+                phi = -2.0 / radius;
+            } else {
+                // 通常の屈折面
+                phi = (N_after - n_prev) / radius;
+            }
             alpha_chief = alpha_incident + phi * h_chief;
         }
 
@@ -642,6 +712,27 @@ export function calculateAfocalSeidelCoefficientsIntegrated(opticalSystemRows, w
     
     for (let i = 1; i < normalizedRows.length; i++) {
         const surf = normalizedRows[i];
+        const origSurf = opticalSystemRows[i]; // 元の光学系データ
+        
+        // Mirror面の検出（収差に寄与するため計算に含める）
+        const isMirror = (
+            origSurf.material === 'MIRROR' || 
+            origSurf.material === 'Mirror' || 
+            origSurf.rindex === '-1' || 
+            origSurf.rindex === -1 ||
+            origSurf['ref index'] === '-1' ||
+            origSurf['ref index'] === -1
+        );
+        
+        // CoordTrans面とGap面をスキップ（ただしMirror面は除く）
+        if (!isMirror && isCoordTransSurface(origSurf)) {
+            console.log(`面${i}: CoordTrans面 - Afocal収差係数計算からスキップ`);
+            continue;
+        }
+        if (!isMirror && (origSurf._blockType === 'Gap' || origSurf.blockType === 'Gap')) {
+            console.log(`面${i}: Gap面 - Afocal収差係数計算からスキップ`);
+            continue;
+        }
         
         const chiefData = chief[i];
         const marginalData = marginal[i];
@@ -719,6 +810,7 @@ export function calculateAfocalSeidelCoefficientsIntegrated(opticalSystemRows, w
         surfaceCoefficients.push({
             surfaceIndex: i,
             surfaceType: surf['object type'] || 'Lens',
+            isMirror: isMirror,  // Mirror面フラグ
             radius: radius * unitScale,
             thickness: parseFloat(surf.thickness) * unitScale,
             n: n_after,

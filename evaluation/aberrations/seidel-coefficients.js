@@ -22,7 +22,8 @@ import {
     calculateFocalLength,
     calculateBackFocalLength,
     calculatePupilsByNewSpec,
-    calculateFullSystemParaxialTrace
+    calculateFullSystemParaxialTrace,
+    isCoordTransSurface
 } from '../../raytracing/core/ray-paraxial.js';
 import { tableSource, loadTableData as loadSourceTableData } from '../../data/table-source.js';
 
@@ -447,9 +448,45 @@ export function calculateSeidelCoefficients(opticalSystemRows, wavelength = 0.58
     // 3次収差係数を計算
     const surfaceCoefficients = [];
     
+    console.log(`🔎 収差係数計算開始: opticalSystemRows.length = ${opticalSystemRows.length}`);
+    
     for (let j = 1; j < opticalSystemRows.length; j++) {
         const surface = opticalSystemRows[j];
         const normalizedSurface = normalizedOpticalSystem[j];
+        
+        // 各面の基本情報をログ出力
+        console.log(`\n📌 面${j}: surfType='${surface['surf type'] || surface.surfType}', material='${surface.material}', rindex='${surface.rindex}', blockType='${surface._blockType || surface.blockType}'`);
+        
+        // Mirror面の検出（Mirror面は収差に寄与するため、CoordTransチェック前に判定）
+        const isMirror = (
+            surface.material === 'MIRROR' || 
+            surface.material === 'Mirror' || 
+            surface.rindex === '-1' || 
+            surface.rindex === -1 ||
+            surface['ref index'] === '-1' ||
+            surface['ref index'] === -1
+        );
+        console.log(`   isMirror判定結果: ${isMirror}`);
+        if (isMirror) {
+            console.log(`   ✅ Mirror面検出 - 収差係数計算に含める`);
+        }
+        
+        // CoordTrans面とGap面をスキップ（ただしMirror面は除く）
+        const isCoordTrans = isCoordTransSurface(surface);
+        console.log(`   isCoordTransSurface判定結果: ${isCoordTrans}`);
+        if (!isMirror && isCoordTrans) {
+            console.log(`   ⏭️ CoordTrans面 - スキップ`);
+            continue;
+        }
+        const isGap = surface._blockType === 'Gap' || surface.blockType === 'Gap';
+        console.log(`   isGap判定結果: ${isGap}`);
+        if (!isMirror && isGap) {
+            console.log(`   ⏭️ Gap面 - スキップ`);
+            continue;
+        }
+        
+        console.log(`   ➡️ 面${j}を処理します`);
+
         
         // 周辺光線（Marginal ray）のデータ
         const marginalTrace = normalizedMarginalTrace[j];
@@ -619,6 +656,7 @@ export function calculateSeidelCoefficients(opticalSystemRows, wavelength = 0.58
         surfaceCoefficients.push({
             surfaceIndex: j,
             surfaceType: surface['object type'] || surface.object || '',
+            isMirror: isMirror,  // Mirror面フラグ
             hQ: hQ,
             hQ_chief: hQ_chief,
             J: J,
@@ -631,6 +669,11 @@ export function calculateSeidelCoefficients(opticalSystemRows, wavelength = 0.58
             IV: IV,  // Field Curvature
             V: V     // Distortion
         });
+        
+        // デバッグ: push直後のisMirror値を確認
+        if (isMirror) {
+            console.log(`✅ 面${j}を収差係数配列に追加: isMirror=${isMirror}, material='${surface.material}', rindex='${surface.rindex}'`);
+        }
     }
     
     // 合計を計算
@@ -772,12 +815,25 @@ function calculateChromaticAberrations(opticalSystemRows, normalizedOpticalSyste
         const data = marginalTraceShort[i];
         const surface = opticalSystemRows[i];
         
+        // CoordTrans面とGap面をスキップ（表示から除外）
+        if (isCoordTransSurface(surface)) {
+            continue;
+        }
+        if (surface._blockType === 'Gap' || surface.blockType === 'Gap') {
+            continue;
+        }
+        
         console.log(`🔍 Surface ${i}:`, surface);
         
         const objectName = getObjectName(surface);
         const radius = getSafeRadius(surface);
         const thickness = getSafeThickness(surface);
         const abbeNumber = getAbbeNumber(surface, lambdaShort);
+        
+        // Mirror面を識別
+        const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror' || 
+                         surface.rindex === '-1' || surface['ref index'] === '-1');
+        const displayObjectName = isMirror ? 'Mirror' : objectName;
         
         console.log(`  Object: ${objectName}, Radius: ${radius}, Thickness: ${thickness}, Abbe: ${abbeNumber}`);
         console.log(`  Data: h=${data.height}, α=${data.alpha}, n=${data.n}, power=${data.power}`);
@@ -790,7 +846,7 @@ function calculateChromaticAberrations(opticalSystemRows, normalizedOpticalSyste
         const angleStr = data.alpha.toFixed(8);
         const heightStr = data.height.toFixed(8);
         
-        const line = `${i.toString().padStart(7)}\t${objectName.padEnd(6)}\t${radiusStr.padStart(13)}\t${thicknessStr.padStart(13)}\t${indexStr.padStart(13)}\t${abbeStr.padStart(13)}\t${powerStr.padStart(15)}\t${angleStr.padStart(15)}\t${heightStr.padStart(15)}\n`;
+        const line = `${i.toString().padStart(7)}\t${displayObjectName.padEnd(6)}\t${radiusStr.padStart(13)}\t${thicknessStr.padStart(13)}\t${indexStr.padStart(13)}\t${abbeStr.padStart(13)}\t${powerStr.padStart(15)}\t${angleStr.padStart(15)}\t${heightStr.padStart(15)}\n`;
         console.log(`  Line: ${line.substring(0, 100)}...`);
         outputText += line;
     }
@@ -804,12 +860,25 @@ function calculateChromaticAberrations(opticalSystemRows, normalizedOpticalSyste
         const data = marginalTraceLong[i];
         const surface = opticalSystemRows[i];
         
+        // CoordTrans面とGap面をスキップ（表示から除外）
+        if (isCoordTransSurface(surface)) {
+            continue;
+        }
+        if (surface._blockType === 'Gap' || surface.blockType === 'Gap') {
+            continue;
+        }
+        
         console.log(`🔍 Long wavelength Surface ${i}`);
         
         const objectName = getObjectName(surface);
         const radius = getSafeRadius(surface);
         const thickness = getSafeThickness(surface);
         const abbeNumber = getAbbeNumber(surface, lambdaLong);
+        
+        // Mirror面を識別
+        const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror' || 
+                         surface.rindex === '-1' || surface['ref index'] === '-1');
+        const displayObjectName = isMirror ? 'Mirror' : objectName;
         
         const radiusStr = isFinite(radius) ? radius.toFixed(6) : 'INF';
         const thicknessStr = isFinite(thickness) ? thickness.toFixed(6) : (i === 0 ? 'INF' : '');
@@ -819,7 +888,7 @@ function calculateChromaticAberrations(opticalSystemRows, normalizedOpticalSyste
         const angleStr = data.alpha.toFixed(8);
         const heightStr = data.height.toFixed(8);
         
-        const line = `${i.toString().padStart(7)}\t${objectName.padEnd(6)}\t${radiusStr.padStart(13)}\t${thicknessStr.padStart(13)}\t${indexStr.padStart(13)}\t${abbeStr.padStart(13)}\t${powerStr.padStart(15)}\t${angleStr.padStart(15)}\t${heightStr.padStart(15)}\n`;
+        const line = `${i.toString().padStart(7)}\t${displayObjectName.padEnd(6)}\t${radiusStr.padStart(13)}\t${thicknessStr.padStart(13)}\t${indexStr.padStart(13)}\t${abbeStr.padStart(13)}\t${powerStr.padStart(15)}\t${angleStr.padStart(15)}\t${heightStr.padStart(15)}\n`;
         outputText += line;
     }
     
@@ -1443,15 +1512,43 @@ function performParaxialTrace(opticalSystemRows, wavelength, entrancePupilRadius
         const surface = opticalSystemRows[i];
         const prevSurface = opticalSystemRows[i - 1];
         
+        // CoordTrans面・Gap面をスキップ（近軸光線追跡では座標変換のみで光学的影響なし）
+        const isCurrentCoordTrans = isCoordTransSurface(surface) || surface._blockType === 'Gap' || surface.blockType === 'Gap';
+        if (isCurrentCoordTrans) {
+            // CoordTrans面/Gap面: 光学的変化なし、前の値をそのまま記録
+            traceData.push({
+                surface: i,
+                height: h,
+                alpha: alpha,
+                height_chief: hbar,
+                alpha_chief: alpha_chief,
+                n: n
+            });
+            continue;
+        }
+        
         // 前の面の屈折率（現在の空間の屈折率）
         const n_prev = n;
         
         // 前の面からの転送（transfer）: h[j] = h[j-1] - d[j-1] * α[j-1] / n[j-1]
         // 注意: αは換算傾角（N*u）なので、移行時に屈折率で割って傾きを取得する
-        const thickness = getSafeThickness(prevSurface);
-        if (isFinite(thickness) && thickness !== 0) {
-            h = h - thickness * alpha / n_prev;
-            hbar = hbar - thickness * alpha_chief / n_prev;
+        // CoordTrans面の後は、埋め込まれたGap情報を考慮
+        const isPrevCoordTrans = isCoordTransSurface(prevSurface) || prevSurface._blockType === 'Gap' || prevSurface.blockType === 'Gap';
+        if (!isPrevCoordTrans) {
+            const thickness = getSafeThickness(prevSurface);
+            if (isFinite(thickness) && thickness !== 0) {
+                h = h - thickness * alpha / n_prev;
+                hbar = hbar - thickness * alpha_chief / n_prev;
+            }
+        } else {
+            // CoordTrans面の場合、埋め込まれたGap情報（__cooptGapThickness）を確認
+            const gapThickness = prevSurface.__cooptGapThickness;
+            if (gapThickness !== undefined && isFinite(gapThickness) && gapThickness !== 0) {
+                // Gap情報をそのまま使用（符号を保持）
+                h = h - gapThickness * alpha / n_prev;
+                hbar = hbar - gapThickness * alpha_chief / n_prev;
+                console.log(`🔧 CoordTrans面${i-1}にGap情報あり: thickness=${gapThickness.toFixed(6)}, h更新: ${h.toFixed(6)}`);
+            }
         }
         
         // 面1での確認
@@ -1673,13 +1770,36 @@ function performChiefRayTrace(opticalSystemRows, wavelength, NFL = 1.0, maxField
         const surface = opticalSystemRows[i];
         const prevSurface = opticalSystemRows[i - 1];
         
+        // CoordTrans面・Gap面をスキップ（近軸光線追跡では座標変換のみで光学的影響なし）
+        const isCurrentCoordTrans = isCoordTransSurface(surface) || surface._blockType === 'Gap' || surface.blockType === 'Gap';
+        if (isCurrentCoordTrans) {
+            // CoordTrans面/Gap面: 光学的変化なし、前の値をそのまま記録
+            traceData.push({
+                surface: i,
+                height: h,
+                alpha: alpha,
+                n: n
+            });
+            continue;
+        }
+        
         // 前の面の屈折率（現在の空間の屈折率）
         const n_prev = n;
 
         // 前の面からの転送（transfer）: h[j] = h[j-1] - d[j-1] * α[j-1] / n[j-1]
-        const thickness = getSafeThickness(prevSurface);
-        if (isFinite(thickness) && thickness !== 0) {
-            h = h - thickness * alpha / n_prev; // α/n_prev = slope
+        // CoordTrans面の後は、埋め込まれたGap情報を考慮
+        const isPrevCoordTrans = isCoordTransSurface(prevSurface) || prevSurface._blockType === 'Gap' || prevSurface.blockType === 'Gap';
+        if (!isPrevCoordTrans) {
+            const thickness = getSafeThickness(prevSurface);
+            if (isFinite(thickness) && thickness !== 0) {
+                h = h - thickness * alpha / n_prev; // α/n_prev = slope
+            }
+        } else {
+            // CoordTrans面の場合、埋め込まれたGap情報（__cooptGapThickness）を確認
+            const gapThickness = prevSurface.__cooptGapThickness;
+            if (gapThickness !== undefined && isFinite(gapThickness) && gapThickness !== 0) {
+                h = h - gapThickness * alpha / n_prev;
+            }
         }
         
         // この面の右側の屈折率
@@ -1760,12 +1880,35 @@ function performChiefRayTraceWithColorAtSurface(opticalSystemRows, targetSurface
         const surface = opticalSystemRows[i];
         const prevSurface = opticalSystemRows[i - 1];
         
+        // CoordTrans面・Gap面をスキップ（近軸光線追跡では座標変換のみで光学的影響なし）
+        const isCurrentCoordTrans = isCoordTransSurface(surface) || surface._blockType === 'Gap' || surface.blockType === 'Gap';
+        if (isCurrentCoordTrans) {
+            // CoordTrans面/Gap面: 光学的変化なし、前の値をそのまま記録
+            traceData.push({
+                surface: i,
+                height: h,
+                alpha: alpha,
+                n: n
+            });
+            continue;
+        }
+        
         const n_prev = n;
         
         // 転送: h[j] = h[j-1] - d[j-1] * α[j-1] / n[j-1]
-        const thickness = getSafeThickness(prevSurface);
-        if (isFinite(thickness) && thickness !== 0) {
-            h = h - thickness * alpha / n_prev;
+        // CoordTrans面の後は、埋め込まれたGap情報を考慮
+        const isPrevCoordTrans = isCoordTransSurface(prevSurface) || prevSurface._blockType === 'Gap' || prevSurface.blockType === 'Gap';
+        if (!isPrevCoordTrans) {
+            const thickness = getSafeThickness(prevSurface);
+            if (isFinite(thickness) && thickness !== 0) {
+                h = h - thickness * alpha / n_prev;
+            }
+        } else {
+            // CoordTrans面の場合、埋め込まれたGap情報（__cooptGapThickness）を確認
+            const gapThickness = prevSurface.__cooptGapThickness;
+            if (gapThickness !== undefined && isFinite(gapThickness) && gapThickness !== 0) {
+                h = h - gapThickness * alpha / n_prev;
+            }
         }
         
         // この面での波長を決定（targetSurfaceIndexの時だけ指定波長、それ以外は基準波長）
@@ -1962,6 +2105,15 @@ export function formatSeidelCoefficients(seidelData) {
             const coeff = seidelData.surfaceCoefficients[i];
             const surfaceIndex = coeff.surfaceIndex;
             
+            // 対応する面のデータを取得してCoordTrans/Gap面をスキップ
+            const surface = seidelData.opticalSystemRows[surfaceIndex];
+            if (surface) {
+                const isCoordTrans = isCoordTransSurface(surface) || surface._blockType === 'Gap' || surface.blockType === 'Gap';
+                if (isCoordTrans) {
+                    continue; // CoordTrans/Gap面は表示しない
+                }
+            }
+            
             // 面番号
             let surfNum = surfaceIndex.toString();
             let objectType = '';
@@ -1969,6 +2121,8 @@ export function formatSeidelCoefficients(seidelData) {
                 objectType = 'Object';
             } else if (coeff.surfaceType === 'Stop') {
                 objectType = 'Stop';
+            } else if (coeff.isMirror) {
+                objectType = 'Mirror';  // Mirror面を識別
             } else if (surfaceIndex === seidelData.opticalSystemRows.length - 1) {
                 objectType = 'Image';
             }
@@ -2012,6 +2166,14 @@ export function formatSeidelCoefficients(seidelData) {
             const trace = seidelData.marginalTraceData[j];
             const surface = opticalSystemRows[j];
             
+            // CoordTrans面とGap面をスキップ（表示から除外）
+            if (isCoordTransSurface(surface)) {
+                continue;
+            }
+            if (surface._blockType === 'Gap' || surface.blockType === 'Gap') {
+                continue;
+            }
+            
             let surfNum = j.toString();
             let objectType = '';
             if (j === 0) {
@@ -2020,6 +2182,13 @@ export function formatSeidelCoefficients(seidelData) {
                 objectType = 'Stop';
             } else if (j === seidelData.marginalTraceData.length - 1) {
                 objectType = 'Image';
+            }
+            
+            // Mirror面を識別
+            const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror' || 
+                             surface.rindex === '-1' || surface['ref index'] === '-1');
+            if (isMirror) {
+                objectType = 'Mirror';
             }
             
             output += `${surfNum.padStart(7)}\t${objectType.padEnd(6)}\t`;
@@ -2087,6 +2256,14 @@ export function formatSeidelCoefficients(seidelData) {
             const trace = seidelData.chiefTraceData[j];
             const surface = opticalSystemRows[j];
             
+            // CoordTrans面とGap面をスキップ（表示から除外）
+            if (isCoordTransSurface(surface)) {
+                continue;
+            }
+            if (surface._blockType === 'Gap' || surface.blockType === 'Gap') {
+                continue;
+            }
+            
             let surfNum = j.toString();
             let objectType = '';
             if (j === 0) {
@@ -2095,6 +2272,13 @@ export function formatSeidelCoefficients(seidelData) {
                 objectType = 'Stop';
             } else if (j === seidelData.chiefTraceData.length - 1) {
                 objectType = 'Image';
+            }
+            
+            // Mirror面を識別
+            const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror' || 
+                             surface.rindex === '-1' || surface['ref index'] === '-1');
+            if (isMirror) {
+                objectType = 'Mirror';
             }
             
             output += `${surfNum.padStart(7)}\t${objectType.padEnd(6)}\t`;
@@ -2157,9 +2341,26 @@ export function formatSeidelCoefficients(seidelData) {
             output += '=== Auxiliary Terms ===\n\n';
             output += `${'Surface'.padStart(7)}\t${'Object'.padEnd(6)}\t${'hQ'.padStart(15)}\t${'hQ_'.padStart(15)}\t${'J'.padStart(15)}\t${'hΔ(1/ns)'.padStart(15)}\t${'hΔ(1/ns)_'.padStart(15)}\t${'P'.padStart(15)}\n`;
             
+            // デバッグ：surfaceCoefficients配列の内容を確認
+            console.log(`📊 surfaceCoefficients配列の要素数: ${seidelData.surfaceCoefficients.length}`);
+            for (const sc of seidelData.surfaceCoefficients) {
+                if (sc.isMirror) {
+                    console.log(`  → 面${sc.surfaceIndex}: isMirror=${sc.isMirror}`);
+                }
+            }
+            
             for (let i = 0; i < seidelData.surfaceCoefficients.length; i++) {
                 const coeff = seidelData.surfaceCoefficients[i];
                 const surfaceIndex = coeff.surfaceIndex;
+                
+                // 対応する面のデータを取得してCoordTrans/Gap面をスキップ
+                const surface = seidelData.opticalSystemRows[surfaceIndex];
+                if (surface) {
+                    const isCoordTrans = isCoordTransSurface(surface) || surface._blockType === 'Gap' || surface.blockType === 'Gap';
+                    if (isCoordTrans) {
+                        continue; // CoordTrans/Gap面は表示しない
+                    }
+                }
                 
                 let surfNum = surfaceIndex.toString();
                 let objectType = '';
@@ -2167,8 +2368,16 @@ export function formatSeidelCoefficients(seidelData) {
                     objectType = 'Object';
                 } else if (coeff.surfaceType === 'Stop') {
                     objectType = 'Stop';
-                } else if (surfaceIndex === opticalSystemRows.length - 1) {
+                } else if (coeff.isMirror) {
+                    objectType = 'Mirror';
+                    console.log(`🪞 Mirror面検出（補助項表示）: 面${surfaceIndex}, isMirror=${coeff.isMirror}`);
+                } else if (surfaceIndex === seidelData.opticalSystemRows.length - 1) {
                     objectType = 'Image';
+                }
+                
+                // デバッグ：Mirror面候補の確認
+                if (surface && (surface.material === 'MIRROR' || surface.rindex === '-1' || surface.rindex === -1)) {
+                    console.log(`🔍 Mirror候補: 面${surfaceIndex}, material='${surface.material}', rindex='${surface.rindex}', isMirror=${coeff.isMirror}, objectType='${objectType}'`);
                 }
                 
                 output += `${surfNum.padStart(7)}\t${objectType.padEnd(6)}\t`;
@@ -2199,6 +2408,14 @@ export function formatSeidelCoefficients(seidelData) {
             const trace = traceData[j];
             const surface = opticalSystemRows[j];
             
+            // CoordTrans面とGap面をスキップ（表示から除外）
+            if (isCoordTransSurface(surface)) {
+                continue;
+            }
+            if (surface._blockType === 'Gap' || surface.blockType === 'Gap') {
+                continue;
+            }
+            
             // 面番号（配列インデックスを使用）
             let surfNum = j.toString();
             let objectType = '';
@@ -2209,6 +2426,14 @@ export function formatSeidelCoefficients(seidelData) {
             } else if (j === traceData.length - 1) {
                 objectType = 'Image';
             }
+            
+            // Mirror面を識別
+            const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror' || 
+                             surface.rindex === '-1' || surface['ref index'] === '-1');
+            if (isMirror) {
+                objectType = 'Mirror';
+            }
+            
             output += `${surfNum.padStart(7)}\t${objectType.padEnd(6)}\t`;
             
             // 半径 r[j-1] (この面の曲率半径)
@@ -2322,6 +2547,14 @@ export function formatSeidelCoefficients(seidelData) {
             const surface = normalizedOpticalSystem[j];
             const originalSurface = opticalSystemRows[j];
             
+            // CoordTrans面とGap面をスキップ（表示から除外）
+            if (isCoordTransSurface(originalSurface)) {
+                continue;
+            }
+            if (originalSurface._blockType === 'Gap' || originalSurface.blockType === 'Gap') {
+                continue;
+            }
+            
             // 面番号（配列インデックスを使用）
             let surfNum = j.toString();
             let objectType = '';
@@ -2332,6 +2565,14 @@ export function formatSeidelCoefficients(seidelData) {
             } else if (j === normalizedTraceData.length - 1) {
                 objectType = 'Image';
             }
+            
+            // Mirror面を識別
+            const isMirror = (originalSurface.material === 'MIRROR' || originalSurface.material === 'Mirror' || 
+                             originalSurface.rindex === '-1' || originalSurface['ref index'] === '-1');
+            if (isMirror) {
+                objectType = 'Mirror';
+            }
+            
             output += `${surfNum.padStart(7)}\t${objectType.padEnd(6)}\t`;
             
             // 半径 r[j-1] (この面の曲率半径) - 正規化済み
@@ -2444,6 +2685,14 @@ export function formatSeidelCoefficients(seidelData) {
             const surface = normalizedOpticalSystem[j];
             const originalSurface = opticalSystemRows[j];
             
+            // CoordTrans面とGap面をスキップ（表示から除外）
+            if (isCoordTransSurface(originalSurface)) {
+                continue;
+            }
+            if (originalSurface._blockType === 'Gap' || originalSurface.blockType === 'Gap') {
+                continue;
+            }
+            
             // 面番号（配列インデックスを使用）
             let surfNum = j.toString();
             let objectType = '';
@@ -2454,6 +2703,14 @@ export function formatSeidelCoefficients(seidelData) {
             } else if (j === chiefTraceData.length - 1) {
                 objectType = 'Image';
             }
+            
+            // Mirror面を識別
+            const isMirror = (originalSurface.material === 'MIRROR' || originalSurface.material === 'Mirror' || 
+                             originalSurface.rindex === '-1' || originalSurface['ref index'] === '-1');
+            if (isMirror) {
+                objectType = 'Mirror';
+            }
+            
             output += `${surfNum.padStart(7)}\t${objectType.padEnd(6)}\t`;
             
             // 半径 r[j-1] (この面の曲率半径) - 正規化済み
@@ -2523,6 +2780,14 @@ export function formatSeidelCoefficients(seidelData) {
             const surfaceIndex = coeff.surfaceIndex;
             const originalSurface = seidelData.opticalSystemRows[surfaceIndex];
             
+            // 対応する面のデータを取得してCoordTrans/Gap面をスキップ
+            if (originalSurface) {
+                const isCoordTrans = isCoordTransSurface(originalSurface) || originalSurface._blockType === 'Gap' || originalSurface.blockType === 'Gap';
+                if (isCoordTrans) {
+                    continue; // CoordTrans/Gap面は表示しない
+                }
+            }
+            
             // 面番号（配列インデックスを使用）
             let surfNum = surfaceIndex.toString();
             let objectType = '';
@@ -2530,6 +2795,8 @@ export function formatSeidelCoefficients(seidelData) {
                 objectType = 'Object';
             } else if (coeff.surfaceType === 'Stop') {
                 objectType = 'Stop';
+            } else if (coeff.isMirror) {
+                objectType = 'Mirror';
             } else if (surfaceIndex === seidelData.opticalSystemRows.length - 1) {
                 objectType = 'Image';
             }

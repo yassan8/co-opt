@@ -1662,7 +1662,7 @@ export function calculateMarginalAlphaAtStop(opticalSystemRows, stopIndex, wavel
  * @param {Object} surface - 面データ
  * @returns {boolean} Coord Trans面の場合true
  */
-function isCoordTransSurface(surface) {
+export function isCoordTransSurface(surface) {
   if (!surface) return false;
   
   const fields = [
