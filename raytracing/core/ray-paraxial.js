@@ -203,6 +203,7 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
     // 近軸光線追跡
     let h = initialHeight;    // 初期光線高さ
     let alpha = initialAlpha; // 初期換算傾角
+    let alphaAfterLastMirror = null; // 最後のミラー直後のα（テレセントリック判定用）
     
     // console.log(`=== 全系近軸光線追跡開始 ===`);
     // console.log(`初期光線高さ h[1]: ${initialHeight.toFixed(6)} mm`);
@@ -236,8 +237,12 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       let nextN = 1.0; // デフォルトは空気
       
       if (isMirror) {
-        // Mirror面: 反射なので符号反転 (n' = -n)
+        // Mirror面: 屈折率反転法 (n' = -n)
+        // 反射を「負の屈折率空間への屈折」として扱う標準的な近軸光線追跡法
+        // 屈折力: φ = (n' - n) / R = (-n - n) / R = -2n/R
         nextN = -prevN;
+        console.log(`  面${j}: MIRROR検出 - 屈折率反転 n = ${prevN} → n' = ${nextN}`);
+        // ミラー通過後のαを記録（屈折計算後に更新される）
       } else {
         // 手動設定のRef Indexまたは材料名がある場合
         const hasManualRefIndex = surface.rindex || surface['ref index'] || surface.refIndex || surface['Ref Index'];
@@ -258,8 +263,8 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       // console.log(`面${j}: Material="${surface.material || 'empty'}", RefIndex="${surface['ref index'] || surface.refIndex || 'none'}", R=${radius.toFixed(6)}, t=${thickness.toFixed(6)}, n=${prevN.toFixed(6)}→${nextN.toFixed(6)}`);
       // console.log(`面${j} 入射: h=${h.toFixed(6)}, α=${alpha.toFixed(6)}`);
       
-      // 数値チェック
-      if (!isFinite(nextN) || nextN <= 0) {
+      // 数値チェック（ミラーの負の屈折率は物理的に有効）
+      if (!isFinite(nextN)) {
         // console.log(`  ⚠️ 無効な屈折率 nextN=${nextN}, 1.0を使用`);
         nextN = 1.0;
       }
@@ -286,6 +291,11 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       if (!isFinite(alpha)) {
         // console.log(`  ❌ αが無効になりました: α=${alpha}, phi=${phi}, h=${h}`);
         return null;
+      }
+      
+      // ミラー面の場合、この面通過後のαを記録
+      if (isMirror) {
+        alphaAfterLastMirror = alpha;
       }
       
       // 光線移行（最終面でない場合）：h[j+1] = h[j] - thickness * α[j+1] / nextN
@@ -330,14 +340,14 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       }
     }
     
-    // バックフォーカス計算：常に無限遠物体条件（α=0）で計算
+    // バックフォーカス計算：光学的計算（h/α）
     let backFocalLength = null;
     if (objectDistance !== Infinity) {
       // 有限物体の場合、BFL計算のために無限遠物体条件での結果を使用
       const eflResult = calculateEFLTrace(opticalSystemRows, wavelength);
       if (eflResult && Math.abs(eflResult.finalAlpha) > 1e-10) {
         backFocalLength = eflResult.finalHeight / eflResult.finalAlpha;
-        // console.log(`BFL計算: BFL = h[final]/α[final] = ${eflResult.finalHeight.toFixed(6)}/${eflResult.finalAlpha.toFixed(6)} = ${backFocalLength.toFixed(6)} mm`);
+        console.log(`BFL計算: h / α = ${eflResult.finalHeight.toFixed(6)} / ${eflResult.finalAlpha.toFixed(6)} = ${backFocalLength.toFixed(6)} mm`);
       } else {
         backFocalLength = Infinity;
       }
@@ -345,18 +355,168 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       // 無限遠物体の場合、通常通り計算
       if (Math.abs(alpha) > 1e-10) {
         backFocalLength = h / alpha;
-        // console.log(`BFL計算: BFL = h[final]/α[final] = ${h.toFixed(6)}/${alpha.toFixed(6)} = ${backFocalLength.toFixed(6)} mm`);
+        console.log(`BFL計算: h / α = ${h.toFixed(6)} / ${alpha.toFixed(6)} = ${backFocalLength.toFixed(6)} mm`);
       } else {
         backFocalLength = Infinity;
       }
     }
     
-    // イメージディスタンス = 実際のオブジェクト距離での計算結果
+    // ミラーシステムの場合：ミラー間の折り返し光路の物理的距離を引く（Image面直前は除外）
+    if (backFocalLength !== null && backFocalLength !== Infinity) {
+      // テレセントリック判定の閾値（rad）
+      const TELECENTRIC_ALPHA_THRESHOLD = 1e-5;
+      // ミラーが存在する場合は最後のミラー直後のαを使用、そうでなければ最終α
+      const alphaForTelecentricCheck = (alphaAfterLastMirror !== null) ? alphaAfterLastMirror : alpha;
+      console.log(`[BFL Mirror補正判定] α = ${alphaForTelecentricCheck.toFixed(9)} rad (|α| = ${Math.abs(alphaForTelecentricCheck).toExponential(6)}), しきい値 = ${TELECENTRIC_ALPHA_THRESHOLD.toExponential(0)}`);
+      if (alphaAfterLastMirror !== null) {
+        console.log(`  → 最後のミラー直後のαを使用（最終α = ${alpha.toFixed(9)}）`);
+      }
+      const isTelecentric = Math.abs(alphaForTelecentricCheck) < TELECENTRIC_ALPHA_THRESHOLD;
+      
+      if (isTelecentric) {
+        console.log(`テレセントリック光学系検出 (|α| = ${Math.abs(alpha).toExponential(3)} < ${TELECENTRIC_ALPHA_THRESHOLD.toExponential(0)})`);
+        console.log(`BFL: ミラー折り返し補正をスキップ（テレセントリック系）`);
+      } else {
+        console.log(`[BFL Mirror補正] 非テレセントリック系 → ミラー光路補正を実行`);
+      }
+      
+      let mirrorPathCorrection = 0;
+      let mirrorCount = 0;
+      
+      // Image面のインデックスを探す
+      let imageIndex = -1;
+      for (let j = 0; j < opticalSystemRows.length; j++) {
+        const surface = opticalSystemRows[j];
+        if (surface["object type"] === "Image" || surface.comment === "Image") {
+          imageIndex = j;
+          break;
+        }
+      }
+      
+      // ミラーが存在する場合、各ミラー後のCoordTransのgapを累積（テレセントリック系は除く）
+      let currentMirrorIndex = 0;
+      if (!isTelecentric) {
+        for (let j = 0; j < opticalSystemRows.length; j++) {
+          const surface = opticalSystemRows[j];
+          if (surface["object type"] === "Image" || surface.comment === "Image") break;
+          
+          const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror');
+          if (isMirror) {
+            currentMirrorIndex++;
+            mirrorCount++;
+          
+            // このミラーの次のCoordTransのgapを探す（ただしImage面直前は除外）
+            for (let k = j + 1; k < opticalSystemRows.length; k++) {
+              const nextSurface = opticalSystemRows[k];
+              if (nextSurface["object type"] === "Image" || nextSurface.comment === "Image") break;
+              if (isCoordTransSurface(nextSurface)) {
+                // Image面の直前のCoordTransかチェック
+                let isBeforeImage = false;
+                if (imageIndex !== -1 && k === imageIndex - 1) {
+                  isBeforeImage = true;
+                }
+                
+                if (!isBeforeImage) {
+                  const thickness = getSafeThickness(nextSurface);
+                  if (thickness !== 0) {
+                    mirrorPathCorrection += Math.abs(thickness);
+                    console.log(`  折り返し光路補正: Mirror${currentMirrorIndex} 後の面${k} CoordTrans gap=${thickness.toFixed(3)}, 累積=${mirrorPathCorrection.toFixed(3)}`);
+                  }
+                } else {
+                  console.log(`  Image面直前の面${k}のgapは補正から除外（Manual調整値）`);
+                }
+                break; // 最初のCoordTransのみを対象
+              }
+            }
+          }
+        }
+      }
+      
+      if (mirrorPathCorrection > 0) {
+        console.log(`BFL補正: 光学的BFL ${backFocalLength.toFixed(6)} - ミラー光路 ${mirrorPathCorrection.toFixed(6)} = ${(backFocalLength - mirrorPathCorrection).toFixed(6)} mm`);
+        backFocalLength = backFocalLength - mirrorPathCorrection;
+      }
+    }
+    
+    // イメージディスタンス計算（光学的計算 + ミラー折り返し補正）
     let imageDistance = null;
+    
     if (Math.abs(alpha) > 1e-10) {
       imageDistance = h / alpha;
+      console.log(`Image Distance (光学的): h/α = ${h.toFixed(6)}/${alpha.toFixed(6)} = ${imageDistance.toFixed(6)} mm`);
+      
+      // テレセントリック判定の閾値（rad）
+      const TELECENTRIC_ALPHA_THRESHOLD = 1e-5;
+      // ミラーが存在する場合は最後のミラー直後のαを使用、そうでなければ最終α
+      const alphaForTelecentricCheck = (alphaAfterLastMirror !== null) ? alphaAfterLastMirror : alpha;
+      console.log(`[IMD Mirror補正判定] α = ${alphaForTelecentricCheck.toFixed(9)} rad (|α| = ${Math.abs(alphaForTelecentricCheck).toExponential(6)}), しきい値 = ${TELECENTRIC_ALPHA_THRESHOLD.toExponential(0)}`);
+      if (alphaAfterLastMirror !== null) {
+        console.log(`  → 最後のミラー直後のαを使用（最終α = ${alpha.toFixed(9)}）`);
+      }
+      const imdIsTelecentric = Math.abs(alphaForTelecentricCheck) < TELECENTRIC_ALPHA_THRESHOLD;
+      
+      // ミラー折り返し光路の補正
+      let imdMirrorPathCorrection = 0;
+      
+      if (imdIsTelecentric) {
+        console.log(`テレセントリック光学系検出 (|α| = ${Math.abs(alpha).toExponential(3)} < ${TELECENTRIC_ALPHA_THRESHOLD.toExponential(0)})`);
+        console.log(`Image Distance: ミラー折り返し補正をスキップ（テレセントリック系）`);
+      } else {
+        console.log(`[IMD Mirror補正] 非テレセントリック系 → ミラー光路補正を実行`);
+          let imdMirrorCount = 0;
+          
+          // Image面のインデックスを探す
+          let imdImageIndex = -1;
+          for (let j = 0; j < opticalSystemRows.length; j++) {
+            const surface = opticalSystemRows[j];
+            if (surface["object type"] === "Image" || surface.comment === "Image") {
+              imdImageIndex = j;
+              break;
+            }
+          }
+          
+          for (let j = 0; j < opticalSystemRows.length; j++) {
+            const surface = opticalSystemRows[j];
+            if (surface["object type"] === "Image" || surface.comment === "Image") break;
+            
+            const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror');
+            if (isMirror) {
+                imdMirrorCount++;
+                
+                // このミラーの次のCoordTransのgapを探す
+                for (let k = j + 1; k < opticalSystemRows.length; k++) {
+                const nextSurface = opticalSystemRows[k];
+                if (nextSurface["object type"] === "Image" || nextSurface.comment === "Image") break;
+                if (isCoordTransSurface(nextSurface)) {
+                    // Image面の直前のCoordTransかチェック
+                    let isBeforeImage = false;
+                    if (imdImageIndex !== -1 && k === imdImageIndex - 1) {
+                    isBeforeImage = true;
+                    }
+                    
+                    if (!isBeforeImage) {
+                    const thickness = getSafeThickness(nextSurface);
+                    if (thickness !== 0) {
+                        imdMirrorPathCorrection += Math.abs(thickness);
+                        console.log(`  Image Distance補正: Mirror${imdMirrorCount} 後の面${k} CoordTrans gap=${thickness.toFixed(3)}, 累積=${imdMirrorPathCorrection.toFixed(3)}`);
+                    }
+                    } else {
+                    console.log(`  Image面直前の面${k}のgapは補正から除外（Manual調整値）`);
+                    }
+                    break; // 最初のCoordTransのみを対象
+                }
+                }
+            }
+          }
+      }
+      
+      if (imdMirrorPathCorrection > 0) {
+        console.log(`Image Distance補正: 光学的 ${imageDistance.toFixed(6)} - ミラー光路 ${imdMirrorPathCorrection.toFixed(6)} = ${(imageDistance - imdMirrorPathCorrection).toFixed(6)} mm`);
+        imageDistance = imageDistance - imdMirrorPathCorrection;
+      }
     } else {
       imageDistance = Infinity;
+      console.log(`Image Distance = Infinity (α ≈ 0)`);
     }
     
     // console.log(`計算結果:`);
@@ -366,8 +526,8 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
     
     console.log(`=== 近軸計算結果 ===`);
     console.log(`  焦点距離 f = h[1]/α[final] = ${initialHeight.toFixed(6)}/${alpha.toFixed(6)} = ${focalLength.toFixed(6)} mm`);
-    console.log(`  バックフォーカス BFL = h[final]/α[final] = ${h.toFixed(6)}/${alpha.toFixed(6)} = ${backFocalLength.toFixed(6)} mm`);
-    console.log(`  イメージディスタンス = ${imageDistance?.toFixed(6)} mm`);
+    console.log(`  バックフォーカス BFL = ${backFocalLength !== null && backFocalLength !== Infinity ? backFocalLength.toFixed(6) : backFocalLength} mm (光学的計算 - ミラー補正)`);
+    console.log(`  イメージディスタンス = ${imageDistance !== null && imageDistance !== Infinity ? imageDistance.toFixed(6) : imageDistance} mm (光学的計算 - ミラー補正)`);
     
     return {
       focalLength: focalLength,
@@ -377,7 +537,7 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       finalAlpha: alpha
     };
   } catch (error) {
-    // console.error('全系近軸光線追跡エラー:', error);
+    console.error('全系近軸光線追跡エラー:', error);
     // console.error('スタックトレース:', error.stack);
     return null;
   }
@@ -1549,18 +1709,28 @@ function calculateEFLTrace(opticalSystemRows, wavelength = 0.5875618) {
     const radius = getSafeRadius(surface);
     const thickness = getSafeThickness(surface);
     
+    // Mirror面の検出
+    const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror');
+    
     // 次の媒質の屈折率を決定
     let nextN = 1.0; // デフォルトは空気
     
-    // 手動設定のRef Indexまたは材料名がある場合
-    const hasManualRefIndex = surface['ref index'] || surface.refIndex || surface['Ref Index'];
-    const hasMaterial = surface.material && surface.material !== "" && surface.material !== "0";
-    
-    if (thickness > 0 && (hasManualRefIndex || hasMaterial)) {
-      nextN = getRefractiveIndex(surface, wavelength);
+    if (isMirror) {
+      // Mirror面: ZEMAXスタイル - 屈折率は変えずに反射を処理
+      nextN = prevN;
+    } else {
+      // 手動設定のRef Indexまたは材料名がある場合
+      const hasManualRefIndex = surface['ref index'] || surface.refIndex || surface['Ref Index'];
+      const hasMaterial = surface.material && surface.material !== "" && surface.material !== "0";
+      
+      if (thickness > 0 && (hasManualRefIndex || hasMaterial)) {
+        nextN = getRefractiveIndex(surface, wavelength);
+      } else {
+        nextN = 1.0;
+      }
     }
     
-    if (!isFinite(nextN) || nextN <= 0) {
+    if (!isFinite(nextN) || nextN === 0) {
       nextN = 1.0;
     }
     
@@ -1595,7 +1765,8 @@ function calculateEFLTrace(opticalSystemRows, wavelength = 0.5875618) {
   
   return {
     finalHeight: h,
-    finalAlpha: alpha
+    finalAlpha: alpha,
+    finalN: prevN  // 最終屈折率を返す（ミラーの符号を考慮）
   };
 }
 

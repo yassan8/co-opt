@@ -15,7 +15,7 @@ import { tableObject } from '../data/table-object.js';
 import { tableOpticalSystem } from '../data/table-optical-system.js';
 import { debugWASMSystem, quickWASMComparison } from '../debug/debug-utils.js';
 import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows, deriveBlocksFromLegacyOpticalSystemRows } from '../data/block-schema.js';
-import { calculateBackFocalLength, calculateImageDistance, calculateFocalLength, calculateParaxialData, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.js';
+import { calculateBackFocalLength, calculateImageDistance, calculateFocalLength, calculateParaxialData, calculateFullSystemParaxialTrace, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.js';
 import { traceRay, traceRayHitPoint } from '../raytracing/core/ray-tracing.js';
 import { findInfiniteSystemChiefRayOrigin, findApertureBoundaryRays } from '../raytracing/generation/gen-ray-cross-infinite.js';
 import { generateZMXText, downloadZMX } from '../import-export/zemax-export.js';
@@ -8755,21 +8755,44 @@ async function __blocks_updateAutoValues() {
                         ? (Number(window.getPrimaryWavelength()) || 0.5876)
                         : 0.5876;
 
-                    let val = __blocks_findRequirementTarget(mode, activeId);
+                    let val = (mode === 'BFL')
+                        ? calculateBackFocalLength(rows, primaryWavelength)
+                        : calculateImageDistance(rows, primaryWavelength);
+                    
+                    console.log(`[Auto] ${mode} 1st calc result:`, val);
+
                     if (!Number.isFinite(val)) {
-                        val = (mode === 'BFL')
-                            ? calculateBackFocalLength(rows, primaryWavelength)
-                            : calculateImageDistance(rows, primaryWavelength);
+                        const trace = calculateFullSystemParaxialTrace(rows, primaryWavelength);
+                        if (trace) {
+                            val = (mode === 'BFL') ? trace.backFocalLength : trace.imageDistance;
+                        }
+                        console.log(`[Auto] ${mode} trace fallback result:`, val);
+                    }
+                    
+                    if (!Number.isFinite(val)) {
+                         // Debug input rows
+                        if (rows && rows.length > 0) {
+                            console.log('[Auto Debug] Paraxial input rows snippet (0,1, last):', rows[0], rows[1], rows[rows.length-1]);
+                            console.log('[Auto Debug] Primary Wavelength:', primaryWavelength);
+                        }
+                        console.warn(`[Auto] ${mode} calculation failed completely. Checking requirement target.`);
+                        val = __blocks_findRequirementTarget(mode, activeId);
                     }
 
-                    if (Number.isFinite(val) && b.parameters.thickness !== val) {
-                        b.parameters.thickness = val;
-                        // Save the updated value
-                        try {
-                            if (typeof saveSystemConfigurations === 'function') {
-                                saveSystemConfigurations(systemConfig);
-                            }
-                        } catch (_) {}
+                    if (Number.isFinite(val)) {
+                        console.log(`[Auto] Updating ${mode} to ${val}`);
+                        if (b.parameters.thickness !== val) {
+                            b.parameters.thickness = val;
+                            // Save the updated value
+                            try {
+                                if (typeof saveSystemConfigurations === 'function') {
+                                    saveSystemConfigurations(systemConfig);
+                                }
+                            } catch (_) {}
+                            try { refreshBlockInspector(); } catch (_) {}
+                        }
+                    } else {
+                        console.warn(`[Auto] Could not determine finite value for ${mode} (val=${val})`);
                     }
                 }
             }
@@ -9031,7 +9054,9 @@ function __blocks_findRequirementTarget(operand, configId) {
         const rcid = String(r.configId ?? '').trim();
         if (rcid !== '' && cid !== '' && rcid !== cid) continue;
         const tRaw = r.target;
-        const n = (typeof tRaw === 'number') ? tRaw : Number(String(tRaw ?? '').trim());
+        const tStr = String(tRaw ?? '').trim();
+        if (tStr === '') continue;
+        const n = (typeof tRaw === 'number') ? tRaw : Number(tStr);
         if (Number.isFinite(n)) return n;
     }
     return null;
@@ -9876,11 +9901,27 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                     // Prefer System Requirements target (when present) so this can
                                     // directly satisfy the IMD/BFL requirement for the active config.
                                     // Fallback: compute from current system.
-                                    let val = __blocks_findRequirementTarget(desired, activeId);
+                                    let val = (desired === 'BFL')
+                                        ? calculateBackFocalLength(rows, primaryWavelength)
+                                        : calculateImageDistance(rows, primaryWavelength);
                                     if (!Number.isFinite(val)) {
-                                        val = (desired === 'BFL')
-                                            ? calculateBackFocalLength(rows, primaryWavelength)
-                                            : calculateImageDistance(rows, primaryWavelength);
+                                        const trace = calculateFullSystemParaxialTrace(rows, primaryWavelength);
+                                        if (trace) {
+                                            val = (desired === 'BFL') ? trace.backFocalLength : trace.imageDistance;
+                                        }
+                                    }
+                                    if (!Number.isFinite(val)) {
+                                        val = __blocks_findRequirementTarget(desired, activeId);
+                                    }
+                                    if (!Number.isFinite(val)) {
+                                        const trace = calculateFullSystemParaxialTrace(rows, primaryWavelength);
+                                        if (trace) {
+                                            val = (desired === 'BFL') ? trace.backFocalLength : trace.imageDistance;
+                                        }
+                                    }
+                                    if (!Number.isFinite(val)) {
+                                        const coerced = Number(val);
+                                        if (Number.isFinite(coerced)) val = coerced;
                                     }
 
                                     if (!Number.isFinite(val)) {
@@ -10400,11 +10441,30 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                 const primaryWavelength = (typeof window.getPrimaryWavelength === 'function')
                                     ? (Number(window.getPrimaryWavelength()) || 0.5876)
                                     : 0.5876;
-                                let val = __blocks_findRequirementTarget(desired, activeId);
+                                let val = (desired === 'BFL')
+                                    ? calculateBackFocalLength(rows, primaryWavelength)
+                                    : calculateImageDistance(rows, primaryWavelength);
+                                
+                                console.log(`[ManualMode] ${desired} calc result:`, val);
+
                                 if (!Number.isFinite(val)) {
-                                    val = (desired === 'BFL')
-                                        ? calculateBackFocalLength(rows, primaryWavelength)
-                                        : calculateImageDistance(rows, primaryWavelength);
+                                    const trace = calculateFullSystemParaxialTrace(rows, primaryWavelength);
+                                    if (trace) {
+                                        val = (desired === 'BFL') ? trace.backFocalLength : trace.imageDistance;
+                                    }
+                                }
+                                if (!Number.isFinite(val)) {
+                                    val = __blocks_findRequirementTarget(desired, activeId);
+                                }
+                                if (!Number.isFinite(val)) {
+                                    const trace = calculateFullSystemParaxialTrace(rows, primaryWavelength);
+                                    if (trace) {
+                                        val = (desired === 'BFL') ? trace.backFocalLength : trace.imageDistance;
+                                    }
+                                }
+                                if (!Number.isFinite(val)) {
+                                    const coerced = Number(val);
+                                    if (Number.isFinite(coerced)) val = coerced;
                                 }
                                 if (!Number.isFinite(val)) {
                                     alert(`${desired} の計算に失敗しました。`);
