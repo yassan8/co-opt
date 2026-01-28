@@ -219,12 +219,14 @@ export function generateZMXText(opticalSystemRows, options = {}) {
         lines.push(`CONI ${formatFloat(conic)}`);
       }
 
-      // Map coef1..coef10 => PARM 1..10
+      // Map coef1..coef10 => PARM 2..11 (Zemax: PARM 1=unused, PARM 2=A4, PARM 3=A6, ...)
+      // co-opt: coef1=A4, coef2=A6, coef3=A8, ... so coefN => PARM (N+1)
+      lines.push('PARM 1 0');  // PARM 1 is conventionally 0 (unused) in Zemax
       for (let j = 1; j <= 10; j++) {
         const key = `coef${j}`;
         const val = parseNumberOrNull(row[key]);
         if (val === null || !Number.isFinite(val) || val === 0) continue;
-        lines.push(`PARM ${j} ${formatFloat(val)}`);
+        lines.push(`PARM ${j + 1} ${formatFloat(val)}`);
       }
     } else {
       // Standard / spherical
