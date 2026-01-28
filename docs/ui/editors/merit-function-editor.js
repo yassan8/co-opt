@@ -1127,7 +1127,9 @@ class MeritFunctionEditor {
             const rmsUm = rmsMm * 1000;
 
             // Debug output: log first few calls and periodically to track optimization progress
-            if (typeof this.__laRmsCallCount === 'undefined') this.__laRmsCallCount = 0;
+            if (typeof this.__laRmsCallCount === 'undefined') {
+                this.__laRmsCallCount = 0;
+            }
             this.__laRmsCallCount++;
             
             // Log first 3 calls and then every 50th call

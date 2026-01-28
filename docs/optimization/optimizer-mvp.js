@@ -2134,6 +2134,30 @@ export async function runOptimizationMVP(options = {}) {
 
   // Reset global stop flag at the start of each run.
   __optimizerStopRequested = false;
+  
+  // Reset MeritFunctionEditor debug counters to ensure clean state
+  try {
+    if (typeof window !== 'undefined' && window.meritFunctionEditor) {
+      // Reset LA_RMS_UM call counter
+      if (typeof window.meritFunctionEditor.__laRmsCallCount !== 'undefined') {
+        window.meritFunctionEditor.__laRmsCallCount = 0;
+      }
+      // Reset any other counters if needed
+    }
+  } catch (_) {}
+  
+  // Clear spot diagram debug cache to ensure fresh evaluations
+  try {
+    if (typeof window !== 'undefined') {
+      if (window.__cooptSpotSizeDebugFast) {
+        window.__cooptSpotSizeDebugFast = null;
+      }
+      if (window.__cooptSpotSizeDebugFastByKey) {
+        window.__cooptSpotSizeDebugFastByKey = {};
+      }
+    }
+  } catch (_) {}
+  
   const runUntilStopped = !!opts.runUntilStopped;
   const methodRaw = String(opts.method || '').trim().toLowerCase();
   const method = (methodRaw === 'cd' || methodRaw === 'coordinatedescent') ? 'cd' : 'lm';
