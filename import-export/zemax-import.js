@@ -497,10 +497,15 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       const val = parseNumberOrNull(tokens[2]);
       if (idx === null || val === null) continue;
       const j = Math.trunc(idx);
-      if (j >= 1 && j <= 10) {
-        row[`coef${j}`] = val;
+      // Zemax PARM mapping: PARM 1=unused, PARM 2=A4, PARM 3=A6, ...
+      // co-opt mapping: coef1=A4, coef2=A6, coef3=A8, ...
+      // So PARM n maps to coef(n-1), skipping PARM 1
+      if (j >= 2 && j <= 11) {
+        row[`coef${j - 1}`] = val;
+      } else if (j === 1) {
+        // PARM 1 is typically 0 and unused in Zemax; ignore it
       } else {
-        addIssue('warning', `PARM index out of range (1..10) at surface ${currentSurf}: ${j}`);
+        addIssue('warning', `PARM index out of range (1..11) at surface ${currentSurf}: ${j}`);
       }
       continue;
     }
