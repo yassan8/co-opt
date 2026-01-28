@@ -2844,30 +2844,30 @@ body.dark-mode .config-info strong {
 
 /* Tabulator Tables */
 body.dark-mode .tabulator {
-    background-color: var(--bg-secondary);
-    color: var(--text-primary);
-    border-color: var(--border-color);
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
 }
 
 body.dark-mode .tabulator-header {
-    background-color: var(--bg-tertiary);
-    border-color: var(--border-color);
+    background-color: var(--bg-primary) !important;
+    border-color: var(--border-color) !important;
 }
 
 body.dark-mode .tabulator-col {
-    background-color: var(--bg-tertiary);
-    color: var(--text-primary);
-    border-color: var(--border-color);
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
 }
 
 body.dark-mode .tabulator-col-title {
-    color: var(--text-primary);
+    color: var(--text-primary) !important;
 }
 
 body.dark-mode .tabulator-row {
-    background-color: var(--bg-secondary);
-    color: var(--text-primary);
-    border-color: var(--border-light);
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-light) !important;
 }
 
 body.dark-mode .tabulator-row:hover {
@@ -2876,6 +2876,18 @@ body.dark-mode .tabulator-row:hover {
 
 body.dark-mode .tabulator-row.tabulator-selected {
     background-color: var(--bg-tertiary) !important;
+}
+
+body.dark-mode .tabulator-tableholder {
+    background-color: var(--bg-primary) !important;
+}
+
+body.dark-mode #table-source,
+body.dark-mode #table-object,
+body.dark-mode #design-intent-table,
+body.dark-mode #requirements-table,
+body.dark-mode #optical-system-table {
+    background-color: var(--bg-primary) !important;
 }
 
 body.dark-mode .tabulator-cell {
