@@ -3233,6 +3233,11 @@ body.dark-mode footer *[style*="color:black"] {
 
 /* Block Inspector rows and borders */
 body.dark-mode .block-inspector {
+    border: 1px solid var(--border-color) !important;
+    background-color: var(--bg-primary) !important;
+}
+
+body.dark-mode .optical-system-divider {
     border-top-color: var(--border-color) !important;
 }
 
