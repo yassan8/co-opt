@@ -23,6 +23,473 @@ import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-i
 import { buildShareUrlFromCompressedString, decodeAllDataFromCompressedString, encodeAllDataToCompressedString, getCompressedStringFromLocationHash, getCompressedStringFromLocation } from '../utils/url-share.js';
 import { listDesignVariablesFromBlocks } from '../optimization/design-variables.js';
 
+/**
+ * ============================================================================
+ * PARAMETER SLIDER HELPERS (for Design Intent numeric inputs with touch support)
+ * ============================================================================
+ */
+
+/**
+ * Get slider range configuration for a parameter
+ * @param {string} key - Parameter key (e.g., 'frontRadius', 'centerThickness', 'nd', 'vd')
+ * @param {string} blockType - Block type (e.g., 'Lens', 'Mirror', 'Doublet')
+ * @param {number|string} currentValue - Current parameter value
+ * @returns {{min: number, max: number, step: number, useLog: boolean}}
+ */
+function getSliderRangeForParameter(key, blockType, currentValue) {
+    const val = parseFloat(currentValue);
+    const isZeroOrNaN = !Number.isFinite(val) || val === 0;
+    
+    // Refractive index (nd)
+    if (key === 'nd' || (key === 'material' && !isNaN(val) && val > 0 && val < 4)) {
+        return { min: 1.0, max: 2.5, step: 0.0001, useLog: false };
+    }
+    
+    // Abbe number (vd)
+    if (key === 'vd' || key === 'abbe') {
+        return { min: 20, max: 95, step: 0.1, useLog: false };
+    }
+    
+    // Radius parameters (can be negative)
+    if (key.includes('Radius') || key === 'radius') {
+        if (isZeroOrNaN) {
+            return { min: -100, max: 100, step: 0.1, useLog: false };
+        }
+        const absVal = Math.abs(val);
+        const range = absVal * 0.5;
+        return {
+            min: val - range,
+            max: val + range,
+            step: absVal * 0.001,
+            useLog: false
+        };
+    }
+    
+    // Thickness parameters (non-negative)
+    if (key.includes('Thickness') || key === 'thickness' || key.includes('hickness')) {
+        if (isZeroOrNaN) {
+            return { min: 0, max: 20, step: 0.1, useLog: false };
+        }
+        return {
+            min: 0,
+            max: val * 2,
+            step: val * 0.001,
+            useLog: false
+        };
+    }
+    
+    // Semi-diameter / aperture parameters (non-negative)
+    if (key.includes('semidia') || key.includes('Semidia') || key.includes('aperture')) {
+        if (isZeroOrNaN) {
+            return { min: 0.1, max: 20, step: 0.1, useLog: false };
+        }
+        return {
+            min: Math.max(0.1, val * 0.5),
+            max: val * 1.5,
+            step: val * 0.001,
+            useLog: false
+        };
+    }
+    
+    // Conic constant
+    if (key === 'conic') {
+        if (isZeroOrNaN) {
+            return { min: -10, max: 10, step: 0.01, useLog: false };
+        }
+        const absVal = Math.abs(val);
+        const range = Math.max(absVal * 0.5, 1);
+        return {
+            min: val - range,
+            max: val + range,
+            step: absVal > 1 ? absVal * 0.001 : 0.001,
+            useLog: false
+        };
+    }
+    
+    // Aspheric coefficients (can be very small)
+    if (key.startsWith('coef') || key.includes('Coef')) {
+        if (isZeroOrNaN) {
+            return { min: -10, max: 10, step: 0.001, useLog: false };
+        }
+        const absVal = Math.abs(val);
+        const range = Math.max(absVal * 0.5, absVal * 10);
+        return {
+            min: val - range,
+            max: val + range,
+            step: absVal * 0.01,
+            useLog: false
+        };
+    }
+    
+    // Default: relative range ±50%
+    if (isZeroOrNaN) {
+        return { min: -10, max: 10, step: 0.1, useLog: false };
+    }
+    const absVal = Math.abs(val);
+    const range = absVal * 0.5;
+    return {
+        min: val - range,
+        max: val + range,
+        step: absVal * 0.001,
+        useLog: false
+    };
+}
+
+/**
+ * Get display precision based on value magnitude and range
+ * @param {number} value - The value to display
+ * @param {number} rangeSpan - The range span (max - min)
+ * @returns {number} Number of decimal places
+ */
+function getDisplayPrecision(value, rangeSpan) {
+    if (!Number.isFinite(value) || !Number.isFinite(rangeSpan)) return 6;
+    
+    const absVal = Math.abs(value);
+    if (absVal === 0) return 4;
+    
+    // For very small values, use more precision
+    if (absVal < 1e-6) return 15;
+    if (absVal < 1e-3) return 10;
+    if (absVal < 1) return 6;
+    
+    // For larger values, adjust based on range
+    if (rangeSpan < 1) return 6;
+    if (rangeSpan < 10) return 4;
+    if (rangeSpan < 100) return 3;
+    return 2;
+}
+
+/**
+ * Convert slider value (0-1) to parameter value using linear or logarithmic scale
+ * Handles positive/negative ranges with logarithmic scale split at zero
+ * @param {number} sliderValue - Normalized slider position (0-1)
+ * @param {number} min - Minimum parameter value
+ * @param {number} max - Maximum parameter value
+ * @param {boolean} useLog - Whether to use logarithmic scale
+ * @returns {number} Parameter value
+ */
+function sliderToValue(sliderValue, min, max, useLog) {
+    if (!useLog) {
+        // Linear scale
+        return min + sliderValue * (max - min);
+    }
+    
+    // Logarithmic scale
+    // Handle case where range crosses zero
+    if (min < 0 && max > 0) {
+        // Split at zero: 0-0.5 maps to [min, 0], 0.5-1 maps to [0, max]
+        if (sliderValue < 0.5) {
+            // Negative side: use log scale from min to 0
+            const absMin = Math.abs(min);
+            const t = sliderValue * 2; // 0-0.5 -> 0-1
+            if (absMin < 1e-10) return -1e-10 * (1 - t);
+            const logVal = Math.exp(Math.log(absMin) * (1 - t) + Math.log(1e-10) * t);
+            return -logVal;
+        } else {
+            // Positive side: use log scale from 0 to max
+            const t = (sliderValue - 0.5) * 2; // 0.5-1 -> 0-1
+            if (max < 1e-10) return 1e-10 * t;
+            const logVal = Math.exp(Math.log(1e-10) * (1 - t) + Math.log(max) * t);
+            return logVal;
+        }
+    }
+    
+    // Both positive or both negative
+    const absMin = Math.abs(min);
+    const absMax = Math.abs(max);
+    const minLog = Math.log(Math.max(absMin, 1e-10));
+    const maxLog = Math.log(Math.max(absMax, 1e-10));
+    const logVal = Math.exp(minLog + sliderValue * (maxLog - minLog));
+    
+    // Preserve sign
+    if (min < 0 && max < 0) return -logVal;
+    return logVal;
+}
+
+/**
+ * Convert parameter value to slider value (0-1)
+ * @param {number} value - Parameter value
+ * @param {number} min - Minimum parameter value
+ * @param {number} max - Maximum parameter value
+ * @param {boolean} useLog - Whether to use logarithmic scale
+ * @returns {number} Normalized slider position (0-1)
+ */
+function valueToSlider(value, min, max, useLog) {
+    if (!useLog) {
+        // Linear scale
+        if (max === min) return 0.5;
+        return (value - min) / (max - min);
+    }
+    
+    // Logarithmic scale
+    if (min < 0 && max > 0) {
+        // Split at zero
+        if (value < 0) {
+            const absMin = Math.abs(min);
+            const absVal = Math.abs(value);
+            if (absMin < 1e-10 || absVal < 1e-10) return 0.25;
+            const t = (Math.log(absVal) - Math.log(1e-10)) / (Math.log(absMin) - Math.log(1e-10));
+            return (1 - t) * 0.5;
+        } else {
+            if (max < 1e-10 || value < 1e-10) return 0.75;
+            const t = (Math.log(value) - Math.log(1e-10)) / (Math.log(max) - Math.log(1e-10));
+            return 0.5 + t * 0.5;
+        }
+    }
+    
+    // Both positive or both negative
+    const absMin = Math.abs(min);
+    const absMax = Math.abs(max);
+    const absVal = Math.abs(value);
+    if (absMin < 1e-10 || absMax < 1e-10 || absVal < 1e-10) return 0.5;
+    const minLog = Math.log(absMin);
+    const maxLog = Math.log(absMax);
+    const valLog = Math.log(absVal);
+    if (maxLog === minLog) return 0.5;
+    return (valLog - minLog) / (maxLog - minLog);
+}
+
+/**
+ * Create a parameter slider control with linear/log toggle and magnitude adjustment
+ * @param {string} key - Parameter key
+ * @param {string} blockType - Block type
+ * @param {string|number} currentValue - Current parameter value
+ * @param {Function} commitCallback - Callback(newValue) to commit changes
+ * @returns {HTMLElement} Container element with input, slider, and controls
+ */
+function createParameterSlider(key, blockType, currentValue, commitCallback) {
+    const container = document.createElement('div');
+    container.className = 'param-input-with-slider';
+    // Use a fixed-column grid to keep slider start aligned across rows
+    container.style.display = 'grid';
+    container.style.gridTemplateColumns = '120px 40px 40px 40px 140px 220px';
+    container.style.columnGap = '6px';
+    container.style.alignItems = 'center';
+    container.style.flex = '0 0 630px';
+    container.style.width = '630px';
+    container.style.minWidth = '630px';
+    container.style.maxWidth = '630px';
+    
+    // Parse current value
+    const initialVal = parseFloat(currentValue);
+    const hasValidValue = Number.isFinite(initialVal);
+    
+    // Get initial range
+    let rangeConfig = getSliderRangeForParameter(key, blockType, currentValue);
+    let { min, max, step } = rangeConfig;
+    let useLog = false; // Always start with linear mode
+    let magnitudeMultiplier = 1.0;
+    
+    // Text input
+    const textInput = document.createElement('input');
+    textInput.type = 'text';
+    textInput.value = currentValue;
+    textInput.style.flex = '0 0 120px';
+    textInput.style.width = '120px';
+    textInput.style.minWidth = '120px';
+    textInput.style.maxWidth = '120px';
+    textInput.style.height = '22px';
+    textInput.style.fontSize = '12px';
+    textInput.style.padding = '2px 6px';
+    textInput.style.border = '1px solid #ddd';
+    textInput.style.borderRadius = '4px';
+    textInput.style.boxSizing = 'border-box';
+    textInput.addEventListener('click', (e) => e.stopPropagation());
+    
+    // Linear/Log toggle button
+    const scaleBtn = document.createElement('button');
+    scaleBtn.type = 'button';
+    scaleBtn.className = 'scale-mode-btn';
+    scaleBtn.textContent = 'Lin';
+    scaleBtn.title = 'Toggle linear/logarithmic scale';
+    scaleBtn.style.flex = '0 0 40px';
+    scaleBtn.style.width = '40px';
+    scaleBtn.style.minWidth = '40px';
+    scaleBtn.style.maxWidth = '40px';
+    scaleBtn.style.height = '22px';
+    scaleBtn.style.fontSize = '10px';
+    scaleBtn.style.padding = '2px';
+    scaleBtn.style.boxSizing = 'border-box';
+    scaleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        useLog = !useLog;
+        scaleBtn.textContent = useLog ? 'Log' : 'Lin';
+        scaleBtn.style.background = useLog ? '#007acc' : '';
+        scaleBtn.style.color = useLog ? 'white' : '';
+        updateSliderPosition();
+        updateRangeDisplay();
+    });
+    
+    // Magnitude down button (×0.1)
+    const magDownBtn = document.createElement('button');
+    magDownBtn.type = 'button';
+    magDownBtn.className = 'magnitude-btn';
+    magDownBtn.textContent = '×0.1';
+    magDownBtn.title = 'Decrease range by 10x';
+    magDownBtn.style.flex = '0 0 40px';
+    magDownBtn.style.width = '40px';
+    magDownBtn.style.minWidth = '40px';
+    magDownBtn.style.maxWidth = '40px';
+    magDownBtn.style.height = '22px';
+    magDownBtn.style.fontSize = '9px';
+    magDownBtn.style.padding = '2px';
+    magDownBtn.style.boxSizing = 'border-box';
+    magDownBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        magnitudeMultiplier *= 0.1;
+        updateRangeFromMultiplier();
+    });
+    
+    // Magnitude up button (×10)
+    const magUpBtn = document.createElement('button');
+    magUpBtn.type = 'button';
+    magUpBtn.className = 'magnitude-btn';
+    magUpBtn.textContent = '×10';
+    magUpBtn.title = 'Increase range by 10x';
+    magUpBtn.style.flex = '0 0 40px';
+    magUpBtn.style.width = '40px';
+    magUpBtn.style.minWidth = '40px';
+    magUpBtn.style.maxWidth = '40px';
+    magUpBtn.style.height = '22px';
+    magUpBtn.style.fontSize = '9px';
+    magUpBtn.style.padding = '2px';
+    magUpBtn.style.boxSizing = 'border-box';
+    magUpBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        magnitudeMultiplier *= 10;
+        updateRangeFromMultiplier();
+    });
+    
+    // Range display
+    const rangeDisplay = document.createElement('div');
+    rangeDisplay.className = 'slider-range-display';
+    rangeDisplay.style.flex = '0 0 auto';
+    rangeDisplay.style.width = '140px';
+    rangeDisplay.style.minWidth = '140px';
+    rangeDisplay.style.maxWidth = '140px';
+    rangeDisplay.style.height = '22px';
+    rangeDisplay.style.lineHeight = '22px';
+    rangeDisplay.style.fontSize = '9px';
+    rangeDisplay.style.color = '#666';
+    rangeDisplay.style.whiteSpace = 'nowrap';
+    rangeDisplay.style.overflow = 'hidden';
+    rangeDisplay.style.textOverflow = 'ellipsis';
+    rangeDisplay.style.fontFamily = 'monospace';
+    rangeDisplay.title = 'Slider range (min ~ max)';
+    
+    // Range slider
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = '0';
+    slider.max = '1';
+    slider.step = '0.001';
+    slider.value = hasValidValue ? String(valueToSlider(initialVal, min, max, useLog)) : '0.5';
+    slider.style.flex = '0 0 220px';
+    slider.style.width = '220px';
+    slider.style.minWidth = '220px';
+    slider.style.maxWidth = '220px';
+    slider.style.height = '22px';
+    slider.addEventListener('click', (e) => e.stopPropagation());
+    
+    // Update range display text
+    function updateRangeDisplay() {
+        const precision = Math.max(2, Math.min(6, -Math.floor(Math.log10(Math.abs(max - min) / 100))));
+        rangeDisplay.textContent = `[${min.toFixed(precision)} ~ ${max.toFixed(precision)}]`;
+    }
+    updateRangeDisplay();
+    
+    // Update range based on magnitude multiplier
+    function updateRangeFromMultiplier() {
+        const baseConfig = getSliderRangeForParameter(key, blockType, currentValue);
+        const center = (baseConfig.min + baseConfig.max) / 2;
+        const baseRange = (baseConfig.max - baseConfig.min) / 2;
+        const newRange = baseRange * magnitudeMultiplier;
+        
+        min = center - newRange;
+        max = center + newRange;
+        step = baseConfig.step * magnitudeMultiplier;
+        
+        // For non-negative parameters, clamp min to 0
+        if (key.includes('Thickness') || key.includes('hickness') || 
+            key.includes('semidia') || key.includes('aperture')) {
+            if (min < 0) {
+                min = 0;
+                max = center * 2;
+            }
+        }
+        
+        updateSliderPosition();
+        updateRangeDisplay();
+    }
+    
+    // Update slider position based on current text value
+    function updateSliderPosition() {
+        const val = parseFloat(textInput.value);
+        if (Number.isFinite(val)) {
+            slider.value = String(valueToSlider(val, min, max, useLog));
+        }
+    }
+    
+    // Handle slider input (drag)
+    slider.addEventListener('input', (e) => {
+        e.stopPropagation();
+        const sliderVal = parseFloat(slider.value);
+        const paramVal = sliderToValue(sliderVal, min, max, useLog);
+        const precision = getDisplayPrecision(paramVal, max - min);
+        textInput.value = paramVal.toFixed(precision);
+    });
+    
+    // Handle slider change (drag end - commit value)
+    slider.addEventListener('change', (e) => {
+        e.stopPropagation();
+        const sliderVal = parseFloat(slider.value);
+        const paramVal = sliderToValue(sliderVal, min, max, useLog);
+        const precision = getDisplayPrecision(paramVal, max - min);
+        const newValue = paramVal.toFixed(precision);
+        textInput.value = newValue;
+        commitCallback(newValue);
+    });
+    
+    // Handle text input changes
+    const tryCommit = () => {
+        const newValue = textInput.value;
+        const numVal = parseFloat(newValue);
+        if (Number.isFinite(numVal)) {
+            // Update slider position to match new text value
+            slider.value = String(valueToSlider(numVal, min, max, useLog));
+        }
+        commitCallback(newValue);
+    };
+    
+    textInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            tryCommit();
+        }
+    });
+    
+    textInput.addEventListener('blur', () => {
+        tryCommit();
+    });
+    
+    // Assemble container
+    container.appendChild(textInput);
+    container.appendChild(scaleBtn);
+    container.appendChild(magDownBtn);
+    container.appendChild(magUpBtn);
+    container.appendChild(rangeDisplay);
+    container.appendChild(slider);
+    
+    return container;
+}
+
+/**
+ * ============================================================================
+ * END OF PARAMETER SLIDER HELPERS
+ * ============================================================================
+ */
+
 function __zmxPickPrimaryWavelengthMicrons(sourceRows) {
     try {
         const rows = Array.isArray(sourceRows) ? sourceRows : [];
@@ -9632,7 +10099,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             } else if (blockType === 'Mirror') {
                 items.push(
                     { kind: 'apertureShape', key: 'apertureShape', label: 'apertureShape', noOptimize: true },
-                    { key: 'semidia', label: 'semidia', noOptimize: true },
+                    { key: 'semidia', label: 'semidia' },
                     { key: 'apertureWidth', label: 'apertureWidth', noOptimize: true },
                     { key: 'apertureHeight', label: 'apertureHeight', noOptimize: true },
                     { key: 'radius', label: 'radius' },
@@ -9651,7 +10118,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             } else if (blockType === 'SingleSurface') {
                 items.push(
                     { kind: 'apertureShape', key: 'apertureShape', label: 'apertureShape', noOptimize: true },
-                    { key: 'semidia', label: 'semidia', noOptimize: true },
+                    { key: 'semidia', label: 'semidia' },
                     { key: 'apertureWidth', label: 'apertureWidth', noOptimize: true },
                     { key: 'apertureHeight', label: 'apertureHeight', noOptimize: true },
                     { key: 'radius', label: 'radius' },
@@ -9679,7 +10146,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     { kind: 'coordTransOrder', key: 'order', label: 'order', noOptimize: true }
                 );
             } else if (blockType === 'ImageSurface') {
-                items.push({ key: 'semidia', label: 'semidia', noOptimize: true, hasImageSemiDiaMode: true });
+                items.push({ key: 'semidia', label: 'semidia', hasImageSemiDiaMode: true });
             }
             for (const it of items) {
                 const isApertureItem = it && typeof it === 'object' && String(it.kind ?? '') === 'aperture';
@@ -9691,7 +10158,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 const isCoordTransOrderItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'coordTransOrder';
                 const isSurfTypeItem = !isApertureItem && it && typeof it === 'object' && typeof it.key === 'string' && /surftype$/i.test(String(it.key));
                 const isMaterialItem = !isApertureItem && it && typeof it === 'object' && typeof it.key === 'string' && /^material\d*$/i.test(String(it.key));
-                const allowOptimize = !isApertureItem && !(it && typeof it === 'object' && it.noOptimize);
+                // Allow optimization for aperture items (semidia for Lens/Doublet/Triplet) unless explicitly marked noOptimize
+                const allowOptimize = !(it && typeof it === 'object' && it.noOptimize);
 
                 if (blockType === 'Mirror') {
                     const k = String(it?.key ?? '');
@@ -9726,7 +10194,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 let cb = null;
                 if (allowOptimize) {
                     scopeSel = document.createElement('select');
-                    scopeSel.style.flex = '0 0 auto';
+                    scopeSel.style.flex = '0 0 100px';
                     scopeSel.style.fontSize = '12px';
                     scopeSel.style.padding = '2px 4px';
                     scopeSel.innerHTML = '<option value="perConfig">Per-config</option><option value="global">Shared (all configs)</option>';
@@ -9734,6 +10202,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
                     cb = document.createElement('input');
                     cb.type = 'checkbox';
+                    cb.style.flex = '0 0 auto';
+                    cb.style.width = '16px';
+                    cb.style.margin = '0 4px 0 0';
                     cb.checked = __blocks_shouldMarkVar(vars[it.key]);
                     cb.addEventListener('click', (e) => e.stopPropagation());
                     cb.addEventListener('change', (e) => {
@@ -9758,8 +10229,12 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
                 const name = document.createElement('div');
                 name.textContent = it.label;
-                name.style.flex = '1 1 auto';
+                name.style.flex = '0 0 150px';
                 name.style.fontFamily = 'monospace';
+                name.style.fontSize = '12px';
+                name.style.overflow = 'hidden';
+                name.style.textOverflow = 'ellipsis';
+                name.style.whiteSpace = 'nowrap';
 
                 // Editable value (Design Intent canonical edits)
                 const currentValue = isApertureItem ? getApertureDisplayValue(it.role) : getDisplayValue(it.key);
@@ -10031,44 +10506,63 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     });
                     valueEl = sel;
                 } else {
-                    const valueInput = document.createElement('input');
-                    valueInput.type = 'text';
-                    valueInput.value = currentValue;
-                    console.log(`[Undo] Creating input for ${it.key || it.role}, value:`, currentValue);
-                    valueInput.placeholder = '';
-                    valueInput.style.flex = '0 0 180px';
-                    valueInput.style.fontSize = '12px';
-                    valueInput.style.padding = '2px 6px';
-                    valueInput.style.border = '1px solid #ddd';
-                    valueInput.style.borderRadius = '4px';
-                    valueInput.addEventListener('click', (e) => e.stopPropagation());
+                    // Check if this is a numeric parameter (should get a slider)
+                    const isNumericParam = !isMaterialItem || (isMaterialItem && !isNaN(parseFloat(currentValue)));
+                    
+                    if (isNumericParam && !isMaterialItem) {
+                        // Use slider component for numeric parameters (except material glass names)
+                        console.log(`[Undo] Creating slider for ${it.key || it.role}, value:`, currentValue);
+                        const sliderContainer = createParameterSlider(
+                            it.key || it.role,
+                            blockType,
+                            currentValue,
+                            (newValue) => {
+                                console.log(`[Undo] Slider commit for ${it.key || it.role}:`, newValue);
+                                commitValue(newValue);
+                            }
+                        );
+                        valueEl = sliderContainer;
+                    } else {
+                        // Use standard text input for material names and other non-numeric fields
+                        const valueInput = document.createElement('input');
+                        valueInput.type = 'text';
+                        valueInput.value = currentValue;
+                        console.log(`[Undo] Creating input for ${it.key || it.role}, value:`, currentValue);
+                        valueInput.placeholder = '';
+                        valueInput.style.flex = '0 0 180px';
+                        valueInput.style.fontSize = '12px';
+                        valueInput.style.padding = '2px 6px';
+                        valueInput.style.border = '1px solid #ddd';
+                        valueInput.style.borderRadius = '4px';
+                        valueInput.addEventListener('click', (e) => e.stopPropagation());
 
-                    // Object distance placeholder: 0mm for INF objects (used as rendering position)
-                    if (isObjectDistanceItem) {
-                        try {
-                            const mRaw = getDisplayValue('objectDistanceMode');
-                            const m = String(mRaw ?? '').trim().replace(/\s+/g, '').toUpperCase();
-                            const isInf = m === 'INF' || m === 'INFINITY';
-                            if (isInf) valueInput.placeholder = '0';
-                        } catch (_) {}
-                    }
-
-                    const tryCommit = () => {
-                        const ok = commitValue(String(valueInput.value ?? ''));
-                        if (!ok) valueInput.value = currentValue;
-                    };
-                    valueInput.addEventListener('keydown', (e) => {
-                        if (e.key === 'Enter') {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            tryCommit();
+                        // Object distance placeholder: 0mm for INF objects (used as rendering position)
+                        if (isObjectDistanceItem) {
+                            try {
+                                const mRaw = getDisplayValue('objectDistanceMode');
+                                const m = String(mRaw ?? '').trim().replace(/\s+/g, '').toUpperCase();
+                                const isInf = m === 'INF' || m === 'INFINITY';
+                                if (isInf) valueInput.placeholder = '0';
+                            } catch (_) {}
                         }
-                    });
-                    valueInput.addEventListener('blur', () => {
-                        tryCommit();
-                    });
 
-                    valueEl = valueInput;
+                        const tryCommit = () => {
+                            const ok = commitValue(String(valueInput.value ?? ''));
+                            if (!ok) valueInput.value = currentValue;
+                        };
+                        valueInput.addEventListener('keydown', (e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                tryCommit();
+                            }
+                        });
+                        valueInput.addEventListener('blur', () => {
+                            tryCommit();
+                        });
+
+                        valueEl = valueInput;
+                    }
                 }
 
                 // Material helper UI (inline): keep material + ref index + abbe on the SAME LINE.
@@ -10352,16 +10846,28 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 }
                 line.appendChild(name);
                 
-                // ImageSurface: insert optimizeSemiDia dropdown before semidia value input.
+                // Fixed-width slot to keep valueContainer aligned across rows
+                const modeSlot = document.createElement('div');
+                modeSlot.style.flex = '0 0 140px';
+                modeSlot.style.width = '140px';
+                modeSlot.style.minWidth = '140px';
+                modeSlot.style.maxWidth = '140px';
+                modeSlot.style.display = 'flex';
+                modeSlot.style.alignItems = 'center';
+                modeSlot.style.gap = '4px';
+
+                // ImageSurface: insert optimizeSemiDia dropdown into the fixed slot
                 if (it && it.hasImageSemiDiaMode && blockType === 'ImageSurface') {
                     const modeValue = getDisplayValue('optimizeSemiDia');
                     const modeSel = document.createElement('select');
-                    modeSel.style.flex = '0 0 auto';
+                    modeSel.style.flex = '0 0 140px';
+                    modeSel.style.width = '140px';
+                    modeSel.style.minWidth = '140px';
+                    modeSel.style.maxWidth = '140px';
                     modeSel.style.fontSize = '12px';
                     modeSel.style.padding = '2px 6px';
                     modeSel.style.border = '1px solid #ddd';
                     modeSel.style.borderRadius = '4px';
-                    modeSel.style.marginRight = '4px';
                     modeSel.innerHTML = [
                         '<option value="">(manual)</option>',
                         '<option value="A">Auto (chief ray)</option>'
@@ -10393,19 +10899,21 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             try { refreshBlockInspector(); } catch (_) {}
                         }
                     });
-                    line.appendChild(modeSel);
+                    modeSlot.appendChild(modeSel);
                 }
-                
-                // Gap blocks: insert thicknessMode dropdown before thickness value input.
+
+                // Gap blocks: insert thicknessMode dropdown into the fixed slot
                 if (it && it.hasThicknessMode && (blockType === 'Gap' || blockType === 'AirGap')) {
                     const modeValue = getDisplayValue('thicknessMode');
                     const modeSel = document.createElement('select');
-                    modeSel.style.flex = '0 0 auto';
+                    modeSel.style.flex = '0 0 140px';
+                    modeSel.style.width = '140px';
+                    modeSel.style.minWidth = '140px';
+                    modeSel.style.maxWidth = '140px';
                     modeSel.style.fontSize = '12px';
                     modeSel.style.padding = '2px 6px';
                     modeSel.style.border = '1px solid #ddd';
                     modeSel.style.borderRadius = '4px';
-                    modeSel.style.marginRight = '4px';
                     modeSel.innerHTML = [
                         '<option value="">(manual)</option>',
                         '<option value="IMD">Image Distance</option>',
@@ -10487,11 +10995,21 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             try { refreshBlockInspector(); } catch (_) {}
                         })();
                     });
-                    line.appendChild(modeSel);
+                    modeSlot.appendChild(modeSel);
                 }
-                
-                line.appendChild(valueEl);
 
+                line.appendChild(modeSlot);
+
+                // Wrap valueEl in a fixed-width container to align all input fields/sliders
+                const valueContainer = document.createElement('div');
+                valueContainer.style.display = 'flex';
+                valueContainer.style.flex = '1 1 auto';
+                valueContainer.style.gap = '6px';
+                valueContainer.style.alignItems = 'center';
+                
+                valueContainer.appendChild(valueEl);
+                
+                // Material items: add Map button, Find button, nd/vd inputs into valueContainer
                 if (isMaterialItem) {
                     const mapBtn = document.createElement('button');
                     mapBtn.type = 'button';
@@ -10583,20 +11101,22 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                         }
                     });
 
-                    // Place buttons to the left of the material textbox.
-                    // Order: 🗺️ Map, 🔍 Find
-                    try { line.insertBefore(mapBtn, valueEl); } catch (_) { line.appendChild(mapBtn); }
-                    try { line.insertBefore(findBtn, valueEl); } catch (_) { line.appendChild(findBtn); }
+                    // Place buttons and nd/vd inputs inside valueContainer
+                    valueContainer.appendChild(mapBtn); 
+                    valueContainer.appendChild(findBtn); 
+                    
+                    // Add ref index + abbe after the Find button
+                    try {
+                        const ctrls = materialListEl && materialListEl.__inlineControls ? materialListEl.__inlineControls : null;
+                        if (ctrls && ctrls.ndInput && ctrls.vdInput) {
+                            valueContainer.appendChild(ctrls.ndInput);
+                            valueContainer.appendChild(ctrls.vdInput);
+                        }
+                    } catch (_) {}
                 }
+                
+                line.appendChild(valueContainer);
 
-                // For material rows: add ref index + abbe after the material input.
-                try {
-                    const ctrls = materialListEl && materialListEl.__inlineControls ? materialListEl.__inlineControls : null;
-                    if (ctrls && ctrls.ndInput && ctrls.vdInput) {
-                        line.appendChild(ctrls.ndInput);
-                        line.appendChild(ctrls.vdInput);
-                    }
-                } catch (_) {}
                 panel.appendChild(line);
 
                 if (materialListEl) {

@@ -2528,3 +2528,190 @@ h4 {
 .modal-actions button:hover {
     background-color: #45a049;
 }
+/* ============================================================================
+ * PARAMETER SLIDER STYLES (for Design Intent with touch support)
+ * ============================================================================ */
+
+.param-input-with-slider {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+}
+
+/* Responsive: wrap buttons on small screens */
+@media (max-width: 768px) {
+    .param-input-with-slider {
+        flex-wrap: wrap;
+    }
+    .param-input-with-slider input[type="text"] {
+        flex: 1 1 100% !important;
+    }
+    .param-input-with-slider input[type="range"] {
+        flex: 1 1 100% !important;
+        order: 10;
+    }
+}
+
+/* Scale mode button (Lin/Log) */
+.scale-mode-btn {
+    min-width: 40px;
+    height: 22px;
+    padding: 2px;
+    font-size: 10px;
+    font-weight: 600;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: #f9f9f9;
+    color: #333;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.scale-mode-btn:hover {
+    background-color: #e9e9e9;
+    border-color: #999;
+}
+
+.scale-mode-btn:active {
+    background-color: #ddd;
+    transform: scale(0.98);
+}
+
+/* Magnitude adjustment buttons */
+.magnitude-btn {
+    min-width: 40px;
+    height: 22px;
+    padding: 2px;
+    font-size: 9px;
+    font-weight: 600;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: #f9f9f9;
+    color: #333;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.magnitude-btn:hover {
+    background-color: #e9e9e9;
+    border-color: #999;
+}
+
+.magnitude-btn:active {
+    background-color: #ddd;
+    transform: scale(0.98);
+}
+
+/* Range display */
+.slider-range-display {
+    font-size: 9px;
+    color: #666;
+    white-space: nowrap;
+    font-family: monospace;
+}
+
+/* Range slider styles with enhanced touch targets */
+.param-input-with-slider input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 22px;
+    background: transparent;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+/* Slider track */
+.param-input-with-slider input[type="range"]::-webkit-slider-track {
+    width: 100%;
+    height: 8px;
+    background: linear-gradient(to right, #e0e0e0, #b0b0b0);
+    border-radius: 4px;
+    border: 1px solid #ccc;
+}
+
+.param-input-with-slider input[type="range"]::-moz-range-track {
+    width: 100%;
+    height: 8px;
+    background: linear-gradient(to right, #e0e0e0, #b0b0b0);
+    border-radius: 4px;
+    border: 1px solid #ccc;
+}
+
+/* Slider thumb */
+.param-input-with-slider input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    background: #007acc;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    margin-top: -6px;
+    transition: all 0.15s ease;
+}
+
+.param-input-with-slider input[type="range"]::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    background: #007acc;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    transition: all 0.15s ease;
+}
+
+/* Larger thumb on hover/active for better touch targets */
+.param-input-with-slider input[type="range"]:hover::-webkit-slider-thumb {
+    width: 24px;
+    height: 24px;
+    margin-top: -8px;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
+}
+
+.param-input-with-slider input[type="range"]:hover::-moz-range-thumb {
+    width: 24px;
+    height: 24px;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
+}
+
+.param-input-with-slider input[type="range"]:active::-webkit-slider-thumb {
+    width: 26px;
+    height: 26px;
+    margin-top: -9px;
+    background: #005a9e;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+}
+
+.param-input-with-slider input[type="range"]:active::-moz-range-thumb {
+    width: 26px;
+    height: 26px;
+    background: #005a9e;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+}
+
+/* Focus styles for accessibility */
+.param-input-with-slider input[type="range"]:focus {
+    outline: none;
+}
+
+.param-input-with-slider input[type="range"]:focus::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px rgba(0, 122, 204, 0.3);
+}
+
+.param-input-with-slider input[type="range"]:focus::-moz-range-thumb {
+    box-shadow: 0 0 0 3px rgba(0, 122, 204, 0.3);
+}
+
+/* ============================================================================
+ * END OF PARAMETER SLIDER STYLES
+ * ============================================================================ */
