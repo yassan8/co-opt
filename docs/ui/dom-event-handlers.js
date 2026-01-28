@@ -9392,7 +9392,19 @@ function __blocks_setBlockParamValue(blockId, key, rawValue) {
         console.warn('⚠️ Failed to update auto values after parameter change:', err);
     }
 
+    // Sync 3D render after Design Intent commit.
+    try { __blocks_requestRedraw(); } catch (_) {}
+
     return { ok: true };
+}
+
+function __blocks_requestRedraw() {
+    try {
+        const popup = window.popup3DWindow;
+        if (popup && !popup.closed && typeof popup.postMessage === 'function') {
+            popup.postMessage({ action: 'request-redraw' }, '*');
+        }
+    } catch (_) {}
 }
 
 function __blocks_setBlockParamValueAllConfigs(blockId, key, rawValue) {
@@ -9490,6 +9502,9 @@ function __blocks_setBlockParamValueAllConfigs(blockId, key, rawValue) {
     } catch (e) {
         return { ok: false, reason: `failed to save: ${e?.message || String(e)}` };
     }
+
+    // Sync 3D render after shared commit.
+    try { __blocks_requestRedraw(); } catch (_) {}
 
     return { ok: true };
 }
@@ -9614,6 +9629,9 @@ function __blocks_setBlockApertureValue(blockId, role, rawValue) {
     } catch (e) {
         return { ok: false, reason: `failed to save: ${e?.message || String(e)}` };
     }
+
+    // Sync 3D render after aperture commit.
+    try { __blocks_requestRedraw(); } catch (_) {}
 
     return { ok: true };
 }

@@ -1094,8 +1094,8 @@ button:active {
     border: 1px solid #ddd;
     border-radius: 3px;
     padding: 6px;
-    height: 160px;
-    min-height: 120px;
+    height: 300px;
+    min-height: 300px;
     max-height: 80vh;
     overflow: auto;
     resize: vertical;
@@ -2650,7 +2650,7 @@ h4 {
     appearance: none;
     width: 20px;
     height: 20px;
-    background: #007acc;
+    background: #9aa0a6;
     border: 2px solid #fff;
     border-radius: 50%;
     cursor: pointer;
@@ -2662,7 +2662,7 @@ h4 {
 .param-input-with-slider input[type="range"]::-moz-range-thumb {
     width: 20px;
     height: 20px;
-    background: #007acc;
+    background: #9aa0a6;
     border: 2px solid #fff;
     border-radius: 50%;
     cursor: pointer;
@@ -2688,14 +2688,14 @@ h4 {
     width: 26px;
     height: 26px;
     margin-top: -9px;
-    background: #005a9e;
+    background: #80868b;
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
 }
 
 .param-input-with-slider input[type="range"]:active::-moz-range-thumb {
     width: 26px;
     height: 26px;
-    background: #005a9e;
+    background: #80868b;
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
 }
 
@@ -2705,11 +2705,11 @@ h4 {
 }
 
 .param-input-with-slider input[type="range"]:focus::-webkit-slider-thumb {
-    box-shadow: 0 0 0 3px rgba(0, 122, 204, 0.3);
+    box-shadow: 0 0 0 3px rgba(154, 160, 166, 0.35);
 }
 
 .param-input-with-slider input[type="range"]:focus::-moz-range-thumb {
-    box-shadow: 0 0 0 3px rgba(0, 122, 204, 0.3);
+    box-shadow: 0 0 0 3px rgba(154, 160, 166, 0.35);
 }
 
 /* ============================================================================
