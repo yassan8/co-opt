@@ -2904,6 +2904,23 @@ body.dark-mode .tabulator-cell {
     border-bottom: 1px solid var(--border-color) !important;
 }
 
+/* Source and Object specific table cells */
+body.dark-mode #table-source .tabulator-cell,
+body.dark-mode #table-object .tabulator-cell {
+    border: 1px solid var(--border-color) !important;
+}
+
+body.dark-mode #table-source .tabulator-row,
+body.dark-mode #table-object .tabulator-row {
+    border-bottom: 1px solid var(--border-color) !important;
+}
+
+body.dark-mode #table-source .tabulator-col,
+body.dark-mode #table-object .tabulator-col {
+    border-right: 1px solid var(--border-color) !important;
+    border-bottom: 1px solid var(--border-color) !important;
+}
+
 body.dark-mode .tabulator-footer {
     background-color: var(--bg-primary) !important;
     border-color: var(--border-color) !important;
