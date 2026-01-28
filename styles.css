@@ -3306,3 +3306,19 @@ body.dark-mode .block-inspector-col-count,
 body.dark-mode .block-inspector-col-params {
     color: var(--text-secondary) !important;
 }
+
+/* Block Inspector Icon Buttons (Map and Find Glass) */
+.block-inspector-icon-btn {
+    border: 1px solid #ddd;
+    background: #fff;
+}
+
+body.dark-mode .block-inspector-icon-btn {
+    border: 1px solid var(--border-color) !important;
+    background-color: var(--bg-secondary) !important;
+}
+
+body.dark-mode .block-inspector-icon-btn:hover {
+    background-color: var(--bg-hover) !important;
+    border-color: var(--accent-color) !important;
+}

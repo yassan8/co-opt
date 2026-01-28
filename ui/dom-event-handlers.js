@@ -10537,6 +10537,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     sel.style.padding = '2px 6px';
                     sel.style.border = '1px solid #ddd';
                     sel.style.borderRadius = '4px';
+                    sel.style.height = '22px';
+                    sel.style.boxSizing = 'border-box';
                     sel.addEventListener('click', (e) => e.stopPropagation());
 
                     sel.innerHTML = [
@@ -11074,6 +11076,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 if (isMaterialItem) {
                     const mapBtn = document.createElement('button');
                     mapBtn.type = 'button';
+                    mapBtn.className = 'block-inspector-icon-btn';
                     mapBtn.textContent = '🗺️ Map';
                     mapBtn.title = 'Select a glass region (nd/vd) constraint from the Abbe diagram';
                     mapBtn.style.flex = '0 0 auto';
@@ -11084,9 +11087,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     mapBtn.style.display = 'inline-flex';
                     mapBtn.style.alignItems = 'center';
                     mapBtn.style.padding = '2px 6px';
-                    mapBtn.style.border = '1px solid #ddd';
                     mapBtn.style.borderRadius = '4px';
-                    mapBtn.style.background = '#fff';
                     mapBtn.style.cursor = 'pointer';
                     mapBtn.addEventListener('click', (e) => {
                         try { e?.preventDefault?.(); } catch (_) {}
@@ -11133,6 +11134,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
                     const findBtn = document.createElement('button');
                     findBtn.type = 'button';
+                    findBtn.className = 'block-inspector-icon-btn';
                     findBtn.textContent = '🔍';
                     findBtn.title = 'Find similar glasses (nd/vd or name)';
                     findBtn.setAttribute('aria-label', 'Find Glass');
@@ -11145,9 +11147,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     findBtn.style.alignItems = 'center';
                     findBtn.style.justifyContent = 'center';
                     findBtn.style.padding = '2px 6px';
-                    findBtn.style.border = '1px solid #ddd';
                     findBtn.style.borderRadius = '4px';
-                    findBtn.style.background = '#fff';
                     findBtn.style.cursor = 'pointer';
                     findBtn.addEventListener('click', (e) => {
                         try { e?.preventDefault?.(); } catch (_) {}
