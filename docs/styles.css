@@ -2891,13 +2891,34 @@ body.dark-mode #optical-system-table {
 }
 
 body.dark-mode .tabulator-cell {
-    border-color: var(--border-light);
-    color: var(--text-primary);
+    border-color: var(--border-light) !important;
+    color: var(--text-primary) !important;
+    background-color: var(--bg-primary) !important;
 }
 
 body.dark-mode .tabulator-footer {
-    background-color: var(--bg-tertiary);
-    border-color: var(--border-color);
+    background-color: var(--bg-primary) !important;
+    border-color: var(--border-color) !important;
+    color: var(--text-primary) !important;
+}
+
+body.dark-mode .tabulator-row.tabulator-row-odd {
+    background-color: var(--bg-primary) !important;
+}
+
+body.dark-mode .tabulator-row.tabulator-row-even {
+    background-color: var(--bg-primary) !important;
+}
+
+body.dark-mode .tabulator-table {
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
+}
+
+body.dark-mode #design-intent-container .tabulator,
+body.dark-mode #requirements-container .tabulator,
+body.dark-mode #optical-system-container .tabulator {
+    background-color: var(--bg-primary) !important;
 }
 
 /* Merit function */
