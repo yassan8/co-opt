@@ -5432,6 +5432,14 @@ export function setupOpticalSystemChangeListeners(scene) {
             <label><input type="checkbox" class="glassmap-mfr-cb" value="Special" /> Special</label>
         </div>
 
+        <div class="section-title">Dark Mode</div>
+        <div class="help">
+            Enable VS Code-style dark mode for the entire UI.
+        </div>
+        <label style="margin: 8px 0 14px 0; display: block;">
+            <input type="checkbox" id="dark-mode-cb" /> Enable Dark Mode
+        </label>
+
         <div class="section-title">Infinite Field: Pupil Sampling Mode</div>
         <div class="help">
             Fix the sampling mode used for infinite-field wavefront/PSF/MTF generation.
@@ -5456,6 +5464,7 @@ export function setupOpticalSystemChangeListeners(scene) {
     <script>
         const KEY = 'coopt.forceInfinitePupilMode';
         const GLASS_MAP_MFR_KEY = 'coopt.glassMap.defaultManufacturers';
+        const DARK_MODE_KEY = 'coopt.darkMode';
         const sanitize = (v) => {
             const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
             return (s === 'stop' || s === 'entrance') ? s : '';
@@ -5537,6 +5546,16 @@ export function setupOpticalSystemChangeListeners(scene) {
                 const v = String(cb.value || '');
                 cb.checked = storedSet.has(v.toUpperCase());
             });
+
+            // Dark Mode
+            const darkModeCb = document.getElementById('dark-mode-cb');
+            if (darkModeCb) {
+                let isDark = false;
+                try {
+                    isDark = localStorage.getItem(DARK_MODE_KEY) === 'true';
+                } catch (_) {}
+                darkModeCb.checked = isDark;
+            }
         }
 
         function saveGlassMapMfrSelection() {
@@ -5548,6 +5567,19 @@ export function setupOpticalSystemChangeListeners(scene) {
             try {
                 if (sanitized.length) localStorage.setItem(GLASS_MAP_MFR_KEY, JSON.stringify(sanitized));
                 else localStorage.removeItem(GLASS_MAP_MFR_KEY);
+            } catch (_) {}
+        }
+
+        function applyDarkMode(enabled) {
+            const o = getOpener();
+            try {
+                if (o && typeof o.__cooptSetDarkMode === 'function') {
+                    o.__cooptSetDarkMode(enabled);
+                }
+            } catch (_) {}
+            
+            try {
+                localStorage.setItem(DARK_MODE_KEY, enabled ? 'true' : 'false');
             } catch (_) {}
         }
 
@@ -5563,6 +5595,13 @@ export function setupOpticalSystemChangeListeners(scene) {
             });
         });
 
+        const darkModeCb = document.getElementById('dark-mode-cb');
+        if (darkModeCb) {
+            darkModeCb.addEventListener('change', () => {
+                applyDarkMode(darkModeCb.checked);
+            });
+        }
+
         document.getElementById('close-btn').addEventListener('click', () => {
             try { window.close(); } catch (_) {}
         });
@@ -5577,5 +5616,35 @@ export function setupOpticalSystemChangeListeners(scene) {
                         try { popup.document.close(); } catch (_) {}
                 });
         }
+
+        // Dark Mode initialization
+        (() => {
+                const DARK_MODE_KEY = 'coopt.darkMode';
+                
+                function applyDarkModeClass(enabled) {
+                        if (enabled) {
+                                document.body.classList.add('dark-mode');
+                        } else {
+                                document.body.classList.remove('dark-mode');
+                        }
+                }
+                
+                function loadDarkMode() {
+                        try {
+                                const stored = localStorage.getItem(DARK_MODE_KEY);
+                                return stored === 'true';
+                        } catch (_) {
+                                return false;
+                        }
+                }
+                
+                // Expose to Settings popup
+                window.__cooptSetDarkMode = (enabled) => {
+                        applyDarkModeClass(enabled);
+                };
+                
+                // Apply on load
+                applyDarkModeClass(loadDarkMode());
+        })();
     
 }
