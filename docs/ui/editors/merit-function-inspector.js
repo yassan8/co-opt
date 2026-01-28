@@ -32,6 +32,16 @@ export const OPERAND_DEFINITIONS = {
     ],
     notes: "System Dataの近軸計算と同じ経路でBFLを返します。\n\nλ: Source行番号(1始まり)。空欄/0の場合はPrimary Wavelength。"
   },
+  "EFFL": {
+    name: "Effective Focal Length (S1–S2)",
+    description: "Effective focal length for a surface range (S1–S2)",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row" },
+      { key: "param2", label: "S1", description: "Start Surface" },
+      { key: "param3", label: "S2", description: "End Surface" }
+    ],
+    notes: "開始面から終了面までの有効焦点距離を計算します。面の指定はOptical SystemテーブルのSurface番号（id値）を使用します。\n\nλ: Sourceテーブルの行番号（1始まり）で波長を指定します。例：λ=1でSource1行目の波長、λ=2でSource2行目の波長を使用。\n\nS1（開始面）: Surface番号で指定。S1=0（Object面）の場合、実際のObject面のthickness値を使用します（有限系または無限系）。S1>0（途中の面から開始）の場合、thickness=Infinityの仮想Object面を作成し、無限共役で計算します。\n\nS2（終了面）: Surface番号で指定。省略時は最終面の1つ前が使用されます。"
+  },
   "IMD": {
     name: "Image Distance",
     description: "Paraxial image distance (System Data)",
