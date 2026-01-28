@@ -1810,17 +1810,15 @@ function buildStagedCoefMaxList(opts) {
   }
   // Default continuation schedule for aspheric coefficients: unlock higher orders progressively.
   // Current system uses coef1=A4(r^4), coef2=A6(r^6), coef3=A8(r^8), ...
-  // ULTRA-CONSERVATIVE schedule to escape local minima: very gradual progression
+  // BALANCED schedule: avoid local minima while maintaining reasonable speed
   // ALL stages optimize: conic, radius, thickness, and other non-coefficient parameters
   // Stage 0: idx ≤ 0 → conic + radius + thickness + etc. (NO aspheric coefficients)
-  //          This stage establishes good base curvature before adding asphericity
+  //          Establishes good base curvature before adding asphericity
   // Stage 1: idx ≤ 1 → above + coef1 (A4 only) - most important aspheric term
-  // Stage 2: idx ≤ 1 → coef1 again with refined parameters (repeat for stability)
-  // Stage 3: idx ≤ 2 → above + coef1-2 (A4, A6)
-  // Stage 4: idx ≤ 3 → above + coef1-3 (A4-A8)
-  // Stage 5: idx ≤ 4 → above + coef1-4 (A4-A10)
-  // Stage 6: idx ≤ 10 → above + all coefficients (A4-A22)
-  return [0, 1, 1, 2, 3, 4, 10];
+  // Stage 2: idx ≤ 2 → above + coef1-2 (A4, A6)
+  // Stage 3: idx ≤ 4 → above + coef1-4 (A4-A10)
+  // Stage 4: idx ≤ 10 → above + all coefficients (A4-A22)
+  return [0, 1, 2, 4, 10];
 }
 
 function stageAllowsVariable(varKey, maxCoefIndex) {
@@ -2174,7 +2172,7 @@ export async function runOptimizationMVP(options = {}) {
 
   const lmLambda0 = Number.isFinite(Number(opts.lmLambda0)) ? Math.max(1e-12, Number(opts.lmLambda0)) : 1e-3;
   const lmLambdaUp = Number.isFinite(Number(opts.lmLambdaUp)) ? Math.max(1.1, Number(opts.lmLambdaUp)) : 10;
-  const lmLambdaDown = Number.isFinite(Number(opts.lmLambdaDown)) ? Math.min(0.95, Math.max(1e-3, Number(opts.lmLambdaDown))) : 0.1;
+  const lmLambdaDown = Number.isFinite(Number(opts.lmLambdaDown)) ? Math.min(0.95, Math.max(1e-3, Number(opts.lmLambdaDown))) : 0.2;
   // Nielsen/Marquardt adaptive damping: use tau to scale initial lambda based on J^T*J
   const lmTau = Number.isFinite(Number(opts.lmTau)) ? Math.max(1e-6, Number(opts.lmTau)) : 1e-3;
   const fdStepFraction = Number.isFinite(Number(opts.fdStepFraction)) ? Math.max(1e-10, Number(opts.fdStepFraction)) : 1e-3;
@@ -2193,8 +2191,8 @@ export async function runOptimizationMVP(options = {}) {
   // Enabled by default for LM because it significantly reduces local-minimum trapping.
   const staged = (opts.staged === undefined) ? true : !!opts.staged;
   const stageMaxCoefList = staged ? buildStagedCoefMaxList(opts) : [10];
-  // Increased stall limit: allow more iterations per stage to escape local minima
-  const stageStallLimit = Number.isFinite(Number(opts.stageStallLimit)) ? Math.max(1, Math.floor(Number(opts.stageStallLimit))) : 8;
+  // Balanced stall limit: enough iterations per stage without being too slow
+  const stageStallLimit = Number.isFinite(Number(opts.stageStallLimit)) ? Math.max(1, Math.floor(Number(opts.stageStallLimit))) : 6;
 
   // Trust region / step control in scaled coordinates.
   const trustRegion = (opts.trustRegion === undefined) ? true : !!opts.trustRegion;
@@ -3195,14 +3193,12 @@ export async function runOptimizationMVP(options = {}) {
     let __lmExploreDisabledAfterZeroRho = false;
 
     for (let iter = 1; iter <= maxIterations; iter++) {
-      // Stage-dependent trust region: very small steps in early stages to avoid local minima
-      // Stage 0-1: minimal steps (0.02) for base optimization
-      // Stage 2-3: small steps (0.04-0.06) as we add more coefficients
-      // Stage 4+: normal steps (0.1) for final refinement
-      const stageBaseTrustDelta = stageIndex === 0 ? 0.02 
-                                 : stageIndex === 1 ? 0.02 
-                                 : stageIndex === 2 ? 0.04
-                                 : stageIndex === 3 ? 0.06
+      // Stage-dependent trust region: balanced between speed and stability
+      // Stage 0: small steps (0.03) for base optimization
+      // Stage 1: moderate steps (0.05) for first aspheric coefficient
+      // Stage 2+: normal steps (0.1) for faster convergence
+      const stageBaseTrustDelta = stageIndex === 0 ? 0.03 
+                                 : stageIndex === 1 ? 0.05
                                  : trustRegionDelta;
       if (iter === 1 || trustRegionDeltaEff > stageBaseTrustDelta * 1.5) {
         trustRegionDeltaEff = stageBaseTrustDelta;
