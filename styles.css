@@ -2768,7 +2768,7 @@ body.dark-mode button:active {
 body.dark-mode button:disabled {
     background-color: var(--bg-secondary);
     color: var(--text-secondary) !important;
-    opacity: 0.5;
+    opacity: 1;
 }
 
 /* Specific button IDs */
@@ -2779,7 +2779,8 @@ body.dark-mode #redo-btn {
 
 body.dark-mode #undo-btn:disabled,
 body.dark-mode #redo-btn:disabled {
-    color: var(--text-secondary) !important;
+    color: #888888 !important;
+    opacity: 1;
 }
 
 /* Inputs, Selects */
