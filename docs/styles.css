@@ -2941,3 +2941,181 @@ body.dark-mode [title]:hover::after {
     color: var(--text-primary);
     border-color: var(--border-color);
 }
+
+/* Regular tables (non-Tabulator) */
+body.dark-mode table,
+body.dark-mode #table-source table,
+body.dark-mode #table-object table,
+body.dark-mode .glass-search-table {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+body.dark-mode table th,
+body.dark-mode #table-source table th,
+body.dark-mode #table-object table th,
+body.dark-mode .glass-search-table th {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+body.dark-mode table td,
+body.dark-mode #table-source table td,
+body.dark-mode #table-object table td,
+body.dark-mode .glass-search-table td {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--border-light);
+}
+
+body.dark-mode table tr:hover,
+body.dark-mode #table-source table tr:hover,
+body.dark-mode #table-object table tr:hover,
+body.dark-mode .glass-search-table tr:hover {
+    background-color: var(--bg-hover) !important;
+}
+
+body.dark-mode table tr:hover td,
+body.dark-mode #table-source table tr:hover td,
+body.dark-mode #table-object table tr:hover td,
+body.dark-mode .glass-search-table tr:hover td {
+    background-color: var(--bg-hover) !important;
+}
+
+body.dark-mode table tr.selected,
+body.dark-mode #table-source table tr.selected,
+body.dark-mode #table-object table tr.selected,
+body.dark-mode .glass-search-table tr.selected {
+    background-color: var(--bg-tertiary) !important;
+}
+
+/* Design Intent section */
+body.dark-mode #design-intent-container,
+body.dark-mode .design-intent-section {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+body.dark-mode #design-intent-table,
+body.dark-mode .design-intent-table {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+/* Requirements section */
+body.dark-mode #requirements-container,
+body.dark-mode .requirements-section {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+body.dark-mode #requirements-table,
+body.dark-mode .requirements-table {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+/* Optical System section */
+body.dark-mode #optical-system-container,
+body.dark-mode .optical-system-section {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+body.dark-mode #optical-system-table,
+body.dark-mode .optical-system-table {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+/* All section headers */
+body.dark-mode .section-header,
+body.dark-mode h1,
+body.dark-mode h2,
+body.dark-mode h3,
+body.dark-mode h4 {
+    color: var(--text-primary);
+}
+
+/* Modal/Dialog */
+body.dark-mode .modal,
+body.dark-mode .dialog {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+body.dark-mode .modal-content,
+body.dark-mode .dialog-content {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+/* File display */
+body.dark-mode #loaded-file-display {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+/* Analysis select dropdown */
+body.dark-mode #analysis-select {
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+body.dark-mode #analysis-select option {
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+}
+
+/* Configuration controls */
+body.dark-mode #config-select {
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+body.dark-mode #config-select option {
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+}
+
+body.dark-mode #config-select option.active-config {
+    background-color: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* Tabulator input cells */
+body.dark-mode .tabulator-cell input,
+body.dark-mode .tabulator-cell select,
+body.dark-mode .tabulator-cell textarea {
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+/* Glass search specific */
+body.dark-mode .glass-search-container,
+body.dark-mode .glass-search-body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+body.dark-mode .glass-search-table input[type="text"],
+body.dark-mode .glass-search-table input[type="search"] {
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+/* Icons and emojis remain visible */
+body.dark-mode .top-file-icon,
+body.dark-mode .button-icon {
+    opacity: 1;
+}
