@@ -2721,15 +2721,15 @@ h4 {
    ============================================ */
 
 body.dark-mode {
-    --bg-primary: #1e1e1e;
-    --bg-secondary: #252526;
-    --bg-tertiary: #2d2d30;
-    --bg-input: #3c3c3c;
-    --bg-hover: #2a2d2e;
-    --text-primary: #cccccc;
-    --text-secondary: #969696;
-    --border-color: #3e3e42;
-    --border-light: #2b2b2b;
+    --bg-primary: #000000;
+    --bg-secondary: #0a0a0a;
+    --bg-tertiary: #1a1a1a;
+    --bg-input: #1a1a1a;
+    --bg-hover: #2a2a2a;
+    --text-primary: #ffffff;
+    --text-secondary: #cccccc;
+    --border-color: #333333;
+    --border-light: #222222;
     --accent-color: #007acc;
     --accent-hover: #1177bb;
     --button-bg: #0e639c;
