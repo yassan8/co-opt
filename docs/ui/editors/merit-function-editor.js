@@ -1080,7 +1080,10 @@ class MeritFunctionEditor {
             );
 
             const points = aberr?.meridionalData?.[0]?.points;
-            if (!Array.isArray(points) || points.length < 2) return 1e9;
+            if (!Array.isArray(points) || points.length < 2) {
+                console.warn('[LA_RMS_UM] No valid aberration data points');
+                return 1e9;
+            }
 
             const pts = points
                 .map(p => ({
@@ -1090,13 +1093,19 @@ class MeritFunctionEditor {
                 .filter(p => Number.isFinite(p.r) && Number.isFinite(p.L))
                 .sort((a, b) => a.r - b.r);
 
-            if (pts.length < 2) return 1e9;
+            if (pts.length < 2) {
+                console.warn('[LA_RMS_UM] Insufficient valid data points after filtering');
+                return 1e9;
+            }
 
             // Area-weighted mean and RMS about mean over pupil: weight is 2r dr.
             const r0 = pts[0].r;
             const rN = pts[pts.length - 1].r;
             const denom = (rN * rN) - (r0 * r0);
-            if (!(denom > 0)) return 1e9;
+            if (!(denom > 0)) {
+                console.warn('[LA_RMS_UM] Invalid pupil range', { r0, rN });
+                return 1e9;
+            }
 
             let sumL = 0;
             let sumL2 = 0;
@@ -1117,8 +1126,35 @@ class MeritFunctionEditor {
             const rmsMm = Math.sqrt(Math.max(0, variance));
             const rmsUm = rmsMm * 1000;
 
+            // Debug output: log first few calls and periodically to track optimization progress
+            if (typeof this.__laRmsCallCount === 'undefined') this.__laRmsCallCount = 0;
+            this.__laRmsCallCount++;
+            
+            // Log first 3 calls and then every 50th call
+            if (this.__laRmsCallCount <= 3 || this.__laRmsCallCount % 50 === 0) {
+                // Find aspheric surfaces for debugging
+                const asphericInfo = opticalSystemData
+                    .map((row, idx) => {
+                        const st = String(row?.surfType || '').toLowerCase();
+                        if (st.includes('aspheric') || st.includes('asphere')) {
+                            const coefs = [];
+                            for (let j = 1; j <= 4; j++) {
+                                const c = row[`coef${j}`];
+                                if (c && c !== 0) coefs.push(`c${j}=${Number(c).toExponential(2)}`);
+                            }
+                            return `S${idx}:${coefs.join(',')}`;
+                        }
+                        return null;
+                    })
+                    .filter(x => x)
+                    .join('; ');
+                
+                console.log(`[LA_RMS_UM #${this.__laRmsCallCount}] RMS=${rmsUm.toFixed(3)}µm, mean=${(meanL*1000).toFixed(3)}µm, σ=${(Math.sqrt(variance)*1000).toFixed(3)}µm, pts=${pts.length}, ${asphericInfo || 'no aspheric'}`);
+            }
+
             return Number.isFinite(rmsUm) ? rmsUm : 1e9;
-        } catch (_) {
+        } catch (err) {
+            console.error('[LA_RMS_UM] Exception:', err);
             return 1e9;
         }
     }

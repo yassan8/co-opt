@@ -485,12 +485,14 @@ function getNumericVariables(activeCfg) {
     const s = String(raw ?? '').trim();
 
     // Treat empty asphere terms as 0 so they can be optimized from a "blank" UI state.
-    // Supports Lens (front/back), and cemented elements (surfN* for Doublet/Triplet).
+    // Supports Lens (front/back), cemented elements (surfN*), and standard optical notation (a4, a6, ...).
     if (s === '') {
       if (
         /^(front|back)coef\d+$/i.test(key) ||
         /^coef\d+$/i.test(key) ||
-        /^surf\d+coef\d+$/i.test(key)
+        /^surf\d+coef\d+$/i.test(key) ||
+        /^(front|back)?a\d+$/i.test(key) ||
+        /^surf\d+a\d+$/i.test(key)
       ) {
         return { ...v, value: 0 };
       }
@@ -802,12 +804,13 @@ function coerceBlankAsphereToZero(v) {
   const s = String(raw ?? '').trim();
 
   if (s === '') {
-    // Lens blocks
-    if (/^(front|back)coef\d+$/i.test(key) || /^coef\d+$/i.test(key)) return { ...v, value: 0 };
+    // Lens blocks: support both coef notation and standard optical notation (a4, a6, ...)
+    if (/^(front|back)coef\d+$/i.test(key) || /^coef\d+$/i.test(key) || 
+        /^(front|back)?a\d+$/i.test(key)) return { ...v, value: 0 };
     if (/^(front|back)conic$/i.test(key) || /^conic$/i.test(key)) return { ...v, value: 0 };
 
-    // Multi-surface blocks (Doublet/Triplet): surf1Coef1, surf2Conic, ...
-    if (/^surf\d+coef\d+$/i.test(key)) return { ...v, value: 0 };
+    // Multi-surface blocks (Doublet/Triplet): surf1Coef1, surf2Conic, surf1A4, surf2A6, ...
+    if (/^surf\d+coef\d+$/i.test(key) || /^surf\d+a\d+$/i.test(key)) return { ...v, value: 0 };
     if (/^surf\d+conic$/i.test(key)) return { ...v, value: 0 };
   }
 
@@ -939,7 +942,7 @@ function setJointDesignVariableValue({ blocksByConfigId, targetConfigIds, active
       }
 
       // Default safety clamp for asphere coefficients (prevents catastrophic ray-trace failures).
-      // coef1*r^2, coef2*r^4, ... can blow up quickly if coefficients drift.
+      // Aspheric terms can blow up quickly if coefficients drift too far.
       const dot = String(baseId || '').indexOf('.');
       const key = (dot >= 0) ? String(baseId).slice(dot + 1) : '';
       const idx = parseCoefIndexFromKey(key);
@@ -947,6 +950,9 @@ function setJointDesignVariableValue({ blocksByConfigId, targetConfigIds, active
         // Allow override: optimize.clampAbsMax
         const overrideAbs = (opt && Number.isFinite(Number(opt.clampAbsMax))) ? Math.max(0, Number(opt.clampAbsMax)) : null;
         const baseScale = defaultScaleForKey(key);
+        // For aspheric coefficients: allow ±1000 * scale in physical units
+        // With scale matching typical values (1e-6 for A4), this gives ±1e-3 range
+        // In scaled coordinates: ±1000, which is reasonable freedom for optimization
         const absMax = overrideAbs !== null ? overrideAbs : Math.max(1e-30, 1e3 * baseScale);
         const clamped = Math.max(-absMax, Math.min(absMax, n));
         return Number.isFinite(clamped) ? clamped : rawValue;
@@ -1739,11 +1745,31 @@ function initialStepForValue(value, stepFraction, minStep) {
 function parseCoefIndexFromKey(key) {
   const s = String(key ?? '').trim();
   if (!s) return null;
-  const m = s.match(/coef(\d+)$/i);
-  if (!m) return null;
-  const idx = Number(m[1]);
-  if (!Number.isFinite(idx)) return null;
-  return idx;
+  
+  // Support multiple naming conventions for aspheric coefficients:
+  // - coef1, coef2, ... (legacy)
+  // - a4, a6, a8, a10, ... (standard optical notation, r^4, r^6, r^8, r^10)
+  // - A4, A6, A8, A10, ... (uppercase variant)
+  // - frontCoef1, backCoef1, surf1Coef1, etc.
+  
+  // Try standard optical notation: a4, a6, a8, a10, ...
+  let m = s.match(/a(\d+)$/i);
+  if (m) {
+    const power = Number(m[1]);
+    if (!Number.isFinite(power) || power % 2 !== 0) return null; // Must be even power
+    // Convert power to coefficient index: a4 → idx=2, a6 → idx=3, a8 → idx=4, ...
+    return power / 2;
+  }
+  
+  // Try legacy notation: coef1, coef2, ...
+  m = s.match(/coef(\d+)$/i);
+  if (m) {
+    const idx = Number(m[1]);
+    if (!Number.isFinite(idx)) return null;
+    return idx;
+  }
+  
+  return null;
 }
 
 function isAsphereCoefKey(key) {
@@ -1755,11 +1781,13 @@ function defaultScaleForKey(key) {
   if (!s) return 1;
   if (isAsphereCoefKey(s)) {
     const idx = parseCoefIndexFromKey(s);
-    // Heuristic scale for polynomial coefficients used in ray-tracing.js:
-    // coef1*r^2, coef2*r^4, ...
-    // Lower-order terms typically need much larger magnitudes than higher orders.
-    // This scale is primarily used for FD steps and trust-region clipping.
-    // coef1: 1e-6, coef2: 1e-8, coef3: 1e-10, ...
+    // Heuristic scale for polynomial coefficients used in aspheric surfaces.
+    // For standard notation (a4, a6, a8, ...): idx=2,3,4,... → r^4, r^6, r^8, ...
+    // For legacy notation (coef1, coef2, ...): idx=1,2,3,... → r^2, r^4, r^6, ...
+    // Scaling strategy: match typical coefficient magnitudes to make scaled values ~1.0
+    // Typical values: A4 ~ 1e-6, A6 ~ 1e-8, A8 ~ 1e-10, A10 ~ 1e-12, ...
+    // With these scales, |coef/scale| ≈ 1.0 in optimizer's coordinate system.
+    // idx=1 (A4): 1e-6, idx=2 (A6): 1e-8, idx=3 (A8): 1e-10, idx=4 (A10): 1e-12, ...
     if (idx === null) return 1e-12;
     const exp = -6 - 2 * Math.max(0, idx - 1);
     const sc = Math.pow(10, exp);
@@ -1780,15 +1808,87 @@ function buildStagedCoefMaxList(opts) {
       .sort((a, b) => a - b);
     if (arr.length > 0) return arr;
   }
-  // Default continuation schedule for asphere: unlock higher orders gradually.
-  return [0, 2, 4, 6, 8, 10];
+  // Default continuation schedule for aspheric coefficients: unlock higher orders progressively.
+  // Current system uses coef1=A4(r^4), coef2=A6(r^6), coef3=A8(r^8), ...
+  // ULTRA-CONSERVATIVE schedule to escape local minima: very gradual progression
+  // ALL stages optimize: conic, radius, thickness, and other non-coefficient parameters
+  // Stage 0: idx ≤ 0 → conic + radius + thickness + etc. (NO aspheric coefficients)
+  //          This stage establishes good base curvature before adding asphericity
+  // Stage 1: idx ≤ 1 → above + coef1 (A4 only) - most important aspheric term
+  // Stage 2: idx ≤ 1 → coef1 again with refined parameters (repeat for stability)
+  // Stage 3: idx ≤ 2 → above + coef1-2 (A4, A6)
+  // Stage 4: idx ≤ 3 → above + coef1-3 (A4-A8)
+  // Stage 5: idx ≤ 4 → above + coef1-4 (A4-A10)
+  // Stage 6: idx ≤ 10 → above + all coefficients (A4-A22)
+  return [0, 1, 1, 2, 3, 4, 10];
 }
 
 function stageAllowsVariable(varKey, maxCoefIndex) {
   const idx = parseCoefIndexFromKey(varKey);
-  if (idx === null) return true; // non-coef always enabled
+  // null means non-coefficient variable (conic, radius, thickness, etc.)
+  // These are always enabled in all stages to ensure proper optimization
+  // Stage 0 will optimize: conic + radius + thickness + other non-coef params
+  // Stage 1+ will additionally optimize: aspheric coefficients up to maxCoefIndex
+  if (idx === null) return true; // conic and other non-coef always enabled
   const maxIdx = Number.isFinite(Number(maxCoefIndex)) ? Number(maxCoefIndex) : 10;
   return idx <= maxIdx;
+}
+
+/**
+ * Initialize aspheric coefficients to zero to avoid local minima.
+ * This is called at the start of optimization if resetAsphericCoefficients option is enabled.
+ * @param {object} params - {configsById, targetConfigIds}
+ * @returns {number} - count of coefficients reset
+ */
+function resetAsphericCoefficientsToZero({ configsById, targetConfigIds }) {
+  let resetCount = 0;
+  const targetIds = Array.isArray(targetConfigIds) ? targetConfigIds : [];
+  
+  for (const [configId, cfg] of Object.entries(configsById || {})) {
+    if (targetIds.length > 0 && !targetIds.includes(Number(configId))) continue;
+    const blocks = cfg?.blocks || [];
+    
+    for (const blk of blocks) {
+      // Reset aspheric coefficients in block parameters
+      if (blk.parameters) {
+        for (let i = 1; i <= 10; i++) {
+          const key = `frontCoef${i}`;
+          if (key in blk.parameters) {
+            blk.parameters[key] = 0;
+            resetCount++;
+          }
+        }
+        for (let i = 1; i <= 10; i++) {
+          const key = `backCoef${i}`;
+          if (key in blk.parameters) {
+            blk.parameters[key] = 0;
+            resetCount++;
+          }
+        }
+      }
+      
+      // Reset aspheric coefficients in block variables
+      if (blk.variables) {
+        for (let i = 1; i <= 10; i++) {
+          const key = `frontCoef${i}`;
+          if (blk.variables[key]) {
+            blk.variables[key].value = 0;
+            resetCount++;
+          }
+        }
+        for (let i = 1; i <= 10; i++) {
+          const key = `backCoef${i}`;
+          if (blk.variables[key]) {
+            blk.variables[key].value = 0;
+            resetCount++;
+          }
+        }
+      }
+    }
+  }
+  
+  console.log(`🔄 [OptimizerMVP] Reset ${resetCount} aspheric coefficients to zero`);
+  return resetCount;
 }
 
 /**
@@ -2039,7 +2139,7 @@ export async function runOptimizationMVP(options = {}) {
   const method = (methodRaw === 'cd' || methodRaw === 'coordinatedescent') ? 'cd' : 'lm';
   const maxIterations = runUntilStopped
     ? Number.MAX_SAFE_INTEGER
-    : (Number.isFinite(Number(opts.maxIterations)) ? Math.max(1, Math.floor(Number(opts.maxIterations))) : 20);
+    : (Number.isFinite(Number(opts.maxIterations)) ? Math.max(1, Math.floor(Number(opts.maxIterations))) : 50);
   const stepFraction = Number.isFinite(Number(opts.stepFraction)) ? Math.max(1e-6, Number(opts.stepFraction)) : 0.02;
   const minStep = Number.isFinite(Number(opts.minStep)) ? Math.max(1e-12, Number(opts.minStep)) : 1e-6;
   const stepDecay = Number.isFinite(Number(opts.stepDecay)) ? Math.min(0.95, Math.max(0.1, Number(opts.stepDecay))) : 0.5;
@@ -2050,28 +2150,40 @@ export async function runOptimizationMVP(options = {}) {
 
   const lmLambda0 = Number.isFinite(Number(opts.lmLambda0)) ? Math.max(1e-12, Number(opts.lmLambda0)) : 1e-3;
   const lmLambdaUp = Number.isFinite(Number(opts.lmLambdaUp)) ? Math.max(1.1, Number(opts.lmLambdaUp)) : 10;
-  const lmLambdaDown = Number.isFinite(Number(opts.lmLambdaDown)) ? Math.min(0.95, Math.max(1e-3, Number(opts.lmLambdaDown))) : 0.3;
-  const fdStepFraction = Number.isFinite(Number(opts.fdStepFraction)) ? Math.max(1e-10, Number(opts.fdStepFraction)) : 1e-4;
+  const lmLambdaDown = Number.isFinite(Number(opts.lmLambdaDown)) ? Math.min(0.95, Math.max(1e-3, Number(opts.lmLambdaDown))) : 0.1;
+  // Nielsen/Marquardt adaptive damping: use tau to scale initial lambda based on J^T*J
+  const lmTau = Number.isFinite(Number(opts.lmTau)) ? Math.max(1e-6, Number(opts.lmTau)) : 1e-3;
+  const fdStepFraction = Number.isFinite(Number(opts.fdStepFraction)) ? Math.max(1e-10, Number(opts.fdStepFraction)) : 1e-3;
   // Default must be tiny enough for asphere coefficients (often ~1e-12 and smaller).
   // A too-large absolute FD step will destroy Jacobians for coef vars.
   const fdMinStep = Number.isFinite(Number(opts.fdMinStep)) ? Math.max(1e-30, Number(opts.fdMinStep)) : 1e-18;
-  const fdScaledStep = Number.isFinite(Number(opts.fdScaledStep)) ? Math.max(1e-9, Number(opts.fdScaledStep)) : 1e-3;
+  const fdScaledStep = Number.isFinite(Number(opts.fdScaledStep)) ? Math.max(1e-9, Number(opts.fdScaledStep)) : 5e-3;
+
+  // Aspheric coefficient regularization (Tikhonov): penalizes large high-order terms
+  // Helps prevent overfitting and improves manufacturability
+  // alphaReg = 0: no regularization (default for fast convergence)
+  // alphaReg > 0: add penalty term alphaReg * ||coef||^2 to cost function
+  const asphericRegularization = Number.isFinite(Number(opts.asphericRegularization)) ? Math.max(0, Number(opts.asphericRegularization)) : 0;
 
   // Continuation/staged optimization for aspherics.
   // Enabled by default for LM because it significantly reduces local-minimum trapping.
   const staged = (opts.staged === undefined) ? true : !!opts.staged;
   const stageMaxCoefList = staged ? buildStagedCoefMaxList(opts) : [10];
-  const stageStallLimit = Number.isFinite(Number(opts.stageStallLimit)) ? Math.max(1, Math.floor(Number(opts.stageStallLimit))) : 2;
+  // Increased stall limit: allow more iterations per stage to escape local minima
+  const stageStallLimit = Number.isFinite(Number(opts.stageStallLimit)) ? Math.max(1, Math.floor(Number(opts.stageStallLimit))) : 8;
 
   // Trust region / step control in scaled coordinates.
   const trustRegion = (opts.trustRegion === undefined) ? true : !!opts.trustRegion;
-  // In staged LM (especially with asphere coefficients), smaller steps are much more stable.
+  // In staged LM (especially with asphere coefficients), balance stability with convergence speed.
   const trustRegionDelta = Number.isFinite(Number(opts.trustRegionDelta))
     ? Math.max(1e-6, Number(opts.trustRegionDelta))
-    : ((method === 'lm' && staged) ? 0.05 : 0.2);
+    : ((method === 'lm' && staged) ? 0.1 : 0.2);
   const trustRegionDeltaMax = Number.isFinite(Number(opts.trustRegionDeltaMax))
     ? Math.max(trustRegionDelta, Number(opts.trustRegionDeltaMax))
-    : Math.max(trustRegionDelta, 1.0);
+    : Math.max(trustRegionDelta, 2.0);
+
+  // Reset aspheric coefficients to zero before optimization to avoid local minima
+  const resetAsphericCoefs = !!opts.resetAsphericCoefficients;
 
   // Optional: restart/jitter when LM is stuck (e.g. reject streak) to escape local minima.
   // This is intentionally simple; it prefers coefficient-like variables but will fall back
@@ -2089,7 +2201,7 @@ export async function runOptimizationMVP(options = {}) {
 
   // Backtracking line search along LM step.
   const backtracking = (opts.backtracking === undefined) ? true : !!opts.backtracking;
-  const backtrackingMaxTries = Number.isFinite(Number(opts.backtrackingMaxTries)) ? Math.max(1, Math.floor(Number(opts.backtrackingMaxTries))) : 8;
+  const backtrackingMaxTries = Number.isFinite(Number(opts.backtrackingMaxTries)) ? Math.max(1, Math.floor(Number(opts.backtrackingMaxTries))) : 5;
 
   // If the LM step becomes (near-)zero (common when residuals are flat / discontinuous),
   // rho tends to 0 and we can get stuck rejecting forever. Allow a tiny random exploration
@@ -2782,6 +2894,7 @@ export async function runOptimizationMVP(options = {}) {
 
 
     let lambda = lmLambda0;
+    let lambdaInitialized = false; // Will be set adaptively from first Jacobian (Nielsen method)
     let completedIterations = 0;
     let best = Infinity;
     let before = Infinity;
@@ -3028,6 +3141,28 @@ export async function runOptimizationMVP(options = {}) {
 
     console.log('🚀 [OptimizerMVP] start', { method: 'lm', vars: vars.length, before, maxIterations, multiScenario });
 
+    // Reset aspheric coefficients at the start if option is enabled (helps avoid local minima)
+    if (resetAsphericCoefs) {
+      console.log('🔄 [OptimizerMVP] Resetting aspheric coefficients to zero to avoid local minima...');
+      const resetCount = resetAsphericCoefficientsToZero({ configsById, targetConfigIds });
+      if (resetCount > 0) {
+        // Sync to tables after reset
+        try {
+          if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+            await window.ConfigurationManager.loadActiveConfigurationToTables({
+              applyToUI: false,
+              suppressOpticalSystemDataChanged: true,
+            });
+          }
+        } catch (_) {}
+        // Re-evaluate initial state after reset
+        before0Eval = await evalStateLM();
+        before = before0Eval.cost;
+        best = before;
+        console.log(`🔄 [OptimizerMVP] After reset: cost=${before.toFixed(6)}, reset ${resetCount} coefficients`);
+      }
+    }
+
     let stageIndex = 0;
     let stageNoImprove = 0;
     const lastStageIndex = Math.max(0, stageMaxCoefList.length - 1);
@@ -3036,6 +3171,18 @@ export async function runOptimizationMVP(options = {}) {
     let __lmExploreDisabledAfterZeroRho = false;
 
     for (let iter = 1; iter <= maxIterations; iter++) {
+      // Stage-dependent trust region: very small steps in early stages to avoid local minima
+      // Stage 0-1: minimal steps (0.02) for base optimization
+      // Stage 2-3: small steps (0.04-0.06) as we add more coefficients
+      // Stage 4+: normal steps (0.1) for final refinement
+      const stageBaseTrustDelta = stageIndex === 0 ? 0.02 
+                                 : stageIndex === 1 ? 0.02 
+                                 : stageIndex === 2 ? 0.04
+                                 : stageIndex === 3 ? 0.06
+                                 : trustRegionDelta;
+      if (iter === 1 || trustRegionDeltaEff > stageBaseTrustDelta * 1.5) {
+        trustRegionDeltaEff = stageBaseTrustDelta;
+      }
       if (shouldStop && shouldStop()) {
         if (onProgress) {
           try { onProgress({ phase: 'stopped', iter, current: best, best, method: 'lm', multiScenario, requirementCount }); } catch (_) {}
@@ -3082,6 +3229,13 @@ export async function runOptimizationMVP(options = {}) {
 
       if (onProgress) {
         try {
+          // Debug info: track aspheric coefficient values during optimization
+          const asphericVars = curVars.filter(v => isAsphereCoefKey(v.key) || /conic$/i.test(v.key));
+          const asphericDebug = asphericVars.length > 0 ? {
+            count: asphericVars.length,
+            values: asphericVars.map(v => ({ key: v.key, value: v.value }))
+          } : undefined;
+
           onProgress({
             phase: 'iter',
             iter,
@@ -3098,7 +3252,8 @@ export async function runOptimizationMVP(options = {}) {
             bestFeasibleFound: !!bestFeasibleEval,
             stageIndex,
             stageMaxCoef: maxCoef,
-            activeVariables: n
+            activeVariables: n,
+            asphericDebug
           });
         } catch (_) {}
         await nextFrame();
@@ -3131,7 +3286,15 @@ export async function runOptimizationMVP(options = {}) {
         const r1 = br.residuals;
         const mm = Math.min(m, r1.length);
         for (let i = 0; i < mm; i++) {
-          J[i][j] = (r1[i] - r0[i]) / h;
+          const derivative = (r1[i] - r0[i]) / h;
+          // Numerical stability: clamp extremely large derivatives (likely numerical errors)
+          // This prevents singular or near-singular Jacobian matrices
+          const maxDerivMag = 1e12;
+          if (Number.isFinite(derivative)) {
+            J[i][j] = Math.max(-maxDerivMag, Math.min(maxDerivMag, derivative));
+          } else {
+            J[i][j] = 0; // Treat NaN/Inf as zero derivative
+          }
         }
         for (let i = mm; i < m; i++) {
           J[i][j] = 0;
@@ -3175,7 +3338,42 @@ export async function runOptimizationMVP(options = {}) {
         }
       }
 
+      // Nielsen adaptive initialization: lambda_0 = tau * max(diag(A))
+      if (!lambdaInitialized) {
+        let maxDiag = 0;
+        for (let i = 0; i < n; i++) {
+          const d = A[i][i];
+          if (Number.isFinite(d) && d > maxDiag) maxDiag = d;
+        }
+        if (maxDiag > 0 && lmTau > 0) {
+          lambda = lmTau * maxDiag;
+          lambdaInitialized = true;
+        }
+      }
+
+      // Add Tikhonov regularization for aspheric coefficients (if enabled)
+      // Adds alphaReg to diagonal elements for aspheric coefficient variables
+      // This penalizes large coefficient magnitudes, improving manufacturability
+      if (asphericRegularization > 0) {
+        for (let i = 0; i < n; i++) {
+          const key = keys[i];
+          if (isAsphereCoefKey(key)) {
+            A[i][i] += asphericRegularization;
+          }
+        }
+      }
+
+      // Numerical stability: ensure all diagonal elements are positive
+      // This prevents singular or near-singular matrices
+      const minDiag = 1e-30;
+      for (let i = 0; i < n; i++) {
+        if (!Number.isFinite(A[i][i]) || A[i][i] < minDiag) {
+          A[i][i] = minDiag;
+        }
+      }
+
       // Damping: A_damped = A + lambda * diag(A) + lambda * I
+      // This is the Marquardt modification (combines Levenberg and Marquardt approaches)
       /** @type {number[][]} */
       const Ad = A.map((row) => row.slice());
       for (let i = 0; i < n; i++) {
@@ -3194,12 +3392,24 @@ export async function runOptimizationMVP(options = {}) {
       let dx = solveSymmetricPositiveDefinite(Ad, b);
       if (!dx) dx = solveLinearSystemFallback(Ad, b);
       if (!dx) {
-        // increase damping and continue
+        // Stability tuning: linear solver failed, increase damping
         lambda *= lmLambdaUp;
+        // Safety check: if lambda becomes too large, the problem may be ill-conditioned
+        // Reset to Nielsen-based initialization and reduce trust region
+        if (lambda > 1e10) {
+          let maxDiag = 0;
+          for (let i = 0; i < n; i++) {
+            const d = A[i][i];
+            if (Number.isFinite(d) && d > maxDiag) maxDiag = d;
+          }
+          lambda = (maxDiag > 0) ? lmTau * maxDiag : lmLambda0;
+          trustRegionDeltaEff = Math.max(trustRegionDelta * 0.5, trustRegionDelta);
+        }
         continue;
       }
 
       // Trust region (scaled): clip dx so max |dx_i/scale_i| <= delta.
+      // Stability tuning: prevents overly large steps in scaled coordinates
       if (trustRegion) {
         let maxAbs = 0;
         for (let i = 0; i < n; i++) {
@@ -3213,6 +3423,21 @@ export async function runOptimizationMVP(options = {}) {
           const f = delta / maxAbs;
           for (let i = 0; i < n; i++) dx[i] *= f;
         }
+      }
+
+      // Numerical stability check: detect NaN or Inf in step
+      let stepValid = true;
+      for (let i = 0; i < n; i++) {
+        if (!Number.isFinite(dx[i])) {
+          stepValid = false;
+          break;
+        }
+      }
+      if (!stepValid) {
+        // Numerical instability detected, increase damping significantly
+        lambda *= lmLambdaUp * lmLambdaUp;
+        trustRegionDeltaEff = Math.max(trustRegionDelta, trustRegionDeltaEff * 0.5);
+        continue;
       }
 
       // Detect a near-zero step in scaled coordinates.
@@ -3253,19 +3478,30 @@ export async function runOptimizationMVP(options = {}) {
       let acceptedRho = 0;
 
       const predictedReductionForStep = (dxStep) => {
-        // Predicted decrease for the *same* objective as `cost = ||r||^2`.
-        // For the LM damped quadratic model with SPD matrix Ad:
-        //   phi = 0.5||r||^2, model reduction ≈ 0.5 * dx^T Ad dx  (always >= 0)
-        // Therefore for cost (=2*phi), predicted reduction is:
-        //   predCost = dx^T Ad dx
+        // Predicted decrease using the linearized model: m(0) - m(dx)
+        // For LM method: pred = dx^T * g + 0.5 * dx^T * A * dx
+        // where g = -J^T * r (gradient) and A = J^T * J
+        // This is more accurate than the simplified version
         try {
-          let dxAdx = 0;
+          // Linear term: dx^T * g
+          let linearTerm = 0;
           for (let i = 0; i < n; i++) {
-            let s = 0;
-            for (let k = 0; k < n; k++) s += Ad[i][k] * dxStep[k];
-            dxAdx += dxStep[i] * s;
+            linearTerm += dxStep[i] * g[i];
           }
-          return Number.isFinite(dxAdx) ? dxAdx : NaN;
+          
+          // Quadratic term: 0.5 * dx^T * A * dx
+          let quadTerm = 0;
+          for (let i = 0; i < n; i++) {
+            let sum = 0;
+            for (let k = 0; k < n; k++) {
+              sum += A[i][k] * dxStep[k];
+            }
+            quadTerm += dxStep[i] * sum;
+          }
+          quadTerm *= 0.5;
+          
+          const pred = -(linearTerm + quadTerm); // Negative because g points downhill
+          return Number.isFinite(pred) ? pred : NaN;
         } catch (_) {
           return NaN;
         }
@@ -3344,25 +3580,36 @@ export async function runOptimizationMVP(options = {}) {
         rejectStreak = 0;
 
         // Adaptive trust region: if rho is high, allow larger steps; otherwise decay back to base.
+        // Stability tuning: prevents trust region from becoming too small or too large
         // This is especially helpful for spot-size hinge constraints where the quadratic model is
         // only reliable intermittently.
         if (trustRegion) {
+          const minDelta = trustRegionDelta * 0.1; // Prevent collapse to zero
           if (acceptedRho > 0.75) {
             trustRegionDeltaEff = Math.min(trustRegionDeltaMax, Math.max(trustRegionDelta, trustRegionDeltaEff * 1.25));
           } else if (acceptedRho > 0.25) {
             trustRegionDeltaEff = Math.min(trustRegionDeltaMax, Math.max(trustRegionDelta, trustRegionDeltaEff * 1.05));
           } else {
-            trustRegionDeltaEff = Math.max(trustRegionDelta, trustRegionDeltaEff * 0.95);
+            // Stability: don't shrink below minimum threshold
+            trustRegionDeltaEff = Math.max(minDelta, trustRegionDeltaEff * 0.95);
           }
         }
 
-        // Adaptive lambda update based on gain ratio.
-        // High rho => model predicted well => reduce lambda more.
-        // Medium rho => keep lambda roughly.
-        const downSqrt = Math.sqrt(Math.max(1e-6, lmLambdaDown));
-        const factor = (acceptedRho > 0.75) ? lmLambdaDown
-          : (acceptedRho > 0.25) ? downSqrt
-            : 1;
+        // Nielsen/Marquardt adaptive lambda update based on gain ratio.
+        // This uses a smooth function rather than discrete thresholds for better behavior.
+        // Reference: Nielsen, H.B. (1999), "Damping Parameter in Marquardt's Method"
+        // factor = max(1/3, 1 - (2*rho - 1)^3) when rho > threshold
+        const rhoThreshold = 0.0001; // Numerical threshold for accepting step
+        let factor;
+        if (acceptedRho > rhoThreshold) {
+          // Smooth decrease: higher rho → smaller factor → smaller lambda
+          const smoothTerm = Math.pow(2 * acceptedRho - 1, 3);
+          factor = Math.max(1.0 / 3.0, 1.0 - smoothTerm);
+          factor = Math.max(lmLambdaDown, Math.min(1.0, factor));
+        } else {
+          // Very poor prediction: increase damping significantly
+          factor = lmLambdaUp;
+        }
         lambda = Math.max(1e-18, lambda * factor);
 
         // Once rho is 0 (degenerate/flat model), permanently disable random exploration steps.
@@ -3408,8 +3655,15 @@ export async function runOptimizationMVP(options = {}) {
         rejectStreak++;
 
         if (trustRegion) {
-          // On rejection, shrink toward base (but never below the base delta).
-          trustRegionDeltaEff = Math.max(trustRegionDelta, trustRegionDeltaEff * 0.9);
+          // Stability tuning: On rejection, shrink toward base with minimum threshold
+          const minDelta = trustRegionDelta * 0.1;
+          trustRegionDeltaEff = Math.max(minDelta, trustRegionDeltaEff * 0.9);
+        }
+        
+        // Stability check: if lambda is becoming extremely large, reset
+        if (lambda > 1e12) {
+          lambda = lmLambda0 * 100;
+          trustRegionDeltaEff = trustRegionDelta * 0.5;
         }
 
         // If we're stuck rejecting, try a controlled restart: restore best state and jitter coef vars.
