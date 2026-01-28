@@ -3207,3 +3207,18 @@ body.dark-mode .optical-system-buttons-container {
     background-color: var(--bg-primary) !important;
     color: var(--text-primary) !important;
 }
+
+/* Footer and Privacy Policy text */
+body.dark-mode footer,
+body.dark-mode footer *,
+body.dark-mode footer div,
+body.dark-mode footer span,
+body.dark-mode footer strong {
+    color: var(--text-primary) !important;
+    background-color: transparent !important;
+}
+
+body.dark-mode footer div[style*="color"],
+body.dark-mode footer *[style*="color:black"] {
+    color: var(--text-primary) !important;
+}
