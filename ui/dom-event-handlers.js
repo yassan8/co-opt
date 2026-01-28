@@ -392,9 +392,17 @@ function createParameterSlider(key, blockType, currentValue, commitCallback) {
     slider.addEventListener('click', (e) => e.stopPropagation());
     
     // Update range display text
+    function formatRangeValue(val, precision) {
+        const n = Number(val);
+        if (!Number.isFinite(n)) return String(val ?? '');
+        const abs = Math.abs(n);
+        if (abs > 0 && abs < 1e-6) return n.toExponential(2);
+        return n.toFixed(precision);
+    }
+
     function updateRangeDisplay() {
         const precision = Math.max(2, Math.min(6, -Math.floor(Math.log10(Math.abs(max - min) / 100))));
-        rangeDisplay.textContent = `[${min.toFixed(precision)} ~ ${max.toFixed(precision)}]`;
+        rangeDisplay.textContent = `[${formatRangeValue(min, precision)} ~ ${formatRangeValue(max, precision)}]`;
     }
     updateRangeDisplay();
     
@@ -2297,6 +2305,39 @@ function setupImportZemaxButton() {
                             }
                             
                             activeCfg.blocks.unshift(objBlock);
+                        }
+
+                        // If the imported file has a Stop surface, insert Stop at ObjectSurface (surface 0).
+                        // If there is no Stop surface, insert Stop after ObjectSurface as a fallback.
+                        try {
+                            const stopIndex = Array.isArray(rows) ? findStopSurfaceIndex(rows) : -1;
+                            const stopBlockIndex = activeCfg.blocks.findIndex(b => b && String(b.blockType ?? '').trim() === 'Stop');
+                            const objIdx = activeCfg.blocks.findIndex(b => b && String(b.blockType ?? '').trim() === 'ObjectSurface');
+
+                            const ensureStopBlock = () => {
+                                if (stopBlockIndex >= 0) return activeCfg.blocks[stopBlockIndex];
+                                const stopId = __blocks_generateUniqueBlockId(activeCfg.blocks, 'Stop');
+                                const stopBlock = __blocks_makeDefaultBlock('Stop', stopId);
+                                if (stopBlock && stopBlock.metadata && typeof stopBlock.metadata === 'object') {
+                                    stopBlock.metadata.source = 'zemax-import';
+                                }
+                                return stopBlock;
+                            };
+
+                            if (stopIndex >= 0) {
+                                const stopBlock = ensureStopBlock();
+                                if (stopBlockIndex >= 0) {
+                                    activeCfg.blocks.splice(stopBlockIndex, 1);
+                                }
+                                if (objIdx >= 0) activeCfg.blocks.splice(objIdx + 1, 0, stopBlock);
+                                else activeCfg.blocks.unshift(stopBlock);
+                            } else if (stopBlockIndex < 0) {
+                                const stopBlock = ensureStopBlock();
+                                if (objIdx >= 0) activeCfg.blocks.splice(objIdx + 1, 0, stopBlock);
+                                else activeCfg.blocks.unshift(stopBlock);
+                            }
+                        } catch (_) {
+                            // ignore
                         }
                     } catch (_) {
                         // ignore

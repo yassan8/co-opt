@@ -530,6 +530,22 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
     markDefaultsForObjectAndImage(rows);
   }
 
+  // If no stop surface is defined in the import, place a Stop right after Object (Surf 1).
+  if (Array.isArray(rows) && rows.length > 0) {
+    const hasStopSurface = rows.some((row) => {
+      if (!row || typeof row !== 'object') return false;
+      const objTypeRaw = row['object type'] ?? row.object ?? row.objectType;
+      const objType = String(objTypeRaw ?? '').trim().toLowerCase();
+      const comment = String(row.comment ?? '').trim().toLowerCase();
+      return objType === 'stop' || objType === 'sto' || comment === 'stop' || comment === 'aperture stop' || comment.includes('stop');
+    });
+
+    if (!hasStopSurface) {
+      const stopRow = ensureRow(rows, 1);
+      stopRow['object type'] = 'Stop';
+    }
+  }
+
   // Ensure ids are contiguous and consistent
   for (let i = 0; i < rows.length; i++) {
     if (!rows[i] || typeof rows[i] !== 'object') rows[i] = makeEmptyRow(i);
