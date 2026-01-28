@@ -3165,3 +3165,45 @@ body.dark-mode .top-file-icon,
 body.dark-mode .button-icon {
     opacity: 1;
 }
+
+/* Block Inspector (Design Intent) - Force black background */
+body.dark-mode #block-inspector,
+body.dark-mode #block-inspector *,
+body.dark-mode #block-inspector div,
+body.dark-mode #block-inspector table,
+body.dark-mode #block-inspector tr,
+body.dark-mode #block-inspector td,
+body.dark-mode #block-inspector th,
+body.dark-mode #block-inspector span,
+body.dark-mode #block-inspector input,
+body.dark-mode #block-inspector select,
+body.dark-mode #block-inspector button {
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
+}
+
+/* Design Intent specific elements */
+body.dark-mode .optical-system-section #block-inspector *[style*="background"],
+body.dark-mode #block-inspector *[style*="background-color"] {
+    background-color: var(--bg-primary) !important;
+}
+
+body.dark-mode #block-inspector *[style*="color"] {
+    color: var(--text-primary) !important;
+}
+
+/* Override any white backgrounds in block inspector */
+body.dark-mode #block-inspector div[style*="#fff"],
+body.dark-mode #block-inspector div[style*="white"],
+body.dark-mode #block-inspector *[style*="#fff"],
+body.dark-mode #block-inspector *[style*="white"] {
+    background-color: var(--bg-primary) !important;
+}
+
+/* Design Intent toolbar and controls */
+body.dark-mode #design-intent-toolbar,
+body.dark-mode #design-intent-toolbar *,
+body.dark-mode .optical-system-buttons-container {
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
+}
