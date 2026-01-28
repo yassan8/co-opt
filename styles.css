@@ -2847,17 +2847,20 @@ body.dark-mode .tabulator {
     background-color: var(--bg-primary) !important;
     color: var(--text-primary) !important;
     border-color: var(--border-color) !important;
+    border: 1px solid var(--border-color) !important;
 }
 
 body.dark-mode .tabulator-header {
     background-color: var(--bg-primary) !important;
     border-color: var(--border-color) !important;
+    border-bottom: 1px solid var(--border-color) !important;
 }
 
 body.dark-mode .tabulator-col {
     background-color: var(--bg-primary) !important;
     color: var(--text-primary) !important;
     border-color: var(--border-color) !important;
+    border-right: 1px solid var(--border-color) !important;
 }
 
 body.dark-mode .tabulator-col-title {
@@ -2867,7 +2870,8 @@ body.dark-mode .tabulator-col-title {
 body.dark-mode .tabulator-row {
     background-color: var(--bg-primary) !important;
     color: var(--text-primary) !important;
-    border-color: var(--border-light) !important;
+    border-color: var(--border-color) !important;
+    border-bottom: 1px solid var(--border-color) !important;
 }
 
 body.dark-mode .tabulator-row:hover {
@@ -2880,6 +2884,7 @@ body.dark-mode .tabulator-row.tabulator-selected {
 
 body.dark-mode .tabulator-tableholder {
     background-color: var(--bg-primary) !important;
+    border-color: var(--border-color) !important;
 }
 
 body.dark-mode #table-source,
@@ -2888,12 +2893,15 @@ body.dark-mode #design-intent-table,
 body.dark-mode #requirements-table,
 body.dark-mode #optical-system-table {
     background-color: var(--bg-primary) !important;
+    border: 1px solid var(--border-color) !important;
 }
 
 body.dark-mode .tabulator-cell {
-    border-color: var(--border-light) !important;
+    border-color: var(--border-color) !important;
     color: var(--text-primary) !important;
     background-color: var(--bg-primary) !important;
+    border-right: 1px solid var(--border-color) !important;
+    border-bottom: 1px solid var(--border-color) !important;
 }
 
 body.dark-mode .tabulator-footer {
