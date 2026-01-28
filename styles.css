@@ -3027,43 +3027,56 @@ body.dark-mode .glass-search-table tr.selected {
 /* Design Intent section */
 body.dark-mode #design-intent-container,
 body.dark-mode .design-intent-section {
-    background-color: var(--bg-primary);
-    color: var(--text-primary);
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
 }
 
 body.dark-mode #design-intent-table,
 body.dark-mode .design-intent-table {
-    background-color: var(--bg-secondary);
-    color: var(--text-primary);
-    border-color: var(--border-color);
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
 }
 
 /* Requirements section */
 body.dark-mode #requirements-container,
-body.dark-mode .requirements-section {
-    background-color: var(--bg-primary);
-    color: var(--text-primary);
+body.dark-mode .requirements-section,
+body.dark-mode .merit-function-section {
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
 }
 
 body.dark-mode #requirements-table,
-body.dark-mode .requirements-table {
-    background-color: var(--bg-secondary);
-    color: var(--text-primary);
-    border-color: var(--border-color);
+body.dark-mode .requirements-table,
+body.dark-mode #table-system-requirements,
+body.dark-mode #table-system-requirements * {
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
 }
 
 /* Optical System section */
 body.dark-mode #optical-system-container,
 body.dark-mode .optical-system-section {
-    background-color: var(--bg-primary);
-    color: var(--text-primary);
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
 }
 
 body.dark-mode #optical-system-table,
 body.dark-mode .optical-system-table {
-    background-color: var(--bg-secondary);
-    color: var(--text-primary);
-    border-color: var(--border-color);
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
+}
+
+body.dark-mode .optical-system-section table,
+body.dark-mode .optical-system-section table *,
+body.dark-mode .merit-function-section table,
+body.dark-mode .merit-function-section table *,
+body.dark-mode .design-intent-section table,
+body.dark-mode .design-intent-section table * {
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
 }
 
 /* All section headers */
