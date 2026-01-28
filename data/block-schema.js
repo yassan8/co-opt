@@ -490,6 +490,7 @@ export function validateBlocksConfiguration(config) {
           }
         }
       }
+      // Note: objectDistance is now allowed (optional) for INF mode, used as rendering position
     }
 
     if (blockType === 'SingleSurface') {
@@ -1150,9 +1151,15 @@ export function expandBlocksToOpticalSystemRows(blocks) {
         const mode = String(modeRaw ?? '').trim().replace(/\s+/g, '').toUpperCase();
         if (mode === 'INF' || mode === 'INFINITY') {
           rows[0].thickness = 'INF';
+          // For INF objects, store objectDistance as objectRenderDistance for ray rendering
+          const distRaw = getParamOrVarValue(params, vars, 'objectDistance');
+          const distVal = normalizeThicknessToRowValue(distRaw);
+          rows[0].objectRenderDistance = (typeof distVal === 'number' && Number.isFinite(distVal)) ? distVal : 0;
         } else {
           const distRaw = getParamOrVarValue(params, vars, 'objectDistance');
           rows[0].thickness = normalizeThicknessToRowValue(distRaw);
+          // For finite objects, objectRenderDistance is not used
+          delete rows[0].objectRenderDistance;
         }
       } catch (_) {
         // ignore

@@ -3163,7 +3163,10 @@ class MeritFunctionEditor {
 
     solveCrossRayToStopEdgeY(opticalSystemData, stopIndex, stopRadius, wavelength) {
         const isInfinite = this.isInfiniteConjugateFromObjectRow(opticalSystemData);
-        const zStart = isInfinite ? -25 : 0;
+        // Use objectRenderDistance from Object row for INF objects
+        const objectRow = opticalSystemData && opticalSystemData[0];
+        const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
+        const zStart = isInfinite ? -Math.abs(renderDist) : 0;
         const targetY = stopRadius;
 
         const evalFunc = (u) => {

@@ -1346,7 +1346,10 @@ function calculateInfiniteSystemDirection(objectAngle) {
  * @returns {Object|null} 射出座標 {x, y, z}
  */
 export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurfaceIndex, opticalSystemRows, debugMode, targetSurfaceIndex, wavelength) {
-    const initialZ = -25;
+    // Use objectRenderDistance from Object row for INF objects (positive value converted to negative Z)
+    const objectRow = opticalSystemRows && opticalSystemRows[0];
+    const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
+    const initialZ = -Math.abs(renderDist);
 
     const stopX = Number.isFinite(stopCenter?.x) ? stopCenter.x : 0;
     const stopY = Number.isFinite(stopCenter?.y) ? stopCenter.y : 0;

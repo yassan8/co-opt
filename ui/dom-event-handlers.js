@@ -82,7 +82,11 @@ function __zmxTraceRayToSurfaceIndex(opticalSystemRows, ray0, surfaceIndex) {
 
 function __zmxSolveCrossRayToStopCoordAxis(opticalSystemRows, stopIndex, targetCoordMm, wavelengthMicrons, axis /* 'x'|'y' */, options = null) {
     const isInfinite = __zmxIsInfiniteConjugateFromObjectRow(opticalSystemRows);
-    const zStart = (options && typeof options === 'object' && Number.isFinite(options.zStart)) ? Number(options.zStart) : (isInfinite ? -25 : 0);
+    // Use objectRenderDistance from Object row for INF objects
+    const objectRow = opticalSystemRows && opticalSystemRows[0];
+    const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
+    const defaultZStart = isInfinite ? -Math.abs(renderDist) : 0;
+    const zStart = (options && typeof options === 'object' && Number.isFinite(options.zStart)) ? Number(options.zStart) : defaultZStart;
     const axisLower = String(axis || 'y').toLowerCase();
     const useX = axisLower === 'x';
     const target = Number(targetCoordMm);
@@ -9548,7 +9552,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             if (blockType === 'ObjectSurface') {
                 items.push(
                     { kind: 'objectMode', key: 'objectDistanceMode', label: 'object (INF/finite)', noOptimize: true },
-                    { kind: 'objectDistance', key: 'objectDistance', label: 'distance to 1st lens', noOptimize: true }
+                    { kind: 'objectDistance', key: 'objectDistance', label: 'distance to 1st surf', noOptimize: true }
                 );
             } else if (blockType === 'Lens' || blockType === 'PositiveLens') {
                 items.push(
@@ -10039,14 +10043,13 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     valueInput.style.borderRadius = '4px';
                     valueInput.addEventListener('click', (e) => e.stopPropagation());
 
-                    // Object distance is ignored when objectDistanceMode is INF.
+                    // Object distance placeholder: 0mm for INF objects (used as rendering position)
                     if (isObjectDistanceItem) {
                         try {
                             const mRaw = getDisplayValue('objectDistanceMode');
                             const m = String(mRaw ?? '').trim().replace(/\s+/g, '').toUpperCase();
                             const isInf = m === 'INF' || m === 'INFINITY';
-                            valueInput.disabled = isInf;
-                            if (isInf) valueInput.placeholder = '(ignored)';
+                            if (isInf) valueInput.placeholder = '0';
                         } catch (_) {}
                     }
 

@@ -539,7 +539,10 @@ export function optimizeAngleObjectPosition(angleX, angleY, opticalSystemRows) {
         const stopY = Number(stopOrigin?.y ?? 0);
         const stopZ = Number(stopOrigin?.z ?? stopInfo.zPosition);
 
-        const objectZ = -25.0;
+        // Use objectRenderDistance from Object row for INF objects (positive value converted to negative Z)
+        const objectRow = opticalSystemRows && opticalSystemRows[0];
+        const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
+        const objectZ = -Math.abs(renderDist);
         const dir = buildDirectionFromFieldAngles(angleX, angleY);
         const safeK = Math.abs(dir.z) > 1e-12 ? dir.z : (dir.z >= 0 ? 1e-12 : -1e-12);
         if (!Number.isFinite(stopZ)) {
@@ -905,8 +908,10 @@ function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLi
         // Object position (Point objects use xHeightAngle and yHeightAngle for positioning)
         const objectX = Number(obj.xHeightAngle) || 0;
         const objectY = Number(obj.yHeightAngle) || 0;
-        // Object Z coordinate: use actual surface origin for finite objects, fallback to -25mm only for infinite objects
-        let objectZ = isInfiniteObject ? -25.0 : finiteObjectZ;
+        // Object Z coordinate: use actual surface origin for finite objects, use objectRenderDistance for infinite objects
+        const objectRow = opticalSystemRows && opticalSystemRows[0];
+        const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
+        let objectZ = isInfiniteObject ? -Math.abs(renderDist) : finiteObjectZ;
         
         // Calculate Object surface sag at object position (finite objectのみ)
         let objectSag = 0;
@@ -1371,8 +1376,10 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         const firstSurfaceOrigin = surfaceOrigins[0] ? surfaceOrigins[0].origin : { x: 0, y: 0, z: 0 };
         const finiteObjectZ = Number.isFinite(firstSurfaceOrigin?.z) ? firstSurfaceOrigin.z : 0;
         
-        // Use actual object-plane origin for finite objects; fall back to -25mm only when object distance is infinite
-        let objectZ = isInfiniteObject ? -25.0 : finiteObjectZ;
+        // Use actual object-plane origin for finite objects; use objectRenderDistance for infinite objects
+        const objectRow = opticalSystemRows && opticalSystemRows[0];
+        const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
+        let objectZ = isInfiniteObject ? -Math.abs(renderDist) : finiteObjectZ;
         
         const surf = opticalSystemRows[0];
 
@@ -1798,8 +1805,10 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
         const centerX = parseNumericValue(obj.xHeight ?? obj.x ?? obj.xHeightAngle ?? obj.xAngle);
         const centerY = parseNumericValue(obj.yHeight ?? obj.y ?? obj.yHeightAngle ?? obj.yAngle);
         const finiteObjectZ = Number.isFinite(firstSurfaceOrigin?.z) ? firstSurfaceOrigin.z : 0;
-        // Use true surface origin for finite objects; retain -25mm fallback only when object is effectively infinite
-        const objectZ = isInfiniteObject ? -25.0 : finiteObjectZ;
+        // Use true surface origin for finite objects; use objectRenderDistance for infinite objects
+        const objectRow = opticalSystemRows && opticalSystemRows[0];
+        const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
+        const objectZ = isInfiniteObject ? -Math.abs(renderDist) : finiteObjectZ;
         
         // Calculate Object surface sag at object position
         let objectSag = 0;
