@@ -2752,7 +2752,7 @@ body.dark-mode h3 {
 /* Buttons */
 body.dark-mode button {
     background-color: var(--bg-secondary);
-    color: var(--text-primary);
+    color: var(--text-primary) !important;
     border-color: var(--border-color);
 }
 
@@ -2767,8 +2767,19 @@ body.dark-mode button:active {
 
 body.dark-mode button:disabled {
     background-color: var(--bg-secondary);
-    color: var(--text-secondary);
+    color: var(--text-secondary) !important;
     opacity: 0.5;
+}
+
+/* Specific button IDs */
+body.dark-mode #undo-btn,
+body.dark-mode #redo-btn {
+    color: var(--text-primary) !important;
+}
+
+body.dark-mode #undo-btn:disabled,
+body.dark-mode #redo-btn:disabled {
+    color: var(--text-secondary) !important;
 }
 
 /* Inputs, Selects */
