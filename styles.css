@@ -3230,3 +3230,28 @@ body.dark-mode footer div[style*="color"],
 body.dark-mode footer *[style*="color:black"] {
     color: var(--text-primary) !important;
 }
+
+/* Block Inspector rows and borders */
+body.dark-mode .block-inspector {
+    border-top-color: var(--border-color) !important;
+}
+
+body.dark-mode .block-inspector-row {
+    border-bottom: 1px solid var(--border-color) !important;
+    color: var(--text-primary) !important;
+}
+
+body.dark-mode .block-inspector-row:hover {
+    background-color: var(--bg-hover) !important;
+}
+
+body.dark-mode .block-inspector-row.selected,
+body.dark-mode .block-inspector-row.selected:hover {
+    background-color: var(--bg-tertiary) !important;
+}
+
+body.dark-mode .block-inspector-col-type,
+body.dark-mode .block-inspector-col-count,
+body.dark-mode .block-inspector-col-params {
+    color: var(--text-secondary) !important;
+}

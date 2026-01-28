@@ -9963,9 +9963,11 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
         if (realBlock && __blockInspectorExpandedBlockId === blockId) {
             const panel = document.createElement('div');
             panel.style.padding = '6px 8px 10px 8px';
-            panel.style.borderTop = '1px solid #eee';
+            // Dark mode support
+            const isDarkMode = document.body.classList.contains('dark-mode');
+            panel.style.borderTop = isDarkMode ? '1px solid #333' : '1px solid #eee';
             panel.style.fontSize = '12px';
-            panel.style.color = '#333';
+            panel.style.color = isDarkMode ? '#ffffff' : '#333';
 
             /** @type {Array<{key:string,label:string}>} */
             const items = [];
