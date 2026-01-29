@@ -2771,6 +2771,10 @@ function setupSuggestOptimizeButtons() {
         Max Iterations
         <input id="opt-max-iter" type="number" min="1" step="1" value="1000" style="width:100px; padding:4px 6px;" />
     </label>
+    <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
+        <input id="opt-auto-render" type="checkbox" style="width:16px; height:16px;" />
+        Auto-render on Accept
+    </label>
 </div>
 <div style="display:flex; gap:10px; flex-direction:column;">
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Phase</span><span id="opt-phase" style="margin-left:8px;">-</span></div>
@@ -3006,6 +3010,19 @@ function setupSuggestOptimizeButtons() {
                         const aText = Number.isFinite(a) ? a.toFixed(6) : '-';
                         const rText = Number.isFinite(r) ? r.toFixed(6) : '-';
                         lastDecisionText = `ACCEPT (α=${aText}, ρ=${rText})`;
+                        
+                        // Auto-render on Accept if checkbox is enabled
+                        try {
+                            if (popup && !popup.closed) {
+                                const autoRenderCheckbox = popup.document.getElementById('opt-auto-render');
+                                if (autoRenderCheckbox && autoRenderCheckbox.checked) {
+                                    // Trigger render update in main window
+                                    if (typeof window.renderOpticalSystem === 'function') {
+                                        window.renderOpticalSystem();
+                                    }
+                                }
+                            }
+                        } catch (_) {}
                     } else if (phaseStr === 'reject') {
                         rejectCount++;
                         lastDecisionText = 'REJECT';
