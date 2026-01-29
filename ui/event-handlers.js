@@ -190,25 +190,38 @@ const ensurePopupMessageHandler = () => {
                     console.warn('⚠️ Unable to set ray color mode:', e);
                 }
 
+                // Check if optimization is running to avoid interfering with optimizer state
+                const isOptimizing = (typeof globalThis !== 'undefined') ? !!globalThis.__cooptOptimizerIsRunning : false;
+                
                 // アクティブなConfigurationをテーブルに反映
-                console.log('🔄 [DrawCross] Loading active configuration to tables...');
-                if (typeof window.loadActiveConfigurationToTables === 'function') {
-                    window.loadActiveConfigurationToTables();
-                    console.log('✅ [DrawCross] Active configuration loaded');
-                } else if (typeof loadActiveConfigurationToTables === 'function') {
-                    loadActiveConfigurationToTables();
-                    console.log('✅ [DrawCross] Active configuration loaded');
+                // BUT: Skip during optimization to avoid corrupting optimizer's transient state
+                if (!isOptimizing) {
+                    console.log('🔄 [DrawCross] Loading active configuration to tables...');
+                    if (typeof window.loadActiveConfigurationToTables === 'function') {
+                        window.loadActiveConfigurationToTables();
+                        console.log('✅ [DrawCross] Active configuration loaded');
+                    } else if (typeof loadActiveConfigurationToTables === 'function') {
+                        loadActiveConfigurationToTables();
+                        console.log('✅ [DrawCross] Active configuration loaded');
+                    } else {
+                        console.warn('⚠️ [DrawCross] loadActiveConfigurationToTables not available');
+                    }
                 } else {
-                    console.warn('⚠️ [DrawCross] loadActiveConfigurationToTables not available');
+                    console.log('⏭️ [DrawCross] Skipping loadActiveConfigurationToTables during optimization');
                 }
 
                 // Rendering should always reflect the canonical current configuration.
                 // Clear any transient override rows left behind by optimization/debug flows.
-                try {
-                    if (typeof globalThis !== 'undefined') {
-                        globalThis.__cooptOpticalSystemRowsOverride = null;
-                    }
-                } catch (_) {}
+                // BUT: During active optimization, preserve the override to show current optimized state.
+                if (!isOptimizing) {
+                    try {
+                        if (typeof globalThis !== 'undefined') {
+                            globalThis.__cooptOpticalSystemRowsOverride = null;
+                        }
+                    } catch (_) {}
+                } else {
+                    console.log('⏭️ [DrawCross] Preserving __cooptOpticalSystemRowsOverride during optimization');
+                }
                 
                 const opticalSystemRows = getOpticalSystemRows();
                 console.log('📊 Optical system rows:', opticalSystemRows);

@@ -2154,6 +2154,23 @@ export async function runOptimizationMVP(options = {}) {
     }
   } catch (_) {}
   
+  // Clear any leftover override variables from previous optimization runs
+  // This ensures a clean slate and prevents state contamination between runs
+  try {
+    if (typeof window !== 'undefined') {
+      // Clear blocks override (will be set fresh during this run)
+      delete window.__cooptBlocksOverride;
+      // Clear scenario override (will be managed within this run)
+      delete window.__cooptScenarioOverride;
+    }
+    if (typeof globalThis !== 'undefined') {
+      // Clear optical system rows override (will be managed within this run)
+      delete globalThis.__cooptOpticalSystemRowsOverride;
+      // Clear fast mode settings (will be set fresh during this run)
+      delete globalThis.__cooptMeritFastMode;
+    }
+  } catch (_) {}
+  
   const runUntilStopped = !!opts.runUntilStopped;
   const methodRaw = String(opts.method || '').trim().toLowerCase();
   const method = (methodRaw === 'cd' || methodRaw === 'coordinatedescent') ? 'cd' : 'lm';

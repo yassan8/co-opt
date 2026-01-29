@@ -2762,14 +2762,14 @@ function setupSuggestOptimizeButtons() {
 <div style="font-size:14px; font-weight:600; margin-bottom:8px;">Optimize Progress</div>
 <div style="font-size:12px; color:#555; margin-bottom:10px;">Updates per candidate evaluation (±step)</div>
 <div style="margin-bottom:10px; display:flex; align-items:center; gap:6px;">
-    <button id="opt-run" style="padding:6px 10px;" disabled>Run</button>
-    <button id="opt-stop" style="padding:6px 10px;">Stop</button>
+    <button id="opt-run" style="padding:6px 10px;">Run</button>
+    <button id="opt-stop" style="padding:6px 10px;" disabled>Stop</button>
     <span id="opt-stop-state" style="margin-left:8px; font-size:12px; color:#555;"></span>
 </div>
 <div style="margin-bottom:10px; display:flex; align-items:center; gap:10px;">
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         Max Iterations
-        <input id="opt-max-iter" type="number" min="1" step="1" value="1000" style="width:100px; padding:4px 6px;" />
+        <input id="opt-max-iter" type="number" min="1" step="1" value="10000" style="width:100px; padding:4px 6px;" />
     </label>
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         <input id="opt-auto-render" type="checkbox" style="width:16px; height:16px;" />
@@ -3016,9 +3016,12 @@ function setupSuggestOptimizeButtons() {
                             if (popup && !popup.closed) {
                                 const autoRenderCheckbox = popup.document.getElementById('opt-auto-render');
                                 if (autoRenderCheckbox && autoRenderCheckbox.checked) {
-                                    // Trigger render update in main window
-                                    if (typeof window.renderOpticalSystem === 'function') {
-                                        window.renderOpticalSystem();
+                                    // Trigger render by clicking the Draw button in 3D popup
+                                    if (window.popup3DWindow && !window.popup3DWindow.closed) {
+                                        const drawBtn = window.popup3DWindow.document.getElementById('draw-btn');
+                                        if (drawBtn) {
+                                            drawBtn.click();
+                                        }
                                     }
                                 }
                             }
@@ -3517,9 +3520,8 @@ function setupSuggestOptimizeButtons() {
                     window.__cooptStartOptimizationFromPopup = startRun;
                 } catch (_) {}
 
-                // Initial run
-                console.log('[Optimize] Starting optimization, isRunning flag:', globalThis.__cooptOptimizerIsRunning);
-                await startRun();
+                // Wait for user to press Run button instead of auto-starting
+                console.log('[Optimize] Optimization ready. Press Run to start.');
 
             } catch (e) {
                 console.warn('⚠️ [Optimize] Failed:', e);
