@@ -1770,16 +1770,22 @@ function defaultScaleForKey(key) {
   if (isAsphereCoefKey(s)) {
     const idx = parseCoefIndexFromKey(s);
     // Heuristic scale for polynomial coefficients used in aspheric surfaces.
-    // For standard notation (a4, a6, a8, ...): idx=2,3,4,... → r^4, r^6, r^8, ...
-    // For legacy notation (coef1, coef2, ...): idx=1,2,3,... → r^2, r^4, r^6, ...
+    // For legacy notation (coef1, coef2, ...): idx=1,2,3,... → A4(r⁴), A6(r⁶), A8(r⁸), ...
+    // For standard notation (a4, a6, a8, ...): idx=2,3,4,... → A4(r⁴), A6(r⁶), A8(r⁸), ...
+    // The mapping is: coefN → A(2N+2) → r^(2N+2)
     // Scaling strategy: match typical coefficient magnitudes to make scaled values ~1.0
-    // Typical values: A4 ~ 1e-6, A6 ~ 1e-8, A8 ~ 1e-10, A10 ~ 1e-12, ...
-    // With these scales, |coef/scale| ≈ 1.0 in optimizer's coordinate system.
-    // idx=1 (A4): 1e-6, idx=2 (A6): 1e-8, idx=3 (A8): 1e-10, idx=4 (A10): 1e-12, ...
+    // Typical values for even asphere: A4 ~ 1e-4, A6 ~ 1e-6, A8 ~ 1e-8, A10 ~ 1e-10, ...
+    // More generally: A(2k) ~ 1e(-k) where k is the power of r
+    // coef1 (idx=1): A4 (r⁴) → 1e-4
+    // coef2 (idx=2): A6 (r⁶) → 1e-6
+    // coef7 (idx=7): A14 (r¹⁴) → 1e-14
+    // coef8 (idx=8): A16 (r¹⁶) → 1e-16
+    // Formula: scale = 10^(-(2*idx+2)) = 10^(-2*(idx+1))
     if (idx === null) return 1e-12;
-    const exp = -6 - 2 * Math.max(0, idx - 1);
+    const power = 2 * (idx + 1);  // r^power: idx=1→4, idx=2→6, idx=7→14, idx=8→16
+    const exp = -power;            // scale exponent
     const sc = Math.pow(10, exp);
-    return (Number.isFinite(sc) && sc > 0) ? sc : 1e-12;
+    return (Number.isFinite(sc) && sc > 0) ? sc : 1e-22;  // fallback for very high orders
   }
   if (/conic$/i.test(s)) return 1;
   if (/radius$/i.test(s)) return 100;
