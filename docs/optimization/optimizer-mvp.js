@@ -941,22 +941,10 @@ function setJointDesignVariableValue({ blocksByConfigId, targetConfigIds, active
         return Number.isFinite(clamped) ? clamped : rawValue;
       }
 
-      // Default safety clamp for asphere coefficients (prevents catastrophic ray-trace failures).
-      // Aspheric terms can blow up quickly if coefficients drift too far.
-      const dot = String(baseId || '').indexOf('.');
-      const key = (dot >= 0) ? String(baseId).slice(dot + 1) : '';
-      const idx = parseCoefIndexFromKey(key);
-      if (idx !== null) {
-        // Allow override: optimize.clampAbsMax
-        const overrideAbs = (opt && Number.isFinite(Number(opt.clampAbsMax))) ? Math.max(0, Number(opt.clampAbsMax)) : null;
-        const baseScale = defaultScaleForKey(key);
-        // For aspheric coefficients: allow ±1000 * scale in physical units
-        // With scale matching typical values (1e-6 for A4), this gives ±1e-3 range
-        // In scaled coordinates: ±1000, which is reasonable freedom for optimization
-        const absMax = overrideAbs !== null ? overrideAbs : Math.max(1e-30, 1e3 * baseScale);
-        const clamped = Math.max(-absMax, Math.min(absMax, n));
-        return Number.isFinite(clamped) ? clamped : rawValue;
-      }
+      // REMOVED: Default safety clamp for asphere coefficients
+      // User requested unrestricted optimization for aspherical coefficients (A4-A22)
+      // If explicit min/max bounds are set, they will be respected above
+      // If clampAbsMax is set in optimize options, users can still apply custom limits
 
       return rawValue;
     } catch (_) {
