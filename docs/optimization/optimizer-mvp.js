@@ -1781,11 +1781,23 @@ function defaultScaleForKey(key) {
     // coef7 (idx=7): A14 (r¹⁴) → 1e-14
     // coef8 (idx=8): A16 (r¹⁶) → 1e-16
     // Formula: scale = 10^(-(2*idx+2)) = 10^(-2*(idx+1))
+    // 
+    // IMPROVEMENT: For higher-order terms (idx > 6), use slightly larger scale
+    // to improve numerical stability and convergence during optimization.
+    // This helps prevent the optimizer from getting stuck when dealing with
+    // very small coefficient values (1e-14 to 1e-22 range).
     if (idx === null) return 1e-12;
     const power = 2 * (idx + 1);  // r^power: idx=1→4, idx=2→6, idx=7→14, idx=8→16
-    const exp = -power;            // scale exponent
+    let exp = -power;              // base scale exponent
+    
+    // For higher-order terms (A14+), increase scale slightly for better convergence
+    // This makes the optimizer more aggressive with these terms initially
+    if (idx > 6) {
+      exp += 2;  // e.g., A14: 1e-14 → 1e-12, A16: 1e-16 → 1e-14
+    }
+    
     const sc = Math.pow(10, exp);
-    return (Number.isFinite(sc) && sc > 0) ? sc : 1e-22;  // fallback for very high orders
+    return (Number.isFinite(sc) && sc > 0) ? sc : 1e-20;  // fallback for very high orders
   }
   if (/conic$/i.test(s)) return 1;
   if (/radius$/i.test(s)) return 100;
@@ -1804,13 +1816,15 @@ function buildStagedCoefMaxList(opts) {
   }
   // Default continuation schedule for aspheric coefficients: unlock higher orders progressively.
   // Current system uses coef1=A4(r^4), coef2=A6(r^6), coef3=A8(r^8), ...
-  // FAST schedule: focus on speed while maintaining reasonable stability
+  // REVISED schedule: more gradual progression to improve convergence for higher-order terms
   // ALL stages optimize: conic, radius, thickness, and other non-coefficient parameters
   // Stage 0: idx ≤ 0 → conic + radius + thickness + etc. (NO aspheric coefficients)
   //          Quick base curvature optimization
-  // Stage 1: idx ≤ 2 → above + coef1-2 (A4, A6) - most important aspheric terms
-  // Stage 2: idx ≤ 10 → above + all coefficients (A4-A22)
-  return [0, 2, 10];
+  // Stage 1: idx ≤ 2 → above + coef1-2 (A4, A6) - most important low-order terms
+  // Stage 2: idx ≤ 4 → above + coef3-4 (A8, A10) - mid-low order
+  // Stage 3: idx ≤ 6 → above + coef5-6 (A12, A14) - mid-high order
+  // Stage 4: idx ≤ 10 → above + coef7-10 (A16-A22) - highest order terms
+  return [0, 2, 4, 6, 10];
 }
 
 function stageAllowsVariable(varKey, maxCoefIndex) {
@@ -2194,6 +2208,10 @@ export async function runOptimizationMVP(options = {}) {
   // Helps prevent overfitting and improves manufacturability
   // alphaReg = 0: no regularization (default for fast convergence)
   // alphaReg > 0: add penalty term alphaReg * ||coef||^2 to cost function
+  // 
+  // IMPROVEMENT: For high-order coefficients (A14+), consider enabling gentle regularization
+  // to improve convergence. Use opts.asphericRegularization to control this.
+  // Suggested value for difficult cases: 1e-6 to 1e-4
   const asphericRegularization = Number.isFinite(Number(opts.asphericRegularization)) ? Math.max(0, Number(opts.asphericRegularization)) : 0;
 
   // Continuation/staged optimization for aspherics.
