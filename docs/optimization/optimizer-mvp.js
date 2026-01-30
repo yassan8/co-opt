@@ -1770,28 +1770,32 @@ function defaultScaleForKey(key) {
   if (isAsphereCoefKey(s)) {
     const idx = parseCoefIndexFromKey(s);
     // Heuristic scale for polynomial coefficients used in aspheric surfaces.
-    // For legacy notation (coef1, coef2, ...): idx=1,2,3,... → A4(r⁴), A6(r⁶), A8(r⁸), ...
-    // For standard notation (a4, a6, a8, ...): idx=2,3,4,... → A4(r⁴), A6(r⁶), A8(r⁸), ...
-    // The mapping is: coefN → A(2N+2) → r^(2N+2)
+    // 
+    // EVEN ASPHERE (default):
+    //   coef1→A4(r⁴), coef2→A6(r⁶), coef3→A8(r⁸), ..., coef10→A22(r²²)
+    //   Formula: r^(2*idx+2)
+    //   Typical values: A4~1e-4, A6~1e-6, A8~1e-8, A10~1e-10, ...
+    // 
+    // ODD ASPHERE:
+    //   coef1→A3(r³), coef2→A5(r⁵), coef3→A7(r⁷), ..., coef10→A21(r²¹)
+    //   Formula: r^(2*idx+1)
+    //   Typical values: A3~1e-3, A5~1e-5, A7~1e-7, A9~1e-9, ...
+    // 
+    // Note: Optimizer doesn't know even/odd mode at this point,
+    // so we use even asphere scaling as default (more common).
+    // For odd asphere, scales will be slightly off but still reasonable.
+    // 
     // Scaling strategy: match typical coefficient magnitudes to make scaled values ~1.0
-    // Typical values for even asphere: A4 ~ 1e-4, A6 ~ 1e-6, A8 ~ 1e-8, A10 ~ 1e-10, ...
-    // More generally: A(2k) ~ 1e(-k) where k is the power of r
-    // coef1 (idx=1): A4 (r⁴) → 1e-4
-    // coef2 (idx=2): A6 (r⁶) → 1e-6
-    // coef7 (idx=7): A14 (r¹⁴) → 1e-14
-    // coef8 (idx=8): A16 (r¹⁶) → 1e-16
-    // Formula: scale = 10^(-(2*idx+2)) = 10^(-2*(idx+1))
     // 
     // IMPROVEMENT: For higher-order terms (idx > 6), use slightly larger scale
     // to improve numerical stability and convergence during optimization.
-    // This helps prevent the optimizer from getting stuck when dealing with
-    // very small coefficient values (1e-14 to 1e-22 range).
     if (idx === null) return 1e-12;
-    const power = 2 * (idx + 1);  // r^power: idx=1→4, idx=2→6, idx=7→14, idx=8→16
+    
+    // Default to even asphere formula: r^(2*idx+2)
+    const power = 2 * (idx + 1);  // idx=1→4, idx=2→6, idx=7→14, idx=8→16
     let exp = -power;              // base scale exponent
     
-    // For higher-order terms (A14+), increase scale slightly for better convergence
-    // This makes the optimizer more aggressive with these terms initially
+    // For higher-order terms (idx > 6: A14+), increase scale for better convergence
     if (idx > 6) {
       exp += 2;  // e.g., A14: 1e-14 → 1e-12, A16: 1e-16 → 1e-14
     }

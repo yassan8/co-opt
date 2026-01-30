@@ -81,11 +81,13 @@ export function asphericSurfaceZ(r, params, mode = "even") {
     const c = Number(coefs[i]) || 0;
     if (c === 0) continue;
     if (mode === "even") {
-      // coef1 corresponds to r^4.
+      // coef1 corresponds to r^4, coef2 to r^6, etc.
+      // Even asphere: A4, A6, A8, A10, A12, A14, A16, A18, A20, A22
       asphere += c * Math.pow(rr, 2 * (i + 2));
     } else if (mode === "odd") {
-      // coef1 corresponds to r^5.
-      asphere += c * Math.pow(rr, 2 * (i + 2) + 1);
+      // coef1 corresponds to r^3, coef2 to r^5, etc.
+      // Odd asphere: A3, A5, A7, A9, A11, A13, A15, A17, A19, A21
+      asphere += c * Math.pow(rr, 2 * i + 3);
     }
   }
 
