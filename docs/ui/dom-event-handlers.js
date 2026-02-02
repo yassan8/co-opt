@@ -10193,6 +10193,13 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     items.push({ key: `surf${si}SurfType`, label: `surf${si}SurfType` });
                     items.push({ key: `surf${si}Conic`, label: `surf${si}Conic` });
 
+                    // Toric surface parameters
+                    const surfST = getValue(`surf${si}SurfType`);
+                    if (surfST === 'Toric') {
+                        items.push({ key: `surf${si}RadiusX`, label: `surf${si}RadiusX` });
+                        items.push({ key: `surf${si}Axis`, label: `surf${si}Axis` });
+                    }
+
                     // Coef* is unused for Spherical. Hide per-surface.
                     if (shouldShowCoefsForSurfTypeKey(`surf${si}SurfType`)) {
                         const st = getValue(`surf${si}SurfType`);

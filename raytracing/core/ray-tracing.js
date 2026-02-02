@@ -763,9 +763,13 @@ export function intersectToricSurface(ray, params, maxIter = 50, tol = 1e-10, de
   
   // Initial guess: intersection with z=0 plane
   let t = -ray.pos.z / ray.dir.z;
-  if (!isFinite(t) || t < 0) {
+  if (!isFinite(t)) {
     if (debugLog) debugLog.push('❌ intersectToricSurface: Invalid initial t guess');
     return null;
+  }
+  // Round small negative values to zero (numerical tolerance)
+  if (t < 0) {
+    t = 0;
   }
   
   let converged = false;
@@ -1775,6 +1779,8 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
     ? opticalSystemRows.slice(0, maxSurfaceIndex + 1)
     : opticalSystemRows;
   
+  console.log(`🔵 [Ray Trace START] surfaces=${effectiveSystemRows.length}, wavelength=${ray0.wavelength}`);
+  
   // 各面の原点・回転行列を事前計算
   const __tCalcSurf0 = RT_PROF.enabled ? now() : 0;
   const surfaceData = __getCachedSurfaceData(opticalSystemRows, maxSurfaceIndex, effectiveSystemRows);
@@ -2192,6 +2198,8 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       
       // Toric surface intersection
       const surfTypeStr = String(row.surfType ?? row.type ?? '').trim();
+      console.log(`🔵 [Ray Trace] Surface ${i}: surfTypeStr="${surfTypeStr}", surfType="${surfType}", radius=${row.radius}`);
+      
       if (surfTypeStr === 'Toric') {
         // Parse radiusX: handle "INF" string and Infinity
         let radiusX_val = Infinity;
@@ -2243,6 +2251,7 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       }
       
       if (!hitPoint) {
+        console.error(`❌ [Ray Trace] NO INTERSECTION at surface ${i + 1}, surfType=${row.surfType}, radius=${row.radius}`);
         if (isDetailedDebug) {
           debugLog.push(`❌ SURFACE NO INTERSECTION: Numerical method failed, breaking ray trace - Surface ${i + 1}`);
         }

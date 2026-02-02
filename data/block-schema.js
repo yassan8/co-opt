@@ -778,7 +778,7 @@ export function validateBlocksConfiguration(config) {
       for (let si = 1; si <= 3; si++) {
         const st = normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, `surf${si}SurfType`));
         if (st && !ALLOWED_SURF_TYPES.has(st)) {
-          issues.push({ severity: 'fatal', phase: 'validate', message: `Doublet.surf${si}SurfType must be one of: Spherical, Aspheric even, Aspheric odd. Got: ${st}`, blockId: block.blockId });
+          issues.push({ severity: 'fatal', phase: 'validate', message: `Doublet.surf${si}SurfType must be one of: Spherical, Aspheric even, Aspheric odd, Toric. Got: ${st}`, blockId: block.blockId });
         }
       }
     }
@@ -828,7 +828,7 @@ export function validateBlocksConfiguration(config) {
       for (let si = 1; si <= 4; si++) {
         const st = normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, `surf${si}SurfType`));
         if (st && !ALLOWED_SURF_TYPES.has(st)) {
-          issues.push({ severity: 'fatal', phase: 'validate', message: `Triplet.surf${si}SurfType must be one of: Spherical, Aspheric even, Aspheric odd. Got: ${st}`, blockId: block.blockId });
+          issues.push({ severity: 'fatal', phase: 'validate', message: `Triplet.surf${si}SurfType must be one of: Spherical, Aspheric even, Aspheric odd, Toric. Got: ${st}`, blockId: block.blockId });
         }
       }
     }
@@ -1596,9 +1596,21 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const s2Coefs = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `surf2Coef${i + 1}`));
       const s3Coefs = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `surf3Coef${i + 1}`));
 
-      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, undefined, undefined, undefined);
-      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, undefined, undefined, undefined);
-      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, undefined, undefined, undefined);
+      // Toric surface parameters
+      const s1RadiusX = getParamOrVarValue(params, vars, 'surf1RadiusX');
+      const s2RadiusX = getParamOrVarValue(params, vars, 'surf2RadiusX');
+      const s3RadiusX = getParamOrVarValue(params, vars, 'surf3RadiusX');
+      const s1Axis = getParamOrVarValue(params, vars, 'surf1Axis');
+      const s2Axis = getParamOrVarValue(params, vars, 'surf2Axis');
+      const s3Axis = getParamOrVarValue(params, vars, 'surf3Axis');
+
+      console.log(`[Doublet Toric] s1RadiusX=${s1RadiusX}, s1Axis=${s1Axis}, s1SurfType=${s1SurfType}`);
+      console.log(`[Doublet Toric] s2RadiusX=${s2RadiusX}, s2Axis=${s2Axis}, s2SurfType=${s2SurfType}`);
+      console.log(`[Doublet Toric] s3RadiusX=${s3RadiusX}, s3Axis=${s3Axis}, s3SurfType=${s3SurfType}`);
+
+      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, s1RadiusX, undefined, s1Axis);
+      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, s2RadiusX, undefined, s2Axis);
+      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, s3RadiusX, undefined, s3Axis);
 
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius1') && shouldMarkV(vars.radius1)) applyVFlag(s1, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness1') && shouldMarkV(vars.thickness1)) applyVFlag(s1, 'optimizeT');
@@ -1699,10 +1711,25 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const s3Coefs = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `surf3Coef${i + 1}`));
       const s4Coefs = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `surf4Coef${i + 1}`));
 
-      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, undefined, undefined, undefined);
-      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, undefined, undefined, undefined);
-      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, undefined, undefined, undefined);
-      applyAsphereFieldsFromParams(s4, s4SurfType, s4Conic, s4Coefs, undefined, undefined, undefined);
+      // Toric surface parameters
+      const s1RadiusX = getParamOrVarValue(params, vars, 'surf1RadiusX');
+      const s2RadiusX = getParamOrVarValue(params, vars, 'surf2RadiusX');
+      const s3RadiusX = getParamOrVarValue(params, vars, 'surf3RadiusX');
+      const s4RadiusX = getParamOrVarValue(params, vars, 'surf4RadiusX');
+      const s1Axis = getParamOrVarValue(params, vars, 'surf1Axis');
+      const s2Axis = getParamOrVarValue(params, vars, 'surf2Axis');
+      const s3Axis = getParamOrVarValue(params, vars, 'surf3Axis');
+      const s4Axis = getParamOrVarValue(params, vars, 'surf4Axis');
+
+      console.log(`[Triplet Toric] s1RadiusX=${s1RadiusX}, s1Axis=${s1Axis}, s1SurfType=${s1SurfType}`);
+      console.log(`[Triplet Toric] s2RadiusX=${s2RadiusX}, s2Axis=${s2Axis}, s2SurfType=${s2SurfType}`);
+      console.log(`[Triplet Toric] s3RadiusX=${s3RadiusX}, s3Axis=${s3Axis}, s3SurfType=${s3SurfType}`);
+      console.log(`[Triplet Toric] s4RadiusX=${s4RadiusX}, s4Axis=${s4Axis}, s4SurfType=${s4SurfType}`);
+
+      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, s1RadiusX, undefined, s1Axis);
+      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, s2RadiusX, undefined, s2Axis);
+      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, s3RadiusX, undefined, s3Axis);
+      applyAsphereFieldsFromParams(s4, s4SurfType, s4Conic, s4Coefs, s4RadiusX, undefined, s4Axis);
 
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius1') && shouldMarkV(vars.radius1)) applyVFlag(s1, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness1') && shouldMarkV(vars.thickness1)) applyVFlag(s1, 'optimizeT');

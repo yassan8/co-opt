@@ -173,25 +173,11 @@ async function initializeApplication() {
         }
         
         try {
-            // setupViewButtons の呼び出しを復活（簡易版のオプションで）
-            setupViewButtons(viewButtonsOptions);
-            
-            // 追加: setupSimpleViewButtons を確実に呼び出す
-            try {
-                setupSimpleViewButtons();
-
-            } catch (simpleError) {
-                console.error('❌ Error setting up simple view buttons:', simpleError);
-            }
+            // View buttons setup - using simple version
+            setupSimpleViewButtons();
         } catch (error) {
             console.error('❌ Error setting up view buttons:', error);
             console.error('📋 Stack trace:', error.stack);
-            // フォールバック: setupSimpleViewButtons を呼び出す
-            try {
-                setupSimpleViewButtons();
-            } catch (simpleError) {
-                console.error('❌ Error setting up fallback simple view buttons:', simpleError);
-            }
         }
         
         try {
