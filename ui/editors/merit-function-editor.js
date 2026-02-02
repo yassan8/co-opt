@@ -3479,7 +3479,14 @@ class MeritFunctionEditor {
         const paraxial = calculateParaxialData(opticalSystemData, wavelength);
 
         const fl = this.safeFiniteNumberOrZero(paraxial?.focalLength);
-        const bfl = this.safeFiniteNumberOrZero(paraxial?.backFocalLength);
+        
+        // トーリック面の場合、backFocalLengthはtangential値を使用
+        let bfl = paraxial?.backFocalLength;
+        if (bfl && typeof bfl === 'object' && 'tangential' in bfl) {
+            bfl = bfl.tangential;
+        }
+        bfl = this.safeFiniteNumberOrZero(bfl);
+        
         const imd = this.safeFiniteNumberOrZero(paraxial?.imageDistance);
         const finalAlpha = Number(paraxial?.finalAlpha);
 

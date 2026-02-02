@@ -50,12 +50,10 @@ function stopAutoSave() {
  * Configuration UIを初期化
  */
 export function initializeConfigurationUI() {
-  console.log('🔧 [Configuration] initializeConfigurationUI called');
   
   // 既に初期化済みの場合はイベントリスナーのみ再設定
   try {
     if (typeof window !== 'undefined' && window.__configurationUIInitialized) {
-      console.log('⚠️ [Configuration] Already initialized, re-setting event listeners only');
       setupConfigurationEventListeners();
       return;
     }
@@ -67,21 +65,15 @@ export function initializeConfigurationUI() {
     }
   } catch (_) {}
   
-  console.log('🔧 [Configuration] Initializing system...');
-  
   // 既存のConfigurationシステムを初期化（初回起動時）
   initializeConfigurationSystem();
   
   // UIコンポーネントを更新
-  console.log('🔧 [Configuration] Updating UI components...');
   updateConfigurationSelect();
   updateConfigInfo();
   
   // イベントリスナー設定
-  console.log('🔧 [Configuration] Setting up event listeners...');
   setupConfigurationEventListeners();
-  
-  console.log('✅ [Configuration] initializeConfigurationUI complete');
 }
 
 // Auto-init as a fallback if the host page doesn't call initializeConfigurationUI.
@@ -218,48 +210,31 @@ function setupConfigurationEventListeners() {
   const select = document.getElementById('config-select');
   if (select) {
     select.addEventListener('change', handleConfigurationChange);
-    console.log('✅ [Configuration] config-select listener added');
-  } else {
-    console.warn('⚠️ [Configuration] config-select not found');
   }
   
   // Add Configボタン
   const addBtn = document.getElementById('add-config-btn');
   if (addBtn) {
     addBtn.addEventListener('click', handleAddConfiguration);
-    console.log('✅ [Configuration] add-config-btn listener added');
-  } else {
-    console.warn('⚠️ [Configuration] add-config-btn not found');
   }
   
   // Delete Configボタン
   const deleteBtn = document.getElementById('delete-config-btn');
   if (deleteBtn) {
     deleteBtn.addEventListener('click', handleDeleteConfiguration);
-    console.log('✅ [Configuration] delete-config-btn listener added');
-  } else {
-    console.warn('⚠️ [Configuration] delete-config-btn not found');
   }
   
   // Duplicate Configボタン
   const duplicateBtn = document.getElementById('duplicate-config-btn');
   if (duplicateBtn) {
     duplicateBtn.addEventListener('click', handleDuplicateConfiguration);
-    console.log('✅ [Configuration] duplicate-config-btn listener added');
-  } else {
-    console.warn('⚠️ [Configuration] duplicate-config-btn not found');
   }
   
   // Rename Configボタン
   const renameBtn = document.getElementById('rename-config-btn');
   if (renameBtn) {
     renameBtn.addEventListener('click', handleRenameConfiguration);
-    console.log('✅ [Configuration] rename-config-btn listener added');
-  } else {
-    console.warn('⚠️ [Configuration] rename-config-btn not found');
   }
-  
-  console.log('✅ [Configuration] All event listeners setup complete');
   
   // テーブル変更時に自動保存
   setupAutoSave();

@@ -5,7 +5,7 @@
  * It initializes the application using modular components and sets up the main functionality.
  */
 
-console.log('🚀 [Main] main.js loading...');
+
 
 // =============================================================================
 // IMPORTS
@@ -65,7 +65,7 @@ import { initializeConfigurationUI } from './ui/configuration-handlers.js';
 import { getActiveConfiguration } from './data/table-configuration.js';
 import { expandBlocksToOpticalSystemRows } from './data/block-schema.js';
 
-console.log('✅ [Main] All imports loaded, initializeConfigurationUI:', typeof initializeConfigurationUI);
+
 
 // Suggest (Design Intent) implementation (adds window.SuggestDesignIntent)
 import './optimization/suggest-design-intent.js';
@@ -174,21 +174,7 @@ async function initializeApplication() {
         
         try {
             // setupViewButtons の呼び出しを復活（簡易版のオプションで）
-            console.log('🔧 Attempting to setup view buttons...');
-            const viewButtonsOptions = {
-                scene,
-                camera,
-                controls,
-                renderer,
-                drawOptimizedRaysFromObjects,
-                getOpticalSystemRows: () => getOpticalSystemRows(tableOpticalSystem),
-                getObjectRows: () => getObjectRows(tableObject),
-                calculateOpticalSystemOffset: calculateOpticalSystemOffset,
-                drawOpticalSystemSurfaceWrapper
-            };
-            console.log('📋 View buttons options:', viewButtonsOptions);
             setupViewButtons(viewButtonsOptions);
-            console.log('✅ View buttons set up');
             
             // 追加: setupSimpleViewButtons を確実に呼び出す
             try {
@@ -203,7 +189,6 @@ async function initializeApplication() {
             // フォールバック: setupSimpleViewButtons を呼び出す
             try {
                 setupSimpleViewButtons();
-                console.log('✅ Fallback: Simple view buttons set up');
             } catch (simpleError) {
                 console.error('❌ Error setting up fallback simple view buttons:', simpleError);
             }
@@ -226,7 +211,6 @@ async function initializeApplication() {
         // Configuration UI初期化
         try {
             initializeConfigurationUI();
-            console.log('✅ Configuration UI initialized');
         } catch (error) {
             console.error('❌ Error initializing configuration UI:', error);
         }
@@ -242,12 +226,10 @@ async function initializeApplication() {
         // Update UI elements
         try {
             updateAllUIElements();
-            console.log('✅ All UI elements updated');
         } catch (error) {
             console.error('❌ Error updating UI elements:', error);
         }
         
-        console.log('✅ Application initialized successfully');
         
         // Debug table initialization status
         setTimeout(async () => {

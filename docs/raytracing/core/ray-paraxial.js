@@ -74,16 +74,270 @@ export function calculatePupilsByNewSpec(opticalSystemRows, wavelength = 0.58756
 }
 
 /**
- * 面の曲率半径を安全に取得
+ * トーリック面が含まれているかチェック
+ * @param {Array} opticalSystemRows - 光学系データ
+ * @returns {boolean} トーリック面が存在するか
+ */
+function hasToricSurfaces(opticalSystemRows) {
+  if (!opticalSystemRows || !Array.isArray(opticalSystemRows)) return false;
+  return opticalSystemRows.some(surface => 
+    surface && surface.surfType === 'Toric'
+  );
+}
+
+/**
+ * 面の曲率半径を安全に取得（トーリック面対応）
  * @param {Object} surface - 面データ
+ * @param {string} meridian - 子午線方向: 'tangential'(X), 'sagittal'(Y), 'average'
  * @returns {number} 曲率半径（無効な値の場合はInfinity）
  */
-export function getSafeRadius(surface) {
+export function getSafeRadius(surface, meridian = 'average') {
   if (!surface) {
     // // console.warn('getSafeRadius: surface is null/undefined, returning Infinity');
     return Infinity;
   }
   
+  // Toric surface handling
+  if (surface.surfType === 'Toric') {
+    // Get axis rotation (degrees)
+    const axisDeg = Number(surface.axis) || 0;
+    
+    console.log(`[getSafeRadius] Toric surface detected: meridian=${meridian}, axis=${axisDeg}, radiusX=${surface.radiusX}, radiusY=${surface.radiusY || surface.radius}`);
+    
+    // For meridian-based calculations, we need to determine which physical radius to use
+    // based on the axis rotation. The axis parameter rotates the toric meridians.
+    // 
+    // Convention:
+    // - radiusX is the "base" X-meridian radius (before rotation)
+    // - radiusY is the "base" Y-meridian radius (before rotation)
+    // - axis rotates these meridians
+    //
+    // For paraxial calculations:
+    // - tangential meridian is typically the YZ plane (vertical)
+    // - sagittal meridian is typically the XZ plane (horizontal)
+    //
+    // With axis rotation:
+    // - axis=0°: tangential uses radiusY, sagittal uses radiusX
+    // - axis=90°: tangential uses radiusX, sagittal uses radiusY
+    //
+    // General formula:
+    // - tangential direction is rotated by axis from Y-axis
+    // - sagittal direction is rotated by axis from X-axis
+    
+    if (meridian === 'tangential') {
+      // Tangential meridian: determine which radius based on axis
+      // At axis=0°, tangential is Y-direction (uses radiusY)
+      // At axis=90°, tangential is X-direction (uses radiusX)
+      const axisRad = (axisDeg * Math.PI) / 180;
+      const sinA = Math.sin(axisRad);
+      const cosA = Math.cos(axisRad);
+      
+      console.log(`[getSafeRadius Tangential] axis=${axisDeg}°, sinA=${sinA}, cosA=${cosA}`);
+      
+      // Get both radii
+      const rxRaw = surface.radiusX;
+      const ryRaw = surface.radiusY !== undefined && surface.radiusY !== null && surface.radiusY !== ""
+                    ? surface.radiusY 
+                    : surface.radius;
+      
+      // Parse radiusX
+      let rx = Infinity;
+      if (rxRaw !== undefined && rxRaw !== null && rxRaw !== "") {
+        const rxStr = String(rxRaw).toUpperCase();
+        if (rxStr !== "INF" && rxStr !== "INFINITY") {
+          const rxNum = parseFloat(rxRaw);
+          if (isFinite(rxNum) && Math.abs(rxNum) >= 1e-10) {
+            rx = rxNum;
+          }
+        }
+      }
+      
+      // Parse radiusY
+      let ry = Infinity;
+      if (ryRaw !== undefined && ryRaw !== null && ryRaw !== "") {
+        const ryStr = String(ryRaw).toUpperCase();
+        if (ryStr !== "INF" && ryStr !== "INFINITY") {
+          const ryNum = parseFloat(ryRaw);
+          if (isFinite(ryNum) && Math.abs(ryNum) >= 1e-10) {
+            ry = ryNum;
+          }
+        }
+      }
+      
+      // If both are infinite, return Infinity
+      if (!isFinite(rx) && !isFinite(ry)) return Infinity;
+      
+      console.log(`[getSafeRadius Tangential] Parsed: rx=${rx}, ry=${ry}, sin²=${sinA*sinA}, cos²=${cosA*cosA}`);
+      
+      // Calculate effective radius in tangential direction
+      // Tangential (Y-direction): 1/R_eff = sin²(axis)/Rx + cos²(axis)/Ry
+      const sin2 = sinA * sinA;
+      const cos2 = cosA * cosA;
+      
+      // Special cases: when sin²≈0, radiusX doesn't contribute (axis≈0°)
+      //                when cos²≈0, radiusY doesn't contribute (axis≈90°)
+      if (sin2 < 1e-10) {
+        // axis ≈ 0°: only radiusY contributes
+        const result = isFinite(ry) ? ry : Infinity;
+        console.log(`[getSafeRadius Tangential] axis≈0°, radiusX=${rx}, radiusY=${ry} → ${result}`);
+        return result;
+      }
+      if (cos2 < 1e-10) {
+        // axis ≈ 90°: only radiusX contributes
+        const result = isFinite(rx) ? rx : Infinity;
+        console.log(`[getSafeRadius Tangential] axis≈90°, radiusX=${rx}, radiusY=${ry} → ${result}`);
+        return result;
+      }
+      
+      // General case: both radii contribute
+      if (!isFinite(rx) && !isFinite(ry)) return Infinity;
+      if (!isFinite(rx)) {
+        // radiusX is infinite, only radiusY contributes
+        return isFinite(ry) ? ry / cos2 : Infinity;
+      }
+      if (!isFinite(ry)) {
+        // radiusY is infinite, only radiusX contributes
+        return isFinite(rx) ? rx / sin2 : Infinity;
+      }
+      
+      // Both finite: 1/R_eff = sin²(axis)/Rx + cos²(axis)/Ry
+      const curvEff = sin2 / rx + cos2 / ry;
+      if (Math.abs(curvEff) < 1e-10) return Infinity;
+      return 1 / curvEff;
+      
+    } else if (meridian === 'sagittal') {
+      // Sagittal meridian: perpendicular to tangential
+      // At axis=0°, sagittal is X-direction (uses radiusX)
+      // At axis=90°, sagittal is Y-direction (uses radiusY)
+      const axisRad = (axisDeg * Math.PI) / 180;
+      const sinA = Math.sin(axisRad);
+      const cosA = Math.cos(axisRad);
+      
+      console.log(`[getSafeRadius Sagittal] axis=${axisDeg}°, sinA=${sinA}, cosA=${cosA}`);
+      
+      // Get both radii
+      const rxRaw = surface.radiusX;
+      const ryRaw = surface.radiusY !== undefined && surface.radiusY !== null && surface.radiusY !== ""
+                    ? surface.radiusY 
+                    : surface.radius;
+      
+      // Parse radiusX
+      let rx = Infinity;
+      if (rxRaw !== undefined && rxRaw !== null && rxRaw !== "") {
+        const rxStr = String(rxRaw).toUpperCase();
+        if (rxStr !== "INF" && rxStr !== "INFINITY") {
+          const rxNum = parseFloat(rxRaw);
+          if (isFinite(rxNum) && Math.abs(rxNum) >= 1e-10) {
+            rx = rxNum;
+          }
+        }
+      }
+      
+      // Parse radiusY
+      let ry = Infinity;
+      if (ryRaw !== undefined && ryRaw !== null && ryRaw !== "") {
+        const ryStr = String(ryRaw).toUpperCase();
+        if (ryStr !== "INF" && ryStr !== "INFINITY") {
+          const ryNum = parseFloat(ryRaw);
+          if (isFinite(ryNum) && Math.abs(ryNum) >= 1e-10) {
+            ry = ryNum;
+          }
+        }
+      }
+      
+      // If both are infinite, return Infinity
+      if (!isFinite(rx) && !isFinite(ry)) return Infinity;
+      
+      console.log(`[getSafeRadius Sagittal] Parsed: rx=${rx}, ry=${ry}, sin²=${sinA*sinA}, cos²=${cosA*cosA}`);
+      
+      // Calculate effective radius in sagittal direction
+      // Sagittal (X-direction): 1/R_eff = cos²(axis)/Rx + sin²(axis)/Ry
+      const sin2 = sinA * sinA;
+      const cos2 = cosA * cosA;
+      
+      // Special cases: when cos²≈0, radiusX doesn't contribute (axis≈90°)
+      //                when sin²≈0, radiusY doesn't contribute (axis≈0°)
+      if (cos2 < 1e-10) {
+        // axis ≈ 90°: only radiusY contributes
+        const result = isFinite(ry) ? ry : Infinity;
+        console.log(`[getSafeRadius Sagittal] axis≈90°, radiusX=${rx}, radiusY=${ry} → ${result}`);
+        return result;
+      }
+      if (sin2 < 1e-10) {
+        // axis ≈ 0°: only radiusX contributes
+        const result = isFinite(rx) ? rx : Infinity;
+        console.log(`[getSafeRadius Sagittal] axis≈0°, radiusX=${rx}, radiusY=${ry} → ${result}`);
+        return result;
+      }
+      
+      // General case: both radii contribute
+      if (!isFinite(rx) && !isFinite(ry)) return Infinity;
+      if (!isFinite(rx)) {
+        // radiusX is infinite, only radiusY contributes
+        return isFinite(ry) ? ry / sin2 : Infinity;
+      }
+      if (!isFinite(ry)) {
+        // radiusY is infinite, only radiusX contributes
+        return isFinite(rx) ? rx / cos2 : Infinity;
+      }
+      
+      // Both finite: 1/R_eff = cos²(axis)/Rx + sin²(axis)/Ry
+      const curvEff = cos2 / rx + sin2 / ry;
+      if (Math.abs(curvEff) < 1e-10) return Infinity;
+      return 1 / curvEff;
+    } else {
+      // Average: harmonic mean (equivalent spherical radius for non-directional calculations)
+      console.log(`[getSafeRadius Average] Computing harmonic mean`);
+      const rxRaw = surface.radiusX;
+      const ryRaw = surface.radiusY !== undefined && surface.radiusY !== null && surface.radiusY !== ""
+                    ? surface.radiusY 
+                    : surface.radius;
+      
+      // Check if radiusX is INF
+      let rxIsInf = true;
+      if (rxRaw !== undefined && rxRaw !== null && rxRaw !== "") {
+        const rxStr = String(rxRaw).toUpperCase();
+        if (rxStr !== "INF" && rxStr !== "INFINITY") {
+          const rx = parseFloat(rxRaw);
+          if (isFinite(rx) && Math.abs(rx) >= 1e-10) {
+            rxIsInf = false;
+          }
+        }
+      }
+      
+      // Check if radiusY is INF
+      let ryIsInf = true;
+      if (ryRaw !== undefined && ryRaw !== null && ryRaw !== "") {
+        const ryStr = String(ryRaw).toUpperCase();
+        if (ryStr !== "INF" && ryStr !== "INFINITY") {
+          const ry = parseFloat(ryRaw);
+          if (isFinite(ry) && Math.abs(ry) >= 1e-10) {
+            ryIsInf = false;
+          }
+        }
+      }
+      
+      if (rxIsInf && ryIsInf) return Infinity;
+      
+      const rx = parseFloat(rxRaw);
+      const ry = parseFloat(ryRaw);
+      
+      if (rxIsInf) {
+        console.log(`[getSafeRadius Average] radiusX=INF, returning radiusY=${ry}`);
+        return ry;
+      }
+      if (ryIsInf) {
+        console.log(`[getSafeRadius Average] radiusY=INF, returning radiusX=${rx}`);
+        return rx;
+      }
+      
+      const harmonicMean = 2 * rx * ry / (rx + ry);
+      console.log(`[getSafeRadius Average] radiusX=${rx}, radiusY=${ry}, harmonicMean=${harmonicMean}`);
+      return harmonicMean;
+    }
+  }
+  
+  // Standard spherical surface
   let radius = surface.radius;
   if (radius === undefined || radius === null || radius === "") {
     // console.log(`getSafeRadius: radius未定義 (surface: ${surface.surface || 'unknown'}), Infinityを使用`);
@@ -156,9 +410,10 @@ export function getSafeThickness(surface) {
  * 条件：α[0]=0（無限遠物体）、ObjectのThicknessを含めない
  * @param {Array} opticalSystemRows - 光学系データ配列
  * @param {number} wavelength - 波長 (μm), デフォルト 0.5875618μm (d-line)
+ * @param {string} meridian - 子午線方向: 'tangential', 'sagittal', 'average' (トーリック面用)
  * @returns {Object} 計算結果 {focalLength, backFocalLength, imageDistance, finalHeight, finalAlpha}
  */
-export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength = 0.5875618) {
+export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength = 0.5875618, meridian = 'average') {
   if (!opticalSystemRows || opticalSystemRows.length === 0) {
     // console.warn('光学系データが空です');
     return null;
@@ -227,7 +482,7 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
         continue;
       }
       
-      const radius = getSafeRadius(surface);
+      const radius = getSafeRadius(surface, meridian);
       const thickness = getSafeThickness(surface);
       
       // Mirror面の検出
@@ -323,7 +578,7 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
     if (objectDistance !== Infinity) {
       // 有限物体の場合、EFL計算のために無限遠物体条件で再計算
       // console.log('=== EFL計算のための無限遠物体条件での光線追跡 ===');
-      const eflResult = calculateEFLTrace(opticalSystemRows, wavelength);
+      const eflResult = calculateEFLTrace(opticalSystemRows, wavelength, meridian);
       if (eflResult && Math.abs(eflResult.finalAlpha) > 1e-10) {
         focalLength = initialHeight / eflResult.finalAlpha;
         // console.log(`EFL計算: f = h[1]/α[final] = ${initialHeight.toFixed(6)}/${eflResult.finalAlpha.toFixed(6)} = ${focalLength.toFixed(6)} mm`);
@@ -344,10 +599,11 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
     let backFocalLength = null;
     if (objectDistance !== Infinity) {
       // 有限物体の場合、BFL計算のために無限遠物体条件での結果を使用
-      const eflResult = calculateEFLTrace(opticalSystemRows, wavelength);
+      console.log(`[BFL Calc] Calling calculateEFLTrace with meridian=${meridian}`);
+      const eflResult = calculateEFLTrace(opticalSystemRows, wavelength, meridian);
       if (eflResult && Math.abs(eflResult.finalAlpha) > 1e-10) {
         backFocalLength = eflResult.finalHeight / eflResult.finalAlpha;
-        console.log(`BFL計算: h / α = ${eflResult.finalHeight.toFixed(6)} / ${eflResult.finalAlpha.toFixed(6)} = ${backFocalLength.toFixed(6)} mm`);
+
       } else {
         backFocalLength = Infinity;
       }
@@ -355,7 +611,7 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       // 無限遠物体の場合、通常通り計算
       if (Math.abs(alpha) > 1e-10) {
         backFocalLength = h / alpha;
-        console.log(`BFL計算: h / α = ${h.toFixed(6)} / ${alpha.toFixed(6)} = ${backFocalLength.toFixed(6)} mm`);
+
       } else {
         backFocalLength = Infinity;
       }
@@ -443,7 +699,7 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
     
     if (Math.abs(alpha) > 1e-10) {
       imageDistance = h / alpha;
-      console.log(`Image Distance (光学的): h/α = ${h.toFixed(6)}/${alpha.toFixed(6)} = ${imageDistance.toFixed(6)} mm`);
+
       
       // テレセントリック判定の閾値（rad）
       const TELECENTRIC_ALPHA_THRESHOLD = 1e-5;
@@ -544,25 +800,102 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
 }
 
 /**
- * 焦点距離（EFL: Effective Focal Length）を計算
+ * トーリック面対応の全系近軸光線追跡（タンジェンシャル/サジタル両方向）
+ * トーリック面が含まれる場合は両方向で計算し、別々の焦点距離を返す
  * @param {Array} opticalSystemRows - 光学系データ配列
  * @param {number} wavelength - 波長 (μm), デフォルト 0.5875618μm (d-line)
- * @returns {number} 焦点距離 (mm)
+ * @returns {Object} 計算結果（トーリック面がある場合は tangential/sagittal を含む）
  */
-export function calculateFocalLength(opticalSystemRows, wavelength = 0.5875618) {
-  const result = calculateFullSystemParaxialTrace(opticalSystemRows, wavelength);
-  return result ? result.focalLength : null;
+export function calculateFullSystemParaxialTraceWithToric(opticalSystemRows, wavelength = 0.5875618) {
+  console.log('[calculateFullSystemParaxialTraceWithToric] Called');
+  
+  if (!opticalSystemRows || opticalSystemRows.length === 0) {
+    console.log('[calculateFullSystemParaxialTraceWithToric] No optical system rows');
+    return null;
+  }
+  
+  const hasToric = hasToricSurfaces(opticalSystemRows);
+  console.log(`[calculateFullSystemParaxialTraceWithToric] hasToric=${hasToric}`);
+  
+  if (!hasToric) {
+    const result = calculateFullSystemParaxialTrace(opticalSystemRows, wavelength, 'average');
+    if (result) {
+      result.hasToric = false;
+    }
+    return result;
+  }
+  
+  // トーリック面がある場合：タンジェンシャルとサジタルの両方向で計算
+  const tangentialResult = calculateFullSystemParaxialTrace(opticalSystemRows, wavelength, 'tangential');
+  const sagittalResult = calculateFullSystemParaxialTrace(opticalSystemRows, wavelength, 'sagittal');
+  
+  if (!tangentialResult || !sagittalResult) {
+    return null;
+  }
+  
+  // 非点収差（astigmatism）の計算
+  const astigmatism = tangentialResult.focalLength - sagittalResult.focalLength;
+  
+  console.log(`タンジェンシャル焦点距離: ${tangentialResult.focalLength?.toFixed(6)} mm`);
+  const resultObject = {
+    hasToric: true,
+    tangential: tangentialResult,
+    sagittal: sagittalResult,
+    astigmatism: astigmatism,
+    // BFL/IMDはY方向（tangential）のみを使用
+    focalLength: tangentialResult.focalLength,
+    backFocalLength: tangentialResult.backFocalLength,
+    imageDistance: tangentialResult.imageDistance,
+    finalHeight: tangentialResult.finalHeight,
+    finalAlpha: tangentialResult.finalAlpha
+  };
+  
+  return resultObject;
 }
 
 /**
- * バックフォーカス（BFL: Back Focal Length）を計算
+ * 焦点距離（EFL: Effective Focal Length）を計算（トーリック面対応）
  * @param {Array} opticalSystemRows - 光学系データ配列
  * @param {number} wavelength - 波長 (μm), デフォルト 0.5875618μm (d-line)
- * @returns {number} バックフォーカス (mm)
+ * @returns {number|Object} 焦点距離 (mm) またはトーリック面がある場合は {tangential, sagittal, average}
+ */
+export function calculateFocalLength(opticalSystemRows, wavelength = 0.5875618) {
+  const result = calculateFullSystemParaxialTraceWithToric(opticalSystemRows, wavelength);
+  if (!result) return null;
+  
+  if (result.hasToric) {
+    return {
+      tangential: result.tangential.focalLength,
+      sagittal: result.sagittal.focalLength,
+      average: result.focalLength,
+      astigmatism: result.astigmatism
+    };
+  }
+  
+  return result.focalLength;
+}
+
+/**
+ * バックフォーカス（BFL: Back Focal Length）を計算（トーリック面対応）
+ * @param {Array} opticalSystemRows - 光学系データ配列
+ * @param {number} wavelength - 波長 (μm), デフォルト 0.5875618μm (d-line)
+ * @returns {number|Object} バックフォーカス (mm) またはトーリック面がある場合は {tangential, sagittal, average}
  */
 export function calculateBackFocalLength(opticalSystemRows, wavelength = 0.5875618) {
-  const result = calculateFullSystemParaxialTrace(opticalSystemRows, wavelength);
-  return result ? result.backFocalLength : null;
+  const result = calculateFullSystemParaxialTraceWithToric(opticalSystemRows, wavelength);
+  if (!result) {
+    return null;
+  }
+  
+  if (result.hasToric) {
+    return {
+      tangential: result.tangential.backFocalLength,
+      sagittal: result.sagittal.backFocalLength,
+      average: result.backFocalLength
+    };
+  }
+  
+  return result.backFocalLength;
 }
 
 /**
@@ -572,7 +905,7 @@ export function calculateBackFocalLength(opticalSystemRows, wavelength = 0.58756
  * @returns {number} イメージディスタンス (mm)
  */
 export function calculateImageDistance(opticalSystemRows, wavelength = 0.5875618) {
-  const result = calculateFullSystemParaxialTrace(opticalSystemRows, wavelength);
+  const result = calculateFullSystemParaxialTraceWithToric(opticalSystemRows, wavelength);
   return result ? result.imageDistance : null;
 }
 
@@ -1445,18 +1778,13 @@ export function findStopSurfaceIndex(opticalSystemRows) {
  */
 export function calculateParaxialData(opticalSystemRows, wavelength = 0.5875618) {
   try {
-    // console.log('=== calculateParaxialData 開始 ===');
-    
     if (!opticalSystemRows || opticalSystemRows.length === 0) {
-    // console.warn('光学系データが空です');
       return null;
     }
 
-    // console.log('全系近軸光線追跡実行中...');
-    const fullSystemResult = calculateFullSystemParaxialTrace(opticalSystemRows, wavelength);
+    const fullSystemResult = calculateFullSystemParaxialTraceWithToric(opticalSystemRows, wavelength);
     
     if (!fullSystemResult) {
-    // console.error('全系近軸光線追跡が失敗しました');
       return null;
     }
 
@@ -1686,7 +2014,7 @@ export function isCoordTransSurface(surface) {
  * @param {number} wavelength - 波長 (nm)
  * @returns {Object} {finalHeight, finalAlpha}
  */
-function calculateEFLTrace(opticalSystemRows, wavelength = 0.5875618) {
+function calculateEFLTrace(opticalSystemRows, wavelength = 0.5875618, meridian = 'average') {
   const initialHeight = 1.0;
   let h = initialHeight;
   let alpha = 0; // 無限遠物体条件
@@ -1706,7 +2034,7 @@ function calculateEFLTrace(opticalSystemRows, wavelength = 0.5875618) {
       continue;
     }
     
-    const radius = getSafeRadius(surface);
+    const radius = getSafeRadius(surface, meridian);
     const thickness = getSafeThickness(surface);
     
     // Mirror面の検出

@@ -111,3 +111,136 @@ export function asphericSagDerivative(r, params, mode = "even") {
   }
   return (f1 - f0) / (2 * h);
 }
+
+// Toric surface sag calculation: z(x, y) with independent radii in X and Y meridians.
+// Toric surfaces are non-rotationally symmetric, used for astigmatism correction.
+// params: { radiusX, radiusY, conic, axis }
+export function toricSurfaceZ(x, y, params) {
+  const { radiusX, radiusY, conic, axis } = params || {};
+  
+  const xx = Number(x);
+  const yy = Number(y);
+  if (!isFinite(xx) || !isFinite(yy)) {
+    return NaN;
+  }
+  
+  // Apply axis rotation: rotate coordinates by -axis angle
+  // This rotates the toric meridians by axis degrees
+  const axisDeg = Number(axis) || 0;
+  const axisRad = (axisDeg * Math.PI) / 180;
+  const cosA = Math.cos(axisRad);
+  const sinA = Math.sin(axisRad);
+  
+  // Rotated coordinates: apply -axis rotation
+  const xRot = xx * cosA + yy * sinA;
+  const yRot = -xx * sinA + yy * cosA;
+  
+  const x2 = xRot * xRot;
+  const y2 = yRot * yRot;
+  const k = Number(conic) || 0;
+  
+  // Handle infinite radius (flat surface) for X-meridian
+  let sagX = 0;
+  if (isFinite(radiusX) && radiusX !== 0) {
+    const absRx = Math.abs(radiusX);
+    const sqrtTermX = 1 - (1 + k) * x2 / (absRx * absRx);
+    if (!isFinite(sqrtTermX) || sqrtTermX < 0) {
+      return NaN;
+    }
+    const sagXAbs = x2 / (absRx * (1 + Math.sqrt(sqrtTermX)));
+    sagX = radiusX > 0 ? sagXAbs : -sagXAbs;
+  }
+  // If radiusX is INF or not finite, sagX stays 0 (flat in X direction)
+  
+  // Handle infinite radius (flat surface) for Y-meridian
+  let sagY = 0;
+  if (isFinite(radiusY) && radiusY !== 0) {
+    const absRy = Math.abs(radiusY);
+    const sqrtTermY = 1 - (1 + k) * y2 / (absRy * absRy);
+    if (!isFinite(sqrtTermY) || sqrtTermY < 0) {
+      return NaN;
+    }
+    const sagYAbs = y2 / (absRy * (1 + Math.sqrt(sqrtTermY)));
+    sagY = radiusY > 0 ? sagYAbs : -sagYAbs;
+  }
+  // If radiusY is INF or not finite, sagY stays 0 (flat in Y direction)
+  
+  // Total sag is sum of both meridian contributions
+  const result = sagX + sagY;
+  return isFinite(result) ? result : NaN;
+}
+
+// Partial derivatives of toric surface for normal vector and ray intersection.
+// Returns { dz_dx, dz_dy } using analytical derivatives for better accuracy.
+export function toricSagDerivatives(x, y, params) {
+  const { radiusX, radiusY, conic, axis } = params || {};
+  
+  const xx = Number(x);
+  const yy = Number(y);
+  
+  if (!isFinite(xx) || !isFinite(yy)) {
+    return { dz_dx: NaN, dz_dy: NaN };
+  }
+  
+  // Apply axis rotation: rotate coordinates by -axis angle
+  const axisDeg = Number(axis) || 0;
+  const axisRad = (axisDeg * Math.PI) / 180;
+  const cosA = Math.cos(axisRad);
+  const sinA = Math.sin(axisRad);
+  
+  // Rotated coordinates
+  const xRot = xx * cosA + yy * sinA;
+  const yRot = -xx * sinA + yy * cosA;
+  
+  const k = Number(conic) || 0;
+  
+  // dz/dx calculation (X-meridian derivative) in rotated coordinates
+  let dz_dxRot = 0;
+  if (isFinite(radiusX) && radiusX !== 0) {
+    const Rx = radiusX;
+    const absRx = Math.abs(Rx);
+    const x2 = xRot * xRot;
+    const discriminant = 1 - (1 + k) * x2 / (absRx * absRx);
+    
+    if (isFinite(discriminant) && discriminant > 0) {
+      const sqrtTerm = Math.sqrt(discriminant);
+      // For z = x^2 / (|R| * (1 + sqrt(1 - (1+k)*x^2/R^2)))
+      // dz/dx = x / (|R| * sqrt(1 - (1+k)*x^2/R^2))
+      dz_dxRot = xRot / (absRx * sqrtTerm);
+      if (Rx < 0) dz_dxRot = -dz_dxRot;
+    }
+  }
+  // If radiusX is INF or not finite, dz_dxRot stays 0
+  
+  // dz/dy calculation (Y-meridian derivative) in rotated coordinates
+  let dz_dyRot = 0;
+  if (isFinite(radiusY) && radiusY !== 0) {
+    const Ry = radiusY;
+    const absRy = Math.abs(Ry);
+    const y2 = yRot * yRot;
+    const discriminant = 1 - (1 + k) * y2 / (absRy * absRy);
+    
+    if (isFinite(discriminant) && discriminant > 0) {
+      const sqrtTerm = Math.sqrt(discriminant);
+      // For z = y^2 / (|R| * (1 + sqrt(1 - (1+k)*y^2/R^2)))
+      // dz/dy = y / (|R| * sqrt(1 - (1+k)*y^2/R^2))
+      dz_dyRot = yRot / (absRy * sqrtTerm);
+      if (Ry < 0) dz_dyRot = -dz_dyRot;
+    }
+  }
+  // If radiusY is INF or not finite, dz_dyRot stays 0
+  
+  // Transform derivatives back to original coordinate system
+  // If z = f(x', y') where (x', y') = rotation of (x, y) by -axis,
+  // then dz/dx = (dz/dx') * (dx'/dx) + (dz/dy') * (dy'/dx)
+  //      dz/dy = (dz/dx') * (dx'/dy) + (dz/dy') * (dy'/dy)
+  // where dx'/dx = cos(axis), dy'/dx = -sin(axis)
+  //       dx'/dy = sin(axis), dy'/dy = cos(axis)
+  const dz_dx = dz_dxRot * cosA - dz_dyRot * sinA;
+  const dz_dy = dz_dxRot * sinA + dz_dyRot * cosA;
+  
+  return { 
+    dz_dx: isFinite(dz_dx) ? dz_dx : 0, 
+    dz_dy: isFinite(dz_dy) ? dz_dy : 0 
+  };
+}

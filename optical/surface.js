@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'OrbitControls';
 import { getWASMSystem } from '../main.js';
+import { toricSurfaceZ, toricSagDerivatives } from './surface-math.js';
 
 // Debug control: Set to true to enable all 🔸 debug logs
 const ENABLE_DEBUG_LOGS = true;
@@ -678,6 +679,139 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
   debugLog(`✅ Scene children after adding surface: ${scene.children.length}`);
 }
 
+// Draw toric surface with origin and rotation using 50x50 grid mesh.
+// Toric surfaces are non-rotationally symmetric (different radii in X and Y).
+export function drawToricSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z: 0}, rotationMatrix = null, segments = 50, color = 0x00ccff, opacity = 0.5) {
+  const { THREE: THREE_CTX, globalScope } = getSceneThreeContext(scene);
+  const { radiusX, radiusY, conic, axis, semidia } = params;
+  
+  console.log(`[Toric Render] params:`, params);
+  console.log(`[Toric Render] radiusX=${radiusX}, radiusY=${radiusY}, axis=${axis}, radius=${params.radius}`);
+  
+  // Check if both radiusX and radiusY are INF (both flat) - that's just a plane, skip rendering
+  const rxIsFlat = !isFinite(radiusX) || radiusX === 0;
+  const ryIsFlat = !isFinite(radiusY) || radiusY === 0;
+  
+  if (rxIsFlat && ryIsFlat) {
+    console.warn('⚠️ drawToricSurfaceWithOrigin: Both radiusX and radiusY are flat (INF), rendering as plane');
+    // Could still render a flat disc here if needed, but skip for now
+    return;
+  }
+  
+  if (!isFinite(semidia) || semidia <= 0) {
+    console.warn('⚠️ drawToricSurfaceWithOrigin: Invalid semidia, skipping');
+    return;
+  }
+  
+  const positions = [];
+  const indices = [];
+  
+  // Debug: Log specific test points
+  console.log(`[Toric Debug] Testing key points for radiusX=${radiusX}, radiusY=${radiusY}, conic=${conic || 0}`);
+  
+  // Test center point
+  const z_center = toricSurfaceZ(0, 0, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
+  console.log(`[Toric Debug] Center (0,0): z=${z_center.toFixed(4)}`);
+  
+  // Test X-axis points (y=0)
+  const testR = semidia * 0.5; // Test at half semidia
+  const z_xPos = toricSurfaceZ(testR, 0, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
+  const z_xNeg = toricSurfaceZ(-testR, 0, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
+  console.log(`[Toric Debug] X-axis (+${testR.toFixed(2)}, 0): z=${z_xPos.toFixed(4)}`);
+  console.log(`[Toric Debug] X-axis (-${testR.toFixed(2)}, 0): z=${z_xNeg.toFixed(4)}`);
+  
+  // Test Y-axis points (x=0)
+  const z_yPos = toricSurfaceZ(0, testR, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
+  const z_yNeg = toricSurfaceZ(0, -testR, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
+  console.log(`[Toric Debug] Y-axis (0, +${testR.toFixed(2)}): z=${z_yPos.toFixed(4)}`);
+  console.log(`[Toric Debug] Y-axis (0, -${testR.toFixed(2)}): z=${z_yNeg.toFixed(4)}`);
+  
+  // Build 50x50 grid mesh (non-rotationally symmetric)
+  const vertexInAperture = []; // Track which vertices are within aperture
+  
+  for (let iy = 0; iy <= segments; iy++) {
+    const ty = iy / segments;
+    const y = -semidia + 2 * semidia * ty; // Range: [-semidia, +semidia]
+    
+    for (let ix = 0; ix <= segments; ix++) {
+      const tx = ix / segments;
+      const x = -semidia + 2 * semidia * tx; // Range: [-semidia, +semidia]
+      
+      // Check if point is within circular aperture
+      const r = Math.sqrt(x * x + y * y);
+      const isInside = r <= semidia;
+      vertexInAperture.push(isInside);
+      
+      let z = 0;
+      if (isInside) {
+        // Calculate toric surface sag
+        z = toricSurfaceZ(x, y, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
+        if (!isFinite(z)) {
+          z = 0; // Fallback for points outside valid domain
+        }
+      }
+      
+      // Create vertex in local coordinates
+      let vertex = new THREE_CTX.Vector3(x, y, z);
+      
+      // Apply rotation matrix if provided
+      if (rotationMatrix) {
+        const R = rotationMatrix;
+        const newX = R[0][0] * vertex.x + R[0][1] * vertex.y + R[0][2] * vertex.z;
+        const newY = R[1][0] * vertex.x + R[1][1] * vertex.y + R[1][2] * vertex.z;
+        const newZ = R[2][0] * vertex.x + R[2][1] * vertex.y + R[2][2] * vertex.z;
+        vertex = new THREE_CTX.Vector3(newX, newY, newZ);
+      }
+      
+      // Apply origin offset
+      vertex.x += origin.x || 0;
+      vertex.y += origin.y || 0;
+      vertex.z += origin.z || 0;
+      
+      positions.push(vertex.x, vertex.y, vertex.z);
+    }
+  }
+  
+  // Triangulate grid - only create triangles where all vertices are within aperture
+  for (let iy = 0; iy < segments; iy++) {
+    for (let ix = 0; ix < segments; ix++) {
+      const i0 = iy * (segments + 1) + ix;
+      const i1 = i0 + 1;
+      const i2 = i0 + (segments + 1);
+      const i3 = i2 + 1;
+      
+      // Only create triangles if all vertices are within aperture
+      if (vertexInAperture[i0] && vertexInAperture[i1] && vertexInAperture[i2]) {
+        indices.push(i0, i2, i1);
+      }
+      if (vertexInAperture[i1] && vertexInAperture[i2] && vertexInAperture[i3]) {
+        indices.push(i1, i2, i3);
+      }
+    }
+  }
+  
+  // Create geometry with computed vertices and indices
+  const geometry = new THREE_CTX.BufferGeometry();
+  geometry.setAttribute('position', new THREE_CTX.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals(); // Smooth shading
+  
+  // Create material with provided color and opacity
+  const material = new THREE_CTX.MeshBasicMaterial({
+    color: color,
+    transparent: true,
+    opacity: opacity,
+    side: THREE_CTX.DoubleSide,
+    depthWrite: false
+  });
+  
+  const mesh = new THREE_CTX.Mesh(geometry, material);
+  mesh.userData = { type: 'lensSurface', isLensSurface: true, surfaceType: 'Toric' };
+  scene.add(mesh);
+  
+  debugLog(`✅ drawToricSurfaceWithOrigin: Added toric surface to scene, grid: ${segments}x${segments}, vertices: ${positions.length/3}, color: 0x${color.toString(16)}`);
+}
+
 // Sag計算を含むリング描画関数
 export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segments = 100, color = 0x000000, origin = {x: 0, y: 0, z: 0}, rotationMatrix = null, surf = null) {
   const { THREE: THREE_CTX } = getSceneThreeContext(scene);
@@ -719,9 +853,28 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
     return;
   }
 
-  // 非球面パラメータを準備
+  // 非球面・トーリック面パラメータを準備
   let asphericParams = null;
-  if (surf && surf.radius && surf.radius !== "INF") {
+  let toricParams = null;
+  const isToric = surf && surf.surfType === 'Toric';
+  
+  if (isToric) {
+    // Toric surface parameters
+    const radiusX = (surf.radiusX === "INF" || surf.radiusX === Infinity) ? Infinity : parseFloat(surf.radiusX);
+    const radiusY = (surf.radiusY === "INF" || surf.radiusY === Infinity || surf.radius === "INF" || surf.radius === Infinity) 
+                     ? Infinity 
+                     : parseFloat(surf.radiusY || surf.radius);
+    
+    if ((isFinite(radiusX) || radiusX === Infinity) && (isFinite(radiusY) || radiusY === Infinity)) {
+      toricParams = {
+        radiusX: radiusX,
+        radiusY: radiusY,
+        conic: Number(surf.conic) || 0,
+        axis: Number(surf.axis) || 0
+      };
+      console.log(`[Ring Toric] Using toric params: radiusX=${radiusX}, radiusY=${radiusY}`);
+    }
+  } else if (surf && surf.radius && surf.radius !== "INF") {
     const radius = parseFloat(surf.radius);
     if (isFinite(radius) && Math.abs(radius) > 0.001) {
       asphericParams = {
@@ -749,9 +902,16 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
     const x = semidia * Math.cos(theta);
     const y = semidia * Math.sin(theta);
     
-    // 各点でsagを計算（円周上の各点での半径を使用）
+    // 各点でsagを計算
     let sagZ = 0;
-    if (asphericParams) {
+    if (toricParams) {
+      // Toric surface: use x, y coordinates directly
+      sagZ = toricSurfaceZ(x, y, toricParams);
+      if (!isFinite(sagZ)) {
+        sagZ = 0; // 計算エラーの場合は0にフォールバック
+      }
+    } else if (asphericParams) {
+      // Rotationally symmetric surface: use radial distance
       const r = Math.sqrt(x * x + y * y); // 各点での半径
       sagZ = asphericSurfaceZ(r, asphericParams, "even");
       if (!isFinite(sagZ)) {
@@ -850,10 +1010,29 @@ export function drawRectApertureWithOriginAndSurface(scene, width = 20, height =
   const halfH = height / 2;
   const seg = Math.max(4, Math.floor(segmentsPerEdge || 0));
 
-  // 非球面パラメータを準備
+  // 非球面・トーリック面パラメータを準備
   let asphericParams = null;
+  let toricParams = null;
   let asphereMode = 'even';
-  if (surf && surf.radius && surf.radius !== 'INF') {
+  const isToric = surf && surf.surfType === 'Toric';
+  
+  if (isToric) {
+    // Toric surface parameters
+    const radiusX = (surf.radiusX === "INF" || surf.radiusX === Infinity) ? Infinity : parseFloat(surf.radiusX);
+    const radiusY = (surf.radiusY === "INF" || surf.radiusY === Infinity || surf.radius === "INF" || surf.radius === Infinity) 
+                     ? Infinity 
+                     : parseFloat(surf.radiusY || surf.radius);
+    
+    if ((isFinite(radiusX) || radiusX === Infinity) && (isFinite(radiusY) || radiusY === Infinity)) {
+      toricParams = {
+        radiusX: radiusX,
+        radiusY: radiusY,
+        conic: Number(surf.conic) || 0,
+        axis: Number(surf.axis) || 0
+      };
+      console.log(`[Rect Aperture Toric] Using toric params: radiusX=${radiusX}, radiusY=${radiusY}`);
+    }
+  } else if (surf && surf.radius && surf.radius !== 'INF') {
     const radius = parseFloat(surf.radius);
     if (isFinite(radius) && Math.abs(radius) > 0.001) {
       asphericParams = {
@@ -880,7 +1059,12 @@ export function drawRectApertureWithOriginAndSurface(scene, width = 20, height =
   const positions = [];
   const pushPoint = (x, y) => {
     let sagZ = 0;
-    if (asphericParams) {
+    if (toricParams) {
+      // Toric surface: use x, y coordinates directly
+      sagZ = toricSurfaceZ(x, y, toricParams);
+      if (!isFinite(sagZ)) sagZ = 0;
+    } else if (asphericParams) {
+      // Rotationally symmetric surface: use radial distance
       const r = Math.sqrt(x * x + y * y);
       sagZ = asphericSurfaceZ(r, asphericParams, asphereMode);
       if (!isFinite(sagZ)) sagZ = 0;
@@ -1720,8 +1904,29 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
               const endSemidia = __coopt_getSemidiaMm(nextSurf) ?? 0;
                 
                 if (startSemidia > 0 && endSemidia > 0) {
-                    // sag計算関数（非球面対応）
-                    const calculateSag = (surf, r) => {
+                    // sag計算関数（非球面・Toric対応）
+                    const calculateSag = (surf, x, y) => {
+                        // Toric面の場合
+                        if (surf.surfType === 'Toric') {
+                            const radiusX = (surf.radiusX === "INF" || surf.radiusX === Infinity) ? Infinity : parseFloat(surf.radiusX);
+                            const radiusY = (surf.radiusY === "INF" || surf.radiusY === Infinity || surf.radius === "INF" || surf.radius === Infinity) 
+                                             ? Infinity 
+                                             : parseFloat(surf.radiusY || surf.radius);
+                            
+                            if ((isFinite(radiusX) || radiusX === Infinity) && (isFinite(radiusY) || radiusY === Infinity)) {
+                                const toricParams = {
+                                    radiusX: radiusX,
+                                    radiusY: radiusY,
+                                    conic: Number(surf.conic) || 0,
+                                    axis: Number(surf.axis) || 0
+                                };
+                                const z = toricSurfaceZ(x, y, toricParams);
+                                return isFinite(z) ? z : 0;
+                            }
+                            return 0;
+                        }
+                        
+                        // 通常の非球面の場合
                         if (!surf.radius || surf.radius === "INF") return 0;
                         const radius = parseFloat(surf.radius);
                         if (!isFinite(radius) || Math.abs(radius) < 0.001) return 0;
@@ -1742,26 +1947,34 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
                             coef10: Number(surf.coef10) || 0
                         };
                         
+                        const r = Math.sqrt(x * x + y * y);
                         return asphericSurfaceZ(r, asphericParams, "even") || 0;
                     };
                     
                     // 接続線を描画する関数（4本の線: +Y, -Y, +X, -X）
                     const drawConnectionLine = (start, end, direction, sign, color) => {
-                        const startSag = calculateSag(currentSurf, startSemidia);
-                        const endSag = calculateSag(nextSurf, endSemidia);
-                        
-                        // 回転行列の適用
-                        let startLocal, endLocal;
+                        let startX = 0, startY = 0, endX = 0, endY = 0;
                         
                         if (direction === 'YZ') {
                             // Y軸方向（上下）
-                            startLocal = new THREE.Vector3(0, sign * startSemidia, startSag);
-                            endLocal = new THREE.Vector3(0, sign * endSemidia, endSag);
+                            startX = 0;
+                            startY = sign * startSemidia;
+                            endX = 0;
+                            endY = sign * endSemidia;
                         } else {
                             // X軸方向（左右）
-                            startLocal = new THREE.Vector3(sign * startSemidia, 0, startSag);
-                            endLocal = new THREE.Vector3(sign * endSemidia, 0, endSag);
+                            startX = sign * startSemidia;
+                            startY = 0;
+                            endX = sign * endSemidia;
+                            endY = 0;
                         }
+                        
+                        const startSag = calculateSag(currentSurf, startX, startY);
+                        const endSag = calculateSag(nextSurf, endX, endY);
+                        
+                        // ローカル座標
+                        let startLocal = new THREE.Vector3(startX, startY, startSag);
+                        let endLocal = new THREE.Vector3(endX, endY, endSag);
                         
                         // 回転行列を適用 with NaN validation
                         if (startOrigin.rotationMatrix) {
@@ -1907,12 +2120,32 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         // Y-Z断面プロファイル（緑色）
         const yzPoints = [];
         const yzSteps = 40; // より細かい分割
+        const isToricYZ = surf.surfType === 'Toric';
+        
         for (let i = 0; i <= yzSteps; i++) {
           const y = -profileHalfY + (2 * profileHalfY * i / yzSteps); // 均等分割
-            const r = Math.abs(y);
             let z = 0;
             
-            if (surf.radius && surf.radius !== "INF") {
+            if (isToricYZ) {
+                // Toric surface: use toricSurfaceZ(0, y)
+                const radiusX = (surf.radiusX === "INF" || surf.radiusX === Infinity) ? Infinity : parseFloat(surf.radiusX);
+                const radiusY = (surf.radiusY === "INF" || surf.radiusY === Infinity || surf.radius === "INF" || surf.radius === Infinity) 
+                                 ? Infinity 
+                                 : parseFloat(surf.radiusY || surf.radius);
+                
+                if ((isFinite(radiusX) || radiusX === Infinity) && (isFinite(radiusY) || radiusY === Infinity)) {
+                    const toricParams = {
+                        radiusX: radiusX,
+                        radiusY: radiusY,
+                        conic: Number(surf.conic) || 0,
+                        axis: Number(surf.axis) || 0
+                    };
+                    z = toricSurfaceZ(0, y, toricParams);
+                    if (!isFinite(z)) z = 0;
+                }
+            } else if (surf.radius && surf.radius !== "INF") {
+                // Rotationally symmetric surface: use radial distance
+                const r = Math.abs(y);
                 const asphericParams = {
                     radius: parseFloat(surf.radius),
                     conic: Number(surf.conic) || 0,
@@ -1985,12 +2218,32 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         // X-Z断面プロファイル（赤色）
         const xzPoints = [];
         const xzSteps = 40; // より細かい分割
+        const isToricXZ = surf.surfType === 'Toric';
+        
         for (let i = 0; i <= xzSteps; i++) {
           const x = -profileHalfX + (2 * profileHalfX * i / xzSteps); // 均等分割
-            const r = Math.abs(x);
             let z = 0;
             
-            if (surf.radius && surf.radius !== "INF") {
+            if (isToricXZ) {
+                // Toric surface: use toricSurfaceZ(x, 0)
+                const radiusX = (surf.radiusX === "INF" || surf.radiusX === Infinity) ? Infinity : parseFloat(surf.radiusX);
+                const radiusY = (surf.radiusY === "INF" || surf.radiusY === Infinity || surf.radius === "INF" || surf.radius === Infinity) 
+                                 ? Infinity 
+                                 : parseFloat(surf.radiusY || surf.radius);
+                
+                if ((isFinite(radiusX) || radiusX === Infinity) && (isFinite(radiusY) || radiusY === Infinity)) {
+                    const toricParams = {
+                        radiusX: radiusX,
+                        radiusY: radiusY,
+                        conic: Number(surf.conic) || 0,
+                        axis: Number(surf.axis) || 0
+                    };
+                    z = toricSurfaceZ(x, 0, toricParams);
+                    if (!isFinite(z)) z = 0;
+                }
+            } else if (surf.radius && surf.radius !== "INF") {
+                // Rotationally symmetric surface: use radial distance
+                const r = Math.abs(x);
                 const asphericParams = {
                     radius: parseFloat(surf.radius),
                     conic: Number(surf.conic) || 0,
@@ -2065,3 +2318,6 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
     // console.log(`✅ プロファイル描画完了: YZ=${yzProfileCount}, XZ=${xzProfileCount} 描画`);
     // console.log(`✅ Connection lines drawn: ${connectionLineCount} total`);
 }
+
+// Re-export toricSurfaceZ from surface-math.js for use by system-renderer.js
+export { toricSurfaceZ };

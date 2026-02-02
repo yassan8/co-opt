@@ -20,7 +20,7 @@ import { calculateEntrancePupilDiameter, calculateParaxialData } from '../../ray
 
 const TRANSVERSE_DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis.__TRANSVERSE_DEBUG || globalThis.__OPD_DEBUG || globalThis.__PSF_DEBUG));
 
-console.log('🔍 Transverse Aberration module loaded - CT/Mirror support enabled');
+
 
 // Helper function to detect mirror surfaces
 function isMirrorRow(row) {

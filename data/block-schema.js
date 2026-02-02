@@ -10,7 +10,7 @@ export const BLOCK_SCHEMA_VERSION = '0.1';
 export const DEFAULT_SEMIDIA = '10';
 export const DEFAULT_STOP_SEMI_DIAMETER = 5.0;
 
-const ALLOWED_SURF_TYPES = new Set(['', 'Spherical', 'Aspheric even', 'Aspheric odd']);
+const ALLOWED_SURF_TYPES = new Set(['', 'Spherical', 'Aspheric even', 'Aspheric odd', 'Toric']);
 
 function normalizeSurfTypeValue(value) {
   const s = String(value ?? '').trim();
@@ -28,6 +28,7 @@ function normalizeSurfTypeValue(value) {
   if (key === 'spherical' || key === 'sphere' || key === 'sph') return 'Spherical';
   if (key === 'asphericaleven' || key === 'asphericeven' || key === 'evenasphere' || key === 'evenaspheric') return 'Aspheric even';
   if (key === 'asphericalodd' || key === 'asphericodd' || key === 'oddasphere' || key === 'oddaspheric') return 'Aspheric odd';
+  if (key === 'toric' || key === 'toroidal') return 'Toric';
 
   // Fuzzy matches
   if (key.includes('aspher') && key.includes('even')) return 'Aspheric even';
@@ -502,10 +503,22 @@ export function validateBlocksConfiguration(config) {
       const surfType = normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, 'surfType'));
 
       if (surfType && !ALLOWED_SURF_TYPES.has(surfType)) {
-        issues.push({ severity: 'fatal', phase: 'validate', message: `SingleSurface.surfType must be one of: Spherical, Aspheric even, Aspheric odd. Got: ${surfType}`, blockId: block.blockId });
+        issues.push({ severity: 'fatal', phase: 'validate', message: `SingleSurface.surfType must be one of: Spherical, Aspheric even, Aspheric odd, Toric. Got: ${surfType}`, blockId: block.blockId });
       }
 
-      if (radius === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'SingleSurface.radius is required.', blockId: block.blockId });
+      // Toric surfaces require radiusX and radiusY instead of radius
+      if (surfType === 'Toric') {
+        const radiusX = getParamOrVarValue(parameters, variables, 'radiusX');
+        const radiusY = getParamOrVarValue(parameters, variables, 'radiusY');
+        if (radiusX === undefined) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: 'SingleSurface.radiusX is required for Toric surfaces.', blockId: block.blockId });
+        }
+        if (radiusY === undefined) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: 'SingleSurface.radiusY is required for Toric surfaces.', blockId: block.blockId });
+        }
+      } else {
+        if (radius === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'SingleSurface.radius is required.', blockId: block.blockId });
+      }
       if (thickness === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'SingleSurface.thickness is required.', blockId: block.blockId });
 
       // Material is optional for SingleSurface (can be air/vacuum)
@@ -594,14 +607,37 @@ export function validateBlocksConfiguration(config) {
       const backSurfType = normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, 'backSurfType'));
 
       if (frontSurfType && !ALLOWED_SURF_TYPES.has(frontSurfType)) {
-        issues.push({ severity: 'fatal', phase: 'validate', message: `Lens.frontSurfType must be one of: Spherical, Aspheric even, Aspheric odd. Got: ${frontSurfType}`, blockId: block.blockId });
+        issues.push({ severity: 'fatal', phase: 'validate', message: `Lens.frontSurfType must be one of: Spherical, Aspheric even, Aspheric odd, Toric. Got: ${frontSurfType}`, blockId: block.blockId });
       }
       if (backSurfType && !ALLOWED_SURF_TYPES.has(backSurfType)) {
-        issues.push({ severity: 'fatal', phase: 'validate', message: `Lens.backSurfType must be one of: Spherical, Aspheric even, Aspheric odd. Got: ${backSurfType}`, blockId: block.blockId });
+        issues.push({ severity: 'fatal', phase: 'validate', message: `Lens.backSurfType must be one of: Spherical, Aspheric even, Aspheric odd, Toric. Got: ${backSurfType}`, blockId: block.blockId });
       }
 
-      if (frontRadius === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.frontRadius is required.', blockId: block.blockId });
-      if (backRadius === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.backRadius is required.', blockId: block.blockId });
+      // Toric front surface validation
+      if (frontSurfType === 'Toric') {
+        const frontRadiusX = getParamOrVarValue(parameters, variables, 'frontRadiusX');
+        if (frontRadiusX === undefined) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.frontRadiusX is required for Toric front surface.', blockId: block.blockId });
+        }
+        if (frontRadius === undefined) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.frontRadius is required for Toric front surface.', blockId: block.blockId });
+        }
+      } else {
+        if (frontRadius === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.frontRadius is required.', blockId: block.blockId });
+      }
+
+      // Toric back surface validation
+      if (backSurfType === 'Toric') {
+        const backRadiusX = getParamOrVarValue(parameters, variables, 'backRadiusX');
+        if (backRadiusX === undefined) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.backRadiusX is required for Toric back surface.', blockId: block.blockId });
+        }
+        if (backRadius === undefined) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.backRadius is required for Toric back surface.', blockId: block.blockId });
+        }
+      } else {
+        if (backRadius === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.backRadius is required.', blockId: block.blockId });
+      }
       if (centerThickness === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.centerThickness is required.', blockId: block.blockId });
 
       if (typeof material !== 'string' || material.trim() === '') {
@@ -1219,11 +1255,30 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       }
     };
 
-    const applyAsphereFieldsFromParams = (row, surfTypeRaw, conicRaw, coefsRaw) => {
+    const applyAsphereFieldsFromParams = (row, surfTypeRaw, conicRaw, coefsRaw, radiusXRaw, radiusYRaw, axisRaw) => {
       const stNorm = normalizeSurfTypeValue(surfTypeRaw);
       const st = (stNorm && ALLOWED_SURF_TYPES.has(stNorm)) ? stNorm : '';
       row.surfType = st || (blockAsphereLooksNonZero({ surfType: stNorm, conic: conicRaw, coefs: coefsRaw }) ? 'Aspheric even' : 'Spherical');
-      if (row.surfType === 'Spherical') {
+      
+      if (row.surfType === 'Toric') {
+        // Toric surfaces use radiusX (tangential) and row.radius (sagittal/radiusY)
+        // radiusY is always taken from row.radius, not a separate parameter
+        console.log(`[applyAsphereFields Toric] radiusXRaw=${radiusXRaw}, row.radius=${row.radius}`);
+        
+        // Only set radiusX if radiusXRaw is explicitly provided
+        // Do NOT default to row.radius if radiusXRaw is undefined - that would overwrite user's radiusX
+        if (radiusXRaw !== undefined) {
+          row.radiusX = normalizeRadiusToRowValue(radiusXRaw);
+        }
+        // If radiusXRaw is undefined and row.radiusX doesn't exist yet, keep row.radiusX as is
+        
+        row.radiusY = row.radius; // Use existing radius field for Y direction
+        console.log(`[applyAsphereFields Toric] After: radiusX=${row.radiusX}, radiusY=${row.radiusY}`);
+        row.axis = normalizeOptionalNumberToRowValue(axisRaw);
+        row.conic = normalizeOptionalNumberToRowValue(conicRaw);
+        // Toric surfaces don't use aspheric coefficients in initial implementation
+        for (let i = 0; i < 10; i++) row[`coef${i + 1}`] = '';
+      } else if (row.surfType === 'Spherical') {
         row.conic = '';
         for (let i = 0; i < 10; i++) row[`coef${i + 1}`] = '';
       } else {
@@ -1284,6 +1339,14 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const backConicRaw = getParamOrVarValue(params, vars, 'backConic');
       const frontCoefsRaw = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `frontCoef${i + 1}`));
       const backCoefsRaw = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `backCoef${i + 1}`));
+      
+      // Toric parameters (radiusX for tangential, regular radius used for sagittal)
+      const frontRadiusXRaw = getParamOrVarValue(params, vars, 'frontRadiusX');
+      const frontAxisRaw = getParamOrVarValue(params, vars, 'frontAxis');
+      const backRadiusXRaw = getParamOrVarValue(params, vars, 'backRadiusX');
+      const backAxisRaw = getParamOrVarValue(params, vars, 'backAxis');
+
+
 
       front.radius = normalizeRadiusToRowValue(frontRadius);
       front.thickness = applySignedThickness(normalizeThicknessToRowValue(centerThickness));
@@ -1291,13 +1354,13 @@ export function expandBlocksToOpticalSystemRows(blocks) {
 
       applyDerivedGlassDisplay(front);
 
-      applyAsphereFieldsFromParams(front, frontSurfTypeRaw, frontConicRaw, frontCoefsRaw);
+      applyAsphereFieldsFromParams(front, frontSurfTypeRaw, frontConicRaw, frontCoefsRaw, frontRadiusXRaw, undefined, frontAxisRaw);
 
       back.radius = normalizeRadiusToRowValue(backRadius);
       back.thickness = 0; // post spacing is handled by AirGap block only
       back.material = 'AIR';
 
-      applyAsphereFieldsFromParams(back, backSurfTypeRaw, backConicRaw, backCoefsRaw);
+      applyAsphereFieldsFromParams(back, backSurfTypeRaw, backConicRaw, backCoefsRaw, backRadiusXRaw, undefined, backAxisRaw);
 
       // Only set optimize flags for variables explicitly present.
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'frontRadius') && shouldMarkV(vars.frontRadius)) {
@@ -1332,13 +1395,18 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const surfTypeRaw = getParamOrVarValue(params, vars, 'surfType');
       const conicRaw = getParamOrVarValue(params, vars, 'conic');
       const coefsRaw = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `coef${i + 1}`));
+      
+      // Toric parameters
+      const radiusXRaw = getParamOrVarValue(params, vars, 'radiusX');
+      const radiusYRaw = getParamOrVarValue(params, vars, 'radiusY');
+      const axisRaw = getParamOrVarValue(params, vars, 'axis');
 
       surf.radius = normalizeRadiusToRowValue(radius);
       surf.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness));
       surf.material = String(material ?? '').trim();
 
       applyDerivedGlassDisplay(surf);
-      applyAsphereFieldsFromParams(surf, surfTypeRaw, conicRaw, coefsRaw);
+      applyAsphereFieldsFromParams(surf, surfTypeRaw, conicRaw, coefsRaw, radiusXRaw, radiusYRaw, axisRaw);
 
       // Aperture shape handling (same as Mirror)
       const shape = normalizeApertureShape(getParamOrVarValue(params, vars, 'apertureShape'));
@@ -1528,9 +1596,9 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const s2Coefs = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `surf2Coef${i + 1}`));
       const s3Coefs = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `surf3Coef${i + 1}`));
 
-      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs);
-      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs);
-      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs);
+      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, undefined, undefined, undefined);
+      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, undefined, undefined, undefined);
+      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, undefined, undefined, undefined);
 
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius1') && shouldMarkV(vars.radius1)) applyVFlag(s1, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness1') && shouldMarkV(vars.thickness1)) applyVFlag(s1, 'optimizeT');
@@ -1631,10 +1699,10 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const s3Coefs = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `surf3Coef${i + 1}`));
       const s4Coefs = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `surf4Coef${i + 1}`));
 
-      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs);
-      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs);
-      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs);
-      applyAsphereFieldsFromParams(s4, s4SurfType, s4Conic, s4Coefs);
+      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, undefined, undefined, undefined);
+      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, undefined, undefined, undefined);
+      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, undefined, undefined, undefined);
+      applyAsphereFieldsFromParams(s4, s4SurfType, s4Conic, s4Coefs, undefined, undefined, undefined);
 
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius1') && shouldMarkV(vars.radius1)) applyVFlag(s1, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness1') && shouldMarkV(vars.thickness1)) applyVFlag(s1, 'optimizeT');
@@ -1666,7 +1734,7 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const surfTypeRaw = getParamOrVarValue(params, vars, 'surfType');
       const conicRaw = getParamOrVarValue(params, vars, 'conic');
       const coefsRaw = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `coef${i + 1}`));
-      applyAsphereFieldsFromParams(mirror, surfTypeRaw, conicRaw, coefsRaw);
+      applyAsphereFieldsFromParams(mirror, surfTypeRaw, conicRaw, coefsRaw, undefined, undefined, undefined);
 
       const mat = String(matRaw ?? '').trim();
       mirror.material = mat ? mat : 'MIRROR';

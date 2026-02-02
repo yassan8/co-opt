@@ -468,6 +468,10 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       const typeName = String(tokens[1] ?? '').trim().toUpperCase();
       if (typeName === 'EVENASPH') {
         row.surfType = 'Aspheric even';
+      } else if (typeName === 'TORICS') {
+        row.surfType = 'Toric';
+        // Zemax TORICS uses PARM 1=radiusX curvature, PARM 2=radiusY curvature, PARM 3=axis
+        // Will be handled in PARM section below
       } else if (typeName === 'COORDBRK' || typeName === 'COORD' || typeName === 'COORDINATEBREAK') {
         const err = new Error(`Zemax import: Coord Break surfaces are not supported yet (surface ${currentSurf}).`);
         err.code = 'ZMX_UNSUPPORTED_COORDBRK';
@@ -497,15 +501,31 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       const val = parseNumberOrNull(tokens[2]);
       if (idx === null || val === null) continue;
       const j = Math.trunc(idx);
-      // Zemax PARM mapping: PARM 1=unused, PARM 2=A4, PARM 3=A6, ...
-      // co-opt mapping: coef1=A4, coef2=A6, coef3=A8, ...
-      // So PARM n maps to coef(n-1), skipping PARM 1
-      if (j >= 2 && j <= 11) {
-        row[`coef${j - 1}`] = val;
-      } else if (j === 1) {
-        // PARM 1 is typically 0 and unused in Zemax; ignore it
+      
+      // Handle Toric surface parameters
+      if (row.surfType === 'Toric') {
+        if (j === 1) {
+          // PARM 1 = radiusX curvature (1/radiusX)
+          row.radiusX = invertCurvatureToRadius(val);
+        } else if (j === 2) {
+          // PARM 2 = radiusY curvature (1/radiusY)
+          row.radiusY = invertCurvatureToRadius(val);
+        } else if (j === 3) {
+          // PARM 3 = axis rotation (degrees)
+          row.axis = val;
+        }
+        // Other PARM values for TORICS may exist but are not used in spherical toric
       } else {
-        addIssue('warning', `PARM index out of range (1..11) at surface ${currentSurf}: ${j}`);
+        // Zemax PARM mapping for aspheric: PARM 1=unused, PARM 2=A4, PARM 3=A6, ...
+        // co-opt mapping: coef1=A4, coef2=A6, coef3=A8, ...
+        // So PARM n maps to coef(n-1), skipping PARM 1
+        if (j >= 2 && j <= 11) {
+          row[`coef${j - 1}`] = val;
+        } else if (j === 1) {
+          // PARM 1 is typically 0 and unused in Zemax; ignore it
+        } else {
+          addIssue('warning', `PARM index out of range (1..11) at surface ${currentSurf}: ${j}`);
+        }
       }
       continue;
     }

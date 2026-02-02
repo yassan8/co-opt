@@ -636,7 +636,7 @@
           if (parsed && Array.isArray(parsed.configurations) && parsed.configurations.length > 0) {
             const { loadActiveConfigurationToTables } = await import('./data/table-configuration.js');
             loadActiveConfigurationToTables();
-            console.log('✅ [Startup] Active configuration expanded to table storage keys');
+
           }
         } catch (e) {
           console.warn('⚠️ [Startup] Failed to parse systemConfigurations; skipping pre-load:', e);
@@ -653,7 +653,7 @@
     // Initialize undo history system
     if (typeof UndoHistory !== 'undefined') {
       window.undoHistory = new UndoHistory();
-      console.log('✅ [Undo] UndoHistory initialized');
+
     } else {
       console.warn('⚠️ [Undo] UndoHistory class not found');
     }
@@ -964,12 +964,9 @@
     
     // WASM最適化システム自動初期化
     document.addEventListener('DOMContentLoaded', async () => {
-      console.log('🚀 基本システム初期化中...');
       
       try {
         // 基本的な機能のみ有効化（削除された最適化ファイルへの依存を除去）
-        console.log('✅ 基本システム初期化完了');
-        console.log('   メイン光学計算機能が利用可能です');
         
         // Loadしたファイル名を表示
         const loadedFileName = localStorage.getItem('loadedFileName');
@@ -1010,7 +1007,6 @@
         // Configuration UI を初期化
         if (typeof window.initializeConfigurationUI === 'function') {
           window.initializeConfigurationUI();
-          console.log('✅ Configuration UI初期化完了');
         } else {
           console.warn('⚠️ initializeConfigurationUI関数が見つかりません');
         }
@@ -1038,8 +1034,7 @@
 
         
       } catch (error) {
-        console.warn('⚠️ 基本システム初期化で軽微なエラー:', error.message);
-        console.log('📋 コア機能は動作を継続');
+        // Silent error
       }
     });
     

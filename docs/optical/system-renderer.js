@@ -2,13 +2,13 @@
  * Optical system renderer for 3D visualization
  */
 
-console.log('🚀 system-renderer.js loaded at', new Date().toISOString());
+
 
 import * as THREE from 'three';
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.js';
-import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin,
+import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawToricSurfaceWithOrigin,
          drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, 
-         drawSemidiaRingWithOriginAndSurface, drawRectApertureWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './surface.js';
+         drawSemidiaRingWithOriginAndSurface, drawRectApertureWithOriginAndSurface, asphericSurfaceZ, toricSurfaceZ, addMirrorBackText } from './surface.js';
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordTrans';
@@ -402,14 +402,39 @@ export function drawOpticalSystemSurfaces(options = {}) {
                         
                         const { halfX: crossHalfX, halfY: crossHalfY } = __coopt_getCrosshairHalfExtents(surface, planeSemidia);
 
-                        // 縦線（Y方向、黒）
+                        // Toric面の場合のパラメータ準備
+                        let toricParams = null;
+                        const isToric = surface && surface.surfType === 'Toric';
+                        if (isToric) {
+                            const radiusX = (surface.radiusX === "INF" || surface.radiusX === Infinity) ? Infinity : parseFloat(surface.radiusX);
+                            const radiusY = (surface.radiusY === "INF" || surface.radiusY === Infinity || surface.radius === "INF" || surface.radius === Infinity) 
+                                             ? Infinity 
+                                             : parseFloat(surface.radiusY || surface.radius);
+                            
+                            if ((isFinite(radiusX) || radiusX === Infinity) && (isFinite(radiusY) || radiusY === Infinity)) {
+                                toricParams = {
+                                    radiusX: radiusX,
+                                    radiusY: radiusY,
+                                    conic: Number(surface.conic) || 0
+                                };
+                                console.log(`[OBJECT Crosshair] Toric params: radiusX=${radiusX}, radiusY=${radiusY}`);
+                            }
+                        }
+
+                        // 縦線（Y方向、黒） - 複数セグメントで描画
                         const pointsVertical = [];
-                        for (let j = 0; j <= 1; j++) {
-                            const y = -crossHalfY + (2 * crossHalfY * j);
-                            const point = new THREE.Vector3(0, y, 0);
+                        const vSegments = 20; // 十字線のセグメント数
+                        for (let j = 0; j <= vSegments; j++) {
+                            const y = -crossHalfY + (2 * crossHalfY * j / vSegments);
+                            let z = 0;
+                            if (toricParams) {
+                                z = toricSurfaceZ(0, y, toricParams);
+                                if (!isFinite(z)) z = 0;
+                            }
+                            const point = new THREE.Vector3(0, y, z);
                             pointsVertical.push(point);
                         }
-                        if (pointsVertical.length === 2) {
+                        if (pointsVertical.length >= 2) {
                             const geometryV = new THREE.BufferGeometry().setFromPoints(pointsVertical);
                             const materialV = new THREE.LineBasicMaterial({ 
                                 color: 0x000000, 
@@ -420,17 +445,23 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             lineV.renderOrder = 999;
                             lineV.userData = { type: 'plane-crosshair', direction: 'vertical', surfaceIndex: i };
                             scene.add(lineV);
-                            console.log(`🔍 Object plane vertical crosshair added at surface ${i}, points:`, pointsVertical);
+                            console.log(`🔍 Object plane vertical crosshair added at surface ${i}, points: ${pointsVertical.length}`);
                         }
                         
-                        // 横線（X方向、赤）
+                        // 横線（X方向、赤） - 複数セグメントで描画
                         const pointsHorizontal = [];
-                        for (let j = 0; j <= 1; j++) {
-                            const x = -crossHalfX + (2 * crossHalfX * j);
-                            const point = new THREE.Vector3(x, 0, 0);
+                        const hSegments = 20;
+                        for (let j = 0; j <= hSegments; j++) {
+                            const x = -crossHalfX + (2 * crossHalfX * j / hSegments);
+                            let z = 0;
+                            if (toricParams) {
+                                z = toricSurfaceZ(x, 0, toricParams);
+                                if (!isFinite(z)) z = 0;
+                            }
+                            const point = new THREE.Vector3(x, 0, z);
                             pointsHorizontal.push(point);
                         }
-                        if (pointsHorizontal.length === 2) {
+                        if (pointsHorizontal.length >= 2) {
                             const geometryH = new THREE.BufferGeometry().setFromPoints(pointsHorizontal);
                             const materialH = new THREE.LineBasicMaterial({ 
                                 color: 0xff0000, 
@@ -441,7 +472,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             lineH.renderOrder = 999;
                             lineH.userData = { type: 'plane-crosshair', direction: 'horizontal', surfaceIndex: i };
                             scene.add(lineH);
-                            console.log(`🔍 Object plane horizontal crosshair added at surface ${i}, points:`, pointsHorizontal);
+                            console.log(`🔍 Object plane horizontal crosshair added at surface ${i}, points: ${pointsHorizontal.length}`);
                         }
                         
                         console.log(`✅ Object plane ring and crosshair drawn for surface ${i}`);
@@ -503,11 +534,36 @@ export function drawOpticalSystemSurfaces(options = {}) {
                         // 十字線描画
                         console.log(`🎯 [IMAGE] Crosshair drawing: surface=${i}, planeSemidia=${planeSemidia}`);
                         
-                        // 縦線（Y方向、黒）
+                        // Toric面の場合のパラメータ準備
+                        let toricParams = null;
+                        const isToric = surface && surface.surfType === 'Toric';
+                        if (isToric) {
+                            const radiusX = (surface.radiusX === "INF" || surface.radiusX === Infinity) ? Infinity : parseFloat(surface.radiusX);
+                            const radiusY = (surface.radiusY === "INF" || surface.radiusY === Infinity || surface.radius === "INF" || surface.radius === Infinity) 
+                                             ? Infinity 
+                                             : parseFloat(surface.radiusY || surface.radius);
+                            
+                            if ((isFinite(radiusX) || radiusX === Infinity) && (isFinite(radiusY) || radiusY === Infinity)) {
+                                toricParams = {
+                                    radiusX: radiusX,
+                                    radiusY: radiusY,
+                                    conic: Number(surface.conic) || 0
+                                };
+                                console.log(`[IMAGE Crosshair] Toric params: radiusX=${radiusX}, radiusY=${radiusY}`);
+                            }
+                        }
+                        
+                        // 縦線（Y方向、黒） - 複数セグメントで描画
                         const pointsVertical = [];
-                        for (let j = 0; j <= 1; j++) {
-                            const y = -crossHalfY + (2 * crossHalfY * j);
-                            let point = new THREE.Vector3(0, y, 0);
+                        const vSegments = 20;
+                        for (let j = 0; j <= vSegments; j++) {
+                            const y = -crossHalfY + (2 * crossHalfY * j / vSegments);
+                            let z = 0;
+                            if (toricParams) {
+                                z = toricSurfaceZ(0, y, toricParams);
+                                if (!isFinite(z)) z = 0;
+                            }
+                            let point = new THREE.Vector3(0, y, z);
                             if (imgRotMat && Array.isArray(imgRotMat) && imgRotMat.length >= 3) {
                                 // 回転行列を適用
                                 const newX = imgRotMat[0][0] * point.x + imgRotMat[0][1] * point.y + imgRotMat[0][2] * point.z;
@@ -520,7 +576,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             point.z += imgOrigin.z;
                             pointsVertical.push(point);
                         }
-                        if (pointsVertical.length === 2) {
+                        if (pointsVertical.length >= 2) {
                             const geometryV = new THREE.BufferGeometry().setFromPoints(pointsVertical);
                             const materialV = new THREE.LineBasicMaterial({ 
                                 color: 0x000000, 
@@ -531,14 +587,20 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             lineV.renderOrder = 999;
                             lineV.userData = { type: 'plane-crosshair', direction: 'vertical', surfaceIndex: i };
                             scene.add(lineV);
-                            console.log(`🔍 Image plane vertical crosshair added at surface ${i}, points:`, pointsVertical);
+                            console.log(`🔍 Image plane vertical crosshair added at surface ${i}, points: ${pointsVertical.length}`);
                         }
                         
-                        // 横線（X方向、赤）
+                        // 横線（X方向、赤） - 複数セグメントで描画
                         const pointsHorizontal = [];
-                        for (let j = 0; j <= 1; j++) {
-                            const x = -crossHalfX + (2 * crossHalfX * j);
-                            let point = new THREE.Vector3(x, 0, 0);
+                        const hSegments = 20;
+                        for (let j = 0; j <= hSegments; j++) {
+                            const x = -crossHalfX + (2 * crossHalfX * j / hSegments);
+                            let z = 0;
+                            if (toricParams) {
+                                z = toricSurfaceZ(x, 0, toricParams);
+                                if (!isFinite(z)) z = 0;
+                            }
+                            let point = new THREE.Vector3(x, 0, z);
                             if (imgRotMat && Array.isArray(imgRotMat) && imgRotMat.length >= 3) {
                                 // 回転行列を適用
                                 const newX = imgRotMat[0][0] * point.x + imgRotMat[0][1] * point.y + imgRotMat[0][2] * point.z;
@@ -551,7 +613,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             point.z += imgOrigin.z;
                             pointsHorizontal.push(point);
                         }
-                        if (pointsHorizontal.length === 2) {
+                        if (pointsHorizontal.length >= 2) {
                             const geometryH = new THREE.BufferGeometry().setFromPoints(pointsHorizontal);
                             const materialH = new THREE.LineBasicMaterial({ 
                                 color: 0xff0000, 
@@ -562,7 +624,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             lineH.renderOrder = 999;
                             lineH.userData = { type: 'plane-crosshair', direction: 'horizontal', surfaceIndex: i };
                             scene.add(lineH);
-                            console.log(`🔍 Image plane horizontal crosshair added at surface ${i}, points:`, pointsHorizontal);
+                            console.log(`🔍 Image plane horizontal crosshair added at surface ${i}, points: ${pointsHorizontal.length}`);
                         }
                         
                         console.log(`✅ Image plane ring and crosshair drawn for surface ${i}`);
@@ -638,12 +700,30 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             i
                         );
                     }
+                } else if (surface.surfType === 'Toric') {
+                    // Toric surface rendering
+                    console.log(`🔵 Drawing Toric surface ${i}`);
+                    
+                    const toricDefaultColor = 0x00ccff;
+                    const toricKey = __coopt_surfaceColorKey(surface, i);
+                    const toricOverride = __coopt_parseColorToInt(surfaceColorOverrides?.[toricKey]);
+                    const toricColor = (toricOverride !== null) ? toricOverride : toricDefaultColor;
+                    
+                    drawToricSurfaceWithOrigin(
+                        scene,
+                        surface,                         // params with radiusX, radiusY, conic, semidia
+                        surfaceOrigins[i].origin,
+                        surfaceOrigins[i].rotationMatrix,
+                        256,                             // 256x256 grid mesh for smooth surface
+                        toricColor,                      // color
+                        0.5                              // opacity
+                    );
                 } else {
                     // 通常のレンズ面の処理
                     console.log(`🔵 Drawing Lens surface ${i}`);
                     
                     // 3D表面を描画
-                    console.log(`� Drawing 3D lens surface ${i} with origin and rotation`);
+                    console.log(`🔷 Drawing 3D lens surface ${i} with origin and rotation`);
                     const lensDefaultColor = 0x00ccff;
                     const lensKey = __coopt_surfaceColorKey(surface, i);
                     const lensOverride = __coopt_parseColorToInt(surfaceColorOverrides?.[lensKey]);

@@ -256,7 +256,7 @@ const createDOMTableSource = (container, initialRows) => {
               rowData.wavelength
             );
             window.undoHistory.record(cmd);
-            console.log(`[Undo] Recorded: Set Source ${rowData.id}.wavelength from ${oldValue} to ${rowData.wavelength}`);
+
           }
         }
 
@@ -296,7 +296,7 @@ const createDOMTableSource = (container, initialRows) => {
               rowData.weight
             );
             window.undoHistory.record(cmd);
-            console.log(`[Undo] Recorded: Set Source ${rowData.id}.weight from ${oldValue} to ${rowData.weight}`);
+
           }
         }
 
@@ -339,7 +339,7 @@ const createDOMTableSource = (container, initialRows) => {
               rowData.primary
             );
             window.undoHistory.record(cmd);
-            console.log(`[Undo] Recorded: Set Source ${rowData.id}.primary from ${oldValue} to ${rowData.primary}`);
+
           }
         }
 
@@ -526,7 +526,7 @@ if (deleteSourceBtn && tableSource) deleteSourceBtn.addEventListener("click", fu
 
 // 主波長を取得する関数
 function getPrimaryWavelength() {
-  console.log('🔍 getPrimaryWavelength called from table-source.js');
+
   try {
     if (tableSource && typeof tableSource.getData === 'function') {
       const sourceData = tableSource.getData();
@@ -539,7 +539,7 @@ function getPrimaryWavelength() {
       if (primaryEntry && primaryEntry.wavelength) {
         const wavelength = parseFloat(primaryEntry.wavelength);
         if (!isNaN(wavelength)) {
-          console.log(`✅ Primary wavelength found (table-source.js): ${wavelength} μm`);
+
           return wavelength;
         }
       }

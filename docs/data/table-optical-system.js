@@ -506,6 +506,7 @@ let tabulatorOptions = {
               {value: "Spherical", label: "Spherical"},
               {value: "Aspheric even", label: "Aspheric even"},
               {value: "Aspheric odd", label: "Aspheric odd"},
+              {value: "Toric", label: "Toric"},
               {value: "Coord Break", label: "Coord Break"}
             ]
           },
@@ -568,6 +569,62 @@ let tabulatorOptions = {
       }
     },
     { title: "Material", field: "material", editor: "input", width: 100, headerSort: false },
+    { title: "Radius X", field: "radiusX", editor: "input", width: 100, headerSort: false,
+      visible: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          return rowData.surfType === 'Toric';
+        } catch (e) {
+          return false;
+        }
+      },
+      mutator: function(value) {
+        try {
+          if (value === "" || value === null || value === undefined) return "";
+          const valueStr = String(value).toUpperCase();
+          if (valueStr === "INF" || valueStr === "INFINITY") return "INF";
+          const num = Number(value);
+          return !isNaN(num) ? num : value;
+        } catch (e) {
+          return value;
+        }
+      }},
+    { title: "Radius Y", field: "radiusY", editor: "input", width: 100, headerSort: false,
+      visible: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          return rowData.surfType === 'Toric';
+        } catch (e) {
+          return false;
+        }
+      },
+      mutator: function(value) {
+        try {
+          if (value === "" || value === null || value === undefined) return "";
+          const valueStr = String(value).toUpperCase();
+          if (valueStr === "INF" || valueStr === "INFINITY") return "INF";
+          const num = Number(value);
+          return !isNaN(num) ? num : value;
+        } catch (e) {
+          return value;
+        }
+      }},
+    { title: "Axis", field: "axis", editor: "input", width: 80, headerSort: false,
+      visible: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          return rowData.surfType === 'Toric';
+        } catch (e) {
+          return false;
+        }
+      },
+      mutator: function(value) {
+        try {
+          return value === "" ? "" : Number(value);
+        } catch (e) {
+          return value;
+        }
+      }},
     { title: "Ref Index", field: "rindex", editor: "input", width: 100, headerSort: false , mutator: function(value) {
         try {
           return value === "" ? "" : Number(value);

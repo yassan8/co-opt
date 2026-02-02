@@ -290,7 +290,7 @@ const createDOMTableObject = (container, initialRows) => {
               rowData.xHeightAngle
             );
             window.undoHistory.record(cmd);
-            console.log(`[Undo] Recorded: Set Object ${rowData.id}.xHeightAngle from ${oldValue} to ${rowData.xHeightAngle}`);
+
           }
         }
         
@@ -326,7 +326,7 @@ const createDOMTableObject = (container, initialRows) => {
               rowData.yHeightAngle
             );
             window.undoHistory.record(cmd);
-            console.log(`[Undo] Recorded: Set Object ${rowData.id}.yHeightAngle from ${oldValue} to ${rowData.yHeightAngle}`);
+
           }
         }
         
@@ -367,7 +367,7 @@ const createDOMTableObject = (container, initialRows) => {
               rowData.position
             );
             window.undoHistory.record(cmd);
-            console.log(`[Undo] Recorded: Set Object ${rowData.id}.position from ${oldValue} to ${rowData.position}`);
+
           }
         }
         

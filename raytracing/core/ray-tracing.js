@@ -6,7 +6,7 @@ if (typeof window !== 'undefined') {
 
 // Import functions from ray-paraxial.js without destructuring for compatibility
 import * as rayParaxial from './ray-paraxial.js';
-import { asphericSagDerivative } from '../../optical/surface-math.js';
+import { asphericSagDerivative, toricSurfaceZ, toricSagDerivatives } from '../../optical/surface-math.js';
 const getSafeThickness = rayParaxial.getSafeThickness;
 const getRefractiveIndex = rayParaxial.getRefractiveIndex;
 // 循環依存を避けるため、main.jsからのimportを削除
@@ -736,6 +736,110 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
   return null;
 }
 
+// --- Toric Surface Intersection using 3D Newton-Raphson ---
+export function intersectToricSurface(ray, params, maxIter = 50, tol = 1e-10, debugLog = null) {
+  // ray: {pos: {x,y,z}, dir: {x,y,z}}
+  // params: {radiusX, radiusY, conic, axis, semidia}
+  
+  const safeParams = params || {};
+  const { radiusX, radiusY, conic = 0, axis = 0, semidia = Infinity } = safeParams;
+  
+  // radiusX or radiusY can be Infinity (flat surface in that direction)
+  // but should not be 0 or invalid finite values
+  if ((isFinite(radiusX) && radiusX === 0) || (isFinite(radiusY) && radiusY === 0)) {
+    if (debugLog) debugLog.push('❌ intersectToricSurface: radiusX or radiusY is zero');
+    return null;
+  }
+  
+  if (!isFinite(radiusX) && radiusX !== Infinity) {
+    if (debugLog) debugLog.push('❌ intersectToricSurface: Invalid radiusX (NaN)');
+    return null;
+  }
+  
+  if (!isFinite(radiusY) && radiusY !== Infinity) {
+    if (debugLog) debugLog.push('❌ intersectToricSurface: Invalid radiusY (NaN)');
+    return null;
+  }
+  
+  // Initial guess: intersection with z=0 plane
+  let t = -ray.pos.z / ray.dir.z;
+  if (!isFinite(t) || t < 0) {
+    if (debugLog) debugLog.push('❌ intersectToricSurface: Invalid initial t guess');
+    return null;
+  }
+  
+  let converged = false;
+  let lastValidPt = null;
+  let lastValidF = Infinity;
+  
+  for (let iter = 0; iter < maxIter; iter++) {
+    const P = add(ray.pos, scale(ray.dir, t));
+    const z_surface = toricSurfaceZ(P.x, P.y, { radiusX, radiusY, conic, axis });
+    
+    if (!isFinite(z_surface)) {
+      if (debugLog) debugLog.push(`   ⚠️ Iter ${iter}: Invalid toric sag at (${P.x.toFixed(3)}, ${P.y.toFixed(3)})`);
+      break;
+    }
+    
+    const F = P.z - z_surface;
+    
+    if (Math.abs(F) < tol) {
+      const r = Math.sqrt(P.x * P.x + P.y * P.y);
+      if (r <= semidia) {
+        if (debugLog) debugLog.push(`   ✅ Converged at iter ${iter}: F=${F.toExponential(3)}, r=${r.toFixed(3)}`);
+        return P;
+      }
+    }
+    
+    // Track best valid point
+    if (Math.abs(F) < Math.abs(lastValidF)) {
+      lastValidPt = P;
+      lastValidF = F;
+    }
+    
+    // Calculate partial derivatives dz/dx and dz/dy
+    const { dz_dx, dz_dy } = toricSagDerivatives(P.x, P.y, { radiusX, radiusY, conic, axis });
+    
+    if (!isFinite(dz_dx) || !isFinite(dz_dy)) {
+      if (debugLog) debugLog.push(`   ⚠️ Iter ${iter}: Invalid derivatives`);
+      break;
+    }
+    
+    // dF/dt = dir.z - dz/dx * dir.x - dz/dy * dir.y
+    const dFdt = ray.dir.z - dz_dx * ray.dir.x - dz_dy * ray.dir.y;
+    
+    if (Math.abs(dFdt) < 1e-14) {
+      if (debugLog) debugLog.push(`   ⚠️ Iter ${iter}: dFdt too small, ray tangent to surface`);
+      break;
+    }
+    
+    const deltaT = F / dFdt;
+    t -= deltaT;
+    
+    // Bounds check
+    if (t < -10000 || t > 10000) {
+      if (debugLog) debugLog.push(`   ❌ Iter ${iter}: t=${t.toFixed(3)} out of bounds`);
+      break;
+    }
+    
+    if (Math.abs(deltaT) < tol * Math.abs(t)) {
+      converged = true;
+    }
+  }
+  
+  // Accept best valid point if close enough
+  if (lastValidPt && Math.abs(lastValidF) < tol * 100) {
+    const r = Math.sqrt(lastValidPt.x * lastValidPt.x + lastValidPt.y * lastValidPt.y);
+    if (r <= semidia * 1.1) {
+      if (debugLog) debugLog.push(`   ✅ Accepting best valid point: F=${lastValidF.toExponential(3)}`);
+      return lastValidPt;
+    }
+  }
+  
+  if (debugLog) debugLog.push('   ❌ Toric intersection failed');
+  return null;
+}
+
 // --- サーフェス法線ベクトル（数値計算版） ---
 // --- 解析的微分による非球面SAGの微分計算（Horner法使用）---
 // asphericSagDerivativeはsurface.jsからimportするため、ここでは定義しない
@@ -841,6 +945,35 @@ function __surfaceNormal_impl(pt, params, mode = "even") {
   // 法線ベクトル: n = (-∂z/∂x, -∂z/∂y, 1)
   const nx = -dzdx;
   const ny = -dzdy;
+  const nz = 1;
+  
+  return normalize(vec3(nx, ny, nz));
+}
+
+// --- Toric Surface Normal Vector ---
+export function toricSurfaceNormal(pt, params) {
+  // params: {radiusX, radiusY, conic, axis}
+  // Normal vector: n = normalize(-dz/dx, -dz/dy, 1)
+  
+  const { radiusX, radiusY, conic = 0, axis = 0 } = params || {};
+  
+  // radiusX or radiusY can be Infinity (flat surface in that direction)
+  if ((isFinite(radiusX) && radiusX === 0) || (isFinite(radiusY) && radiusY === 0)) {
+    return normalize(vec3(0, 0, 1)); // Default to Z-axis for zero radius
+  }
+  
+  if ((!isFinite(radiusX) && radiusX !== Infinity) || (!isFinite(radiusY) && radiusY !== Infinity)) {
+    return normalize(vec3(0, 0, 1)); // Default to Z-axis for NaN
+  }
+  
+  const { dz_dx, dz_dy } = toricSagDerivatives(pt.x, pt.y, { radiusX, radiusY, conic, axis });
+  
+  if (!isFinite(dz_dx) || !isFinite(dz_dy)) {
+    return normalize(vec3(0, 0, 1)); // Fallback to Z-axis
+  }
+  
+  const nx = -dz_dx;
+  const ny = -dz_dy;
   const nz = 1;
   
   return normalize(vec3(nx, ny, nz));
@@ -2053,10 +2186,61 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
         debugLog.push(`Non-zero aspherical coefficients: ${hasAsphericCoefs ? 'YES' : 'NO'}`);
       }
       
-      // 非球面交点計算（球面も同様に処理）
-        const surfType = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
-        const asphereMode = surfType.includes('odd') ? 'odd' : 'even';
-      hitPoint = intersectAsphericSurface(localRay, surfaceParams, asphereMode, 20, 1e-7, isDetailedDebug ? debugLog : null);
+      // Determine asphere mode (even/odd) for non-toric surfaces
+      const surfType = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
+      const asphereMode = surfType.includes('odd') ? 'odd' : 'even';
+      
+      // Toric surface intersection
+      const surfTypeStr = String(row.surfType ?? row.type ?? '').trim();
+      if (surfTypeStr === 'Toric') {
+        // Parse radiusX: handle "INF" string and Infinity
+        let radiusX_val = Infinity;
+        if (row.radiusX !== undefined && row.radiusX !== null && row.radiusX !== "") {
+          const rxStr = String(row.radiusX).toUpperCase();
+          if (rxStr === "INF" || rxStr === "INFINITY") {
+            radiusX_val = Infinity;
+          } else {
+            const rxNum = Number(row.radiusX);
+            if (isFinite(rxNum) && rxNum !== 0) {
+              radiusX_val = rxNum;
+            }
+          }
+        }
+        
+        // Parse radiusY: use radiusY if present, otherwise use radius (sagittal direction)
+        let radiusY_val = Infinity;
+        const ryRaw = row.radiusY !== undefined && row.radiusY !== null && row.radiusY !== "" 
+                      ? row.radiusY 
+                      : row.radius;
+        if (ryRaw !== undefined && ryRaw !== null && ryRaw !== "") {
+          const ryStr = String(ryRaw).toUpperCase();
+          if (ryStr === "INF" || ryStr === "INFINITY") {
+            radiusY_val = Infinity;
+          } else {
+            const ryNum = Number(ryRaw);
+            if (isFinite(ryNum) && ryNum !== 0) {
+              radiusY_val = ryNum;
+            }
+          }
+        }
+        
+        const toricParams = {
+          radiusX: radiusX_val,
+          radiusY: radiusY_val,
+          conic: Number(row.conic) || 0,
+          axis: Number(row.axis) || 0,
+          semidia: surfaceParams.semidia
+        };
+        
+        if (isDetailedDebug) {
+          debugLog.push(`Toric params: radiusX=${radiusX_val}, radiusY=${radiusY_val}, conic=${toricParams.conic}, axis=${toricParams.axis}`);
+        }
+        
+        hitPoint = intersectToricSurface(localRay, toricParams, 50, 1e-10, isDetailedDebug ? debugLog : null);
+      } else {
+        // 非球面交点計算（球面も同様に処理）
+        hitPoint = intersectAsphericSurface(localRay, surfaceParams, asphereMode, 20, 1e-7, isDetailedDebug ? debugLog : null);
+      }
       
       if (!hitPoint) {
         if (isDetailedDebug) {
@@ -2073,8 +2257,49 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
         break;
       }
       
-      // 非球面法線ベクトル計算（球面も同様に処理）
-  normal = surfaceNormal(hitPoint, surfaceParams, asphereMode);
+      // 法線ベクトル計算（トーリック面 vs 非球面）
+      if (surfTypeStr === 'Toric') {
+        // Parse radiusX: handle "INF" string and Infinity
+        let radiusX_val = Infinity;
+        if (row.radiusX !== undefined && row.radiusX !== null && row.radiusX !== "") {
+          const rxStr = String(row.radiusX).toUpperCase();
+          if (rxStr === "INF" || rxStr === "INFINITY") {
+            radiusX_val = Infinity;
+          } else {
+            const rxNum = Number(row.radiusX);
+            if (isFinite(rxNum) && rxNum !== 0) {
+              radiusX_val = rxNum;
+            }
+          }
+        }
+        
+        // Parse radiusY: use radiusY if present, otherwise use radius
+        let radiusY_val = Infinity;
+        const ryRaw = row.radiusY !== undefined && row.radiusY !== null && row.radiusY !== "" 
+                      ? row.radiusY 
+                      : row.radius;
+        if (ryRaw !== undefined && ryRaw !== null && ryRaw !== "") {
+          const ryStr = String(ryRaw).toUpperCase();
+          if (ryStr === "INF" || ryStr === "INFINITY") {
+            radiusY_val = Infinity;
+          } else {
+            const ryNum = Number(ryRaw);
+            if (isFinite(ryNum) && ryNum !== 0) {
+              radiusY_val = ryNum;
+            }
+          }
+        }
+        
+        const toricParams = {
+          radiusX: radiusX_val,
+          radiusY: radiusY_val,
+          conic: Number(row.conic) || 0
+        };
+        normal = toricSurfaceNormal(hitPoint, toricParams);
+      } else {
+        // 非球面法線ベクトル計算（球面も同様に処理）
+        normal = surfaceNormal(hitPoint, surfaceParams, asphereMode);
+      }
       
       // 法線ベクトルの向きを確認・調整
       // 光線と法線の内積が正の場合、法線が光線と同じ方向を向いているので反転

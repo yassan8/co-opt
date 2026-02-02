@@ -795,12 +795,6 @@ class UndoHistory {
    * Record a new command in the undo history
    */
   record(command) {
-    console.log('[DEBUG UndoHistory.record] Called:', {
-      commandType: command?.constructor?.name,
-      isExecuting: this.isExecuting,
-      willRecord: !this.isExecuting
-    });
-    
     if (this.isExecuting) return; // Don't record undo/redo operations
     
     this.undoStack.push(command);
@@ -946,5 +940,5 @@ if (typeof window !== 'undefined') {
   window.CompoundCommand = CompoundCommand;
   window.UndoHistory = UndoHistory;
   
-  console.log('[Undo] Undo/Redo system initialized');
+
 }

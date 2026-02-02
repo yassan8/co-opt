@@ -288,7 +288,6 @@ function createParameterSlider(key, blockType, currentValue, commitCallback) {
     textInput.style.width = '120px';
     textInput.style.minWidth = '120px';
     textInput.style.maxWidth = '120px';
-    textInput.style.height = '22px';
     textInput.style.fontSize = '12px';
     textInput.style.padding = '2px 6px';
     textInput.style.border = '1px solid #ddd';
@@ -306,7 +305,6 @@ function createParameterSlider(key, blockType, currentValue, commitCallback) {
     scaleBtn.style.width = '40px';
     scaleBtn.style.minWidth = '40px';
     scaleBtn.style.maxWidth = '40px';
-    scaleBtn.style.height = '22px';
     scaleBtn.style.fontSize = '10px';
     scaleBtn.style.padding = '2px';
     scaleBtn.style.boxSizing = 'border-box';
@@ -330,7 +328,6 @@ function createParameterSlider(key, blockType, currentValue, commitCallback) {
     magDownBtn.style.width = '40px';
     magDownBtn.style.minWidth = '40px';
     magDownBtn.style.maxWidth = '40px';
-    magDownBtn.style.height = '22px';
     magDownBtn.style.fontSize = '9px';
     magDownBtn.style.padding = '2px';
     magDownBtn.style.boxSizing = 'border-box';
@@ -350,7 +347,6 @@ function createParameterSlider(key, blockType, currentValue, commitCallback) {
     magUpBtn.style.width = '40px';
     magUpBtn.style.minWidth = '40px';
     magUpBtn.style.maxWidth = '40px';
-    magUpBtn.style.height = '22px';
     magUpBtn.style.fontSize = '9px';
     magUpBtn.style.padding = '2px';
     magUpBtn.style.boxSizing = 'border-box';
@@ -367,8 +363,6 @@ function createParameterSlider(key, blockType, currentValue, commitCallback) {
     rangeDisplay.style.width = '140px';
     rangeDisplay.style.minWidth = '140px';
     rangeDisplay.style.maxWidth = '140px';
-    rangeDisplay.style.height = '22px';
-    rangeDisplay.style.lineHeight = '22px';
     rangeDisplay.style.fontSize = '9px';
     rangeDisplay.style.color = '#666';
     rangeDisplay.style.whiteSpace = 'nowrap';
@@ -388,7 +382,6 @@ function createParameterSlider(key, blockType, currentValue, commitCallback) {
     slider.style.width = '220px';
     slider.style.minWidth = '220px';
     slider.style.maxWidth = '220px';
-    slider.style.height = '22px';
     slider.addEventListener('click', (e) => e.stopPropagation());
     
     // Update range display text
@@ -6454,8 +6447,6 @@ export function setupDOMEventHandlers() {
     }
     window.__domEventHandlersInitialized = true;
 
-    console.log('🎯 DOM Content Loaded - イベントリスナーを設定中...');
-    
     // WASMテストボタンのハンドラーを設定
     const wasmTestBtn = document.getElementById('debug-wasm-system');
     if (wasmTestBtn) {
@@ -6474,29 +6465,10 @@ export function setupDOMEventHandlers() {
     // 互換性のための別名
     window.objectTabulator = window.objectTabulator || window.tableObject;
     window.opticalSystemTabulator = window.opticalSystemTabulator || window.tableOpticalSystem;
-    console.log('✅ テーブルがwindowオブジェクトに設定されました');
     
     // テーブルの初期化状況を確認
-    console.log('🔍 テーブル初期化状況:');
-    console.log('- window.tableOpticalSystem:', !!window.tableOpticalSystem);
-    console.log('- window.opticalSystemTabulator:', !!window.opticalSystemTabulator);
-    console.log('- window.tableObject:', !!window.tableObject);
-    console.log('- window.objectTabulator:', !!window.objectTabulator);
-    
-    if (window.opticalSystemTabulator && typeof window.opticalSystemTabulator.on === 'function') {
-        console.log('✅ opticalSystemTabulator.on method is available');
-    } else {
-        console.warn('⚠️ opticalSystemTabulator.on method is not available');
-        console.log('   - opticalSystemTabulator type:', typeof window.opticalSystemTabulator);
-        console.log('   - opticalSystemTabulator.on type:', typeof window.opticalSystemTabulator?.on);
-    }
     
     // 関数が利用可能かどうかを確認
-    console.log('🔍 関数の利用可能性をチェック:');
-    console.log('- outputParaxialDataToDebug:', typeof outputParaxialDataToDebug);
-    console.log('- displayCoordinateTransformMatrix:', typeof displayCoordinateTransformMatrix);
-    console.log('- window.outputParaxialDataToDebug:', typeof window.outputParaxialDataToDebug);
-    console.log('- window.displayCoordinateTransformMatrix:', typeof window.displayCoordinateTransformMatrix);
     
     try {
         // UIイベントハンドラーを設定
@@ -8199,13 +8171,13 @@ const defaultSystemConfig = {
 
 // localStorageからConfiguration全体を読み込み
 export function loadSystemConfigurations() {
-  console.log('🔵 [Configuration] Loading system configurations from localStorage...');
+
   const json = localStorage.getItem(STORAGE_KEY);
   
   if (json) {
     try {
       const parsed = JSON.parse(json);
-      console.log('🔵 [Configuration] Loaded configurations:', parsed.configurations.length);
+
       return parsed;
     } catch (e) {
       console.warn('⚠️ [Configuration] Parse error:', e);
@@ -8219,10 +8191,10 @@ export function loadSystemConfigurations() {
 
 // Configuration全体を保存
 export function saveSystemConfigurations(systemConfig) {
-  console.log('🔵 [Configuration] Saving system configurations...');
+
   if (systemConfig && systemConfig.configurations) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(systemConfig));
-    console.log(`💾 [Configuration] Saved ${systemConfig.configurations.length} configurations`);
+
   } else {
     console.warn('⚠️ [Configuration] Invalid system config, not saving:', systemConfig);
   }
@@ -9290,14 +9262,16 @@ async function __blocks_updateAutoValues() {
                         ? calculateBackFocalLength(rows, primaryWavelength)
                         : calculateImageDistance(rows, primaryWavelength);
                     
-                    console.log(`[Auto] ${mode} 1st calc result:`, val);
+                    // トーリック面の場合、tangential値を使用
+                    if (val && typeof val === 'object' && 'tangential' in val) {
+                        val = val.tangential;
+                    }
 
                     if (!Number.isFinite(val)) {
                         const trace = calculateFullSystemParaxialTrace(rows, primaryWavelength);
                         if (trace) {
                             val = (mode === 'BFL') ? trace.backFocalLength : trace.imageDistance;
                         }
-                        console.log(`[Auto] ${mode} trace fallback result:`, val);
                     }
                     
                     if (!Number.isFinite(val)) {
@@ -9335,9 +9309,7 @@ async function __blocks_updateAutoValues() {
 }
 
 function __blocks_setBlockParamValue(blockId, key, rawValue) {
-    console.log(`[Undo] __blocks_setBlockParamValue called: blockId=${blockId}, key=${key}, rawValue=${rawValue}`);
-    console.log(`[Undo] window.SetBlockParameterCommand exists:`, !!window.SetBlockParameterCommand);
-    console.log(`[Undo] window.undoHistory exists:`, !!window.undoHistory);
+
     
     const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
     if (!systemConfig || !Array.isArray(systemConfig.configurations)) return { ok: false, reason: 'systemConfigurations not found.' };
@@ -9370,7 +9342,7 @@ function __blocks_setBlockParamValue(blockId, key, rawValue) {
     const oldValue = b.parameters[String(key)];
     const newValue = coerced;
     if (oldValue !== newValue && window.undoHistory && !window.undoHistory.isExecuting) {
-        console.log(`[Undo] Recording block param change: ${blockId}.${key} from ${oldValue} to ${newValue}`);
+
         const cmd = new SetBlockParameterCommand(activeId, blockId, `parameters.${String(key)}`, oldValue, newValue);
         window.undoHistory.record(cmd);
     } else {
@@ -9387,6 +9359,8 @@ function __blocks_setBlockParamValue(blockId, key, rawValue) {
         const isSurfTypeKey = /surftype$/i.test(k);
         const v = String(coerced ?? '').trim();
         const isExplicitSpherical = /^spherical$/i.test(v);
+        const isExplicitToric = /^toric$/i.test(v);
+        
         if (isSurfTypeKey && isExplicitSpherical) {
             /** @type {string|null} */
             let conicKey = null;
@@ -9406,6 +9380,63 @@ function __blocks_setBlockParamValue(blockId, key, rawValue) {
             if (conicKey) b.parameters[conicKey] = 0;
             if (coefPrefix) {
                 for (let i = 1; i <= 10; i++) b.parameters[`${coefPrefix}${i}`] = 0;
+            }
+        }
+        
+        // If SurfType was set to Toric, auto-initialize radiusX from radius if not present
+        // Note: radiusY is not a separate parameter - we always use the regular radius field
+        if (isSurfTypeKey && isExplicitToric) {
+            console.log(`[Toric Init] Detected Toric surfType change: key=${k}, blockType=${b.blockType}`);
+            let radiusKey = null;
+            let radiusXKey = null;
+            let axisKey = null;
+
+            if (k === 'frontSurfType') {
+                radiusKey = 'frontRadius';
+                radiusXKey = 'frontRadiusX';
+                axisKey = 'frontAxis';
+            } else if (k === 'backSurfType') {
+                radiusKey = 'backRadius';
+                radiusXKey = 'backRadiusX';
+                axisKey = 'backAxis';
+            } else if (k === 'surfType') {
+                radiusKey = 'radius';
+                radiusXKey = 'radiusX';
+                axisKey = 'axis';
+            } else {
+                const m = /^surf(\d+)SurfType$/i.exec(k);
+                if (m) {
+                    const n = m[1];
+                    radiusKey = `surf${n}Radius`;
+                    radiusXKey = `surf${n}RadiusX`;
+                    axisKey = `surf${n}Axis`;
+                }
+            }
+
+            console.log(`[Toric Init] radiusKey=${radiusKey}, radiusXKey=${radiusXKey}`);
+            console.log(`[Toric Init] Current parameters:`, b.parameters);
+
+            if (radiusKey && radiusXKey) {
+                const radiusValue = b.parameters[radiusKey];
+                console.log(`[Toric Init] radiusValue from ${radiusKey}:`, radiusValue);
+                
+                if (radiusValue !== undefined && radiusValue !== null && radiusValue !== '') {
+                    const currentRadiusX = b.parameters[radiusXKey];
+                    console.log(`[Toric Init] Current ${radiusXKey}:`, currentRadiusX);
+                    
+                    // Always set radiusX when switching to Toric to ensure validation passes
+                    console.log(`[Toric Init] Setting ${radiusXKey} = ${radiusValue}`);
+                    b.parameters[radiusXKey] = radiusValue;
+                } else {
+                    console.warn(`[Toric Init] radiusValue is empty or undefined. Cannot auto-initialize radiusX.`);
+                }
+                
+                if (axisKey && (b.parameters[axisKey] === undefined || b.parameters[axisKey] === null)) {
+                    console.log(`[Toric Init] Setting ${axisKey} = 0`);
+                    b.parameters[axisKey] = 0;
+                }
+            } else {
+                console.warn(`[Toric Init] radiusKey/radiusXKey not properly identified.`);
             }
         }
     } catch (_) {}
@@ -10115,6 +10146,24 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     { key: 'backConic', label: 'backConic' }
                 );
 
+                // Toric front surface parameters
+                const frontST = getValue('frontSurfType');
+                if (frontST === 'Toric') {
+                    items.push(
+                        { key: 'frontRadiusX', label: 'frontRadiusX' },
+                        { key: 'frontAxis', label: 'frontAxis' }
+                    );
+                }
+
+                // Toric back surface parameters
+                const backST = getValue('backSurfType');
+                if (backST === 'Toric') {
+                    items.push(
+                        { key: 'backRadiusX', label: 'backRadiusX' },
+                        { key: 'backAxis', label: 'backAxis' }
+                    );
+                }
+
                 // Coef* is unused for Spherical. Hide to keep Design Intent concise.
                 if (shouldShowCoefsForSurfTypeKey('frontSurfType')) {
                     const st = getValue('frontSurfType');
@@ -10207,6 +10256,15 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     { key: 'surfType', label: 'surfType' },
                     { key: 'conic', label: 'conic' }
                 );
+
+                // Toric surface parameters
+                const surfST = getValue('surfType');
+                if (surfST === 'Toric') {
+                    items.push(
+                        { key: 'radiusX', label: 'radiusX' },
+                        { key: 'axis', label: 'axis' }
+                    );
+                }
 
                 if (shouldShowCoefsForSurfTypeKey('surfType')) {
                     const st = getValue('surfType');
@@ -10318,21 +10376,16 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
                 // Editable value (Design Intent canonical edits)
                 const currentValue = isApertureItem ? getApertureDisplayValue(it.role) : getDisplayValue(it.key);
-                console.log(`[Undo] Getting current value for ${it.key || it.role}:`, currentValue, 'isAperture:', isApertureItem);
 
                 const commitValue = (nextRaw) => {
-                    console.log('[Undo] commitValue called:', { blockId, key: it.key, role: it.role, nextRaw, currentValue, isApertureItem });
                     const next = String(nextRaw ?? '');
                     const current = currentValue;
                     if (next === current) {
-                        console.log('[Undo] Value unchanged, skipping');
                         return;
                     }
-                    console.log('[Undo] Calling', isApertureItem ? '__blocks_setBlockApertureValue' : '__blocks_setBlockParamValue');
                     const res = isApertureItem
                         ? __blocks_setBlockApertureValue(blockId, it.role, next)
                         : __blocks_setBlockParamValue(blockId, it.key, next);
-                    console.log('[Undo] Function returned:', res);
                     if (!res || res.ok !== true) {
                         const desc = isApertureItem ? `${blockId}.aperture.${String(it.role ?? '')}` : `${blockId}.${it.key}`;
                         alert(`Failed to update ${desc}: ${res?.reason || 'unknown error'}`);
@@ -10350,6 +10403,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     sel.style.padding = '2px 6px';
                     sel.style.border = '1px solid #ddd';
                     sel.style.borderRadius = '4px';
+                    sel.style.margin = '0';
+                    sel.style.verticalAlign = 'middle';
+                    sel.style.lineHeight = 'normal';
                     sel.addEventListener('click', (e) => e.stopPropagation());
 
                     if (isObjectModeItem) {
@@ -10463,6 +10519,12 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                     let val = (desired === 'BFL')
                                         ? calculateBackFocalLength(rows, primaryWavelength)
                                         : calculateImageDistance(rows, primaryWavelength);
+                                    
+                                    // トーリック面の場合、tangential値を使用
+                                    if (val && typeof val === 'object' && 'tangential' in val) {
+                                        val = val.tangential;
+                                    }
+                                    
                                     if (!Number.isFinite(val)) {
                                         const trace = calculateFullSystemParaxialTrace(rows, primaryWavelength);
                                         if (trace) {
@@ -10556,15 +10618,17 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     sel.style.padding = '2px 6px';
                     sel.style.border = '1px solid #ddd';
                     sel.style.borderRadius = '4px';
-                    sel.style.height = '22px';
-                    sel.style.boxSizing = 'border-box';
+                    sel.style.margin = '0';
+                    sel.style.verticalAlign = 'middle';
+                    sel.style.lineHeight = 'normal';
                     sel.addEventListener('click', (e) => e.stopPropagation());
 
                     sel.innerHTML = [
                         '<option value="">(default: Spherical)</option>',
                         '<option value="Spherical">Spherical</option>',
                         '<option value="Aspheric even">Aspheric even</option>',
-                        '<option value="Aspheric odd">Aspheric odd</option>'
+                        '<option value="Aspheric odd">Aspheric odd</option>',
+                        '<option value="Toric">Toric</option>'
                     ].join('');
 
                     // Normalize current value into one of the options
@@ -10575,15 +10639,16 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     else if (key === 'spherical' || key === 'sph' || key === 'std' || key === 'standard') normalized = 'Spherical';
                     else if (key === 'asphericeven' || key === 'asphericaleven' || key === 'evenaspheric' || key === 'evenasphere') normalized = 'Aspheric even';
                     else if (key === 'asphericodd' || key === 'asphericalodd' || key === 'oddaspheric' || key === 'oddasphere') normalized = 'Aspheric odd';
+                    else if (key === 'toric' || key === 'toroidal') normalized = 'Toric';
                     else normalized = cur;
 
-                    sel.value = ['','Spherical','Aspheric even','Aspheric odd'].includes(normalized) ? normalized : '';
+                    sel.value = ['','Spherical','Aspheric even','Aspheric odd','Toric'].includes(normalized) ? normalized : '';
                     sel.addEventListener('change', (e) => {
                         e.stopPropagation();
                         const ok = commitValue(String(sel.value ?? ''));
                         if (!ok) {
                             // restore
-                            sel.value = ['','Spherical','Aspheric even','Aspheric odd'].includes(normalized) ? normalized : '';
+                            sel.value = ['','Spherical','Aspheric even','Aspheric odd','Toric'].includes(normalized) ? normalized : '';
                         }
                     });
                     valueEl = sel;
@@ -10593,7 +10658,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     
                     if (isNumericParam && !isMaterialItem) {
                         // Use slider component for numeric parameters (except material glass names)
-                        console.log(`[Undo] Creating slider for ${it.key || it.role}, value:`, currentValue);
                         const sliderContainer = createParameterSlider(
                             it.key || it.role,
                             blockType,
@@ -10609,7 +10673,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                         const valueInput = document.createElement('input');
                         valueInput.type = 'text';
                         valueInput.value = currentValue;
-                        console.log(`[Undo] Creating input for ${it.key || it.role}, value:`, currentValue);
                         valueInput.placeholder = '';
                         valueInput.style.flex = '0 0 180px';
                         valueInput.style.fontSize = '12px';
@@ -11038,7 +11101,10 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                     ? calculateBackFocalLength(rows, primaryWavelength)
                                     : calculateImageDistance(rows, primaryWavelength);
                                 
-                                console.log(`[ManualMode] ${desired} calc result:`, val);
+                                // トーリック面の場合、tangential値を使用
+                                if (val && typeof val === 'object' && 'tangential' in val) {
+                                    val = val.tangential;
+                                }
 
                                 if (!Number.isFinite(val)) {
                                     const trace = calculateFullSystemParaxialTrace(rows, primaryWavelength);
@@ -11095,18 +11161,16 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 if (isMaterialItem) {
                     const mapBtn = document.createElement('button');
                     mapBtn.type = 'button';
-                    mapBtn.className = 'block-inspector-icon-btn';
+                    mapBtn.className = 'scale-mode-btn';
                     mapBtn.textContent = '🗺️ Map';
                     mapBtn.title = 'Select a glass region (nd/vd) constraint from the Abbe diagram';
                     mapBtn.style.flex = '0 0 auto';
-                    mapBtn.style.fontSize = '12px';
+                    mapBtn.style.fontSize = '10px';
                     // Match the adjacent material/nd/vd text inputs.
-                    mapBtn.style.boxSizing = 'border-box';
-                    mapBtn.style.height = '22px';
                     mapBtn.style.display = 'inline-flex';
                     mapBtn.style.alignItems = 'center';
-                    mapBtn.style.padding = '2px 6px';
-                    mapBtn.style.borderRadius = '4px';
+                    mapBtn.style.padding = '2px';
+                    mapBtn.style.boxSizing = 'border-box';
                     mapBtn.style.cursor = 'pointer';
                     mapBtn.addEventListener('click', (e) => {
                         try { e?.preventDefault?.(); } catch (_) {}
@@ -11153,20 +11217,17 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
                     const findBtn = document.createElement('button');
                     findBtn.type = 'button';
-                    findBtn.className = 'block-inspector-icon-btn';
+                    findBtn.className = 'scale-mode-btn';
                     findBtn.textContent = '🔍';
                     findBtn.title = 'Find similar glasses (nd/vd or name)';
                     findBtn.setAttribute('aria-label', 'Find Glass');
                     findBtn.style.flex = '0 0 auto';
-                    findBtn.style.fontSize = '12px';
-                    // Match the adjacent material/nd/vd text inputs.
-                    findBtn.style.boxSizing = 'border-box';
-                    findBtn.style.height = '22px';
+                    findBtn.style.fontSize = '10px';
                     findBtn.style.display = 'inline-flex';
                     findBtn.style.alignItems = 'center';
                     findBtn.style.justifyContent = 'center';
-                    findBtn.style.padding = '2px 6px';
-                    findBtn.style.borderRadius = '4px';
+                    findBtn.style.padding = '2px';
+                    findBtn.style.boxSizing = 'border-box';
                     findBtn.style.cursor = 'pointer';
                     findBtn.addEventListener('click', (e) => {
                         try { e?.preventDefault?.(); } catch (_) {}
@@ -11348,6 +11409,7 @@ function __blocks_mapSurfaceEditToBlockChange(edit) {
         if (key === 'spherical') return 'Spherical';
         if (key === 'asphericeven' || key === 'asphericaleven') return 'Aspheric even';
         if (key === 'asphericodd' || key === 'asphericalodd') return 'Aspheric odd';
+        if (key === 'toric' || key === 'toroidal') return 'Toric';
         return null;
     };
 
@@ -11369,7 +11431,7 @@ function __blocks_mapSurfaceEditToBlockChange(edit) {
         // when all terms are zero and will clear coef/conic fields, making "apply 0"
         // appear as a no-op.
         const st = inferRowSurfType();
-        const normalized = (st === 'Aspheric even' || st === 'Aspheric odd') ? st : null;
+        const normalized = (st === 'Aspheric even' || st === 'Aspheric odd' || st === 'Toric') ? st : null;
         return {
             blockId: String(blockId),
             blockType: String(blockType),
