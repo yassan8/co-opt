@@ -198,6 +198,7 @@ function __coopt_loadSurfaceColorOverrides() {
  * @param {Array} options.opticalSystemData - Optical system data
  */
 export function drawOpticalSystemSurfaces(options = {}) {
+    
     const {
         crossSectionOnly = false,
         scene,
@@ -225,6 +226,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
     }
 
 
+
     // Clear existing optical elements before drawing new ones
     clearExistingOpticalElements(scene);
 
@@ -235,7 +237,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
     try {
         const DEBUG_CB = __coopt_isCoordTransDebugEnabled();
         if (DEBUG_CB && Array.isArray(surfaceOrigins)) {
-            console.log('🧭 [CO-OPT] Coord Break debug enabled');
             const cbRows = [];
             for (let i = 0; i < opticalSystemData.length; i++) {
                 const row = opticalSystemData[i];
@@ -290,7 +291,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
 
                 console.groupCollapsed(`🧭 [CO-OPT] Coord Break debug (${cbRows.length} rows)`);
                 for (const r of tableRows) {
-                    console.log('🧭 [CO-OPT] CB row:', JSON.stringify(r));
                 }
                 console.log(cbRows);
                 console.groupEnd();
@@ -300,13 +300,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
 
     const surfaceColorOverrides = __coopt_loadSurfaceColorOverrides();
     
-    // Debug: Show all surface origins
-    if (surfaceOrigins) {
-        surfaceOrigins.forEach((surfaceInfo, index) => {
-            const origin = surfaceInfo?.origin;
-            console.log(`  Surface ${index}: (${origin?.x?.toFixed(3) || 'undefined'}, ${origin?.y?.toFixed(3) || 'undefined'}, ${origin?.z?.toFixed(3) || 'undefined'})`);
-        });
-    }
+
 
     // Draw 3D surfaces (skip if crossSectionOnly is true)
     if (!crossSectionOnly) {
@@ -775,6 +769,10 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
     
     for (let i = 0; i < opticalSystemRows.length; i++) {
         const surface = opticalSystemRows[i];
+        // console.log(`🔍 [findStopSurface] Surface ${i}:`, surface);
+        // console.log(`🔍 [findStopSurface] Surface ${i} keys:`, Object.keys(surface));
+        // console.log(`🔍 [findStopSurface] Surface ${i} type:`, surface.type);
+        // console.log(`🔍 [findStopSurface] Surface ${i} object type:`, surface['object type']);
         
         // Stop surface can be tagged in multiple ways depending on the import/source:
         // - type: 'Stop'
@@ -783,6 +781,7 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
         const objTypeRaw = surface['object type'] ?? surface.object ?? surface.objectType;
         const objTypeNorm = String(objTypeRaw ?? '').trim().toUpperCase();
         if (surface.type === 'Stop' || surface['object type'] === 'Stop' || objTypeNorm === 'STO') {
+            // console.log(`🎯 [findStopSurface] Stop面発見! Surface ${i}`);
             
             // Stop面の位置を計算（CB対応）
             let stopX = 0;
@@ -812,6 +811,8 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
             
             // Stop面の半径を取得（複数のフィールド名を試す）
             let stopRadius = 10; // デフォルト値
+            // console.log(`🔍 [findStopSurface] Stop面データ:`, surface);
+            // console.log(`🔍 [findStopSurface] Stop面の全プロパティ:`, JSON.stringify(surface, null, 2));
             
             // より多くのフィールド名を試す
             const radiusFields = [
@@ -822,6 +823,7 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
                 'Clear_Aperture', 'clearAperture', 'clear_aperture'
             ];
             
+            // console.log(`🔍 [findStopSurface] 半径候補チェック:`);
             for (const field of radiusFields) {
                 const value = surface[field];
                 // console.log(`  ${field}: ${value} (type: ${typeof value})`);
@@ -829,6 +831,7 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
                     const numValue = parseFloat(value);
                     if (!isNaN(numValue)) {
                         stopRadius = numValue;
+                        // console.log(`🎯 [findStopSurface] フィールド "${field}" を使用: ${stopRadius}`);
                         break;
                     }
                 }
@@ -846,6 +849,7 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
                 stopRadius = 10;
             }
             
+            // console.log(`🔍 [findStopSurface] 最終的な半径: ${stopRadius}`);
             
             return {
                 surface: surface,

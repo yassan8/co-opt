@@ -871,19 +871,8 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
     const angles = Array.isArray(objectAngles) ? objectAngles : [objectAngles];
     const allResults = [];
 
-    if (debugMode) {
-        console.log(`   Object角度数: ${angles.length}`);
-        console.log(`   光線数: ${rayCount}`);
-        console.log(`   クロスタイプ: ${crossType}`);
-        console.log(`   評価面: ${targetSurfaceIndex !== null ? `Surface ${targetSurfaceIndex + 1} (index: ${targetSurfaceIndex})` : '全面追跡'}`);
-    }
-
     for (let objectIndex = 0; objectIndex < angles.length; objectIndex++) {
         const objectAngle = angles[objectIndex];
-        
-        
-        if (debugMode) {
-        }
 
         // 1. 角度から方向ベクトル計算
         const direction = calculateInfiniteSystemDirection(objectAngle);
@@ -973,8 +962,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
 
         // System Data出力: 主光線最適化結果（成功時またはフォールバック時）
         if (typeof window !== 'undefined') {
-            // デバッグ: グローバル変数の状態を確認
-            
             // window.lastChiefRayResultが設定されていない場合の安全措置
             if (!window.lastChiefRayResult && chiefRayOrigin && stopSurfaceInfo) {
                 console.warn(`⚠️ [SystemData] window.lastChiefRayResult が未設定。幾何学的推定値を使用します`);
@@ -994,7 +981,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             
             if (window.lastChiefRayResult) {
                 // 最適化結果あり（Brent法またはフォールバック）
-                
                 outputChiefRayConvergenceToSystemData(
                     objectIndex + 1,
                     objectAngle.x || 0,
@@ -1758,7 +1744,6 @@ export function outputChiefRayConvergenceToSystemData(objectNumber, xAngle, yAng
             return;
         }
         
-        
         // 最適化手法の日本語表示
         const methodDisplayName = {
             'grid-brent-hybrid': 'Grid+Brent法ハイブリッド高精度最適化',
@@ -1799,7 +1784,6 @@ export function outputChiefRayConvergenceToSystemData(objectNumber, xAngle, yAng
         
         // スクロールを最上位に移動
         systemDataTextarea.scrollTop = 0;
-        
     } catch (error) {
         console.error(`❌ [SystemData] System Data出力エラー:`, error);
     }

@@ -25,7 +25,7 @@ import { drawOpticalSystemSurfaces, clearAllOpticalElements, findStopSurface } f
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './optical/surface.js';
 
 // Ray tracing modules
-import { traceRay, calculateSurfaceOrigins, transformPointToLocal } from './raytracing/core/ray-tracing.js';
+import { traceRay, calculateSurfaceOrigins, transformPointToLocal, calculateAllSurfacesLocalCoordinates, resetToSurfaceCoordinates, shiftToChiefRayOrigin, restoreFromLocalCoordinates, transformToChiefRayLocalCoordinates } from './raytracing/core/ray-tracing.js';
 import { calculateFocalLength, calculateBackFocalLength, calculateImageDistance, calculateEntrancePupilDiameter, calculateExitPupilDiameter, calculateFullSystemParaxialTrace, calculateParaxialData, debugParaxialRayTrace, calculatePupilsByNewSpec, findStopSurfaceIndex } from './raytracing/core/ray-paraxial.js';
 
 // Marginal ray modules
@@ -57,7 +57,7 @@ import { initAIAssistant } from './ai/ai-assistant.js';
 import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayColorMode, optimizeObjectPositionForStop, optimizeAngleObjectPosition, generateRayStartPointsForObject, drawRayWithSegmentColors } from './optical/ray-renderer.js';
 
 // UI modules
-import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons } from './ui/event-handlers.js';
+import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons, setupTransformationControls, updateTransformSurfaceSelect } from './ui/event-handlers.js';
 import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListeners } from './ui/ui-updates.js';
 import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers, loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables, refreshBlockInspector } from './ui/dom-event-handlers.js';
 import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.js';
@@ -173,6 +173,12 @@ async function initializeApplication() {
         }
         
         try {
+            setupTransformationControls();
+        } catch (error) {
+            console.error('❌ Error setting up transformation controls:', error);
+        }
+        
+        try {
             // View buttons setup - using simple version
             setupSimpleViewButtons();
         } catch (error) {
@@ -270,6 +276,15 @@ async function initializeApplication() {
         window.getOpticalSystemRows = getOpticalSystemRows;
         window.getObjectRows = getObjectRows;
         window.getSourceRows = getSourceRows;
+        
+        // Export coordinate transformation functions
+        window.calculateAllSurfacesLocalCoordinates = calculateAllSurfacesLocalCoordinates;
+        window.resetToSurfaceCoordinates = resetToSurfaceCoordinates;
+        window.shiftToChiefRayOrigin = shiftToChiefRayOrigin;
+        window.restoreFromLocalCoordinates = restoreFromLocalCoordinates;
+        window.transformToChiefRayLocalCoordinates = transformToChiefRayLocalCoordinates;
+        window.calculateSurfaceOrigins = calculateSurfaceOrigins;
+        window.updateTransformSurfaceSelect = updateTransformSurfaceSelect;
         
         // Export undo system dependencies
         window.loadSystemConfigurations = loadSystemConfigurations;

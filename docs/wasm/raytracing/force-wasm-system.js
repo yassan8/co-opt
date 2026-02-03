@@ -77,11 +77,8 @@ class ForceWASMSystem {
                 throw new Error('WASM V3モジュールの初期化に失敗');
             }
             
-            console.log('✅ WASM V3モジュール初期化成功');
-            
             // メモリ管理機能の確認
             if (typeof this.wasmModule._malloc === 'function' && typeof this.wasmModule._free === 'function') {
-                console.log('✅ メモリ管理機能利用可能');
                 this.memoryManagementAvailable = true;
             } else {
                 console.warn('⚠️  メモリ管理機能なし - フォールバックモード');

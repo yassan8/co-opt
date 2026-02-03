@@ -198,12 +198,6 @@ function __coopt_loadSurfaceColorOverrides() {
  * @param {Array} options.opticalSystemData - Optical system data
  */
 export function drawOpticalSystemSurfaces(options = {}) {
-    console.log('🎨 drawOpticalSystemSurfaces called:', {
-        hasScene: !!options.scene,
-        surfaceCount: options.opticalSystemData?.length,
-        crossSectionOnly: options.crossSectionOnly,
-        timestamp: new Date().toISOString()
-    });
     
     const {
         crossSectionOnly = false,
@@ -231,22 +225,18 @@ export function drawOpticalSystemSurfaces(options = {}) {
         return;
     }
 
-    console.log(`📊 Using optical system data: ${opticalSystemData.length} surfaces`);
-    console.log('🔍 Optical system data preview:', opticalSystemData.slice(0, 3));
-    console.log('🔍 Cross-section only mode:', crossSectionOnly);
+
 
     // Clear existing optical elements before drawing new ones
     clearExistingOpticalElements(scene);
 
     // Surface origins calculation - NOW with the correct parameter
     const surfaceOrigins = calculateSurfaceOrigins(opticalSystemData);
-    console.log('🔍 Surface origins calculated:', surfaceOrigins ? surfaceOrigins.length : 'None');
 
     // Opt-in Coord Break debug: helps verify that decenter params are numeric at render time.
     try {
         const DEBUG_CB = __coopt_isCoordTransDebugEnabled();
         if (DEBUG_CB && Array.isArray(surfaceOrigins)) {
-            console.log('🧭 [CO-OPT] Coord Break debug enabled');
             const cbRows = [];
             for (let i = 0; i < opticalSystemData.length; i++) {
                 const row = opticalSystemData[i];
@@ -301,7 +291,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
 
                 console.groupCollapsed(`🧭 [CO-OPT] Coord Break debug (${cbRows.length} rows)`);
                 for (const r of tableRows) {
-                    console.log('🧭 [CO-OPT] CB row:', JSON.stringify(r));
                 }
                 console.log(cbRows);
                 console.groupEnd();
@@ -311,14 +300,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
 
     const surfaceColorOverrides = __coopt_loadSurfaceColorOverrides();
     
-    // Debug: Show all surface origins
-    if (surfaceOrigins) {
-        console.log('🔍 All surface origins:');
-        surfaceOrigins.forEach((surfaceInfo, index) => {
-            const origin = surfaceInfo?.origin;
-            console.log(`  Surface ${index}: (${origin?.x?.toFixed(3) || 'undefined'}, ${origin?.y?.toFixed(3) || 'undefined'}, ${origin?.z?.toFixed(3) || 'undefined'})`);
-        });
-    }
+
 
     // Draw 3D surfaces (skip if crossSectionOnly is true)
     if (!crossSectionOnly) {

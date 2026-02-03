@@ -853,8 +853,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         generateInfiniteSystemCrossBeam.__loggedBuildStamp = true;
         console.log(`[gen-ray-cross-infinite] build=${GEN_RAY_CROSS_INFINITE_BUILD}`);
     }
-    console.log('🌟 [generateInfiniteSystemCrossBeam] 関数呼び出し開始');
-    console.log('🌟 [generateInfiniteSystemCrossBeam] 受信したobjectAngles:', JSON.stringify(objectAngles, null, 2));
     
     const {
         rayCount = 51,  // 31 → 51 に増加（絞り周辺により密な光線配置）
@@ -875,23 +873,8 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
     const angles = Array.isArray(objectAngles) ? objectAngles : [objectAngles];
     const allResults = [];
 
-    if (debugMode) {
-        console.log('🌟 [InfiniteSystem] 無限系クロスビーム生成開始');
-        console.log(`   Object角度数: ${angles.length}`);
-        console.log(`   光線数: ${rayCount}`);
-        console.log(`   クロスタイプ: ${crossType}`);
-        console.log(`   評価面: ${targetSurfaceIndex !== null ? `Surface ${targetSurfaceIndex + 1} (index: ${targetSurfaceIndex})` : '全面追跡'}`);
-    }
-
     for (let objectIndex = 0; objectIndex < angles.length; objectIndex++) {
         const objectAngle = angles[objectIndex];
-        
-        console.log(`🌟 [InfiniteSystem] Object${objectIndex + 1}処理開始: 角度(${objectAngle.x}°, ${objectAngle.y}°)`);
-        console.log(`🌟 [InfiniteSystem] objectAngle詳細:`, JSON.stringify(objectAngle, null, 2));
-        
-        if (debugMode) {
-            console.log(`🌟 [InfiniteSystem] Object${objectIndex + 1}処理開始 (debugMode): 角度(${objectAngle.x}°, ${objectAngle.y}°)`);
-        }
 
         // 1. 角度から方向ベクトル計算
         const direction = calculateInfiniteSystemDirection(objectAngle);
@@ -996,11 +979,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
 
         // System Data出力: 主光線最適化結果（成功時またはフォールバック時）
         if (typeof window !== 'undefined') {
-            // デバッグ: グローバル変数の状態を確認
-            console.log(`🔍 [SystemData] グローバル変数確認: window.lastChiefRayResult =`, window.lastChiefRayResult);
-            console.log(`🔍 [SystemData] 現在処理中のObject: Object${objectIndex + 1}, 角度(${objectAngle.x}°, ${objectAngle.y}°)`);
-            console.log(`🔍 [SystemData] chiefRayOrigin =`, chiefRayOrigin);
-            
             // window.lastChiefRayResultが設定されていない場合の安全措置
             if (!window.lastChiefRayResult && chiefRayOrigin && stopSurfaceInfo) {
                 console.warn(`⚠️ [SystemData] window.lastChiefRayResult が未設定。幾何学的推定値を使用します`);
@@ -1016,13 +994,10 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                     error: estimatedError,
                     method: 'geometric-approximation'
                 };
-                console.log(`📊 [SystemData] 推定誤差を設定: ${estimatedError.toFixed(6)}mm`);
             }
             
             if (window.lastChiefRayResult) {
                 // 最適化結果あり（Brent法またはフォールバック）
-                console.log(`📊 [SystemData] 出力データ: Object${objectIndex + 1}, X角度=${objectAngle.x}°, Y角度=${objectAngle.y}°, 誤差=${window.lastChiefRayResult.error}`);
-                
                 outputChiefRayConvergenceToSystemData(
                     objectIndex + 1,
                     objectAngle.x || 0,
@@ -1796,8 +1771,6 @@ export function outputChiefRayConvergenceToSystemData(objectNumber, xAngle, yAng
             return;
         }
         
-        console.log(`✅ [SystemData] テキストエリアが見つかりました:`, systemDataTextarea);
-        
         // 最適化手法の日本語表示
         const methodDisplayName = {
             'grid-brent-hybrid': 'Grid+Brent法ハイブリッド高精度最適化',
@@ -1838,8 +1811,6 @@ export function outputChiefRayConvergenceToSystemData(objectNumber, xAngle, yAng
         
         // スクロールを最上位に移動
         systemDataTextarea.scrollTop = 0;
-        
-        console.log(`✅ [SystemData] System Data出力完了: Object${objectNumber}`);
     } catch (error) {
         console.error(`❌ [SystemData] System Data出力エラー:`, error);
     }

@@ -255,6 +255,7 @@ export function asphericSagDerivative(r, params, mode = "even") {
 
 // Y-Z平面（高さ方向: -semidia～+semidia, 厚み方向: zOffset+z）で描画
 export function drawAsphericProfile(scene, params, mode = "even", segments = 100, colorY = 0x000000, zOffset = 0, colorX = 0xff0000) {
+  debugLog('🔸 drawAsphericProfile called:', { params, mode, segments, zOffset, colorY, colorX });
   
   const semidia = __coopt_getSemidiaMm(params);
   if (semidia === null) {
@@ -275,6 +276,7 @@ export function drawAsphericProfile(scene, params, mode = "even", segments = 100
     const material = new THREE.LineBasicMaterial({ color: colorY });
     const line = new THREE.Line(geometry, material);
     scene.add(line);
+    debugLog('✅ Added Y-Z aspherical profile to scene, points:', pointsYZ.length);
   }
   
   // X-Z平面（赤）
@@ -290,12 +292,15 @@ export function drawAsphericProfile(scene, params, mode = "even", segments = 100
     const material = new THREE.LineBasicMaterial({ color: colorX }); // ← 赤色(0xff0000)で描画
     const line = new THREE.Line(geometry, material);
     scene.add(line);
+    debugLog('✅ Added X-Z aspherical profile to scene, points:', pointsXZ.length);
   }
   
+  debugLog('✅ drawAsphericProfile completed, scene children:', scene.children.length);
 }
 
 // Y-Z平面・X-Z平面の平面プロファイル
 export function drawPlaneProfile(scene, semidia = 20, segments = 100, colorY = 0x000000, zOffset = 0, colorX = 0xff0000) {
+  debugLog('🔸 drawPlaneProfile called:', { semidia, segments, zOffset, colorY, colorX });
   
   semidia = Number(semidia);
   if (!isFinite(semidia) || semidia <= 0) {
@@ -314,6 +319,7 @@ export function drawPlaneProfile(scene, semidia = 20, segments = 100, colorY = 0
     const material = new THREE.LineBasicMaterial({ color: colorY });
     const line = new THREE.Line(geometry, material);
     scene.add(line);
+    debugLog('✅ Added Y-Z plane line to scene, points:', pointsYZ.length);
   }
   
   // X-Z平面（赤）
@@ -327,8 +333,10 @@ export function drawPlaneProfile(scene, semidia = 20, segments = 100, colorY = 0
     const material = new THREE.LineBasicMaterial({ color: colorX }); // ← 赤色(0xff0000)で描画
     const line = new THREE.Line(geometry, material);
     scene.add(line);
+    debugLog('✅ Added X-Z plane line to scene, points:', pointsXZ.length);
   }
   
+  debugLog('✅ drawPlaneProfile completed, scene children:', scene.children.length);
 }
 
 // --- レンズ表面（回転体）を描画（Z軸回転） ---
@@ -452,6 +460,8 @@ export function drawLensSurface(scene, params, mode = "even", segments = 100, zO
   mesh.userData = { type: 'lensSurface', isLensSurface: true, surfaceType: '3DSurface' };
   scene.add(mesh);
   
+  debugLog(`✅ drawLensSurface: Added 3D lens surface to scene, vertices: ${positions.length/3}, faces: ${indices.length/3}`);
+  debugLog(`✅ Scene children after adding surface: ${scene.children.length}`);
 }
 
 // 座標変換1.5.md仕様準拠: 原点O(s)・回転行列R(s)を使用した3Dレンズサーフェス描画
@@ -472,6 +482,7 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
       objType === 'coordinatebreak'
     );
     if (isCB) {
+      debugLog('🔸 Skipping 3D surface drawing for Coord Trans surface');
       return;
     }
   }
@@ -486,7 +497,10 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
   if (typeof origin.y !== 'number') origin.y = 0;
   if (typeof origin.z !== 'number') origin.z = 0;
   
+  debugLog(`🔸 drawLensSurfaceWithOrigin: Drawing 3D surface at origin O(s)=(${origin.x.toFixed(3)}, ${origin.y.toFixed(3)}, ${origin.z.toFixed(3)})`);
+  debugLog(`🔸 Rotation matrix available: ${rotationMatrix ? 'YES' : 'NO'}`);
   if (rotationMatrix) {
+    debugLog(`🔸 Rotation matrix:`, rotationMatrix);
   }
   
   const semidia = __coopt_getSemidiaMm(params);
@@ -661,6 +675,8 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
   mesh.userData = { type: 'lensSurface', isLensSurface: true, surfaceType: '3DSurface' };
   scene.add(mesh);
   
+  debugLog(`✅ drawLensSurfaceWithOrigin: Added 3D lens surface to scene, vertices: ${positions.length/3}, faces: ${indices.length/3}`);
+  debugLog(`✅ Scene children after adding surface: ${scene.children.length}`);
 }
 
 // Draw toric surface with origin and rotation using 50x50 grid mesh.
@@ -793,6 +809,7 @@ export function drawToricSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, 
   mesh.userData = { type: 'lensSurface', isLensSurface: true, surfaceType: 'Toric' };
   scene.add(mesh);
   
+  debugLog(`✅ drawToricSurfaceWithOrigin: Added toric surface to scene, grid: ${segments}x${segments}, vertices: ${positions.length/3}, color: 0x${color.toString(16)}`);
 }
 
 // Sag計算を含むリング描画関数
@@ -813,6 +830,7 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
       objType === 'coordinatebreak'
     );
     if (isCB) {
+      debugLog('🔸 Skipping ring drawing for Coord Trans surface');
       return;
     }
   }
@@ -827,6 +845,7 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
   if (typeof origin.y !== 'number') origin.y = 0;
   if (typeof origin.z !== 'number') origin.z = 0;
   
+  debugLog('🔸 drawSemidiaRingWithOriginAndSurface called:', { semidia, origin, surf: surf?.surfType });
   
   // Check if semidia is valid
   if (!isFinite(semidia) || semidia <= 0) {
@@ -939,15 +958,20 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
   
   scene.add(line);
   
+  debugLog(`🔸 ✅ Added semidia ring to scene, positions: ${positions.length/3}, scene children: ${scene.children.length}`);
+  debugLog(`🔸 Ring at origin: (${origin.x.toFixed(3)}, ${origin.y.toFixed(3)}, ${origin.z.toFixed(3)}), semidia: ${semidia}`);
   
   // Debug: Log some sample positions to verify sag calculation (only for test scenarios)
   if (positions.length >= 6 && scene.children.length <= 10) { // Only show debug for simple test scenes
+    console.log(`🔸 Ring debug - First point: (${positions[0].toFixed(3)}, ${positions[1].toFixed(3)}, ${positions[2].toFixed(3)})`);
     if (positions.length >= 12) {
+      console.log(`🔸 Ring debug - Second point: (${positions[3].toFixed(3)}, ${positions[4].toFixed(3)}, ${positions[5].toFixed(3)})`);
     }
     
     // Debug: Check if sag calculation is working
     if (asphericParams) {
       const testSag = asphericSurfaceZ(semidia, asphericParams, "even");
+      console.log(`🔸 Ring debug - Expected sag at semidia ${semidia}: ${testSag.toFixed(3)}`);
     }
   }
 }
@@ -970,6 +994,7 @@ export function drawRectApertureWithOriginAndSurface(scene, width = 20, height =
       objType === 'coordinatebreak'
     );
     if (isCB) {
+      debugLog('🔸 Skipping rect aperture drawing for Coord Trans surface');
       return;
     }
   }
@@ -1424,6 +1449,7 @@ export function drawLensCrossSection(scene, surfaces, coordinateTransforms = [],
       
       // デバッグ出力：座標変換前後の点を確認
       if (i === surfaces.length - 1) { // Image面の場合のみデバッグ出力
+        // console.log(`🔍 Surface ${i} (Image面) - 座標変換デバッグ (面固有処理):`);
         // console.log(`  Transform Order: ${lastTransform.order}`);
         // console.log(`  Tilt: X=${(lastTransform.tiltX * 180 / Math.PI).toFixed(2)}° Y=${(lastTransform.tiltY * 180 / Math.PI).toFixed(2)}° Z=${(lastTransform.tiltZ * 180 / Math.PI).toFixed(2)}°`);
         // console.log(`  Rotation Center Z: ${lastTransform.zOffset}mm`);
@@ -1774,10 +1800,14 @@ export function addMirrorBackText(scene, origin, rotationMatrix) {
   
   scene.add(sprite);
   
+  // console.log('🪞 Added MIRROR back text at position:', sprite.position);
 }
 
 // 新規追加: O(s)/R(s) での断面描画関数
 export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigins) {
+    // console.log('🔸 drawLensCrossSectionWithSurfaceOrigins 開始');
+    debugLog('🔸 Cross-section O(s)/R(s) drawing started');
+    debugLog('🔸 Parameters check:', { scene: !!scene, rows: rows?.length, surfaceOrigins: surfaceOrigins?.length });
     
     // sceneの型チェック
     if (!scene) {
@@ -2045,6 +2075,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         const surf = rows[i];
         const origin = surfaceOrigins[i];
         
+        // console.log(`🔸 Surface ${i}: type=${surf["object type"]}, surfType=${surf.surfType}, origin=`, origin?.origin);
         
         if (!origin || !origin.origin) {
             continue;
@@ -2074,11 +2105,13 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         
         const semidia = __coopt_getSemidiaMm(surf);
         if (!semidia) {
+          console.log(`🔸 Surface ${i}: semidia無効(${semidia})、スキップ`);
           continue;
         }
 
         const { halfX: profileHalfX, halfY: profileHalfY } = __coopt_getProfileHalfExtents(surf, semidia);
         
+        // console.log(`🔸 Surface ${i}: 描画対象、semidia=${semidia}`);
         
         // Y-Z断面プロファイル（緑色）
         const yzPoints = [];
@@ -2159,6 +2192,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         }
         
         if (yzPoints.length > 1) {
+            // console.log(`🔸 Surface ${i}: YZプロファイル描画、points=${yzPoints.length}`);
             const yzGeometry = new THREE.BufferGeometry();
             yzGeometry.setFromPoints(yzPoints);
             const yzMaterial = new THREE.LineBasicMaterial({ 
@@ -2255,6 +2289,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         }
         
         if (xzPoints.length > 1) {
+            // console.log(`🔸 Surface ${i}: XZプロファイル描画、points=${xzPoints.length}`);
             const xzGeometry = new THREE.BufferGeometry();
             xzGeometry.setFromPoints(xzPoints);
             const xzMaterial = new THREE.LineBasicMaterial({ 
@@ -2273,6 +2308,9 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         }
     }
     
+    debugLog(`🔸 Cross-section O(s)/R(s) drawing completed: ${yzProfileCount} YZ profiles, ${xzProfileCount} XZ profiles, ${connectionLineCount} connection lines`);
+    // console.log(`✅ プロファイル描画完了: YZ=${yzProfileCount}, XZ=${xzProfileCount} 描画`);
+    // console.log(`✅ Connection lines drawn: ${connectionLineCount} total`);
 }
 
 // Re-export toricSurfaceZ from surface-math.js for use by system-renderer.js
