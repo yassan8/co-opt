@@ -25,7 +25,7 @@ import { drawOpticalSystemSurfaces, clearAllOpticalElements, findStopSurface } f
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, drawSemidiaRingWithOriginAndSurface, asphericSurfaceZ, addMirrorBackText } from './optical/surface.js';
 
 // Ray tracing modules
-import { traceRay, calculateSurfaceOrigins, transformPointToLocal } from './raytracing/core/ray-tracing.js';
+import { traceRay, calculateSurfaceOrigins, transformPointToLocal, calculateAllSurfacesLocalCoordinates, resetToSurfaceCoordinates, shiftToChiefRayOrigin, restoreFromLocalCoordinates, transformToChiefRayLocalCoordinates, calculateChiefRaySurfaceIntersections } from './raytracing/core/ray-tracing.js';
 import { calculateFocalLength, calculateBackFocalLength, calculateImageDistance, calculateEntrancePupilDiameter, calculateExitPupilDiameter, calculateFullSystemParaxialTrace, calculateParaxialData, debugParaxialRayTrace, calculatePupilsByNewSpec, findStopSurfaceIndex } from './raytracing/core/ray-paraxial.js';
 
 // Marginal ray modules
@@ -57,7 +57,7 @@ import { initAIAssistant } from './ai/ai-assistant.js';
 import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayColorMode, optimizeObjectPositionForStop, optimizeAngleObjectPosition, generateRayStartPointsForObject, drawRayWithSegmentColors } from './optical/ray-renderer.js';
 
 // UI modules
-import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons } from './ui/event-handlers.js';
+import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons, setupTransformationControls, updateTransformSurfaceSelect } from './ui/event-handlers.js';
 import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListeners } from './ui/ui-updates.js';
 import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers, loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables, refreshBlockInspector } from './ui/dom-event-handlers.js';
 import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.js';
@@ -169,6 +169,11 @@ async function initializeApplication() {
         }
         
         try {
+            setupTransformationControls();
+        } catch (error) {
+        }
+        
+        try {
             // View buttons setup - using simple version
             setupSimpleViewButtons();
         } catch (error) {
@@ -258,6 +263,16 @@ async function initializeApplication() {
         window.getOpticalSystemRows = getOpticalSystemRows;
         window.getObjectRows = getObjectRows;
         window.getSourceRows = getSourceRows;
+        
+        // Export coordinate transformation functions
+        window.calculateAllSurfacesLocalCoordinates = calculateAllSurfacesLocalCoordinates;
+        window.resetToSurfaceCoordinates = resetToSurfaceCoordinates;
+        window.shiftToChiefRayOrigin = shiftToChiefRayOrigin;
+        window.restoreFromLocalCoordinates = restoreFromLocalCoordinates;
+        window.transformToChiefRayLocalCoordinates = transformToChiefRayLocalCoordinates;
+        window.calculateSurfaceOrigins = calculateSurfaceOrigins;
+        window.calculateChiefRaySurfaceIntersections = calculateChiefRaySurfaceIntersections;
+        window.updateTransformSurfaceSelect = updateTransformSurfaceSelect;
         
         // Export undo system dependencies
         window.loadSystemConfigurations = loadSystemConfigurations;
@@ -1354,7 +1369,6 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
         window.tableOpticalSystem = tableOpticalSystem;
         window.tableObject = tableObject;
         window.tableSource = tableSource;
-        
 
         // URL share load (hash: #compressed_data=...)
         // Run on next tick so other DOMContentLoaded listeners can finish too.
@@ -1744,6 +1758,7 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
 
         if (undoBtn) {
             undoBtn.addEventListener('click', () => {
+                console.log('[Undo] Undo button clicked');
                 if (window.undoHistory) {
                     const success = window.undoHistory.undo();
                     if (success) {
@@ -1758,6 +1773,7 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
 
         if (redoBtn) {
             redoBtn.addEventListener('click', () => {
+                console.log('[Undo] Redo button clicked');
                 if (window.undoHistory) {
                     const success = window.undoHistory.redo();
                     if (success) {
@@ -1770,6 +1786,7 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
             console.warn('[Undo] redo-btn not found');
         }
 
+        console.log('[Undo] Button handlers registered');
         
         // Setup Toolbar Toggle button
         const toggleToolbarBtn = document.getElementById('toggle-toolbar-btn');
@@ -2213,6 +2230,7 @@ document.addEventListener('keydown', (e) => {
 function clearUndoHistoryOnMajorChange(reason) {
     if (window.undoHistory) {
         window.undoHistory.clear();
+        console.log(`[Undo] History cleared: ${reason}`);
     }
 }
 
