@@ -36,6 +36,7 @@ import { listDesignVariablesFromBlocks } from '../optimization/design-variables.
  */
 window.__performCoordTransCalculation = async function(blockId, panel) {
     try {
+        console.log('[CoordTrans] Performing calculation for block:', blockId);
         
         // Get the current block's parameters
         const getValue = (key) => {
@@ -56,12 +57,14 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
         const toSurfValue = getValue('toSurf');
         const coordReturnValue = getValue('coordReturn') || 'xy';  // default to 'xy'
         
+        console.log('[CoordTrans] toSurf:', toSurfValue, 'coordReturn:', coordReturnValue);
         
         // Force Order 1 when Coord Return is not 'none'
         // Order 1 (Tilt → Decenter) is required for correct angle extraction
         if (coordReturnValue !== 'none') {
             const currentOrder = getValue('order');
             if (currentOrder !== '1') {
+                console.log('[CoordTrans] Forcing Order 1 for coordinate return calculation');
                 const orderRes = window.__blocks_setBlockParamValue?.(blockId, 'order', '1');
                 if (!orderRes || orderRes.ok !== true) {
                     console.warn('[CoordTrans] Failed to set order to 1:', orderRes?.reason);
@@ -71,6 +74,7 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
         
         // Check if target surface is selected
         if (!toSurfValue || toSurfValue === '') {
+            console.log('[CoordTrans] No target surface selected, skipping calculation');
             return;
         }
         
@@ -99,21 +103,9 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
             return;
         }
         
-        // Debug: Log current optical system state before calculation
-        console.log('[DEBUG] Current optical system state:');
-        console.log('  CoordTrans-1 (surf 2):', {
-            decenterY: opticalSystemRows[2]?.decenterY,
-            tiltX: opticalSystemRows[2]?.tiltX
-        });
-        console.log('  CoordTrans-2 (surf 5):', {
-            decenterY: opticalSystemRows[5]?.decenterY,
-            tiltX: opticalSystemRows[5]?.tiltX
-        });
-        
         // Add block parameters to optical system rows
         // This is needed because block parameters (like chiefRayShiftX) are stored in the block system
         // but not included in the optical system table rows
-        console.log('[DEBUG] Creating enrichedRows from opticalSystemRows...');
         const enrichedRows = opticalSystemRows.map(row => {
             const bid = String(row._blockId ?? row.blockId ?? '');
             if (!bid) return row;
@@ -144,27 +136,16 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
             };
         });
         
-        // Debug: Check enrichedRows vs opticalSystemRows for CoordTrans-1
-        console.log('[DEBUG] CoordTrans-1 comparison:');
-        try {
-            const origTiltX = opticalSystemRows[2]?.tiltX;
-            const enrichedTiltX = enrichedRows[2]?.tiltX;
-            console.log('  opticalSystemRows[2].tiltX:', origTiltX);
-            console.log('  enrichedRows[2].tiltX:', enrichedTiltX);
-            console.log('  Match:', origTiltX === enrichedTiltX);
-        } catch (e) {
-            console.error('[DEBUG] Error comparing tiltX:', e);
-        }
-        
-        // Calculate local coordinates
-        // Don't ignore any blocks - we need the full system for accurate calculation
+        // Calculate local coordinates (ignore this CoordTrans block to avoid circular dependency)
+        console.log('[CoordTrans] Starting calculation...');
         const result = await calculateAllSurfacesLocalCoordinates(
             enrichedRows,
             targetIndex,
             null,  // no progress callback
-            null   // don't ignore any blocks
+            blockId  // ignore this block during calculation
         );
         
+        console.log('[CoordTrans] Calculation complete, result:', result);
         
         // Find which surface this CoordTrans block corresponds to
         let blockSurfaceId = -1;
@@ -176,6 +157,7 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
             }
         }
         
+        console.log('[CoordTrans] Block surface ID:', blockSurfaceId);
         
         if (blockSurfaceId < 0) {
             console.error('[CoordTrans] Could not find surface for block:', blockId);
@@ -183,25 +165,21 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
         }
         
         // Get surface data for this block
-        console.log('[DEBUG] blockId:', blockId, 'blockSurfaceId:', blockSurfaceId);
-        console.log('[DEBUG] result.surfaces keys:', Object.keys(result.surfaces || {}));
         const rowId = String(opticalSystemRows[blockSurfaceId].id);
-        console.log('[DEBUG] Looking for rowId:', rowId);
         let surfData = result.surfaces?.[rowId] || result.surfaces?.[String(rowId)] || result.surfaces?.[Number(rowId)] ||
                       result.surfaces?.[blockSurfaceId] || result.surfaces?.[String(blockSurfaceId)];
         
         // If no data for this block, try next surface
         if (!surfData) {
+            console.log('[CoordTrans] No data for this surface, checking next surface...');
             for (let i = blockSurfaceId + 1; i < opticalSystemRows.length; i++) {
                 const nextRowId = String(opticalSystemRows[i].id);
                 surfData = result.surfaces?.[nextRowId];
                 if (surfData) {
-                    console.log('[DEBUG] Found surfData at surface index:', i, 'rowId:', nextRowId);
+                    console.log(`[CoordTrans] Using data from next surface ${nextRowId}`);
                     break;
                 }
             }
-        } else {
-            console.log('[DEBUG] Found surfData for blockSurfaceId:', blockSurfaceId, 'rowId:', rowId);
         }
         
         if (!surfData) {
@@ -209,8 +187,7 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
             return;
         }
         
-        console.log('[DEBUG] Using surfData:', surfData);
-        
+        console.log('[CoordTrans] Surface data:', surfData);
         
         // Update the input fields based on coordinate return mode
         const updateField = (key, value) => {
@@ -233,6 +210,7 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
                 input.value = value.toFixed(6);
                 input.dispatchEvent(new Event('input', { bubbles: true }));
                 input.dispatchEvent(new Event('blur', { bubbles: true }));
+                console.log(`[CoordTrans] Updated ${key} = ${value.toFixed(6)}`);
                 return true;
             } else {
                 console.warn(`[CoordTrans] Input field not found for ${key}`);
@@ -240,22 +218,15 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
             }
         };
         
-        // Get chiefRayShift modes to determine which fields should be auto-updated
-        const chiefRayShiftX = getValue('chiefRayShiftX');
-        const chiefRayShiftY = getValue('chiefRayShiftY');
-        const chiefRayShiftZ = getValue('chiefRayShiftZ');
-        const shouldAutoX = (String(chiefRayShiftX ?? '').trim().toUpperCase() === 'A');
-        const shouldAutoY = (String(chiefRayShiftY ?? '').trim().toUpperCase() === 'A');
-        const shouldAutoZ = (String(chiefRayShiftZ ?? '').trim().toUpperCase() === 'A');
-        
-        // Apply updates based on coordinate return mode and chiefRayShift settings
+        // Apply updates based on coordinate return mode
         let updated = {};
         switch (coordReturnValue) {
             case 'none':
+                console.log('[CoordTrans] Coordinate return mode: none - skipping field updates');
                 break;
                 
             case 'orientation':
-                // Tilt only (force all decenters to 0 regardless of Auto settings)
+                // Tilt only
                 updated = {
                     decenterX: updateField('decenterX', 0),
                     decenterY: updateField('decenterY', 0),
@@ -267,26 +238,32 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
                 break;
                 
             case 'xy':
-                // Decenter X, Y only (only update if Auto mode is enabled, tilt remains unchanged)
+                // Tilt + Decenter X, Y
                 updated = {
-                    decenterX: shouldAutoX ? updateField('decenterX', surfData.localDecenterX) : false,
-                    decenterY: shouldAutoY ? updateField('decenterY', surfData.localDecenterY) : false,
-                    decenterZ: updateField('decenterZ', 0)
+                    decenterX: updateField('decenterX', surfData.localDecenterX),
+                    decenterY: updateField('decenterY', surfData.localDecenterY),
+                    decenterZ: updateField('decenterZ', 0),
+                    tiltX: updateField('tiltX', surfData.localTiltX),
+                    tiltY: updateField('tiltY', surfData.localTiltY),
+                    tiltZ: updateField('tiltZ', surfData.localTiltZ)
                 };
                 break;
                 
             case 'xyz':
-                // Decenter X, Y, Z only (only update if Auto mode is enabled, tilt remains unchanged)
+                // All Tilt and Decenter
                 updated = {
-                    decenterX: shouldAutoX ? updateField('decenterX', surfData.localDecenterX) : false,
-                    decenterY: shouldAutoY ? updateField('decenterY', surfData.localDecenterY) : false,
-                    decenterZ: shouldAutoZ ? updateField('decenterZ', surfData.localDecenterZ) : false
+                    decenterX: updateField('decenterX', surfData.localDecenterX),
+                    decenterY: updateField('decenterY', surfData.localDecenterY),
+                    decenterZ: updateField('decenterZ', surfData.localDecenterZ),
+                    tiltX: updateField('tiltX', surfData.localTiltX),
+                    tiltY: updateField('tiltY', surfData.localTiltY),
+                    tiltZ: updateField('tiltZ', surfData.localTiltZ)
                 };
                 break;
         }
         
         const successCount = Object.values(updated).filter(v => v).length;
-        console.log('[CoordTrans] Updated', successCount, 'fields');
+        console.log(`[CoordTrans] ✓ Updated ${successCount} fields`);
         
     } catch (error) {
         console.error('[CoordTrans] Calculation error:', error);
@@ -3710,6 +3687,7 @@ function setupSuggestOptimizeButtons() {
                                             redo: function() { return this.execute(); }
                                         };
                                         window.undoHistory.record(command);
+                                        console.log('[Undo] Recorded: Optimization');
                                     }
                                 }
                             } catch (e) {
@@ -4712,6 +4690,7 @@ function updateWavefrontObjectOptions() {
         
         // 各Objectのオプションを追加
         validObjectData.forEach((obj, index) => {
+            console.log(`🔍 有効Object[${index}]:`, obj);
             
             const option = document.createElement('option');
             option.value = index.toString();
@@ -4725,6 +4704,7 @@ function updateWavefrontObjectOptions() {
             objectSelect.appendChild(option);
         });
         
+        console.log(`📊 波面収差図Object選択更新: ${validObjectData.length}個の有効Object`);
         
     } catch (error) {
         console.error('❌ Object選択オプション更新エラー:', error);
@@ -9615,6 +9595,7 @@ function __blocks_setBlockParamValue(blockId, key, rawValue) {
         const cmd = new SetBlockParameterCommand(activeId, blockId, `parameters.${String(key)}`, oldValue, newValue);
         window.undoHistory.record(cmd);
     } else {
+        console.log(`[Undo] Not recording: oldValue=${oldValue}, newValue=${newValue}, undoHistory=${!!window.undoHistory}, isExecuting=${window.undoHistory?.isExecuting}`);
     }
     
     b.parameters[String(key)] = coerced;
@@ -9945,10 +9926,14 @@ function __blocks_setBlockApertureValue(blockId, role, rawValue) {
     // Record undo command
     const oldValue = b.aperture[r];
     const newValue = (String(coerced ?? '').trim() === '') ? undefined : coerced;
+    console.log(`[Undo] Aperture change: ${blockId}.aperture.${r} from ${oldValue} to ${newValue}`);
+    console.log(`[Undo] Check: oldValue !== newValue = ${oldValue !== newValue}, undoHistory = ${!!window.undoHistory}, isExecuting = ${window.undoHistory?.isExecuting}`);
     if (oldValue !== newValue && window.undoHistory && !window.undoHistory.isExecuting) {
+        console.log(`[Undo] Recording aperture command`);
         const cmd = new SetBlockParameterCommand(activeId, blockId, `aperture.${r}`, oldValue, newValue);
         window.undoHistory.record(cmd);
     } else {
+        console.log(`[Undo] NOT recording aperture command`);
     }
     
     if (String(coerced ?? '').trim() === '') {
@@ -11019,6 +11004,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             blockType,
                             currentValue,
                             (newValue) => {
+                                console.log(`[Undo] Slider commit for ${it.key || it.role}:`, newValue);
                                 commitValue(newValue);
                             }
                         );
@@ -11408,8 +11394,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     const modeKey = 'chiefRayShift' + axis; // chiefRayShiftX, chiefRayShiftY, chiefRayShiftZ
                     const modeValue = getDisplayValue(modeKey);
                     const modeSel = document.createElement('select');
-                    modeSel.setAttribute('data-param-key', modeKey);
-                    modeSel.setAttribute('name', modeKey);
                     modeSel.style.flex = '0 0 140px';
                     modeSel.style.width = '140px';
                     modeSel.style.minWidth = '140px';
@@ -11427,7 +11411,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     const cur = String(modeValue ?? '').trim().toUpperCase();
                     const normalized = (cur === 'A' || cur === 'AUTO') ? 'A' : '';
                     modeSel.value = normalized;
-                    modeSel.addEventListener('change', async (e) => {
+                    modeSel.addEventListener('change', (e) => {
                         e.stopPropagation();
                         const desired = String(modeSel.value ?? '');
                         const res = __blocks_setBlockParamValue(blockId, modeKey, desired);
@@ -11436,12 +11420,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             modeSel.value = normalized;
                             return;
                         }
-                        
-                        // Auto-trigger coordinate transformation calculation when Auto mode is selected
-                        if (desired === 'A' || desired === 'AUTO') {
-                            await __performCoordTransCalculation(blockId, panel);
-                        }
-                        
                         try { refreshBlockInspector(); } catch (_) {}
                     });
                     modeSlot.appendChild(modeSel);
@@ -11671,6 +11649,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 }
 
 export function refreshBlockInspector() {
+    console.log('[Undo] refreshBlockInspector() called - starting UI rebuild');
     const banner = document.getElementById('import-analyze-mode-banner');
     const setBannerVisible = (isVisible) => {
         if (!banner) return;
@@ -11682,6 +11661,7 @@ export function refreshBlockInspector() {
         // A missing active config here makes the UI falsely fall back into Import/Analyze mode.
         const activeCfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
         const blocks = activeCfg && Array.isArray(activeCfg.blocks) ? activeCfg.blocks : null;
+        console.log('[Undo] refreshBlockInspector() - blocks count:', blocks ? blocks.length : 0);
 
         try {
             // Show Import/Analyze banner only when blocks are actually unavailable.

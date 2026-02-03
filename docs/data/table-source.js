@@ -530,7 +530,6 @@ function getPrimaryWavelength() {
   try {
     if (tableSource && typeof tableSource.getData === 'function') {
       const sourceData = tableSource.getData();
-      console.log('📊 Source data:', sourceData);
       
       // Primary Wavelengthに設定されているエントリを探す
       const primaryEntry = sourceData.find(row => row.primary === "Primary Wavelength");

@@ -9,6 +9,7 @@ import * as rayParaxial from './ray-paraxial.js';
 import { asphericSagDerivative, toricSurfaceZ, toricSagDerivatives } from '../../optical/surface-math.js';
 const getSafeThickness = rayParaxial.getSafeThickness;
 const getRefractiveIndex = rayParaxial.getRefractiveIndex;
+const isCoordTransSurface = rayParaxial.isCoordTransSurface;
 // 循環依存を避けるため、main.jsからのimportを削除
 // import { getWASMSystem } from './main.js';
 
@@ -1020,21 +1021,14 @@ function reflectRay(dir, normal) {
 
 // --- Coordinate Break面の座標変換処理 ---
 function createCoordinateTransform(row, rotationCenterZ = 0) {
-  // 正しいマッピング（座標変換説明.md準拠）
-  const decenterX = Number(row.semidia ?? 0);   // Semi Dia → Decenter X
-  const decenterY = Number(row.material ?? 0);  // Material → Decenter Y (CB面専用)
-  // NOTE: decenterZ is intentionally disabled (always 0).
-  // CB rows reuse thickness for other purposes in legacy designs; treating it as Z-decenter
-  // causes confusing behavior and breaks object visualization.
-  const decenterZ = 0;
-  
-  // Tilt X, Y, Z の値 (degrees)
-  const tiltX = Number(row.rindex ?? 0);        // Ref Index → Tilt X
-  const tiltY = Number(row.abbe ?? 0);          // Abbe → Tilt Y
-  const tiltZ = Number(row.conic ?? 0);         // Conic → Tilt Z
-  
-  // 変換順序の制御 (coef1 field: 0=Tilt→Decenter, 1=Decenter→Tilt)
-  const transformOrder = Number(row.coef1 ?? 0);
+  const cb = parseCoordTransParams(row) || {};
+  const decenterX = Number(cb.decenterX ?? 0);
+  const decenterY = Number(cb.decenterY ?? 0);
+  const decenterZ = Number(cb.decenterZ ?? 0);
+  const tiltX = Number(cb.tiltX ?? 0);
+  const tiltY = Number(cb.tiltY ?? 0);
+  const tiltZ = Number(cb.tiltZ ?? 0);
+  const transformOrder = Number(cb.transformOrder ?? 1);
   
   return {
     decenterX, decenterY, decenterZ, tiltX, tiltY, tiltZ, transformOrder, rotationCenterZ
@@ -1227,8 +1221,104 @@ function __rtIsCoordTransRow(row) {
   return fields.some(isCb);
 }
 
+// Normalize legacy CoordTrans rows into explicit fields (one-time in-memory migration).
+function normalizeCoordTransRows(rows) {
+  if (!Array.isArray(rows)) return rows;
+  return rows.map((row) => {
+    if (!__rtIsCoordTransRow(row) || !row || typeof row !== 'object') return row;
+
+    const hasExplicit = ['decenterX', 'decenterY', 'tiltX', 'tiltY', 'tiltZ'].some(
+      (k) => Object.prototype.hasOwnProperty.call(row, k)
+    );
+    if (hasExplicit) return row;
+
+    const decenterX = Number.isFinite(Number(row.semidia)) ? Number(row.semidia) : 0;
+    const decenterY = Number.isFinite(Number(row.material)) ? Number(row.material) : 0;
+    const decenterZ = 0;
+    const tiltX = Number.isFinite(Number(row.rindex)) ? Number(row.rindex) : 0;
+    const tiltY = Number.isFinite(Number(row.abbe)) ? Number(row.abbe) : 0;
+    const tiltZ = Number.isFinite(Number(row.conic)) ? Number(row.conic) : 0;
+    const orderCandidate = (row.order !== undefined && row.order !== null) ? row.order : row.coef1;
+    const orderRaw = Number(String(orderCandidate ?? '').trim());
+    const order = (orderRaw === 0 || orderRaw === 1) ? orderRaw : 1;
+
+    return {
+      ...row,
+      decenterX,
+      decenterY,
+      decenterZ,
+      tiltX,
+      tiltY,
+      tiltZ,
+      order
+    };
+  });
+}
+
+// Compute a chief-ray direction that passes through the stop center (local x=y=0).
+function computeChiefRayDirectionToStop(rows, wavelength = 0.55, maxIter = 8) {
+  const stopIndex = rayParaxial.findStopSurfaceIndex(rows);
+  if (stopIndex < 0) return { dir: { x: 0, y: 0, z: 1 }, converged: false };
+
+  const surfaceData = calculateSurfaceOrigins(rows);
+  const stopSurfaceInfo = surfaceData?.[stopIndex];
+  if (!stopSurfaceInfo) return { dir: { x: 0, y: 0, z: 1 }, converged: false };
+
+  const rayStart = { x: 0, y: 0, z: 0 };
+  const eps = 1e-6;
+  const tol = 1e-6;
+
+  let ax = 0;
+  let ay = 0;
+
+  const traceAt = (aX, aY) => {
+    const dir = normalize({ x: aX, y: aY, z: 1 });
+    const ray = { pos: rayStart, dir, wavelength };
+    const path = traceRay(rows, ray, 1.0);
+    if (!path || path.length === 0) return null;
+    const idx = surfaceIndexToRayPathPointIndex(rows, stopIndex);
+    if (idx === null || idx >= path.length) return null;
+    const p = path[idx];
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) return null;
+    const local = transformPointToLocal(p, stopSurfaceInfo);
+    return { local };
+  };
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    const base = traceAt(ax, ay);
+    if (!base) break;
+    const ex = base.local.x;
+    const ey = base.local.y;
+    if (Math.sqrt(ex * ex + ey * ey) < tol) {
+      return { dir: normalize({ x: ax, y: ay, z: 1 }), converged: true };
+    }
+
+    const dx = traceAt(ax + eps, ay);
+    const dy = traceAt(ax, ay + eps);
+    if (!dx || !dy) break;
+
+    const j11 = (dx.local.x - ex) / eps;
+    const j21 = (dx.local.y - ey) / eps;
+    const j12 = (dy.local.x - ex) / eps;
+    const j22 = (dy.local.y - ey) / eps;
+
+    const det = j11 * j22 - j12 * j21;
+    if (Math.abs(det) < 1e-12) break;
+
+    // d = -J^{-1} * e
+    const dax = (-j22 * ex + j12 * ey) / det;
+    const day = (j21 * ex - j11 * ey) / det;
+
+    ax += dax;
+    ay += day;
+  }
+
+  return { dir: normalize({ x: ax, y: ay, z: 1 }), converged: false };
+}
+
 // --- 座標変換1.5.md仕様: 各面の原点O(s)と回転行列R(s)の算出 ---
 export function calculateSurfaceOrigins(opticalSystemRows) {
+  const normalizedRows = normalizeCoordTransRows(opticalSystemRows);
   const surfaceData = [];
   
   // 初期値: 面0の原点は{0,0,0}、回転行列は単位行列
@@ -1240,14 +1330,14 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
   const ey = vec3(0, 1, 0);
   const ez = vec3(0, 0, 1);
   
-  for (let s = 0; s < opticalSystemRows.length; s++) {
-    const surface = opticalSystemRows[s];
-    const previousSurface = s > 0 ? opticalSystemRows[s - 1] : null;
+  for (let s = 0; s < normalizedRows.length; s++) {
+    const surface = normalizedRows[s];
+    const previousSurface = s > 0 ? normalizedRows[s - 1] : null;
     
     let surfaceOrigin, surfaceRotMatrix;
     
     if (__rtIsCoordTransRow(surface)) {
-      // CB面の場合
+      // CoordTrans面の場合
       const cbParams = parseCoordTransParams(surface, previousSurface);
       const decenterX = cbParams.decenterX !== undefined ? cbParams.decenterX : 0;
       const decenterY = cbParams.decenterY !== undefined ? cbParams.decenterY : 0;
@@ -1256,9 +1346,12 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
       const tiltY = cbParams.tiltY !== undefined ? cbParams.tiltY : 0;
       const tiltZ = cbParams.tiltZ !== undefined ? cbParams.tiltZ : 0;
       const transformOrder = cbParams.transformOrder !== undefined ? cbParams.transformOrder : 1;
+      
+      // CoordTransは座標系の定義のみで、thicknessは持たない（次の面のthicknessは別）
+      // 前の面のthicknessのみを使用して、そこから座標変換を適用
       let thickness = previousSurface ? getSafeThickness(previousSurface) : 0;
       
-      // NaN validation and Infinity handling for CB parameters
+      // NaN validation and Infinity handling
       if (!isFinite(thickness)) {
         thickness = 0;
       }
@@ -1271,21 +1364,21 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
       const newRotMatrix = multiplyMatrices(singleRotMatrix, currentRotMatrix);
       
       if (transformOrder === 0) {
-        // Order 0: O(s) = O(r) + DX(s)*R(r).ex + DY(s)*R(r).ey + t(r)*R(r).ez
+        // Order 0: O(s) = O(r) + t(r)*R(r).ez + DX(s)*R(r).ex + DY(s)*R(r).ey + DZ(s)*R(r).ez
+        const tz_term = scale(applyMatrixToVector(previousRotMatrix, ez), thickness);
         const dx_term = scale(applyMatrixToVector(previousRotMatrix, ex), decenterX);
         const dy_term = scale(applyMatrixToVector(previousRotMatrix, ey), decenterY);
         const dz_term = scale(applyMatrixToVector(previousRotMatrix, ez), decenterZ);
-        const tz_term = scale(applyMatrixToVector(previousRotMatrix, ez), thickness);
         
-        surfaceOrigin = add(add(add(add(currentOrigin, dx_term), dy_term), dz_term), tz_term);
+        surfaceOrigin = add(add(add(add(currentOrigin, tz_term), dx_term), dy_term), dz_term);
       } else {
-        // Order 1: O(s) = O(r) + DX(s)*R(s).ex + DY(s)*R(s).ey + t(r)*R(r).ez
+        // Order 1: O(s) = O(r) + t(r)*R(r).ez + DX(s)*R(s).ex + DY(s)*R(s).ey + DZ(s)*R(s).ez
+        const tz_term = scale(applyMatrixToVector(previousRotMatrix, ez), thickness);
         const dx_term = scale(applyMatrixToVector(newRotMatrix, ex), decenterX);
         const dy_term = scale(applyMatrixToVector(newRotMatrix, ey), decenterY);
         const dz_term = scale(applyMatrixToVector(newRotMatrix, ez), decenterZ);
-        const tz_term = scale(applyMatrixToVector(previousRotMatrix, ez), thickness);
         
-        surfaceOrigin = add(add(add(add(currentOrigin, dx_term), dy_term), dz_term), tz_term);
+        surfaceOrigin = add(add(add(add(currentOrigin, tz_term), dx_term), dy_term), dz_term);
       }
       
       surfaceRotMatrix = newRotMatrix;
@@ -1435,66 +1528,25 @@ function parseCoordTransParams(surface, previousSurface = null) {
     return 0;
   };
 
-  const toFiniteOrNull = (v) => {
-    if (v === null || v === undefined) return null;
-    if (typeof v === 'number' && Number.isFinite(v)) return v;
-    const s = String(v).trim();
-    if (s === '') return null;
-    const n = Number(s);
-    return Number.isFinite(n) ? n : null;
-  };
-
-  // New rule (root-cause fix): Prefer dedicated CoordTrans fields when present.
-  // This prevents accidental decenter from non-CB fields like semidia/material.
-  // Legacy field-reuse remains as a fallback for older designs.
+  // Explicit-only: legacy reuse has been removed from core math.
   const hasExplicit = (() => {
-    const keys = ['decenterX', 'decenterY', 'tiltX', 'tiltY', 'tiltZ', 'order'];
+    const keys = ['decenterX', 'decenterY', 'tiltX', 'tiltY', 'tiltZ'];
     if (!surface || typeof surface !== 'object') return false;
-
-    // If the dedicated keys exist at all (even as empty strings), treat this as
-    // an explicit CB schema and avoid legacy fallbacks.
-    // This is important for newly inserted Coord Break rows where semidia/material
-    // may contain non-CB data and would otherwise be misinterpreted as decenter/tilt.
-    const hasDedicatedKeys = keys.some((k) => Object.prototype.hasOwnProperty.call(surface, k));
-    if (hasDedicatedKeys) return true;
-
-    // Otherwise, detect explicit numeric values.
-    for (const k of keys) {
-      const v = surface[k];
-      if (v === null || v === undefined) continue;
-      if (typeof v === 'number' && Number.isFinite(v)) return true;
-      const s = String(v).trim();
-      if (s !== '' && Number.isFinite(Number(s))) return true;
-    }
-    return false;
+    return keys.some((k) => Object.prototype.hasOwnProperty.call(surface, k));
   })();
 
-  // IMPORTANT: When dedicated CoordTrans fields are present, do NOT fall back to
-  // legacy reused columns (semidia/material/rindex/abbe/conic/coef1).
-  // Otherwise, a CB row with only `order` set can accidentally pick up a non-zero
-  // semidia/material and introduce an unintended decenter/tilt.
-  const decenterX = (() => {
-    if (hasExplicit) return toFiniteNumber(surface.decenterX);
-    // Legacy fallback: semidia/material columns were historically reused for CB decenter.
-    // But newly inserted CB rows often inherit semidia from the previous surface (e.g. 12mm).
-    // That inherited semidia MUST NOT become an unintended decenterX.
-    const semidiaN = toFiniteOrNull(surface?.semidia);
-    const prevSemidiaN = toFiniteOrNull(previousSurface?.semidia);
-    const semidiaLooksInherited = (semidiaN !== null && prevSemidiaN !== null && Math.abs(semidiaN - prevSemidiaN) < 1e-12);
-    if (semidiaLooksInherited) return 0;
-    return toFiniteNumber(surface.semidia, surface.decenterX);
-  })();
-  const decenterY = hasExplicit ? toFiniteNumber(surface.decenterY) : toFiniteNumber(surface.material, surface.decenterY);
-  // decenterZ is disabled (always 0)
-  const decenterZ = 0;
+  if (!hasExplicit) {
+    return { decenterX: 0, decenterY: 0, decenterZ: 0, tiltX: 0, tiltY: 0, tiltZ: 0, transformOrder: 1 };
+  }
 
-  const tiltX = hasExplicit ? toFiniteNumber(surface.tiltX) : toFiniteNumber(surface.rindex, surface.tiltX);
-  const tiltY = hasExplicit ? toFiniteNumber(surface.tiltY) : toFiniteNumber(surface.abbe, surface.tiltY);
-  const tiltZ = hasExplicit ? toFiniteNumber(surface.tiltZ) : toFiniteNumber(surface.conic, surface.tiltZ);
+  const decenterX = toFiniteNumber(surface.decenterX);
+  const decenterY = toFiniteNumber(surface.decenterY);
+  const decenterZ = toFiniteNumber(surface.decenterZ);
+  const tiltX = toFiniteNumber(surface.tiltX);
+  const tiltY = toFiniteNumber(surface.tiltY);
+  const tiltZ = toFiniteNumber(surface.tiltZ);
 
-  const orderCandidate = hasExplicit
-    ? surface.order
-    : ((surface.coef1 !== undefined && surface.coef1 !== null) ? surface.coef1 : surface.order);
+  const orderCandidate = (surface.order !== undefined && surface.order !== null) ? surface.order : surface.coef1;
   const orderRaw = Number(String(orderCandidate ?? '').trim());
   const transformOrder = (orderRaw === 0 || orderRaw === 1) ? orderRaw : 1;
 
@@ -1778,8 +1830,6 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
   const effectiveSystemRows = maxSurfaceIndex !== null && maxSurfaceIndex >= 0 
     ? opticalSystemRows.slice(0, maxSurfaceIndex + 1)
     : opticalSystemRows;
-  
-  console.log(`🔵 [Ray Trace START] surfaces=${effectiveSystemRows.length}, wavelength=${ray0.wavelength}`);
   
   // 各面の原点・回転行列を事前計算
   const __tCalcSurf0 = RT_PROF.enabled ? now() : 0;
@@ -2600,6 +2650,54 @@ export function transformPointToLocal(globalPoint, surfaceInfo) {
   };
 }
 
+/**
+ * Transform a point from global coordinates to local coordinates
+ * @param {Object} point - Point with x, y, z properties
+ * @param {Object} origin - Local coordinate system origin
+ * @param {Array} rotationMatrix - 3x3 rotation matrix
+ * @returns {Object} - Transformed point
+ */
+function transformGlobalToLocal(point, origin, rotationMatrix) {
+  // Translate by origin
+  const translated = {
+    x: point.x - origin.x,
+    y: point.y - origin.y,
+    z: point.z - origin.z
+  };
+  
+  // Apply inverse rotation (transpose of rotation matrix)
+  const m = rotationMatrix;
+  return {
+    x: m[0][0] * translated.x + m[1][0] * translated.y + m[2][0] * translated.z,
+    y: m[0][1] * translated.x + m[1][1] * translated.y + m[2][1] * translated.z,
+    z: m[0][2] * translated.x + m[1][2] * translated.y + m[2][2] * translated.z
+  };
+}
+
+/**
+ * Transform a point from local coordinates to global coordinates (inverse of transformGlobalToLocal)
+ * @param {Object} point - Point in local coordinates with x, y, z properties
+ * @param {Object} origin - Local coordinate system origin in global coordinates
+ * @param {Array} rotationMatrix - 3x3 rotation matrix
+ * @returns {Object} - Point in global coordinates
+ */
+function transformLocalToGlobal(point, origin, rotationMatrix) {
+  // Apply rotation (use rotationMatrix directly, not transpose)
+  const m = rotationMatrix;
+  const rotated = {
+    x: m[0][0] * point.x + m[0][1] * point.y + m[0][2] * point.z,
+    y: m[1][0] * point.x + m[1][1] * point.y + m[1][2] * point.z,
+    z: m[2][0] * point.x + m[2][1] * point.y + m[2][2] * point.z
+  };
+  
+  // Translate by origin
+  return {
+    x: rotated.x + origin.x,
+    y: rotated.y + origin.y,
+    z: rotated.z + origin.z
+  };
+}
+
 // 4x4行列の逆行列計算（回転行列用）
 function invertMatrix(matrix) {
   if (RT_PROF.enabled) {
@@ -2741,4 +2839,980 @@ export function getRayTracingProfile(options = {}) {
   const snapshot = JSON.parse(JSON.stringify(RT_PROF.stats));
   if (reset) resetRayTracingProfiler();
   return snapshot;
+}
+
+// ============================================================================
+// COORDINATE TRANSFORMATION UTILITIES
+// ============================================================================
+
+/**
+ * Reset ray coordinates to specified surface's local coordinate system.
+ * @param {Object} ray - Ray object with pos and dir properties
+ * @param {number} surfaceIndex - 0-based surface index
+ * @param {Array} opticalSystemRows - Optical system data
+ * @returns {Object} - {transformedRay, origin, rotationMatrix} or null on error
+ */
+export function resetToSurfaceCoordinates(ray, surfaceIndex, opticalSystemRows) {
+  if (!ray || !ray.pos || !ray.dir) {
+    throw new Error('Invalid ray object. Must have pos and dir properties.');
+  }
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+    throw new Error('Invalid optical system data.');
+  }
+  if (!Number.isInteger(surfaceIndex) || surfaceIndex < 0 || surfaceIndex >= opticalSystemRows.length) {
+    throw new Error(`Invalid surface index: ${surfaceIndex}. Must be between 0 and ${opticalSystemRows.length - 1}.`);
+  }
+  
+  // Check if surface is CoordTrans or Object (no intersection point)
+  const targetRow = opticalSystemRows[surfaceIndex];
+  if (isCoordTransSurface(targetRow) || isObjectRow(targetRow)) {
+    throw new Error('CoordTrans surface has no intersection point. Please specify a real surface before/after it.');
+  }
+  
+  try {
+    // Get surface origins and rotation matrices
+    const surfaceData = calculateSurfaceOrigins(opticalSystemRows);
+    if (!surfaceData || surfaceIndex >= surfaceData.length) {
+      throw new Error(`Failed to calculate surface origins for surface ${surfaceIndex}.`);
+    }
+    
+    const { origin, rotationMatrix } = surfaceData[surfaceIndex];
+    
+    // Transform ray to local coordinates
+    const transformedRay = {
+      pos: transformGlobalToLocal(ray.pos, origin, rotationMatrix),
+      dir: transformGlobalToLocal(ray.dir, { x: 0, y: 0, z: 0 }, rotationMatrix), // Direction is a vector, no origin offset
+      wavelength: ray.wavelength
+    };
+    
+    return { transformedRay, origin, rotationMatrix };
+  } catch (error) {
+    throw new Error(`Failed to reset to surface coordinates: ${error.message}`);
+  }
+}
+
+/**
+ * Shift ray position so chief ray is at origin in specified surface's coordinate system.
+ * @param {Object} ray - Ray object to shift
+ * @param {number} surfaceIndex - 0-based surface index
+ * @param {Array} chiefRayPath - Chief ray path array from traceChiefRay
+ * @param {Array} opticalSystemRows - Optical system data
+ * @returns {Object} - {shiftedRay, chiefRayShift} or null on error
+ */
+export function shiftToChiefRayOrigin(ray, surfaceIndex, chiefRayPath, opticalSystemRows) {
+  if (!ray || !ray.pos) {
+    throw new Error('Invalid ray object. Must have pos property.');
+  }
+  if (!Array.isArray(chiefRayPath) || chiefRayPath.length === 0) {
+    throw new Error('Invalid chief ray path. Chief ray data is missing.');
+  }
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+    throw new Error('Invalid optical system data.');
+  }
+  
+  // Get rayPath index for this surface
+  const rayPathIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex);
+  if (rayPathIndex === null || rayPathIndex >= chiefRayPath.length) {
+    throw new Error(`Cannot find chief ray intersection at surface ${surfaceIndex}. Surface may be skipped or out of range.`);
+  }
+  
+  const chiefRayPos = chiefRayPath[rayPathIndex];
+  if (!chiefRayPos || typeof chiefRayPos.x !== 'number') {
+    throw new Error(`Invalid chief ray position at surface ${surfaceIndex}.`);
+  }
+  
+  // Shift ray position by subtracting chief ray position
+  const shiftedRay = {
+    pos: {
+      x: ray.pos.x - chiefRayPos.x,
+      y: ray.pos.y - chiefRayPos.y,
+      z: ray.pos.z - chiefRayPos.z
+    },
+    dir: { ...ray.dir }, // Direction unchanged
+    wavelength: ray.wavelength
+  };
+  
+  const chiefRayShift = { ...chiefRayPos };
+  
+  return { shiftedRay, chiefRayShift };
+}
+
+/**
+ * Restore ray from local coordinates back to global coordinates.
+ * @param {Object} ray - Ray in local coordinates
+ * @param {Object} transformInfo - {origin, rotationMatrix, chiefRayShift} from previous transforms
+ * @returns {Object} - Restored ray in global coordinates
+ */
+export function restoreFromLocalCoordinates(ray, transformInfo) {
+  if (!ray || !ray.pos || !ray.dir) {
+    throw new Error('Invalid ray object. Must have pos and dir properties.');
+  }
+  if (!transformInfo) {
+    throw new Error('Invalid transform info. Must contain origin, rotationMatrix, and optionally chiefRayShift.');
+  }
+  
+  const { origin, rotationMatrix, chiefRayShift } = transformInfo;
+  
+  if (!origin || !rotationMatrix) {
+    throw new Error('Transform info must contain origin and rotationMatrix.');
+  }
+  
+  try {
+    // Step 1: If chief ray shift was applied, restore it first (add it back)
+    let restoredPos = { ...ray.pos };
+    if (chiefRayShift) {
+      restoredPos = {
+        x: restoredPos.x + chiefRayShift.x,
+        y: restoredPos.y + chiefRayShift.y,
+        z: restoredPos.z + chiefRayShift.z
+      };
+    }
+    
+    // Step 2: Transform from local to global coordinates
+    const globalPos = transformLocalToGlobal(restoredPos, origin, rotationMatrix);
+    const globalDir = transformLocalToGlobal(ray.dir, { x: 0, y: 0, z: 0 }, rotationMatrix);
+    
+    return {
+      pos: globalPos,
+      dir: globalDir,
+      wavelength: ray.wavelength
+    };
+  } catch (error) {
+    throw new Error(`Failed to restore from local coordinates: ${error.message}`);
+  }
+}
+
+/**
+ * Combined transformation: reset to surface coordinates and shift to chief ray origin.
+ * @param {Object} ray - Ray object to transform
+ * @param {number} surfaceIndex - 0-based surface index
+ * @param {Array} chiefRayPath - Chief ray path array
+ * @param {Array} opticalSystemRows - Optical system data
+ * @returns {Object} - {transformedRay, transformInfo: {origin, rotationMatrix, chiefRayShift}}
+ */
+export function transformToChiefRayLocalCoordinates(ray, surfaceIndex, chiefRayPath, opticalSystemRows) {
+  // Step 1: Reset to surface coordinates
+  const resetResult = resetToSurfaceCoordinates(ray, surfaceIndex, opticalSystemRows);
+  if (!resetResult) {
+    throw new Error('Failed to reset to surface coordinates.');
+  }
+  
+  const { transformedRay, origin, rotationMatrix } = resetResult;
+  
+  // Step 2: Shift to chief ray origin
+  const shiftResult = shiftToChiefRayOrigin(transformedRay, surfaceIndex, chiefRayPath, opticalSystemRows);
+  if (!shiftResult) {
+    throw new Error('Failed to shift to chief ray origin.');
+  }
+  
+  const { shiftedRay, chiefRayShift } = shiftResult;
+  
+  return {
+    transformedRay: shiftedRay,
+    transformInfo: {
+      origin,
+      rotationMatrix,
+      chiefRayShift
+    }
+  };
+}
+
+/**
+ * Calculate chief-ray global intersection points for each real surface.
+ * Uses surface 0 as the global coordinate origin.
+ * CoordTrans/Object rows are skipped because they have no physical intersection.
+ * @param {Array} opticalSystemRows
+ * @param {Object} options
+ * @returns {Array} [{ surfaceIndex, surfaceId, point }]
+ */
+export function calculateChiefRaySurfaceIntersections(opticalSystemRows, options = {}) {
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+    throw new Error('Invalid optical system data.');
+  }
+
+  const rows = normalizeCoordTransRows(opticalSystemRows);
+
+  const chiefRayStart = { x: 0, y: 0, z: 0 };
+  let chiefRayDir = { x: 0, y: 0, z: 1 };
+
+  try {
+    const result = computeChiefRayDirectionToStop(rows, options.wavelength ?? 0.55);
+    chiefRayDir = result?.dir || chiefRayDir;
+  } catch (_) {}
+
+  const chiefRay = {
+    pos: chiefRayStart,
+    dir: chiefRayDir,
+    wavelength: options.wavelength ?? 0.55
+  };
+
+  const chiefRayPath = traceRay(rows, chiefRay, 1.0);
+  if (!chiefRayPath || chiefRayPath.length === 0) {
+    throw new Error('Failed to trace chief ray.');
+  }
+
+  // chiefRayPath is already in global coordinates!
+  // Simply collect the points for each real surface
+  const results = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (isCoordTransSurface(row) || isObjectRow(row)) continue;
+
+    const rayPathIndex = surfaceIndexToRayPathPointIndex(rows, i);
+    if (rayPathIndex === null || rayPathIndex >= chiefRayPath.length) continue;
+
+    const point = chiefRayPath[rayPathIndex];
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)) continue;
+
+    results.push({
+      surfaceIndex: i,
+      surfaceId: row.id ?? i,
+      point: { x: point.x, y: point.y, z: point.z }
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Calculate local coordinates for all surfaces at specified target surface.
+ * @param {Array} opticalSystemRows - Optical system data
+ * @param {number} targetSurfaceIndex - 0-based target surface index
+ * @param {Function} progressCallback - Optional callback(percent, message)
+ * @param {string} ignoreCoordTransBlockId - Optional: block ID of CoordTrans to ignore (treat as identity)
+ * @returns {Promise<Object>} - {surfaces: {surfaceId: {localDecenterX, ...}}, metadata: {...}}
+ */
+export async function calculateAllSurfacesLocalCoordinates(opticalSystemRows, targetSurfaceIndex, progressCallback, ignoreCoordTransBlockId) {
+  // Input validation
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+    throw new Error('Invalid optical system data.');
+  }
+  if (!Number.isInteger(targetSurfaceIndex) || targetSurfaceIndex < 0 || targetSurfaceIndex >= opticalSystemRows.length) {
+    throw new Error(`Invalid target surface index: ${targetSurfaceIndex}.`);
+  }
+  
+  const reportProgress = (percent, message) => {
+    try {
+      if (typeof progressCallback === 'function') {
+        progressCallback(percent, message);
+      }
+    } catch (_) {}
+  };
+  
+  reportProgress(0, 'Starting calculation...');
+  
+  // If ignoreCoordTransBlockId is specified, temporarily zero out that CoordTrans block's parameters
+  let modifiedRows = normalizeCoordTransRows(opticalSystemRows);
+  if (ignoreCoordTransBlockId) {
+    console.log(`[CoordTrans] Ignoring CoordTrans block: ${ignoreCoordTransBlockId}`);
+    modifiedRows = opticalSystemRows.map(row => {
+      const blockId = String(row._blockId ?? row.blockId ?? '');
+      if (blockId === String(ignoreCoordTransBlockId) && isCoordTransSurface(row)) {
+        // Create a copy with zeroed parameters
+        return {
+          ...row,
+          decenterX: 0,
+          decenterY: 0,
+          decenterZ: 0,
+          tiltX: 0,
+          tiltY: 0,
+          tiltZ: 0,
+          // Also zero legacy reused fields so legacy CB rows are truly ignored
+          semidia: 0,
+          material: 0,
+          thickness: 0,
+          rindex: 0,
+          abbe: 0,
+          conic: 0,
+          coef1: row.coef1
+        };
+      }
+      return row;
+    });
+  }
+  
+  // Check if target surface is valid (not CoordTrans or Object)
+  const targetRow = modifiedRows[targetSurfaceIndex];
+  if (isCoordTransSurface(targetRow) || isObjectRow(targetRow)) {
+    throw new Error('Target surface cannot be CoordTrans or Object surface. Please specify a real surface.');
+  }
+  
+  try {
+    reportProgress(5, 'Tracing chief ray...');
+    
+    // Trace chief ray for field point (0, 0) at primary wavelength 0.55μm
+    // Aim the ray through the stop center to approximate the true chief ray
+    const chiefRayStart = { x: 0, y: 0, z: 0 };
+    let chiefRayDir = { x: 0, y: 0, z: 1 };
+    try {
+      const result = computeChiefRayDirectionToStop(modifiedRows, 0.55);
+      chiefRayDir = result?.dir || chiefRayDir;
+    } catch (_) {}
+
+    const chiefRay = {
+      pos: chiefRayStart,
+      dir: chiefRayDir,
+      wavelength: 0.55
+    };
+    
+    // Trace chief ray through the system (using modified rows)
+    const chiefRayPath = traceRay(modifiedRows, chiefRay, 1.0);
+    
+    if (!chiefRayPath || chiefRayPath.length === 0) {
+      throw new Error('Failed to trace chief ray. Check optical system configuration.');
+    }
+    
+    // Log chief ray final position (for debugging chief ray shift accuracy)
+    if (chiefRayPath.length > 0) {
+      const finalPos = chiefRayPath[chiefRayPath.length - 1];
+      console.log(`  [Chief Ray] Final position: (${finalPos.x.toFixed(6)}, ${finalPos.y.toFixed(6)}, ${finalPos.z.toFixed(6)})`);
+    }
+    
+    reportProgress(10, 'Calculating surface origins...');
+    
+    // Get surface data (origins and rotation matrices) using modified rows
+    const surfaceData = calculateSurfaceOrigins(modifiedRows);
+    if (!surfaceData) {
+      throw new Error('Failed to calculate surface origins.');
+    }
+    
+    reportProgress(15, 'Processing surfaces...');
+    
+    // Calculate local coordinates for each surface
+    const results = {};
+    let processedCount = 0;
+    const totalSurfaces = modifiedRows.length;
+    
+    for (let i = 0; i < modifiedRows.length; i++) {
+      // Check for cancellation
+      if (typeof window !== 'undefined' && window._transformCalculationCancelled) {
+        reportProgress(100, 'Calculation cancelled');
+        throw new Error('Calculation cancelled by user.');
+      }
+      
+      const row = modifiedRows[i];
+      const surfaceId = row.id;
+      
+      // Skip Object surfaces (they don't have intersection points)
+      if (isObjectRow(row)) {
+        continue;
+      }
+      
+      // For CoordTrans surfaces, only calculate their coordinate transformation parameters
+      // (no ray tracing needed)
+      if (isCoordTransSurface(row)) {
+        const globalOrigin = surfaceData[i].origin;
+        const globalRotMat = surfaceData[i].rotationMatrix;
+        
+        let decenterX, decenterY, decenterZ;
+        
+        if (i === 0) {
+          decenterX = globalOrigin.x;
+          decenterY = globalOrigin.y;
+          decenterZ = globalOrigin.z;
+        } else {
+          const prevOrigin = surfaceData[i - 1].origin;
+          const prevRotMat = surfaceData[i - 1].rotationMatrix;
+          
+          const dx_global = globalOrigin.x - prevOrigin.x;
+          const dy_global = globalOrigin.y - prevOrigin.y;
+          const dz_global = globalOrigin.z - prevOrigin.z;
+          
+          decenterX = prevRotMat[0][0] * dx_global + prevRotMat[0][1] * dy_global + prevRotMat[0][2] * dz_global;
+          decenterY = prevRotMat[1][0] * dx_global + prevRotMat[1][1] * dy_global + prevRotMat[1][2] * dz_global;
+          decenterZ = prevRotMat[2][0] * dx_global + prevRotMat[2][1] * dy_global + prevRotMat[2][2] * dz_global;
+          
+          // Apply chief ray shift if enabled via chiefRayShiftX, Y, Z parameters
+          
+          const chiefRayShiftModeX = String(row?.parameters?.chiefRayShiftX ?? row?.chiefRayShiftX ?? '').trim().toUpperCase();
+          const chiefRayShiftModeY = String(row?.parameters?.chiefRayShiftY ?? row?.chiefRayShiftY ?? '').trim().toUpperCase();
+          const chiefRayShiftModeZ = String(row?.parameters?.chiefRayShiftZ ?? row?.chiefRayShiftZ ?? '').trim().toUpperCase();
+          const useChiefRayShiftX = (chiefRayShiftModeX === 'A' || chiefRayShiftModeX === 'AUTO');
+          const useChiefRayShiftY = (chiefRayShiftModeY === 'A' || chiefRayShiftModeY === 'AUTO');
+          const useChiefRayShiftZ = (chiefRayShiftModeZ === 'A' || chiefRayShiftModeZ === 'AUTO');
+          
+          if (useChiefRayShiftX || useChiefRayShiftY || useChiefRayShiftZ) {
+            // Find where the chief ray intersects the CoordTrans *station plane*.
+            // The station plane is defined by:
+            //   baseOrigin = O(r) + t(r) * R(r).ez
+            // and normal:
+            //   n = R(r).ez
+            // Using a constant global-Z plane leaves a residual when the system is tilted.
+
+            const thickness = getSafeThickness(modifiedRows[i - 1]);
+            const baseOrigin = add(prevOrigin, scale(applyMatrixToVector(prevRotMat, vec3(0, 0, 1)), thickness));
+            // CoordTrans is applied at the station defined along the previous Z axis.
+            // Intersect with the station plane normal R(r).ez.
+            const planeNormal = applyMatrixToVector(prevRotMat, vec3(0, 0, 1));
+
+            let chiefIntersectionGlobal = null;
+            const eps = 1e-12;
+
+            if (chiefRayPath && chiefRayPath.length >= 2) {
+              for (let j = 0; j < chiefRayPath.length - 1; j++) {
+                const p1 = chiefRayPath[j];
+                const p2 = chiefRayPath[j + 1];
+
+                const d1 = dot(planeNormal, sub(p1, baseOrigin));
+                const d2 = dot(planeNormal, sub(p2, baseOrigin));
+
+                if (Math.abs(d1) <= eps) {
+                  chiefIntersectionGlobal = { x: p1.x, y: p1.y, z: p1.z };
+                  break;
+                }
+
+                if (d1 * d2 <= 0) {
+                  const denom = d1 - d2;
+                  if (Math.abs(denom) > eps) {
+                    const t = d1 / denom;
+                    chiefIntersectionGlobal = {
+                      x: p1.x + t * (p2.x - p1.x),
+                      y: p1.y + t * (p2.y - p1.y),
+                      z: p1.z + t * (p2.z - p1.z)
+                    };
+                    break;
+                  }
+                }
+              }
+            }
+            
+            if (chiefIntersectionGlobal && i > 0) {
+              // Compute decenter in the correct basis depending on transform order.
+              // Order 0: decenter is expressed in the previous frame R(r)
+              // Order 1: decenter is expressed in the new frame R(s)
+              const dx = chiefIntersectionGlobal.x - baseOrigin.x;
+              const dy = chiefIntersectionGlobal.y - baseOrigin.y;
+              const dz = chiefIntersectionGlobal.z - baseOrigin.z;
+
+              const cbParams = parseCoordTransParams(row, modifiedRows[i - 1]) || {};
+              const transformOrder = (Number(cbParams.transformOrder) === 0) ? 0 : 1;
+              const basisMat = (transformOrder === 0) ? prevRotMat : surfaceData[i].rotationMatrix;
+
+              const axisX = applyMatrixToVector(basisMat, vec3(1, 0, 0));
+              const axisY = applyMatrixToVector(basisMat, vec3(0, 1, 0));
+              const axisZ = applyMatrixToVector(basisMat, vec3(0, 0, 1));
+
+              const chiefLocalX = axisX.x * dx + axisX.y * dy + axisX.z * dz;
+              const chiefLocalY = axisY.x * dx + axisY.y * dy + axisY.z * dz;
+              const chiefLocalZ = axisZ.x * dx + axisZ.y * dy + axisZ.z * dz;
+              
+              // Apply chief ray shift: set CoordTrans origin to chief ray position
+              // This makes the chief ray pass through the origin (0,0) of this CoordTrans
+              if (useChiefRayShiftX) {
+                decenterX = chiefLocalX;
+              }
+              if (useChiefRayShiftY) {
+                decenterY = chiefLocalY;
+              }
+              if (useChiefRayShiftZ) {
+                decenterZ = chiefLocalZ;
+              }
+              
+              console.log(`  [CoordTrans Surf ${surfaceId}] Chief ray intersection at station plane: global=(${chiefIntersectionGlobal.x.toFixed(6)}, ${chiefIntersectionGlobal.y.toFixed(6)}, ${chiefIntersectionGlobal.z.toFixed(6)}), local=(${chiefLocalX.toFixed(6)}, ${chiefLocalY.toFixed(6)}, ${chiefLocalZ.toFixed(6)})`);
+            }
+          }
+        }
+        
+        // Use the original tilt values from the row parameters
+        // (相対回転ではなく、元のパラメータ値を返す)
+        const cbParams = parseCoordTransParams(row, modifiedRows[i - 1]) || {};
+        const tiltX = Number(cbParams.tiltX || 0);
+        const tiltY = Number(cbParams.tiltY || 0);
+        const tiltZ = Number(cbParams.tiltZ || 0);
+        
+        console.log(`  [CoordTrans ${surfaceId}] Dec=(${decenterX.toFixed(3)}, ${decenterY.toFixed(3)}, ${decenterZ.toFixed(3)}) Tilt=(${tiltX.toFixed(1)}°, ${tiltY.toFixed(1)}°, ${tiltZ.toFixed(1)}°)`);
+        
+        // Store result with string key for consistent lookup
+        const resultKey = String(surfaceId);
+        results[resultKey] = {
+          localDecenterX: decenterX,
+          localDecenterY: decenterY,
+          localDecenterZ: decenterZ,
+          localTiltX: tiltX,
+          localTiltY: tiltY,
+          localTiltZ: tiltZ,
+          transformType: 'coordtrans',
+          targetSurface: targetSurfaceIndex
+        };
+        
+        continue; // Skip ray tracing for CoordTrans
+      }
+      
+      try {
+        // Get chief ray intersection at this surface (surface i)
+        const rayPathIndex = surfaceIndexToRayPathPointIndex(modifiedRows, i);
+        if (rayPathIndex === null || rayPathIndex >= chiefRayPath.length) {
+          continue; // Skip if no intersection
+        }
+        
+        const chiefRayAtSurface = chiefRayPath[rayPathIndex];
+        if (!chiefRayAtSurface || typeof chiefRayAtSurface.x !== 'number') {
+          continue;
+        }
+        
+        // Get chief ray direction at this surface (approximate from path)
+        let chiefRayDir = { x: 0, y: 0, z: 1 }; // Default direction
+        if (rayPathIndex + 1 < chiefRayPath.length) {
+          const nextPoint = chiefRayPath[rayPathIndex + 1];
+          const dx = nextPoint.x - chiefRayAtSurface.x;
+          const dy = nextPoint.y - chiefRayAtSurface.y;
+          const dz = nextPoint.z - chiefRayAtSurface.z;
+          const mag = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (mag > 1e-10) {
+            chiefRayDir = { x: dx / mag, y: dy / mag, z: dz / mag };
+          }
+        }
+        
+        // Create a ray at the chief ray intersection point
+        const rayAtSurface = {
+          pos: { x: chiefRayAtSurface.x, y: chiefRayAtSurface.y, z: chiefRayAtSurface.z },
+          dir: chiefRayDir,
+          wavelength: 0.55
+        };
+        
+        // Transform to target surface's local coordinates first
+        const localResult = resetToSurfaceCoordinates(
+          rayAtSurface,
+          targetSurfaceIndex,
+          modifiedRows
+        );
+        
+        let finalPos = localResult.transformedRay.pos;
+        let finalDir = localResult.transformedRay.dir;
+        
+        // Check if chief ray shift is enabled
+        const useChiefRayShift = (typeof window !== 'undefined' && window._useChiefRayShift === true);
+        
+        if (useChiefRayShift) {
+          // Get chief ray at target surface for rotation matrix
+          const targetRayPathIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
+          if (targetRayPathIndex !== null && targetRayPathIndex < chiefRayPath.length) {
+            const chiefAtTarget = chiefRayPath[targetRayPathIndex];
+            
+            // Get chief ray direction at target surface
+            let chiefDirAtTarget = { x: 0, y: 0, z: 1 };
+            if (targetRayPathIndex + 1 < chiefRayPath.length) {
+              const nextPt = chiefRayPath[targetRayPathIndex + 1];
+              const dx = nextPt.x - chiefAtTarget.x;
+              const dy = nextPt.y - chiefAtTarget.y;
+              const dz = nextPt.z - chiefAtTarget.z;
+              const mag = Math.sqrt(dx * dx + dy * dy + dz * dz);
+              if (mag > 1e-10) {
+                chiefDirAtTarget = { x: dx / mag, y: dy / mag, z: dz / mag };
+              }
+            }
+            
+            // Transform chief ray to target surface local coordinates
+            const chiefLocalResult = resetToSurfaceCoordinates(
+              { pos: chiefAtTarget, dir: chiefDirAtTarget, wavelength: 0.55 },
+              targetSurfaceIndex,
+              opticalSystemRows
+            );
+            const chiefLocalPos = chiefLocalResult.transformedRay.pos;
+            const chiefLocalDir = chiefLocalResult.transformedRay.dir;
+            
+            console.log(`  [Debug] Chief ray at target - Local pos: (${chiefLocalPos.x.toFixed(6)}, ${chiefLocalPos.y.toFixed(6)}, ${chiefLocalPos.z.toFixed(6)})`);
+            console.log(`  [Debug] Chief ray at target - Local dir: (${chiefLocalDir.x.toFixed(6)}, ${chiefLocalDir.y.toFixed(6)}, ${chiefLocalDir.z.toFixed(6)})`);
+            
+            // Build rotation matrix with chief ray direction as new Z-axis
+            // New Z-axis = chief ray direction (normalized)
+            const newZ = chiefLocalDir;
+            
+            // New X-axis: perpendicular to newZ
+            // If newZ is not parallel to global Y, use Y × newZ
+            let newX;
+            if (Math.abs(newZ.y) < 0.99) {
+              // Cross product: Y × newZ
+              const crossX = -newZ.z;
+              const crossY = 0;
+              const crossZ = newZ.x;
+              const crossMag = Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
+              newX = { x: crossX / crossMag, y: crossY / crossMag, z: crossZ / crossMag };
+            } else {
+              // Use X × newZ if newZ is nearly parallel to Y
+              const crossX = 0;
+              const crossY = newZ.z;
+              const crossZ = -newZ.y;
+              const crossMag = Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
+              newX = { x: crossX / crossMag, y: crossY / crossMag, z: crossZ / crossMag };
+            }
+            
+            // New Y-axis = newZ × newX
+            const newY = {
+              x: newZ.y * newX.z - newZ.z * newX.y,
+              y: newZ.z * newX.x - newZ.x * newX.z,
+              z: newZ.x * newX.y - newZ.y * newX.x
+            };
+            
+            // Rotation matrix R_chief: columns are newX, newY, newZ
+            // To transform point p: R_chief^T × (p - chiefLocalPos)
+            // This makes chief ray at origin pointing in +Z direction
+            
+            // Apply rotation and translation
+            const dx = finalPos.x - chiefLocalPos.x;
+            const dy = finalPos.y - chiefLocalPos.y;
+            const dz = finalPos.z - chiefLocalPos.z;
+            
+            finalPos = {
+              x: newX.x * dx + newX.y * dy + newX.z * dz,
+              y: newY.x * dx + newY.y * dy + newY.z * dz,
+              z: newZ.x * dx + newZ.y * dy + newZ.z * dz
+            };
+            
+            // Transform direction vector
+            finalDir = {
+              x: newX.x * finalDir.x + newX.y * finalDir.y + newX.z * finalDir.z,
+              y: newY.x * finalDir.x + newY.y * finalDir.y + newY.z * finalDir.z,
+              z: newZ.x * finalDir.x + newZ.y * finalDir.y + newZ.z * finalDir.z
+            };
+          }
+        }
+        
+        // For regular surfaces, we don't calculate decenter/tilt
+        // (only CoordTrans blocks need these parameters)
+        // Simply store the result for display purposes
+        
+        console.log(`Surface ${surfaceId}: Transformed successfully (target: Surf ${targetSurfaceIndex})`);
+      } catch (error) {
+        // Skip surfaces that fail transformation
+        console.warn(`Failed to transform surface ${i}:`, error.message);
+      }
+      
+      processedCount++;
+      
+      // Report progress every 10 surfaces
+      if (processedCount % 10 === 0 || processedCount === totalSurfaces) {
+        const percent = 15 + Math.floor((processedCount / totalSurfaces) * 80);
+        reportProgress(percent, `Processing surface ${processedCount}/${totalSurfaces}...`);
+        
+        // Yield to event loop every 10 surfaces
+        if (processedCount % 10 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+      }
+    }
+    
+    // Check if any CoordTrans used chief ray shift - if so, iteratively refine
+    let needsRetrace = false;
+    const coordTransWithChiefShift = [];
+    for (let i = 0; i < modifiedRows.length; i++) {
+      const row = modifiedRows[i];
+      if (isCoordTransSurface(row)) {
+        const chiefRayShiftModeY = String(row?.parameters?.chiefRayShiftY ?? row?.chiefRayShiftY ?? '').trim().toUpperCase();
+        if (chiefRayShiftModeY === 'A' || chiefRayShiftModeY === 'AUTO') {
+          needsRetrace = true;
+          coordTransWithChiefShift.push(i);
+        }
+      }
+    }
+    
+    // ITERATION DISABLED: The initial calculation is already correct
+    // Iteration doesn't converge because changing decenterY moves the entire coordinate system,
+    // so the chief ray intersection in global coordinates remains at the same position
+    needsRetrace = false;
+    
+    if (needsRetrace) {
+      reportProgress(92, 'Iteratively refining chief ray shifts...');
+      
+      // Create a new array with deeply copied row objects to avoid cache poisoning
+      // The cache uses array reference as key, so we need a distinct array object
+      // Also copy nested objects like parameters to ensure full isolation
+      modifiedRows = modifiedRows.map(row => ({
+        ...row,
+        parameters: row.parameters ? { ...row.parameters } : undefined
+      }));
+      
+      const maxIterations = 5;
+      const convergenceThreshold = 0.001; // 1 micron
+      let currentChiefPath = chiefRayPath; // Start with initial path
+      
+      console.log(`  [Starting iteration] coordTransWithChiefShift indices: [${coordTransWithChiefShift.join(', ')}]`);
+      
+      for (let iteration = 1; iteration <= maxIterations; iteration++) {
+        console.log(`  === [Iteration ${iteration} START] ===`);
+        
+        // Clear cache BEFORE creating new array (delete old array's cache entry)
+        if (typeof __surfaceOriginsCache !== 'undefined') {
+          __surfaceOriginsCache.delete(modifiedRows);
+        }
+        
+        // Create a new array to ensure cache key changes
+        modifiedRows = modifiedRows.map(r => r);
+        
+        // Trace chief ray with current decenter values
+        const chiefRayRetrace = traceRay(modifiedRows, chiefRay, 1.0);
+        
+        if (!chiefRayRetrace || chiefRayRetrace.length === 0) {
+          console.log(`  [Iteration ${iteration}] Chief ray trace failed`);
+          break;
+        }
+        
+        console.log(`    [Path points]:`, chiefRayRetrace.map((p, i) => `[${i}]=(${p.x.toFixed(3)}, ${p.y.toFixed(3)}, ${p.z.toFixed(3)})`).join(' '));
+        
+        const finalPos = chiefRayRetrace[chiefRayRetrace.length - 1];
+        const finalY = Math.abs(finalPos.y);
+        
+        console.log(`  [Iteration ${iteration}] Chief ray final Y = ${finalY.toFixed(6)} mm`);
+        
+        // Check convergence
+        if (finalY < convergenceThreshold) {
+          console.log(`  [Converged] Chief ray aligned after ${iteration} iteration(s)`);
+          break;
+        }
+        
+        if (iteration === maxIterations) {
+          console.log(`  [Max iterations reached] Final Y offset = ${finalY.toFixed(6)} mm`);
+          break;
+        }
+        
+        // Recalculate surfaceData with current decenters
+        const updatedSurfaceData = calculateSurfaceOrigins(modifiedRows);
+        if (!updatedSurfaceData) {
+          console.log(`  [Iteration ${iteration}] Failed to recalculate surface origins`);
+          break;
+        }
+        
+        // Calculate NEW decenter values based on traced path
+        for (const i of coordTransWithChiefShift) {
+          const row = modifiedRows[i];
+          const surfaceId = row["Surf ID"] || i;
+          
+          // Check which shifts are enabled
+          const chiefRayShiftModeX = String(row?.parameters?.chiefRayShiftX ?? row?.chiefRayShiftX ?? '').trim().toUpperCase();
+          const chiefRayShiftModeY = String(row?.parameters?.chiefRayShiftY ?? row?.chiefRayShiftY ?? '').trim().toUpperCase();
+          const chiefRayShiftModeZ = String(row?.parameters?.chiefRayShiftZ ?? row?.chiefRayShiftZ ?? '').trim().toUpperCase();
+          const useChiefRayShiftX = (chiefRayShiftModeX === 'A' || chiefRayShiftModeX === 'AUTO');
+          const useChiefRayShiftY = (chiefRayShiftModeY === 'A' || chiefRayShiftModeY === 'AUTO');
+          const useChiefRayShiftZ = (chiefRayShiftModeZ === 'A' || chiefRayShiftModeZ === 'AUTO');
+          
+          if (!updatedSurfaceData[i] || i === 0) continue;
+
+          // Find intersection of chief ray with CoordTrans station plane
+          const prevOrigin = updatedSurfaceData[i - 1].origin;
+          const prevRotMat = updatedSurfaceData[i - 1].rotationMatrix;
+          const thickness = getSafeThickness(modifiedRows[i - 1]);
+          const baseOrigin = add(prevOrigin, scale(applyMatrixToVector(prevRotMat, vec3(0, 0, 1)), thickness));
+          const planeNormal = applyMatrixToVector(prevRotMat, vec3(0, 0, 1));
+
+          let chiefIntersectionGlobal = null;
+          const eps = 1e-10;
+          for (let k = 0; k < chiefRayRetrace.length - 1; k++) {
+            const p1 = chiefRayRetrace[k];
+            const p2 = chiefRayRetrace[k + 1];
+
+            const d1 = dot(planeNormal, sub(p1, baseOrigin));
+            const d2 = dot(planeNormal, sub(p2, baseOrigin));
+
+            if (Math.abs(d1) <= eps) {
+              chiefIntersectionGlobal = { x: p1.x, y: p1.y, z: p1.z };
+              break;
+            }
+
+            if (d1 * d2 <= 0) {
+              const denom = d1 - d2;
+              if (Math.abs(denom) > eps) {
+                const t = d1 / denom;
+                chiefIntersectionGlobal = {
+                  x: p1.x + t * (p2.x - p1.x),
+                  y: p1.y + t * (p2.y - p1.y),
+                  z: p1.z + t * (p2.z - p1.z)
+                };
+                break;
+              }
+            }
+          }
+          
+          if (!chiefIntersectionGlobal) continue;
+
+          // Compute decenter in the correct basis depending on transform order.
+
+          const dx = chiefIntersectionGlobal.x - baseOrigin.x;
+          const dy = chiefIntersectionGlobal.y - baseOrigin.y;
+          const dz = chiefIntersectionGlobal.z - baseOrigin.z;
+
+          const cbParams = parseCoordTransParams(row, modifiedRows[i - 1]) || {};
+          const transformOrder = (Number(cbParams.transformOrder) === 0) ? 0 : 1;
+          const basisMat = (transformOrder === 0) ? prevRotMat : updatedSurfaceData[i].rotationMatrix;
+
+          const axisX = applyMatrixToVector(basisMat, vec3(1, 0, 0));
+          const axisY = applyMatrixToVector(basisMat, vec3(0, 1, 0));
+          const axisZ = applyMatrixToVector(basisMat, vec3(0, 0, 1));
+
+          const chiefLocalX = axisX.x * dx + axisX.y * dy + axisX.z * dz;
+          const chiefLocalY = axisY.x * dx + axisY.y * dy + axisY.z * dz;
+          const chiefLocalZ = axisZ.x * dx + axisZ.y * dy + axisZ.z * dz;
+          
+          const oldDecenterX = row.decenterX || row.parameters?.decenterX || 0;
+          const oldDecenterY = row.decenterY || row.parameters?.decenterY || 0;
+          const oldDecenterZ = row.decenterZ || row.parameters?.decenterZ || 0;
+          
+          // Create new decenter values - CORRECTIVE adjustment, not absolute position
+          // Chief ray intersects at chiefLocalY in the station plane
+          // To center the chief ray, we need to shift the coordinate system by +chiefLocalY
+          const newDecenterX = useChiefRayShiftX ? (oldDecenterX + chiefLocalX) : oldDecenterX;
+          const newDecenterY = useChiefRayShiftY ? (oldDecenterY + chiefLocalY) : oldDecenterY;
+          const newDecenterZ = useChiefRayShiftZ ? (oldDecenterZ + chiefLocalZ) : oldDecenterZ;
+          
+          // Update row with new decenter values (create new object to break cache)
+          modifiedRows[i] = {
+            ...row,
+            decenterX: newDecenterX,
+            decenterY: newDecenterY,
+            decenterZ: newDecenterZ,
+            parameters: {
+              ...(row.parameters || {}),
+              decenterX: newDecenterX,
+              decenterY: newDecenterY,
+              decenterZ: newDecenterZ
+            }
+          };
+          
+          console.log(`    [CoordTrans ${surfaceId}] Updated decenterY: ${oldDecenterY.toFixed(6)} -> ${newDecenterY.toFixed(6)}`);
+        }
+      }
+    }
+    
+    reportProgress(95, 'Finalizing...');
+    
+    // If we did iterations, recalculate results with final decenter values
+    if (needsRetrace) {
+      console.log('  [Recalculating] Final coordinate transforms with updated decenter values...');
+      
+      // Recalculate station plane intersections with final decenter values
+      for (let i = 0; i < modifiedRows.length; i++) {
+        const row = modifiedRows[i];
+        if (!isCoordTransSurface(row)) continue;
+        if (ignoreCoordTransBlockId && String(row._blockId || row.blockId || '') === String(ignoreCoordTransBlockId)) continue;
+        
+        const surfaceId = row["Surf ID"] || i;
+        const rowId = String(row.id || surfaceId);
+        
+        try {
+          const cbParams = parseCoordTransParams(row, modifiedRows[i - 1]) || {};
+          const transformOrder = (Number(cbParams.transformOrder) === 0) ? 0 : 1;
+          const surfaceData = calculateSurfaceOrigins(modifiedRows);
+          
+          if (!surfaceData || !surfaceData[i] || i === 0) continue;
+          
+          const prevOrigin = surfaceData[i - 1].origin;
+          const prevRotMat = surfaceData[i - 1].rotationMatrix;
+          const thickness = getSafeThickness(modifiedRows[i - 1]);
+          const baseOrigin = add(prevOrigin, scale(applyMatrixToVector(prevRotMat, vec3(0, 0, 1)), thickness));
+          const planeNormal = applyMatrixToVector(prevRotMat, vec3(0, 0, 1));
+          
+          // Find chief ray intersection with station plane
+          let chiefIntersectionGlobal = null;
+          const eps = 1e-10;
+          for (let k = 0; k < chiefRayPath.length - 1; k++) {
+            const p1 = chiefRayPath[k];
+            const p2 = chiefRayPath[k + 1];
+            const d1 = dot(planeNormal, sub(p1, baseOrigin));
+            const d2 = dot(planeNormal, sub(p2, baseOrigin));
+            
+            if (Math.abs(d1) <= eps) {
+              chiefIntersectionGlobal = { x: p1.x, y: p1.y, z: p1.z };
+              break;
+            }
+            
+            if (d1 * d2 <= 0) {
+              const denom = d1 - d2;
+              if (Math.abs(denom) > eps) {
+                const t = d1 / denom;
+                chiefIntersectionGlobal = {
+                  x: p1.x + t * (p2.x - p1.x),
+                  y: p1.y + t * (p2.y - p1.y),
+                  z: p1.z + t * (p2.z - p1.z)
+                };
+                break;
+              }
+            }
+          }
+          
+          if (!chiefIntersectionGlobal) continue;
+          
+          const dx = chiefIntersectionGlobal.x - baseOrigin.x;
+          const dy = chiefIntersectionGlobal.y - baseOrigin.y;
+          const dz = chiefIntersectionGlobal.z - baseOrigin.z;
+          
+          const basisMat = (transformOrder === 0) ? prevRotMat : surfaceData[i].rotationMatrix;
+          const axisX = applyMatrixToVector(basisMat, vec3(1, 0, 0));
+          const axisY = applyMatrixToVector(basisMat, vec3(0, 1, 0));
+          const axisZ = applyMatrixToVector(basisMat, vec3(0, 0, 1));
+          
+          const chiefLocalX = axisX.x * dx + axisX.y * dy + axisX.z * dz;
+          const chiefLocalY = axisY.x * dx + axisY.y * dy + axisY.z * dz;
+          const chiefLocalZ = axisZ.x * dx + axisZ.y * dy + axisZ.z * dz;
+          
+          const currentDecenterX = row.decenterX || row.parameters?.decenterX || 0;
+          const currentDecenterY = row.decenterY || row.parameters?.decenterY || 0;
+          const currentDecenterZ = row.decenterZ || row.parameters?.decenterZ || 0;
+          
+          console.log(`  [CoordTrans Surf ${surfaceId}] Final chief ray intersection at station plane: global=(${chiefIntersectionGlobal.x.toFixed(6)}, ${chiefIntersectionGlobal.y.toFixed(6)}, ${chiefIntersectionGlobal.z.toFixed(6)}), local=(${chiefLocalX.toFixed(6)}, ${chiefLocalY.toFixed(6)}, ${chiefLocalZ.toFixed(6)})`);
+          
+          // Store final calculated values in results
+          results[rowId] = {
+            localDecenterX: currentDecenterX,
+            localDecenterY: currentDecenterY,
+            localDecenterZ: currentDecenterZ,
+            localTiltX: cbParams.tiltX || 0,
+            localTiltY: cbParams.tiltY || 0,
+            localTiltZ: cbParams.tiltZ || 0
+          };
+        } catch (error) {
+          console.warn(`Failed to recalculate surface ${i}:`, error.message);
+        }
+      }
+    }
+    
+    // Create metadata
+    const metadata = {
+      targetSurfaceIndex,
+      timestamp: new Date().toISOString(),
+      version: '1.0',
+      opticalSystemHash: JSON.stringify(opticalSystemRows).slice(0, 100), // Simple hash
+      cancelled: false,
+      surfaceCount: Object.keys(results).length
+    };
+    
+    // (Debug logging removed)
+    
+    reportProgress(100, 'Complete');
+    
+    return {
+      surfaces: results,
+      metadata
+    };
+    
+  } catch (error) {
+    reportProgress(100, 'Error');
+    throw error;
+  }
+}
+
+// Helper function to check if surface is Object
+function isObjectRow(row) {
+  if (!row) return false;
+  const t = String(row?.['object type'] ?? row?.object ?? '').toLowerCase();
+  return t === 'object';
+}
+
+/**
+ * Convert surface index to rayPath point index (accounting for skipped surfaces)
+ * @param {Array} opticalSystemRows - Optical system data
+ * @param {number} surfaceIndex - Surface index (0-based)
+ * @returns {number|null} - RayPath point index or null if invalid
+ */
+function surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex) {
+  if (!Array.isArray(opticalSystemRows) || surfaceIndex === null || surfaceIndex === undefined) {
+    return null;
+  }
+  const sIdx = Math.max(0, Math.min(surfaceIndex, opticalSystemRows.length - 1));
+  let count = 0;
+  for (let i = 0; i <= sIdx; i++) {
+    const row = opticalSystemRows[i];
+    if (isCoordTransSurface(row)) continue;
+    if (isObjectRow(row)) continue;
+    count++;
+  }
+  return count > 0 ? count : null;
 }

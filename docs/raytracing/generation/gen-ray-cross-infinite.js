@@ -370,7 +370,6 @@ function binarySearchApertureBoundary(chiefOrigin, direction, basis, searchVecto
         iterations++;
         
         if (debugMode && iterations % 10 === 0) {
-            console.log(`    🔄 二分法 iter=${iterations}: range=[${minDistance.toFixed(4)}, ${maxDistance_current.toFixed(4)}]`);
         }
     }
     
@@ -853,8 +852,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         generateInfiniteSystemCrossBeam.__loggedBuildStamp = true;
         console.log(`[gen-ray-cross-infinite] build=${GEN_RAY_CROSS_INFINITE_BUILD}`);
     }
-    console.log('🌟 [generateInfiniteSystemCrossBeam] 関数呼び出し開始');
-    console.log('🌟 [generateInfiniteSystemCrossBeam] 受信したobjectAngles:', JSON.stringify(objectAngles, null, 2));
     
     const {
         rayCount = 51,  // 31 → 51 に増加（絞り周辺により密な光線配置）
@@ -869,14 +866,12 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
     console.log(`[gen-ray-cross-infinite] options: targetSurfaceIndex=${targetSurfaceIndex}, wavelength=${wavelength}, debugMode=${debugMode}`);
 
     if (debugMode) {
-        console.log('[InfiniteSystem] opticalSystem fingerprint:', fingerprintOpticalSystemRows(opticalSystemRows));
     }
 
     const angles = Array.isArray(objectAngles) ? objectAngles : [objectAngles];
     const allResults = [];
 
     if (debugMode) {
-        console.log('🌟 [InfiniteSystem] 無限系クロスビーム生成開始');
         console.log(`   Object角度数: ${angles.length}`);
         console.log(`   光線数: ${rayCount}`);
         console.log(`   クロスタイプ: ${crossType}`);
@@ -886,11 +881,8 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
     for (let objectIndex = 0; objectIndex < angles.length; objectIndex++) {
         const objectAngle = angles[objectIndex];
         
-        console.log(`🌟 [InfiniteSystem] Object${objectIndex + 1}処理開始: 角度(${objectAngle.x}°, ${objectAngle.y}°)`);
-        console.log(`🌟 [InfiniteSystem] objectAngle詳細:`, JSON.stringify(objectAngle, null, 2));
         
         if (debugMode) {
-            console.log(`🌟 [InfiniteSystem] Object${objectIndex + 1}処理開始 (debugMode): 角度(${objectAngle.x}°, ${objectAngle.y}°)`);
         }
 
         // 1. 角度から方向ベクトル計算
@@ -915,7 +907,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         }
         
         if (debugMode) {
-            console.log(`✅ [InfiniteSystem] Object${objectIndex + 1}方向: (${direction.i.toFixed(6)}, ${direction.j.toFixed(6)}, ${direction.k.toFixed(6)})`);
         }
 
         // 2. Stop面情報の取得
@@ -931,10 +922,8 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         
         const stopSurfaceInfo = findStopSurface(opticalSystemRows, surfaceOrigins);
         if (debugMode) {
-            console.log(`🔍 [InfiniteSystem] Stop面検索結果:`, stopSurfaceInfo);
             if (stopSurfaceInfo?.index !== undefined) {
                 const stopRow = opticalSystemRows?.[stopSurfaceInfo.index] || {};
-                console.log(`🔍 [InfiniteSystem] Stop row fields:`, {
                     index: stopSurfaceInfo.index,
                     objectType: stopRow['object type'] ?? stopRow.object ?? stopRow.type,
                     semidia: stopRow.semidia ?? stopRow.semiDia ?? stopRow.semiDiameter ?? stopRow['semi-diameter'],
@@ -967,7 +956,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         );
 
         if (debugMode) {
-            console.log(`🔍 [InfiniteSystem] Object${objectIndex + 1}: chiefRayOrigin =`, chiefRayOrigin);
         }
 
         // Stop中心に到達できる主光線が存在しない場合（強いビネッティング等）
@@ -997,9 +985,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         // System Data出力: 主光線最適化結果（成功時またはフォールバック時）
         if (typeof window !== 'undefined') {
             // デバッグ: グローバル変数の状態を確認
-            console.log(`🔍 [SystemData] グローバル変数確認: window.lastChiefRayResult =`, window.lastChiefRayResult);
-            console.log(`🔍 [SystemData] 現在処理中のObject: Object${objectIndex + 1}, 角度(${objectAngle.x}°, ${objectAngle.y}°)`);
-            console.log(`🔍 [SystemData] chiefRayOrigin =`, chiefRayOrigin);
             
             // window.lastChiefRayResultが設定されていない場合の安全措置
             if (!window.lastChiefRayResult && chiefRayOrigin && stopSurfaceInfo) {
@@ -1016,12 +1001,10 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                     error: estimatedError,
                     method: 'geometric-approximation'
                 };
-                console.log(`📊 [SystemData] 推定誤差を設定: ${estimatedError.toFixed(6)}mm`);
             }
             
             if (window.lastChiefRayResult) {
                 // 最適化結果あり（Brent法またはフォールバック）
-                console.log(`📊 [SystemData] 出力データ: Object${objectIndex + 1}, X角度=${objectAngle.x}°, Y角度=${objectAngle.y}°, 誤差=${window.lastChiefRayResult.error}`);
                 
                 outputChiefRayConvergenceToSystemData(
                     objectIndex + 1,
@@ -1032,7 +1015,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                 );
                 
                 if (debugMode) {
-                    console.log(`📊 [InfiniteSystem] System Data出力完了: Object${objectIndex + 1}, 誤差=${window.lastChiefRayResult.error.toFixed(6)}mm`);
                 }
             } else {
                 // 最適化結果も主光線もない（深刻なエラー）
@@ -1047,7 +1029,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                 );
             }
         } else {
-            console.log(`❌ [SystemData] window オブジェクトが利用できません`);
         }
 
         // chiefRayOrigin は上で null チェック済み
@@ -1142,7 +1123,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         } else {
             // stop-based boundary search
             if (debugMode) {
-                console.log(`🔍 [InfiniteSystem] Object${objectIndex + 1}: 新方式による絞り周辺光線探索開始`);
             }
 
             apertureBoundaryRays = findApertureBoundaryRays(
@@ -1155,7 +1135,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
 
             // デバッグ: 絞り周辺光線の探索結果を表示
             if (debugMode) {
-                console.log(`🔍 [InfiniteSystem] 新方式絞り周辺光線探索結果:`);
                 console.log(`   発見数: ${apertureBoundaryRays.length} / 4 (期待値)`);
 
                 if (apertureBoundaryRays.length < 4) {
@@ -1232,7 +1211,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         allResults.push(objectResult);
         
         if (debugMode) {
-            console.log(`✅ [InfiniteSystem] Object${objectIndex + 1}クロスビーム生成成功（新方式）`);
             console.log(`   Object角度: (${objectAngle.x}°, ${objectAngle.y}°)`);
             console.log(`   生成光線数: ${crossBeamRays.length}`);
             console.log(`   追跡成功: ${tracedRays.filter(r => r.success).length}/${tracedRays.length}`);
@@ -1271,7 +1249,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
     };
 
     if (debugMode) {
-        console.log('✅ [InfiniteSystem] 無限系クロスビーム生成完了');
         console.log(`   処理Object数: ${allResults.length}/${angles.length}`);
         console.log(`   総生成光線数: ${allCrossBeamRays.length}`);
         console.log(`   総追跡成功: ${allTracedRays.filter(r => r.success).length}/${allTracedRays.length}`);
@@ -1317,7 +1294,6 @@ function calculateInfiniteSystemDirection(objectAngle) {
     
     // 大きな角度のデバッグ情報
     if (Math.abs(objectAngle.x) >= 15 || Math.abs(objectAngle.y) >= 15) {
-        console.log(`🔍 [InfiniteSystem] 大きな角度の方向ベクトル計算 (改良版):`);
         console.log(`   入力角度: x=${objectAngle.x}°, y=${objectAngle.y}°`);
         console.log(`   三角関数: cosX=${cosX.toFixed(6)}, cosY=${cosY.toFixed(6)}, sinX=${sinX.toFixed(6)}, sinY=${sinY.toFixed(6)}`);
         console.log(`   生成ベクトル: i=${i.toFixed(6)}, j=${j.toFixed(6)}, k=${k.toFixed(6)}`);
@@ -1378,7 +1354,6 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
     const dynamicHalfRange = Math.max(50, guessAbs + 2 * stopRadiusGuess + 10);
     
     if (debugMode) {
-        console.log(`🔍 [InfiniteSystem] Grid+Brent法ハイブリッド主光線射出座標探索開始（優秀レベル対応）`);
         console.log(`   方向ベクトル: (${direction.i.toFixed(6)}, ${direction.j.toFixed(6)}, ${direction.k.toFixed(6)})`);
         console.log(`   Stop面中心: (${stopCenter.x.toFixed(3)}, ${stopCenter.y.toFixed(3)}, ${stopCenter.z.toFixed(3)})`);
         console.log(`   目標精度: 優秀レベル (< 10μm)`);
@@ -1729,7 +1704,6 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             const totalError = Math.hypot(errorX, errorY);
             
             if (debugMode) {
-                console.log(`📊 [Grid+Brent] 最終結果検証:`);
                 console.log(`   射出座標: (${result.x.toFixed(6)}, ${result.y.toFixed(6)}, ${result.z.toFixed(3)})`);
                 console.log(`   Stop面実際位置: (${actualPoint.x.toFixed(6)}, ${actualPoint.y.toFixed(6)})`);
                 console.log(`   Stop面目標位置: (${stopCenter.x.toFixed(6)}, ${stopCenter.y.toFixed(6)})`);
@@ -1772,7 +1746,6 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
  */
 export function outputChiefRayConvergenceToSystemData(objectNumber, xAngle, yAngle, distanceFromCenter, optimizationMethod) {
     try {
-        console.log(`📊 [SystemData] 出力関数呼び出し: Object${objectNumber}, 角度(${xAngle}°, ${yAngle}°), 距離=${distanceFromCenter}mm, 手法=${optimizationMethod}`);
         
         // DOM要素の存在確認（複数のID候補を試す）
         let systemDataTextarea = document.getElementById('system-data');
@@ -1796,7 +1769,6 @@ export function outputChiefRayConvergenceToSystemData(objectNumber, xAngle, yAng
             return;
         }
         
-        console.log(`✅ [SystemData] テキストエリアが見つかりました:`, systemDataTextarea);
         
         // 最適化手法の日本語表示
         const methodDisplayName = {
@@ -1839,7 +1811,6 @@ export function outputChiefRayConvergenceToSystemData(objectNumber, xAngle, yAng
         // スクロールを最上位に移動
         systemDataTextarea.scrollTop = 0;
         
-        console.log(`✅ [SystemData] System Data出力完了: Object${objectNumber}`);
     } catch (error) {
         console.error(`❌ [SystemData] System Data出力エラー:`, error);
     }
@@ -1905,7 +1876,6 @@ function calculateApertureRayNewton(chiefRayOrigin, direction, perpendicularPlan
         const residualMagnitude = Math.sqrt(residual.x * residual.x + residual.y * residual.y);
         
         if (debugMode && iteration < 3) {
-            console.log(`🔄 [Newton] 反復${iteration}: 残差=${residualMagnitude.toFixed(8)}mm`);
         }
         
         if (residualMagnitude < tolerance) {
@@ -2104,7 +2074,6 @@ function findInfiniteSystemApertureRays(chiefRayOrigin, direction, perpendicular
     const edgeErrorTol = Math.max(1e-4, stopRadius * 1e-4); // 許容誤差（半径の0.01% or 0.1µm）
     
     if (debugMode) {
-        console.log(`🔍 [InfiniteSystem] 絞り周辺光線探索（高精度適応的）:`);
         console.log(`   主光線射出座標: (${chiefRayOrigin.x.toFixed(3)}, ${chiefRayOrigin.y.toFixed(3)}, ${chiefRayOrigin.z.toFixed(3)})`);
         console.log(`   方向ベクトル: (${direction.i.toFixed(6)}, ${direction.j.toFixed(6)}, ${direction.k.toFixed(6)})`);
         console.log(`   垂直面uベクトル: (${u.x.toFixed(6)}, ${u.y.toFixed(6)}, ${u.z.toFixed(6)})`);
@@ -2627,7 +2596,6 @@ function findInfiniteSystemApertureRays(chiefRayOrigin, direction, perpendicular
     });
     
     // 絞り周辺光線探索の統計情報を出力（デバッグモードに関係なく常に出力）
-    console.log(`\n📊 [ApertureRays] 絞り周辺光線探索結果統計:`);
     console.log(`   総探索方向: 4 (上下左右)`);
     console.log(`   成功した方向: ${apertureBoundaryRays.length}`);
     console.log(`   成功率: ${(apertureBoundaryRays.length / 4 * 100).toFixed(1)}%`);
@@ -3202,7 +3170,6 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
     
     if (debugMode) {
         const successCount = tracedRays.filter(r => r.success).length;
-        console.log(`📊 [InfiniteSystem] 光線追跡完了: 成功${successCount}/${tracedRays.length}`);
     }
     
     return tracedRays;

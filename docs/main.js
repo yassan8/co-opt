@@ -134,7 +134,6 @@ async function initializeApplication() {
             
 
         } catch (error) {
-            console.warn('⚠️ WASM initialization failed, falling back to JavaScript:', error.message);
             // Set a flag to indicate WASM is not available
             wasmSystem.isWASMReady = false;
         }
@@ -156,49 +155,41 @@ async function initializeApplication() {
         try {
             setupOpticalSystemChangeListeners(scene);
         } catch (error) {
-            console.error('❌ Error setting up optical system change listeners:', error);
         }
         
         try {
             setupRayPatternButtons();
         } catch (error) {
-            console.error('❌ Error setting up ray pattern buttons:', error);
         }
         
         try {
             setupRayColorButtons();
 
         } catch (error) {
-            console.error('❌ Error setting up ray color buttons:', error);
         }
         
         try {
             // View buttons setup - using simple version
             setupSimpleViewButtons();
         } catch (error) {
-            console.error('❌ Error setting up view buttons:', error);
-            console.error('📋 Stack trace:', error.stack);
         }
         
         try {
             initializeUIEventListeners();
 
         } catch (error) {
-            console.error('❌ Error initializing UI event listeners:', error);
         }
         
         try {
             setupDOMEventHandlers();
 
         } catch (error) {
-            console.error('❌ Error setting up DOM event handlers:', error);
         }
         
         // Configuration UI初期化
         try {
             initializeConfigurationUI();
         } catch (error) {
-            console.error('❌ Error initializing configuration UI:', error);
         }
         
         // 波面収差図Object選択UI初期化
@@ -206,14 +197,12 @@ async function initializeApplication() {
             initializeWavefrontObjectUI();
 
         } catch (error) {
-            console.error('❌ Error initializing wavefront object UI:', error);
         }
         
         // Update UI elements
         try {
             updateAllUIElements();
         } catch (error) {
-            console.error('❌ Error updating UI elements:', error);
         }
         
         
@@ -227,7 +216,6 @@ async function initializeApplication() {
                     window.updateWavefrontObjectSelect();
                 }
             } catch (error) {
-                console.error('❌ Error updating wavefront object selection after table init:', error);
             }
             
             // (removed) OPD Rays drawing feature
@@ -310,7 +298,6 @@ async function initializeApplication() {
         };
         
     } catch (error) {
-        console.error('❌ Error initializing application:', error);
         throw error;
     }
 }
@@ -323,7 +310,6 @@ async function initializeApplication() {
  * Draw optical system surfaces - wrapper function for backward compatibility
  */
 function drawOpticalSystemSurfaceWrapper(options = {}) {
-    console.log('🎨 Starting drawOpticalSystemSurfaceWrapper...');
     
     const defaultOptions = {
         crossSectionOnly: false,
@@ -344,7 +330,6 @@ function drawOpticalSystemSurfaceWrapper(options = {}) {
         }
         
         if (!finalOptions.opticalSystemData || finalOptions.opticalSystemData.length === 0) {
-            console.warn('⚠️ No optical system data available for drawing');
             return;
         }
 
@@ -358,13 +343,9 @@ function drawOpticalSystemSurfaceWrapper(options = {}) {
         const lastSystemType = window.lastSystemType || null;
         const systemTypeChanged = lastSystemType && lastSystemType !== currentSystemType;
         
-        console.log(`🔍 [DrawOpticalSystem] Object Thickness: ${objectThickness}`);
-        console.log(`🔍 [DrawOpticalSystem] 光学系タイプ: ${isInfiniteSystem ? '無限系' : '有限系'}`);
-        console.log(`🔍 [DrawOpticalSystem] システムタイプ変更: ${systemTypeChanged ? `${lastSystemType} → ${currentSystemType}` : '変更なし'}`);
         
         // システムタイプが変更された場合、より完全なクリアを実行
         if (systemTypeChanged) {
-            console.log('🧹 [DrawOpticalSystem] システムタイプ変更検出 - 完全なキャンバスクリア実行');
             // レンダラーとシーンを完全にクリア
             if (window.renderer) {
                 window.renderer.clear();
@@ -402,10 +383,8 @@ function drawOpticalSystemSurfaceWrapper(options = {}) {
             crossSectionCenterOffset: finalOptions.crossSectionCenterOffset
         });
         
-        console.log('✅ drawOpticalSystemSurfaceWrapper completed successfully');
         
     } catch (error) {
-        console.error('❌ Error in drawOpticalSystemSurfaceWrapper:', error);
     }
 }
 
@@ -413,7 +392,6 @@ function drawOpticalSystemSurfaceWrapper(options = {}) {
  * Improved draw optical system surface wrapper function
  */
 function improvedDrawOpticalSystemSurfaceWrapper() {
-    console.log('🔧 Running improved draw optical system surface wrapper...');
     
     try {
         // Clear existing optical elements first
@@ -423,7 +401,6 @@ function improvedDrawOpticalSystemSurfaceWrapper() {
         const opticalSystemRows = getOpticalSystemRows();
         
         if (!opticalSystemRows || opticalSystemRows.length === 0) {
-            console.warn('⚠️ No optical system data available');
             return;
         }
         
@@ -436,9 +413,7 @@ function improvedDrawOpticalSystemSurfaceWrapper() {
         // Adjust camera view to fit the drawn surfaces
         adjustCameraView();
         
-        console.log('✅ Improved draw optical system surface wrapper completed');
     } catch (error) {
-        console.error('❌ Error in improvedDrawOpticalSystemSurfaceWrapper:', error);
     }
 }
 
@@ -446,35 +421,29 @@ function improvedDrawOpticalSystemSurfaceWrapper() {
  * Draw optimized rays from objects (正確な光線追跡版)
  */
 function drawOptimizedRaysFromObjects(opticalSystemRows) {
-    console.log('🌟 Drawing optimized rays from objects (正確な光線追跡版)...');
     
     try {
         const objectRows = getObjectRows();
         const scene = window.scene;
         
         if (!scene) {
-            console.warn('⚠️ Scene not available for ray drawing');
             return;
         }
         
         if (!objectRows || objectRows.length === 0) {
-            console.warn('⚠️ No object data available for ray drawing');
             return;
         }
         
         if (!opticalSystemRows || opticalSystemRows.length === 0) {
-            console.warn('⚠️ No optical system data available for ray drawing');
             return;
         }
         
         // 正確な光線追跡を実行（generateRayStartPointsForObject を使用して Angle も正しく扱う）
         objectRows.forEach((obj, objIndex) => {
-            console.log(`🔍 Processing object ${objIndex}:`, obj);
 
             // Get ray count from UI input
             const rayCountInput = document.getElementById('draw-ray-count-input');
             const rayCount = rayCountInput ? (parseInt(rayCountInput.value, 10) || 5) : 5;
-            console.log(`📊 Ray count for object ${objIndex}: ${rayCount}`);
 
             const isAngle = (obj?.position === 'Angle' || obj?.position === 'angle');
             const rayStartPoints = generateRayStartPointsForObject(
@@ -493,7 +462,6 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
             );
 
             if (!Array.isArray(rayStartPoints) || rayStartPoints.length === 0) {
-                console.warn(`⚠️ No rayStartPoints generated for object ${objIndex}`);
                 return;
             }
 
@@ -516,7 +484,6 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                     const rayPath = window.traceRay ? window.traceRay(opticalSystemRows, ray, 1.0) : null;
 
                     if (rayPath && rayPath.length > 1) {
-                        console.log(`✅ 正確光線${rayIndex}追跡成功: ${rayPath.length}点`);
                         console.log(`   開始位置確認: (${rayPath[0].x.toFixed(3)}, ${rayPath[0].y.toFixed(3)}, ${rayPath[0].z.toFixed(3)})`);
 
                         // 光線の描画（正確な方法で）
@@ -536,22 +503,17 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                         };
                         scene.add(line);
 
-                        console.log(`🎨 正確光線${rayIndex}描画完了 (Object${objIndex})`);
                     } else {
-                        console.log(`❌ 正確光線${rayIndex}追跡失敗`);
                     }
                 } catch (error) {
-                    console.error(`❌ 正確光線${rayIndex}でエラー:`, error.message);
                 }
 
                 rayIndex++;
             }
         });
         
-        console.log('✅ Optimized rays drawn successfully (正確な光線追跡版)');
         
     } catch (error) {
-        console.error('❌ Error drawing optimized rays:', error);
     }
 }
 
@@ -559,7 +521,6 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
  * Force draw everything for testing
  */
 function forceDrawEverything() {
-    console.log('🎯 Force drawing everything for testing...');
     
     try {
         // Clear scene first
@@ -579,31 +540,26 @@ function forceDrawEverything() {
         const opticalSystemRows = getOpticalSystemRows();
         const objectRows = getObjectRows();
         
-        console.log('📊 Available data:');
         console.log('  - Optical system rows:', opticalSystemRows?.length || 0);
         console.log('  - Object rows:', objectRows?.length || 0);
         
         if (!opticalSystemRows || opticalSystemRows.length === 0) {
-            console.warn('⚠️ No optical system data, initializing with dummy data');
             initializeTablesWithDummyData();
         }
         
         // Force draw optical surfaces
-        console.log('🔧 Drawing optical surfaces...');
         drawOpticalSystemSurfaces({
             opticalSystemData: getOpticalSystemRows(),
             scene: window.scene
         });
         
         // Force draw rays
-        console.log('🔧 Drawing rays...');
         const finalOpticalSystemRows = getOpticalSystemRows();
         const finalObjectRows = getObjectRows();
         
         if (finalObjectRows && finalObjectRows.length > 0) {
             drawOptimizedRaysFromObjects(finalOpticalSystemRows);
         } else {
-            console.log('🔧 Creating default object for ray drawing...');
             const defaultObject = {
                 height: 10,
                 distance: 100,
@@ -624,10 +580,8 @@ function forceDrawEverything() {
             window.renderer.render(window.scene, window.camera);
         }
         
-        console.log('✅ Force draw completed');
         
     } catch (error) {
-        console.error('❌ Error in force draw:', error);
     }
 }
 
@@ -635,7 +589,6 @@ function forceDrawEverything() {
  * Fit camera to show the optical system properly
  */
 function fitCameraToOpticalSystem() {
-    console.log('📷 Fitting camera to optical system...');
     
     try {
         const camera = window.camera;
@@ -643,7 +596,6 @@ function fitCameraToOpticalSystem() {
         const scene = window.scene;
         
         if (!camera || !controls || !scene) {
-            console.error('❌ Camera, controls, or scene not available');
             return;
         }
         
@@ -658,7 +610,6 @@ function fitCameraToOpticalSystem() {
         const systemSize = Math.max(systemLength, maxY * 2);
         const cameraDistance = Math.max(systemSize * 1.5, 600); // 光学系のサイズの1.5倍またはmin 600
         
-        console.log(`📷 Dynamic camera fitting: centerZ=${systemCenterZ.toFixed(3)}, length=${systemLength.toFixed(3)}, maxY=${maxY.toFixed(3)}, distance=${cameraDistance.toFixed(1)}`);
         
         // Position camera to view the system from a good angle
         camera.position.set(cameraDistance * 0.7, cameraDistance * 0.5, systemCenterZ);
@@ -677,12 +628,8 @@ function fitCameraToOpticalSystem() {
             window.renderer.render(scene, camera);
         }
         
-        console.log('✅ Camera fitted to optical system with dynamic positioning');
-        console.log(`📷 Camera position: (${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)})`);
-        console.log(`🎯 Controls target: (${controls.target.x.toFixed(1)}, ${controls.target.y.toFixed(1)}, ${controls.target.z.toFixed(1)})`);
         
     } catch (error) {
-        console.error('❌ Error fitting camera:', error);
     }
 }
 
@@ -693,14 +640,12 @@ function calculateOpticalSystemZRange() {
     try {
         const opticalSystemRows = getOpticalSystemRows();
         if (!opticalSystemRows || opticalSystemRows.length === 0) {
-            console.warn('⚠️ No optical system data for Z range calculation');
             return { minZ: 0, maxZ: 414, centerZ: 207, totalLength: 414, maxY: 50 };
         }
         
         // Surface origins を計算
         const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
         if (!surfaceOrigins || surfaceOrigins.length === 0) {
-            console.warn('⚠️ No surface origins calculated');
             return { minZ: 0, maxZ: 414, centerZ: 207, totalLength: 414, maxY: 50 };
         }
         
@@ -713,7 +658,6 @@ function calculateOpticalSystemZRange() {
                 const z = surfaceInfo.origin.z;
                 if (isFinite(z)) {
                     zPositions.push(z);
-                    console.log(`🔍 Surface ${index}: Z = ${z.toFixed(3)}`);
                 }
             }
         });
@@ -727,7 +671,6 @@ function calculateOpticalSystemZRange() {
         });
         
         if (zPositions.length === 0) {
-            console.warn('⚠️ No valid Z positions found');
             return { minZ: 0, maxZ: 414, centerZ: 207, totalLength: 414, maxY: maxY || 50 };
         }
         
@@ -736,14 +679,10 @@ function calculateOpticalSystemZRange() {
         const centerZ = (minZ + maxZ) / 2;
         const totalLength = maxZ - minZ;
         
-        console.log(`📏 Optical system Z range: ${minZ.toFixed(3)} to ${maxZ.toFixed(3)}`);
-        console.log(`📏 Center Z: ${centerZ.toFixed(3)}, Total length: ${totalLength.toFixed(3)}`);
-        console.log(`📏 Max Y (semidia): ${maxY.toFixed(3)}`);
         
         return { minZ, maxZ, centerZ, totalLength, maxY };
         
     } catch (error) {
-        console.error('❌ Error calculating optical system Z range:', error);
         return { minZ: 0, maxZ: 414, centerZ: 207, totalLength: 414, maxY: 50 };
     }
 }
@@ -755,12 +694,10 @@ function calculateOpticalSystemZRange() {
 function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
     try {
         if (!rays || !Array.isArray(rays) || rays.length === 0) {
-            console.log('📐 updateImageSemiDiaFromChiefRays: No rays available');
             return;
         }
         
         if (!opticalSystemRows || opticalSystemRows.length === 0) {
-            console.log('📐 updateImageSemiDiaFromChiefRays: No optical system data');
             return;
         }
         
@@ -806,11 +743,9 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
         const isAutoUpdate = imageSurface.optimizeSemiDia === 'U' || imageSurface.semidia === 'Auto';
         
         if (!isAutoUpdate) {
-            console.log(`📐 Image面のoptimizeSemiDia="${imageSurface.optimizeSemiDia}", semidia="${imageSurface.semidia}" (Auto/U以外なのでスキップ)`);
             return;
         }
         
-        console.log('📐 Image面のSemi Diaを主光線の最大高さで自動更新します');
         
         // 主光線のみを抽出
         const chiefRays = rays.filter(ray => {
@@ -819,10 +754,8 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
             return type.includes('chief');
         });
         
-        console.log(`📐 主光線数: ${chiefRays.length}`);
         
         if (chiefRays.length === 0) {
-            console.warn('⚠️ 主光線が見つかりません');
             return;
         }
         
@@ -854,7 +787,6 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
         });
         
         if (maxHeight > 0) {
-            console.log(`📐 主光線の最大高さ: ${maxHeight.toFixed(6)}`);
             
             // Image面のSemi Diaを更新
             imageSurface.semidia = maxHeight;
@@ -862,14 +794,11 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
             // テーブルを更新
             if (window.tableOpticalSystem) {
                 window.tableOpticalSystem.updateData([imageSurface]);
-                console.log(`✅ Image面のSemi Diaを${maxHeight.toFixed(6)}に更新しました`);
             }
         } else {
-            console.warn('⚠️ 有効な主光線の高さが見つかりません');
         }
         
     } catch (error) {
-        console.error('❌ updateImageSemiDiaFromChiefRays error:', error);
     }
 }
 
@@ -878,16 +807,13 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
  * カメラの位置や方向は変更せず、視野範囲のみを更新
  */
 function updateCameraViewBounds() {
-    console.log('📷 updateCameraViewBounds called');
     
     const camera = window.camera;
     if (!camera) {
-        console.log('📷 No camera available');
         return;
     }
     
     if (!camera.isOrthographicCamera) {
-        console.log('📷 Camera is not OrthographicCamera');
         return;
     }
     
@@ -897,7 +823,6 @@ function updateCameraViewBounds() {
         // 光学系のZ範囲とY範囲を動的に計算
         const rangeData = calculateOpticalSystemZRange();
         if (!rangeData) {
-            console.log('📷 No optical system range data available');
             return;
         }
         
@@ -912,7 +837,6 @@ function updateCameraViewBounds() {
                 maxY = Math.max(maxY || 0, ySpan / 2);
             }
         }
-        console.log(`📷 Optical system: maxY=${maxY}, totalLength=${totalLength}`);
         
         // 光線の開始位置も考慮
         const rayStartMargin = 25;
@@ -925,7 +849,6 @@ function updateCameraViewBounds() {
         if (window.renderer) {
             const size = window.renderer.getSize(new THREE.Vector2());
             aspect = size.x / size.y;
-            console.log(`📷 Renderer aspect: ${aspect.toFixed(3)}`);
         }
         
         // 描画枠全体に光学系が収まるように視野サイズを計算
@@ -934,7 +857,6 @@ function updateCameraViewBounds() {
         const visibleHeight = safeMaxY * 2 * marginFactor;
         const visibleWidth = effectiveTotalLength * marginFactor;
         
-        console.log(`📷 Visible size: ${visibleWidth.toFixed(1)} x ${visibleHeight.toFixed(1)}`);
         
         // アスペクト比に基づいて視野範囲を計算
         let viewHeight, viewWidth;
@@ -955,10 +877,7 @@ function updateCameraViewBounds() {
         camera.bottom = -viewHeight;
         camera.updateProjectionMatrix();
         
-        console.log(`📷 View bounds updated: width=${(viewWidth*2).toFixed(1)}, height=${(viewHeight*2).toFixed(1)}`);
-        console.log(`📷 Camera bounds: [${camera.left.toFixed(1)}, ${camera.right.toFixed(1)}, ${camera.top.toFixed(1)}, ${camera.bottom.toFixed(1)}]`);
     } catch (error) {
-        console.error('❌ Error updating camera view bounds:', error);
     }
 }
 
@@ -1039,7 +958,6 @@ function expandOrthoBoundsToAspect(camera, aspect) {
  * Set camera for Y-Z cross section front view (for Draw Cross)
  */
 function setCameraForYZCrossSection(options = {}) {
-    console.log('📷 Setting camera for Y-Z cross section front view...');
     
     try {
         const camera = options.camera || window.camera;
@@ -1048,7 +966,6 @@ function setCameraForYZCrossSection(options = {}) {
         const renderer = options.renderer || window.renderer;
         
         if (!camera || !controls || !scene) {
-            console.error('❌ Camera, controls, or scene not available');
             return;
         }
         
@@ -1102,7 +1019,6 @@ function setCameraForYZCrossSection(options = {}) {
         if (renderer) {
             const size = renderer.getSize(new THREE.Vector2());
             aspect = size.x / size.y;
-            console.log(`📷 Renderer size: ${size.x.toFixed(0)} x ${size.y.toFixed(0)}, aspect: ${aspect.toFixed(3)}`);
         }
         
         // 描画枠全体に光学系が収まるように視野サイズを計算
@@ -1122,14 +1038,12 @@ function setCameraForYZCrossSection(options = {}) {
                 // User already adjusted the view (pan/zoom/rotate).
                 // Keep the current bounds so pressing Render does not change the scale.
                 expandOrthoBoundsToAspect(camera, aspect);
-                console.log('📷 Preserving current orthographic bounds (YZ)');
             } else if (preserveDrawCrossBounds) {
                 camera.left = savedBounds.left;
                 camera.right = savedBounds.right;
                 camera.top = savedBounds.top;
                 camera.bottom = savedBounds.bottom;
                 expandOrthoBoundsToAspect(camera, aspect);
-                console.log('📷 Using preserved Draw Cross orthographic bounds (YZ)');
             } else {
                 // アスペクト比に基づいて、どちらの方向を基準にするか決定
                 let viewHeight, viewWidth;
@@ -1153,19 +1067,11 @@ function setCameraForYZCrossSection(options = {}) {
                 camera.top = viewHeight;
                 camera.bottom = -viewHeight;
 
-                console.log(`📷 Content aspect: ${contentAspect.toFixed(3)}, Screen aspect: ${aspect.toFixed(3)}`);
-                console.log(`📷 OrthographicCamera view: width=${(viewWidth*2).toFixed(1)}, height=${(viewHeight*2).toFixed(1)}`);
-                console.log(`📷 Camera bounds: left=${camera.left.toFixed(1)}, right=${camera.right.toFixed(1)}, top=${camera.top.toFixed(1)}, bottom=${camera.bottom.toFixed(1)}`);
             }
         }
         
-        console.log(`📷 Dynamic camera setup: centerZ=${systemCenterZ.toFixed(3)}`);
-        console.log(`📷 Optical system range: Z=${minZ.toFixed(3)} to ${maxZ.toFixed(3)} (length: ${totalLength.toFixed(3)}), maxY=${maxY.toFixed(3)}`);
-        console.log(`📷 Effective range (with rays): Z=${effectiveMinZ.toFixed(3)} to ${effectiveMaxZ.toFixed(3)} (length: ${effectiveTotalLength.toFixed(3)})`);
         if (sceneBounds) {
-            console.log(`📷 Scene-bounds fit: Z=${fitMinZ.toFixed(3)} to ${fitMaxZ.toFixed(3)} (length: ${fitTotalLength.toFixed(3)}), maxY≈${safeMaxY.toFixed(3)}`);
         }
-        console.log(`📷 Visible dimensions: height=${visibleHeight.toFixed(1)} (Y-vertical), width=${visibleWidth.toFixed(1)} (Z-horizontal)`);
         
         // カメラをX軸負方向に配置（Y-Z断面の正面）- 距離は任意（正投影なので影響なし）
         const cameraDistance = 300; // 正投影カメラでは距離は見た目に影響しない
@@ -1208,7 +1114,6 @@ function setCameraForYZCrossSection(options = {}) {
                 bottom: camera.bottom,
                 centerZ: targetZ
             };
-            console.log('💾 Saved Draw Cross orthographic bounds to camera.userData');
         }
         
         // 強制レンダリング
@@ -1216,17 +1121,12 @@ function setCameraForYZCrossSection(options = {}) {
             renderer.render(scene, camera);
         }
         
-        console.log('✅ Camera set for Y-Z cross section view with dynamic positioning');
-        console.log(`📷 Camera position: (${camera.position.x}, ${camera.position.y}, ${camera.position.z})`);
-        console.log(`🎯 Controls target: (${controls.target.x}, ${controls.target.y}, ${controls.target.z})`);
         
     } catch (error) {
-        console.error('❌ Error setting camera for Y-Z cross section:', error);
     }
 }
 
 function setCameraForXZCrossSection(options = {}) {
-    console.log('📷 Setting camera for X-Z cross section view...');
 
     try {
         const camera = options.camera || window.camera;
@@ -1235,13 +1135,11 @@ function setCameraForXZCrossSection(options = {}) {
         const renderer = options.renderer || window.renderer;
 
         if (!camera || !controls || !scene) {
-            console.error('❌ Camera, controls, or scene not available');
             return;
         }
 
         const rangeData = calculateOpticalSystemZRange();
         if (!rangeData) {
-            console.warn('⚠️ Unable to calculate optical system range for X-Z view');
             return;
         }
 
@@ -1285,7 +1183,6 @@ function setCameraForXZCrossSection(options = {}) {
         if (renderer) {
             const size = renderer.getSize(new THREE.Vector2());
             aspect = size.x / size.y;
-            console.log(`📷 [XZ] Renderer aspect: ${aspect.toFixed(3)}`);
         }
 
         const marginFactor = 1.1;
@@ -1299,14 +1196,12 @@ function setCameraForXZCrossSection(options = {}) {
             const preserveCurrentOrthoBounds = preserveRequested && hasReliableExtent;
             if (preserveCurrentOrthoBounds) {
                 expandOrthoBoundsToAspect(camera, aspect);
-                console.log('📷 [XZ] Preserving current orthographic bounds');
             } else if (preserveDrawCrossBounds) {
                 camera.left = savedBounds.left;
                 camera.right = savedBounds.right;
                 camera.top = savedBounds.top;
                 camera.bottom = savedBounds.bottom;
                 expandOrthoBoundsToAspect(camera, aspect);
-                console.log('📷 [XZ] Using preserved Draw Cross orthographic bounds');
             } else {
                 let viewHeight, viewWidth;
                 const contentAspect = visibleWidth / Math.max(1e-9, visibleHeight);
@@ -1355,9 +1250,7 @@ function setCameraForXZCrossSection(options = {}) {
             renderer.render(scene, camera);
         }
 
-        console.log('✅ Camera set for X-Z cross section view');
     } catch (error) {
-        console.error('❌ Error setting camera for X-Z cross section:', error);
     }
 }
 
@@ -1446,7 +1339,6 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
             throw new Error('Failed to initialize application components');
         }
         
-        console.log('✅ Application components initialized:', appComponents);
         // Store references globally for backward compatibility
         if (appComponents) {
             window.scene = appComponents.scene;
@@ -1455,9 +1347,7 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
             window.controls = appComponents.controls;
             window.ambientLight = appComponents.ambientLight;
             window.directionalLight = appComponents.directionalLight;
-            console.log('✅ App components stored globally');
         } else {
-            console.error('❌ App components not initialized');
         }
         
         // Store table references globally
@@ -1465,17 +1355,14 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
         window.tableObject = tableObject;
         window.tableSource = tableSource;
         
-        console.log('✅ Application initialization completed');
 
         // URL share load (hash: #compressed_data=...)
         // Run on next tick so other DOMContentLoaded listeners can finish too.
         setTimeout(() => {
             try {
                 Promise.resolve(loadFromCompressedDataHashIfPresent()).catch((e) => {
-                    console.warn('⚠️ [URL Load] Failed:', e);
                 });
             } catch (e) {
-                console.warn('⚠️ [URL Load] Failed:', e);
             }
         }, 0);
         
@@ -1485,24 +1372,20 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
         const debugObjectDataBtn = document.getElementById('debug-object-data');
         if (debugObjectDataBtn) {
             debugObjectDataBtn.addEventListener('click', () => {
-                console.log('\n🔍 [ObjectDebug] Objectデータデバッグ開始');
                 
                 const objectRows = window.getObjectRows ? window.getObjectRows() : [];
                 const objectSelect = document.getElementById('wavefront-object-select');
                 const selectedIndex = objectSelect ? parseInt(objectSelect.value) : 0;
                 
-                console.log('🔍 [ObjectDebug] 基本情報:');
                 console.log(`  Object総数: ${objectRows.length}`);
                 console.log(`  選択インデックス: ${selectedIndex}`);
                 console.log(`  ドロップダウン存在: ${!!objectSelect}`);
                 
                 if (objectRows.length === 0) {
-                    console.warn('⚠️ [ObjectDebug] Objectデータが見つかりません');
                     alert('Objectデータが読み込まれていません。JSONファイルをロードしてください。');
                     return;
                 }
                 
-                console.log('🔍 [ObjectDebug] 全Objectデータ:');
                 objectRows.forEach((obj, index) => {
                     console.log(`  Object ${index + 1}:`, obj);
                     console.log(`    Type: ${obj.Type || obj.type || '未設定'}`);
@@ -1522,7 +1405,6 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                 
                 // 選択されたObjectの詳細
                 const selectedObject = objectRows[selectedIndex] || objectRows[0];
-                console.log('🎯 [ObjectDebug] 選択されたObject詳細:');
                 console.log('  データ:', selectedObject);
                 
                 // フィールド設定として変換
@@ -1538,12 +1420,10 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
         const debugRayAnglesBtn = document.getElementById('debug-ray-angles');
         if (debugRayAnglesBtn) {
             debugRayAnglesBtn.addEventListener('click', () => {
-                console.log('\n🔍 [RayAngleDebug] 光線角度デバッグ開始');
                 
                 if (window.debugOPDRayAngles) {
                     window.debugOPDRayAngles();
                 } else {
-                    console.warn('⚠️ [RayAngleDebug] debugOPDRayAngles関数が見つかりません');
                     console.log('💡 [RayAngleDebug] debug-opd-ray-angles.jsが正しく読み込まれているか確認してください');
                 }
             });
@@ -1554,7 +1434,6 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
         if (drawCrossBtn) {
             drawCrossBtn.addEventListener('click', async () => {
                 try {
-                    console.log('🎯 [DrawCross] クロスビーム描画開始');
                     
                     // ボタンを無効化
                     drawCrossBtn.disabled = true;
@@ -1577,13 +1456,9 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                     const lastSystemType = window.lastSystemType || null;
                     const systemTypeChanged = lastSystemType && lastSystemType !== currentSystemType;
                     
-                    console.log(`🔍 [DrawCross] Object Thickness: ${objectThickness}`);
-                    console.log(`🔍 [DrawCross] 光学系タイプ: ${isInfiniteSystem ? '無限系' : '有限系'}`);
-                    console.log(`🔍 [DrawCross] システムタイプ変更: ${systemTypeChanged ? `${lastSystemType} → ${currentSystemType}` : '変更なし'}`);
                     
                     // システムタイプが変更された場合、より完全なクリアを実行
                     if (systemTypeChanged) {
-                        console.log('🧹 [DrawCross] システムタイプ変更検出 - 完全なキャンバスクリア実行');
                         // レンダラーとシーンを完全にクリア
                         if (window.renderer) {
                             window.renderer.clear();
@@ -1610,9 +1485,7 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                     window.lastSystemType = currentSystemType;
                     
                     if (isInfiniteSystem) {
-                        console.log('🌟 [DrawCross] 無限系光学系 - gen-ray-cross-infinite.js を使用');
                     } else {
-                        console.log('🎯 [DrawCross] 有限系光学系 - gen-ray-cross-finite.js を使用');
                     }
                     
                     // Objectデータの取得
@@ -1654,23 +1527,17 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                     const drawRayCountInput = document.getElementById('draw-ray-count-input');
                     const rayCount = drawRayCountInput ? (parseInt(drawRayCountInput.value, 10) || 7) : 7;  // デフォルト7本
                     
-                    console.log(`🎯 [DrawCross] 光線数: ${rayCount}`);
-                    console.log(`🎯 [DrawCross] 光学系データ: ${opticalSystemRows.length}面`);
-                    console.log(`🎯 [DrawCross] 処理Object数: ${allObjectPositions.length}`);
-                    console.log(`🎯 [DrawCross] 送信するObjectデータ:`, allObjectPositions);
                     
                     // 評価面の選択値を取得
                     const transverseSurfaceSelect = document.getElementById('transverse-surface-select');
                     let targetSurfaceIndex = null;
                     if (transverseSurfaceSelect && transverseSurfaceSelect.value !== '') {
                         targetSurfaceIndex = parseInt(transverseSurfaceSelect.value) - 1; // 1-based to 0-based
-                        console.log(`🎯 [DrawCross] 評価面インデックス: ${targetSurfaceIndex} (Surface ${targetSurfaceIndex + 1})`);
                     } else {
                         const imageSurfaceIndex = opticalSystemRows.findIndex(row =>
                             row && (row['object type'] === 'Image' || row.object === 'Image')
                         );
                         targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemRows.length - 1);
-                        console.log(`🎯 [DrawCross] 評価面未選択 - デフォルトでSurface ${targetSurfaceIndex + 1} (index: ${targetSurfaceIndex}) を使用`);
                     }
                     
                     // Object Thicknessに基づいて適切な関数を選択
@@ -1679,14 +1546,11 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                         ? Number(window.getPrimaryWavelength()) || 0.5876
                         : 0.5876;
                     if (isInfiniteSystem) {
-                        console.log('🌟 [DrawCross] 無限系クロスビーム生成を開始');
                         // 無限系の場合、objectPositionsを角度形式に変換
                         const objectAngles = allObjectPositions.map(pos => ({
                             x: pos.x || 0,  // 角度として扱う
                             y: pos.y || 0   // 角度として扱う
                         }));
-                        console.log('🌟 [DrawCross] Object角度データ:', objectAngles);
-                        console.log('🔧 [DrawCross] 光学系データ:', JSON.stringify(opticalSystemRows.slice(0, 3), null, 2));
                         
                         crossBeamResult = await generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, {
                             rayCount: rayCount,
@@ -1698,7 +1562,6 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                             chiefZ: -20  // 主光線始点をz=-20に設定
                         });
                     } else {
-                        console.log('🎯 [DrawCross] 有限系クロスビーム生成を開始');
                         crossBeamResult = await generateCrossBeam(opticalSystemRows, allObjectPositions, {
                             rayCount: rayCount,
                             debugMode: false,
@@ -1712,10 +1575,6 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                         return;
                     }
                     
-                    console.log(`🎯 [DrawCross] ${isInfiniteSystem ? '無限系' : '有限系'}クロスビーム生成結果:`);
-                    console.log(`🔍 [DrawCross] crossBeamResult構造:`, crossBeamResult);
-                    console.log(`🔍 [DrawCross] crossBeamResult.success:`, crossBeamResult.success);
-                    console.log(`🔍 [DrawCross] crossBeamResult keys:`, Object.keys(crossBeamResult));
                     
                     // 戻り値の構造を確認して適切にアクセス
                     let allRays = [];
@@ -1724,7 +1583,6 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                     
                     if (crossBeamResult.results && Array.isArray(crossBeamResult.results)) {
                         // results配列がある場合
-                        console.log(`🔍 [DrawCross] results配列発見: ${crossBeamResult.results.length}個`);
                         crossBeamResult.results.forEach((result, idx) => {
                             console.log(`   Result${idx + 1}:`, result);
                             if (result.rays && Array.isArray(result.rays)) {
@@ -1737,7 +1595,6 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                     } else if (crossBeamResult.allCrossBeamRays && Array.isArray(crossBeamResult.allCrossBeamRays) &&
                                crossBeamResult.allTracedRays && Array.isArray(crossBeamResult.allTracedRays)) {
                         // 両方の配列がある場合：allTracedRaysにtypeプロパティを追加
-                        console.log(`🔍 [DrawCross] allCrossBeamRays と allTracedRays を統合`);
                         allRays = crossBeamResult.allTracedRays.map((tracedRay, index) => {
                             const crossRay = crossBeamResult.allCrossBeamRays[index];
                             // tracedRayをベースにして、typeとbeamTypeのみ上書き（pathデータを保持）
@@ -1751,13 +1608,11 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                         totalCount = crossBeamResult.objectCount || 0;
                     } else if (crossBeamResult.allCrossBeamRays && Array.isArray(crossBeamResult.allCrossBeamRays)) {
                         // allCrossBeamRays配列のみ（光線タイプ情報を保持）
-                        console.log(`⚠️ [DrawCross] allCrossBeamRays のみ使用（successプロパティなし）`);
                         allRays = crossBeamResult.allCrossBeamRays;
                         processedCount = crossBeamResult.processedObjectCount || 0;
                         totalCount = crossBeamResult.objectCount || 0;
                     } else if (crossBeamResult.allTracedRays && Array.isArray(crossBeamResult.allTracedRays)) {
                         // allTracedRays配列のみ（フォールバック）
-                        console.log(`⚠️ [DrawCross] allTracedRays のみ使用（typeプロパティなし）`);
                         allRays = crossBeamResult.allTracedRays;
                         processedCount = crossBeamResult.processedObjectCount || 0;
                         totalCount = crossBeamResult.objectCount || 0;
@@ -1781,7 +1636,6 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                         console.log(`   成功光線数: ${allRays.filter(r => r.success).length}`);
                         
                         // デバッグ: allRaysの最初の3本を詳細表示
-                        console.log(`🔍 [DrawCross] allRays サンプル (最初3本):`);
                         allRays.slice(0, 3).forEach((ray, idx) => {
                             console.log(`   光線${idx}: type="${ray.type}", beamType="${ray.beamType}", success=${ray.success}`);
                         });
@@ -1817,9 +1671,7 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                     setCameraForYZCrossSection();
                     
                     // 複数Object対応クロスビームの描画
-                    console.log(`🎯 [DrawCross] 描画する光線数: ${allRays.length}`);
                     if (allRays.length > 0) {
-                        console.log(`🎯 [DrawCross] 描画光線のObject分布:`);
                         const objectDistribution = {};
                         allRays.forEach(ray => {
                             const objIndex = ray.objectIndex || 0;
@@ -1846,7 +1698,6 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                         
                         drawCrossBeamRays(allRays);
                     } else {
-                        console.warn(`⚠️ [DrawCross] 描画する光線が見つかりません`);
                         window.currentDrawCrossRays = [];
                     }
                     
@@ -1862,23 +1713,18 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
                     try {
                         const currentSystem = getCurrentOpticalSystem();
                         if (currentSystem && currentSystem.length > 0) {
-                            console.log('🌟 [DrawCross] 絞り周辺光線の計算を開始');
                             // 軸上の点（デフォルトフィールド設定）を使用
                             const fieldSetting = { x: 0, y: 0, displayName: "On-axis" };
                             const marginalRays = calculateAllMarginalRays(currentSystem, fieldSetting, 0.5876); // opticalSystem, fieldSetting, wavelength
                             drawMarginalRays(marginalRays, currentSystem);
-                            console.log('✅ [DrawCross] 絞り周辺光線の描画完了');
                         }
                     } catch (marginalError) {
-                        console.warn('⚠️ [DrawCross] 絞り周辺光線描画でエラー:', marginalError);
                         // 絞り周辺光線のエラーは致命的ではないので続行
                     }
                     */
                     
-                    console.log('✅ [DrawCross] クロスビーム描画完了');
                     
                 } catch (error) {
-                    console.error('❌ [DrawCross] エラー:', error);
                     alert(`クロスビーム描画エラー: ${error.message}`);
                 } finally {
                     // ボタンを再有効化
@@ -1898,11 +1744,9 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
 
         if (undoBtn) {
             undoBtn.addEventListener('click', () => {
-                console.log('[Undo] Undo button clicked');
                 if (window.undoHistory) {
                     const success = window.undoHistory.undo();
                     if (success) {
-                        console.log('✅ Undo executed');
                     }
                 } else {
                     console.error('[Undo] window.undoHistory not found');
@@ -1914,11 +1758,9 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
 
         if (redoBtn) {
             redoBtn.addEventListener('click', () => {
-                console.log('[Undo] Redo button clicked');
                 if (window.undoHistory) {
                     const success = window.undoHistory.redo();
                     if (success) {
-                        console.log('✅ Redo executed');
                     }
                 } else {
                     console.error('[Undo] window.undoHistory not found');
@@ -1928,7 +1770,6 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
             console.warn('[Undo] redo-btn not found');
         }
 
-        console.log('[Undo] Button handlers registered');
         
         // Setup Toolbar Toggle button
         const toggleToolbarBtn = document.getElementById('toggle-toolbar-btn');
@@ -1951,7 +1792,6 @@ if (typeof document !== 'undefined' && document?.addEventListener) document.addE
         }
         
     } catch (error) {
-        console.error('❌ Failed to initialize application:', error);
         alert(`Failed to initialize application: ${error.message}`);
     }
 });
@@ -1974,14 +1814,8 @@ function drawCrossBeamRays(tracedRays, targetScene) {
     // Use provided scene or default to window.scene
     const scene = targetScene || window.scene;
     
-    console.log('🎯 [DrawCrossBeamRays] 複数Object対応描画開始', tracedRays);
-    console.log('🎯 [DrawCrossBeamRays] Using scene:', scene === window.scene ? 'window.scene' : 'custom scene');
     
     if (!tracedRays || tracedRays.length === 0) {
-        console.warn('⚠️ [DrawCrossBeamRays] 描画する光線がありません');
-        console.log('🔍 [DrawCrossBeamRays] tracedRays:', tracedRays);
-        console.log('🔍 [DrawCrossBeamRays] tracedRays type:', typeof tracedRays);
-        console.log('🔍 [DrawCrossBeamRays] Array.isArray(tracedRays):', Array.isArray(tracedRays));
         return;
     }
     
@@ -2004,11 +1838,9 @@ function drawCrossBeamRays(tracedRays, targetScene) {
     const filteredRays = tracedRays.filter(r => {
         const t = r?.originalRay?.type;
         if (!(r && r.success && t && allowedTypes.has(t))) {
-            console.warn(`[DrawCrossBeamRays] ❌ 除外: type=${t}, success=${r?.success}, objectIndex=${r?.objectIndex}`);
             return false;
         }
         if (r.fallback) {
-            console.warn(`[DrawCrossBeamRays] ❌ 除外: フォールバック直線光線 (type=${t}, side=${r?.originalRay?.side})`);
             return false;
         }
         // 安全にパス取得
@@ -2021,22 +1853,18 @@ function drawCrossBeamRays(tracedRays, targetScene) {
         );
         
         if (validHits.length === 0) {
-            console.warn(`[DrawCrossBeamRays] ⚠️ 有効な座標なし: type=${t}, pathLen=${path.length}`);
             return false; // 描画をスキップ
         }
         return true;
     });
     if (filteredRays.length !== tracedRays.length) {
-        console.log(`🧹 [DrawCrossBeamRays] 非クロス系光線を除外: ${tracedRays.length - filteredRays.length}本 → 残り${filteredRays.length}本`);
     }
     const fallbackCount = filteredRays.filter(r => r.fallback).length;
     if (fallbackCount > 0) {
-        console.warn(`⚠️ [DrawCrossBeamRays] フォールバック合成光線: ${fallbackCount}本 (trace失敗を補完)`);
     }
     tracedRays = filteredRays;
 
     if (!scene) {
-        console.error('❌ [DrawCrossBeamRays] 3Dシーンが見つかりません');
         return;
     }
     
@@ -2048,18 +1876,15 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             objectRayCount[objIndex] = (objectRayCount[objIndex] || 0) + 1;
         });
         
-        console.log('🎯 [DrawCrossBeamRays] Object毎の光線数:', JSON.stringify(objectRayCount));
         
         // 全ての光線を描画
         tracedRays.forEach((rayData, index) => {
             if (!rayData.success) {
-                console.warn(`⚠️ [DrawCrossBeamRays] 光線${index}の追跡に失敗: ${rayData.error}`);
                 return;
             }
             
             const rayPath = rayData.rayPath;
             if (!rayPath || rayPath.length === 0) {
-                console.warn(`⚠️ [DrawCrossBeamRays] 光線${index}のパスが空です (objectIndex=${rayData.objectIndex}, type=${rayData.originalRay?.type})`);
                 return;
             }
             
@@ -2096,7 +1921,6 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             const side = (origSide.toLowerCase() === 'top') ? 'upper' : (origSide.toLowerCase() === 'bottom') ? 'lower' : (origSide || 'center');
             
             // 光線の実際の開始位置を確認
-            console.log(`🔍 [DrawCrossBeamRays] 光線${index}(Object${objectIndex + 1}, ${beamType}/${side}): 開始位置 (${rayPath[0].x}, ${rayPath[0].y}, ${rayPath[0].z})`);
             if (objectPosition) {
                 console.log(`   Object${objectIndex + 1}位置: (${objectPosition.x}, ${objectPosition.y}, ${objectPosition.z})`);
             }
@@ -2122,7 +1946,6 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             
             // LM最適化済み光線の表示
             if (rayData.optimized) {
-                console.log(`🔧 [DrawCrossBeamRays] LM最適化済み光線: Object${objectIndex + 1}, ${beamType}`);
             }
             
             // 光線の色を設定（Object毎に異なる色を使用）
@@ -2143,11 +1966,9 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             drawRayWithSegmentColors(rayPath, objectId, index, scene);
         });
         
-        console.log(`✅ [DrawCrossBeamRays] ${tracedRays.length}本の光線を描画完了`);
         console.log(`   処理Object数: ${Object.keys(objectRayCount).length}`);
         
     } catch (error) {
-        console.error('❌ [DrawCrossBeamRays] エラー:', error);
     }
 }
 
@@ -2181,7 +2002,6 @@ window.isFiniteSystem = function(opticalSystemRows) {
         
         // 文字列'INF'またはInfinity値の場合は無限系
         if (thickness === 'INF' || thickness === Infinity) {
-            console.log(`🔍 [SystemCheck] 無限系検出: 第1面厚さ=${thickness}`);
             return false; // 無限系
         }
         
@@ -2189,7 +2009,6 @@ window.isFiniteSystem = function(opticalSystemRows) {
         const numThickness = parseFloat(thickness);
         const isFinite = Number.isFinite(numThickness) && numThickness > 0;
         
-        console.log(`🔍 [SystemCheck] 第1面厚さ: ${thickness}, 数値: ${numThickness}, 有限性: ${isFinite}`);
         return isFinite;
     }
     return false;
@@ -2235,7 +2054,6 @@ function convertObjectToFieldSetting(objectData, index) {
         const angleX = parseFloat(objectData.xHeightAngle || objectData.X || objectData.x || 0);
         const angleY = parseFloat(objectData.yHeightAngle || objectData.Y || objectData.y || 0);
         
-        console.log(`🔍 [ConvertObject] 角度変換 Object ${index + 1}: xHeightAngle=${objectData.xHeightAngle}, yHeightAngle=${objectData.yHeightAngle} → angleX=${angleX}, angleY=${angleY}`);
         
         return {
             fieldAngle: { x: angleX, y: angleY },
@@ -2247,7 +2065,6 @@ function convertObjectToFieldSetting(objectData, index) {
         const heightX = parseFloat(objectData.xHeight || objectData.X || objectData.x || 0);
         const heightY = parseFloat(objectData.yHeight || objectData.Y || objectData.y || 0);
         
-        console.log(`🔍 [ConvertObject] 高さ変換 Object ${index + 1}: xHeight=${objectData.xHeight}, yHeight=${objectData.yHeight} → heightX=${heightX}, heightY=${heightY}`);
         
         return {
             xHeight: heightX,
@@ -2264,7 +2081,6 @@ window.convertObjectToFieldSetting = convertObjectToFieldSetting;
 // 絞り周辺光線の描画関数
 function drawMarginalRays(marginalRaysData, opticalSystem) {
     if (!marginalRaysData || !window.scene) {
-        console.log('⚠️ [MarginalRays] 描画に必要な要素が不足しています');
         return;
     }
 
@@ -2279,12 +2095,9 @@ function drawMarginalRays(marginalRaysData, opticalSystem) {
         right: 0x0000ff  // 青
     };
 
-    console.log('🌟 [MarginalRays] 絞り周辺光線を描画開始');
-    console.log('🔍 [MarginalRays] データ構造:', Object.keys(marginalRays));
 
     Object.entries(marginalRays).forEach(([direction, rayData]) => {
         if (!rayData || !rayData.success || !rayData.surfacePoints) {
-            console.log(`⚠️ [MarginalRays] ${direction}方向の光線データが無効です`);
             return;
         }
 
@@ -2313,7 +2126,6 @@ function drawMarginalRays(marginalRaysData, opticalSystem) {
         };
         
         window.scene.add(rayLine);
-        console.log(`✅ [MarginalRays] ${direction}方向光線を追加 (色: 0x${color.toString(16).padStart(6, '0')})`);
     });
 }
 
@@ -2401,7 +2213,6 @@ document.addEventListener('keydown', (e) => {
 function clearUndoHistoryOnMajorChange(reason) {
     if (window.undoHistory) {
         window.undoHistory.clear();
-        console.log(`[Undo] History cleared: ${reason}`);
     }
 }
 

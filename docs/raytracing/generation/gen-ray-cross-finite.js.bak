@@ -270,6 +270,7 @@ function brent(f, a, b, tol = 1e-6, maxIter = 100) {
  */
 export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, stopSurfaceIndex, opticalSystemRows, debugMode = false, wavelength = 0.5876) {
     if (debugMode) {
+        console.log(`🔍 [FiniteSystem] 主光線方向ベクトル探索開始（Brent法）`);
         console.log(`   Object位置: (${objectPosition.x.toFixed(3)}, ${objectPosition.y.toFixed(3)}, ${objectPosition.z.toFixed(3)})`);
         console.log(`   Stop面中心: (${stopCenter.x.toFixed(3)}, ${stopCenter.y.toFixed(3)}, ${stopCenter.z.toFixed(3)})`);
     }
@@ -415,6 +416,7 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                             if (newDirX >= -searchRange && newDirX <= searchRange) {
                                 optimalDirX = newDirX;
                                 if (debugMode) {
+                                    console.log(`   📐 勾配法: ${optimalDirX.toFixed(6)}, 誤差改善: ${f0.toFixed(6)} → ${objectiveFunctionDirX(optimalDirX).toFixed(6)}`);
                                 }
                             }
                         }
@@ -485,6 +487,7 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                             if (newDirY >= -searchRange && newDirY <= searchRange) {
                                 optimalDirY = newDirY;
                                 if (debugMode) {
+                                    console.log(`   📐 勾配法: ${optimalDirY.toFixed(6)}, 誤差改善: ${f0.toFixed(6)} → ${objectiveFunctionDirY(optimalDirY).toFixed(6)}`);
                                 }
                             }
                         }
@@ -563,6 +566,7 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
             const totalError = Math.sqrt(errorX*errorX + errorY*errorY);
             
             if (debugMode) {
+                console.log(`📊 [Brent] 結果検証:`);
                 console.log(`   最適方向ベクトル: (${result.i.toFixed(6)}, ${result.j.toFixed(6)}, ${result.k.toFixed(6)})`);
                 console.log(`   Stop面実際位置: (${actualPoint.x.toFixed(3)}, ${actualPoint.y.toFixed(3)})`);
                 console.log(`   Stop面目標位置: (${stopCenter.x.toFixed(3)}, ${stopCenter.y.toFixed(3)})`);
@@ -866,6 +870,7 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                 const totalError = Math.sqrt(errorX*errorX + errorY*errorY);
                 
                 if (debugMode) {
+                    console.log(`📊 [Marginal-Brent] 結果検証:`);
                     console.log(`   最適方向ベクトル: (${result.i.toFixed(6)}, ${result.j.toFixed(6)}, ${result.k.toFixed(6)})`);
                     console.log(`   Stop面実際位置: (${actualPoint.x.toFixed(3)}, ${actualPoint.y.toFixed(3)})`);
                     console.log(`   Stop面目標位置: (${targetPoint.x.toFixed(3)}, ${targetPoint.y.toFixed(3)})`);
@@ -1091,12 +1096,14 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
         const allCrossBeamRays = [];
 
         if (actualDebugMode) {
+            console.log('🌟 [FiniteSystem] 有限系クロスビーム生成開始');
             console.log(`   Object数: ${objectPositions.length}, 光線数: ${rayCount}, クロスタイプ: ${crossType}`);
         }
         
         if (actualDebugMode) {
             console.log(`   光学系行数: ${opticalSystemRows.length}`);
             // 光学系の最初の数行をチェック
+            console.log('📋 [FiniteSystem] 光学系サンプル:');
             for (let i = 0; i < Math.min(3, opticalSystemRows.length); i++) {
                 const row = opticalSystemRows[i];
                 console.log(`   Surface${i + 1}: R=${row.radius}, T=${row.thickness}, ND=${row.nd}, VD=${row.vd}`);
@@ -1141,6 +1148,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
             console.log(`   Stop面: Surface${stopSurfaceIndex + 1}, 中心(${stopCenter.x}, ${stopCenter.y}, ${stopCenter.z})`);
         }
         if (actualDebugMode) {
+            console.log(`📍 [FiniteSystem] Stop面詳細確認:`);
             console.log(`   Stop面インデックス: ${stopSurfaceIndex}`);
             console.log(`   Stop面データからのz: ${stopSurface.z}`);
             console.log(`   surfaceOrigins[${stopSurfaceIndex}]: ${surfaceOrigins && surfaceOrigins[stopSurfaceIndex] ? JSON.stringify(surfaceOrigins[stopSurfaceIndex]) : 'undefined'}`);
@@ -1151,6 +1159,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
         
         // 基本的な光線追跡テスト（デバッグモード時のみ）
         if (actualDebugMode) {
+            console.log('🧪 [FiniteSystem] 光線追跡テスト開始');
             try {
                 const testRay = {
                     pos: { x: 0, y: 0, z: 0 },
@@ -1232,6 +1241,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                 z: objectZ
             };
             
+            console.log(`🎯 [FiniteSystem] Object${actualObjectIndex + 1}処理開始: 位置(${fixedObjectPos.x.toFixed(3)}, ${fixedObjectPos.y.toFixed(3)}, ${fixedObjectPos.z.toFixed(3)})`);
             
             // Object位置の妥当性チェック
             if (fixedObjectPos.x === 0 && fixedObjectPos.y === 0 && fixedObjectPos.z === 0) {
@@ -1266,6 +1276,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
             
             try {
                 if (actualDebugMode) {
+                    console.log(`🔍 [FiniteSystem] Object${actualObjectIndex + 1}: 主光線方向ベクトル探索開始`);
                     console.log(`   Object位置: (${fixedObjectPos.x.toFixed(3)}, ${fixedObjectPos.y.toFixed(3)}, ${fixedObjectPos.z.toFixed(3)})`);
                     console.log(`   Stop面中心: (${stopCenter.x.toFixed(3)}, ${stopCenter.y.toFixed(3)}, ${stopCenter.z.toFixed(3)})`);
                 }
@@ -1281,6 +1292,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                 );
                 
                 if (actualDebugMode) {
+                    console.log(`✅ [FiniteSystem] Object${actualObjectIndex + 1}: 主光線方向ベクトル計算完了`);
                     console.log(`   結果: (${chiefRayDirection.i.toFixed(6)}, ${chiefRayDirection.j.toFixed(6)}, ${chiefRayDirection.k.toFixed(6)})`);
                 }
                 
@@ -1306,6 +1318,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                 }
                 
                 if (actualDebugMode) {
+                    console.log(`🔄 [FiniteSystem] Object${objectIndex + 1}: フォールバック計算使用`);
                     console.log(`   幾何学的方向: (${chiefRayDirection.i.toFixed(6)}, ${chiefRayDirection.j.toFixed(6)}, ${chiefRayDirection.k.toFixed(6)})`);
                 }
             }
@@ -1374,6 +1387,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
             // 絞りサイズの動的推定（実際のStop面データから取得）
             let apertureRadius = 5; // デフォルト値
             
+            console.log(`🔍 [FiniteSystem] Object${actualObjectIndex + 1}: 絞り半径の取得を開始`);
             console.log(`   stopSurface:`, stopSurface);
             console.log(`   stopSurfaceIndex: ${stopSurfaceIndex}`);
             
@@ -1451,6 +1465,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                     z: stopCenter.z 
                 };
 
+                console.log(`🔍 [FiniteSystem] Object${actualObjectIndex + 1}: 水平方向光線探索開始`);
                 console.log(`   左目標点: (${leftTarget.x.toFixed(3)}, ${leftTarget.y.toFixed(3)}, ${leftTarget.z.toFixed(3)})`);
                 console.log(`   右目標点: (${rightTarget.x.toFixed(3)}, ${rightTarget.y.toFixed(3)}, ${rightTarget.z.toFixed(3)})`);
 
@@ -1459,6 +1474,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                         fixedObjectPos, leftTarget, stopSurfaceIndex, opticalSystemRows, true, wavelength
                     );
                     
+                    console.log(`✅ [FiniteSystem] Object${actualObjectIndex + 1}: 左マージナル光線方向: (${leftDirection.i.toFixed(6)}, ${leftDirection.j.toFixed(6)}, ${leftDirection.k.toFixed(6)})`);
                 } catch (error) {
                     console.error(`❌ [FiniteSystem] Object${actualObjectIndex + 1}: 左マージナル光線計算失敗: ${error.message}`);
                     console.error(`   スタックトレース:`, error.stack);
@@ -1476,6 +1492,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                         fixedObjectPos, rightTarget, stopSurfaceIndex, opticalSystemRows, true, wavelength
                     );
                     
+                    console.log(`✅ [FiniteSystem] Object${actualObjectIndex + 1}: 右マージナル光線方向: (${rightDirection.i.toFixed(6)}, ${rightDirection.j.toFixed(6)}, ${rightDirection.k.toFixed(6)})`);
                 } catch (error) {
                     console.error(`❌ [FiniteSystem] Object${actualObjectIndex + 1}: 右マージナル光線計算失敗: ${error.message}`);
                     console.error(`   スタックトレース:`, error.stack);
@@ -1522,6 +1539,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                     z: stopCenter.z 
                 };
 
+                console.log(`🔍 [FiniteSystem] Object${actualObjectIndex + 1}: 垂直方向光線探索開始`);
                 console.log(`   上目標点: (${topTarget.x.toFixed(3)}, ${topTarget.y.toFixed(3)}, ${topTarget.z.toFixed(3)})`);
                 console.log(`   下目標点: (${bottomTarget.x.toFixed(3)}, ${bottomTarget.y.toFixed(3)}, ${bottomTarget.z.toFixed(3)})`);
 
@@ -1530,6 +1548,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                         fixedObjectPos, topTarget, stopSurfaceIndex, opticalSystemRows, true, wavelength
                     );
                     
+                    console.log(`✅ [FiniteSystem] Object${actualObjectIndex + 1}: 上マージナル光線方向: (${topDirection.i.toFixed(6)}, ${topDirection.j.toFixed(6)}, ${topDirection.k.toFixed(6)})`);
                 } catch (error) {
                     console.error(`❌ [FiniteSystem] Object${actualObjectIndex + 1}: 上マージナル光線計算失敗: ${error.message}`);
                     console.error(error.stack);
@@ -1547,6 +1566,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                         fixedObjectPos, bottomTarget, stopSurfaceIndex, opticalSystemRows, true, wavelength
                     );
                     
+                    console.log(`✅ [FiniteSystem] Object${actualObjectIndex + 1}: 下マージナル光線方向: (${bottomDirection.i.toFixed(6)}, ${bottomDirection.j.toFixed(6)}, ${bottomDirection.k.toFixed(6)})`);
                 } catch (error) {
                     console.error(`❌ [FiniteSystem] Object${actualObjectIndex + 1}: 下マージナル光線計算失敗: ${error.message}`);
                     console.error(error.stack);
@@ -1812,6 +1832,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
             });
 
             const successCount = tracedRays.filter(r => r.success).length;
+            console.log(`✅ [FiniteSystem] Object${objectIndex + 1}処理完了: 光線${rays.length}本, 追跡成功${successCount}本 (成功率${(successCount/rays.length*100).toFixed(1)}%)`);
             
             // System Data出力: 主光線の収束品質
             try {
@@ -1832,6 +1853,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                         'brent-optimization' // 有限系ではBrent法使用
                     );
                     
+                    console.log(`📊 [FiniteSystem] Object${objectIndex + 1}: System Data出力完了, 誤差=${totalError.toFixed(6)}mm`);
                 } else {
                         try {
                             const RAYTRACE_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__RAYTRACE_DEBUG);
@@ -1861,6 +1883,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
         ).length;
         
         if (actualDebugMode) {
+            console.log(`✅ [FiniteSystem] 有限系クロスビーム生成完了`);
             console.log(`   処理Object数: ${allResults.length}/${objectPositions.length}`);
             console.log(`   総生成光線数: ${totalRays}`);
             console.log(`   総追跡成功: ${totalSuccess}/${allTracedRays.length} (成功率${(totalSuccess/allTracedRays.length*100).toFixed(1)}%)`);
@@ -1916,6 +1939,7 @@ export function generateCrossBeam(opticalSystemRows, objectPositions, options = 
  */
 function outputFiniteSystemChiefRayToSystemData(objectNumber, xPosition, yPosition, distanceFromCenter, optimizationMethod) {
     try {
+        console.log(`📊 [SystemData] 有限系出力関数呼び出し: Object${objectNumber}, 位置(${xPosition}mm, ${yPosition}mm), 距離=${distanceFromCenter}mm, 手法=${optimizationMethod}`);
         
         // DOM要素の存在確認（複数のID候補を試す）
         let systemDataTextarea = document.getElementById('system-data');
@@ -1939,6 +1963,7 @@ function outputFiniteSystemChiefRayToSystemData(objectNumber, xPosition, yPositi
             return;
         }
         
+        console.log(`✅ [SystemData] テキストエリアが見つかりました:`, systemDataTextarea);
         
         // 最適化手法の日本語表示
         const methodDisplayName = {
@@ -1981,6 +2006,7 @@ function outputFiniteSystemChiefRayToSystemData(objectNumber, xPosition, yPositi
         // スクロールを最上位に移動
         systemDataTextarea.scrollTop = 0;
         
+        console.log(`✅ [SystemData] System Data出力完了: Object${objectNumber}`);
     } catch (error) {
         console.error(`❌ [SystemData] System Data出力エラー:`, error);
     }

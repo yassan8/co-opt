@@ -2059,7 +2059,6 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
                     };
                     
                     // Y-Z方向（黒色）とX-Z方向（赤色）の接続線を4本描画
-                    console.log(`🔗 Drawing 4 connection lines for surface ${i} to ${i+1}`);
                     drawConnectionLine(startOrigin.origin, endOrigin.origin, 'YZ', 1, 0x000000);   // +Y 黒
                     drawConnectionLine(startOrigin.origin, endOrigin.origin, 'YZ', -1, 0x000000);  // -Y 黒
                     drawConnectionLine(startOrigin.origin, endOrigin.origin, 'XZ', 1, 0xff0000);   // +X 赤
@@ -2072,7 +2071,6 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
     }
     
     // プロファイル描画
-    console.log('🔸 プロファイル描画開始:', rows.length, '面');
     for (let i = 0; i < rows.length; i++) {
         const surf = rows[i];
         const origin = surfaceOrigins[i];
@@ -2080,7 +2078,6 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         // console.log(`🔸 Surface ${i}: type=${surf["object type"]}, surfType=${surf.surfType}, origin=`, origin?.origin);
         
         if (!origin || !origin.origin) {
-            console.log(`🔸 Surface ${i}: origin無効、スキップ`);
             continue;
         }
         
@@ -2103,7 +2100,6 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             objType === 'coordinatebreak'
         );
         if (isCB) {
-            console.log(`🔸 Surface ${i}: CB面、スキップ`);
             continue;
         }
         
@@ -2212,7 +2208,6 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             scene.add(yzLine);
             yzProfileCount++;
         } else {
-            console.log(`🔸 Surface ${i}: YZプロファイル点数不足、points=${yzPoints.length}`);
         }
         
         // X-Z断面プロファイル（赤色）
@@ -2310,7 +2305,6 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             scene.add(xzLine);
             xzProfileCount++;
         } else {
-            console.log(`🔸 Surface ${i}: XZプロファイル点数不足、points=${xzPoints.length}`);
         }
     }
     

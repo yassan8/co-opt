@@ -367,6 +367,18 @@
   <!-- System Dataセクション -->
   <div class="system-section" style="display:none;">
     <h2>System Data</h2>
+    
+    <!-- Error message bar -->
+    <div id="transform-error-bar" class="merit-function-help" style="display:none; border-left-color:#dc3545; margin-bottom: 10px;">
+      <strong>Error:</strong> <span id="transform-error-text"></span>
+    </div>
+    
+    <!-- Progress bar -->
+    <div id="transform-progress-wrapper" style="display:none; padding:8px 12px; border-bottom:1px solid #eee; background:#fff; margin-bottom: 10px;">
+      <div id="transform-progress-text">Calculating...</div>
+      <progress id="transform-progressbar" max="100" value="0" style="width:100%; margin-top: 4px;"></progress>
+    </div>
+    
     <div class="system-controls">
       <button id="calculate-paraxial-btn">Calculate Paraxial</button>
       <button id="calculate-seidel-btn">Aberration Coefficients</button>
@@ -374,6 +386,16 @@
       <label for="reference-focal-length">Reference Focal Length:</label>
       <input type="text" id="reference-focal-length" placeholder="Auto" style="width: 80px;">
       <button id="coord-transform-btn">Coord Transform</button>
+      
+      <!-- Coordinate transformation controls -->
+      <br>
+      <label for="transform-surface-select" style="margin-top: 8px;">Transform at surface:</label>
+      <select id="transform-surface-select" style="margin-right: 8px;">
+        <option value="">Select surface...</option>
+      </select>
+      <button id="show-local-coords-btn">Show Local Coords</button>
+      <button id="cancel-transform-btn" style="display:none;">Cancel</button>
+      <button id="save-local-coords-btn" style="display:none;">Save as JSON</button>
     </div>
     <textarea id="system-data" rows="15" cols="100" placeholder="System information will appear here..."></textarea>
   </div>
@@ -1093,6 +1115,9 @@
       </div>
     </div>
   </footer>
+
+  <!-- Coordinate Transform Test (Temporary - remove after testing) -->
+  <script type="module" src="testing/test-coordinate-transform.js"></script>
 
 </body>
 

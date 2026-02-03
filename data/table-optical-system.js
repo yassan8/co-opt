@@ -251,15 +251,10 @@ export function loadTableData() {
 
 // テーブルデータをローカルストレージに保存
 export function saveTableData(data) {
-  console.log('🔵 [TableOpticalSystem] Saving data to localStorage...');
-  console.log('🔵 [TableOpticalSystem] Data is array:', Array.isArray(data));
-  console.log('🔵 [TableOpticalSystem] Data length:', data ? data.length : 'null');
   if (data && Array.isArray(data)) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    console.log(`💾 [TableOpticalSystem] Saved ${data.length} entries to localStorage key: ${STORAGE_KEY}`);
     // Verify save
     const verify = localStorage.getItem(STORAGE_KEY);
-    console.log('🔵 [TableOpticalSystem] Verification - data saved:', !!verify);
   } else {
     console.warn('⚠️ [TableOpticalSystem] Invalid data, not saving:', data);
   }
@@ -548,6 +543,54 @@ let tabulatorOptions = {
           return value;
         }
       }},
+    { title: "Local X", field: "_localX", width: 110, headerSort: false, editor: false,
+      visible: function() {
+        // Temporarily always visible for debugging
+        return true;
+        // try {
+        //   return typeof window !== 'undefined' && window._showLocalCoords === true;
+        // } catch (_) {
+        //   return false;
+        // }
+      },
+      formatter: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
+          
+          // Debug every call to see if formatter is being invoked
+          console.log(`[Local X Formatter] Row ${rowData.id}:`, {
+            rowId: rowData.id,
+            rowIdType: typeof rowData.id,
+            hasLocalData: !!localData,
+            hasSurfaces: !!localData?.surfaces,
+            surfaceKeys: localData?.surfaces ? Object.keys(localData.surfaces) : [],
+            surfData: localData?.surfaces?.[rowData.id],
+            surfDataString: localData?.surfaces?.[String(rowData.id)]
+          });
+          
+          if (!localData || !localData.surfaces) {
+            console.log(`[Local X Formatter] Row ${rowData.id}: No local data, returning '-'`);
+            return '-';
+          }
+          
+          // Try both numeric and string id
+          const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
+          if (!surfData) {
+            console.log(`[Local X Formatter] Row ${rowData.id}: No surface data found, returning '-'`);
+            return '-';
+          }
+          
+          const prefix = surfData.transformType === 'chief' ? 'Chief: ' : '@Surf' + surfData.targetSurface + ': ';
+          const result = prefix + surfData.localDecenterX.toFixed(3);
+          console.log(`[Local X Formatter] Row ${rowData.id}: Returning '${result}'`);
+          return result;
+        } catch (err) {
+          console.error('Local X formatter error:', err);
+          return '-';
+        }
+      }
+    },
     { 
       title: "Semi Dia", 
       field: "semidia", 
@@ -625,6 +668,42 @@ let tabulatorOptions = {
           return value;
         }
       }},
+    { title: "Local Y", field: "_localY", width: 110, headerSort: false, editor: false,
+      visible: function() {
+        return true; // Temporarily always visible for debugging
+      },
+      formatter: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
+          if (!localData || !localData.surfaces) return '-';
+          const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
+          if (!surfData) return '-';
+          const prefix = surfData.transformType === 'chief' ? 'Chief: ' : '@Surf' + surfData.targetSurface + ': ';
+          return prefix + surfData.localDecenterY.toFixed(3);
+        } catch (_) {
+          return '-';
+        }
+      }
+    },
+    { title: "Local Z", field: "_localZ", width: 110, headerSort: false, editor: false,
+      visible: function() {
+        return true; // Temporarily always visible for debugging
+      },
+      formatter: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
+          if (!localData || !localData.surfaces) return '-';
+          const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
+          if (!surfData) return '-';
+          const prefix = surfData.transformType === 'chief' ? 'Chief: ' : '@Surf' + surfData.targetSurface + ': ';
+          return prefix + surfData.localDecenterZ.toFixed(3);
+        } catch (_) {
+          return '-';
+        }
+      }
+    },
     { title: "Ref Index", field: "rindex", editor: "input", width: 100, headerSort: false , mutator: function(value) {
         try {
           return value === "" ? "" : Number(value);
@@ -633,6 +712,24 @@ let tabulatorOptions = {
           return value;
         }
       }},
+    { title: "Local TiltX", field: "_localTiltX", width: 110, headerSort: false, editor: false,
+      visible: function() {
+        return true; // Temporarily always visible for debugging
+      },
+      formatter: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
+          if (!localData || !localData.surfaces) return '-';
+          const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
+          if (!surfData) return '-';
+          const prefix = surfData.transformType === 'chief' ? 'Chief: ' : '@Surf' + surfData.targetSurface + ': ';
+          return prefix + surfData.localTiltX.toFixed(3);
+        } catch (_) {
+          return '-';
+        }
+      }
+    },
     { title: "Abbe", field: "abbe", editor: "input", width: 100, headerSort: false , mutator: function(value) {
         try {
           return value === "" ? "" : Number(value);
@@ -641,6 +738,24 @@ let tabulatorOptions = {
           return value;
         }
       }},
+    { title: "Local TiltY", field: "_localTiltY", width: 110, headerSort: false, editor: false,
+      visible: function() {
+        return true; // Temporarily always visible for debugging
+      },
+      formatter: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
+          if (!localData || !localData.surfaces) return '-';
+          const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
+          if (!surfData) return '-';
+          const prefix = surfData.transformType === 'chief' ? 'Chief: ' : '@Surf' + surfData.targetSurface + ': ';
+          return prefix + surfData.localTiltY.toFixed(3);
+        } catch (_) {
+          return '-';
+        }
+      }
+    },
     { title: "Conic", field: "conic", editor: "input", width: 100, headerSort: false , mutator: function(value) {
         try {
           return value === "" ? "" : Number(value);
@@ -649,6 +764,24 @@ let tabulatorOptions = {
           return value;
         }
       }},
+    { title: "Local TiltZ", field: "_localTiltZ", width: 110, headerSort: false, editor: false,
+      visible: function() {
+        return true; // Temporarily always visible for debugging
+      },
+      formatter: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
+          if (!localData || !localData.surfaces) return '-';
+          const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
+          if (!surfData) return '-';
+          const prefix = surfData.transformType === 'chief' ? 'Chief: ' : '@Surf' + surfData.targetSurface + ': ';
+          return prefix + surfData.localTiltZ.toFixed(3);
+        } catch (_) {
+          return '-';
+        }
+      }
+    },
     // 各面typeごとの係数
     { title: "Coef1", field: "coef1", editor: "input", width: 80, headerSort: false , mutator: function(value) {
         try {
@@ -1193,6 +1326,14 @@ tableOpticalSystem.on("cellEdited", function(cell){
 
     // Step2: show/update Apply Reason panel immediately after an edit.
     try { updateApplyReasonPanelFromCell(cell, 'edited'); } catch (_) {}
+
+    // Clear local coordinate cache on data change
+    try {
+      if (typeof window !== 'undefined') {
+        window._cachedLocalCoords = null;
+        window._showLocalCoords = false;
+      }
+    } catch (_) {}
 
     // System Constraints (BFL): update on edits (read-only; no table mutations).
     try { requestSystemConstraintsUpdate('cell-edited'); } catch (_) {}
@@ -2062,8 +2203,6 @@ setTimeout(() => {
  * optimizeSemiDia="A"の場合に呼び出される
  */
 async function calculateImageSemiDiaFromChiefRays() {
-    console.log('🎯 Image面のSemi Dia自動計算を開始');
-    
     try {
     // Blocks-first / Blocks-only を含め、常に「評価系と同じ rows」を使う。
     // Expanded table は Blocks-only だと no-op / stale になり得るため。
@@ -2071,13 +2210,10 @@ async function calculateImageSemiDiaFromChiefRays() {
       ? window.getOpticalSystemRows(tableOpticalSystem)
       : tableOpticalSystem.getData();
 
-    console.log(`📊 opticalSystemRows.length = ${opticalSystemRows?.length}`);
-
     // Image面を見つける
     const imageSurfaceIndex = opticalSystemRows.findIndex(data =>
       data["object type"] === "Image" || data.object === "Image"
     );
-        console.log(`🔍 imageSurfaceIndex = ${imageSurfaceIndex}`);
         if (imageSurfaceIndex === -1) {
             console.warn('⚠️ Image面が見つかりません');
             return false;
@@ -2087,9 +2223,7 @@ async function calculateImageSemiDiaFromChiefRays() {
         // In Blocks-first / Blocks-only mode, the canonical state lives in Design Intent blocks.
         // The expanded table row may not have synced optimizeSemiDia yet, so check blocks too.
         const rowOpt = String(imageSurface.optimizeSemiDia ?? '').trim();
-        console.log(`🔧 imageSurface.optimizeSemiDia = "${rowOpt}"`);
         let shouldAuto = (rowOpt === 'A' || rowOpt === 'a');
-        console.log(`🔧 shouldAuto (from row) = ${shouldAuto}`);
 
         if (!shouldAuto) {
           try {
@@ -2103,9 +2237,7 @@ async function calculateImageSemiDiaFromChiefRays() {
               const imgBlock = blocks ? [...blocks].reverse().find(b => b && String(b.blockType ?? '') === 'ImageSurface') : null;
               const blkOptRaw = imgBlock?.parameters?.optimizeSemiDia;
               const blkOpt = String(blkOptRaw ?? '').trim();
-              console.log(`🔧 ImageSurface block optimizeSemiDia = "${blkOpt}"`);
               if (blkOpt === 'A' || blkOpt === 'a' || blkOpt.toUpperCase() === 'AUTO') {
-                console.log(`✅ Setting shouldAuto = true from block`);
                 shouldAuto = true;
                 // Best-effort: keep table row consistent for later checks.
                 const imageId = imageSurface?.id;
@@ -2117,12 +2249,10 @@ async function calculateImageSemiDiaFromChiefRays() {
           } catch (_) {}
         }
 
-        console.log(`🎯 Final shouldAuto = ${shouldAuto}`);
         if (!shouldAuto) {
           console.log('📐 optimizeSemiDiaが"A"ではないのでスキップ');
           return false;
         }
-        console.log('✅ Proceeding with auto semidia calculation');
         // 光学系データとObjectデータを取得
         const objectRows = (typeof window !== 'undefined' && typeof window.getObjectRows === 'function')
           ? window.getObjectRows(window.tableObject)
@@ -2141,7 +2271,6 @@ async function calculateImageSemiDiaFromChiefRays() {
         const primaryWavelength = (typeof window.getPrimaryWavelength === 'function') 
             ? Number(window.getPrimaryWavelength()) || 0.5876 
             : 0.5876;
-        console.log(`🌈 使用波長: ${primaryWavelength} μm`);
         // 主光線のみを生成（光線数=1）
         const objectSurface = opticalSystemRows[0];
         const objectThickness = objectSurface?.thickness;
@@ -2195,7 +2324,6 @@ async function calculateImageSemiDiaFromChiefRays() {
         if (rays.length > 0) {
             let maxHeight = 0;
             let computedAny = false;
-            console.log(`🔍 取得した光線数: ${rays.length}`);
 
             // traceRay() rayPath convention:
             // rayPath[0] = start point; then hit points for each non-Object, non-CB surface.
@@ -2226,7 +2354,6 @@ async function calculateImageSemiDiaFromChiefRays() {
               return count > 0 ? count : null;
             };
             const imageRayPathIndex = __rayPathPointIndexForSurfaceIndex(opticalSystemRows, imageSurfaceIndex);
-            console.log(`📍 ImageSurface index: ${imageSurfaceIndex}, rayPath index: ${imageRayPathIndex}`);
 
             // Build Image surface transformation info inline to convert global coordinates back to local
             let imageSurfaceInfo = null;
@@ -2360,11 +2487,8 @@ async function calculateImageSemiDiaFromChiefRays() {
                 }
               }
             });
-            console.log(`🎯 最終的な最大高さ: ${maxHeight.toFixed(6)} mm`);
             if (computedAny) {
-              console.log(`✅ Semi Diaを${maxHeight.toFixed(6)}に設定`);
               const imageId = imageSurface?.id;
-              console.log(`🔍 更新するID: ${imageId}, Semi Dia値: ${maxHeight}`);
 
               // Also persist into Blocks (Design Intent canonical) when available.
               try {
@@ -2399,7 +2523,6 @@ async function calculateImageSemiDiaFromChiefRays() {
 
               // 更新前の全データを確認
               const beforeData = tableOpticalSystem.getData();
-              console.log(`🔍 更新前のImage面データ:`, beforeData[imageSurfaceIndex]);
 
               // tableOpticalSystem.updateRowを使って確実に更新（optimizeSemiDiaは"A"のまま残す）
               if (imageId !== null && imageId !== undefined) {
@@ -2408,7 +2531,6 @@ async function calculateImageSemiDiaFromChiefRays() {
 
               // 更新後の全データを確認
               const afterData = tableOpticalSystem.getData();
-              console.log(`🔍 更新後のImage面データ:`, afterData[imageSurfaceIndex]);
 
               // テーブルを保存
               if (typeof saveTableData === 'function') {

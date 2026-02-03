@@ -204,7 +204,6 @@ function updateConfigInfo() {
  * イベントリスナー設定
  */
 function setupConfigurationEventListeners() {
-  console.log('🔧 [Configuration] Setting up event listeners...');
   
   // Configuration選択変更
   const select = document.getElementById('config-select');
@@ -425,7 +424,6 @@ function handleDuplicateConfiguration() {
  * Configuration名前変更ハンドラー
  */
 function handleRenameConfiguration() {
-  console.log('🔧 [Configuration] handleRenameConfiguration called');
   
   const activeId = getActiveConfigId();
   const activeConfig = getActiveConfiguration();
@@ -439,7 +437,6 @@ function handleRenameConfiguration() {
     return;
   }
   
-  console.log('🔧 [Configuration] Renaming to:', newName);
   const success = renameConfiguration(activeId, newName.trim());
   
   if (success) {

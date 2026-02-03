@@ -198,12 +198,6 @@ function __coopt_loadSurfaceColorOverrides() {
  * @param {Array} options.opticalSystemData - Optical system data
  */
 export function drawOpticalSystemSurfaces(options = {}) {
-    console.log('🎨 drawOpticalSystemSurfaces called:', {
-        hasScene: !!options.scene,
-        surfaceCount: options.opticalSystemData?.length,
-        crossSectionOnly: options.crossSectionOnly,
-        timestamp: new Date().toISOString()
-    });
     
     const {
         crossSectionOnly = false,
@@ -231,22 +225,18 @@ export function drawOpticalSystemSurfaces(options = {}) {
         return;
     }
 
-    console.log(`📊 Using optical system data: ${opticalSystemData.length} surfaces`);
-    console.log('🔍 Optical system data preview:', opticalSystemData.slice(0, 3));
-    console.log('🔍 Cross-section only mode:', crossSectionOnly);
+
 
     // Clear existing optical elements before drawing new ones
     clearExistingOpticalElements(scene);
 
     // Surface origins calculation - NOW with the correct parameter
     const surfaceOrigins = calculateSurfaceOrigins(opticalSystemData);
-    console.log('🔍 Surface origins calculated:', surfaceOrigins ? surfaceOrigins.length : 'None');
 
     // Opt-in Coord Break debug: helps verify that decenter params are numeric at render time.
     try {
         const DEBUG_CB = __coopt_isCoordTransDebugEnabled();
         if (DEBUG_CB && Array.isArray(surfaceOrigins)) {
-            console.log('🧭 [CO-OPT] Coord Break debug enabled');
             const cbRows = [];
             for (let i = 0; i < opticalSystemData.length; i++) {
                 const row = opticalSystemData[i];
@@ -301,7 +291,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
 
                 console.groupCollapsed(`🧭 [CO-OPT] Coord Break debug (${cbRows.length} rows)`);
                 for (const r of tableRows) {
-                    console.log('🧭 [CO-OPT] CB row:', JSON.stringify(r));
                 }
                 console.log(cbRows);
                 console.groupEnd();
@@ -311,28 +300,17 @@ export function drawOpticalSystemSurfaces(options = {}) {
 
     const surfaceColorOverrides = __coopt_loadSurfaceColorOverrides();
     
-    // Debug: Show all surface origins
-    if (surfaceOrigins) {
-        console.log('🔍 All surface origins:');
-        surfaceOrigins.forEach((surfaceInfo, index) => {
-            const origin = surfaceInfo?.origin;
-            console.log(`  Surface ${index}: (${origin?.x?.toFixed(3) || 'undefined'}, ${origin?.y?.toFixed(3) || 'undefined'}, ${origin?.z?.toFixed(3) || 'undefined'})`);
-        });
-    }
+
 
     // Draw 3D surfaces (skip if crossSectionOnly is true)
     if (!crossSectionOnly) {
-        console.log('🎨 Starting 3D surface drawing...');
         for (let i = 0; i < opticalSystemData.length; i++) {
             const surface = opticalSystemData[i];
             
-            console.log(`🔍 Processing surface ${i}: type=${surface.type}, conic=${surface.conic}`);
             
             // Object面のスキップ判定
             const objectType = surface["object type"] || "";
-            console.log(`🔍 Surface ${i}: objectType="${objectType}"`);
             if (objectType === "Object") {
-                console.log(`✨ Surface ${i}: Object面を検出しました`);
                 const objectThickness = surface.thickness;
                 const isInfiniteThickness = objectThickness === 'INF' || objectThickness === 'Infinity' || objectThickness === Infinity;
                 
@@ -345,22 +323,18 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             const firstObject = objectRows[0];
                             const position = firstObject.position || (Array.isArray(firstObject) ? firstObject[3] : null);
                             isAngleObject = position === 'angle' || position === 'Angle';
-                            console.log(`🔍 3D Surface ${i}: Object position判定 - position=${position}, isAngleObject=${isAngleObject}`);
                         }
                     } catch (error) {
                         console.warn(`⚠️ 3D Surface ${i}: Object data取得エラー:`, error);
                     }
                     
                     // 無限系のObject面は常にスキップ
-                    console.log(`🔸 3D Surface ${i}: Object面（無限系）、3D描画スキップ`);
                     continue;
                 } else {
                     // 有限系のObject面を描画
-                    console.log(`🔸 3D Surface ${i}: Object面（有限系、thickness=${objectThickness}）、3D描画実行`);
                     
                     try {
                         // surfaceOriginsの確認
-                        console.log(`🔍 surfaceOrigins[${i}]:`, surfaceOrigins[i]);
                         
                         // semidiaの取得（ObjectテーブルのRectangle座標から計算）
                         let planeSemidia = __coopt_getRenderSemidiaMm(surface);
@@ -375,7 +349,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
                                 });
                                 if (maxCoord > 0) {
                                     planeSemidia = maxCoord;
-                                    console.log(`🔍 Object plane semidia from Rectangle: ${planeSemidia.toFixed(2)}mm`);
                                 }
                             }
                         }
@@ -385,7 +358,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
                         const objOrigin = { x: 0, y: 0, z: 0 };
                         const objRotMat = null; // Object面には回転を適用しない
                         
-                        console.log(`🔍 Object plane drawing params: semidia=${planeSemidia}, origin=`, objOrigin);
                         
                         // リング描画
                         __coopt_drawApertureOutline(
@@ -398,7 +370,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
                         );
                         
                         // 十字線描画
-                        console.log(`🎯 [OBJECT] Crosshair drawing: surface=${i}, planeSemidia=${planeSemidia}`);
                         
                         const { halfX: crossHalfX, halfY: crossHalfY } = __coopt_getCrosshairHalfExtents(surface, planeSemidia);
 
@@ -445,7 +416,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             lineV.renderOrder = 999;
                             lineV.userData = { type: 'plane-crosshair', direction: 'vertical', surfaceIndex: i };
                             scene.add(lineV);
-                            console.log(`🔍 Object plane vertical crosshair added at surface ${i}, points: ${pointsVertical.length}`);
                         }
                         
                         // 横線（X方向、赤） - 複数セグメントで描画
@@ -472,10 +442,8 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             lineH.renderOrder = 999;
                             lineH.userData = { type: 'plane-crosshair', direction: 'horizontal', surfaceIndex: i };
                             scene.add(lineH);
-                            console.log(`🔍 Object plane horizontal crosshair added at surface ${i}, points: ${pointsHorizontal.length}`);
                         }
                         
-                        console.log(`✅ Object plane ring and crosshair drawn for surface ${i}`);
                     } catch (error) {
                         console.error(`❌ Error drawing Object plane for surface ${i}:`, error);
                     }
@@ -490,7 +458,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
                 const objectThickness = firstSurface?.thickness;
                 const isInfiniteSystem = objectThickness === 'INF' || objectThickness === 'Infinity' || objectThickness === Infinity;
                 
-                console.log(`🔸 3D Surface ${i}: Image面（${isInfiniteSystem ? '無限系' : '有限系'}）、3D描画実行`);
                 
                 try {
                         // semidiaの取得
@@ -514,9 +481,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
                         if (surfaceOrigins && surfaceOrigins[i]) {
                             imgOrigin = surfaceOrigins[i].origin || imgOrigin;
                             imgRotMat = surfaceOrigins[i].rotationMatrix || null;
-                            console.log(`🔍 Image plane using surfaceOrigins[${i}]: origin=`, imgOrigin);
                         } else {
-                            console.log(`🔍 Image plane: no surfaceOrigins available, using default origin`);
                         }
                         
                         // アパーチャ枠描画
@@ -532,7 +497,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
                         const { halfX: crossHalfX, halfY: crossHalfY } = __coopt_getCrosshairHalfExtents(surface, planeSemidia);
 
                         // 十字線描画
-                        console.log(`🎯 [IMAGE] Crosshair drawing: surface=${i}, planeSemidia=${planeSemidia}`);
                         
                         // Toric面の場合のパラメータ準備
                         let toricParams = null;
@@ -587,7 +551,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             lineV.renderOrder = 999;
                             lineV.userData = { type: 'plane-crosshair', direction: 'vertical', surfaceIndex: i };
                             scene.add(lineV);
-                            console.log(`🔍 Image plane vertical crosshair added at surface ${i}, points: ${pointsVertical.length}`);
                         }
                         
                         // 横線（X方向、赤） - 複数セグメントで描画
@@ -624,10 +587,8 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             lineH.renderOrder = 999;
                             lineH.userData = { type: 'plane-crosshair', direction: 'horizontal', surfaceIndex: i };
                             scene.add(lineH);
-                            console.log(`🔍 Image plane horizontal crosshair added at surface ${i}, points: ${pointsHorizontal.length}`);
                         }
                         
-                        console.log(`✅ Image plane ring and crosshair drawn for surface ${i}`);
                     } catch (error) {
                         console.error(`❌ Error drawing Image plane for surface ${i}:`, error);
                     }
@@ -644,20 +605,16 @@ export function drawOpticalSystemSurfaces(options = {}) {
                 objType === 'coordtrans' || objType === 'coordinatebreak'
             );
             if (isCB) {
-                console.log(`🔸 3D Surface ${i}: Coord Break (surfType=${surfType}, objType=${objType})、三次元描画スキップ`);
                 continue;
             }
             
             try {
                 if (surface.type === 'Stop' || surface['object type'] === 'Stop') {
                     // Stop面の場合は特別な処理
-                    console.log(`🟢 Drawing Stop surface ${i}`);
                     if (showSemidiaRing) {
-                        console.log(`⭕ Drawing Stop ring for surface ${i}, semidia: ${surface.semidia}`);
                         try {
                             const ringSemidia = __coopt_getRenderSemidiaMm(surface);
                             if (ringSemidia === null) {
-                                console.log(`⏭️ Stop ring skipped (no semidia) for surface ${i}`);
                             } else {
                             __coopt_drawApertureOutline(
                                 scene,
@@ -667,7 +624,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
                                 surfaceOrigins[i]?.rotationMatrix || null,
                                 0x000000
                             );
-                            console.log(`✅ Stop ring drawn for surface ${i}`);
                             }
                         } catch (stopRingError) {
                             console.error(`❌ Error drawing Stop ring for surface ${i}:`, stopRingError);
@@ -675,7 +631,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
                     }
                 } else if (surface.type === 'Mirror' || surface.material === 'MIRROR') {
                     // Mirror面の処理
-                    console.log(`🪞 Drawing 3D Mirror surface ${i} with origin and rotation`);
                     const mirrorDefaultColor = 0xc0c0c0;
                     const mirrorKey = __coopt_surfaceColorKey(surface, i);
                     const mirrorOverride = __coopt_parseColorToInt(surfaceColorOverrides?.[mirrorKey]);
@@ -702,7 +657,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
                     }
                 } else if (surface.surfType === 'Toric') {
                     // Toric surface rendering
-                    console.log(`🔵 Drawing Toric surface ${i}`);
                     
                     const toricDefaultColor = 0x00ccff;
                     const toricKey = __coopt_surfaceColorKey(surface, i);
@@ -720,10 +674,8 @@ export function drawOpticalSystemSurfaces(options = {}) {
                     );
                 } else {
                     // 通常のレンズ面の処理
-                    console.log(`🔵 Drawing Lens surface ${i}`);
                     
                     // 3D表面を描画
-                    console.log(`🔷 Drawing 3D lens surface ${i} with origin and rotation`);
                     const lensDefaultColor = 0x00ccff;
                     const lensKey = __coopt_surfaceColorKey(surface, i);
                     const lensOverride = __coopt_parseColorToInt(surfaceColorOverrides?.[lensKey]);
@@ -743,7 +695,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
                 
                 // Surface origins表示（デバッグ用の追加表示のみ）
                 if (showSurfaceOrigins) {
-                    console.log(`📍 Drawing surface origin marker for surface ${i}`);
                     // 原点マーカーとして小さな球を描画
                     const geometry = new THREE.SphereGeometry(2, 8, 8);
                     const material = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.8 });
@@ -756,14 +707,10 @@ export function drawOpticalSystemSurfaces(options = {}) {
                 
                 // Semidia ring表示（Coord Trans面は除外）
                 if (showSemidiaRing && surface.type !== 'Stop' && surface['object type'] !== 'Stop' && !isCB) {
-                    console.log(`⭕ Drawing semidia ring for surface ${i}, semidia: ${surface.semidia}`);
-                    console.log(`⭕ Ring origin for ${i}:`, surfaceOrigins[i]);
-                    console.log(`⭕ Surface type: ${surface.type}, material: ${surface.material}`);
                     
                     try {
                         const ringSemidia = __coopt_getRenderSemidiaMm(surface);
                         if (ringSemidia === null) {
-                            console.log(`⏭️ Semidia ring skipped (no semidia) for surface ${i}`);
                         } else {
                         __coopt_drawApertureOutline(
                             scene,
@@ -773,7 +720,6 @@ export function drawOpticalSystemSurfaces(options = {}) {
                             surfaceOrigins[i]?.rotationMatrix || null,
                             0x000000
                         );
-                        console.log(`✅ Semidia ring drawn for surface ${i}`);
                         }
                     } catch (ringError) {
                         console.error(`❌ Error drawing semidia ring for surface ${i}:`, ringError);
@@ -783,9 +729,7 @@ export function drawOpticalSystemSurfaces(options = {}) {
                 console.error(`❌ Error drawing surface ${i}:`, error);
             }
         }
-        console.log('✅ 3D surface drawing completed');
     } else {
-        console.log('⏭️ Skipping 3D surface drawing (crossSectionOnly = true)');
     }
 
     // Draw cross-sections
@@ -821,8 +765,6 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
     const DEBUG_STOP = !!(typeof globalThis !== 'undefined' && globalThis.__COOPT_DEBUG_STOP_SURFACE);
     if (DEBUG_STOP) {
         // 光学系データ全体をデバッグ出力
-        console.log(`🔍 [findStopSurface] 光学系データ全体:`, opticalSystemRows);
-        console.log(`🔍 [findStopSurface] データ数: ${opticalSystemRows.length}`);
     }
     
     for (let i = 0; i < opticalSystemRows.length; i++) {
@@ -990,7 +932,6 @@ export function clearAllOpticalElements(scene) {
     // Remove duplicates
     const uniqueObjects = [...new Set(objectsToRemove)];
     
-    console.log(`🧹 Clearing ${uniqueObjects.length} optical elements from scene`);
     
     uniqueObjects.forEach(obj => {
         scene.remove(obj);
@@ -1059,5 +1000,4 @@ function clearExistingOpticalElements(scene) {
         } catch (_) {}
     });
     
-    console.log(`🧹 Cleared ${elementsToRemove.length} existing optical elements`);
 }

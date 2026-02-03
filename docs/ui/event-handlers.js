@@ -70,26 +70,20 @@ try {
 function getRequiredFunctions() {
     return {
         getOpticalSystemRows: window.getOpticalSystemRows || (() => { 
-            console.error('❌ getOpticalSystemRows not available'); 
             return null; 
         }),
         getObjectRows: window.getObjectRows || (() => { 
-            console.error('❌ getObjectRows not available'); 
             return null; 
         }),
         generateCrossBeam: window.generateCrossBeam || (async () => { 
-            console.error('❌ generateCrossBeam not available'); 
             return { success: false, error: 'generateCrossBeam function not found' }; 
         }),
         generateInfiniteSystemCrossBeam: window.generateInfiniteSystemCrossBeam || (async () => { 
-            console.error('❌ generateInfiniteSystemCrossBeam not available'); 
             return { success: false, error: 'generateInfiniteSystemCrossBeam function not found' }; 
         }),
         drawOpticalSystemSurfaces: window.drawOpticalSystemSurfaces || (() => { 
-            console.error('❌ drawOpticalSystemSurfaces not available'); 
         }),
         drawCrossBeamRays: window.drawCrossBeamRays || (() => { 
-            console.error('❌ drawCrossBeamRays not available'); 
         })
     };
 }
@@ -109,17 +103,14 @@ const ensurePopupMessageHandler = () => {
             return;
         }
 
-        console.log('📨 Received message from popup:', event.data);
         const { action } = event.data || {};
 
         if (action === 'popup-ready') {
-            console.log('✅ 3D popup window ready');
             return;
         }
 
         if (action === 'popup-resize') {
             if (!window.popup3DWindow) {
-                console.warn('⚠️ Popup window reference is unavailable (resize)');
                 return;
             }
 
@@ -149,9 +140,7 @@ const ensurePopupMessageHandler = () => {
                     window.setCameraForYZCrossSection(cameraOptions);
                 }
 
-                console.log(`✅ Popup resize handled (refit camera): axis=${axis}`);
             } catch (error) {
-                console.error('❌ Popup resize handling error:', error);
             }
             return;
         }
@@ -166,7 +155,6 @@ const ensurePopupMessageHandler = () => {
         } = getRequiredFunctions();
 
         if (action === 'draw-cross') {
-            console.log('🎯 Handling draw-cross action in popup');
             try {
                 const popupWindow = window.popup3DWindow;
                 const viewAxisRaw = (event.data?.viewAxis || 'YZ').toString().toUpperCase();
@@ -187,7 +175,6 @@ const ensurePopupMessageHandler = () => {
                 try {
                     setRayColorMode(rayColorMode);
                 } catch (e) {
-                    console.warn('⚠️ Unable to set ray color mode:', e);
                 }
 
                 // Check if optimization is running to avoid interfering with optimizer state
@@ -196,18 +183,13 @@ const ensurePopupMessageHandler = () => {
                 // アクティブなConfigurationをテーブルに反映
                 // BUT: Skip during optimization to avoid corrupting optimizer's transient state
                 if (!isOptimizing) {
-                    console.log('🔄 [DrawCross] Loading active configuration to tables...');
                     if (typeof window.loadActiveConfigurationToTables === 'function') {
                         window.loadActiveConfigurationToTables();
-                        console.log('✅ [DrawCross] Active configuration loaded');
                     } else if (typeof loadActiveConfigurationToTables === 'function') {
                         loadActiveConfigurationToTables();
-                        console.log('✅ [DrawCross] Active configuration loaded');
                     } else {
-                        console.warn('⚠️ [DrawCross] loadActiveConfigurationToTables not available');
                     }
                 } else {
-                    console.log('⏭️ [DrawCross] Skipping loadActiveConfigurationToTables during optimization');
                 }
 
                 // Rendering should always reflect the canonical current configuration.
@@ -220,11 +202,9 @@ const ensurePopupMessageHandler = () => {
                         }
                     } catch (_) {}
                 } else {
-                    console.log('⏭️ [DrawCross] Preserving __cooptOpticalSystemRowsOverride during optimization');
                 }
                 
                 const opticalSystemRows = getOpticalSystemRows();
-                console.log('📊 Optical system rows:', opticalSystemRows);
 
                 // Provide surface list to popup so it can build per-surface color UI.
                 try {
@@ -239,28 +219,22 @@ const ensurePopupMessageHandler = () => {
                         : [];
                     window.popup3DWindow?.postMessage({ action: 'surface-list', surfaces }, '*');
                 } catch (e) {
-                    console.warn('⚠️ Unable to post surface list to popup:', e);
                 }
 
                 if (!opticalSystemRows || opticalSystemRows.length === 0) {
-                    console.error('❌ No optical system data');
                     window.popup3DWindow.postMessage({ status: 'Error: No optical system data' }, '*');
                     return;
                 }
 
                 const popupScene = window.popup3DWindow.scene;
-                console.log('🎬 Popup scene:', popupScene);
 
                 if (!popupScene) {
-                    console.error('❌ Popup scene not available');
                     window.popup3DWindow.postMessage({ status: 'Error: Scene not ready' }, '*');
                     return;
                 }
 
-                console.log('🖌️ Drawing optical system surfaces...');
                 
                 // 完全なキャンバスクリア
-                console.log('🧹 [DrawCross] 完全なキャンバスクリア実行');
                 if (window.popup3DWindow && window.popup3DWindow.renderer) {
                     window.popup3DWindow.renderer.clear();
                 }
@@ -288,9 +262,7 @@ const ensurePopupMessageHandler = () => {
                 });
                 harmonizeSceneGeometry(popupScene);
 
-                console.log(`📷 Setting camera for ${viewAxis} cross section in popup...`);
                 if (!popupWindow) {
-                    console.warn('⚠️ Popup window reference missing (camera)');
                 } else if (viewAxis === 'XZ' && typeof window.setCameraForXZCrossSection === 'function') {
                     window.setCameraForXZCrossSection({
                         camera: popupWindow.camera,
@@ -316,45 +288,35 @@ const ensurePopupMessageHandler = () => {
                         ...(userAdjustedView === true && targetOverride ? { targetOverride } : {})
                     });
                 } else {
-                    console.warn(`⚠️ Popup window/camera not ready for setCameraFor${viewAxis}CrossSection`);
                 }
 
-                console.log('🌟 Generating rays...');
                 let objectRows = [];
                 try {
                     if (typeof getObjectRows === 'function') {
                         objectRows = getObjectRows() || [];
-                        console.log('📋 Got object data via helper:', objectRows.length, 'rows');
                     }
                 } catch (error) {
-                    console.error('❌ Error getting object data via helper:', error);
                 }
 
                 if (!Array.isArray(objectRows) || objectRows.length === 0) {
                     try {
                         if (window.tableObject && typeof window.tableObject.getData === 'function') {
                             objectRows = window.tableObject.getData();
-                            console.log('📋 Fallback object data from tableObject:', objectRows.length, 'rows');
                         } else {
                             const tableElement = document.getElementById('table-object');
                             if (tableElement && tableElement.tabulator) {
                                 objectRows = tableElement.tabulator.getData();
-                                console.log('📋 Fallback object data from DOM element:', objectRows.length, 'rows');
                             } else {
-                                console.warn('⚠️ No object table found for fallback');
                                 objectRows = [];
                             }
                         }
                     } catch (error) {
-                        console.error('❌ Error getting fallback object data:', error);
                         objectRows = [];
                     }
                 }
 
-                console.log('📊 Object rows:', objectRows);
 
                 if (objectRows && objectRows.length > 0) {
-                    console.log('🔍 Object row details:');
                     objectRows.forEach((row, idx) => {
                         console.log(`  Object ${idx}:`, {
                             height: row.height,
@@ -385,17 +347,13 @@ const ensurePopupMessageHandler = () => {
                         parseFloat(row.height || 0) === 0);
                 const isInfiniteSystem = hasThicknessInfo ? thicknessIndicatesInfinite : objectRowsIndicateInfinite;
 
-                console.log('📐 Object thickness (popup):', thicknessRaw);
-                console.log('📐 System type:', isInfiniteSystem ? 'Infinite' : 'Finite');
 
                 let crossBeamResult;
                 if (isInfiniteSystem) {
-                    console.log('🔄 Generating infinite system cross beam...');
                     const objectAngles = objectRows.map(row => ({
                         x: parseFloat(row.xHeightAngle) || 0,
                         y: parseFloat(row.yHeightAngle) || 0
                     }));
-                    console.log('📐 Object angles:', objectAngles);
 
                     const imageSurfaceIndex = opticalSystemRows.findIndex(row =>
                         row && (row['object type'] === 'Image' || row.object === 'Image')
@@ -443,7 +401,6 @@ const ensurePopupMessageHandler = () => {
                     if (allObjectPositions.length === 0) {
                         allObjectPositions.push({ x: 0, y: 0, z: 0 });
                     }
-                    console.log('🔄 Generating finite system cross beam for positions:', allObjectPositions);
                     crossBeamResult = await generateCrossBeam(opticalSystemRows, allObjectPositions, {
                         rayCount,
                         debugMode: false,
@@ -452,14 +409,11 @@ const ensurePopupMessageHandler = () => {
                     });
                 }
 
-                console.log('📦 Cross beam result:', crossBeamResult);
 
                 if (crossBeamResult.success) {
-                    console.log('✅ Drawing rays to popup scene...');
 
                     let allRays = [];
                     if (crossBeamResult.results && Array.isArray(crossBeamResult.results)) {
-                        console.log(`🔍 results配列発見: ${crossBeamResult.results.length}個`);
                         crossBeamResult.results.forEach((result, idx) => {
                             console.log(`   Result${idx + 1}:`, result);
                             if (result.rays && Array.isArray(result.rays)) {
@@ -475,24 +429,18 @@ const ensurePopupMessageHandler = () => {
                         allRays = crossBeamResult;
                     }
 
-                    console.log('🔍 Total rays extracted:', allRays.length);
-                    console.log('🔍 Ray data:', allRays);
 
                     if (allRays && allRays.length > 0) {
                         drawCrossBeamRays(allRays, popupScene);
                         harmonizeSceneGeometry(popupScene);
                     } else {
-                        console.warn('⚠️ No ray data found in cross beam result');
                     }
 
                     window.popup3DWindow.postMessage({ status: 'Drawing complete' }, '*');
-                    console.log('✅ Drawing complete!');
                 } else {
-                    console.error('❌ Cross beam generation failed:', crossBeamResult.error);
                     window.popup3DWindow.postMessage({ status: 'Error: ' + crossBeamResult.error }, '*');
                 }
             } catch (error) {
-                console.error('❌ Error in draw-cross:', error);
                 console.error('Error stack:', error.stack);
                 window.popup3DWindow.postMessage({ status: 'Error: ' + error.message }, '*');
             }
@@ -502,7 +450,6 @@ const ensurePopupMessageHandler = () => {
         if (action === 'view-xz' || action === 'view-yz') {
             console.log('🎥 Handling popup view action:', action);
             if (!window.popup3DWindow) {
-                console.warn('⚠️ Popup window reference is unavailable');
                 return;
             }
 
@@ -685,14 +632,12 @@ const ensurePopupMessageHandler = () => {
                             harmonizeSceneGeometry(popupWindow.scene);
                         }
                     } catch (e) {
-                        console.warn('⚠️ Popup cross-section redraw skipped:', e);
                     }
 
                     if (popupStatus) {
                         popupStatus.textContent = `${viewAxis === 'XZ' ? 'X-Z' : 'Y-Z'} view ready`;
                     }
                     popupWindow.postMessage({ status: `${viewAxis === 'XZ' ? 'X-Z' : 'Y-Z'} view ready` }, '*');
-                    console.log('✅ Popup view switched (camera only)');
                 } else {
                     // フォールバック: まだDraw Cross実行前など（bounds未保存）
                     await executeCrossSectionView({
@@ -705,10 +650,8 @@ const ensurePopupMessageHandler = () => {
                         showAlerts: false
                     });
                     popupWindow.postMessage({ status: `${viewAxis === 'XZ' ? 'X-Z' : 'Y-Z'} view ready` }, '*');
-                    console.log('✅ Popup view rendered successfully (fallback redraw)');
                 }
             } catch (error) {
-                console.error('❌ Popup view rendering error:', error);
                 popupWindow.postMessage({ status: `Error: ${error.message}` }, '*');
             }
             return;
@@ -777,7 +720,6 @@ async function executeCrossSectionView({
                 loadActiveConfigurationToTables();
             }
         } catch (e) {
-            console.warn('⚠️ [CrossSectionView] Unable to load active configuration:', e);
         }
 
         // Clear any transient override rows left behind by optimization/debug flows.
@@ -897,20 +839,17 @@ async function executeCrossSectionView({
             drawCrossBeamRays(raysToRender, sceneRef);
             harmonizeSceneGeometry(sceneRef);
         } else {
-            console.warn(`⚠️ [${label} View] No rays to render`);
         }
 
         if (statusElement) {
             statusElement.textContent = `${label} view ready`;
         }
 
-        console.log(`✅ [${label} View] Completed`);
         return { success: true };
     } catch (error) {
         if (statusElement) {
             statusElement.textContent = `Error: ${error.message}`;
         }
-        console.error(`❌ [${label} View] Error:`, error);
         if (showAlerts) {
             alert(`${label}断面描画エラー: ${error.message}`);
         }
@@ -1080,13 +1019,11 @@ export function setupRayPatternButtons() {
         annularBtn.addEventListener('click', function() {
             setRayEmissionPattern('annular');
             updateButtonStates(annularBtn, gridBtn, 'annular');
-            console.log('🎯 Ray pattern set to: annular');
         });
         
         gridBtn.addEventListener('click', function() {
             setRayEmissionPattern('grid');
             updateButtonStates(annularBtn, gridBtn, 'grid');
-            console.log('🎯 Ray pattern set to: grid');
         });
     }
 }
@@ -1105,13 +1042,11 @@ export function setupRayColorButtons() {
         objectBtn.addEventListener('click', function() {
             setRayColorMode('object');
             updateColorButtonStates(objectBtn, segmentBtn, 'object');
-            console.log('🎨 Ray color mode set to: object');
         });
         
         segmentBtn.addEventListener('click', function() {
             setRayColorMode('segment');
             updateColorButtonStates(objectBtn, segmentBtn, 'segment');
-            console.log('🎨 Ray color mode set to: segment');
         });
     }
 }
@@ -1198,10 +1133,8 @@ export function setupViewButtons(options) {
                 // 手動でレンダリングを実行
                 if (renderer) {
                     renderer.render(scene, camera);
-                    console.log('🎨 Clear All rendered');
                 }
             } catch (error) {
-                console.error('❌ Error in Clear All button:', error);
             }
         });
     }
@@ -1219,7 +1152,6 @@ export function setupSimpleViewButtons() {
             try {
                 await executeCrossSectionView({ viewAxis: 'XZ', buttonElement: xzBtn });
             } catch (error) {
-                console.error('❌ [X-Z View] エラー:', error);
             }
         });
     }
@@ -1231,7 +1163,6 @@ export function setupSimpleViewButtons() {
             try {
                 await executeCrossSectionView({ viewAxis: 'YZ', buttonElement: yzBtn });
             } catch (error) {
-                console.error('❌ [Y-Z View] エラー:', error);
             }
         });
     }
@@ -1271,7 +1202,6 @@ export function setupOpticalSystemChangeListeners(scene) {
         });
         
         window.opticalSystemTabulator.on('dataChanged', function(data) {
-            console.log('🔄 Optical system data changed');
             // 自動クリアは無効化 - 手動でDrawボタンを押してもらう
             // clearAllOpticalElements();
         });
@@ -1529,12 +1459,10 @@ export function setupOpticalSystemChangeListeners(scene) {
         // Wait for THREE to be available
         function initPopup() {
             if (typeof THREE === 'undefined') {
-                console.error('❌ THREE.js not loaded');
                 setTimeout(initPopup, 100);
                 return;
             }
             
-            console.log('✅ THREE.js loaded');
             
             // Initialize Three.js scene
             const container = document.getElementById('threejs-container');
@@ -1544,7 +1472,6 @@ export function setupOpticalSystemChangeListeners(scene) {
             const aspect = width / height;
             const viewSize = 50;
             
-            console.log('📐 Container size:', width, 'x', height);
             
             const scene = new THREE.Scene();
             scene.userData = scene.userData || {};
@@ -1572,7 +1499,6 @@ export function setupOpticalSystemChangeListeners(scene) {
             renderer.shadowMap.enabled = false;
             container.appendChild(renderer.domElement);
             
-            console.log('🎬 Scene and renderer created');
             
             // Add OrbitControls
             const controls = new THREE.OrbitControls(camera, renderer.domElement);
@@ -1692,7 +1618,6 @@ export function setupOpticalSystemChangeListeners(scene) {
             window.renderer = renderer;
             window.controls = controls;
             
-            console.log('💾 References stored globally');
             
             // Button event handlers - communicate with parent
             const drawBtn = document.getElementById('draw-btn');
@@ -1762,7 +1687,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                 try {
                     localStorage.setItem(SURFACE_COLOR_OVERRIDES_STORAGE_KEY, JSON.stringify(map || {}));
                 } catch (e) {
-                    console.warn('⚠️ Failed to save surface color overrides:', e);
                 }
             }
 
@@ -1773,7 +1697,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                     window.opener.postMessage({ action: 'draw-cross', ...viewState }, '*');
                     if (status) status.textContent = 'Redrawing...';
                 } catch (e) {
-                    console.warn('⚠️ Redraw request failed:', e);
                 }
             }
 
@@ -1878,7 +1801,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                 segmentColorBtn.addEventListener('click', () => setPopupRayColorMode('segment'));
             }
             
-            console.log('🔧 Setting up popup button handlers...');
             console.log('Buttons:', {drawBtn, xzBtn, yzBtn, clearBtn, status});
 
             // Receive status updates from parent
@@ -1891,7 +1813,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                     try {
                         renderSurfaceColorsTable(data.surfaces);
                     } catch (e) {
-                        console.warn('⚠️ Failed to render surface colors table:', e);
                     }
                     return;
                 }
@@ -1908,7 +1829,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                         }
                         window.opener.postMessage({ action: 'draw-cross', ...viewState }, '*');
                     } catch (e) {
-                        console.error('❌ request-redraw failed:', e);
                     }
                     return;
                 }
@@ -1943,21 +1863,18 @@ export function setupOpticalSystemChangeListeners(scene) {
             
             if (drawBtn) {
                 drawBtn.addEventListener('click', () => {
-                    console.log('🎯 Draw Cross button clicked in popup');
                     const viewState = getPopupViewState();
                     console.log('📤 Sending message to parent:', { action: 'draw-cross', ...viewState });
                     if (window.opener) {
                         window.opener.postMessage({ action: 'draw-cross', ...viewState }, '*');
                         status.textContent = 'Drawing...';
                     } else {
-                        console.error('❌ window.opener not available');
                     }
                 });
             }
             
             if (xzBtn) {
                 xzBtn.addEventListener('click', () => {
-                    console.log('🎯 X-Z View button clicked in popup');
                     window.__currentViewAxis = 'XZ';
                     if (window.opener) {
                         const viewState = getPopupViewState();
@@ -1969,7 +1886,6 @@ export function setupOpticalSystemChangeListeners(scene) {
             
             if (yzBtn) {
                 yzBtn.addEventListener('click', () => {
-                    console.log('🎯 Y-Z View button clicked in popup');
                     window.__currentViewAxis = 'YZ';
                     if (window.opener) {
                         const viewState = getPopupViewState();
@@ -1981,7 +1897,6 @@ export function setupOpticalSystemChangeListeners(scene) {
             
             if (clearBtn) {
                 clearBtn.addEventListener('click', () => {
-                    console.log('🧹 Clear button clicked in popup');
                     // Clear all objects from scene except lights
                     const objectsToRemove = [];
                     scene.traverse((object) => {
@@ -2002,12 +1917,10 @@ export function setupOpticalSystemChangeListeners(scene) {
                     });
                     renderer.render(scene, camera);
                     status.textContent = 'Cleared';
-                    console.log('✅ Scene cleared');
                 });
             }
             
             // Notify parent that popup is ready
-            console.log('✅ Popup window initialized successfully');
             console.log('📤 Sending popup-ready message to parent');
             if (window.opener) {
                 window.opener.postMessage({ action: 'popup-ready' }, '*');
@@ -2019,7 +1932,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                     try {
                         drawBtn.click();
                     } catch (e) {
-                        console.error('❌ Auto-render failed:', e);
                     }
                 }, 0);
             }
@@ -3828,7 +3740,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                                 }
                             }
                         } catch (e) {
-                            console.warn('⚠️ Zernike fit/push failed:', e);
                             setProgress(100, 'Zernike fit failed. See console.');
                         }
                     }
@@ -4554,7 +4465,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                             if (PSF_DEBUG) console.log('🔑 [PSF Popup] Forced stop mode for infinite field');
                         }
                     } catch (e) {
-                        console.warn('⚠️ [PSF Popup] Failed to set stop mode:', e);
                     }
                     
                     onProgress({ percent: 0, phase: 'opd', message: 'OPD...' });
@@ -4593,10 +4503,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                     }
 
                     if (PSF_DEBUG) {
-                        console.log('🔍 [PSF Popup] Wavefront map keys:', Object.keys(wavefrontMap));
-                        console.log('🔍 [PSF Popup] pupilPhysicalRadiusMm:', wavefrontMap.pupilPhysicalRadiusMm);
-                        console.log('🔍 [PSF Popup] pupilSamplingMode:', wavefrontMap.pupilSamplingMode);
-                        console.log('🔍 [PSF Popup] entranceEffectiveRadiusMm:', wavefrontMap.entranceEffectiveRadiusMm);
                     }
                     
                     // CRITICAL: Use actual entrance pupil radius for spatial frequency scaling
@@ -4606,7 +4512,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                         ? wavefrontMap.entranceEffectiveRadiusMm
                         : wavefrontMap.pupilPhysicalRadiusMm;
                     
-                    if (PSF_DEBUG) console.log('🔍 [PSF Popup] Using actualPupilRadiusMm:', actualPupilRadiusMm);
 
                     // Convert to PSF calculator format (gridData)
                     // Build OPD grid from the wavefront map samples (piston+tilt removed display OPD).
@@ -4755,7 +4660,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                     // In entrance pupil mode, keep actualPupilRadiusMm for understanding
                     // but use stopDiameterMm for PSF calculation to maintain consistent diffraction limit
                     if (wavefrontMap.pupilSamplingMode === 'entrance') {
-                        if (PSF_DEBUG) console.log('🔍 [PSF Popup] Entrance pupil mode: using stop diameter', stopDiameterMm, 'mm instead of entrance', actualPupilRadiusMm * 2, 'mm');
                         pupilDiameterMm = stopDiameterMm;
                     } else {
                         pupilDiameterMm = stopDiameterMm;  // Use stop diameter in stop mode too

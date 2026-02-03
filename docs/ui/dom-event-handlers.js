@@ -25,6 +25,276 @@ import { listDesignVariablesFromBlocks } from '../optimization/design-variables.
 
 /**
  * ============================================================================
+ * GLOBAL COORDTRANS CALCULATION FUNCTION
+ * ============================================================================
+ */
+
+/**
+ * Perform coordinate transformation calculation for a CoordTrans block
+ * @param {string} blockId - The block ID
+ * @param {HTMLElement} panel - The panel element containing the inputs
+ */
+window.__performCoordTransCalculation = async function(blockId, panel) {
+    try {
+        
+        // Get the current block's parameters
+        const getValue = (key) => {
+            // Try to find input element first
+            let element = panel.querySelector(`input[data-param-key="${key}"]`) || 
+                         panel.querySelector(`.param-input-with-slider[data-param-key="${key}"] input[type="text"]`) ||
+                         panel.querySelector(`input[name="${key}"]`);
+            
+            // If not found, try select element (for dropdowns)
+            if (!element) {
+                element = panel.querySelector(`select[data-param-key="${key}"]`) ||
+                         panel.querySelector(`select[name="${key}"]`);
+            }
+            
+            return element ? element.value : null;
+        };
+        
+        const toSurfValue = getValue('toSurf');
+        const coordReturnValue = getValue('coordReturn') || 'xy';  // default to 'xy'
+        
+        
+        // Force Order 1 when Coord Return is not 'none'
+        // Order 1 (Tilt → Decenter) is required for correct angle extraction
+        if (coordReturnValue !== 'none') {
+            const currentOrder = getValue('order');
+            if (currentOrder !== '1') {
+                const orderRes = window.__blocks_setBlockParamValue?.(blockId, 'order', '1');
+                if (!orderRes || orderRes.ok !== true) {
+                    console.warn('[CoordTrans] Failed to set order to 1:', orderRes?.reason);
+                }
+            }
+        }
+        
+        // Check if target surface is selected
+        if (!toSurfValue || toSurfValue === '') {
+            return;
+        }
+        
+        const targetIndex = parseInt(toSurfValue);
+        if (!Number.isFinite(targetIndex)) {
+            console.error('[CoordTrans] Invalid target index:', toSurfValue);
+            return;
+        }
+        
+        // Get required functions
+        const calculateAllSurfacesLocalCoordinates = window.calculateAllSurfacesLocalCoordinates;
+        if (typeof calculateAllSurfacesLocalCoordinates !== 'function') {
+            console.error('[CoordTrans] calculateAllSurfacesLocalCoordinates not available');
+            return;
+        }
+        
+        const getOpticalSystemRows = window.getOpticalSystemRows;
+        if (typeof getOpticalSystemRows !== 'function') {
+            console.error('[CoordTrans] getOpticalSystemRows not available');
+            return;
+        }
+        
+        const opticalSystemRows = getOpticalSystemRows();
+        if (!opticalSystemRows || opticalSystemRows.length === 0) {
+            console.error('[CoordTrans] No optical system data');
+            return;
+        }
+        
+        // Debug: Log current optical system state before calculation
+        console.log('[DEBUG] Current optical system state:');
+        console.log('  CoordTrans-1 (surf 2):', {
+            decenterY: opticalSystemRows[2]?.decenterY,
+            tiltX: opticalSystemRows[2]?.tiltX
+        });
+        console.log('  CoordTrans-2 (surf 5):', {
+            decenterY: opticalSystemRows[5]?.decenterY,
+            tiltX: opticalSystemRows[5]?.tiltX
+        });
+        
+        // Add block parameters to optical system rows
+        // This is needed because block parameters (like chiefRayShiftX) are stored in the block system
+        // but not included in the optical system table rows
+        console.log('[DEBUG] Creating enrichedRows from opticalSystemRows...');
+        const enrichedRows = opticalSystemRows.map(row => {
+            const bid = String(row._blockId ?? row.blockId ?? '');
+            if (!bid) return row;
+            
+            // Try to get block data from system configurations
+            let blockData = null;
+            try {
+                const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
+                if (systemConfig && Array.isArray(systemConfig.configurations)) {
+                    const activeId = systemConfig.activeConfigId;
+                    const activeCfg = systemConfig.configurations.find(c => c && c.id === activeId);
+                    if (activeCfg && Array.isArray(activeCfg.blocks)) {
+                        blockData = activeCfg.blocks.find(b => b && String(b.blockId ?? '') === bid);
+                    }
+                }
+            } catch (e) {
+                console.warn(`[CoordTrans] Could not get block data for ${bid}:`, e);
+            }
+            
+            if (!blockData || !blockData.parameters) return row;
+            
+            // Add block parameters to row
+            return {
+                ...row,
+                chiefRayShiftX: blockData.parameters.chiefRayShiftX,
+                chiefRayShiftY: blockData.parameters.chiefRayShiftY,
+                chiefRayShiftZ: blockData.parameters.chiefRayShiftZ
+            };
+        });
+        
+        // Debug: Check enrichedRows vs opticalSystemRows for CoordTrans-1
+        console.log('[DEBUG] CoordTrans-1 comparison:');
+        try {
+            const origTiltX = opticalSystemRows[2]?.tiltX;
+            const enrichedTiltX = enrichedRows[2]?.tiltX;
+            console.log('  opticalSystemRows[2].tiltX:', origTiltX);
+            console.log('  enrichedRows[2].tiltX:', enrichedTiltX);
+            console.log('  Match:', origTiltX === enrichedTiltX);
+        } catch (e) {
+            console.error('[DEBUG] Error comparing tiltX:', e);
+        }
+        
+        // Calculate local coordinates
+        // Don't ignore any blocks - we need the full system for accurate calculation
+        const result = await calculateAllSurfacesLocalCoordinates(
+            enrichedRows,
+            targetIndex,
+            null,  // no progress callback
+            null   // don't ignore any blocks
+        );
+        
+        
+        // Find which surface this CoordTrans block corresponds to
+        let blockSurfaceId = -1;
+        for (let i = 0; i < opticalSystemRows.length; i++) {
+            const bid = String(opticalSystemRows[i]._blockId ?? opticalSystemRows[i].blockId ?? '');
+            if (bid === String(blockId)) {
+                blockSurfaceId = i;
+                break;
+            }
+        }
+        
+        
+        if (blockSurfaceId < 0) {
+            console.error('[CoordTrans] Could not find surface for block:', blockId);
+            return;
+        }
+        
+        // Get surface data for this block
+        console.log('[DEBUG] blockId:', blockId, 'blockSurfaceId:', blockSurfaceId);
+        console.log('[DEBUG] result.surfaces keys:', Object.keys(result.surfaces || {}));
+        const rowId = String(opticalSystemRows[blockSurfaceId].id);
+        console.log('[DEBUG] Looking for rowId:', rowId);
+        let surfData = result.surfaces?.[rowId] || result.surfaces?.[String(rowId)] || result.surfaces?.[Number(rowId)] ||
+                      result.surfaces?.[blockSurfaceId] || result.surfaces?.[String(blockSurfaceId)];
+        
+        // If no data for this block, try next surface
+        if (!surfData) {
+            for (let i = blockSurfaceId + 1; i < opticalSystemRows.length; i++) {
+                const nextRowId = String(opticalSystemRows[i].id);
+                surfData = result.surfaces?.[nextRowId];
+                if (surfData) {
+                    console.log('[DEBUG] Found surfData at surface index:', i, 'rowId:', nextRowId);
+                    break;
+                }
+            }
+        } else {
+            console.log('[DEBUG] Found surfData for blockSurfaceId:', blockSurfaceId, 'rowId:', rowId);
+        }
+        
+        if (!surfData) {
+            console.error('[CoordTrans] No surface data found');
+            return;
+        }
+        
+        console.log('[DEBUG] Using surfData:', surfData);
+        
+        
+        // Update the input fields based on coordinate return mode
+        const updateField = (key, value) => {
+            let input = panel.querySelector(`input[data-param-key="${key}"]`) || 
+                       panel.querySelector(`.param-input-with-slider[data-param-key="${key}"] input[type="text"]`) ||
+                       panel.querySelector(`input[name="${key}"]`);
+            
+            if (!input) {
+                const allInputs = panel.querySelectorAll('input[type="text"], input[type="number"], input:not([type])');
+                for (const inp of allInputs) {
+                    const dataKey = inp.getAttribute('data-param-key') || inp.getAttribute('data-key') || inp.name;
+                    if (dataKey === key) {
+                        input = inp;
+                        break;
+                    }
+                }
+            }
+            
+            if (input) {
+                input.value = value.toFixed(6);
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('blur', { bubbles: true }));
+                return true;
+            } else {
+                console.warn(`[CoordTrans] Input field not found for ${key}`);
+                return false;
+            }
+        };
+        
+        // Get chiefRayShift modes to determine which fields should be auto-updated
+        const chiefRayShiftX = getValue('chiefRayShiftX');
+        const chiefRayShiftY = getValue('chiefRayShiftY');
+        const chiefRayShiftZ = getValue('chiefRayShiftZ');
+        const shouldAutoX = (String(chiefRayShiftX ?? '').trim().toUpperCase() === 'A');
+        const shouldAutoY = (String(chiefRayShiftY ?? '').trim().toUpperCase() === 'A');
+        const shouldAutoZ = (String(chiefRayShiftZ ?? '').trim().toUpperCase() === 'A');
+        
+        // Apply updates based on coordinate return mode and chiefRayShift settings
+        let updated = {};
+        switch (coordReturnValue) {
+            case 'none':
+                break;
+                
+            case 'orientation':
+                // Tilt only (force all decenters to 0 regardless of Auto settings)
+                updated = {
+                    decenterX: updateField('decenterX', 0),
+                    decenterY: updateField('decenterY', 0),
+                    decenterZ: updateField('decenterZ', 0),
+                    tiltX: updateField('tiltX', surfData.localTiltX),
+                    tiltY: updateField('tiltY', surfData.localTiltY),
+                    tiltZ: updateField('tiltZ', surfData.localTiltZ)
+                };
+                break;
+                
+            case 'xy':
+                // Decenter X, Y only (only update if Auto mode is enabled, tilt remains unchanged)
+                updated = {
+                    decenterX: shouldAutoX ? updateField('decenterX', surfData.localDecenterX) : false,
+                    decenterY: shouldAutoY ? updateField('decenterY', surfData.localDecenterY) : false,
+                    decenterZ: updateField('decenterZ', 0)
+                };
+                break;
+                
+            case 'xyz':
+                // Decenter X, Y, Z only (only update if Auto mode is enabled, tilt remains unchanged)
+                updated = {
+                    decenterX: shouldAutoX ? updateField('decenterX', surfData.localDecenterX) : false,
+                    decenterY: shouldAutoY ? updateField('decenterY', surfData.localDecenterY) : false,
+                    decenterZ: shouldAutoZ ? updateField('decenterZ', surfData.localDecenterZ) : false
+                };
+                break;
+        }
+        
+        const successCount = Object.values(updated).filter(v => v).length;
+        console.log('[CoordTrans] Updated', successCount, 'fields');
+        
+    } catch (error) {
+        console.error('[CoordTrans] Calculation error:', error);
+    }
+};
+
+/**
+ * ============================================================================
  * PARAMETER SLIDER HELPERS (for Design Intent numeric inputs with touch support)
  * ============================================================================
  */
@@ -260,6 +530,7 @@ function valueToSlider(value, min, max, useLog) {
 function createParameterSlider(key, blockType, currentValue, commitCallback) {
     const container = document.createElement('div');
     container.className = 'param-input-with-slider';
+    container.dataset.paramKey = key; // Add data attribute for field identification
     // Use a fixed-column grid to keep slider start aligned across rows
     container.style.display = 'grid';
     container.style.gridTemplateColumns = '120px 40px 40px 40px 140px 220px';
@@ -283,6 +554,7 @@ function createParameterSlider(key, blockType, currentValue, commitCallback) {
     // Text input
     const textInput = document.createElement('input');
     textInput.type = 'text';
+    textInput.dataset.paramKey = key; // Add data attribute for field identification
     textInput.value = currentValue;
     textInput.style.flex = '0 0 120px';
     textInput.style.width = '120px';
@@ -3438,7 +3710,6 @@ function setupSuggestOptimizeButtons() {
                                             redo: function() { return this.execute(); }
                                         };
                                         window.undoHistory.record(command);
-                                        console.log('[Undo] Recorded: Optimization');
                                     }
                                 }
                             } catch (e) {
@@ -4441,7 +4712,6 @@ function updateWavefrontObjectOptions() {
         
         // 各Objectのオプションを追加
         validObjectData.forEach((obj, index) => {
-            console.log(`🔍 有効Object[${index}]:`, obj);
             
             const option = document.createElement('option');
             option.value = index.toString();
@@ -4455,7 +4725,6 @@ function updateWavefrontObjectOptions() {
             objectSelect.appendChild(option);
         });
         
-        console.log(`📊 波面収差図Object選択更新: ${validObjectData.length}個の有効Object`);
         
     } catch (error) {
         console.error('❌ Object選択オプション更新エラー:', error);
@@ -9346,7 +9615,6 @@ function __blocks_setBlockParamValue(blockId, key, rawValue) {
         const cmd = new SetBlockParameterCommand(activeId, blockId, `parameters.${String(key)}`, oldValue, newValue);
         window.undoHistory.record(cmd);
     } else {
-        console.log(`[Undo] Not recording: oldValue=${oldValue}, newValue=${newValue}, undoHistory=${!!window.undoHistory}, isExecuting=${window.undoHistory?.isExecuting}`);
     }
     
     b.parameters[String(key)] = coerced;
@@ -9677,14 +9945,10 @@ function __blocks_setBlockApertureValue(blockId, role, rawValue) {
     // Record undo command
     const oldValue = b.aperture[r];
     const newValue = (String(coerced ?? '').trim() === '') ? undefined : coerced;
-    console.log(`[Undo] Aperture change: ${blockId}.aperture.${r} from ${oldValue} to ${newValue}`);
-    console.log(`[Undo] Check: oldValue !== newValue = ${oldValue !== newValue}, undoHistory = ${!!window.undoHistory}, isExecuting = ${window.undoHistory?.isExecuting}`);
     if (oldValue !== newValue && window.undoHistory && !window.undoHistory.isExecuting) {
-        console.log(`[Undo] Recording aperture command`);
         const cmd = new SetBlockParameterCommand(activeId, blockId, `aperture.${r}`, oldValue, newValue);
         window.undoHistory.record(cmd);
     } else {
-        console.log(`[Undo] NOT recording aperture command`);
     }
     
     if (String(coerced ?? '').trim() === '') {
@@ -10018,6 +10282,10 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             panel.style.borderTop = isDarkMode ? '1px solid #333' : '1px solid #eee';
             panel.style.fontSize = '12px';
             panel.style.color = isDarkMode ? '#ffffff' : '#333';
+            
+            // Set block ID on panel for coordinate transformation
+            panel.dataset.blockId = String(blockId);
+            panel.setAttribute('data-block-id', String(blockId));
 
             /** @type {Array<{key:string,label:string}>} */
             const items = [];
@@ -10126,7 +10394,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             const isSingleSurfaceCircular = singleSurfaceShape === 'Circular';
             const isSingleSurfaceSquare = singleSurfaceShape === 'Square';
             const isSingleSurfaceRect = singleSurfaceShape === 'Rectangular';
-
             if (blockType === 'ObjectSurface') {
                 items.push(
                     { kind: 'objectMode', key: 'objectDistanceMode', label: 'object (INF/finite)', noOptimize: true },
@@ -10282,13 +10549,15 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 }
             } else if (blockType === 'CoordTrans') {
                 items.push(
-                    { key: 'decenterX', label: 'decenterX' },
-                    { key: 'decenterY', label: 'decenterY' },
-                    { key: 'decenterZ', label: 'decenterZ' },
+                    { key: 'decenterX', label: 'decenterX', hasChiefRayShiftMode: true },
+                    { key: 'decenterY', label: 'decenterY', hasChiefRayShiftMode: true },
+                    { key: 'decenterZ', label: 'decenterZ', hasChiefRayShiftMode: true },
                     { key: 'tiltX', label: 'tiltX (deg)' },
                     { key: 'tiltY', label: 'tiltY (deg)' },
                     { key: 'tiltZ', label: 'tiltZ (deg)' },
-                    { kind: 'coordTransOrder', key: 'order', label: 'order', noOptimize: true }
+                    { kind: 'coordTransOrder', key: 'order', label: 'order', noOptimize: true },
+                    { kind: 'coordTransReturn', key: 'coordReturn', label: 'Coord Return', noOptimize: true },
+                    { kind: 'coordTransToSurf', key: 'toSurf', label: 'To Surf', noOptimize: true }
                 );
             } else if (blockType === 'ImageSurface') {
                 items.push({ key: 'semidia', label: 'semidia', hasImageSemiDiaMode: true });
@@ -10301,6 +10570,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 const isGapThicknessModeItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'gapThicknessMode';
                 const isApertureShapeItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'apertureShape';
                 const isCoordTransOrderItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'coordTransOrder';
+                const isCoordTransReturnItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'coordTransReturn';
+                const isCoordTransToSurfItem = !isApertureItem && it && typeof it === 'object' && String(it.kind ?? '') === 'coordTransToSurf';
                 const isSurfTypeItem = !isApertureItem && it && typeof it === 'object' && typeof it.key === 'string' && /surftype$/i.test(String(it.key));
                 const isMaterialItem = !isApertureItem && it && typeof it === 'object' && typeof it.key === 'string' && /^material\d*$/i.test(String(it.key));
                 // Allow optimization for aperture items (semidia for Lens/Doublet/Triplet) unless explicitly marked noOptimize
@@ -10403,7 +10674,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 };
 
                 let valueEl;
-                if (isObjectModeItem || isImageSemiDiaModeItem || isGapThicknessModeItem || isApertureShapeItem || isCoordTransOrderItem) {
+                if (isObjectModeItem || isImageSemiDiaModeItem || isGapThicknessModeItem || isApertureShapeItem || isCoordTransOrderItem || isCoordTransReturnItem || isCoordTransToSurfItem) {
                     const sel = document.createElement('select');
                     sel.style.flex = '0 0 180px';
                     sel.style.fontSize = '12px';
@@ -10594,6 +10865,84 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             }
                             try { refreshBlockInspector(); } catch (_) {}
                         });
+                    } else if (isCoordTransReturnItem) {
+                        // CoordTrans Coordinate Return mode (Zemax-style)
+                        sel.setAttribute('data-param-key', it.key || 'coordReturn');
+                        sel.innerHTML = [
+                            '<option value="none">None</option>',
+                            '<option value="orientation">Orientation Only</option>',
+                            '<option value="xy">Orientation & XY</option>',
+                            '<option value="xyz">Orientation & XYZ</option>'
+                        ].join('');
+
+                        const cur = String(currentValue ?? '').trim();
+                        const normalized = ['none', 'orientation', 'xy', 'xyz'].includes(cur) ? cur : 'none';
+                        sel.value = normalized;
+
+                        sel.addEventListener('change', async (e) => {
+                            e.stopPropagation();
+                            const desired = String(sel.value ?? 'none');
+                            const ok = commitValue(desired);
+                            if (!ok) {
+                                sel.value = normalized;
+                                return;
+                            }
+                            
+                            // Auto-trigger coordinate transformation calculation
+                            if (desired !== 'none') {
+                                await __performCoordTransCalculation(blockId, panel);
+                            }
+                            
+                            try { refreshBlockInspector(); } catch (_) {}
+                        });
+                    } else if (isCoordTransToSurfItem) {
+                        // CoordTrans To Surf - select target surface
+                        sel.setAttribute('data-param-key', it.key || 'toSurf');
+                        const getOpticalSystemRows = window.getOpticalSystemRows;
+                        if (typeof getOpticalSystemRows === 'function') {
+                            const opticalSystemRows = getOpticalSystemRows();
+                            const options = ['<option value="">Select Surface...</option>'];
+                            
+                            if (opticalSystemRows && opticalSystemRows.length > 0) {
+                                opticalSystemRows.forEach((row, index) => {
+                                    const objectType = String(row?.['object type'] ?? row?.object ?? '').toLowerCase();
+                                    if (objectType === 'object') return;
+                                    
+                                    const surfType = String(row?.surfType ?? row?.type ?? '').toLowerCase();
+                                    if (surfType === 'ct' || surfType === 'coordtrans' || surfType === 'coordinatebreak' ||
+                                        surfType === 'coord trans' || surfType === 'coordinate break') {
+                                        return;
+                                    }
+                                    
+                                    let label = 'Surf ' + index;
+                                    if (row.comment) label += ': ' + row.comment;
+                                    else if (row.material && row.material !== 'AIR') label += ': ' + row.material;
+                                    
+                                    options.push(`<option value="${index}">${label}</option>`);
+                                });
+                            }
+                            sel.innerHTML = options.join('');
+                        }
+
+                        const cur = String(currentValue ?? '').trim();
+                        sel.value = cur;
+
+                        sel.addEventListener('change', async (e) => {
+                            e.stopPropagation();
+                            const desired = String(sel.value ?? '');
+                            const ok = commitValue(desired);
+                            if (!ok) {
+                                sel.value = cur;
+                                return;
+                            }
+                            
+                            // Auto-trigger coordinate transformation calculation if target surface selected
+                            if (desired) {
+                                await __performCoordTransCalculation(blockId, panel);
+                            }
+                            
+                            try { refreshBlockInspector(); } catch (_) {}
+                        });
                     } else {
                         // Mirror.apertureShape
                         sel.innerHTML = [
@@ -10670,7 +11019,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             blockType,
                             currentValue,
                             (newValue) => {
-                                console.log(`[Undo] Slider commit for ${it.key || it.role}:`, newValue);
                                 commitValue(newValue);
                             }
                         );
@@ -11054,6 +11402,51 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     modeSlot.appendChild(modeSel);
                 }
 
+                // CoordTrans: insert chief ray shift mode dropdown for decenter X, Y, Z
+                if (it && it.hasChiefRayShiftMode && blockType === 'CoordTrans') {
+                    const axis = String(it.key ?? '').replace(/^decenter/i, '').toUpperCase(); // X, Y, or Z
+                    const modeKey = 'chiefRayShift' + axis; // chiefRayShiftX, chiefRayShiftY, chiefRayShiftZ
+                    const modeValue = getDisplayValue(modeKey);
+                    const modeSel = document.createElement('select');
+                    modeSel.setAttribute('data-param-key', modeKey);
+                    modeSel.setAttribute('name', modeKey);
+                    modeSel.style.flex = '0 0 140px';
+                    modeSel.style.width = '140px';
+                    modeSel.style.minWidth = '140px';
+                    modeSel.style.maxWidth = '140px';
+                    modeSel.style.fontSize = '12px';
+                    modeSel.style.padding = '2px 6px';
+                    modeSel.style.border = '1px solid #ddd';
+                    modeSel.style.borderRadius = '4px';
+                    modeSel.style.cursor = 'pointer';
+                    modeSel.style.pointerEvents = 'auto';
+                    modeSel.innerHTML = [
+                        '<option value="">(manual)</option>',
+                        '<option value="A">Auto (chief ray)</option>'
+                    ].join('');
+                    const cur = String(modeValue ?? '').trim().toUpperCase();
+                    const normalized = (cur === 'A' || cur === 'AUTO') ? 'A' : '';
+                    modeSel.value = normalized;
+                    modeSel.addEventListener('change', async (e) => {
+                        e.stopPropagation();
+                        const desired = String(modeSel.value ?? '');
+                        const res = __blocks_setBlockParamValue(blockId, modeKey, desired);
+                        if (!res || res.ok !== true) {
+                            alert(`Failed to update ${blockId}.${modeKey}: ${res?.reason || 'unknown error'}`);
+                            modeSel.value = normalized;
+                            return;
+                        }
+                        
+                        // Auto-trigger coordinate transformation calculation when Auto mode is selected
+                        if (desired === 'A' || desired === 'AUTO') {
+                            await __performCoordTransCalculation(blockId, panel);
+                        }
+                        
+                        try { refreshBlockInspector(); } catch (_) {}
+                    });
+                    modeSlot.appendChild(modeSel);
+                }
+
                 // Gap blocks: insert thicknessMode dropdown into the fixed slot
                 if (it && it.hasThicknessMode && (blockType === 'Gap' || blockType === 'AirGap')) {
                     const modeValue = getDisplayValue('thicknessMode');
@@ -11278,7 +11671,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 }
 
 export function refreshBlockInspector() {
-    console.log('[Undo] refreshBlockInspector() called - starting UI rebuild');
     const banner = document.getElementById('import-analyze-mode-banner');
     const setBannerVisible = (isVisible) => {
         if (!banner) return;
@@ -11290,7 +11682,6 @@ export function refreshBlockInspector() {
         // A missing active config here makes the UI falsely fall back into Import/Analyze mode.
         const activeCfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
         const blocks = activeCfg && Array.isArray(activeCfg.blocks) ? activeCfg.blocks : null;
-        console.log('[Undo] refreshBlockInspector() - blocks count:', blocks ? blocks.length : 0);
 
         try {
             // Show Import/Analyze banner only when blocks are actually unavailable.
