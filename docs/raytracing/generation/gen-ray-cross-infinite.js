@@ -921,17 +921,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         }
         
         const stopSurfaceInfo = findStopSurface(opticalSystemRows, surfaceOrigins);
-        if (debugMode) {
-            if (stopSurfaceInfo?.index !== undefined) {
-                const stopRow = opticalSystemRows?.[stopSurfaceInfo.index] || {};
-                    index: stopSurfaceInfo.index,
-                    objectType: stopRow['object type'] ?? stopRow.object ?? stopRow.type,
-                    semidia: stopRow.semidia ?? stopRow.semiDia ?? stopRow.semiDiameter ?? stopRow['semi-diameter'],
-                    aperture: stopRow.aperture ?? stopRow.Aperture,
-                    thickness: stopRow.thickness
-                });
-            }
-        }
         
         if (!stopSurfaceInfo) {
             console.warn(`⚠️ [InfiniteSystem] Object${objectIndex + 1}のStop面が見つかりません`);
