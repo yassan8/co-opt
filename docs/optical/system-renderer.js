@@ -198,8 +198,6 @@ function __coopt_loadSurfaceColorOverrides() {
  * @param {Array} options.opticalSystemData - Optical system data
  */
 export function drawOpticalSystemSurfaces(options = {}) {
-    });
-    
     const {
         crossSectionOnly = false,
         scene,
