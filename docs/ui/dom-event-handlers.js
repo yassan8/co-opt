@@ -11106,9 +11106,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                         sel.setAttribute('data-param-key', it.key || 'coordReturn');
                         sel.innerHTML = [
                             '<option value="none">None</option>',
-                            '<option value="orientation">Orientation Only</option>',
-                            '<option value="xy">Orientation & XY</option>',
-                            '<option value="xyz">Orientation & XYZ</option>'
+                            '<option value="orientation">Orientation</option>',
+                            '<option value="xy">XY (Local)</option>',
+                            '<option value="xyz">XYZ (Global)</option>'
                         ].join('');
 
                         const cur = String(currentValue ?? '').trim();
