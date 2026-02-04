@@ -1242,8 +1242,10 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       try {
         if (!row || typeof row !== 'object') return;
         const glassName = String(row.material ?? '').trim();
+        // If material is not specified or is AIR, preserve any manually-set rindex/abbe (synthetic glass)
         if (!glassName || glassName.toUpperCase() === 'AIR') return;
         const glass = getGlassDataWithSellmeier(glassName);
+        // Only update if glass data is found; otherwise preserve existing rindex/abbe
         if (glass && typeof glass.nd === 'number' && Number.isFinite(glass.nd)) {
           row.rindex = String(glass.nd);
         }

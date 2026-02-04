@@ -1242,8 +1242,10 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       try {
         if (!row || typeof row !== 'object') return;
         const glassName = String(row.material ?? '').trim();
+        // If material is not specified or is AIR, preserve any manually-set rindex/abbe (synthetic glass)
         if (!glassName || glassName.toUpperCase() === 'AIR') return;
         const glass = getGlassDataWithSellmeier(glassName);
+        // Only update if glass data is found; otherwise preserve existing rindex/abbe
         if (glass && typeof glass.nd === 'number' && Number.isFinite(glass.nd)) {
           row.rindex = String(glass.nd);
         }
@@ -1331,6 +1333,8 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const backRadius = getParamOrVarValue(params, vars, 'backRadius');
       const centerThickness = getParamOrVarValue(params, vars, 'centerThickness');
       const material = getParamOrVarValue(params, vars, 'material');
+      const rindex = getParamOrVarValue(params, vars, 'rindex');
+      const abbe = getParamOrVarValue(params, vars, 'abbe');
 
       // Optional asphere (canonical, per-surface)
       const frontSurfTypeRaw = getParamOrVarValue(params, vars, 'frontSurfType');
@@ -1351,6 +1355,14 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       front.radius = normalizeRadiusToRowValue(frontRadius);
       front.thickness = applySignedThickness(normalizeThicknessToRowValue(centerThickness));
       front.material = String(material ?? '').trim();
+      
+      // Apply directly-specified rindex/abbe (synthetic glass) if provided
+      if (rindex !== undefined && rindex !== null && String(rindex).trim() !== '') {
+        front.rindex = String(rindex);
+      }
+      if (abbe !== undefined && abbe !== null && String(abbe).trim() !== '') {
+        front.abbe = String(abbe);
+      }
 
       applyDerivedGlassDisplay(front);
 
@@ -1390,6 +1402,8 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const radius = getParamOrVarValue(params, vars, 'radius');
       const thickness = getParamOrVarValue(params, vars, 'thickness');
       const material = getParamOrVarValue(params, vars, 'material');
+      const rindex = getParamOrVarValue(params, vars, 'rindex');
+      const abbe = getParamOrVarValue(params, vars, 'abbe');
 
       // Optional asphere parameters
       const surfTypeRaw = getParamOrVarValue(params, vars, 'surfType');
@@ -1404,6 +1418,14 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       surf.radius = normalizeRadiusToRowValue(radius);
       surf.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness));
       surf.material = String(material ?? '').trim();
+      
+      // Apply directly-specified rindex/abbe (synthetic glass) if provided
+      if (rindex !== undefined && rindex !== null && String(rindex).trim() !== '') {
+        surf.rindex = String(rindex);
+      }
+      if (abbe !== undefined && abbe !== null && String(abbe).trim() !== '') {
+        surf.abbe = String(abbe);
+      }
 
       applyDerivedGlassDisplay(surf);
       applyAsphereFieldsFromParams(surf, surfTypeRaw, conicRaw, coefsRaw, radiusXRaw, radiusYRaw, axisRaw);
@@ -1571,15 +1593,31 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const thickness2 = getParamOrVarValue(params, vars, 'thickness2');
       const material1 = getParamOrVarValue(params, vars, 'material1');
       const material2 = getParamOrVarValue(params, vars, 'material2');
+      const rindex1 = getParamOrVarValue(params, vars, 'rindex1');
+      const abbe1 = getParamOrVarValue(params, vars, 'abbe1');
+      const rindex2 = getParamOrVarValue(params, vars, 'rindex2');
+      const abbe2 = getParamOrVarValue(params, vars, 'abbe2');
 
       s1.radius = normalizeRadiusToRowValue(radius1);
       s1.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness1));
       s1.material = String(material1 ?? '').trim();
+      if (rindex1 !== undefined && rindex1 !== null && String(rindex1).trim() !== '') {
+        s1.rindex = String(rindex1);
+      }
+      if (abbe1 !== undefined && abbe1 !== null && String(abbe1).trim() !== '') {
+        s1.abbe = String(abbe1);
+      }
       applyDerivedGlassDisplay(s1);
 
       s2.radius = normalizeRadiusToRowValue(radius2);
       s2.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness2));
       s2.material = String(material2 ?? '').trim();
+      if (rindex2 !== undefined && rindex2 !== null && String(rindex2).trim() !== '') {
+        s2.rindex = String(rindex2);
+      }
+      if (abbe2 !== undefined && abbe2 !== null && String(abbe2).trim() !== '') {
+        s2.abbe = String(abbe2);
+      }
       applyDerivedGlassDisplay(s2);
 
       s3.radius = normalizeRadiusToRowValue(radius3);
@@ -1678,20 +1716,44 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const material1 = getParamOrVarValue(params, vars, 'material1');
       const material2 = getParamOrVarValue(params, vars, 'material2');
       const material3 = getParamOrVarValue(params, vars, 'material3');
+      const rindex1 = getParamOrVarValue(params, vars, 'rindex1');
+      const abbe1 = getParamOrVarValue(params, vars, 'abbe1');
+      const rindex2 = getParamOrVarValue(params, vars, 'rindex2');
+      const abbe2 = getParamOrVarValue(params, vars, 'abbe2');
+      const rindex3 = getParamOrVarValue(params, vars, 'rindex3');
+      const abbe3 = getParamOrVarValue(params, vars, 'abbe3');
 
       s1.radius = normalizeRadiusToRowValue(radius1);
       s1.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness1));
       s1.material = String(material1 ?? '').trim();
+      if (rindex1 !== undefined && rindex1 !== null && String(rindex1).trim() !== '') {
+        s1.rindex = String(rindex1);
+      }
+      if (abbe1 !== undefined && abbe1 !== null && String(abbe1).trim() !== '') {
+        s1.abbe = String(abbe1);
+      }
       applyDerivedGlassDisplay(s1);
 
       s2.radius = normalizeRadiusToRowValue(radius2);
       s2.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness2));
       s2.material = String(material2 ?? '').trim();
+      if (rindex2 !== undefined && rindex2 !== null && String(rindex2).trim() !== '') {
+        s2.rindex = String(rindex2);
+      }
+      if (abbe2 !== undefined && abbe2 !== null && String(abbe2).trim() !== '') {
+        s2.abbe = String(abbe2);
+      }
       applyDerivedGlassDisplay(s2);
 
       s3.radius = normalizeRadiusToRowValue(radius3);
       s3.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness3));
       s3.material = String(material3 ?? '').trim();
+      if (rindex3 !== undefined && rindex3 !== null && String(rindex3).trim() !== '') {
+        s3.rindex = String(rindex3);
+      }
+      if (abbe3 !== undefined && abbe3 !== null && String(abbe3).trim() !== '') {
+        s3.abbe = String(abbe3);
+      }
       applyDerivedGlassDisplay(s3);
 
       s4.radius = normalizeRadiusToRowValue(radius4);

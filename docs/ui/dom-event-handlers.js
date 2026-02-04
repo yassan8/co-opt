@@ -11310,19 +11310,29 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 if (isMaterialItem) {
                     const materialKey = String(it?.key ?? '').trim();
                     const mat = String(currentValue ?? '').trim();
-                    let curNd = '';
-                    let curVd = '';
+                    
+                    // Derive rindex/abbe keys from material key (material -> rindex, material1 -> rindex1)
+                    const rindexKey = materialKey.replace(/^material(\d*)$/, 'rindex$1');
+                    const abbeKey = materialKey.replace(/^material(\d*)$/, 'abbe$1');
+                    
+                    // Get stored rindex/abbe values from block parameters
+                    const storedRindex = getDisplayValue(rindexKey);
+                    const storedAbbe = getDisplayValue(abbeKey);
+                    
+                    let curNd = storedRindex || '';
+                    let curVd = storedAbbe || '';
                     let matIsKnownGlass = false;
                     let matIsNumeric = false;
                     let matNumericNd = NaN;
                     try {
+                        // Check material type regardless of stored values
                         if (mat !== '' && mat.toUpperCase() !== 'AIR') {
                             const gd = getGlassDataWithSellmeier(mat);
                             if (gd && Number.isFinite(gd.nd)) {
-                                curNd = String(gd.nd);
                                 matNumericNd = gd.nd;
+                                if (!storedRindex) curNd = String(gd.nd);
                             }
-                            if (gd && Number.isFinite(gd.vd)) curVd = String(gd.vd);
+                            if (gd && Number.isFinite(gd.vd) && !storedAbbe) curVd = String(gd.vd);
                             // Numeric material returns vd=undefined; known glass returns finite vd.
                             matIsKnownGlass = !!(gd && Number.isFinite(gd.nd) && Number.isFinite(gd.vd));
                             matIsNumeric = !!(gd && Number.isFinite(gd.nd) && !Number.isFinite(gd.vd));
@@ -11334,8 +11344,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     ndInput.dataset.glassHelper = 'nd';
                     ndInput.dataset.blockId = String(blockId ?? '');
                     ndInput.dataset.materialKey = materialKey;
+                    ndInput.dataset.rindexKey = rindexKey;
                     ndInput.placeholder = curNd !== '' ? curNd : 'ref index';
-                    ndInput.value = '';
+                    ndInput.value = storedRindex || '';
                     ndInput.style.flex = '0 0 86px';
                     ndInput.style.fontSize = '12px';
                     ndInput.style.padding = '2px 6px';
@@ -11349,8 +11360,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     vdInput.dataset.glassHelper = 'vd';
                     vdInput.dataset.blockId = String(blockId ?? '');
                     vdInput.dataset.materialKey = materialKey;
+                    vdInput.dataset.abbeKey = abbeKey;
                     vdInput.placeholder = curVd !== '' ? curVd : 'abbe';
-                    vdInput.value = '';
+                    vdInput.value = storedAbbe || '';
                     vdInput.style.flex = '0 0 86px';
                     vdInput.style.fontSize = '12px';
                     vdInput.style.padding = '2px 6px';
@@ -11358,6 +11370,37 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     vdInput.style.borderRadius = '4px';
                     vdInput.title = 'Abbe number (vd)';
                     vdInput.addEventListener('click', (e) => e.stopPropagation());
+                    
+                    // Save rindex/abbe values to block parameters when changed
+                    ndInput.addEventListener('blur', (e) => {
+                        e.stopPropagation();
+                        const newVal = String(ndInput.value ?? '').trim();
+                        const oldVal = String(getDisplayValue(rindexKey) ?? '').trim();
+                        if (newVal !== oldVal) {
+                            const res = __blocks_setBlockParamValue(blockId, rindexKey, newVal);
+                            if (!res || res.ok !== true) {
+                                alert(`Failed to update ${blockId}.${rindexKey}: ${res?.reason || 'unknown error'}`);
+                                ndInput.value = oldVal;
+                            } else {
+                                try { refreshBlockInspector(); } catch (_) {}
+                            }
+                        }
+                    });
+                    
+                    vdInput.addEventListener('blur', (e) => {
+                        e.stopPropagation();
+                        const newVal = String(vdInput.value ?? '').trim();
+                        const oldVal = String(getDisplayValue(abbeKey) ?? '').trim();
+                        if (newVal !== oldVal) {
+                            const res = __blocks_setBlockParamValue(blockId, abbeKey, newVal);
+                            if (!res || res.ok !== true) {
+                                alert(`Failed to update ${blockId}.${abbeKey}: ${res?.reason || 'unknown error'}`);
+                                vdInput.value = oldVal;
+                            } else {
+                                try { refreshBlockInspector(); } catch (_) {}
+                            }
+                        }
+                    });
 
                     const markPreferred = () => {
                         try {
@@ -11418,8 +11461,22 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                 const current = String(currentValue ?? '').trim();
                                 const ok = (name === current) ? true : commitValue(name);
                                 if (ok) {
+                                    // Also update rindex/abbe fields with the selected glass's nd/vd
+                                    try {
+                                        if (Number.isFinite(g?.nd)) {
+                                            const ndVal = String(g.nd);
+                                            const ndRes = __blocks_setBlockParamValue(blockId, rindexKey, ndVal);
+                                            if (ndRes && ndRes.ok) ndInput.value = ndVal;
+                                        }
+                                        if (Number.isFinite(g?.vd)) {
+                                            const vdVal = String(g.vd);
+                                            const vdRes = __blocks_setBlockParamValue(blockId, abbeKey, vdVal);
+                                            if (vdRes && vdRes.ok) vdInput.value = vdVal;
+                                        }
+                                    } catch (_) {}
                                     listEl.style.display = 'none';
                                     listEl.innerHTML = '';
+                                    try { refreshBlockInspector(); } catch (_) {}
                                 }
                             });
 
@@ -11481,8 +11538,22 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                 const current = String(currentValue ?? '').trim();
                                 const ok = (name === current) ? true : commitValue(name);
                                 if (ok) {
+                                    // Also update rindex/abbe fields with the selected glass's nd/vd
+                                    try {
+                                        if (Number.isFinite(g?.nd)) {
+                                            const ndVal = String(g.nd);
+                                            const ndRes = __blocks_setBlockParamValue(blockId, rindexKey, ndVal);
+                                            if (ndRes && ndRes.ok) ndInput.value = ndVal;
+                                        }
+                                        if (Number.isFinite(g?.vd)) {
+                                            const vdVal = String(g.vd);
+                                            const vdRes = __blocks_setBlockParamValue(blockId, abbeKey, vdVal);
+                                            if (vdRes && vdRes.ok) vdInput.value = vdVal;
+                                        }
+                                    } catch (_) {}
                                     listEl.style.display = 'none';
                                     listEl.innerHTML = '';
+                                    try { refreshBlockInspector(); } catch (_) {}
                                 }
                             });
 
@@ -11497,8 +11568,10 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             right.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
                             {
                                 const scoreStr = String(Number(g.score).toFixed(0)).padStart(3);
+                                const ndStr = Number.isFinite(g?.nd) ? Number(g.nd).toFixed(6).padStart(10) : '       N/A';
+                                const vdStr = Number.isFinite(g?.vd) ? Number(g.vd).toFixed(2).padStart(6) : '   N/A';
                                 const priceStr = (Number.isFinite(g?.price) ? Number(g.price).toFixed(4) : 'null').padStart(8);
-                                right.textContent = `score=${scoreStr}  price=${priceStr}`;
+                                right.textContent = `score=${scoreStr}  ${ndStr} / ${vdStr}  price=${priceStr}`;
                             }
                             rowEl.appendChild(left);
                             rowEl.appendChild(right);
@@ -11509,26 +11582,35 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     const pickTargetNdVd = () => {
                         const nRaw = Number.parseFloat(String(ndInput.value ?? '').trim());
                         const vRaw = Number.parseFloat(String(vdInput.value ?? '').trim());
-                        if (Number.isFinite(nRaw) && Number.isFinite(vRaw)) return { nd: nRaw, vd: vRaw };
+                        console.log('[pickTargetNdVd] ndInput.value:', ndInput.value, 'vdInput.value:', vdInput.value, 'nRaw:', nRaw, 'vRaw:', vRaw);
+                        if (Number.isFinite(nRaw) && Number.isFinite(vRaw)) {
+                            console.log('[pickTargetNdVd] Using manual nd/vd:', { nd: nRaw, vd: vRaw });
+                            return { nd: nRaw, vd: vRaw };
+                        }
 
                         // If material is a known glass, Suggest should work without manual nd/vd.
                         if (matIsKnownGlass) {
                             const nd = Number.parseFloat(curNd);
                             const vd = Number.parseFloat(curVd);
+                            console.log('[pickTargetNdVd] Using known glass nd/vd:', { nd, vd }, 'from curNd:', curNd, 'curVd:', curVd);
                             if (Number.isFinite(nd) && Number.isFinite(vd)) return { nd, vd };
                         }
 
                         // Numeric material: allow using vd input if provided.
                         if (matIsNumeric) {
                             const vd = Number.parseFloat(String(vdInput.value ?? '').trim());
+                            console.log('[pickTargetNdVd] Using numeric material nd:', matNumericNd, 'with manual vd:', vd);
                             if (Number.isFinite(matNumericNd) && Number.isFinite(vd)) return { nd: matNumericNd, vd };
                         }
+                        console.log('[pickTargetNdVd] No valid nd/vd found');
                         return null;
                     };
 
                     const suggest = () => {
                         const t = pickTargetNdVd();
+                        console.log('[suggest] pickTargetNdVd returned:', t);
                         if (t) {
+                            console.log('[suggest] Calling renderNdVdCandidates with nd:', t.nd, 'vd:', t.vd);
                             renderNdVdCandidates(t.nd, t.vd);
                             return;
                         }
@@ -11538,6 +11620,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             alert('Enter a material name or nd/vd first.');
                             return;
                         }
+                        console.log('[suggest] Falling back to renderNameCandidates with query:', q);
                         renderNameCandidates(q);
                     };
 

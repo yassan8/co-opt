@@ -13195,7 +13195,7 @@ export function findSimilarGlassNames(query, maxResults = 20) {
   if (qn === '') return [];
 
   const dbs = getAllGlassDatabases();
-  /** @type {Array<{name:string, score:number, manufacturer:string, price:(number|null)}>} */
+  /** @type {Array<{name:string, score:number, manufacturer:string, price:(number|null), nd:number, vd:number}>} */
   const out = [];
 
   for (const db of dbs) {
@@ -13216,6 +13216,8 @@ export function findSimilarGlassNames(query, maxResults = 20) {
         score,
         manufacturer: g.manufacturer || 'Unknown',
         price: Number.isFinite(g.price) ? Number(g.price) : null,
+        nd: g.nd,
+        vd: g.vd,
       });
     }
   }
