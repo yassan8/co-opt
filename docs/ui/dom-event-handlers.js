@@ -35,6 +35,8 @@ import { listDesignVariablesFromBlocks } from '../optimization/design-variables.
  * @param {HTMLElement} panel - The panel element containing the inputs
  */
 window.__performCoordTransCalculation = async function(blockId, panel) {
+    if (panel && panel.__coordTransCalculating) return;
+    if (panel) panel.__coordTransCalculating = true;
     try {
         
         // Get the current block's parameters
@@ -53,8 +55,41 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
             return element ? element.value : null;
         };
         
-        const toSurfValue = getValue('toSurf');
-        const coordReturnValue = getValue('coordReturn') || 'xy';  // default to 'xy'
+        // Prefer block parameters over DOM values to avoid stale/hidden inputs.
+        let blockParams = null;
+        try {
+            if (typeof loadSystemConfigurations === 'function') {
+                const systemConfig = loadSystemConfigurations();
+                const activeId = systemConfig?.activeConfigId;
+                const activeCfg = Array.isArray(systemConfig?.configurations)
+                    ? systemConfig.configurations.find(c => c && String(c.id) === String(activeId))
+                    : null;
+                const block = activeCfg?.blocks?.find(b => b && String(b.blockId ?? '') === String(blockId));
+                blockParams = block?.parameters || null;
+            }
+        } catch (_) {}
+
+        const toSurfValue = (blockParams && blockParams.toSurf !== undefined && blockParams.toSurf !== null)
+            ? String(blockParams.toSurf)
+            : getValue('toSurf');
+        const coordReturnValue = (blockParams && blockParams.coordReturn)
+            ? String(blockParams.coordReturn)
+            : (getValue('coordReturn') || 'xy');  // default to 'xy'
+        
+        // For AUTO mode, zero out existing decenters to ensure independent calculation
+        // This prevents previous target's results from contaminating current calculation
+        if (blockParams) {
+            const normShift = (v) => String(v ?? '').trim().toUpperCase();
+            if (['A', 'AUTO'].includes(normShift(blockParams.chiefRayShiftX))) {
+                blockParams = { ...blockParams, decenterX: 0 };
+            }
+            if (['A', 'AUTO'].includes(normShift(blockParams.chiefRayShiftY))) {
+                blockParams = { ...blockParams, decenterY: 0 };
+            }
+            if (['A', 'AUTO'].includes(normShift(blockParams.chiefRayShiftZ))) {
+                blockParams = { ...blockParams, decenterZ: 0 };
+            }
+        }
         
         
         // Force Order 1 when Coord Return is not 'none'
@@ -62,9 +97,14 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
         if (coordReturnValue !== 'none') {
             const currentOrder = getValue('order');
             if (currentOrder !== '1') {
-                const orderRes = window.__blocks_setBlockParamValue?.(blockId, 'order', '1');
-                if (!orderRes || orderRes.ok !== true) {
-                    console.warn('[CoordTrans] Failed to set order to 1:', orderRes?.reason);
+                if (typeof window.__blocks_setBlockParamValue === 'function') {
+                    const orderRes = window.__blocks_setBlockParamValue(blockId, 'order', '1');
+                    if (!orderRes || orderRes.ok !== true) {
+                        if (!panel || !panel.__coordTransOrderWarned) {
+                            console.warn('[CoordTrans] Failed to set order to 1:', orderRes?.reason);
+                            if (panel) panel.__coordTransOrderWarned = true;
+                        }
+                    }
                 }
             }
         }
@@ -99,70 +139,98 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
             return;
         }
         
-        // Debug: Log current optical system state before calculation
-        console.log('[DEBUG] Current optical system state:');
-        console.log('  CoordTrans-1 (surf 2):', {
-            decenterY: opticalSystemRows[2]?.decenterY,
-            tiltX: opticalSystemRows[2]?.tiltX
-        });
-        console.log('  CoordTrans-2 (surf 5):', {
-            decenterY: opticalSystemRows[5]?.decenterY,
-            tiltX: opticalSystemRows[5]?.tiltX
-        });
+        // Save the original (unenriched) rows for target position calculations
+        const originalUnenrichedRows = opticalSystemRows.map(row => ({ ...row }));
+        
+        // Load system config ONCE efficiently
+        let activeSystemConfig = null;
+        try { 
+            activeSystemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null; 
+        } catch (_) {}
         
         // Add block parameters to optical system rows
         // This is needed because block parameters (like chiefRayShiftX) are stored in the block system
         // but not included in the optical system table rows
-        console.log('[DEBUG] Creating enrichedRows from opticalSystemRows...');
         const enrichedRows = opticalSystemRows.map(row => {
             const bid = String(row._blockId ?? row.blockId ?? '');
             if (!bid) return row;
             
-            // Try to get block data from system configurations
-            let blockData = null;
-            try {
-                const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
-                if (systemConfig && Array.isArray(systemConfig.configurations)) {
-                    const activeId = systemConfig.activeConfigId;
-                    const activeCfg = systemConfig.configurations.find(c => c && c.id === activeId);
-                    if (activeCfg && Array.isArray(activeCfg.blocks)) {
-                        blockData = activeCfg.blocks.find(b => b && String(b.blockId ?? '') === bid);
+            let myParams = null;
+            
+            // PRIORITY: use the known blockParams for the current block to ensure we use the very latest state
+            if (bid === String(blockId) && blockParams) {
+                myParams = blockParams;
+            } else {
+                // Fallback: look up in loaded config
+                try {
+                    if (activeSystemConfig && Array.isArray(activeSystemConfig.configurations)) {
+                        const activeId = activeSystemConfig.activeConfigId;
+                        const activeCfg = activeSystemConfig.configurations.find(c => c && c.id === activeId);
+                        if (activeCfg && Array.isArray(activeCfg.blocks)) {
+                            const foundBlock = activeCfg.blocks.find(b => b && String(b.blockId ?? '') === bid);
+                            if (foundBlock) myParams = foundBlock.parameters;
+                        }
                     }
+                } catch (e) {
+                     console.warn(`[CoordTrans] Could not get block data for ${bid}:`, e);
                 }
-            } catch (e) {
-                console.warn(`[CoordTrans] Could not get block data for ${bid}:`, e);
             }
             
-            if (!blockData || !blockData.parameters) return row;
+            if (!myParams) return row;
             
-            // Add block parameters to row
+            // For the current CoordTrans block in AUTO mode, zero out decenters before ray tracing
+            // This ensures we calculate what decenters are NEEDED, not apply existing ones
+            const isCurrentBlock = (bid === String(blockId));
+            const normShift = (v) => String(v ?? '').trim().toUpperCase();
+            const shouldZeroX = isCurrentBlock && ['A', 'AUTO'].includes(normShift(myParams.chiefRayShiftX));
+            const shouldZeroY = isCurrentBlock && ['A', 'AUTO'].includes(normShift(myParams.chiefRayShiftY));
+            const shouldZeroZ = isCurrentBlock && ['A', 'AUTO'].includes(normShift(myParams.chiefRayShiftZ));
+            
+            // Add block parameters to row (preserving original block configuration)
+            // This ensures we use the block's defined parameters, not the current UI state
             return {
                 ...row,
-                chiefRayShiftX: blockData.parameters.chiefRayShiftX,
-                chiefRayShiftY: blockData.parameters.chiefRayShiftY,
-                chiefRayShiftZ: blockData.parameters.chiefRayShiftZ
+                // Coordinate transformation parameters from block definition
+                // For AUTO mode, zero out decenters so calculation is independent of previous target
+                decenterX: shouldZeroX ? 0 : (myParams.decenterX !== undefined ? myParams.decenterX : row.decenterX),
+                decenterY: shouldZeroY ? 0 : (myParams.decenterY !== undefined ? myParams.decenterY : row.decenterY),
+                decenterZ: shouldZeroZ ? 0 : (myParams.decenterZ !== undefined ? myParams.decenterZ : row.decenterZ),
+                tiltX: myParams.tiltX !== undefined ? myParams.tiltX : row.tiltX,
+                tiltY: myParams.tiltY !== undefined ? myParams.tiltY : row.tiltY,
+                tiltZ: myParams.tiltZ !== undefined ? myParams.tiltZ : row.tiltZ,
+                order: myParams.order !== undefined ? myParams.order : row.order,
+                // Chief ray shift settings
+                chiefRayShiftX: myParams.chiefRayShiftX,
+                chiefRayShiftY: myParams.chiefRayShiftY,
+                chiefRayShiftZ: myParams.chiefRayShiftZ,
+                // Also update the parameters object for consistency
+                parameters: {
+                    ...(row.parameters || {}),
+                    decenterX: shouldZeroX ? 0 : (myParams.decenterX !== undefined ? myParams.decenterX : row.parameters?.decenterX),
+                    decenterY: shouldZeroY ? 0 : (myParams.decenterY !== undefined ? myParams.decenterY : row.parameters?.decenterY),
+                    decenterZ: shouldZeroZ ? 0 : (myParams.decenterZ !== undefined ? myParams.decenterZ : row.parameters?.decenterZ),
+                    tiltX: myParams.tiltX !== undefined ? myParams.tiltX : row.parameters?.tiltX,
+                    tiltY: myParams.tiltY !== undefined ? myParams.tiltY : row.parameters?.tiltY,
+                    tiltZ: myParams.tiltZ !== undefined ? myParams.tiltZ : row.parameters?.tiltZ,
+                    order: myParams.order !== undefined ? myParams.order : row.parameters?.order,
+                    chiefRayShiftX: myParams.chiefRayShiftX,
+                    chiefRayShiftY: myParams.chiefRayShiftY,
+                    chiefRayShiftZ: myParams.chiefRayShiftZ
+                }
             };
         });
         
-        // Debug: Check enrichedRows vs opticalSystemRows for CoordTrans-1
-        console.log('[DEBUG] CoordTrans-1 comparison:');
-        try {
-            const origTiltX = opticalSystemRows[2]?.tiltX;
-            const enrichedTiltX = enrichedRows[2]?.tiltX;
-            console.log('  opticalSystemRows[2].tiltX:', origTiltX);
-            console.log('  enrichedRows[2].tiltX:', enrichedTiltX);
-            console.log('  Match:', origTiltX === enrichedTiltX);
-        } catch (e) {
-            console.error('[DEBUG] Error comparing tiltX:', e);
-        }
-        
         // Calculate local coordinates
-        // Don't ignore any blocks - we need the full system for accurate calculation
+        // We Ignore THIS block to calculate "Return" values based on incoming system.
+        // If we include the block's current parameters, we get the *residual* tilt/decenter,
+        // rather than the parameters needed to *cancel* the incoming tilt/decenter.
+        // Pass both enriched and original unenriched rows so the function can get correct target positions
         const result = await calculateAllSurfacesLocalCoordinates(
             enrichedRows,
             targetIndex,
-            null,  // no progress callback
-            null   // don't ignore any blocks
+            null,      // no progress callback
+            blockId,   // Ignore THIS block to calculate correct return values
+            originalUnenrichedRows  // Original unenriched rows for correct target surface positions
         );
         
         
@@ -183,10 +251,7 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
         }
         
         // Get surface data for this block
-        console.log('[DEBUG] blockId:', blockId, 'blockSurfaceId:', blockSurfaceId);
-        console.log('[DEBUG] result.surfaces keys:', Object.keys(result.surfaces || {}));
         const rowId = String(opticalSystemRows[blockSurfaceId].id);
-        console.log('[DEBUG] Looking for rowId:', rowId);
         let surfData = result.surfaces?.[rowId] || result.surfaces?.[String(rowId)] || result.surfaces?.[Number(rowId)] ||
                       result.surfaces?.[blockSurfaceId] || result.surfaces?.[String(blockSurfaceId)];
         
@@ -196,97 +261,237 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
                 const nextRowId = String(opticalSystemRows[i].id);
                 surfData = result.surfaces?.[nextRowId];
                 if (surfData) {
-                    console.log('[DEBUG] Found surfData at surface index:', i, 'rowId:', nextRowId);
                     break;
                 }
             }
-        } else {
-            console.log('[DEBUG] Found surfData for blockSurfaceId:', blockSurfaceId, 'rowId:', rowId);
         }
         
         if (!surfData) {
             console.error('[CoordTrans] No surface data found');
             return;
         }
-        
-        console.log('[DEBUG] Using surfData:', surfData);
-        
-        
-        // Update the input fields based on coordinate return mode
-        const updateField = (key, value) => {
-            let input = panel.querySelector(`input[data-param-key="${key}"]`) || 
-                       panel.querySelector(`.param-input-with-slider[data-param-key="${key}"] input[type="text"]`) ||
-                       panel.querySelector(`input[name="${key}"]`);
-            
-            if (!input) {
-                const allInputs = panel.querySelectorAll('input[type="text"], input[type="number"], input:not([type])');
-                for (const inp of allInputs) {
-                    const dataKey = inp.getAttribute('data-param-key') || inp.getAttribute('data-key') || inp.name;
-                    if (dataKey === key) {
-                        input = inp;
-                        break;
-                    }
-                }
+
+        try {
+            if (coordReturnValue === 'xyz' || coordReturnValue === 'xy') {
+                console.log('[CoordTrans] Mode:', coordReturnValue, 'blockId:', blockId, 'targetIndex:', targetIndex);
+                console.log('[CoordTrans] blockParams:', blockParams);
+                console.log('[CoordTrans] surfData tilt:', {
+                    tiltX: surfData.localTiltX,
+                    tiltY: surfData.localTiltY,
+                    tiltZ: surfData.localTiltZ
+                });
+                console.log('[CoordTrans] surfData decenter (local):', {
+                    decenterX: surfData.localDecenterX,
+                    decenterY: surfData.localDecenterY,
+                    decenterZ: surfData.localDecenterZ
+                });
+                console.log('[CoordTrans] surfData decenter (flat):', {
+                    decenterX: surfData.flatDecenterX,
+                    decenterY: surfData.flatDecenterY,
+                    decenterZ: surfData.flatDecenterZ
+                });
             }
-            
-            if (input) {
-                input.value = value.toFixed(6);
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.dispatchEvent(new Event('blur', { bubbles: true }));
+        } catch (_) {}
+        
+        
+        // Store computed values for display (no block parameter updates)
+        const computedValues = {};
+        const setComputedValue = (key, value) => {
+            if (typeof value === 'number' && Number.isFinite(value)) {
+                computedValues[key] = value;
                 return true;
-            } else {
-                console.warn(`[CoordTrans] Input field not found for ${key}`);
-                return false;
             }
+            return false;
         };
         
         // Get chiefRayShift modes to determine which fields should be auto-updated
-        const chiefRayShiftX = getValue('chiefRayShiftX');
-        const chiefRayShiftY = getValue('chiefRayShiftY');
-        const chiefRayShiftZ = getValue('chiefRayShiftZ');
-        const shouldAutoX = (String(chiefRayShiftX ?? '').trim().toUpperCase() === 'A');
-        const shouldAutoY = (String(chiefRayShiftY ?? '').trim().toUpperCase() === 'A');
-        const shouldAutoZ = (String(chiefRayShiftZ ?? '').trim().toUpperCase() === 'A');
+        const chiefRayShiftX = (blockParams && blockParams.chiefRayShiftX !== undefined)
+            ? blockParams.chiefRayShiftX
+            : getValue('chiefRayShiftX');
+        const chiefRayShiftY = (blockParams && blockParams.chiefRayShiftY !== undefined)
+            ? blockParams.chiefRayShiftY
+            : getValue('chiefRayShiftY');
+        const chiefRayShiftZ = (blockParams && blockParams.chiefRayShiftZ !== undefined)
+            ? blockParams.chiefRayShiftZ
+            : getValue('chiefRayShiftZ');
+        const normShift = (v) => String(v ?? '').trim().toUpperCase();
+        const shouldAutoX = ['A', 'AUTO'].includes(normShift(chiefRayShiftX));
+        const shouldAutoY = ['A', 'AUTO'].includes(normShift(chiefRayShiftY));
+        const shouldAutoZ = ['A', 'AUTO'].includes(normShift(chiefRayShiftZ));
         
         // Apply updates based on coordinate return mode and chiefRayShift settings
         let updated = {};
         switch (coordReturnValue) {
             case 'none':
                 break;
-                
             case 'orientation':
                 // Tilt only (force all decenters to 0 regardless of Auto settings)
+                // Only update UI, don't trigger block parameter updates
                 updated = {
-                    decenterX: updateField('decenterX', 0),
-                    decenterY: updateField('decenterY', 0),
-                    decenterZ: updateField('decenterZ', 0),
-                    tiltX: updateField('tiltX', surfData.localTiltX),
-                    tiltY: updateField('tiltY', surfData.localTiltY),
-                    tiltZ: updateField('tiltZ', surfData.localTiltZ)
+                    decenterX: setComputedValue('decenterX', 0),
+                    decenterY: setComputedValue('decenterY', 0),
+                    decenterZ: setComputedValue('decenterZ', 0),
+                    tiltX: setComputedValue('tiltX', surfData.localTiltX),
+                    tiltY: setComputedValue('tiltY', surfData.localTiltY),
+                    tiltZ: setComputedValue('tiltZ', surfData.localTiltZ)
                 };
                 break;
                 
             case 'xy':
-                // Decenter X, Y only (only update if Auto mode is enabled, tilt remains unchanged)
+                // Orientation & XY: update tilt + decenter X/Y (and force Z to 0)
+                // Only update UI, don't trigger block parameter updates
                 updated = {
-                    decenterX: shouldAutoX ? updateField('decenterX', surfData.localDecenterX) : false,
-                    decenterY: shouldAutoY ? updateField('decenterY', surfData.localDecenterY) : false,
-                    decenterZ: updateField('decenterZ', 0)
+                    decenterX: shouldAutoX ? setComputedValue('decenterX', surfData.localDecenterX) : false,
+                    decenterY: shouldAutoY ? setComputedValue('decenterY', surfData.localDecenterY) : false,
+                    decenterZ: setComputedValue('decenterZ', 0),
+                    tiltX: setComputedValue('tiltX', surfData.localTiltX),
+                    tiltY: setComputedValue('tiltY', surfData.localTiltY),
+                    tiltZ: setComputedValue('tiltZ', surfData.localTiltZ)
                 };
                 break;
                 
             case 'xyz':
-                // Decenter X, Y, Z only (only update if Auto mode is enabled, tilt remains unchanged)
-                updated = {
-                    decenterX: shouldAutoX ? updateField('decenterX', surfData.localDecenterX) : false,
-                    decenterY: shouldAutoY ? updateField('decenterY', surfData.localDecenterY) : false,
-                    decenterZ: shouldAutoZ ? updateField('decenterZ', surfData.localDecenterZ) : false
-                };
+                // Orientation & XYZ: use flat/global basis for decenters
+                {
+                    const srcX = (surfData.flatDecenterX !== undefined && Number.isFinite(surfData.flatDecenterX)) 
+                        ? surfData.flatDecenterX : surfData.localDecenterX;
+                    const srcY = (surfData.flatDecenterY !== undefined && Number.isFinite(surfData.flatDecenterY)) 
+                        ? surfData.flatDecenterY : surfData.localDecenterY;
+                    const srcZ = (surfData.flatDecenterZ !== undefined && Number.isFinite(surfData.flatDecenterZ)) 
+                        ? surfData.flatDecenterZ : surfData.localDecenterZ;
+                    
+                    updated = {
+                        decenterX: shouldAutoX ? setComputedValue('decenterX', srcX) : false,
+                        decenterY: shouldAutoY ? setComputedValue('decenterY', srcY) : false,
+                        decenterZ: shouldAutoZ ? setComputedValue('decenterZ', srcZ) : false,
+                        tiltX: setComputedValue('tiltX', surfData.localTiltX),
+                        tiltY: setComputedValue('tiltY', surfData.localTiltY),
+                        tiltZ: setComputedValue('tiltZ', surfData.localTiltZ)
+                    };
+                }
                 break;
         }
         
+        // Store computed values for display in the inspector
+        if (coordReturnValue !== 'none') {
+            if (typeof window !== 'undefined') {
+                if (!window.__coordTransComputedValues) window.__coordTransComputedValues = {};
+                window.__coordTransComputedValues[blockId] = computedValues;
+            }
+        } else if (typeof window !== 'undefined' && window.__coordTransComputedValues) {
+            delete window.__coordTransComputedValues[blockId];
+        }
+
+        // Apply computed values to block parameters so rendering uses updated values.
+        if (coordReturnValue !== 'none') {
+            try {
+                window.__coordTransApplyingResults = true;
+
+                const updates = {};
+                if (coordReturnValue === 'orientation') {
+                    updates.decenterX = 0;
+                    updates.decenterY = 0;
+                    updates.decenterZ = 0;
+                    updates.tiltX = surfData.localTiltX;
+                    updates.tiltY = surfData.localTiltY;
+                    updates.tiltZ = surfData.localTiltZ;
+                } else if (coordReturnValue === 'xy') {
+                    if (shouldAutoX) updates.decenterX = surfData.localDecenterX;
+                    if (shouldAutoY) updates.decenterY = surfData.localDecenterY;
+                    updates.decenterZ = 0;
+                    updates.tiltX = surfData.localTiltX;
+                    updates.tiltY = surfData.localTiltY;
+                    updates.tiltZ = surfData.localTiltZ;
+                } else if (coordReturnValue === 'xyz') {
+                    // Use flat/global basis calculation if available (provides correct offset when orientation is restored to global)
+                    let srcX = surfData.localDecenterX;
+                    if (surfData.flatDecenterX !== undefined && Number.isFinite(surfData.flatDecenterX)) {
+                        srcX = surfData.flatDecenterX;
+                    }
+                    
+                    let srcY = surfData.localDecenterY;
+                    if (surfData.flatDecenterY !== undefined && Number.isFinite(surfData.flatDecenterY)) {
+                        srcY = surfData.flatDecenterY;
+                    }
+                    
+                    let srcZ = surfData.localDecenterZ;
+                    if (surfData.flatDecenterZ !== undefined && Number.isFinite(surfData.flatDecenterZ)) {
+                        srcZ = surfData.flatDecenterZ;
+                    }
+                    
+                    if (shouldAutoX) updates.decenterX = srcX;
+                    if (shouldAutoY) updates.decenterY = srcY;
+                    if (shouldAutoZ) updates.decenterZ = srcZ;
+                    updates.tiltX = surfData.localTiltX;
+                    updates.tiltY = surfData.localTiltY;
+                    updates.tiltZ = surfData.localTiltZ;
+                }
+
+                // Batch-apply updates to Design Intent block to avoid intermediate auto-updates.
+                if (typeof loadSystemConfigurations === 'function' && typeof saveSystemConfigurations === 'function') {
+                    const systemConfig = loadSystemConfigurations();
+                    const activeId = systemConfig?.activeConfigId;
+                    const activeCfg = Array.isArray(systemConfig?.configurations)
+                        ? systemConfig.configurations.find(c => c && String(c.id) === String(activeId))
+                        : null;
+                    const block = activeCfg?.blocks?.find(b => b && String(b.blockId ?? '') === String(blockId));
+                    if (block) {
+                        if (!block.parameters || typeof block.parameters !== 'object') block.parameters = {};
+                        for (const [k, v] of Object.entries(updates)) {
+                            if (typeof v === 'number' && Number.isFinite(v)) {
+                                block.parameters[k] = v;
+                            }
+                        }
+                        if (activeCfg?.metadata && typeof activeCfg.metadata === 'object') {
+                            activeCfg.metadata.modified = new Date().toISOString();
+                        }
+                        saveSystemConfigurations(systemConfig);
+                    }
+                }
+
+                // Re-expand blocks to optical system so rendering uses updated params.
+                try {
+                    if (typeof loadSystemConfigurations === 'function' && typeof expandBlocksToOpticalSystemRows === 'function') {
+                        const systemConfig = loadSystemConfigurations();
+                        const activeId = systemConfig?.activeConfigId;
+                        const activeCfg = Array.isArray(systemConfig?.configurations)
+                            ? systemConfig.configurations.find(c => c && String(c.id) === String(activeId))
+                            : null;
+                        if (activeCfg && Array.isArray(activeCfg.blocks)) {
+                            const expanded = expandBlocksToOpticalSystemRows(activeCfg.blocks);
+                            if (expanded && Array.isArray(expanded.rows)) {
+                                activeCfg.opticalSystem = expanded.rows;
+                                if (typeof saveSystemConfigurations === 'function') {
+                                    saveSystemConfigurations(systemConfig);
+                                }
+                            }
+                        }
+                    }
+                } catch (_) {}
+
+                if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+                    await window.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
+                } else if (typeof window.loadActiveConfigurationToTables === 'function') {
+                    await window.loadActiveConfigurationToTables({ applyToUI: true });
+                }
+                
+                // Refresh block list display to show updated parameters
+                try { 
+                    if (window.ConfigurationManager && typeof window.ConfigurationManager.renderBlocksUI === 'function') {
+                        window.ConfigurationManager.renderBlocksUI();
+                    }
+                } catch (_) {}
+                
+                try { if (typeof window.__blocks_requestRedraw === 'function') window.__blocks_requestRedraw(); } catch (_) {}
+                try { if (typeof window.refreshAllUI === 'function') window.refreshAllUI(); } catch (_) {}
+            } finally {
+                window.__coordTransApplyingResults = false;
+            }
+        }
+
         const successCount = Object.values(updated).filter(v => v).length;
-        console.log('[CoordTrans] Updated', successCount, 'fields');
+        console.log('[CoordTrans] Updated', successCount, 'fields:', coordReturnValue);
+        try { refreshBlockInspector(); } catch (_) {}
         
     } catch (error) {
         console.error('[CoordTrans] Calculation error:', error);
@@ -10335,6 +10540,18 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             };
 
             const getDisplayValue = (k) => {
+                // For CoordTrans blocks with Coord Return enabled, show computed values if present.
+                if (blockType === 'CoordTrans') {
+                    const coordReturnValue = getValue('coordReturn') || 'none';
+                    if (coordReturnValue !== 'none') {
+                        const cache = (typeof window !== 'undefined') ? window.__coordTransComputedValues : null;
+                        const computed = cache && cache[blockId] ? cache[blockId][k] : undefined;
+                        if (typeof computed === 'number' && Number.isFinite(computed)) {
+                            return computed.toFixed(6);
+                        }
+                    }
+                }
+
                 const v = getValue(k);
                 // Show a meaningful default for Stop.semiDiameter when omitted.
                 if (blockType === 'Stop' && String(k) === 'semiDiameter') {
@@ -10656,6 +10873,11 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 const currentValue = isApertureItem ? getApertureDisplayValue(it.role) : getDisplayValue(it.key);
 
                 const commitValue = (nextRaw) => {
+                    // Skip block parameter update if this is triggered by CoordTrans calculation result
+                    if (valueEl && (valueEl.__coordTransUpdating || window.event?.__coordTransUpdate || window.__coordTransApplyingResults)) {
+                        return true; // Return true to prevent error alerts
+                    }
+                    
                     const next = String(nextRaw ?? '');
                     const current = currentValue;
                     if (next === current) {
@@ -10669,6 +10891,20 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                         alert(`Failed to update ${desc}: ${res?.reason || 'unknown error'}`);
                         return false;
                     }
+                    // Auto-recalculate CoordTrans when Coord Return is enabled and other params change
+                    try {
+                        if (blockType === 'CoordTrans' && !isApertureItem) {
+                            const key = String(it?.key ?? it?.role ?? '');
+                            if (key && !['coordReturn', 'order', 'toSurf'].includes(key)) {
+                                const coordReturnValue = getValue('coordReturn') || 'none';
+                                if (coordReturnValue !== 'none' && typeof __performCoordTransCalculation === 'function') {
+                                    if (!panel || !panel.__coordTransCalculating) {
+                                        __performCoordTransCalculation(blockId, panel);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (_) {}
                     try { refreshBlockInspector(); } catch (_) {}
                     return true;
                 };

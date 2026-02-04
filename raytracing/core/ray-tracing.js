@@ -1227,8 +1227,10 @@ function normalizeCoordTransRows(rows) {
   return rows.map((row) => {
     if (!__rtIsCoordTransRow(row) || !row || typeof row !== 'object') return row;
 
+    // Check if parameters are defined in row itself or in row.parameters
     const hasExplicit = ['decenterX', 'decenterY', 'tiltX', 'tiltY', 'tiltZ'].some(
-      (k) => Object.prototype.hasOwnProperty.call(row, k)
+      (k) => Object.prototype.hasOwnProperty.call(row, k) || 
+             (row.parameters && Object.prototype.hasOwnProperty.call(row.parameters, k))
     );
     if (hasExplicit) return row;
 
@@ -1532,19 +1534,22 @@ function parseCoordTransParams(surface, previousSurface = null) {
   const hasExplicit = (() => {
     const keys = ['decenterX', 'decenterY', 'tiltX', 'tiltY', 'tiltZ'];
     if (!surface || typeof surface !== 'object') return false;
-    return keys.some((k) => Object.prototype.hasOwnProperty.call(surface, k));
+    return keys.some((k) => 
+      Object.prototype.hasOwnProperty.call(surface, k) ||
+      (surface.parameters && Object.prototype.hasOwnProperty.call(surface.parameters, k))
+    );
   })();
 
   if (!hasExplicit) {
     return { decenterX: 0, decenterY: 0, decenterZ: 0, tiltX: 0, tiltY: 0, tiltZ: 0, transformOrder: 1 };
   }
 
-  const decenterX = toFiniteNumber(surface.decenterX);
-  const decenterY = toFiniteNumber(surface.decenterY);
-  const decenterZ = toFiniteNumber(surface.decenterZ);
-  const tiltX = toFiniteNumber(surface.tiltX);
-  const tiltY = toFiniteNumber(surface.tiltY);
-  const tiltZ = toFiniteNumber(surface.tiltZ);
+  const decenterX = toFiniteNumber(surface.decenterX, surface.parameters?.decenterX);
+  const decenterY = toFiniteNumber(surface.decenterY, surface.parameters?.decenterY);
+  const decenterZ = toFiniteNumber(surface.decenterZ, surface.parameters?.decenterZ);
+  const tiltX = toFiniteNumber(surface.tiltX, surface.parameters?.tiltX);
+  const tiltY = toFiniteNumber(surface.tiltY, surface.parameters?.tiltY);
+  const tiltZ = toFiniteNumber(surface.tiltZ, surface.parameters?.tiltZ);
 
   const orderCandidate = (surface.order !== undefined && surface.order !== null) ? surface.order : surface.coef1;
   const orderRaw = Number(String(orderCandidate ?? '').trim());
@@ -3080,12 +3085,36 @@ export function calculateChiefRaySurfaceIntersections(opticalSystemRows, options
  * @param {number} targetSurfaceIndex - 0-based target surface index
  * @param {Function} progressCallback - Optional callback(percent, message)
  * @param {string} ignoreCoordTransBlockId - Optional: block ID of CoordTrans to ignore (treat as identity)
+ * @param {Array} originalOpticalSystemRows - Optional: original rows before enrichment (for correct target positions)
  * @returns {Promise<Object>} - {surfaces: {surfaceId: {localDecenterX, ...}}, metadata: {...}}
  */
-export async function calculateAllSurfacesLocalCoordinates(opticalSystemRows, targetSurfaceIndex, progressCallback, ignoreCoordTransBlockId) {
+export async function calculateAllSurfacesLocalCoordinates(opticalSystemRows, targetSurfaceIndex, progressCallback, ignoreCoordTransBlockId, originalOpticalSystemRows) {
   // Input validation
   if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
     throw new Error('Invalid optical system data.');
+  }
+  
+  console.log(`[calculateAllSurfacesLocalCoordinates] targetSurfaceIndex=${targetSurfaceIndex}, ignoreBlockId=${ignoreCoordTransBlockId}, opticalSystemRows.length=${opticalSystemRows.length}, originalRows.length=${originalOpticalSystemRows ? originalOpticalSystemRows.length : 'N/A'}`);
+  
+  // Log surface structure for debugging
+  console.log('[calculateAllSurfacesLocalCoordinates] Surface structure:');
+  try {
+    const maxSurfaces = Math.min(7, opticalSystemRows.length);
+    console.log(`  Logging ${maxSurfaces} surfaces...`);
+    for (let idx = 0; idx < maxSurfaces; idx++) {
+      try {
+        const row = opticalSystemRows[idx];
+        const blockId = row._blockId || row.blockId || '?';
+        const type = row.type || '?';
+        const thickness = Number(row.thickness) || 0;
+        console.log(`  Surf ${idx}: ${type} (${blockId}), thickness=${thickness.toFixed(4)}`);
+      } catch (e) {
+        console.log(`  Surf ${idx}: ERROR - ${e.message}`);
+      }
+    }
+    console.log('  Done logging surfaces');
+  } catch (e) {
+    console.log(`  Error in surface logging: ${e.message}`);
   }
   if (!Number.isInteger(targetSurfaceIndex) || targetSurfaceIndex < 0 || targetSurfaceIndex >= opticalSystemRows.length) {
     throw new Error(`Invalid target surface index: ${targetSurfaceIndex}.`);
@@ -3176,6 +3205,37 @@ export async function calculateAllSurfacesLocalCoordinates(opticalSystemRows, ta
       throw new Error('Failed to calculate surface origins.');
     }
     
+    // Calculate surface origins from UNMODIFIED rows (without ignoring current CoordTrans block)
+    // This gives us the correct global Z positions for target surfaces
+    const rowsForOriginal = originalOpticalSystemRows || opticalSystemRows;
+    console.log(`  [Debug] Using ${originalOpticalSystemRows ? 'original' : 'fallback'} rows, count=${rowsForOriginal.length}`);
+    // Don't normalize - we want the full system including the CoordTrans block
+    const surfaceDataWithCoordTrans = calculateSurfaceOrigins(rowsForOriginal);
+    
+    // Debug: log the difference and surface structure
+    if (surfaceDataWithCoordTrans && surfaceData) {
+      console.log(`  [Debug] Surface count: modified=${surfaceData.length}, withCoordTrans=${surfaceDataWithCoordTrans.length}`);
+      if (targetSurfaceIndex >= 0) {
+        // Find target in both arrays
+        const modTargetZ = targetSurfaceIndex < surfaceData.length ? surfaceData[targetSurfaceIndex].origin.z.toFixed(4) : 'N/A';
+        const origTargetZ = targetSurfaceIndex < surfaceDataWithCoordTrans.length ? surfaceDataWithCoordTrans[targetSurfaceIndex].origin.z.toFixed(4) : 'N/A';
+        console.log(`  [Debug] Target ${targetSurfaceIndex} Z: modified=${modTargetZ}, withCoordTrans=${origTargetZ}`);
+      }
+      // Log all surface Z positions for debugging
+      console.log('  [Debug] All surface Z positions (with CoordTrans):');
+      console.log(`  [Debug] surfaceDataWithCoordTrans is ${surfaceDataWithCoordTrans ? 'defined' : 'undefined'}, length=${surfaceDataWithCoordTrans ? surfaceDataWithCoordTrans.length : 'N/A'}`);
+      try {
+        for (let idx = 0; idx < Math.min(7, surfaceDataWithCoordTrans.length); idx++) {
+          const rowType = (rowsForOriginal[idx] && rowsForOriginal[idx].type) ? rowsForOriginal[idx].type : 'unknown';
+          const zPos = surfaceDataWithCoordTrans[idx] ? surfaceDataWithCoordTrans[idx].origin.z.toFixed(4) : 'N/A';
+          console.log(`    Surf ${idx} (${rowType}): Z=${zPos}`);
+        }
+        console.log('  [Debug] Loop completed');
+      } catch (e) {
+        console.log(`    Error logging surfaces: ${e.message}`);
+      }
+    }
+    
     reportProgress(15, 'Processing surfaces...');
     
     // Calculate local coordinates for each surface
@@ -3205,6 +3265,7 @@ export async function calculateAllSurfacesLocalCoordinates(opticalSystemRows, ta
         const globalRotMat = surfaceData[i].rotationMatrix;
         
         let decenterX, decenterY, decenterZ;
+        let flatDecenterX = 0, flatDecenterY = 0, flatDecenterZ = 0;
         
         if (i === 0) {
           decenterX = globalOrigin.x;
@@ -3223,102 +3284,234 @@ export async function calculateAllSurfacesLocalCoordinates(opticalSystemRows, ta
           decenterZ = prevRotMat[2][0] * dx_global + prevRotMat[2][1] * dy_global + prevRotMat[2][2] * dz_global;
           
           // Apply chief ray shift if enabled via chiefRayShiftX, Y, Z parameters
-          
           const chiefRayShiftModeX = String(row?.parameters?.chiefRayShiftX ?? row?.chiefRayShiftX ?? '').trim().toUpperCase();
           const chiefRayShiftModeY = String(row?.parameters?.chiefRayShiftY ?? row?.chiefRayShiftY ?? '').trim().toUpperCase();
           const chiefRayShiftModeZ = String(row?.parameters?.chiefRayShiftZ ?? row?.chiefRayShiftZ ?? '').trim().toUpperCase();
           const useChiefRayShiftX = (chiefRayShiftModeX === 'A' || chiefRayShiftModeX === 'AUTO');
           const useChiefRayShiftY = (chiefRayShiftModeY === 'A' || chiefRayShiftModeY === 'AUTO');
           const useChiefRayShiftZ = (chiefRayShiftModeZ === 'A' || chiefRayShiftModeZ === 'AUTO');
-          
+
           if (useChiefRayShiftX || useChiefRayShiftY || useChiefRayShiftZ) {
-            // Find where the chief ray intersects the CoordTrans *station plane*.
-            // The station plane is defined by:
-            //   baseOrigin = O(r) + t(r) * R(r).ez
-            // and normal:
-            //   n = R(r).ez
-            // Using a constant global-Z plane leaves a residual when the system is tilted.
-
             const thickness = getSafeThickness(modifiedRows[i - 1]);
-            const baseOrigin = add(prevOrigin, scale(applyMatrixToVector(prevRotMat, vec3(0, 0, 1)), thickness));
-            // CoordTrans is applied at the station defined along the previous Z axis.
-            // Intersect with the station plane normal R(r).ez.
-            const planeNormal = applyMatrixToVector(prevRotMat, vec3(0, 0, 1));
-
-            let chiefIntersectionGlobal = null;
             const eps = 1e-12;
+            
+            // Calculate offset: how many surfaces were ignored before targetSurfaceIndex
+            // This is needed because targetSurfaceIndex is in the modified (ignored) array,
+            // but we need to access surfaceDataWithCoordTrans which includes ALL surfaces
+            let targetIndexWithCoordTrans = targetSurfaceIndex;
+            if (rowsForOriginal && rowsForOriginal.length > modifiedRows.length) {
+              // Count ignored blocks before target
+              let ignoredCount = 0;
+              let modifiedIdx = 0;
+              for (let origIdx = 0; origIdx < rowsForOriginal.length && modifiedIdx <= targetSurfaceIndex; origIdx++) {
+                const origRow = rowsForOriginal[origIdx];
+                const modRow = modifiedRows[modifiedIdx];
+                // Check if this original row was ignored (not in modified)
+                if (modRow && (origRow.id === modRow.id || origRow._blockId === modRow._blockId || origRow.blockId === modRow.blockId)) {
+                  // This row exists in both - advance modified index
+                  modifiedIdx++;
+                } else {
+                  // This row was ignored
+                  if (modifiedIdx < targetSurfaceIndex) {
+                    ignoredCount++;
+                  }
+                }
+              }
+              targetIndexWithCoordTrans = targetSurfaceIndex + ignoredCount;
+              console.log(`  [CoordTrans Surf ${surfaceId}] Target index: modified=${targetSurfaceIndex}, withCoordTrans=${targetIndexWithCoordTrans}, ignored=${ignoredCount}`);
+            }
+            
+            // Get the target surface's global Z position for flat calculation
+            // Use the surfaceDataWithCoordTrans (before ignoring blocks) to get the correct target position
+            let targetGlobalZ = prevOrigin.z + thickness; // Default to nominal vertex
+            if (targetIndexWithCoordTrans >= 0 && targetIndexWithCoordTrans < surfaceDataWithCoordTrans.length) {
+              targetGlobalZ = surfaceDataWithCoordTrans[targetIndexWithCoordTrans].origin.z;
+              console.log(`  [CoordTrans Surf ${surfaceId}] Target surf ${targetIndexWithCoordTrans} at Z=${targetGlobalZ.toFixed(4)}, prevOrigin.z=${prevOrigin.z.toFixed(4)}, thickness=${thickness.toFixed(4)}`);
+            } else {
+              console.log(`  [CoordTrans Surf ${surfaceId}] Using default targetZ=${targetGlobalZ.toFixed(4)} (targetIndex=${targetIndexWithCoordTrans} out of range)`);
+            }
 
+            // =========================================================================================
+            // CALCULATION 1: Tilted/Local Basis (For 'XY' mode return)
+            // Intersection with plane perpendicular to Local Z at nominal vertex position.
+            // =========================================================================================
+            const localZAxis = applyMatrixToVector(prevRotMat, vec3(0, 0, 1));
+            const nominalVertex = add(prevOrigin, scale(localZAxis, thickness));
+            const planeNormalLocal = localZAxis;
+
+            let intersectGlobalLocalBasis = null;
             if (chiefRayPath && chiefRayPath.length >= 2) {
               for (let j = 0; j < chiefRayPath.length - 1; j++) {
-                const p1 = chiefRayPath[j];
-                const p2 = chiefRayPath[j + 1];
-
-                const d1 = dot(planeNormal, sub(p1, baseOrigin));
-                const d2 = dot(planeNormal, sub(p2, baseOrigin));
-
-                if (Math.abs(d1) <= eps) {
-                  chiefIntersectionGlobal = { x: p1.x, y: p1.y, z: p1.z };
-                  break;
-                }
-
+                const p1 = chiefRayPath[j], p2 = chiefRayPath[j + 1];
+                const d1 = dot(planeNormalLocal, sub(p1, nominalVertex));
+                const d2 = dot(planeNormalLocal, sub(p2, nominalVertex));
+                if (Math.abs(d1) <= eps) { intersectGlobalLocalBasis = { x: p1.x, y: p1.y, z: p1.z }; break; }
                 if (d1 * d2 <= 0) {
                   const denom = d1 - d2;
                   if (Math.abs(denom) > eps) {
                     const t = d1 / denom;
-                    chiefIntersectionGlobal = {
-                      x: p1.x + t * (p2.x - p1.x),
-                      y: p1.y + t * (p2.y - p1.y),
-                      z: p1.z + t * (p2.z - p1.z)
-                    };
+                    intersectGlobalLocalBasis = { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y), z: p1.z + t * (p2.z - p1.z) };
                     break;
                   }
                 }
               }
             }
             
-            if (chiefIntersectionGlobal && i > 0) {
-              // Compute decenter in the correct basis depending on transform order.
-              // Order 0: decenter is expressed in the previous frame R(r)
-              // Order 1: decenter is expressed in the new frame R(s)
-              const dx = chiefIntersectionGlobal.x - baseOrigin.x;
-              const dy = chiefIntersectionGlobal.y - baseOrigin.y;
-              const dz = chiefIntersectionGlobal.z - baseOrigin.z;
+            if (intersectGlobalLocalBasis) {
+              const dx = intersectGlobalLocalBasis.x - nominalVertex.x;
+              const dy = intersectGlobalLocalBasis.y - nominalVertex.y;
+              const dz = intersectGlobalLocalBasis.z - nominalVertex.z;
+              const axisX = applyMatrixToVector(prevRotMat, vec3(1, 0, 0));
+              const axisY = applyMatrixToVector(prevRotMat, vec3(0, 1, 0));
+              const axisZ = applyMatrixToVector(prevRotMat, vec3(0, 0, 1));
 
-              const cbParams = parseCoordTransParams(row, modifiedRows[i - 1]) || {};
-              const transformOrder = (Number(cbParams.transformOrder) === 0) ? 0 : 1;
-              const basisMat = (transformOrder === 0) ? prevRotMat : surfaceData[i].rotationMatrix;
+              const lx = axisX.x * dx + axisX.y * dy + axisX.z * dz;
+              const ly = axisY.x * dx + axisY.y * dy + axisY.z * dz;
+              const lz = axisZ.x * dx + axisZ.y * dy + axisZ.z * dz;
 
-              const axisX = applyMatrixToVector(basisMat, vec3(1, 0, 0));
-              const axisY = applyMatrixToVector(basisMat, vec3(0, 1, 0));
-              const axisZ = applyMatrixToVector(basisMat, vec3(0, 0, 1));
-
-              const chiefLocalX = axisX.x * dx + axisX.y * dy + axisX.z * dz;
-              const chiefLocalY = axisY.x * dx + axisY.y * dy + axisY.z * dz;
-              const chiefLocalZ = axisZ.x * dx + axisZ.y * dy + axisZ.z * dz;
+              if (useChiefRayShiftX) decenterX = lx;
+              if (useChiefRayShiftY) decenterY = ly;
+              if (useChiefRayShiftZ) decenterZ = lz;
               
-              // Apply chief ray shift: set CoordTrans origin to chief ray position
-              // This makes the chief ray pass through the origin (0,0) of this CoordTrans
-              if (useChiefRayShiftX) {
-                decenterX = chiefLocalX;
-              }
-              if (useChiefRayShiftY) {
-                decenterY = chiefLocalY;
-              }
-              if (useChiefRayShiftZ) {
-                decenterZ = chiefLocalZ;
-              }
-              
-              console.log(`  [CoordTrans Surf ${surfaceId}] Chief ray intersection at station plane: global=(${chiefIntersectionGlobal.x.toFixed(6)}, ${chiefIntersectionGlobal.y.toFixed(6)}, ${chiefIntersectionGlobal.z.toFixed(6)}), local=(${chiefLocalX.toFixed(6)}, ${chiefLocalY.toFixed(6)}, ${chiefLocalZ.toFixed(6)})`);
+              console.log(`  [CoordTrans Surf ${surfaceId}] Tilted/Local Shift: local=(${lx.toFixed(4)}, ${ly.toFixed(4)}, ${lz.toFixed(4)})`);
             }
+
+            // =========================================================================================
+            // CALCULATION 2: Flat/Global Basis (For 'XYZ' mode return)
+            // Intersection with plane perpendicular to Global Z at the TARGET surface Z position.
+            // This gives the decenter needed to align chief ray with target surface in global coordinates.
+            // =========================================================================================
+            const planeNormalFlat = vec3(0, 0, 1);
+            const baseOriginFlat = vec3(prevOrigin.x, prevOrigin.y, targetGlobalZ); 
+            
+            let intersectGlobalFlatBasis = null;
+            if (chiefRayPath && chiefRayPath.length >= 2) {
+                console.log(`  [CoordTrans Surf ${surfaceId}] Chief Ray Path has ${chiefRayPath.length} points, target Z=${targetGlobalZ.toFixed(4)}, prevOrigin Z=${prevOrigin.z.toFixed(4)}`);
+                // Log all points in chief ray path
+                for (let j = 0; j < chiefRayPath.length; j++) {
+                  const p = chiefRayPath[j];
+                  console.log(`    Point ${j}: (${p.x.toFixed(4)}, ${p.y.toFixed(4)}, ${p.z.toFixed(4)})`);
+                }
+                
+                // First, check if there's a point exactly at target Z (within tolerance)
+                const tolerance = 1e-6;
+                for (let j = 0; j < chiefRayPath.length; j++) {
+                  if (Math.abs(chiefRayPath[j].z - targetGlobalZ) < tolerance) {
+                    intersectGlobalFlatBasis = {
+                      x: chiefRayPath[j].x,
+                      y: chiefRayPath[j].y,
+                      z: chiefRayPath[j].z
+                    };
+                    console.log(`  [CoordTrans Surf ${surfaceId}] Found exact point at target Z: Point ${j}, (${intersectGlobalFlatBasis.x.toFixed(4)}, ${intersectGlobalFlatBasis.y.toFixed(4)}, ${intersectGlobalFlatBasis.z.toFixed(4)})`);
+                    break;
+                  }
+                }
+                
+                // If no exact point found, find the segment that crosses target Z
+                if (!intersectGlobalFlatBasis) {
+                  // Find the first point AFTER target Z (refracted position)
+                  let pointAfterTarget = null;
+                  let pointBeforeTarget = null;
+                  for (let j = 0; j < chiefRayPath.length; j++) {
+                    if (chiefRayPath[j].z <= targetGlobalZ) {
+                      pointBeforeTarget = chiefRayPath[j];
+                    }
+                    if (chiefRayPath[j].z > targetGlobalZ && !pointAfterTarget) {
+                      pointAfterTarget = chiefRayPath[j];
+                      break;
+                    }
+                  }
+                  
+                  // If we have a point after target, use it (refracted ray)
+                  // Use the refracted ray direction (from before to after) to back-project to target Z
+                  if (pointAfterTarget && pointBeforeTarget) {
+                    // Calculate ray direction from before to after refraction
+                    const dx = pointAfterTarget.x - pointBeforeTarget.x;
+                    const dy = pointAfterTarget.y - pointBeforeTarget.y;
+                    const dz = pointAfterTarget.z - pointBeforeTarget.z;
+                    const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                    if (len > eps && Math.abs(dz) > eps) {
+                      // Normalized direction
+                      const dirX = dx / len;
+                      const dirY = dy / len;
+                      const dirZ = dz / len;
+                      
+                      // Back-project from pointAfterTarget to target Z
+                      const t = (pointAfterTarget.z - targetGlobalZ) / dirZ;
+                      intersectGlobalFlatBasis = {
+                        x: pointAfterTarget.x - t * dirX,
+                        y: pointAfterTarget.y - t * dirY,
+                        z: targetGlobalZ
+                      };
+                      console.log(`  [CoordTrans Surf ${surfaceId}] Back-projecting from after-point: Z=${pointAfterTarget.z.toFixed(4)} → target Z=${targetGlobalZ.toFixed(4)}`);
+                      console.log(`  [CoordTrans Surf ${surfaceId}] Ray direction: (${dirX.toFixed(6)}, ${dirY.toFixed(6)}, ${dirZ.toFixed(6)}), t=${t.toFixed(4)}`);
+                      console.log(`  [CoordTrans Surf ${surfaceId}] Intersection: (${intersectGlobalFlatBasis.x.toFixed(4)}, ${intersectGlobalFlatBasis.y.toFixed(4)}, ${intersectGlobalFlatBasis.z.toFixed(4)})`);
+                    }
+                  } else {
+                    // Fallback to old method
+                    for (let j = 0; j < chiefRayPath.length - 1; j++) {
+                      const p1 = chiefRayPath[j], p2 = chiefRayPath[j + 1];
+                      const d1 = dot(planeNormalFlat, sub(p1, baseOriginFlat));
+                      const d2 = dot(planeNormalFlat, sub(p2, baseOriginFlat));
+                      if (Math.abs(d1) <= eps) { 
+                        intersectGlobalFlatBasis = { x: p1.x, y: p1.y, z: p1.z }; 
+                        console.log(`  [CoordTrans Surf ${surfaceId}] Found intersection at segment ${j} (point on plane): (${p1.x.toFixed(4)}, ${p1.y.toFixed(4)}, ${p1.z.toFixed(4)})`);
+                        break; 
+                      }
+                      if (d1 * d2 <= 0) {
+                        const denom = d1 - d2;
+                        if (Math.abs(denom) > eps) {
+                          const t = d1 / denom;
+                          intersectGlobalFlatBasis = { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y), z: p1.z + t * (p2.z - p1.z) };
+                          console.log(`  [CoordTrans Surf ${surfaceId}] Found intersection at segment ${j}, t=${t.toFixed(4)}: (${intersectGlobalFlatBasis.x.toFixed(4)}, ${intersectGlobalFlatBasis.y.toFixed(4)}, ${intersectGlobalFlatBasis.z.toFixed(4)})`);
+                          console.log(`    p1=(${p1.x.toFixed(4)}, ${p1.y.toFixed(4)}, ${p1.z.toFixed(4)}), p2=(${p2.x.toFixed(4)}, ${p2.y.toFixed(4)}, ${p2.z.toFixed(4)})`);
+                          break;
+                        }
+                      }
+                    }
+                  }
+                }
+                if (!intersectGlobalFlatBasis) {
+                  console.log(`  [CoordTrans Surf ${surfaceId}] WARNING: No intersection found with flat plane!`);
+                }
+              }
+
+              if (intersectGlobalFlatBasis) {
+                  // X, Y: offset from previous origin at target Z plane
+                  const dxf = intersectGlobalFlatBasis.x - prevOrigin.x;
+                  const dyf = intersectGlobalFlatBasis.y - prevOrigin.y;
+                  // Z: Global Z distance from previous origin to target
+                  const dzf = targetGlobalZ - prevOrigin.z;
+                  
+                  // Project onto Identity Basis (Global X,Y,Z)
+                  flatDecenterX = dxf;
+                  flatDecenterY = dyf;
+                  flatDecenterZ = dzf;
+                  
+                  console.log(`  [CoordTrans Surf ${surfaceId}] Flat/Global Shift: global=(${dxf.toFixed(4)}, ${dyf.toFixed(4)}, ${dzf.toFixed(4)})`);
+              }
           }
         }
         
-        // Use the original tilt values from the row parameters
-        // (相対回転ではなく、元のパラメータ値を返す)
-        const cbParams = parseCoordTransParams(row, modifiedRows[i - 1]) || {};
-        const tiltX = Number(cbParams.tiltX || 0);
-        const tiltY = Number(cbParams.tiltY || 0);
-        const tiltZ = Number(cbParams.tiltZ || 0);
+        // Extract tilt from the current global rotation matrix so Orientation modes can update tilt.
+        let tiltX, tiltY, tiltZ;
+        const sy = globalRotMat[0][2];
+        if (Math.abs(sy) >= 0.99999) {
+          tiltY = Math.asin(Math.max(-1, Math.min(1, sy)));
+          tiltX = Math.atan2(globalRotMat[1][0], globalRotMat[1][1]);
+          tiltZ = 0;
+        } else {
+          tiltY = Math.asin(Math.max(-1, Math.min(1, sy)));
+          tiltX = Math.atan2(-globalRotMat[1][2], globalRotMat[2][2]);
+          tiltZ = Math.atan2(-globalRotMat[0][1], globalRotMat[0][0]);
+        }
+        tiltX *= (180 / Math.PI);
+        tiltY *= (180 / Math.PI);
+        tiltZ *= (180 / Math.PI);
+        // Invert signs to match CoordTrans parameter convention.
+        tiltX = -tiltX;
+        tiltY = -tiltY;
+        tiltZ = -tiltZ;
         
         console.log(`  [CoordTrans ${surfaceId}] Dec=(${decenterX.toFixed(3)}, ${decenterY.toFixed(3)}, ${decenterZ.toFixed(3)}) Tilt=(${tiltX.toFixed(1)}°, ${tiltY.toFixed(1)}°, ${tiltZ.toFixed(1)}°)`);
         
@@ -3331,6 +3524,10 @@ export async function calculateAllSurfacesLocalCoordinates(opticalSystemRows, ta
           localTiltX: tiltX,
           localTiltY: tiltY,
           localTiltZ: tiltZ,
+          // Expose Flat Basis shifts for XYZ mode
+          flatDecenterX: flatDecenterX || 0,
+          flatDecenterY: flatDecenterY || 0,
+          flatDecenterZ: flatDecenterZ || 0,
           transformType: 'coordtrans',
           targetSurface: targetSurfaceIndex
         };
@@ -3673,96 +3870,6 @@ export async function calculateAllSurfacesLocalCoordinates(opticalSystemRows, ta
     }
     
     reportProgress(95, 'Finalizing...');
-    
-    // If we did iterations, recalculate results with final decenter values
-    if (needsRetrace) {
-      console.log('  [Recalculating] Final coordinate transforms with updated decenter values...');
-      
-      // Recalculate station plane intersections with final decenter values
-      for (let i = 0; i < modifiedRows.length; i++) {
-        const row = modifiedRows[i];
-        if (!isCoordTransSurface(row)) continue;
-        if (ignoreCoordTransBlockId && String(row._blockId || row.blockId || '') === String(ignoreCoordTransBlockId)) continue;
-        
-        const surfaceId = row["Surf ID"] || i;
-        const rowId = String(row.id || surfaceId);
-        
-        try {
-          const cbParams = parseCoordTransParams(row, modifiedRows[i - 1]) || {};
-          const transformOrder = (Number(cbParams.transformOrder) === 0) ? 0 : 1;
-          const surfaceData = calculateSurfaceOrigins(modifiedRows);
-          
-          if (!surfaceData || !surfaceData[i] || i === 0) continue;
-          
-          const prevOrigin = surfaceData[i - 1].origin;
-          const prevRotMat = surfaceData[i - 1].rotationMatrix;
-          const thickness = getSafeThickness(modifiedRows[i - 1]);
-          const baseOrigin = add(prevOrigin, scale(applyMatrixToVector(prevRotMat, vec3(0, 0, 1)), thickness));
-          const planeNormal = applyMatrixToVector(prevRotMat, vec3(0, 0, 1));
-          
-          // Find chief ray intersection with station plane
-          let chiefIntersectionGlobal = null;
-          const eps = 1e-10;
-          for (let k = 0; k < chiefRayPath.length - 1; k++) {
-            const p1 = chiefRayPath[k];
-            const p2 = chiefRayPath[k + 1];
-            const d1 = dot(planeNormal, sub(p1, baseOrigin));
-            const d2 = dot(planeNormal, sub(p2, baseOrigin));
-            
-            if (Math.abs(d1) <= eps) {
-              chiefIntersectionGlobal = { x: p1.x, y: p1.y, z: p1.z };
-              break;
-            }
-            
-            if (d1 * d2 <= 0) {
-              const denom = d1 - d2;
-              if (Math.abs(denom) > eps) {
-                const t = d1 / denom;
-                chiefIntersectionGlobal = {
-                  x: p1.x + t * (p2.x - p1.x),
-                  y: p1.y + t * (p2.y - p1.y),
-                  z: p1.z + t * (p2.z - p1.z)
-                };
-                break;
-              }
-            }
-          }
-          
-          if (!chiefIntersectionGlobal) continue;
-          
-          const dx = chiefIntersectionGlobal.x - baseOrigin.x;
-          const dy = chiefIntersectionGlobal.y - baseOrigin.y;
-          const dz = chiefIntersectionGlobal.z - baseOrigin.z;
-          
-          const basisMat = (transformOrder === 0) ? prevRotMat : surfaceData[i].rotationMatrix;
-          const axisX = applyMatrixToVector(basisMat, vec3(1, 0, 0));
-          const axisY = applyMatrixToVector(basisMat, vec3(0, 1, 0));
-          const axisZ = applyMatrixToVector(basisMat, vec3(0, 0, 1));
-          
-          const chiefLocalX = axisX.x * dx + axisX.y * dy + axisX.z * dz;
-          const chiefLocalY = axisY.x * dx + axisY.y * dy + axisY.z * dz;
-          const chiefLocalZ = axisZ.x * dx + axisZ.y * dy + axisZ.z * dz;
-          
-          const currentDecenterX = row.decenterX || row.parameters?.decenterX || 0;
-          const currentDecenterY = row.decenterY || row.parameters?.decenterY || 0;
-          const currentDecenterZ = row.decenterZ || row.parameters?.decenterZ || 0;
-          
-          console.log(`  [CoordTrans Surf ${surfaceId}] Final chief ray intersection at station plane: global=(${chiefIntersectionGlobal.x.toFixed(6)}, ${chiefIntersectionGlobal.y.toFixed(6)}, ${chiefIntersectionGlobal.z.toFixed(6)}), local=(${chiefLocalX.toFixed(6)}, ${chiefLocalY.toFixed(6)}, ${chiefLocalZ.toFixed(6)})`);
-          
-          // Store final calculated values in results
-          results[rowId] = {
-            localDecenterX: currentDecenterX,
-            localDecenterY: currentDecenterY,
-            localDecenterZ: currentDecenterZ,
-            localTiltX: cbParams.tiltX || 0,
-            localTiltY: cbParams.tiltY || 0,
-            localTiltZ: cbParams.tiltZ || 0
-          };
-        } catch (error) {
-          console.warn(`Failed to recalculate surface ${i}:`, error.message);
-        }
-      }
-    }
     
     // Create metadata
     const metadata = {
