@@ -2296,24 +2296,21 @@ async function __loadAllDataObjectIntoApp(allData, { filename }) {
         try {
             const blocks = cfg?.blocks;
             if (!Array.isArray(blocks) || blocks.length === 0) return false;
-            const isNumericish = (v) => {
-                if (typeof v === 'number') return Number.isFinite(v);
-                const s = String(v ?? '').trim();
-                if (!s) return false;
-                return /^[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?$/i.test(s);
-            };
             for (const b of blocks) {
                 const type = String(b?.blockType ?? '');
                 if (type === 'Lens') {
                     const mat = b?.parameters?.material;
-                    // A lens material should be a glass name, not a refractive index number.
-                    if (isNumericish(mat)) return true;
+                    if (mat === undefined || mat === null || String(mat).trim() === '') return true;
                 }
                 if (type === 'Doublet' || type === 'Triplet') {
                     const m1 = b?.parameters?.material1;
                     const m2 = b?.parameters?.material2;
                     const m3 = b?.parameters?.material3;
-                    if (isNumericish(m1) || isNumericish(m2) || isNumericish(m3)) return true;
+                    if ((m1 === undefined || m1 === null || String(m1).trim() === '') ||
+                        (m2 === undefined || m2 === null || String(m2).trim() === '') ||
+                        (type === 'Triplet' && (m3 === undefined || m3 === null || String(m3).trim() === ''))) {
+                        return true;
+                    }
                 }
             }
             return false;
@@ -2747,7 +2744,10 @@ function setupImportZemaxButton() {
                 // Ensure ObjectSurface exists and is first in Design Intent after Zemax import.
                 if (Array.isArray(activeCfg.blocks)) {
                     try {
-                        const hasObjectSurface = activeCfg.blocks.some(b => b && String(b.blockType ?? '').trim() === 'ObjectSurface');
+                        const hasObjectSurface = activeCfg.blocks.some(b => {
+                            const bt = String(b?.blockType ?? '').trim();
+                            return bt === 'ObjectSurface' || bt === 'ObjectPlane';
+                        });
                         if (!hasObjectSurface) {
                             // Check if Object surface (rows[0]) has finite or infinite thickness
                             const objThickness = rows?.[0]?.thickness;
@@ -2782,7 +2782,10 @@ function setupImportZemaxButton() {
                         try {
                             const stopIndex = Array.isArray(rows) ? findStopSurfaceIndex(rows) : -1;
                             const stopBlockIndex = activeCfg.blocks.findIndex(b => b && String(b.blockType ?? '').trim() === 'Stop');
-                            const objIdx = activeCfg.blocks.findIndex(b => b && String(b.blockType ?? '').trim() === 'ObjectSurface');
+                            const objIdx = activeCfg.blocks.findIndex(b => {
+                                const bt = String(b?.blockType ?? '').trim();
+                                return bt === 'ObjectSurface' || bt === 'ObjectPlane';
+                            });
 
                             const ensureStopBlock = () => {
                                 if (stopBlockIndex >= 0) return activeCfg.blocks[stopBlockIndex];
@@ -5219,7 +5222,12 @@ function updateSurfaceNumberSelectLegacy() {
                 try {
                     if (cfg && Array.isArray(cfg.blocks) && cfg.blocks.length > 0 && typeof expandBlocksToOpticalSystemRows === 'function') {
                         const blocksHaveObjectSurface = (() => {
-                            try { return cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface'); } catch (_) { return false; }
+                            try { 
+                                return cfg.blocks.some(b => {
+                                    const bt = String(b?.blockType ?? '').trim();
+                                    return bt === 'ObjectSurface' || bt === 'ObjectPlane';
+                                }); 
+                            } catch (_) { return false; }
                         })();
                         const scenarios = Array.isArray(cfg.scenarios) ? cfg.scenarios : null;
                         const scenarioId = cfg.activeScenarioId ? String(cfg.activeScenarioId) : '';
@@ -9399,7 +9407,7 @@ function __blocks_makeDefaultBlock(blockType, blockId) {
         base.parameters = { thickness: 1, material: 'AIR', thicknessMode: '' };
         return base;
     }
-    if (type === 'ObjectSurface') {
+    if (type === 'ObjectSurface' || type === 'ObjectPlane') {
         base.parameters = {
             objectDistanceMode: 'Finite',
             objectDistance: 100
@@ -9506,9 +9514,12 @@ function __blocks_addBlockToActiveConfig(blockType, insertAfterBlockId = null) {
         if (already) return { ok: false, reason: 'ImageSurface already exists (only one is supported).' };
     }
 
-    if (type === 'ObjectSurface') {
-        const already = blocks.some(b => b && String(b.blockType ?? '').trim() === 'ObjectSurface');
-        if (already) return { ok: false, reason: 'ObjectSurface already exists (only one is supported).' };
+    if (type === 'ObjectSurface' || type === 'ObjectPlane') {
+        const already = blocks.some(b => {
+            const bt = String(b?.blockType ?? '').trim();
+            return bt === 'ObjectSurface' || bt === 'ObjectPlane';
+        });
+        if (already) return { ok: false, reason: 'ObjectSurface/ObjectPlane already exists (only one is supported).' };
     }
 
     const newId = __blocks_generateUniqueBlockId(blocks, type);
@@ -9520,8 +9531,8 @@ function __blocks_addBlockToActiveConfig(blockType, insertAfterBlockId = null) {
 
     let insertIdx = imageIdx; // default: before ImageSurface (or end)
 
-    // ObjectSurface defines the object-to-first-surface distance; keep it first since there is no reorder UI.
-    if (type === 'ObjectSurface') {
+    // ObjectSurface/ObjectPlane defines the object-to-first-surface distance; keep it first since there is no reorder UI.
+    if (type === 'ObjectSurface' || type === 'ObjectPlane') {
         insertIdx = 0;
     }
     const afterId = String(insertAfterBlockId ?? '').trim();
@@ -10385,9 +10396,10 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
     const formatSingletonBlockLabel = (blockType, blockIdRaw) => {
         const t = String(blockType ?? '').trim();
         const id = String(blockIdRaw ?? '').trim();
-        if (t === 'ObjectSurface' || t === 'ImageSurface') return t;
-        const m = /^(ObjectSurface|ImageSurface)-\d+$/i.exec(id);
-        if (m) return m[1];
+        if (t === 'ObjectSurface' || t === 'ObjectPlane') return 'ObjectSurface';
+        if (t === 'ImageSurface') return t;
+        const m = /^(ObjectSurface|ObjectPlane|ImageSurface)-\d+$/i.exec(id);
+        if (m) return (m[1].toLowerCase() === 'objectplane') ? 'ObjectSurface' : m[1];
         return id || '(none)';
     };
 
@@ -10406,13 +10418,17 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             if (!tRaw) continue;
 
             // Singletons: show without numbering.
-            if (tRaw === 'ObjectSurface' || tRaw === 'ImageSurface') {
+            if (tRaw === 'ObjectSurface' || tRaw === 'ObjectPlane') {
+                displayLabelByBlockId.set(realId, 'ObjectSurface');
+                continue;
+            }
+            if (tRaw === 'ImageSurface') {
                 displayLabelByBlockId.set(realId, tRaw);
                 continue;
             }
 
             // Normalize display base type.
-            const baseType = (tRaw === 'PositiveLens') ? 'Lens' : tRaw;
+            const baseType = (tRaw === 'PositiveLens') ? 'Lens' : (tRaw === 'ObjectPlane' ? 'ObjectSurface' : tRaw);
             const next = (counts.get(baseType) || 0) + 1;
             counts.set(baseType, next);
             displayLabelByBlockId.set(realId, `${baseType}-${next}`);
@@ -10433,8 +10449,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             const rawId = String(b.blockId ?? '(none)');
             const label = displayLabelByBlockId.get(rawId) || formatSingletonBlockLabel(b.blockType, rawId);
 
-            // Special-case: ObjectSurface corresponds to the Object surface (Surf 0).
-            if (String(b.blockType ?? '').trim() === 'ObjectSurface') {
+            // Special-case: ObjectSurface/ObjectPlane corresponds to the Object surface (Surf 0).
+            const blockTypeStr = String(b.blockType ?? '').trim();
+            if (blockTypeStr === 'ObjectSurface' || blockTypeStr === 'ObjectPlane') {
                 colId.textContent = `${label} → Surf 0`;
             } else {
                 const range = surfRangeByBlockId.get(String(b.blockId ?? '').trim());
@@ -10451,7 +10468,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
         const colType = document.createElement('div');
         colType.className = 'block-inspector-col-type';
-        colType.textContent = String(b.blockType ?? '(none)');
+        // Normalize ObjectPlane to ObjectSurface for display
+        const displayType = String(b.blockType ?? '(none)').trim() === 'ObjectPlane' ? 'ObjectSurface' : String(b.blockType ?? '(none)');
+        colType.textContent = displayType;
 
         const colParams = document.createElement('div');
         colParams.className = 'block-inspector-col-params';
@@ -10611,7 +10630,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             const isSingleSurfaceCircular = singleSurfaceShape === 'Circular';
             const isSingleSurfaceSquare = singleSurfaceShape === 'Square';
             const isSingleSurfaceRect = singleSurfaceShape === 'Rectangular';
-            if (blockType === 'ObjectSurface') {
+            if (blockType === 'ObjectSurface' || blockType === 'ObjectPlane') {
                 items.push(
                     { kind: 'objectMode', key: 'objectDistanceMode', label: 'object (INF/finite)', noOptimize: true },
                     { kind: 'objectDistance', key: 'objectDistance', label: 'distance to 1st surf', noOptimize: true }

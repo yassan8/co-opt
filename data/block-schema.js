@@ -296,59 +296,17 @@ function __isNumericMaterialName(material) {
   return Number.isFinite(n) && n > 0 && n < 4;
 }
 
-function __findClosestGlassNameByNdVd(targetNd, targetVd) {
-  if (!Number.isFinite(targetNd) || !Number.isFinite(targetVd) || targetNd <= 0 || targetVd <= 0) return null;
-  const dbs = getAllGlassDatabases();
-
-  let best = null;
-  let bestScore = Infinity;
-
-  for (const db of dbs) {
-    if (!Array.isArray(db)) continue;
-    for (const g of db) {
-      if (!g) continue;
-      const nd = g.nd;
-      const vd = g.vd;
-      if (!Number.isFinite(nd) || !Number.isFinite(vd)) continue;
-      // Weighted squared error (simple, fast, robust enough for import).
-      const dn = nd - targetNd;
-      const dv = vd - targetVd;
-      const score = dn * dn + (dv * dv) * 1e-4;
-      if (score < bestScore) {
-        bestScore = score;
-        best = g;
-      }
-    }
-  }
-  return best && typeof best.name === 'string' ? best.name : null;
-}
-
 function __normalizeLegacyMaterialForBlocks(rowObj, rowIndex, issues) {
   const raw = String(rowObj?.material ?? '').trim();
   if (raw === '' || raw.toUpperCase() === 'AIR') return raw;
 
-  // If legacy stores numeric refractive index in material, try to map to a real glass name
-  // using (rindex, abbe) if available. If not, keep the numeric name (synthetic glass).
+  // Keep numeric material names (Nd/νd) as-is without automatic glass substitution.
+  // Users can manually select glass if needed.
   if (__isNumericMaterialName(raw)) {
-    const nd = Number(raw);
-    const vd = Number.parseFloat(String(rowObj?.abbe ?? '').trim());
-    const vdOk = Number.isFinite(vd) && vd > 0;
-    if (vdOk) {
-      const guess = __findClosestGlassNameByNdVd(nd, vd);
-      if (guess) {
-        issues.push({
-          severity: 'warning',
-          phase: 'validate',
-          message: `Numeric material at row ${rowIndex} (${raw}, Abbe=${vd}) mapped to closest glass: ${guess}`
-        });
-        return guess;
-      }
-    }
-
     issues.push({
-      severity: 'warning',
+      severity: 'info',
       phase: 'validate',
-      message: `Numeric material at row ${rowIndex} (${raw}) kept as synthetic glass (dispersion may be inaccurate).`
+      message: `Numeric material at row ${rowIndex} (${raw}) kept as synthetic glass (Nd/νd-based).`
     });
     return raw;
   }
@@ -404,14 +362,15 @@ export function validateBlocksConfiguration(config) {
     return issues;
   }
 
-  // ObjectSurface rules: at most one.
+  // ObjectSurface/ObjectPlane rules: at most one.
   try {
     const nObjectSurface = (config.blocks || []).filter(b => String(b?.blockType ?? '').trim() === 'ObjectSurface').length;
-    if (nObjectSurface > 1) {
+    const nObjectPlane = (config.blocks || []).filter(b => String(b?.blockType ?? '').trim() === 'ObjectPlane').length;
+    if (nObjectSurface + nObjectPlane > 1) {
       issues.push({
         severity: 'fatal',
         phase: 'validate',
-        message: 'Only one ObjectSurface block is supported.'
+        message: 'Only one ObjectSurface or ObjectPlane block is supported.'
       });
     }
   } catch (_) {}
@@ -435,11 +394,11 @@ export function validateBlocksConfiguration(config) {
     }
 
     const blockType = block.blockType;
-    if (blockType !== 'ObjectSurface' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordTrans' && blockType !== 'Mirror' && blockType !== 'SingleSurface' && blockType !== 'ImageSurface') {
+    if (blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordTrans' && blockType !== 'Mirror' && blockType !== 'SingleSurface' && blockType !== 'ImageSurface') {
       issues.push({
         severity: 'fatal',
         phase: 'validate',
-        message: `Unsupported blockType: ${blockType} (MVP supports ObjectSurface, Lens, SingleSurface, Doublet, Triplet, Gap, Stop, CoordTrans, Mirror, ImageSurface only).`,
+        message: `Unsupported blockType: ${blockType} (MVP supports ObjectSurface, ObjectPlane, Lens, SingleSurface, Doublet, Triplet, Gap, Stop, CoordTrans, Mirror, ImageSurface only).`,
         blockId: block.blockId
       });
       continue;
@@ -462,7 +421,7 @@ export function validateBlocksConfiguration(config) {
       continue;
     }
 
-    if (blockType === 'ObjectSurface') {
+    if (blockType === 'ObjectSurface' || blockType === 'ObjectPlane') {
       const modeRaw = getParamOrVarValue(parameters, variables, 'objectDistanceMode');
       const mode = String(modeRaw ?? '').trim();
       const modeKey = mode.replace(/\s+/g, '').toUpperCase();
@@ -473,7 +432,7 @@ export function validateBlocksConfiguration(config) {
         issues.push({
           severity: 'fatal',
           phase: 'validate',
-          message: `ObjectSurface.objectDistanceMode must be Finite or INF (got: ${mode})`,
+          message: `${blockType}.objectDistanceMode must be Finite or INF (got: ${mode})`,
           blockId: block.blockId
         });
       }
@@ -481,13 +440,13 @@ export function validateBlocksConfiguration(config) {
       if (!isInf) {
         const d = getParamOrVarValue(parameters, variables, 'objectDistance');
         if (d === undefined) {
-          issues.push({ severity: 'fatal', phase: 'validate', message: 'ObjectSurface.objectDistance is required when mode is Finite.', blockId: block.blockId });
+          issues.push({ severity: 'fatal', phase: 'validate', message: `${blockType}.objectDistance is required when mode is Finite.`, blockId: block.blockId });
         } else {
           const v = normalizeThicknessToRowValue(d);
           if (v === 'INF') {
-            issues.push({ severity: 'warning', phase: 'validate', message: 'ObjectSurface.objectDistance is INF; treating as INF.', blockId: block.blockId });
+            issues.push({ severity: 'warning', phase: 'validate', message: `${blockType}.objectDistance is INF; treating as INF.`, blockId: block.blockId });
           } else if (typeof v === 'number' && Number.isFinite(v) && v <= 0) {
-            issues.push({ severity: 'warning', phase: 'validate', message: `ObjectSurface.objectDistance is <= 0 (${String(v)}).`, blockId: block.blockId });
+            issues.push({ severity: 'warning', phase: 'validate', message: `${blockType}.objectDistance is <= 0 (${String(v)}).`, blockId: block.blockId });
           }
         }
       }
@@ -1124,6 +1083,33 @@ export function expandBlocksToOpticalSystemRows(blocks) {
   rows[0]._blockType = 'Object';
   rows[0]._blockId = null;
 
+  // Process ObjectSurface/ObjectPlane first to ensure it's always at surface 0
+  const objectSurfaceBlock = blocks.find(b => {
+    const type = isPlainObject(b) ? b.blockType : null;
+    return type === 'ObjectSurface' || type === 'ObjectPlane';
+  });
+
+  if (objectSurfaceBlock && isPlainObject(objectSurfaceBlock)) {
+    const params = objectSurfaceBlock.parameters;
+    const vars = isPlainObject(objectSurfaceBlock.variables) ? objectSurfaceBlock.variables : null;
+    try {
+      const modeRaw = getParamOrVarValue(params, vars, 'objectDistanceMode');
+      const mode = String(modeRaw ?? '').trim().replace(/\s+/g, '').toUpperCase();
+      if (mode === 'INF' || mode === 'INFINITY') {
+        rows[0].thickness = 'INF';
+        const distRaw = getParamOrVarValue(params, vars, 'objectDistance');
+        const distVal = normalizeThicknessToRowValue(distRaw);
+        rows[0].objectRenderDistance = (typeof distVal === 'number' && Number.isFinite(distVal)) ? distVal : 0;
+      } else {
+        const distRaw = getParamOrVarValue(params, vars, 'objectDistance');
+        rows[0].thickness = normalizeThicknessToRowValue(distRaw);
+        delete rows[0].objectRenderDistance;
+      }
+    } catch (_) {
+      // ignore
+    }
+  }
+
   const getLastRow = () => rows[rows.length - 1];
 
   const isStopRow = (r) => r && (r['object type'] === 'Stop' || r.object === 'Stop');
@@ -1179,27 +1165,8 @@ export function expandBlocksToOpticalSystemRows(blocks) {
     const vars = isPlainObject(block.variables) ? block.variables : null;
     const aperture = isPlainObject(block.aperture) ? block.aperture : null;
 
-    if (type === 'ObjectSurface') {
-      // ObjectSurface is a non-surface block that defines the distance from the object plane
-      // to the first surface (stored as Object row thickness).
-      try {
-        const modeRaw = getParamOrVarValue(params, vars, 'objectDistanceMode');
-        const mode = String(modeRaw ?? '').trim().replace(/\s+/g, '').toUpperCase();
-        if (mode === 'INF' || mode === 'INFINITY') {
-          rows[0].thickness = 'INF';
-          // For INF objects, store objectDistance as objectRenderDistance for ray rendering
-          const distRaw = getParamOrVarValue(params, vars, 'objectDistance');
-          const distVal = normalizeThicknessToRowValue(distRaw);
-          rows[0].objectRenderDistance = (typeof distVal === 'number' && Number.isFinite(distVal)) ? distVal : 0;
-        } else {
-          const distRaw = getParamOrVarValue(params, vars, 'objectDistance');
-          rows[0].thickness = normalizeThicknessToRowValue(distRaw);
-          // For finite objects, objectRenderDistance is not used
-          delete rows[0].objectRenderDistance;
-        }
-      } catch (_) {
-        // ignore
-      }
+    if (type === 'ObjectSurface' || type === 'ObjectPlane') {
+      // ObjectSurface/ObjectPlane was already processed before the loop to ensure it's at surface 0
       continue;
     }
 
@@ -2084,6 +2051,26 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows) {
   let tripletCount = 0;
   let stopCount = 0;
   let gapCount = 0;
+
+  // Add ObjectSurface block from Object row (rows[0])
+  if (legacyRows.length > 0 && legacyRows[0]) {
+    const objRow = legacyRows[0];
+    const objThickness = asNumberOrInfOrZero(objRow.thickness);
+    const isInfinite = objThickness === 'INF' || objThickness === Infinity;
+    
+    blocks.push({
+      blockId: 'ObjectSurface-1',
+      blockType: 'ObjectSurface',
+      role: null,
+      constraints: {},
+      parameters: {
+        objectDistanceMode: isInfinite ? 'INF' : 'Finite',
+        ...(isInfinite ? {} : { objectDistance: typeof objThickness === 'number' && objThickness > 0 ? objThickness : 100 })
+      },
+      variables: {},
+      metadata: { source: 'legacy-opticalSystem' }
+    });
+  }
 
   // We skip the first Object row and stop before the final Image row if present.
   let end = legacyRows.length;

@@ -1644,6 +1644,66 @@ export function traceParaxialRayFromStopInternal(opticalSystemRows, stopIndex, w
 }
 
 /**
+ * ndとνdから任意の波長の屈折率を近似計算
+ * 2点推定法とCauchy式の簡易版を使用
+ * @param {number} nd - d線（587.56nm）での屈折率
+ * @param {number} vd - アッベ数
+ * @param {number} wavelength - 目的波長 (μm)
+ * @returns {number} 推定屈折率
+ */
+function estimateRefractiveIndexFromNdVd(nd, vd, wavelength) {
+  // 基準波長
+  const lambda_d = 0.5875618; // d線 (587.56 nm)
+  const lambda_F = 0.4861327; // F線 (486.13 nm)
+  const lambda_C = 0.6562725; // C線 (656.27 nm)
+  
+  // アッベ数の定義から nF と nC を推定
+  // νd = (nd - 1) / (nF - nC)
+  // より正確な2点推定法：
+  const dispersion = (nd - 1) / vd;
+  const nF = nd + dispersion / 2;
+  const nC = nd - dispersion / 2;
+  
+  // 3点（C, d, F）での値が得られたので、線形補間または簡易Cauchy式で推定
+  
+  // 可視域（0.4 ~ 0.7 μm）では線形補間が妥当
+  if (wavelength >= lambda_F && wavelength <= lambda_C) {
+    // 線形補間
+    if (wavelength <= lambda_d) {
+      // F線とd線の間
+      const t = (wavelength - lambda_F) / (lambda_d - lambda_F);
+      return nF + t * (nd - nF);
+    } else {
+      // d線とC線の間
+      const t = (wavelength - lambda_d) / (lambda_C - lambda_d);
+      return nd + t * (nC - nd);
+    }
+  }
+  
+  // 可視域外では簡易Cauchy式 n(λ) = A + B/λ² を使用
+  // 3点からA, Bを最小二乗法で求める（簡易版：2点で近似）
+  // d線とF線から求める
+  const lambda_d_sq = lambda_d * lambda_d;
+  const lambda_F_sq = lambda_F * lambda_F;
+  
+  // nd = A + B/λd²
+  // nF = A + B/λF²
+  // より、B = (nF - nd) / (1/λF² - 1/λd²)
+  const B = (nF - nd) / (1/lambda_F_sq - 1/lambda_d_sq);
+  const A = nd - B / lambda_d_sq;
+  
+  const n_estimated = A + B / (wavelength * wavelength);
+  
+  // 妥当性チェック（屈折率は1.0～3.0の範囲）
+  if (n_estimated < 1.0 || n_estimated > 3.0) {
+    console.warn(`⚠️ 推定屈折率が異常: n=${n_estimated.toFixed(6)} at λ=${wavelength.toFixed(4)}μm, nd=${nd}, vd=${vd} → nd値を返す`);
+    return nd;
+  }
+  
+  return n_estimated;
+}
+
+/**
  * 屈折率を取得
  */
 export function getRefractiveIndex(surface, wavelength = 0.5875618) {
@@ -1659,8 +1719,13 @@ export function getRefractiveIndex(surface, wavelength = 0.5875618) {
           const refractiveIndex = calculateRefractiveIndex(glassData.sellmeier, wavelength);
           // console.log(`🔍 ${surface.material}: λ=${wavelength.toFixed(4)}μm → n=${refractiveIndex.toFixed(6)}`);
           return refractiveIndex;
+        } else if (glassData.nd && glassData.vd) {
+          // Sellmeierデータがないが nd/vd がある場合、近似分散式を使用
+          const n_approx = estimateRefractiveIndexFromNdVd(glassData.nd, glassData.vd, wavelength);
+          console.log(`📐 ${surface.material}: nd=${glassData.nd.toFixed(6)}, vd=${glassData.vd.toFixed(2)} → λ=${wavelength.toFixed(4)}μm: n≈${n_approx.toFixed(6)} (近似)`);
+          return n_approx;
         } else {
-          // Sellmeierデータがない場合はd線の屈折率を使用
+          // Sellmeierデータもnd/vdもない場合はd線の屈折率を使用
           console.log(`⚠️ ${surface.material}: Sellmeierデータなし、d線屈折率=${glassData.nd}を使用`);
           return glassData.nd;
         }
@@ -1671,12 +1736,25 @@ export function getRefractiveIndex(surface, wavelength = 0.5875618) {
   }
   
   // 手動設定のRef Indexをチェック（Materialが空の場合のみ）
-  if (surface.rindex || surface['ref index'] || surface.refIndex || surface['Ref Index']) {
-    const manualRefIndex = surface.rindex || surface['ref index'] || surface.refIndex || surface['Ref Index'];
-    const numValue = parseFloat(manualRefIndex);
-    if (!isNaN(numValue) && numValue > 0) {
-      // console.log(`🔧 手動設定Ref Index使用: ${numValue} (Material: "${surface.material || 'empty'}")`);
-      return numValue;
+  // ただし、Abbeが設定されている場合は近似分散式を使用
+  const manualRefIndex = surface.rindex || surface['ref index'] || surface.refIndex || surface['Ref Index'];
+  const manualAbbe = surface.abbe || surface.Abbe || surface.vd || surface.Vd;
+  
+  if (manualRefIndex) {
+    const nd = parseFloat(manualRefIndex);
+    const vd = parseFloat(manualAbbe);
+    
+    if (!isNaN(nd) && nd > 0) {
+      // Abbe数も設定されている場合、近似分散式を使用
+      if (!isNaN(vd) && vd > 0) {
+        const n_approx = estimateRefractiveIndexFromNdVd(nd, vd, wavelength);
+        // console.log(`🔧📐 手動設定: nd=${nd.toFixed(6)}, vd=${vd.toFixed(2)} → λ=${wavelength.toFixed(4)}μm: n≈${n_approx.toFixed(6)} (近似)`);
+        return n_approx;
+      } else {
+        // Abbe数がない場合は手動設定値をそのまま返す
+        // console.log(`🔧 手動設定Ref Index使用: ${nd} (Material: "${surface.material || 'empty'}")`);
+        return nd;
+      }
     }
   }
   
@@ -1700,27 +1778,6 @@ export function getRefractiveIndex(surface, wavelength = 0.5875618) {
     const numValue = parseFloat(surface.material);
     if (!isNaN(numValue)) {
       return numValue;
-    }
-  }
-  
-  // ガラスカタログから屈折率を取得
-  if (surface.material && surface.material !== '' && surface.material !== 'Air' && surface.material !== 'AIR') {
-    try {
-      const glassData = getGlassData(surface.material);
-      if (glassData) {
-        // 指定波長での屈折率を計算
-        if (glassData.sellmeier) {
-          const refractiveIndex = calculateRefractiveIndex(glassData.sellmeier, wavelength);
-          console.log(`🔍 ${surface.material}: λ=${wavelength.toFixed(4)}μm → n=${refractiveIndex.toFixed(6)}`);
-          return refractiveIndex;
-        } else {
-          // Sellmeierデータがない場合はd線の屈折率を使用
-          console.log(`⚠️ ${surface.material}: Sellmeierデータなし、d線屈折率=${glassData.nd}を使用`);
-          return glassData.nd;
-        }
-      }
-    } catch (error) {
-      debugWarn(1, `ガラスデータ取得エラー: ${surface.material}, ${error.message}`);
     }
   }
   

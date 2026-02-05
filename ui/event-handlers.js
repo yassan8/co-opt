@@ -2043,23 +2043,8 @@ export function setupOpticalSystemChangeListeners(scene) {
         <label for="popup-reference-focal-length">Reference Focal Length:</label>
         <input type="text" id="popup-reference-focal-length" placeholder="Auto" style="width: 80px;" />
         <button id="popup-coord-transform">Coord Transform</button>
-        <br>
-        <label for="popup-transform-surface-select">Transform at surface:</label>
-        <select id="popup-transform-surface-select" style="margin-right: 8px;">
-            <option value="">Select surface...</option>
-        </select>
-        <button id="popup-show-local-coords-btn">Show Local Coords</button>
-        <button id="popup-cancel-transform-btn" style="display:none;">Cancel</button>
-        <button id="popup-save-local-coords-btn" style="display:none;">Save as JSON</button>
     </div>
     <div class="content">
-        <div id="popup-transform-error-bar" style="display:none; padding:8px 12px; margin-bottom:8px; background:#fff3cd; border:1px solid #ffc107; border-radius:3px; color:#856404;">
-            <strong>Error:</strong> <span id="popup-transform-error-text"></span>
-        </div>
-        <div id="popup-transform-progress-wrapper" style="display:none; padding:8px 12px; border-bottom:1px solid #eee; background:#fff; margin-bottom:8px;">
-            <div id="popup-transform-progress-text">Calculating...</div>
-            <progress id="popup-transform-progressbar" max="100" value="0" style="width:100%; margin-top:4px;"></progress>
-        </div>
         <textarea id="popup-system-data" placeholder="System information will appear here..."></textarea>
     </div>
 
@@ -2109,191 +2094,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                 localStorage.setItem('systemData', JSON.stringify({ referenceFocalLength: value }));
             } catch (_) {}
         });
-
-        // Coordinate transformation controls in popup
-        const popupTransformSurfaceSelect = document.getElementById('popup-transform-surface-select');
-        const popupShowLocalCoordsBtn = document.getElementById('popup-show-local-coords-btn');
-        const popupCancelTransformBtn = document.getElementById('popup-cancel-transform-btn');
-        const popupSaveLocalCoordsBtn = document.getElementById('popup-save-local-coords-btn');
-        const popupErrorBar = document.getElementById('popup-transform-error-bar');
-        const popupErrorText = document.getElementById('popup-transform-error-text');
-        const popupProgressWrapper = document.getElementById('popup-transform-progress-wrapper');
-        const popupProgressText = document.getElementById('popup-transform-progress-text');
-        const popupProgressBar = document.getElementById('popup-transform-progressbar');
-
-        function showPopupError(message) {
-            if (popupErrorBar && popupErrorText) {
-                popupErrorText.textContent = message;
-                popupErrorBar.style.display = '';
-            }
-        }
-
-        function hidePopupError() {
-            if (popupErrorBar) popupErrorBar.style.display = 'none';
-        }
-
-        function setPopupProgress(percent, message) {
-            if (popupProgressWrapper) popupProgressWrapper.style.display = 'block';
-            if (popupProgressBar && Number.isFinite(percent)) {
-                popupProgressBar.value = Math.max(0, Math.min(100, percent));
-            }
-            if (popupProgressText && message) popupProgressText.textContent = message;
-        }
-
-        function hidePopupProgress() {
-            if (popupProgressWrapper) popupProgressWrapper.style.display = 'none';
-        }
-
-        // Update surface select from opener
-        function updatePopupSurfaceSelect() {
-            if (!popupTransformSurfaceSelect) return;
-            try {
-                const getOpticalSystemRows = window.opener && window.opener.getOpticalSystemRows;
-                if (typeof getOpticalSystemRows !== 'function') return;
-                
-                const opticalSystemRows = getOpticalSystemRows();
-                if (!opticalSystemRows || opticalSystemRows.length === 0) return;
-                
-                popupTransformSurfaceSelect.innerHTML = '<option value="">Select surface...</option>';
-                
-                opticalSystemRows.forEach((row, index) => {
-                    const objectType = String(row?.['object type'] ?? row?.object ?? '').toLowerCase();
-                    if (objectType === 'object') return;
-                    
-                    const surfType = String(row?.surfType ?? row?.type ?? '').toLowerCase();
-                    if (surfType === 'ct' || surfType === 'coordtrans' || surfType === 'coordinatebreak' ||
-                        surfType === 'coord trans' || surfType === 'coordinate break') {
-                        return;
-                    }
-                    
-                    const option = document.createElement('option');
-                    option.value = index;
-                    
-                    let label = 'Surf ' + index;
-                    if (row.comment) label += ': ' + row.comment;
-                    else if (row.material && row.material !== 'AIR') label += ': ' + row.material;
-                    
-                    option.textContent = label;
-                    popupTransformSurfaceSelect.appendChild(option);
-                });
-            } catch (error) {
-                console.error('Error updating popup surface select:', error);
-            }
-        }
-
-        // Show Local Coords button
-        if (popupShowLocalCoordsBtn) {
-            popupShowLocalCoordsBtn.addEventListener('click', async function() {
-                hidePopupError();
-                
-                try {
-                    const surfaceIndex = parseInt(popupTransformSurfaceSelect?.value);
-                    if (!surfaceIndex && surfaceIndex !== 0) {
-                        showPopupError('Please select a surface first.');
-                        return;
-                    }
-                    
-                    const calculateAllSurfacesLocalCoordinates = window.opener && window.opener.calculateAllSurfacesLocalCoordinates;
-                    const getOpticalSystemRows = window.opener && window.opener.getOpticalSystemRows;
-                    const tableOpticalSystem = window.opener && window.opener.tableOpticalSystem;
-                    
-                    if (typeof calculateAllSurfacesLocalCoordinates !== 'function') {
-                        showPopupError('Coordinate transformation function not available.');
-                        return;
-                    }
-                    
-                    if (typeof getOpticalSystemRows !== 'function') {
-                        showPopupError('Optical system data not available.');
-                        return;
-                    }
-                    
-                    const opticalSystemRows = getOpticalSystemRows();
-                    if (!opticalSystemRows || opticalSystemRows.length === 0) {
-                        showPopupError('No optical system data. Please load or create an optical system.');
-                        return;
-                    }
-                    
-                    popupShowLocalCoordsBtn.disabled = true;
-                    if (popupCancelTransformBtn) popupCancelTransformBtn.style.display = '';
-                    if (popupSaveLocalCoordsBtn) popupSaveLocalCoordsBtn.style.display = 'none';
-                    
-                    if (window.opener) window.opener._transformCalculationCancelled = false;
-                    
-                    const result = await calculateAllSurfacesLocalCoordinates(
-                        opticalSystemRows,
-                        surfaceIndex,
-                        (percent, message) => setPopupProgress(percent, message)
-                    );
-                    
-                    if (window.opener) {
-                        window.opener._cachedLocalCoords = result;
-                        window.opener._showLocalCoords = true;
-                    }
-                    
-                    if (tableOpticalSystem) {
-                        tableOpticalSystem.redraw();
-                    }
-                    
-                    if (popupSaveLocalCoordsBtn) popupSaveLocalCoordsBtn.style.display = '';
-                    
-                    hidePopupProgress();
-                    
-                } catch (error) {
-                    console.error('Coordinate transformation error:', error);
-                    showPopupError(error.message || 'Failed to calculate local coordinates.');
-                    hidePopupProgress();
-                } finally {
-                    popupShowLocalCoordsBtn.disabled = false;
-                    if (popupCancelTransformBtn) popupCancelTransformBtn.style.display = 'none';
-                }
-            });
-        }
-
-        // Cancel button
-        if (popupCancelTransformBtn) {
-            popupCancelTransformBtn.addEventListener('click', function() {
-                if (window.opener) window.opener._transformCalculationCancelled = true;
-                if (popupCancelTransformBtn) popupCancelTransformBtn.style.display = 'none';
-                hidePopupProgress();
-                showPopupError('Calculation cancelled by user.');
-            });
-        }
-
-        // Save as JSON button
-        if (popupSaveLocalCoordsBtn) {
-            popupSaveLocalCoordsBtn.addEventListener('click', function() {
-                try {
-                    const data = window.opener && window.opener._cachedLocalCoords;
-                    if (!data) {
-                        showPopupError('No coordinate data to save. Please calculate first.');
-                        return;
-                    }
-                    
-                    const json = JSON.stringify(data, null, 2);
-                    const blob = new Blob([json], { type: 'application/json' });
-                    const url = URL.createObjectURL(blob);
-                    
-                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-                    const surfaceIndex = data.metadata?.targetSurfaceIndex ?? 'unknown';
-                    const filename = 'local-coords-surf' + surfaceIndex + '-' + timestamp + '.json';
-                    
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename;
-                    a.click();
-                    
-                    URL.revokeObjectURL(url);
-                    
-                } catch (error) {
-                    console.error('Save error:', error);
-                    showPopupError('Failed to save JSON file: ' + error.message);
-                }
-            });
-        }
-
-        // Update surface select on load and periodically
-        updatePopupSurfaceSelect();
-        setInterval(updatePopupSurfaceSelect, 1000);
 
         // Keep in sync with the main window.
         setInterval(syncFromOpener, 500);
@@ -5934,6 +5734,11 @@ export function updateTransformSurfaceSelect() {
   const transformSurfaceSelect = document.getElementById('transform-surface-select');
   if (!transformSurfaceSelect) return;
   
+  // Save previous selection
+  const prevValue = (transformSurfaceSelect.value !== undefined && transformSurfaceSelect.value !== null)
+    ? String(transformSurfaceSelect.value)
+    : '';
+  
   try {
     const getOpticalSystemRows = window.getOpticalSystemRows;
     if (typeof getOpticalSystemRows !== 'function') return;
@@ -5969,6 +5774,11 @@ export function updateTransformSurfaceSelect() {
       option.textContent = label;
       transformSurfaceSelect.appendChild(option);
     });
+    
+    // Restore previous selection if it still exists
+    if (prevValue !== '' && transformSurfaceSelect.querySelector(`option[value="${CSS.escape(prevValue)}"]`)) {
+      transformSurfaceSelect.value = prevValue;
+    }
     
   } catch (error) {
     console.error('Error updating transform surface select:', error);

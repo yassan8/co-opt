@@ -2253,7 +2253,6 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       
       // Toric surface intersection
       const surfTypeStr = String(row.surfType ?? row.type ?? '').trim();
-      console.log(`🔵 [Ray Trace] Surface ${i}: surfTypeStr="${surfTypeStr}", surfType="${surfType}", radius=${row.radius}`);
       
       if (surfTypeStr === 'Toric') {
         // Parse radiusX: handle "INF" string and Infinity

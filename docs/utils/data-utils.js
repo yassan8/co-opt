@@ -234,7 +234,10 @@ function __du_expandActiveBlocksToRows() {
 
     const __du_blocksHaveObjectSurface = (blocks) => {
       try {
-        return Array.isArray(blocks) && blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface');
+        return Array.isArray(blocks) && blocks.some(b => {
+          const bt = String(b?.blockType ?? '').trim();
+          return bt === 'ObjectSurface' || bt === 'ObjectPlane';
+        });
       } catch (_) {
         return false;
       }

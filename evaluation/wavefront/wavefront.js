@@ -8,10 +8,41 @@
  * - 保守性：数式やモデルの変更が描画に影響しない
  *
  * このファイルは `eva-wavefront-plot.js` などの描画スクリプトから import して使用される。
+ * 
+ * ## 参照球面モード（Reference Sphere Mode）
+ * 
+ * 波面収差計算では、参照球面の中心位置の定義が重要です。
+ * 中心位置のズレは巨大なデフォーカス成分として波面収差に現れます。
+ * 
+ * ### 使用方法:
+ * ```javascript
+ * const calculator = createOPDCalculator(opticalSystemRows, wavelength, {
+ *   referenceSphereMode: 'best-focus'  // 'paraxial' | 'best-focus' | 'chief-ray'
+ * });
+ * ```
+ * 
+ * ### モード説明:
+ * - **paraxial** (デフォルト): 近軸計算による像面位置を中心とする（Zemax互換）
+ *   - 最も標準的な定義
+ *   - 球面収差と波面収差が物理的に整合する
+ *   - 推奨設定
+ * 
+ * - **best-focus**: 縦球面収差の最大/最小値の中点を中心とする
+ *   - 計算コストが低い
+ *   - 最良像点基準（CODE V互換に近い）
+ * 
+ * - **chief-ray**: 主光線の逆延長による光軸交点を中心とする（旧実装）
+ *   - 軸外視野で参照球面中心が大きくズレる可能性
+ *   - デバッグ・比較用
+ * 
+ * ### トラブルシューティング:
+ * 球面収差が±0.1mm程度なのに波面収差が数百λになる場合、
+ * 参照球面の定義に問題があります。コンソールに警告が表示されるので、
+ * モードを変更して再計算してください。
  */
 
 import { traceRay, calculateSurfaceOrigins } from '../../raytracing/core/ray-tracing.js';
-import { getRefractiveIndex as getCatalogRefractiveIndex } from '../../raytracing/core/ray-paraxial.js';
+import { getRefractiveIndex as getCatalogRefractiveIndex, calculateParaxialData } from '../../raytracing/core/ray-paraxial.js';
 import { findFiniteSystemChiefRayDirection } from '../../raytracing/generation/gen-ray-cross-finite.js';
 import { findInfiniteSystemChiefRayOrigin } from '../../raytracing/generation/gen-ray-cross-infinite.js';
 import { fitZernikeWeighted, reconstructOPD, jToNM, nmToJ, getZernikeName } from './zernike-fitting.js';
@@ -501,7 +532,7 @@ function findStopSurfaceIndex(opticalSystemRows) {
  * 基準光線（主光線）に対する周辺光線の光路差を計算する
  */
 export class OpticalPathDifferenceCalculator {
-    constructor(opticalSystemRows, wavelength = 0.5876) {
+    constructor(opticalSystemRows, wavelength = 0.5876, options = {}) {
         // 🆕 初期化時の詳細検証
         if (!opticalSystemRows) {
             console.error(`❌ OpticalPathDifferenceCalculator: opticalSystemRows が null または undefined です`);
@@ -520,6 +551,12 @@ export class OpticalPathDifferenceCalculator {
         
         this.opticalSystemRows = opticalSystemRows;
         this.wavelength = wavelength; // μm
+        
+        // 参照球面モード: 'paraxial' | 'best-focus' | 'chief-ray'
+        // - paraxial: 近軸像点を参照球面中心とする（Zemax互換、デフォルト）
+        // - best-focus: 縦球面収差の最大/最小値の中点を中心とする
+        // - chief-ray: 主光線の逆延長による軸交点を中心とする（旧実装）
+        this.referenceSphereMode = options.referenceSphereMode || 'paraxial';
         this.stopSurfaceIndex = findStopSurfaceIndex(opticalSystemRows);
         this.referenceOpticalPath = null;
         this.referenceChiefRay = null; // 主光線データ保存用
@@ -532,7 +569,7 @@ export class OpticalPathDifferenceCalculator {
             ? opticalSystemRows.filter(isMirrorRow).length
             : 0;
         this.mirrorSign = (mirrorCount % 2 === 1) ? -1 : 1;
-        if (OPD_DEBUG) {
+        if (OPD_DEBUG && false) {
             console.log(`🔍 OPD: Detected ${mirrorCount} mirror(s), mirrorSign=${this.mirrorSign}`);
         }
 
@@ -600,7 +637,7 @@ export class OpticalPathDifferenceCalculator {
         this._cachedEntranceRadiusMm = null;
         this._cachedFirstSurfaceZ = null;
 
-        if (__cooptIsOPDDebugNow()) {
+        if (OPD_DEBUG && false) {
             console.log(`🔍 OPD Calculator 初期化: 波長=${wavelength}μm, 絞り面インデックス=${this.stopSurfaceIndex}`);
             console.log(`🔍 光学系行数: ${opticalSystemRows ? opticalSystemRows.length : 'null'}`);
 
@@ -665,6 +702,11 @@ export class OpticalPathDifferenceCalculator {
 
     _getForcedInfinitePupilMode() {
         try {
+            const local = this._forcedInfinitePupilMode;
+            if (typeof local === 'string') {
+                const ls = local.trim().toLowerCase();
+                if (ls === 'stop' || ls === 'entrance') return ls;
+            }
             const v = globalThis?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? globalThis?.COOPT_FORCE_INFINITE_PUPIL_MODE;
             const s = (typeof v === 'string') ? v.trim().toLowerCase() : null;
             if (s === 'stop' || s === 'entrance') return s;
@@ -688,6 +730,20 @@ export class OpticalPathDifferenceCalculator {
         if (forced) return forced;
         const key = this._getInfinitePupilModeKey(fieldSetting);
         return this._infinitePupilModeCache?.get(key) || 'stop';
+    }
+
+    _getEffectiveReferenceSphereMode(fieldSetting) {
+        const base = String(this.referenceSphereMode || 'paraxial');
+        try {
+            const isFinite = this.isFiniteForField(fieldSetting);
+            if (!isFinite) {
+                const pm = this._getInfinitePupilMode(fieldSetting);
+                if (pm === 'stop' && base === 'paraxial') {
+                    return 'chief-ray';
+                }
+            }
+        } catch (_) {}
+        return base;
     }
 
     _setInfinitePupilMode(fieldSetting, mode) {
@@ -2865,6 +2921,7 @@ ${surfaceTypeList}
         // 🆕 各画角に対して基準光線を確実に設定
         // 画角が変わるたびに主光線の光路長を再計算する必要がある
         const currentFieldKey = this.getFieldCacheKey(fieldSetting);
+        const refSphereKey = `${currentFieldKey}|${this.referenceSphereMode}`;
         
         // 前回と異なる画角の場合、または基準光路長が未設定の場合
         if (this.referenceOpticalPath === null || this.lastFieldKey !== currentFieldKey) {
@@ -2980,7 +3037,7 @@ ${surfaceTypeList}
             if (isChiefRay) {
                 const chiefOPDError = Math.abs(opd);
                 // Disable excessive logging during grid calculations - only show warnings for major errors
-                if (OPD_DEBUG && chiefOPDError > 1e-3) { // 1nm以上の誤差のみログ出力
+                if (OPD_DEBUG && false && chiefOPDError > 1e-3) { // 1nm以上の誤差のみログ出力
                     console.warn(`⚠️ 主光線のOPDが0でありません！誤差=${chiefOPDError.toFixed(6)}μm`);
                     console.warn(`🔧 基準光路長の設定に問題がある可能性があります`);
                     console.warn(`📊 [主光線詳細] 周辺光路長=${marginalOpticalPath.toFixed(6)}μm, 基準光路長=${this.referenceOpticalPath.toFixed(6)}μm`);
@@ -3037,7 +3094,7 @@ ${surfaceTypeList}
             this.lastFieldKey = currentFieldKey;
             try {
                 if (this._referenceSphereCache && typeof this._referenceSphereCache.delete === 'function') {
-                    this._referenceSphereCache.delete(currentFieldKey);
+                    this._referenceSphereCache.delete(refSphereKey);
                 }
             } catch (_) {}
         }
@@ -3086,28 +3143,56 @@ ${surfaceTypeList}
             let cachedCenter = null;
             let cachedRadius = null;
             let cachedSphereCenter = null;
+            let cachedGeom = null;
             try {
-                const c = this._referenceSphereCache?.get?.(currentFieldKey);
+                const c = this._referenceSphereCache?.get?.(refSphereKey);
                 if (c && typeof c === 'object') {
                     cachedCenter = c.center || null;
                     cachedRadius = c.radius;
                     cachedSphereCenter = c.sphereCenter || null;
+                    cachedGeom = c.geom || null;
                 }
             } catch (_) {}
+
+            const MIN_CACHE_RADIUS = 0.01;
+            if (!Number.isFinite(cachedRadius) || cachedRadius < MIN_CACHE_RADIUS || !cachedSphereCenter) {
+                cachedRadius = null;
+                cachedSphereCenter = null;
+            }
+
+            // If best-focus is requested, avoid reusing non-best-focus cache entries or missing diagnostics.
+            if (this.referenceSphereMode === 'best-focus') {
+                const mode = String(cachedGeom?.mode || '');
+                if (!mode.startsWith('best-focus') || cachedGeom?.bestFocusDiag === null || cachedGeom?.bestFocusDiag === undefined) {
+                    cachedRadius = null;
+                    cachedSphereCenter = null;
+                    cachedGeom = null;
+                }
+            }
 
             // Populate cache if missing.
             if (!cachedCenter) {
                 cachedCenter = this.getChiefRayImagePoint();
             }
             if (cachedRadius === null || cachedRadius === undefined) {
-                const geom = this.calculateImageSphereGeometry(cachedCenter);
+                const geom = this.calculateImageSphereGeometry(cachedCenter, fieldSetting, options);
+                cachedGeom = geom || null;
                 cachedRadius = geom?.imageSphereRadius;
                 cachedSphereCenter = geom?.referenceSphereCenter;
-                // On-axis fallback: if chief ray is exactly on-axis, geometry returns Infinity.
-                // Use a tiny off-axis probe ray to estimate the axis intersection instead.
-                if (!Number.isFinite(cachedRadius) || cachedRadius === Infinity || !cachedSphereCenter) {
+                // On-axis fallback: if radius is invalid/tiny or geometry failed, use a tiny off-axis probe
+                // ray to estimate the axis intersection instead.
+                if (!Number.isFinite(cachedRadius) || cachedRadius === Infinity || cachedRadius < MIN_CACHE_RADIUS || !cachedSphereCenter) {
                     const probe = this._estimateAxisIntersectionZFromProbe(fieldSetting, options);
-                    if (probe && Number.isFinite(probe.axisIntersectionZ)) {
+                    if (probe && probe.axisIntersection && Number.isFinite(probe.axisIntersection.z)) {
+                        cachedSphereCenter = { x: probe.axisIntersection.x, y: probe.axisIntersection.y, z: probe.axisIntersection.z };
+                        const dx = (cachedCenter?.x ?? 0) - cachedSphereCenter.x;
+                        const dy = (cachedCenter?.y ?? 0) - cachedSphereCenter.y;
+                        const dz = (cachedCenter?.z ?? 0) - cachedSphereCenter.z;
+                        cachedRadius = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                        if (OPD_DEBUG) {
+                            console.log(`🟦 [RefSphere] on-axis probe fallback: axisZ=${cachedSphereCenter.z.toFixed(6)}mm, R=${cachedRadius.toFixed(6)}mm, probe=(${probe.probePupil.x},${probe.probePupil.y})`);
+                        }
+                    } else if (probe && Number.isFinite(probe.axisIntersectionZ)) {
                         cachedSphereCenter = { x: 0, y: 0, z: probe.axisIntersectionZ };
                         const dx = (cachedCenter?.x ?? 0) - cachedSphereCenter.x;
                         const dy = (cachedCenter?.y ?? 0) - cachedSphereCenter.y;
@@ -3119,16 +3204,69 @@ ${surfaceTypeList}
                     }
                 }
                 try {
-                    this._referenceSphereCache?.set?.(currentFieldKey, { center: cachedCenter, radius: cachedRadius, sphereCenter: cachedSphereCenter });
+                    this._referenceSphereCache?.set?.(refSphereKey, { center: cachedCenter, radius: cachedRadius, sphereCenter: cachedSphereCenter, geom: cachedGeom });
                 } catch (_) {}
             }
+
+            // One-time geometry log per field/mode to diagnose OPD scale issues.
+            try {
+                if (!this._referenceSphereLogOnce) this._referenceSphereLogOnce = new Set();
+                if (!this._referenceSphereLogOnce.has(refSphereKey)) {
+                    this._referenceSphereLogOnce.add(refSphereKey);
+                    const c = cachedCenter;
+                    const s = cachedSphereCenter;
+                    const r = cachedRadius;
+                    const mode = cachedGeom?.mode || this.referenceSphereMode || 'unknown';
+                    let chiefDist = null;
+                    let chiefError = null;
+                    if (c && s && Number.isFinite(r)) {
+                        const dx = c.x - s.x;
+                        const dy = c.y - s.y;
+                        const dz = c.z - s.z;
+                        chiefDist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                        chiefError = chiefDist - r;
+                    }
+                    console.log(`🧭 [RefSphere] field=${currentFieldKey} mode=${mode}`);
+                    if (c) console.log(`   imagePoint: (${c.x.toFixed(6)}, ${c.y.toFixed(6)}, ${c.z.toFixed(6)})`);
+                    if (s) console.log(`   sphereCenter: (${s.x.toFixed(6)}, ${s.y.toFixed(6)}, ${s.z.toFixed(6)})`);
+                    if (Number.isFinite(r)) console.log(`   radius: ${r.toFixed(6)} mm`);
+                    if (chiefDist !== null && chiefError !== null) {
+                        console.log(`   chiefDist: ${chiefDist.toFixed(6)} mm, error: ${chiefError.toFixed(6)} mm`);
+                    }
+                    if (cachedGeom?.bestFocusTRange) {
+                        const br = cachedGeom.bestFocusTRange;
+                        console.log(`   bestFocus t-range: [${br.tMin.toFixed(6)}, ${br.tMax.toFixed(6)}], n=${br.count}`);
+                    }
+                }
+            } catch (_) {}
+
+            // Store for UI diagnostics (stats panel)
+            try {
+                this._lastReferenceSphereInfo = {
+                    fieldKey: currentFieldKey,
+                    mode: cachedGeom?.mode || this.referenceSphereMode || 'unknown',
+                    referenceSphereMode: this.referenceSphereMode || null,
+                    imagePoint: cachedCenter ? { x: cachedCenter.x, y: cachedCenter.y, z: cachedCenter.z } : null,
+                    sphereCenter: cachedSphereCenter ? { x: cachedSphereCenter.x, y: cachedSphereCenter.y, z: cachedSphereCenter.z } : null,
+                    radius: Number.isFinite(cachedRadius) ? cachedRadius : null,
+                    chiefDist: (cachedCenter && cachedSphereCenter)
+                        ? Math.hypot(cachedCenter.x - cachedSphereCenter.x, cachedCenter.y - cachedSphereCenter.y, cachedCenter.z - cachedSphereCenter.z)
+                        : null,
+                    chiefError: (cachedCenter && cachedSphereCenter && Number.isFinite(cachedRadius))
+                        ? (Math.hypot(cachedCenter.x - cachedSphereCenter.x, cachedCenter.y - cachedSphereCenter.y, cachedCenter.z - cachedSphereCenter.z) - cachedRadius)
+                        : null,
+                    bestFocusTRange: cachedGeom?.bestFocusTRange || null,
+                    bestFocusDiag: cachedGeom?.bestFocusDiag || null
+                };
+            } catch (_) {}
 
             const ref = this.calculateOPDFromReferenceSphere(marginalRay, marginalOpticalPath, fieldSetting, removeTilt, {
                 imageSphereCenter: cachedCenter,
                 imageSphereRadius: cachedRadius,
                 _imageSphereGeometry: {
                     imageSphereRadius: cachedRadius,
-                    referenceSphereCenter: cachedSphereCenter
+                    referenceSphereCenter: cachedSphereCenter,
+                    mode: cachedGeom?.mode
                 }
             });
             if (!ref?.success || !isFinite(ref.opd) || isNaN(ref.opd)) {
@@ -3306,10 +3444,19 @@ ${surfaceTypeList}
 
             // Calculate reference sphere geometry (center on axis + radius)
             let referenceSphereGeometry;
-            if (precomputed && precomputed._imageSphereGeometry) {
-                referenceSphereGeometry = precomputed._imageSphereGeometry;
+            const MIN_CACHE_RADIUS = 0.01; // mm
+            if (precomputed && precomputed._imageSphereGeometry && precomputed._imageSphereGeometry.mode) {
+                const cachedRadius = precomputed._imageSphereGeometry.imageSphereRadius;
+                if (Number.isFinite(cachedRadius) && cachedRadius >= MIN_CACHE_RADIUS) {
+                    // キャッシュに mode フィールドがあり、半径が安定域なら使用
+                    referenceSphereGeometry = precomputed._imageSphereGeometry;
+                } else {
+                    // 半径が小さすぎるキャッシュは再計算（on-axis補正適用）
+                    referenceSphereGeometry = this.calculateImageSphereGeometry(imagePoint, fieldSetting, null);
+                }
             } else {
-                referenceSphereGeometry = this.calculateImageSphereGeometry(imagePoint);
+                // mode がないキャッシュは古い形式なので再計算
+                referenceSphereGeometry = this.calculateImageSphereGeometry(imagePoint, fieldSetting, null);
             }
             
             // Check if reference sphere is degenerate (radius too small or infinite)
@@ -3325,13 +3472,26 @@ ${surfaceTypeList}
                 !Number.isFinite(referenceSphereGeometry.imageSphereRadius) ||
                 referenceSphereGeometry.imageSphereRadius < MIN_RADIUS ||
                 referenceSphereGeometry.imageSphereRadius > MAX_RADIUS) {
-                
-                // Fallback: use simplified reference at image plane
-                // This happens when chief ray is nearly on-axis or parallel to axis
-                console.warn(`⚠️ 参照球半径が異常 (${referenceSphereGeometry?.imageSphereRadius?.toFixed(6)} mm), 像面基準モードに切替`);
-                referenceSphereCenter = imagePoint; // Reference at image point
-                referenceSphereRadius = 0.001; // Nominal small radius
-                useSimplifiedMode = true;
+                // Fallback: build a stable reference sphere using paraxial distances
+                const paraxialData = calculateParaxialData(this.opticalSystemRows, this.wavelength);
+                const fallbackCandidates = [
+                    Number.isFinite(paraxialData?.imageDistance) ? Math.abs(paraxialData.imageDistance) : null,
+                    Number.isFinite(paraxialData?.focalLength) ? Math.abs(paraxialData.focalLength) : null,
+                    1.0
+                ].filter((v) => Number.isFinite(v) && v > 0);
+                const desiredRadius = fallbackCandidates.length > 0 ? Math.max(...fallbackCandidates) : 1.0;
+                const axisDirUnit = (() => {
+                    const evalIdx = Number.isFinite(this.evaluationSurfaceIndex)
+                        ? this.evaluationSurfaceIndex
+                        : (Array.isArray(this.opticalSystemRows) ? (this.opticalSystemRows.length - 1) : null);
+                    const axes = (evalIdx !== null && evalIdx !== undefined) ? this.getSurfaceAxes(evalIdx) : null;
+                    const raw = (axes && axes.ez) ? axes.ez : { x: 0, y: 0, z: 1 };
+                    const m = Math.hypot(raw.x, raw.y, raw.z) || 1;
+                    return { x: raw.x / m, y: raw.y / m, z: raw.z / m };
+                })();
+                referenceSphereCenter = this.addVec(imagePoint, this.scaleVec(axisDirUnit, -desiredRadius));
+                referenceSphereRadius = desiredRadius;
+                useSimplifiedMode = false;
             } else {
                 referenceSphereCenter = referenceSphereGeometry.referenceSphereCenter;
                 referenceSphereRadius = referenceSphereGeometry.imageSphereRadius;
@@ -3350,6 +3510,18 @@ ${surfaceTypeList}
             const marginalImagePoint = getRayImagePoint(marginalRay);
             if (!marginalImagePoint) throw new Error('周辺光線の像面交点が不足しています');
 
+            if (OPD_DEBUG) {
+                console.log(`🔍 [OPD計算] 像点と参照球面:
+  ┌─ 像点位置
+  │  主光線: (${chiefImagePoint.x.toFixed(3)}, ${chiefImagePoint.y.toFixed(3)}, ${chiefImagePoint.z.toFixed(3)}) mm
+  │  周辺光線: (${marginalImagePoint.x.toFixed(3)}, ${marginalImagePoint.y.toFixed(3)}, ${marginalImagePoint.z.toFixed(3)}) mm
+  ├─ 参照球面
+  │  中心: (${referenceSphereCenter.x.toFixed(3)}, ${referenceSphereCenter.y.toFixed(3)}, ${referenceSphereCenter.z.toFixed(3)}) mm
+  │  半径: ${referenceSphereRadius.toFixed(6)} mm
+  │  モード: ${referenceSphereGeometry.mode || 'unknown (キャッシュ古い形式?)'}
+  └─ データ取得方法: ${(precomputed && precomputed._imageSphereGeometry) ? 'キャッシュ' : '新規計算'}`);
+            }
+
             // Calculate distances from image points to reference sphere center
             const chiefDist = Math.sqrt(
                 (chiefImagePoint.x - referenceSphereCenter.x)**2 + 
@@ -3364,11 +3536,37 @@ ${surfaceTypeList}
             );
 
             // DEBUG: Check sphere geometry
-            console.log(`🔍 参照球チェック:
-  半径: ${referenceSphereRadius.toFixed(3)} mm
-  主光線像点の球中心からの距離: ${chiefDist.toFixed(3)} mm
-  差: ${(chiefDist - referenceSphereRadius).toFixed(6)} mm
-  周辺光線像点の球中心からの距離: ${marginalDist.toFixed(3)} mm`);
+            const chiefDistError = chiefDist - referenceSphereRadius;
+            const chiefDistErrorPercent = Math.abs(chiefDistError / referenceSphereRadius) * 100;
+            
+            if (OPD_DEBUG) {
+                console.log(`🔍 参照球面チェック:
+  ┌─ 参照球面形状
+  │  モード: ${referenceSphereGeometry.mode || 'unknown'}
+  │  中心: (${referenceSphereCenter.x.toFixed(3)}, ${referenceSphereCenter.y.toFixed(3)}, ${referenceSphereCenter.z.toFixed(3)}) mm
+  │  半径: ${referenceSphereRadius.toFixed(3)} mm
+  ├─ 像点の球中心からの距離
+  │  主光線像点: ${chiefDist.toFixed(3)} mm (差: ${chiefDistError.toFixed(6)} mm, ${chiefDistErrorPercent.toFixed(2)}%)
+  │  周辺光線像点: ${marginalDist.toFixed(3)} mm
+  └─ 状態: ${Math.abs(chiefDistError) > 0.01 ? '⚠️ 警告' : '✓ OK'}`);
+            }
+            
+            // 参照球面の整合性チェック: 主光線が参照球面上にあるべき
+            const MAX_CHIEF_ERROR_MM = 0.01; // 0.01mm以上のズレで警告
+            if (Math.abs(chiefDistError) > MAX_CHIEF_ERROR_MM) {
+                console.warn(`⚠️ 参照球面の定義に問題があります！
+  主光線像点が参照球面から ${chiefDistError.toFixed(6)} mm ズレています。
+  これは波面収差計算で大きな誤差（デフォーカス成分）を引き起こします。
+  
+  推奨される対処:
+  1. referenceSphereMode を変更してみてください（現在: ${this.referenceSphereMode}）
+     - 'paraxial': 近軸像点基準（Zemax互換、デフォルト）
+     - 'best-focus': 最良像点基準（計算コスト低）
+     - 'chief-ray': 主光線軸交点基準（旧実装）
+  2. 光学系の設定を確認してください（特に像面位置）
+  
+  現在の球面収差値と波面収差値に大きな乖離がある場合、この問題が原因です。`);
+            }
 
             // Refractive index in image space
             const nImg = (() => {
@@ -3383,6 +3581,10 @@ ${surfaceTypeList}
             })();
 
             let opd, spherePathDifference, referenceOpticalPathCorrected;
+            const chiefOpticalPath = this.calculateOpticalPath(this.referenceChiefRay);
+            const referencePathForSphere = (Number.isFinite(chiefOpticalPath) && !isNaN(chiefOpticalPath))
+                ? chiefOpticalPath
+                : this.referenceOpticalPath;
             
             if (useSimplifiedMode) {
                 // Simplified mode: image plane reference with geometric correction
@@ -3408,16 +3610,40 @@ ${surfaceTypeList}
   幾何補正: ${geometricCorrection.toFixed(3)} μm
   OPD: ${opd.toFixed(6)} μm`);
             } else {
-                // Standard mode: OPD calculation based on reference sphere
-                // OPD = (marginal optical path - marginal geometric distance to sphere)
-                //     - (chief optical path - chief geometric distance to sphere)
-                // Since chief ray defines the sphere (chiefDist ≈ radius), the second term ≈ 0
-                const marginalGeometricCorrection = (marginalDist - referenceSphereRadius) * nImg * 1000; // mm to μm
-                const chiefGeometricCorrection = (chiefDist - referenceSphereRadius) * nImg * 1000; // mm to μm
-                
-                opd = (marginalOpticalPath - marginalGeometricCorrection) - (this.referenceOpticalPath - chiefGeometricCorrection);
-                spherePathDifference = marginalDist - referenceSphereRadius; // mm
-                referenceOpticalPathCorrected = this.referenceOpticalPath - chiefGeometricCorrection;
+                // Standard mode: OPD calculation based on reference sphere with ray-direction sag correction
+                // Use the ray-sphere intersection along the actual ray direction (more accurate than radial sag).
+                const solveRaySphereT = (rayData) => {
+                    const path = this.getPathData(rayData);
+                    if (!Array.isArray(path) || path.length < 2) return null;
+                    const p = path[path.length - 1];
+                    const p0 = path[path.length - 2];
+                    const dir = { x: p.x - p0.x, y: p.y - p0.y, z: p.z - p0.z };
+                    const dm = Math.hypot(dir.x, dir.y, dir.z) || 1;
+                    dir.x /= dm; dir.y /= dm; dir.z /= dm;
+                    const oc = { x: p.x - referenceSphereCenter.x, y: p.y - referenceSphereCenter.y, z: p.z - referenceSphereCenter.z };
+                    const b = 2 * (oc.x * dir.x + oc.y * dir.y + oc.z * dir.z);
+                    const c = oc.x * oc.x + oc.y * oc.y + oc.z * oc.z - referenceSphereRadius * referenceSphereRadius;
+                    const disc = b * b - 4 * c;
+                    if (!Number.isFinite(disc) || disc < 0) return null;
+                    const sqrtDisc = Math.sqrt(disc);
+                    const t1 = (-b - sqrtDisc) / 2;
+                    const t2 = (-b + sqrtDisc) / 2;
+                    if (!Number.isFinite(t1) && !Number.isFinite(t2)) return null;
+                    if (Number.isFinite(t1) && Number.isFinite(t2)) {
+                        return (Math.abs(t1) <= Math.abs(t2)) ? t1 : t2;
+                    }
+                    return Number.isFinite(t1) ? t1 : t2;
+                };
+
+                const tMarginal = solveRaySphereT(marginalRay);
+                const tChief = solveRaySphereT(this.referenceChiefRay);
+
+                const marginalGeometricCorrection = (Number.isFinite(tMarginal) ? tMarginal : (marginalDist - referenceSphereRadius)) * nImg * 1000;
+                const chiefGeometricCorrection = (Number.isFinite(tChief) ? tChief : (chiefDist - referenceSphereRadius)) * nImg * 1000;
+
+                opd = (marginalOpticalPath - marginalGeometricCorrection) - (referencePathForSphere - chiefGeometricCorrection);
+                spherePathDifference = Number.isFinite(tMarginal) ? tMarginal : (marginalDist - referenceSphereRadius);
+                referenceOpticalPathCorrected = referencePathForSphere - chiefGeometricCorrection;
             }
 
             return {
@@ -3450,62 +3676,459 @@ ${surfaceTypeList}
      *
      * - 入力: 像面上の主光線像点（実像高 H'）
      * - 出力: 球中心(光軸上の交点) + 半径(Rex)
+     * 
+     * モード別の計算方法：
+     * - 'paraxial': 近軸計算による像面Z座標を中心とする（Zemax互換、デフォルト）
+     * - 'best-focus': 縦球面収差の最大/最小値の中点を中心とする（計算コスト低）
+     * - 'chief-ray': 主光線の逆延長による軸交点を中心とする（旧実装）
      */
-    calculateImageSphereGeometry(imageSpherePoint) {
+    calculateImageSphereGeometry(imageSpherePoint, fieldSetting = null, options = undefined) {
         try {
             if (!this.referenceChiefRay) {
+                console.error('❌ [calculateImageSphereGeometry] 主光線データが設定されていません');
                 throw new Error('主光線データが設定されていません');
             }
 
-            // 主光線の最後の2点から方向ベクトルを計算
             const chiefPath = this.getPathData(this.referenceChiefRay);
             if (!chiefPath || chiefPath.length < 2) {
+                console.error(`❌ [calculateImageSphereGeometry] 主光線のパスデータが不十分: ${chiefPath ? chiefPath.length : 0} points`);
+                console.error(`   evaluationSurfaceIndex: ${this.evaluationSurfaceIndex}`);
+                console.error(`   _recordedSurfaceIndices: ${JSON.stringify(this._recordedSurfaceIndices)}`);
                 throw new Error('主光線のパスデータが不十分です');
             }
 
             const lastPoint = chiefPath[chiefPath.length - 1]; // 像面交点
-            const prevPoint = chiefPath[chiefPath.length - 2];
 
-            // 主光線の方向ベクトル（逆方向 = 主光線を逆延長）
-            const dirX = prevPoint.x - lastPoint.x;
-            const dirY = prevPoint.y - lastPoint.y;
-            const dirZ = prevPoint.z - lastPoint.z;
-
-            const dirLength = Math.sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
-            if (dirLength === 0) {
-                throw new Error('主光線の方向ベクトルが計算できません');
-            }
-
-            const normalizedDirX = dirX / dirLength;
-            const normalizedDirY = dirY / dirLength;
-            const normalizedDirZ = dirZ / dirLength;
-
-            let t = null;
-            if (Math.abs(normalizedDirX) > 1e-10) {
-                t = -imageSpherePoint.x / normalizedDirX;
-            } else if (Math.abs(normalizedDirY) > 1e-10) {
-                t = -imageSpherePoint.y / normalizedDirY;
-            } else {
-                // Chief ray ~ parallel to axis → intersection at infinity
-                return { imageSphereRadius: Infinity, referenceSphereCenter: null, axisIntersectionZ: null };
-            }
-
-            if (t === null || !isFinite(t)) {
-                throw new Error('光軸との交点パラメータが計算できません');
-            }
-
-            const axisIntersectionZ = imageSpherePoint.z + t * normalizedDirZ;
-            const dz = imageSpherePoint.z - axisIntersectionZ;
-            const radius = Math.sqrt(imageSpherePoint.x * imageSpherePoint.x + imageSpherePoint.y * imageSpherePoint.y + dz * dz);
-
-            return {
-                imageSphereRadius: radius,
-                referenceSphereCenter: { x: 0, y: 0, z: axisIntersectionZ },
-                axisIntersectionZ
+            const dot = (a, b) => (a.x * b.x + a.y * b.y + a.z * b.z);
+            const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+            const norm = (v) => {
+                const m = Math.hypot(v.x, v.y, v.z) || 1;
+                return { x: v.x / m, y: v.y / m, z: v.z / m };
             };
+
+            const evalIdx = Number.isFinite(this.evaluationSurfaceIndex)
+                ? this.evaluationSurfaceIndex
+                : (Array.isArray(this.opticalSystemRows) ? (this.opticalSystemRows.length - 1) : null);
+            const axisOrigin = (evalIdx !== null && evalIdx !== undefined)
+                ? this.getSurfaceOrigin(evalIdx)
+                : { x: 0, y: 0, z: lastPoint.z };
+            const axisAxes = (evalIdx !== null && evalIdx !== undefined)
+                ? this.getSurfaceAxes(evalIdx)
+                : null;
+            const axisDirRaw = (axisAxes && axisAxes.ez) ? axisAxes.ez : { x: 0, y: 0, z: 1 };
+            const axisDir = norm(axisDirRaw);
+
+            const closestPointOnAxisToLine = (linePoint, lineDir) => {
+                const d1 = norm(lineDir);
+                const d2 = axisDir;
+                const w0 = sub(linePoint, axisOrigin);
+                const a = dot(d1, d1);
+                const b = dot(d1, d2);
+                const c = dot(d2, d2);
+                const d = dot(d1, w0);
+                const e = dot(d2, w0);
+                const denom = a * c - b * b;
+                let u;
+                if (Math.abs(denom) > 1e-12) {
+                    u = (a * e - b * d) / denom;
+                } else {
+                    u = (c > 1e-12) ? (e / c) : 0;
+                }
+                return { x: axisOrigin.x + d2.x * u, y: axisOrigin.y + d2.y * u, z: axisOrigin.z + d2.z * u };
+            };
+
+            const closestPointOnAxisToPoint = (pt) => {
+                const w = sub(pt, axisOrigin);
+                const u = dot(w, axisDir);
+                return { x: axisOrigin.x + axisDir.x * u, y: axisOrigin.y + axisDir.y * u, z: axisOrigin.z + axisDir.z * u };
+            };
+
+            let axisIntersectionZ = null;
+            let axisIntersection = null;
+            let calculationMode = this._getEffectiveReferenceSphereMode(fieldSetting);
+            let bestFocusTRange = null;
+            let bestFocusDiag = null;
+
+            // モード別の参照球面中心Z座標計算
+            if (calculationMode === 'paraxial') {
+                // 近軸計算による像面Z座標（最終面からの距離を使用）
+                try {
+                    const paraxialData = calculateParaxialData(this.opticalSystemRows, this.wavelength);
+                    const exitPupilPosFromImage = paraxialData?.exitPupilDetails?.position;
+                    if (Number.isFinite(exitPupilPosFromImage) && Math.abs(exitPupilPosFromImage) > 0.01) {
+                        const axisDirUnit = norm(axisDir);
+                        axisIntersection = this.addVec(imageSpherePoint, this.scaleVec(axisDirUnit, -exitPupilPosFromImage));
+                        axisIntersectionZ = axisIntersection.z;
+                        calculationMode = 'exit-pupil-position';
+                    }
+                    if (!axisIntersection && paraxialData && Number.isFinite(paraxialData.imageDistance)) {
+                        // imageDistance は「最終面からの距離」なので、最終面の軸上位置から加算する
+                        let baseSurfaceIdx = null;
+                        if (Array.isArray(this._recordedSurfaceIndices) && this._recordedSurfaceIndices.length > 0) {
+                            baseSurfaceIdx = this._recordedSurfaceIndices[this._recordedSurfaceIndices.length - 1];
+                            if (Number.isFinite(this.evaluationSurfaceIndex) && baseSurfaceIdx === this.evaluationSurfaceIndex) {
+                                if (this._recordedSurfaceIndices.length >= 2) {
+                                    baseSurfaceIdx = this._recordedSurfaceIndices[this._recordedSurfaceIndices.length - 2];
+                                }
+                            }
+                        }
+                        const baseOrigin = (Number.isFinite(baseSurfaceIdx)) ? this.getSurfaceOrigin(baseSurfaceIdx) : axisOrigin;
+                        axisIntersection = this.addVec(baseOrigin, this.scaleVec(axisDir, paraxialData.imageDistance));
+                        axisIntersectionZ = axisIntersection.z;
+
+                        if (OPD_DEBUG) {
+                            console.log(`🔍 [Paraxial計算] Defocus診断:
+  ┌─ 近軸データ
+  │  imageDistance: ${paraxialData.imageDistance.toFixed(6)} mm
+  │  baseSurfaceIdx: ${baseSurfaceIdx}
+  │  baseOrigin.z: ${baseOrigin.z.toFixed(6)} mm
+  ├─ 計算結果
+  │  参照球面中心Z: ${axisIntersectionZ.toFixed(6)} mm (= baseOrigin.z + imageDistance)
+  │  主光線像点Z: ${lastPoint.z.toFixed(6)} mm (実光線追跡)
+  │  差: ${(lastPoint.z - axisIntersectionZ).toFixed(6)} mm
+  └─ 判定: ${Math.abs(lastPoint.z - axisIntersectionZ) > 0.01 ? '⚠️ Defocus あり' : '✓ OK'}`);
+                            console.log(`🔍 参照球面中心（近軸モード）: Z = ${axisIntersectionZ.toFixed(6)} mm`);
+                            console.log(`   ベース面origin: (${baseOrigin.x.toFixed(6)}, ${baseOrigin.y.toFixed(6)}, ${baseOrigin.z.toFixed(6)})`);
+                            console.log(`   軸方向: (${axisDir.x.toFixed(6)}, ${axisDir.y.toFixed(6)}, ${axisDir.z.toFixed(6)})`);
+                            console.log(`   近軸イメージディスタンス: ${paraxialData.imageDistance.toFixed(6)} mm`);
+                        }
+                    } else {
+                        if (OPD_DEBUG) console.warn('⚠️ 近軸計算失敗、主光線軸交点モードにフォールバック');
+                        calculationMode = 'chief-ray';
+                    }
+                } catch (error) {
+                    if (OPD_DEBUG) console.warn(`⚠️ 近軸計算エラー: ${error.message}、主光線軸交点モードにフォールバック`);
+                    calculationMode = 'chief-ray';
+                }
+            } else if (calculationMode === 'best-focus') {
+                // 縦球面収差（LSA）のサンプリングによる最良像点推定
+                // 複数の瞳位置の光線を追跡し、軸交点の中点を使用
+                try {
+                    if (!fieldSetting) {
+                        bestFocusDiag = { error: 'fieldSetting missing' };
+                        calculationMode = 'best-focus-failed';
+                        throw new Error('fieldSetting missing');
+                    }
+                    const axisTs = [];
+                    const sampleData = [];
+                    let samplesTried = 0;
+                    let raysOk = 0;
+                    const samples = [
+                        { x: 0.0, y: 0.0 },
+                        { x: 0.3, y: 0.0 },
+                        { x: -0.3, y: 0.0 },
+                        { x: 0.7, y: 0.0 },
+                        { x: -0.7, y: 0.0 },
+                        { x: 0.0, y: 0.3 },
+                        { x: 0.0, y: -0.3 },
+                        { x: 0.5, y: 0.5 },
+                        { x: -0.5, y: -0.5 }
+                    ];
+
+                    const sampleWithMode = (mode) => {
+                        for (const p of samples) {
+                            samplesTried++;
+                            let r = null;
+                            try {
+                                r = this.generateMarginalRay(p.x, p.y, fieldSetting, { fastMarginalRay: true, forcePupilMode: mode });
+                            } catch (_) {
+                                r = null;
+                            }
+                            if (!r) {
+                                try {
+                                    r = this.generateMarginalRay(p.x, p.y, fieldSetting, { fastMarginalRay: false, forcePupilMode: mode });
+                                } catch (_) {
+                                    r = null;
+                                }
+                            }
+                            if (!r) {
+                                try {
+                                    r = this.generateMarginalRay(p.x, p.y, fieldSetting, { relaxStopMissTol: true, forcePupilMode: mode });
+                                } catch (_) {
+                                    r = null;
+                                }
+                            }
+                            const path = this.getPathData(r);
+                            if (!Array.isArray(path) || path.length < 2) continue;
+                            raysOk++;
+                            const lastP = path[path.length - 1];
+                            const prevP = path[path.length - 2];
+                            if (!lastP || !prevP) continue;
+                            const dir = { x: lastP.x - prevP.x, y: lastP.y - prevP.y, z: lastP.z - prevP.z };
+                            const axisPt = closestPointOnAxisToLine(lastP, dir);
+                            if (!axisPt || !Number.isFinite(axisPt.x) || !Number.isFinite(axisPt.y) || !Number.isFinite(axisPt.z)) continue;
+                            const t = dot(sub(axisPt, axisOrigin), axisDir);
+                            if (Number.isFinite(t)) {
+                                axisTs.push(t);
+                                const opl = this.calculateOpticalPath(r);
+                                if (Number.isFinite(opl) && !isNaN(opl)) {
+                                    sampleData.push({ t, imagePoint: { x: lastP.x, y: lastP.y, z: lastP.z }, opl });
+                                }
+                            }
+                        }
+                    };
+
+                    const preferredMode = (() => {
+                        const forced = this._getForcedInfinitePupilMode?.();
+                        if (forced === 'stop' || forced === 'entrance') return forced;
+                        try {
+                            return this._getInfinitePupilMode(fieldSetting);
+                        } catch (_) {
+                            return 'stop';
+                        }
+                    })();
+
+                    sampleWithMode(preferredMode);
+                    if (raysOk === 0) {
+                        sampleWithMode(preferredMode === 'stop' ? 'entrance' : 'stop');
+                    }
+
+                    bestFocusDiag = {
+                        samplesTried,
+                        raysOk,
+                        axisTsCount: axisTs.length
+                    };
+
+                    if (axisTs.length > 0) {
+                        const tMin = Math.min(...axisTs);
+                        const tMax = Math.max(...axisTs);
+
+                        // OPLベースの最良像点探索（軸方向1D）
+                        let tFocus = (tMin + tMax) / 2;
+                        let rmsBest = Number.POSITIVE_INFINITY;
+                        if (sampleData.length >= 3 && this.referenceChiefRay) {
+                            const chiefOpticalPath = this.calculateOpticalPath(this.referenceChiefRay);
+                            const chiefImg = imageSpherePoint;
+                            const nImg = (() => {
+                                try {
+                                    const chiefPath = this.getPathData(this.referenceChiefRay);
+                                    const segIdx = Math.max(0, (chiefPath?.length || 2) - 2);
+                                    const n = this.getRefractiveIndex(segIdx);
+                                    return (Number.isFinite(n) && n > 0) ? n : 1.0;
+                                } catch (_) {
+                                    return 1.0;
+                                }
+                            })();
+
+                            if (Number.isFinite(chiefOpticalPath)) {
+                                const t0 = dot(sub(chiefImg, axisOrigin), axisDir);
+                                let paraxialSpan = 0;
+                                try {
+                                    const pd = calculateParaxialData(this.opticalSystemRows, this.wavelength);
+                                    const exitPupilPosFromImage = pd?.exitPupilDetails?.position;
+                                    if (Number.isFinite(exitPupilPosFromImage)) {
+                                        paraxialSpan = Math.max(paraxialSpan, Math.abs(exitPupilPosFromImage));
+                                    }
+                                    if (Number.isFinite(pd?.imageDistance)) {
+                                        paraxialSpan = Math.max(paraxialSpan, Math.abs(pd.imageDistance));
+                                    }
+                                } catch (_) {}
+                                const baseRange = Math.max(1e-6, tMax - tMin);
+                                const span = Math.max(baseRange, paraxialSpan, 1e-3);
+                                const tStart = Math.min(tMin, t0 - span * 1.2);
+                                const tEnd = Math.max(tMax, t0 + span * 1.2);
+                                const steps = 31;
+                                for (let i = 0; i < steps; i++) {
+                                    const t = (steps === 1) ? tFocus : (tStart + (tEnd - tStart) * (i / (steps - 1)));
+                                    const center = this.addVec(axisOrigin, this.scaleVec(axisDir, t));
+                                    const dxC = chiefImg.x - center.x;
+                                    const dyC = chiefImg.y - center.y;
+                                    const dzC = chiefImg.z - center.z;
+                                    const radius = Math.sqrt(dxC * dxC + dyC * dyC + dzC * dzC);
+                                    const chiefDist = radius;
+                                    const chiefSag = (chiefDist - radius) * nImg * 1000;
+
+                                    let sum2 = 0;
+                                    let count = 0;
+                                    for (const s of sampleData) {
+                                        const dx = s.imagePoint.x - center.x;
+                                        const dy = s.imagePoint.y - center.y;
+                                        const dz = s.imagePoint.z - center.z;
+                                        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                                        const sag = (dist - radius) * nImg * 1000;
+                                        const opd = (s.opl - sag) - (chiefOpticalPath - chiefSag);
+                                        if (Number.isFinite(opd)) {
+                                            sum2 += opd * opd;
+                                            count++;
+                                        }
+                                    }
+                                    if (count > 0) {
+                                        const rms = Math.sqrt(sum2 / count);
+                                        if (rms < rmsBest) {
+                                            rmsBest = rms;
+                                            tFocus = t;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        axisIntersection = this.addVec(axisOrigin, this.scaleVec(axisDir, tFocus));
+                        axisIntersectionZ = axisIntersection.z;
+                        calculationMode = 'best-focus-opl';
+                        bestFocusTRange = { tMin, tMax, count: axisTs.length, tFocus, rms: Number.isFinite(rmsBest) ? rmsBest : null };
+
+                        if (OPD_DEBUG) {
+                            console.log(`🔍 参照球面中心（最良像点モード）: Z = ${axisIntersectionZ.toFixed(6)} mm`);
+                            console.log(`   t範囲: ${tMin.toFixed(6)} ~ ${tMax.toFixed(6)} mm, tFocus=${tFocus.toFixed(6)}, rms=${Number.isFinite(rmsBest) ? rmsBest.toFixed(6) : 'n/a'}μm`);
+                        }
+                    } else {
+                        console.warn('⚠️ 最良像点計算失敗、主光線軸交点モードにフォールバック');
+                        calculationMode = 'best-focus-failed';
+                    }
+                } catch (error) {
+                    bestFocusDiag = { error: error?.message || String(error) };
+                    console.warn(`⚠️ 最良像点計算エラー: ${error.message}、主光線軸交点モードにフォールバック`);
+                    calculationMode = 'best-focus-failed';
+                }
+            }
+            
+            if (calculationMode === 'chief-ray' || axisIntersectionZ === null || !axisIntersection) {
+                // 主光線と像空間軸との最短距離点を使用（Coord Break対応）
+                const prevPoint = chiefPath[chiefPath.length - 2];
+                const dir = { x: lastPoint.x - prevPoint.x, y: lastPoint.y - prevPoint.y, z: lastPoint.z - prevPoint.z };
+                const dirLength = Math.hypot(dir.x, dir.y, dir.z);
+                if (dirLength === 0) {
+                    throw new Error('主光線の方向ベクトルが計算できません');
+                }
+                axisIntersection = closestPointOnAxisToLine(lastPoint, dir);
+                axisIntersectionZ = axisIntersection.z;
+
+                if (OPD_DEBUG) {
+                    console.log(`🔍 参照球面中心（主光線軸交点モード）: Z = ${axisIntersectionZ.toFixed(6)} mm`);
+                }
+            }
+
+            // 参照球面の半径を計算
+            if (!axisIntersection || !Number.isFinite(axisIntersection.x) || !Number.isFinite(axisIntersection.y) || !Number.isFinite(axisIntersection.z)) {
+                console.error(`❌ axisIntersection が無効: ${JSON.stringify(axisIntersection)}`);
+                return { imageSphereRadius: null, referenceSphereCenter: null, axisIntersectionZ: null, mode: calculationMode || this.referenceSphereMode };
+            }
+
+            const dx = imageSpherePoint.x - axisIntersection.x;
+            const dy = imageSpherePoint.y - axisIntersection.y;
+            const dz = imageSpherePoint.z - axisIntersection.z;
+            const radius = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+            const result = {
+                imageSphereRadius: radius,
+                referenceSphereCenter: { x: axisIntersection.x, y: axisIntersection.y, z: axisIntersection.z },
+                axisIntersectionZ: axisIntersectionZ,
+                mode: calculationMode
+            };
+            if (String(calculationMode || '').startsWith('best-focus') && bestFocusTRange) {
+                result.bestFocusTRange = bestFocusTRange;
+            }
+            if (bestFocusDiag) {
+                result.bestFocusDiag = bestFocusDiag;
+            }
+            
+            // Check if radius is too small (near on-axis case) - use a stable radius and recenter on axis
+            const MIN_STABLE_RADIUS = 0.01; // 10μm より小さいと数値不安定
+            if (radius < MIN_STABLE_RADIUS && String(calculationMode || '').startsWith('best-focus')) {
+                try {
+                    const paraxialData = calculateParaxialData(this.opticalSystemRows, this.wavelength);
+                    const axisDirUnit = norm(axisDir);
+                    let desiredRadius = null;
+                    const exitPupilPosFromImage = paraxialData?.exitPupilDetails?.position;
+                    if (Number.isFinite(exitPupilPosFromImage)) {
+                        desiredRadius = Math.abs(exitPupilPosFromImage);
+                    } else if (Number.isFinite(paraxialData?.imageDistance)) {
+                        desiredRadius = Math.abs(paraxialData.imageDistance);
+                    } else if (Number.isFinite(paraxialData?.focalLength)) {
+                        desiredRadius = Math.abs(paraxialData.focalLength);
+                    }
+                    if (!Number.isFinite(desiredRadius) || desiredRadius <= 0) {
+                        desiredRadius = MIN_STABLE_RADIUS;
+                    }
+                    const axisCenter = this.addVec(imageSpherePoint, this.scaleVec(axisDirUnit, -desiredRadius));
+                    return {
+                        imageSphereRadius: desiredRadius,
+                        referenceSphereCenter: { x: axisCenter.x, y: axisCenter.y, z: axisCenter.z },
+                        axisIntersectionZ: axisCenter.z,
+                        mode: `${calculationMode}-adjusted-radius`,
+                        bestFocusTRange,
+                        bestFocusDiag
+                    };
+                } catch (_) {
+                    // fall through
+                }
+            }
+            if (radius < MIN_STABLE_RADIUS && !(String(calculationMode || '').startsWith('best-focus'))) {
+                try {
+                    const paraxialData = calculateParaxialData(this.opticalSystemRows, this.wavelength);
+                    const exitPupilPosFromImage = paraxialData?.exitPupilDetails?.position;
+                    if (Number.isFinite(exitPupilPosFromImage) && Math.abs(exitPupilPosFromImage) > MIN_STABLE_RADIUS) {
+                        const axisDirUnit = norm(axisDir);
+                        const axisCenter = this.addVec(imageSpherePoint, this.scaleVec(axisDirUnit, -Math.abs(exitPupilPosFromImage)));
+                        return {
+                            imageSphereRadius: Math.abs(exitPupilPosFromImage),
+                            referenceSphereCenter: { x: axisCenter.x, y: axisCenter.y, z: axisCenter.z },
+                            axisIntersectionZ: axisCenter.z,
+                            mode: 'exit-pupil-radius'
+                        };
+                    }
+                    let desiredRadius = null;
+
+                    if (Number.isFinite(exitPupilPosFromImage)) {
+                        // exitPupilDetails.position is defined as distance from Image plane
+                        const axisDirUnit = norm(axisDir);
+                        const exitRadius = Math.abs(exitPupilPosFromImage);
+                        const exitCenter = this.addVec(imageSpherePoint, this.scaleVec(axisDirUnit, -exitRadius));
+                        return {
+                            imageSphereRadius: exitRadius,
+                            referenceSphereCenter: { x: exitCenter.x, y: exitCenter.y, z: exitCenter.z },
+                            axisIntersectionZ: exitCenter.z,
+                            mode: 'exit-pupil-position'
+                        };
+                    } else if (paraxialData && Number.isFinite(paraxialData.exitPupilDistance)) {
+                        desiredRadius = Math.abs(paraxialData.exitPupilDistance);
+                    } else if (paraxialData && Number.isFinite(paraxialData.entrancePupilDiameter) && 
+                        Number.isFinite(paraxialData.imageDistance) && 
+                        Number.isFinite(paraxialData.focalLength) && paraxialData.focalLength !== 0) {
+                        const entrancePupilRadius = paraxialData.entrancePupilDiameter / 2;
+                        const magnification = paraxialData.imageDistance / paraxialData.focalLength;
+                        desiredRadius = Math.abs(entrancePupilRadius * magnification);
+                    } else if (paraxialData && Number.isFinite(paraxialData.imageDistance)) {
+                        desiredRadius = Math.abs(paraxialData.imageDistance);
+                    } else if (paraxialData && Number.isFinite(paraxialData.focalLength)) {
+                        desiredRadius = Math.abs(paraxialData.focalLength);
+                    }
+
+                    if (!Number.isFinite(desiredRadius) || desiredRadius <= 0 || desiredRadius < MIN_STABLE_RADIUS) {
+                        const fallbackImageDist = Number.isFinite(paraxialData?.imageDistance) ? Math.abs(paraxialData.imageDistance) : null;
+                        const fallbackFocal = Number.isFinite(paraxialData?.focalLength) ? Math.abs(paraxialData.focalLength) : null;
+                        const fallbackCandidates = [fallbackImageDist, fallbackFocal, MIN_STABLE_RADIUS].filter((v) => Number.isFinite(v) && v > 0);
+                        desiredRadius = Math.max(...fallbackCandidates);
+                    }
+
+                    const axisDirUnit = norm(axisDir);
+                    const w = sub(imageSpherePoint, axisOrigin);
+                    const t0 = dot(w, axisDirUnit);
+                    const wLen2 = dot(w, w);
+                    const perp2 = Math.max(0, wLen2 - t0 * t0);
+                    const perp = Math.sqrt(perp2);
+                    if (desiredRadius <= perp) {
+                        desiredRadius = perp + MIN_STABLE_RADIUS;
+                    }
+                    const dt = Math.sqrt(Math.max(0, desiredRadius * desiredRadius - perp2));
+                    const t = t0 - dt;
+                    const adjustedCenter = this.addVec(axisOrigin, this.scaleVec(axisDirUnit, t));
+                    return {
+                        imageSphereRadius: desiredRadius,
+                        referenceSphereCenter: { x: adjustedCenter.x, y: adjustedCenter.y, z: adjustedCenter.z },
+                        axisIntersectionZ: adjustedCenter.z,
+                        mode: 'on-axis-adjusted-radius'
+                    };
+                } catch (error) {
+                    console.warn(`⚠️ [RefSphere] 近軸データ取得失敗: ${error.message}`);
+                }
+            }
+            
+            return result;
         } catch (error) {
             console.error(`❌ 像参照球幾何計算エラー: ${error.message}`);
-            return { imageSphereRadius: null, referenceSphereCenter: null, axisIntersectionZ: null };
+            return { imageSphereRadius: null, referenceSphereCenter: null, axisIntersectionZ: null, mode: this.referenceSphereMode };
         }
     }
 
@@ -3515,6 +4138,44 @@ ${surfaceTypeList}
      */
     _estimateAxisIntersectionZFromProbe(fieldSetting, options = undefined) {
         try {
+            const dot = (a, b) => (a.x * b.x + a.y * b.y + a.z * b.z);
+            const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+            const norm = (v) => {
+                const m = Math.hypot(v.x, v.y, v.z) || 1;
+                return { x: v.x / m, y: v.y / m, z: v.z / m };
+            };
+
+            const evalIdx = Number.isFinite(this.evaluationSurfaceIndex)
+                ? this.evaluationSurfaceIndex
+                : (Array.isArray(this.opticalSystemRows) ? (this.opticalSystemRows.length - 1) : null);
+            const axisOrigin = (evalIdx !== null && evalIdx !== undefined)
+                ? this.getSurfaceOrigin(evalIdx)
+                : { x: 0, y: 0, z: 0 };
+            const axisAxes = (evalIdx !== null && evalIdx !== undefined)
+                ? this.getSurfaceAxes(evalIdx)
+                : null;
+            const axisDirRaw = (axisAxes && axisAxes.ez) ? axisAxes.ez : { x: 0, y: 0, z: 1 };
+            const axisDir = norm(axisDirRaw);
+
+            const closestPointOnAxisToLine = (linePoint, lineDir) => {
+                const d1 = norm(lineDir);
+                const d2 = axisDir;
+                const w0 = sub(linePoint, axisOrigin);
+                const a = dot(d1, d1);
+                const b = dot(d1, d2);
+                const c = dot(d2, d2);
+                const d = dot(d1, w0);
+                const e = dot(d2, w0);
+                const denom = a * c - b * b;
+                let u;
+                if (Math.abs(denom) > 1e-12) {
+                    u = (a * e - b * d) / denom;
+                } else {
+                    u = (c > 1e-12) ? (e / c) : 0;
+                }
+                return { x: axisOrigin.x + d2.x * u, y: axisOrigin.y + d2.y * u, z: axisOrigin.z + d2.z * u };
+            };
+
             const probePairs = [
                 { x: 1e-3, y: 0 },
                 { x: 0, y: 1e-3 },
@@ -3534,23 +4195,12 @@ ${surfaceTypeList}
                 const prev = path[path.length - 2];
                 if (!last || !prev) continue;
 
-                const dirX = prev.x - last.x;
-                const dirY = prev.y - last.y;
-                const dirZ = prev.z - last.z;
-
-                let t = null;
-                if (Math.abs(dirX) > 1e-12) {
-                    t = -last.x / dirX;
-                } else if (Math.abs(dirY) > 1e-12) {
-                    t = -last.y / dirY;
-                } else {
-                    continue;
-                }
-
-                const axisIntersectionZ = last.z + t * dirZ;
-                if (Number.isFinite(axisIntersectionZ)) {
+                const dir = { x: last.x - prev.x, y: last.y - prev.y, z: last.z - prev.z };
+                const axisIntersection = closestPointOnAxisToLine(last, dir);
+                if (axisIntersection && Number.isFinite(axisIntersection.z)) {
                     return {
-                        axisIntersectionZ,
+                        axisIntersection,
+                        axisIntersectionZ: axisIntersection.z,
                         probePupil: { x: p.x, y: p.y }
                     };
                 }
@@ -3573,7 +4223,7 @@ ${surfaceTypeList}
      */
     calculateImageSphereRadius(imageSphereCenter) {
         try {
-            const geom = this.calculateImageSphereGeometry(imageSphereCenter);
+            const geom = this.calculateImageSphereGeometry(imageSphereCenter, null, null);
             return geom?.imageSphereRadius ?? null;
 
         } catch (error) {
@@ -4171,7 +4821,12 @@ ${surfaceTypeList}
 
         // Best-effort vignetted pupil mode: sample the pupil on an entrance plane and accept that
         // many rays may be blocked (vignetting). This mode does NOT enforce a stop hit.
-        const pupilMode = this._getInfinitePupilMode(fieldSetting);
+        const forcedPupilMode = (options && typeof options.forcePupilMode === 'string')
+            ? String(options.forcePupilMode).trim().toLowerCase()
+            : null;
+        const pupilMode = (forcedPupilMode === 'entrance' || forcedPupilMode === 'stop')
+            ? forcedPupilMode
+            : this._getInfinitePupilMode(fieldSetting);
         if (pupilMode === 'entrance') {
             const cfg = this._getOrBuildEntrancePupilConfig(fieldSetting, direction, options);
             if (!cfg) {
@@ -5226,6 +5881,21 @@ ${surfaceTypeList}
         const maxReasonableSegmentMm = (Number.isFinite(this._opticalPathMaxSegMm) && this._opticalPathMaxSegMm > 0)
             ? this._opticalPathMaxSegMm
             : (5 * this.estimateSystemLength());
+        const isFiniteSys = this.isFiniteSystem();
+        let maxObjectSegmentMm = maxReasonableSegmentMm;
+        try {
+            if (isFiniteSys && Array.isArray(pathData) && pathData.length > 1) {
+                const p0 = pathData[0];
+                const p1 = pathData[1];
+                if (p0 && p1 && Number.isFinite(p0.x) && Number.isFinite(p0.y) && Number.isFinite(p0.z)
+                    && Number.isFinite(p1.x) && Number.isFinite(p1.y) && Number.isFinite(p1.z)) {
+                    const objSeg = Math.hypot(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z);
+                    if (Number.isFinite(objSeg) && objSeg > maxObjectSegmentMm) {
+                        maxObjectSegmentMm = objSeg * 1.05;
+                    }
+                }
+            }
+        } catch (_) {}
         
         // **重要**: 座標の単位チェック - 光学系はmm単位、OPDはμm単位
         // console.log('🔍 座標単位確認 - 最初の数点:');  // ログ削減
@@ -5275,7 +5945,11 @@ ${surfaceTypeList}
             }
             
             if (distance > maxReasonableSegmentMm) {
-                return NaN;
+                if (isFiniteSys && i === 0 && distance <= maxObjectSegmentMm) {
+                    // allow long object-to-first-surface segment
+                } else {
+                    return NaN;
+                }
             }
             
             // **重要**: 光学系の座標がmm単位の場合、μmに変換する必要がある
@@ -5365,7 +6039,6 @@ ${surfaceTypeList}
             
             // 極端な瞳座標（3.0以上）のみをビネッティング扱い
             if (pupilRadius > 3.0) {
-                console.log(`🚫 [DrawOPD] 極端瞳座標ビネッティング: pupilRadius=${pupilRadius.toFixed(3)} > 3.0`);
                 return true;
             }
             
@@ -5387,15 +6060,11 @@ ${surfaceTypeList}
                 // 光路長の妥当性チェックのみ実行
                 const opticalPath = this.calculateOpticalPath(testRay);
                 if (!isFinite(opticalPath) || opticalPath <= 0) {
-                    console.log(`🚫 [DrawOPD] 無効光路長ビネッティング: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}) OPL=${opticalPath}`);
                     return true;
                 }
-                
-                console.log(`✅ [DrawOPD] ビネッティングなし: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}), radius=${pupilRadius.toFixed(3)}`);
                 return false; // ビネッティングなし
                 
             } catch (error) {
-                console.log(`🚫 [DrawOPD] 光線追跡エラーによるビネッティング: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}) ${error.message}`);
                 return true;
             }
         }
@@ -5405,8 +6074,7 @@ ${surfaceTypeList}
         const shouldDebug = pupilRadius > 0.8 || (Math.abs(pupilX) > 0.9) || (Math.abs(pupilY) > 0.9);
         
         if (shouldDebug) {
-            console.log(`🔍 ビネッティング判定開始: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}), radius=${pupilRadius.toFixed(3)}`);
-            console.log(`🔍 絞り面インデックス: ${this.stopSurfaceIndex}, 光学系面数: ${this.opticalSystemRows.length}`);
+            // debug logs removed
         }
         
         // 実際の光線追跡によるビネッティング判定
@@ -6027,6 +6695,8 @@ export class WavefrontAberrationAnalyzer {
                 : [0, 1, 2, 4];
             const maxOrder = Number.isFinite(options?.maxOrder) ? Math.max(1, Math.floor(options.maxOrder)) : 2; // n<=2 includes defocus
             const wavelength = this.opdCalculator?.wavelength;
+            const returnResiduals = !!options?.returnResiduals;
+            const pupilRange = Number.isFinite(options?.pupilRange) && options.pupilRange > 0 ? Number(options.pupilRange) : 1.0;
 
             if (!Array.isArray(pupilCoordinates) || !Array.isArray(opdsMicrons) || pupilCoordinates.length !== opdsMicrons.length) {
                 return null;
@@ -6037,9 +6707,11 @@ export class WavefrontAberrationAnalyzer {
                 const p = pupilCoordinates[i];
                 const opd = opdsMicrons[i];
                 if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(opd)) continue;
-                const r = Math.hypot(p.x, p.y);
+                const xN = p.x / pupilRange;
+                const yN = p.y / pupilRange;
+                const r = Math.hypot(xN, yN);
                 if (r > 1.0 + 1e-9) continue;
-                points.push({ x: p.x, y: p.y, opd, weight: 1.0 });
+                points.push({ x: xN, y: yN, opd, weight: 1.0 });
             }
             if (points.length < 6) return null;
 
@@ -6068,25 +6740,32 @@ export class WavefrontAberrationAnalyzer {
                     residualWaves.push(NaN);
                     continue;
                 }
-                const r = Math.hypot(p.x, p.y);
+                const xN = p.x / pupilRange;
+                const yN = p.y / pupilRange;
+                const r = Math.hypot(xN, yN);
                 if (r > 1.0 + 1e-9) {
                     residualMicrons.push(NaN);
                     residualWaves.push(NaN);
                     continue;
                 }
-                const model = reconstructOPD(removeCoeffs, p.x, p.y);
+                const model = reconstructOPD(removeCoeffs, xN, yN);
                 const res = (Number.isFinite(model)) ? (opd - model) : NaN;
                 residualMicrons.push(res);
                 residualWaves.push(Number.isFinite(res) && Number.isFinite(wavelength) && wavelength > 0 ? (res / wavelength) : NaN);
             }
 
-            return {
+            const out = {
                 removeIndices,
                 maxOrder,
                 coefficientsMicrons: coeffs,
                 opdMicrons: this.calculateStatistics(residualMicrons, { removePiston: false }),
                 opdWavelengths: this.calculateStatistics(residualWaves, { removePiston: false })
             };
+            if (returnResiduals) {
+                out.residualMicrons = residualMicrons;
+                out.residualWaves = residualWaves;
+            }
+            return out;
         } catch (_) {
             return null;
         }
@@ -6160,7 +6839,7 @@ export class WavefrontAberrationAnalyzer {
         const diagnoseDiscontinuities = !!options?.diagnoseDiscontinuities;
         const diagTopK = Number.isFinite(options?.diagTopK) ? Math.max(1, Math.floor(options.diagTopK)) : 5;
         const opdMode = String(options?.opdMode || 'simple'); // 'simple' | 'referenceSphere'
-        const opdDisplayMode = String(options?.opdDisplayMode || 'default'); // 'default' | 'pistonTiltRemoved'
+        const opdDisplayMode = String(options?.opdDisplayMode || 'default'); // 'default' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved'
         const zernikeMaxNollOpt = Number.isFinite(options?.zernikeMaxNoll) ? Math.max(1, Math.floor(options.zernikeMaxNoll)) : 15;
         const renderFromZernike = !!options?.renderFromZernike;
         const skipZernikeFit = !!options?.skipZernikeFit; // Skip Zernike fitting if requested
@@ -6250,34 +6929,7 @@ export class WavefrontAberrationAnalyzer {
             if (prof) prof.marks.refEnd = now();
             emitProgress(3, 'reference', 'Reference ray set');
             
-            // Diagnostic: Check reference ray for on-axis fields
-            const fieldAngleX = Math.abs(fieldSetting.fieldAngle?.x || 0);
-            const fieldAngleY = Math.abs(fieldSetting.fieldAngle?.y || 0);
-            console.log(`🔍 [Debug] fieldAngleX=${fieldAngleX}, fieldAngleY=${fieldAngleY}, hasRefRay=${!!this.opdCalculator.referenceRay}`);
-            if (fieldAngleX < 0.01 && fieldAngleY < 0.01 && this.opdCalculator.referenceRay) {
-                const refRay = this.opdCalculator.referenceRay;
-                console.log(`🔍 [Reference Ray] Field: (${fieldAngleX.toFixed(4)}°, ${fieldAngleY.toFixed(4)}°)`);
-                console.log(`🔍 [Debug] refRay type: ${Array.isArray(refRay) ? 'Array' : typeof refRay}, length=${refRay?.length}`);
-                if (Array.isArray(refRay) && refRay.length >= 2) {
-                    const p0 = refRay[0];
-                    const p1 = refRay[1];
-                    console.log(`🔍 [Reference Ray] Start: (${p0.x.toFixed(6)}, ${p0.y.toFixed(6)}, ${p0.z.toFixed(6)})`);
-                    console.log(`🔍 [Reference Ray] Direction: (${(p1.x-p0.x).toFixed(6)}, ${(p1.y-p0.y).toFixed(6)}, ${(p1.z-p0.z).toFixed(6)})`);
-                    
-                    // Check if reference ray is truly on-axis (direction should be along Z)
-                    const dx = p1.x - p0.x;
-                    const dy = p1.y - p0.y;
-                    const dz = p1.z - p0.z;
-                    const transverseComponent = Math.sqrt(dx*dx + dy*dy);
-                    const axialComponent = Math.abs(dz);
-                    const angleOffAxis = Math.atan2(transverseComponent, axialComponent) * 180 / Math.PI;
-                    console.log(`🔍 [Reference Ray] Angle off Z-axis: ${angleOffAxis.toFixed(6)}°`);
-                    
-                    if (angleOffAxis > 0.001) {
-                        console.warn(`⚠️ Reference ray is tilted ${angleOffAxis.toFixed(6)}° off axis - this will cause OPD asymmetry!`);
-                    }
-                }
-            }
+            // Diagnostic logs removed to reduce OPD noise.
 
             throwIfCancelled();
 
@@ -6418,7 +7070,7 @@ export class WavefrontAberrationAnalyzer {
                 stopRadius = semidia > 0 ? semidia : (aperture > 0 ? aperture / 2 : 17.85);
                 
                 // 🔧 **Cross光線との比較**: 絞り半径の詳細確認
-                if (OPD_DEBUG) {
+                if (OPD_DEBUG && false) {
                     console.log(`🔍 [絞り比較] OPD計算での絞り半径: ${stopRadius}mm (semidia=${semidia}, aperture=${aperture})`);
                     console.log(`🔍 [絞り比較] 絞り面インデックス: ${this.opdCalculator.stopSurfaceIndex}`);
                     console.log(`🔍 [絞り比較] 最大瞳座標での絞り到達範囲: ±${stopRadius * pupilRange}mm`);
@@ -6439,38 +7091,15 @@ export class WavefrontAberrationAnalyzer {
         // CBシフトによる実効的な軸外判定: Stop面のグローバル座標が原点から0.001mm以上ずれている場合は軸外扱い
         if (isOnAxisField) {
             try {
-                console.log(`🔍 [On-axis Check] stopSurfaceIndex=${this.opdCalculator.stopSurfaceIndex}`);
-                console.log(`🔍 [On-axis Check] _surfaceOrigins=`, this.opdCalculator._surfaceOrigins);
                 const stopOrigin = this.opdCalculator.getSurfaceOrigin(this.opdCalculator.stopSurfaceIndex);
-                console.log(`🔍 [On-axis Check] stopOrigin=`, stopOrigin);
-                
-                // デバッグ用：グローバルに保存
-                if (typeof window !== 'undefined') {
-                    window.__DEBUG_STOP_INDEX = this.opdCalculator.stopSurfaceIndex;
-                    window.__DEBUG_SURFACE_ORIGINS = this.opdCalculator._surfaceOrigins;
-                    window.__DEBUG_STOP_ORIGIN = stopOrigin;
-                }
-                
                 if (stopOrigin) {
                     const stopGlobalOffset = Math.sqrt(stopOrigin.x * stopOrigin.x + stopOrigin.y * stopOrigin.y);
-                    console.log(`🔍 [On-axis Check] stopGlobalOffset=${stopGlobalOffset.toFixed(6)}mm (x=${stopOrigin.x.toFixed(6)}, y=${stopOrigin.y.toFixed(6)}, z=${stopOrigin.z.toFixed(6)})`);
-                    
-                    // デバッグ用：グローバルに保存
-                    if (typeof window !== 'undefined') {
-                        window.__DEBUG_STOP_OFFSET = stopGlobalOffset;
-                    }
-                    
                     if (stopGlobalOffset > 0.001) {
                         isOnAxisField = false;
-                        console.log(`🔍 [On-axis Check] Field angle=0° but Stop surface global offset=${stopGlobalOffset.toFixed(6)}mm → treating as OFF-AXIS (CB shift detected)`);
-                    } else {
-                        console.log(`🔍 [On-axis Check] Field angle=0°, Stop surface global offset=${stopGlobalOffset.toFixed(6)}mm → treating as ON-AXIS`);
                     }
-                } else {
-                    console.warn(`⚠️ [On-axis Check] stopOrigin is null/undefined`);
                 }
             } catch (err) {
-                console.warn(`⚠️ [On-axis Check] Failed to check Stop surface position:`, err);
+                // ignore diagnostics
             }
         }
         
@@ -6800,7 +7429,15 @@ export class WavefrontAberrationAnalyzer {
             const preferFast = true;
             // For entrance-pupil mode, keep the sampling scale fixed to the (design) stop radius,
             // and mask non-traceable regions as invalid (do NOT shrink the pupil to make everything valid).
-            const pupilScaleRadiusMm = (isInfiniteField && passMode === 'entrance') ? stopRadius : undefined;
+            const pupilScaleRadiusMm = (isInfiniteField && passMode === 'entrance')
+                ? (() => {
+                    const e = wavefrontMap.entranceEffectiveRadiusMm;
+                    if (Number.isFinite(e)) {
+                        return Math.min(stopRadius, e);
+                    }
+                    return stopRadius;
+                })()
+                : undefined;
             const solveOptionsFast = originDeltaHints
                 ? { originDeltaHints, fastMarginalRay: true, pupilScaleRadiusMm }
                 : { fastMarginalRay: true, pupilScaleRadiusMm };
@@ -7024,7 +7661,7 @@ export class WavefrontAberrationAnalyzer {
                 }
                 
                 // ログ出力での詳細確認
-                if (OPD_DEBUG && pupilRadius > 0.8 && debugLogCount < 240) { // ログ上限
+                if (OPD_DEBUG && false && pupilRadius > 0.8 && debugLogCount < 240) { // ログ上限
                     console.log(`🔍 [DrawOPD] 詳細チェック: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}), radius=${pupilRadius.toFixed(3)}`);
                     console.log(`  OPD: ${opd}, OPDλ: ${opdInWavelengths}, Wλ: ${wavefrontAberration}`);
                     console.log(`  isVignetted判定: ${isVignetted} (OPD=${opd})`);
@@ -7035,7 +7672,7 @@ export class WavefrontAberrationAnalyzer {
                 }
                 
             // デバッグ: 最初の数点で光線データをチェック
-            if (OPD_DEBUG && debugLogCount < 260) {
+            if (OPD_DEBUG && false && debugLogCount < 260) {
                 console.log(`🔍 光線データ記録: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)})`);
                 console.log(`  rayResult:`, rayResult ? '存在' : 'なし');
                 console.log(`  rayResult.ray:`, rayResult?.ray ? '存在' : 'なし');
@@ -8046,6 +8683,25 @@ export class WavefrontAberrationAnalyzer {
                         opdWavelengths: this.calculateStatistics(fit.residualWaves, { removePiston: false })
                     };
                 }
+            } else if (opdDisplayMode === 'pistonTiltDefocusRemoved') {
+                const low = this._calculateLowOrderRemovedStats(
+                    wavefrontMap.pupilCoordinates,
+                    wavefrontMap.opds,
+                    { removeIndices: [0, 1, 2, 4], maxOrder: 2, returnResiduals: true, pupilRange: wavefrontMap.pupilRange }
+                );
+                if (low && Array.isArray(low.residualMicrons) && Array.isArray(low.residualWaves)) {
+                    display = {
+                        mode: 'pistonTiltDefocusRemoved',
+                        opds: low.residualMicrons,
+                        opdsInWavelengths: low.residualWaves,
+                        wavefrontAberrations: low.residualWaves
+                    };
+                    displayStats = {
+                        mode: 'pistonTiltDefocusRemoved',
+                        opdMicrons: this.calculateStatistics(low.residualMicrons, { removePiston: false }),
+                        opdWavelengths: this.calculateStatistics(low.residualWaves, { removePiston: false })
+                    };
+                }
             }
         } catch (_) {
             display = null;
@@ -8063,13 +8719,35 @@ export class WavefrontAberrationAnalyzer {
             {
                 // OSA/ANSI: 0 piston, 1/2 tilt, 4 defocus
                 removeIndices: [0, 1, 2, 4],
-                maxOrder: 2
+                maxOrder: 2,
+                pupilRange: wavefrontMap.pupilRange
             }
         );
+        
+        // Zernike係数からデフォーカス項（Z4, Noll index=4）を抽出
+        let defocusComponent = { microns: 0, wavelengths: 0 };
+        try {
+            if (wavefrontMap.zernike && wavefrontMap.zernike.coefficients) {
+                const z4Coefficient = wavefrontMap.zernike.coefficients[4] || 0; // Noll index 4 = Defocus
+                defocusComponent.microns = z4Coefficient;
+                defocusComponent.wavelengths = z4Coefficient / this.opdCalculator.wavelength;
+                
+                if (OPD_DEBUG) {
+                    console.log(`🔍 デフォーカス成分 (Zernike Z4):`, {
+                        microns: defocusComponent.microns.toFixed(6),
+                        wavelengths: defocusComponent.wavelengths.toFixed(3)
+                    });
+                }
+            }
+        } catch (error) {
+            console.warn(`⚠️ デフォーカス成分抽出エラー: ${error.message}`);
+        }
+        
         wavefrontMap.statistics = {
             wavefront: this.calculateStatistics(wavefrontMap.wavefrontAberrations, { removePiston: true }),
             opdMicrons: this.calculateStatistics(wavefrontMap.opds, { removePiston: true }),
             opdWavelengths: this.calculateStatistics(wavefrontMap.opdsInWavelengths, { removePiston: true }),
+            defocus: defocusComponent, // 🆕 デフォーカス成分を追加
             raw: {
                 wavefront: this.calculateStatistics(wavefrontMap.raw.wavefrontAberrations, { removePiston: false }),
                 opdMicrons: this.calculateStatistics(wavefrontMap.raw.opds, { removePiston: false }),
@@ -8134,12 +8812,35 @@ export class WavefrontAberrationAnalyzer {
                 wavefrontMap.statistics.display.opdMicrons.opdMode = usedOpdMode;
                 wavefrontMap.statistics.display.opdMicrons.skipZernikeFit = usedSkipZernikeFit;
                 wavefrontMap.statistics.display.opdMicrons.opdDisplayMode = opdDisplayMode;
+                wavefrontMap.statistics.display.opdMicrons.pupilPhysicalRadiusMm = wavefrontMap.pupilPhysicalRadiusMm;
+                wavefrontMap.statistics.display.opdMicrons.entranceEffectiveRadiusMm = wavefrontMap.entranceEffectiveRadiusMm;
+                wavefrontMap.statistics.display.opdMicrons.aberrationRmsMicrons = wavefrontMap.statistics?.aberration?.opdMicrons?.rms;
             }
             if (wavefrontMap.statistics?.display?.opdWavelengths) {
                 wavefrontMap.statistics.display.opdWavelengths.pupilSamplingMode = mode;
                 wavefrontMap.statistics.display.opdWavelengths.opdMode = usedOpdMode;
                 wavefrontMap.statistics.display.opdWavelengths.skipZernikeFit = usedSkipZernikeFit;
                 wavefrontMap.statistics.display.opdWavelengths.opdDisplayMode = opdDisplayMode;
+                wavefrontMap.statistics.display.opdWavelengths.pupilPhysicalRadiusMm = wavefrontMap.pupilPhysicalRadiusMm;
+                wavefrontMap.statistics.display.opdWavelengths.entranceEffectiveRadiusMm = wavefrontMap.entranceEffectiveRadiusMm;
+                wavefrontMap.statistics.display.opdWavelengths.aberrationRmsWaves = wavefrontMap.statistics?.aberration?.opdWavelengths?.rms;
+            }
+
+            // Attach reference sphere diagnostics for UI display
+            const refInfo = this.opdCalculator?._lastReferenceSphereInfo || null;
+            if (refInfo) {
+                if (wavefrontMap.statistics?.display?.opdMicrons) {
+                    wavefrontMap.statistics.display.opdMicrons.referenceSphereInfo = refInfo;
+                }
+                if (wavefrontMap.statistics?.display?.opdWavelengths) {
+                    wavefrontMap.statistics.display.opdWavelengths.referenceSphereInfo = refInfo;
+                }
+                if (wavefrontMap.statistics?.opdMicrons) {
+                    wavefrontMap.statistics.opdMicrons.referenceSphereInfo = refInfo;
+                }
+                if (wavefrontMap.statistics?.opdWavelengths) {
+                    wavefrontMap.statistics.opdWavelengths.referenceSphereInfo = refInfo;
+                }
             }
         } catch (_) {}
         if (OPD_DEBUG) console.log('📊 統計情報:', wavefrontMap.statistics);
@@ -8183,24 +8884,7 @@ export class WavefrontAberrationAnalyzer {
         
         if (validCount === 0) {
             console.error(`❌ 有効なデータが1点もありません！`);
-            console.log(`🔍 詳細診断:`);
-            console.log(`  - 基準光路長: ${this.opdCalculator.referenceOpticalPath}`);
-            console.log(`  - グリッドサイズ: ${gridSize}`);
-            console.log(`  - 瞳座標範囲: ±${pupilRange}`);
-            
-            // 中央点での詳細テスト
-            console.log(`🔍 中央点(0,0)での詳細テスト:`);
-            try {
-                const centerOPD = this.opdCalculator.calculateOPD(0, 0, fieldSetting);
-                console.log(`  中央点OPD: ${centerOPD}`);
-                if (isNaN(centerOPD)) {
-                    console.error(`❌ 中央点でもOPD計算に失敗しています`);
-                } else {
-                    console.log(`✅ 中央点OPD計算は成功: ${centerOPD}μm`);
-                }
-            } catch (error) {
-                console.error(`❌ 中央点OPD計算エラー: ${error.message}`);
-            }
+            // 詳細診断ログは抑制
         }
 
         return wavefrontMap;
@@ -9662,11 +10346,12 @@ function fitZernikeNollGramSchmidtSelected(points, nollList) {
 /**
  * エクスポート用のファクトリ関数
  */
-export function createOPDCalculator(opticalSystemRows, wavelength = 0.5876) {
+export function createOPDCalculator(opticalSystemRows, wavelength = 0.5876, options = {}) {
     if (OPD_DEBUG) {
         console.log('🔧 OPDCalculator作成:');
         console.log(`  光学系行数: ${opticalSystemRows ? opticalSystemRows.length : 'null'}`);
         console.log(`  波長: ${wavelength}μm`);
+        console.log(`  参照球面モード: ${options.referenceSphereMode || 'paraxial (default)'}`);
     }
     
     // データの詳細検証とデバッグ
@@ -9676,11 +10361,11 @@ export function createOPDCalculator(opticalSystemRows, wavelength = 0.5876) {
         opticalSystemRows = createSampleOpticalSystemData();
     } else if (opticalSystemRows.length === 0) {
         console.error('❌ opticalSystemRows が空の配列です');
-        if (OPD_DEBUG) console.log('� サンプル光学系データを自動生成します');
+        if (OPD_DEBUG) console.log('🔧 サンプル光学系データを自動生成します');
         opticalSystemRows = createSampleOpticalSystemData();
     } else {
         if (OPD_DEBUG) {
-            console.log('�🔍 光学系データ詳細確認:');
+            console.log('🔍 光学系データ詳細確認:');
             opticalSystemRows.forEach((row, index) => {
                 const surface = index + 1;
                 const object = row.object || row.Object || 'N/A';
@@ -9705,10 +10390,12 @@ export function createOPDCalculator(opticalSystemRows, wavelength = 0.5876) {
         }
     }
     
-    return new OpticalPathDifferenceCalculator(opticalSystemRows, wavelength);
+    return new OpticalPathDifferenceCalculator(opticalSystemRows, wavelength, options);
 }
 
 /**
+ * サンプル光学系データを生成（テスト用）
+ *//**
  * サンプル光学系データを生成（テスト用）
  */
 function createSampleOpticalSystemData() {

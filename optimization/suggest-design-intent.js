@@ -53,7 +53,10 @@ function tryGetLocalStorageArray(key) {
 
 function pickPreservedObjectThickness(cfg, systemConfig, configId) {
   try {
-    const hasObjectSurface = Array.isArray(cfg?.blocks) && cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface');
+    const hasObjectSurface = Array.isArray(cfg?.blocks) && cfg.blocks.some(b => {
+      const bt = String(b?.blockType ?? '').trim();
+      return bt === 'ObjectSurface' || bt === 'ObjectPlane';
+    });
     if (hasObjectSurface) return undefined;
   } catch (_) {}
 
