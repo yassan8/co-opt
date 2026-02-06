@@ -2305,7 +2305,11 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       }
       
       if (!hitPoint) {
-        console.error(`❌ [Ray Trace] NO INTERSECTION at surface ${i + 1}, surfType=${row.surfType}, radius=${row.radius}`);
+        // Suppress error logging during chief ray search grid trials (expected failures)
+        const suppressErrors = (typeof globalThis !== 'undefined' && globalThis.__COOPT_SUPPRESS_RAY_ERRORS === true);
+        if (!suppressErrors) {
+          console.error(`❌ [Ray Trace] NO INTERSECTION at surface ${i + 1}, surfType=${row.surfType}, radius=${row.radius}`);
+        }
         if (isDetailedDebug) {
           debugLog.push(`❌ SURFACE NO INTERSECTION: Numerical method failed, breaking ray trace - Surface ${i + 1}`);
         }

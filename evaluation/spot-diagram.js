@@ -167,7 +167,13 @@ function generateRayStartPointsForSpot(obj, opticalSystemRows, rayNumber, apertu
         const result = generateRayStartPointsForObject(obj, opticalSystemRows, rayNumber, null, options);
         return result;
     } catch (error) {
-        console.error('❌ Error calling generateRayStartPointsForObject:', error);
+        console.error('❌ Error calling generateRayStartPointsForObject for Object', obj?.id || 'unknown', ':', error);
+        console.error('   Object details:', {
+            id: obj?.id,
+            position: obj?.position,
+            xHeightAngle: obj?.xHeightAngle,
+            yHeightAngle: obj?.yHeightAngle
+        });
         
         // Fallback to window object
         if (typeof window !== 'undefined' && window.generateRayStartPointsForObject) {
@@ -318,10 +324,31 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         const objectId = obj.id || 'Unknown';
         const opdCompatibleAngle = physicalVignetting && isAngleObject;
         
+        console.log(`🔍 [OBJECT DEBUG] Processing Object ${objectId}:`, {
+            objectType,
+            isAngleObject,
+            'object x': obj['object x'],
+            'object y': obj['object y'],
+            angle: obj.angle,
+            'decenter y': obj['decenter y'],
+            vignetting: obj.vignetting,
+            position: obj.position
+        });
+        
         // console.log(`📊 Processing Object ${objectId}: ${objectType}`, obj);
         
         const targetSurfaceIndex = surfaceNumber - 1;
         const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
+
+        // Diagnostic: Verify consistent surface targeting across objects
+        if (objectIndex === 0 || objectIndex === 1) {
+            console.log(`🔍 [SPOT DIAGRAM DEBUG] Object ${objectId}:`, {
+                targetSurfaceIndex,
+                targetPointIndex,
+                surfaceNumber,
+                targetSurfaceType: opticalSystemRows[targetSurfaceIndex]?.surfType || 'unknown'
+            });
+        }
 
         const hasCoordinateBreak = (() => {
             try {
@@ -382,6 +409,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
             );
 
             if (!starts || !Array.isArray(starts) || starts.length === 0) {
+                console.warn(`⚠️ [SPOT DIAGRAM] Object ${objectId}: Failed to generate ray starts (scale=${scale}, aimThroughStop=${aimThroughStop})`);
                 return { starts, ok: 0, spotPoints: [], diagnostics: null };
             }
 
@@ -438,18 +466,44 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                     };
                     const traced = __spot_withRayTraceFailureCapture(() => traceRay(opticalRowsCopy, ray0, 1.0, debugLog, targetSurfaceIndex));
                     const rayPath = traced.result;
+                    
+                    // Diagnostic: Log first ray of each object to verify evaluation surface
+                    if (i === 0 && (objectIndex === 0 || objectIndex === 1)) {
+                        console.log(`🔍 [SPOT RAY DEBUG] Object ${objectId}, Ray 0:`, {
+                            targetSurfaceIndex,
+                            targetPointIndex,
+                            rayPathLength: rayPath ? rayPath.length : 'null',
+                            targetPoint: rayPath && targetPointIndex !== null && rayPath[targetPointIndex] ? 
+                                { x: rayPath[targetPointIndex].x, y: rayPath[targetPointIndex].y, z: rayPath[targetPointIndex].z } : 
+                                'missing'
+                        });
+                    }
+                    
                     if (rayPath && Array.isArray(rayPath) && targetPointIndex !== null && rayPath.length > targetPointIndex && targetSurfaceIndex >= 0) {
                         const hitPointGlobal = rayPath[targetPointIndex];
                         const surfaceInfo = surfaceInfoList[targetSurfaceIndex];
                         const hitPointLocal = surfaceInfo ? transformPointToLocal(hitPointGlobal, surfaceInfo) : hitPointGlobal;
+                        
+                        // Diagnostic: Log hit point details for chief ray
+                        if (i === 0 && (objectIndex === 0 || objectIndex === 1)) {
+                            console.log(`🔍 [SPOT HIT DEBUG] Object ${objectId}, Ray 0 (Chief):`, {
+                                hitPointGlobal: { x: hitPointGlobal?.x, y: hitPointGlobal?.y, z: hitPointGlobal?.z },
+                                hitPointLocal: { x: hitPointLocal?.x, y: hitPointLocal?.y, z: hitPointLocal?.z },
+                                hasSurfaceInfo: !!surfaceInfo
+                            });
+                        }
+                        
                         if (hitPointLocal && typeof hitPointLocal.x === 'number' && typeof hitPointLocal.y === 'number') {
                             const startPointClone = rayStart?.startP && typeof rayStart.startP === 'object'
                                 ? { x: rayStart.startP.x, y: rayStart.startP.y, z: rayStart.startP.z }
                                 : null;
                             const isChief = rayStart.isChief === true || (rayStart.isChief === undefined && i === 0);
-                            pts.push({
-                                x: hitPointLocal.x,
-                                y: hitPointLocal.y,
+                            
+                            // For spot diagram, use global coordinates at the target surface.
+                            // The chief-ray-relative centering is done later in drawSpotDiagram.
+                            const spotPoint = {
+                                x: hitPointGlobal.x,
+                                y: hitPointGlobal.y,
                                 z: hitPointLocal.z,
                                 globalX: hitPointGlobal?.x,
                                 globalY: hitPointGlobal?.y,
@@ -462,7 +516,20 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                                 isChiefRay: isChief,
                                 startPoint: startPointClone,
                                 initialDir: rayStart && rayStart.dir ? { ...rayStart.dir } : undefined
-                            });
+                            };
+                            
+                            // Diagnostic: Log what's being saved for chief ray
+                            if (isChief && (objectIndex === 0 || objectIndex === 1)) {
+                                console.log(`🔍 [SPOT SAVE DEBUG] Object ${objectId}, Chief ray point:`, {
+                                    isChief,
+                                    z: spotPoint.z,
+                                    globalZ: spotPoint.globalZ,
+                                    x: spotPoint.x,
+                                    y: spotPoint.y
+                                });
+                            }
+                            
+                            pts.push(spotPoint);
                             ok++;
                         } else {
                             __spot_recordTraceFailure(diag, traced.failure, 'INVALID_HIT_POINT', opticalSystemRows, rayPath);
@@ -1073,6 +1140,8 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                             successRate: o?.successRate ?? null,
                             chiefLocalX: (chief && Number.isFinite(Number(chief.x))) ? Number(chief.x) : null,
                             chiefLocalY: (chief && Number.isFinite(Number(chief.y))) ? Number(chief.y) : null,
+                            chiefLocalZ: (chief && Number.isFinite(Number(chief.z))) ? Number(chief.z) : null,
+                            chiefGlobalZ: (chief && Number.isFinite(Number(chief.globalZ))) ? Number(chief.globalZ) : null,
                             chiefDirY: (dir && Number.isFinite(Number(dir.y))) ? Number(dir.y) : null,
                             chiefDirZ: (dir && Number.isFinite(Number(dir.z))) ? Number(dir.z) : null,
                             emissionOriginY: (origin && Number.isFinite(Number(origin.y))) ? Number(origin.y) : null,
@@ -1090,6 +1159,43 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         airy: airy,
         selectedRingCount: ringCount,
         surfaceInfoList: surfaceInfoList
+    };
+}
+
+// Diagnostic helper: Check if all objects evaluated the same surface
+if (typeof window !== 'undefined') {
+    window.__cooptCheckSpotSurfaceConsistency = function() {
+        const run = (typeof globalThis !== 'undefined') ? globalThis.__cooptLastSpotDiagramRun : null;
+        if (!run || !Array.isArray(run.objects)) {
+            console.warn('No spot diagram run data available. Run a spot diagram first.');
+            return;
+        }
+        
+        console.log(`🔍 Checking evaluation surface consistency for ${run.objects.length} objects:`);
+        console.log(`   Target surface number: ${run.surfaceNumber}`);
+        
+        const zValues = run.objects.map(o => ({
+            objectId: o.objectId,
+            chiefGlobalZ: o.chiefGlobalZ,
+            chiefLocalZ: o.chiefLocalZ
+        }));
+        
+        console.table(zValues);
+        
+        // Check if all globalZ values are the same
+        const globalZs = zValues.map(v => v.chiefGlobalZ).filter(z => Number.isFinite(z));
+        if (globalZs.length > 0) {
+            const minZ = Math.min(...globalZs);
+            const maxZ = Math.max(...globalZs);
+            const diff = maxZ - minZ;
+            
+            if (diff < 0.001) {
+                console.log(`✅ All objects evaluated at the same surface (Z difference: ${diff.toFixed(6)}mm)`);
+            } else {
+                console.warn(`⚠️ Objects evaluated at different surfaces! Z difference: ${diff.toFixed(6)}mm`);
+                console.warn(`   This may indicate different ray path lengths or missing surfaces.`);
+            }
+        }
     };
 }
 
@@ -1290,6 +1396,26 @@ export async function generateSpotDiagramAsync(
 
         const targetSurfaceIndex = surfaceNumber - 1;
         const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
+        
+        // Diagnostic: Verify consistent surface targeting across objects
+        if (objectIndex === 0 || objectIndex === 1) {
+            console.log(`🔍 [SPOT DIAGRAM ASYNC DEBUG] Object ${objectId}:`, {
+                targetSurfaceIndex,
+                targetPointIndex,
+                surfaceNumber,
+                targetSurfaceType: opticalSystemRows[targetSurfaceIndex]?.surfType || 'unknown'
+            });
+            // Calculate expected Z position at target surface
+            let cumulativeZ = 0;
+            for (let i = 0; i < targetSurfaceIndex && i < opticalSystemRows.length; i++) {
+                const t = parseFloat(opticalSystemRows[i]?.thickness);
+                if (isFinite(t)) {
+                    cumulativeZ += t;
+                }
+            }
+            console.log(`🔍 [Expected Z at target surface]: ${cumulativeZ.toFixed(3)}mm`);
+        }
+        
         // NOTE: Even in physical-vignetting mode, we may shrink pupilScale to avoid 0-hit results.
         // This mirrors the synchronous spot-diagram/requirements pathway and prevents Angle+CB cases
         // from failing with PHYSICAL_APERTURE_BLOCK×N.
@@ -1393,16 +1519,50 @@ export async function generateSpotDiagramAsync(
                     if (rayPath && Array.isArray(rayPath) && targetPointIndex !== null && rayPath.length > targetPointIndex && targetSurfaceIndex >= 0) {
                         const hitPointGlobal = rayPath[targetPointIndex];
                         const surfaceInfo = surfaceInfoList[targetSurfaceIndex];
+                        
+                        // Diagnostic: Check surfaceInfo for Object 2 (first ray only)
+                        if (objectId === 2 && i === 0) {
+                            console.log(`🔍 [SURFACE INFO DEBUG] Object ${objectId}, targetSurfaceIndex=${targetSurfaceIndex}, surfaceInfoList.length=${surfaceInfoList?.length}:`, {
+                                hasInfo: !!surfaceInfo,
+                                origin: surfaceInfo?.origin,
+                                rotationMatrix: surfaceInfo?.rotationMatrix,
+                                surfaceInfoListLength: surfaceInfoList?.length
+                            });
+                        }
+                        
                         const hitPointLocal = surfaceInfo ? transformPointToLocal(hitPointGlobal, surfaceInfo) : hitPointGlobal;
+                        
+                        // Diagnostic: Log hit point details for chief ray
+                        if (i === 0 && (objectIndex === 0 || objectIndex === 1)) {
+                            console.log(`🔍 [SPOT HIT ASYNC DEBUG] Object ${objectId}, Ray 0 (Chief):`, {
+                                hitPointGlobal: { x: hitPointGlobal?.x, y: hitPointGlobal?.y, z: hitPointGlobal?.z },
+                                hitPointLocal: { x: hitPointLocal?.x, y: hitPointLocal?.y, z: hitPointLocal?.z },
+                                hasSurfaceInfo: !!surfaceInfo,
+                                targetSurfaceIndex,
+                                actualGlobalZ: hitPointGlobal?.z
+                            });
+                        }
+                        
+                        // Diagnostic: Log peripheral rays for Object 2 to check coordinate transformation
+                        if (objectIndex === 1 && i > 0 && i <= 3) {
+                            console.log(`🔍 [SPOT HIT PERIPHERAL DEBUG] Object ${objectId}, Ray ${i}:`, {
+                                hitPointGlobal: { x: hitPointGlobal?.x, y: hitPointGlobal?.y, z: hitPointGlobal?.z },
+                                hitPointLocal: { x: hitPointLocal?.x, y: hitPointLocal?.y, z: hitPointLocal?.z },
+                                hasSurfaceInfo: !!surfaceInfo
+                            });
+                        }
 
                         if (hitPointLocal && typeof hitPointLocal.x === 'number' && typeof hitPointLocal.y === 'number') {
                             const startPointClone = rayStart?.startP && typeof rayStart.startP === 'object'
                                 ? { x: rayStart.startP.x, y: rayStart.startP.y, z: rayStart.startP.z }
                                 : null;
                             const isChief = rayStart.isChief === true || (rayStart.isChief === undefined && i === 0);
-                            pts.push({
-                                x: hitPointLocal.x,
-                                y: hitPointLocal.y,
+                            
+                            // For spot diagram, use global coordinates at the target surface.
+                            // The chief-ray-relative centering is done later in drawSpotDiagram.
+                            const spotPoint = {
+                                x: hitPointGlobal.x,
+                                y: hitPointGlobal.y,
                                 z: hitPointLocal.z,
                                 globalX: hitPointGlobal?.x,
                                 globalY: hitPointGlobal?.y,
@@ -1415,7 +1575,20 @@ export async function generateSpotDiagramAsync(
                                 isChiefRay: isChief,
                                 startPoint: startPointClone,
                                 initialDir: rayStart && rayStart.dir ? { ...rayStart.dir } : undefined
-                            });
+                            };
+                            
+                            // Diagnostic: Log what's being saved for chief ray
+                            if (isChief && (objectIndex === 0 || objectIndex === 1)) {
+                                console.log(`🔍 [SPOT SAVE ASYNC DEBUG] Object ${objectId}, Chief ray point:`, {
+                                    isChief,
+                                    z: spotPoint.z,
+                                    globalZ: spotPoint.globalZ,
+                                    x: spotPoint.x,
+                                    y: spotPoint.y
+                                });
+                            }
+                            
+                            pts.push(spotPoint);
                             ok++;
                             if (rayStart && rayStart.dir) {
                                 pts[pts.length - 1].initialDir = { ...rayStart.dir };
@@ -1445,7 +1618,9 @@ export async function generateSpotDiagramAsync(
 
         let aimThroughStopUsed = null;
         const tryPupilScales = async (aim) => {
+            console.log(`🔍 [RETRY DEBUG] Object ${objectId}: Starting tryPupilScales, aim=${aim}, scales to try:`, pupilScalesToTry.length);
             for (const s of pupilScalesToTry) {
+                console.log(`🔍 [RETRY DEBUG] Object ${objectId}: Trying pupilScale=${s}`);
                 // For Angle objects under physical vignetting, we sometimes need to try multiple
                 // origin-solve strategies and/or disable the Angle emission optimization.
                 const disableAngleObjectPositionOptimizationModes = (opdCompatibleAngle && physicalVignetting)
@@ -1460,11 +1635,14 @@ export async function generateSpotDiagramAsync(
 
                 for (const disableAngleObjectPositionOptimizationRequested of disableAngleObjectPositionOptimizationModes) {
                     for (const allowStopBasedOriginSolveRequested of allowStopBasedOriginSolveModes) {
+                        console.log(`🔍 [RETRY DEBUG] Object ${objectId}: Sub-attempt with disableAngleOpt=${disableAngleObjectPositionOptimizationRequested}, allowStopSolve=${allowStopBasedOriginSolveRequested}`);
                         r = await traceOnceWithScale(s, aim, {
                             disableAngleObjectPositionOptimizationRequested,
                             allowStopBasedOriginSolveRequested
                         });
 
+                        console.log(`🔍 [RETRY DEBUG] Object ${objectId}: Result: ok=${r.ok}/${r.starts?.length || 0} rays`);
+                        
                         const rr = (r && r.diagnostics && r.diagnostics.retry) ? r.diagnostics.retry : null;
                         const topKind = (() => {
                             try {
@@ -1540,6 +1718,7 @@ export async function generateSpotDiagramAsync(
                         rayStartPoints = r.starts || rayStartPoints;
 
                         if (r.ok > 0) {
+                            console.log(`✅ [RETRY DEBUG] Object ${objectId}: SUCCESS with ${r.ok} hits, stopping retry`);
                             spotPoints = r.spotPoints;
                             successfulRays = r.ok;
                             pupilScaleUsed = s;
@@ -1561,13 +1740,19 @@ export async function generateSpotDiagramAsync(
         // Prefer the nominal field definition first (aimThroughStop=false).
         // In physical-vignetting mode, do NOT fall back to aimThroughStop=true by default.
         // However, for Angle objects in physical mode, match OPD behavior by aiming through stop.
+        console.log(`🔍 [RETRY STRATEGY] Object ${objectId}: opdCompatibleAngle=${opdCompatibleAngle}`);
         if (opdCompatibleAngle) {
+            console.log(`🔍 [RETRY STRATEGY] Object ${objectId}: Using aim=true (OPD-compatible angle)`);
             await tryPupilScales(true);
         } else if (!(await tryPupilScales(false)) && !physicalVignetting) {
+            console.log(`🔍 [RETRY STRATEGY] Object ${objectId}: First attempt failed, trying aim=true`);
             await tryPupilScales(true);
         }
 
+        console.log(`🔍 [RETRY SUMMARY] Object ${objectId}: Attempts=${attempts.length}, successfulRays=${successfulRays}, pupilScaleUsed=${pupilScaleUsed}`);
+
         if (!rayStartPoints || !Array.isArray(rayStartPoints) || rayStartPoints.length === 0) {
+            console.warn(`⚠️ [RETRY SUMMARY] Object ${objectId}: No ray start points generated, skipping`);
             continue;
         }
 
@@ -2077,7 +2262,7 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
     
     // タイトルを追加
     const title = doc.createElement('h3');
-    title.textContent = `Spot Diagram - Surf ${Math.max(0, surfaceNumber - 1)}`;
+    title.textContent = `Spot Diagram - Surf ${Math.max(0, surfaceNumber)}`;
     title.style.cssText = 'text-align: center; margin-bottom: 20px; color: #333;';
     mainContainer.appendChild(title);
     
@@ -2219,6 +2404,19 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
         const xValuesMm = objectData.spotPoints.map(p => p.x);
         const yValuesMm = objectData.spotPoints.map(p => p.y);
         const colors = objectData.spotPoints.map((point, pointIndex) => getSpotColor(point, objectData.objectId, pointIndex));
+        
+        // Diagnostic: Check for extreme coordinate values
+        if (objectData.objectId === 2) {
+            const maxX = Math.max(...xValuesMm.map(Math.abs));
+            const maxY = Math.max(...yValuesMm.map(Math.abs));
+            console.log(`🔍 [SPOT COORD DEBUG] Object 2 raw coordinates:`, {
+                maxX: maxX.toFixed(6),
+                maxY: maxY.toFixed(6),
+                firstPoint: { x: xValuesMm[0], y: yValuesMm[0] },
+                lastPoint: { x: xValuesMm[xValuesMm.length - 1], y: yValuesMm[yValuesMm.length - 1] },
+                sampleNonChief: objectData.spotPoints.filter(p => !p.isChiefRay).slice(0, 3).map(p => ({ x: p.x, y: p.y, isChief: p.isChiefRay }))
+            });
+        }
         
         // 主光線交点を取得
         // Note: for heavily vignetted fields the intended chief ray can fail to reach the target surface,
@@ -3080,12 +3278,12 @@ export function generateSurfaceOptions(opticalSystemRows) {
         }
         
         // IMPORTANT:
-        // - `surfaceId` is the UI-friendly label number (counts non-object rows, including CB).
-        // - `value` must match the evaluator's expected surfaceNumber, which is the 1-based row index
-        //   into `opticalSystemRows` (because the evaluator uses `rows[surfaceNumber - 1]`).
-        // Using `surfaceId` as `value` breaks when Coord Break rows exist.
+        // - `surfaceId` is the CB-invariant UI-friendly label number.
+        // - `value` is what the UI select uses, so it MUST be surfaceId for stable selection.
+        // - `rowIndex` is the actual 0-based index into opticalSystemRows.
+        // - optical-analysis.js resolves surfaceId back to rowIndex after loading the config's rows.
         options.push({
-            value: i + 1,
+            value: surfaceId,
             surfaceId,
             label: displayName,
             rowId,

@@ -923,6 +923,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         }
 
         // 3. 主光線射出座標の探索
+        console.log(`🔍 [Chief Ray Search] Object ${objectIndex + 1}: direction=(${direction.x.toFixed(6)}, ${direction.y.toFixed(6)}, ${direction.z.toFixed(6)}), stopCenter=(${stopSurfaceInfo.center.x}, ${stopSurfaceInfo.center.y}), stopIndex=${stopSurfaceInfo.index}`);
         let chiefRayOrigin = findInfiniteSystemChiefRayOrigin(
             direction,
             stopSurfaceInfo.center,
@@ -932,6 +933,12 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             targetSurfaceIndex,
             wavelength
         );
+
+        if (chiefRayOrigin) {
+            console.log(`✅ [Chief Ray Found] Object ${objectIndex + 1}: origin=(${chiefRayOrigin.x.toFixed(3)}, ${chiefRayOrigin.y.toFixed(3)}, ${chiefRayOrigin.z.toFixed(3)})`);
+        } else {
+            console.warn(`❌ [Chief Ray Failed] Object ${objectIndex + 1}: Could not find origin that reaches stop center`);
+        }
 
         if (debugMode) {
         }
@@ -1343,7 +1350,14 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             };
 
             try {
-                const rayPath = traceRay(opticalSystemRows, ray, 1.0, null, targetSurfaceIndex);
+                // Suppress NO INTERSECTION errors during grid search (expected for many trial points)
+                const prevSuppressFlag = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_SUPPRESS_RAY_ERRORS : undefined;
+                try {
+                    if (typeof globalThis !== 'undefined') globalThis.__COOPT_SUPPRESS_RAY_ERRORS = true;
+                    var rayPath = traceRay(opticalSystemRows, ray, 1.0, null, targetSurfaceIndex);
+                } finally {
+                    if (typeof globalThis !== 'undefined') globalThis.__COOPT_SUPPRESS_RAY_ERRORS = prevSuppressFlag;
+                }
                 if (!rayPath) return { valid: false, error: Infinity, stopPoint: null };
                 const actualStopPoint = getRayPointAtSurfaceIndex(rayPath, opticalSystemRows, stopSurfaceIndex);
                 if (!actualStopPoint) return { valid: false, error: Infinity, stopPoint: null };

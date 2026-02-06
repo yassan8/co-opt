@@ -1438,6 +1438,13 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                     }
                 }
             } catch (error) {
+                console.error(`❌ [AngleRayRenderer] Failed to find chief ray origin for Object ${objectPosition?.id || 'unknown'}:`, error);
+                console.error(`   Object details:`, {
+                    id: objectPosition?.id,
+                    xAngle: xAngle,
+                    yAngle: yAngle,
+                    direction: directionForAnalysis
+                });
                 console.warn('⚠️ [AngleRayRenderer] Chief ray analysis failed, using fallback position:', error);
             }
         }
