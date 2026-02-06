@@ -35,8 +35,6 @@ import { listDesignVariablesFromBlocks } from '../optimization/design-variables.
  * @param {HTMLElement} panel - The panel element containing the inputs
  */
 window.__performCoordTransCalculation = async function(blockId, panel) {
-    if (panel && panel.__coordTransCalculating) return;
-    if (panel) panel.__coordTransCalculating = true;
     try {
         
         // Get the current block's parameters
@@ -55,41 +53,8 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
             return element ? element.value : null;
         };
         
-        // Prefer block parameters over DOM values to avoid stale/hidden inputs.
-        let blockParams = null;
-        try {
-            if (typeof loadSystemConfigurations === 'function') {
-                const systemConfig = loadSystemConfigurations();
-                const activeId = systemConfig?.activeConfigId;
-                const activeCfg = Array.isArray(systemConfig?.configurations)
-                    ? systemConfig.configurations.find(c => c && String(c.id) === String(activeId))
-                    : null;
-                const block = activeCfg?.blocks?.find(b => b && String(b.blockId ?? '') === String(blockId));
-                blockParams = block?.parameters || null;
-            }
-        } catch (_) {}
-
-        const toSurfValue = (blockParams && blockParams.toSurf !== undefined && blockParams.toSurf !== null)
-            ? String(blockParams.toSurf)
-            : getValue('toSurf');
-        const coordReturnValue = (blockParams && blockParams.coordReturn)
-            ? String(blockParams.coordReturn)
-            : (getValue('coordReturn') || 'xy');  // default to 'xy'
-        
-        // For AUTO mode, zero out existing decenters to ensure independent calculation
-        // This prevents previous target's results from contaminating current calculation
-        if (blockParams) {
-            const normShift = (v) => String(v ?? '').trim().toUpperCase();
-            if (['A', 'AUTO'].includes(normShift(blockParams.chiefRayShiftX))) {
-                blockParams = { ...blockParams, decenterX: 0 };
-            }
-            if (['A', 'AUTO'].includes(normShift(blockParams.chiefRayShiftY))) {
-                blockParams = { ...blockParams, decenterY: 0 };
-            }
-            if (['A', 'AUTO'].includes(normShift(blockParams.chiefRayShiftZ))) {
-                blockParams = { ...blockParams, decenterZ: 0 };
-            }
-        }
+        const toSurfValue = getValue('toSurf');
+        const coordReturnValue = getValue('coordReturn') || 'xy';  // default to 'xy'
         
         
         // Force Order 1 when Coord Return is not 'none'
@@ -97,14 +62,9 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
         if (coordReturnValue !== 'none') {
             const currentOrder = getValue('order');
             if (currentOrder !== '1') {
-                if (typeof window.__blocks_setBlockParamValue === 'function') {
-                    const orderRes = window.__blocks_setBlockParamValue(blockId, 'order', '1');
-                    if (!orderRes || orderRes.ok !== true) {
-                        if (!panel || !panel.__coordTransOrderWarned) {
-                            console.warn('[CoordTrans] Failed to set order to 1:', orderRes?.reason);
-                            if (panel) panel.__coordTransOrderWarned = true;
-                        }
-                    }
+                const orderRes = window.__blocks_setBlockParamValue?.(blockId, 'order', '1');
+                if (!orderRes || orderRes.ok !== true) {
+                    console.warn('[CoordTrans] Failed to set order to 1:', orderRes?.reason);
                 }
             }
         }
@@ -139,98 +99,70 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
             return;
         }
         
-        // Save the original (unenriched) rows for target position calculations
-        const originalUnenrichedRows = opticalSystemRows.map(row => ({ ...row }));
-        
-        // Load system config ONCE efficiently
-        let activeSystemConfig = null;
-        try { 
-            activeSystemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null; 
-        } catch (_) {}
+        // Debug: Log current optical system state before calculation
+        console.log('[DEBUG] Current optical system state:');
+        console.log('  CoordTrans-1 (surf 2):', {
+            decenterY: opticalSystemRows[2]?.decenterY,
+            tiltX: opticalSystemRows[2]?.tiltX
+        });
+        console.log('  CoordTrans-2 (surf 5):', {
+            decenterY: opticalSystemRows[5]?.decenterY,
+            tiltX: opticalSystemRows[5]?.tiltX
+        });
         
         // Add block parameters to optical system rows
         // This is needed because block parameters (like chiefRayShiftX) are stored in the block system
         // but not included in the optical system table rows
+        console.log('[DEBUG] Creating enrichedRows from opticalSystemRows...');
         const enrichedRows = opticalSystemRows.map(row => {
             const bid = String(row._blockId ?? row.blockId ?? '');
             if (!bid) return row;
             
-            let myParams = null;
-            
-            // PRIORITY: use the known blockParams for the current block to ensure we use the very latest state
-            if (bid === String(blockId) && blockParams) {
-                myParams = blockParams;
-            } else {
-                // Fallback: look up in loaded config
-                try {
-                    if (activeSystemConfig && Array.isArray(activeSystemConfig.configurations)) {
-                        const activeId = activeSystemConfig.activeConfigId;
-                        const activeCfg = activeSystemConfig.configurations.find(c => c && c.id === activeId);
-                        if (activeCfg && Array.isArray(activeCfg.blocks)) {
-                            const foundBlock = activeCfg.blocks.find(b => b && String(b.blockId ?? '') === bid);
-                            if (foundBlock) myParams = foundBlock.parameters;
-                        }
+            // Try to get block data from system configurations
+            let blockData = null;
+            try {
+                const systemConfig = (typeof loadSystemConfigurations === 'function') ? loadSystemConfigurations() : null;
+                if (systemConfig && Array.isArray(systemConfig.configurations)) {
+                    const activeId = systemConfig.activeConfigId;
+                    const activeCfg = systemConfig.configurations.find(c => c && c.id === activeId);
+                    if (activeCfg && Array.isArray(activeCfg.blocks)) {
+                        blockData = activeCfg.blocks.find(b => b && String(b.blockId ?? '') === bid);
                     }
-                } catch (e) {
-                     console.warn(`[CoordTrans] Could not get block data for ${bid}:`, e);
                 }
+            } catch (e) {
+                console.warn(`[CoordTrans] Could not get block data for ${bid}:`, e);
             }
             
-            if (!myParams) return row;
+            if (!blockData || !blockData.parameters) return row;
             
-            // For the current CoordTrans block in AUTO mode, zero out decenters before ray tracing
-            // This ensures we calculate what decenters are NEEDED, not apply existing ones
-            const isCurrentBlock = (bid === String(blockId));
-            const normShift = (v) => String(v ?? '').trim().toUpperCase();
-            const shouldZeroX = isCurrentBlock && ['A', 'AUTO'].includes(normShift(myParams.chiefRayShiftX));
-            const shouldZeroY = isCurrentBlock && ['A', 'AUTO'].includes(normShift(myParams.chiefRayShiftY));
-            const shouldZeroZ = isCurrentBlock && ['A', 'AUTO'].includes(normShift(myParams.chiefRayShiftZ));
-            
-            // Add block parameters to row (preserving original block configuration)
-            // This ensures we use the block's defined parameters, not the current UI state
+            // Add block parameters to row
             return {
                 ...row,
-                // Coordinate transformation parameters from block definition
-                // For AUTO mode, zero out decenters so calculation is independent of previous target
-                decenterX: shouldZeroX ? 0 : (myParams.decenterX !== undefined ? myParams.decenterX : row.decenterX),
-                decenterY: shouldZeroY ? 0 : (myParams.decenterY !== undefined ? myParams.decenterY : row.decenterY),
-                decenterZ: shouldZeroZ ? 0 : (myParams.decenterZ !== undefined ? myParams.decenterZ : row.decenterZ),
-                tiltX: myParams.tiltX !== undefined ? myParams.tiltX : row.tiltX,
-                tiltY: myParams.tiltY !== undefined ? myParams.tiltY : row.tiltY,
-                tiltZ: myParams.tiltZ !== undefined ? myParams.tiltZ : row.tiltZ,
-                order: myParams.order !== undefined ? myParams.order : row.order,
-                // Chief ray shift settings
-                chiefRayShiftX: myParams.chiefRayShiftX,
-                chiefRayShiftY: myParams.chiefRayShiftY,
-                chiefRayShiftZ: myParams.chiefRayShiftZ,
-                // Also update the parameters object for consistency
-                parameters: {
-                    ...(row.parameters || {}),
-                    decenterX: shouldZeroX ? 0 : (myParams.decenterX !== undefined ? myParams.decenterX : row.parameters?.decenterX),
-                    decenterY: shouldZeroY ? 0 : (myParams.decenterY !== undefined ? myParams.decenterY : row.parameters?.decenterY),
-                    decenterZ: shouldZeroZ ? 0 : (myParams.decenterZ !== undefined ? myParams.decenterZ : row.parameters?.decenterZ),
-                    tiltX: myParams.tiltX !== undefined ? myParams.tiltX : row.parameters?.tiltX,
-                    tiltY: myParams.tiltY !== undefined ? myParams.tiltY : row.parameters?.tiltY,
-                    tiltZ: myParams.tiltZ !== undefined ? myParams.tiltZ : row.parameters?.tiltZ,
-                    order: myParams.order !== undefined ? myParams.order : row.parameters?.order,
-                    chiefRayShiftX: myParams.chiefRayShiftX,
-                    chiefRayShiftY: myParams.chiefRayShiftY,
-                    chiefRayShiftZ: myParams.chiefRayShiftZ
-                }
+                chiefRayShiftX: blockData.parameters.chiefRayShiftX,
+                chiefRayShiftY: blockData.parameters.chiefRayShiftY,
+                chiefRayShiftZ: blockData.parameters.chiefRayShiftZ
             };
         });
         
+        // Debug: Check enrichedRows vs opticalSystemRows for CoordTrans-1
+        console.log('[DEBUG] CoordTrans-1 comparison:');
+        try {
+            const origTiltX = opticalSystemRows[2]?.tiltX;
+            const enrichedTiltX = enrichedRows[2]?.tiltX;
+            console.log('  opticalSystemRows[2].tiltX:', origTiltX);
+            console.log('  enrichedRows[2].tiltX:', enrichedTiltX);
+            console.log('  Match:', origTiltX === enrichedTiltX);
+        } catch (e) {
+            console.error('[DEBUG] Error comparing tiltX:', e);
+        }
+        
         // Calculate local coordinates
-        // We Ignore THIS block to calculate "Return" values based on incoming system.
-        // If we include the block's current parameters, we get the *residual* tilt/decenter,
-        // rather than the parameters needed to *cancel* the incoming tilt/decenter.
-        // Pass both enriched and original unenriched rows so the function can get correct target positions
+        // Don't ignore any blocks - we need the full system for accurate calculation
         const result = await calculateAllSurfacesLocalCoordinates(
             enrichedRows,
             targetIndex,
-            null,      // no progress callback
-            blockId,   // Ignore THIS block to calculate correct return values
-            originalUnenrichedRows  // Original unenriched rows for correct target surface positions
+            null,  // no progress callback
+            null   // don't ignore any blocks
         );
         
         
@@ -251,7 +183,10 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
         }
         
         // Get surface data for this block
+        console.log('[DEBUG] blockId:', blockId, 'blockSurfaceId:', blockSurfaceId);
+        console.log('[DEBUG] result.surfaces keys:', Object.keys(result.surfaces || {}));
         const rowId = String(opticalSystemRows[blockSurfaceId].id);
+        console.log('[DEBUG] Looking for rowId:', rowId);
         let surfData = result.surfaces?.[rowId] || result.surfaces?.[String(rowId)] || result.surfaces?.[Number(rowId)] ||
                       result.surfaces?.[blockSurfaceId] || result.surfaces?.[String(blockSurfaceId)];
         
@@ -261,237 +196,97 @@ window.__performCoordTransCalculation = async function(blockId, panel) {
                 const nextRowId = String(opticalSystemRows[i].id);
                 surfData = result.surfaces?.[nextRowId];
                 if (surfData) {
+                    console.log('[DEBUG] Found surfData at surface index:', i, 'rowId:', nextRowId);
                     break;
                 }
             }
+        } else {
+            console.log('[DEBUG] Found surfData for blockSurfaceId:', blockSurfaceId, 'rowId:', rowId);
         }
         
         if (!surfData) {
             console.error('[CoordTrans] No surface data found');
             return;
         }
-
-        try {
-            if (coordReturnValue === 'xyz' || coordReturnValue === 'xy') {
-                console.log('[CoordTrans] Mode:', coordReturnValue, 'blockId:', blockId, 'targetIndex:', targetIndex);
-                console.log('[CoordTrans] blockParams:', blockParams);
-                console.log('[CoordTrans] surfData tilt:', {
-                    tiltX: surfData.localTiltX,
-                    tiltY: surfData.localTiltY,
-                    tiltZ: surfData.localTiltZ
-                });
-                console.log('[CoordTrans] surfData decenter (local):', {
-                    decenterX: surfData.localDecenterX,
-                    decenterY: surfData.localDecenterY,
-                    decenterZ: surfData.localDecenterZ
-                });
-                console.log('[CoordTrans] surfData decenter (flat):', {
-                    decenterX: surfData.flatDecenterX,
-                    decenterY: surfData.flatDecenterY,
-                    decenterZ: surfData.flatDecenterZ
-                });
+        
+        console.log('[DEBUG] Using surfData:', surfData);
+        
+        
+        // Update the input fields based on coordinate return mode
+        const updateField = (key, value) => {
+            let input = panel.querySelector(`input[data-param-key="${key}"]`) || 
+                       panel.querySelector(`.param-input-with-slider[data-param-key="${key}"] input[type="text"]`) ||
+                       panel.querySelector(`input[name="${key}"]`);
+            
+            if (!input) {
+                const allInputs = panel.querySelectorAll('input[type="text"], input[type="number"], input:not([type])');
+                for (const inp of allInputs) {
+                    const dataKey = inp.getAttribute('data-param-key') || inp.getAttribute('data-key') || inp.name;
+                    if (dataKey === key) {
+                        input = inp;
+                        break;
+                    }
+                }
             }
-        } catch (_) {}
-        
-        
-        // Store computed values for display (no block parameter updates)
-        const computedValues = {};
-        const setComputedValue = (key, value) => {
-            if (typeof value === 'number' && Number.isFinite(value)) {
-                computedValues[key] = value;
+            
+            if (input) {
+                input.value = value.toFixed(6);
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('blur', { bubbles: true }));
                 return true;
+            } else {
+                console.warn(`[CoordTrans] Input field not found for ${key}`);
+                return false;
             }
-            return false;
         };
         
         // Get chiefRayShift modes to determine which fields should be auto-updated
-        const chiefRayShiftX = (blockParams && blockParams.chiefRayShiftX !== undefined)
-            ? blockParams.chiefRayShiftX
-            : getValue('chiefRayShiftX');
-        const chiefRayShiftY = (blockParams && blockParams.chiefRayShiftY !== undefined)
-            ? blockParams.chiefRayShiftY
-            : getValue('chiefRayShiftY');
-        const chiefRayShiftZ = (blockParams && blockParams.chiefRayShiftZ !== undefined)
-            ? blockParams.chiefRayShiftZ
-            : getValue('chiefRayShiftZ');
-        const normShift = (v) => String(v ?? '').trim().toUpperCase();
-        const shouldAutoX = ['A', 'AUTO'].includes(normShift(chiefRayShiftX));
-        const shouldAutoY = ['A', 'AUTO'].includes(normShift(chiefRayShiftY));
-        const shouldAutoZ = ['A', 'AUTO'].includes(normShift(chiefRayShiftZ));
+        const chiefRayShiftX = getValue('chiefRayShiftX');
+        const chiefRayShiftY = getValue('chiefRayShiftY');
+        const chiefRayShiftZ = getValue('chiefRayShiftZ');
+        const shouldAutoX = (String(chiefRayShiftX ?? '').trim().toUpperCase() === 'A');
+        const shouldAutoY = (String(chiefRayShiftY ?? '').trim().toUpperCase() === 'A');
+        const shouldAutoZ = (String(chiefRayShiftZ ?? '').trim().toUpperCase() === 'A');
         
         // Apply updates based on coordinate return mode and chiefRayShift settings
         let updated = {};
         switch (coordReturnValue) {
             case 'none':
                 break;
+                
             case 'orientation':
                 // Tilt only (force all decenters to 0 regardless of Auto settings)
-                // Only update UI, don't trigger block parameter updates
                 updated = {
-                    decenterX: setComputedValue('decenterX', 0),
-                    decenterY: setComputedValue('decenterY', 0),
-                    decenterZ: setComputedValue('decenterZ', 0),
-                    tiltX: setComputedValue('tiltX', surfData.localTiltX),
-                    tiltY: setComputedValue('tiltY', surfData.localTiltY),
-                    tiltZ: setComputedValue('tiltZ', surfData.localTiltZ)
+                    decenterX: updateField('decenterX', 0),
+                    decenterY: updateField('decenterY', 0),
+                    decenterZ: updateField('decenterZ', 0),
+                    tiltX: updateField('tiltX', surfData.localTiltX),
+                    tiltY: updateField('tiltY', surfData.localTiltY),
+                    tiltZ: updateField('tiltZ', surfData.localTiltZ)
                 };
                 break;
                 
             case 'xy':
-                // Orientation & XY: update tilt + decenter X/Y (and force Z to 0)
-                // Only update UI, don't trigger block parameter updates
+                // Decenter X, Y only (only update if Auto mode is enabled, tilt remains unchanged)
                 updated = {
-                    decenterX: shouldAutoX ? setComputedValue('decenterX', surfData.localDecenterX) : false,
-                    decenterY: shouldAutoY ? setComputedValue('decenterY', surfData.localDecenterY) : false,
-                    decenterZ: setComputedValue('decenterZ', 0),
-                    tiltX: setComputedValue('tiltX', surfData.localTiltX),
-                    tiltY: setComputedValue('tiltY', surfData.localTiltY),
-                    tiltZ: setComputedValue('tiltZ', surfData.localTiltZ)
+                    decenterX: shouldAutoX ? updateField('decenterX', surfData.localDecenterX) : false,
+                    decenterY: shouldAutoY ? updateField('decenterY', surfData.localDecenterY) : false,
+                    decenterZ: updateField('decenterZ', 0)
                 };
                 break;
                 
             case 'xyz':
-                // Orientation & XYZ: use flat/global basis for decenters
-                {
-                    const srcX = (surfData.flatDecenterX !== undefined && Number.isFinite(surfData.flatDecenterX)) 
-                        ? surfData.flatDecenterX : surfData.localDecenterX;
-                    const srcY = (surfData.flatDecenterY !== undefined && Number.isFinite(surfData.flatDecenterY)) 
-                        ? surfData.flatDecenterY : surfData.localDecenterY;
-                    const srcZ = (surfData.flatDecenterZ !== undefined && Number.isFinite(surfData.flatDecenterZ)) 
-                        ? surfData.flatDecenterZ : surfData.localDecenterZ;
-                    
-                    updated = {
-                        decenterX: shouldAutoX ? setComputedValue('decenterX', srcX) : false,
-                        decenterY: shouldAutoY ? setComputedValue('decenterY', srcY) : false,
-                        decenterZ: shouldAutoZ ? setComputedValue('decenterZ', srcZ) : false,
-                        tiltX: setComputedValue('tiltX', surfData.localTiltX),
-                        tiltY: setComputedValue('tiltY', surfData.localTiltY),
-                        tiltZ: setComputedValue('tiltZ', surfData.localTiltZ)
-                    };
-                }
+                // Decenter X, Y, Z only (only update if Auto mode is enabled, tilt remains unchanged)
+                updated = {
+                    decenterX: shouldAutoX ? updateField('decenterX', surfData.localDecenterX) : false,
+                    decenterY: shouldAutoY ? updateField('decenterY', surfData.localDecenterY) : false,
+                    decenterZ: shouldAutoZ ? updateField('decenterZ', surfData.localDecenterZ) : false
+                };
                 break;
         }
         
-        // Store computed values for display in the inspector
-        if (coordReturnValue !== 'none') {
-            if (typeof window !== 'undefined') {
-                if (!window.__coordTransComputedValues) window.__coordTransComputedValues = {};
-                window.__coordTransComputedValues[blockId] = computedValues;
-            }
-        } else if (typeof window !== 'undefined' && window.__coordTransComputedValues) {
-            delete window.__coordTransComputedValues[blockId];
-        }
-
-        // Apply computed values to block parameters so rendering uses updated values.
-        if (coordReturnValue !== 'none') {
-            try {
-                window.__coordTransApplyingResults = true;
-
-                const updates = {};
-                if (coordReturnValue === 'orientation') {
-                    updates.decenterX = 0;
-                    updates.decenterY = 0;
-                    updates.decenterZ = 0;
-                    updates.tiltX = surfData.localTiltX;
-                    updates.tiltY = surfData.localTiltY;
-                    updates.tiltZ = surfData.localTiltZ;
-                } else if (coordReturnValue === 'xy') {
-                    if (shouldAutoX) updates.decenterX = surfData.localDecenterX;
-                    if (shouldAutoY) updates.decenterY = surfData.localDecenterY;
-                    updates.decenterZ = 0;
-                    updates.tiltX = surfData.localTiltX;
-                    updates.tiltY = surfData.localTiltY;
-                    updates.tiltZ = surfData.localTiltZ;
-                } else if (coordReturnValue === 'xyz') {
-                    // Use flat/global basis calculation if available (provides correct offset when orientation is restored to global)
-                    let srcX = surfData.localDecenterX;
-                    if (surfData.flatDecenterX !== undefined && Number.isFinite(surfData.flatDecenterX)) {
-                        srcX = surfData.flatDecenterX;
-                    }
-                    
-                    let srcY = surfData.localDecenterY;
-                    if (surfData.flatDecenterY !== undefined && Number.isFinite(surfData.flatDecenterY)) {
-                        srcY = surfData.flatDecenterY;
-                    }
-                    
-                    let srcZ = surfData.localDecenterZ;
-                    if (surfData.flatDecenterZ !== undefined && Number.isFinite(surfData.flatDecenterZ)) {
-                        srcZ = surfData.flatDecenterZ;
-                    }
-                    
-                    if (shouldAutoX) updates.decenterX = srcX;
-                    if (shouldAutoY) updates.decenterY = srcY;
-                    if (shouldAutoZ) updates.decenterZ = srcZ;
-                    updates.tiltX = surfData.localTiltX;
-                    updates.tiltY = surfData.localTiltY;
-                    updates.tiltZ = surfData.localTiltZ;
-                }
-
-                // Batch-apply updates to Design Intent block to avoid intermediate auto-updates.
-                if (typeof loadSystemConfigurations === 'function' && typeof saveSystemConfigurations === 'function') {
-                    const systemConfig = loadSystemConfigurations();
-                    const activeId = systemConfig?.activeConfigId;
-                    const activeCfg = Array.isArray(systemConfig?.configurations)
-                        ? systemConfig.configurations.find(c => c && String(c.id) === String(activeId))
-                        : null;
-                    const block = activeCfg?.blocks?.find(b => b && String(b.blockId ?? '') === String(blockId));
-                    if (block) {
-                        if (!block.parameters || typeof block.parameters !== 'object') block.parameters = {};
-                        for (const [k, v] of Object.entries(updates)) {
-                            if (typeof v === 'number' && Number.isFinite(v)) {
-                                block.parameters[k] = v;
-                            }
-                        }
-                        if (activeCfg?.metadata && typeof activeCfg.metadata === 'object') {
-                            activeCfg.metadata.modified = new Date().toISOString();
-                        }
-                        saveSystemConfigurations(systemConfig);
-                    }
-                }
-
-                // Re-expand blocks to optical system so rendering uses updated params.
-                try {
-                    if (typeof loadSystemConfigurations === 'function' && typeof expandBlocksToOpticalSystemRows === 'function') {
-                        const systemConfig = loadSystemConfigurations();
-                        const activeId = systemConfig?.activeConfigId;
-                        const activeCfg = Array.isArray(systemConfig?.configurations)
-                            ? systemConfig.configurations.find(c => c && String(c.id) === String(activeId))
-                            : null;
-                        if (activeCfg && Array.isArray(activeCfg.blocks)) {
-                            const expanded = expandBlocksToOpticalSystemRows(activeCfg.blocks);
-                            if (expanded && Array.isArray(expanded.rows)) {
-                                activeCfg.opticalSystem = expanded.rows;
-                                if (typeof saveSystemConfigurations === 'function') {
-                                    saveSystemConfigurations(systemConfig);
-                                }
-                            }
-                        }
-                    }
-                } catch (_) {}
-
-                if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
-                    await window.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
-                } else if (typeof window.loadActiveConfigurationToTables === 'function') {
-                    await window.loadActiveConfigurationToTables({ applyToUI: true });
-                }
-                
-                // Refresh block list display to show updated parameters
-                try { 
-                    if (window.ConfigurationManager && typeof window.ConfigurationManager.renderBlocksUI === 'function') {
-                        window.ConfigurationManager.renderBlocksUI();
-                    }
-                } catch (_) {}
-                
-                try { if (typeof window.__blocks_requestRedraw === 'function') window.__blocks_requestRedraw(); } catch (_) {}
-                try { if (typeof window.refreshAllUI === 'function') window.refreshAllUI(); } catch (_) {}
-            } finally {
-                window.__coordTransApplyingResults = false;
-            }
-        }
-
         const successCount = Object.values(updated).filter(v => v).length;
-        console.log('[CoordTrans] Updated', successCount, 'fields:', coordReturnValue);
-        try { refreshBlockInspector(); } catch (_) {}
+        console.log('[CoordTrans] Updated', successCount, 'fields');
         
     } catch (error) {
         console.error('[CoordTrans] Calculation error:', error);
@@ -2296,21 +2091,24 @@ async function __loadAllDataObjectIntoApp(allData, { filename }) {
         try {
             const blocks = cfg?.blocks;
             if (!Array.isArray(blocks) || blocks.length === 0) return false;
+            const isNumericish = (v) => {
+                if (typeof v === 'number') return Number.isFinite(v);
+                const s = String(v ?? '').trim();
+                if (!s) return false;
+                return /^[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?$/i.test(s);
+            };
             for (const b of blocks) {
                 const type = String(b?.blockType ?? '');
                 if (type === 'Lens') {
                     const mat = b?.parameters?.material;
-                    if (mat === undefined || mat === null || String(mat).trim() === '') return true;
+                    // A lens material should be a glass name, not a refractive index number.
+                    if (isNumericish(mat)) return true;
                 }
                 if (type === 'Doublet' || type === 'Triplet') {
                     const m1 = b?.parameters?.material1;
                     const m2 = b?.parameters?.material2;
                     const m3 = b?.parameters?.material3;
-                    if ((m1 === undefined || m1 === null || String(m1).trim() === '') ||
-                        (m2 === undefined || m2 === null || String(m2).trim() === '') ||
-                        (type === 'Triplet' && (m3 === undefined || m3 === null || String(m3).trim() === ''))) {
-                        return true;
-                    }
+                    if (isNumericish(m1) || isNumericish(m2) || isNumericish(m3)) return true;
                 }
             }
             return false;
@@ -2744,10 +2542,7 @@ function setupImportZemaxButton() {
                 // Ensure ObjectSurface exists and is first in Design Intent after Zemax import.
                 if (Array.isArray(activeCfg.blocks)) {
                     try {
-                        const hasObjectSurface = activeCfg.blocks.some(b => {
-                            const bt = String(b?.blockType ?? '').trim();
-                            return bt === 'ObjectSurface' || bt === 'ObjectPlane';
-                        });
+                        const hasObjectSurface = activeCfg.blocks.some(b => b && String(b.blockType ?? '').trim() === 'ObjectSurface');
                         if (!hasObjectSurface) {
                             // Check if Object surface (rows[0]) has finite or infinite thickness
                             const objThickness = rows?.[0]?.thickness;
@@ -2782,10 +2577,7 @@ function setupImportZemaxButton() {
                         try {
                             const stopIndex = Array.isArray(rows) ? findStopSurfaceIndex(rows) : -1;
                             const stopBlockIndex = activeCfg.blocks.findIndex(b => b && String(b.blockType ?? '').trim() === 'Stop');
-                            const objIdx = activeCfg.blocks.findIndex(b => {
-                                const bt = String(b?.blockType ?? '').trim();
-                                return bt === 'ObjectSurface' || bt === 'ObjectPlane';
-                            });
+                            const objIdx = activeCfg.blocks.findIndex(b => b && String(b.blockType ?? '').trim() === 'ObjectSurface');
 
                             const ensureStopBlock = () => {
                                 if (stopBlockIndex >= 0) return activeCfg.blocks[stopBlockIndex];
@@ -5222,12 +5014,7 @@ function updateSurfaceNumberSelectLegacy() {
                 try {
                     if (cfg && Array.isArray(cfg.blocks) && cfg.blocks.length > 0 && typeof expandBlocksToOpticalSystemRows === 'function') {
                         const blocksHaveObjectSurface = (() => {
-                            try { 
-                                return cfg.blocks.some(b => {
-                                    const bt = String(b?.blockType ?? '').trim();
-                                    return bt === 'ObjectSurface' || bt === 'ObjectPlane';
-                                }); 
-                            } catch (_) { return false; }
+                            try { return cfg.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface'); } catch (_) { return false; }
                         })();
                         const scenarios = Array.isArray(cfg.scenarios) ? cfg.scenarios : null;
                         const scenarioId = cfg.activeScenarioId ? String(cfg.activeScenarioId) : '';
@@ -9407,7 +9194,7 @@ function __blocks_makeDefaultBlock(blockType, blockId) {
         base.parameters = { thickness: 1, material: 'AIR', thicknessMode: '' };
         return base;
     }
-    if (type === 'ObjectSurface' || type === 'ObjectPlane') {
+    if (type === 'ObjectSurface') {
         base.parameters = {
             objectDistanceMode: 'Finite',
             objectDistance: 100
@@ -9514,12 +9301,9 @@ function __blocks_addBlockToActiveConfig(blockType, insertAfterBlockId = null) {
         if (already) return { ok: false, reason: 'ImageSurface already exists (only one is supported).' };
     }
 
-    if (type === 'ObjectSurface' || type === 'ObjectPlane') {
-        const already = blocks.some(b => {
-            const bt = String(b?.blockType ?? '').trim();
-            return bt === 'ObjectSurface' || bt === 'ObjectPlane';
-        });
-        if (already) return { ok: false, reason: 'ObjectSurface/ObjectPlane already exists (only one is supported).' };
+    if (type === 'ObjectSurface') {
+        const already = blocks.some(b => b && String(b.blockType ?? '').trim() === 'ObjectSurface');
+        if (already) return { ok: false, reason: 'ObjectSurface already exists (only one is supported).' };
     }
 
     const newId = __blocks_generateUniqueBlockId(blocks, type);
@@ -9531,8 +9315,8 @@ function __blocks_addBlockToActiveConfig(blockType, insertAfterBlockId = null) {
 
     let insertIdx = imageIdx; // default: before ImageSurface (or end)
 
-    // ObjectSurface/ObjectPlane defines the object-to-first-surface distance; keep it first since there is no reorder UI.
-    if (type === 'ObjectSurface' || type === 'ObjectPlane') {
+    // ObjectSurface defines the object-to-first-surface distance; keep it first since there is no reorder UI.
+    if (type === 'ObjectSurface') {
         insertIdx = 0;
     }
     const afterId = String(insertAfterBlockId ?? '').trim();
@@ -10396,10 +10180,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
     const formatSingletonBlockLabel = (blockType, blockIdRaw) => {
         const t = String(blockType ?? '').trim();
         const id = String(blockIdRaw ?? '').trim();
-        if (t === 'ObjectSurface' || t === 'ObjectPlane') return 'ObjectSurface';
-        if (t === 'ImageSurface') return t;
-        const m = /^(ObjectSurface|ObjectPlane|ImageSurface)-\d+$/i.exec(id);
-        if (m) return (m[1].toLowerCase() === 'objectplane') ? 'ObjectSurface' : m[1];
+        if (t === 'ObjectSurface' || t === 'ImageSurface') return t;
+        const m = /^(ObjectSurface|ImageSurface)-\d+$/i.exec(id);
+        if (m) return m[1];
         return id || '(none)';
     };
 
@@ -10418,17 +10201,13 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             if (!tRaw) continue;
 
             // Singletons: show without numbering.
-            if (tRaw === 'ObjectSurface' || tRaw === 'ObjectPlane') {
-                displayLabelByBlockId.set(realId, 'ObjectSurface');
-                continue;
-            }
-            if (tRaw === 'ImageSurface') {
+            if (tRaw === 'ObjectSurface' || tRaw === 'ImageSurface') {
                 displayLabelByBlockId.set(realId, tRaw);
                 continue;
             }
 
             // Normalize display base type.
-            const baseType = (tRaw === 'PositiveLens') ? 'Lens' : (tRaw === 'ObjectPlane' ? 'ObjectSurface' : tRaw);
+            const baseType = (tRaw === 'PositiveLens') ? 'Lens' : tRaw;
             const next = (counts.get(baseType) || 0) + 1;
             counts.set(baseType, next);
             displayLabelByBlockId.set(realId, `${baseType}-${next}`);
@@ -10449,9 +10228,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             const rawId = String(b.blockId ?? '(none)');
             const label = displayLabelByBlockId.get(rawId) || formatSingletonBlockLabel(b.blockType, rawId);
 
-            // Special-case: ObjectSurface/ObjectPlane corresponds to the Object surface (Surf 0).
-            const blockTypeStr = String(b.blockType ?? '').trim();
-            if (blockTypeStr === 'ObjectSurface' || blockTypeStr === 'ObjectPlane') {
+            // Special-case: ObjectSurface corresponds to the Object surface (Surf 0).
+            if (String(b.blockType ?? '').trim() === 'ObjectSurface') {
                 colId.textContent = `${label} → Surf 0`;
             } else {
                 const range = surfRangeByBlockId.get(String(b.blockId ?? '').trim());
@@ -10468,9 +10246,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
         const colType = document.createElement('div');
         colType.className = 'block-inspector-col-type';
-        // Normalize ObjectPlane to ObjectSurface for display
-        const displayType = String(b.blockType ?? '(none)').trim() === 'ObjectPlane' ? 'ObjectSurface' : String(b.blockType ?? '(none)');
-        colType.textContent = displayType;
+        colType.textContent = String(b.blockType ?? '(none)');
 
         const colParams = document.createElement('div');
         colParams.className = 'block-inspector-col-params';
@@ -10559,18 +10335,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             };
 
             const getDisplayValue = (k) => {
-                // For CoordTrans blocks with Coord Return enabled, show computed values if present.
-                if (blockType === 'CoordTrans') {
-                    const coordReturnValue = getValue('coordReturn') || 'none';
-                    if (coordReturnValue !== 'none') {
-                        const cache = (typeof window !== 'undefined') ? window.__coordTransComputedValues : null;
-                        const computed = cache && cache[blockId] ? cache[blockId][k] : undefined;
-                        if (typeof computed === 'number' && Number.isFinite(computed)) {
-                            return computed.toFixed(6);
-                        }
-                    }
-                }
-
                 const v = getValue(k);
                 // Show a meaningful default for Stop.semiDiameter when omitted.
                 if (blockType === 'Stop' && String(k) === 'semiDiameter') {
@@ -10630,7 +10394,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             const isSingleSurfaceCircular = singleSurfaceShape === 'Circular';
             const isSingleSurfaceSquare = singleSurfaceShape === 'Square';
             const isSingleSurfaceRect = singleSurfaceShape === 'Rectangular';
-            if (blockType === 'ObjectSurface' || blockType === 'ObjectPlane') {
+            if (blockType === 'ObjectSurface') {
                 items.push(
                     { kind: 'objectMode', key: 'objectDistanceMode', label: 'object (INF/finite)', noOptimize: true },
                     { kind: 'objectDistance', key: 'objectDistance', label: 'distance to 1st surf', noOptimize: true }
@@ -10892,11 +10656,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 const currentValue = isApertureItem ? getApertureDisplayValue(it.role) : getDisplayValue(it.key);
 
                 const commitValue = (nextRaw) => {
-                    // Skip block parameter update if this is triggered by CoordTrans calculation result
-                    if (valueEl && (valueEl.__coordTransUpdating || window.event?.__coordTransUpdate || window.__coordTransApplyingResults)) {
-                        return true; // Return true to prevent error alerts
-                    }
-                    
                     const next = String(nextRaw ?? '');
                     const current = currentValue;
                     if (next === current) {
@@ -10910,20 +10669,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                         alert(`Failed to update ${desc}: ${res?.reason || 'unknown error'}`);
                         return false;
                     }
-                    // Auto-recalculate CoordTrans when Coord Return is enabled and other params change
-                    try {
-                        if (blockType === 'CoordTrans' && !isApertureItem) {
-                            const key = String(it?.key ?? it?.role ?? '');
-                            if (key && !['coordReturn', 'order', 'toSurf'].includes(key)) {
-                                const coordReturnValue = getValue('coordReturn') || 'none';
-                                if (coordReturnValue !== 'none' && typeof __performCoordTransCalculation === 'function') {
-                                    if (!panel || !panel.__coordTransCalculating) {
-                                        __performCoordTransCalculation(blockId, panel);
-                                    }
-                                }
-                            }
-                        }
-                    } catch (_) {}
                     try { refreshBlockInspector(); } catch (_) {}
                     return true;
                 };
@@ -11125,9 +10870,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                         sel.setAttribute('data-param-key', it.key || 'coordReturn');
                         sel.innerHTML = [
                             '<option value="none">None</option>',
-                            '<option value="orientation">Orientation</option>',
-                            '<option value="xy">XY (Local)</option>',
-                            '<option value="xyz">XYZ (Global)</option>'
+                            '<option value="orientation">Orientation Only</option>',
+                            '<option value="xy">Orientation & XY</option>',
+                            '<option value="xyz">Orientation & XYZ</option>'
                         ].join('');
 
                         const cur = String(currentValue ?? '').trim();
@@ -11329,29 +11074,19 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                 if (isMaterialItem) {
                     const materialKey = String(it?.key ?? '').trim();
                     const mat = String(currentValue ?? '').trim();
-                    
-                    // Derive rindex/abbe keys from material key (material -> rindex, material1 -> rindex1)
-                    const rindexKey = materialKey.replace(/^material(\d*)$/, 'rindex$1');
-                    const abbeKey = materialKey.replace(/^material(\d*)$/, 'abbe$1');
-                    
-                    // Get stored rindex/abbe values from block parameters
-                    const storedRindex = getDisplayValue(rindexKey);
-                    const storedAbbe = getDisplayValue(abbeKey);
-                    
-                    let curNd = storedRindex || '';
-                    let curVd = storedAbbe || '';
+                    let curNd = '';
+                    let curVd = '';
                     let matIsKnownGlass = false;
                     let matIsNumeric = false;
                     let matNumericNd = NaN;
                     try {
-                        // Check material type regardless of stored values
                         if (mat !== '' && mat.toUpperCase() !== 'AIR') {
                             const gd = getGlassDataWithSellmeier(mat);
                             if (gd && Number.isFinite(gd.nd)) {
+                                curNd = String(gd.nd);
                                 matNumericNd = gd.nd;
-                                if (!storedRindex) curNd = String(gd.nd);
                             }
-                            if (gd && Number.isFinite(gd.vd) && !storedAbbe) curVd = String(gd.vd);
+                            if (gd && Number.isFinite(gd.vd)) curVd = String(gd.vd);
                             // Numeric material returns vd=undefined; known glass returns finite vd.
                             matIsKnownGlass = !!(gd && Number.isFinite(gd.nd) && Number.isFinite(gd.vd));
                             matIsNumeric = !!(gd && Number.isFinite(gd.nd) && !Number.isFinite(gd.vd));
@@ -11363,9 +11098,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     ndInput.dataset.glassHelper = 'nd';
                     ndInput.dataset.blockId = String(blockId ?? '');
                     ndInput.dataset.materialKey = materialKey;
-                    ndInput.dataset.rindexKey = rindexKey;
                     ndInput.placeholder = curNd !== '' ? curNd : 'ref index';
-                    ndInput.value = storedRindex || '';
+                    ndInput.value = '';
                     ndInput.style.flex = '0 0 86px';
                     ndInput.style.fontSize = '12px';
                     ndInput.style.padding = '2px 6px';
@@ -11379,9 +11113,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     vdInput.dataset.glassHelper = 'vd';
                     vdInput.dataset.blockId = String(blockId ?? '');
                     vdInput.dataset.materialKey = materialKey;
-                    vdInput.dataset.abbeKey = abbeKey;
                     vdInput.placeholder = curVd !== '' ? curVd : 'abbe';
-                    vdInput.value = storedAbbe || '';
+                    vdInput.value = '';
                     vdInput.style.flex = '0 0 86px';
                     vdInput.style.fontSize = '12px';
                     vdInput.style.padding = '2px 6px';
@@ -11389,37 +11122,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     vdInput.style.borderRadius = '4px';
                     vdInput.title = 'Abbe number (vd)';
                     vdInput.addEventListener('click', (e) => e.stopPropagation());
-                    
-                    // Save rindex/abbe values to block parameters when changed
-                    ndInput.addEventListener('blur', (e) => {
-                        e.stopPropagation();
-                        const newVal = String(ndInput.value ?? '').trim();
-                        const oldVal = String(getDisplayValue(rindexKey) ?? '').trim();
-                        if (newVal !== oldVal) {
-                            const res = __blocks_setBlockParamValue(blockId, rindexKey, newVal);
-                            if (!res || res.ok !== true) {
-                                alert(`Failed to update ${blockId}.${rindexKey}: ${res?.reason || 'unknown error'}`);
-                                ndInput.value = oldVal;
-                            } else {
-                                try { refreshBlockInspector(); } catch (_) {}
-                            }
-                        }
-                    });
-                    
-                    vdInput.addEventListener('blur', (e) => {
-                        e.stopPropagation();
-                        const newVal = String(vdInput.value ?? '').trim();
-                        const oldVal = String(getDisplayValue(abbeKey) ?? '').trim();
-                        if (newVal !== oldVal) {
-                            const res = __blocks_setBlockParamValue(blockId, abbeKey, newVal);
-                            if (!res || res.ok !== true) {
-                                alert(`Failed to update ${blockId}.${abbeKey}: ${res?.reason || 'unknown error'}`);
-                                vdInput.value = oldVal;
-                            } else {
-                                try { refreshBlockInspector(); } catch (_) {}
-                            }
-                        }
-                    });
 
                     const markPreferred = () => {
                         try {
@@ -11480,22 +11182,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                 const current = String(currentValue ?? '').trim();
                                 const ok = (name === current) ? true : commitValue(name);
                                 if (ok) {
-                                    // Also update rindex/abbe fields with the selected glass's nd/vd
-                                    try {
-                                        if (Number.isFinite(g?.nd)) {
-                                            const ndVal = String(g.nd);
-                                            const ndRes = __blocks_setBlockParamValue(blockId, rindexKey, ndVal);
-                                            if (ndRes && ndRes.ok) ndInput.value = ndVal;
-                                        }
-                                        if (Number.isFinite(g?.vd)) {
-                                            const vdVal = String(g.vd);
-                                            const vdRes = __blocks_setBlockParamValue(blockId, abbeKey, vdVal);
-                                            if (vdRes && vdRes.ok) vdInput.value = vdVal;
-                                        }
-                                    } catch (_) {}
                                     listEl.style.display = 'none';
                                     listEl.innerHTML = '';
-                                    try { refreshBlockInspector(); } catch (_) {}
                                 }
                             });
 
@@ -11557,22 +11245,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                                 const current = String(currentValue ?? '').trim();
                                 const ok = (name === current) ? true : commitValue(name);
                                 if (ok) {
-                                    // Also update rindex/abbe fields with the selected glass's nd/vd
-                                    try {
-                                        if (Number.isFinite(g?.nd)) {
-                                            const ndVal = String(g.nd);
-                                            const ndRes = __blocks_setBlockParamValue(blockId, rindexKey, ndVal);
-                                            if (ndRes && ndRes.ok) ndInput.value = ndVal;
-                                        }
-                                        if (Number.isFinite(g?.vd)) {
-                                            const vdVal = String(g.vd);
-                                            const vdRes = __blocks_setBlockParamValue(blockId, abbeKey, vdVal);
-                                            if (vdRes && vdRes.ok) vdInput.value = vdVal;
-                                        }
-                                    } catch (_) {}
                                     listEl.style.display = 'none';
                                     listEl.innerHTML = '';
-                                    try { refreshBlockInspector(); } catch (_) {}
                                 }
                             });
 
@@ -11587,10 +11261,8 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             right.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
                             {
                                 const scoreStr = String(Number(g.score).toFixed(0)).padStart(3);
-                                const ndStr = Number.isFinite(g?.nd) ? Number(g.nd).toFixed(6).padStart(10) : '       N/A';
-                                const vdStr = Number.isFinite(g?.vd) ? Number(g.vd).toFixed(2).padStart(6) : '   N/A';
                                 const priceStr = (Number.isFinite(g?.price) ? Number(g.price).toFixed(4) : 'null').padStart(8);
-                                right.textContent = `score=${scoreStr}  ${ndStr} / ${vdStr}  price=${priceStr}`;
+                                right.textContent = `score=${scoreStr}  price=${priceStr}`;
                             }
                             rowEl.appendChild(left);
                             rowEl.appendChild(right);
@@ -11601,35 +11273,26 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                     const pickTargetNdVd = () => {
                         const nRaw = Number.parseFloat(String(ndInput.value ?? '').trim());
                         const vRaw = Number.parseFloat(String(vdInput.value ?? '').trim());
-                        console.log('[pickTargetNdVd] ndInput.value:', ndInput.value, 'vdInput.value:', vdInput.value, 'nRaw:', nRaw, 'vRaw:', vRaw);
-                        if (Number.isFinite(nRaw) && Number.isFinite(vRaw)) {
-                            console.log('[pickTargetNdVd] Using manual nd/vd:', { nd: nRaw, vd: vRaw });
-                            return { nd: nRaw, vd: vRaw };
-                        }
+                        if (Number.isFinite(nRaw) && Number.isFinite(vRaw)) return { nd: nRaw, vd: vRaw };
 
                         // If material is a known glass, Suggest should work without manual nd/vd.
                         if (matIsKnownGlass) {
                             const nd = Number.parseFloat(curNd);
                             const vd = Number.parseFloat(curVd);
-                            console.log('[pickTargetNdVd] Using known glass nd/vd:', { nd, vd }, 'from curNd:', curNd, 'curVd:', curVd);
                             if (Number.isFinite(nd) && Number.isFinite(vd)) return { nd, vd };
                         }
 
                         // Numeric material: allow using vd input if provided.
                         if (matIsNumeric) {
                             const vd = Number.parseFloat(String(vdInput.value ?? '').trim());
-                            console.log('[pickTargetNdVd] Using numeric material nd:', matNumericNd, 'with manual vd:', vd);
                             if (Number.isFinite(matNumericNd) && Number.isFinite(vd)) return { nd: matNumericNd, vd };
                         }
-                        console.log('[pickTargetNdVd] No valid nd/vd found');
                         return null;
                     };
 
                     const suggest = () => {
                         const t = pickTargetNdVd();
-                        console.log('[suggest] pickTargetNdVd returned:', t);
                         if (t) {
-                            console.log('[suggest] Calling renderNdVdCandidates with nd:', t.nd, 'vd:', t.vd);
                             renderNdVdCandidates(t.nd, t.vd);
                             return;
                         }
@@ -11639,7 +11302,6 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
                             alert('Enter a material name or nd/vd first.');
                             return;
                         }
-                        console.log('[suggest] Falling back to renderNameCandidates with query:', q);
                         renderNameCandidates(q);
                     };
 

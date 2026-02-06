@@ -2043,8 +2043,23 @@ export function setupOpticalSystemChangeListeners(scene) {
         <label for="popup-reference-focal-length">Reference Focal Length:</label>
         <input type="text" id="popup-reference-focal-length" placeholder="Auto" style="width: 80px;" />
         <button id="popup-coord-transform">Coord Transform</button>
+        <br>
+        <label for="popup-transform-surface-select">Transform at surface:</label>
+        <select id="popup-transform-surface-select" style="margin-right: 8px;">
+            <option value="">Select surface...</option>
+        </select>
+        <button id="popup-show-local-coords-btn">Show Local Coords</button>
+        <button id="popup-cancel-transform-btn" style="display:none;">Cancel</button>
+        <button id="popup-save-local-coords-btn" style="display:none;">Save as JSON</button>
     </div>
     <div class="content">
+        <div id="popup-transform-error-bar" style="display:none; padding:8px 12px; margin-bottom:8px; background:#fff3cd; border:1px solid #ffc107; border-radius:3px; color:#856404;">
+            <strong>Error:</strong> <span id="popup-transform-error-text"></span>
+        </div>
+        <div id="popup-transform-progress-wrapper" style="display:none; padding:8px 12px; border-bottom:1px solid #eee; background:#fff; margin-bottom:8px;">
+            <div id="popup-transform-progress-text">Calculating...</div>
+            <progress id="popup-transform-progressbar" max="100" value="0" style="width:100%; margin-top:4px;"></progress>
+        </div>
         <textarea id="popup-system-data" placeholder="System information will appear here..."></textarea>
     </div>
 
@@ -2094,6 +2109,191 @@ export function setupOpticalSystemChangeListeners(scene) {
                 localStorage.setItem('systemData', JSON.stringify({ referenceFocalLength: value }));
             } catch (_) {}
         });
+
+        // Coordinate transformation controls in popup
+        const popupTransformSurfaceSelect = document.getElementById('popup-transform-surface-select');
+        const popupShowLocalCoordsBtn = document.getElementById('popup-show-local-coords-btn');
+        const popupCancelTransformBtn = document.getElementById('popup-cancel-transform-btn');
+        const popupSaveLocalCoordsBtn = document.getElementById('popup-save-local-coords-btn');
+        const popupErrorBar = document.getElementById('popup-transform-error-bar');
+        const popupErrorText = document.getElementById('popup-transform-error-text');
+        const popupProgressWrapper = document.getElementById('popup-transform-progress-wrapper');
+        const popupProgressText = document.getElementById('popup-transform-progress-text');
+        const popupProgressBar = document.getElementById('popup-transform-progressbar');
+
+        function showPopupError(message) {
+            if (popupErrorBar && popupErrorText) {
+                popupErrorText.textContent = message;
+                popupErrorBar.style.display = '';
+            }
+        }
+
+        function hidePopupError() {
+            if (popupErrorBar) popupErrorBar.style.display = 'none';
+        }
+
+        function setPopupProgress(percent, message) {
+            if (popupProgressWrapper) popupProgressWrapper.style.display = 'block';
+            if (popupProgressBar && Number.isFinite(percent)) {
+                popupProgressBar.value = Math.max(0, Math.min(100, percent));
+            }
+            if (popupProgressText && message) popupProgressText.textContent = message;
+        }
+
+        function hidePopupProgress() {
+            if (popupProgressWrapper) popupProgressWrapper.style.display = 'none';
+        }
+
+        // Update surface select from opener
+        function updatePopupSurfaceSelect() {
+            if (!popupTransformSurfaceSelect) return;
+            try {
+                const getOpticalSystemRows = window.opener && window.opener.getOpticalSystemRows;
+                if (typeof getOpticalSystemRows !== 'function') return;
+                
+                const opticalSystemRows = getOpticalSystemRows();
+                if (!opticalSystemRows || opticalSystemRows.length === 0) return;
+                
+                popupTransformSurfaceSelect.innerHTML = '<option value="">Select surface...</option>';
+                
+                opticalSystemRows.forEach((row, index) => {
+                    const objectType = String(row?.['object type'] ?? row?.object ?? '').toLowerCase();
+                    if (objectType === 'object') return;
+                    
+                    const surfType = String(row?.surfType ?? row?.type ?? '').toLowerCase();
+                    if (surfType === 'ct' || surfType === 'coordtrans' || surfType === 'coordinatebreak' ||
+                        surfType === 'coord trans' || surfType === 'coordinate break') {
+                        return;
+                    }
+                    
+                    const option = document.createElement('option');
+                    option.value = index;
+                    
+                    let label = 'Surf ' + index;
+                    if (row.comment) label += ': ' + row.comment;
+                    else if (row.material && row.material !== 'AIR') label += ': ' + row.material;
+                    
+                    option.textContent = label;
+                    popupTransformSurfaceSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error updating popup surface select:', error);
+            }
+        }
+
+        // Show Local Coords button
+        if (popupShowLocalCoordsBtn) {
+            popupShowLocalCoordsBtn.addEventListener('click', async function() {
+                hidePopupError();
+                
+                try {
+                    const surfaceIndex = parseInt(popupTransformSurfaceSelect?.value);
+                    if (!surfaceIndex && surfaceIndex !== 0) {
+                        showPopupError('Please select a surface first.');
+                        return;
+                    }
+                    
+                    const calculateAllSurfacesLocalCoordinates = window.opener && window.opener.calculateAllSurfacesLocalCoordinates;
+                    const getOpticalSystemRows = window.opener && window.opener.getOpticalSystemRows;
+                    const tableOpticalSystem = window.opener && window.opener.tableOpticalSystem;
+                    
+                    if (typeof calculateAllSurfacesLocalCoordinates !== 'function') {
+                        showPopupError('Coordinate transformation function not available.');
+                        return;
+                    }
+                    
+                    if (typeof getOpticalSystemRows !== 'function') {
+                        showPopupError('Optical system data not available.');
+                        return;
+                    }
+                    
+                    const opticalSystemRows = getOpticalSystemRows();
+                    if (!opticalSystemRows || opticalSystemRows.length === 0) {
+                        showPopupError('No optical system data. Please load or create an optical system.');
+                        return;
+                    }
+                    
+                    popupShowLocalCoordsBtn.disabled = true;
+                    if (popupCancelTransformBtn) popupCancelTransformBtn.style.display = '';
+                    if (popupSaveLocalCoordsBtn) popupSaveLocalCoordsBtn.style.display = 'none';
+                    
+                    if (window.opener) window.opener._transformCalculationCancelled = false;
+                    
+                    const result = await calculateAllSurfacesLocalCoordinates(
+                        opticalSystemRows,
+                        surfaceIndex,
+                        (percent, message) => setPopupProgress(percent, message)
+                    );
+                    
+                    if (window.opener) {
+                        window.opener._cachedLocalCoords = result;
+                        window.opener._showLocalCoords = true;
+                    }
+                    
+                    if (tableOpticalSystem) {
+                        tableOpticalSystem.redraw();
+                    }
+                    
+                    if (popupSaveLocalCoordsBtn) popupSaveLocalCoordsBtn.style.display = '';
+                    
+                    hidePopupProgress();
+                    
+                } catch (error) {
+                    console.error('Coordinate transformation error:', error);
+                    showPopupError(error.message || 'Failed to calculate local coordinates.');
+                    hidePopupProgress();
+                } finally {
+                    popupShowLocalCoordsBtn.disabled = false;
+                    if (popupCancelTransformBtn) popupCancelTransformBtn.style.display = 'none';
+                }
+            });
+        }
+
+        // Cancel button
+        if (popupCancelTransformBtn) {
+            popupCancelTransformBtn.addEventListener('click', function() {
+                if (window.opener) window.opener._transformCalculationCancelled = true;
+                if (popupCancelTransformBtn) popupCancelTransformBtn.style.display = 'none';
+                hidePopupProgress();
+                showPopupError('Calculation cancelled by user.');
+            });
+        }
+
+        // Save as JSON button
+        if (popupSaveLocalCoordsBtn) {
+            popupSaveLocalCoordsBtn.addEventListener('click', function() {
+                try {
+                    const data = window.opener && window.opener._cachedLocalCoords;
+                    if (!data) {
+                        showPopupError('No coordinate data to save. Please calculate first.');
+                        return;
+                    }
+                    
+                    const json = JSON.stringify(data, null, 2);
+                    const blob = new Blob([json], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+                    const surfaceIndex = data.metadata?.targetSurfaceIndex ?? 'unknown';
+                    const filename = 'local-coords-surf' + surfaceIndex + '-' + timestamp + '.json';
+                    
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.click();
+                    
+                    URL.revokeObjectURL(url);
+                    
+                } catch (error) {
+                    console.error('Save error:', error);
+                    showPopupError('Failed to save JSON file: ' + error.message);
+                }
+            });
+        }
+
+        // Update surface select on load and periodically
+        updatePopupSurfaceSelect();
+        setInterval(updatePopupSurfaceSelect, 1000);
 
         // Keep in sync with the main window.
         setInterval(syncFromOpener, 500);
@@ -3364,6 +3564,10 @@ export function setupOpticalSystemChangeListeners(scene) {
             <input id="popup-zernike-fit-checkbox" type="checkbox" />
             Zernike (calc)
         </label>
+        <label style="display:flex;align-items:center;gap:6px;">
+            <input id="popup-opd-remove-ptd-checkbox" type="checkbox" />
+            Remove P/T/D
+        </label>
         <button id="popup-show-wavefront-btn" type="button">Show wavefront diagram</button>
         <button id="popup-stop-opd-btn" type="button" disabled>Stop</button>
     </div>
@@ -3460,10 +3664,13 @@ export function setupOpticalSystemChangeListeners(scene) {
         function syncInputsFromOpener() {
             const openerPlotType = getOpenerEl('wavefront-plot-type-select');
             const openerGrid = getOpenerEl('wavefront-grid-size-select');
+            const openerRemovePtd = getOpenerEl('opd-remove-ptd-checkbox');
             const popupPlotType = document.getElementById('popup-wavefront-plot-type-select');
             const popupGrid = document.getElementById('popup-wavefront-grid-size-select');
+            const popupRemovePtd = document.getElementById('popup-opd-remove-ptd-checkbox');
             if (openerPlotType && popupPlotType) popupPlotType.value = openerPlotType.value;
             if (openerGrid && popupGrid) popupGrid.value = openerGrid.value;
+            if (popupRemovePtd) popupRemovePtd.checked = !!(openerRemovePtd && openerRemovePtd.checked);
         }
 
         function resizePlot() {
@@ -3495,6 +3702,7 @@ export function setupOpticalSystemChangeListeners(scene) {
             const popupPlotType = document.getElementById('popup-wavefront-plot-type-select');
             const popupGrid = document.getElementById('popup-wavefront-grid-size-select');
             const popupZernikeFit = document.getElementById('popup-zernike-fit-checkbox');
+            const popupRemovePtd = document.getElementById('popup-opd-remove-ptd-checkbox');
 
             const objectIndex = (() => {
                 if (!popupObject) return 0;
@@ -3505,13 +3713,18 @@ export function setupOpticalSystemChangeListeners(scene) {
             })();
             const plotType = popupPlotType ? popupPlotType.value : 'surface';
             const gridSize = popupGrid ? parseInt(popupGrid.value, 10) : 64;
+            const opdDisplayMode = (popupRemovePtd && popupRemovePtd.checked)
+                ? 'pistonTiltDefocusRemoved'
+                : 'pistonTiltRemoved';
 
             const openerObject = getOpenerEl('wavefront-object-select');
             const openerPlotType = getOpenerEl('wavefront-plot-type-select');
             const openerGrid = getOpenerEl('wavefront-grid-size-select');
+            const openerRemovePtd = getOpenerEl('opd-remove-ptd-checkbox');
             if (openerObject && Number.isFinite(objectIndex)) openerObject.value = String(objectIndex);
             if (openerPlotType) openerPlotType.value = plotType;
             if (openerGrid && Number.isFinite(gridSize)) openerGrid.value = String(gridSize);
+            if (openerRemovePtd) openerRemovePtd.checked = (opdDisplayMode === 'pistonTiltDefocusRemoved');
 
             try {
                 const computeInPopup = false;
@@ -3564,7 +3777,8 @@ export function setupOpticalSystemChangeListeners(scene) {
                     await window.opener.showWavefrontDiagram(plotType, 'opd', Number.isFinite(gridSize) ? gridSize : 64, Number.isFinite(objectIndex) ? objectIndex : 0, {
                         containerElement: containerEl,
                         cancelToken: popupCancelToken,
-                        onProgress
+                        onProgress,
+                        opdDisplayMode
                     });
 
                     // Optional: Zernike fit + push report to System Data
@@ -3911,6 +4125,7 @@ export function setupOpticalSystemChangeListeners(scene) {
             <option value="4096">4096x4096</option>
         </select>
         <label><input type="checkbox" id="popup-psf-log-scale-checkbox"> Log scale</label>
+        <label><input type="checkbox" id="popup-psf-remove-ptd-checkbox"> Remove P/T/D</label>
         <label><input type="checkbox" id="popup-psf-force-wasm-checkbox"> Force WASM</label>
         <button id="popup-show-psf-btn" type="button">Show PSF</button>
         <button id="popup-stop-psf-btn" type="button" disabled>Stop</button>
@@ -4101,9 +4316,11 @@ export function setupOpticalSystemChangeListeners(scene) {
             const openerZeroPad = getOpenerEl('psf-zeropad-select');
             const openerZernikeSampling = getOpenerEl('psf-zernike-sampling-select');
             const openerLog = getOpenerEl('psf-log-scale-checkbox');
+            const openerRemovePtd = getOpenerEl('psf-remove-ptd-checkbox');
             const popupSampling = document.getElementById('popup-psf-sampling-select');
             const popupZernikeSampling = document.getElementById('popup-psf-zernike-sampling-select');
             const popupLog = document.getElementById('popup-psf-log-scale-checkbox');
+            const popupRemovePtd = document.getElementById('popup-psf-remove-ptd-checkbox');
             if (openerZeroPad && popupSampling && openerZeroPad.value) {
                 if (Array.from(popupSampling.options || []).some(o => String(o.value) === String(openerZeroPad.value))) {
                     popupSampling.value = openerZeroPad.value;
@@ -4114,6 +4331,9 @@ export function setupOpticalSystemChangeListeners(scene) {
             try {
                 if (openerLog) openerLog.checked = false;
                 if (popupLog) popupLog.checked = false;
+            } catch (_) {}
+            try {
+                if (popupRemovePtd) popupRemovePtd.checked = !!(openerRemovePtd && openerRemovePtd.checked);
             } catch (_) {}
         }
 
@@ -4159,6 +4379,7 @@ export function setupOpticalSystemChangeListeners(scene) {
             const popupSampling = document.getElementById('popup-psf-sampling-select');
             const popupZernikeSampling = document.getElementById('popup-psf-zernike-sampling-select');
             const popupLog = document.getElementById('popup-psf-log-scale-checkbox');
+            const popupRemovePtd = document.getElementById('popup-psf-remove-ptd-checkbox');
             const popupForceWasm = document.getElementById('popup-psf-force-wasm-checkbox');
 
             let objectIndex = popupObject ? parseInt(popupObject.value, 10) : 0;
@@ -4168,6 +4389,9 @@ export function setupOpticalSystemChangeListeners(scene) {
             const zernikeSampling = popupZernikeSampling ? parseInt(popupZernikeSampling.value, 10) : 128;
             const zeroPadRaw = popupSampling ? String(popupSampling.value || 'auto') : 'auto';
             const logScale = !!(popupLog && popupLog.checked);
+            const opdDisplayMode = (popupRemovePtd && popupRemovePtd.checked)
+                ? 'pistonTiltDefocusRemoved'
+                : 'pistonTiltRemoved';
             const forceWasm = !!(popupForceWasm && popupForceWasm.checked);
             const PSF_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__PSF_DEBUG);
 
@@ -4176,6 +4400,7 @@ export function setupOpticalSystemChangeListeners(scene) {
             const openerZeroPad = getOpenerEl('psf-zeropad-select');
             const openerZernikeSampling = getOpenerEl('psf-zernike-sampling-select');
             const openerLog = getOpenerEl('psf-log-scale-checkbox');
+            const openerRemovePtd = getOpenerEl('psf-remove-ptd-checkbox');
             if (openerObject && Number.isFinite(objectIndex)) openerObject.value = String(objectIndex);
             if (openerSampling && Number.isFinite(zernikeSampling)) openerSampling.value = String(zernikeSampling);
             if (openerZeroPad && zeroPadRaw) {
@@ -4183,6 +4408,9 @@ export function setupOpticalSystemChangeListeners(scene) {
                     openerZeroPad.value = zeroPadRaw;
                 }
             }
+            try {
+                if (openerRemovePtd) openerRemovePtd.checked = (opdDisplayMode === 'pistonTiltDefocusRemoved');
+            } catch (_) {}
             if (openerZernikeSampling && Number.isFinite(zernikeSampling)) openerZernikeSampling.value = String(zernikeSampling);
             if (openerLog) openerLog.checked = logScale;
 
@@ -4481,7 +4709,7 @@ export function setupOpticalSystemChangeListeners(scene) {
                         renderFromZernike: false,
                         skipZernikeFit: true,
                         opdMode: 'referenceSphere',
-                        opdDisplayMode: 'pistonTiltRemoved',
+                        opdDisplayMode,
                         diagnoseDiscontinuities: PSF_DEBUG,
                         diagTopK: 8,
                         cancelToken: activeCancelToken,
@@ -4839,6 +5067,12 @@ export function setupOpticalSystemChangeListeners(scene) {
             background: white;
             width: 120px;
         }
+        .controls input[type="checkbox"] {
+            width: auto;
+            padding: 0;
+            border: none;
+            background: transparent;
+        }
         .controls button {
             padding: 6px 10px;
             border: 1px solid #bbb;
@@ -4882,6 +5116,10 @@ export function setupOpticalSystemChangeListeners(scene) {
             <option value="2048">2048x2048</option>
             <option value="4096">4096x4096</option>
         </select>
+        <label style="display:flex;align-items:center;gap:6px;">
+            <input id="popup-mtf-remove-ptd-checkbox" type="checkbox" />
+            Remove P/T/D
+        </label>
         <button id="popup-show-mtf-btn" type="button">Show MTF</button>
     </div>
     <div class="note">
@@ -5019,6 +5257,7 @@ export function setupOpticalSystemChangeListeners(scene) {
             const objSel = document.getElementById('popup-mtf-object-select');
             const maxEl = document.getElementById('popup-mtf-max-freq-input');
             const samplingEl = document.getElementById('popup-mtf-sampling-select');
+            const removePtdEl = document.getElementById('popup-mtf-remove-ptd-checkbox');
 
             const wlValue = wlSel ? String(wlSel.value) : '';
             const primary = getPrimaryWavelength();
@@ -5026,6 +5265,9 @@ export function setupOpticalSystemChangeListeners(scene) {
             const objectIndex = objSel ? parseInt(objSel.value, 10) : 0;
             const maxFreq = maxEl ? Number(maxEl.value) : 100;
             const sampling = samplingEl ? Number(samplingEl.value) : 256;
+            const opdDisplayMode = (removePtdEl && removePtdEl.checked)
+                ? 'pistonTiltDefocusRemoved'
+                : 'pistonTiltRemoved';
 
             try {
                 const opener = getOpener();
@@ -5040,6 +5282,7 @@ export function setupOpticalSystemChangeListeners(scene) {
                     objectIndex: Number.isFinite(objectIndex) ? objectIndex : 0,
                     maxFrequencyLpmm: Number.isFinite(maxFreq) ? maxFreq : 100,
                     samplingSize: Number.isFinite(sampling) ? sampling : 256,
+                    opdDisplayMode,
                     onProgress: (evt) => {
                         try {
                             const p = Number(evt?.percent);
@@ -5734,11 +5977,6 @@ export function updateTransformSurfaceSelect() {
   const transformSurfaceSelect = document.getElementById('transform-surface-select');
   if (!transformSurfaceSelect) return;
   
-  // Save previous selection
-  const prevValue = (transformSurfaceSelect.value !== undefined && transformSurfaceSelect.value !== null)
-    ? String(transformSurfaceSelect.value)
-    : '';
-  
   try {
     const getOpticalSystemRows = window.getOpticalSystemRows;
     if (typeof getOpticalSystemRows !== 'function') return;
@@ -5774,11 +6012,6 @@ export function updateTransformSurfaceSelect() {
       option.textContent = label;
       transformSurfaceSelect.appendChild(option);
     });
-    
-    // Restore previous selection if it still exists
-    if (prevValue !== '' && transformSurfaceSelect.querySelector(`option[value="${CSS.escape(prevValue)}"]`)) {
-      transformSurfaceSelect.value = prevValue;
-    }
     
   } catch (error) {
     console.error('Error updating transform surface select:', error);

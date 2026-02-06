@@ -179,15 +179,6 @@ export class WavefrontPlotter {
                 throw new Error('波面収差計算機の初期化に失敗しました');
             }
 
-            // For OPD maps, force stop-based pupil sampling to align with spot-diagram semantics.
-            try {
-                calculator._forcedInfinitePupilMode = 'stop';
-            } catch (_) {}
-            // Use paraxial reference sphere for faster evaluation.
-            try {
-                calculator.referenceSphereMode = 'paraxial';
-            } catch (_) {}
-
             // Discontinuity診断は重いためデフォルトOFF（必要なら runtime でON）
             //   globalThis.__WAVEFRONT_DIAG_DISCONTINUITIES = true
             const diagnoseDiscontinuities = (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_DIAG_DISCONTINUITIES === true);
@@ -1434,19 +1425,6 @@ export class WavefrontPlotter {
         const removalNote = (Array.isArray(statistics?.removeIndices) && statistics.removeIndices.length)
             ? `<div class="stats-note"><strong>Stats removal (OSA):</strong> [${statistics.removeIndices.join(', ')}] (piston/tilt/defocus)</div>`
             : '';
-
-        const pupilRadiusNote = (Number.isFinite(statistics?.pupilPhysicalRadiusMm) || Number.isFinite(statistics?.entranceEffectiveRadiusMm))
-            ? `<div class="stats-note"><strong>Pupil radius:</strong> stop=${Number.isFinite(statistics?.pupilPhysicalRadiusMm) ? Number(statistics.pupilPhysicalRadiusMm).toFixed(4) : 'n/a'}mm, entrance=${Number.isFinite(statistics?.entranceEffectiveRadiusMm) ? Number(statistics.entranceEffectiveRadiusMm).toFixed(4) : 'n/a'}mm</div>`
-            : '';
-
-        const osaResidualNote = (Number.isFinite(statistics?.aberrationRmsWaves) || Number.isFinite(statistics?.aberrationRmsMicrons))
-            ? `<div class="stats-note"><strong>OSA residual RMS (piston/tilt/defocus removed):</strong> ${Number.isFinite(statistics?.aberrationRmsWaves) ? Number(statistics.aberrationRmsWaves).toFixed(4) + ' λ' : (Number.isFinite(statistics?.aberrationRmsMicrons) ? Number(statistics.aberrationRmsMicrons).toFixed(4) + ' μm' : 'n/a')}</div>`
-            : '';
-
-        const refInfo = statistics?.referenceSphereInfo || null;
-        const refInfoNote = refInfo
-            ? `<div class="stats-note"><strong>RefSphere:</strong> mode=${String(refInfo.mode)}${refInfo.referenceSphereMode ? ` (ref=${String(refInfo.referenceSphereMode)})` : ''}${Number.isFinite(refInfo.radius) ? `, R=${Number(refInfo.radius).toFixed(6)}mm` : ''}${Number.isFinite(refInfo.chiefError) ? `, chiefErr=${Number(refInfo.chiefError).toFixed(6)}mm` : ''}${refInfo?.bestFocusTRange ? `, t=[${Number(refInfo.bestFocusTRange.tMin).toFixed(6)}, ${Number(refInfo.bestFocusTRange.tMax).toFixed(6)}], n=${refInfo.bestFocusTRange.count}` : ''}${(refInfo && Object.prototype.hasOwnProperty.call(refInfo, 'bestFocusDiag')) ? `, bestFocusDiag=${JSON.stringify(refInfo.bestFocusDiag)}` : ''}</div>`
-            : '';
         
         // Check if mean value is unusually large (potential piston issue)
         // NOTE: When showing raw OPD, the mean value includes piston by design.
@@ -1466,9 +1444,6 @@ export class WavefrontPlotter {
                 ${zernikeNote}
                 ${rawMeanNote}
                 ${removalNote}
-                ${pupilRadiusNote}
-                ${osaResidualNote}
-                ${refInfoNote}
                 <div class="stats-grid">
                     <div><strong>Data points:</strong> ${statistics.count}</div>
                     <div><strong>Mean:</strong> ${statistics.mean.toFixed(4)} ${unit}</div>
