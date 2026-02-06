@@ -1152,13 +1152,15 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         }
     } catch (_) {}
 
+    const displaySurfaceNumber = Number(options?.displaySurfaceNumber);
     return {
         spotData: spotData,
         primaryWavelength: primaryWavelength,
         wavelengths: wavelengths,
         airy: airy,
         selectedRingCount: ringCount,
-        surfaceInfoList: surfaceInfoList
+        surfaceInfoList: surfaceInfoList,
+        displaySurfaceNumber: Number.isFinite(displaySurfaceNumber) ? displaySurfaceNumber : null
     };
 }
 
@@ -2143,13 +2145,15 @@ export async function generateSpotDiagramAsync(
         }
     } catch (_) {}
 
+    const displaySurfaceNumber = Number(options?.displaySurfaceNumber);
     return {
         spotData: spotData,
         primaryWavelength: primaryWavelength,
         wavelengths: wavelengths,
         airy: airy,
         selectedRingCount: ringCount,
-        surfaceInfoList: surfaceInfoList
+        surfaceInfoList: surfaceInfoList,
+        displaySurfaceNumber: Number.isFinite(displaySurfaceNumber) ? displaySurfaceNumber : null
     };
 }
 
@@ -2249,6 +2253,9 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
     }
 
     const doc = container.ownerDocument || document;
+    const displaySurfaceNumber = (spotData && typeof spotData === 'object' && Number.isFinite(Number(spotData.displaySurfaceNumber)))
+        ? Number(spotData.displaySurfaceNumber)
+        : surfaceNumber;
     const plotly = doc.defaultView?.Plotly || (typeof window !== 'undefined' ? window.Plotly : null);
     
     console.log('✅ [SPOT DIAGRAM] Container found');
@@ -2262,7 +2269,7 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
     
     // タイトルを追加
     const title = doc.createElement('h3');
-    title.textContent = `Spot Diagram - Surf ${Math.max(0, surfaceNumber)}`;
+    title.textContent = `Spot Diagram - Surf ${Math.max(0, displaySurfaceNumber)}`;
     title.style.cssText = 'text-align: center; margin-bottom: 20px; color: #333;';
     mainContainer.appendChild(title);
     
@@ -2332,7 +2339,7 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
                 diagHtml = '';
             }
             warningText.innerHTML = `
-                <strong>⚠️ No rays reached Surf ${Math.max(0, surfaceNumber - 1)}</strong><br>
+                <strong>⚠️ No rays reached Surf ${Math.max(0, displaySurfaceNumber)}</strong><br>
                 <div style="margin-top: 8px; font-size: 14px; color: #555;">
                     • Total rays traced: ${totalRays}<br>
                     • Rays reached target surface: ${successfulRays} (${successRate}%)<br>
@@ -2679,7 +2686,7 @@ export function drawSpotDiagram(spotData, surfaceNumber, containerId, primaryWav
             shapes: [],
             annotations: [
                 {
-                    text: `Surface: ${surfaceNumber}`,
+                    text: `Surface: ${displaySurfaceNumber}`,
                     x: 1,
                     y: 1.12,
                     xref: 'paper',

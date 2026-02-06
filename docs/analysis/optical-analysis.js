@@ -963,7 +963,7 @@ export async function showSpotDiagram(options = {}) {
                 surfaceNumber,
                 rayCount,
                 ringCount,
-                { onProgress, physicalVignetting: true }
+                { onProgress, physicalVignetting: true, displaySurfaceNumber: surfaceId }
             );
             
             if (!spotDiagramData) {
@@ -991,7 +991,7 @@ export async function showSpotDiagram(options = {}) {
                 surfaceNumber,
                 rayCount,
                 ringCount,
-                { onProgress, physicalVignetting: true }
+                { onProgress, physicalVignetting: true, displaySurfaceNumber: surfaceId }
             );
             
             if (!spotDiagramData) {
