@@ -2101,14 +2101,15 @@ async function __loadAllDataObjectIntoApp(allData, { filename }) {
                 const type = String(b?.blockType ?? '');
                 if (type === 'Lens') {
                     const mat = b?.parameters?.material;
+                    // Numeric materials (refractive index) are now allowed and should not be flagged as suspicious.
                     // A lens material should be a glass name, not a refractive index number.
-                    if (isNumericish(mat)) return true;
+                    // if (isNumericish(mat)) return true;  // DISABLED: Numeric materials are now kept as-is.
                 }
                 if (type === 'Doublet' || type === 'Triplet') {
                     const m1 = b?.parameters?.material1;
                     const m2 = b?.parameters?.material2;
                     const m3 = b?.parameters?.material3;
-                    if (isNumericish(m1) || isNumericish(m2) || isNumericish(m3)) return true;
+                    // if (isNumericish(m1) || isNumericish(m2) || isNumericish(m3)) return true;  // DISABLED
                 }
             }
             return false;
@@ -4760,11 +4761,15 @@ function setupWavefrontAberrationButton() {
                 const objectSelect = document.getElementById('wavefront-object-select');
                 const plotTypeSelect = document.getElementById('wavefront-plot-type-select');
                 const gridSizeSelect = document.getElementById('wavefront-grid-size-select');
+                const removePtdCheckbox = document.getElementById('opd-remove-ptd-checkbox');
                 
                 const selectedObjectIndex = objectSelect ? parseInt(objectSelect.value) : 0;
                 const plotType = plotTypeSelect ? plotTypeSelect.value : 'surface';
                 const dataType = 'opd'; // Optical Path Difference固定
                 const gridSize = gridSizeSelect ? parseInt(gridSizeSelect.value) : 64;
+                const opdDisplayMode = (removePtdCheckbox && removePtdCheckbox.checked)
+                    ? 'pistonTiltDefocusRemoved'
+                    : 'pistonTiltRemoved';
                 
                 console.log(`🌊 光路差表示: Object${selectedObjectIndex + 1}, ${plotType}, ${dataType}, gridSize=${gridSize}`);
                 
@@ -4794,7 +4799,8 @@ function setupWavefrontAberrationButton() {
                 try {
                     await showWavefrontDiagram(plotType, dataType, gridSize, selectedObjectIndex, {
                         cancelToken: activeOpdCancelToken,
-                        onProgress
+                        onProgress,
+                        opdDisplayMode
                     });
                     if (progressEl) progressEl.textContent = 'OPD calculation completed';
                 } catch (err) {
@@ -5276,9 +5282,13 @@ async function handlePSFCalculation(debugMode = false) {
     const samplingSelect = document.getElementById('psf-sampling-select'); // PSF UIのサンプリングサイズ
     const zeroPadSelect = document.getElementById('psf-zeropad-select'); // PSF UIのゼロパディング設定
     const zernikeSamplingSelect = document.getElementById('psf-zernike-sampling-select'); // Zernikeフィット用サンプリングサイズ
+    const removePtdCheckbox = document.getElementById('psf-remove-ptd-checkbox');
     
     // デバッグモードの場合は設定を上書き
     let wavelength, psfSamplingSize, zernikeFitSamplingSize, zeroPadTo;
+    const opdDisplayMode = (removePtdCheckbox && removePtdCheckbox.checked)
+        ? 'pistonTiltDefocusRemoved'
+        : 'pistonTiltRemoved';
     if (debugMode) {
         wavelength = '0.5876'; // d線固定
         psfSamplingSize = 16; // 16×16グリッド固定（高速）
@@ -5472,6 +5482,7 @@ async function handlePSFCalculation(debugMode = false) {
                 zernikeMaxNoll: 36,
                 renderFromZernike: false,  // 生OPDデータを使用
                 // Use raw OPD with geometric tilt, let PSF calculator remove it
+                opdDisplayMode,
                 cancelToken
             });
 
@@ -5488,7 +5499,10 @@ async function handlePSFCalculation(debugMode = false) {
             // 収差サンプリングの本体である pupilCoordinates/opds を優先する。
             // （rayData は ray.path が取れない点が落ちて疎になることがあり、補間が不安定化しやすい）
             const pupilCoords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
-            const opdsMicrons = Array.isArray(wavefrontMap?.opds) ? wavefrontMap.opds : [];
+            const useDisplayOpd = (opdDisplayMode === 'pistonTiltDefocusRemoved') && Array.isArray(wavefrontMap?.display?.opds);
+            const opdsMicrons = useDisplayOpd
+                ? wavefrontMap.display.opds
+                : (Array.isArray(wavefrontMap?.opds) ? wavefrontMap.opds : []);
             const validPupilMask = Array.isArray(wavefrontMap?.validPupilMask) ? wavefrontMap.validPupilMask : null;
             const maskG = validPupilMask ? validPupilMask.length : 0;
 
@@ -5564,7 +5578,7 @@ async function handlePSFCalculation(debugMode = false) {
             // Prefer Zernike-fit piston+tilt removal for PSF input.
             // This keeps the residual wavefront (higher-order terms) while aligning the reference plane.
             // NOTE: Noll indexing here follows eva-wavefront.js (j=2 => sin, j=3 => cos).
-            const removePistonTiltByZernikeFit = (() => {
+            const removePistonTiltByZernikeFit = useDisplayOpd ? true : (() => {
                 try {
                     const coeffs = wavefrontMap?.zernike?.coefficientsMicrons;
                     if (!coeffs || typeof coeffs !== 'object') return false;
@@ -7423,7 +7437,7 @@ async function showPSFDiagram(plotType, samplingSize, logScale, objectIndex, opt
  * - フィールド選択: objectIndex
  * - 表示最大周波数: maxFrequencyLpmm
  */
-async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress } = {}) {
+async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode } = {}) {
     const safeNumber = (v, fallback) => {
         const n = Number(v);
         return Number.isFinite(n) ? n : fallback;
@@ -7457,6 +7471,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     const primaryWl = (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function')
         ? safeNumber(window.getPrimaryWavelength(), 0.5876)
         : 0.5876;
+    const effectiveOpdDisplayMode = (typeof opdDisplayMode === 'string' && opdDisplayMode)
+        ? opdDisplayMode
+        : 'pistonTiltRemoved';
 
     const isAllWavelengths = (typeof wavelengthMicrons === 'string')
         ? (String(wavelengthMicrons).toLowerCase() === 'all')
@@ -7608,7 +7625,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             renderFromZernike: false,
             skipZernikeFit: true,
             opdMode: 'referenceSphere',
-            opdDisplayMode: 'pistonTiltRemoved',
+            opdDisplayMode: effectiveOpdDisplayMode,
             onProgress: onWavefrontProgress
         });
         if (wavefrontMap?.error) {
@@ -7635,7 +7652,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
         }
 
         const coords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
-        const opdMicrons = (wavefrontMap?.display && Array.isArray(wavefrontMap.display.opds))
+        const useDisplayOpd = (effectiveOpdDisplayMode !== 'raw') && Array.isArray(wavefrontMap?.display?.opds);
+        const opdMicrons = useDisplayOpd
             ? wavefrontMap.display.opds
             : (Array.isArray(wavefrontMap?.opds) ? wavefrontMap.opds : []);
         const n = Math.min(coords.length, opdMicrons.length);
@@ -9084,7 +9102,7 @@ function formatBlockPreview(block) {
         return parts.join(' ');
     }
 
-    if (type === 'ObjectSurface') {
+    if (type === 'ObjectSurface' || type === 'ObjectPlane') {
         const modeRaw = pick('objectDistanceMode');
         const mode = String(modeRaw ?? '').trim().replace(/\s+/g, '').toUpperCase();
         if (mode === 'INF' || mode === 'INFINITY') return 'INF';
@@ -9125,7 +9143,9 @@ const __blockInspectorPreferredMaterialKeyByBlockId = new Map();
 let __blocks_lastScopeErrors = [];
 
 function __blocks_generateUniqueBlockId(blocks, baseType) {
-    const base = String(baseType ?? '').trim();
+    let base = String(baseType ?? '').trim();
+    // Normalize ObjectPlane to ObjectSurface for consistent ID generation
+    if (base === 'ObjectPlane') base = 'ObjectSurface';
     if (!Array.isArray(blocks) || !base) return `${base}-1`;
     let maxNum = 0;
     const re = new RegExp(`^${base.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}-(\\d+)$`, 'i');
@@ -9194,7 +9214,7 @@ function __blocks_makeDefaultBlock(blockType, blockId) {
         base.parameters = { thickness: 1, material: 'AIR', thicknessMode: '' };
         return base;
     }
-    if (type === 'ObjectSurface') {
+    if (type === 'ObjectSurface' || type === 'ObjectPlane') {
         base.parameters = {
             objectDistanceMode: 'Finite',
             objectDistance: 100
@@ -9301,9 +9321,12 @@ function __blocks_addBlockToActiveConfig(blockType, insertAfterBlockId = null) {
         if (already) return { ok: false, reason: 'ImageSurface already exists (only one is supported).' };
     }
 
-    if (type === 'ObjectSurface') {
-        const already = blocks.some(b => b && String(b.blockType ?? '').trim() === 'ObjectSurface');
-        if (already) return { ok: false, reason: 'ObjectSurface already exists (only one is supported).' };
+    if (type === 'ObjectSurface' || type === 'ObjectPlane') {
+        const already = blocks.some(b => {
+            const bt = String(b?.blockType ?? '').trim();
+            return bt === 'ObjectSurface' || bt === 'ObjectPlane';
+        });
+        if (already) return { ok: false, reason: 'ObjectSurface/ObjectPlane already exists (only one is supported).' };
     }
 
     const newId = __blocks_generateUniqueBlockId(blocks, type);
@@ -9315,8 +9338,8 @@ function __blocks_addBlockToActiveConfig(blockType, insertAfterBlockId = null) {
 
     let insertIdx = imageIdx; // default: before ImageSurface (or end)
 
-    // ObjectSurface defines the object-to-first-surface distance; keep it first since there is no reorder UI.
-    if (type === 'ObjectSurface') {
+    // ObjectSurface/ObjectPlane defines the object-to-first-surface distance; keep it first since there is no reorder UI.
+    if (type === 'ObjectSurface' || type === 'ObjectPlane') {
         insertIdx = 0;
     }
     const afterId = String(insertAfterBlockId ?? '').trim();
@@ -10180,8 +10203,14 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
     const formatSingletonBlockLabel = (blockType, blockIdRaw) => {
         const t = String(blockType ?? '').trim();
         const id = String(blockIdRaw ?? '').trim();
-        if (t === 'ObjectSurface' || t === 'ImageSurface') return t;
-        const m = /^(ObjectSurface|ImageSurface)-\d+$/i.exec(id);
+        // Display ObjectPlane as ObjectSurface for UI consistency
+        if (t === 'ObjectSurface' || t === 'ObjectPlane' || t === 'ImageSurface') {
+            return (t === 'ObjectPlane') ? 'ObjectSurface' : t;
+        }
+        // Handle legacy ObjectPlane-* IDs
+        const mPlane = /^ObjectPlane-(\d+)$/i.exec(id);
+        if (mPlane) return 'ObjectSurface';
+        const m = /^(ObjectSurface|ImageSurface)-(\d+)$/i.exec(id);
         if (m) return m[1];
         return id || '(none)';
     };
@@ -10200,9 +10229,10 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             const tRaw = String(bb.blockType ?? '').trim();
             if (!tRaw) continue;
 
-            // Singletons: show without numbering.
-            if (tRaw === 'ObjectSurface' || tRaw === 'ImageSurface') {
-                displayLabelByBlockId.set(realId, tRaw);
+            // Singletons: show without numbering. Normalize ObjectPlane to ObjectSurface.
+            if (tRaw === 'ObjectSurface' || tRaw === 'ObjectPlane' || tRaw === 'ImageSurface') {
+                const displayType = (tRaw === 'ObjectPlane') ? 'ObjectSurface' : tRaw;
+                displayLabelByBlockId.set(realId, displayType);
                 continue;
             }
 
@@ -10228,8 +10258,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             const rawId = String(b.blockId ?? '(none)');
             const label = displayLabelByBlockId.get(rawId) || formatSingletonBlockLabel(b.blockType, rawId);
 
-            // Special-case: ObjectSurface corresponds to the Object surface (Surf 0).
-            if (String(b.blockType ?? '').trim() === 'ObjectSurface') {
+            // Special-case: ObjectSurface/ObjectPlane corresponds to the Object surface (Surf 0).
+            const bt = String(b.blockType ?? '').trim();
+            if (bt === 'ObjectSurface' || bt === 'ObjectPlane') {
                 colId.textContent = `${label} → Surf 0`;
             } else {
                 const range = surfRangeByBlockId.get(String(b.blockId ?? '').trim());
@@ -10246,7 +10277,9 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
 
         const colType = document.createElement('div');
         colType.className = 'block-inspector-col-type';
-        colType.textContent = String(b.blockType ?? '(none)');
+        // Display ObjectPlane as ObjectSurface for UI consistency
+        const displayType = (String(b.blockType ?? '').trim() === 'ObjectPlane') ? 'ObjectSurface' : String(b.blockType ?? '(none)');
+        colType.textContent = displayType;
 
         const colParams = document.createElement('div');
         colParams.className = 'block-inspector-col-params';
@@ -10394,7 +10427,7 @@ function renderBlockInspector(summary, groups, blockById = null, blocksInOrder =
             const isSingleSurfaceCircular = singleSurfaceShape === 'Circular';
             const isSingleSurfaceSquare = singleSurfaceShape === 'Square';
             const isSingleSurfaceRect = singleSurfaceShape === 'Rectangular';
-            if (blockType === 'ObjectSurface') {
+            if (blockType === 'ObjectSurface' || blockType === 'ObjectPlane') {
                 items.push(
                     { kind: 'objectMode', key: 'objectDistanceMode', label: 'object (INF/finite)', noOptimize: true },
                     { kind: 'objectDistance', key: 'objectDistance', label: 'distance to 1st surf', noOptimize: true }

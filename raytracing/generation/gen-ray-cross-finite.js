@@ -354,9 +354,17 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
         };
         
         // 探索範囲（方向ベクトル成分の範囲）
-        const searchRange = 0.95; // ±0.95（主光線でもより広い範囲）
+        // objectDistanceが長い場合、光線の方向が初期推定に近くなるため、範囲を狭める
+        const distance = Math.sqrt(deltaX*deltaX + deltaY*deltaY + deltaZ*deltaZ);
+        const baseSearchRange = 0.95;
+        // 距離が100mm以上の場合、探索範囲を適応的に狭める（誤差が小さいため）
+        const searchRange = (distance > 100) ? Math.min(baseSearchRange, 0.5 * (100 / distance)) : baseSearchRange;
         let optimalDirX = initialDirection.i;
         let optimalDirY = initialDirection.j;
+        
+        if (debugMode && distance > 100) {
+            console.log(`   ⚠️ 長距離Object (${distance.toFixed(1)}mm): 探索範囲を±${searchRange.toFixed(3)}に縮小`);
+        }
         
         // 交互最適化（X→Y→X→Y）
         const maxIterations = 3;
@@ -392,9 +400,11 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                     }
                     
                     if (found) {
-                        optimalDirX = brent(objectiveFunctionDirX, aX, bX, 0.0001, 500);
+                        // 距離に応じた収束許容誤差（長距離の場合は緩める）
+                        const tolerance = (distance > 100) ? Math.min(0.001, 0.0001 * (distance / 100)) : 0.0001;
+                        optimalDirX = brent(objectiveFunctionDirX, aX, bX, tolerance, 500);
                         if (debugMode) {
-                            console.log(`   ✅ X方向最適化完了: ${optimalDirX.toFixed(6)}`);
+                            console.log(`   ✅ X方向最適化完了: ${optimalDirX.toFixed(6)} (tol=${tolerance})`);
                         }
                     } else {
                         // 符号変化が見つからない場合、勾配ベース探索（無限系スタイル）
@@ -462,9 +472,11 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                     }
                     
                     if (found) {
-                        optimalDirY = brent(objectiveFunctionDirY, aY, bY, 0.0001, 500);
+                        // 距離に応じた収束許容誤差（長距離の場合は緩める）
+                        const tolerance = (distance > 100) ? Math.min(0.001, 0.0001 * (distance / 100)) : 0.0001;
+                        optimalDirY = brent(objectiveFunctionDirY, aY, bY, tolerance, 500);
                         if (debugMode) {
-                            console.log(`   ✅ Y方向最適化完了: ${optimalDirY.toFixed(6)}`);
+                            console.log(`   ✅ Y方向最適化完了: ${optimalDirY.toFixed(6)} (tol=${tolerance})`);
                         }
                     } else {
                         // 符号変化が見つからない場合、勾配ベース探索（無限系スタイル）

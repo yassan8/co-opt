@@ -185,6 +185,7 @@ export class WavefrontPlotter {
 
             // 波面収差マップを生成
             if (profileEnabled) console.time('⏱️ plotOPDSurface.generateWavefrontMap');
+            const displayMode = options?.opdDisplayMode || 'pistonTiltRemoved';
             const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, 'circular', {
                 recordRays: false,
                 // Avoid console-log progress (it can dominate runtime on large grids)
@@ -197,8 +198,8 @@ export class WavefrontPlotter {
                 // OPD is fixed to raw-grid computation (no Zernike fit).
                 skipZernikeFit: true,
                 renderFromZernike: false,
-                // OPD display is fixed to piston+tilt removed (defocus kept).
-                opdDisplayMode: 'pistonTiltRemoved',
+                // OPD display mode for plots (piston/tilt or piston/tilt/defocus removal).
+                opdDisplayMode: displayMode,
                 profile: profileEnabled,
                 cancelToken: options?.cancelToken || null,
                 onProgress: options?.onProgress || null
@@ -273,8 +274,7 @@ export class WavefrontPlotter {
             } catch (_) {}
 
             // If display mode is enabled, plot the transformed OPD arrays.
-            const displayMode = 'pistonTiltRemoved';
-            const mapForPlot = (displayMode === 'pistonTiltRemoved' && wavefrontMap?.display?.opdsInWavelengths)
+            const mapForPlot = (displayMode !== 'raw' && wavefrontMap?.display?.opdsInWavelengths)
                 ? {
                     ...wavefrontMap,
                     opds: wavefrontMap.display.opds,
@@ -607,6 +607,7 @@ export class WavefrontPlotter {
             }
             // 波面収差マップを生成（Zernike 37項で関数面を描画）
             const diagnoseDiscontinuities = (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_DIAG_DISCONTINUITIES === true);
+            const displayMode = options?.opdDisplayMode || 'pistonTiltRemoved';
             const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, 'circular', {
                 recordRays: false,
                 // Avoid console-log progress (it can dominate runtime on large grids)
@@ -619,8 +620,8 @@ export class WavefrontPlotter {
                 renderFromZernike: false,
                 // OPD is fixed to raw-grid computation (no Zernike fit).
                 skipZernikeFit: true,
-                // OPD display is fixed to piston+tilt removed (defocus kept).
-                opdDisplayMode: 'pistonTiltRemoved',
+                // OPD display mode for plots (piston/tilt or piston/tilt/defocus removal).
+                opdDisplayMode: displayMode,
                 cancelToken: options?.cancelToken || null,
                 onProgress: options?.onProgress || null,
                 profile: profileEnabled
@@ -635,8 +636,7 @@ export class WavefrontPlotter {
             }
             // ヒートマップ用のデータに変換
             // If display mode is enabled, plot the transformed OPD arrays.
-            const displayMode = 'pistonTiltRemoved';
-            const mapForPlot = (displayMode === 'pistonTiltRemoved' && wavefrontMap?.display?.opdsInWavelengths)
+            const mapForPlot = (displayMode !== 'raw' && wavefrontMap?.display?.opdsInWavelengths)
                 ? {
                     ...wavefrontMap,
                     opds: wavefrontMap.display.opds,
@@ -1828,6 +1828,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
         
         // プロッターを作成
         const plotter = new WavefrontPlotter(options?.containerElement || 'wavefront-container');
+        const opdDisplayMode = options?.opdDisplayMode || 'pistonTiltRemoved';
         
         // プロットタイプに応じて描画
         const storeLast = (wavefrontMap) => {
@@ -1901,7 +1902,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
         switch (plotType) {
             case 'surface':
                 if (dataType === 'opd') {
-                    const wavefrontMap = await plotter.plotOPDSurface(opticalSystemRows, fieldSetting, wavelength, gridSize, { cancelToken, onProgress });
+                    const wavefrontMap = await plotter.plotOPDSurface(opticalSystemRows, fieldSetting, wavelength, gridSize, { cancelToken, onProgress, opdDisplayMode });
                     storeLast(wavefrontMap);
                 } else {
                     const wavefrontMap = await plotter.plotWavefrontAberrationSurface(opticalSystemRows, fieldSetting, wavelength, gridSize);
@@ -1911,7 +1912,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                 
             case 'heatmap':
                 if (dataType === 'opd') {
-                    const wavefrontMap = await plotter.plotOPDHeatmap(opticalSystemRows, fieldSetting, wavelength, gridSize, { cancelToken, onProgress });
+                    const wavefrontMap = await plotter.plotOPDHeatmap(opticalSystemRows, fieldSetting, wavelength, gridSize, { cancelToken, onProgress, opdDisplayMode });
                     storeLast(wavefrontMap);
                 } else {
                     const wavefrontMap = await plotter.plotWavefrontHeatmap(opticalSystemRows, fieldSetting, wavelength, gridSize);
