@@ -712,6 +712,22 @@ export class OpticalPathDifferenceCalculator {
             return cached;
         }
 
+        const normalizedDirection = (() => {
+            const dx = direction?.x ?? direction?.i;
+            const dy = direction?.y ?? direction?.j;
+            const dz = direction?.z ?? direction?.k;
+            if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) return null;
+            return { x: Number(dx), y: Number(dy), z: Number(dz) };
+        })();
+
+        if (!normalizedDirection) {
+            if (OPD_DEBUG) {
+                console.warn('🧩 [EntrancePupil] invalid direction supplied', { direction });
+            }
+            return null;
+        }
+        direction = normalizedDirection;
+
         if (OPD_DEBUG) {
             // This can be expensive for heavily vignetted fields; emit a single log so it doesn't look hung.
             try {

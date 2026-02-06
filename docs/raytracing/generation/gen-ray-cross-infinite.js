@@ -923,7 +923,13 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         }
 
         // 3. 主光線射出座標の探索
-        console.log(`🔍 [Chief Ray Search] Object ${objectIndex + 1}: direction=(${direction.x.toFixed(6)}, ${direction.y.toFixed(6)}, ${direction.z.toFixed(6)}), stopCenter=(${stopSurfaceInfo.center.x}, ${stopSurfaceInfo.center.y}), stopIndex=${stopSurfaceInfo.index}`);
+        const dirX = direction?.x ?? direction?.i;
+        const dirY = direction?.y ?? direction?.j;
+        const dirZ = direction?.z ?? direction?.k;
+        const dirStr = (Number.isFinite(dirX) && Number.isFinite(dirY) && Number.isFinite(dirZ))
+            ? `(${dirX.toFixed(6)}, ${dirY.toFixed(6)}, ${dirZ.toFixed(6)})`
+            : '(invalid)';
+        console.log(`🔍 [Chief Ray Search] Object ${objectIndex + 1}: direction=${dirStr}, stopCenter=(${stopSurfaceInfo.center.x}, ${stopSurfaceInfo.center.y}), stopIndex=${stopSurfaceInfo.index}`);
         let chiefRayOrigin = findInfiniteSystemChiefRayOrigin(
             direction,
             stopSurfaceInfo.center,
