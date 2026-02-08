@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 // System Configuration管理モジュール
 // 複数のConfigurationを保存・切り替え可能にする
 
@@ -16,7 +24,7 @@ interface Block {
 
 const STORAGE_KEY = "systemConfigurations";
 
-const CONFIG_DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis as any).__CONFIG_DEBUG);
+const CONFIG_DEBUG = !!(typeof globalThis !== 'undefined' && w.__CONFIG_DEBUG);
 const cfgLog = (...args: any[]): void => { if (CONFIG_DEBUG) console.log(...args); };
 const cfgWarn = (...args: any[]): void => { if (CONFIG_DEBUG) console.warn(...args); };
 
@@ -252,22 +260,22 @@ export function saveCurrentToActiveConfiguration(): void {
   // Source is global (shared across configurations).
   // Persist it to the shared storage key, but do not store it per-config.
   try {
-    const globalSource = (window as any).tableSource ? (window as any).tableSource.getData() : [];
+    const globalSource = w.tableSource ? w.tableSource.getData() : [];
     localStorage.setItem('sourceTableData', JSON.stringify(globalSource));
   } catch (_) {}
-  activeConfig.object = (window as any).tableObject ? (window as any).tableObject.getData() : [];
+  activeConfig.object = w.tableObject ? w.tableObject.getData() : [];
 
   // Expanded Optical System is derived from Blocks.
   // When Blocks exist, do NOT overwrite config.opticalSystem from the (disabled/no-op) surface table.
   if (!configurationHasBlocks(activeConfig)) {
-    activeConfig.opticalSystem = (window as any).tableOpticalSystem ? (window as any).tableOpticalSystem.getData() : [];
+    activeConfig.opticalSystem = w.tableOpticalSystem ? w.tableOpticalSystem.getData() : [];
   }
   
   // Merit Function はグローバルに保存（各configには保存しない）
-  systemConfig.meritFunction = (window as any).meritFunctionEditor ? (window as any).meritFunctionEditor.getData() : [];
+  systemConfig.meritFunction = w.meritFunctionEditor ? w.meritFunctionEditor.getData() : [];
 
   // System Requirements はグローバルに保存（各configには保存しない）
-  systemConfig.systemRequirements = (window as any).systemRequirementsEditor ? (window as any).systemRequirementsEditor.getData() : [];
+  systemConfig.systemRequirements = w.systemRequirementsEditor ? w.systemRequirementsEditor.getData() : [];
   
   // System Data を保存（localStorageとconfigの両方）
   const refFLInput = document.getElementById('reference-focal-length') as HTMLInputElement | null;
@@ -547,15 +555,15 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
   if (options && options.applyToUI) {
     const suppressOpticalSystemDataChanged = (enabled: boolean): void => {
       const key = '__suppressOpticalSystemDataChangedDepth';
-      const depth = Number((globalThis as any)[key] || 0);
+      const depth = Number(w[key] || 0);
       if (enabled) {
-        (globalThis as any)[key] = depth + 1;
-        (globalThis as any).__suppressOpticalSystemDataChanged = true;
+        w[key] = depth + 1;
+        w.__suppressOpticalSystemDataChanged = true;
         return;
       }
       const next = Math.max(0, depth - 1);
-      (globalThis as any)[key] = next;
-      (globalThis as any).__suppressOpticalSystemDataChanged = next > 0;
+      w[key] = next;
+      w.__suppressOpticalSystemDataChanged = next > 0;
     };
 
     const applyTableData = async (table: any, data: any[]): Promise<void> => {
@@ -563,7 +571,7 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
       try {
         if (typeof table.blockRedraw === 'function') table.blockRedraw();
 
-        const isOpticalSystemTable = table === (globalThis as any).tableOpticalSystem;
+        const isOpticalSystemTable = table === w.tableOpticalSystem;
         const shouldSuppress = !!(options && options.suppressOpticalSystemDataChanged && isOpticalSystemTable);
         if (shouldSuppress) {
           suppressOpticalSystemDataChanged(true);
@@ -579,7 +587,7 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
       } catch (e) {
         cfgWarn('⚠️ [Configuration] Failed to apply table data:', e);
       } finally {
-        if (table === (globalThis as any).tableOpticalSystem) {
+        if (table === w.tableOpticalSystem) {
           // Release on next tick so async Tabulator events (dataChanged) are still suppressed.
           setTimeout(() => suppressOpticalSystemDataChanged(false), 0);
         }
@@ -596,9 +604,9 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
       globalSourceRows = Array.isArray(parsed) ? parsed : [];
     } catch (_) {}
 
-    await applyTableData((globalThis as any).tableSource, globalSourceRows);
-    await applyTableData((globalThis as any).tableObject, activeConfig.object || []);
-    await applyTableData((globalThis as any).tableOpticalSystem, effectiveOpticalSystem || []);
+    await applyTableData(w.tableSource, globalSourceRows);
+    await applyTableData(w.tableObject, activeConfig.object || []);
+    await applyTableData(w.tableOpticalSystem, effectiveOpticalSystem || []);
 
     // Update system data input (reference focal length)
     try {
@@ -732,7 +740,7 @@ export function getConfigurationList(): ConfigurationListItem[] {
 
 // グローバルにエクスポート
 if (typeof window !== 'undefined') {
-  (window as any).ConfigurationManager = {
+  w.ConfigurationManager = {
     loadSystemConfigurations,
     saveSystemConfigurations,
     getActiveConfiguration,

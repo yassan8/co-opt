@@ -1,6 +1,14 @@
 // ui/dom-event-handlers.ts
 // DOM event handlers orchestration: comprehensive UI management for the entire application
 
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 // Import statements (all .ts → .js for ESM runtime)
 import { getGlassDataWithSellmeier, findSimilarGlassNames, findSimilarGlassesByNdVd } from '../data/glass.js';
 import { openGlassMapWindow } from '../data/glass-map.js';
@@ -249,10 +257,10 @@ function getSliderRangeForParameter(key: string, blockType: string, currentValue
 
 
 // Global coordinate transformation calculation function
-(window as any).__performCoordTransCalculation = async (blockId: string, panel: HTMLElement): Promise<void> => {
+w.__performCoordTransCalculation = async (blockId: string, panel: HTMLElement): Promise<void> => {
     try {
-        const systemConfig = (typeof (window as any).loadSystemConfigurations === 'function') 
-            ? (window as any).loadSystemConfigurations() 
+        const systemConfig = (typeof w.loadSystemConfigurations === 'function') 
+            ? w.loadSystemConfigurations() 
             : null;
         const activeId = systemConfig?.activeConfigId;
         const activeCfg = Array.isArray(systemConfig?.configurations)
@@ -293,15 +301,15 @@ function getSliderRangeForParameter(key: string, blockType: string, currentValue
         const expanded = expandBlocksToOpticalSystemRows(blocks);
         const rows = expanded && Array.isArray(expanded.rows) ? expanded.rows : [];
 
-        const sourceRows = ((window as any).tableSource && typeof (window as any).tableSource.getData === 'function') 
-            ? (window as any).tableSource.getData() 
+        const sourceRows = (w.tableSource && typeof w.tableSource.getData === 'function') 
+            ? w.tableSource.getData() 
             : [];
-        const objectRows = ((window as any).tableObject && typeof (window as any).tableObject.getData === 'function') 
-            ? (window as any).tableObject.getData() 
+        const objectRows = (w.tableObject && typeof w.tableObject.getData === 'function') 
+            ? w.tableObject.getData() 
             : [];
 
-        const primaryWavelength = (typeof (window as any).getPrimaryWavelength === 'function')
-            ? (Number((window as any).getPrimaryWavelength()) || 0.5876)
+        const primaryWavelength = (typeof w.getPrimaryWavelength === 'function')
+            ? (Number(w.getPrimaryWavelength()) || 0.5876)
             : 0.5876;
 
         const objRow0 = Array.isArray(objectRows) && objectRows.length > 0 ? objectRows[0] : {};
@@ -314,8 +322,8 @@ function getSliderRangeForParameter(key: string, blockType: string, currentValue
 
         let fieldSettingCenter: any;
         try {
-            if (typeof (window as any).createFieldSettingFromObject === 'function') {
-                fieldSettingCenter = (window as any).createFieldSettingFromObject(objRow0, 0, isInfinite);
+            if (typeof w.createFieldSettingFromObject === 'function') {
+                fieldSettingCenter = w.createFieldSettingFromObject(objRow0, 0, isInfinite);
             }
         } catch (_) {}
         if (!fieldSettingCenter) {
@@ -325,8 +333,8 @@ function getSliderRangeForParameter(key: string, blockType: string, currentValue
         }
 
         let rays: any[] = [];
-        if (isInfinite && typeof (window as any).generateInfiniteSystemCrossBeam === 'function') {
-            const result = await (window as any).generateInfiniteSystemCrossBeam(rows, [{ x: 0, y: 0 }], {
+        if (isInfinite && typeof w.generateInfiniteSystemCrossBeam === 'function') {
+            const result = await w.generateInfiniteSystemCrossBeam(rows, [{ x: 0, y: 0 }], {
                 rayCount: 21,
                 debugMode: false,
                 wavelength: primaryWavelength,
@@ -336,8 +344,8 @@ function getSliderRangeForParameter(key: string, blockType: string, currentValue
                 targetSurfaceIndex: toSurf
             });
             if (result?.rays) rays = result.rays;
-        } else if (!isInfinite && typeof (window as any).generateCrossBeam === 'function') {
-            const result = await (window as any).generateCrossBeam(rows, [{ x: 0, y: 0, z: 0 }], {
+        } else if (!isInfinite && typeof w.generateCrossBeam === 'function') {
+            const result = await w.generateCrossBeam(rows, [{ x: 0, y: 0, z: 0 }], {
                 rayCount: 21,
                 debugMode: false,
                 wavelength: primaryWavelength,
@@ -373,21 +381,21 @@ function getSliderRangeForParameter(key: string, blockType: string, currentValue
         const dz = Number.isFinite(targetPos.z) && Number.isFinite(ctPos.z) ? targetPos.z - ctPos.z : 0;
 
         if (coordReturn === 'xy' || coordReturn === 'xyz') {
-            if ((window as any).__blocks_setBlockParamValue) {
-                (window as any).__blocks_setBlockParamValue(blockId, 'decenterX', dx);
-                (window as any).__blocks_setBlockParamValue(blockId, 'decenterY', dy);
+            if (w.__blocks_setBlockParamValue) {
+                w.__blocks_setBlockParamValue(blockId, 'decenterX', dx);
+                w.__blocks_setBlockParamValue(blockId, 'decenterY', dy);
             }
         }
         if (coordReturn === 'xyz') {
-            if ((window as any).__blocks_setBlockParamValue) {
-                (window as any).__blocks_setBlockParamValue(blockId, 'decenterZ', dz);
+            if (w.__blocks_setBlockParamValue) {
+                w.__blocks_setBlockParamValue(blockId, 'decenterZ', dz);
             }
         }
 
         console.log(`✅ [CoordTrans] Applied: dx=${dx.toFixed(6)}, dy=${dy.toFixed(6)}, dz=${dz.toFixed(6)}`);
 
         try {
-            (window as any).refreshBlockInspector?.();
+            w.refreshBlockInspector?.();
         } catch (_) {}
     } catch (err) {
         console.error('❌ Failed to perform coordinate transformation calculation:', err);
@@ -442,15 +450,15 @@ function __zmxSolveCrossRayToStopCoordAxis(
         for (let iter = 0; iter < maxIter; iter++) {
             const mid = (lo + hi) / 2;
             const rays = isInfinite
-                ? (typeof (window as any).generateInfiniteSystemCrossBeam === 'function'
-                    ? (window as any).generateInfiniteSystemCrossBeam(rows, [{ x: 0, y: 0 }], {
+                ? (typeof w.generateInfiniteSystemCrossBeam === 'function'
+                    ? w.generateInfiniteSystemCrossBeam(rows, [{ x: 0, y: 0 }], {
                         rayCount: 1,
                         wavelength: primaryWavelength,
                         debugMode: false
                     })
                     : null)
-                : (typeof (window as any).generateCrossBeam === 'function'
-                    ? (window as any).generateCrossBeam(rows, [{ x: targetAxis === 'x' ? mid : 0, y: targetAxis === 'y' ? mid : 0, z: 0 }], {
+                : (typeof w.generateCrossBeam === 'function'
+                    ? w.generateCrossBeam(rows, [{ x: targetAxis === 'x' ? mid : 0, y: targetAxis === 'y' ? mid : 0, z: 0 }], {
                         rayCount: 1,
                         wavelength: primaryWavelength,
                         debugMode: false
@@ -499,15 +507,15 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
         if (sd !== undefined && sd !== null && String(sd).trim() !== '') continue;
 
         const rays = isInfinite
-            ? (typeof (window as any).generateInfiniteSystemCrossBeam === 'function'
-                ? (window as any).generateInfiniteSystemCrossBeam(rows, [{ x: 0, y: 0 }], {
+            ? (typeof w.generateInfiniteSystemCrossBeam === 'function'
+                ? w.generateInfiniteSystemCrossBeam(rows, [{ x: 0, y: 0 }], {
                     rayCount: 21,
                     wavelength: wavelengthMicrons,
                     debugMode: false
                 })
                 : null)
-            : (typeof (window as any).generateCrossBeam === 'function'
-                ? (window as any).generateCrossBeam(rows, [{ x: crossX, y: 0, z: 0 }, { x: 0, y: crossY, z: 0 }], {
+            : (typeof w.generateCrossBeam === 'function'
+                ? w.generateCrossBeam(rows, [{ x: crossX, y: 0, z: 0 }, { x: 0, y: crossY, z: 0 }], {
                     rayCount: 21,
                     wavelength: wavelengthMicrons,
                     debugMode: false
@@ -530,13 +538,13 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
 }
 
 function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[]): void {
-    const tbl = (window as any).tableOpticalSystem || (globalThis as any).tableOpticalSystem;
+    const tbl = w.tableOpticalSystem || w.tableOpticalSystem;
     const rows = (tbl && typeof tbl.getData === 'function') ? tbl.getData() : null;
     if (!Array.isArray(rows) || rows.length < 2) return;
 
     try {
-        const primaryWavelength = (typeof (window as any).getPrimaryWavelength === 'function')
-            ? (Number((window as any).getPrimaryWavelength()) || 0.5876)
+        const primaryWavelength = (typeof w.getPrimaryWavelength === 'function')
+            ? (Number(w.getPrimaryWavelength()) || 0.5876)
             : 0.5876;
 
         __zmxApplySemidiaOverridesFromMarginalRays(rows, primaryWavelength);
@@ -552,8 +560,8 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
 
     // Normalize design data first
     try {
-        if (typeof (window as any).normalizeDesign === 'function') {
-            const normalizedResult = (window as any).normalizeDesign(allData);
+        if (typeof w.normalizeDesign === 'function') {
+            const normalizedResult = w.normalizeDesign(allData);
             if (normalizedResult?.normalized) {
                 allData = normalizedResult.normalized;
             }
@@ -584,8 +592,8 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
             const hasBlocks = configurationHasBlocks(cfg);
 
             // Try to derive blocks from legacy optical system rows
-            if (typeof (window as any).deriveBlocksFromLegacyOpticalSystemRows === 'function') {
-                const derived = (window as any).deriveBlocksFromLegacyOpticalSystemRows(legacyRows);
+            if (typeof w.deriveBlocksFromLegacyOpticalSystemRows === 'function') {
+                const derived = w.deriveBlocksFromLegacyOpticalSystemRows(legacyRows);
                 const hasFatal = Array.isArray(derived?.issues) && derived.issues.some((i: any) => i && i.severity === 'fatal');
 
                 if (!hasFatal && (!hasBlocks || (Array.isArray(derived?.blocks) && derived.blocks.length > 0))) {
@@ -601,8 +609,8 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     for (const cfg of cfgList) {
         if (configurationHasBlocks(cfg)) {
             try {
-                if (typeof (window as any).validateBlocksConfiguration === 'function') {
-                    const issues = (window as any).validateBlocksConfiguration(cfg);
+                if (typeof w.validateBlocksConfiguration === 'function') {
+                    const issues = w.validateBlocksConfiguration(cfg);
                     const fatals = Array.isArray(issues) ? issues.filter((i: any) => i && i.severity === 'fatal') : [];
                     if (fatals.length > 0) {
                         console.warn('⚠️ Block validation errors:', fatals);
@@ -619,14 +627,14 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         if (activeCfg && configurationHasBlocks(activeCfg)) {
             const legacyBeforeExpand = Array.isArray(activeCfg.opticalSystem) ? activeCfg.opticalSystem : null;
             
-            if (typeof (window as any).expandBlocksToOpticalSystemRows === 'function') {
-                const expanded = (window as any).expandBlocksToOpticalSystemRows(activeCfg.blocks);
+            if (typeof w.expandBlocksToOpticalSystemRows === 'function') {
+                const expanded = w.expandBlocksToOpticalSystemRows(activeCfg.blocks);
                 
                 if (Array.isArray(legacyBeforeExpand) && legacyBeforeExpand.length > 0) {
                     // Preserve legacy surface data and overlay provenance
                     try {
-                        if (typeof (window as any).__blocks_overlayExpandedProvenanceIntoLegacyRows === 'function') {
-                            (window as any).__blocks_overlayExpandedProvenanceIntoLegacyRows(legacyBeforeExpand, expanded.rows);
+                        if (typeof w.__blocks_overlayExpandedProvenanceIntoLegacyRows === 'function') {
+                            w.__blocks_overlayExpandedProvenanceIntoLegacyRows(legacyBeforeExpand, expanded.rows);
                         }
                     } catch (_) {}
                     
@@ -722,7 +730,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
             } catch (_) {}
             try {
                 const sourceData = JSON.parse(localStorage.getItem('sourceTableData') || '[]');
-                const tableSource = (window as any).tableSource;
+                const tableSource = w.tableSource;
                 if (tableSource && typeof tableSource.replaceData === 'function') {
                     tableSource.replaceData(sourceData);
                 } else if (tableSource && typeof tableSource.setData === 'function') {
@@ -731,7 +739,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
             } catch (_) {}
             try {
                 const objectData = JSON.parse(localStorage.getItem('objectTableData') || '[]');
-                const tableObject = (window as any).tableObject;
+                const tableObject = w.tableObject;
                 if (tableObject && typeof tableObject.replaceData === 'function') {
                     tableObject.replaceData(objectData);
                 } else if (tableObject && typeof tableObject.setData === 'function') {
@@ -740,7 +748,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
             } catch (_) {}
             try {
                 const opticalData = JSON.parse(localStorage.getItem('OpticalSystemTableData') || '[]');
-                const tableOptical = (window as any).tableOpticalSystem || (window as any).opticalSystemTabulator;
+                const tableOptical = w.tableOpticalSystem || w.opticalSystemTabulator;
                 if (tableOptical && typeof tableOptical.replaceData === 'function') {
                     tableOptical.replaceData(opticalData);
                 } else if (tableOptical && typeof tableOptical.setData === 'function') {
@@ -749,14 +757,14 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
             } catch (_) {}
             try {
                 const meritData = JSON.parse(localStorage.getItem('meritFunctionData') || '[]');
-                const meritEditor = (window as any).meritFunctionEditor;
+                const meritEditor = w.meritFunctionEditor;
                 if (meritEditor && typeof meritEditor.setData === 'function') {
                     meritEditor.setData(meritData);
                 }
             } catch (_) {}
             try {
                 const reqData = JSON.parse(localStorage.getItem('systemRequirementsData') || '[]');
-                const reqEditor = (window as any).systemRequirementsEditor;
+                const reqEditor = w.systemRequirementsEditor;
                 if (reqEditor && typeof reqEditor.setData === 'function') {
                     reqEditor.setData(reqData);
                     if (typeof reqEditor.scheduleEvaluateAndUpdate === 'function') {
@@ -766,17 +774,17 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
             } catch (_) {}
             try { refreshBlockInspector(); } catch (_) {}
             try {
-                if (typeof (window as any).updateTransformSurfaceSelect === 'function') {
-                    (window as any).updateTransformSurfaceSelect();
+                if (typeof w.updateTransformSurfaceSelect === 'function') {
+                    w.updateTransformSurfaceSelect();
                 }
             } catch (_) {}
             
             // Wait for config-select element to be available, then initialize Configuration UI
             const waitForConfigSelect = () => {
                 const selectElement = document.getElementById('config-select');
-                if (selectElement && typeof (window as any).initializeConfigurationUI === 'function') {
+                if (selectElement && typeof w.initializeConfigurationUI === 'function') {
                     console.log('🔵 [Load] Calling initializeConfigurationUI()');
-                    (window as any).initializeConfigurationUI();
+                    w.initializeConfigurationUI();
                 } else {
                     console.log('🔵 [Load] Waiting for config-select element...');
                     setTimeout(waitForConfigSelect, 100);
@@ -839,8 +847,8 @@ function setupImportZemaxButton(): void {
                 const decoder = new TextDecoder('utf-8');
                 const text = decoder.decode(arrayBuffer);
 
-                if (typeof (window as any).parseZemaxFile === 'function') {
-                    const parsed = (window as any).parseZemaxFile(text);
+                if (typeof w.parseZemaxFile === 'function') {
+                    const parsed = w.parseZemaxFile(text);
                     if (parsed && typeof parsed === 'object') {
                         await __loadAllDataObjectIntoApp(parsed, { filename: file.name });
                         try {
@@ -884,7 +892,7 @@ function setupOptimizeDesignIntentButton(): void {
         const prevDisabled = optimizeBtn.disabled;
         optimizeBtn.disabled = true;
         try {
-            const opt = (window as any).OptimizationMVP;
+            const opt = w.OptimizationMVP;
             if (!opt || typeof opt.run !== 'function') {
                 alert('OptimizationMVP が利用できません。');
                 optimizeBtn.disabled = false;
@@ -898,8 +906,8 @@ function setupOptimizeDesignIntentButton(): void {
             let numericVarCount = 0;
             let categoricalVarCount = 0;
             try {
-                const systemConfig = (typeof (window as any).loadSystemConfigurationsFromTableConfig === 'function')
-                    ? (window as any).loadSystemConfigurationsFromTableConfig()
+                const systemConfig = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
+                    ? w.loadSystemConfigurationsFromTableConfig()
                     : JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
                 const activeId = systemConfig?.activeConfigId;
                 activeCfg = systemConfig?.configurations?.find((c: any) => c && c.id === activeId)
@@ -1081,7 +1089,7 @@ function setupOptimizeDesignIntentButton(): void {
                             stopBtn.addEventListener('click', () => {
                                 stopFlag.stop = true;
                                 try {
-                                    const _opt = (window as any).OptimizationMVP;
+                                    const _opt = w.OptimizationMVP;
                                     if (_opt && typeof _opt.stop === 'function') _opt.stop();
                                 } catch (_) {}
                                 try { if (stopBtn) stopBtn.disabled = true; } catch (_) {}
@@ -1092,7 +1100,7 @@ function setupOptimizeDesignIntentButton(): void {
                         if (runBtn) {
                             runBtn.addEventListener('click', () => {
                                 try {
-                                    const fn = (window as any).__cooptStartOptimizationFromPopup;
+                                    const fn = w.__cooptStartOptimizationFromPopup;
                                     if (typeof fn === 'function') fn();
                                 } catch (_) {}
                             });
@@ -1127,7 +1135,7 @@ function setupOptimizeDesignIntentButton(): void {
                                 alert('⚠️ Warning: Optimize Progress window was closed while optimization was running.\nThis may cause instability. Use the Stop button before closing the window.');
                                 stopFlag.stop = true;
                                 try {
-                                    const _opt = (window as any).OptimizationMVP;
+                                    const _opt = w.OptimizationMVP;
                                     if (_opt && typeof _opt.stop === 'function') _opt.stop();
                                 } catch (_) {}
                                 _gThis.__cooptOptimizerIsRunning = false;
@@ -1178,8 +1186,8 @@ function setupOptimizeDesignIntentButton(): void {
                         if (popup && !popup.closed) {
                             const autoRenderCheckbox = popup.document.getElementById('opt-auto-render') as HTMLInputElement | null;
                             if (autoRenderCheckbox && autoRenderCheckbox.checked) {
-                                if ((window as any).popup3DWindow && !(window as any).popup3DWindow.closed) {
-                                    const drawBtn = (window as any).popup3DWindow.document.getElementById('draw-btn');
+                                if (w.popup3DWindow && !w.popup3DWindow.closed) {
+                                    const drawBtn = w.popup3DWindow.document.getElementById('draw-btn');
                                     if (drawBtn) drawBtn.click();
                                 }
                             }
@@ -1200,7 +1208,7 @@ function setupOptimizeDesignIntentButton(): void {
                     const now = Date.now();
                     if ((now - __lastReqRefreshAt) >= __reqRefreshThrottleMs) {
                         if (phaseStr === 'start' || phaseStr === 'iter' || phaseStr === 'candidate' || phaseStr === 'accept' || phaseStr === 'reject') {
-                            const sre = (window as any).systemRequirementsEditor;
+                            const sre = w.systemRequirementsEditor;
                             if (sre && typeof sre.scheduleEvaluateAndUpdate === 'function') {
                                 __lastReqRefreshAt = now;
                                 sre.scheduleEvaluateAndUpdate();
@@ -1217,8 +1225,8 @@ function setupOptimizeDesignIntentButton(): void {
 
                 // Surface the worst residual/requirement contributor
                 try {
-                    const dbg = ((window as any).__cooptLastOptimizerResidualDebug && typeof (window as any).__cooptLastOptimizerResidualDebug === 'object')
-                        ? (window as any).__cooptLastOptimizerResidualDebug
+                    const dbg = (w.__cooptLastOptimizerResidualDebug && typeof w.__cooptLastOptimizerResidualDebug === 'object')
+                        ? w.__cooptLastOptimizerResidualDebug
                         : null;
                     const worst = dbg && dbg.worst && typeof dbg.worst === 'object' ? dbg.worst : null;
                     const at = dbg ? Number(dbg.at) : NaN;
@@ -1379,8 +1387,8 @@ function setupOptimizeDesignIntentButton(): void {
 
                     // Re-read config for each Run
                     try {
-                        const systemConfig = (typeof (window as any).loadSystemConfigurationsFromTableConfig === 'function')
-                            ? (window as any).loadSystemConfigurationsFromTableConfig()
+                        const systemConfig = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
+                            ? w.loadSystemConfigurationsFromTableConfig()
                             : JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
                         const activeId = systemConfig?.activeConfigId;
                         activeCfg = systemConfig?.configurations?.find((c: any) => c && c.id === activeId)
@@ -1503,8 +1511,8 @@ function setupOptimizeDesignIntentButton(): void {
                     let __prevDisableRayTraceDebug: any;
                     try {
                         // Prevent undo recording during optimization
-                        if ((window as any).undoHistory) {
-                            (window as any).undoHistory.isExecuting = true;
+                        if (w.undoHistory) {
+                            w.undoHistory.isExecuting = true;
                         }
 
                         // Force-disable ray-tracing detailed debug logs during optimization.
@@ -1537,13 +1545,13 @@ function setupOptimizeDesignIntentButton(): void {
                         } catch (_) {}
 
                         // Re-enable undo recording after optimization
-                        if ((window as any).undoHistory) {
-                            (window as any).undoHistory.isExecuting = false;
+                        if (w.undoHistory) {
+                            w.undoHistory.isExecuting = false;
                         }
 
                         // Record optimization as a single undo operation
                         try {
-                            if (beforeOptimizationState && (window as any).undoHistory && result?.ok) {
+                            if (beforeOptimizationState && w.undoHistory && result?.ok) {
                                 const afterOptimizationState = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
                                 if (JSON.stringify(beforeOptimizationState) !== JSON.stringify(afterOptimizationState)) {
                                     const command = {
@@ -1551,28 +1559,28 @@ function setupOptimizeDesignIntentButton(): void {
                                         execute: async () => {
                                             localStorage.setItem('systemConfigurations', JSON.stringify(afterOptimizationState));
                                             try {
-                                                if ((window as any).ConfigurationManager && typeof (window as any).ConfigurationManager.loadActiveConfigurationToTables === 'function') {
-                                                    await (window as any).ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
+                                                if (w.ConfigurationManager && typeof w.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+                                                    await w.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
                                                 }
                                             } catch (_) {}
                                             try {
-                                                if (typeof (window as any).refreshBlockInspector === 'function') (window as any).refreshBlockInspector();
+                                                if (typeof w.refreshBlockInspector === 'function') w.refreshBlockInspector();
                                             } catch (_) {}
                                         },
                                         undo: async () => {
                                             localStorage.setItem('systemConfigurations', JSON.stringify(beforeOptimizationState));
                                             try {
-                                                if ((window as any).ConfigurationManager && typeof (window as any).ConfigurationManager.loadActiveConfigurationToTables === 'function') {
-                                                    await (window as any).ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
+                                                if (w.ConfigurationManager && typeof w.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+                                                    await w.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
                                                 }
                                             } catch (_) {}
                                             try {
-                                                if (typeof (window as any).refreshBlockInspector === 'function') (window as any).refreshBlockInspector();
+                                                if (typeof w.refreshBlockInspector === 'function') w.refreshBlockInspector();
                                             } catch (_) {}
                                         },
                                         redo: function() { return this.execute(); }
                                     };
-                                    (window as any).undoHistory.record(command);
+                                    w.undoHistory.record(command);
                                 }
                             }
                         } catch (e) {
@@ -1590,8 +1598,8 @@ function setupOptimizeDesignIntentButton(): void {
                             _gThis.__cooptOptimizerIsRunning = false;
                         } catch (_) {}
 
-                        if ((window as any).undoHistory) {
-                            (window as any).undoHistory.isExecuting = false;
+                        if (w.undoHistory) {
+                            w.undoHistory.isExecuting = false;
                         }
                     } finally {
                         isRunning = false;
@@ -1632,7 +1640,7 @@ function setupOptimizeDesignIntentButton(): void {
 
             // Expose the starter for the popup
             try {
-                (window as any).__cooptStartOptimizationFromPopup = startRun;
+                w.__cooptStartOptimizationFromPopup = startRun;
             } catch (_) {}
 
             console.log('[Optimize] Optimization ready. Press Run to start.');
@@ -2126,11 +2134,11 @@ function buildAllDataForExport(): any {
     const refFLInput = document.getElementById('reference-focal-length') as HTMLInputElement;
     const referenceFocalLength = refFLInput ? refFLInput.value : '';
 
-    let opticalSystemData = (window as any).tableOpticalSystem ? (window as any).tableOpticalSystem.getData() : [];
+    let opticalSystemData = w.tableOpticalSystem ? w.tableOpticalSystem.getData() : [];
     
     try {
-        const systemConfig = (typeof (window as any).loadSystemConfigurations === 'function') 
-            ? (window as any).loadSystemConfigurations() 
+        const systemConfig = (typeof w.loadSystemConfigurations === 'function') 
+            ? w.loadSystemConfigurations() 
             : null;
         const activeId = systemConfig?.activeConfigId;
         const activeCfg = Array.isArray(systemConfig?.configurations)
@@ -2144,8 +2152,8 @@ function buildAllDataForExport(): any {
         };
         
         if (activeCfg && configurationHasBlocks(activeCfg)) {
-            if (typeof (window as any).expandBlocksToOpticalSystemRows === 'function') {
-                const expanded = (window as any).expandBlocksToOpticalSystemRows(activeCfg.blocks);
+            if (typeof w.expandBlocksToOpticalSystemRows === 'function') {
+                const expanded = w.expandBlocksToOpticalSystemRows(activeCfg.blocks);
                 if (expanded && Array.isArray(expanded.rows)) {
                     opticalSystemData = expanded.rows;
                 }
@@ -2154,11 +2162,11 @@ function buildAllDataForExport(): any {
     } catch (_) {}
 
     return {
-        source: (window as any).tableSource ? (window as any).tableSource.getData() : [],
-        object: (window as any).tableObject ? (window as any).tableObject.getData() : [],
+        source: w.tableSource ? w.tableSource.getData() : [],
+        object: w.tableObject ? w.tableObject.getData() : [],
         opticalSystem: opticalSystemData,
-        meritFunction: (window as any).meritFunctionEditor ? (window as any).meritFunctionEditor.getData() : [],
-        systemRequirements: (window as any).systemRequirementsEditor ? (window as any).systemRequirementsEditor.getData() : [],
+        meritFunction: w.meritFunctionEditor ? w.meritFunctionEditor.getData() : [],
+        systemRequirements: w.systemRequirementsEditor ? w.systemRequirementsEditor.getData() : [],
         systemData: {
             referenceFocalLength: referenceFocalLength
         },
@@ -2333,9 +2341,9 @@ function setupParaxialButton(): void {
     btn.addEventListener('click', () => {
         console.log('📐 近軸計算ボタンがクリックされました');
         try {
-            if (typeof (window as any).outputParaxialDataToDebug === 'function') {
-                const tableOpticalSystem = (window as any).tableOpticalSystem;
-                (window as any).outputParaxialDataToDebug(tableOpticalSystem);
+            if (typeof w.outputParaxialDataToDebug === 'function') {
+                const tableOpticalSystem = w.tableOpticalSystem;
+                w.outputParaxialDataToDebug(tableOpticalSystem);
                 console.log('✅ 近軸計算が完了しました');
             } else {
                 console.error('❌ outputParaxialDataToDebug関数が見つかりません');
@@ -2352,8 +2360,8 @@ function setupSeidelButton(): void {
     btn.addEventListener('click', () => {
         console.log('🔬 Seidel係数計算ボタンがクリックされました');
         try {
-            if (typeof (window as any).outputSeidelCoefficientsToDebug === 'function') {
-                (window as any).outputSeidelCoefficientsToDebug();
+            if (typeof w.outputSeidelCoefficientsToDebug === 'function') {
+                w.outputSeidelCoefficientsToDebug();
                 console.log('✅ Seidel係数計算が完了しました');
             } else {
                 console.error('❌ outputSeidelCoefficientsToDebug関数が見つかりません');
@@ -2373,9 +2381,9 @@ function setupSeidelAfocalButton(): void {
             const { calculateAfocalSeidelCoefficientsIntegrated } = await import('../evaluation/aberrations/seidel-coefficients-afocal.js');
             const { formatSeidelCoefficients } = await import('../evaluation/aberrations/seidel-coefficients.js');
 
-            const opticalSystemRows = (window as any).getOpticalSystemRows ? (window as any).getOpticalSystemRows() : [];
-            const objectRows = (window as any).getObjectTableRows ? (window as any).getObjectTableRows() : [];
-            const sourceRows = (window as any).getSourceTableRows ? (window as any).getSourceTableRows() : [];
+            const opticalSystemRows = w.getOpticalSystemRows ? w.getOpticalSystemRows() : [];
+            const objectRows = w.getObjectTableRows ? w.getObjectTableRows() : [];
+            const sourceRows = w.getSourceTableRows ? w.getSourceTableRows() : [];
 
             if (opticalSystemRows.length === 0) {
                 console.error('❌ Optical system data is empty');
@@ -2426,9 +2434,9 @@ function setupSeidelAfocalButton(): void {
                 systemDataTextarea.value = formatSeidelCoefficients(result);
                 console.log('✅ アフォーカル系Seidel係数計算が完了しました');
 
-                if (typeof (window as any).renderBlockContributionSummaryFromSeidel === 'function') {
+                if (typeof w.renderBlockContributionSummaryFromSeidel === 'function') {
                     try {
-                        (window as any).renderBlockContributionSummaryFromSeidel(result, opticalSystemRows);
+                        w.renderBlockContributionSummaryFromSeidel(result, opticalSystemRows);
                     } catch (e) {
                         console.warn('⚠️ Block contribution summary render failed (afocal):', e);
                     }
@@ -2449,8 +2457,8 @@ function setupCoordinateTransformButton(): void {
     btn.addEventListener('click', () => {
         console.log('🔄 座標変換ボタンがクリックされました');
         try {
-            if (typeof (window as any).displayCoordinateTransformMatrix === 'function') {
-                (window as any).displayCoordinateTransformMatrix();
+            if (typeof w.displayCoordinateTransformMatrix === 'function') {
+                w.displayCoordinateTransformMatrix();
                 console.log('✅ 座標変換表示が完了しました');
             } else {
                 console.error('❌ displayCoordinateTransformMatrix関数が見つかりません');
@@ -2465,8 +2473,8 @@ function setupSpotDiagramButton(): void {
     const btn = document.getElementById('spot-diagram-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
-        if (typeof (window as any).showSpotDiagram === 'function') {
-            (window as any).showSpotDiagram();
+        if (typeof w.showSpotDiagram === 'function') {
+            w.showSpotDiagram();
         }
     });
 }
@@ -2475,8 +2483,8 @@ function setupLongitudinalAberrationButton(): void {
     const btn = document.getElementById('longitudinal-aberration-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
-        if (typeof (window as any).showLongitudinalAberration === 'function') {
-            (window as any).showLongitudinalAberration();
+        if (typeof w.showLongitudinalAberration === 'function') {
+            w.showLongitudinalAberration();
         }
     });
 }
@@ -2485,8 +2493,8 @@ function setupTransverseAberrationButton(): void {
     const btn = document.getElementById('transverse-aberration-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
-        if (typeof (window as any).showTransverseAberration === 'function') {
-            (window as any).showTransverseAberration();
+        if (typeof w.showTransverseAberration === 'function') {
+            w.showTransverseAberration();
         }
     });
 }
@@ -2495,8 +2503,8 @@ function setupDistortionButton(): void {
     const btn = document.getElementById('distortion-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
-        if (typeof (window as any).showDistortion === 'function') {
-            (window as any).showDistortion();
+        if (typeof w.showDistortion === 'function') {
+            w.showDistortion();
         }
     });
 }
@@ -2505,8 +2513,8 @@ function setupIntegratedAberrationButton(): void {
     const btn = document.getElementById('integrated-aberration-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
-        if (typeof (window as any).showIntegratedAberration === 'function') {
-            (window as any).showIntegratedAberration();
+        if (typeof w.showIntegratedAberration === 'function') {
+            w.showIntegratedAberration();
         }
     });
 }
@@ -2515,8 +2523,8 @@ function setupAstigmatismButton(): void {
     const btn = document.getElementById('astigmatism-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
-        if (typeof (window as any).showAstigmatism === 'function') {
-            (window as any).showAstigmatism();
+        if (typeof w.showAstigmatism === 'function') {
+            w.showAstigmatism();
         }
     });
 }
@@ -2524,30 +2532,30 @@ function setupAstigmatismButton(): void {
 // PSF Calculation
 async function handlePSFCalculation(debugMode: boolean = false): Promise<void> {
     try {
-        const tbl = (window as any).tableOpticalSystem || (globalThis as any).tableOpticalSystem;
+        const tbl = w.tableOpticalSystem || w.tableOpticalSystem;
         const rows = (tbl && typeof tbl.getData === 'function') ? tbl.getData() : null;
         if (!Array.isArray(rows) || rows.length < 2) {
             alert('Optical system data not available');
             return;
         }
 
-        const objectRows = ((window as any).tableObject && typeof (window as any).tableObject.getData === 'function')
-            ? (window as any).tableObject.getData()
+        const objectRows = (w.tableObject && typeof w.tableObject.getData === 'function')
+            ? w.tableObject.getData()
             : [];
 
         const selectedObjectKey = String((document.getElementById('psf-object-select') as HTMLSelectElement)?.value ?? '0');
         const objectIndex = Number(selectedObjectKey);
 
-        const primaryWavelength = (typeof (window as any).getPrimaryWavelength === 'function')
-            ? (Number((window as any).getPrimaryWavelength()) || 0.5876)
+        const primaryWavelength = (typeof w.getPrimaryWavelength === 'function')
+            ? (Number(w.getPrimaryWavelength()) || 0.5876)
             : 0.5876;
 
         const gridSize = 128;
         const zeroPadding = 'auto';
         const opdDisplayMode = 'pistonTiltRemoved';
 
-        if (typeof (window as any).getPSFCalculatorSingleton === 'function') {
-            const calculator = await (window as any).getPSFCalculatorSingleton();
+        if (typeof w.getPSFCalculatorSingleton === 'function') {
+            const calculator = await w.getPSFCalculatorSingleton();
             const result = await calculator.calculatePSF(rows, objectRows, objectIndex, primaryWavelength, {
                 gridSize,
                 zeroPadding,
@@ -2555,8 +2563,8 @@ async function handlePSFCalculation(debugMode: boolean = false): Promise<void> {
                 debugMode
             });
 
-            if (typeof (window as any).displayPSFResult === 'function') {
-                (window as any).displayPSFResult(result);
+            if (typeof w.displayPSFResult === 'function') {
+                w.displayPSFResult(result);
             }
         }
     } catch (err) {
@@ -2572,20 +2580,20 @@ function setupPSFDisplaySettings(): void {
     const characteristicsCheckbox = document.getElementById('psf-characteristics') as HTMLInputElement;
 
     logScaleCheckbox?.addEventListener('change', () => {
-        if (typeof (window as any).updatePSFDisplay === 'function') {
-            (window as any).updatePSFDisplay();
+        if (typeof w.updatePSFDisplay === 'function') {
+            w.updatePSFDisplay();
         }
     });
 
     contoursCheckbox?.addEventListener('change', () => {
-        if (typeof (window as any).updatePSFDisplay === 'function') {
-            (window as any).updatePSFDisplay();
+        if (typeof w.updatePSFDisplay === 'function') {
+            w.updatePSFDisplay();
         }
     });
 
     characteristicsCheckbox?.addEventListener('change', () => {
-        if (typeof (window as any).updatePSFDisplay === 'function') {
-            (window as any).updatePSFDisplay();
+        if (typeof w.updatePSFDisplay === 'function') {
+            w.updatePSFDisplay();
         }
     });
 }
@@ -2611,8 +2619,8 @@ function setupPSFDisplayModeButtons(): void {
             });
             btn.classList.add('active');
 
-            if (typeof (window as any).switchPSFDisplayMode === 'function') {
-                (window as any).switchPSFDisplayMode(mode);
+            if (typeof w.switchPSFDisplayMode === 'function') {
+                w.switchPSFDisplayMode(mode);
             }
         });
     });
@@ -2626,7 +2634,7 @@ async function showMTFDiagram(options: {
     samplingSize?: number;
 } = {}): Promise<void> {
     try {
-        const tbl = (window as any).tableOpticalSystem || (globalThis as any).tableOpticalSystem;
+        const tbl = w.tableOpticalSystem || w.tableOpticalSystem;
         const rows = (tbl && typeof tbl.getData === 'function') ? tbl.getData() : null;
         if (!Array.isArray(rows) || rows.length < 2) {
             alert('Optical system data not available');
@@ -2638,16 +2646,16 @@ async function showMTFDiagram(options: {
         const maxFrequencyLpmm = options.maxFrequencyLpmm ?? 100;
         const samplingSize = options.samplingSize ?? 128;
 
-        if (typeof (window as any).calculateMTF === 'function') {
-            const result = await (window as any).calculateMTF(rows, {
+        if (typeof w.calculateMTF === 'function') {
+            const result = await w.calculateMTF(rows, {
                 wavelengthMicrons,
                 objectIndex,
                 maxFrequencyLpmm,
                 samplingSize
             });
 
-            if (typeof (window as any).displayMTFResult === 'function') {
-                (window as any).displayMTFResult(result);
+            if (typeof w.displayMTFResult === 'function') {
+                w.displayMTFResult(result);
             }
         }
     } catch (err) {
@@ -2788,13 +2796,13 @@ export function saveCurrentToActiveConfiguration(): void {
     }
     
     try {
-        const globalSource = (window as any).tableSource ? (window as any).tableSource.getData() : [];
+        const globalSource = w.tableSource ? w.tableSource.getData() : [];
         localStorage.setItem('sourceTableData', JSON.stringify(globalSource));
     } catch (_) {}
     
-    activeConfig.object = (window as any).tableObject ? (window as any).tableObject.getData() : [];
-    activeConfig.opticalSystem = (window as any).tableOpticalSystem ? (window as any).tableOpticalSystem.getData() : [];
-    activeConfig.meritFunction = (window as any).meritFunctionEditor ? (window as any).meritFunctionEditor.getData() : [];
+    activeConfig.object = w.tableObject ? w.tableObject.getData() : [];
+    activeConfig.opticalSystem = w.tableOpticalSystem ? w.tableOpticalSystem.getData() : [];
+    activeConfig.meritFunction = w.meritFunctionEditor ? w.meritFunctionEditor.getData() : [];
     
     activeConfig.metadata.modified = new Date().toISOString();
     
@@ -2948,9 +2956,9 @@ export function getConfigurationList(): any[] {
 
 // Global exports
 if (typeof window !== 'undefined') {
-    const prev = (window as any).ConfigurationManager;
+    const prev = w.ConfigurationManager;
     const base = (prev && typeof prev === 'object') ? prev : {};
-    (window as any).ConfigurationManager = {
+    w.ConfigurationManager = {
         ...base,
         loadSystemConfigurations: base.loadSystemConfigurations || loadSystemConfigurations,
         saveSystemConfigurations: base.saveSystemConfigurations || saveSystemConfigurations,
@@ -3164,9 +3172,9 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
 
     if (oldValue !== newValue) {
         try {
-            if ((window as any).undoHistory && (window as any).SetBlockParameterCommand && !(window as any).undoHistory.isExecuting) {
-                const cmd = new (window as any).SetBlockParameterCommand(activeConfig.name, String(blockId), String(path), oldValue, newValue);
-                (window as any).undoHistory.record(cmd);
+            if (w.undoHistory && w.SetBlockParameterCommand && !w.undoHistory.isExecuting) {
+                const cmd = new w.SetBlockParameterCommand(activeConfig.name, String(blockId), String(path), oldValue, newValue);
+                w.undoHistory.record(cmd);
             }
         } catch (_) {}
     }
@@ -3177,7 +3185,7 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     } catch (_) {}
     try { saveSystemConfigurations(systemConfig); } catch (_) {}
     try { refreshBlockInspector(); } catch (_) {}
-    try { if (typeof (window as any).loadActiveConfigurationToTables === 'function') (window as any).loadActiveConfigurationToTables(); } catch (_) {}
+    try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
 }
 
 function renderBlockInspector(summary: any[], groups: any, blockById: Map<string, any> | null = null, blocksInOrder: any[] | null = null): void {
@@ -3188,8 +3196,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
     // Show error banner if scope errors exist
     try {
-        if (Array.isArray((globalThis as any).__blocks_lastScopeErrors) && (globalThis as any).__blocks_lastScopeErrors.length > 0) {
-            const e0 = (globalThis as any).__blocks_lastScopeErrors[0];
+        if (Array.isArray(w.__blocks_lastScopeErrors) && w.__blocks_lastScopeErrors.length > 0) {
+            const e0 = w.__blocks_lastScopeErrors[0];
             const miss = Array.isArray(e0?.missing) ? e0.missing : [];
             const names = miss.slice(0, 6).map((m: any) => m?.configName ? `${String(m.configName)}(${String(m.configId)})` : String(m?.configId ?? '')).filter(Boolean);
             const banner = document.createElement('div');
@@ -3219,8 +3227,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     // Compute per-block surface index ranges
     const surfRangeByBlockId = new Map<string, {min:number, max:number}>();
     try {
-        if (Array.isArray(blocksInOrder) && blocksInOrder.length > 0 && typeof (window as any).expandBlocksToOpticalSystemRows === 'function') {
-            const exp = (window as any).expandBlocksToOpticalSystemRows(blocksInOrder);
+        if (Array.isArray(blocksInOrder) && blocksInOrder.length > 0 && typeof w.expandBlocksToOpticalSystemRows === 'function') {
+            const exp = w.expandBlocksToOpticalSystemRows(blocksInOrder);
             const rows = exp && Array.isArray(exp.rows) ? exp.rows : [];
             for (let i = 0; i < rows.length; i++) {
                 const r = rows[i];
@@ -4289,10 +4297,10 @@ export function refreshBlockInspector(): void {
                         return row;
                     });
 
-                    const tab = ((window as any).tableOpticalSystem && typeof (window as any).tableOpticalSystem.getData === 'function')
-                        ? (window as any).tableOpticalSystem
-                        : ((window as any).opticalSystemTabulator && typeof (window as any).opticalSystemTabulator.getData === 'function')
-                            ? (window as any).opticalSystemTabulator
+                    const tab = (w.tableOpticalSystem && typeof w.tableOpticalSystem.getData === 'function')
+                        ? w.tableOpticalSystem
+                        : (w.opticalSystemTabulator && typeof w.opticalSystemTabulator.getData === 'function')
+                            ? w.opticalSystemTabulator
                             : null;
 
                     if (tab) {
@@ -4304,7 +4312,7 @@ export function refreshBlockInspector(): void {
                     }
 
                     try {
-                        if (typeof (window as any).updateSurfaceNumberSelect === 'function') (window as any).updateSurfaceNumberSelect();
+                        if (typeof w.updateSurfaceNumberSelect === 'function') w.updateSurfaceNumberSelect();
                     } catch (_) {}
                 }
             } catch (_) {}
@@ -4327,8 +4335,8 @@ export function refreshBlockInspector(): void {
             }
             renderBlockInspector(merged, {}, blockById, blocks);
         } else {
-            if (typeof (window as any).dumpOpticalSystemProvenance !== 'function') return;
-            const result = (window as any).dumpOpticalSystemProvenance({ quiet: true });
+            if (typeof w.dumpOpticalSystemProvenance !== 'function') return;
+            const result = w.dumpOpticalSystemProvenance({ quiet: true });
             renderBlockInspector(result?.summary || [], result?.groups || {}, null, null);
         }
     } catch (e) {
@@ -4346,7 +4354,7 @@ function setupApplyToDesignIntentButton(): void {
 
     btn.addEventListener('click', () => {
         try {
-            const tbl = (window as any).tableOpticalSystem || (globalThis as any).tableOpticalSystem;
+            const tbl = w.tableOpticalSystem || w.tableOpticalSystem;
             const rows = (tbl && typeof tbl.getData === 'function') ? tbl.getData() : null;
             if (!Array.isArray(rows) || rows.length === 0) {
                 alert('Expanded Optical System が見つかりません。');
@@ -4355,7 +4363,7 @@ function setupApplyToDesignIntentButton(): void {
 
             const edits: any[] = [];
             try {
-                const pending = (globalThis as any).__pendingSurfaceEdits;
+                const pending = w.__pendingSurfaceEdits;
                 if (pending && typeof pending === 'object') {
                     for (const [key, v] of Object.entries(pending)) {
                         const [sidRaw, fieldRaw] = String(key).split(':');
@@ -4368,7 +4376,7 @@ function setupApplyToDesignIntentButton(): void {
                     }
                 }
             } catch (_) {}
-            if (edits.length === 0 && (globalThis as any).__lastSurfaceEdit) edits.push((globalThis as any).__lastSurfaceEdit);
+            if (edits.length === 0 && w.__lastSurfaceEdit) edits.push(w.__lastSurfaceEdit);
 
             if (edits.length === 0) {
                 try {
@@ -4388,7 +4396,7 @@ function setupApplyToDesignIntentButton(): void {
 
             if (edits.length === 0) {
                 try {
-                    const last = (globalThis as any).__lastActiveSurfaceCell || (globalThis as any).__lastSelectedSurfaceCell;
+                    const last = w.__lastActiveSurfaceCell || w.__lastSelectedSurfaceCell;
                     const surfaceId = Number(last?.surfaceId);
                     const field = String(last?.field ?? '').trim();
                     if (Number.isFinite(surfaceId) && field) {
@@ -4406,10 +4414,10 @@ function setupApplyToDesignIntentButton(): void {
             console.log(`✅ Apply to Design Intent: ${edits.length} edits processed`);
 
             try { refreshBlockInspector(); } catch (_) {}
-            try { (globalThis as any).__pendingSurfaceEdits = {}; } catch (_) {}
+            try { w.__pendingSurfaceEdits = {}; } catch (_) {}
             
             try {
-                const popup = (window as any).popup3DWindow;
+                const popup = w.popup3DWindow;
                 if (popup && !popup.closed && typeof popup.postMessage === 'function') {
                     popup.postMessage({ action: 'request-redraw' }, '*');
                 }

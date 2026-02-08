@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 /**
  * 波面収差図Object選択UI管理
  * Objectの数に応じて動的にドロップダウンオプションを更新
@@ -16,8 +24,8 @@ export function updateWavefrontObjectSelect(): void {
         
         // table-object.jsからObjectデータを取得
         let objectRows = [];
-        if (typeof window !== 'undefined' && (window as any).tableObject && (window as any).tableObject.getData) {
-            const allObjectRows = (window as any).tableObject.getData();
+        if (typeof window !== 'undefined' && w.tableObject && w.tableObject.getData) {
+            const allObjectRows = w.tableObject.getData();
             
             // 有効なObjectデータのみをフィルタリング
             objectRows = allObjectRows.filter((obj, index) => {
@@ -101,8 +109,8 @@ export function setupWavefrontObjectSelectListener(): void {
             
             // 選択されたObjectの詳細をログ出力
             try {
-                if (typeof window !== 'undefined' && (window as any).tableObject && (window as any).tableObject.getData) {
-                    const objectRows = (window as any).tableObject.getData();
+                if (typeof window !== 'undefined' && w.tableObject && w.tableObject.getData) {
+                    const objectRows = w.tableObject.getData();
                     const selectedObject = objectRows[selectedIndex];
                     if (selectedObject) {
                         console.log(`   詳細: (${selectedObject.xHeightAngle || 0}, ${selectedObject.yHeightAngle || 0})`);
@@ -123,8 +131,8 @@ export function initializeWavefrontObjectUI(): void {
     updateWavefrontObjectSelect();
     
     // グローバルアクセス用にwindowオブジェクトに登録
-    (window as any).updateWavefrontObjectSelect = updateWavefrontObjectSelect;
-    (window as any).debugResetObjectTable = debugResetObjectTable;
+    w.updateWavefrontObjectSelect = updateWavefrontObjectSelect;
+    w.debugResetObjectTable = debugResetObjectTable;
 }
 
 /**

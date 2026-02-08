@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 /**
  * System Evaluation Inspector Configuration
  * Manages operand definitions and inspector display logic
@@ -649,7 +657,7 @@ export class InspectorManager {
 
     const setParam2 = (nextVal: string) => {
       try {
-        const sre = (window as any).systemRequirementsEditor;
+        const sre = w.systemRequirementsEditor;
         if (!sre || !sre.table || typeof sre.table.updateData !== 'function') return;
         sre.table.updateData([{ id: rowId, param2: nextVal }]);
         if (typeof sre.saveToStorage === 'function') sre.saveToStorage();
@@ -707,12 +715,12 @@ export class InspectorManager {
     try {
       let sys = null;
       try {
-        if (typeof (window as any).loadSystemConfigurationsFromTableConfig === 'function') {
-          sys = (window as any).loadSystemConfigurationsFromTableConfig();
-        } else if (typeof (window as any).ConfigurationManager !== 'undefined' && typeof (window as any).ConfigurationManager.loadSystemConfigurations === 'function') {
-          sys = (window as any).ConfigurationManager.loadSystemConfigurations();
-        } else if (typeof (window as any).loadSystemConfigurations === 'function') {
-          sys = (window as any).loadSystemConfigurations();
+        if (typeof w.loadSystemConfigurationsFromTableConfig === 'function') {
+          sys = w.loadSystemConfigurationsFromTableConfig();
+        } else if (typeof w.ConfigurationManager !== 'undefined' && typeof w.ConfigurationManager.loadSystemConfigurations === 'function') {
+          sys = w.ConfigurationManager.loadSystemConfigurations();
+        } else if (typeof w.loadSystemConfigurations === 'function') {
+          sys = w.loadSystemConfigurations();
         }
       } catch (_) {
         sys = null;
@@ -830,6 +838,6 @@ export class InspectorManager {
 
 // Export for console access
 if (typeof window !== 'undefined') {
-  (window as any).InspectorManager = InspectorManager;
-  (window as any).OPERAND_DEFINITIONS = OPERAND_DEFINITIONS;
+  w.InspectorManager = InspectorManager;
+  w.OPERAND_DEFINITIONS = OPERAND_DEFINITIONS;
 }

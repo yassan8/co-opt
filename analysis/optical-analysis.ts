@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 /**
  * Optical Analysis Module
  * Handles PSF, spot diagram, and aberration analysis functions
@@ -356,8 +364,8 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
 
                 // Prefer cached optical rows for the selected config (avoids mixing after CB insertion).
                 try {
-                    if (cfg && typeof window !== 'undefined' && (window as any).__cooptOpticalSystemByConfigId) {
-                        const cached = (window as any).__cooptOpticalSystemByConfigId[String(selectedConfigId)];
+                    if (cfg && typeof window !== 'undefined' && w.__cooptOpticalSystemByConfigId) {
+                        const cached = w.__cooptOpticalSystemByConfigId[String(selectedConfigId)];
                         if (Array.isArray(cached) && cached.length > 0) {
                             console.log(`🔍 [Cache Hit] Config "${selectedConfigId}": Using cached opticalSystemRows (${cached.length} surfaces)`);
                             
@@ -825,9 +833,9 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         // Persist the current spot-diagram settings for other modules (e.g., Requirements spot size operands).
         // This also bridges main window vs popup window differences by using shared localStorage.
         try {
-            const pattern = (typeof window !== 'undefined' && typeof (window as any).getRayEmissionPattern === 'function')
-                ? String((window as any).getRayEmissionPattern() || '').trim().toLowerCase()
-                : String((window as any).rayEmissionPattern || '').trim().toLowerCase();
+            const pattern = (typeof window !== 'undefined' && typeof w.getRayEmissionPattern === 'function')
+                ? String(w.getRayEmissionPattern() || '').trim().toLowerCase()
+                : String(w.rayEmissionPattern || '').trim().toLowerCase();
 
             let primaryWavelengthUm = 0.5876;
             if (Array.isArray(sourceRows) && sourceRows.length > 0) {
@@ -885,10 +893,10 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                     // CRITICAL: Also update in-memory cache so merit evaluation uses latest settings immediately.
                     // This prevents Spot Diagram execution from requiring browser reload to update UR values.
                     if (typeof window !== 'undefined') {
-                        if (!(window as any).__cooptSpotDiagramSettingsByConfigId || typeof (window as any).__cooptSpotDiagramSettingsByConfigId !== 'object') {
-                            (window as any).__cooptSpotDiagramSettingsByConfigId = {};
+                        if (!w.__cooptSpotDiagramSettingsByConfigId || typeof w.__cooptSpotDiagramSettingsByConfigId !== 'object') {
+                            w.__cooptSpotDiagramSettingsByConfigId = {};
                         }
-                        (window as any).__cooptSpotDiagramSettingsByConfigId[cfgKey] = map[cfgKey];
+                        w.__cooptSpotDiagramSettingsByConfigId[cfgKey] = map[cfgKey];
                     }
                 }
             } catch (_) {
@@ -1419,7 +1427,7 @@ export async function showLongitudinalAberrationDiagram(options: any = {}): Prom
             surfaceIndex,
             wavelengths as any, // Array of wavelengths from Source table
             rayCount,
-            { onProgress, debugSA: Boolean((globalThis as any).__COOPT_DEBUG_SA) } as any
+            { onProgress, debugSA: Boolean(w.__COOPT_DEBUG_SA) } as any
         );
         
         if (!aberrationData) {

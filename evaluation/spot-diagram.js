@@ -3708,3 +3708,4 @@ function findReachableSurfaces(opticalSystemRows, objectRows) {
     return reachableSurfaces;
 }
 
+export { derivePupilAndFocalLengthMmFromParaxial };

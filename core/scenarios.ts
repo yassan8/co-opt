@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 /**
  * Multi-State / Scenarios support (console-driven).
  *
@@ -201,18 +209,18 @@ function expandActiveConfigWithScenario(activeCfg: Configuration, scenarioId?: s
 
 function refreshUI(): void {
   try {
-    if ((window as any).ConfigurationManager && typeof (window as any).ConfigurationManager.loadActiveConfigurationToTables === 'function') {
-      (window as any).ConfigurationManager.loadActiveConfigurationToTables();
+    if (w.ConfigurationManager && typeof w.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+      w.ConfigurationManager.loadActiveConfigurationToTables();
     }
   } catch (_) {}
 
   try {
-    if (typeof (window as any).refreshBlockInspector === 'function') (window as any).refreshBlockInspector();
+    if (typeof w.refreshBlockInspector === 'function') w.refreshBlockInspector();
   } catch (_) {}
 
   try {
-    if ((window as any).meritFunctionEditor && typeof (window as any).meritFunctionEditor.calculateMerit === 'function') {
-      (window as any).meritFunctionEditor.calculateMerit();
+    if (w.meritFunctionEditor && typeof w.meritFunctionEditor.calculateMerit === 'function') {
+      w.meritFunctionEditor.calculateMerit();
     }
   } catch (_) {}
 }
@@ -336,7 +344,7 @@ export function rebuildOpticalSystemFromActiveScenario(): ScenarioResult {
 
 // Global entrypoint
 if (typeof window !== 'undefined') {
-  (window as any).Scenarios = {
+  w.Scenarios = {
     list: listScenarios,
     add: addScenario,
     setActive: setActiveScenario,

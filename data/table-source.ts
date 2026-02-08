@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 // メモ　物体高だけでなく画角も扱えるようにする
 
 interface SourceRow {
@@ -239,9 +247,9 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
             
             // Record undo
             try {
-              if ((window as any).undoHistory && (window as any).DeleteRowCommand && !(window as any).undoHistory.isExecuting) {
-                const cmd = new (window as any).DeleteRowCommand('source', deletedRow, index);
-                (window as any).undoHistory.record(cmd);
+              if (w.undoHistory && w.DeleteRowCommand && !w.undoHistory.isExecuting) {
+                const cmd = new w.DeleteRowCommand('source', deletedRow, index);
+                w.undoHistory.record(cmd);
               }
             } catch (e) {
               console.warn('[Undo] Failed to record source delete:', e);
@@ -283,17 +291,17 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
         if (raw !== '' && Number.isNaN(rowData.wavelength as number)) rowData.wavelength = raw;
 
         // Record undo command
-        if ((window as any).undoHistory && !(window as any).undoHistory.isExecuting && oldValue !== rowData.wavelength) {
-          const cfg = (window as any).getActiveConfiguration?.();
+        if (w.undoHistory && !w.undoHistory.isExecuting && oldValue !== rowData.wavelength) {
+          const cfg = w.getActiveConfiguration?.();
           if (cfg) {
-            const cmd = new (window as any).SetSourceFieldCommand(
+            const cmd = new w.SetSourceFieldCommand(
               cfg.id,
               rowData.id,
               'wavelength',
               oldValue,
               rowData.wavelength
             );
-            (window as any).undoHistory.record(cmd);
+            w.undoHistory.record(cmd);
           }
         }
 
@@ -322,17 +330,17 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
         if (raw !== '' && Number.isNaN(rowData.weight as number)) rowData.weight = raw;
 
         // Record undo command
-        if ((window as any).undoHistory && !(window as any).undoHistory.isExecuting && oldValue !== rowData.weight) {
-          const cfg = (window as any).getActiveConfiguration?.();
+        if (w.undoHistory && !w.undoHistory.isExecuting && oldValue !== rowData.weight) {
+          const cfg = w.getActiveConfiguration?.();
           if (cfg) {
-            const cmd = new (window as any).SetSourceFieldCommand(
+            const cmd = new w.SetSourceFieldCommand(
               cfg.id,
               rowData.id,
               'weight',
               oldValue,
               rowData.weight
             );
-            (window as any).undoHistory.record(cmd);
+            w.undoHistory.record(cmd);
           }
         }
 
@@ -364,17 +372,17 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
         }
 
         // Record undo command
-        if ((window as any).undoHistory && !(window as any).undoHistory.isExecuting && oldValue !== rowData.primary) {
-          const cfg = (window as any).getActiveConfiguration?.();
+        if (w.undoHistory && !w.undoHistory.isExecuting && oldValue !== rowData.primary) {
+          const cfg = w.getActiveConfiguration?.();
           if (cfg) {
-            const cmd = new (window as any).SetSourceFieldCommand(
+            const cmd = new w.SetSourceFieldCommand(
               cfg.id,
               rowData.id,
               'primary',
               oldValue,
               rowData.primary
             );
-            (window as any).undoHistory.record(cmd);
+            w.undoHistory.record(cmd);
           }
         }
 
@@ -420,9 +428,9 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
     
     // Record undo
     try {
-      if ((window as any).undoHistory && (window as any).AddRowCommand && !(window as any).undoHistory.isExecuting) {
-        const cmd = new (window as any).AddRowCommand('source', JSON.parse(JSON.stringify(newRow)), insertIndex);
-        (window as any).undoHistory.record(cmd);
+      if (w.undoHistory && w.AddRowCommand && !w.undoHistory.isExecuting) {
+        const cmd = new w.AddRowCommand('source', JSON.parse(JSON.stringify(newRow)), insertIndex);
+        w.undoHistory.record(cmd);
       }
     } catch (e) {
       console.warn('[Undo] Failed to record source add:', e);
@@ -485,7 +493,7 @@ if (hasDocument && tableContainer) {
 
 // Expose to global scope for legacy callers
 if (typeof window !== 'undefined') {
-  (window as any).tableSource = tableSource;
+  w.tableSource = tableSource;
 }
 
 const bindSourceControls = (): void => {
@@ -574,7 +582,7 @@ export function mountTableSourceIfReady(): boolean {
   tableSource.__cooptContainer = tableContainer;
   try { (tableContainer as any).tabulator = tableSource; } catch (_) {}
   if (typeof window !== 'undefined') {
-    (window as any).tableSource = tableSource;
+    w.tableSource = tableSource;
   }
   bindSourceControls();
   return true;
@@ -623,15 +631,15 @@ function getPrimaryWavelength(): number {
 // 主波長変更通知関数
 function notifyPrimaryWavelengthChanged(): void {
   console.log('🔄 Primary wavelength changed, updating optical system refractive indices');
-  console.log('🔍 Current window.tableSource:', (window as any).tableSource ? 'available' : 'not available');
+  console.log('🔍 Current window.tableSource:', w.tableSource ? 'available' : 'not available');
   
   // 現在の主波長を確認
   const currentWavelength = getPrimaryWavelength();
   console.log(`📏 Current primary wavelength: ${currentWavelength} μm`);
   
   // 光学システムの屈折率を更新
-  if (typeof (window as any).updateAllRefractiveIndices === 'function') {
-    (window as any).updateAllRefractiveIndices();
+  if (typeof w.updateAllRefractiveIndices === 'function') {
+    w.updateAllRefractiveIndices();
   } else {
     console.warn('⚠️ updateAllRefractiveIndices function not found');
   }
@@ -642,9 +650,9 @@ function notifyPrimaryWavelengthChanged(): void {
  */
 function recalculateAutoSemiDiaIfAvailable(): void {
   try {
-    if (typeof (window as any).calculateImageSemiDiaFromChiefRays === 'function') {
+    if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
       console.log('🔄 Source変更検知: Image面のSemi Dia自動計算を再実行');
-      (window as any).calculateImageSemiDiaFromChiefRays();
+      w.calculateImageSemiDiaFromChiefRays();
     }
   } catch (error: any) {
     console.debug('Semi Dia自動計算スキップ:', error.message);
@@ -660,10 +668,10 @@ function testPrimaryWavelengthUpdate(): void {
   console.log(`📏 Current primary wavelength: ${currentWavelength} μm`);
   
   // window.tableSourceの状態を確認
-  console.log('🔍 window.tableSource:', (window as any).tableSource ? 'available' : 'not available');
+  console.log('🔍 window.tableSource:', w.tableSource ? 'available' : 'not available');
   
-  if ((window as any).tableSource) {
-    const sourceData = (window as any).tableSource.getData();
+  if (w.tableSource) {
+    const sourceData = w.tableSource.getData();
     console.log('📊 Source table data:', sourceData);
     
     const primaryEntry = sourceData.find((row: SourceRow) => row.primary === "Primary Wavelength");
@@ -671,29 +679,29 @@ function testPrimaryWavelengthUpdate(): void {
   }
   
   // 屈折率更新関数が利用可能かチェック
-  console.log('🔧 updateAllRefractiveIndices available:', typeof (window as any).updateAllRefractiveIndices);
+  console.log('🔧 updateAllRefractiveIndices available:', typeof w.updateAllRefractiveIndices);
   
   // 実際に屈折率更新を実行
-  if (typeof (window as any).updateAllRefractiveIndices === 'function') {
+  if (typeof w.updateAllRefractiveIndices === 'function') {
     console.log('▶️ Calling updateAllRefractiveIndices...');
-    (window as any).updateAllRefractiveIndices();
+    w.updateAllRefractiveIndices();
   }
 }
 
 // Export functions to global scope (browser only)
 if (typeof window !== 'undefined') {
   if (typeof getPrimaryWavelength === 'function') {
-    (window as any).getPrimaryWavelength = getPrimaryWavelength;
+    w.getPrimaryWavelength = getPrimaryWavelength;
   }
 
   if (typeof notifyPrimaryWavelengthChanged === 'function') {
-    (window as any).notifyPrimaryWavelengthChanged = notifyPrimaryWavelengthChanged;
+    w.notifyPrimaryWavelengthChanged = notifyPrimaryWavelengthChanged;
   }
 }
 
 // デバッグ用テスト関数をグローバルに公開（browser only）
 if (typeof window !== 'undefined') {
   if (typeof testPrimaryWavelengthUpdate === 'function') {
-    (window as any).testPrimaryWavelengthUpdate = testPrimaryWavelengthUpdate;
+    w.testPrimaryWavelengthUpdate = testPrimaryWavelengthUpdate;
   }
 }

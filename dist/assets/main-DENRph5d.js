@@ -39,6 +39,7 @@ import { showWavefrontDiagram } from './evaluation/wavefront/wavefront-plot.js';
 import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './evaluation/wavefront/wavefront.js';
 import { PSFCalculator } from './evaluation/psf/psf-calculator.js';
 import { PSFPlotter, PSFDisplayManager } from './evaluation/psf/psf-plot.js';
+import { showMTFDiagram } from './evaluation/mtf-plot.js';
 import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './evaluation/wavefront/zernike-fitting.js';
 import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './evaluation/wavefront/opd-zernike-analysis.js';
 import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './raytracing/generation/gen-ray-cross-finite.js';
@@ -287,6 +288,7 @@ async function initializeApplication() {
         window.showAstigmatismDiagram = showAstigmatismDiagram;
         window.showIntegratedAberrationDiagram = showIntegratedAberrationDiagram;
         window.showWavefrontDiagram = showWavefrontDiagram;
+        window.showMTFDiagram = showMTFDiagram;
         
         // Wavefront analysis functions (for debugging)
         window.OpticalPathDifferenceCalculator = OpticalPathDifferenceCalculator;

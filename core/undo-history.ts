@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 /**
  * Undo/Redo System for Co-Opt
  * Implements Command Pattern for system-wide undo functionality
@@ -82,18 +90,18 @@ export class SetBlockParameterCommand extends Command {
   
   execute(): void {
     console.log('[Undo] execute() called');
-    if ((window as any).undoHistory) {
-      (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) {
+      w.undoHistory.isExecuting = true;
     }
     try {
-      const sysConfig = (window as any).loadSystemConfigurations();
+      const sysConfig = w.loadSystemConfigurations();
       const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       const block = this.findBlock(cfg);
       this.setNestedValue(block, this.parameterPath, this.newValue);
       this.refreshSystem(sysConfig, cfg);
     } finally {
-      if ((window as any).undoHistory) {
-        (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) {
+        w.undoHistory.isExecuting = false;
       }
       console.log('[Undo] execute() completed');
     }
@@ -101,11 +109,11 @@ export class SetBlockParameterCommand extends Command {
   
   undo(): void {
     console.log('[Undo] SetBlockParameterCommand.undo() starting');
-    if ((window as any).undoHistory) {
-      (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) {
+      w.undoHistory.isExecuting = true;
     }
     try {
-      const sysConfig = (window as any).loadSystemConfigurations();
+      const sysConfig = w.loadSystemConfigurations();
       const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       console.log('[Undo] Config found:', cfg ? cfg.name : 'null');
       const block = this.findBlock(cfg);
@@ -117,8 +125,8 @@ export class SetBlockParameterCommand extends Command {
       this.refreshSystem(sysConfig, cfg);
       console.log('[Undo] SetBlockParameterCommand.undo() completed');
     } finally {
-      if ((window as any).undoHistory) {
-        (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) {
+        w.undoHistory.isExecuting = false;
       }
     }
   }
@@ -134,7 +142,7 @@ export class SetBlockParameterCommand extends Command {
   }
   
   getConfig(): Configuration {
-    const sysConfig = (window as any).loadSystemConfigurations();
+    const sysConfig = w.loadSystemConfigurations();
     return sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
   }
   
@@ -163,9 +171,9 @@ export class SetBlockParameterCommand extends Command {
     console.log('[Undo] refreshSystem() starting');
     
     // Re-expand blocks to optical system
-    if ((window as any).expandBlocksToOpticalSystemRows) {
+    if (w.expandBlocksToOpticalSystemRows) {
       console.log('[Undo] Expanding blocks to optical system');
-      const expanded = (window as any).expandBlocksToOpticalSystemRows(cfg.blocks);
+      const expanded = w.expandBlocksToOpticalSystemRows(cfg.blocks);
       if (expanded && expanded.rows) {
         cfg.opticalSystemRows = expanded.rows;
         console.log('[Undo] Optical system updated');
@@ -178,29 +186,29 @@ export class SetBlockParameterCommand extends Command {
     console.log('[Undo] Before save, value in sysConfig:', this.getNestedValue(blockInSysConfig, this.parameterPath));
     
     // Save to localStorage (sysConfig already contains the changes made to cfg)
-    if ((window as any).saveSystemConfigurations) {
+    if (w.saveSystemConfigurations) {
       console.log('[Undo] Saving system configurations');
-      (window as any).saveSystemConfigurations(sysConfig);
+      w.saveSystemConfigurations(sysConfig);
       
       // Verify save
-      const reloaded = (window as any).loadSystemConfigurations();
+      const reloaded = w.loadSystemConfigurations();
       const reloadedCfg = reloaded.configurations.find((c: Configuration) => c.name === cfg.name);
       const reloadedBlock = reloadedCfg?.blocks.find((b: Block) => b.blockId === this.blockId);
       console.log('[Undo] After save, reloaded value:', this.getNestedValue(reloadedBlock, this.parameterPath));
     }
     
     // Refresh UI
-    if ((window as any).refreshBlockInspector) {
+    if (w.refreshBlockInspector) {
       console.log('[Undo] Calling refreshBlockInspector');
-      (window as any).refreshBlockInspector();
+      w.refreshBlockInspector();
     }
-    if ((window as any).loadActiveConfigurationToTables) {
+    if (w.loadActiveConfigurationToTables) {
       console.log('[Undo] Calling loadActiveConfigurationToTables');
-      (window as any).loadActiveConfigurationToTables();
+      w.loadActiveConfigurationToTables();
     }
-    if ((window as any).refreshAllUI) {
+    if (w.refreshAllUI) {
       console.log('[Undo] Calling refreshAllUI');
-      (window as any).refreshAllUI();
+      w.refreshAllUI();
     }
     console.log('[Undo] refreshSystem() completed');
   }
@@ -244,22 +252,22 @@ export class SetSurfaceFieldCommand extends Command {
   }
   
   getConfig(): Configuration {
-    const sysConfig = (window as any).loadSystemConfigurations();
+    const sysConfig = w.loadSystemConfigurations();
     return sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
   }
   
   saveAndRefresh(): void {
-    if ((window as any).saveSystemConfigurations) {
-      (window as any).saveSystemConfigurations();
+    if (w.saveSystemConfigurations) {
+      w.saveSystemConfigurations();
     }
     
     // Reload table to reflect changes
-    if ((window as any).loadActiveConfigurationToTables) {
-      (window as any).loadActiveConfigurationToTables();
+    if (w.loadActiveConfigurationToTables) {
+      w.loadActiveConfigurationToTables();
     }
     
-    if ((window as any).refreshAllUI) {
-      (window as any).refreshAllUI();
+    if (w.refreshAllUI) {
+      w.refreshAllUI();
     }
   }
 }
@@ -283,8 +291,8 @@ export class SetRequirementCommand extends Command {
   
   execute(): void {
     console.log('[Undo] SetRequirementCommand.execute() starting');
-    if ((window as any).undoHistory) {
-      (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) {
+      w.undoHistory.isExecuting = true;
     }
     try {
       // Load from systemRequirementsData localStorage key
@@ -299,16 +307,16 @@ export class SetRequirementCommand extends Command {
         this.refreshUI();
       }
     } finally {
-      if ((window as any).undoHistory) {
-        (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) {
+        w.undoHistory.isExecuting = false;
       }
     }
   }
   
   undo(): void {
     console.log('[Undo] SetRequirementCommand.undo() starting');
-    if ((window as any).undoHistory) {
-      (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) {
+      w.undoHistory.isExecuting = true;
     }
     try {
       // Load from systemRequirementsData localStorage key
@@ -330,31 +338,31 @@ export class SetRequirementCommand extends Command {
         this.refreshUI();
       }
     } finally {
-      if ((window as any).undoHistory) {
-        (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) {
+        w.undoHistory.isExecuting = false;
       }
     }
   }
   
   refreshUI(): void {
     console.log('[Undo] SetRequirementCommand.refreshUI() called');
-    if ((window as any).systemRequirementsEditor) {
+    if (w.systemRequirementsEditor) {
       console.log('[Undo] Calling systemRequirementsEditor.loadFromStorage()...');
-      (window as any).systemRequirementsEditor.loadFromStorage();
-      console.log('[Undo] loadFromStorage() completed, requirements:', (window as any).systemRequirementsEditor.requirements);
+      w.systemRequirementsEditor.loadFromStorage();
+      console.log('[Undo] loadFromStorage() completed, requirements:', w.systemRequirementsEditor.requirements);
       
       // Check if requirement data is correct
-      const req = (window as any).systemRequirementsEditor.requirements.find((r: SystemRequirement) => r.id === this.requirementId);
+      const req = w.systemRequirementsEditor.requirements.find((r: SystemRequirement) => r.id === this.requirementId);
       console.log(`[Undo] Requirement ${this.requirementId} data after loadFromStorage:`, req);
       console.log(`[Undo] Field ${this.field} value:`, req?.[this.field]);
       
       console.log('[Undo] Calling systemRequirementsEditor.renderTable()...');
-      (window as any).systemRequirementsEditor.renderTable();
+      w.systemRequirementsEditor.renderTable();
       console.log('[Undo] renderTable() completed');
       
       // Verify UI after render
       setTimeout(() => {
-        const reloadedReq = (window as any).systemRequirementsEditor.requirements.find((r: SystemRequirement) => r.id === this.requirementId);
+        const reloadedReq = w.systemRequirementsEditor.requirements.find((r: SystemRequirement) => r.id === this.requirementId);
         console.log(`[Undo] After renderTable, requirement ${this.requirementId}.${this.field}:`, reloadedReq?.[this.field]);
       }, 100);
     } else {
@@ -384,8 +392,8 @@ export class SetSourceFieldCommand extends Command {
   
   execute(): void {
     console.log('[Undo] SetSourceFieldCommand.execute() starting');
-    if ((window as any).undoHistory) {
-      (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) {
+      w.undoHistory.isExecuting = true;
     }
     try {
       // Load from sourceTableData localStorage key
@@ -400,16 +408,16 @@ export class SetSourceFieldCommand extends Command {
         this.refreshUI();
       }
     } finally {
-      if ((window as any).undoHistory) {
-        (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) {
+        w.undoHistory.isExecuting = false;
       }
     }
   }
   
   undo(): void {
     console.log('[Undo] SetSourceFieldCommand.undo() starting');
-    if ((window as any).undoHistory) {
-      (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) {
+      w.undoHistory.isExecuting = true;
     }
     try {
       // Load from sourceTableData localStorage key
@@ -424,22 +432,22 @@ export class SetSourceFieldCommand extends Command {
         this.refreshUI();
       }
     } finally {
-      if ((window as any).undoHistory) {
-        (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) {
+        w.undoHistory.isExecuting = false;
       }
     }
   }
   
   refreshUI(): void {
     console.log('[Undo] SetSourceFieldCommand.refreshUI() called');
-    console.log('[Undo] window.tableSource exists:', !!(window as any).tableSource);
-    console.log('[Undo] window.loadSourceTableData exists:', !!(window as any).loadSourceTableData);
-    if ((window as any).tableSource && (window as any).loadSourceTableData) {
+    console.log('[Undo] window.tableSource exists:', !!w.tableSource);
+    console.log('[Undo] window.loadSourceTableData exists:', !!w.loadSourceTableData);
+    if (w.tableSource && w.loadSourceTableData) {
       console.log('[Undo] Calling loadSourceTableData()...');
-      const data = (window as any).loadSourceTableData();
+      const data = w.loadSourceTableData();
       console.log('[Undo] Loaded data:', data);
       console.log('[Undo] Calling tableSource.replaceData()...');
-      (window as any).tableSource.replaceData(data);
+      w.tableSource.replaceData(data);
       console.log('[Undo] tableSource.replaceData() completed');
     } else {
       console.error('[Undo] Cannot refresh UI - missing tableSource or loadSourceTableData');
@@ -468,8 +476,8 @@ export class SetObjectFieldCommand extends Command {
   
   execute(): void {
     console.log('[Undo] SetObjectFieldCommand.execute() starting');
-    if ((window as any).undoHistory) {
-      (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) {
+      w.undoHistory.isExecuting = true;
     }
     try {
       // Load from objectTableData localStorage key
@@ -484,16 +492,16 @@ export class SetObjectFieldCommand extends Command {
         this.refreshUI();
       }
     } finally {
-      if ((window as any).undoHistory) {
-        (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) {
+        w.undoHistory.isExecuting = false;
       }
     }
   }
   
   undo(): void {
     console.log('[Undo] SetObjectFieldCommand.undo() starting');
-    if ((window as any).undoHistory) {
-      (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) {
+      w.undoHistory.isExecuting = true;
     }
     try {
       // Load from objectTableData localStorage key
@@ -518,27 +526,27 @@ export class SetObjectFieldCommand extends Command {
         console.error('[Undo] Object not found! objectId:', this.objectId);
       }
     } finally {
-      if ((window as any).undoHistory) {
-        (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) {
+        w.undoHistory.isExecuting = false;
       }
     }
   }
   
   getConfig(): Configuration {
-    const sysConfig = (window as any).loadSystemConfigurations();
+    const sysConfig = w.loadSystemConfigurations();
     return sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
   }
   
   refreshUI(): void {
     console.log('[Undo] SetObjectFieldCommand.refreshUI() called');
-    console.log('[Undo] window.tableObject exists:', !!(window as any).tableObject);
-    console.log('[Undo] window.loadObjectTableData exists:', !!(window as any).loadObjectTableData);
-    if ((window as any).tableObject && (window as any).loadObjectTableData) {
+    console.log('[Undo] window.tableObject exists:', !!w.tableObject);
+    console.log('[Undo] window.loadObjectTableData exists:', !!w.loadObjectTableData);
+    if (w.tableObject && w.loadObjectTableData) {
       console.log('[Undo] Calling loadObjectTableData()...');
-      const data = (window as any).loadObjectTableData();
+      const data = w.loadObjectTableData();
       console.log('[Undo] Loaded data:', data);
       console.log('[Undo] Calling tableObject.replaceData()...');
-      (window as any).tableObject.replaceData(data);
+      w.tableObject.replaceData(data);
       console.log('[Undo] tableObject.replaceData() completed');
     } else {
       console.error('[Undo] Cannot refresh UI - missing tableObject or loadObjectTableData');
@@ -562,42 +570,42 @@ export class AddBlockCommand extends Command {
   }
   
   execute(): void {
-    if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
     try {
-      const sysConfig = (window as any).loadSystemConfigurations();
+      const sysConfig = w.loadSystemConfigurations();
       const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       if (!cfg || !Array.isArray(cfg.blocks)) return;
       
       cfg.blocks.splice(this.insertIndex, 0, this.blockData);
       this.refreshSystem(sysConfig, cfg);
     } finally {
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
     }
   }
   
   undo(): void {
-    if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
     try {
-      const sysConfig = (window as any).loadSystemConfigurations();
+      const sysConfig = w.loadSystemConfigurations();
       const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       if (!cfg || !Array.isArray(cfg.blocks)) return;
       
       cfg.blocks.splice(this.insertIndex, 1);
       this.refreshSystem(sysConfig, cfg);
     } finally {
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
     }
   }
   
   refreshSystem(sysConfig: SystemConfigurations, cfg: Configuration): void {
-    if ((window as any).expandBlocksToOpticalSystemRows) {
-      const expanded = (window as any).expandBlocksToOpticalSystemRows(cfg.blocks);
+    if (w.expandBlocksToOpticalSystemRows) {
+      const expanded = w.expandBlocksToOpticalSystemRows(cfg.blocks);
       if (expanded && expanded.rows) cfg.opticalSystemRows = expanded.rows;
     }
-    if ((window as any).saveSystemConfigurations) (window as any).saveSystemConfigurations(sysConfig);
-    if ((window as any).refreshBlockInspector) (window as any).refreshBlockInspector();
-    if ((window as any).loadActiveConfigurationToTables) (window as any).loadActiveConfigurationToTables();
-    if ((window as any).refreshAllUI) (window as any).refreshAllUI();
+    if (w.saveSystemConfigurations) w.saveSystemConfigurations(sysConfig);
+    if (w.refreshBlockInspector) w.refreshBlockInspector();
+    if (w.loadActiveConfigurationToTables) w.loadActiveConfigurationToTables();
+    if (w.refreshAllUI) w.refreshAllUI();
   }
 }
 
@@ -617,42 +625,42 @@ export class DeleteBlockCommand extends Command {
   }
   
   execute(): void {
-    if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
     try {
-      const sysConfig = (window as any).loadSystemConfigurations();
+      const sysConfig = w.loadSystemConfigurations();
       const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       if (!cfg || !Array.isArray(cfg.blocks)) return;
       
       cfg.blocks.splice(this.blockIndex, 1);
       this.refreshSystem(sysConfig, cfg);
     } finally {
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
     }
   }
   
   undo(): void {
-    if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
     try {
-      const sysConfig = (window as any).loadSystemConfigurations();
+      const sysConfig = w.loadSystemConfigurations();
       const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       if (!cfg || !Array.isArray(cfg.blocks)) return;
       
       cfg.blocks.splice(this.blockIndex, 0, this.blockData);
       this.refreshSystem(sysConfig, cfg);
     } finally {
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
     }
   }
   
   refreshSystem(sysConfig: SystemConfigurations, cfg: Configuration): void {
-    if ((window as any).expandBlocksToOpticalSystemRows) {
-      const expanded = (window as any).expandBlocksToOpticalSystemRows(cfg.blocks);
+    if (w.expandBlocksToOpticalSystemRows) {
+      const expanded = w.expandBlocksToOpticalSystemRows(cfg.blocks);
       if (expanded && expanded.rows) cfg.opticalSystemRows = expanded.rows;
     }
-    if ((window as any).saveSystemConfigurations) (window as any).saveSystemConfigurations(sysConfig);
-    if ((window as any).refreshBlockInspector) (window as any).refreshBlockInspector();
-    if ((window as any).loadActiveConfigurationToTables) (window as any).loadActiveConfigurationToTables();
-    if ((window as any).refreshAllUI) (window as any).refreshAllUI();
+    if (w.saveSystemConfigurations) w.saveSystemConfigurations(sysConfig);
+    if (w.refreshBlockInspector) w.refreshBlockInspector();
+    if (w.loadActiveConfigurationToTables) w.loadActiveConfigurationToTables();
+    if (w.refreshAllUI) w.refreshAllUI();
   }
 }
 
@@ -675,7 +683,7 @@ export class AddRowCommand extends Command {
   }
   
   execute(): void {
-    if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
     try {
       const storageKey = this.getStorageKey();
       const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
@@ -683,11 +691,11 @@ export class AddRowCommand extends Command {
       localStorage.setItem(storageKey, JSON.stringify(data));
       
       // Temporarily set isExecuting to false for refreshUI to work properly
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
       this.refreshUI();
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
+      if (w.undoHistory) w.undoHistory.isExecuting = true;
     } finally {
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
     }
   }
   
@@ -698,7 +706,7 @@ export class AddRowCommand extends Command {
       rowDataId: this.rowData?.id
     });
     
-    if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
     try {
       const storageKey = this.getStorageKey();
       const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
@@ -708,11 +716,11 @@ export class AddRowCommand extends Command {
       localStorage.setItem(storageKey, JSON.stringify(data));
       
       // Temporarily set isExecuting to false for refreshUI to work properly
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
       this.refreshUI();
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
+      if (w.undoHistory) w.undoHistory.isExecuting = true;
     } finally {
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
     }
     console.log('[DEBUG AddRowCommand.undo] Completed');
   }
@@ -727,13 +735,13 @@ export class AddRowCommand extends Command {
   }
   
   refreshUI(): void {
-    if (this.tableName === 'source' && (window as any).tableSource && (window as any).loadSourceTableData) {
-      (window as any).tableSource.replaceData((window as any).loadSourceTableData());
-    } else if (this.tableName === 'object' && (window as any).tableObject && (window as any).loadObjectTableData) {
-      (window as any).tableObject.replaceData((window as any).loadObjectTableData());
-    } else if (this.tableName === 'requirement' && (window as any).systemRequirementsEditor) {
-      (window as any).systemRequirementsEditor.loadFromStorage();
-      (window as any).systemRequirementsEditor.renderTable();
+    if (this.tableName === 'source' && w.tableSource && w.loadSourceTableData) {
+      w.tableSource.replaceData(w.loadSourceTableData());
+    } else if (this.tableName === 'object' && w.tableObject && w.loadObjectTableData) {
+      w.tableObject.replaceData(w.loadObjectTableData());
+    } else if (this.tableName === 'requirement' && w.systemRequirementsEditor) {
+      w.systemRequirementsEditor.loadFromStorage();
+      w.systemRequirementsEditor.renderTable();
     }
   }
 }
@@ -757,7 +765,7 @@ export class DeleteRowCommand extends Command {
   }
   
   execute(): void {
-    if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
     try {
       const storageKey = this.getStorageKey();
       const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
@@ -765,11 +773,11 @@ export class DeleteRowCommand extends Command {
       localStorage.setItem(storageKey, JSON.stringify(data));
       
       // Temporarily set isExecuting to false for refreshUI to work properly
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
       this.refreshUI();
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
+      if (w.undoHistory) w.undoHistory.isExecuting = true;
     } finally {
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
     }
   }
   
@@ -780,7 +788,7 @@ export class DeleteRowCommand extends Command {
       rowDataId: this.rowData?.id
     });
     
-    if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
     try {
       const storageKey = this.getStorageKey();
       const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
@@ -790,11 +798,11 @@ export class DeleteRowCommand extends Command {
       localStorage.setItem(storageKey, JSON.stringify(data));
       
       // Temporarily set isExecuting to false for refreshUI to work properly
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
       this.refreshUI();
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
+      if (w.undoHistory) w.undoHistory.isExecuting = true;
     } finally {
-      if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = false;
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
     }
     console.log('[DEBUG DeleteRowCommand.undo] Completed');
   }
@@ -809,13 +817,13 @@ export class DeleteRowCommand extends Command {
   }
   
   refreshUI(): void {
-    if (this.tableName === 'source' && (window as any).tableSource && (window as any).loadSourceTableData) {
-      (window as any).tableSource.replaceData((window as any).loadSourceTableData());
-    } else if (this.tableName === 'object' && (window as any).tableObject && (window as any).loadObjectTableData) {
-      (window as any).tableObject.replaceData((window as any).loadObjectTableData());
-    } else if (this.tableName === 'requirement' && (window as any).systemRequirementsEditor) {
-      (window as any).systemRequirementsEditor.loadFromStorage();
-      (window as any).systemRequirementsEditor.renderTable();
+    if (this.tableName === 'source' && w.tableSource && w.loadSourceTableData) {
+      w.tableSource.replaceData(w.loadSourceTableData());
+    } else if (this.tableName === 'object' && w.tableObject && w.loadObjectTableData) {
+      w.tableObject.replaceData(w.loadObjectTableData());
+    } else if (this.tableName === 'requirement' && w.systemRequirementsEditor) {
+      w.systemRequirementsEditor.loadFromStorage();
+      w.systemRequirementsEditor.renderTable();
     }
   }
 }
@@ -1006,19 +1014,19 @@ export class UndoHistory {
 
 // Create global instance
 if (typeof window !== 'undefined') {
-  (window as any).undoHistory = new UndoHistory();
+  w.undoHistory = new UndoHistory();
   
   // Export command classes for use in other modules
-  (window as any).Command = Command;
-  (window as any).SetBlockParameterCommand = SetBlockParameterCommand;
-  (window as any).SetSurfaceFieldCommand = SetSurfaceFieldCommand;
-  (window as any).SetRequirementCommand = SetRequirementCommand;
-  (window as any).SetSourceFieldCommand = SetSourceFieldCommand;
-  (window as any).SetObjectFieldCommand = SetObjectFieldCommand;
-  (window as any).AddBlockCommand = AddBlockCommand;
-  (window as any).DeleteBlockCommand = DeleteBlockCommand;
-  (window as any).AddRowCommand = AddRowCommand;
-  (window as any).DeleteRowCommand = DeleteRowCommand;
-  (window as any).CompoundCommand = CompoundCommand;
-  (window as any).UndoHistory = UndoHistory;
+  w.Command = Command;
+  w.SetBlockParameterCommand = SetBlockParameterCommand;
+  w.SetSurfaceFieldCommand = SetSurfaceFieldCommand;
+  w.SetRequirementCommand = SetRequirementCommand;
+  w.SetSourceFieldCommand = SetSourceFieldCommand;
+  w.SetObjectFieldCommand = SetObjectFieldCommand;
+  w.AddBlockCommand = AddBlockCommand;
+  w.DeleteBlockCommand = DeleteBlockCommand;
+  w.AddRowCommand = AddRowCommand;
+  w.DeleteRowCommand = DeleteRowCommand;
+  w.CompoundCommand = CompoundCommand;
+  w.UndoHistory = UndoHistory;
 }

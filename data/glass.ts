@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 // Relative price index maps (embedded).
 //
 // Interpretation:
@@ -14063,8 +14071,8 @@ export function getPrimaryWavelength(): number {
   if (DEBUG) console.log('🔍 getPrimaryWavelength called from glass.js');
   try {
     // グローバルのtableSourceオブジェクトを使用
-    if (typeof window !== 'undefined' && (window as any).tableSource && typeof (window as any).tableSource.getData === 'function') {
-      const sourceData = (window as any).tableSource.getData();
+    if (typeof window !== 'undefined' && w.tableSource && typeof w.tableSource.getData === 'function') {
+      const sourceData = w.tableSource.getData();
       if (DEBUG) console.log('📊 Source data (glass.js):', sourceData);
       
       // Primary Wavelengthに設定されているエントリを探す
@@ -14083,7 +14091,7 @@ export function getPrimaryWavelength(): number {
       if (DEBUG) console.log('⚠️ Primary wavelength not found (glass.js), using default: 0.5876 μm');
       return 0.5876;
     } else {
-      if (DEBUG) console.warn('⚠️ (window as any).tableSource not available in glass.js');
+      if (DEBUG) console.warn('⚠️ w.tableSource not available in glass.js');
     }
   } catch (error) {
     if (DEBUG) console.warn('❌ Error getting primary wavelength (glass.js):', error);
@@ -14095,11 +14103,11 @@ export function getPrimaryWavelength(): number {
 
 // グローバルに公開（テスト用）
 if (typeof window !== 'undefined') {
-  (window as any).getPrimaryWavelength = getPrimaryWavelength;
-  (window as any).calculateRefractiveIndex = calculateRefractiveIndex;
-  (window as any).getGlassDataWithSellmeier = getGlassDataWithSellmeier;
-  (window as any).getAllGlassDatabases = getAllGlassDatabases;
-  (window as any).findSimilarGlassesByNdVd = findSimilarGlassesByNdVd;
-  (window as any).findGlassesByNd = findGlassesByNd;
-  (window as any).findSimilarGlassNames = findSimilarGlassNames;
+  w.getPrimaryWavelength = getPrimaryWavelength;
+  w.calculateRefractiveIndex = calculateRefractiveIndex;
+  w.getGlassDataWithSellmeier = getGlassDataWithSellmeier;
+  w.getAllGlassDatabases = getAllGlassDatabases;
+  w.findSimilarGlassesByNdVd = findSimilarGlassesByNdVd;
+  w.findGlassesByNd = findGlassesByNd;
+  w.findSimilarGlassNames = findSimilarGlassNames;
 }

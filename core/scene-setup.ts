@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 /**
  * THREE.js Scene Setup Module
  * JS_lensDraw v3 - Scene Initialization and Management
@@ -128,10 +136,10 @@ export function initializeThreeJS(): SceneComponents {
             renderer.domElement.style.height = '100%';
             
             // OrthographicCameraの視野範囲を更新
-            if ((window as any).updateCameraViewBounds) {
+            if (w.updateCameraViewBounds) {
                 // 光学系のサイズに基づいて視野範囲を再計算
                 console.log('📷 Calling updateCameraViewBounds from resize handler');
-                (window as any).updateCameraViewBounds();
+                w.updateCameraViewBounds();
             } else {
                 // フォールバック: 固定viewSizeを使用（光学系ロード前）
                 const newAspect = newWidth / newHeight;
@@ -228,10 +236,10 @@ export function animate(): void {
         requestAnimationFrame(animationLoop);
         
         // Get global references
-        const scene = (window as any).scene as THREE.Scene | undefined;
-        const camera = (window as any).camera as THREE.Camera | undefined;
-        const renderer = (window as any).renderer as THREE.WebGLRenderer | undefined;
-        const controls = (window as any).controls as OrbitControls | undefined;
+        const scene = w.scene as THREE.Scene | undefined;
+        const camera = w.camera as THREE.Camera | undefined;
+        const renderer = w.renderer as THREE.WebGLRenderer | undefined;
+        const controls = w.controls as OrbitControls | undefined;
         
         if (scene && camera && renderer && controls) {
             // Update controls

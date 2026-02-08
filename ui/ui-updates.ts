@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 /**
  * UI Update Module
  * Handles updating UI elements based on data changes
@@ -30,12 +38,12 @@ export function updateSurfaceNumberSelect(): void {
     // Prefer the modern table when present, but fall back so Surf updates without reload.
     let opticalSystemData = null;
     try {
-        const d1 = (window as any).tableOpticalSystem?.getData?.();
+        const d1 = w.tableOpticalSystem?.getData?.();
         if (Array.isArray(d1) && d1.length > 0) opticalSystemData = d1;
     } catch (_) {}
     if (!opticalSystemData) {
         try {
-            const d2 = (window as any).opticalSystemTabulator?.getData?.();
+            const d2 = w.opticalSystemTabulator?.getData?.();
             if (Array.isArray(d2) && d2.length > 0) opticalSystemData = d2;
         } catch (_) {}
     }
@@ -84,7 +92,7 @@ export function updateSurfaceNumberSelect(): void {
 
     // Notify Spot Diagram popup (if open) to resync Surf options.
     try {
-        const p = (window as any).__spotDiagramPopup;
+        const p = w.__spotDiagramPopup;
         if (p && !p.closed) {
             if (typeof p.__cooptSpotPopupSyncAll === 'function') {
                 p.__cooptSpotPopupSyncAll();

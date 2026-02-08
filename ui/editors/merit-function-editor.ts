@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 // merit-function-editor.ts
 import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.js';
 import {
@@ -270,7 +278,7 @@ class MeritFunctionEditor {
         }
 
         try {
-            this.table = new (window as any).Tabulator(container, {
+            this.table = new w.Tabulator(container, {
                 data: this.operands,
                 layout: "fitColumns",
                 height: "100%",
@@ -680,7 +688,7 @@ class MeritFunctionEditor {
 
         const isCurrentOperand = !operand.configId || String(operand.configId).trim() === '';
 
-        const meritFast = (typeof globalThis !== 'undefined' && (globalThis as any).__cooptMeritFastMode) || null;
+        const meritFast = (typeof globalThis !== 'undefined' && w.__cooptMeritFastMode) || null;
 
         switch (operand.operand) {
             case 'FL':
@@ -772,7 +780,7 @@ class MeritFunctionEditor {
                 const existingZernike = (() => {
                     try {
                         if (typeof window === 'undefined') return null;
-                        const wfMap = (window as any).__lastWavefrontMap;
+                        const wfMap = w.__lastWavefrontMap;
                         if (!wfMap || typeof wfMap !== 'object') return null;
                         if (!wfMap.zernike || typeof wfMap.zernike !== 'object') return null;
                         const z = wfMap.zernike;
@@ -948,7 +956,7 @@ class MeritFunctionEditor {
         const getLastRayTraceFailureForThisEval = () => {
             try {
                 if (typeof window === 'undefined') return null;
-                const f = (window as any).__lastRayTraceFailure;
+                const f = w.__lastRayTraceFailure;
                 if (!f || typeof f !== 'object') return null;
                 const ts = Number(f.evaluationTimestamp);
                 if (!Number.isFinite(ts)) return null;
@@ -963,10 +971,10 @@ class MeritFunctionEditor {
         const stampSpotDebug = (partial: any) => {
             try {
                 if (typeof window === 'undefined') return;
-                if (!(window as any).__cooptLastSpotSizeDebug) {
-                    (window as any).__cooptLastSpotSizeDebug = {};
+                if (!w.__cooptLastSpotSizeDebug) {
+                    w.__cooptLastSpotSizeDebug = {};
                 }
-                Object.assign((window as any).__cooptLastSpotSizeDebug, partial);
+                Object.assign(w.__cooptLastSpotSizeDebug, partial);
             } catch (_) {}
         };
 
@@ -1028,7 +1036,7 @@ class MeritFunctionEditor {
             const useUiDefaults = (options.useUiDefaults !== undefined) ? options.useUiDefaults : true;
             const useUiTables = (options.useUiTables !== undefined) ? options.useUiTables : useUiDefaults;
 
-            const meritFast = (typeof globalThis !== 'undefined' && (globalThis as any).__cooptMeritFastMode) || null;
+            const meritFast = (typeof globalThis !== 'undefined' && w.__cooptMeritFastMode) || null;
             const fastModeEnabled = !!(meritFast && typeof meritFast === 'object');
 
             const rayCountOverride = options.rayCountOverride;
@@ -1473,14 +1481,14 @@ class MeritFunctionEditor {
             }
 
             try {
-                if (typeof window !== 'undefined' && (window as any).__cooptLastSpotSizeDebug) {
-                    (window as any).__cooptLastSpotSizeDebug.ok = true;
-                    (window as any).__cooptLastSpotSizeDebug.reason = 'ok';
-                    (window as any).__cooptLastSpotSizeDebug.legacyFallbackHits = legacyFallbackHits;
-                    (window as any).__cooptLastSpotSizeDebug.hits = hits.length;
-                    (window as any).__cooptLastSpotSizeDebug.lastRayTraceFailure = getLastRayTraceFailureForThisEval();
+                if (typeof window !== 'undefined' && w.__cooptLastSpotSizeDebug) {
+                    w.__cooptLastSpotSizeDebug.ok = true;
+                    w.__cooptLastSpotSizeDebug.reason = 'ok';
+                    w.__cooptLastSpotSizeDebug.legacyFallbackHits = legacyFallbackHits;
+                    w.__cooptLastSpotSizeDebug.hits = hits.length;
+                    w.__cooptLastSpotSizeDebug.lastRayTraceFailure = getLastRayTraceFailureForThisEval();
                     if (fastModeEnabled) {
-                        (window as any).__cooptLastSpotSizeDebugFast = (window as any).__cooptLastSpotSizeDebug;
+                        w.__cooptLastSpotSizeDebugFast = w.__cooptLastSpotSizeDebug;
                     }
                 }
             } catch (_) {}
@@ -1539,15 +1547,15 @@ class MeritFunctionEditor {
             return 1e9;
         } finally {
             try {
-                if (typeof window !== 'undefined' && (window as any).__cooptLastSpotSizeDebug && typeof (window as any).__cooptLastSpotSizeDebug === 'object') {
-                    const r = String((window as any).__cooptLastSpotSizeDebug.reason ?? '');
-                    const ok = (window as any).__cooptLastSpotSizeDebug.ok;
+                if (typeof window !== 'undefined' && w.__cooptLastSpotSizeDebug && typeof w.__cooptLastSpotSizeDebug === 'object') {
+                    const r = String(w.__cooptLastSpotSizeDebug.reason ?? '');
+                    const ok = w.__cooptLastSpotSizeDebug.ok;
                     if (r === 'started' && ok === false) {
-                        (window as any).__cooptLastSpotSizeDebug.reason = 'early-return-without-stamp';
-                        (window as any).__cooptLastSpotSizeDebug.ok = false;
-                        (window as any).__cooptLastSpotSizeDebug.resultUm = (window as any).__cooptLastSpotSizeDebug.resultUm ?? 1e9;
-                        (window as any).__cooptLastSpotSizeDebug.earlyReturnStage = (window as any).__cooptLastSpotSizeDebug.spotDiagStage ?? null;
-                        (window as any).__cooptLastSpotSizeDebug.lastRayTraceFailure = (window as any).__cooptLastSpotSizeDebug.lastRayTraceFailure ?? getLastRayTraceFailureForThisEval?.();
+                        w.__cooptLastSpotSizeDebug.reason = 'early-return-without-stamp';
+                        w.__cooptLastSpotSizeDebug.ok = false;
+                        w.__cooptLastSpotSizeDebug.resultUm = w.__cooptLastSpotSizeDebug.resultUm ?? 1e9;
+                        w.__cooptLastSpotSizeDebug.earlyReturnStage = w.__cooptLastSpotSizeDebug.spotDiagStage ?? null;
+                        w.__cooptLastSpotSizeDebug.lastRayTraceFailure = w.__cooptLastSpotSizeDebug.lastRayTraceFailure ?? getLastRayTraceFailureForThisEval?.();
                     }
                 }
             } catch (_) {}
@@ -1765,9 +1773,9 @@ class MeritFunctionEditor {
             if (activeConfigId && targetIdStr && targetIdStr === activeConfigId) {
                 return {
                     source: getSourceRows({}),
-                    object: (typeof window !== 'undefined' && (window as any).getObjectRows)
-                        ? (window as any).getObjectRows()
-                        : ((window as any).tableObject ? (window as any).tableObject.getData() : [])
+                    object: (typeof window !== 'undefined' && w.getObjectRows)
+                        ? w.getObjectRows()
+                        : (w.tableObject ? w.tableObject.getData() : [])
                 };
             }
 
@@ -1775,17 +1783,17 @@ class MeritFunctionEditor {
             if (!config) {
                 return {
                     source: getSourceRows({}),
-                    object: (typeof window !== 'undefined' && (window as any).getObjectRows) ? (window as any).getObjectRows() : ((window as any).tableObject ? (window as any).tableObject.getData() : [])
+                    object: (typeof window !== 'undefined' && w.getObjectRows) ? w.getObjectRows() : (w.tableObject ? w.tableObject.getData() : [])
                 };
             }
             return {
                 source: Array.isArray(config.source) ? config.source : getSourceRows({}),
-                object: Array.isArray(config.object) ? config.object : ((typeof window !== 'undefined' && (window as any).getObjectRows) ? (window as any).getObjectRows() : ((window as any).tableObject ? (window as any).tableObject.getData() : []))
+                object: Array.isArray(config.object) ? config.object : ((typeof window !== 'undefined' && w.getObjectRows) ? w.getObjectRows() : (w.tableObject ? w.tableObject.getData() : []))
             };
         } catch {
             return {
                 source: getSourceRows({}),
-                object: (typeof window !== 'undefined' && (window as any).getObjectRows) ? (window as any).getObjectRows() : ((window as any).tableObject ? (window as any).tableObject.getData() : [])
+                object: (typeof window !== 'undefined' && w.getObjectRows) ? w.getObjectRows() : (w.tableObject ? w.tableObject.getData() : [])
             };
         }
     }
@@ -2077,10 +2085,10 @@ class MeritFunctionEditor {
     getOpticalSystemDataByConfigId(configId: any): any[] {
         try {
             try {
-                if (typeof window !== 'undefined' && (window as any).__cooptOpticalSystemByConfigId) {
+                if (typeof window !== 'undefined' && w.__cooptOpticalSystemByConfigId) {
                     const cfgId = (configId !== undefined && configId !== null) ? String(configId).trim() : '';
                     if (cfgId) {
-                        const cached = (window as any).__cooptOpticalSystemByConfigId[cfgId];
+                        const cached = w.__cooptOpticalSystemByConfigId[cfgId];
                         if (Array.isArray(cached) && cached.length > 0) {
                             return cached;
                         }
@@ -2092,8 +2100,8 @@ class MeritFunctionEditor {
             let memSystemConfig: any = null;
             let lsSystemConfig: any = null;
             try {
-                if (typeof window !== 'undefined' && (window as any).__cooptSystemConfig) {
-                    memSystemConfig = (window as any).__cooptSystemConfig;
+                if (typeof window !== 'undefined' && w.__cooptSystemConfig) {
+                    memSystemConfig = w.__cooptSystemConfig;
                 }
             } catch (_) {}
             try {
@@ -2137,7 +2145,7 @@ class MeritFunctionEditor {
 
             let overrideBlocks: any = null;
             try {
-                const ov = (typeof window !== 'undefined') ? (window as any).__cooptBlocksOverride : null;
+                const ov = (typeof window !== 'undefined') ? w.__cooptBlocksOverride : null;
                 if (ov && typeof ov === 'object') {
                     const key = String(targetConfigId);
                     const b = ov[key];
@@ -2150,7 +2158,7 @@ class MeritFunctionEditor {
 
             let scenarioId: any = null;
             try {
-                const ov = (typeof window !== 'undefined') ? (window as any).__cooptScenarioOverride : null;
+                const ov = (typeof window !== 'undefined') ? w.__cooptScenarioOverride : null;
                 if (ov && typeof ov === 'object') {
                     const key = String(targetConfigId);
                     if (ov[key]) scenarioId = String(ov[key]);
@@ -2211,7 +2219,7 @@ class MeritFunctionEditor {
                     }
 
                     try {
-                        const RAYTRACE_DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis as any).__RAYTRACE_DEBUG);
+                        const RAYTRACE_DEBUG = !!(typeof globalThis !== 'undefined' && w.__RAYTRACE_DEBUG);
                         if (RAYTRACE_DEBUG) {
                             console.log(`📊 Config "${config.name}" (ID: ${targetIdStr}) blocks expanded${scenarioId ? ` (scenario: ${scenarioId})` : ''}`);
                         }
@@ -2512,14 +2520,14 @@ class MeritFunctionEditor {
 const __cooptInitMeritFunctionEditor = (): boolean => {
     try {
         if (typeof window === 'undefined') return false;
-        if ((window as any).meritFunctionEditor) return true;
+        if (w.meritFunctionEditor) return true;
         const container = document.getElementById('table-merit-function');
         if (!container) return false;
-        (window as any).meritFunctionEditor = new MeritFunctionEditor();
+        w.meritFunctionEditor = new MeritFunctionEditor();
 
         try {
-            if (!(window as any).__cooptLastSpotSizeDebug) {
-                (window as any).__cooptLastSpotSizeDebug = {
+            if (!w.__cooptLastSpotSizeDebug) {
+                w.__cooptLastSpotSizeDebug = {
                     ok: false,
                     reason: 'not-evaluated',
                     targetSurfaceIndex: null,
@@ -2555,8 +2563,8 @@ export { MeritFunctionEditor, OPERAND_DEFINITIONS };
 
 try {
     if (typeof globalThis !== 'undefined') {
-        (globalThis as any).__cooptSummarizeSpotSizeDebug = function __cooptSummarizeSpotSizeDebug() {
-            const byId = (globalThis as any).__cooptSpotSizeDebugByReqRowId;
+        w.__cooptSummarizeSpotSizeDebug = function __cooptSummarizeSpotSizeDebug() {
+            const byId = w.__cooptSpotSizeDebugByReqRowId;
             if (!byId || typeof byId !== 'object') return {};
             const out: any = {};
             for (const [k, v] of Object.entries(byId)) {
@@ -2588,8 +2596,8 @@ try {
             return out;
         };
 
-        (globalThis as any).__cooptPrintSpotSizeDebugTable = function __cooptPrintSpotSizeDebugTable() {
-            const o = (globalThis as any).__cooptSummarizeSpotSizeDebug ? (globalThis as any).__cooptSummarizeSpotSizeDebug() : {};
+        w.__cooptPrintSpotSizeDebugTable = function __cooptPrintSpotSizeDebugTable() {
+            const o = w.__cooptSummarizeSpotSizeDebug ? w.__cooptSummarizeSpotSizeDebug() : {};
             const rows = Object.entries(o).map(([reqRowId, v]: [string, any]) => ({
                 reqRowId,
                 ok: v.ok,

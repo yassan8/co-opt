@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 /**
  * (Removed) Draw/Clear OPD Rays feature.
  * Kept as a no-op stub to avoid stale imports crashing.
@@ -16,15 +24,15 @@ function handleClearWavefrontRays(): void {
 
         let clearedAny = false;
         try {
-            const popup = (window as any).popup3DWindow;
+            const popup = w.popup3DWindow;
             if (popup && !popup.closed && popup.scene) {
                 clearWavefrontRays(popup.scene);
                 clearedAny = true;
             }
         } catch (_) {}
 
-        if ((window as any).scene) {
-            clearWavefrontRays((window as any).scene);
+        if (w.scene) {
+            clearWavefrontRays(w.scene);
             clearedAny = true;
         }
 
@@ -46,7 +54,7 @@ function handleClearWavefrontRays(): void {
 function getCurrentFieldSetting(): any {
     try {
         // 🔍 まずObjectデータ全体を確認
-        const objectRows = (window as any).getObjectRows ? (window as any).getObjectRows() : [];
+        const objectRows = w.getObjectRows ? w.getObjectRows() : [];
         console.log('🔍 利用可能なObjectデータ:', objectRows);
         
         // Object選択ドロップダウンからObjectインデックスを取得
@@ -359,7 +367,7 @@ async function addBestEffortMarginalRays(baseWavefrontMap: any, opticalSystemRow
                 };
                 
                 try {
-                    const tracedPath = (window as any).traceRay(opticalSystemRows, initialRay, 1.0);
+                    const tracedPath = w.traceRay(opticalSystemRows, initialRay, 1.0);
                     
                     if (tracedPath && tracedPath.length > 1) {
                         // 瞳座標を計算（拡張半径から逆算）
@@ -414,8 +422,8 @@ async function addBestEffortMarginalRays(baseWavefrontMap: any, opticalSystemRow
                     const offsetPupilY = offset.y;
                     
                     // eva-wavefront.js の generateMarginalRay を使用
-                    if ((window as any).lastWavefrontAnalyzer) {
-                        const marginalRay = (window as any).lastWavefrontAnalyzer.opdCalculator.generateMarginalRay(
+                    if (w.lastWavefrontAnalyzer) {
+                        const marginalRay = w.lastWavefrontAnalyzer.opdCalculator.generateMarginalRay(
                             offsetPupilX, offsetPupilY, fieldSetting
                         );
                         
@@ -485,7 +493,7 @@ function findBestEffortMarginalRayDirection(objectPos: any, targetPoint: any, op
     
     try {
         // Stop面インデックスを取得
-        const stopSurface = (window as any).findStopSurface(opticalSystemRows);
+        const stopSurface = w.findStopSurface(opticalSystemRows);
         const stopIndex = stopSurface.index;
         
         console.log(`📍 Stop面インデックス: ${stopIndex}`);
@@ -517,7 +525,7 @@ function findBestEffortMarginalRayDirection(objectPos: any, targetPoint: any, op
                     dir: adjustedDirection
                 };
                 
-                const tracedPath = (window as any).traceRay(opticalSystemRows, testRay, 1.0);
+                const tracedPath = w.traceRay(opticalSystemRows, testRay, 1.0);
                 
                 if (tracedPath && tracedPath.length > stopIndex) {
                     const stopPoint = tracedPath[stopIndex];
@@ -553,7 +561,7 @@ function findBestEffortMarginalRayDirection(objectPos: any, targetPoint: any, op
                     dir: adjustedDirection
                 };
                 
-                const tracedPath = (window as any).traceRay(opticalSystemRows, testRay, 1.0);
+                const tracedPath = w.traceRay(opticalSystemRows, testRay, 1.0);
                 
                 if (tracedPath && tracedPath.length > stopIndex) {
                     const stopPoint = tracedPath[stopIndex];
@@ -569,7 +577,7 @@ function findBestEffortMarginalRayDirection(objectPos: any, targetPoint: any, op
         let optimalDeltaX = 0;
         let optimalDeltaY = 0;
         
-        const brentMethod = (window as any).brentMethod;
+        const brentMethod = w.brentMethod;
         
         // 🎯 高精度Brent法でX方向を最適化
         if (brentMethod && typeof brentMethod === 'function') {
@@ -682,7 +690,7 @@ function findBestEffortMarginalRayDirection(objectPos: any, targetPoint: any, op
             dir: bestDirection
         };
         
-        const finalPath = (window as any).traceRay(opticalSystemRows, finalRay, 1.0);
+        const finalPath = w.traceRay(opticalSystemRows, finalRay, 1.0);
         
         if (finalPath && finalPath.length > stopIndex) {
             const finalStopPoint = finalPath[stopIndex];
@@ -707,7 +715,7 @@ function findBestEffortMarginalRayDirection(objectPos: any, targetPoint: any, op
         success: success,
         direction: bestDirection,
         bestError: bestError,
-        usedBrentMethod: (window as any).brentMethod !== null
+        usedBrentMethod: w.brentMethod !== null
     };
 }
 
@@ -717,7 +725,7 @@ declare function findStopSurface(rows: any[]): any;
 declare function calculateSurfaceOrigins(rows: any[]): any;
 
 // グローバル関数として公開
-(window as any).setupWavefrontRayButtons = setupWavefrontRayButtons;
-(window as any).handleDrawWavefrontRays = (window as any).handleDrawWavefrontRays;
-(window as any).getCurrentFieldSetting = getCurrentFieldSetting;
-(window as any).handleClearWavefrontRays = handleClearWavefrontRays;
+w.setupWavefrontRayButtons = setupWavefrontRayButtons;
+w.handleDrawWavefrontRays = w.handleDrawWavefrontRays;
+w.getCurrentFieldSetting = getCurrentFieldSetting;
+w.handleClearWavefrontRays = handleClearWavefrontRays;

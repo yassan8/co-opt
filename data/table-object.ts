@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 // データの保存・復元用キー
 const STORAGE_KEY = "objectTableData";
 
@@ -272,9 +280,9 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
             
             // Record undo
             try {
-              if ((window as any).undoHistory && (window as any).DeleteRowCommand && !(window as any).undoHistory.isExecuting) {
-                const cmd = new (window as any).DeleteRowCommand('object', deletedRow, index);
-                (window as any).undoHistory.record(cmd);
+              if (w.undoHistory && w.DeleteRowCommand && !w.undoHistory.isExecuting) {
+                const cmd = new w.DeleteRowCommand('object', deletedRow, index);
+                w.undoHistory.record(cmd);
               }
             } catch (e) {
               console.warn('[Undo] Failed to record object delete:', e);
@@ -317,17 +325,17 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
         rowData.xHeightAngle = normalizeNumberLike(inputX.value);
         
         // Record undo command
-        if ((window as any).undoHistory && !(window as any).undoHistory.isExecuting && oldValue !== rowData.xHeightAngle) {
-          const cfg = (window as any).getActiveConfiguration?.();
+        if (w.undoHistory && !w.undoHistory.isExecuting && oldValue !== rowData.xHeightAngle) {
+          const cfg = w.getActiveConfiguration?.();
           if (cfg) {
-            const cmd = new (window as any).SetObjectFieldCommand(
+            const cmd = new w.SetObjectFieldCommand(
               cfg.id,
               rowData.id,
               'xHeightAngle',
               oldValue,
               rowData.xHeightAngle
             );
-            (window as any).undoHistory.record(cmd);
+            w.undoHistory.record(cmd);
           }
         }
         
@@ -352,17 +360,17 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
         }
         
         // Record undo command
-        if ((window as any).undoHistory && !(window as any).undoHistory.isExecuting && oldValue !== rowData.yHeightAngle) {
-          const cfg = (window as any).getActiveConfiguration?.();
+        if (w.undoHistory && !w.undoHistory.isExecuting && oldValue !== rowData.yHeightAngle) {
+          const cfg = w.getActiveConfiguration?.();
           if (cfg) {
-            const cmd = new (window as any).SetObjectFieldCommand(
+            const cmd = new w.SetObjectFieldCommand(
               cfg.id,
               rowData.id,
               'yHeightAngle',
               oldValue,
               rowData.yHeightAngle
             );
-            (window as any).undoHistory.record(cmd);
+            w.undoHistory.record(cmd);
           }
         }
         
@@ -392,17 +400,17 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
         }
         
         // Record undo command
-        if ((window as any).undoHistory && !(window as any).undoHistory.isExecuting && oldValue !== rowData.position) {
-          const cfg = (window as any).getActiveConfiguration?.();
+        if (w.undoHistory && !w.undoHistory.isExecuting && oldValue !== rowData.position) {
+          const cfg = w.getActiveConfiguration?.();
           if (cfg) {
-            const cmd = new (window as any).SetObjectFieldCommand(
+            const cmd = new w.SetObjectFieldCommand(
               cfg.id,
               rowData.id,
               'position',
               oldValue,
               rowData.position
             );
-            (window as any).undoHistory.record(cmd);
+            w.undoHistory.record(cmd);
           }
         }
         
@@ -441,9 +449,9 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
     
     // Record undo
     try {
-      if ((window as any).undoHistory && (window as any).AddRowCommand && !(window as any).undoHistory.isExecuting) {
-        const cmd = new (window as any).AddRowCommand('object', JSON.parse(JSON.stringify(next)), insertIndex);
-        (window as any).undoHistory.record(cmd);
+      if (w.undoHistory && w.AddRowCommand && !w.undoHistory.isExecuting) {
+        const cmd = new w.AddRowCommand('object', JSON.parse(JSON.stringify(next)), insertIndex);
+        w.undoHistory.record(cmd);
       }
     } catch (e) {
       console.warn('[Undo] Failed to record object add:', e);
@@ -509,9 +517,9 @@ tableObject.__cooptIsDom = !!tableContainer;
 tableObject.__cooptContainer = tableContainer;
 
 if (hasWindow) {
-  (window as any).tableObject = tableObject;
-  (window as any).objectTabulator = tableObject; // legacy name
-  (window as any).objectTable = tableObject;
+  w.tableObject = tableObject;
+  w.objectTabulator = tableObject; // legacy name
+  w.objectTable = tableObject;
 }
 
 if (tableContainer) {
@@ -625,8 +633,8 @@ function setHeightRectTitles(): void {
 // PSF選択肢更新機能
 function updatePSFObjectSelectIfAvailable(): void {
   // main.jsでPSF機能が利用可能かチェック
-  if (typeof (window as any).updatePSFObjectSelect === 'function') {
-    (window as any).updatePSFObjectSelect();
+  if (typeof w.updatePSFObjectSelect === 'function') {
+    w.updatePSFObjectSelect();
   }
 }
 
@@ -637,8 +645,8 @@ attachObjectTableListeners();
  */
 function updateWavefrontObjectOptionsIfAvailable(): void {
   try {
-    if (typeof (window as any).updateWavefrontObjectSelect === 'function') {
-      (window as any).updateWavefrontObjectSelect();
+    if (typeof w.updateWavefrontObjectSelect === 'function') {
+      w.updateWavefrontObjectSelect();
     }
   } catch (error) {
     console.debug('波面収差図Object選択更新スキップ（関数未定義）');
@@ -650,9 +658,9 @@ function updateWavefrontObjectOptionsIfAvailable(): void {
  */
 function recalculateAutoSemiDiaIfAvailable(): void {
   try {
-    if (typeof (window as any).calculateImageSemiDiaFromChiefRays === 'function') {
+    if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
       console.log('🔄 Object変更検知: Image面のSemi Dia自動計算を再実行');
-      (window as any).calculateImageSemiDiaFromChiefRays();
+      w.calculateImageSemiDiaFromChiefRays();
     }
   } catch (error: any) {
     console.debug('Semi Dia自動計算スキップ:', error.message);
@@ -676,9 +684,9 @@ export function mountTableObjectIfReady(): boolean {
   tableObject.__cooptContainer = tableContainer;
   try { (tableContainer as any).tabulator = tableObject; } catch (_) {}
   if (hasWindow) {
-    (window as any).tableObject = tableObject;
-    (window as any).objectTabulator = tableObject;
-    (window as any).objectTable = tableObject;
+    w.tableObject = tableObject;
+    w.objectTabulator = tableObject;
+    w.objectTable = tableObject;
   }
   attachObjectTableListeners();
   bindObjectControls();

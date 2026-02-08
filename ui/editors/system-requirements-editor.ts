@@ -4,8 +4,24 @@
  * - System Evaluation UI is deprecated (no transfer)
  */
 
+console.log('[Requirements] Module loading...');
+
 import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.js';
 import { getOpticalSystemRows } from '../../utils/data-utils.js';
+
+console.log('[Requirements] Imports loaded');
+
+// Extend Window interface for global properties
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+
+// Safe window property accessors (avoiding 'as' to prevent compilation issues)
+const w: Record<string, any> = window;
+
+console.log('[Requirements] Module initialized, setting up event listeners...');
 
 // Zernike Noll index names (0-37)
 const ZERNIKE_NOLL_NAMES = [
@@ -91,8 +107,11 @@ class SystemRequirementsEditor {
     this._paramToggleBtn = null;
     this.inspector = new InspectorManager('requirement-inspector', 'requirement-inspector-content');
 
+    console.log('[Requirements] Initializing SystemRequirementsEditor');
     this.loadFromStorage();
+    console.log('[Requirements] Loaded requirements:', this.requirements.length);
     this.initializeTable();
+    console.log('[Requirements] Table initialized');
     this.initializeEventListeners();
     this._ensureProgressUI();
 
@@ -105,12 +124,12 @@ class SystemRequirementsEditor {
     try {
       let sys = null;
       try {
-        if (typeof (window as any).loadSystemConfigurationsFromTableConfig === 'function') {
-          sys = (window as any).loadSystemConfigurationsFromTableConfig();
-        } else if (typeof (window as any).ConfigurationManager !== 'undefined' && typeof (window as any).ConfigurationManager.loadSystemConfigurations === 'function') {
-          sys = (window as any).ConfigurationManager.loadSystemConfigurations();
-        } else if (typeof (window as any).loadSystemConfigurations === 'function') {
-          sys = (window as any).loadSystemConfigurations();
+        if (typeof w.loadSystemConfigurationsFromTableConfig === 'function') {
+          sys = w.loadSystemConfigurationsFromTableConfig();
+        } else if (typeof w.ConfigurationManager !== 'undefined' && typeof w.ConfigurationManager.loadSystemConfigurations === 'function') {
+          sys = w.ConfigurationManager.loadSystemConfigurations();
+        } else if (typeof w.loadSystemConfigurations === 'function') {
+          sys = w.loadSystemConfigurations();
         }
       } catch (_) {
         sys = null;
@@ -436,8 +455,8 @@ class SystemRequirementsEditor {
 
       tr.addEventListener('click', (e) => {
         // Keep selection behavior but don't break inline edits.
-        const t = e?.target;
-        if (t && typeof (t as HTMLElement).closest === 'function' && (t as HTMLElement).closest('input,select,textarea')) {
+        const t = e?.target as HTMLElement | null;
+        if (t && typeof t.closest === 'function' && t.closest('input,select,textarea')) {
           if (String(this._selectedId) !== String(row.id)) setSelectedRow(row.id);
           return;
         }
@@ -460,14 +479,14 @@ class SystemRequirementsEditor {
         row.enabled = !!onCb.checked;
         
         // Record undo command
-        if ((window as any).undoHistory && (window as any).SetRequirementCommand && !(window as any).undoHistory.isExecuting && oldValue !== row.enabled) {
-          const command = new (window as any).SetRequirementCommand(
+        if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== row.enabled) {
+          const command = new w.SetRequirementCommand(
             row.id,
             'enabled',
             oldValue,
             row.enabled
           );
-          (window as any).undoHistory.record(command);
+          w.undoHistory.record(command);
           console.log(`[Undo] Recorded: Set Requirement ${row.id}.enabled from ${oldValue} to ${row.enabled}`);
         }
         
@@ -498,9 +517,9 @@ class SystemRequirementsEditor {
         console.log('[Undo] operandSel change event fired');
         console.log('[Undo] row.operand before change:', row.operand);
         console.log('[Undo] operandSel.value:', operandSel.value);
-        console.log('[Undo] window.undoHistory exists:', !!(window as any).undoHistory);
-        console.log('[Undo] window.SetRequirementCommand exists:', !!(window as any).SetRequirementCommand);
-        console.log('[Undo] window.undoHistory.isExecuting:', (window as any).undoHistory?.isExecuting);
+        console.log('[Undo] window.undoHistory exists:', !!w.undoHistory);
+        console.log('[Undo] window.SetRequirementCommand exists:', !!w.SetRequirementCommand);
+        console.log('[Undo] window.undoHistory.isExecuting:', w.undoHistory?.isExecuting);
         
         const oldValue = row.operand;
         row.operand = operandSel.value;
@@ -510,20 +529,20 @@ class SystemRequirementsEditor {
         console.log('[Undo] values are different:', oldValue !== row.operand);
         
         // Record undo command
-        if ((window as any).undoHistory && (window as any).SetRequirementCommand && !(window as any).undoHistory.isExecuting && oldValue !== row.operand) {
-          const command = new (window as any).SetRequirementCommand(
+        if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== row.operand) {
+          const command = new w.SetRequirementCommand(
             row.id,
             'operand',
             oldValue,
             row.operand
           );
-          (window as any).undoHistory.record(command);
+          w.undoHistory.record(command);
           console.log(`[Undo] Recorded: Set Requirement ${row.id}.operand from ${oldValue} to ${row.operand}`);
         } else {
           console.log('[Undo] NOT recording operand change, reason:', 
-            !(window as any).undoHistory ? 'undoHistory missing' :
-            !(window as any).SetRequirementCommand ? 'SetRequirementCommand missing' :
-            (window as any).undoHistory.isExecuting ? 'isExecuting=true' :
+            !w.undoHistory ? 'undoHistory missing' :
+            !w.SetRequirementCommand ? 'SetRequirementCommand missing' :
+            w.undoHistory.isExecuting ? 'isExecuting=true' :
             oldValue === row.operand ? 'values are same' : 'unknown');
         }
         
@@ -598,14 +617,14 @@ class SystemRequirementsEditor {
         row.configId = cfgSel.value;
         
         // Record undo command
-        if ((window as any).undoHistory && (window as any).SetRequirementCommand && !(window as any).undoHistory.isExecuting && oldValue !== row.configId) {
-          const command = new (window as any).SetRequirementCommand(
+        if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== row.configId) {
+          const command = new w.SetRequirementCommand(
             row.id,
             'configId',
             oldValue,
             row.configId
           );
-          (window as any).undoHistory.record(command);
+          w.undoHistory.record(command);
           console.log(`[Undo] Recorded: Set Requirement ${row.id}.configId from ${oldValue} to ${row.configId}`);
         }
         
@@ -870,14 +889,14 @@ class SystemRequirementsEditor {
             
             // Record undo command
             try {
-              if ((window as any).undoHistory && (window as any).SetRequirementCommand && !(window as any).undoHistory.isExecuting && oldValue !== control.value) {
-                const command = new (window as any).SetRequirementCommand(
+              if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== control.value) {
+                const command = new w.SetRequirementCommand(
                   row.id,
                   field,
                   oldValue,
                   control.value
                 );
-                (window as any).undoHistory.record(command);
+                w.undoHistory.record(command);
               }
             } catch (undoError) {
               console.warn('[Undo] Failed to record requirement edit:', undoError);
@@ -915,14 +934,14 @@ class SystemRequirementsEditor {
             
             // Record undo command
             try {
-              if ((window as any).undoHistory && (window as any).SetRequirementCommand && !(window as any).undoHistory.isExecuting && oldValue !== nextVal) {
-                const command = new (window as any).SetRequirementCommand(
+              if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== nextVal) {
+                const command = new w.SetRequirementCommand(
                   row.id,
                   field,
                   oldValue,
                   nextVal
                 );
-                (window as any).undoHistory.record(command);
+                w.undoHistory.record(command);
               }
             } catch (undoError) {
               console.warn('[Undo] Failed to record requirement edit:', undoError);
@@ -1045,14 +1064,14 @@ class SystemRequirementsEditor {
         row.op = opSel.value;
         
         // Record undo command
-        if ((window as any).undoHistory && (window as any).SetRequirementCommand && !(window as any).undoHistory.isExecuting && oldValue !== row.op) {
-          const command = new (window as any).SetRequirementCommand(
+        if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== row.op) {
+          const command = new w.SetRequirementCommand(
             row.id,
             'op',
             oldValue,
             row.op
           );
-          (window as any).undoHistory.record(command);
+          w.undoHistory.record(command);
           console.log(`[Undo] Recorded: Set Requirement ${row.id}.op from ${oldValue} to ${row.op}`);
         }
         
@@ -1116,6 +1135,21 @@ class SystemRequirementsEditor {
     this._renderBody = (specFn: any, ratPrevFn: any, ensureDl: any): void => {
       if (!this._tbody) return;
       this._tbody.innerHTML = '';
+      
+      // Show placeholder if no requirements
+      if (this.requirements.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 100;
+        td.style.textAlign = 'center';
+        td.style.padding = '40px 20px';
+        td.style.color = '#999';
+        td.style.fontStyle = 'italic';
+        td.textContent = 'No requirements defined. Click "Add Requirement" to create one.';
+        tr.appendChild(td);
+        this._tbody.appendChild(tr);
+        return;
+      }
       
       // Render all requirements
       for (const r of this.requirements) {
@@ -1280,19 +1314,36 @@ class SystemRequirementsEditor {
   }
 
   initializeEventListeners(): void {
+    console.log('[Requirements] Initializing event listeners...');
     const addBtn = document.getElementById('add-requirement-btn');
-    if (addBtn) addBtn.addEventListener('click', () => this.addRequirement());
+    if (addBtn) {
+      addBtn.addEventListener('click', () => this.addRequirement());
+      console.log('[Requirements] Add button listener attached');
+    } else {
+      console.warn('[Requirements] Add button not found');
+    }
 
     const delBtn = document.getElementById('delete-requirement-btn');
-    if (delBtn) delBtn.addEventListener('click', () => this.deleteRequirement());
+    if (delBtn) {
+      delBtn.addEventListener('click', () => this.deleteRequirement());
+      console.log('[Requirements] Delete button listener attached');
+    } else {
+      console.warn('[Requirements] Delete button not found');
+    }
 
     const updateBtn = document.getElementById('update-requirement-btn');
     if (updateBtn) {
       updateBtn.addEventListener('click', async () => {
+        console.log('[Requirements] Update button clicked');
         try {
           await this.updateAllConfigsAndEvaluate();
-        } catch (_) {}
+        } catch (err) {
+          console.error('[Requirements] Error in updateAllConfigsAndEvaluate:', err);
+        }
       });
+      console.log('[Requirements] Update button listener attached');
+    } else {
+      console.warn('[Requirements] Update button not found');
     }
   }
 
@@ -1515,7 +1566,7 @@ class SystemRequirementsEditor {
       // This prevents CB insertion from causing stale surfaceId resolution during the next evaluation.
       try {
         if (typeof window !== 'undefined') {
-          (window as any).__cooptSpotDiagramSettingsByConfigId = map;
+          w.__cooptSpotDiagramSettingsByConfigId = map;
         }
       } catch (_) {}
     } catch (_) {
@@ -1537,14 +1588,14 @@ class SystemRequirementsEditor {
     // Keep __cooptOpticalSystemByConfigId so non-active configs retain CB-aware rows.
     try {
       if (typeof window !== 'undefined') {
-        delete (window as any).__cooptSystemConfig;
-        delete (window as any).__cooptSpotDiagramSettingsByConfigId;
+        delete w.__cooptSystemConfig;
+        delete w.__cooptSpotDiagramSettingsByConfigId;
       }
     } catch (_) {}
 
     // Ensure each configuration has an up-to-date expanded opticalSystem snapshot
     // and has a per-config Spot Diagram settings entry.
-    const editor = (window as any).meritFunctionEditor;
+    const editor = w.meritFunctionEditor;
     if (!editor || typeof editor.getOpticalSystemDataByConfigId !== 'function') {
       try { await this.evaluateAndUpdateNow({ reason: 'no-merit-editor' }); } catch (_) {}
       return;
@@ -1593,10 +1644,10 @@ class SystemRequirementsEditor {
       if (activeConfigId) {
         try {
           // Directly access UI table, bypassing blocks-first logic in getOpticalSystemRows
-          if ((window as any).tableOpticalSystem && typeof (window as any).tableOpticalSystem.getData === 'function') {
-            activeConfigOpticalRows = (window as any).tableOpticalSystem.getData();
-          } else if ((window as any).opticalSystemTabulator && typeof (window as any).opticalSystemTabulator.getData === 'function') {
-            activeConfigOpticalRows = (window as any).opticalSystemTabulator.getData();
+          if (w.tableOpticalSystem && typeof w.tableOpticalSystem.getData === 'function') {
+            activeConfigOpticalRows = w.tableOpticalSystem.getData();
+          } else if (w.opticalSystemTabulator && typeof w.opticalSystemTabulator.getData === 'function') {
+            activeConfigOpticalRows = w.opticalSystemTabulator.getData();
           }
           
           if (Array.isArray(activeConfigOpticalRows) && activeConfigOpticalRows.length > 0) {
@@ -1628,8 +1679,8 @@ class SystemRequirementsEditor {
 
         const cachedRows = (() => {
           try {
-            if (typeof window !== 'undefined' && (window as any).__cooptOpticalSystemByConfigId) {
-              const c = (window as any).__cooptOpticalSystemByConfigId[cfgId];
+            if (typeof window !== 'undefined' && w.__cooptOpticalSystemByConfigId) {
+              const c = w.__cooptOpticalSystemByConfigId[cfgId];
               return (Array.isArray(c) && c.length > 0) ? c : null;
             }
           } catch (_) {}
@@ -1665,8 +1716,8 @@ class SystemRequirementsEditor {
           // uses fresh data immediately after CB insertion (before localStorage reload).
           try {
             if (typeof window !== 'undefined') {
-              if (!(window as any).__cooptOpticalSystemByConfigId) (window as any).__cooptOpticalSystemByConfigId = {};
-              (window as any).__cooptOpticalSystemByConfigId[cfgId] = opticalRows;
+              if (!w.__cooptOpticalSystemByConfigId) w.__cooptOpticalSystemByConfigId = {};
+              w.__cooptOpticalSystemByConfigId[cfgId] = opticalRows;
             }
           } catch (_) {}
         }
@@ -1745,7 +1796,7 @@ class SystemRequirementsEditor {
             
             localStorage.setItem('spotDiagramSettingsByConfigId', JSON.stringify(map));
             if (typeof window !== 'undefined') {
-              (window as any).__cooptSpotDiagramSettingsByConfigId = map;
+              w.__cooptSpotDiagramSettingsByConfigId = map;
             }
           }
         }
@@ -1756,7 +1807,7 @@ class SystemRequirementsEditor {
         // CRITICAL: Also cache in memory so getOpticalSystemDataByConfigId
         // reads fresh data immediately after CB insertion (before localStorage sync).
         if (typeof window !== 'undefined') {
-          (window as any).__cooptSystemConfig = systemConfig;
+          w.__cooptSystemConfig = systemConfig;
         }
       } catch (_) {}
     } finally {
@@ -1821,31 +1872,31 @@ class SystemRequirementsEditor {
     newRow.id = insertIndex + 1; // Temporary ID based on position
     
     console.log('[DEBUG addRequirement] Before command:', {
-      hasUndoHistory: !!(window as any).undoHistory,
-      hasAddRowCommand: !!(window as any).AddRowCommand,
-      isExecuting: (window as any).undoHistory?.isExecuting,
+      hasUndoHistory: !!w.undoHistory,
+      hasAddRowCommand: !!w.AddRowCommand,
+      isExecuting: w.undoHistory?.isExecuting,
       insertIndex,
       newRowId: newRow.id
     });
     
     // Create command and execute, then record for undo
     try {
-      if ((window as any).undoHistory && (window as any).AddRowCommand && !(window as any).undoHistory.isExecuting) {
-        const cmd = new (window as any).AddRowCommand('requirement', JSON.parse(JSON.stringify(newRow)), insertIndex, false);
+      if (w.undoHistory && w.AddRowCommand && !w.undoHistory.isExecuting) {
+        const cmd = new w.AddRowCommand('requirement', JSON.parse(JSON.stringify(newRow)), insertIndex, false);
         cmd.execute(); // Execute first (this will update localStorage and refresh UI)
         console.log('[DEBUG addRequirement] After execute, before record:', {
-          isExecuting: (window as any).undoHistory.isExecuting,
-          undoStackLength: (window as any).undoHistory.undoStack?.length || 0
+          isExecuting: w.undoHistory.isExecuting,
+          undoStackLength: w.undoHistory.undoStack?.length || 0
         });
-        (window as any).undoHistory.record(cmd); // Then record for undo
+        w.undoHistory.record(cmd); // Then record for undo
         console.log('[DEBUG addRequirement] After record:', {
-          undoStackLength: (window as any).undoHistory.undoStack?.length || 0
+          undoStackLength: w.undoHistory.undoStack?.length || 0
         });
       } else {
         console.warn('[DEBUG addRequirement] Fallback path taken:', {
-          hasUndoHistory: !!(window as any).undoHistory,
-          hasAddRowCommand: !!(window as any).AddRowCommand,
-          isExecuting: (window as any).undoHistory?.isExecuting
+          hasUndoHistory: !!w.undoHistory,
+          hasAddRowCommand: !!w.AddRowCommand,
+          isExecuting: w.undoHistory?.isExecuting
         });
         // Fallback if undo system is not available
         storageData.splice(insertIndex, 0, JSON.parse(JSON.stringify(newRow)));
@@ -1884,25 +1935,25 @@ class SystemRequirementsEditor {
     this._selectedId = null;
 
     console.log('[DEBUG deleteRequirement] Before command:', {
-      hasUndoHistory: !!(window as any).undoHistory,
-      hasDeleteRowCommand: !!(window as any).DeleteRowCommand,
-      isExecuting: (window as any).undoHistory?.isExecuting,
+      hasUndoHistory: !!w.undoHistory,
+      hasDeleteRowCommand: !!w.DeleteRowCommand,
+      isExecuting: w.undoHistory?.isExecuting,
       idx,
       deletedRowId: deletedRow.id
     });
 
     // Create command and execute, then record for undo
     try {
-      if ((window as any).undoHistory && (window as any).DeleteRowCommand && !(window as any).undoHistory.isExecuting) {
-        const cmd = new (window as any).DeleteRowCommand('requirement', deletedRow, idx, false);
+      if (w.undoHistory && w.DeleteRowCommand && !w.undoHistory.isExecuting) {
+        const cmd = new w.DeleteRowCommand('requirement', deletedRow, idx, false);
         cmd.execute(); // Execute first (this will update localStorage and refresh UI)
         console.log('[DEBUG deleteRequirement] After execute, before record:', {
-          isExecuting: (window as any).undoHistory.isExecuting,
-          undoStackLength: (window as any).undoHistory.undoStack?.length || 0
+          isExecuting: w.undoHistory.isExecuting,
+          undoStackLength: w.undoHistory.undoStack?.length || 0
         });
-        (window as any).undoHistory.record(cmd); // Then record for undo
+        w.undoHistory.record(cmd); // Then record for undo
         console.log('[DEBUG deleteRequirement] After record:', {
-          undoStackLength: (window as any).undoHistory.undoStack?.length || 0
+          undoStackLength: w.undoHistory.undoStack?.length || 0
         });
         
         try {
@@ -1910,9 +1961,9 @@ class SystemRequirementsEditor {
         } catch (_) {}
       } else {
         console.warn('[DEBUG deleteRequirement] Fallback path taken:', {
-          hasUndoHistory: !!(window as any).undoHistory,
-          hasDeleteRowCommand: !!(window as any).DeleteRowCommand,
-          isExecuting: (window as any).undoHistory?.isExecuting
+          hasUndoHistory: !!w.undoHistory,
+          hasDeleteRowCommand: !!w.DeleteRowCommand,
+          isExecuting: w.undoHistory?.isExecuting
         });
         // Fallback if undo system is not available
         storageData.splice(idx, 1);
@@ -1980,27 +2031,27 @@ class SystemRequirementsEditor {
     this._isEvaluating = true;
 
     try {
-      (window as any).__cooptLastRequirementsEval = { at: Date.now(), stage: 'enter' };
+      w.__cooptLastRequirementsEval = { at: Date.now(), stage: 'enter' };
     } catch (_) {}
 
     if (this._isEditingCell) {
       this._pendingEvalAfterEdit = true;
       try {
-        (window as any).__cooptLastRequirementsEval = { at: Date.now(), stage: 'deferred-edit' };
+        w.__cooptLastRequirementsEval = { at: Date.now(), stage: 'deferred-edit' };
       } catch (_) {}
       this._isEvaluating = false;
       return;
     }
 
-    const editor = (window as any).meritFunctionEditor;
+    const editor = w.meritFunctionEditor;
     if (!editor || typeof editor.calculateOperandValue !== 'function') {
-      try { (window as any).__cooptLastRequirementsEval = { at: Date.now(), stage: 'no-merit-editor' }; } catch (_) {}
+      try { w.__cooptLastRequirementsEval = { at: Date.now(), stage: 'no-merit-editor' }; } catch (_) {}
       this._isEvaluating = false;
       return;
     }
 
     try {
-      (window as any).__cooptLastRequirementsEval = { at: Date.now(), stage: 'running' };
+      w.__cooptLastRequirementsEval = { at: Date.now(), stage: 'running' };
     } catch (_) {}
 
     let systemConfig: any = null;
@@ -2090,20 +2141,20 @@ class SystemRequirementsEditor {
           if (typeof window !== 'undefined') {
             const opName = String(operand || '').trim();
             if (opName.startsWith('SPOT_SIZE')) {
-              const sd = ((window as any).__cooptLastSpotSizeDebug && typeof (window as any).__cooptLastSpotSizeDebug === 'object')
-                ? (window as any).__cooptLastSpotSizeDebug
+              const sd = (w.__cooptLastSpotSizeDebug && typeof w.__cooptLastSpotSizeDebug === 'object')
+                ? w.__cooptLastSpotSizeDebug
                 : null;
               const rid = row.id;
               if (sd && rid !== undefined && rid !== null && Number(sd.reqRowId) === Number(rid)) {
-                const map = ((window as any).__cooptSpotSizeDebugByReqRowId && typeof (window as any).__cooptSpotSizeDebugByReqRowId === 'object')
-                  ? (window as any).__cooptSpotSizeDebugByReqRowId
+                const map = (w.__cooptSpotSizeDebugByReqRowId && typeof w.__cooptSpotSizeDebugByReqRowId === 'object')
+                  ? w.__cooptSpotSizeDebugByReqRowId
                   : {};
                 let snap = sd;
                 try {
                   snap = (typeof structuredClone === 'function') ? structuredClone(sd) : JSON.parse(JSON.stringify(sd));
                 } catch (_) {}
                 map[String(rid)] = snap;
-                (window as any).__cooptSpotSizeDebugByReqRowId = map;
+                w.__cooptSpotSizeDebugByReqRowId = map;
               }
             }
           }
@@ -2189,7 +2240,7 @@ class SystemRequirementsEditor {
     }
 
     try {
-      (window as any).__cooptLastRequirementsEval = { at: Date.now(), stage: 'done', updated: Array.isArray(updates) ? updates.length : 0 };
+      w.__cooptLastRequirementsEval = { at: Date.now(), stage: 'done', updated: Array.isArray(updates) ? updates.length : 0 };
     } catch (_) {}
 
     this._isEvaluating = false;
@@ -2215,14 +2266,14 @@ class SystemRequirementsEditor {
   installMeritHook(): void {
     if (this._meritHookInstalled) return;
     const tryInstall = (): boolean => {
-      const editor = (window as any).meritFunctionEditor;
+      const editor = w.meritFunctionEditor;
       if (!editor || typeof editor.calculateMerit !== 'function') return false;
       if (editor.__cooptRequirementsHooked) {
         // Hook already installed (possibly by a previous cached load).
         // Still ensure we compute Current/Status at least once.
         try {
-          if ((window as any).systemRequirementsEditor && typeof (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
-            (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate();
+          if (w.systemRequirementsEditor && typeof w.systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
+            w.systemRequirementsEditor.scheduleEvaluateAndUpdate();
           }
         } catch (_) {}
         return true;
@@ -2232,8 +2283,8 @@ class SystemRequirementsEditor {
       editor.calculateMerit = (...args: any[]) => {
         const out = original(...args);
         try {
-          if ((window as any).systemRequirementsEditor && typeof (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
-            (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate();
+          if (w.systemRequirementsEditor && typeof w.systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
+            w.systemRequirementsEditor.scheduleEvaluateAndUpdate();
           }
         } catch (_) {}
         return out;
@@ -2242,8 +2293,8 @@ class SystemRequirementsEditor {
       editor.__cooptRequirementsHooked = true;
       // Ensure we compute Current/Status at least once after the editor becomes ready.
       try {
-        if ((window as any).systemRequirementsEditor && typeof (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
-          (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate();
+        if (w.systemRequirementsEditor && typeof w.systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
+          w.systemRequirementsEditor.scheduleEvaluateAndUpdate();
         }
       } catch (_) {}
       return true;
@@ -2264,8 +2315,8 @@ class SystemRequirementsEditor {
 
         // If we managed to install (or the editor appeared late), schedule an eval now.
         try {
-          if ((window as any).systemRequirementsEditor && typeof (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
-            (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate();
+          if (w.systemRequirementsEditor && typeof w.systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
+            w.systemRequirementsEditor.scheduleEvaluateAndUpdate();
           }
         } catch (_) {}
       }
@@ -2452,11 +2503,21 @@ class SystemRequirementsEditor {
 
 const __cooptInitSystemRequirementsEditor = (): boolean => {
   try {
+    console.log('[Requirements] Attempting to initialize editor');
     if (typeof window === 'undefined') return false;
-    if ((window as any).systemRequirementsEditor) return true;
+    if (w.systemRequirementsEditor) {
+      console.log('[Requirements] Editor already initialized');
+      return true;
+    }
     const container = document.getElementById('table-system-requirements');
-    if (!container) return false;
-    (window as any).systemRequirementsEditor = new SystemRequirementsEditor();
+    console.log('[Requirements] Container element:', container);
+    if (!container) {
+      console.warn('[Requirements] Container element not found');
+      return false;
+    }
+    console.log('[Requirements] Creating new SystemRequirementsEditor instance');
+    w.systemRequirementsEditor = new SystemRequirementsEditor();
+    console.log('[Requirements] Editor created successfully');
     return true;
   } catch (e) {
     console.error('❌ System Requirements Editor init failed:', e);
@@ -2465,25 +2526,56 @@ const __cooptInitSystemRequirementsEditor = (): boolean => {
 };
 
 const __cooptScheduleSystemRequirementsInit = (): void => {
-  if (__cooptInitSystemRequirementsEditor()) return;
+  console.log('[Requirements] __cooptScheduleSystemRequirementsInit called');
+  console.log('[Requirements] Checking container availability...');
+  const container = document.getElementById('table-system-requirements');
+  console.log('[Requirements] Container found:', !!container);
+  
+  if (__cooptInitSystemRequirementsEditor()) {
+    console.log('[Requirements] Editor initialized successfully on first try');
+    return;
+  }
+  
   if (typeof window !== 'undefined') {
-    if ((window as any).__cooptReactMounted) {
-      __cooptInitSystemRequirementsEditor();
+    console.log('[Requirements] Waiting for React mount, __cooptReactMounted:', w.__cooptReactMounted);
+    if (w.__cooptReactMounted) {
+      console.log('[Requirements] React already mounted, trying again...');
+      setTimeout(() => __cooptInitSystemRequirementsEditor(), 50);
       return;
     }
+    console.log('[Requirements] Adding coopt:react-mounted event listener');
     window.addEventListener('coopt:react-mounted', () => {
-      __cooptInitSystemRequirementsEditor();
+      console.log('[Requirements] coopt:react-mounted event received, initializing...');
+      // Give React a moment to fully render the DOM
+      setTimeout(() => {
+        __cooptInitSystemRequirementsEditor();
+      }, 100);
     }, { once: true });
-    setTimeout(() => {
-      __cooptInitSystemRequirementsEditor();
-    }, 0);
+    
+    // Fallback: retry multiple times
+    let retryCount = 0;
+    const maxRetries = 20;
+    const retryInterval = setInterval(() => {
+      retryCount++;
+      console.log(`[Requirements] Retry attempt ${retryCount}/${maxRetries}`);
+      if (__cooptInitSystemRequirementsEditor() || retryCount >= maxRetries) {
+        clearInterval(retryInterval);
+        if (retryCount >= maxRetries) {
+          console.warn('[Requirements] Failed to initialize after max retries');
+        }
+      }
+    }, 100);
   }
 };
 
+console.log('[Requirements] Setting up initialization, readyState:', document.readyState);
+
 if (typeof document !== 'undefined' && document?.addEventListener) {
   if (document.readyState === 'loading') {
+    console.log('[Requirements] Document loading, adding DOMContentLoaded listener');
     document.addEventListener('DOMContentLoaded', __cooptScheduleSystemRequirementsInit);
   } else {
+    console.log('[Requirements] Document already loaded, initializing immediately');
     __cooptScheduleSystemRequirementsInit();
   }
 }

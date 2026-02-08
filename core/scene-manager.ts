@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 /**
  * Three.js Scene Management Module
  * Three.jsのシーン、カメラ、レンダラーを管理
@@ -123,14 +131,14 @@ export class SceneManager {
             // OrthographicCameraの場合、光学系がロード済みなら視野範囲を再計算
             if ((this.camera as any).isOrthographicCamera) {
                 console.log('📐 Is OrthographicCamera');
-                console.log('📐 window.updateCameraViewBounds:', typeof (window as any).updateCameraViewBounds);
+                console.log('📐 window.updateCameraViewBounds:', typeof w.updateCameraViewBounds);
                 
                 // 光学系がロード済みで、updateCameraViewBounds関数が利用可能な場合
-                if ((window as any).updateCameraViewBounds) {
+                if (w.updateCameraViewBounds) {
                     try {
                         // 光学系のサイズに基づいて視野範囲のみを再計算（カメラ位置は変更しない）
                         console.log('📷 Calling updateCameraViewBounds for resized window...');
-                        (window as any).updateCameraViewBounds();
+                        w.updateCameraViewBounds();
                         console.log('📷 updateCameraViewBounds completed');
                     } catch (error) {
                         console.error('❌ Error in updateCameraViewBounds:', error);
@@ -158,7 +166,7 @@ export class SceneManager {
     
     onWindowResize(): void {
         console.log('🔄 Window resize event triggered');
-        console.log('🔍 Checking window.updateCameraViewBounds:', typeof (window as any).updateCameraViewBounds);
+        console.log('🔍 Checking window.updateCameraViewBounds:', typeof w.updateCameraViewBounds);
         this.updateRendererSize();
     }
     
@@ -304,10 +312,10 @@ export function getSceneManager(): SceneManager {
 // 従来のグローバル変数との互換性のためのエクスポート
 export function initializeGlobalThreeJS(): SceneManager {
     const manager = getSceneManager();
-    (window as any).scene = manager.scene;
-    (window as any).camera = manager.camera;
-    (window as any).renderer = manager.renderer;
-    (window as any).controls = manager.controls;
+    w.scene = manager.scene;
+    w.camera = manager.camera;
+    w.renderer = manager.renderer;
+    w.controls = manager.controls;
     
     // レンダリングループ開始
     manager.startRenderLoop();

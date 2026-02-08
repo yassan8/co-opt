@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 import { clearAllOpticalElements } from '../optical/system-renderer.js';
 import { setRayEmissionPattern, setRayColorMode } from '../optical/ray-renderer.js';
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.js';
@@ -21,7 +29,7 @@ function __cooptSanitizeForcedInfinitePupilMode(v: any): string {
 
 function __cooptGetForceInfinitePupilMode(): string {
     try {
-        const fromGlobal = (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE;
+        const fromGlobal = w.__COOPT_FORCE_INFINITE_PUPIL_MODE;
         if (fromGlobal) return __cooptSanitizeForcedInfinitePupilMode(fromGlobal);
     } catch (_) {}
     
@@ -38,12 +46,12 @@ function __cooptSetForceInfinitePupilMode(mode: string): void {
     
     try {
         if (m) {
-            (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE = m;
+            w.__COOPT_FORCE_INFINITE_PUPIL_MODE = m;
         } else {
             try {
-                delete (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE;
+                delete w.__COOPT_FORCE_INFINITE_PUPIL_MODE;
             } catch (_) {
-                (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined;
+                w.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined;
             }
         }
     } catch (_) {}
@@ -61,14 +69,14 @@ function __cooptInitForceInfinitePupilModeFromStorage(): void {
     const mode = __cooptGetForceInfinitePupilMode();
     if (mode) {
         try {
-            (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE = mode;
+            w.__COOPT_FORCE_INFINITE_PUPIL_MODE = mode;
         } catch (_) {}
     }
 }
 
 // Expose globally for Settings popup
-(window as any).__cooptGetForceInfinitePupilMode = __cooptGetForceInfinitePupilMode;
-(window as any).__cooptSetForceInfinitePupilMode = __cooptSetForceInfinitePupilMode;
+w.__cooptGetForceInfinitePupilMode = __cooptGetForceInfinitePupilMode;
+w.__cooptSetForceInfinitePupilMode = __cooptSetForceInfinitePupilMode;
 
 // Initialize on load
 __cooptInitForceInfinitePupilModeFromStorage();
@@ -79,14 +87,14 @@ __cooptInitForceInfinitePupilModeFromStorage();
 
 function getRequiredFunctions(): any {
     return {
-        getOpticalSystemRows: (window as any).getOpticalSystemRows || (() => []),
-        getObjectRows: (window as any).getObjectRows || (() => []),
-        generateCrossBeam: (window as any).generateCrossBeam || (() => ({ results: [] })),
-        generateInfiniteSystemCrossBeam: (window as any).generateInfiniteSystemCrossBeam || (() => ({ results: [] })),
-        drawOpticalSystemSurfaces: (window as any).drawOpticalSystemSurfaces || (() => {}),
-        drawCrossBeamRays: (window as any).drawCrossBeamRays || (() => {}),
-        harmonizeSceneGeometry: (window as any).harmonizeSceneGeometry || (() => {}),
-        clearAllOpticalElements: (window as any).clearAllOpticalElements || (() => {})
+        getOpticalSystemRows: w.getOpticalSystemRows || (() => []),
+        getObjectRows: w.getObjectRows || (() => []),
+        generateCrossBeam: w.generateCrossBeam || (() => ({ results: [] })),
+        generateInfiniteSystemCrossBeam: w.generateInfiniteSystemCrossBeam || (() => ({ results: [] })),
+        drawOpticalSystemSurfaces: w.drawOpticalSystemSurfaces || (() => {}),
+        drawCrossBeamRays: w.drawCrossBeamRays || (() => {}),
+        harmonizeSceneGeometry: w.harmonizeSceneGeometry || (() => {}),
+        clearAllOpticalElements: w.clearAllOpticalElements || (() => {})
     };
 }
 
@@ -95,13 +103,13 @@ function getRequiredFunctions(): any {
 // ============================================================================
 
 function ensurePopupMessageHandler(): void {
-    if ((window as any).popupMessageHandlerRegistered) {
+    if (w.popupMessageHandlerRegistered) {
         return;
     }
-    (window as any).popupMessageHandlerRegistered = true;
+    w.popupMessageHandlerRegistered = true;
     
     window.addEventListener('message', async (event: MessageEvent) => {
-        const popup = (window as any).popup3DWindow;
+        const popup = w.popup3DWindow;
         if (!popup || event.source !== popup) {
             return;
         }
@@ -113,7 +121,7 @@ function ensurePopupMessageHandler(): void {
             console.log('📥 Received popup-ready message, triggering initial draw');
             
             // Trigger initial draw when popup is ready
-            const popup = (window as any).popup3DWindow;
+            const popup = w.popup3DWindow;
             if (popup && !popup.closed) {
                 try {
                     // Send initial draw request to popup
@@ -140,10 +148,10 @@ function ensurePopupMessageHandler(): void {
         if (data.action === 'popup-resize') {
             console.log('📥 Received popup-resize message');
             
-            const scene = (window as any).popupScene;
-            const camera = (window as any).popupCamera;
-            const renderer = (window as any).popupRenderer;
-            const viewAxis = (window as any).__currentPopupViewAxis || 'YZ';
+            const scene = w.popupScene;
+            const camera = w.popupCamera;
+            const renderer = w.popupRenderer;
+            const viewAxis = w.__currentPopupViewAxis || 'YZ';
             
             if (!scene || !camera || !renderer) {
                 console.log('⚠️ popup-resize: Missing scene/camera/renderer');
@@ -169,7 +177,7 @@ function ensurePopupMessageHandler(): void {
         // Handle draw-cross message
         if (data.action === 'draw-cross') {
             try {
-                const popupWindow = (window as any).popup3DWindow;
+                const popupWindow = w.popup3DWindow;
                 const viewAxisRaw = (data?.viewAxis || 'YZ').toString().toUpperCase();
                 const viewAxis = viewAxisRaw === 'XZ' ? 'XZ' : 'YZ';
                 const userAdjustedView = data?.userAdjustedView === true;
@@ -186,23 +194,23 @@ function ensurePopupMessageHandler(): void {
                 const rayColorMode = (data?.rayColorMode === 'segment') ? 'segment' : 'object';
                 
                 try {
-                    if (typeof (window as any).setRayColorMode === 'function') {
-                        (window as any).setRayColorMode(rayColorMode);
+                    if (typeof w.setRayColorMode === 'function') {
+                        w.setRayColorMode(rayColorMode);
                     }
                 } catch (e) {}
 
-                const isOptimizing = (typeof globalThis !== 'undefined') ? !!(globalThis as any).__cooptOptimizerIsRunning : false;
+                const isOptimizing = (typeof globalThis !== 'undefined') ? !!w.__cooptOptimizerIsRunning : false;
                 
                 if (!isOptimizing) {
-                    if (typeof (window as any).loadActiveConfigurationToTables === 'function') {
-                        (window as any).loadActiveConfigurationToTables();
+                    if (typeof w.loadActiveConfigurationToTables === 'function') {
+                        w.loadActiveConfigurationToTables();
                     }
                 }
 
                 if (!isOptimizing) {
                     try {
                         if (typeof globalThis !== 'undefined') {
-                            (globalThis as any).__cooptOpticalSystemRowsOverride = null;
+                            w.__cooptOpticalSystemRowsOverride = null;
                         }
                     } catch (_) {}
                 }
@@ -230,23 +238,23 @@ function ensurePopupMessageHandler(): void {
                             _surfaceRole: (s && typeof s === 'object') ? (s._surfaceRole ?? '') : ''
                         }))
                         : [];
-                    (window as any).popup3DWindow?.postMessage({ action: 'surface-list', surfaces }, '*');
+                    w.popup3DWindow?.postMessage({ action: 'surface-list', surfaces }, '*');
                 } catch (e) {}
 
                 if (!opticalSystemRows || opticalSystemRows.length === 0) {
-                    (window as any).popup3DWindow.postMessage({ status: 'Error: No optical system data' }, '*');
+                    w.popup3DWindow.postMessage({ status: 'Error: No optical system data' }, '*');
                     return;
                 }
 
-                const popupScene = (window as any).popup3DWindow.scene;
+                const popupScene = w.popup3DWindow.scene;
 
                 if (!popupScene) {
-                    (window as any).popup3DWindow.postMessage({ status: 'Error: Scene not ready' }, '*');
+                    w.popup3DWindow.postMessage({ status: 'Error: Scene not ready' }, '*');
                     return;
                 }
 
-                if ((window as any).popup3DWindow && (window as any).popup3DWindow.renderer) {
-                    (window as any).popup3DWindow.renderer.clear();
+                if (w.popup3DWindow && w.popup3DWindow.renderer) {
+                    w.popup3DWindow.renderer.clear();
                 }
                 if (popupScene) {
                     const allChildren = [...popupScene.children];
@@ -287,8 +295,8 @@ function ensurePopupMessageHandler(): void {
 
                 if (!Array.isArray(objectRows) || objectRows.length === 0) {
                     try {
-                        if ((window as any).tableObject && typeof (window as any).tableObject.getData === 'function') {
-                            objectRows = (window as any).tableObject.getData();
+                        if (w.tableObject && typeof w.tableObject.getData === 'function') {
+                            objectRows = w.tableObject.getData();
                         } else {
                             const tableElement = document.getElementById('table-object');
                             if (tableElement && (tableElement as any).tabulator) {
@@ -331,8 +339,8 @@ function ensurePopupMessageHandler(): void {
                         row && (row['object type'] === 'Image' || row.object === 'Image')
                     );
                     const targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemRows.length - 1);
-                    const primaryWavelength = (typeof (window as any).getPrimaryWavelength === 'function')
-                        ? Number((window as any).getPrimaryWavelength()) || 0.5876
+                    const primaryWavelength = (typeof w.getPrimaryWavelength === 'function')
+                        ? Number(w.getPrimaryWavelength()) || 0.5876
                         : 0.5876;
 
                     crossBeamResult = await generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, {
@@ -401,12 +409,12 @@ function ensurePopupMessageHandler(): void {
                         drawCrossBeamRays(allRays, popupScene);
                         try {
                             (popupWindow as any).__lastCrossRays = allRays;
-                            (window as any).__lastCrossRays = allRays;
+                            w.__lastCrossRays = allRays;
                         } catch (_) {}
                         harmonizeSceneGeometry(popupScene);
                         console.log('📍 Refitting camera after ray drawing...');
                         if (popupWindow && popupWindow.camera && popupWindow.renderer) {
-                            const THREE = popupWindow.THREE || (window as any).THREE;
+                            const THREE = popupWindow.THREE || w.THREE;
                             const renderer = popupWindow.renderer;
                             const camera = popupWindow.camera;
                             const controls = popupWindow.controls;
@@ -502,13 +510,13 @@ function ensurePopupMessageHandler(): void {
                         }
                     }
 
-                    (window as any).popup3DWindow.postMessage({ status: 'Drawing complete' }, '*');
+                    w.popup3DWindow.postMessage({ status: 'Drawing complete' }, '*');
                 } else {
-                    (window as any).popup3DWindow.postMessage({ status: 'Error: ' + crossBeamResult.error }, '*');
+                    w.popup3DWindow.postMessage({ status: 'Error: ' + crossBeamResult.error }, '*');
                 }
             } catch (error: any) {
                 console.error('Error stack:', error.stack);
-                (window as any).popup3DWindow.postMessage({ status: 'Error: ' + error.message }, '*');
+                w.popup3DWindow.postMessage({ status: 'Error: ' + error.message }, '*');
             }
             return;
         }
@@ -516,11 +524,11 @@ function ensurePopupMessageHandler(): void {
         // Handle view-xz and view-yz messages
         if (data.action === 'view-xz' || data.action === 'view-yz') {
             console.log('🎥 Handling popup view action:', data.action);
-            if (!(window as any).popup3DWindow) {
+            if (!w.popup3DWindow) {
                 return;
             }
 
-            const popupWindow = (window as any).popup3DWindow;
+            const popupWindow = w.popup3DWindow;
             const popupStatus = popupWindow.document?.getElementById('status') || null;
             
             try {
@@ -540,8 +548,8 @@ function ensurePopupMessageHandler(): void {
                     popupWindow.camera &&
                     popupWindow.controls &&
                     popupWindow.renderer &&
-                    (typeof (window as any).setCameraForXZCrossSection === 'function') &&
-                    (typeof (window as any).setCameraForYZCrossSection === 'function');
+                    (typeof w.setCameraForXZCrossSection === 'function') &&
+                    (typeof w.setCameraForYZCrossSection === 'function');
 
                 if (canSwitchCameraOnly) {
                     const rotateCameraAroundZOnly = ({ viewAxis, target }: any) => {
@@ -555,12 +563,12 @@ function ensurePopupMessageHandler(): void {
                         const syncOrthoBoundsToRendererAspect = () => {
                             try {
                                 if (!cam || !cam.isOrthographicCamera || !rnd || typeof rnd.getSize !== 'function') return;
-                                const THREE = popupWindow?.THREE || (window as any).THREE;
+                                const THREE = popupWindow?.THREE || w.THREE;
                                 const size = rnd.getSize(new THREE.Vector2());
-                                const w = Number(size?.x) || 0;
-                                const h = Number(size?.y) || 0;
-                                if (!Number.isFinite(w) || !Number.isFinite(h) || w < 2 || h < 2) return;
-                                const asp = w / h;
+                                const width = Number(size?.x) || 0;
+                                const height = Number(size?.y) || 0;
+                                if (!Number.isFinite(width) || !Number.isFinite(height) || width < 2 || height < 2) return;
+                                const asp = width / height;
 
                                 const currentHeight = (cam.top - cam.bottom) || 1;
                                 const cx = (cam.left + cam.right) / 2;
@@ -695,7 +703,7 @@ function ensurePopupMessageHandler(): void {
                             harmonizeSceneGeometry(popupWindow.scene);
                         }
 
-                        const cachedRays = (popupWindow as any).__lastCrossRays || (window as any).__lastCrossRays;
+                        const cachedRays = (popupWindow as any).__lastCrossRays || w.__lastCrossRays;
                         if (Array.isArray(cachedRays) && cachedRays.length > 0 && typeof drawCrossBeamRays === 'function') {
                             clearRaysOnly(popupWindow.scene);
                             drawCrossBeamRays(cachedRays, popupWindow.scene);
@@ -781,17 +789,17 @@ function executeCrossSectionView(options: {
     }
     
     try {
-        const isOptimizing = !!(globalThis as any).__cooptOptimizerIsRunning;
+        const isOptimizing = !!w.__cooptOptimizerIsRunning;
         
         if (!isOptimizing) {
-            const loadActiveConfigurationToTables = (window as any).loadActiveConfigurationToTables;
+            const loadActiveConfigurationToTables = w.loadActiveConfigurationToTables;
             if (typeof loadActiveConfigurationToTables === 'function') {
                 loadActiveConfigurationToTables();
             }
         }
         
         try {
-            (globalThis as any).__cooptOpticalSystemRowsOverride = null;
+            w.__cooptOpticalSystemRowsOverride = null;
         } catch (_) {}
         
         const {
@@ -851,10 +859,10 @@ function executeCrossSectionView(options: {
         
         const rays = collectRaysFromResult(result);
         
-        const sceneRef = targetScene || (window as any).scene;
-        const cameraRef = targetCamera || (window as any).camera;
-        const controlsRef = targetControls || (window as any).controls;
-        const rendererRef = targetRenderer || (window as any).renderer;
+        const sceneRef = targetScene || w.scene;
+        const cameraRef = targetCamera || w.camera;
+        const controlsRef = targetControls || w.controls;
+        const rendererRef = targetRenderer || w.renderer;
         
         if (sceneRef && typeof clearAllOpticalElements === 'function') {
             clearAllOpticalElements(sceneRef);
@@ -897,7 +905,7 @@ function executeCrossSectionView(options: {
                     cameraRef.bottom = bottom;
                 }
             } else {
-                const calculateOpticalSystemZRange = (window as any).calculateOpticalSystemZRange;
+                const calculateOpticalSystemZRange = w.calculateOpticalSystemZRange;
                 let minZ = -10, maxZ = 100, maxY = 10, centerZ = 50;
                 
                 if (typeof calculateOpticalSystemZRange === 'function') {
@@ -968,7 +976,7 @@ function executeCrossSectionView(options: {
                     cameraRef.bottom = bottom;
                 }
             } else {
-                const calculateOpticalSystemZRange = (window as any).calculateOpticalSystemZRange;
+                const calculateOpticalSystemZRange = w.calculateOpticalSystemZRange;
                 let minZ = -10, maxZ = 100, maxY = 10, centerZ = 50;
                 
                 if (typeof calculateOpticalSystemZRange === 'function') {
@@ -1015,8 +1023,8 @@ function executeCrossSectionView(options: {
             }
         };
         
-        const setCameraForXZCrossSection = (window as any).setCameraForXZCrossSection;
-        const setCameraForYZCrossSection = (window as any).setCameraForYZCrossSection;
+        const setCameraForXZCrossSection = w.setCameraForXZCrossSection;
+        const setCameraForYZCrossSection = w.setCameraForYZCrossSection;
         
         if (viewAxis === 'XZ') {
             if (typeof setCameraForXZCrossSection === 'function') {
@@ -1059,7 +1067,7 @@ function executeCrossSectionView(options: {
 }
 
 // Export for global access
-(window as any).executeCrossSectionView = executeCrossSectionView;
+w.executeCrossSectionView = executeCrossSectionView;
 
 // ============================================================================
 // UI SETUP FUNCTIONS
@@ -1199,12 +1207,12 @@ export function setupSimpleViewButtons(): void {
 }
 
 export function setupOpticalSystemChangeListeners(scene: any): void {
-    if ((window as any).__opticalSystemChangeListenersBound) {
+    if (w.__opticalSystemChangeListenersBound) {
         return;
     }
-    (window as any).__opticalSystemChangeListenersBound = true;
+    w.__opticalSystemChangeListenersBound = true;
     
-    const opticalSystemTabulator = (window as any).tableOpticalSystem;
+    const opticalSystemTabulator = w.tableOpticalSystem;
     
     if (opticalSystemTabulator) {
         const handleChange = (): void => {
@@ -1222,7 +1230,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
     const open3DWindowBtn = document.getElementById('open-3d-window-btn');
     if (open3DWindowBtn) {
         open3DWindowBtn.addEventListener('click', () => {
-            const existingPopup = (window as any).popup3DWindow;
+            const existingPopup = w.popup3DWindow;
             if (existingPopup && !existingPopup.closed) {
                 try {
                     existingPopup.focus();
@@ -1972,7 +1980,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             `);
             popup.document.close();
             
-            (window as any).popup3DWindow = popup;
+            w.popup3DWindow = popup;
         });
     }
 }
@@ -1982,17 +1990,23 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
  * Must be called after React components are mounted
  */
 export function setupAnalysisWindows() {
+        console.log('[Analysis] setupAnalysisWindows called');
         // System Data popup window button
         const openSystemDataWindowBtn = document.getElementById('open-system-data-window-btn');
+        console.log('[Analysis] System Data button:', openSystemDataWindowBtn);
         if (openSystemDataWindowBtn) {
                 openSystemDataWindowBtn.addEventListener('click', () => {
-                        if ((window as any).__systemDataPopup && !(window as any).__systemDataPopup.closed) {
-                                try { (window as any).__systemDataPopup.focus(); } catch (_) {}
+                        if (w.__systemDataPopup && !w.__systemDataPopup.closed) {
+                                try { w.__systemDataPopup.focus(); } catch (_) {}
                                 return;
                         }
 
                         const popup = window.open('', 'System Data', 'width=1200,height=600');
-                        (window as any).__systemDataPopup = popup;
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__systemDataPopup = popup;
 
                         popup.document.write(`
 <!DOCTYPE html>
@@ -2346,25 +2360,29 @@ export function setupAnalysisWindows() {
         const openSpotDiagramWindowBtn = document.getElementById('open-spot-diagram-window-btn');
         if (openSpotDiagramWindowBtn) {
                 openSpotDiagramWindowBtn.addEventListener('click', () => {
-                        if ((window as any).__spotDiagramPopup && !(window as any).__spotDiagramPopup.closed) {
-                                try { (window as any).__spotDiagramPopup.focus(); } catch (_) {}
+                        if (w.__spotDiagramPopup && !w.__spotDiagramPopup.closed) {
+                                try { w.__spotDiagramPopup.focus(); } catch (_) {}
                                 return;
                         }
 
                         // Ensure parent window selects are populated before opening popup
                         try {
-                            if (typeof (window as any).updateSpotDiagramConfigSelect === 'function') {
-                                (window as any).updateSpotDiagramConfigSelect();
+                            if (typeof w.updateSpotDiagramConfigSelect === 'function') {
+                                w.updateSpotDiagramConfigSelect();
                             }
-                            if (typeof (window as any).updateSurfaceNumberSelect === 'function') {
-                                (window as any).updateSurfaceNumberSelect();
+                            if (typeof w.updateSurfaceNumberSelect === 'function') {
+                                w.updateSurfaceNumberSelect();
                             }
                         } catch (e) {
                             console.warn('Failed to update spot diagram selects:', e);
                         }
 
                         const popup = window.open('', 'Spot Diagram', 'width=800,height=600');
-                        (window as any).__spotDiagramPopup = popup;
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__spotDiagramPopup = popup;
 
                         popup.document.write(`
 <!DOCTYPE html>
@@ -2713,7 +2731,7 @@ export function setupAnalysisWindows() {
 
         // Allow the opener to request a resync after table edits (e.g., CB insert/delete).
         try {
-            (window as any).__cooptSpotPopupSyncAll = syncAll;
+            w.__cooptSpotPopupSyncAll = syncAll;
         } catch (_) {}
         window.addEventListener('message', (ev) => {
             try {
@@ -2740,18 +2758,22 @@ export function setupAnalysisWindows() {
         const openSphericalAberrationWindowBtn = document.getElementById('open-spherical-aberration-window-btn');
         if (openSphericalAberrationWindowBtn) {
                 openSphericalAberrationWindowBtn.addEventListener('click', () => {
-                        if ((window as any).__sphericalAberrationPopup && !(window as any).__sphericalAberrationPopup.closed) {
-                                try { (window as any).__sphericalAberrationPopup.focus(); } catch (_) {}
+                        if (w.__sphericalAberrationPopup && !w.__sphericalAberrationPopup.closed) {
+                                try { w.__sphericalAberrationPopup.focus(); } catch (_) {}
                     try {
-                        if (typeof (window as any).__sphericalAberrationPopup.renderSphericalAberration === 'function') {
-                            (window as any).__sphericalAberrationPopup.renderSphericalAberration();
+                        if (typeof w.__sphericalAberrationPopup.renderSphericalAberration === 'function') {
+                            w.__sphericalAberrationPopup.renderSphericalAberration();
                         }
                     } catch (_) {}
                                 return;
                         }
 
                         const popup = window.open('', 'Spherical Aberration', 'width=800,height=600');
-                        (window as any).__sphericalAberrationPopup = popup;
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__sphericalAberrationPopup = popup;
 
                         popup.document.write(`
 <!DOCTYPE html>
@@ -2934,18 +2956,22 @@ export function setupAnalysisWindows() {
         const openAstigmatismWindowBtn = document.getElementById('open-astigmatism-window-btn');
         if (openAstigmatismWindowBtn) {
                 openAstigmatismWindowBtn.addEventListener('click', () => {
-                        if ((window as any).__astigmatismPopup && !(window as any).__astigmatismPopup.closed) {
-                                try { (window as any).__astigmatismPopup.focus(); } catch (_) {}
+                        if (w.__astigmatismPopup && !w.__astigmatismPopup.closed) {
+                                try { w.__astigmatismPopup.focus(); } catch (_) {}
                                 try {
-                                        if (typeof (window as any).__astigmatismPopup.renderAstigmatism === 'function') {
-                                                (window as any).__astigmatismPopup.renderAstigmatism();
+                                        if (typeof w.__astigmatismPopup.renderAstigmatism === 'function') {
+                                                w.__astigmatismPopup.renderAstigmatism();
                                         }
                                 } catch (_) {}
                                 return;
                         }
 
                         const popup = window.open('', 'Astigmatism', 'width=800,height=600');
-                        (window as any).__astigmatismPopup = popup;
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__astigmatismPopup = popup;
 
                         popup.document.write(`
 <!DOCTYPE html>
@@ -3089,18 +3115,22 @@ export function setupAnalysisWindows() {
         const openDistortionWindowBtn = document.getElementById('open-distortion-window-btn');
         if (openDistortionWindowBtn) {
                 openDistortionWindowBtn.addEventListener('click', () => {
-                        if ((window as any).__distortionPopup && !(window as any).__distortionPopup.closed) {
-                                try { (window as any).__distortionPopup.focus(); } catch (_) {}
+                        if (w.__distortionPopup && !w.__distortionPopup.closed) {
+                                try { w.__distortionPopup.focus(); } catch (_) {}
                                 try {
-                                        if (typeof (window as any).__distortionPopup.renderDistortion === 'function') {
-                                                (window as any).__distortionPopup.renderDistortion();
+                                        if (typeof w.__distortionPopup.renderDistortion === 'function') {
+                                                w.__distortionPopup.renderDistortion();
                                         }
                                 } catch (_) {}
                                 return;
                         }
 
                         const popup = window.open('', 'Distortion', 'width=800,height=600');
-                        (window as any).__distortionPopup = popup;
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__distortionPopup = popup;
 
                         popup.document.write(`
 <!DOCTYPE html>
@@ -3356,18 +3386,22 @@ export function setupAnalysisWindows() {
         const openIntegratedAberrationWindowBtn = document.getElementById('open-integrated-aberration-window-btn');
         if (openIntegratedAberrationWindowBtn) {
                 openIntegratedAberrationWindowBtn.addEventListener('click', () => {
-                        if ((window as any).__integratedAberrationPopup && !(window as any).__integratedAberrationPopup.closed) {
-                                try { (window as any).__integratedAberrationPopup.focus(); } catch (_) {}
+                        if (w.__integratedAberrationPopup && !w.__integratedAberrationPopup.closed) {
+                                try { w.__integratedAberrationPopup.focus(); } catch (_) {}
                                 try {
-                                        if (typeof (window as any).__integratedAberrationPopup.renderIntegratedAberration === 'function') {
-                                                (window as any).__integratedAberrationPopup.renderIntegratedAberration();
+                                        if (typeof w.__integratedAberrationPopup.renderIntegratedAberration === 'function') {
+                                                w.__integratedAberrationPopup.renderIntegratedAberration();
                                         }
                                 } catch (_) {}
                                 return;
                         }
 
                         const popup = window.open('', 'Integrated Aberration', 'width=800,height=600');
-                        (window as any).__integratedAberrationPopup = popup;
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__integratedAberrationPopup = popup;
 
                         popup.document.write(`
 <!DOCTYPE html>
@@ -3511,14 +3545,18 @@ export function setupAnalysisWindows() {
         const openOpdWindowBtn = document.getElementById('open-opd-window-btn');
         if (openOpdWindowBtn) {
                 openOpdWindowBtn.addEventListener('click', () => {
-                        if ((window as any).__opdPopup && !(window as any).__opdPopup.closed) {
+                        if (w.__opdPopup && !w.__opdPopup.closed) {
                     // Always reopen fresh so stale about:blank popup code can't persist.
-                    try { (window as any).__opdPopup.close(); } catch (_) {}
-                    (window as any).__opdPopup = null;
+                    try { w.__opdPopup.close(); } catch (_) {}
+                    w.__opdPopup = null;
                         }
 
                         const popup = window.open('', 'Optical Path Difference', 'width=800,height=600');
-                        (window as any).__opdPopup = popup;
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__opdPopup = popup;
 
                         try { popup.document.open(); } catch (_) {}
 
@@ -3794,7 +3832,7 @@ export function setupAnalysisWindows() {
                 });
                 
                 const popupCancelToken = createCancelToken();
-                (window as any).__popupOpdCancelToken = popupCancelToken;
+                window.__popupOpdCancelToken = popupCancelToken;
                 
                 const stopBtn = document.getElementById('popup-stop-opd-btn');
                 
@@ -4018,7 +4056,7 @@ export function setupAnalysisWindows() {
                         stopBtn.disabled = true;
                         stopBtn.textContent = 'Stop';
                     }
-                    (window as any).__popupOpdCancelToken = null;
+                    window.__popupOpdCancelToken = null;
                 }
             } catch (err) {
                 console.error(err);
@@ -4032,7 +4070,7 @@ export function setupAnalysisWindows() {
         document.getElementById('popup-show-wavefront-btn').addEventListener('click', () => window.renderOPD());
         document.getElementById('popup-stop-opd-btn').addEventListener('click', () => {
             console.log('🛑 Popup OPD Stop button clicked');
-            const token = (window as any).__popupOpdCancelToken;
+            const token = window.__popupOpdCancelToken;
             if (token && typeof token.abort === 'function') {
                 token.abort('Stopped by user');
                 const stopBtn = document.getElementById('popup-stop-opd-btn');
@@ -4063,10 +4101,10 @@ export function setupAnalysisWindows() {
         const openPsfWindowBtn = document.getElementById('open-psf-window-btn');
         if (openPsfWindowBtn) {
                 openPsfWindowBtn.addEventListener('click', () => {
-                        if ((window as any).__psfPopup && !(window as any).__psfPopup.closed) {
+                        if (w.__psfPopup && !w.__psfPopup.closed) {
                                 // Always reopen fresh so stale about:blank popup code can't persist.
-                                try { (window as any).__psfPopup.close(); } catch (_) {}
-                                (window as any).__psfPopup = null;
+                                try { w.__psfPopup.close(); } catch (_) {}
+                                w.__psfPopup = null;
                         }
 
                         const popup = window.open('', 'Point Spread Function', 'width=800,height=600');
@@ -4075,7 +4113,7 @@ export function setupAnalysisWindows() {
                             alert('Popup could not be opened. Please allow popups for this site.');
                             return;
                         }
-                        (window as any).__psfPopup = popup;
+                        w.__psfPopup = popup;
 
                         try { popup.document.open(); } catch (_) {}
 
@@ -4946,8 +4984,8 @@ export function setupAnalysisWindows() {
 
                     logScaleInputs(pupilDiameterMm, focalLengthMm, stopIndexForLog);
 
-                    if (!(window as any).__popupPsfCalculator) (window as any).__popupPsfCalculator = new PSFCalculator();
-                    const psfCalculator = (window as any).__popupPsfCalculator;
+                    if (!window.__popupPsfCalculator) window.__popupPsfCalculator = new PSFCalculator();
+                    const psfCalculator = window.__popupPsfCalculator;
                     const psfSamplingSize = Number.isFinite(zernikeSampling) ? zernikeSampling : 128;
                     const zeroPadTo = (zeroPadRaw === 'none')
                         ? psfSamplingSize
@@ -5055,13 +5093,17 @@ export function setupAnalysisWindows() {
         const openMtfWindowBtn = document.getElementById('open-mtf-window-btn');
         if (openMtfWindowBtn) {
                 openMtfWindowBtn.addEventListener('click', () => {
-                        if ((window as any).__mtfPopup && !(window as any).__mtfPopup.closed) {
-                                try { (window as any).__mtfPopup.focus(); } catch (_) {}
+                        if (w.__mtfPopup && !w.__mtfPopup.closed) {
+                                try { w.__mtfPopup.focus(); } catch (_) {}
                                 return;
                         }
 
                         const popup = window.open('', 'Modulation Transfer Function', 'width=800,height=600');
-                        (window as any).__mtfPopup = popup;
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__mtfPopup = popup;
 
                         popup.document.write(`
 <!DOCTYPE html>
@@ -5366,18 +5408,22 @@ export function setupAnalysisWindows() {
         const openTransverseAberrationWindowBtn = document.getElementById('open-transverse-aberration-window-btn');
         if (openTransverseAberrationWindowBtn) {
                 openTransverseAberrationWindowBtn.addEventListener('click', () => {
-                        if ((window as any).__transverseAberrationPopup && !(window as any).__transverseAberrationPopup.closed) {
-                                try { (window as any).__transverseAberrationPopup.focus(); } catch (_) {}
+                        if (w.__transverseAberrationPopup && !w.__transverseAberrationPopup.closed) {
+                                try { w.__transverseAberrationPopup.focus(); } catch (_) {}
                     try {
-                        if (typeof (window as any).__transverseAberrationPopup.renderTransverseAberration === 'function') {
-                            (window as any).__transverseAberrationPopup.renderTransverseAberration();
+                        if (typeof w.__transverseAberrationPopup.renderTransverseAberration === 'function') {
+                            w.__transverseAberrationPopup.renderTransverseAberration();
                         }
                     } catch (_) {}
                                 return;
                         }
 
                         const popup = window.open('', 'Transverse Aberration', 'width=800,height=600');
-                        (window as any).__transverseAberrationPopup = popup;
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__transverseAberrationPopup = popup;
 
                         popup.document.write(`
 <!DOCTYPE html>
@@ -5556,13 +5602,17 @@ export function setupAnalysisWindows() {
         const openSettingsBtn = document.getElementById('open-settings-btn');
         if (openSettingsBtn) {
                 openSettingsBtn.addEventListener('click', () => {
-                        if ((window as any).__settingsPopup && !(window as any).__settingsPopup.closed) {
-                                try { (window as any).__settingsPopup.focus(); } catch (_) {}
+                        if (w.__settingsPopup && !w.__settingsPopup.closed) {
+                                try { w.__settingsPopup.focus(); } catch (_) {}
                                 return;
                         }
 
                         const popup = window.open('', 'Settings', 'width=520,height=340');
-                        (window as any).__settingsPopup = popup;
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__settingsPopup = popup;
 
                         popup.document.write(`
 <!DOCTYPE html>
@@ -5845,7 +5895,7 @@ export function setupAnalysisWindows() {
                 }
                 
                 // Expose to Settings popup
-                (window as any).__cooptSetDarkMode = (enabled) => {
+                w.__cooptSetDarkMode = (enabled) => {
                         applyDarkModeClass(enabled);
                 };
                 
@@ -5909,7 +5959,7 @@ export function setupTransformationControls(): void {
                 }
                 
                 // Get optical system data
-                const getOpticalSystemRows = (window as any).getOpticalSystemRows;
+                const getOpticalSystemRows = w.getOpticalSystemRows;
                 if (typeof getOpticalSystemRows !== 'function') {
                     showError('Optical system data not available.');
                     return;
@@ -5927,10 +5977,10 @@ export function setupTransformationControls(): void {
                 if (saveLocalCoordsBtn) saveLocalCoordsBtn.style.display = 'none';
                 
                 // Reset cancellation flag
-                (window as any)._transformCalculationCancelled = false;
+                w._transformCalculationCancelled = false;
                 
                 // Calculate local coordinates
-                const calculateAllSurfacesLocalCoordinates = (window as any).calculateAllSurfacesLocalCoordinates;
+                const calculateAllSurfacesLocalCoordinates = w.calculateAllSurfacesLocalCoordinates;
                 if (typeof calculateAllSurfacesLocalCoordinates !== 'function') {
                     showError('Coordinate transformation function not available.');
                     showLocalCoordsBtn.disabled = false;
@@ -5945,12 +5995,12 @@ export function setupTransformationControls(): void {
                 );
                 
                 // Store results
-                (window as any)._cachedLocalCoords = result;
-                (window as any)._showLocalCoords = true;
+                w._cachedLocalCoords = result;
+                w._showLocalCoords = true;
                 
                 // Redraw table
-                if ((window as any).tableOpticalSystem) {
-                    (window as any).tableOpticalSystem.redraw();
+                if (w.tableOpticalSystem) {
+                    w.tableOpticalSystem.redraw();
                 }
                 
                 // Show save button
@@ -5972,7 +6022,7 @@ export function setupTransformationControls(): void {
     // Cancel button
     if (cancelTransformBtn) {
         cancelTransformBtn.addEventListener('click', function() {
-            (window as any)._transformCalculationCancelled = true;
+            w._transformCalculationCancelled = true;
             if (cancelTransformBtn) cancelTransformBtn.style.display = 'none';
             hideProgress();
             showError('Calculation cancelled by user.');
@@ -5983,12 +6033,12 @@ export function setupTransformationControls(): void {
     if (saveLocalCoordsBtn) {
         saveLocalCoordsBtn.addEventListener('click', function() {
             try {
-                if (!(window as any)._cachedLocalCoords) {
+                if (!w._cachedLocalCoords) {
                     showError('No coordinate data to save. Please calculate first.');
                     return;
                 }
                 
-                const data = (window as any)._cachedLocalCoords;
+                const data = w._cachedLocalCoords;
                 const json = JSON.stringify(data, null, 2);
                 const blob = new Blob([json], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
@@ -6016,9 +6066,11 @@ export function setupTransformationControls(): void {
     
     // Analysis dropdown selector
     const analysisSelect = document.getElementById('analysis-select') as HTMLSelectElement | null;
+    console.log('[Analysis] Dropdown selector:', analysisSelect);
     if (analysisSelect) {
         analysisSelect.addEventListener('change', () => {
             const selectedValue = analysisSelect.value;
+            console.log('[Analysis] Selected value:', selectedValue);
             if (!selectedValue) return;
             
             // Reset select to default after triggering
@@ -6038,9 +6090,12 @@ export function setupTransformationControls(): void {
             };
             
             const buttonId = analysisButtonMap[selectedValue];
+            console.log('[Analysis] Button ID:', buttonId);
             if (buttonId) {
                 const button = document.getElementById(buttonId);
+                console.log('[Analysis] Button element:', button);
                 if (button) {
+                    console.log('[Analysis] Clicking button:', buttonId);
                     button.click();
                 } else {
                     console.warn(`Analysis button not found: ${buttonId}`);
@@ -6058,7 +6113,7 @@ export function updateTransformSurfaceSelect(): void {
     if (!transformSurfaceSelect) return;
     
     try {
-        const getOpticalSystemRows = (window as any).getOpticalSystemRows;
+        const getOpticalSystemRows = w.getOpticalSystemRows;
         if (typeof getOpticalSystemRows !== 'function') return;
         
         const opticalSystemRows = getOpticalSystemRows();
@@ -6102,16 +6157,26 @@ export function updateTransformSurfaceSelect(): void {
  * Update spot diagram config select with available configurations
  */
 export function updateSpotDiagramConfigSelect(): void {
+    console.log('[DEBUG] updateSpotDiagramConfigSelect called');
     const spotCfg = document.getElementById('spot-diagram-config-select') as HTMLSelectElement | null;
-    if (!spotCfg) return;
+    console.log('[DEBUG] spot-diagram-config-select element:', spotCfg);
+    if (!spotCfg) {
+        console.log('[DEBUG] spot-diagram-config-select element not found!');
+        return;
+    }
     
     try {
         const systemConfig = localStorage.getItem('systemConfigurations');
-        if (!systemConfig) return;
+        console.log('[DEBUG] systemConfigurations:', systemConfig);
+        if (!systemConfig) {
+            console.log('[DEBUG] No systemConfigurations in localStorage');
+            return;
+        }
         
         const parsed = JSON.parse(systemConfig);
         const configurations = Array.isArray(parsed?.configurations) ? parsed.configurations : [];
         const activeId = parsed?.activeConfigId;
+        console.log('[DEBUG] Found configurations:', configurations.length, 'activeId:', activeId);
         
         // Clear existing options
         spotCfg.innerHTML = '';
@@ -6126,12 +6191,14 @@ export function updateSpotDiagramConfigSelect(): void {
                 option.selected = true;
             }
             spotCfg.appendChild(option);
+            console.log('[DEBUG] Added option:', config.name || config.id);
         });
         
         // If no selection and has options, select first
         if (spotCfg.options.length > 0 && !spotCfg.value) {
             spotCfg.selectedIndex = 0;
         }
+        console.log('[DEBUG] Final options count:', spotCfg.options.length);
     } catch (error) {
         console.error('Error updating spot diagram config select:', error);
     }
@@ -6141,15 +6208,28 @@ export function updateSpotDiagramConfigSelect(): void {
  * Update surface number select with current optical system surfaces
  */
 export function updateSurfaceNumberSelect(): void {
+    console.log('[DEBUG] updateSurfaceNumberSelect called');
     const surfaceSelect = document.getElementById('surface-number-select') as HTMLSelectElement | null;
-    if (!surfaceSelect) return;
+    console.log('[DEBUG] surface-number-select element:', surfaceSelect);
+    if (!surfaceSelect) {
+        console.log('[DEBUG] surface-number-select element not found!');
+        return;
+    }
     
     try {
-        const getOpticalSystemRows = (window as any).getOpticalSystemRows;
-        if (typeof getOpticalSystemRows !== 'function') return;
+        const getOpticalSystemRows = w.getOpticalSystemRows;
+        console.log('[DEBUG] getOpticalSystemRows function:', typeof getOpticalSystemRows);
+        if (typeof getOpticalSystemRows !== 'function') {
+            console.log('[DEBUG] getOpticalSystemRows is not a function');
+            return;
+        }
         
         const opticalSystemRows = getOpticalSystemRows();
-        if (!opticalSystemRows || opticalSystemRows.length === 0) return;
+        console.log('[DEBUG] opticalSystemRows:', opticalSystemRows?.length);
+        if (!opticalSystemRows || opticalSystemRows.length === 0) {
+            console.log('[DEBUG] No optical system rows found');
+            return;
+        }
         
         // Save current selection
         const prevValue = surfaceSelect.value;
@@ -6193,6 +6273,6 @@ export function updateSurfaceNumberSelect(): void {
 
 // Expose functions to window for backwards compatibility
 if (typeof window !== 'undefined') {
-    (window as any).updateSpotDiagramConfigSelect = updateSpotDiagramConfigSelect;
-    (window as any).updateSurfaceNumberSelect = updateSurfaceNumberSelect;
+    w.updateSpotDiagramConfigSelect = updateSpotDiagramConfigSelect;
+    w.updateSurfaceNumberSelect = updateSurfaceNumberSelect;
 }

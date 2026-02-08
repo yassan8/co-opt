@@ -1,3 +1,11 @@
+// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
+declare global {
+  interface Window {
+    [key: string]: any;
+  }
+}
+const w: Record<string, any> = window;
+
 import {
   loadSystemConfigurations,
   saveSystemConfigurations,
@@ -33,7 +41,7 @@ function setConfigControlsEnabled(enabled: boolean): void {
 
 function shouldSkipAutoSave(): boolean {
   try {
-    return isConfigurationSwitching || (globalThis as any).__configurationAutoSaveDisabled === true;
+    return isConfigurationSwitching || w.__configurationAutoSaveDisabled === true;
   } catch (_) {
     return isConfigurationSwitching;
   }
@@ -54,7 +62,7 @@ export function initializeConfigurationUI(): void {
   
   // 既に初期化済みの場合はUIを更新してイベントリスナーを再設定
   try {
-    if (typeof window !== 'undefined' && (window as any).__configurationUIInitialized) {
+    if (typeof window !== 'undefined' && w.__configurationUIInitialized) {
       console.log('🔵 [Configuration UI] Already initialized, refreshing UI');
       updateConfigurationSelect();
       updateConfigInfo();
@@ -65,7 +73,7 @@ export function initializeConfigurationUI(): void {
   
   try {
     if (typeof window !== 'undefined') {
-      (window as any).__configurationUIInitialized = true;
+      w.__configurationUIInitialized = true;
     }
   } catch (_) {}
   
@@ -107,8 +115,8 @@ try {
 // without re-initializing event listeners or requiring a browser reload.
 try {
   if (typeof window !== 'undefined') {
-    if (typeof (window as any).refreshConfigurationUI !== 'function') {
-      (window as any).refreshConfigurationUI = () => {
+    if (typeof w.refreshConfigurationUI !== 'function') {
+      w.refreshConfigurationUI = () => {
         try { updateConfigurationSelect(); } catch (_) {}
         try { updateConfigInfo(); } catch (_) {}
       };
@@ -187,8 +195,8 @@ function updateConfigurationSelect(): void {
 
   // Keep Spot Diagram config selector synchronized with available configs.
   try {
-    if (typeof window !== 'undefined' && typeof (window as any).updateSpotDiagramConfigSelect === 'function') {
-      (window as any).updateSpotDiagramConfigSelect();
+    if (typeof window !== 'undefined' && typeof w.updateSpotDiagramConfigSelect === 'function') {
+      w.updateSpotDiagramConfigSelect();
     }
   } catch (_) {}
 }
@@ -291,13 +299,13 @@ async function handleConfigurationChange(event: Event): Promise<void> {
   // Config切替後、Objectリストを即時反映（PSF/Wavefront）
   try {
     if (typeof window !== 'undefined') {
-      if (typeof (window as any).updateWavefrontObjectSelect === 'function') {
-        (window as any).updateWavefrontObjectSelect();
+      if (typeof w.updateWavefrontObjectSelect === 'function') {
+        w.updateWavefrontObjectSelect();
       }
-      if (typeof (window as any).updatePSFObjectOptions === 'function') {
-        (window as any).updatePSFObjectOptions();
-      } else if (typeof (window as any).setupPSFObjectSelect === 'function') {
-        (window as any).setupPSFObjectSelect();
+      if (typeof w.updatePSFObjectOptions === 'function') {
+        w.updatePSFObjectOptions();
+      } else if (typeof w.setupPSFObjectSelect === 'function') {
+        w.setupPSFObjectSelect();
       }
     }
   } catch (e) {
@@ -317,20 +325,20 @@ async function handleConfigurationChange(event: Event): Promise<void> {
       spotCfg.value = has ? desired : '';
     }
   } catch (_) {}
-  try { (window as any).updateSurfaceNumberSelectLegacy(); } catch (_) {}
-  try { (window as any).updateSurfaceNumberSelect(); } catch (_) {}
+  try { w.updateSurfaceNumberSelectLegacy(); } catch (_) {}
+  try { w.updateSurfaceNumberSelect(); } catch (_) {}
 
   // Spot Diagram config selector may exist and should mirror available configs.
   try {
-    if (typeof window !== 'undefined' && typeof (window as any).updateSpotDiagramConfigSelect === 'function') {
-      (window as any).updateSpotDiagramConfigSelect();
+    if (typeof window !== 'undefined' && typeof w.updateSpotDiagramConfigSelect === 'function') {
+      w.updateSpotDiagramConfigSelect();
     }
   } catch (_) {}
 
   // Design Intent (Blocks) 表示を更新
   try {
-    if (typeof window !== 'undefined' && typeof (window as any).refreshBlockInspector === 'function') {
-      (window as any).refreshBlockInspector();
+    if (typeof window !== 'undefined' && typeof w.refreshBlockInspector === 'function') {
+      w.refreshBlockInspector();
     }
   } catch (e) {
     console.warn('⚠️ [Configuration] Failed to refresh Design Intent (Blocks):', e);
@@ -338,7 +346,7 @@ async function handleConfigurationChange(event: Event): Promise<void> {
 
   // Render Optical System (3D popup) を自動再描画
   try {
-    const popup = (window as any).popup3DWindow;
+    const popup = w.popup3DWindow;
     if (popup && !popup.closed && typeof popup.postMessage === 'function') {
       popup.postMessage({ action: 'request-redraw' }, '*');
     }
@@ -406,8 +414,8 @@ function handleDeleteConfiguration(): void {
       updateConfigInfo();
 
       try {
-        if (typeof window !== 'undefined' && typeof (window as any).refreshBlockInspector === 'function') {
-          (window as any).refreshBlockInspector();
+        if (typeof window !== 'undefined' && typeof w.refreshBlockInspector === 'function') {
+          w.refreshBlockInspector();
         }
       } catch (e) {
         console.warn('⚠️ [Configuration] Failed to refresh Design Intent (Blocks):', e);
@@ -494,6 +502,6 @@ function setupAutoSave(): void {
 
 // グローバルエクスポート
 if (typeof window !== 'undefined') {
-  (window as any).initializeConfigurationUI = initializeConfigurationUI;
-  (window as any).loadActiveConfigurationToTables = loadActiveConfigurationToTables;
+  w.initializeConfigurationUI = initializeConfigurationUI;
+  w.loadActiveConfigurationToTables = loadActiveConfigurationToTables;
 }
