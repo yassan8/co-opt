@@ -3495,7 +3495,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 name.style.flex = '0 0 140px';
 
                 // Check parameter type - surfType uses exact match (case-sensitive key)
-                const isSurfType = label === 'surfType' || label === 'frontSurfType' || label === 'backSurfType';
+                const isSurfType = label === 'surfType' || label === 'frontSurfType' || label === 'backSurfType' || 
+                                   label === 'surf1SurfType' || label === 'surf2SurfType' || label === 'surf3SurfType';
                 const isMaterial = label.toLowerCase().includes('material') || paramType === 'material';
                 const isNumeric = !isMaterial && !isSurfType && !isNaN(parseFloat(String(value)));
                 
@@ -4009,6 +4010,15 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         continue;
                     }
                     if (/^backCoef\d+$/.test(key) && params.backSurfType === 'Spherical') {
+                        continue;
+                    }
+                    if (/^surf1Coef\d+$/.test(key) && params.surf1SurfType === 'Spherical') {
+                        continue;
+                    }
+                    if (/^surf2Coef\d+$/.test(key) && params.surf2SurfType === 'Spherical') {
+                        continue;
+                    }
+                    if (/^surf3Coef\d+$/.test(key) && params.surf3SurfType === 'Spherical') {
                         continue;
                     }
                     
