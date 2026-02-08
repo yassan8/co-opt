@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PSF Calculator WebAssembly Demo</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .performance-stats { background: #f5f5f5; padding: 10px; margin: 10px 0; }
+        .controls { margin: 20px 0; }
+        button { margin: 5px; padding: 10px; }
+        .status { font-weight: bold; }
+        .status.ready { color: green; }
+        .status.loading { color: orange; }
+        .status.error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>🔬 PSF Calculator WebAssembly Demo</h1>
+    
+    <div class="controls">
+        <h3>WebAssembly Status:</h3>
+        <p>WASM Status: <span id="wasmStatus" class="status loading">Loading...</span></p>
+        <p>Current Implementation: <span id="currentImpl">Unknown</span></p>
+        
+        <h3>Performance Controls:</h3>
+        <button onclick="setPerformanceMode('auto')">Auto Mode</button>
+        <button onclick="setPerformanceMode('wasm')">Force WASM</button>
+        <button onclick="setPerformanceMode('javascript')">Force JavaScript</button>
+        
+        <h3>Test PSF Calculation:</h3>
+        <label for="samplingSize">Sampling Size:</label>
+        <select id="samplingSize">
+            <option value="32">32x32</option>
+            <option value="64" selected>64x64</option>
+            <option value="128">128x128</option>
+            <option value="256">256x256</option>
+            <option value="512">512x512</option>
+            <option value="1024">1024x1024</option>
+            <option value="2048">2048x2048</option>
+            <option value="4096">4096x4096</option>
+        </select>
+        <button onclick="runPSFTest()">Run PSF Test</button>
+        <button onclick="runBenchmark()">Run Benchmark (256x, 512x, 1024x, 2048x)</button>
+    </div>
+    
+    <div class="performance-stats">
+        <h3>📊 Performance Statistics:</h3>
+        <pre id="performanceStats">No data yet</pre>
+    </div>
+    
+    <div id="results">
+        <h3>📋 Test Results:</h3>
+        <div id="testOutput">No tests run yet</div>
+    </div>
+
+    <!-- WebAssembly PSF Calculator (条件付き読み込み) -->
+    <script>
+        // WebAssemblyファイルの存在チェック
+        let wasmAvailable = false;
+        
+        console.log('🔍 [WASM] Starting WASM file detection...');
+        
+        // psf-wasm.jsの存在を確認
+        fetch('./psf-wasm.js', { method: 'HEAD' })
+            .then(response => {
+                console.log('🔍 [WASM] psf-wasm.js fetch response:', response.status, response.statusText);
+                if (response.ok) {
+                    wasmAvailable = true;
+                    console.log('✅ [WASM] psf-wasm.js found, loading...');
+                    // WASMファイルが存在する場合のみ読み込み
+                    const script = document.createElement('script');
+                    script.src = './psf-wasm.js';
+                    script.onload = () => {
+                        console.log('✅ [WASM] psf-wasm.js loaded successfully');
+                        console.log('🔍 [WASM] Available after load:', typeof PSFWasm);
+                    };
+                    script.onerror = (error) => {
+                        console.warn('⚠️ [WASM] Failed to load psf-wasm.js:', error);
+                    };
+                    document.head.appendChild(script);
+                } else {
+                    console.warn('⚠️ [WASM] psf-wasm.js not found - using JavaScript fallback');
+                }
+            })
+            .catch((error) => {
+                console.warn('⚠️ [WASM] Cannot check psf-wasm.js availability - using JavaScript fallback');
+                console.error('🔍 [WASM] Fetch error:', error);
+            });
+    </script>
+    <script type="module">
+        import { PSFCalculatorAuto } from './psf-wasm-wrapper.js';
+        
+        let psfCalculator = null;
+        
+        // 初期化
+        async function initializePSFCalculator() {
+            try {
+                document.getElementById('wasmStatus').textContent = 'Checking...';
+                document.getElementById('wasmStatus').className = 'status loading';
+                
+                // WASMファイルの存在を再確認
+                await new Promise(resolve => setTimeout(resolve, 500)); // 少し待機
+                
+                // JavaScriptフォールバック版PSF計算器を作成
+                const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.js');
+                psfCalculator = new PSFCalculator();
+                
+                // WASMラッパーが利用可能かチェック
+                let wasmCalculatorAvailable = false;
+                try {
+                    // WASMラッパーの読み込みを試行
+                    const wasmModule = await import('./psf-wasm-wrapper.js');
+                    if (wasmModule.PSFCalculatorAuto) {
+                        console.log('🔍 [WASM] Creating PSFCalculatorAuto instance...');
+                        const wasmCalc = new wasmModule.PSFCalculatorAuto();
+                        
+                        // 初期化完了を待機（最大5秒）
+                        let attempts = 0;
+                        const maxAttempts = 25; // 5秒 = 25 * 200ms
+                        
+                        while (attempts < maxAttempts) {
+                            await new Promise(resolve => setTimeout(resolve, 200));
+                            const wasmStatus = wasmCalc.getWasmStatus();
+                            console.log(`🔍 [WASM] Status check (${attempts + 1}/${maxAttempts}):`, JSON.stringify(wasmStatus, null, 2));
+                            
+                            if (wasmStatus.initialized) {
+                                if (wasmStatus.available && wasmStatus.ready) {
+                                    psfCalculator = wasmCalc; // WASM版に切り替え
+                                    wasmCalculatorAvailable = true;
+                                    console.log('✅ [WASM] WebAssembly PSF calculator ready');
+                                } else {
+                                    psfCalculator = wasmCalc; // JavaScript版として使用
+                                    console.log('ℹ️ [WASM] Using JavaScript fallback through PSFCalculatorAuto');
+                                    console.log('🔍 [WASM] Detailed status:', wasmStatus);
+                                }
+                                break;
+                            }
+                            attempts++;
+                        }
+                        
+                        if (attempts >= maxAttempts) {
+                            console.warn('⚠️ [WASM] Initialization timeout, using basic JavaScript fallback');
+                        }
+                    }
+                } catch (error) {
+                    console.warn('⚠️ [WASM] WebAssembly not available:', error.message);
+                    console.error('🔍 [WASM] Full error:', error);
+                }
+                
+                // ステータス更新
+                if (wasmCalculatorAvailable) {
+                    document.getElementById('wasmStatus').textContent = 'Ready (WASM)';
+                    document.getElementById('wasmStatus').className = 'status ready';
+                    document.getElementById('currentImpl').textContent = 'WASM Available';
+                } else {
+                    document.getElementById('wasmStatus').textContent = 'JavaScript Only';
+                    document.getElementById('wasmStatus').className = 'status loading'; // オレンジ色を維持
+                    document.getElementById('currentImpl').textContent = 'JavaScript Fallback';
+                }
+                
+                updatePerformanceStats();
+                console.log('✅ [PSF] Calculator initialized successfully');
+                
+            } catch (error) {
+                console.error('❌ [PSF] Failed to initialize PSF calculator:', error);
+                document.getElementById('wasmStatus').textContent = 'Error';
+                document.getElementById('wasmStatus').className = 'status error';
+                document.getElementById('currentImpl').textContent = 'Initialization Failed';
+                
+                // 最後の手段として基本的なPSF計算器を試行
+                try {
+                    const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.js');
+                    psfCalculator = new PSFCalculator();
+                    document.getElementById('wasmStatus').textContent = 'Basic JS Only';
+                    document.getElementById('currentImpl').textContent = 'Basic JavaScript';
+                    console.log('⚠️ [PSF] Fallback to basic JavaScript calculator');
+                } catch (fallbackError) {
+                    console.error('❌ [PSF] Even fallback failed:', fallbackError);
+                }
+            }
+        }
+        
+        // パフォーマンスモード設定
+        window.setPerformanceMode = function(mode) {
+            if (!psfCalculator) {
+                alert('PSF calculator not initialized');
+                return;
+            }
+            
+            try {
+                // WASM対応計算器かチェック
+                if (typeof psfCalculator.setImplementation === 'function') {
+                    psfCalculator.setImplementation(mode);
+                    document.getElementById('currentImpl').textContent = mode;
+                } else if (typeof psfCalculator.setPerformanceMode === 'function') {
+                    psfCalculator.setPerformanceMode(mode);
+                    document.getElementById('currentImpl').textContent = `${mode} (Basic)`;
+                } else {
+                    console.warn('⚠️ [PSF] Performance mode control not available');
+                    document.getElementById('currentImpl').textContent = 'JavaScript Only';
+                }
+                updatePerformanceStats();
+            } catch (error) {
+                console.error('❌ [PSF] Failed to set performance mode:', error);
+                alert(`Failed to set mode: ${error.message}`);
+            }
+        };
+        
+        // パフォーマンス統計更新
+        function updatePerformanceStats() {
+            if (!psfCalculator) {
+                document.getElementById('performanceStats').textContent = 'Calculator not initialized';
+                return;
+            }
+            
+            try {
+                let performanceData = {};
+                
+                if (typeof psfCalculator.getPerformanceStats === 'function') {
+                    performanceData = psfCalculator.getPerformanceStats();
+                } else {
+                    performanceData = {
+                        message: 'Performance stats not available',
+                        calculatorType: 'Basic JavaScript',
+                        wasmSupport: false
+                    };
+                }
+                
+                document.getElementById('performanceStats').textContent = JSON.stringify(performanceData, null, 2);
+                
+            } catch (error) {
+                console.error('❌ [PSF] Failed to get performance stats:', error);
+                document.getElementById('performanceStats').textContent = `Error: ${error.message}`;
+            }
+        }
+        
+        // テスト用OPDデータ生成
+        function generateTestOPDData(size = 50) {
+            const rayData = [];
+            const center = size / 2;
+            
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    const x = (i - center) / center;
+                    const y = (j - center) / center;
+                    const radius = Math.sqrt(x * x + y * y);
+                    
+                    if (radius <= 1.0) { // 円形瞳内
+                        // 球面収差をシミュレート
+                        const opd = 0.1 * Math.sin(radius * Math.PI);
+                        
+                        rayData.push({
+                            pupilX: x,
+                            pupilY: y,
+                            opd: opd,
+                            isVignetted: false
+                        });
+                    }
+                }
+            }
+            
+            return { rayData };
+        }
+        
+        // PSFテスト実行
+        window.runPSFTest = async function() {
+            if (!psfCalculator) {
+                alert('PSF calculator not ready');
+                return;
+            }
+            
+            const samplingSize = parseInt(document.getElementById('samplingSize').value);
+            const testData = generateTestOPDData();
+            
+            try {
+                document.getElementById('testOutput').innerHTML = 'Running PSF calculation...';
+                
+                const startTime = performance.now();
+                const result = await psfCalculator.calculatePSF(testData, {
+                    samplingSize: samplingSize,
+                    wavelength: 0.55
+                });
+                const endTime = performance.now();
+                
+                const output = `
+                    <h4>PSF Calculation Result (${samplingSize}x${samplingSize}):</h4>
+                    <ul>
+                        <li>Execution Time: ${(endTime - startTime).toFixed(2)} ms</li>
+                        <li>Implementation: ${result.metadata?.method || 'Unknown'}</li>
+                        <li>Strehl Ratio: ${result.strehlRatio?.toFixed(4) || 'N/A'}</li>
+                        <li>FWHM X: ${result.fwhm?.x?.toFixed(2) || 'N/A'}</li>
+                        <li>FWHM Y: ${result.fwhm?.y?.toFixed(2) || 'N/A'}</li>
+                        <li>Ray Count: ${result.metadata?.rayCount || 'N/A'}</li>
+                    </ul>
+                `;
+                
+                document.getElementById('testOutput').innerHTML = output;
+                updatePerformanceStats();
+                
+            } catch (error) {
+                console.error('PSF test failed:', error);
+                document.getElementById('testOutput').innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        };
+        
+        // ベンチマーク実行
+        window.runBenchmark = async function() {
+            if (!psfCalculator) {
+                alert('PSF calculator not ready');
+                return;
+            }
+            
+            document.getElementById('testOutput').innerHTML = 'Running benchmark...';
+            
+            const testSizes = [256, 512, 1024, 2048];
+            const testData = generateTestOPDData();
+            const results = [];
+            
+            for (const size of testSizes) {
+                // WASM版テスト
+                const wasmStart = performance.now();
+                try {
+                    await psfCalculator.calculatePSF(testData, {
+                        samplingSize: size,
+                        forceImplementation: 'wasm'
+                    });
+                } catch (error) {
+                    console.warn('WASM test failed:', error);
+                }
+                const wasmTime = performance.now() - wasmStart;
+                
+                // JavaScript版テスト
+                const jsStart = performance.now();
+                await psfCalculator.calculatePSF(testData, {
+                    samplingSize: size,
+                    forceImplementation: 'javascript'
+                });
+                const jsTime = performance.now() - jsStart;
+                
+                results.push({
+                    size: size,
+                    wasmTime: wasmTime,
+                    jsTime: jsTime,
+                    speedup: jsTime / wasmTime
+                });
+            }
+            
+            let output = '<h4>Benchmark Results:</h4><table border="1"><tr><th>Size</th><th>WASM (ms)</th><th>JS (ms)</th><th>Speedup</th></tr>';
+            for (const result of results) {
+                output += `<tr>
+                    <td>${result.size}x${result.size}</td>
+                    <td>${result.wasmTime.toFixed(2)}</td>
+                    <td>${result.jsTime.toFixed(2)}</td>
+                    <td>${result.speedup.toFixed(2)}x</td>
+                </tr>`;
+            }
+            output += '</table>';
+            
+            document.getElementById('testOutput').innerHTML = output;
+            updatePerformanceStats();
+        };
+        
+        // 初期化実行
+        initializePSFCalculator();
+    </script>
+</body>
+</html>
