@@ -8,7 +8,7 @@
 // Normalization:
 // - priceIndexNormalization[manufacturer].scaleToNBK7 scales that vendor's index so its BK7-equivalent is 1.0.
 // - For vendors without a price column, scaleToNBK7 is null.
-import { hikariGlassDB } from './hikari_catalog.js';
+import { hikariGlassDB } from './hikari_catalog.ts';
 
 const priceIndexByManufacturer = {
   "CDGM": {

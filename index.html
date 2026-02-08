@@ -147,7 +147,7 @@
         try {
           const parsed = JSON.parse(systemConfigurationsJson);
           if (parsed && Array.isArray(parsed.configurations) && parsed.configurations.length > 0) {
-            const { loadActiveConfigurationToTables } = await import('./data/table-configuration.js');
+            const { loadActiveConfigurationToTables } = await import('./data/table-configuration.ts');
             loadActiveConfigurationToTables();
 
           }
@@ -161,7 +161,7 @@
   </script>
   
   <!-- Undo/Redo System -->
-  <script src="core/undo-history.js"></script>
+  <script src="core/undo-history.ts" type="module"></script>
   <script>
     // Initialize undo history system
     if (typeof UndoHistory !== 'undefined') {
@@ -175,7 +175,7 @@
   <script type="module" src="main.js"></script>
   
   <!-- Configuration System -->
-  <script type="module" src="data/table-configuration.js"></script>
+  <script type="module" src="data/table-configuration.ts"></script>
   <script type="module" src="ui/configuration-handlers.js"></script>
   
   <!-- Merit Function Inspector (must load before editor) -->

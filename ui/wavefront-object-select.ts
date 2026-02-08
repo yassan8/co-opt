@@ -6,9 +6,9 @@
 /**
  * Object選択ドロップダウンを更新
  */
-export function updateWavefrontObjectSelect() {
+export function updateWavefrontObjectSelect(): void {
     try {
-        const objectSelect = document.getElementById('wavefront-object-select');
+        const objectSelect = document.getElementById('wavefront-object-select') as HTMLSelectElement | null;
         if (!objectSelect) {
             console.warn('⚠️ wavefront-object-select要素が見つかりません');
             return;
@@ -16,8 +16,8 @@ export function updateWavefrontObjectSelect() {
         
         // table-object.jsからObjectデータを取得
         let objectRows = [];
-        if (typeof window !== 'undefined' && window.tableObject && window.tableObject.getData) {
-            const allObjectRows = window.tableObject.getData();
+        if (typeof window !== 'undefined' && (window as any).tableObject && (window as any).tableObject.getData) {
+            const allObjectRows = (window as any).tableObject.getData();
             
             // 有効なObjectデータのみをフィルタリング
             objectRows = allObjectRows.filter((obj, index) => {
@@ -92,17 +92,17 @@ export function updateWavefrontObjectSelect() {
 /**
  * Object選択ドロップダウンの変更イベントリスナーを設定
  */
-export function setupWavefrontObjectSelectListener() {
-    const objectSelect = document.getElementById('wavefront-object-select');
+export function setupWavefrontObjectSelectListener(): void {
+    const objectSelect = document.getElementById('wavefront-object-select') as HTMLSelectElement | null;
     if (objectSelect) {
-        objectSelect.addEventListener('change', function() {
+        objectSelect.addEventListener('change', function(this: HTMLSelectElement) {
             const selectedIndex = parseInt(this.value) || 0;
             console.log(`🔄 Object選択変更: Object${selectedIndex + 1}`);
             
             // 選択されたObjectの詳細をログ出力
             try {
-                if (typeof window !== 'undefined' && window.tableObject && window.tableObject.getData) {
-                    const objectRows = window.tableObject.getData();
+                if (typeof window !== 'undefined' && (window as any).tableObject && (window as any).tableObject.getData) {
+                    const objectRows = (window as any).tableObject.getData();
                     const selectedObject = objectRows[selectedIndex];
                     if (selectedObject) {
                         console.log(`   詳細: (${selectedObject.xHeightAngle || 0}, ${selectedObject.yHeightAngle || 0})`);
@@ -118,19 +118,19 @@ export function setupWavefrontObjectSelectListener() {
 /**
  * 波面収差図Object選択UIの初期化
  */
-export function initializeWavefrontObjectUI() {
+export function initializeWavefrontObjectUI(): void {
     setupWavefrontObjectSelectListener();
     updateWavefrontObjectSelect();
     
     // グローバルアクセス用にwindowオブジェクトに登録
-    window.updateWavefrontObjectSelect = updateWavefrontObjectSelect;
-    window.debugResetObjectTable = debugResetObjectTable;
+    (window as any).updateWavefrontObjectSelect = updateWavefrontObjectSelect;
+    (window as any).debugResetObjectTable = debugResetObjectTable;
 }
 
 /**
  * デバッグ用：Objectテーブルデータを強制リセット
  */
-export function debugResetObjectTable() {
+export function debugResetObjectTable(): void {
     try {
         localStorage.removeItem('objectTableData');
         location.reload();
@@ -144,7 +144,7 @@ export function debugResetObjectTable() {
  * Objectテーブルが更新された時に呼び出される関数
  * main.jsや他のファイルから呼び出し可能
  */
-export function onObjectTableUpdated() {
+export function onObjectTableUpdated(): void {
     console.log('🔄 Objectテーブル更新検出 - Object選択ドロップダウンを更新');
     updateWavefrontObjectSelect();
 }

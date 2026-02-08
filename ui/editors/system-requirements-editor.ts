@@ -50,6 +50,27 @@ const ZERNIKE_NOLL_NAMES = [
 ];
 
 class SystemRequirementsEditor {
+  requirements: any[];
+  table: any;
+  _evalTimer: any;
+  _meritHookInstalled: boolean;
+  _isEditingCell: boolean;
+  _pendingEvalAfterEdit: boolean;
+  _tableRoot: HTMLTableElement | null;
+  _tbody: HTMLTableSectionElement | null;
+  _selectedId: any;
+  _selectedTr: HTMLTableRowElement | null;
+  _paramHeaderEls: any;
+  _operandKeys: string[];
+  _isEvaluating: boolean;
+  _pendingEvalRequested: boolean;
+  _progressEls: any;
+  inspector: InspectorManager;
+  _renderBody: any;
+  _renderRow: any;
+  _paramsExpanded: boolean;
+  _paramToggleBtn: HTMLButtonElement | null;
+
   constructor() {
     this.requirements = [];
     this.table = null;
@@ -66,6 +87,8 @@ class SystemRequirementsEditor {
     this._isEvaluating = false;
     this._pendingEvalRequested = false;
     this._progressEls = null;
+    this._paramsExpanded = true;
+    this._paramToggleBtn = null;
     this.inspector = new InspectorManager('requirement-inspector', 'requirement-inspector-content');
 
     this.loadFromStorage();
@@ -78,16 +101,16 @@ class SystemRequirementsEditor {
     this.scheduleEvaluateAndUpdate();
   }
 
-  _getBlocksForConfigHint(configIdValue) {
+  _getBlocksForConfigHint(configIdValue: any): any[] {
     try {
       let sys = null;
       try {
-        if (typeof loadSystemConfigurationsFromTableConfig === 'function') {
-          sys = loadSystemConfigurationsFromTableConfig();
-        } else if (typeof window !== 'undefined' && window.ConfigurationManager && typeof window.ConfigurationManager.loadSystemConfigurations === 'function') {
-          sys = window.ConfigurationManager.loadSystemConfigurations();
-        } else if (typeof loadSystemConfigurations === 'function') {
-          sys = loadSystemConfigurations();
+        if (typeof (window as any).loadSystemConfigurationsFromTableConfig === 'function') {
+          sys = (window as any).loadSystemConfigurationsFromTableConfig();
+        } else if (typeof (window as any).ConfigurationManager !== 'undefined' && typeof (window as any).ConfigurationManager.loadSystemConfigurations === 'function') {
+          sys = (window as any).ConfigurationManager.loadSystemConfigurations();
+        } else if (typeof (window as any).loadSystemConfigurations === 'function') {
+          sys = (window as any).loadSystemConfigurations();
         }
       } catch (_) {
         sys = null;
@@ -104,10 +127,10 @@ class SystemRequirementsEditor {
       const hint = (configIdValue === undefined || configIdValue === null) ? '' : String(configIdValue).trim();
       let cfg = null;
       if (hint) {
-        cfg = configs.find(c => c && String(c.id) === hint) || configs.find(c => c && String(c.name).trim() === hint) || null;
+        cfg = configs.find((c: any) => c && String(c.id) === hint) || configs.find((c: any) => c && String(c.name).trim() === hint) || null;
       }
       if (!cfg && activeId) {
-        cfg = configs.find(c => c && String(c.id) === activeId) || null;
+        cfg = configs.find((c: any) => c && String(c.id) === activeId) || null;
       }
       if (!cfg) cfg = configs[0] || null;
 
@@ -118,27 +141,27 @@ class SystemRequirementsEditor {
     }
   }
 
-  _normalizeConfigId(configIdValue, systemConfig, activeConfigId) {
+  _normalizeConfigId(configIdValue: any, systemConfig: any, activeConfigId: string): string {
     const raw = (configIdValue === undefined || configIdValue === null) ? '' : String(configIdValue).trim();
     if (!raw) return activeConfigId;
 
     const configs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
     // Already a valid id?
-    const byId = configs.find(c => c && String(c.id) === raw);
+    const byId = configs.find((c: any) => c && String(c.id) === raw);
     if (byId) return String(byId.id);
 
     // Backward compatibility: allow specifying config by name (e.g. "Wide")
-    const byName = configs.find(c => c && String(c.name).trim() === raw);
+    const byName = configs.find((c: any) => c && String(c.name).trim() === raw);
     if (byName) return String(byName.id);
 
     return activeConfigId;
   }
 
-  _getLiveRequirementsData() {
+  _getLiveRequirementsData(): any[] {
     return Array.isArray(this.requirements) ? this.requirements : [];
   }
 
-  initializeTable() {
+  initializeTable(): void {
     this._operandKeys = (() => {
       try {
         const keys = InspectorManager.getAvailableOperands?.();
@@ -148,14 +171,14 @@ class SystemRequirementsEditor {
       }
     })();
 
-    const escapeHtml = (s) => String(s)
+    const escapeHtml = (s: any): string => String(s)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
 
-    const formatNumberShort = (v) => {
+    const formatNumberShort = (v: any): string => {
       if (v === null || v === undefined) return '';
       const s = String(v).trim();
       if (!s) return '';
@@ -166,7 +189,7 @@ class SystemRequirementsEditor {
       return String(n);
     };
 
-    const makeSpecSummary = (row) => {
+    const makeSpecSummary = (row: any): string => {
       const op = String(row?.op || '=').trim();
       const targetS = formatNumberShort(row?.target ?? 0);
       const tolRaw = row?.tol;
@@ -181,7 +204,7 @@ class SystemRequirementsEditor {
       return `${op} ${targetS}`;
     };
 
-    const rationalePreview = (v, maxLen = 64) => {
+    const rationalePreview = (v: any, maxLen = 64): string => {
       const s = (v === null || v === undefined) ? '' : String(v);
       const oneLine = s.split(/\r?\n/)[0].trim();
       if (!oneLine) return '';
@@ -189,10 +212,10 @@ class SystemRequirementsEditor {
       return oneLine.slice(0, Math.max(0, maxLen - 1)) + '…';
     };
 
-    const getEflDisplayLabelByBlockId = (blocks) => {
-      const labelById = new Map();
+    const getEflDisplayLabelByBlockId = (blocks: any[]): Map<string, string> => {
+      const labelById = new Map<string, string>();
       try {
-        const counts = new Map();
+        const counts = new Map<string, number>();
         for (const b of blocks || []) {
           if (!b || typeof b !== 'object') continue;
           const id = String(b.blockId ?? '').trim();
@@ -212,10 +235,10 @@ class SystemRequirementsEditor {
       return labelById;
     };
 
-    const ensureEflBlocksDatalist = (blocks) => {
+    const ensureEflBlocksDatalist = (blocks: any[]): string | null => {
       try {
         const id = 'coopt-efl-blocks-datalist';
-        let dl = document.getElementById(id);
+        let dl = document.getElementById(id) as HTMLDataListElement | null;
         if (!dl) {
           dl = document.createElement('datalist');
           dl.id = id;
@@ -223,10 +246,10 @@ class SystemRequirementsEditor {
         }
         dl.innerHTML = '';
         const displayLabelById = getEflDisplayLabelByBlockId(blocks || []);
-        const addOpt = (value) => {
+        const addOpt = (value: string) => {
           const o = document.createElement('option');
           o.value = value;
-          dl.appendChild(o);
+          dl!.appendChild(o);
         };
         addOpt('ALL');
         for (const b of blocks || []) {
@@ -260,7 +283,7 @@ class SystemRequirementsEditor {
 
     const thead = document.createElement('thead');
     const headRow = document.createElement('tr');
-    const mkTh = (text, widthPx, stickyLeftPx = null) => {
+    const mkTh = (text: string, widthPx: number, stickyLeftPx: number | null = null): HTMLTableCellElement => {
       const th = document.createElement('th');
       th.textContent = text;
       th.style.padding = '4px 6px';
@@ -348,7 +371,7 @@ class SystemRequirementsEditor {
     this._tbody = tbody;
     this._tableRoot = table;
 
-    const setEditing = (editing) => {
+    const setEditing = (editing: boolean): void => {
       this._isEditingCell = !!editing;
       if (!editing && this._pendingEvalAfterEdit) {
         this._pendingEvalAfterEdit = false;
@@ -356,21 +379,21 @@ class SystemRequirementsEditor {
       }
     };
 
-    const onCellFocus = () => setEditing(true);
-    const onCellBlur = () => setEditing(false);
+    const onCellFocus = (): void => setEditing(true);
+    const onCellBlur = (): void => setEditing(false);
 
-    const formatCurrentCell = (v) => {
+    const formatCurrentCell = (v: any): string => {
       if (v === null || v === undefined) return '';
       const n = Number(v);
       return Number.isFinite(n) ? n.toFixed(6) : String(v);
     };
 
-    const setSelectedRow = (rowId) => {
+    const setSelectedRow = (rowId: any): void => {
       this._selectedId = rowId;
       if (!this._tbody) return;
 
       if (this._selectedTr) this._selectedTr.classList.remove('sr-selected');
-      const tr = this._tbody.querySelector(`tr[data-id="${String(rowId)}"]`);
+      const tr = this._tbody.querySelector(`tr[data-id="${String(rowId)}"]`) as HTMLTableRowElement | null;
       if (tr) {
         tr.classList.add('sr-selected');
         this._selectedTr = tr;
@@ -378,7 +401,7 @@ class SystemRequirementsEditor {
         this._selectedTr = null;
       }
 
-      const row = this.requirements.find(r => r && String(r.id) === String(rowId)) || null;
+      const row = this.requirements.find((r: any) => r && String(r.id) === String(rowId)) || null;
       if (row) {
         try {
           if (this.inspector && typeof this.inspector.show === 'function') this.inspector.show(row);
@@ -386,12 +409,12 @@ class SystemRequirementsEditor {
       }
     };
 
-    const renderRow = (row) => {
+    const renderRow = (row: any): HTMLTableRowElement => {
       const tr = document.createElement('tr');
       tr.dataset.id = String(row.id);
       if (String(this._selectedId) === String(row.id)) tr.classList.add('sr-selected');
 
-      const mkTd = (widthPx, stickyLeftPx = null) => {
+      const mkTd = (widthPx: number, stickyLeftPx: number | null = null): HTMLTableCellElement => {
         const td = document.createElement('td');
         td.style.padding = '3px 6px';
         td.style.borderBottom = '1px solid #eee';
@@ -414,7 +437,7 @@ class SystemRequirementsEditor {
       tr.addEventListener('click', (e) => {
         // Keep selection behavior but don't break inline edits.
         const t = e?.target;
-        if (t && typeof t.closest === 'function' && t.closest('input,select,textarea')) {
+        if (t && typeof (t as HTMLElement).closest === 'function' && (t as HTMLElement).closest('input,select,textarea')) {
           if (String(this._selectedId) !== String(row.id)) setSelectedRow(row.id);
           return;
         }
@@ -437,14 +460,14 @@ class SystemRequirementsEditor {
         row.enabled = !!onCb.checked;
         
         // Record undo command
-        if (window.undoHistory && window.SetRequirementCommand && !window.undoHistory.isExecuting && oldValue !== row.enabled) {
-          const command = new window.SetRequirementCommand(
+        if ((window as any).undoHistory && (window as any).SetRequirementCommand && !(window as any).undoHistory.isExecuting && oldValue !== row.enabled) {
+          const command = new (window as any).SetRequirementCommand(
             row.id,
             'enabled',
             oldValue,
             row.enabled
           );
-          window.undoHistory.record(command);
+          (window as any).undoHistory.record(command);
           console.log(`[Undo] Recorded: Set Requirement ${row.id}.enabled from ${oldValue} to ${row.enabled}`);
         }
         
@@ -475,9 +498,9 @@ class SystemRequirementsEditor {
         console.log('[Undo] operandSel change event fired');
         console.log('[Undo] row.operand before change:', row.operand);
         console.log('[Undo] operandSel.value:', operandSel.value);
-        console.log('[Undo] window.undoHistory exists:', !!window.undoHistory);
-        console.log('[Undo] window.SetRequirementCommand exists:', !!window.SetRequirementCommand);
-        console.log('[Undo] window.undoHistory.isExecuting:', window.undoHistory?.isExecuting);
+        console.log('[Undo] window.undoHistory exists:', !!(window as any).undoHistory);
+        console.log('[Undo] window.SetRequirementCommand exists:', !!(window as any).SetRequirementCommand);
+        console.log('[Undo] window.undoHistory.isExecuting:', (window as any).undoHistory?.isExecuting);
         
         const oldValue = row.operand;
         row.operand = operandSel.value;
@@ -487,20 +510,20 @@ class SystemRequirementsEditor {
         console.log('[Undo] values are different:', oldValue !== row.operand);
         
         // Record undo command
-        if (window.undoHistory && window.SetRequirementCommand && !window.undoHistory.isExecuting && oldValue !== row.operand) {
-          const command = new window.SetRequirementCommand(
+        if ((window as any).undoHistory && (window as any).SetRequirementCommand && !(window as any).undoHistory.isExecuting && oldValue !== row.operand) {
+          const command = new (window as any).SetRequirementCommand(
             row.id,
             'operand',
             oldValue,
             row.operand
           );
-          window.undoHistory.record(command);
+          (window as any).undoHistory.record(command);
           console.log(`[Undo] Recorded: Set Requirement ${row.id}.operand from ${oldValue} to ${row.operand}`);
         } else {
           console.log('[Undo] NOT recording operand change, reason:', 
-            !window.undoHistory ? 'undoHistory missing' :
-            !window.SetRequirementCommand ? 'SetRequirementCommand missing' :
-            window.undoHistory.isExecuting ? 'isExecuting=true' :
+            !(window as any).undoHistory ? 'undoHistory missing' :
+            !(window as any).SetRequirementCommand ? 'SetRequirementCommand missing' :
+            (window as any).undoHistory.isExecuting ? 'isExecuting=true' :
             oldValue === row.operand ? 'values are same' : 'unknown');
         }
         
@@ -554,7 +577,7 @@ class SystemRequirementsEditor {
         cfgSel.appendChild(opt);
       }
       cfgSel.value = (row.configId === undefined || row.configId === null) ? '' : String(row.configId);
-      const populateObjectSelect = (selectEl, cfgId) => {
+      const populateObjectSelect = (selectEl: HTMLSelectElement | null, cfgId: string): void => {
         if (!selectEl) return;
         const prev = selectEl.value;
         const objects = this._getObjectOptions(cfgId);
@@ -575,14 +598,14 @@ class SystemRequirementsEditor {
         row.configId = cfgSel.value;
         
         // Record undo command
-        if (window.undoHistory && window.SetRequirementCommand && !window.undoHistory.isExecuting && oldValue !== row.configId) {
-          const command = new window.SetRequirementCommand(
+        if ((window as any).undoHistory && (window as any).SetRequirementCommand && !(window as any).undoHistory.isExecuting && oldValue !== row.configId) {
+          const command = new (window as any).SetRequirementCommand(
             row.id,
             'configId',
             oldValue,
             row.configId
           );
-          window.undoHistory.record(command);
+          (window as any).undoHistory.record(command);
           console.log(`[Undo] Recorded: Set Requirement ${row.id}.configId from ${oldValue} to ${row.configId}`);
         }
         
@@ -593,14 +616,14 @@ class SystemRequirementsEditor {
           if (String(row?.operand ?? '').trim() === 'EFL') {
             const blocks = this._getBlocksForConfigHint(row?.configId);
             const dlId = ensureEflBlocksDatalist(blocks);
-            const p2Input = tr.querySelector('input[data-role="param2"]');
+            const p2Input = tr.querySelector('input[data-role="param2"]') as HTMLInputElement | null;
             if (p2Input && dlId) p2Input.setAttribute('list', dlId);
           }
         } catch (_) {}
         // Refresh Object idx dropdowns for this row
         try {
           const objSelects = tr.querySelectorAll('select[data-is-object-param="1"]');
-          for (const sel of objSelects) populateObjectSelect(sel, row.configId);
+          for (const sel of objSelects) populateObjectSelect(sel as HTMLSelectElement, row.configId);
         } catch (_) {}
 
         this.scheduleEvaluateAndUpdate();
@@ -608,12 +631,12 @@ class SystemRequirementsEditor {
       tdCfg.appendChild(cfgSel);
       tr.appendChild(tdCfg);
 
-      const mkInput = (field, widthPx, placeholder = '', paramDef = null) => {
+      const mkInput = (field: string, widthPx: number, placeholder = '', paramDef: any = null): { td: HTMLTableCellElement; input: HTMLInputElement | HTMLSelectElement } => {
         const td = mkTd(widthPx, null);
         td.style.textAlign = 'center';
         td.dataset.paramField = field; // Mark for dynamic visibility
         
-        let control = null;
+        let control: HTMLInputElement | HTMLSelectElement;
         const paramLabel = paramDef?.label || '';
         const paramDesc = paramDef?.description || '';
         
@@ -834,7 +857,7 @@ class SystemRequirementsEditor {
               if (String(row?.operand ?? '').trim() === 'EFL' && control.tagName === 'INPUT') {
                 const blocks = this._getBlocksForConfigHint(row?.configId);
                 const dlId = ensureEflBlocksDatalist(blocks);
-                if (dlId) control.setAttribute('list', dlId);
+                if (dlId) (control as HTMLInputElement).setAttribute('list', dlId);
               }
             } catch (_) {}
           });
@@ -847,14 +870,14 @@ class SystemRequirementsEditor {
             
             // Record undo command
             try {
-              if (window.undoHistory && window.SetRequirementCommand && !window.undoHistory.isExecuting && oldValue !== control.value) {
-                const command = new window.SetRequirementCommand(
+              if ((window as any).undoHistory && (window as any).SetRequirementCommand && !(window as any).undoHistory.isExecuting && oldValue !== control.value) {
+                const command = new (window as any).SetRequirementCommand(
                   row.id,
                   field,
                   oldValue,
                   control.value
                 );
-                window.undoHistory.record(command);
+                (window as any).undoHistory.record(command);
               }
             } catch (undoError) {
               console.warn('[Undo] Failed to record requirement edit:', undoError);
@@ -872,7 +895,7 @@ class SystemRequirementsEditor {
               if (field === 'param2' && String(row?.operand ?? '').trim() === 'EFL') {
                 const blocks = this._getBlocksForConfigHint(row?.configId);
                 const displayLabelById = getEflDisplayLabelByBlockId(blocks);
-                const labelToId = new Map();
+                const labelToId = new Map<string, string>();
                 for (const [id, label] of displayLabelById.entries()) {
                   if (label) labelToId.set(String(label), String(id));
                 }
@@ -880,9 +903,9 @@ class SystemRequirementsEditor {
                 if (/^all$/i.test(raw)) {
                   nextVal = 'ALL';
                 } else if (raw) {
-                  const tokens = raw.split(/[\s,]+/).map(s => String(s).trim()).filter(Boolean);
-                  const mapped = tokens.map(t => labelToId.get(t) || t);
-                  if (mapped.some(t => /^all$/i.test(String(t)))) nextVal = 'ALL';
+                  const tokens = raw.split(/[\s,]+/).map((s: string) => String(s).trim()).filter(Boolean);
+                  const mapped = tokens.map((t: string) => labelToId.get(t) || t);
+                  if (mapped.some((t: string) => /^all$/i.test(String(t)))) nextVal = 'ALL';
                   else nextVal = mapped.join(',');
                 }
               }
@@ -892,14 +915,14 @@ class SystemRequirementsEditor {
             
             // Record undo command
             try {
-              if (window.undoHistory && window.SetRequirementCommand && !window.undoHistory.isExecuting && oldValue !== nextVal) {
-                const command = new window.SetRequirementCommand(
+              if ((window as any).undoHistory && (window as any).SetRequirementCommand && !(window as any).undoHistory.isExecuting && oldValue !== nextVal) {
+                const command = new (window as any).SetRequirementCommand(
                   row.id,
                   field,
                   oldValue,
                   nextVal
                 );
-                window.undoHistory.record(command);
+                (window as any).undoHistory.record(command);
               }
             } catch (undoError) {
               console.warn('[Undo] Failed to record requirement edit:', undoError);
@@ -940,7 +963,7 @@ class SystemRequirementsEditor {
       paramsSummary.style.cursor = 'pointer';
       paramsSummary.style.padding = '4px';
       
-      const updateSummary = () => {
+      const updateSummary = (): void => {
         const values = [];
         for (let i = 1; i <= paramCount; i++) {
           const val = row[`param${i}`];
@@ -979,7 +1002,6 @@ class SystemRequirementsEditor {
         control.style.width = '100%';
         
         // Override blur to update summary
-        const origOnBlur = control.onblur;
         control.addEventListener('blur', () => {
           updateSummary();
         });
@@ -990,8 +1012,8 @@ class SystemRequirementsEditor {
             const configIdHint = row?.configId;
             const blocks = this._getBlocksForConfigHint(configIdHint);
             const dlId = ensureEflBlocksDatalist(blocks);
-            if (dlId) control.setAttribute('list', dlId);
-            control.placeholder = 'ALL or blockId (comma separated allowed)';
+            if (dlId) (control as HTMLInputElement).setAttribute('list', dlId);
+            (control as HTMLInputElement).placeholder = 'ALL or blockId (comma separated allowed)';
           } catch (_) {}
         }
         
@@ -1023,14 +1045,14 @@ class SystemRequirementsEditor {
         row.op = opSel.value;
         
         // Record undo command
-        if (window.undoHistory && window.SetRequirementCommand && !window.undoHistory.isExecuting && oldValue !== row.op) {
-          const command = new window.SetRequirementCommand(
+        if ((window as any).undoHistory && (window as any).SetRequirementCommand && !(window as any).undoHistory.isExecuting && oldValue !== row.op) {
+          const command = new (window as any).SetRequirementCommand(
             row.id,
             'op',
             oldValue,
             row.op
           );
-          window.undoHistory.record(command);
+          (window as any).undoHistory.record(command);
           console.log(`[Undo] Recorded: Set Requirement ${row.id}.op from ${oldValue} to ${row.op}`);
         }
         
@@ -1091,7 +1113,7 @@ class SystemRequirementsEditor {
       return tr;
     };
 
-    this._renderBody = (specFn, ratPrevFn, ensureDl) => {
+    this._renderBody = (specFn: any, ratPrevFn: any, ensureDl: any): void => {
       if (!this._tbody) return;
       this._tbody.innerHTML = '';
       
@@ -1102,7 +1124,7 @@ class SystemRequirementsEditor {
       }
 
       // Update header labels for selected operand if any.
-      const sel = this.requirements.find(x => x && String(x.id) === String(this._selectedId)) || null;
+      const sel = this.requirements.find((x: any) => x && String(x.id) === String(this._selectedId)) || null;
       if (sel) {
         setSelectedRow(sel.id);
       }
@@ -1116,7 +1138,7 @@ class SystemRequirementsEditor {
     wrap.appendChild(table);
     container.appendChild(wrap);
 
-    const applyParamsExpandedLayout = () => {
+    const applyParamsExpandedLayout = (): void => {
       if (!this._tbody) return;
       const expanded = !!this._paramsExpanded;
       const rows = this._tbody.querySelectorAll('tr');
@@ -1124,13 +1146,13 @@ class SystemRequirementsEditor {
         const cells = row.querySelectorAll('td');
         for (const td of cells) {
           if (expanded) {
-            td.style.paddingTop = '12px';
-            td.style.paddingBottom = '3px';
-            td.style.verticalAlign = 'top';
+            (td as HTMLTableCellElement).style.paddingTop = '12px';
+            (td as HTMLTableCellElement).style.paddingBottom = '3px';
+            (td as HTMLTableCellElement).style.verticalAlign = 'top';
           } else {
-            td.style.paddingTop = '3px';
-            td.style.paddingBottom = '3px';
-            td.style.verticalAlign = 'middle';
+            (td as HTMLTableCellElement).style.paddingTop = '3px';
+            (td as HTMLTableCellElement).style.paddingBottom = '3px';
+            (td as HTMLTableCellElement).style.verticalAlign = 'middle';
           }
         }
       }
@@ -1147,10 +1169,10 @@ class SystemRequirementsEditor {
         applyParamsExpandedLayout();
         
         // Toggle all parameter containers
-        const allParamContainers = this._tbody.querySelectorAll('[data-role="params-container"]');
+        const allParamContainers = this._tbody!.querySelectorAll('[data-role="params-container"]');
         for (const container of allParamContainers) {
-          const summary = container.querySelector('.params-summary');
-          const expanded = container.querySelector('.params-expanded');
+          const summary = container.querySelector('.params-summary') as HTMLElement | null;
+          const expanded = container.querySelector('.params-expanded') as HTMLElement | null;
           if (summary && expanded) {
             summary.style.display = this._paramsExpanded ? 'none' : 'block';
             expanded.style.display = this._paramsExpanded ? 'flex' : 'none';
@@ -1164,12 +1186,12 @@ class SystemRequirementsEditor {
     applyParamsExpandedLayout();
   }
 
-  _getWavelengthOptions() {
+  _getWavelengthOptions(): Array<{ value: string; label: string }> {
     try {
       // Try to get from global source first
-      let sourceRows = null;
+      let sourceRows: any = null;
       try {
-        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
         if (systemConfig && Array.isArray(systemConfig.source)) {
           sourceRows = systemConfig.source;
         }
@@ -1183,7 +1205,7 @@ class SystemRequirementsEditor {
       const options = [{ value: '', label: '(Primary)' }];
       
       if (Array.isArray(sourceRows) && sourceRows.length > 0) {
-        sourceRows.forEach((row, idx) => {
+        sourceRows.forEach((row: any, idx: number) => {
           const wl = row?.wavelength;
           const isPrimary = row?.primary;
           const label = `${idx + 1}: ${wl}µm${isPrimary ? ' (Primary)' : ''}`;
@@ -1198,18 +1220,18 @@ class SystemRequirementsEditor {
     }
   }
 
-  _getObjectOptions(configId = null) {
+  _getObjectOptions(configId: any = null): Array<{ value: string; label: string }> {
     try {
       // Try to get from active config first
-      let objectRows = null;
+      let objectRows: any = null;
       try {
-        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
         const activeId = systemConfig?.activeConfigId;
         const desiredId = (configId !== undefined && configId !== null && String(configId).trim() !== '')
           ? String(configId)
           : String(activeId ?? '');
         const cfgList = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
-        const activeConfig = cfgList.find(c => String(c?.id ?? '') === desiredId);
+        const activeConfig = cfgList.find((c: any) => String(c?.id ?? '') === desiredId);
         if (activeConfig && Array.isArray(activeConfig.object)) objectRows = activeConfig.object;
       } catch (_) {}
       
@@ -1220,7 +1242,7 @@ class SystemRequirementsEditor {
       
       const options = [{ value: '', label: '(default 1)' }];
 
-      const fmtNum = (value) => {
+      const fmtNum = (value: any): string | null => {
         const n = Number(value);
         if (!Number.isFinite(n)) return null;
         const abs = Math.abs(n);
@@ -1229,7 +1251,7 @@ class SystemRequirementsEditor {
         return s;
       };
 
-      const buildObjectLabel = (row, idx) => {
+      const buildObjectLabel = (row: any, idx: number): string => {
         if (!row || typeof row !== 'object') return `${idx + 1}`;
 
         const xRaw = row?.xHeightAngle ?? row?.xHeight ?? row?.x ?? row?.X ?? 0;
@@ -1244,7 +1266,7 @@ class SystemRequirementsEditor {
       };
 
       if (Array.isArray(objectRows) && objectRows.length > 0) {
-        objectRows.forEach((row, idx) => {
+        objectRows.forEach((row: any, idx: number) => {
           const label = buildObjectLabel(row, idx);
           options.push({ value: String(idx + 1), label });
         });
@@ -1257,7 +1279,7 @@ class SystemRequirementsEditor {
     }
   }
 
-  initializeEventListeners() {
+  initializeEventListeners(): void {
     const addBtn = document.getElementById('add-requirement-btn');
     if (addBtn) addBtn.addEventListener('click', () => this.addRequirement());
 
@@ -1274,13 +1296,13 @@ class SystemRequirementsEditor {
     }
   }
 
-  renderTable() {
+  renderTable(): void {
     if (typeof this._renderBody === 'function') {
       this._renderBody(() => '', () => '', () => null);
     }
   }
 
-  _ensureProgressUI() {
+  _ensureProgressUI(): any {
     try {
       if (this._progressEls) return this._progressEls;
       const btns = document.querySelector('.merit-function-buttons-container');
@@ -1313,7 +1335,7 @@ class SystemRequirementsEditor {
     }
   }
 
-  _setProgressVisible(visible) {
+  _setProgressVisible(visible: boolean): void {
     try {
       const els = this._ensureProgressUI();
       if (!els || !els.wrap) return;
@@ -1321,7 +1343,7 @@ class SystemRequirementsEditor {
     } catch (_) {}
   }
 
-  _setProgress(labelText, value, max) {
+  _setProgress(labelText: string, value: number, max: number): void {
     try {
       const els = this._ensureProgressUI();
       if (!els) return;
@@ -1335,21 +1357,21 @@ class SystemRequirementsEditor {
     } catch (_) {}
   }
 
-  async _yieldToUI() {
+  async _yieldToUI(): Promise<void> {
     try {
-      await new Promise(resolve => requestAnimationFrame(() => resolve()));
+      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
     } catch (_) {
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
     }
   }
 
-  _upsertSpotDiagramSettingsForConfig(configId, opticalRows, sourceRows) {
+  _upsertSpotDiagramSettingsForConfig(configId: string, opticalRows: any[], sourceRows: any[]): void {
     try {
       if (typeof localStorage === 'undefined') return;
       const cfgKey = String(configId ?? '').trim();
       if (!cfgKey) return;
 
-      const isImageRow = (row) => {
+      const isImageRow = (row: any): boolean => {
         if (!row || typeof row !== 'object') return false;
         const t1 = String(row['object type'] ?? '').trim();
         const t2 = String(row.object ?? '').trim();
@@ -1358,22 +1380,22 @@ class SystemRequirementsEditor {
         return st === 'image' || st.includes('image');
       };
 
-      const isCoordTransRow = (row) => {
+      const isCoordTransRow = (row: any): boolean => {
         if (!row || typeof row !== 'object') return false;
         const st = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
         const t1 = String(row['object type'] ?? '').trim().toLowerCase();
         const t2 = String(row.object ?? '').trim().toLowerCase();
-        const compact = (v) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, '');
+        const compact = (v: any) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, '');
         const stc = compact(st);
         const t1c = compact(t1);
         const t2c = compact(t2);
-        const isCb = (v) => v === 'ct' || v === 'coordtrans' || v === 'coordinatebreak';
+        const isCb = (v: string) => v === 'ct' || v === 'coordtrans' || v === 'coordinatebreak';
         return isCb(stc) || isCb(t1c) || isCb(t2c) || st === 'coord trans' || st === 'coordinate transform' || t1 === 'coord trans' || t1 === 'coordinate transform' || t2 === 'coord trans' || t2 === 'coordinate transform';
       };
 
       const imageIdx = (() => {
         if (!Array.isArray(opticalRows) || opticalRows.length === 0) return 0;
-        const i = opticalRows.findIndex(r => isImageRow(r));
+        const i = opticalRows.findIndex((r: any) => isImageRow(r));
         return (i >= 0) ? i : Math.max(0, opticalRows.length - 1);
       })();
 
@@ -1417,7 +1439,7 @@ class SystemRequirementsEditor {
       } catch (_) {}
 
       try {
-        const dbg = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_DEBUG_REQUIREMENTS : false;
+        const dbg = (typeof globalThis !== 'undefined') ? (globalThis as any).__COOPT_DEBUG_REQUIREMENTS : false;
         if (dbg) {
           console.log(`🧪 [ReqDebug] surfaceIdRaw=${imageSurfaceIdRaw} resolvedSurfaceId=${resolvedSurfaceId} imageIdx=${imageIdx} cfg=${cfgKey}`);
         }
@@ -1425,7 +1447,7 @@ class SystemRequirementsEditor {
 
       const primaryWavelengthUm = (() => {
         if (!Array.isArray(sourceRows) || sourceRows.length === 0) return 0.5876;
-        const primaryRow = sourceRows.find(r => r && r.primary && String(r.primary).toLowerCase().includes('primary'));
+        const primaryRow = sourceRows.find((r: any) => r && r.primary && String(r.primary).toLowerCase().includes('primary'));
         const wl = Number(primaryRow ? primaryRow.wavelength : sourceRows[0]?.wavelength);
         return (Number.isFinite(wl) && wl > 0) ? wl : 0.5876;
       })();
@@ -1454,9 +1476,9 @@ class SystemRequirementsEditor {
         if (needsIdUpdate) {
           try {
             console.log(`🔧 Updating Spot Diagram settings for config ${cfgKey}:`);
-            console.log(`   surfaceId: ${existing.surfaceId} → ${imageSurfaceId}`);
+            console.log(`   surfaceId: ${existing.surfaceId} → ${resolvedSurfaceId}`);
             console.log(`   surfaceIndex: ${existing.surfaceIndex} → ${imageIdx}`);
-            console.log(`   Image row found at index ${imageIdx} with surfaceId ${imageSurfaceId}`);
+            console.log(`   Image row found at index ${imageIdx} with surfaceId ${resolvedSurfaceId}`);
           } catch (_) {}
         }
         if (needsIdUpdate || needsIndexUpdate || existing.surfaceIndex === undefined || existing.surfaceIndex === null) {
@@ -1493,7 +1515,7 @@ class SystemRequirementsEditor {
       // This prevents CB insertion from causing stale surfaceId resolution during the next evaluation.
       try {
         if (typeof window !== 'undefined') {
-          window.__cooptSpotDiagramSettingsByConfigId = map;
+          (window as any).__cooptSpotDiagramSettingsByConfigId = map;
         }
       } catch (_) {}
     } catch (_) {
@@ -1501,13 +1523,13 @@ class SystemRequirementsEditor {
     }
   }
 
-  async updateAllConfigsAndEvaluate() {
+  async updateAllConfigsAndEvaluate(): Promise<void> {
     // Force using UI table rows during this update cycle (blocks may be stale after CB insertion).
-    let prevPreferTable = undefined;
+    let prevPreferTable: any;
     try {
       if (typeof globalThis !== 'undefined') {
-        prevPreferTable = globalThis.__cooptPreferTableOpticalSystemRows;
-        globalThis.__cooptPreferTableOpticalSystemRows = true;
+        prevPreferTable = (globalThis as any).__cooptPreferTableOpticalSystemRows;
+        (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
       }
     } catch (_) {}
 
@@ -1515,22 +1537,22 @@ class SystemRequirementsEditor {
     // Keep __cooptOpticalSystemByConfigId so non-active configs retain CB-aware rows.
     try {
       if (typeof window !== 'undefined') {
-        delete window.__cooptSystemConfig;
-        delete window.__cooptSpotDiagramSettingsByConfigId;
+        delete (window as any).__cooptSystemConfig;
+        delete (window as any).__cooptSpotDiagramSettingsByConfigId;
       }
     } catch (_) {}
 
     // Ensure each configuration has an up-to-date expanded opticalSystem snapshot
     // and has a per-config Spot Diagram settings entry.
-    const editor = window.meritFunctionEditor;
+    const editor = (window as any).meritFunctionEditor;
     if (!editor || typeof editor.getOpticalSystemDataByConfigId !== 'function') {
       try { await this.evaluateAndUpdateNow({ reason: 'no-merit-editor' }); } catch (_) {}
       return;
     }
 
-    let systemConfig = null;
+    let systemConfig: any = null;
     try {
-      systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+      systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
     } catch (_) {}
     const configs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
     if (!systemConfig || configs.length === 0) {
@@ -1538,11 +1560,11 @@ class SystemRequirementsEditor {
       return;
     }
 
-    const updateBtn = document.getElementById('update-requirement-btn');
+    const updateBtn = document.getElementById('update-requirement-btn') as HTMLButtonElement | null;
     try { if (updateBtn) updateBtn.disabled = true; } catch (_) {}
 
     // Show progress during the refresh, then reuse the same bar for evaluation.
-    let showTimer = null;
+    let showTimer: any = null;
     try {
       showTimer = setTimeout(() => {
         try {
@@ -1553,7 +1575,7 @@ class SystemRequirementsEditor {
     } catch (_) {}
 
     try {
-      let globalSourceRows = [];
+      let globalSourceRows: any[] = [];
       try {
         const json = localStorage.getItem('sourceTableData');
         const parsed = json ? JSON.parse(json) : null;
@@ -1563,7 +1585,7 @@ class SystemRequirementsEditor {
       // CRITICAL: Get active config's optical rows first (CB-aware).
       // This will be used for Spot Diagram settings across ALL configs.
       // MUST read UI table directly, bypassing blocks expansion (which may be stale after CB insertion).
-      let activeConfigOpticalRows = null;
+      let activeConfigOpticalRows: any = null;
       const activeConfigId = (systemConfig.activeConfigId !== undefined && systemConfig.activeConfigId !== null)
         ? String(systemConfig.activeConfigId)
         : '';
@@ -1571,10 +1593,10 @@ class SystemRequirementsEditor {
       if (activeConfigId) {
         try {
           // Directly access UI table, bypassing blocks-first logic in getOpticalSystemRows
-          if (window.tableOpticalSystem && typeof window.tableOpticalSystem.getData === 'function') {
-            activeConfigOpticalRows = window.tableOpticalSystem.getData();
-          } else if (window.opticalSystemTabulator && typeof window.opticalSystemTabulator.getData === 'function') {
-            activeConfigOpticalRows = window.opticalSystemTabulator.getData();
+          if ((window as any).tableOpticalSystem && typeof (window as any).tableOpticalSystem.getData === 'function') {
+            activeConfigOpticalRows = (window as any).tableOpticalSystem.getData();
+          } else if ((window as any).opticalSystemTabulator && typeof (window as any).opticalSystemTabulator.getData === 'function') {
+            activeConfigOpticalRows = (window as any).opticalSystemTabulator.getData();
           }
           
           if (Array.isArray(activeConfigOpticalRows) && activeConfigOpticalRows.length > 0) {
@@ -1586,12 +1608,12 @@ class SystemRequirementsEditor {
         if (!Array.isArray(activeConfigOpticalRows) || activeConfigOpticalRows.length === 0) {
           try {
             if (typeof globalThis !== 'undefined') {
-              globalThis.__cooptPreferTableOpticalSystemRows = true;
+              (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
             }
             const fn = (typeof getOpticalSystemRows === 'function') ? getOpticalSystemRows : null;
             if (fn) activeConfigOpticalRows = fn();
             if (typeof globalThis !== 'undefined') {
-              delete globalThis.__cooptPreferTableOpticalSystemRows;
+              delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
             }
           } catch (_) {}
         }
@@ -1606,15 +1628,15 @@ class SystemRequirementsEditor {
 
         const cachedRows = (() => {
           try {
-            if (typeof window !== 'undefined' && window.__cooptOpticalSystemByConfigId) {
-              const c = window.__cooptOpticalSystemByConfigId[cfgId];
+            if (typeof window !== 'undefined' && (window as any).__cooptOpticalSystemByConfigId) {
+              const c = (window as any).__cooptOpticalSystemByConfigId[cfgId];
               return (Array.isArray(c) && c.length > 0) ? c : null;
             }
           } catch (_) {}
           return null;
         })();
 
-        let opticalRows = null;
+        let opticalRows: any = null;
         try {
           // CRITICAL: Active config must read from live UI table (CB insertion updates UI first).
           // Non-active configs should prefer cached rows if they differ from the active UI rows
@@ -1643,8 +1665,8 @@ class SystemRequirementsEditor {
           // uses fresh data immediately after CB insertion (before localStorage reload).
           try {
             if (typeof window !== 'undefined') {
-              if (!window.__cooptOpticalSystemByConfigId) window.__cooptOpticalSystemByConfigId = {};
-              window.__cooptOpticalSystemByConfigId[cfgId] = opticalRows;
+              if (!(window as any).__cooptOpticalSystemByConfigId) (window as any).__cooptOpticalSystemByConfigId = {};
+              (window as any).__cooptOpticalSystemByConfigId[cfgId] = opticalRows;
             }
           } catch (_) {}
         }
@@ -1662,7 +1684,7 @@ class SystemRequirementsEditor {
         );
 
         try {
-          const debugFlag = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_DEBUG_REQUIREMENTS : false;
+          const debugFlag = (typeof globalThis !== 'undefined') ? (globalThis as any).__COOPT_DEBUG_REQUIREMENTS : false;
           if (debugFlag) {
             console.log(`🧪 [ReqDebug] cfg=${cfgId} active=${isActiveCfg} rowsForSpot=${Array.isArray(rowsForSpotSettings) ? rowsForSpotSettings.length : 'null'}`);
           }
@@ -1723,7 +1745,7 @@ class SystemRequirementsEditor {
             
             localStorage.setItem('spotDiagramSettingsByConfigId', JSON.stringify(map));
             if (typeof window !== 'undefined') {
-              window.__cooptSpotDiagramSettingsByConfigId = map;
+              (window as any).__cooptSpotDiagramSettingsByConfigId = map;
             }
           }
         }
@@ -1734,7 +1756,7 @@ class SystemRequirementsEditor {
         // CRITICAL: Also cache in memory so getOpticalSystemDataByConfigId
         // reads fresh data immediately after CB insertion (before localStorage sync).
         if (typeof window !== 'undefined') {
-          window.__cooptSystemConfig = systemConfig;
+          (window as any).__cooptSystemConfig = systemConfig;
         }
       } catch (_) {}
     } finally {
@@ -1748,18 +1770,18 @@ class SystemRequirementsEditor {
     try {
       if (typeof globalThis !== 'undefined') {
         if (prevPreferTable === undefined) {
-          delete globalThis.__cooptPreferTableOpticalSystemRows;
+          delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
         } else {
-          globalThis.__cooptPreferTableOpticalSystemRows = prevPreferTable;
+          (globalThis as any).__cooptPreferTableOpticalSystemRows = prevPreferTable;
         }
       }
     } catch (_) {}
   }
 
-  createDefaultRequirementRow() {
+  createDefaultRequirementRow(): any {
     let activeConfigId = '';
     try {
-      const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+      const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
       if (systemConfig && systemConfig.activeConfigId) activeConfigId = String(systemConfig.activeConfigId);
     } catch (_) {}
 
@@ -1781,12 +1803,12 @@ class SystemRequirementsEditor {
     };
   }
 
-  addRequirement() {
+  addRequirement(): void {
     // Get current data from localStorage to ensure consistency
     const storageData = JSON.parse(localStorage.getItem('systemRequirementsData') || '[]');
     
     // Calculate insertIndex based on current selection in this.requirements
-    const selectedIndex = this.requirements.findIndex(r => r && String(r.id) === String(this._selectedId));
+    const selectedIndex = this.requirements.findIndex((r: any) => r && String(r.id) === String(this._selectedId));
     let insertIndex;
     if (selectedIndex !== -1) {
       insertIndex = selectedIndex + 1;
@@ -1799,31 +1821,31 @@ class SystemRequirementsEditor {
     newRow.id = insertIndex + 1; // Temporary ID based on position
     
     console.log('[DEBUG addRequirement] Before command:', {
-      hasUndoHistory: !!window.undoHistory,
-      hasAddRowCommand: !!window.AddRowCommand,
-      isExecuting: window.undoHistory?.isExecuting,
+      hasUndoHistory: !!(window as any).undoHistory,
+      hasAddRowCommand: !!(window as any).AddRowCommand,
+      isExecuting: (window as any).undoHistory?.isExecuting,
       insertIndex,
       newRowId: newRow.id
     });
     
     // Create command and execute, then record for undo
     try {
-      if (window.undoHistory && window.AddRowCommand && !window.undoHistory.isExecuting) {
-        const cmd = new window.AddRowCommand('requirement', JSON.parse(JSON.stringify(newRow)), insertIndex, false);
+      if ((window as any).undoHistory && (window as any).AddRowCommand && !(window as any).undoHistory.isExecuting) {
+        const cmd = new (window as any).AddRowCommand('requirement', JSON.parse(JSON.stringify(newRow)), insertIndex, false);
         cmd.execute(); // Execute first (this will update localStorage and refresh UI)
         console.log('[DEBUG addRequirement] After execute, before record:', {
-          isExecuting: window.undoHistory.isExecuting,
-          undoStackLength: window.undoHistory.undoStack?.length || 0
+          isExecuting: (window as any).undoHistory.isExecuting,
+          undoStackLength: (window as any).undoHistory.undoStack?.length || 0
         });
-        window.undoHistory.record(cmd); // Then record for undo
+        (window as any).undoHistory.record(cmd); // Then record for undo
         console.log('[DEBUG addRequirement] After record:', {
-          undoStackLength: window.undoHistory.undoStack?.length || 0
+          undoStackLength: (window as any).undoHistory.undoStack?.length || 0
         });
       } else {
         console.warn('[DEBUG addRequirement] Fallback path taken:', {
-          hasUndoHistory: !!window.undoHistory,
-          hasAddRowCommand: !!window.AddRowCommand,
-          isExecuting: window.undoHistory?.isExecuting
+          hasUndoHistory: !!(window as any).undoHistory,
+          hasAddRowCommand: !!(window as any).AddRowCommand,
+          isExecuting: (window as any).undoHistory?.isExecuting
         });
         // Fallback if undo system is not available
         storageData.splice(insertIndex, 0, JSON.parse(JSON.stringify(newRow)));
@@ -1841,14 +1863,14 @@ class SystemRequirementsEditor {
     }
   }
 
-  deleteRequirement() {
+  deleteRequirement(): void {
     if (this._selectedId === null || this._selectedId === undefined || String(this._selectedId).trim() === '') {
       alert('削除する行を選択してください');
       return;
     }
 
     // Find index in current requirements (after any previous operations)
-    const idx = this.requirements.findIndex(r => r && String(r.id) === String(this._selectedId));
+    const idx = this.requirements.findIndex((r: any) => r && String(r.id) === String(this._selectedId));
     if (idx === -1) return;
     
     // Get the actual data from localStorage to ensure we're deleting the right row
@@ -1862,25 +1884,25 @@ class SystemRequirementsEditor {
     this._selectedId = null;
 
     console.log('[DEBUG deleteRequirement] Before command:', {
-      hasUndoHistory: !!window.undoHistory,
-      hasDeleteRowCommand: !!window.DeleteRowCommand,
-      isExecuting: window.undoHistory?.isExecuting,
+      hasUndoHistory: !!(window as any).undoHistory,
+      hasDeleteRowCommand: !!(window as any).DeleteRowCommand,
+      isExecuting: (window as any).undoHistory?.isExecuting,
       idx,
       deletedRowId: deletedRow.id
     });
 
     // Create command and execute, then record for undo
     try {
-      if (window.undoHistory && window.DeleteRowCommand && !window.undoHistory.isExecuting) {
-        const cmd = new window.DeleteRowCommand('requirement', deletedRow, idx, false);
+      if ((window as any).undoHistory && (window as any).DeleteRowCommand && !(window as any).undoHistory.isExecuting) {
+        const cmd = new (window as any).DeleteRowCommand('requirement', deletedRow, idx, false);
         cmd.execute(); // Execute first (this will update localStorage and refresh UI)
         console.log('[DEBUG deleteRequirement] After execute, before record:', {
-          isExecuting: window.undoHistory.isExecuting,
-          undoStackLength: window.undoHistory.undoStack?.length || 0
+          isExecuting: (window as any).undoHistory.isExecuting,
+          undoStackLength: (window as any).undoHistory.undoStack?.length || 0
         });
-        window.undoHistory.record(cmd); // Then record for undo
+        (window as any).undoHistory.record(cmd); // Then record for undo
         console.log('[DEBUG deleteRequirement] After record:', {
-          undoStackLength: window.undoHistory.undoStack?.length || 0
+          undoStackLength: (window as any).undoHistory.undoStack?.length || 0
         });
         
         try {
@@ -1888,9 +1910,9 @@ class SystemRequirementsEditor {
         } catch (_) {}
       } else {
         console.warn('[DEBUG deleteRequirement] Fallback path taken:', {
-          hasUndoHistory: !!window.undoHistory,
-          hasDeleteRowCommand: !!window.DeleteRowCommand,
-          isExecuting: window.undoHistory?.isExecuting
+          hasUndoHistory: !!(window as any).undoHistory,
+          hasDeleteRowCommand: !!(window as any).DeleteRowCommand,
+          isExecuting: (window as any).undoHistory?.isExecuting
         });
         // Fallback if undo system is not available
         storageData.splice(idx, 1);
@@ -1916,11 +1938,11 @@ class SystemRequirementsEditor {
     }
   }
 
-  transferSelectedToEvaluation() {
+  transferSelectedToEvaluation(): void {
     alert('System Evaluation は廃止されました。Requirements が仕様（合否）です。');
   }
 
-  computeViolationAmount(op, current, target, tol) {
+  computeViolationAmount(op: string, current: any, target: number, tol: number): number {
     if (current === null || current === undefined) return NaN;
     if (typeof current === 'string' && current.trim() === '') return NaN;
     const c = Number(current);
@@ -1932,7 +1954,7 @@ class SystemRequirementsEditor {
     return Math.max(0, Math.abs(c - t) - z);
   }
 
-  _sanitizeCurrentForUI(rawCurrent) {
+  _sanitizeCurrentForUI(rawCurrent: any): { current: any; ok: boolean } {
     // Preserve non-empty string diagnostics (e.g. explicit failure labels)
     // rather than collapsing them to an empty cell.
     if (typeof rawCurrent === 'string' && rawCurrent.trim() !== '') {
@@ -1950,7 +1972,7 @@ class SystemRequirementsEditor {
     return { current: v, ok: true };
   }
 
-  async evaluateAndUpdateNow(options = null) {
+  async evaluateAndUpdateNow(options: any = null): Promise<void> {
     if (this._isEvaluating) {
       this._pendingEvalRequested = true;
       return;
@@ -1958,32 +1980,32 @@ class SystemRequirementsEditor {
     this._isEvaluating = true;
 
     try {
-      window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'enter' };
+      (window as any).__cooptLastRequirementsEval = { at: Date.now(), stage: 'enter' };
     } catch (_) {}
 
     if (this._isEditingCell) {
       this._pendingEvalAfterEdit = true;
       try {
-        window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'deferred-edit' };
+        (window as any).__cooptLastRequirementsEval = { at: Date.now(), stage: 'deferred-edit' };
       } catch (_) {}
       this._isEvaluating = false;
       return;
     }
 
-    const editor = window.meritFunctionEditor;
+    const editor = (window as any).meritFunctionEditor;
     if (!editor || typeof editor.calculateOperandValue !== 'function') {
-      try { window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'no-merit-editor' }; } catch (_) {}
+      try { (window as any).__cooptLastRequirementsEval = { at: Date.now(), stage: 'no-merit-editor' }; } catch (_) {}
       this._isEvaluating = false;
       return;
     }
 
     try {
-      window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'running' };
+      (window as any).__cooptLastRequirementsEval = { at: Date.now(), stage: 'running' };
     } catch (_) {}
 
-    let systemConfig = null;
+    let systemConfig: any = null;
     try {
-      systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+      systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
     } catch (_) {}
     const activeConfigId = systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null
       ? String(systemConfig.activeConfigId)
@@ -1993,7 +2015,7 @@ class SystemRequirementsEditor {
     this.requirements = live;
 
     // Progress bar (only show if evaluation takes noticeable time)
-    let showTimer = null;
+    let showTimer: any = null;
     let progressVisible = false;
     try {
       showTimer = setTimeout(() => {
@@ -2007,7 +2029,7 @@ class SystemRequirementsEditor {
 
     // Requirements are a pass/fail spec. They should reflect the same semantics as the UI analyses
     // (e.g., Spot Diagram) rather than any optimization/fast-mode heuristics.
-    const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+    const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
     const prevFast = g ? g.__cooptMeritFastMode : null;
     const prevReqFlag = g ? g.__COOPT_EVALUATING_REQUIREMENTS : undefined;
     try {
@@ -2019,7 +2041,7 @@ class SystemRequirementsEditor {
       }
     } catch (_) {}
 
-    const updates = [];
+    const updates: any[] = [];
     try {
     for (let i = 0; i < live.length; i++) {
       const row = live[i];
@@ -2058,7 +2080,7 @@ class SystemRequirementsEditor {
         weight
       };
 
-      let current = null;
+      let current: any = null;
       try {
         current = editor.calculateOperandValue(opObj);
 
@@ -2068,20 +2090,20 @@ class SystemRequirementsEditor {
           if (typeof window !== 'undefined') {
             const opName = String(operand || '').trim();
             if (opName.startsWith('SPOT_SIZE')) {
-              const sd = (window.__cooptLastSpotSizeDebug && typeof window.__cooptLastSpotSizeDebug === 'object')
-                ? window.__cooptLastSpotSizeDebug
+              const sd = ((window as any).__cooptLastSpotSizeDebug && typeof (window as any).__cooptLastSpotSizeDebug === 'object')
+                ? (window as any).__cooptLastSpotSizeDebug
                 : null;
               const rid = row.id;
               if (sd && rid !== undefined && rid !== null && Number(sd.reqRowId) === Number(rid)) {
-                const map = (window.__cooptSpotSizeDebugByReqRowId && typeof window.__cooptSpotSizeDebugByReqRowId === 'object')
-                  ? window.__cooptSpotSizeDebugByReqRowId
+                const map = ((window as any).__cooptSpotSizeDebugByReqRowId && typeof (window as any).__cooptSpotSizeDebugByReqRowId === 'object')
+                  ? (window as any).__cooptSpotSizeDebugByReqRowId
                   : {};
                 let snap = sd;
                 try {
                   snap = (typeof structuredClone === 'function') ? structuredClone(sd) : JSON.parse(JSON.stringify(sd));
                 } catch (_) {}
                 map[String(rid)] = snap;
-                window.__cooptSpotSizeDebugByReqRowId = map;
+                (window as any).__cooptSpotSizeDebugByReqRowId = map;
               }
             }
           }
@@ -2098,6 +2120,7 @@ class SystemRequirementsEditor {
       const amount = sanitized.ok ? this.computeViolationAmount(op, current, target, tol) : Number.POSITIVE_INFINITY;
       const wEff = Math.max(0, Number.isFinite(weight) ? weight : 1);
       const contribution = Number.isFinite(amount) ? (wEff * Math.max(0, amount)) : null;
+
       let status = 'OK';
 
       // IMPORTANT: The optimizer treats weight<=0 as disabled (it filters those requirements out).
@@ -2136,7 +2159,7 @@ class SystemRequirementsEditor {
     try {
       if (Array.isArray(updates) && updates.length > 0) {
         for (const u of updates) {
-          const r = this.requirements.find(x => x && x.id === u.id);
+          const r = this.requirements.find((x: any) => x && x.id === u.id);
           if (r) {
             r.current = u.current;
             r.status = u.status;
@@ -2166,7 +2189,7 @@ class SystemRequirementsEditor {
     }
 
     try {
-      window.__cooptLastRequirementsEval = { at: Date.now(), stage: 'done', updated: Array.isArray(updates) ? updates.length : 0 };
+      (window as any).__cooptLastRequirementsEval = { at: Date.now(), stage: 'done', updated: Array.isArray(updates) ? updates.length : 0 };
     } catch (_) {}
 
     this._isEvaluating = false;
@@ -2176,7 +2199,7 @@ class SystemRequirementsEditor {
     }
   }
 
-  scheduleEvaluateAndUpdate() {
+  scheduleEvaluateAndUpdate(): void {
     try {
       if (this._evalTimer) clearTimeout(this._evalTimer);
     } catch (_) {}
@@ -2189,28 +2212,28 @@ class SystemRequirementsEditor {
     }, 50);
   }
 
-  installMeritHook() {
+  installMeritHook(): void {
     if (this._meritHookInstalled) return;
-    const tryInstall = () => {
-      const editor = window.meritFunctionEditor;
+    const tryInstall = (): boolean => {
+      const editor = (window as any).meritFunctionEditor;
       if (!editor || typeof editor.calculateMerit !== 'function') return false;
       if (editor.__cooptRequirementsHooked) {
         // Hook already installed (possibly by a previous cached load).
         // Still ensure we compute Current/Status at least once.
         try {
-          if (window.systemRequirementsEditor && typeof window.systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
-            window.systemRequirementsEditor.scheduleEvaluateAndUpdate();
+          if ((window as any).systemRequirementsEditor && typeof (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
+            (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate();
           }
         } catch (_) {}
         return true;
       }
 
       const original = editor.calculateMerit.bind(editor);
-      editor.calculateMerit = (...args) => {
+      editor.calculateMerit = (...args: any[]) => {
         const out = original(...args);
         try {
-          if (window.systemRequirementsEditor && typeof window.systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
-            window.systemRequirementsEditor.scheduleEvaluateAndUpdate();
+          if ((window as any).systemRequirementsEditor && typeof (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
+            (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate();
           }
         } catch (_) {}
         return out;
@@ -2219,8 +2242,8 @@ class SystemRequirementsEditor {
       editor.__cooptRequirementsHooked = true;
       // Ensure we compute Current/Status at least once after the editor becomes ready.
       try {
-        if (window.systemRequirementsEditor && typeof window.systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
-          window.systemRequirementsEditor.scheduleEvaluateAndUpdate();
+        if ((window as any).systemRequirementsEditor && typeof (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
+          (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate();
         }
       } catch (_) {}
       return true;
@@ -2241,39 +2264,39 @@ class SystemRequirementsEditor {
 
         // If we managed to install (or the editor appeared late), schedule an eval now.
         try {
-          if (window.systemRequirementsEditor && typeof window.systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
-            window.systemRequirementsEditor.scheduleEvaluateAndUpdate();
+          if ((window as any).systemRequirementsEditor && typeof (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
+            (window as any).systemRequirementsEditor.scheduleEvaluateAndUpdate();
           }
         } catch (_) {}
       }
     }, 100);
   }
 
-  updateRowNumbers() {
-    this.requirements.forEach((r, index) => {
+  updateRowNumbers(): void {
+    this.requirements.forEach((r: any, index: number) => {
       r.id = index + 1;
     });
   }
 
-  getData() {
+  getData(): any[] {
     return this.requirements;
   }
 
-  setData(data) {
+  setData(data: any[]): void {
     if (!Array.isArray(data)) {
       console.warn('System Requirements setData: invalid data');
       return;
     }
 
-    let systemConfig = null;
+    let systemConfig: any = null;
     try {
-      systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+      systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
     } catch (_) {}
     const activeConfigId = systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null
       ? String(systemConfig.activeConfigId)
       : '';
 
-    this.requirements = data.map(row => {
+    this.requirements = data.map((row: any) => {
       const r = row && typeof row === 'object' ? { ...row } : {};
 
       // Migration: Type (severity) removed.
@@ -2299,7 +2322,7 @@ class SystemRequirementsEditor {
     if (typeof this._renderBody === 'function') this._renderBody(() => '', () => '', () => null);
   }
 
-  loadFromStorage() {
+  loadFromStorage(): void {
     try {
       const saved = localStorage.getItem('systemRequirementsData');
       if (!saved) return;
@@ -2307,16 +2330,16 @@ class SystemRequirementsEditor {
 
       let activeConfigId = '';
       try {
-        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
         if (systemConfig && systemConfig.activeConfigId) activeConfigId = String(systemConfig.activeConfigId);
       } catch (_) {}
 
-      let systemConfig = null;
+      let systemConfig: any = null;
       try {
-        systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+        systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
       } catch (_) {}
 
-      this.requirements = (Array.isArray(data) ? data : []).map(row => {
+      this.requirements = (Array.isArray(data) ? data : []).map((row: any) => {
         const r = row && typeof row === 'object' ? { ...row } : {};
 
         // Migration: Type (severity) removed.
@@ -2354,13 +2377,13 @@ class SystemRequirementsEditor {
     }
   }
 
-  saveToStorage() {
+  saveToStorage(): void {
     try {
       const live = this._getLiveRequirementsData();
       this.requirements = live;
 
       // Do not persist derived fields (current/status)
-      const toSave = (Array.isArray(live) ? live : []).map(r => {
+      const toSave = (Array.isArray(live) ? live : []).map((r: any) => {
         if (!r || typeof r !== 'object') return r;
         const {
           id,
@@ -2386,16 +2409,16 @@ class SystemRequirementsEditor {
     }
   }
 
-  getConfigurationList() {
+  getConfigurationList(): Record<string, string> {
     try {
-      const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+      const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
       if (!systemConfig || !systemConfig.configurations) return { '': 'Current' };
 
-      const activeConfig = systemConfig.configurations.find(c => c.id === systemConfig.activeConfigId);
+      const activeConfig = systemConfig.configurations.find((c: any) => c.id === systemConfig.activeConfigId);
       const activeName = activeConfig ? activeConfig.name : '';
 
-      const list = { '': `Current (${activeName})` };
-      systemConfig.configurations.forEach(cfg => {
+      const list: Record<string, string> = { '': `Current (${activeName})` };
+      systemConfig.configurations.forEach((cfg: any) => {
         list[String(cfg.id)] = cfg.name;
       });
       return list;
@@ -2404,12 +2427,12 @@ class SystemRequirementsEditor {
     }
   }
 
-  getConfigName(configId) {
+  getConfigName(configId: any): string {
     if (!configId && configId !== 0) {
       try {
-        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
         if (systemConfig && systemConfig.configurations) {
-          const activeConfig = systemConfig.configurations.find(c => c.id === systemConfig.activeConfigId);
+          const activeConfig = systemConfig.configurations.find((c: any) => c.id === systemConfig.activeConfigId);
           if (activeConfig) return `Current (${activeConfig.name})`;
         }
       } catch (_) {}
@@ -2417,9 +2440,9 @@ class SystemRequirementsEditor {
     }
 
     try {
-      const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+      const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
       if (!systemConfig || !systemConfig.configurations) return 'Current';
-      const cfg = systemConfig.configurations.find(c => String(c.id) === String(configId));
+      const cfg = systemConfig.configurations.find((c: any) => String(c.id) === String(configId));
       return cfg ? cfg.name : 'Current';
     } catch (_) {
       return 'Current';
@@ -2427,13 +2450,13 @@ class SystemRequirementsEditor {
   }
 }
 
-const __cooptInitSystemRequirementsEditor = () => {
+const __cooptInitSystemRequirementsEditor = (): boolean => {
   try {
     if (typeof window === 'undefined') return false;
-    if (window.systemRequirementsEditor) return true;
+    if ((window as any).systemRequirementsEditor) return true;
     const container = document.getElementById('table-system-requirements');
     if (!container) return false;
-    window.systemRequirementsEditor = new SystemRequirementsEditor();
+    (window as any).systemRequirementsEditor = new SystemRequirementsEditor();
     return true;
   } catch (e) {
     console.error('❌ System Requirements Editor init failed:', e);

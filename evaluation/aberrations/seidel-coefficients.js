@@ -25,7 +25,7 @@ import {
     calculateFullSystemParaxialTrace,
     isCoordTransSurface
 } from '../../raytracing/core/ray-paraxial.js';
-import { tableSource, loadTableData as loadSourceTableData } from '../../data/table-source.js';
+import { tableSource, loadTableData as loadSourceTableData } from '../../data/table-source.ts';
 
 function getSourceRowsSafe() {
     try {

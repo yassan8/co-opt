@@ -13,12 +13,12 @@
 
 // Core modules
 import { APP_CONFIG, initializeReferences, setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration, getCamera, getControls } from './core/app-config.ts';
-import { initializeThreeJS, initializeLighting, renderScene, animate } from './core/scene-setup.js';
+import { initializeThreeJS, initializeLighting, renderScene, animate } from './core/scene-setup.ts';
 
 // Table data modules
-import { loadTableData as loadSourceTableData, saveTableData as saveSourceTableData, tableSource, mountTableSourceIfReady } from './data/table-source.js';
-import { loadTableData as loadObjectTableData, saveTableData as saveObjectTableData, tableObject, mountTableObjectIfReady } from './data/table-object.js';
-import { loadTableData as loadOpticalSystemTableData, saveTableData as saveLensTableData, tableOpticalSystem, updateAllRefractiveIndices, updateOpticalPropertiesFromMaterial } from './data/table-optical-system.js';
+import { loadTableData as loadSourceTableData, saveTableData as saveSourceTableData, tableSource, mountTableSourceIfReady } from './data/table-source.ts';
+import { loadTableData as loadObjectTableData, saveTableData as saveObjectTableData, tableObject, mountTableObjectIfReady } from './data/table-object.ts';
+import { loadTableData as loadOpticalSystemTableData, saveTableData as saveLensTableData, tableOpticalSystem, updateAllRefractiveIndices, updateOpticalPropertiesFromMaterial } from './data/table-optical-system.ts';
 
 // Optical system modules
 import { drawOpticalSystemSurfaces, clearAllOpticalElements, findStopSurface } from './optical/system-renderer.js';
@@ -62,8 +62,8 @@ import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListen
 import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers, loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables, refreshBlockInspector } from './ui/dom-event-handlers.js';
 import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.js';
 import { initializeConfigurationUI } from './ui/configuration-handlers.js';
-import { getActiveConfiguration } from './data/table-configuration.js';
-import { expandBlocksToOpticalSystemRows } from './data/block-schema.js';
+import { getActiveConfiguration } from './data/table-configuration.ts';
+import { expandBlocksToOpticalSystemRows } from './data/block-schema.ts';
 
 
 

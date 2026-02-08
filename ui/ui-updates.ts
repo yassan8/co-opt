@@ -8,8 +8,8 @@ import { generateSurfaceOptions } from '../evaluation/spot-diagram.js';
 /**
  * Update surface number select options
  */
-export function updateSurfaceNumberSelect() {
-    const surfaceNumberSelect = document.getElementById('surface-number-select');
+export function updateSurfaceNumberSelect(): void {
+    const surfaceNumberSelect = document.getElementById('surface-number-select') as HTMLSelectElement | null;
     if (!surfaceNumberSelect) return;
 
     const prevSelectedOption = surfaceNumberSelect.selectedOptions && surfaceNumberSelect.selectedOptions.length > 0
@@ -30,12 +30,12 @@ export function updateSurfaceNumberSelect() {
     // Prefer the modern table when present, but fall back so Surf updates without reload.
     let opticalSystemData = null;
     try {
-        const d1 = window.tableOpticalSystem?.getData?.();
+        const d1 = (window as any).tableOpticalSystem?.getData?.();
         if (Array.isArray(d1) && d1.length > 0) opticalSystemData = d1;
     } catch (_) {}
     if (!opticalSystemData) {
         try {
-            const d2 = window.opticalSystemTabulator?.getData?.();
+            const d2 = (window as any).opticalSystemTabulator?.getData?.();
             if (Array.isArray(d2) && d2.length > 0) opticalSystemData = d2;
         } catch (_) {}
     }
@@ -45,11 +45,11 @@ export function updateSurfaceNumberSelect() {
     
     // Add options using Spot Diagram's CB-invariant surface ids.
     const opts = generateSurfaceOptions(opticalSystemData);
-    let imageValue = null;
-    let lastValue = null;
+    let imageValue: string | null = null;
+    let lastValue: string | null = null;
     for (const o of opts) {
         const option = document.createElement('option');
-        option.value = o.value;
+        option.value = String(o.value);
         option.textContent = o.label;
         if (o.rowId !== undefined && o.rowId !== null && String(o.rowId) !== '') {
             option.dataset.rowId = String(o.rowId);
@@ -84,7 +84,7 @@ export function updateSurfaceNumberSelect() {
 
     // Notify Spot Diagram popup (if open) to resync Surf options.
     try {
-        const p = window.__spotDiagramPopup;
+        const p = (window as any).__spotDiagramPopup;
         if (p && !p.closed) {
             if (typeof p.__cooptSpotPopupSyncAll === 'function') {
                 p.__cooptSpotPopupSyncAll();
@@ -98,13 +98,13 @@ export function updateSurfaceNumberSelect() {
 /**
  * Update UI elements when data changes
  */
-export function updateAllUIElements() {
+export function updateAllUIElements(): void {
     updateSurfaceNumberSelect();
 }
 
 /**
  * Initialize UI event listeners
  */
-export function initializeUIEventListeners() {
+export function initializeUIEventListeners(): void {
     // Event listeners initialization can be added here if needed
 }

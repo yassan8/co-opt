@@ -11,7 +11,7 @@ import { calculateSeidelCoefficients } from '../../evaluation/aberrations/seidel
 import { calculateAfocalSeidelCoefficientsIntegrated } from '../../evaluation/aberrations/seidel-coefficients-afocal.js';
 import { generateSpotDiagram, generateSurfaceOptions } from '../../evaluation/spot-diagram.js';
 import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../../evaluation/wavefront/wavefront.js';
-import { expandBlocksToOpticalSystemRows } from '../../data/block-schema.js';
+import { expandBlocksToOpticalSystemRows } from '../../data/block-schema.ts';
 import { generateRayStartPointsForObject, setRayEmissionPattern, getRayEmissionPattern } from '../../optical/ray-renderer.js';
 import { calculateLongitudinalAberration } from '../../evaluation/aberrations/longitudinal-aberration.js';
 import { getTableOpticalSystem, getTableObject, getTableSource } from '../../core/app-config.js';
