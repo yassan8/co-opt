@@ -3468,9 +3468,15 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 });
             };
             
-            const paramKeys = sortParameterKeys(Object.keys(params || {}));
-            const varKeys = Object.keys(vars || {}).sort();
             const blockType = String(realBlock.blockType || realBlock.type || 'unknown');
+            
+            // For Gap blocks, ensure material is always in paramKeys even if not set
+            const allParamKeys = Object.keys(params || {});
+            if ((blockType === 'Gap' || blockType === 'AirGap') && !allParamKeys.includes('material')) {
+                allParamKeys.push('material');
+            }
+            const paramKeys = sortParameterKeys(allParamKeys);
+            const varKeys = Object.keys(vars || {}).sort();
 
             const createSectionTitle = (label: string) => {
                 const title = document.createElement('div');
@@ -4022,7 +4028,11 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         continue;
                     }
                     
-                    const value = (params as any)[key];
+                    let value = (params as any)[key];
+                    // For Gap/AirGap material, default to 'AIR' if undefined or empty
+                    if ((blockType === 'Gap' || blockType === 'AirGap') && key === 'material' && (value === undefined || value === null || value === '')) {
+                        value = 'AIR';
+                    }
                     const varEntry = (vars as any)[key];
 
                     // Create row with optimize checkbox and scope selector
