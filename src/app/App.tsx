@@ -8,11 +8,13 @@ import LegacyPanels from "../ui/components/LegacyPanels";
 
 export default function App() {
   useEffect(() => {
+    console.log("[React] App component mounted, dispatching coopt:react-mounted event");
     (window as typeof window & { __cooptReactMounted?: boolean })
       .__cooptReactMounted = true;
     window.dispatchEvent(new CustomEvent("coopt:react-mounted"));
   }, []);
 
+  console.log("[React] Rendering App component");
   return (
     <>
       <MainToolbar />
