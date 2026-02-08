@@ -3347,15 +3347,20 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             const params = (realBlock.parameters && typeof realBlock.parameters === 'object') ? realBlock.parameters : {};
             const vars = (realBlock.variables && typeof realBlock.variables === 'object') ? realBlock.variables : {};
             
-            // Custom sort order: material → abbe → front* → back* → radius → conic → thickness → semidia → coef*
+            // Custom sort order: material1 → material2 → abbe → front* → back* → radius → conic → thickness → semidia → coef*
             const sortParameterKeys = (keys: string[]): string[] => {
                 return keys.sort((a, b) => {
                     const aLower = a.toLowerCase();
                     const bLower = b.toLowerCase();
                     
-                    // Material always first
-                    if (aLower.includes('material')) return -1;
-                    if (bLower.includes('material')) return 1;
+                    // Material1 first, then material2
+                    if (a === 'material1') return -1;
+                    if (b === 'material1') return 1;
+                    if (a === 'material2' && b !== 'material1') return -1;
+                    if (b === 'material2' && a !== 'material1') return 1;
+                    // Other materials after material1/2
+                    if (aLower.includes('material') && !bLower.includes('material')) return -1;
+                    if (bLower.includes('material') && !aLower.includes('material')) return 1;
                     
                     // Abbe/vd second
                     if (a === 'abbe' || a === 'vd') return -1;
@@ -3493,6 +3498,12 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const isSurfType = label === 'surfType' || label === 'frontSurfType' || label === 'backSurfType';
                 const isMaterial = label.toLowerCase().includes('material') || paramType === 'material';
                 const isNumeric = !isMaterial && !isSurfType && !isNaN(parseFloat(String(value)));
+                
+                // Determine if this parameter should show coef parameters based on surfType
+                const shouldHideCoef = (key: string, surfTypeValue: string) => {
+                    if (!key.includes('Coef') && !key.includes('coef')) return false;
+                    return surfTypeValue === 'Spherical';
+                };
 
                 let inputElement: HTMLElement;
 
@@ -3509,7 +3520,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     select.style.cursor = 'pointer';
                     select.style.minWidth = '150px';
 
-                    const options = ['Spherical', 'Aspheric even', 'Aspheric odd', 'Toric'];
+                    const options = ['Spherical', 'Aspherical even', 'Aspherical odd', 'Toric'];
                     const currentValue = String(value || 'Spherical');
 
                     options.forEach(optionValue => {
