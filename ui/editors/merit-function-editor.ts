@@ -163,7 +163,7 @@ function computeZernikeFitLive({
             const vp: any[] = [];
             const opdVals: number[] = [];
             for (const pt of gridPoints) {
-                const opd = opdCalc(pt.nx, pt.ny);
+                const opd = opdCalc.calculateOPD(pt.nx, pt.ny, 0);
                 if (opd !== null && Number.isFinite(opd)) {
                     vp.push(pt);
                     opdVals.push(opd);
@@ -178,13 +178,12 @@ function computeZernikeFitLive({
         }
 
         const analyzer = new WavefrontAberrationAnalyzer(
-            validPoints.map(p => ({ x: p.nx, y: p.ny })),
-            opdValues
+            validPoints.map(p => ({ x: p.nx, y: p.ny, opd: opdValues[validPoints.indexOf(p)] }))
         );
 
-        const fit = analyzer.fitZernikePolynomials({ maxNoll: zernikeMaxNoll });
+        const fit = analyzer.fitZernikePolynomials({ maxNoll: zernikeMaxNoll }) as any;
 
-        if (!fit || !fit.coefficientsWaves) {
+        if (!fit || !fit.coefficients) {
             console.warn('⚠️ computeZernikeFitLive: Zernike fit failed');
             return null;
         }
@@ -430,7 +429,7 @@ class MeritFunctionEditor {
         try {
             const inspectorContainer = document.getElementById('merit-function-inspector');
             if (inspectorContainer) {
-                this.inspector = new InspectorManager(inspectorContainer);
+                this.inspector = new InspectorManager('merit-function-inspector');
             }
         } catch (error) {
             console.error('❌ Inspector初期化エラー:', error);
@@ -886,7 +885,7 @@ class MeritFunctionEditor {
             ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
             : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
 
-        const results = calculateLongitudinalAberration(opticalSystemData, wavelength);
+        const results = calculateLongitudinalAberration(opticalSystemData, wavelength) as any;
 
         if (!results || !Array.isArray(results.data) || results.data.length === 0) {
             console.warn('⚠️ LA_RMS_UM: longitudinal aberration calculation failed');
@@ -1178,12 +1177,12 @@ class MeritFunctionEditor {
                         { physicalVignetting: true }
                     );
 
-                    if (!spotResult || !Array.isArray(spotResult.rayHits) || spotResult.rayHits.length === 0) {
+                    if (!spotResult || !Array.isArray(spotResult.spotData) || spotResult.spotData.length === 0) {
                         stampSpotDebug({ ok: false, reason: 'spot-diagram-no-rays', hits: 0, resultUm: 1e9 });
                         return 1e9;
                     }
 
-                    const hits = spotResult.rayHits;
+                    const hits = spotResult.spotData[0]?.spotPoints || [];
 
                     let chief = hits.find((h: any) => h.isChief) || null;
                     if (!chief) {
@@ -1271,7 +1270,7 @@ class MeritFunctionEditor {
                 objRow,
                 opticalSystemData,
                 rayCount,
-                apertureLimitMm,
+                apertureLimitMm ?? undefined,
                 {
                     annularRingCount: options.annularRingCount || 3,
                     targetSurfaceIndex: imageSurfaceIndex,
@@ -1308,17 +1307,17 @@ class MeritFunctionEditor {
                     const start = starts[i];
                     attempted++;
 
-                    let hit = traceRayHitPoint(opticalSystemData, start, 1.0, imageSurfaceIndex);
+                    let hit: any = traceRayHitPoint(opticalSystemData, start, 1.0, undefined);
                     if (!hit) {
                         legacyFallbackHits++;
-                        const fullPath = traceRay(opticalSystemData, start, 1.0, null, imageSurfaceIndex);
-                        hit = fullPath ? fullPath[imageSurfaceIndex + 1] : null;
+                        const fullPath = traceRay(opticalSystemData, start, 1.0, null, undefined);
+                        hit = (fullPath && Array.isArray(fullPath)) ? fullPath[imageSurfaceIndex + 1] : null;
                     }
 
-                    if (hit && typeof hit === 'object' && Number.isFinite(hit.x) && Number.isFinite(hit.y)) {
+                    if (hit && typeof hit === 'object' && Number.isFinite((hit as any).x) && Number.isFinite((hit as any).y)) {
                         hits.push({
-                            x: hit.x,
-                            y: hit.y,
+                            x: (hit as any).x,
+                            y: (hit as any).y,
                             isChief: start.isChief || false
                         });
                         consecutiveMiss = 0;
@@ -1598,7 +1597,7 @@ class MeritFunctionEditor {
     }
 
     traceRayToSurfaceIndex(opticalSystemData: any[], ray0: any, surfaceIndex: number): any {
-        const p = traceRay(opticalSystemData, ray0, 1.0, null, surfaceIndex);
+        const p = traceRay(opticalSystemData, ray0, 1.0, null, undefined) as any;
         if (!p || !Array.isArray(p)) return null;
         const hit = p[surfaceIndex + 1];
         if (!hit) return null;
@@ -1765,7 +1764,7 @@ class MeritFunctionEditor {
 
             if (activeConfigId && targetIdStr && targetIdStr === activeConfigId) {
                 return {
-                    source: getSourceRows(),
+                    source: getSourceRows({}),
                     object: (typeof window !== 'undefined' && (window as any).getObjectRows)
                         ? (window as any).getObjectRows()
                         : ((window as any).tableObject ? (window as any).tableObject.getData() : [])
@@ -1775,17 +1774,17 @@ class MeritFunctionEditor {
             const config = systemConfig?.configurations?.find((c: any) => String(c.id) === String(targetIdStr));
             if (!config) {
                 return {
-                    source: getSourceRows(),
+                    source: getSourceRows({}),
                     object: (typeof window !== 'undefined' && (window as any).getObjectRows) ? (window as any).getObjectRows() : ((window as any).tableObject ? (window as any).tableObject.getData() : [])
                 };
             }
             return {
-                source: Array.isArray(config.source) ? config.source : getSourceRows(),
+                source: Array.isArray(config.source) ? config.source : getSourceRows({}),
                 object: Array.isArray(config.object) ? config.object : ((typeof window !== 'undefined' && (window as any).getObjectRows) ? (window as any).getObjectRows() : ((window as any).tableObject ? (window as any).tableObject.getData() : []))
             };
         } catch {
             return {
-                source: getSourceRows(),
+                source: getSourceRows({}),
                 object: (typeof window !== 'undefined' && (window as any).getObjectRows) ? (window as any).getObjectRows() : ((window as any).tableObject ? (window as any).tableObject.getData() : [])
             };
         }
@@ -1875,7 +1874,7 @@ class MeritFunctionEditor {
         const imd = this.safeFiniteNumberOrZero(paraxial?.imageDistance);
         const finalAlpha = Number(paraxial?.finalAlpha);
 
-        const eflTrace = calculateFullSystemParaxialTrace(opticalSystemData, wavelength);
+        const eflTrace = calculateFullSystemParaxialTrace(opticalSystemData, wavelength) as any;
         const efl = (eflTrace && Number.isFinite(eflTrace.finalAlpha) && Math.abs(eflTrace.finalAlpha) > 1e-12)
             ? (1.0 / eflTrace.finalAlpha)
             : 0;
@@ -1888,13 +1887,13 @@ class MeritFunctionEditor {
         const exitPupil = newSpecPupils?.exitPupil;
         const entrancePupil = newSpecPupils?.entrancePupil;
 
-        const expd = this.safeFiniteNumberOrZero(exitPupilDetails?.diameter ?? exitPupil?.diameter ?? paraxial?.exitPupilDiameter);
-        const exPosOrigin = this.safeFiniteNumberOrZero(exitPupilDetails?.position ?? exitPupil?.position);
+        const expd = this.safeFiniteNumberOrZero((exitPupilDetails as any)?.diameter ?? (exitPupil as any)?.diameter ?? paraxial?.exitPupilDiameter);
+        const exPosOrigin = this.safeFiniteNumberOrZero((exitPupilDetails as any)?.position ?? (exitPupil as any)?.position);
         const exppFromImage = (Number.isFinite(exPosOrigin) && Number.isFinite(imd)) ? (exPosOrigin - imd) : 0;
 
-        const betaExpRaw = (typeof exitPupil?.betaExp === 'number') ? exitPupil.betaExp
-            : (typeof exitPupilDetails?.betaExp === 'number') ? exitPupilDetails.betaExp
-            : (typeof exitPupilDetails?.magnification === 'number') ? exitPupilDetails.magnification
+        const betaExpRaw = (typeof (exitPupil as any)?.betaExp === 'number') ? (exitPupil as any).betaExp
+            : (typeof (exitPupilDetails as any)?.betaExp === 'number') ? (exitPupilDetails as any).betaExp
+            : (typeof (exitPupilDetails as any)?.magnification === 'number') ? (exitPupilDetails as any).magnification
             : (typeof exitPupil?.magnification === 'number') ? exitPupil.magnification
             : NaN;
         const betaExp = this.safeFiniteNumberOrZero(betaExpRaw);
@@ -2039,7 +2038,7 @@ class MeritFunctionEditor {
                     baseWavelength,
                     stopIndex,
                     objectRows,
-                    referenceFocalLengthAfocal
+                    referenceFocalLengthAfocal ?? 100
                 );
             } else {
                 seidel = calculateSeidelCoefficients(
@@ -2128,12 +2127,12 @@ class MeritFunctionEditor {
 
             if (isActiveConfig || wantsCurrent) {
                 const hasBlocksForActive = Array.isArray(config?.blocks);
-                if (!hasBlocksForActive) return getOpticalSystemRows();
+                if (!hasBlocksForActive) return getOpticalSystemRows({});
             }
 
             if (!config) {
                 console.warn(`Config ID ${targetIdStr} が見つかりません。現在のテーブルデータを使用します。`);
-                return getOpticalSystemRows();
+                return getOpticalSystemRows({});
             }
 
             let overrideBlocks: any = null;
@@ -2226,7 +2225,7 @@ class MeritFunctionEditor {
 
         } catch (error) {
             console.error('光学系データ取得エラー:', error);
-            return getOpticalSystemRows();
+            return getOpticalSystemRows({});
         }
     }
 
@@ -2309,7 +2308,7 @@ class MeritFunctionEditor {
 
         console.log('📋 サブシステムデータ:', subSystemData);
 
-        const paraxialResult = calculateFullSystemParaxialTrace(subSystemData, wavelength);
+        const paraxialResult = calculateFullSystemParaxialTrace(subSystemData, wavelength) as any;
 
         console.log('🎯 近軸追跡結果:', paraxialResult);
 
