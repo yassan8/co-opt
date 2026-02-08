@@ -315,6 +315,14 @@ async function initializeApplication() {
         window.getObjectRows = getObjectRows;
         window.getSourceRows = getSourceRows;
         
+        // Export evaluation/analysis functions for popup windows
+        window.createOPDCalculator = createOPDCalculator;
+        window.WavefrontAberrationAnalyzer = WavefrontAberrationAnalyzer;
+        window.PSFCalculator = PSFCalculator;
+        window.PSFPlotter = PSFPlotter;
+        window.calculateFocalLength = calculateFocalLength;
+        window.findStopSurfaceIndex = findStopSurfaceIndex;
+        
         // Export coordinate transformation functions
         window.calculateAllSurfacesLocalCoordinates = calculateAllSurfacesLocalCoordinates;
         window.resetToSurfaceCoordinates = resetToSurfaceCoordinates;
