@@ -4550,12 +4550,12 @@ export function setupAnalysisWindows() {
                     };
 
                     const [{ getOpticalSystemRows, getObjectRows, getSourceRows }, { PSFPlotter }, { createOPDCalculator, WavefrontAberrationAnalyzer }, { PSFCalculator }, { calculateFocalLength, findStopSurfaceIndex }, { DEFAULT_STOP_SEMI_DIAMETER }] = await Promise.all([
-                        import(moduleURL('./utils/data-utils.js')),
-                        import(moduleURL('./evaluation/psf/psf-plot.js')),
-                        import(moduleURL('./evaluation/wavefront/wavefront.js')),
-                        import(moduleURL('./evaluation/psf/psf-calculator.js')),
-                        import(moduleURL('./raytracing/core/ray-paraxial.js')),
-                        import(moduleURL('./data/block-schema.js'))
+                        import('../utils/data-utils.js'),
+                        import('../evaluation/psf/psf-plot.js'),
+                        import('../evaluation/wavefront/wavefront.js'),
+                        import('../evaluation/psf/psf-calculator.js'),
+                        import('../raytracing/core/ray-paraxial.js'),
+                        import('../data/block-schema.js')
                     ]);
 
                     const cloneRows = (rows) => {
