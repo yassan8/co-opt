@@ -4083,6 +4083,11 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             if (varKeys.length > 0) {
                 panel.appendChild(createSectionTitle('Variables'));
                 for (const key of varKeys) {
+                    // Skip if this key is already shown in Parameters
+                    if (paramKeys.includes(key)) {
+                        continue;
+                    }
+                    
                     const entry = (vars as any)[key];
                     const value = entry && typeof entry === 'object' && 'value' in entry ? entry.value : entry;
 
