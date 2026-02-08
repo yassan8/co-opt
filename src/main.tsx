@@ -3,6 +3,9 @@ import ReactDOM from "react-dom/client";
 import App from "./app/App";
 import "./app.css";
 
+// Import main.js first to initialize window functions
+import "../main.js";
+
 const container = document.getElementById("react-root");
 
 if (!container) {
