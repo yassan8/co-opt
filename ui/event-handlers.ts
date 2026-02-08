@@ -4515,8 +4515,7 @@ export function setupAnalysisWindows() {
                 // Always compute inside the popup to avoid background throttling of the opener
                 // when the main window is hidden/minimized/unfocused.
                 {
-                    const CACHE_BUSTER = '2026-01-14b';
-                    const moduleURL = (relPath) => {
+                    const moduleURL = (relPath: string): string => {
                         const baseHref = (() => {
                             try {
                                 return (window.opener && window.opener.location && window.opener.location.href)
@@ -4527,7 +4526,6 @@ export function setupAnalysisWindows() {
                             }
                         })();
                         const url = new URL(relPath, baseHref);
-                        if (!url.searchParams.has('v')) url.searchParams.set('v', CACHE_BUSTER);
                         return url.href;
                     };
 
