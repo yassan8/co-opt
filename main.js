@@ -183,6 +183,14 @@ async function initializeApplication() {
         try {
             // Setup analysis window buttons (must be called after React mount)
             setupAnalysisWindows();
+            
+            // Initialize spot diagram controls
+            if (typeof window.updateSpotDiagramConfigSelect === 'function') {
+                window.updateSpotDiagramConfigSelect();
+            }
+            if (typeof window.updateSurfaceNumberSelect === 'function') {
+                window.updateSurfaceNumberSelect();
+            }
         } catch (error) {
             console.error('Failed to setup analysis windows:', error);
         }

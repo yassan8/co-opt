@@ -6085,3 +6085,102 @@ export function updateTransformSurfaceSelect(): void {
         console.error('Error updating transform surface select:', error);
     }
 }
+
+/**
+ * Update spot diagram config select with available configurations
+ */
+export function updateSpotDiagramConfigSelect(): void {
+    const spotCfg = document.getElementById('spot-diagram-config-select') as HTMLSelectElement | null;
+    if (!spotCfg) return;
+    
+    try {
+        const systemConfig = localStorage.getItem('systemConfigurations');
+        if (!systemConfig) return;
+        
+        const parsed = JSON.parse(systemConfig);
+        const configurations = Array.isArray(parsed?.configurations) ? parsed.configurations : [];
+        const activeId = parsed?.activeConfigId;
+        
+        // Clear existing options
+        spotCfg.innerHTML = '';
+        
+        // Add configuration options
+        configurations.forEach((config: any) => {
+            if (!config || !config.id) return;
+            const option = document.createElement('option');
+            option.value = String(config.id);
+            option.textContent = String(config.name || config.id);
+            if (String(config.id) === String(activeId)) {
+                option.selected = true;
+            }
+            spotCfg.appendChild(option);
+        });
+        
+        // If no selection and has options, select first
+        if (spotCfg.options.length > 0 && !spotCfg.value) {
+            spotCfg.selectedIndex = 0;
+        }
+    } catch (error) {
+        console.error('Error updating spot diagram config select:', error);
+    }
+}
+
+/**
+ * Update surface number select with current optical system surfaces
+ */
+export function updateSurfaceNumberSelect(): void {
+    const surfaceSelect = document.getElementById('surface-number-select') as HTMLSelectElement | null;
+    if (!surfaceSelect) return;
+    
+    try {
+        const getOpticalSystemRows = (window as any).getOpticalSystemRows;
+        if (typeof getOpticalSystemRows !== 'function') return;
+        
+        const opticalSystemRows = getOpticalSystemRows();
+        if (!opticalSystemRows || opticalSystemRows.length === 0) return;
+        
+        // Save current selection
+        const prevValue = surfaceSelect.value;
+        
+        // Clear existing options
+        surfaceSelect.innerHTML = '<option value="">Select surface...</option>';
+        
+        // Add surface options
+        opticalSystemRows.forEach((row: any, index: number) => {
+            const option = document.createElement('option');
+            option.value = String(index);
+            
+            // Create label
+            let label = `Surf ${index}`;
+            const objectType = String(row?.['object type'] ?? row?.object ?? '').toLowerCase();
+            if (objectType === 'object') {
+                label = `Surf ${index}: Object`;
+            } else if (objectType === 'image') {
+                label = `Surf ${index}: Image`;
+            } else if (row.comment) {
+                label += `: ${row.comment}`;
+            } else if (row.material && row.material !== 'AIR') {
+                label += `: ${row.material}`;
+            }
+            
+            option.textContent = label;
+            surfaceSelect.appendChild(option);
+        });
+        
+        // Restore selection if still valid
+        if (prevValue && Array.from(surfaceSelect.options).some(opt => opt.value === prevValue)) {
+            surfaceSelect.value = prevValue;
+        } else if (surfaceSelect.options.length > 1) {
+            // Default to last surface (usually Image)
+            surfaceSelect.selectedIndex = surfaceSelect.options.length - 1;
+        }
+    } catch (error) {
+        console.error('Error updating surface number select:', error);
+    }
+}
+
+// Expose functions to window for backwards compatibility
+if (typeof window !== 'undefined') {
+    (window as any).updateSpotDiagramConfigSelect = updateSpotDiagramConfigSelect;
+    (window as any).updateSurfaceNumberSelect = updateSurfaceNumberSelect;
+}
