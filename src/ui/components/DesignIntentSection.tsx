@@ -49,39 +49,31 @@ export default function DesignIntentSection() {
         <div id="block-inspector" className="block-inspector"></div>
       </div>
 
-      <div className="expanded-optical-system-header">
-        <h2 className="optical-system-title">Expanded Optical System (from Blocks)</h2>
-        <button id="toggle-expanded-optical-system-btn" aria-expanded="true">
-          Collapse
-        </button>
+      <div className="optical-system-buttons-container">
+        <button id="add-optical-system-btn">Add Surf</button>
+        <button id="delete-optical-system-row-btn">Del Surf</button>
+        <button id="apply-to-design-intent-btn">Apply to Design Intent</button>
+        <button id="find-glass-btn">🔍 Find Glass</button>
       </div>
-      <div id="expanded-optical-system-content">
-        <div className="optical-system-buttons-container">
-          <button id="add-optical-system-btn">Add Surf</button>
-          <button id="delete-optical-system-row-btn">Del Surf</button>
-          <button id="apply-to-design-intent-btn">Apply to Design Intent</button>
-          <button id="find-glass-btn">🔍 Find Glass</button>
+
+      <div id="apply-reason-section" className="apply-reason-section" style={{ display: "none" }}>
+        <div className="apply-reason-title">適用理由（参照用 / 読み取り専用）</div>
+        <div className="apply-reason-help">
+          セルを選択または編集すると、対象 Block（_blockId）に対する最新の評価要約（LCA/TCA 寄与）が表示されます。
+          ※評価は「Aberration Coefficients」実行時に更新されます。
         </div>
-
-        <div id="apply-reason-section" className="apply-reason-section" style={{ display: "none" }}>
-          <div className="apply-reason-title">適用理由（参照用 / 読み取り専用）</div>
-          <div className="apply-reason-help">
-            セルを選択または編集すると、対象 Block（_blockId）に対する最新の評価要約（LCA/TCA 寄与）が表示されます。
-            ※評価は「Aberration Coefficients」実行時に更新されます。
-          </div>
-          <textarea
-            id="apply-reason-text"
-            rows={6}
-            cols={100}
-            readOnly
-            placeholder="ここに適用理由（評価要約）が表示されます…"
-          ></textarea>
-        </div>
-
-        <div className="optical-system-divider"></div>
-
-        <div id="table-optical-system"></div>
+        <textarea
+          id="apply-reason-text"
+          rows={6}
+          cols={100}
+          readOnly
+          placeholder="ここに適用理由（評価要約）が表示されます…"
+        ></textarea>
       </div>
+
+      <div className="optical-system-divider"></div>
+
+      <div id="table-optical-system"></div>
     </div>
   );
 }
