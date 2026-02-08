@@ -4002,7 +4002,60 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     }
                     
                     const value = (params as any)[key];
-                    panel.appendChild(createRow(key, value, `parameters.${key}`));
+                    const varEntry = (vars as any)[key];
+
+                    // Create row with optimize checkbox and scope selector
+                    const paramRow = document.createElement('div');
+                    paramRow.style.display = 'flex';
+                    paramRow.style.alignItems = 'center';
+                    paramRow.style.gap = '6px';
+                    paramRow.style.marginBottom = '6px';
+
+                    // Optimize checkbox
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.style.flex = '0 0 auto';
+                    cb.style.width = '16px';
+                    cb.style.height = '16px';
+                    cb.style.margin = '0 4px 0 0';
+                    cb.checked = __blocks_shouldMarkVar(varEntry);
+                    cb.addEventListener('click', (e) => e.stopPropagation());
+
+                    // Scope select (Per-config / Shared)
+                    const scopeSel = document.createElement('select');
+                    scopeSel.style.flex = '0 0 110px';
+                    scopeSel.style.fontSize = '12px';
+                    scopeSel.style.padding = '2px 4px';
+                    scopeSel.innerHTML = '<option value="perConfig">Per-config</option><option value="global">Shared (all configs)</option>';
+                    scopeSel.value = __blocks_getVarScope(varEntry);
+                    scopeSel.disabled = !cb.checked;
+                    scopeSel.addEventListener('click', (e) => e.stopPropagation());
+
+                    cb.addEventListener('change', (e) => {
+                        e.stopPropagation();
+                        try { scopeSel.disabled = !cb.checked; } catch (_) {}
+                        __blocks_setVarMode(blockId, key, cb.checked, String(scopeSel.value));
+                        try { refreshBlockInspector(); } catch (_) {}
+                    });
+
+                    scopeSel.addEventListener('change', (e) => {
+                        e.stopPropagation();
+                        const newScope = String(scopeSel.value);
+                        __blocks_setVarScope(blockId, key, newScope);
+                        if (cb.checked) {
+                            __blocks_setVarMode(blockId, key, true, newScope);
+                        }
+                        try { refreshBlockInspector(); } catch (_) {}
+                    });
+
+                    const innerRow = createRow(key, value, `parameters.${key}`);
+                    innerRow.style.flex = '1';
+                    innerRow.style.marginBottom = '0';
+
+                    paramRow.appendChild(cb);
+                    paramRow.appendChild(scopeSel);
+                    paramRow.appendChild(innerRow);
+                    panel.appendChild(paramRow);
                 }
             }
 
