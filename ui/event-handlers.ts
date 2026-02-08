@@ -15,6 +15,12 @@ import {
     harmonizeSceneGeometry,
     validateSceneGeometry
 } from '../optical/surface.js';
+import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.js';
+import { PSFPlotter } from '../evaluation/psf/psf-plot.js';
+import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../evaluation/wavefront/wavefront.js';
+import { PSFCalculator } from '../evaluation/psf/psf-calculator.js';
+import { calculateFocalLength, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.js';
+import { DEFAULT_STOP_SEMI_DIAMETER } from '../data/block-schema.js';
 
 // ============================================================================
 // GLOBAL CONFIGURATION: FORCE INFINITE PUPIL MODE
@@ -4549,14 +4555,7 @@ export function setupAnalysisWindows() {
                         return await Promise.race([promise, cancelPromise]);
                     };
 
-                    const [{ getOpticalSystemRows, getObjectRows, getSourceRows }, { PSFPlotter }, { createOPDCalculator, WavefrontAberrationAnalyzer }, { PSFCalculator }, { calculateFocalLength, findStopSurfaceIndex }, { DEFAULT_STOP_SEMI_DIAMETER }] = await Promise.all([
-                        import('/co-opt/utils/data-utils.js'),
-                        import('/co-opt/evaluation/psf/psf-plot.js'),
-                        import('/co-opt/evaluation/wavefront/wavefront.js'),
-                        import('/co-opt/evaluation/psf/psf-calculator.js'),
-                        import('/co-opt/raytracing/core/ray-paraxial.js'),
-                        import('/co-opt/data/block-schema.js')
-                    ]);
+                    // Modules are already imported at the top of this file
 
                     const cloneRows = (rows) => {
                         if (!Array.isArray(rows)) return rows;
