@@ -124,17 +124,6 @@
 
   <!-- Import map for Three.js to resolve bare module specifiers -->
 
-
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
-        "three/examples/jsm/controls/OrbitControls.js": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js"
-      }
-    }
-  </script>
-  <script type="module" crossorigin src="/co-opt/assets/index-CrHlzWhP.js"></script>
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-DY4pkkkN.js">
   <link rel="stylesheet" crossorigin href="/co-opt/assets/index-CZf93wEg.css">
 </head>
 <body>
@@ -154,6 +143,32 @@
     We only do this when the configuration system has already been initialized (systemConfigurations exists),
     to avoid wiping legacy single-config data before the migration runs.
   -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+          "three/examples/jsm/controls/OrbitControls.js": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js",
+          "OrbitControls": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js"
+  <script type="module" crossorigin src="/co-opt/assets/index-2Hzsq7-C.js"></script>
+  <script type="module">
+    try {
+      const systemConfigurationsJson = localStorage.getItem('systemConfigurations');
+      if (systemConfigurationsJson) {
+        try {
+          const parsed = JSON.parse(systemConfigurationsJson);
+          if (parsed && Array.isArray(parsed.configurations) && parsed.configurations.length > 0) {
+            const { loadActiveConfigurationToTables } = await import('/co-opt/assets/table-configuration-BcpgQFKJ.ts');
+            loadActiveConfigurationToTables();
+
+          }
+        } catch (e) {
+          console.warn('⚠️ [Startup] Failed to parse systemConfigurations; skipping pre-load:', e);
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ [Startup] Failed to pre-load active configuration:', e);
+    }
+  </script>
   
   <!-- Undo/Redo System -->
   <script>
