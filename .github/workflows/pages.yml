@@ -29,10 +29,10 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload artifact (docs)
+      - name: Upload artifact (dist)
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./docs
+          path: ./dist
 
       - name: Deploy to GitHub Pages
         id: deployment
