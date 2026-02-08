@@ -3527,7 +3527,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     select.style.borderRadius = '4px';
                     select.style.flex = '1';
                     select.style.cursor = 'pointer';
-                    select.style.minWidth = '150px';
+                    select.style.minWidth = '200px';
 
                     const options = ['Spherical', 'Aspherical even', 'Aspherical odd', 'Toric'];
                     const currentValue = String(value || 'Spherical');
@@ -3766,7 +3766,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     input.style.background = isDarkMode ? '#111827' : '#fff';
                     input.style.color = isDarkMode ? '#f9fafb' : '#111827';
                     input.style.flex = '1';
-                    input.style.minWidth = '120px';
+                    input.style.minWidth = '200px';
 
                     const glassBtn = document.createElement('button');
                     glassBtn.textContent = '🔍';
@@ -3981,6 +3981,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     input.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
                     input.style.background = isDarkMode ? '#111827' : '#fff';
                     input.style.color = isDarkMode ? '#f9fafb' : '#111827';
+                    input.style.flex = '1';
+                    input.style.minWidth = '200px';
 
                     input.addEventListener('blur', () => {
                         const newValue = cooptNormalizeInputValue(input.value, value);
