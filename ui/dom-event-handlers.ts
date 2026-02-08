@@ -3504,7 +3504,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const isSurfType = label === 'surfType' || label === 'frontSurfType' || label === 'backSurfType' || 
                                    label === 'surf1SurfType' || label === 'surf2SurfType' || label === 'surf3SurfType';
                 const isMaterial = label.toLowerCase().includes('material') || paramType === 'material';
-                const isNumeric = !isMaterial && !isSurfType && !isNaN(parseFloat(String(value)));
+                // Exclude nd, vd, abbe from slider display - they should be text input only
+                const isGlassProperty = label === 'nd' || label === 'vd' || label === 'abbe';
+                const isNumeric = !isMaterial && !isSurfType && !isGlassProperty && !isNaN(parseFloat(String(value)));
                 
                 // Determine if this parameter should show coef parameters based on surfType
                 const shouldHideCoef = (key: string, surfTypeValue: string) => {
