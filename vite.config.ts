@@ -18,7 +18,7 @@ export default defineConfig({
               (chunk: any) => chunk.type === 'chunk' && chunk.name === 'main'
             );
             if (mainChunk && 'fileName' in mainChunk) {
-              const scriptTag = `  <script type="module" crossorigin src="/co-opt/assets/${mainChunk.fileName}"></script>\n`;
+              const scriptTag = `  <script type="module" crossorigin src="/co-opt/${mainChunk.fileName}"></script>\n`;
               return html.replace('</head>', scriptTag + '</head>');
             }
           }
