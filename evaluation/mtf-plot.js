@@ -1,3 +1,6 @@
+// Import data utility functions
+import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.js';
+
 // Singleton for PSF calculator to avoid repeated initialization
 let _psfCalculatorSingletonPromise = null;
 async function getPSFCalculatorSingleton() {
@@ -88,7 +91,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
 
     reportProgress(10, 'Preparing optical system...');
 
-    // Optical system and objects (live table preferred)
+    // Optical system and objects (use imported functions)
     const opticalSystemRows = getOpticalSystemRows(window.tableOpticalSystem);
     if (!opticalSystemRows || opticalSystemRows.length === 0) {
         throw new Error('光学システムデータがありません。まず光学システムを設定してください。');
