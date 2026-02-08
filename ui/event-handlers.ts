@@ -4515,7 +4515,7 @@ export function setupAnalysisWindows() {
                 // Always compute inside the popup to avoid background throttling of the opener
                 // when the main window is hidden/minimized/unfocused.
                 {
-                    const moduleURL = (relPath: string): string => {
+                    const moduleURL = (relPath) => {
                         const baseHref = (() => {
                             try {
                                 return (window.opener && window.opener.location && window.opener.location.href)
