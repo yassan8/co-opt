@@ -12,6 +12,27 @@ export default function App() {
     (window as typeof window & { __cooptReactMounted?: boolean })
       .__cooptReactMounted = true;
     window.dispatchEvent(new CustomEvent("coopt:react-mounted"));
+
+    // レガシー初期化関数を呼び出す
+    // DOMが準備できたので、テーブルやイベントハンドラーを初期化
+    setTimeout(() => {
+      console.log("[React] Initializing legacy tables and handlers");
+      
+      // main.jsの初期化が完了するのを待ってから、テーブルを再初期化
+      if (typeof (window as any).initializeAllTables === 'function') {
+        (window as any).initializeAllTables();
+      }
+      
+      // イベントハンドラーの再バインド (Configuration UI含む)
+      if (typeof (window as any).rebindEventHandlers === 'function') {
+        (window as any).rebindEventHandlers();
+      }
+      
+      // Configuration UIを確実に初期化
+      if (typeof (window as any).initializeConfigurationUI === 'function') {
+        (window as any).initializeConfigurationUI();
+      }
+    }, 100);
   }, []);
 
   console.log("[React] Rendering App component");

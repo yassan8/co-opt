@@ -13920,6 +13920,46 @@ export function findSimilarGlassesByNdVd(targetNd: number, targetVd: number, max
   return out.slice(0, limit);
 }
 
+/**
+ * Find glasses by nd value only (useful when vd is unknown, e.g., numeric refractive index input)
+ * 
+ * @param {number} targetNd - Target refractive index
+ * @param {number} [maxResults=20] - Maximum number of results
+ * @returns {Array<{name:string, nd:number, vd:number, manufacturer:string, price:(number|null), ndDiff:number}>}
+ */
+export function findGlassesByNd(targetNd: number, maxResults: number = 20): any[] {
+  if (!Number.isFinite(targetNd)) return [];
+  if (targetNd <= 0 || targetNd >= 4) return [];
+
+  const dbs = getAllGlassDatabases();
+  const out = [];
+
+  for (const db of dbs) {
+    if (!Array.isArray(db)) continue;
+    for (const glass of db) {
+      if (!glass) continue;
+      const nd = glass.nd;
+      const vd = glass.vd;
+      if (!Number.isFinite(nd) || !Number.isFinite(vd)) continue;
+      
+      const ndDiff = Math.abs(nd - targetNd);
+      out.push({
+        name: String(glass.name),
+        nd,
+        vd,
+        manufacturer: glass.manufacturer || 'Unknown',
+        price: Number.isFinite(glass.price) ? Number(glass.price) : null,
+        ndDiff
+      });
+    }
+  }
+
+  out.sort((a, b) => a.ndDiff - b.ndDiff);
+  const n = Number(maxResults);
+  const limit = Number.isFinite(n) && n > 0 ? Math.floor(n) : 20;
+  return out.slice(0, limit);
+}
+
 function __normalizeGlassNameForSearch(s) {
   return String(s ?? '')
     .toLowerCase()
@@ -14060,5 +14100,6 @@ if (typeof window !== 'undefined') {
   (window as any).getGlassDataWithSellmeier = getGlassDataWithSellmeier;
   (window as any).getAllGlassDatabases = getAllGlassDatabases;
   (window as any).findSimilarGlassesByNdVd = findSimilarGlassesByNdVd;
+  (window as any).findGlassesByNd = findGlassesByNd;
   (window as any).findSimilarGlassNames = findSimilarGlassNames;
 }

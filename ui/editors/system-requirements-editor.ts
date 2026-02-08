@@ -668,7 +668,7 @@ class SystemRequirementsEditor {
           
           // Get optical system rows from Design Intent
           try {
-            const opticalRows = getOpticalSystemRows();
+            const opticalRows = (getOpticalSystemRows as any)(null);
             if (Array.isArray(opticalRows)) {
               for (let i = 0; i < opticalRows.length; i++) {
                 const surfRow = opticalRows[i];
@@ -1611,7 +1611,7 @@ class SystemRequirementsEditor {
               (globalThis as any).__cooptPreferTableOpticalSystemRows = true;
             }
             const fn = (typeof getOpticalSystemRows === 'function') ? getOpticalSystemRows : null;
-            if (fn) activeConfigOpticalRows = fn();
+            if (fn) activeConfigOpticalRows = (fn as any)(null);
             if (typeof globalThis !== 'undefined') {
               delete (globalThis as any).__cooptPreferTableOpticalSystemRows;
             }
@@ -2464,9 +2464,13 @@ const __cooptInitSystemRequirementsEditor = (): boolean => {
   }
 };
 
-document.addEventListener('DOMContentLoaded', () => {
+const __cooptScheduleSystemRequirementsInit = (): void => {
   if (__cooptInitSystemRequirementsEditor()) return;
   if (typeof window !== 'undefined') {
+    if ((window as any).__cooptReactMounted) {
+      __cooptInitSystemRequirementsEditor();
+      return;
+    }
     window.addEventListener('coopt:react-mounted', () => {
       __cooptInitSystemRequirementsEditor();
     }, { once: true });
@@ -2474,6 +2478,14 @@ document.addEventListener('DOMContentLoaded', () => {
       __cooptInitSystemRequirementsEditor();
     }, 0);
   }
-});
+};
+
+if (typeof document !== 'undefined' && document?.addEventListener) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', __cooptScheduleSystemRequirementsInit);
+  } else {
+    __cooptScheduleSystemRequirementsInit();
+  }
+}
 
 export { SystemRequirementsEditor };

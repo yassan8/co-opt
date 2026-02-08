@@ -866,59 +866,89 @@ let tabulatorOptions = {
     ]
   }; // ←columns配列の直後はオプションオブジェクトの終端
 
-  // Tabulatorインスタンスを作成 (disabled when Blocks exist)
-  if (__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) {
-    tableOpticalSystem = createNoopOpticalSystemTable();
-  } else {
-    try {
-      tableOpticalSystem = new (window as any).Tabulator('#table-optical-system', tabulatorOptions);
-    } catch (error) {
-      console.warn('Tabulator initialization failed. Falling back to noop table.', error);
+  // Mount function to initialize table after DOM is ready
+  export function mountTableOpticalSystemIfReady(): boolean {
+    const hasDocument = typeof document !== 'undefined';
+    if (!hasDocument) return false;
+    
+    const tableContainer = document.getElementById('table-optical-system');
+    if (!tableContainer) {
+      const reactMounted = typeof window !== 'undefined' && (window as any).__cooptReactMounted;
+      if (reactMounted) {
+        console.warn('[TableOpticalSystem] Container #table-optical-system not found');
+      }
+      return false;
+    }
+    
+    // If already initialized and pointing to the same container, skip
+    if (tableOpticalSystem && (tableOpticalSystem as any).__cooptIsDom && (tableOpticalSystem as any).__cooptContainer === tableContainer) {
+      console.log('[TableOpticalSystem] Already initialized');
+      return true;
+    }
+    
+    console.log('[TableOpticalSystem] Initializing table...');
+    
+    // Create the table instance
+    if (__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) {
       tableOpticalSystem = createNoopOpticalSystemTable();
-    }
-  }
-
-  // In Blocks-only mode, the optical system table is a no-op UI, but downstream
-  // evaluation (chief ray / PSF) still expects tableOpticalSystem.getData() to
-  // return the expanded surface rows. Seed it here so it is never empty.
-  if (__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) {
-    try {
-      let rows = Array.isArray(initialData) ? initialData : [];
-      const cfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
-      if (cfg && configurationHasBlocks(cfg) && Array.isArray(cfg.blocks)) {
-        const expanded = expandBlocksToOpticalSystemRows(cfg.blocks);
-        const fatals = Array.isArray(expanded?.issues) ? expanded.issues.filter(i => i && i.severity === 'fatal') : [];
-        if (Array.isArray(expanded?.rows) && fatals.length === 0) {
-          rows = expanded.rows;
+      
+      // In Blocks-only mode, seed the table with expanded data
+      try {
+        let rows = Array.isArray(initialData) ? initialData : [];
+        const cfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
+        if (cfg && configurationHasBlocks(cfg) && Array.isArray(cfg.blocks)) {
+          const expanded = expandBlocksToOpticalSystemRows(cfg.blocks);
+          const fatals = Array.isArray(expanded?.issues) ? expanded.issues.filter(i => i && i.severity === 'fatal') : [];
+          if (Array.isArray(expanded?.rows) && fatals.length === 0) {
+            rows = expanded.rows;
+          }
         }
+        // Ensure ids exist for updateRow().
+        try { renumberIds(rows); } catch (_) {}
+        try { updateObjectTypes(rows); } catch (_) {}
+        if (typeof tableOpticalSystem.setData === 'function') {
+          tableOpticalSystem.setData(rows);
+        }
+      } catch (_) {
+        // ignore
       }
-      // Ensure ids exist for updateRow().
-      try { renumberIds(rows); } catch (_) {}
-      try { updateObjectTypes(rows); } catch (_) {}
-      if (typeof tableOpticalSystem.setData === 'function') {
-        tableOpticalSystem.setData(rows);
+    } else {
+      try {
+        tableOpticalSystem = new (window as any).Tabulator('#table-optical-system', tabulatorOptions);
+        (tableOpticalSystem as any).__cooptIsDom = true;
+        (tableOpticalSystem as any).__cooptContainer = tableContainer;
+        console.log('[TableOpticalSystem] Table initialized successfully');
+        
+        // Setup table event handlers only for real Tabulator instances
+        setupTableHandlers();
+      } catch (error) {
+        console.warn('Tabulator initialization failed. Falling back to noop table.', error);
+        tableOpticalSystem = createNoopOpticalSystemTable();
       }
-    } catch (_) {
-      // ignore
     }
+    
+    // Store global reference
+    try {
+      if (typeof window !== 'undefined') (window as any).tableOpticalSystem = tableOpticalSystem;
+    } catch (_) {}
+    
+    return true;
   }
 
-  try {
-    // Keep the historical global reference stable.
-    if (typeof window !== 'undefined') (window as any).tableOpticalSystem = tableOpticalSystem;
-  } catch (_) {}
+  // Setup event handlers for the table (only called for real Tabulator instances)
+  function setupTableHandlers() {
+    if (!tableOpticalSystem || typeof tableOpticalSystem.on !== 'function') {
+      console.warn('[TableOpticalSystem] setupTableHandlers called but table.on is not available');
+      return;
+    }
 
-  // console.log(tableOpticalSystem); // Tabulatorインスタンスが出力されるか確認
-
-  // Tabulatorエラーハンドリング
-  if (!__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) {
+    // Tabulator error handling
     tableOpticalSystem.on("error", function(error) {
       console.warn("Tabulator error:", error);
     });
-  }
 
-  // 初期化完了後にイベントリスナーを設定
-  if (!__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) tableOpticalSystem.on("tableBuilt", function(){
+    // Setup table built event
+    tableOpticalSystem.on("tableBuilt", function(){
     // console.log("Optical System Tabulator initialized successfully");
 
     const updateDynamicHeadersForSurfType = (surfTypeValue) => {
@@ -1109,7 +1139,27 @@ let tabulatorOptions = {
         console.warn("Cell edit cancelled scroll restore error:", error);
       }
     });
-  });
+  }); // end of tableBuilt event handler
+  } // end of setupTableHandlers function
+
+  // Initial attempt to mount (will fail if DOM not ready, that's OK)
+  try {
+    mountTableOpticalSystemIfReady();
+  } catch (_) {
+    console.log('[TableOpticalSystem] Initial mount failed, will retry after React mount');
+  }
+  
+  // Listen for React mount event
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    window.addEventListener('coopt:react-mounted', () => {
+      console.log('[TableOpticalSystem] React mounted event received, attempting to mount table');
+      try {
+        mountTableOpticalSystemIfReady();
+      } catch (err) {
+        console.error('[TableOpticalSystem] Mount failed:', err);
+      }
+    }, { once: true });
+  }
 
 try {
   // Initialization code is above, but if needed, add here
@@ -1308,7 +1358,11 @@ export function updateAllRefractiveIndices(): void {
 
 // ガラス名変更時に自動で屈折率とアッベ数を更新
 // 屈折率・Abbe数変更時に自動でガラスを検索・設定
-tableOpticalSystem.on("cellEdited", function(cell){
+const attachOpticalSystemCellEditedHandler = () => {
+  if (!tableOpticalSystem || typeof tableOpticalSystem.on !== 'function') {
+    return false;
+  }
+  tableOpticalSystem.on("cellEdited", function(cell){
   try {
     // When we programmatically update cells (e.g. rindex/abbe derived from material),
     // Tabulator still fires cellEdited. Those events must NOT overwrite the user's
@@ -1667,7 +1721,20 @@ function findClosestGlassByProperties(targetRindex, targetVd, maxResults = 20) {
       isUpdatingFromCellEdit = false;
     }, 100);
   }
-});
+  });
+  return true;
+};
+
+if (!attachOpticalSystemCellEditedHandler()) {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('coopt:react-mounted', () => {
+      try { attachOpticalSystemCellEditedHandler(); } catch (_) {}
+    }, { once: true });
+    setTimeout(() => {
+      try { attachOpticalSystemCellEditedHandler(); } catch (_) {}
+    }, 0);
+  }
+}
 
 
 // 屈折率またはAbbe数入力時にガラスを自動検索・設定する関数
@@ -2716,3 +2783,6 @@ function autoSetGlassByProperties(rowIndex, field, value) {
     }
 }
 */
+
+// Export showGlassSearchDialog to window for use in DOM event handlers
+(window as any).showGlassSearchDialog = showGlassSearchDialog;

@@ -50,10 +50,14 @@ function stopAutoSave(): void {
  * Configuration UIを初期化
  */
 export function initializeConfigurationUI(): void {
+  console.log('🔵 [Configuration UI] initializeConfigurationUI called');
   
-  // 既に初期化済みの場合はイベントリスナーのみ再設定
+  // 既に初期化済みの場合はUIを更新してイベントリスナーを再設定
   try {
     if (typeof window !== 'undefined' && (window as any).__configurationUIInitialized) {
+      console.log('🔵 [Configuration UI] Already initialized, refreshing UI');
+      updateConfigurationSelect();
+      updateConfigInfo();
       setupConfigurationEventListeners();
       return;
     }
@@ -65,15 +69,21 @@ export function initializeConfigurationUI(): void {
     }
   } catch (_) {}
   
+  console.log('🔵 [Configuration UI] First-time initialization');
+  
   // 既存のConfigurationシステムを初期化（初回起動時）
   initializeConfigurationSystem();
   
   // UIコンポーネントを更新
+  console.log('🔵 [Configuration UI] Updating UI components');
   updateConfigurationSelect();
   updateConfigInfo();
   
   // イベントリスナー設定
+  console.log('🔵 [Configuration UI] Setting up event listeners');
   setupConfigurationEventListeners();
+  
+  console.log('✅ [Configuration UI] Initialization complete');
 }
 
 // Auto-init as a fallback if the host page doesn't call initializeConfigurationUI.
@@ -147,10 +157,15 @@ function initializeConfigurationSystem(): void {
  */
 function updateConfigurationSelect(): void {
   const select = document.getElementById('config-select') as HTMLSelectElement | null;
-  if (!select) return;
+  console.log('🔵 [Configuration UI] updateConfigurationSelect - select element:', !!select);
+  if (!select) {
+    console.warn('⚠️ [Configuration UI] config-select element not found!');
+    return;
+  }
   
   const configList = getConfigurationList();
   const activeId = getActiveConfigId();
+  console.log('🔵 [Configuration UI] Config list:', configList.length, 'items, active ID:', activeId);
   
   select.innerHTML = '';
   
@@ -167,6 +182,8 @@ function updateConfigurationSelect(): void {
     
     select.appendChild(option);
   });
+  
+  console.log('✅ [Configuration UI] Updated config-select with', configList.length, 'options');
 
   // Keep Spot Diagram config selector synchronized with available configs.
   try {

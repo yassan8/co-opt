@@ -19,8 +19,9 @@ export default function MainToolbar() {
           <button id="new-file-btn">New</button>
           <button id="save-all-btn">Save</button>
           <button id="load-all-btn">Load</button>
+          <button id="load-default-btn">Load Default System</button>
           <button id="share-url-btn">Share</button>
-          <button id="clear-storage-btn">Clear Cache</button>
+          <button id="clear-storage-btn">Clear Chashe</button>
         </div>
 
         <div className="button-group">

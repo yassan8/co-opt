@@ -1,8 +1,7 @@
 export default function DesignIntentSection() {
-  console.log("[DesignIntentSection] Component rendering");
   return (
-    <div className="optical-system-section" style={{ border: "3px solid blue", padding: "10px", margin: "10px" }}>
-      <h2 style={{ color: "blue", fontSize: "24px" }}>Design Intent</h2>
+    <div className="optical-system-section">
+      <h2>Design Intent</h2>
       <div id="design-intent-toolbar" className="optical-system-buttons-container">
         <select id="design-intent-add-block-type">
           <option value="ObjectPlane">ObjectSurface</option>
@@ -50,13 +49,6 @@ export default function DesignIntentSection() {
         <div id="block-inspector" className="block-inspector"></div>
       </div>
 
-      <div className="optical-system-buttons-container">
-        <button id="add-optical-system-btn">Add Surf</button>
-        <button id="delete-optical-system-row-btn">Del Surf</button>
-        <button id="apply-to-design-intent-btn">Apply to Design Intent</button>
-        <button id="find-glass-btn">🔍 Find Glass</button>
-      </div>
-
       <div id="apply-reason-section" className="apply-reason-section" style={{ display: "none" }}>
         <div className="apply-reason-title">適用理由（参照用 / 読み取り専用）</div>
         <div className="apply-reason-help">
@@ -71,8 +63,6 @@ export default function DesignIntentSection() {
           placeholder="ここに適用理由（評価要約）が表示されます…"
         ></textarea>
       </div>
-
-      <div className="optical-system-divider"></div>
 
       <div id="table-optical-system"></div>
     </div>
