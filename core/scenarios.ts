@@ -185,7 +185,7 @@ function expandActiveConfigWithScenario(activeCfg: Configuration, scenarioId?: s
   if (!activeCfg || !Array.isArray(activeCfg.blocks)) return { rows: [], issues: [{ severity: 'fatal', phase: 'expand', message: 'Active config has no blocks.' }] };
 
   ensureScenarioContainer(activeCfg);
-  const scn = findScenario(activeCfg, scenarioId || activeCfg.activeScenarioId);
+  const scn = findScenario(activeCfg, scenarioId || activeCfg.activeScenarioId || 'base');
   const overrides = scn && isPlainObject(scn.overrides) ? scn.overrides : {};
 
   const blocksToExpand = applyOverridesToBlocks(activeCfg.blocks, overrides);
@@ -222,7 +222,7 @@ export function listScenarios(): Array<{ id: string; name: string; weight: numbe
   const activeCfg = getActiveConfigRef(systemConfig);
   if (!activeCfg) return [];
   ensureScenarioContainer(activeCfg);
-  return activeCfg.scenarios.map(s => ({ id: s.id, name: s.name, weight: s.weight }));
+  return (activeCfg.scenarios || []).map(s => ({ id: s.id, name: s.name, weight: s.weight }));
 }
 
 export function addScenario(name: string = 'Scenario', weight: number = 1): ScenarioResult {
@@ -233,6 +233,7 @@ export function addScenario(name: string = 'Scenario', weight: number = 1): Scen
   ensureScenarioContainer(activeCfg);
 
   const id = `scn_${Date.now()}`;
+  if (!activeCfg.scenarios) activeCfg.scenarios = [];
   activeCfg.scenarios.push({ id, name: String(name), weight: Number(weight) || 1, overrides: {} });
   activeCfg.activeScenarioId = id;
 
@@ -271,7 +272,7 @@ export function setOverride(scenarioId: string, variableId: string, value: any):
   if (!activeCfg) return { ok: false, reason: 'Active configuration not found.' };
   ensureScenarioContainer(activeCfg);
 
-  const scn = findScenario(activeCfg, scenarioId || activeCfg.activeScenarioId);
+  const scn = findScenario(activeCfg, scenarioId || activeCfg.activeScenarioId || 'base');
   if (!scn) return { ok: false, reason: `Scenario not found: ${scenarioId}` };
 
   if (!isPlainObject(scn.overrides)) scn.overrides = {};
@@ -297,7 +298,7 @@ export function clearOverride(scenarioId: string, variableId: string): ScenarioR
   if (!activeCfg) return { ok: false, reason: 'Active configuration not found.' };
   ensureScenarioContainer(activeCfg);
 
-  const scn = findScenario(activeCfg, scenarioId || activeCfg.activeScenarioId);
+  const scn = findScenario(activeCfg, scenarioId || activeCfg.activeScenarioId || 'base');
   if (!scn) return { ok: false, reason: `Scenario not found: ${scenarioId}` };
 
   if (isPlainObject(scn.overrides)) {
