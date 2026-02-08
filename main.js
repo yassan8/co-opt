@@ -12,7 +12,7 @@
 // =============================================================================
 
 // Core modules
-import { APP_CONFIG, initializeReferences, setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration, getCamera, getControls } from './core/app-config.js';
+import { APP_CONFIG, initializeReferences, setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration, getCamera, getControls } from './core/app-config.ts';
 import { initializeThreeJS, initializeLighting, renderScene, animate } from './core/scene-setup.js';
 
 // Table data modules

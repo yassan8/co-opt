@@ -11,8 +11,29 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "strict": true
+    
+    // TypeScript migration settings - 段階的移行のため緩和
+    "allowJs": true,
+    "checkJs": false,
+    "strict": false,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true
   },
-  "include": ["src"],
+  "include": [
+    "src",
+    "types",
+    "**/*.js",
+    "**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "public",
+    "*.config.ts",
+    "vite.config.ts",
+    "tsconfig.node.json"
+  ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
