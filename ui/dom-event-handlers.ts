@@ -4087,6 +4087,61 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     paramRow.appendChild(scopeSel);
                     paramRow.appendChild(innerRow);
                     panel.appendChild(paramRow);
+                    
+                    // If this is a material parameter and has a glass name, show nd/vd below
+                    const isMaterialParam = key === 'material' || key === 'material1' || key === 'material2' || key === 'material3';
+                    if (isMaterialParam && value && typeof value === 'string' && value.trim() !== '' && value.trim().toUpperCase() !== 'AIR') {
+                        try {
+                            const glassData = getGlassDataWithSellmeier(String(value).trim());
+                            if (glassData && glassData.nd !== undefined && glassData.vd !== undefined) {
+                                // Create read-only display for nd
+                                const ndRow = document.createElement('div');
+                                ndRow.style.display = 'flex';
+                                ndRow.style.alignItems = 'center';
+                                ndRow.style.gap = '6px';
+                                ndRow.style.marginBottom = '4px';
+                                ndRow.style.marginLeft = '132px'; // Indent to align with parameter value
+                                ndRow.style.fontSize = '11px';
+                                ndRow.style.color = isDarkMode ? '#9ca3af' : '#6b7280';
+                                
+                                const ndLabel = document.createElement('span');
+                                ndLabel.textContent = '↳ nd:';
+                                ndLabel.style.width = '60px';
+                                
+                                const ndValue = document.createElement('span');
+                                ndValue.textContent = glassData.nd.toFixed(5);
+                                ndValue.style.fontFamily = 'monospace';
+                                
+                                ndRow.appendChild(ndLabel);
+                                ndRow.appendChild(ndValue);
+                                panel.appendChild(ndRow);
+                                
+                                // Create read-only display for vd (abbe)
+                                const vdRow = document.createElement('div');
+                                vdRow.style.display = 'flex';
+                                vdRow.style.alignItems = 'center';
+                                vdRow.style.gap = '6px';
+                                vdRow.style.marginBottom = '6px';
+                                vdRow.style.marginLeft = '132px'; // Indent to align with parameter value
+                                vdRow.style.fontSize = '11px';
+                                vdRow.style.color = isDarkMode ? '#9ca3af' : '#6b7280';
+                                
+                                const vdLabel = document.createElement('span');
+                                vdLabel.textContent = '↳ vd:';
+                                vdLabel.style.width = '60px';
+                                
+                                const vdValue = document.createElement('span');
+                                vdValue.textContent = glassData.vd.toFixed(2);
+                                vdValue.style.fontFamily = 'monospace';
+                                
+                                vdRow.appendChild(vdLabel);
+                                vdRow.appendChild(vdValue);
+                                panel.appendChild(vdRow);
+                            }
+                        } catch (err) {
+                            // Glass not found or error - silently ignore
+                        }
+                    }
                 }
             }
 
