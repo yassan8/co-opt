@@ -139,37 +139,7 @@
   <div id="react-root"></div>
   
   <!-- main.jsを最初に読み込んで関数を定義 -->
-  <!--
-    IMPORTANT:
-    When multiple System Configurations exist, each table reads from shared localStorage keys
-    (e.g. OpticalSystemTableData). On refresh, if those shared keys still contain a different
-    config's data, the UI can appear to "switch" and auto-save may overwrite the active config.
-
-    To prevent this, expand the ACTIVE configuration into the shared keys BEFORE main.js
-    imports table modules.
-
-    We only do this when the configuration system has already been initialized (systemConfigurations exists),
-    to avoid wiping legacy single-config data before the migration runs.
-  -->
-  <script type="module">
-    try {
-      const systemConfigurationsJson = localStorage.getItem('systemConfigurations');
-      if (systemConfigurationsJson) {
-        try {
-          const parsed = JSON.parse(systemConfigurationsJson);
-          if (parsed && Array.isArray(parsed.configurations) && parsed.configurations.length > 0) {
-            const { loadActiveConfigurationToTables } = await import('./data/table-configuration.ts');
-            loadActiveConfigurationToTables();
-
-          }
-        } catch (e) {
-          console.warn('⚠️ [Startup] Failed to parse systemConfigurations; skipping pre-load:', e);
-        }
-      }
-    } catch (e) {
-      console.warn('⚠️ [Startup] Failed to pre-load active configuration:', e);
-    }
-  </script>
+  <script type="module" src="main.js"></script>
   
   <!-- Undo/Redo System -->
   <script src="core/undo-history.ts" type="module"></script>
@@ -183,7 +153,34 @@
     }
   </script>
   
-  <script type="module" src="main.js"></script>
+  <!--
+    IMPORTANT:
+    When multiple System Configurations exist, each table reads from shared localStorage keys
+    (e.g. OpticalSystemTableData). On refresh, if those shared keys still contain a different
+    config's data, the UI can appear to "switch" and auto-save may overwrite the active config.
+
+    To prevent this, expand the ACTIVE configuration into the shared keys BEFORE table modules initialize.
+    We only do this when the configuration system has already been initialized (systemConfigurations exists),
+    to avoid wiping legacy single-config data before the migration runs.
+  -->
+  <script type="module">
+    try {
+      const systemConfigurationsJson = localStorage.getItem('systemConfigurations');
+      if (systemConfigurationsJson) {
+        try {
+          const parsed = JSON.parse(systemConfigurationsJson);
+          if (parsed && Array.isArray(parsed.configurations) && parsed.configurations.length > 0) {
+            const { loadActiveConfigurationToTables } = await import('./data/table-configuration.ts');
+            loadActiveConfigurationToTables();
+          }
+        } catch (e) {
+          console.warn('⚠️ [Startup] Failed to parse systemConfigurations; skipping pre-load:', e);
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ [Startup] Failed to pre-load active configuration:', e);
+    }
+  </script>
   
   <!-- Configuration System -->
   <script type="module" src="data/table-configuration.ts"></script>

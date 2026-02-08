@@ -133,7 +133,7 @@
       }
     }
   </script>
-  <script type="module" crossorigin src="/co-opt/assets/index-CrHlzWhP.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/index-C6nkYLd9.js"></script>
   <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-DY4pkkkN.js">
   <link rel="stylesheet" crossorigin href="/co-opt/assets/index-CZf93wEg.css">
 </head>
@@ -142,18 +142,6 @@
   <div id="react-root"></div>
   
   <!-- main.jsを最初に読み込んで関数を定義 -->
-  <!--
-    IMPORTANT:
-    When multiple System Configurations exist, each table reads from shared localStorage keys
-    (e.g. OpticalSystemTableData). On refresh, if those shared keys still contain a different
-    config's data, the UI can appear to "switch" and auto-save may overwrite the active config.
-
-    To prevent this, expand the ACTIVE configuration into the shared keys BEFORE main.js
-    imports table modules.
-
-    We only do this when the configuration system has already been initialized (systemConfigurations exists),
-    to avoid wiping legacy single-config data before the migration runs.
-  -->
   
   <!-- Undo/Redo System -->
   <script>
@@ -166,6 +154,16 @@
     }
   </script>
   
+  <!--
+    IMPORTANT:
+    When multiple System Configurations exist, each table reads from shared localStorage keys
+    (e.g. OpticalSystemTableData). On refresh, if those shared keys still contain a different
+    config's data, the UI can appear to "switch" and auto-save may overwrite the active config.
+
+    To prevent this, expand the ACTIVE configuration into the shared keys BEFORE table modules initialize.
+    We only do this when the configuration system has already been initialized (systemConfigurations exists),
+    to avoid wiping legacy single-config data before the migration runs.
+  -->
   
   <!-- Configuration System -->
   
