@@ -17,7 +17,17 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        main: "index.html"
+        app: "index.html",
+        main: "main.js"
+      },
+      output: {
+        entryFileNames: (chunkInfo) => {
+          // Keep main.js with a stable name for script tags
+          if (chunkInfo.name === 'main') {
+            return 'assets/main-[hash].js';
+          }
+          return 'assets/[name]-[hash].js';
+        }
       }
     }
   }
