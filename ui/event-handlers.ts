@@ -2351,6 +2351,18 @@ export function setupAnalysisWindows() {
                                 return;
                         }
 
+                        // Ensure parent window selects are populated before opening popup
+                        try {
+                            if (typeof (window as any).updateSpotDiagramConfigSelect === 'function') {
+                                (window as any).updateSpotDiagramConfigSelect();
+                            }
+                            if (typeof (window as any).updateSurfaceNumberSelect === 'function') {
+                                (window as any).updateSurfaceNumberSelect();
+                            }
+                        } catch (e) {
+                            console.warn('Failed to update spot diagram selects:', e);
+                        }
+
                         const popup = window.open('', 'Spot Diagram', 'width=800,height=600');
                         (window as any).__spotDiagramPopup = popup;
 
