@@ -130,11 +130,11 @@ function applyOverridesToBlocks(blocks: Block[], overrides: Record<string, any>)
     const parsed = parseOverrideKey(varId);
     if (!parsed) continue;
     const blk = byId.get(String(parsed.blockId));
-    if (!blk || !isPlainObject(blk.parameters)) continue;
+    if (!blk || !isPlainObject((blk as any).parameters)) continue;
 
     // Prefer numeric when possible.
     const n = Number(rawVal);
-    blk.parameters[parsed.key] = Number.isFinite(n) ? n : rawVal;
+    (blk as any).parameters[parsed.key] = Number.isFinite(n) ? n : rawVal;
   }
 
   return cloned;

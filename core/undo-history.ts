@@ -139,7 +139,7 @@ export class SetBlockParameterCommand extends Command {
   }
   
   findBlock(cfg: Configuration): Block {
-    return cfg.blocks.find((b: Block) => b.blockId === this.blockId)!;
+    return cfg.blocks?.find((b: Block) => b.blockId === this.blockId)!;
   }
   
   setNestedValue(obj: any, path: string, value: any): void {
@@ -174,7 +174,7 @@ export class SetBlockParameterCommand extends Command {
     
     // Debug: Check value before save
     const cfgInSysConfig = sysConfig.configurations.find((c: Configuration) => c.name === cfg.name);
-    const blockInSysConfig = cfgInSysConfig?.blocks.find((b: Block) => b.blockId === this.blockId);
+    const blockInSysConfig = cfgInSysConfig?.blocks?.find((b: Block) => b.blockId === this.blockId);
     console.log('[Undo] Before save, value in sysConfig:', this.getNestedValue(blockInSysConfig, this.parameterPath));
     
     // Save to localStorage (sysConfig already contains the changes made to cfg)
@@ -227,18 +227,18 @@ export class SetSurfaceFieldCommand extends Command {
   
   execute(): void {
     const cfg = this.getConfig();
-    const surface = cfg.opticalSystemRows.find((s: any) => s.id === this.surfaceId);
+    const surface = cfg.opticalSystemRows?.find((s: any) => s.id === this.surfaceId);
     if (surface) {
-      surface[this.field] = this.newValue;
+      (surface as any)[this.field] = this.newValue;
       this.saveAndRefresh();
     }
   }
   
   undo(): void {
     const cfg = this.getConfig();
-    const surface = cfg.opticalSystemRows.find((s: any) => s.id === this.surfaceId);
+    const surface = cfg.opticalSystemRows?.find((s: any) => s.id === this.surfaceId);
     if (surface) {
-      surface[this.field] = this.oldValue;
+      (surface as any)[this.field] = this.oldValue;
       this.saveAndRefresh();
     }
   }

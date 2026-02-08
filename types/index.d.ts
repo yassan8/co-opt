@@ -182,16 +182,20 @@ export interface ObjectRow {
 // ========================================
 
 export interface Configuration {
+  id?: string;
   name: string;
   version?: string;
   blocks?: Block[];
   opticalSystemRows?: OpticalSystemRow[];
+  opticalSystem?: OpticalSystemRow[];
   sourceRows?: SourceRow[];
   objectRows?: ObjectRow[];
   pupilMode?: 'EPD' | 'Fno' | 'NA';
   pupilValue?: number;
   stopSurfaceNumber?: number;
   semidiaOverrides?: { [key: number]: number };
+  scenarios?: Array<{ id: string; name: string; weight: number; overrides: any }>;
+  activeScenarioId?: string;
 }
 
 // ========================================
