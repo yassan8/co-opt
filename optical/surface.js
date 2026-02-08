@@ -114,17 +114,148 @@ function cloneAttributeArrayToScope(attribute, globalScope) {
   if (!attribute || !attribute.array || !globalScope) {
     return;
   }
-  const ctor = attribute.array.constructor;
+  const array = attribute.array;
+  if (Array.isArray(array)) {
+    const Float32Ctor = globalScope.Float32Array || Float32Array;
+    attribute.array = new Float32Ctor(array);
+    attribute.needsUpdate = true;
+    return;
+  }
+  if (!ArrayBuffer.isView(array)) {
+    return;
+  }
+  const ctor = array.constructor;
   const ctorName = ctor && ctor.name;
-  if (!ctorName || typeof globalScope[ctorName] !== 'function') {
+  const allowed = new Set([
+    'Int8Array',
+    'Uint8Array',
+    'Uint8ClampedArray',
+    'Int16Array',
+    'Uint16Array',
+    'Int32Array',
+    'Uint32Array',
+    'Float32Array'
+  ]);
+  if (!ctorName) {
+    return;
+  }
+  if (!allowed.has(ctorName)) {
+    const Float32Ctor = globalScope.Float32Array || Float32Array;
+    attribute.array = new Float32Ctor(array);
+    attribute.needsUpdate = true;
+    return;
+  }
+  if (typeof globalScope[ctorName] !== 'function') {
     return;
   }
   const TargetCtor = globalScope[ctorName];
-  if (attribute.array instanceof TargetCtor) {
+  if (array instanceof TargetCtor) {
     return;
   }
-  attribute.array = new TargetCtor(attribute.array);
+  attribute.array = new TargetCtor(array);
   attribute.needsUpdate = true;
+}
+
+function normalizeAttributeArray(attribute, globalScope, options = {}) {
+  if (!attribute || !globalScope) {
+    return;
+  }
+  const isIndex = options.isIndex === true;
+  const targetArray = attribute.isInterleavedBufferAttribute ? attribute.data?.array : attribute.array;
+  if (!targetArray) {
+    return;
+  }
+  if (Array.isArray(targetArray)) {
+    if (isIndex) {
+      let maxIndex = 0;
+      for (let i = 0; i < targetArray.length; i++) {
+        const value = targetArray[i];
+        if (Number.isFinite(value) && value > maxIndex) {
+          maxIndex = value;
+        }
+      }
+      const IndexCtor = maxIndex <= 65535 ?
+        (globalScope.Uint16Array || Uint16Array) :
+        (globalScope.Uint32Array || Uint32Array);
+      const converted = new IndexCtor(targetArray);
+      if (attribute.isInterleavedBufferAttribute && attribute.data) {
+        attribute.data.array = converted;
+        attribute.data.needsUpdate = true;
+      } else {
+        attribute.array = converted;
+        attribute.needsUpdate = true;
+      }
+      return;
+    }
+    const Float32Ctor = globalScope.Float32Array || Float32Array;
+    const converted = new Float32Ctor(targetArray);
+    if (attribute.isInterleavedBufferAttribute && attribute.data) {
+      attribute.data.array = converted;
+      attribute.data.needsUpdate = true;
+    } else {
+      attribute.array = converted;
+      attribute.needsUpdate = true;
+    }
+    return;
+  }
+  if (!ArrayBuffer.isView(targetArray)) {
+    return;
+  }
+  const ctorName = targetArray.constructor?.name;
+  if (!ctorName) {
+    return;
+  }
+  if (isIndex) {
+    if (ctorName !== 'Uint16Array' && ctorName !== 'Uint32Array') {
+      const Float32Ctor = globalScope.Float32Array || Float32Array;
+      const converted = new Float32Ctor(targetArray);
+      if (attribute.isInterleavedBufferAttribute && attribute.data) {
+        attribute.data.array = converted;
+        attribute.data.needsUpdate = true;
+      } else {
+        attribute.array = converted;
+        attribute.needsUpdate = true;
+      }
+      return;
+    }
+  }
+  const allowed = new Set([
+    'Int8Array',
+    'Uint8Array',
+    'Uint8ClampedArray',
+    'Int16Array',
+    'Uint16Array',
+    'Int32Array',
+    'Uint32Array',
+    'Float32Array'
+  ]);
+  if (!allowed.has(ctorName)) {
+    const Float32Ctor = globalScope.Float32Array || Float32Array;
+    const converted = new Float32Ctor(targetArray);
+    if (attribute.isInterleavedBufferAttribute && attribute.data) {
+      attribute.data.array = converted;
+      attribute.data.needsUpdate = true;
+    } else {
+      attribute.array = converted;
+      attribute.needsUpdate = true;
+    }
+    return;
+  }
+  const TargetCtor = globalScope[ctorName];
+  if (typeof TargetCtor !== 'function') {
+    return;
+  }
+  if (targetArray instanceof TargetCtor) {
+    return;
+  }
+  const converted = new TargetCtor(targetArray);
+  if (attribute.isInterleavedBufferAttribute && attribute.data) {
+    attribute.data.array = converted;
+    attribute.data.needsUpdate = true;
+  } else {
+    attribute.array = converted;
+    attribute.needsUpdate = true;
+  }
 }
 
 export function harmonizeSceneGeometry(scene) {
@@ -143,12 +274,82 @@ export function harmonizeSceneGeometry(scene) {
     }
     const attributes = geometry.attributes || {};
     Object.keys(attributes).forEach((key) => {
-      cloneAttributeArrayToScope(attributes[key], globalScope);
+      normalizeAttributeArray(attributes[key], globalScope, { isIndex: false });
+    });
+    const morphAttributes = geometry.morphAttributes || {};
+    Object.keys(morphAttributes).forEach((key) => {
+      const morphList = morphAttributes[key] || [];
+      morphList.forEach((attr) => {
+        normalizeAttributeArray(attr, globalScope, { isIndex: false });
+      });
     });
     if (geometry.index) {
-      cloneAttributeArrayToScope(geometry.index, globalScope);
+      normalizeAttributeArray(geometry.index, globalScope, { isIndex: true });
     }
   });
+}
+
+export function validateSceneGeometry(scene, label = '') {
+  if (!scene) {
+    return true;
+  }
+  const issues = [];
+  const allowedAttributeTypes = new Set([
+    'Int8Array',
+    'Uint8Array',
+    'Uint8ClampedArray',
+    'Int16Array',
+    'Uint16Array',
+    'Int32Array',
+    'Uint32Array',
+    'Float32Array'
+  ]);
+  scene.traverse((object) => {
+    const geometry = object.geometry;
+    if (!geometry) {
+      return;
+    }
+    const attributes = geometry.attributes || {};
+    Object.keys(attributes).forEach((key) => {
+      const attr = attributes[key];
+      const array = attr?.array;
+      if (!array) {
+        issues.push({ type: 'attribute-missing-array', key, object: object.name || object.uuid });
+        return;
+      }
+      if (Array.isArray(array)) {
+        issues.push({ type: 'attribute-plain-array', key, object: object.name || object.uuid });
+        return;
+      }
+      const ctorName = array.constructor?.name;
+      if (!allowedAttributeTypes.has(ctorName)) {
+        issues.push({ type: 'attribute-unsupported-type', key, ctorName, object: object.name || object.uuid });
+      }
+      if (!Number.isInteger(attr.itemSize) || attr.itemSize <= 0) {
+        issues.push({ type: 'attribute-invalid-itemSize', key, itemSize: attr.itemSize, object: object.name || object.uuid });
+      }
+    });
+    if (geometry.index) {
+      const indexArray = geometry.index.array;
+      if (Array.isArray(indexArray)) {
+        issues.push({ type: 'index-plain-array', object: object.name || object.uuid });
+      } else {
+        const ctorName = indexArray?.constructor?.name;
+        if (ctorName && ctorName !== 'Uint16Array' && ctorName !== 'Uint32Array') {
+          issues.push({ type: 'index-unsupported-type', ctorName, object: object.name || object.uuid });
+        }
+      }
+    }
+  });
+  if (issues.length > 0) {
+    console.error('❌ Geometry validation issues', { label, count: issues.length, issues: issues.slice(0, 20) });
+    issues.slice(0, 20).forEach((issue, idx) => {
+      console.error(`❌ [${label}] issue ${idx + 1}`, issue);
+    });
+    return false;
+  }
+  console.log('✅ Geometry validation passed', { label });
+  return true;
 }
 
 export function asphericSurfaceZ(r, params, mode = "even") {
@@ -436,15 +637,36 @@ export function drawLensSurface(scene, params, mode = "even", segments = 100, zO
     }
   }
 
+  // Validate indices array
+  const hasInvalidIndex = indices.some(idx => !Number.isFinite(idx) || idx < 0);
+  if (hasInvalidIndex) {
+    console.error('❌ Invalid indices detected in drawLensSurface');
+    return;
+  }
+
+  // Debug: Log array types and sample values
+  console.log('🔍 indices type:', indices.constructor.name, 'length:', indices.length, 'sample:', indices.slice(0, 6));
+  console.log('🔍 positions type:', positions.constructor.name, 'length:', positions.length, 'sample:', positions.slice(0, 9));
+
   const geometry = new THREE_CTX.BufferGeometry();
-  geometry.setAttribute("position", new THREE_CTX.Float32BufferAttribute(positions, 3));
-  // WebGL1 fallback: prefer Uint16 when vertex count fits, otherwise rely on Uint32 w/ extension
+  const PositionArrayCtor = globalScope?.Float32Array || Float32Array;
+  geometry.setAttribute("position", new THREE_CTX.BufferAttribute(new PositionArrayCtor(positions), 3));
+  
+  // Create TypedArray from the correct global scope
   const vertexCount = positions.length / 3;
-  const Uint16Ctor = globalScope?.Uint16Array || Uint16Array;
-  const Uint32Ctor = globalScope?.Uint32Array || Uint32Array;
-  const IndexArrayType = vertexCount <= 65535 ? Uint16Ctor : Uint32Ctor;
-  const indexArray = new IndexArrayType(indices);
-  geometry.setIndex(new THREE_CTX.BufferAttribute(indexArray, 1));
+  const IndexArrayCtor = vertexCount <= 65535 ? 
+    (globalScope.Uint16Array || Uint16Array) : 
+    (globalScope.Uint32Array || Uint32Array);
+  const indexArray = new IndexArrayCtor(indices);
+  
+  // Try different approaches to set index
+  try {
+    geometry.setIndex(new THREE_CTX.BufferAttribute(indexArray, 1));
+    console.log('✅ setIndex succeeded');
+  } catch (e) {
+    console.error('❌ setIndex failed:', e.message);
+    return;
+  }
   // geometry.computeVertexNormals(); // ← この行をコメントアウトまたは削除
 
   const material = new THREE_CTX.MeshBasicMaterial({
@@ -652,16 +874,36 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
     }
   }
 
+  // Validate indices array
+  const hasInvalidIndex = indices.some(idx => !Number.isFinite(idx) || idx < 0);
+  if (hasInvalidIndex) {
+    console.error('❌ Invalid indices detected in drawLensSurfaceWithOrigin');
+    return;
+  }
+
+  // Debug: Log array types and sample values
+  console.log('🔍 [WithOrigin] indices type:', indices.constructor.name, 'length:', indices.length, 'sample:', indices.slice(0, 6));
+  console.log('🔍 [WithOrigin] positions type:', positions.constructor.name, 'length:', positions.length, 'sample:', positions.slice(0, 9));
+
   const geometry = new THREE_CTX.BufferGeometry();
-  geometry.setAttribute("position", new THREE_CTX.Float32BufferAttribute(positions, 3));
+  const PositionArrayCtor = globalScope?.Float32Array || Float32Array;
+  geometry.setAttribute("position", new THREE_CTX.BufferAttribute(new PositionArrayCtor(positions), 3));
   
-  // SafariなどWebGL1コンテキストではUint32インデックスが使えないため頂点数で型を切り替える
+  // Create TypedArray from the correct global scope
   const vertexCount = positions.length / 3;
-  const Uint16Ctor = globalScope?.Uint16Array || Uint16Array;
-  const Uint32Ctor = globalScope?.Uint32Array || Uint32Array;
-  const IndexArrayType = vertexCount <= 65535 ? Uint16Ctor : Uint32Ctor;
-  const indexArray = new IndexArrayType(indices);
-  geometry.setIndex(new THREE_CTX.BufferAttribute(indexArray, 1));
+  const IndexArrayCtor = vertexCount <= 65535 ? 
+    (globalScope.Uint16Array || Uint16Array) : 
+    (globalScope.Uint32Array || Uint32Array);
+  const indexArray = new IndexArrayCtor(indices);
+  
+  // Try different approaches to set index
+  try {
+    geometry.setIndex(new THREE_CTX.BufferAttribute(indexArray, 1));
+    console.log('✅ [WithOrigin] setIndex succeeded');
+  } catch (e) {
+    console.error('❌ [WithOrigin] setIndex failed:', e.message);
+    return;
+  }
 
   const material = new THREE_CTX.MeshBasicMaterial({
     color: color,
@@ -792,8 +1034,12 @@ export function drawToricSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, 
   
   // Create geometry with computed vertices and indices
   const geometry = new THREE_CTX.BufferGeometry();
-  geometry.setAttribute('position', new THREE_CTX.Float32BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
+  const PositionArrayCtor = globalScope?.Float32Array || Float32Array;
+  geometry.setAttribute('position', new THREE_CTX.BufferAttribute(new PositionArrayCtor(positions), 3));
+  const indexArrayCtor = (positions.length / 3) <= 65535
+    ? (globalScope?.Uint16Array || Uint16Array)
+    : (globalScope?.Uint32Array || Uint32Array);
+  geometry.setIndex(new THREE_CTX.BufferAttribute(new indexArrayCtor(indices), 1));
   geometry.computeVertexNormals(); // Smooth shading
   
   // Create material with provided color and opacity
@@ -814,7 +1060,7 @@ export function drawToricSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, 
 
 // Sag計算を含むリング描画関数
 export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segments = 100, color = 0x000000, origin = {x: 0, y: 0, z: 0}, rotationMatrix = null, surf = null) {
-  const { THREE: THREE_CTX } = getSceneThreeContext(scene);
+  const { THREE: THREE_CTX, globalScope } = getSceneThreeContext(scene);
   
   // Coord Trans / Coord Break面のチェック（描画を抑制）
   if (surf) {
@@ -940,7 +1186,8 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
   }
 
   const geometry = new THREE_CTX.BufferGeometry();
-  geometry.setAttribute('position', new THREE_CTX.Float32BufferAttribute(positions, 3));
+  const PositionArrayCtor = globalScope?.Float32Array || Float32Array;
+  geometry.setAttribute('position', new THREE_CTX.BufferAttribute(new PositionArrayCtor(positions), 3));
 
   const material = new THREE_CTX.LineBasicMaterial({ 
     color: color,
@@ -978,7 +1225,7 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
 
 // Sag計算を含む矩形アパーチャ描画関数（サグ追従）
 export function drawRectApertureWithOriginAndSurface(scene, width = 20, height = 20, segmentsPerEdge = 128, color = 0x000000, origin = {x: 0, y: 0, z: 0}, rotationMatrix = null, surf = null) {
-  const { THREE: THREE_CTX } = getSceneThreeContext(scene);
+  const { THREE: THREE_CTX, globalScope } = getSceneThreeContext(scene);
   
   // Coord Trans / Coord Break面のチェック（描画を抑制）
   if (surf) {
@@ -1112,7 +1359,8 @@ export function drawRectApertureWithOriginAndSurface(scene, width = 20, height =
   }
 
   const geometry = new THREE_CTX.BufferGeometry();
-  geometry.setAttribute('position', new THREE_CTX.Float32BufferAttribute(positions, 3));
+  const PositionArrayCtor = globalScope?.Float32Array || Float32Array;
+  geometry.setAttribute('position', new THREE_CTX.BufferAttribute(new PositionArrayCtor(positions), 3));
 
   const material = new THREE_CTX.LineBasicMaterial({
     color: color,

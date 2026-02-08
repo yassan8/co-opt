@@ -954,7 +954,7 @@ export async function showSpotDiagram(options = {}) {
             console.log('📊 Using default object data:', defaultObjectRows);
             
             // Import functions and use default object data
-            const { generateSpotDiagramAsync, drawSpotDiagram } = await import('../eva-spot-diagram.js');
+            const { generateSpotDiagramAsync, drawSpotDiagram } = await import('../evaluation/spot-diagram.js');
             
             const spotDiagramData = await generateSpotDiagramAsync(
                 opticalSystemRows,

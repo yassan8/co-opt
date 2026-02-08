@@ -6,7 +6,7 @@ import { clearAllOpticalElements } from '../optical/system-renderer.js';
 import { setRayEmissionPattern, setRayColorMode } from '../optical/ray-renderer.js';
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.js';
 import { calculateOpticalSystemOffset } from '../utils/math.js';
-import { drawLensCrossSectionWithSurfaceOrigins, harmonizeSceneGeometry } from '../optical/surface.js';
+import { drawLensCrossSectionWithSurfaceOrigins, harmonizeSceneGeometry, validateSceneGeometry } from '../optical/surface.js';
 
 const __COOPT_FORCE_INFINITE_PUPIL_MODE_KEY = 'coopt.forceInfinitePupilMode';
 
@@ -230,8 +230,15 @@ const ensurePopupMessageHandler = () => {
 
                 if (!popupScene) {
                     window.popup3DWindow.postMessage({ status: 'Error: Scene not ready' }, '*');
+                    console.error('❌ Popup scene is not available');
                     return;
                 }
+                
+                console.log('✅ Popup scene reference obtained:', {
+                    sceneExists: !!popupScene,
+                    sceneChildrenBefore: popupScene.children.length,
+                    sceneUUID: popupScene.uuid
+                });
 
                 
                 // 完全なキャンバスクリア
@@ -240,7 +247,12 @@ const ensurePopupMessageHandler = () => {
                 }
                 if (popupScene) {
                     const allChildren = [...popupScene.children];
+                    const lightsToKeep = [];
                     allChildren.forEach(child => {
+                        if (child && (child.isLight || String(child.type || '').includes('Light'))) {
+                            lightsToKeep.push(child);
+                            return;
+                        }
                         popupScene.remove(child);
                         if (child.geometry) child.geometry.dispose();
                         if (child.material) {
@@ -251,8 +263,31 @@ const ensurePopupMessageHandler = () => {
                             }
                         }
                     });
+                    // Re-attach preserved lights if they were detached.
+                    lightsToKeep.forEach(light => {
+                        if (light && light.parent !== popupScene) {
+                            try { popupScene.add(light); } catch (_) {}
+                        }
+                    });
+                    // Ensure at least one light exists after clearing.
+                    const hasLight = popupScene.children.some(obj => obj && (obj.isLight || String(obj.type || '').includes('Light')));
+                    if (!hasLight) {
+                        try {
+                            const threeContext = popupScene?.userData?.renderContext?.three || window.THREE;
+                            if (threeContext?.AmbientLight) {
+                                popupScene.add(new threeContext.AmbientLight(0xffffff, 0.6));
+                            }
+                            if (threeContext?.DirectionalLight) {
+                                const dl = new threeContext.DirectionalLight(0xffffff, 0.4);
+                                dl.position.set(10, 10, 10);
+                                popupScene.add(dl);
+                            }
+                        } catch (_) {}
+                    }
                 }
                 clearAllOpticalElements(popupScene);
+                console.log('✅ Scene cleared, children count:', popupScene.children.length);
+                
                 drawOpticalSystemSurfaces({
                     opticalSystemData: opticalSystemRows,
                     scene: popupScene,
@@ -260,7 +295,35 @@ const ensurePopupMessageHandler = () => {
                     showSurfaceOrigins: false,
                     crossSectionOnly: false
                 });
+                console.log('✅ After drawOpticalSystemSurfaces, children count:', popupScene.children.length);
+                
                 harmonizeSceneGeometry(popupScene);
+                console.log('✅ After harmonizeSceneGeometry, children count:', popupScene.children.length);
+                console.log('🔎 Running geometry validation (after-harmonize)');
+                validateSceneGeometry(popupScene, 'after-harmonize');
+                console.log('🎬 Forcing popup renderer update...');
+                
+                // Force render in popup window
+                if (window.popup3DWindow && window.popup3DWindow.renderer && window.popup3DWindow.camera) {
+                    try {
+                        if (typeof window.popup3DWindow.__cooptNormalizeSceneGeometry === 'function') {
+                            window.popup3DWindow.__cooptNormalizeSceneGeometry();
+                        }
+                        window.popup3DWindow.renderer.render(popupScene, window.popup3DWindow.camera);
+                        console.log('✅ Manual render executed in popup');
+                    } catch (error) {
+                        console.error('❌ Failed to manually render:', error);
+                        validateSceneGeometry(popupScene, 'render-failed');
+                        console.log('🔎 popup3DWindow state', {
+                            hasPopup: !!window.popup3DWindow,
+                            hasFindBad: typeof window.popup3DWindow?.__cooptFindBadGeometry === 'function'
+                        });
+                        if (window.popup3DWindow && typeof window.popup3DWindow.__cooptFindBadGeometry === 'function') {
+                            const bad = window.popup3DWindow.__cooptFindBadGeometry();
+                            console.log('🔎 __cooptFindBadGeometry result', bad);
+                        }
+                    }
+                }
 
                 if (!popupWindow) {
                 } else if (viewAxis === 'XZ' && typeof window.setCameraForXZCrossSection === 'function') {
@@ -1215,8 +1278,23 @@ export function setupOpticalSystemChangeListeners(scene) {
     const open3DWindowBtn = document.getElementById('open-3d-window-btn');
     if (open3DWindowBtn) {
         open3DWindowBtn.addEventListener('click', () => {
+            // Check if popup already exists and is open
+            if (window.popup3DWindow && !window.popup3DWindow.closed) {
+                window.popup3DWindow.focus();
+                return;
+            }
+            
             // Create popup window
             const popup = window.open('', '3D Optical System', 'width=800,height=600');
+            
+            // Check if popup already has content (was opened before and not closed)
+            if (popup.document.body && popup.document.body.children.length > 0) {
+                console.log('✅ Reusing existing popup window');
+                popup.focus();
+                // Update the reference
+                window.popup3DWindow = popup;
+                return;
+            }
             
             // Write HTML structure with full Three.js setup
             popup.document.write(`
@@ -1450,20 +1528,45 @@ export function setupOpticalSystemChangeListeners(scene) {
             </div>
         </div>
     </div>
-    <script src="https://unpkg.com/three@0.138.0/build/three.min.js"></script>
-    <script src="https://unpkg.com/three@0.138.0/examples/js/controls/OrbitControls.js"></script>
     <script>
         console.log('🚀 Popup window script starting...');
-        console.log('THREE available:', typeof THREE !== 'undefined');
         
-        // Wait for THREE to be available
+        // Get THREE from parent window to ensure version compatibility
+        let THREE, OrbitControls;
+        
         function initPopup() {
-            if (typeof THREE === 'undefined') {
+            try {
+                if (window.opener && window.opener.THREE) {
+                    THREE = window.opener.THREE;
+                    console.log('✅ Using THREE from parent window');
+                } else if (typeof window.THREE !== 'undefined') {
+                    THREE = window.THREE;
+                    console.log('⚠️ Using fallback THREE from CDN');
+                } else {
+                    console.log('⏳ Waiting for THREE...');
+                    setTimeout(initPopup, 100);
+                    return;
+                }
+                
+                // Try to get OrbitControls from parent
+                if (window.opener && window.opener.OrbitControls) {
+                    OrbitControls = window.opener.OrbitControls;
+                } else if (window.opener && window.opener.THREE && window.opener.THREE.OrbitControls) {
+                    OrbitControls = window.opener.THREE.OrbitControls;
+                } else if (typeof THREE.OrbitControls !== 'undefined') {
+                    OrbitControls = THREE.OrbitControls;
+                } else {
+                    console.warn('OrbitControls not found, using basic camera');
+                }
+                
+                setupScene();
+            } catch (error) {
+                console.error('Failed to initialize popup:', error);
                 setTimeout(initPopup, 100);
-                return;
             }
-            
-            
+        }
+        
+        function setupScene() {
             // Initialize Three.js scene
             const container = document.getElementById('threejs-container');
             const rect = container.getBoundingClientRect();
@@ -1475,7 +1578,7 @@ export function setupOpticalSystemChangeListeners(scene) {
             
             const scene = new THREE.Scene();
             scene.userData = scene.userData || {};
-            scene.userData.renderContext = { three: THREE, global: window };
+            scene.userData.renderContext = { three: THREE, global: (window.opener || window) };
             const camera = new THREE.OrthographicCamera(
                 -viewSize * aspect / 2,
                 viewSize * aspect / 2,
@@ -1501,29 +1604,34 @@ export function setupOpticalSystemChangeListeners(scene) {
             
             
             // Add OrbitControls
-            const controls = new THREE.OrbitControls(camera, renderer.domElement);
-            controls.enableDamping = true;
-            controls.dampingFactor = 0.05;
-            controls.enableRotate = true;
-            controls.enablePan = true;
-            controls.enableZoom = true;
-            // Don't set mouseButtons - use defaults
-
-            // Track whether the user has manually adjusted the view.
-            // If true, resizing should NOT refit/recenter the view.
-            window.__userAdjustedView = false;
-            controls.addEventListener('start', () => {
-                window.__userAdjustedView = true;
-            });
-            
-            console.log('🎮 OrbitControls initialized');
+            let controls;
+            if (OrbitControls) {
+                controls = new OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+                controls.enableRotate = true;
+                controls.enablePan = true;
+                controls.enableZoom = true;
+                
+                // Track whether the user has manually adjusted the view.
+                window.__userAdjustedView = false;
+                controls.addEventListener('start', () => {
+                    window.__userAdjustedView = true;
+                });
+                
+                console.log('🎮 OrbitControls initialized');
+            } else {
+                console.warn('⚠️ OrbitControls not available, camera controls disabled');
+            }
             
             // Set initial camera position (same as main Draw Cross: view from side, Y-Z plane)
             camera.position.set(0, 50, 100);
             camera.lookAt(0, 0, 0);
             camera.up.set(0, 1, 0);  // Y-axis is up
-            controls.target.set(0, 0, 100);  // Look at center of optical system
-            controls.update();
+            if (controls) {
+                controls.target.set(0, 0, 100);  // Look at center of optical system
+                controls.update();
+            }
             
             // Zoom is handled by OrbitControls (orthographic camera.zoom).
             
@@ -1537,7 +1645,7 @@ export function setupOpticalSystemChangeListeners(scene) {
             // Animation loop
             function animate() {
                 requestAnimationFrame(animate);
-                controls.update();
+                if (controls) controls.update();
                 renderer.render(scene, camera);
             }
             animate();
@@ -1617,7 +1725,154 @@ export function setupOpticalSystemChangeListeners(scene) {
             window.camera = camera;
             window.renderer = renderer;
             window.controls = controls;
+
+            // Normalize geometry buffers in popup realm to avoid cross-window TypedArray issues
+            window.__cooptNormalizeSceneGeometry = function __cooptNormalizeSceneGeometry() {
+                if (!window.scene) return;
+                const globalScope = window.opener || window;
+                const normalizeArray = (attr, isIndex = false) => {
+                    if (!attr) return;
+                    const targetArray = attr.isInterleavedBufferAttribute ? attr.data?.array : attr.array;
+                    if (!targetArray) return;
+                    const wrapArray = (Ctor, source) => new Ctor(source);
+                    if (Array.isArray(targetArray)) {
+                        if (isIndex) {
+                            let maxIndex = 0;
+                            for (let i = 0; i < targetArray.length; i++) {
+                                const v = targetArray[i];
+                                if (Number.isFinite(v) && v > maxIndex) maxIndex = v;
+                            }
+                            const IndexCtor = maxIndex <= 65535 ? (globalScope.Uint16Array || Uint16Array) : (globalScope.Uint32Array || Uint32Array);
+                            const converted = wrapArray(IndexCtor, targetArray);
+                            if (attr.isInterleavedBufferAttribute && attr.data) {
+                                attr.data.array = converted;
+                                attr.data.needsUpdate = true;
+                            } else {
+                                attr.array = converted;
+                                attr.needsUpdate = true;
+                            }
+                            return;
+                        }
+                        const Float32Ctor = globalScope.Float32Array || Float32Array;
+                        const converted = wrapArray(Float32Ctor, targetArray);
+                        if (attr.isInterleavedBufferAttribute && attr.data) {
+                            attr.data.array = converted;
+                            attr.data.needsUpdate = true;
+                        } else {
+                            attr.array = converted;
+                            attr.needsUpdate = true;
+                        }
+                        return;
+                    }
+                    if (!ArrayBuffer.isView(targetArray)) return;
+                    const ctorName = targetArray.constructor?.name;
+                    if (!ctorName) return;
+                    const allowed = new Set([
+                        'Int8Array','Uint8Array','Uint8ClampedArray','Int16Array','Uint16Array','Int32Array','Uint32Array','Float32Array'
+                    ]);
+                    if (!allowed.has(ctorName)) {
+                        const Float32Ctor = globalScope.Float32Array || Float32Array;
+                        const converted = wrapArray(Float32Ctor, targetArray);
+                        if (attr.isInterleavedBufferAttribute && attr.data) {
+                            attr.data.array = converted;
+                            attr.data.needsUpdate = true;
+                        } else {
+                            attr.array = converted;
+                            attr.needsUpdate = true;
+                        }
+                        return;
+                    }
+                    const TargetCtor = globalScope[ctorName];
+                    if (typeof TargetCtor !== 'function') return;
+                    if (!(targetArray instanceof TargetCtor)) {
+                        const converted = wrapArray(TargetCtor, targetArray);
+                        if (attr.isInterleavedBufferAttribute && attr.data) {
+                            attr.data.array = converted;
+                            attr.data.needsUpdate = true;
+                        } else {
+                            attr.array = converted;
+                            attr.needsUpdate = true;
+                        }
+                    }
+                };
+                window.scene.traverse((obj) => {
+                    const geometry = obj.geometry;
+                    if (!geometry) return;
+                    const attributes = geometry.attributes || {};
+                    Object.keys(attributes).forEach((key) => normalizeArray(attributes[key], false));
+                    const morphAttributes = geometry.morphAttributes || {};
+                    Object.keys(morphAttributes).forEach((key) => {
+                        const list = morphAttributes[key] || [];
+                        list.forEach((attr) => normalizeArray(attr, false));
+                    });
+                    if (geometry.index) normalizeArray(geometry.index, true);
+                });
+            };
+
+            window.__cooptFindBadGeometry = function __cooptFindBadGeometry() {
+                if (!window.scene || !window.renderer || !window.camera) return null;
+                const tempScene = new THREE.Scene();
+                const lights = [];
+                window.scene.traverse((obj) => {
+                    if (obj.isLight) {
+                        lights.push(obj.clone());
+                    }
+                });
+                lights.forEach((light) => tempScene.add(light));
+
+                let bad = null;
+                const objects = [];
+                window.scene.traverse((obj) => {
+                    if (!obj.geometry || obj.isLight) return;
+                    objects.push(obj);
+                });
+                for (let i = 0; i < objects.length; i++) {
+                    const obj = objects[i];
+                    tempScene.add(obj);
+                    try {
+                        window.renderer.render(tempScene, window.camera);
+                    } catch (e) {
+                        const attrInfo = {};
+                        const attrs = obj.geometry?.attributes || {};
+                        Object.keys(attrs).forEach((key) => {
+                            const attr = attrs[key];
+                            const array = attr?.isInterleavedBufferAttribute ? attr.data?.array : attr.array;
+                            attrInfo[key] = {
+                                itemSize: attr?.itemSize,
+                                count: attr?.count,
+                                arrayType: array?.constructor?.name || typeof array,
+                                isInterleaved: !!attr?.isInterleavedBufferAttribute
+                            };
+                        });
+                        const indexArray = obj.geometry?.index?.array;
+                        const indexInfo = {
+                            arrayType: indexArray?.constructor?.name || typeof indexArray,
+                            count: obj.geometry?.index?.count
+                        };
+                        bad = {
+                            name: obj.name,
+                            uuid: obj.uuid,
+                            type: obj.type,
+                            geometryType: obj.geometry?.type,
+                            hasIndex: !!obj.geometry?.index,
+                            attributes: attrInfo,
+                            index: indexInfo,
+                            userData: obj.userData || {}
+                        };
+                        console.error('❌ Bad geometry detected', bad, e);
+                        tempScene.remove(obj);
+                        break;
+                    }
+                    tempScene.remove(obj);
+                }
+                return bad;
+            };
             
+            // Register this popup window with parent
+            if (window.opener) {
+                window.opener.popup3DWindow = window;
+                console.log('✅ Popup registered with parent window');
+            }
             
             // Button event handlers - communicate with parent
             const drawBtn = document.getElementById('draw-btn');
@@ -1950,7 +2205,13 @@ export function setupOpticalSystemChangeListeners(scene) {
             
         });
     }
+}
 
+/**
+ * Setup analysis window buttons (System Data, Spot Diagram, Aberration analysis, etc.)
+ * Must be called after React components are mounted
+ */
+export function setupAnalysisWindows() {
         // System Data popup window button
         const openSystemDataWindowBtn = document.getElementById('open-system-data-window-btn');
         if (openSystemDataWindowBtn) {
@@ -5806,7 +6067,6 @@ export function setupOpticalSystemChangeListeners(scene) {
                 // Apply on load
                 applyDarkModeClass(loadDarkMode());
         })();
-    
 }
 
 // ============================================================================

@@ -1609,10 +1609,6 @@ export function expandBlocksToOpticalSystemRows(blocks) {
       const s2Axis = getParamOrVarValue(params, vars, 'surf2Axis');
       const s3Axis = getParamOrVarValue(params, vars, 'surf3Axis');
 
-      console.log(`[Doublet Toric] s1RadiusX=${s1RadiusX}, s1Axis=${s1Axis}, s1SurfType=${s1SurfType}`);
-      console.log(`[Doublet Toric] s2RadiusX=${s2RadiusX}, s2Axis=${s2Axis}, s2SurfType=${s2SurfType}`);
-      console.log(`[Doublet Toric] s3RadiusX=${s3RadiusX}, s3Axis=${s3Axis}, s3SurfType=${s3SurfType}`);
-
       applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, s1RadiusX, undefined, s1Axis);
       applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, s2RadiusX, undefined, s2Axis);
       applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, s3RadiusX, undefined, s3Axis);

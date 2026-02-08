@@ -278,7 +278,21 @@ class MeritFunctionEditor {
         this.initializeTable();
         this.initializeEventListeners();
     }
-    
+
+    createNoopTable() {
+        return {
+            on() { return this; },
+            deselectRow() { return; },
+            getSelectedRows() { return []; },
+            addRow() { return; },
+            deleteRow() { return; },
+            getData() { return []; },
+            setData() { return; },
+            clearData() { return; },
+            replaceData() { return; }
+        };
+    }
+
     initializeTable() {
         const operandKeys = (() => {
             try {
@@ -373,13 +387,19 @@ class MeritFunctionEditor {
         ];
 
         // Tabulator初期化
-        this.table = new Tabulator("#table-merit-function", {
-            data: this.operands,
-            columns: columns,
-            layout: "fitColumns",
-            height: "400px",
-            selectable: true
-        });
+        try {
+            this.table = new Tabulator("#table-merit-function", {
+                data: this.operands,
+                columns: columns,
+                layout: "fitColumns",
+                height: "400px",
+                selectable: true
+            });
+        } catch (error) {
+            console.warn('MeritFunctionEditor: Tabulator init failed, using noop table.', error);
+            this.table = this.createNoopTable();
+            return;
+        }
         
         // 行クリック時に選択状態を1つだけにする（Optical Systemと同様）
         this.table.on("rowClick", (e, row) => {
@@ -462,12 +482,10 @@ class MeritFunctionEditor {
             if (systemConfig && systemConfig.activeConfigId) {
                 defaultConfigId = String(systemConfig.activeConfigId);
             }
-        } catch (error) {
-            console.warn('Active config ID取得エラー:', error);
-        }
-        
+        } catch {}
+
         const newOperand = {
-            id: this.operands.length + 1,
+            id: Date.now(),
             operand: operandType,  // nullを許可
             configId: params.configId ? String(params.configId) : null,
             param1: params.param1 || "",
@@ -4254,13 +4272,16 @@ class MeritFunctionEditor {
 }
 
 // DOMContentLoaded時に初期化
-document.addEventListener('DOMContentLoaded', () => {
+const __cooptInitMeritFunctionEditor = () => {
     try {
+        if (typeof window === 'undefined') return false;
+        if (window.meritFunctionEditor) return true;
+        const container = document.getElementById('table-merit-function');
+        if (!container) return false;
         window.meritFunctionEditor = new MeritFunctionEditor();
 
-
         try {
-            if (typeof window !== 'undefined' && !window.__cooptLastSpotSizeDebug) {
+            if (!window.__cooptLastSpotSizeDebug) {
                 window.__cooptLastSpotSizeDebug = {
                     ok: false,
                     reason: 'not-evaluated',
@@ -4274,8 +4295,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
             }
         } catch (_) {}
+        return true;
     } catch (error) {
         console.error('❌ Merit Function Editor初期化エラー:', error);
+        return false;
+    }
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+    if (__cooptInitMeritFunctionEditor()) return;
+    if (typeof window !== 'undefined') {
+        window.addEventListener('coopt:react-mounted', () => {
+            __cooptInitMeritFunctionEditor();
+        }, { once: true });
+        setTimeout(() => {
+            __cooptInitMeritFunctionEditor();
+        }, 0);
     }
 });
 

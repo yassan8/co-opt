@@ -80,7 +80,7 @@ const STORAGE_KEY = "sourceTableData";
 const initialData = loadTableData();
 
 const hasDocument = (typeof document !== 'undefined') && document && typeof document.getElementById === 'function';
-const tableContainer = hasDocument ? document.getElementById('table-source') : null;
+let tableContainer = hasDocument ? document.getElementById('table-source') : null;
 
 // 表の構成
 export let tableSource;
@@ -426,6 +426,8 @@ const createDOMTableSource = (container, initialRows) => {
 
 if (hasDocument && tableContainer) {
   tableSource = createDOMTableSource(tableContainer, initialData);
+  tableSource.__cooptIsDom = true;
+  tableSource.__cooptContainer = tableContainer;
 } else {
   // Headless fallback (Node/tests)
   let _data = safeCloneRows(initialData);
@@ -443,6 +445,7 @@ if (hasDocument && tableContainer) {
     blockRedraw: () => {},
     restoreRedraw: () => {},
   };
+  tableSource.__cooptIsDom = false;
 }
 
 // Expose to global scope for legacy callers
@@ -450,79 +453,108 @@ if (typeof window !== 'undefined') {
   window.tableSource = tableSource;
 }
 
-// 面を追加
-const addSourceBtn = hasDocument ? document.getElementById("add-source-btn") : null;
-if (addSourceBtn && tableSource) addSourceBtn.addEventListener("click", function(){
-  const selectedRows = tableSource.getSelectedRows();
-  let insertIndex = tableSource.getDataCount(); // デフォルトは末尾
+const bindSourceControls = () => {
+  if (!hasDocument) return;
+  const addSourceBtn = document.getElementById("add-source-btn");
+  if (addSourceBtn && addSourceBtn.dataset.cooptBound !== '1') {
+    addSourceBtn.dataset.cooptBound = '1';
+    addSourceBtn.addEventListener("click", function(){
+      if (!tableSource || typeof tableSource.getSelectedRows !== 'function') return;
+      const selectedRows = tableSource.getSelectedRows();
+      let insertIndex = (typeof tableSource.getDataCount === 'function') ? tableSource.getDataCount() : 0;
 
-  if(selectedRows.length > 0){
-    // 選択行の直後に挿入
-    const selectedRow = selectedRows[0];
-    insertIndex = tableSource.getRows().indexOf(selectedRow) + 1;
+      if(selectedRows.length > 0){
+        const selectedRow = selectedRows[0];
+        if (typeof tableSource.getRows === 'function') {
+          insertIndex = tableSource.getRows().indexOf(selectedRow) + 1;
+        }
+      }
+
+      Promise.resolve(tableSource.addRow({
+        id: (typeof tableSource.getDataCount === 'function') ? (tableSource.getDataCount() + 1) : 1,
+        wavelength: "",
+        weight: "",
+        primary: ""
+      }, false, insertIndex)).then(() => {
+        const data = tableSource.getData();
+        renumberIds(data);
+        if (data.length === 1) {
+          data[0].primary = "Primary Wavelength";
+          console.log('✅ Auto-set primary wavelength for single source entry');
+        } else {
+          const primaryExists = data.some(row => row.primary === "Primary Wavelength");
+          if (!primaryExists) {
+            console.log('⚠️ Multiple sources exist but no primary wavelength is set. Please select one manually.');
+          }
+        }
+        tableSource.replaceData(data);
+        saveTableData(data);
+      });
+    });
   }
 
-  tableSource.addRow({
-    id: tableSource.getDataCount() + 1,
-    wavelength: "",
-    weight: "",
-    primary: ""
-  }, false, insertIndex).then(() => {
-    const data = tableSource.getData();
-    renumberIds(data);
-    
-    // 新規行追加後、1行しかない場合は自動的に主波長に設定
-    if (data.length === 1) {
-      data[0].primary = "Primary Wavelength";
-      console.log('✅ Auto-set primary wavelength for single source entry');
-    } else {
-      // 複数行がある場合、既存の主波長設定をチェック
-      const primaryExists = data.some(row => row.primary === "Primary Wavelength");
-      if (!primaryExists) {
-        console.log('⚠️ Multiple sources exist but no primary wavelength is set. Please select one manually.');
+  const deleteSourceBtn = document.getElementById("delete-source-btn");
+  if (deleteSourceBtn && deleteSourceBtn.dataset.cooptBound !== '1') {
+    deleteSourceBtn.dataset.cooptBound = '1';
+    deleteSourceBtn.addEventListener("click", function(){
+      if (!tableSource || typeof tableSource.getSelectedRows !== 'function') return;
+      const selectedRows = tableSource.getSelectedRows();
+      if(selectedRows.length > 0){
+        const deletedRowData = selectedRows[0].getData();
+        const wasPrimary = deletedRowData.primary === "Primary Wavelength";
+        selectedRows[0].delete();
+        setTimeout(() => {
+          const data = tableSource.getData();
+          renumberIds(data);
+          if (data.length === 1) {
+            data[0].primary = "Primary Wavelength";
+            console.log('✅ Auto-set primary wavelength for remaining single source entry');
+          } else if (data.length > 1 && wasPrimary) {
+            console.log('⚠️ Primary wavelength entry was deleted. Please select a new primary wavelength manually.');
+          }
+          tableSource.replaceData(data);
+          saveTableData(data);
+          if (data.length === 1 || wasPrimary) {
+            notifyPrimaryWavelengthChanged();
+          }
+        }, 0);
+      } else {
+        alert("削除する行を選択してください。");
       }
-    }
-    
-    tableSource.replaceData(data);
-    saveTableData(data);
-  });
-});
-
-// 選択行を削除
-const deleteSourceBtn = hasDocument ? document.getElementById("delete-source-btn") : null;
-if (deleteSourceBtn && tableSource) deleteSourceBtn.addEventListener("click", function(){
-  const selectedRows = tableSource.getSelectedRows();
-  if(selectedRows.length > 0){
-    const deletedRowData = selectedRows[0].getData();
-    const wasPrimary = deletedRowData.primary === "Primary Wavelength";
-    
-    selectedRows[0].delete();
-    setTimeout(() => {
-      const data = tableSource.getData();
-      renumberIds(data);
-      
-      // 削除後の処理
-      if (data.length === 1) {
-        // 残り1行の場合、自動的に主波長に設定
-        data[0].primary = "Primary Wavelength";
-        console.log('✅ Auto-set primary wavelength for remaining single source entry');
-      } else if (data.length > 1 && wasPrimary) {
-        // 主波長が設定されていた行が削除され、複数行残っている場合
-        console.log('⚠️ Primary wavelength entry was deleted. Please select a new primary wavelength manually.');
-      }
-      
-      tableSource.replaceData(data);
-      saveTableData(data);
-      
-      // 主波長が変更された可能性があるので通知
-      if (data.length === 1 || wasPrimary) {
-        notifyPrimaryWavelengthChanged();
-      }
-    }, 0);
-  } else {
-    alert("削除する行を選択してください。");
+    });
   }
-});
+};
+
+export function mountTableSourceIfReady() {
+  if (!hasDocument) return false;
+  tableContainer = document.getElementById('table-source');
+  if (!tableContainer) return false;
+  if (tableSource && tableSource.__cooptIsDom && tableSource.__cooptContainer === tableContainer) {
+    bindSourceControls();
+    return true;
+  }
+  const rows = (tableSource && typeof tableSource.getData === 'function') ? tableSource.getData() : safeCloneRows(initialData);
+  tableSource = createDOMTableSource(tableContainer, rows);
+  tableSource.__cooptIsDom = true;
+  tableSource.__cooptContainer = tableContainer;
+  try { tableContainer.tabulator = tableSource; } catch (_) {}
+  if (typeof window !== 'undefined') {
+    window.tableSource = tableSource;
+  }
+  bindSourceControls();
+  return true;
+}
+
+bindSourceControls();
+
+if (hasDocument && !tableContainer && typeof window !== 'undefined') {
+  window.addEventListener('coopt:react-mounted', () => {
+    try { mountTableSourceIfReady(); } catch (_) {}
+  }, { once: true });
+  setTimeout(() => {
+    try { mountTableSourceIfReady(); } catch (_) {}
+  }, 0);
+}
 
 // 主波長を取得する関数
 function getPrimaryWavelength() {

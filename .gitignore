@@ -19,3 +19,10 @@ glass data/
 glass data/
 *.xls
 *.xlsx
+
+# Backup files
+*.bak*
+*.backup
+
+# Old GitHub Pages folder (replaced by dist/)
+docs/

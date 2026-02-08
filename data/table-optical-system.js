@@ -867,9 +867,16 @@ let tabulatorOptions = {
   }; // ←columns配列の直後はオプションオブジェクトの終端
 
   // Tabulatorインスタンスを作成 (disabled when Blocks exist)
-  tableOpticalSystem = __DISABLE_EXPANDED_OPTICAL_SYSTEM_UI
-    ? createNoopOpticalSystemTable()
-    : new Tabulator('#table-optical-system', tabulatorOptions);
+  if (__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) {
+    tableOpticalSystem = createNoopOpticalSystemTable();
+  } else {
+    try {
+      tableOpticalSystem = new Tabulator('#table-optical-system', tabulatorOptions);
+    } catch (error) {
+      console.warn('Tabulator initialization failed. Falling back to noop table.', error);
+      tableOpticalSystem = createNoopOpticalSystemTable();
+    }
+  }
 
   // In Blocks-only mode, the optical system table is a no-op UI, but downstream
   // evaluation (chief ray / PSF) still expects tableOpticalSystem.getData() to

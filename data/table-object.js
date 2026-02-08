@@ -88,7 +88,7 @@ const initialData = loadTableData();
 
 const hasDocument = (typeof document !== 'undefined') && document && typeof document.getElementById === 'function';
 const hasWindow = (typeof window !== 'undefined') && window;
-const tableContainer = hasDocument ? document.getElementById('table-object') : null;
+let tableContainer = hasDocument ? document.getElementById('table-object') : null;
 
 // 表の構成
 export let tableObject;
@@ -470,6 +470,8 @@ const createNoopObjectTable = (initialRows) => {
 tableObject = tableContainer
   ? createDOMTableObject(tableContainer, initialData)
   : createNoopObjectTable(initialData);
+tableObject.__cooptIsDom = !!tableContainer;
+tableObject.__cooptContainer = tableContainer;
 
 if (hasWindow) {
   window.tableObject = tableObject;
@@ -482,38 +484,83 @@ if (tableContainer) {
   tableContainer.tabulator = tableObject;
 }
 
-// 行追加
-const addObjectBtn = hasDocument ? document.getElementById("add-object-btn") : null;
-if (addObjectBtn) addObjectBtn.addEventListener("click", function(){
-  if (!tableObject || typeof tableObject.addRow !== 'function') return;
+const attachObjectTableListeners = () => {
+  if (!tableObject || typeof tableObject.on !== 'function') return;
+  if (tableObject.__cooptListenersBound) return;
+  tableObject.__cooptListenersBound = true;
 
-  const selectedRows = (typeof tableObject.getSelectedRows === 'function') ? tableObject.getSelectedRows() : [];
-  let insertIndex = (typeof tableObject.getDataCount === 'function') ? tableObject.getDataCount() : 0;
-  if (selectedRows.length > 0 && typeof tableObject.getRows === 'function') {
-    const selectedRow = selectedRows[0];
-    insertIndex = tableObject.getRows().indexOf(selectedRow) + 1;
-    if (!Number.isFinite(insertIndex) || insertIndex < 0) insertIndex = (typeof tableObject.getDataCount === 'function') ? tableObject.getDataCount() : 0;
+  tableObject.on("dataChanged", function() {
+    updatePSFObjectSelectIfAvailable();
+    updateWavefrontObjectOptionsIfAvailable();
+  });
+
+  tableObject.on("rowAdded", function() {
+    updatePSFObjectSelectIfAvailable();
+    updateWavefrontObjectOptionsIfAvailable();
+  });
+
+  tableObject.on("rowDeleted", function() {
+    updatePSFObjectSelectIfAvailable();
+    updateWavefrontObjectOptionsIfAvailable();
+  });
+
+  tableObject.on("cellEdited", function() {
+    updatePSFObjectSelectIfAvailable();
+    updateWavefrontObjectOptionsIfAvailable();
+    recalculateAutoSemiDiaIfAvailable();
+  });
+};
+
+const bindObjectControls = () => {
+  if (!hasDocument) return;
+  const addObjectBtn = document.getElementById("add-object-btn");
+  if (addObjectBtn && addObjectBtn.dataset.cooptBound !== '1') {
+    addObjectBtn.dataset.cooptBound = '1';
+    addObjectBtn.addEventListener("click", function(){
+      if (!tableObject || typeof tableObject.addRow !== 'function') return;
+
+      const selectedRows = (typeof tableObject.getSelectedRows === 'function') ? tableObject.getSelectedRows() : [];
+      let insertIndex = (typeof tableObject.getDataCount === 'function') ? tableObject.getDataCount() : 0;
+      if (selectedRows.length > 0 && typeof tableObject.getRows === 'function') {
+        const selectedRow = selectedRows[0];
+        insertIndex = tableObject.getRows().indexOf(selectedRow) + 1;
+        if (!Number.isFinite(insertIndex) || insertIndex < 0) insertIndex = (typeof tableObject.getDataCount === 'function') ? tableObject.getDataCount() : 0;
+      }
+
+      Promise.resolve(tableObject.addRow({
+        id: (typeof tableObject.getDataCount === 'function') ? (tableObject.getDataCount() + 1) : 1,
+        xHeightAngle: "",
+        yHeightAngle: "",
+        position: "Angle"
+      }, false, insertIndex)).catch(() => {});
+    });
   }
 
-  Promise.resolve(tableObject.addRow({
-    id: (typeof tableObject.getDataCount === 'function') ? (tableObject.getDataCount() + 1) : 1,
-    xHeightAngle: "",
-    yHeightAngle: "",
-    position: "Angle"
-  }, false, insertIndex)).catch(() => {});
-});
-
-// 行削除
-const deleteObjectBtn = hasDocument ? document.getElementById("delete-object-btn") : null;
-if (deleteObjectBtn) deleteObjectBtn.addEventListener("click", function(){
-  if (!tableObject || typeof tableObject.getSelectedRows !== 'function') return;
-  const selectedRows = tableObject.getSelectedRows();
-  if (selectedRows.length > 0 && selectedRows[0] && typeof selectedRows[0].delete === 'function') {
-    selectedRows[0].delete();
-  } else {
-    alert("削除する行を選択してください。");
+  const deleteObjectBtn = document.getElementById("delete-object-btn");
+  if (deleteObjectBtn && deleteObjectBtn.dataset.cooptBound !== '1') {
+    deleteObjectBtn.dataset.cooptBound = '1';
+    deleteObjectBtn.addEventListener("click", function(){
+      if (!tableObject || typeof tableObject.getSelectedRows !== 'function') return;
+      const selectedRows = tableObject.getSelectedRows();
+      if (selectedRows.length > 0 && selectedRows[0] && typeof selectedRows[0].delete === 'function') {
+        selectedRows[0].delete();
+      } else {
+        alert("削除する行を選択してください。");
+      }
+    });
   }
-});
+
+  const objectAngleBtn = document.getElementById("object-angle-btn");
+  if (objectAngleBtn && objectAngleBtn.dataset.cooptBound !== '1') {
+    objectAngleBtn.dataset.cooptBound = '1';
+    objectAngleBtn.addEventListener("click", setAngleTitles);
+  }
+  const objectHeightRectBtn = document.getElementById("object-height-rect-btn");
+  if (objectHeightRectBtn && objectHeightRectBtn.dataset.cooptBound !== '1') {
+    objectHeightRectBtn.dataset.cooptBound = '1';
+    objectHeightRectBtn.addEventListener("click", setHeightRectTitles);
+  }
+};
 
 // タイトル変更用関数
 function setAngleTitles() {
@@ -561,29 +608,7 @@ function updatePSFObjectSelectIfAvailable() {
   }
 }
 
-// テーブルデータ変更時のコールバック
-if (tableObject && typeof tableObject.on === 'function') {
-  tableObject.on("dataChanged", function() {
-    updatePSFObjectSelectIfAvailable();
-    updateWavefrontObjectOptionsIfAvailable();
-  });
-
-  tableObject.on("rowAdded", function() {
-    updatePSFObjectSelectIfAvailable();
-    updateWavefrontObjectOptionsIfAvailable();
-  });
-
-  tableObject.on("rowDeleted", function() {
-    updatePSFObjectSelectIfAvailable();
-    updateWavefrontObjectOptionsIfAvailable();
-  });
-
-  tableObject.on("cellEdited", function() {
-    updatePSFObjectSelectIfAvailable();
-    updateWavefrontObjectOptionsIfAvailable();
-    recalculateAutoSemiDiaIfAvailable();
-  });
-}
+attachObjectTableListeners();
 
 /**
  * 波面収差図のObject選択オプションを更新（安全版）
@@ -612,10 +637,37 @@ function recalculateAutoSemiDiaIfAvailable() {
   }
 }
 
-// ボタンイベント
-const objectAngleBtn = hasDocument ? document.getElementById("object-angle-btn") : null;
-if (objectAngleBtn) objectAngleBtn.addEventListener("click", setAngleTitles);
-// const objectHeightCircleBtn = hasDocument ? document.getElementById("object-height-circle-btn") : null;
-// if (objectHeightCircleBtn) objectHeightCircleBtn.addEventListener("click", setHeightCircleTitles);
-const objectHeightRectBtn = hasDocument ? document.getElementById("object-height-rect-btn") : null;
-if (objectHeightRectBtn) objectHeightRectBtn.addEventListener("click", setHeightRectTitles);
+bindObjectControls();
+
+export function mountTableObjectIfReady() {
+  if (!hasDocument) return false;
+  tableContainer = document.getElementById('table-object');
+  if (!tableContainer) return false;
+  if (tableObject && tableObject.__cooptIsDom && tableObject.__cooptContainer === tableContainer) {
+    bindObjectControls();
+    attachObjectTableListeners();
+    return true;
+  }
+  const rows = (tableObject && typeof tableObject.getData === 'function') ? tableObject.getData() : safeCloneRows(initialData);
+  tableObject = createDOMTableObject(tableContainer, rows);
+  tableObject.__cooptIsDom = true;
+  tableObject.__cooptContainer = tableContainer;
+  try { tableContainer.tabulator = tableObject; } catch (_) {}
+  if (hasWindow) {
+    window.tableObject = tableObject;
+    window.objectTabulator = tableObject;
+    window.objectTable = tableObject;
+  }
+  attachObjectTableListeners();
+  bindObjectControls();
+  return true;
+}
+
+if (hasDocument && !tableContainer && hasWindow) {
+  window.addEventListener('coopt:react-mounted', () => {
+    try { mountTableObjectIfReady(); } catch (_) {}
+  }, { once: true });
+  setTimeout(() => {
+    try { mountTableObjectIfReady(); } catch (_) {}
+  }, 0);
+}

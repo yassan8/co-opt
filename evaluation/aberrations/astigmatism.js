@@ -1227,7 +1227,7 @@ export async function calculateAstigmatismData(opticalSystemRows, sourceRows, ob
         // スポット表示モードでは、既存のスポットダイアグラム計算ロジックをそのまま使用し、
         // 結果を非点データ形式に詰め替えて返す
         if (spotDiagramMode) {
-            const { generateSpotDiagram } = await import('./eva-spot-diagram.js');
+            const { generateSpotDiagram } = await import('../spot-diagram.js');
 
             // eva-spot-diagram は面番号を1始まりで受け取る
             const surfaceNumber = targetSurfaceIndex + 1;

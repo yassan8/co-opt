@@ -2427,12 +2427,29 @@ class SystemRequirementsEditor {
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+const __cooptInitSystemRequirementsEditor = () => {
   try {
+    if (typeof window === 'undefined') return false;
+    if (window.systemRequirementsEditor) return true;
+    const container = document.getElementById('table-system-requirements');
+    if (!container) return false;
     window.systemRequirementsEditor = new SystemRequirementsEditor();
-
+    return true;
   } catch (e) {
     console.error('❌ System Requirements Editor init failed:', e);
+    return false;
+  }
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  if (__cooptInitSystemRequirementsEditor()) return;
+  if (typeof window !== 'undefined') {
+    window.addEventListener('coopt:react-mounted', () => {
+      __cooptInitSystemRequirementsEditor();
+    }, { once: true });
+    setTimeout(() => {
+      __cooptInitSystemRequirementsEditor();
+    }, 0);
   }
 });
 
