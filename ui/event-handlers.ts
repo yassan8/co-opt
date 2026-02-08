@@ -4597,7 +4597,7 @@ export function setupAnalysisWindows() {
                                 if (Array.isArray(r) && r.length > 0) return cloneRows(r);
                             }
                         } catch (_) {}
-                        return getSourceRows ? getSourceRows(window.tableSource) : [];
+                        return getSourceRows(window.tableSource);
                     })();
                     if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) throw new Error('No optical system data (popup).');
                     if (!Array.isArray(objects) || objects.length === 0) throw new Error('No object data (popup).');
