@@ -3528,6 +3528,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     select.style.flex = '1';
                     select.style.cursor = 'pointer';
                     select.style.minWidth = '200px';
+                    select.style.height = '28px';
+                    select.style.boxSizing = 'border-box';
 
                     const options = ['Spherical', 'Aspherical even', 'Aspherical odd', 'Toric'];
                     const currentValue = String(value || 'Spherical');
@@ -3575,12 +3577,13 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     textInput.type = 'text';
                     textInput.value = value === undefined || value === null ? '' : String(value);
                     textInput.style.fontSize = '12px';
-                    textInput.style.padding = '2px 6px';
+                    textInput.style.padding = '4px 6px';
                     textInput.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
                     textInput.style.background = isDarkMode ? '#111827' : '#fff';
                     textInput.style.color = isDarkMode ? '#f9fafb' : '#111827';
                     textInput.style.borderRadius = '4px';
                     textInput.style.boxSizing = 'border-box';
+                    textInput.style.height = '28px';
 
                     // Lin/Log toggle button
                     const scaleBtn = document.createElement('button');
@@ -3591,6 +3594,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     scaleBtn.style.fontSize = '10px';
                     scaleBtn.style.padding = '2px';
                     scaleBtn.style.boxSizing = 'border-box';
+                    scaleBtn.style.height = '28px';
 
                     // Magnitude down button (×0.1)
                     const magDownBtn = document.createElement('button');
@@ -3601,6 +3605,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     magDownBtn.style.fontSize = '9px';
                     magDownBtn.style.padding = '2px';
                     magDownBtn.style.boxSizing = 'border-box';
+                    magDownBtn.style.height = '28px';
 
                     // Magnitude up button (×10)
                     const magUpBtn = document.createElement('button');
@@ -3611,6 +3616,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     magUpBtn.style.fontSize = '9px';
                     magUpBtn.style.padding = '2px';
                     magUpBtn.style.boxSizing = 'border-box';
+                    magUpBtn.style.height = '28px';
 
                     // Range display
                     const rangeDisplay = document.createElement('div');
@@ -3767,6 +3773,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     input.style.color = isDarkMode ? '#f9fafb' : '#111827';
                     input.style.flex = '1';
                     input.style.minWidth = '200px';
+                    input.style.height = '28px';
+                    input.style.boxSizing = 'border-box';
 
                     const glassBtn = document.createElement('button');
                     glassBtn.textContent = '🔍';
@@ -3777,6 +3785,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     glassBtn.style.background = isDarkMode ? '#1f2937' : '#f9fafb';
                     glassBtn.style.cursor = 'pointer';
                     glassBtn.style.borderRadius = '4px';
+                    glassBtn.style.height = '28px';
+                    glassBtn.style.boxSizing = 'border-box';
 
                     // Glass Map button
                     const glassMapBtn = document.createElement('button');
@@ -3788,6 +3798,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     glassMapBtn.style.background = isDarkMode ? '#1f2937' : '#f9fafb';
                     glassMapBtn.style.cursor = 'pointer';
                     glassMapBtn.style.borderRadius = '4px';
+                    glassMapBtn.style.height = '28px';
+                    glassMapBtn.style.boxSizing = 'border-box';
 
                     glassMapBtn.onclick = (e) => {
                         e.preventDefault();
@@ -3983,6 +3995,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     input.style.color = isDarkMode ? '#f9fafb' : '#111827';
                     input.style.flex = '1';
                     input.style.minWidth = '200px';
+                    input.style.height = '28px';
+                    input.style.boxSizing = 'border-box';
 
                     input.addEventListener('blur', () => {
                         const newValue = cooptNormalizeInputValue(input.value, value);
