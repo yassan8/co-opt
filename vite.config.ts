@@ -1,9 +1,32 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 export default defineConfig({
   base: '/co-opt/',
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'inject-main-script',
+      transformIndexHtml: {
+        order: 'post',
+        handler(html, ctx) {
+          // Find the main.js bundle file name from the bundle
+          if (ctx.bundle) {
+            const mainChunk = Object.values(ctx.bundle).find(
+              (chunk: any) => chunk.type === 'chunk' && chunk.name === 'main'
+            );
+            if (mainChunk && 'fileName' in mainChunk) {
+              const scriptTag = `  <script type="module" crossorigin src="/co-opt/assets/${mainChunk.fileName}"></script>\n`;
+              return html.replace('</head>', scriptTag + '</head>');
+            }
+          }
+          return html;
+        }
+      }
+    }
+  ],
   resolve: {
     alias: {
       OrbitControls: "three/examples/jsm/controls/OrbitControls.js",

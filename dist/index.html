@@ -124,7 +124,6 @@
 
   <!-- Import map for Three.js to resolve bare module specifiers -->
 
-  <!-- Load main.js first to initialize window functions -->
   <script type="importmap">
     {
       "imports": {
@@ -140,10 +139,13 @@
   <link rel="modulepreload" crossorigin href="/co-opt/assets/seidel-coefficients-afocal-CC12g6aG.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/longitudinal-aberration-CFyhkfj5.js">
   <link rel="stylesheet" crossorigin href="/co-opt/assets/app-CZf93wEg.css">
+  <script type="module" crossorigin src="/co-opt/assets/assets/main-ziA_DbOL.js"></script>
 </head>
 <body>
 
   <div id="react-root"></div>
+  
+  <!-- Load main.js first to initialize window functions -->
   
   <!-- Undo/Redo System -->
   <script>
