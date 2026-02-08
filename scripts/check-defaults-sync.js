@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-const fs = require('node:fs/promises');
-const path = require('node:path');
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 async function collectFileMap(rootDir) {
   /** @type {Map<string, { absPath: string, size: number }> } */
