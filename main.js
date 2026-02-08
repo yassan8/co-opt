@@ -184,13 +184,19 @@ async function initializeApplication() {
             // Setup analysis window buttons (must be called after React mount)
             setupAnalysisWindows();
             
-            // Initialize spot diagram controls
-            if (typeof window.updateSpotDiagramConfigSelect === 'function') {
-                window.updateSpotDiagramConfigSelect();
-            }
-            if (typeof window.updateSurfaceNumberSelect === 'function') {
-                window.updateSurfaceNumberSelect();
-            }
+            // Initialize spot diagram controls after a short delay to ensure DOM is ready
+            setTimeout(() => {
+                try {
+                    if (typeof window.updateSpotDiagramConfigSelect === 'function') {
+                        window.updateSpotDiagramConfigSelect();
+                    }
+                    if (typeof window.updateSurfaceNumberSelect === 'function') {
+                        window.updateSurfaceNumberSelect();
+                    }
+                } catch (e) {
+                    console.warn('Failed to initialize spot diagram selects:', e);
+                }
+            }, 100);
         } catch (error) {
             console.error('Failed to setup analysis windows:', error);
         }
