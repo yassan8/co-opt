@@ -14,7 +14,7 @@
   </script>
   <title>co-opt</title>
   <!-- SVG favicon for modern browsers -->
-  <link rel="icon" type="image/svg+xml" href="/assets/favicon-DBJeJkyS.svg">
+  <link rel="icon" type="image/svg+xml" href="/co-opt/assets/favicon-DBJeJkyS.svg">
   <!-- Fallback for Safari and older browsers -->
   <link rel="icon" type="image/png" sizes="32x32" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231a4d8f' rx='4'/><text x='16' y='22' font-family='Arial, sans-serif' font-size='18' font-weight='bold' fill='%23ffffff' text-anchor='middle'>CO</text></svg>">
   <!-- TabulatorのCSSとJSを追加 -->
@@ -122,9 +122,9 @@
     }, true);
   </script>
 
-  <script type="module" crossorigin src="/assets/index-C-6g97MC.js"></script>
-  <link rel="modulepreload" crossorigin href="/assets/table-configuration-CGZD4u8a.js">
-  <link rel="stylesheet" crossorigin href="/assets/index-C2cpJi91.css">
+  <script type="module" crossorigin src="/co-opt/assets/index-D3aZRuDG.js"></script>
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-CGZD4u8a.js">
+  <link rel="stylesheet" crossorigin href="/co-opt/assets/index-C2cpJi91.css">
 </head>
 <body>
 
@@ -210,9 +210,9 @@
         // ray-tracing.jsの関数をグローバルに公開
         setTimeout(async () => {
           try {
-            const main = await import('/assets/main-D7iNxinU.js');
-            const rayTracing = await import('/assets/ray-tracing-I16uSXiV.js');
-            const debugUtils = await import('/assets/debug-utils-BDPOHgxU.js');
+            const main = await import('/co-opt/assets/main-D7iNxinU.js');
+            const rayTracing = await import('/co-opt/assets/ray-tracing-I16uSXiV.js');
+            const debugUtils = await import('/co-opt/assets/debug-utils-BDPOHgxU.js');
             
             // まずmain.jsからgetWASMSystemをグローバルに公開
             if (typeof main.getWASMSystem === 'function') {
@@ -275,7 +275,7 @@
             }
             
             // 絞り周辺光線モジュールを読み込み
-            import('/assets/ray-marginal-B37ZwYtL.js').then(marginalRayModule => {
+            import('/co-opt/assets/ray-marginal-B37ZwYtL.js').then(marginalRayModule => {
               window.calculateMarginalRay = marginalRayModule.calculateMarginalRay;
               window.calculateAllMarginalRays = marginalRayModule.calculateAllMarginalRays;
             }).catch(error => {
@@ -530,7 +530,7 @@
       
       try {
         // PSFCalculatorを動的インポート
-        const { PSFCalculator } = await import('/assets/psf-calculator-BQyCl5_a.js');
+        const { PSFCalculator } = await import('/co-opt/assets/psf-calculator-BQyCl5_a.js');
         const psfCalculator = new PSFCalculator();
         
         // 初期化を待機
