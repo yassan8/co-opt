@@ -1,7 +1,8 @@
 export default function DesignIntentSection() {
+  console.log("[DesignIntentSection] Component rendering");
   return (
-    <div className="optical-system-section">
-      <h2>Design Intent</h2>
+    <div className="optical-system-section" style={{ border: "3px solid blue", padding: "10px", margin: "10px" }}>
+      <h2 style={{ color: "blue", fontSize: "24px" }}>Design Intent</h2>
       <div id="design-intent-toolbar" className="optical-system-buttons-container">
         <select id="design-intent-add-block-type">
           <option value="ObjectPlane">ObjectSurface</option>
