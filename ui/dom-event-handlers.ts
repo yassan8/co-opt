@@ -4081,7 +4081,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             }
 
             if (varKeys.length > 0) {
-                panel.appendChild(createSectionTitle('Variables'));
                 for (const key of varKeys) {
                     // Skip if this key is already shown in Parameters
                     if (paramKeys.includes(key)) {
