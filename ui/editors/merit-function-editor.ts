@@ -17,7 +17,7 @@ import {
     getSourceRows
 } from '../../compat/data-utils.js';
 import { calculateSeidelCoefficients } from '../../compat/seidel-coefficients.js';
-import { calculateAfocalSeidelCoefficientsIntegrated } from '../../compat/seidel-coefficients-afocal.js';
+import { calculateAfocalSeidelCoefficientsIntegrated } from '../../evaluation/aberrations/seidel-coefficients-afocal.js';
 import { generateSpotDiagram, generateSurfaceOptions } from '../../evaluation/spot-diagram.js';
 import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../../evaluation/wavefront/wavefront.js';
 import { expandBlocksToOpticalSystemRows } from '../../data/block-schema.js';
