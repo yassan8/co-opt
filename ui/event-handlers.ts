@@ -6001,6 +6001,41 @@ export function setupTransformationControls(): void {
     
     // Update surface select on optical system changes
     updateTransformSurfaceSelect();
+    
+    // Analysis dropdown selector
+    const analysisSelect = document.getElementById('analysis-select') as HTMLSelectElement | null;
+    if (analysisSelect) {
+        analysisSelect.addEventListener('change', () => {
+            const selectedValue = analysisSelect.value;
+            if (!selectedValue) return;
+            
+            // Reset select to default after triggering
+            analysisSelect.value = '';
+            
+            // Map analysis values to corresponding button IDs
+            const analysisButtonMap: Record<string, string> = {
+                'spot-diagram': 'open-spot-diagram-window-btn',
+                'spherical-aberration': 'open-spherical-aberration-window-btn',
+                'astigmatism': 'open-astigmatism-window-btn',
+                'distortion': 'open-distortion-window-btn',
+                'integrated-aberration': 'open-integrated-aberration-window-btn',
+                'transverse-aberration': 'open-transverse-aberration-window-btn',
+                'opd': 'open-opd-window-btn',
+                'psf': 'open-psf-window-btn',
+                'mtf': 'open-mtf-window-btn'
+            };
+            
+            const buttonId = analysisButtonMap[selectedValue];
+            if (buttonId) {
+                const button = document.getElementById(buttonId);
+                if (button) {
+                    button.click();
+                } else {
+                    console.warn(`Analysis button not found: ${buttonId}`);
+                }
+            }
+        });
+    }
 }
 
 /**
