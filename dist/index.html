@@ -122,6 +122,17 @@
     }, true);
   </script>
 
+  <!-- Import map for Three.js to resolve bare module specifiers -->
+
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+        "three/examples/jsm/controls/OrbitControls.js": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js"
+      }
+    }
+  </script>
   <script type="module" crossorigin src="/co-opt/assets/index-CrHlzWhP.js"></script>
   <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-DY4pkkkN.js">
   <link rel="stylesheet" crossorigin href="/co-opt/assets/index-CZf93wEg.css">
