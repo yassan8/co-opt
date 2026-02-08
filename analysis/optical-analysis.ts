@@ -805,7 +805,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 console.log(`✅ [Surface Resolution] Matched: surfaceId=${surfaceId} → rowIndex=${resolvedSurfaceRowIndex}, label="${match.label}"`);
             } else if (opts.length > 0) {
                 const img = opts.find((o: any) => typeof o?.label === 'string' && o.label.includes('(Image)'));
-                resolvedSurfaceRowIndex = Number.isInteger(img?.rowIndex) ? img.rowIndex : opts[opts.length - 1].rowIndex;
+                resolvedSurfaceRowIndex = img && Number.isInteger(img.rowIndex) ? img.rowIndex : opts[opts.length - 1].rowIndex;
                 console.warn(`⚠️ [Surface Resolution] No match for surfaceId=${surfaceId}, using fallback: rowIndex=${resolvedSurfaceRowIndex}`);
             }
         } catch (e) {
@@ -814,13 +814,13 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             console.error(`❌ [Surface Resolution] Error:`, e);
         }
 
-        if (Number.isInteger(resolvedSurfaceRowIndex)) {
+        if (Number.isInteger(resolvedSurfaceRowIndex) && resolvedSurfaceRowIndex !== null) {
             surfaceIndex = resolvedSurfaceRowIndex;
         }
-        if (!Number.isInteger(resolvedSurfaceRowIndex) || resolvedSurfaceRowIndex < 0) {
+        if (resolvedSurfaceRowIndex === null || !Number.isInteger(resolvedSurfaceRowIndex) || resolvedSurfaceRowIndex < 0) {
             resolvedSurfaceRowIndex = 0;
         }
-        surfaceIndex = resolvedSurfaceRowIndex;
+        surfaceIndex = resolvedSurfaceRowIndex!;
 
         // Persist the current spot-diagram settings for other modules (e.g., Requirements spot size operands).
         // This also bridges main window vs popup window differences by using shared localStorage.
@@ -974,7 +974,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 spotDiagramData, 
                 surfaceNumber,
                 containerTarget,
-                wavelength / 1000 // convert nm to μm
+                (wavelength / 1000) as any // convert nm to μm
             );
             try { onProgress?.({ percent: 100, message: 'Done' }); } catch (_) {}
             
@@ -1011,7 +1011,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 spotDiagramData, 
                 surfaceNumber,
                 containerTarget,
-                wavelength / 1000 // convert nm to μm
+                wavelength / 1000 as any // convert nm to μm
             );
 
             try { onProgress?.({ percent: 100, message: 'Done' }); } catch (_) {}
@@ -1136,7 +1136,7 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
             null,
             wavelength,
             rayCount,
-            { onProgress }
+            { onProgress } as any
         );
 
         if (!aberrationData) {
@@ -1279,7 +1279,7 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
             }
         );
 
-        if (!fieldCurvesData || !fieldCurvesData.data || fieldCurvesData.data.length === 0) {
+        if (!fieldCurvesData || !(fieldCurvesData as any).data || (fieldCurvesData as any).data.length === 0) {
             console.warn('⚠️ 非点収差曲線データの生成に失敗しました');
         } else {
             try { onProgress?.({ percent: 95, message: 'Rendering...' }); } catch (_) {}
@@ -1351,7 +1351,7 @@ export async function showLongitudinalAberrationDiagram(options: any = {}): Prom
             const unique: number[] = [];
             for (const row of rows) {
                 const wl = normalizeUm(row?.wavelength ?? row?.Wavelength);
-                if (!Number.isFinite(wl) || wl <= 0) continue;
+                if (wl === null || !Number.isFinite(wl) || wl <= 0) continue;
                 if (!unique.some(w => Math.abs(w - wl) < 1e-12)) unique.push(wl);
                 if (unique.length >= 6) break;
             }
@@ -1417,9 +1417,9 @@ export async function showLongitudinalAberrationDiagram(options: any = {}): Prom
         const aberrationData = await calculateLongitudinalAberrationAsync(
             opticalSystemRows,
             surfaceIndex,
-            wavelengths, // Array of wavelengths from Source table
+            wavelengths as any, // Array of wavelengths from Source table
             rayCount,
-            { onProgress, debugSA: Boolean((globalThis as any).__COOPT_DEBUG_SA) }
+            { onProgress, debugSA: Boolean((globalThis as any).__COOPT_DEBUG_SA) } as any
         );
         
         if (!aberrationData) {
@@ -1568,7 +1568,7 @@ export function fitCameraToScene(): void {
     };
     
     // Update camera position and target
-    camera.position.set(cameraPosition.x, cameraPosition.y, cameraPosition.z);
+    (camera as any).position.set(cameraPosition.x, cameraPosition.y, cameraPosition.z);
     controls.target.set(bounds.centerX, bounds.centerY, bounds.centerZ);
     
     // Update orthographic camera view size if needed
@@ -1590,7 +1590,7 @@ export function fitCameraToScene(): void {
     renderer.render(getScene()!, camera);
     
     console.log(`🎥 Camera fitted to scene, distance: ${distance.toFixed(2)}`);
-    console.log(`🎥 Camera position: (${camera.position.x.toFixed(2)}, ${camera.position.y.toFixed(2)}, ${camera.position.z.toFixed(2)})`);
+    console.log(`🎥 Camera position: (${(camera as any).position.x.toFixed(2)}, ${(camera as any).position.y.toFixed(2)}, ${(camera as any).position.z.toFixed(2)})`);
 }
 
 /**
@@ -1746,7 +1746,7 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
             const unique: number[] = [];
             for (const row of rows) {
                 const wl = normalizeUm(row?.wavelength);
-                if (!Number.isFinite(wl) || wl <= 0) continue;
+                if (wl === null || !Number.isFinite(wl) || wl <= 0) continue;
                 if (!unique.some(w => Math.abs(w - wl) < 1e-12)) unique.push(wl);
                 if (unique.length >= 6) break;
             }
@@ -1765,9 +1765,9 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
         const longitudinalData = await calculateLongitudinalAberrationAsync(
             opticalSystemRows,
             surfaceIndex,
-            wavelengths,
+            wavelengths as any,
             rayCountSpherical,
-            { onProgress: mapProgress(5, 30, 'Spherical') }
+            { onProgress: mapProgress(5, 30, 'Spherical') } as any
         );
         
         if (!longitudinalData) {
