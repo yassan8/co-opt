@@ -11,6 +11,7 @@ import {
     BLOCK_SCHEMA_VERSION
 } from '../compat/block-schema.js';
 import { SetBlockParameterCommand } from '../core/undo-history.js';
+import { getCompressedStringFromLocation, decodeAllDataFromCompressedString } from '../utils/url-share.js';
 
 // Type definitions
 type BlockType = string;
@@ -504,7 +505,7 @@ function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[]): void
     } catch (_) {}
 }
 
-async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: string } = {}): Promise<void> {
+async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: string } = {}): Promise<boolean> {
     const filename = String(options?.filename ?? '');
     
     try {
@@ -526,7 +527,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                 if (typeof (window as any).showLoadErrors === 'function') {
                     (window as any).showLoadErrors(issues, { filename });
                 }
-                return;
+                return false;
             }
         } catch (_) {}
     }
@@ -545,6 +546,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     } catch (_) {}
 
     console.log(`✅ Loaded: ${filename || '(unnamed)'}`);
+    return true;
 }
 
 // Setup Zemax Import Button
@@ -1858,6 +1860,37 @@ export function setupDOMEventHandlers(): void {
     } catch (err) {
         console.error('❌ [DOM] Failed to setup event handlers:', err);
     }
+}
+
+/**
+ * Load design from compressed URL hash if present
+ */
+export async function loadFromCompressedDataHashIfPresent(): Promise<{ ok: boolean; reason?: string }> {
+    const compressed = getCompressedStringFromLocation();
+    if (!compressed) return { ok: false, reason: 'no_hash' };
+    
+    const confirmed = confirm(
+        'リンクから設計を読み込みます。現在の設計は上書きされます。続行しますか？\n\n' +
+        'Load design from URL? Current design will be overwritten.'
+    );
+    if (!confirmed) return { ok: false, reason: 'cancelled' };
+    
+    let allData;
+    try {
+        allData = decodeAllDataFromCompressedString(compressed);
+    } catch (e) {
+        console.warn('❌ [URL Load] Decode failed:', e);
+        alert((e as any)?.message || 'Failed to load design from URL');
+        return { ok: false, reason: 'decode_failed' };
+    }
+
+    const ok = await __loadAllDataObjectIntoApp(allData, { filename: 'shared-link.json' });
+    if (ok) {
+        try {
+            history.replaceState(null, '', `${location.origin}${location.pathname}${location.search}`);
+        } catch (_) {}
+    }
+    return { ok };
 }
 
 // Auto-initialize on module load

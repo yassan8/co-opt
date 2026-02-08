@@ -87,7 +87,7 @@ export class SetBlockParameterCommand extends Command {
     }
     try {
       const sysConfig = (window as any).loadSystemConfigurations();
-      const cfg = sysConfig.configurations.find((c: Configuration) => c.id === this.configId);
+      const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       const block = this.findBlock(cfg);
       this.setNestedValue(block, this.parameterPath, this.newValue);
       this.refreshSystem(sysConfig, cfg);
@@ -106,8 +106,8 @@ export class SetBlockParameterCommand extends Command {
     }
     try {
       const sysConfig = (window as any).loadSystemConfigurations();
-      const cfg = sysConfig.configurations.find((c: Configuration) => c.id === this.configId);
-      console.log('[Undo] Config found:', cfg ? cfg.id : 'null');
+      const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
+      console.log('[Undo] Config found:', cfg ? cfg.name : 'null');
       const block = this.findBlock(cfg);
       console.log('[Undo] Block found:', block ? block.blockId : 'null');
       console.log('[Undo] Setting', this.parameterPath, 'to', this.oldValue);
@@ -135,7 +135,7 @@ export class SetBlockParameterCommand extends Command {
   
   getConfig(): Configuration {
     const sysConfig = (window as any).loadSystemConfigurations();
-    return sysConfig.configurations.find((c: Configuration) => c.id === this.configId);
+    return sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
   }
   
   findBlock(cfg: Configuration): Block {
@@ -167,13 +167,13 @@ export class SetBlockParameterCommand extends Command {
       console.log('[Undo] Expanding blocks to optical system');
       const expanded = (window as any).expandBlocksToOpticalSystemRows(cfg.blocks);
       if (expanded && expanded.rows) {
-        cfg.opticalSystem = expanded.rows;
+        cfg.opticalSystemRows = expanded.rows;
         console.log('[Undo] Optical system updated');
       }
     }
     
     // Debug: Check value before save
-    const cfgInSysConfig = sysConfig.configurations.find((c: Configuration) => c.id === cfg.id);
+    const cfgInSysConfig = sysConfig.configurations.find((c: Configuration) => c.name === cfg.name);
     const blockInSysConfig = cfgInSysConfig?.blocks.find((b: Block) => b.blockId === this.blockId);
     console.log('[Undo] Before save, value in sysConfig:', this.getNestedValue(blockInSysConfig, this.parameterPath));
     
@@ -184,7 +184,7 @@ export class SetBlockParameterCommand extends Command {
       
       // Verify save
       const reloaded = (window as any).loadSystemConfigurations();
-      const reloadedCfg = reloaded.configurations.find((c: Configuration) => c.id === cfg.id);
+      const reloadedCfg = reloaded.configurations.find((c: Configuration) => c.name === cfg.name);
       const reloadedBlock = reloadedCfg?.blocks.find((b: Block) => b.blockId === this.blockId);
       console.log('[Undo] After save, reloaded value:', this.getNestedValue(reloadedBlock, this.parameterPath));
     }
@@ -227,7 +227,7 @@ export class SetSurfaceFieldCommand extends Command {
   
   execute(): void {
     const cfg = this.getConfig();
-    const surface = cfg.opticalSystem.find((s: any) => s.id === this.surfaceId);
+    const surface = cfg.opticalSystemRows.find((s: any) => s.id === this.surfaceId);
     if (surface) {
       surface[this.field] = this.newValue;
       this.saveAndRefresh();
@@ -236,7 +236,7 @@ export class SetSurfaceFieldCommand extends Command {
   
   undo(): void {
     const cfg = this.getConfig();
-    const surface = cfg.opticalSystem.find((s: any) => s.id === this.surfaceId);
+    const surface = cfg.opticalSystemRows.find((s: any) => s.id === this.surfaceId);
     if (surface) {
       surface[this.field] = this.oldValue;
       this.saveAndRefresh();
@@ -245,7 +245,7 @@ export class SetSurfaceFieldCommand extends Command {
   
   getConfig(): Configuration {
     const sysConfig = (window as any).loadSystemConfigurations();
-    return sysConfig.configurations.find((c: Configuration) => c.id === this.configId);
+    return sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
   }
   
   saveAndRefresh(): void {
@@ -526,7 +526,7 @@ export class SetObjectFieldCommand extends Command {
   
   getConfig(): Configuration {
     const sysConfig = (window as any).loadSystemConfigurations();
-    return sysConfig.configurations.find((c: Configuration) => c.id === this.configId);
+    return sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
   }
   
   refreshUI(): void {
@@ -565,7 +565,7 @@ export class AddBlockCommand extends Command {
     if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
     try {
       const sysConfig = (window as any).loadSystemConfigurations();
-      const cfg = sysConfig.configurations.find((c: Configuration) => c.id === this.configId);
+      const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       if (!cfg || !Array.isArray(cfg.blocks)) return;
       
       cfg.blocks.splice(this.insertIndex, 0, this.blockData);
@@ -579,7 +579,7 @@ export class AddBlockCommand extends Command {
     if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
     try {
       const sysConfig = (window as any).loadSystemConfigurations();
-      const cfg = sysConfig.configurations.find((c: Configuration) => c.id === this.configId);
+      const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       if (!cfg || !Array.isArray(cfg.blocks)) return;
       
       cfg.blocks.splice(this.insertIndex, 1);
@@ -592,7 +592,7 @@ export class AddBlockCommand extends Command {
   refreshSystem(sysConfig: SystemConfigurations, cfg: Configuration): void {
     if ((window as any).expandBlocksToOpticalSystemRows) {
       const expanded = (window as any).expandBlocksToOpticalSystemRows(cfg.blocks);
-      if (expanded && expanded.rows) cfg.opticalSystem = expanded.rows;
+      if (expanded && expanded.rows) cfg.opticalSystemRows = expanded.rows;
     }
     if ((window as any).saveSystemConfigurations) (window as any).saveSystemConfigurations(sysConfig);
     if ((window as any).refreshBlockInspector) (window as any).refreshBlockInspector();
@@ -620,7 +620,7 @@ export class DeleteBlockCommand extends Command {
     if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
     try {
       const sysConfig = (window as any).loadSystemConfigurations();
-      const cfg = sysConfig.configurations.find((c: Configuration) => c.id === this.configId);
+      const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       if (!cfg || !Array.isArray(cfg.blocks)) return;
       
       cfg.blocks.splice(this.blockIndex, 1);
@@ -634,7 +634,7 @@ export class DeleteBlockCommand extends Command {
     if ((window as any).undoHistory) (window as any).undoHistory.isExecuting = true;
     try {
       const sysConfig = (window as any).loadSystemConfigurations();
-      const cfg = sysConfig.configurations.find((c: Configuration) => c.id === this.configId);
+      const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       if (!cfg || !Array.isArray(cfg.blocks)) return;
       
       cfg.blocks.splice(this.blockIndex, 0, this.blockData);
@@ -647,7 +647,7 @@ export class DeleteBlockCommand extends Command {
   refreshSystem(sysConfig: SystemConfigurations, cfg: Configuration): void {
     if ((window as any).expandBlocksToOpticalSystemRows) {
       const expanded = (window as any).expandBlocksToOpticalSystemRows(cfg.blocks);
-      if (expanded && expanded.rows) cfg.opticalSystem = expanded.rows;
+      if (expanded && expanded.rows) cfg.opticalSystemRows = expanded.rows;
     }
     if ((window as any).saveSystemConfigurations) (window as any).saveSystemConfigurations(sysConfig);
     if ((window as any).refreshBlockInspector) (window as any).refreshBlockInspector();
