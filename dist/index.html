@@ -133,10 +133,10 @@
       }
     }
   </script>
-  <script type="module" crossorigin src="/co-opt/assets/main-DlRY5i_M.js"></script>
-  <script type="module" crossorigin src="/co-opt/assets/app-ichzmEQO.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/main-DI1TLM2n.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-Coh2xVWF.js"></script>
   <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-CwONY8Bt.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-DlRY5i_M.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-DI1TLM2n.js">
   <link rel="stylesheet" crossorigin href="/co-opt/assets/app-BXfHVPvf.css">
 </head>
 <body>
@@ -295,7 +295,7 @@
   <!-- 絞り周辺光線計算スクリプト -->
 
   <!-- WASM最適化モジュール -->
-  <script src="wasm/raytracing/force-wasm-system.ts"></script>
+  <!-- force-wasm-system is now imported in main.ts instead of loaded as a script tag -->
     <!-- NOTE: Do not load legacy ray-tracing-wasm.js here.
       It overwrites the global RayTracingWASM symbol and can hide newer exports
       (e.g. _aspheric_sag_rt10) provided by ray-tracing-wasm-v3.js. -->
@@ -305,24 +305,13 @@
     document.addEventListener('DOMContentLoaded', function() {
       // Force WASM システムの確認
       setTimeout(() => {
-        if (typeof ForceWASMSystem === 'undefined') {
-          console.warn('⚠️ ForceWASMSystem がグローバルスコープにありません。スクリプト読み込み順序を確認中...');
-          
-          // 手動でforce-wasm-system.jsを再読み込み
-          const script = document.createElement('script');
-          script.src = 'wasm/raytracing/force-wasm-system.js';
-          script.onload = () => {
-            console.log('✅ ForceWASMSystem 手動読み込み完了');
-            
-            // 統合テスト再実行
-            if (typeof diagnosticIntegrationStatus === 'function') {
-              setTimeout(() => {
-                console.log('🔄 統合状態を再確認中...');
-                diagnosticIntegrationStatus();
-              }, 1000);
-            }
-          };
-          document.head.appendChild(script);
+        if (typeof window.getWASMSystem !== 'function') {
+          console.warn('⚠️ getWASMSystem がグローバルスコープにありません。main.ts での初期化を確認中...');
+        } else {
+          const wasmSystem = window.getWASMSystem?.();
+          if (wasmSystem) {
+            console.log('✅ ForceWASMSystem 初期化完了');
+          }
         }
 
         setTimeout(() => {
