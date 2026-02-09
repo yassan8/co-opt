@@ -2703,6 +2703,13 @@ const __cooptInitSystemRequirementsEditor = (): boolean => {
   }
 };
 
+// Expose initializer for React fallback (GitHub Pages can miss auto-init timing).
+try {
+  if (typeof window !== 'undefined') {
+    (window as any).__cooptInitSystemRequirementsEditor = __cooptInitSystemRequirementsEditor;
+  }
+} catch (_) {}
+
 const __cooptScheduleSystemRequirementsInit = (): void => {
   console.log('[Requirements] __cooptScheduleSystemRequirementsInit called');
   console.log('[Requirements] Checking container availability...');

@@ -5,6 +5,12 @@ export default function RequirementsSection() {
     console.log('[RequirementsSection] Component mounted');
     // The editor will be reinitialized by __cooptInitSystemRequirementsEditor
     // which is triggered by the initialization system
+    try {
+      const init = (window as any).__cooptInitSystemRequirementsEditor;
+      if (typeof init === 'function') {
+        init();
+      }
+    } catch (_) {}
   }, []);
 
   // React-style button handlers
@@ -47,6 +53,17 @@ export default function RequirementsSection() {
       } catch (err) {
         console.error('[RequirementsSection] ❌ Error in updateAllConfigsAndEvaluate:', err);
       }
+      return;
+    }
+    if (editor && typeof editor.evaluateAndUpdateNow === 'function') {
+      try {
+        console.log('[RequirementsSection] ✅ Calling evaluateAndUpdateNow...');
+        await editor.evaluateAndUpdateNow({ reason: 'update-button-fallback' });
+        console.log('[RequirementsSection] ✅ evaluateAndUpdateNow completed');
+      } catch (err) {
+        console.error('[RequirementsSection] ❌ Error in evaluateAndUpdateNow:', err);
+      }
+      return;
     } else {
       console.error('[RequirementsSection] ❌ Editor or updateAllConfigsAndEvaluate method not available');
     }
