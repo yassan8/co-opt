@@ -11,6 +11,9 @@
  * 作成日: 2025/08/08
  */
 
+// PSFWasmグローバル変数の型宣言
+declare const PSFWasm: any;
+
 /**
  * WASM版PSF計算クラス
  */
@@ -29,6 +32,25 @@ function getGlobalPsfWasmSingletonState() {
 }
 
 export class PSFCalculatorWasm {
+    wasmModule: any;
+    isReady: boolean;
+    fallbackToJS: boolean;
+    initializationAttempted: boolean;
+    initializationFailed: boolean;
+    _initPromise: Promise<void> | null;
+    calculatePSF: any;
+    calculatePSFGrid: any;
+    calculateStrehl: any;
+    calculateEncircledEnergy: any;
+    freePSFResult: any;
+    memoryCopyMode: string;
+    performanceStats: {
+        wasmCalls: number;
+        jsFallbacks: number;
+        totalWasmTime: number;
+        totalJSTime: number;
+    };
+
     constructor() {
         this.wasmModule = null;
         this.isReady = false;
@@ -525,7 +547,14 @@ export class PSFCalculatorWasm {
      * @param {Object} options 計算オプション
      * @returns {Object} PSF計算結果
      */
-    async calculatePSFWasm(opdData, options = {}) {
+    async calculatePSFWasm(opdData, options: {
+        samplingSize?: number;
+        pupilDiameter?: number;
+        focalLength?: number;
+        zeroPadTo?: number;
+        wavelength?: number;
+        removeTilt?: boolean;
+    } = {}) {
         // 初期化チェック（失敗済みの場合は例外を投げる）
         if (this.initializationFailed) {
             throw new Error('WASM initialization failed - cannot use WASM calculator');
@@ -543,14 +572,15 @@ export class PSFCalculatorWasm {
 
         const startTime = performance.now();
         
-        try {
-            const {
-                samplingSize = 128,
-                pupilDiameter = 10.0,
-                focalLength = 100.0,
-                zeroPadTo = 0  // Zero-padding target size (0 = auto/disabled)
-            } = options;
+        // オプションの事前展開（catchブロックでも参照できるように）
+        const {
+            samplingSize = 128,
+            pupilDiameter = 10.0,
+            focalLength = 100.0,
+            zeroPadTo = 0  // Zero-padding target size (0 = auto/disabled)
+        } = options;
 
+        try {
             // 主波長の解決（μm）: 明示指定 > Sourceテーブル > 既定値
             const effectiveWavelength = (Number.isFinite(Number(options.wavelength)) && Number(options.wavelength) > 0)
                 ? Number(options.wavelength)
@@ -574,7 +604,12 @@ export class PSFCalculatorWasm {
             }
 
             // 詳細計測開始
-            const breakdown = {};
+            const breakdown: {
+                dataPreparationTime?: number;
+                memoryTransferTime?: number;
+                computationTime?: number;
+                dataConversionTime?: number;
+            } = {};
 
             // gridData が与えられている場合は「補間なし」でWASM FFTを回す
             if (opdData && opdData.gridData) {
@@ -645,7 +680,7 @@ export class PSFCalculatorWasm {
                 this.performanceStats.totalWasmTime += executionTime;
 
                 // 2D配列に変換
-                const psf2D = Array(samplingSize).fill().map(() => Array(samplingSize).fill(0));
+                const psf2D = Array(samplingSize).fill(null).map(() => Array(samplingSize).fill(0));
                 for (let i = 0; i < samplingSize; i++) {
                     for (let j = 0; j < samplingSize; j++) {
                         psf2D[i][j] = psfIntensity[i * samplingSize + j];
@@ -929,7 +964,7 @@ export class PSFCalculatorWasm {
             }
 
             // 2D配列に変換
-            const psf2D = Array(samplingSize).fill().map(() => Array(samplingSize).fill(0));
+            const psf2D = Array(samplingSize).fill(null).map(() => Array(samplingSize).fill(0));
             for (let i = 0; i < samplingSize; i++) {
                 for (let j = 0; j < samplingSize; j++) {
                     psf2D[i][j] = psfIntensity[i * samplingSize + j];
@@ -1127,6 +1162,11 @@ export class PSFCalculatorWasm {
  * WASMが利用可能な場合はWASM、そうでなければJavaScript版を使用
  */
 export class PSFCalculatorAuto {
+    wasmCalculator: PSFCalculatorWasm | null;
+    jsCalculator: any;
+    preferWasm: boolean;
+    isInitialized: boolean;
+
     constructor() {
         this.wasmCalculator = null;
         this.jsCalculator = null;
@@ -1175,7 +1215,15 @@ export class PSFCalculatorAuto {
      * @param {Object} options 計算オプション
      * @returns {Object} PSF計算結果
      */
-    async calculatePSF(opdData, options = {}) {
+    async calculatePSF(opdData, options: {
+        forceImplementation?: string;
+        samplingSize?: number;
+        pupilDiameter?: number;
+        focalLength?: number;
+        zeroPadTo?: number;
+        wavelength?: number;
+        removeTilt?: boolean;
+    } = {}) {
         const PSF_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__PSF_DEBUG);
         if (PSF_DEBUG) {
             console.log(`🔍 [PSF-AUTO] calculatePSF called with options:`, {

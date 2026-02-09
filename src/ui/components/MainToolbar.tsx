@@ -1,4 +1,17 @@
+import { 
+  handleNewFile, 
+  handleSave, 
+  handleLoad, 
+  handleLoadDefault, 
+  handleClearStorage,
+  handleImportZemax,
+  handleExportZemax,
+  handleOptimize
+} from '../../../ui/toolbar-handlers';
+
 export default function MainToolbar() {
+  console.log('[React] MainToolbar rendering');
+  
   return (
     <div className="top-buttons-container">
       <div className="top-file-row" id="loaded-file-display">
@@ -16,12 +29,12 @@ export default function MainToolbar() {
       <div className="top-buttons-row" id="top-buttons-row">
         <div className="button-group">
           <span className="button-group-label">File</span>
-          <button id="new-file-btn">New</button>
-          <button id="save-all-btn">Save</button>
-          <button id="load-all-btn">Load</button>
-          <button id="load-default-btn">Load Default System</button>
+          <button id="new-file-btn" onClick={handleNewFile}>New</button>
+          <button id="save-all-btn" onClick={handleSave}>Save</button>
+          <button id="load-all-btn" onClick={handleLoad}>Load</button>
+          <button id="load-default-btn" onClick={handleLoadDefault}>Load Default System</button>
           <button id="share-url-btn">Share</button>
-          <button id="clear-storage-btn">Clear Chashe</button>
+          <button id="clear-storage-btn" onClick={handleClearStorage}>Clear Chashe</button>
         </div>
 
         <div className="button-group">
@@ -29,12 +42,14 @@ export default function MainToolbar() {
           <button
             id="import-zemax-btn"
             title="Import a Zemax .zmx file (minimal subset)"
+            onClick={handleImportZemax}
           >
             Import Zemax
           </button>
           <button
             id="export-zemax-btn"
             title="Export current optical system as Zemax .zmx"
+            onClick={handleExportZemax}
           >
             Export Zemax
           </button>
@@ -64,6 +79,7 @@ export default function MainToolbar() {
           <button
             id="optimize-design-intent-btn"
             title="Optimize marked variables (V) to satisfy Requirements (all scenarios)."
+            onClick={handleOptimize}
           >
             Optimize
           </button>

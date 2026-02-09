@@ -40,6 +40,9 @@ async function loadWasmCalculatorDirect() {
  * 簡易FFT実装（Cooley-Tukey アルゴリズム）
  */
 export class SimpleFFT {
+    static __yieldQueue: any[];
+    static __yieldPort: any;
+
     static async _yieldToUI() {
         // NOTE:
         // - requestAnimationFrame can fully pause when a tab/window is not focused/visible.
@@ -70,7 +73,7 @@ export class SimpleFFT {
         await new Promise(resolve => setTimeout(resolve, 0));
     }
 
-    static fft2D(real, imag, options = {}) {
+    static fft2D(real, imag, options: { onProgress?: (data: any) => void } = {}) {
         const onProgress = (options && typeof options.onProgress === 'function') ? options.onProgress : null;
         const emit = (percent, phase, message) => {
             if (!onProgress) return;
@@ -135,7 +138,7 @@ export class SimpleFFT {
         return { real, imag };
     }
 
-    static async fft2DAsync(real, imag, options = {}) {
+    static async fft2DAsync(real, imag, options: { onProgress?: (data: any) => void; yieldEvery?: number } = {}) {
         const onProgress = (options && typeof options.onProgress === 'function') ? options.onProgress : null;
         const yieldEvery = (options && Number.isFinite(options.yieldEvery)) ? Math.max(1, Math.floor(options.yieldEvery)) : 4;
         const emit = (percent, phase, message) => {
@@ -266,6 +269,14 @@ export class SimpleFFT {
  * OPDからPSFを計算するメインクラス（WASM対応）
  */
 export class PSFCalculator {
+    lastCalculationData: any;
+    supportedSamplings: number[];
+    wasmCalculator: any;
+    useWasm: boolean;
+    performanceMode: string;
+    spatialBinsOverride: number | null;
+    _wasmInitPromise: Promise<void> | null;
+
     constructor() {
         this.lastCalculationData = null;
                 this.supportedSamplings = [32, 64, 128, 256, 512, 1024, 2048, 4096];

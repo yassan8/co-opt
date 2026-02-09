@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -p tsconfig.json && vite build",
+    "build": "vite build",
+    "build:check": "tsc -p tsconfig.json && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

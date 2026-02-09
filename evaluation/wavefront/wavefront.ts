@@ -501,6 +501,36 @@ function findStopSurfaceIndex(opticalSystemRows) {
  * 基準光線（主光線）に対する周辺光線の光路差を計算する
  */
 export class OpticalPathDifferenceCalculator {
+    opticalSystemRows: any[];
+    wavelength: number;
+    stopSurfaceIndex: number;
+    referenceOpticalPath: number | null;
+    referenceChiefRay: any;
+    lastRayCalculation: any;
+    lastFieldKey: string | null;
+    _chiefRayCache: Map<any, any>;
+    mirrorSign: number;
+    _stopCenterOverrideCache: Map<any, any>;
+    _infinitePupilModeCache: Map<any, any>;
+    _entrancePupilConfigCache: Map<any, any>;
+    _lastMarginalRayGenFailure: any;
+    _lastStopHitInfo: any;
+    _surfaceOrigins: any;
+    evaluationSurfaceIndex: number;
+    traceMaxSurfaceIndex: number;
+    _recordedSurfaceIndices: any[];
+    _recordedPointIndexBySurfaceIndex: Map<any, any>;
+    _cachedStopRadiusMm: number | null;
+    _cachedEntranceRadiusMm: number | null;
+    _cachedFirstSurfaceZ: number | null;
+    _entrancePupilBuildLogged: boolean;
+    _wavefrontProfile: any;
+    _referenceRayUsedRelaxStopMissTol: boolean;
+    _lastMarginalRayOrigin: any;
+    _lastMarginalRayOriginGeom: any;
+    _lastMarginalRayOriginDelta: any;
+    _referenceSphereCache: Map<any, any>;
+
     constructor(opticalSystemRows, wavelength = 0.5876) {
         // 🆕 初期化時の詳細検証
         if (!opticalSystemRows) {
@@ -599,6 +629,13 @@ export class OpticalPathDifferenceCalculator {
         this._cachedStopRadiusMm = null;
         this._cachedEntranceRadiusMm = null;
         this._cachedFirstSurfaceZ = null;
+        this._entrancePupilBuildLogged = false;
+        this._wavefrontProfile = null;
+        this._referenceRayUsedRelaxStopMissTol = false;
+        this._lastMarginalRayOrigin = null;
+        this._lastMarginalRayOriginGeom = null;
+        this._lastMarginalRayOriginDelta = null;
+        this._referenceSphereCache = new Map();
 
         if (__cooptIsOPDDebugNow()) {
             console.log(`🔍 OPD Calculator 初期化: 波長=${wavelength}μm, 絞り面インデックス=${this.stopSurfaceIndex}`);

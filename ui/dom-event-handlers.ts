@@ -25,7 +25,7 @@ import {
     encodeAllDataToCompressedString,
     buildShareUrlFromCompressedString
 } from '../utils/url-share.ts';
-import { setupOpticalSystemChangeListeners } from './event-handlers.ts';
+import { setupOpticalSystemChangeListeners, setupAnalysisWindows } from './event-handlers.ts';
 import { listDesignVariablesFromBlocks } from '../optimization/design-variables.ts';
 
 // Type definitions
@@ -826,6 +826,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
 
 function setupLoadAllButton(): void {
     const btn = document.getElementById('load-all-btn');
+    console.log('🔧 [Setup] setupLoadAllButton - button found:', !!btn);
     if (!btn) return;
 
     const loadHandler = () => {
@@ -941,6 +942,7 @@ function setupExportZemaxButton(): void {
 // Setup Optimization Buttons
 function setupOptimizeDesignIntentButton(): void {
     const optimizeBtn = document.getElementById('optimize-design-intent-btn') as HTMLButtonElement | null;
+    console.log('🔧 [Setup] setupOptimizeDesignIntentButton - button found:', !!optimizeBtn);
     if (!optimizeBtn) return;
 
     optimizeBtn.addEventListener('click', async () => {
@@ -2047,6 +2049,7 @@ function setupSuggestOptimizeButtons(): void {
 // Setup New File Button
 function setupNewFileButton(): void {
     const btn = document.getElementById('new-file-btn');
+    console.log('🔧 [Setup] setupNewFileButton - button found:', !!btn);
     if (!btn) return;
 
     // Remove existing listener to prevent duplicates
@@ -2136,6 +2139,7 @@ function setupNewFileButton(): void {
 // Setup Save Button
 function setupSaveButton(): void {
     const btn = document.getElementById('save-all-btn');
+    console.log('🔧 [Setup] setupSaveButton - button found:', !!btn);
     if (!btn) return;
 
     const saveHandler = () => {
@@ -2546,7 +2550,7 @@ function setupCoordinateTransformButton(): void {
 }
 
 function setupSpotDiagramButton(): void {
-    const btn = document.getElementById('spot-diagram-btn');
+    const btn = document.getElementById('show-spot-diagram-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
         if (typeof w.showSpotDiagram === 'function') {
@@ -2556,7 +2560,7 @@ function setupSpotDiagramButton(): void {
 }
 
 function setupLongitudinalAberrationButton(): void {
-    const btn = document.getElementById('longitudinal-aberration-btn');
+    const btn = document.getElementById('show-longitudinal-aberration-diagram-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
         if (typeof w.showLongitudinalAberration === 'function') {
@@ -2566,7 +2570,7 @@ function setupLongitudinalAberrationButton(): void {
 }
 
 function setupTransverseAberrationButton(): void {
-    const btn = document.getElementById('transverse-aberration-btn');
+    const btn = document.getElementById('show-transverse-aberration-diagram-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
         if (typeof w.showTransverseAberration === 'function') {
@@ -2576,7 +2580,7 @@ function setupTransverseAberrationButton(): void {
 }
 
 function setupDistortionButton(): void {
-    const btn = document.getElementById('distortion-btn');
+    const btn = document.getElementById('show-distortion-diagram-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
         if (typeof w.showDistortion === 'function') {
@@ -2586,7 +2590,7 @@ function setupDistortionButton(): void {
 }
 
 function setupIntegratedAberrationButton(): void {
-    const btn = document.getElementById('integrated-aberration-btn');
+    const btn = document.getElementById('show-integrated-aberration-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
         if (typeof w.showIntegratedAberration === 'function') {
@@ -2596,7 +2600,7 @@ function setupIntegratedAberrationButton(): void {
 }
 
 function setupAstigmatismButton(): void {
-    const btn = document.getElementById('astigmatism-btn');
+    const btn = document.getElementById('show-astigmatism-diagram-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
         if (typeof w.showAstigmatism === 'function') {
@@ -3200,6 +3204,25 @@ function formatBlockPreview(block: any): string {
         if (String(r2) !== '') parts.push(`R2=${String(r2)}`);
         if (String(ct) !== '') parts.push(`CT=${String(ct)}`);
         if (String(mat) !== '') parts.push(`G=${String(mat)}`);
+        return parts.join(' ');
+    }
+
+    if (type === 'Doublet') {
+        const r1 = pick('radius1');
+        const r2 = pick('radius2');
+        const r3 = pick('radius3');
+        const t1 = pick('thickness1');
+        const t2 = pick('thickness2');
+        const mat1 = pick('material1');
+        const mat2 = pick('material2');
+        const parts = [];
+        if (String(r1) !== '') parts.push(`R1=${String(r1)}`);
+        if (String(r2) !== '') parts.push(`R2=${String(r2)}`);
+        if (String(r3) !== '') parts.push(`R3=${String(r3)}`);
+        if (String(t1) !== '') parts.push(`T1=${String(t1)}`);
+        if (String(t2) !== '') parts.push(`T2=${String(t2)}`);
+        if (String(mat1) !== '') parts.push(`G1=${String(mat1)}`);
+        if (String(mat2) !== '') parts.push(`G2=${String(mat2)}`);
         return parts.join(' ');
     }
 
@@ -4254,6 +4277,59 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 }
             }
 
+            // Add aperture section for blocks that have aperture data
+            const aperture = (realBlock.aperture && typeof realBlock.aperture === 'object') ? realBlock.aperture : null;
+            if (aperture && Object.keys(aperture).length > 0) {
+                panel.appendChild(createSectionTitle('Aperture (Semidiameter)'));
+                
+                // Sort aperture keys (s1, s2, s3, etc.)
+                const apertureKeys = Object.keys(aperture).sort();
+                for (const key of apertureKeys) {
+                    const value = (aperture as any)[key];
+                    
+                    // Create row with optimize checkbox and scope selector
+                    const apertureRow = document.createElement('div');
+                    apertureRow.style.display = 'flex';
+                    apertureRow.style.alignItems = 'center';
+                    apertureRow.style.gap = '6px';
+                    apertureRow.style.marginBottom = '6px';
+
+                    // Optimize checkbox
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.style.flex = '0 0 auto';
+                    cb.style.width = '16px';
+                    cb.style.height = '16px';
+                    cb.style.margin = '0 4px 0 0';
+                    cb.checked = false; // Aperture typically not optimized
+                    cb.addEventListener('click', (e) => e.stopPropagation());
+
+                    // Scope select (Per-config / Shared)
+                    const scopeSel = document.createElement('select');
+                    scopeSel.style.flex = '0 0 110px';
+                    scopeSel.style.fontSize = '12px';
+                    scopeSel.style.padding = '2px 4px';
+                    scopeSel.innerHTML = '<option value="perConfig">Per-config</option><option value="global">Shared (all configs)</option>';
+                    scopeSel.value = 'perConfig';
+                    scopeSel.disabled = true;
+                    scopeSel.addEventListener('click', (e) => e.stopPropagation());
+
+                    cb.addEventListener('change', (e) => {
+                        e.stopPropagation();
+                        try { scopeSel.disabled = !cb.checked; } catch (_) {}
+                    });
+
+                    const innerRow = createRow(key, value, `aperture.${key}`);
+                    innerRow.style.flex = '1';
+                    innerRow.style.marginBottom = '0';
+
+                    apertureRow.appendChild(cb);
+                    apertureRow.appendChild(scopeSel);
+                    apertureRow.appendChild(innerRow);
+                    panel.appendChild(apertureRow);
+                }
+            }
+
             if (varKeys.length > 0) {
                 for (const key of varKeys) {
                     // Skip if this key is already shown in Parameters
@@ -4515,6 +4591,18 @@ function setupApplyToDesignIntentButton(): void {
 // Main DOM Event Handlers Setup Function
 export function setupDOMEventHandlers(): void {
     console.log('🔵 [DOM] Setting up DOM event handlers...');
+    
+    // Check if main toolbar buttons exist
+    const criticalButtons = [
+        'new-file-btn', 'save-all-btn', 'load-all-btn', 'load-default-btn',
+        'import-zemax-btn', 'export-zemax-btn', 'optimize-design-intent-btn',
+        'clear-storage-btn'
+    ];
+    console.log('🔵 [DOM] Critical buttons check:');
+    criticalButtons.forEach(id => {
+        const btn = document.getElementById(id);
+        console.log(`  ${id}: ${btn ? '✅' : '❌'}`);
+    });
 
     try {
         setupImportZemaxButton();
@@ -4586,17 +4674,37 @@ export async function loadFromCompressedDataHashIfPresent(): Promise<{ ok: boole
 
 // Auto-initialize on module load
 if (typeof window !== 'undefined') {
+    // Listen for React mount event to setup ALL handlers after React renders
+    document.addEventListener('coopt:react-mounted', () => {
+        console.log('🔵 [DOM] React mounted, setting up ALL event handlers...');
+        // Wait a bit for React to finish rendering all components
+        setTimeout(() => {
+            console.log('🔵 [DOM] Executing setupDOMEventHandlers...');
+            setupDOMEventHandlers();
+            console.log('🔵 [DOM] Executing setupOpticalSystemChangeListeners...');
+            setupOpticalSystemChangeListeners(null);
+            console.log('🔵 [DOM] Executing setupAnalysisWindows...');
+            setupAnalysisWindows();
+            console.log('✅ [DOM] All event handlers setup complete');
+        }, 200);
+    });
+    
+    // Fallback: if React doesn't mount for some reason
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
-            setupDOMEventHandlers();
+            setTimeout(() => {
+                console.log('⚠️ [DOM] Fallback initialization (React may not have mounted yet)');
+                setupDOMEventHandlers();
+                setupOpticalSystemChangeListeners(null);
+                setupAnalysisWindows();
+            }, 1000);
         });
     } else {
-        setupDOMEventHandlers();
+        setTimeout(() => {
+            console.log('⚠️ [DOM] Immediate fallback initialization');
+            setupDOMEventHandlers();
+            setupOpticalSystemChangeListeners(null);
+            setupAnalysisWindows();
+        }, 1000);
     }
-    
-    // Listen for React mount event to setup handlers that depend on React-rendered elements
-    document.addEventListener('coopt:react-mounted', () => {
-        console.log('🔵 [DOM] React mounted, setting up React-dependent handlers...');
-        setupOpticalSystemChangeListeners(null);
-    });
 }

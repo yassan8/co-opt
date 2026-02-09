@@ -1259,6 +1259,14 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
 <head>
     <meta charset="UTF-8" />
     <title>Render Optical System</title>
+    <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+    </script>
     <style>
         html, body { height: 100%; }
         body {
@@ -1429,16 +1437,20 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
         </div>
     </div>
 
-    <script>
-        const THREE = window.opener.THREE;
-        const OrbitControls = window.opener.OrbitControls || window.opener.THREE?.OrbitControls;
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         
-        if (!THREE) {
-            document.body.innerHTML = '<div style="padding:20px;">THREE.js not available from parent window.</div>';
-            throw new Error('THREE.js not available');
-        }
+        console.log('THREE.js loaded in popup:', !!THREE);
         
-        function setupScene() {
+        // Try to get THREE from parent first, fallback to imported version
+        const parentTHREE = window.opener && window.opener.THREE;
+        const useTHREE = parentTHREE || THREE;
+        const useOrbitControls = (window.opener && window.opener.OrbitControls) || OrbitControls;
+        
+        console.log('Using THREE from:', parentTHREE ? 'parent window' : 'local import');
+        
+        function initializePopup(THREE, OrbitControls) {
             const container = document.getElementById('threejs-container');
             const status = document.getElementById('status');
             
@@ -1979,7 +1991,8 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             }
         }
         
-        initPopup();
+        // Initialize with the loaded THREE.js
+        initializePopup(useTHREE, useOrbitControls);
     </script>
 </body>
 </html>

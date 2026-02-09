@@ -133,17 +133,43 @@
       }
     }
   </script>
-  <script type="module" crossorigin src="/co-opt/assets/main-DI1TLM2n.js"></script>
-  <script type="module" crossorigin src="/co-opt/assets/app-Coh2xVWF.js"></script>
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-CwONY8Bt.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-DI1TLM2n.js">
+  <script type="module" crossorigin src="/co-opt/assets/main-BXS3_itw.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-Btrvaw8N.js"></script>
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-Dl_-XlCu.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-BXS3_itw.js">
   <link rel="stylesheet" crossorigin href="/co-opt/assets/app-BXfHVPvf.css">
 </head>
 <body>
 
   <div id="react-root"></div>
   
-  <!-- Load main.ts in dev mode (will be replaced by Vite plugin in production) -->
+  <!-- Early initialization: Set up getWASMSystem placeholder before modules load -->
+  <script>
+    // WASMシステムの初期化（モジュール読み込み前）
+    (function() {
+      let wasmSystemInstance = null;
+      
+      const getWASMSystemGlobal = function() {
+        return wasmSystemInstance;
+      };
+      
+      // グローバルに公開
+      if (typeof window !== 'undefined') {
+        window.getWASMSystem = getWASMSystemGlobal;
+        // main.tsがwasmSystemを設定できるようにする
+        window._setWASMSystem = function(instance) {
+          wasmSystemInstance = instance;
+        };
+        console.log('🔧 [Early Init] window.getWASMSystem を事前設定しました');
+      }
+      if (typeof globalThis !== 'undefined') {
+        globalThis.getWASMSystem = getWASMSystemGlobal;
+        globalThis._setWASMSystem = function(instance) {
+          wasmSystemInstance = instance;
+        };
+      }
+    })();
+  </script>
   
   <!-- Undo/Redo System -->
   <script>
@@ -223,7 +249,6 @@
         (async () => {
           try {
             const rayTracing = await import('/co-opt/assets/ray-tracing-CPMJprdW.ts');
-            const debugUtils = await import('/co-opt/assets/debug-utils-Bi7kCx71.ts');
             
             // getWASMSystemは既にmain.tsでグローバルに公開済み
             
@@ -273,12 +298,6 @@
               window.surfaceNormal = rayTracing.surfaceNormal;
             }
             
-            // WASMデバッグ関数はmain.tsで既にグローバルに公開済み
-            if (typeof debugUtils.debugWASMSystem === 'function') {
-              window.debugWASMSystem = debugUtils.debugWASMSystem;
-              window.quickWASMComparison = debugUtils.quickWASMComparison;
-            }
-            
             // 絞り周辺光線モジュールを読み込み
             import('/co-opt/assets/ray-marginal-D2MMmUb6.ts').then(marginalRayModule => {
               window.calculateMarginalRay = marginalRayModule.calculateMarginalRay;
@@ -303,27 +322,41 @@
   <script>
     // ForceWASMSystemの確実な初期化確認
     document.addEventListener('DOMContentLoaded', function() {
-      // Force WASM システムの確認
-      setTimeout(() => {
-        if (typeof window.getWASMSystem !== 'function') {
-          console.warn('⚠️ getWASMSystem がグローバルスコープにありません。main.ts での初期化を確認中...');
-        } else {
+      // Force WASM システムの確認（ポーリング方式）
+      let checkCount = 0;
+      const maxChecks = 50; // 最大5秒待機（100ms x 50）
+      
+      const checkWASMSystem = () => {
+        checkCount++;
+        if (typeof window.getWASMSystem === 'function') {
+          console.log('✅ getWASMSystem グローバル関数が利用可能です');
           const wasmSystem = window.getWASMSystem?.();
           if (wasmSystem) {
-            console.log('✅ ForceWASMSystem 初期化完了');
-          }
-        }
-
-        setTimeout(() => {
-          // console.log('🔧 [PSF] DOMContentLoaded後のPSFオブジェクト選択初期化');
-          if (typeof window.setupPSFObjectSelect === 'function') {
-            window.setupPSFObjectSelect();
+            console.log('✅ ForceWASMSystem インスタンスが取得できました');
           }
           
-          // PSF WASM状況の初期化
-          initializePSFWasmStatus();
-        }, 3000);
-      }, 2000);
+          // PSF関連の初期化
+          setTimeout(() => {
+            if (typeof window.setupPSFObjectSelect === 'function') {
+              window.setupPSFObjectSelect();
+            }
+            if (typeof initializePSFWasmStatus === 'function') {
+              initializePSFWasmStatus();
+            }
+          }, 1000);
+          
+          return; // 成功したので終了
+        }
+        
+        if (checkCount < maxChecks) {
+          setTimeout(checkWASMSystem, 100); // 100ms後に再チェック
+        } else {
+          console.error('❌ getWASMSystem がタイムアウトしました。main.ts の初期化を確認してください。');
+        }
+      };
+      
+      // 最初のチェックを少し遅延させる
+      setTimeout(checkWASMSystem, 100);
     });
   </script>
 
@@ -524,7 +557,7 @@
       
       try {
         // PSFCalculatorを動的インポート
-        const { PSFCalculator } = await import('/co-opt/assets/psf-calculator-BQyCl5_a.ts');
+        const { PSFCalculator } = await import('/co-opt/assets/psf-calculator-B7Kx4qWO.ts');
         const psfCalculator = new PSFCalculator();
         
         // 初期化を待機

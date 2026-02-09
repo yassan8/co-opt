@@ -5,11 +5,13 @@
  * It initializes the application using modular components and sets up the main functionality.
  */
 
-
+console.log('🚀 [main.ts] Starting to load main.ts module');
 
 // =============================================================================
 // IMPORTS
 // =============================================================================
+
+console.log('🚀 [main.ts] Importing THREE.js...');
 
 // Core modules
 import { APP_CONFIG, initializeReferences, setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration, getCamera, getControls } from './core/app-config.ts';
@@ -72,15 +74,14 @@ import { expandBlocksToOpticalSystemRows } from './data/block-schema.ts';
 
 // Editor modules (must be imported to initialize)
 import './ui/editors/system-requirements-editor.ts';
+// Editor modules (must be imported to initialize)
+import './ui/editors/system-requirements-editor.ts';
 import './ui/editors/merit-function-editor.ts';
 
 
 
 // Suggest (Design Intent) implementation (adds window.SuggestDesignIntent)
-import './optimization/suggest-design-intent.js';
-
-// Debug modules
-import { debugSceneContents, debugDrawingIssues, adjustCameraView, showSceneBoundingBox } from './debug/debug-utils.ts';
+import './optimization/suggest-design-intent.ts';
 
 // Analysis modules
 import { clearAllDrawing, showSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene } from './analysis/optical-analysis.ts';
@@ -89,7 +90,8 @@ import { clearAllDrawing, showSpotDiagram, showTransverseAberrationDiagram, show
 // import { performanceMonitor } from './performance-monitor.ts';
 
 // WASM acceleration system
-import { ForceWASMSystem } from './wasm/raytracing/force-wasm-system.ts';
+// Temporarily commented out to test loading
+// import { ForceWASMSystem } from './wasm/raytracing/force-wasm-system.ts';
 
 // THREE.js and OrbitControls imports
 import * as THREE from 'three';
@@ -115,18 +117,29 @@ window.THREE = THREE;
 window.OrbitControls = OrbitControls;
 
 // Export ForceWASMSystem class to global scope
-window.ForceWASMSystem = ForceWASMSystem;
-if (typeof globalThis !== 'undefined') {
-    globalThis.ForceWASMSystem = ForceWASMSystem;
-}
+// Temporarily commented out
+// window.ForceWASMSystem = ForceWASMSystem;
+// if (typeof globalThis !== 'undefined') {
+//     globalThis.ForceWASMSystem = ForceWASMSystem;
+// }
 
 // Global WASM system instance
 let wasmSystem = null;
 
-// Expose WASM system getter for modules that want optional fast-paths.
-// (e.g., ray-tracing.js / surface-math.js look for globalThis.getWASMSystem)
-if (typeof globalThis !== 'undefined' && typeof globalThis.getWASMSystem !== 'function') {
-    globalThis.getWASMSystem = () => wasmSystem;
+// Note: window.getWASMSystem is pre-initialized in index.html
+// We just need to update the instance reference when WASM is ready
+if (typeof window !== 'undefined' && typeof window._setWASMSystem === 'function') {
+    console.log('🔧 [Init] 事前設定されたgetWASMSystemを使用します');
+} else {
+    // Fallback: Set up our own getter if not pre-initialized
+    const getWASMSystemGlobal = () => wasmSystem;
+    if (typeof globalThis !== 'undefined') {
+        globalThis.getWASMSystem = getWASMSystemGlobal;
+    }
+    if (typeof window !== 'undefined') {
+        window.getWASMSystem = getWASMSystemGlobal;
+        console.log('🔧 [Init] window.getWASMSystem をフォールバックとして設定しました');
+    }
 }
 
 // =============================================================================
@@ -137,29 +150,43 @@ if (typeof globalThis !== 'undefined' && typeof globalThis.getWASMSystem !== 'fu
  * Initialize the main application
  */
 async function initializeApplication() {
+    console.log('🚀 [Init] initializeApplication() started');
     try {
-        // Initialize WASM system
-        try {
-            wasmSystem = new ForceWASMSystem();
-            // Ensure getter returns the latest instance even if initialization fails.
-            if (typeof globalThis !== 'undefined') globalThis.getWASMSystem = () => wasmSystem;
-            
-            // Add a longer timeout for WASM initialization
-            const initTimeout = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('WASM initialization timeout')), 10000)
-            );
-            
-            await Promise.race([
-                wasmSystem.forceInitializeWASM(),
-                initTimeout
-            ]);
-        } catch (error) {
-            console.warn('⚠️ WASM initialization failed:', error);
-            // Set a flag to indicate WASM is not available
-            if (wasmSystem) {
-                wasmSystem.isWASMReady = false;
+        // Initialize WASM system (non-blocking - run in background)
+        const wasmInitPromise = (async () => {
+            try {
+                // Temporarily skip WASM initialization
+                console.log('⚠️ [Init] WASM system temporarily disabled');
+                return;
+                // wasmSystem = new ForceWASMSystem();
+                console.log('🔧 [Init] ForceWASMSystem インスタンスを作成しました');
+                
+                // Update the global reference immediately
+                if (typeof window !== 'undefined' && typeof window._setWASMSystem === 'function') {
+                    window._setWASMSystem(wasmSystem);
+                    console.log('🔧 [Init] window._setWASMSystemでインスタンスを更新しました');
+                }
+                
+                // Shorter timeout for WASM initialization
+                const initTimeout = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('WASM initialization timeout')), 3000)
+                );
+                
+                await Promise.race([
+                    wasmSystem.forceInitializeWASM(),
+                    initTimeout
+                ]);
+                console.log('✅ [Init] WASM初期化が完了しました');
+            } catch (error) {
+                console.warn('⚠️ WASM initialization failed:', error);
+                // Set a flag to indicate WASM is not available
+                if (wasmSystem) {
+                    wasmSystem.isWASMReady = false;
+                }
             }
-        }
+        })();
+        
+        // Don't wait for WASM - continue with UI initialization immediately
         
         // Initialize THREE.js scene components
         const { scene, camera, renderer, controls } = initializeThreeJS();
@@ -273,10 +300,23 @@ async function initializeApplication() {
 
         try {
             window.rebindEventHandlers = () => {
+                console.log('🔄 [Rebind] rebindEventHandlers called');
+                const mainToolbarBtns = [
+                    'new-file-btn', 'save-all-btn', 'load-all-btn', 'load-default-btn',
+                    'import-zemax-btn', 'export-zemax-btn', 'optimize-design-intent-btn'
+                ];
+                console.log('🔄 [Rebind] Checking button existence:');
+                mainToolbarBtns.forEach(id => {
+                    const btn = document.getElementById(id);
+                    console.log(`  ${id}: ${btn ? '✅ found' : '❌ NOT FOUND'}`);
+                });
+                
                 try { initializeUIEventListeners(); } catch (_) {}
                 try { setupDOMEventHandlers(); } catch (_) {}
                 try { initializeConfigurationUI(); } catch (_) {}
                 try { if (window.scene) setupOpticalSystemChangeListeners(window.scene); } catch (_) {}
+                
+                console.log('✅ [Rebind] rebindEventHandlers completed');
             };
         } catch (_) {}
         
@@ -297,9 +337,9 @@ async function initializeApplication() {
         }, 1000);
         
         // Export functions to global scope for debugging
-        window.debugSceneContents = debugSceneContents;
-        window.adjustCameraView = adjustCameraView;
-        window.showSceneBoundingBox = showSceneBoundingBox;
+        // window.debugSceneContents = debugSceneContents; // removed - debug-utils.ts deleted
+        // window.adjustCameraView = adjustCameraView; // removed - debug-utils.ts deleted
+        // window.showSceneBoundingBox = showSceneBoundingBox; // removed - debug-utils.ts deleted
         window.fitCameraToScene = fitCameraToScene;
         window.clearAllDrawing = clearAllDrawing;
         window.showSpotDiagram = showSpotDiagram;
@@ -1899,6 +1939,8 @@ const startApplicationOnce = (() => {
         // Setup Undo/Redo button handlers
         const undoBtn = document.getElementById('undo-btn');
         const redoBtn = document.getElementById('redo-btn');
+        
+        console.log('[Init] Setting up Undo/Redo buttons:', { undoBtn: !!undoBtn, redoBtn: !!redoBtn });
 
         if (undoBtn) {
             undoBtn.addEventListener('click', () => {
@@ -1962,13 +2004,25 @@ const scheduleApplicationStart = () => {
     const hasReactRoot = !!document.getElementById('react-root');
     if (hasReactRoot) {
         if (window.__cooptReactMounted) {
+            console.log('🚀 [Init] React already mounted, starting immediately');
             startApplicationOnce();
             return;
         }
+        console.log('🚀 [Init] Waiting for React to mount...');
         window.addEventListener('coopt:react-mounted', () => {
+            console.log('🚀 [Init] Received coopt:react-mounted event');
             startApplicationOnce();
         }, { once: true });
+        
+        // Fallback: If React hasn't fired the event within 2 seconds, start anyway
+        setTimeout(() => {
+            if (!window.__cooptReactMounted) {
+                console.warn('⚠️ [Init] React mount event timeout, starting anyway');
+                startApplicationOnce();
+            }
+        }, 2000);
     } else {
+        console.log('🚀 [Init] No React root found, starting immediately');
         startApplicationOnce();
     }
 };
@@ -1989,7 +2043,8 @@ export {
     initializeApplication,
     drawOpticalSystemSurfaceWrapper,
     improvedDrawOpticalSystemSurfaceWrapper,
-    drawOptimizedRaysFromObjects
+    drawOptimizedRaysFromObjects,
+    getWASMSystem
 };
 
 /**
@@ -2320,12 +2375,11 @@ function getCurrentOpticalSystem() {
 }
 
 // Export WASM system for use in other modules
-export function getWASMSystem() {
+function getWASMSystem() {
     return wasmSystem;
 }
 
-// Global access to WASM system
-window.getWASMSystem = getWASMSystem;
+// Note: window.getWASMSystem is already set at module top level
 
 // =============================================================================
 // ANALYSIS DROPDOWN HANDLER

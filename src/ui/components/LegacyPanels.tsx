@@ -112,7 +112,7 @@ export default function LegacyPanels() {
           <button id="calculate-seidel-btn">Aberration Coefficients</button>
           <button id="calculate-seidel-afocal-btn">Aberration Coefficients (Afocal)</button>
           <label htmlFor="reference-focal-length">Reference Focal Length:</label>
-          <input type="text" id="reference-focal-length" placeholder="Auto" style={{ width: 80 }} />
+          <input type="text" id="reference-focal-length" placeholder="Auto" style={{ width: '80px' }} />
           <button id="coord-transform-btn">Coord Transform</button>
           <br />
           <label htmlFor="transform-surface-select" style={{ marginTop: 8 }}>

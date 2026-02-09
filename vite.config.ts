@@ -12,11 +12,13 @@ export default defineConfig({
       transformIndexHtml: {
         order: 'post',
         handler(html, ctx) {
-          // Remove the dev mode main.ts script tag
-          html = html.replace(/<script type="module" src="\/main\.ts"><\/script>\s*/g, '');
-          
-          // Find the main.js bundle file name from the bundle
+          // In production: Remove the dev mode main.ts script tag and add bundled version
+          // In development: Keep the /main.ts script tag as-is
           if (ctx.bundle) {
+            // Production mode: replace with bundled version
+            html = html.replace(/<script type="module" src="\/main\.ts"><\/script>\s*/g, '');
+            
+            // Find the main.js bundle file name from the bundle
             const mainChunk = Object.values(ctx.bundle).find(
               (chunk: any) => chunk.type === 'chunk' && chunk.name === 'main'
             );
@@ -32,6 +34,7 @@ export default defineConfig({
               return html.replace('</head>', '  ' + scriptTag + '</head>');
             }
           }
+          // Development mode: keep the /main.ts script tag as-is
           return html;
         }
       }
