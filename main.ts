@@ -139,12 +139,11 @@ if (typeof globalThis !== 'undefined' && typeof globalThis.getWASMSystem !== 'fu
 async function initializeApplication() {
     try {
         // Initialize WASM system
-        wasmSystem = new ForceWASMSystem();
-        // Ensure getter returns the latest instance even if initialization fails.
         try {
+            wasmSystem = new ForceWASMSystem();
+            // Ensure getter returns the latest instance even if initialization fails.
             if (typeof globalThis !== 'undefined') globalThis.getWASMSystem = () => wasmSystem;
-        } catch (_) {}
-        try {
+            
             // Add a longer timeout for WASM initialization
             const initTimeout = new Promise((_, reject) => 
                 setTimeout(() => reject(new Error('WASM initialization timeout')), 10000)
@@ -154,11 +153,12 @@ async function initializeApplication() {
                 wasmSystem.forceInitializeWASM(),
                 initTimeout
             ]);
-            
-
         } catch (error) {
+            console.warn('⚠️ WASM initialization failed:', error);
             // Set a flag to indicate WASM is not available
-            wasmSystem.isWASMReady = false;
+            if (wasmSystem) {
+                wasmSystem.isWASMReady = false;
+            }
         }
         
         // Initialize THREE.js scene components
