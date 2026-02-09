@@ -7,31 +7,31 @@ declare global {
 const w: Record<string, any> = window;
 
 // merit-function-editor.ts
-import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.js';
+import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.ts';
 import {
     calculateFullSystemParaxialTrace,
     calculateParaxialData,
     findStopSurfaceIndex
-} from '../../compat/ray-paraxial.js';
+} from '../../compat/ray-paraxial.ts';
 import {
     traceRay,
     traceRayHitPoint,
     calculateSurfaceOrigins,
     transformPointToLocal
-} from '../../compat/ray-tracing.js';
+} from '../../compat/ray-tracing.ts';
 import {
     getOpticalSystemRows,
     getObjectRows,
     getSourceRows
-} from '../../compat/data-utils.js';
-import { calculateSeidelCoefficients } from '../../compat/seidel-coefficients.js';
-import { calculateAfocalSeidelCoefficientsIntegrated } from '../../evaluation/aberrations/seidel-coefficients-afocal.js';
-import { generateSpotDiagram, generateSurfaceOptions } from '../../evaluation/spot-diagram.js';
-import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../../evaluation/wavefront/wavefront.js';
-import { expandBlocksToOpticalSystemRows } from '../../data/block-schema.js';
-import { generateRayStartPointsForObject, setRayEmissionPattern, getRayEmissionPattern } from '../../optical/ray-renderer.js';
-import { calculateLongitudinalAberration } from '../../evaluation/aberrations/longitudinal-aberration.js';
-import { getTableOpticalSystem, getTableObject, getTableSource } from '../../core/app-config.js';
+} from '../../compat/data-utils.ts';
+import { calculateSeidelCoefficients } from '../../compat/seidel-coefficients.ts';
+import { calculateAfocalSeidelCoefficientsIntegrated } from '../../evaluation/aberrations/seidel-coefficients-afocal.ts';
+import { generateSpotDiagram, generateSurfaceOptions } from '../../evaluation/spot-diagram.ts';
+import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../../evaluation/wavefront/wavefront.ts';
+import { expandBlocksToOpticalSystemRows } from '../../data/block-schema.ts';
+import { generateRayStartPointsForObject, setRayEmissionPattern, getRayEmissionPattern } from '../../optical/ray-renderer.ts';
+import { calculateLongitudinalAberration } from '../../evaluation/aberrations/longitudinal-aberration.ts';
+import { getTableOpticalSystem, getTableObject, getTableSource } from '../../core/app-config.ts';
 
 function isPlainObject(value: any): boolean {
     return (
@@ -372,6 +372,89 @@ class MeritFunctionEditor {
                         }
                     },
                     {
+                        title: "-",
+                        field: "param5",
+                        width: 100,
+                        editor: (cell: any, onRendered: any, success: any, cancel: any) => {
+                            const rowData = cell.getRow().getData();
+                            const operandType = rowData?.operand || '';
+                            const isSpotSizeOperand = operandType.startsWith('SPOT_SIZE');
+                            
+                            if (isSpotSizeOperand) {
+                                // Create dropdown for SPOT_SIZE operands
+                                const select = document.createElement('select');
+                                select.style.width = '100%';
+                                select.style.height = '100%';
+                                select.style.border = 'none';
+                                select.style.padding = '4px';
+                                
+                                const surfaceList = this.getSurfaceList(rowData);
+                                Object.entries(surfaceList).forEach(([value, label]) => {
+                                    const option = document.createElement('option');
+                                    option.value = value;
+                                    option.textContent = String(label);
+                                    select.appendChild(option);
+                                });
+                                
+                                const currentValue = String(cell.getValue() || '');
+                                select.value = currentValue;
+                                
+                                select.addEventListener('change', () => {
+                                    success(select.value);
+                                });
+                                
+                                select.addEventListener('blur', () => {
+                                    success(select.value);
+                                });
+                                
+                                return select;
+                            } else {
+                                // Create text input for other operands
+                                const input = document.createElement('input');
+                                input.type = 'text';
+                                input.style.width = '100%';
+                                input.style.height = '100%';
+                                input.style.border = 'none';
+                                input.style.padding = '4px';
+                                input.value = cell.getValue() || '';
+                                
+                                input.addEventListener('blur', () => {
+                                    success(input.value);
+                                });
+                                
+                                input.addEventListener('keydown', (e: any) => {
+                                    if (e.key === 'Enter') {
+                                        success(input.value);
+                                    } else if (e.key === 'Escape') {
+                                        cancel();
+                                    }
+                                });
+                                
+                                setTimeout(() => input.focus(), 10);
+                                return input;
+                            }
+                        },
+                        formatter: (cell: any) => {
+                            const rowData = cell.getRow().getData();
+                            const operandType = rowData?.operand || '';
+                            const isSpotSizeOperand = operandType.startsWith('SPOT_SIZE');
+                            const value = cell.getValue();
+                            
+                            if (isSpotSizeOperand) {
+                                if (!value || value === '') {
+                                    return '(Image)';
+                                }
+                                const surfaceList = this.getSurfaceList(rowData);
+                                return surfaceList[String(value)] || value;
+                            }
+                            
+                            return value || '';
+                        },
+                        cellEdited: (cell: any) => {
+                            this.saveToStorage();
+                        }
+                    },
+                    {
                         title: "Target",
                         field: "target",
                         width: 80,
@@ -459,21 +542,27 @@ class MeritFunctionEditor {
     initializeEventListeners(): void {
         const addBtn = document.getElementById('add-operand-btn');
         if (addBtn) {
-            addBtn.addEventListener('click', () => {
+            const newAddBtn = addBtn.cloneNode(true) as HTMLElement;
+            addBtn.parentNode?.replaceChild(newAddBtn, addBtn);
+            newAddBtn.addEventListener('click', () => {
                 this.addOperand();
             });
         }
 
         const deleteBtn = document.getElementById('delete-operand-btn');
         if (deleteBtn) {
-            deleteBtn.addEventListener('click', () => {
+            const newDelBtn = deleteBtn.cloneNode(true) as HTMLElement;
+            deleteBtn.parentNode?.replaceChild(newDelBtn, deleteBtn);
+            newDelBtn.addEventListener('click', () => {
                 this.deleteOperand();
             });
         }
 
         const calculateBtn = document.getElementById('calculate-merit-btn');
         if (calculateBtn) {
-            calculateBtn.addEventListener('click', () => {
+            const newCalcBtn = calculateBtn.cloneNode(true) as HTMLElement;
+            calculateBtn.parentNode?.replaceChild(newCalcBtn, calculateBtn);
+            newCalcBtn.addEventListener('click', () => {
                 this.calculateMerit();
             });
         }
@@ -498,6 +587,7 @@ class MeritFunctionEditor {
             param2: params.param2 !== undefined ? params.param2 : null,
             param3: params.param3 !== undefined ? params.param3 : null,
             param4: params.param4 !== undefined ? params.param4 : null,
+            param5: params.param5 !== undefined ? params.param5 : null,
             target: params.target !== undefined ? params.target : 0,
             weight: params.weight !== undefined ? params.weight : 1,
             result: null,
@@ -550,8 +640,6 @@ class MeritFunctionEditor {
 
     calculateMerit(): void {
         if (!this.table) return;
-
-        console.log('🔍 Merit Function 計算開始');
 
         this._runtimeCache = new Map();
 
@@ -692,7 +780,6 @@ class MeritFunctionEditor {
 
         switch (operand.operand) {
             case 'FL':
-            case 'EFL':
             case 'BFL':
             case 'IMD':
             case 'OBJD':
@@ -710,7 +797,17 @@ class MeritFunctionEditor {
             case 'NA_OBJ':
             case 'NA_IMG':
                 return this.calculatePrimarySystemMetric(operand, opticalSystemData, operand.operand);
-
+            
+            case 'EFL':
+                // EFL with param2 (Blocks parameter) should use EFFL-style calculation
+                if (operand.param2 !== undefined && operand.param2 !== null) {
+                    const blockLabel = String(operand.param2).trim();
+                    if (blockLabel && blockLabel.toUpperCase() !== 'ALL') {
+                        return this.calculateEFLForBlock(operand, opticalSystemData, blockLabel);
+                    }
+                }
+                // Default: full system EFL
+                return this.calculatePrimarySystemMetric(operand, opticalSystemData, 'EFL');
             case 'EFFL':
                 return this.calculateEFFL(operand, opticalSystemData);
 
@@ -739,11 +836,11 @@ class MeritFunctionEditor {
                 return this.calculateClearanceVsSemidia(operand, opticalSystemData);
 
             case 'SPOT_SIZE_ANNULAR':
-                return this.calculateSpotSizeUm(operand, opticalSystemData, { pattern: 'annular' });
+                return this.calculateSpotSizeUm(operand, opticalSystemData, { pattern: 'annular', useUiDefaults: false });
             case 'SPOT_SIZE_RECT':
-                return this.calculateSpotSizeUm(operand, opticalSystemData, { pattern: 'grid' });
+                return this.calculateSpotSizeUm(operand, opticalSystemData, { pattern: 'grid', useUiDefaults: false });
             case 'SPOT_SIZE_CURRENT':
-                return this.calculateSpotSizeUm(operand, opticalSystemData, { pattern: 'annular' });
+                return this.calculateSpotSizeUm(operand, opticalSystemData, { pattern: 'annular', useUiDefaults: false });
 
             case 'LA_RMS_UM':
                 return this.calculateLongitudinalAberrationRmsUm(operand, opticalSystemData);
@@ -1014,12 +1111,21 @@ class MeritFunctionEditor {
                 return 1e9;
             }
 
-            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+            const useUiDefaults = (options.useUiDefaults !== undefined) ? options.useUiDefaults : true;
 
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId, {
+                preferConfigTables: !useUiDefaults
+            });
             const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
-            const wavelength = (param1Raw === '')
-                ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
-                : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+            let wavelength: number;
+            try {
+                wavelength = (param1Raw === '')
+                    ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+                    : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+            } catch (err) {
+                stampSpotDebug({ ok: false, reason: 'wavelength-error', resultUm: 1e9 });
+                return 1e9;
+            }
 
             const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
             const objectIndex1 = (param2Raw === '') ? 1 : Math.max(1, Math.floor(Number(param2Raw)));
@@ -1028,12 +1134,21 @@ class MeritFunctionEditor {
             const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim().toLowerCase() : '';
             const metric = (param3Raw === 'diameter' || param3Raw === 'dia') ? 'diameter' : 'rms';
 
+            // param5: Target surface number (1-based), empty = image surface
+            const param5Raw = (operand.param5 !== undefined && operand.param5 !== null) ? String(operand.param5).trim() : '';
+            let targetSurfaceNumber1: number | null = null;
+            if (param5Raw !== '') {
+                const parsed = Math.floor(Number(param5Raw));
+                if (Number.isFinite(parsed) && parsed > 0) {
+                    targetSurfaceNumber1 = parsed;
+                }
+            }
+
             const param4Raw = (operand.param4 !== undefined && operand.param4 !== null) ? String(operand.param4).trim() : '';
             let rayCount = (param4Raw === '') ? 501 : Math.floor(Number(param4Raw));
             if (!Number.isFinite(rayCount) || rayCount < 1) rayCount = 501;
             if (rayCount > 5000) rayCount = 5000;
 
-            const useUiDefaults = (options.useUiDefaults !== undefined) ? options.useUiDefaults : true;
             const useUiTables = (options.useUiTables !== undefined) ? options.useUiTables : useUiDefaults;
 
             const meritFast = (typeof globalThis !== 'undefined' && w.__cooptMeritFastMode) || null;
@@ -1058,6 +1173,28 @@ class MeritFunctionEditor {
             stampSpotDebug({ wavelength, fastModeEnabled, imageSurfaceIndex });
 
             const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
+            try {
+                if (typeof window !== 'undefined' && w.__cooptLastSpotSizeDebug && typeof w.__cooptLastSpotSizeDebug === 'object') {
+                    const src0 = Array.isArray(sourceRows) ? sourceRows[0] : null;
+                    const primary = Array.isArray(sourceRows)
+                        ? (sourceRows.find((r: any) => r && r.primary && String(r.primary).toLowerCase().includes('primary')) || sourceRows[0])
+                        : null;
+                    w.__cooptLastSpotSizeDebug.objectRowSummary = objRow ? {
+                        id: objRow.id,
+                        position: objRow.position,
+                        x: objRow.x,
+                        y: objRow.y,
+                        z: objRow.z,
+                        angle: objRow.angle,
+                        xHeightAngle: objRow.xHeightAngle,
+                        yHeightAngle: objRow.yHeightAngle,
+                        objectX: objRow['object x'],
+                        objectY: objRow['object y']
+                    } : null;
+                    w.__cooptLastSpotSizeDebug.sourceRow0Summary = src0 ? { wavelength: src0.wavelength, primary: src0.primary } : null;
+                    w.__cooptLastSpotSizeDebug.primarySourceRowSummary = primary ? { wavelength: primary.wavelength, primary: primary.primary } : null;
+                }
+            } catch (_) {}
             if (!objRow || typeof objRow !== 'object') {
                 stampSpotDebug({ ok: false, reason: 'no-object-row', resultUm: 1e9 });
                 return 1e9;
@@ -1066,473 +1203,316 @@ class MeritFunctionEditor {
             const isInfiniteSystem = isInfiniteSystemFromRows(opticalSystemData);
             const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, isInfiniteSystem);
 
-            if (useUiDefaults) {
-                stampSpotDebug({ impl: 'spot-diagram' });
+            // Always use spot-diagram path, but control UI settings usage
+            stampSpotDebug({ impl: 'spot-diagram', useUiDefaults });
 
-                const isOperandActiveConfig = (() => {
-                    try {
-                        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
-                        const activeConfigId = (systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null)
-                            ? String(systemConfig.activeConfigId)
-                            : '';
-                        const operandConfigId = (operand.configId !== undefined && operand.configId !== null)
-                            ? String(operand.configId)
-                            : '';
-                        return activeConfigId && operandConfigId && activeConfigId === operandConfigId;
-                    } catch {
-                        return false;
-                    }
-                })();
-
-                const isCurrentOperand = !operand.configId || String(operand.configId).trim() === '';
-
-                const getUiTableRowsForSpot = () => {
-                    if (useUiTables && (isOperandActiveConfig || isCurrentOperand)) {
-                        return {
-                            optical: getTableOpticalSystem(),
-                            object: getTableObject(),
-                            source: getTableSource()
-                        };
-                    }
-                    return null;
-                };
-
-                const uiTableRows = getUiTableRowsForSpot();
-
-                const spotOpticalRows = uiTableRows ? uiTableRows.optical : opticalSystemData;
-                const spotObjectRowsForOperand = uiTableRows ? uiTableRows.object : objectRows;
-                const spotSourceRowsForOperand = uiTableRows ? uiTableRows.source : sourceRows;
-
-                const obj2 = Array.isArray(spotObjectRowsForOperand) ? spotObjectRowsForOperand[objectIndex0] : null;
-                if (!obj2 || typeof obj2 !== 'object') {
-                    stampSpotDebug({ ok: false, reason: 'no-object-row-ui', resultUm: 1e9 });
-                    return 1e9;
-                }
-
-                const lastSpotSettings = (() => {
-                    try {
-                        const raw = localStorage.getItem('lastSpotSettings');
-                        return raw ? JSON.parse(raw) : {};
-                    } catch {
-                        return {};
-                    }
-                })();
-
-                const forceSpotDiagramPrimary = !options.pattern || options.pattern === 'current';
-
-                const uiSurfaceIndex = (() => {
-                    const idx = Number(lastSpotSettings.surfaceIndex);
-                    if (Number.isFinite(idx) && idx >= 0) return idx;
-                    const sel = document.getElementById('surface-number-select') as HTMLSelectElement | null;
-                    if (sel && sel.value) {
-                        const v = Number(sel.value);
-                        if (Number.isFinite(v) && v >= 0) return v;
-                    }
-                    return null;
-                })();
-
-                const targetSurfaceIndex = uiSurfaceIndex ?? imageSurfaceIndex;
-
-                stampSpotDebug({ targetSurfaceIndex, uiSurfaceIndex });
-
-                const pattern = (() => {
-                    if (options.pattern && options.pattern !== 'current') return options.pattern;
-
-                    const gridBtn = document.getElementById('grid-pattern-btn');
-                    const annularBtn = document.getElementById('annular-pattern-btn');
-                    if (gridBtn && annularBtn) {
-                        if (gridBtn.classList.contains('active')) return 'grid';
-                        if (annularBtn.classList.contains('active')) return 'annular';
-                    }
-
-                    try {
-                        const p = getRayEmissionPattern();
-                        if (p === 'grid' || p === 'annular') return p;
-                    } catch (_) {}
-
-                    return 'annular';
-                })();
-
-                stampSpotDebug({ pattern });
-
-                const effectiveAnnularRingCount = (() => {
-                    if (options.annularRingCount !== undefined && options.annularRingCount !== null) {
-                        return Math.max(1, Math.floor(Number(options.annularRingCount)));
-                    }
-
-                    const ringCount = Number(lastSpotSettings.ringCount);
-                    if (Number.isFinite(ringCount) && ringCount > 0) return Math.floor(ringCount);
-
-                    const sel = document.getElementById('ring-count-select') as HTMLSelectElement | null;
-                    if (sel && sel.value) {
-                        const v = Number(sel.value);
-                        if (Number.isFinite(v) && v > 0) return Math.floor(v);
-                    }
-
-                    return 3;
-                })();
-
-                const surfaceNumber1 = targetSurfaceIndex + 1;
-
+            const isOperandActiveConfig = (() => {
                 try {
-                    const spotResult = generateSpotDiagram(
-                        spotOpticalRows,
-                        spotSourceRowsForOperand,
-                        [obj2],
-                        surfaceNumber1,
-                        rayCount,
-                        effectiveAnnularRingCount,
-                        { physicalVignetting: true }
-                    );
-
-                    if (!spotResult || !Array.isArray(spotResult.spotData) || spotResult.spotData.length === 0) {
-                        stampSpotDebug({ ok: false, reason: 'spot-diagram-no-rays', hits: 0, resultUm: 1e9 });
-                        return 1e9;
-                    }
-
-                    const hits = spotResult.spotData[0]?.spotPoints || [];
-
-                    let chief = hits.find((h: any) => h.isChief) || null;
-                    if (!chief) {
-                        const cx = hits.reduce((sum: number, h: any) => sum + h.x, 0) / hits.length;
-                        const cy = hits.reduce((sum: number, h: any) => sum + h.y, 0) / hits.length;
-                        let bestIdx = 0;
-                        let bestDist = Infinity;
-                        for (let i = 0; i < hits.length; i++) {
-                            const h = hits[i];
-                            const d = Math.hypot(h.x - cx, h.y - cy);
-                            if (d < bestDist) {
-                                bestDist = d;
-                                bestIdx = i;
-                            }
-                        }
-                        chief = hits[bestIdx] || hits[0];
-                    }
-
-                    let maxRUm = 0;
-                    let sumX2 = 0;
-                    let sumY2 = 0;
-                    let n = 0;
-                    for (const h of hits) {
-                        const dxUm = (h.x - chief.x) * 1000;
-                        const dyUm = (h.y - chief.y) * 1000;
-                        const rUm = Math.hypot(dxUm, dyUm);
-                        if (rUm > maxRUm) maxRUm = rUm;
-                        sumX2 += dxUm * dxUm;
-                        sumY2 += dyUm * dyUm;
-                        n++;
-                    }
-
-                    if (n <= 0) {
-                        stampSpotDebug({ ok: false, reason: 'no-valid-hits', hits: 0, resultUm: 1e9 });
-                        return 1e9;
-                    }
-
-                    const rmsX = Math.sqrt(sumX2 / n);
-                    const rmsY = Math.sqrt(sumY2 / n);
-                    const rmsTotal = Math.sqrt(rmsX * rmsX + rmsY * rmsY);
-                    const diameter = 2 * maxRUm;
-
-                    const valueUm = (metric === 'diameter') ? diameter : rmsTotal;
-
-                    stampSpotDebug({ ok: true, reason: 'ok', hits: hits.length, resultUm: valueUm });
-
-                    return valueUm;
-                } catch (err) {
-                    stampSpotDebug({
-                        ok: false,
-                        reason: 'spot-diagram-exception',
-                        hits: 0,
-                        resultUm: 1e9,
-                        errorMessage: String((err && (err as any).message !== undefined) ? (err as any).message : err),
-                        errorStack: (err && (err as any).stack) ? String((err as any).stack) : ''
-                    });
-                    return 1e9;
+                    const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+                    const activeConfigId = (systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null)
+                        ? String(systemConfig.activeConfigId)
+                        : '';
+                    const operandConfigId = (operand.configId !== undefined && operand.configId !== null)
+                        ? String(operand.configId)
+                        : '';
+                    return activeConfigId && operandConfigId && activeConfigId === operandConfigId;
+                } catch {
+                    return false;
                 }
-            }
-
-            stampSpotDebug({ impl: 'legacy-ray-trace' });
-
-            const apertureLimitMm = (() => {
-                if (!fastModeEnabled) return null;
-
-                let minSemidia = Infinity;
-                for (const row of opticalSystemData) {
-                    if (!row || typeof row !== 'object') continue;
-                    const sd = toFiniteNumber(row.semidia || row['Semi Diameter'] || row['semi diameter'], Infinity);
-                    if (Number.isFinite(sd) && sd > 0 && sd < minSemidia) {
-                        minSemidia = sd;
-                    }
-                }
-
-                if (!Number.isFinite(minSemidia) || minSemidia === Infinity) return null;
-
-                return 0.5 * minSemidia * 0.99;
             })();
 
-            if (apertureLimitMm !== null) {
-                stampSpotDebug({ apertureLimitMm });
-            }
+            const isCurrentOperand = !operand.configId || String(operand.configId).trim() === '';
 
-            const rayStarts = generateRayStartPointsForObject(
-                objRow,
-                opticalSystemData,
-                rayCount,
-                apertureLimitMm ?? undefined,
-                {
-                    annularRingCount: options.annularRingCount || 3,
-                    targetSurfaceIndex: imageSurfaceIndex,
-                    useChiefRayAnalysis: true,
-                    chiefRaySolveMode: fastModeEnabled ? 'fast' : 'legacy',
-                    wavelengthUm: wavelength
+            const useUiTablesEffective = useUiTables || (!useUiDefaults && (isOperandActiveConfig || isCurrentOperand));
+
+            const getUiTableRowsForSpot = () => {
+                if (useUiTablesEffective && (isOperandActiveConfig || isCurrentOperand)) {
+                    try {
+                        const tblOpt = getTableOpticalSystem();
+                        const tblObj = getTableObject();
+                        const tblSrc = getTableSource();
+                        const optData = (tblOpt && typeof tblOpt.getData === 'function') ? tblOpt.getData()
+                            : (Array.isArray(tblOpt) ? tblOpt : null);
+                        const objData = (tblObj && typeof tblObj.getData === 'function') ? tblObj.getData()
+                            : (Array.isArray(tblObj) ? tblObj : null);
+                        const srcData = (tblSrc && typeof tblSrc.getData === 'function') ? tblSrc.getData()
+                            : (Array.isArray(tblSrc) ? tblSrc : null);
+                        if (Array.isArray(optData) && optData.length > 0) {
+                            return {
+                                optical: optData,
+                                object: Array.isArray(objData) ? objData : [],
+                                source: Array.isArray(srcData) ? srcData : []
+                            };
+                        }
+                    } catch (_) {}
                 }
-            );
+                return null;
+            };
 
-            if (!rayStarts || !Array.isArray(rayStarts) || rayStarts.length === 0) {
-                stampSpotDebug({ ok: false, reason: 'no-ray-starts', rayStartsGenerated: 0, resultUm: 1e9 });
+            const uiTableRows = getUiTableRowsForSpot();
+
+            const uiObjectSourceFallback = (() => {
+                if (!uiTableRows && !useUiDefaults && (isOperandActiveConfig || isCurrentOperand)) {
+                    try {
+                        const objTbl = getTableObject();
+                        const srcTbl = getTableSource();
+                        const objData = (objTbl && typeof objTbl.getData === 'function') ? objTbl.getData()
+                            : (Array.isArray(objTbl) ? objTbl : null);
+                        const srcData = (srcTbl && typeof srcTbl.getData === 'function') ? srcTbl.getData()
+                            : (Array.isArray(srcTbl) ? srcTbl : null);
+                        if (Array.isArray(objData) || Array.isArray(srcData)) {
+                            return {
+                                object: Array.isArray(objData) ? objData : [],
+                                source: Array.isArray(srcData) ? srcData : []
+                            };
+                        }
+                    } catch (_) {}
+                }
+                return null;
+            })();
+
+            const uiOpticalFallback = (() => {
+                if (!uiTableRows && !useUiDefaults && (isOperandActiveConfig || isCurrentOperand)) {
+                    try {
+                        const tbl = getTableOpticalSystem();
+                        if (tbl && typeof tbl.getData === 'function') {
+                            const data = tbl.getData();
+                            return Array.isArray(data) ? data : null;
+                        }
+                        return Array.isArray(tbl) ? tbl : null;
+                    } catch (_) { return null; }
+                }
+                return null;
+            })();
+
+            const spotOpticalRows = uiTableRows
+                ? uiTableRows.optical
+                : (Array.isArray(uiOpticalFallback) ? uiOpticalFallback : opticalSystemData);
+            const spotObjectRowsForOperand = uiTableRows ? uiTableRows.object : (uiObjectSourceFallback?.object || objectRows);
+            const spotSourceRowsForOperand = uiTableRows ? uiTableRows.source : (uiObjectSourceFallback?.source || sourceRows);
+
+            try {
+                const first3 = Array.isArray(spotOpticalRows)
+                    ? spotOpticalRows.slice(0, 3).map((r: any) => ({
+                        type: r['object type'] || r.objectType,
+                        thickness: r.thickness,
+                        radius: r.radius,
+                        semiDiameter: r['semi diameter']
+                    }))
+                    : null;
+                const last3 = Array.isArray(spotOpticalRows)
+                    ? spotOpticalRows.slice(-3).map((r: any) => ({
+                        type: r['object type'] || r.objectType,
+                        thickness: r.thickness,
+                        radius: r.radius,
+                        semiDiameter: r['semi diameter']
+                    }))
+                    : null;
+                stampSpotDebug({
+                    spotOpticalRowsLength: Array.isArray(spotOpticalRows) ? spotOpticalRows.length : null,
+                    spotOpticalRowsSource: uiTableRows
+                        ? 'uiTableRows.optical'
+                        : (uiOpticalFallback ? 'uiOpticalFallback' : 'opticalSystemData'),
+                    spotObjectRowsSource: uiTableRows
+                        ? 'uiTableRows.object'
+                        : (uiObjectSourceFallback ? 'uiObjectSourceFallback' : 'objectRows'),
+                    spotSourceRowsSource: uiTableRows
+                        ? 'uiTableRows.source'
+                        : (uiObjectSourceFallback ? 'uiObjectSourceFallback' : 'sourceRows'),
+                    spotOpticalRowsPreview: { first3, last3 }
+                });
+            } catch (_) {}
+
+            let obj2 = Array.isArray(spotObjectRowsForOperand) ? spotObjectRowsForOperand[objectIndex0] : null;
+            if (!obj2 || typeof obj2 !== 'object') {
+                const fallbackObj = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
+                if (fallbackObj && typeof fallbackObj === 'object') {
+                    obj2 = fallbackObj;
+                }
+            }
+            if (!obj2 || typeof obj2 !== 'object') {
+                stampSpotDebug({ ok: false, reason: 'no-object-row-ui', resultUm: 1e9 });
                 return 1e9;
             }
 
-            stampSpotDebug({ rayStartsGenerated: rayStarts.length });
-
-            const collectHits = (starts: any[], maxRays: number): any => {
-                const hits: any[] = [];
-                let legacyFallbackHits = 0;
-                let attempted = 0;
-
-                let consecutiveMiss = 0;
-                let consecutiveBlock = 0;
-
-                const earlyAbortMinAttempt = 20;
-                const earlyAbortMinHitRate = 0.20;
-                const earlyAbortMaxHits = 8;
-                const earlyAbortMaxAttempt = 30;
-                const earlyAbortMissStreakMin = 15;
-                const earlyAbortBlockStreakMin = 10;
-                const earlyAbortStreakMaxHits = 12;
-
-                for (let i = 0; i < starts.length && attempted < maxRays; i++) {
-                    const start = starts[i];
-                    attempted++;
-
-                    let hit: any = traceRayHitPoint(opticalSystemData, start, 1.0, undefined);
-                    if (!hit) {
-                        legacyFallbackHits++;
-                        const fullPath = traceRay(opticalSystemData, start, 1.0, null, undefined);
-                        hit = (fullPath && Array.isArray(fullPath)) ? fullPath[imageSurfaceIndex + 1] : null;
-                    }
-
-                    if (hit && typeof hit === 'object' && Number.isFinite((hit as any).x) && Number.isFinite((hit as any).y)) {
-                        hits.push({
-                            x: (hit as any).x,
-                            y: (hit as any).y,
-                            isChief: start.isChief || false
-                        });
-                        consecutiveMiss = 0;
-                        consecutiveBlock = 0;
-                    } else {
-                        consecutiveMiss++;
-
-                        const f = getLastRayTraceFailureForThisEval();
-                        const kind = f && typeof f === 'object' ? String(f.kind || '') : '';
-                        if (kind === 'PHYSICAL_APERTURE_BLOCK') {
-                            consecutiveBlock++;
-                        } else {
-                            consecutiveBlock = 0;
-                        }
-                    }
-
-                    if (fastModeEnabled) {
-                        const hitRate = attempted > 0 ? hits.length / attempted : 0;
-
-                        if (consecutiveMiss >= earlyAbortMissStreakMin && hits.length <= earlyAbortStreakMaxHits) {
-                            return {
-                                hits,
-                                legacyFallbackHits,
-                                attempted,
-                                earlyAbort: { reason: 'MISS_STREAK', hits: hits.length, hitRate, failPenaltyUm: null, failPenaltyKind: null, failPenaltyRatio: null }
-                            };
-                        }
-
-                        if (consecutiveBlock >= earlyAbortBlockStreakMin) {
-                            const f = getLastRayTraceFailureForThisEval();
-                            const d = (f && typeof f === 'object' && f.details && typeof f.details === 'object') ? f.details : null;
-                            const hitR = Number((d ? d.hitRadiusMm : null));
-                            const limR = apertureLimitMm;
-                            let failPenalty = 5e4;
-                            let failPenaltyRatio = null;
-                            if (Number.isFinite(hitR) && Number.isFinite(limR) && limR && limR > 0) {
-                                const ratio = Math.max(1, hitR / limR);
-                                failPenalty = Math.min(2e5, Math.max(1e4, 1e4 * ratio));
-                                failPenaltyRatio = ratio;
-                            }
-                            return {
-                                hits,
-                                legacyFallbackHits,
-                                attempted,
-                                earlyAbort: {
-                                    reason: 'PHYSICAL_APERTURE_BLOCK',
-                                    hits: hits.length,
-                                    hitRate,
-                                    failPenaltyUm: failPenalty,
-                                    failPenaltyKind: 'PHYSICAL_APERTURE_BLOCK',
-                                    failPenaltyRatio
-                                }
-                            };
-                        }
-
-                        if (hitRate < earlyAbortMinHitRate && hits.length <= earlyAbortMaxHits && attempted >= earlyAbortMinAttempt) {
-                            return {
-                                hits,
-                                legacyFallbackHits,
-                                attempted,
-                                earlyAbort: { reason: 'LOW_HIT_RATE', hits: hits.length, hitRate, failPenaltyUm: 5e4, failPenaltyKind: 'LOW_HIT_RATE', failPenaltyRatio: null }
-                            };
-                        }
-
-                        if (attempted >= earlyAbortMaxAttempt && hits.length <= earlyAbortStreakMaxHits && hitRate < earlyAbortMinHitRate) {
-                            return {
-                                hits,
-                                legacyFallbackHits,
-                                attempted,
-                                earlyAbort: { reason: 'MAX_ATTEMPT', hits: hits.length, hitRate, failPenaltyUm: 5e4, failPenaltyKind: 'LOW_HIT_RATE', failPenaltyRatio: null }
-                            };
-                        }
-                    }
-                }
-
-                return { hits, legacyFallbackHits, attempted, earlyAbort: null };
-            };
-
-            const { hits, legacyFallbackHits, attempted, earlyAbort } = collectHits(rayStarts, rayCount);
-
-            if (fastModeEnabled && earlyAbort && earlyAbort.failPenaltyUm !== undefined && earlyAbort.failPenaltyUm !== null) {
-                try {
-                    const f = getLastRayTraceFailureForThisEval();
-                    const d = (f && typeof f === 'object' && f.details && typeof f.details === 'object') ? f.details : null;
-                    stampSpotDebug({
-                        ok: false,
-                        reason: 'early-abort-low-hit-rate',
-                        hits: hits.length,
-                        rayCountRequested: rayCount,
-                        rayStartsGenerated: Array.isArray(rayStarts) ? rayStarts.length : 0,
-                        earlyAbortAttempted: attempted,
-                        earlyAbortHits: earlyAbort.hits,
-                        earlyAbortHitRate: earlyAbort.hitRate,
-                        earlyAbortReason: earlyAbort.reason,
-                        failPenaltyUm: earlyAbort.failPenaltyUm,
-                        failPenaltyKind: earlyAbort.failPenaltyKind,
-                        failPenaltyRatio: earlyAbort.failPenaltyRatio,
-                        lastRayTraceFailure: f,
-                        blockSurfaceIndex: d ? Number(d.surfaceIndex) : null,
-                        blockSurfaceNumber: d ? Number(d.surfaceNumber) : null,
-                        blockHitRadiusMm: d ? Number(d.hitRadiusMm) : null,
-                        blockApertureLimitMm: d ? Number(d.apertureLimitMm) : null,
-                        blockSemidia: d ? d.semidia : null,
-                        blockAperture: d ? d.aperture : null
-                    });
-                } catch (_) {}
-                return Number(earlyAbort.failPenaltyUm);
-            }
-
-            if (hits.length === 0) {
-                if (fastModeEnabled) {
-                    try { stampSpotDebug({ retryTightApertureDisabled: true }); } catch (_) {}
-                }
-
-                if (hits.length === 0) {
-                    try {
-                        if (typeof window !== 'undefined') {
-                            stampSpotDebug({
-                                ok: false,
-                                reason: 'no-ray-hits',
-                                targetSurfaceIndex: imageSurfaceIndex,
-                                rayCountRequested: rayCount,
-                                rayStartsGenerated: Array.isArray(rayStarts) ? rayStarts.length : 0,
-                                legacyFallbackHits,
-                                wavelength,
-                                fastModeEnabled,
-                                lastRayTraceFailure: getLastRayTraceFailureForThisEval()
-                            });
-                        }
-                    } catch (_) {}
-
-                    if (fastModeEnabled) {
-                        const failPenalty = (() => {
-                            try {
-                                const f = getLastRayTraceFailureForThisEval();
-                                if (f && typeof f === 'object' && String(f.kind || '') === 'PHYSICAL_APERTURE_BLOCK') {
-                                    const hitR = Number((f.hitRadiusMm ?? f.details?.hitRadiusMm));
-                                    const limR = Number((f.apertureLimitMm ?? f.details?.apertureLimitMm));
-                                    if (Number.isFinite(hitR) && Number.isFinite(limR) && limR > 0) {
-                                        const ratio = Math.max(1, hitR / limR);
-                                        const um = Math.min(2e5, Math.max(1e4, 1e4 * ratio));
-                                        return { um, kind: 'PHYSICAL_APERTURE_BLOCK', ratio };
-                                    }
-                                }
-                            } catch (_) {}
-                            return { um: 5e4, kind: 'NO_RAY_HITS', ratio: null };
-                        })();
-                        try { stampSpotDebug({ failPenaltyUm: failPenalty.um, failPenaltyKind: failPenalty.kind, failPenaltyRatio: failPenalty.ratio }); } catch (_) {}
-                        return failPenalty.um;
-                    }
-                    return 1e9;
-                }
-            }
-
             try {
-                if (typeof window !== 'undefined' && w.__cooptLastSpotSizeDebug) {
-                    w.__cooptLastSpotSizeDebug.ok = true;
-                    w.__cooptLastSpotSizeDebug.reason = 'ok';
-                    w.__cooptLastSpotSizeDebug.legacyFallbackHits = legacyFallbackHits;
-                    w.__cooptLastSpotSizeDebug.hits = hits.length;
-                    w.__cooptLastSpotSizeDebug.lastRayTraceFailure = getLastRayTraceFailureForThisEval();
-                    if (fastModeEnabled) {
-                        w.__cooptLastSpotSizeDebugFast = w.__cooptLastSpotSizeDebug;
-                    }
-                }
+                stampSpotDebug({
+                    objectRowUsedSummary: obj2 ? {
+                        id: obj2.id,
+                        position: obj2.position,
+                        x: obj2.x,
+                        y: obj2.y,
+                        z: obj2.z,
+                        angle: obj2.angle,
+                        xHeightAngle: obj2.xHeightAngle,
+                        yHeightAngle: obj2.yHeightAngle,
+                        objectX: obj2['object x'],
+                        objectY: obj2['object y']
+                    } : null
+                });
             } catch (_) {}
 
-            let chief = hits.find((h: any) => h.isChief) || null;
-            if (!chief) {
-                const cx = hits.reduce((sum: number, h: any) => sum + h.x, 0) / hits.length;
-                const cy = hits.reduce((sum: number, h: any) => sum + h.y, 0) / hits.length;
-                let bestIdx = 0;
-                let bestDist = Infinity;
-                for (let i = 0; i < hits.length; i++) {
-                    const h = hits[i];
-                    const d = Math.hypot(h.x - cx, h.y - cy);
-                    if (d < bestDist) {
-                        bestDist = d;
-                        bestIdx = i;
+            const lastSpotSettings = (() => {
+                if (!useUiDefaults) return {};
+                try {
+                    const raw = localStorage.getItem('lastSpotSettings');
+                    return raw ? JSON.parse(raw) : {};
+                } catch {
+                    return {};
+                }
+            })();
+
+            const forceSpotDiagramPrimary = !options.pattern || options.pattern === 'current';
+
+            const uiSurfaceIndex = (() => {
+                // If param5 is specified, use it as the target surface (1-based to 0-based)
+                if (targetSurfaceNumber1 !== null) {
+                    const idx = targetSurfaceNumber1 - 1;
+                    if (idx >= 0 && idx < spotOpticalRows.length) {
+                        return idx;
                     }
                 }
-                chief = hits[bestIdx] || hits[0];
+                // Otherwise, use UI settings only if useUiDefaults is true
+                if (!useUiDefaults) return null;
+                
+                const idx = Number(lastSpotSettings.surfaceIndex);
+                if (Number.isFinite(idx) && idx >= 0) return idx;
+                const sel = document.getElementById('surface-number-select') as HTMLSelectElement | null;
+                if (sel && sel.value) {
+                    const v = Number(sel.value);
+                    if (Number.isFinite(v) && v >= 0) return v;
+                }
+                return null;
+            })();
+
+            const targetSurfaceIndex = uiSurfaceIndex ?? imageSurfaceIndex;
+
+            stampSpotDebug({ targetSurfaceIndex, uiSurfaceIndex });
+
+            const pattern = (() => {
+                if (options.pattern && options.pattern !== 'current') return options.pattern;
+                
+                // Only read from UI if useUiDefaults is true
+                if (!useUiDefaults) return 'annular';
+
+                const gridBtn = document.getElementById('grid-pattern-btn');
+                const annularBtn = document.getElementById('annular-pattern-btn');
+                if (gridBtn && annularBtn) {
+                    if (gridBtn.classList.contains('active')) return 'grid';
+                    if (annularBtn.classList.contains('active')) return 'annular';
+                }
+
+                try {
+                    const p = getRayEmissionPattern();
+                    if (p === 'grid' || p === 'annular') return p;
+                } catch (_) {}
+
+                return 'annular';
+            })();
+
+            stampSpotDebug({ pattern });
+
+            const effectiveAnnularRingCount = (() => {
+                if (options.annularRingCount !== undefined && options.annularRingCount !== null) {
+                    return Math.max(1, Math.floor(Number(options.annularRingCount)));
+                }
+
+                // Only read from UI if useUiDefaults is true
+                if (!useUiDefaults) return 3;
+
+                const ringCount = Number(lastSpotSettings.ringCount);
+                if (Number.isFinite(ringCount) && ringCount > 0) return Math.floor(ringCount);
+
+                const sel = document.getElementById('ring-count-select') as HTMLSelectElement | null;
+                if (sel && sel.value) {
+                    const v = Number(sel.value);
+                    if (Number.isFinite(v) && v > 0) return Math.floor(v);
+                }
+
+                return 3;
+            })();
+
+            const surfaceNumber1 = targetSurfaceIndex + 1;
+
+            try {
+                const spotResult = generateSpotDiagram(
+                    spotOpticalRows,
+                    spotSourceRowsForOperand,
+                    [obj2],
+                    surfaceNumber1,
+                    rayCount,
+                    effectiveAnnularRingCount,
+                    { 
+                        physicalVignetting: true,
+                        pattern: pattern
+                    }
+                );
+
+                if (!spotResult || !Array.isArray(spotResult.spotData) || spotResult.spotData.length === 0) {
+                    stampSpotDebug({ ok: false, reason: 'spot-diagram-no-rays', hits: 0, resultUm: 1e9 });
+                    return 1e9;
+                }
+
+                const hits = spotResult.spotData[0]?.spotPoints || [];
+
+                // Fix: spot-diagram.ts saves as 'isChiefRay', not 'isChief'
+                let chief = hits.find((h: any) => h.isChiefRay) || null;
+                if (!chief) {
+                    const cx = hits.reduce((sum: number, h: any) => sum + h.x, 0) / hits.length;
+                    const cy = hits.reduce((sum: number, h: any) => sum + h.y, 0) / hits.length;
+                    let bestIdx = 0;
+                    let bestDist = Infinity;
+                    for (let i = 0; i < hits.length; i++) {
+                        const h = hits[i];
+                        const d = Math.hypot(h.x - cx, h.y - cy);
+                        if (d < bestDist) {
+                            bestDist = d;
+                            bestIdx = i;
+                        }
+                    }
+                    chief = hits[bestIdx] || hits[0];
+                }
+
+                let maxRUm = 0;
+                let sumX2 = 0;
+                let sumY2 = 0;
+                let n = 0;
+                for (const h of hits) {
+                    const dxUm = (h.x - chief.x) * 1000;
+                    const dyUm = (h.y - chief.y) * 1000;
+                    const rUm = Math.hypot(dxUm, dyUm);
+                    if (rUm > maxRUm) maxRUm = rUm;
+                    sumX2 += dxUm * dxUm;
+                    sumY2 += dyUm * dyUm;
+                    n++;
+                }
+
+                if (n <= 0) {
+                    stampSpotDebug({ ok: false, reason: 'no-valid-hits', hits: 0, resultUm: 1e9 });
+                    return 1e9;
+                }
+
+                const rmsX = Math.sqrt(sumX2 / n);
+                const rmsY = Math.sqrt(sumY2 / n);
+                const rmsTotal = Math.sqrt(rmsX * rmsX + rmsY * rmsY);
+                const diameter = 2 * maxRUm;
+
+                const valueUm = (metric === 'diameter') ? diameter : rmsTotal;
+
+                stampSpotDebug({ ok: true, reason: 'ok', hits: hits.length, resultUm: valueUm });
+
+                return valueUm;
+            } catch (err) {
+                stampSpotDebug({
+                    ok: false,
+                    reason: 'spot-diagram-exception',
+                    hits: 0,
+                    resultUm: 1e9,
+                    errorMessage: String((err && (err as any).message !== undefined) ? (err as any).message : err),
+                    errorStack: (err && (err as any).stack) ? String((err as any).stack) : ''
+                });
+                return 1e9;
             }
-
-            let maxRUm = 0;
-            let sumX2 = 0;
-            let sumY2 = 0;
-            let n = 0;
-            for (const h of hits) {
-                const dxUm = (h.x - chief.x) * 1000;
-                const dyUm = (h.y - chief.y) * 1000;
-                const rUm = Math.hypot(dxUm, dyUm);
-                if (rUm > maxRUm) maxRUm = rUm;
-                sumX2 += dxUm * dxUm;
-                sumY2 += dyUm * dyUm;
-                n++;
-            }
-
-            if (n <= 0) return 1e9;
-            const rmsX = Math.sqrt(sumX2 / n);
-            const rmsY = Math.sqrt(sumY2 / n);
-            const rmsTotal = Math.sqrt(rmsX * rmsX + rmsY * rmsY);
-            const diameter = 2 * maxRUm;
-
-            const valueUm = (metric === 'diameter') ? diameter : rmsTotal;
-            try { stampSpotDebug({ resultUm: valueUm }); } catch (_) {}
-            return valueUm;
         } catch (err) {
             stampSpotDebug({
                 ok: false,
@@ -1757,12 +1737,14 @@ class MeritFunctionEditor {
         return violation > 0 ? violation : 0;
     }
 
-    getConfigTablesByConfigId(configId: any): { source: any[]; object: any[] } {
+    getConfigTablesByConfigId(configId: any, options: { preferConfigTables?: boolean } = {}): { source: any[]; object: any[] } {
         try {
             const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
             const activeConfigId = (systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null)
                 ? String(systemConfig.activeConfigId)
                 : '';
+
+            const preferConfigTables = !!options.preferConfigTables;
 
             let targetConfigId = configId;
             if (!targetConfigId) {
@@ -1788,7 +1770,9 @@ class MeritFunctionEditor {
             }
             return {
                 source: Array.isArray(config.source) ? config.source : getSourceRows({}),
-                object: Array.isArray(config.object) ? config.object : ((typeof window !== 'undefined' && w.getObjectRows) ? w.getObjectRows() : (w.tableObject ? w.tableObject.getData() : []))
+                object: Array.isArray(config.object)
+                    ? config.object
+                    : ((typeof window !== 'undefined' && w.getObjectRows) ? w.getObjectRows() : (w.tableObject ? w.tableObject.getData() : []))
             };
         } catch {
             return {
@@ -1864,7 +1848,8 @@ class MeritFunctionEditor {
         const { source: sourceRows } = this.getConfigTablesByConfigId(operand?.configId);
         const wavelength = this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
         const cfgKey = operand?.configId ? String(operand.configId) : 'active';
-        const cacheKey = `primary-metrics:${cfgKey}:wl=${wavelength}`;
+        const param2 = operand?.param2 ? String(operand.param2) : '';
+        const cacheKey = `primary-metrics:${cfgKey}:wl=${wavelength}:p2=${param2}`;
 
         const cached = this._runtimeCache ? this._runtimeCache.get(cacheKey) : null;
         if (cached) return cached;
@@ -1873,9 +1858,9 @@ class MeritFunctionEditor {
 
         const fl = this.safeFiniteNumberOrZero(paraxial?.focalLength);
 
-        let bfl = paraxial?.backFocalLength;
+        let bfl: any = paraxial?.backFocalLength;
         if (bfl && typeof bfl === 'object' && 'tangential' in bfl) {
-            bfl = bfl.tangential;
+            bfl = (bfl as any).tangential;
         }
         bfl = this.safeFiniteNumberOrZero(bfl);
 
@@ -1967,8 +1952,312 @@ class MeritFunctionEditor {
 
     calculatePrimarySystemMetric(operand: any, opticalSystemData: any[], key: string): number {
         if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 0;
+        
+        // For EFL, check if param2 specifies a specific block
+        if (key === 'EFL' && operand.param2 !== undefined && operand.param2 !== null) {
+            const param2Raw = String(operand.param2).trim();
+            console.log(`[EFL Calculation] param2 = "${param2Raw}"`);
+            
+            if (param2Raw && param2Raw.toUpperCase() !== 'ALL') {
+                // Get block definition and calculate surface range
+                const blockInfo = this._getBlockSurfaceRange(param2Raw, operand.configId);
+                if (blockInfo) {
+                    console.log(`[EFL Calculation] Block "${param2Raw}" → surfaces ${blockInfo.startSurf} to ${blockInfo.endSurf}`);
+                    
+                    // Use EFFL-style calculation with surface range
+                    return this._calculateEFLForSurfaceRange(
+                        opticalSystemData,
+                        blockInfo.startSurf,
+                        blockInfo.endSurf,
+                        operand
+                    );
+                } else {
+                    console.warn(`[EFL Calculation] Could not find block "${param2Raw}"`);
+                }
+            }
+        }
+        
         const metrics = this.getPrimarySystemMetricsCached(operand, opticalSystemData);
         return this.safeFiniteNumberOrZero(metrics ? metrics[key] : 0);
+    }
+
+    calculateEFLForBlock(operand: any, opticalSystemData: any[], blockLabel: string): number {
+        console.log(`[EFL Block] Calculating EFL for block "${blockLabel}"`);
+        
+        const blockInfo = this._getBlockSurfaceRange(blockLabel, operand.configId);
+        if (!blockInfo) {
+            console.warn(`[EFL Block] Could not find block "${blockLabel}"`);
+            return 0;
+        }
+        
+        console.log(`[EFL Block] Block "${blockLabel}" → surfaces ${blockInfo.startSurf} to ${blockInfo.endSurf}`);
+        
+        // Use EFFL-style calculation: extract surfaces and calculate EFL
+        const { source: sourceRows } = this.getConfigTablesByConfigId(operand?.configId);
+        const wavelength = this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+        
+        return this._calculateEFLForSurfaceRange(
+            opticalSystemData,
+            blockInfo.startSurf,
+            blockInfo.endSurf,
+            wavelength
+        );
+    }
+
+    _getBlockSurfaceRange(blockLabel: string, configId: any): { startSurf: number; endSurf: number } | null {
+        try {
+            const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
+            const sys = raw ? JSON.parse(raw) : null;
+            const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
+            
+            let cfg = null;
+            if (configId !== undefined && configId !== null) {
+                const hint = String(configId).trim();
+                cfg = configs.find((c: any) => c && String(c.id) === hint) || null;
+            }
+            if (!cfg) {
+                const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null) ? String(sys.activeConfigId) : '';
+                cfg = configs.find((c: any) => c && String(c.id) === activeId) || configs[0] || null;
+            }
+            
+            const blocks = cfg && Array.isArray(cfg.blocks) ? cfg.blocks : [];
+            
+            // Find the block
+            const labelUpper = blockLabel.toUpperCase();
+            let targetBlock = null;
+            for (const block of blocks) {
+                const blockId = String(block?.blockId || '').trim();
+                const name = String(block?.name || '').trim();
+                const type = String(block?.type || '').trim();
+                const blockType = String(block?.blockType || '').trim();
+                
+                if (blockId.toUpperCase() === labelUpper ||
+                    name.toUpperCase() === labelUpper ||
+                    `${type}-${blockId}`.toUpperCase() === labelUpper) {
+                    targetBlock = block;
+                    break;
+                }
+            }
+            
+            if (!targetBlock) {
+                return null;
+            }
+            
+            // Helper function to get surface count from blockType
+            const getSurfaceCountFromBlockType = (block: any): number => {
+                const blockType = String(block?.blockType || '').trim();
+                switch (blockType) {
+                    case 'ObjectPlane':
+                    case 'ObjectSurface':
+                        return 1; // Object plane creates the Object surface at index 0
+                    case 'Lens':
+                    case 'PositiveLens':
+                        return 2; // front + back
+                    case 'Doublet':
+                        return 3; // front + middle + back
+                    case 'Gap':
+                    case 'AirGap':
+                        return 0; // Gap doesn't create surfaces, only sets thickness
+                    case 'Stop':
+                        return 1;
+                    case 'SingleSurface':
+                        return 1;
+                    default:
+                        // Fallback: check if surfaces array exists
+                        if (Array.isArray(block.surfaces)) {
+                            return block.surfaces.length;
+                        }
+                        console.warn(`[EFL Debug] Unknown blockType: ${blockType}, assuming 1 surface`);
+                        return 1;
+                }
+            };
+            
+            // Calculate surface range by counting surfaces in blocks before this one
+            let currentSurf = 0; // Start at 0 (Object surface is at index 0)
+            for (const block of blocks) {
+                const surfCount = getSurfaceCountFromBlockType(block);
+                if (block === targetBlock) {
+                    // Found it! Return the range
+                    const startSurf = currentSurf;
+                    const endSurf = currentSurf + surfCount - 1;
+                    return { startSurf, endSurf };
+                }
+                currentSurf += surfCount;
+            }
+            
+            return null;
+        } catch (err) {
+            console.error('[EFL] Error getting block surface range:', err);
+            return null;
+        }
+    }
+
+    _calculateEFLForSurfaceRange(opticalSystemData: any[], startSurf: number, endSurf: number, wavelength: number): number {
+        try {
+            // Extract surfaces in the range
+            const lensSurfaces = opticalSystemData.slice(startSurf, endSurf + 1);
+            if (lensSurfaces.length === 0) return 0;
+            
+            console.log(`[EFL Range] Calculating EFL for surfaces ${startSurf}-${endSurf} (${lensSurfaces.length} surfaces)`);
+            
+            // Build a minimal optical system: Object + Lens surfaces + Image
+            // This allows proper paraxial trace calculation
+            const rangeData = [
+                // Object surface at infinity
+                {
+                    'object type': 'Object',
+                    'thickness': Infinity,
+                    'radius': Infinity,
+                    'comment': 'Virtual Object for EFL calc'
+                },
+                // The lens surfaces
+                ...lensSurfaces,
+                // Image surface
+                {
+                    'object type': 'Image',
+                    'thickness': 0,
+                    'radius': Infinity,
+                    'comment': 'Virtual Image for EFL calc'
+                }
+            ];
+            
+            console.log(`[EFL Range] Built system with ${rangeData.length} surfaces (Object + ${lensSurfaces.length} lens + Image)`);
+            
+            // Calculate paraxial trace for this isolated system
+            const eflTrace = calculateFullSystemParaxialTrace(rangeData, wavelength) as any;
+            const efl = (eflTrace && Number.isFinite(eflTrace.finalAlpha) && Math.abs(eflTrace.finalAlpha) > 1e-12)
+                ? (1.0 / eflTrace.finalAlpha)
+                : 0;
+            
+            console.log(`[EFL Range] Result: ${efl}`);
+            return this.safeFiniteNumberOrZero(efl);
+        } catch (err) {
+            console.error('[EFL Range] Error calculating EFL:', err);
+            return 0;
+        }
+    }
+
+    _convertLabelToBlockId(label: string, configId: any): string {
+        try {
+            // Get blocks from config
+            let sys = null;
+            const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
+            sys = raw ? JSON.parse(raw) : null;
+            
+            const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
+            const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null) ? String(sys.activeConfigId) : '';
+            
+            const hint = (configId === undefined || configId === null) ? '' : String(configId).trim();
+            let cfg = null;
+            if (hint) {
+                cfg = configs.find((c: any) => c && String(c.id) === hint) || null;
+            }
+            if (!cfg && activeId) {
+                cfg = configs.find((c: any) => c && String(c.id) === activeId) || null;
+            }
+            if (!cfg) cfg = configs[0] || null;
+            
+            const blocks = cfg && Array.isArray(cfg.blocks) ? cfg.blocks : [];
+            
+            // Try to find block by label
+            const labelUpper = label.toUpperCase();
+            for (const block of blocks) {
+                const blockId = String(block?.blockId || '').trim();
+                const name = String(block?.name || '').trim();
+                const type = String(block?.type || '').trim();
+                
+                // Check various possible label formats
+                if (blockId.toUpperCase() === labelUpper) return blockId;
+                if (name.toUpperCase() === labelUpper) return blockId;
+                if (`${type}-${blockId}`.toUpperCase() === labelUpper) return blockId;
+            }
+            
+            // If not found, return the original label (might already be a blockId)
+            console.warn(`[EFL] Could not find blockId for label "${label}"`);
+            return label;
+        } catch (err) {
+            console.error('[EFL] Error converting label to blockId:', err);
+            return label;
+        }
+    }
+
+    _filterOpticalDataByBlockIds(opticalSystemData: any[], param2Raw: string): any[] {
+        console.log('[EFL Filter] ========================================');
+        console.log('[EFL Filter] _filterOpticalDataByBlockIds called!');
+        console.log('[EFL Filter] param2Raw:', param2Raw);
+        console.log('[EFL Filter] opticalSystemData.length:', opticalSystemData?.length);
+        console.log('[EFL Filter] ========================================');
+        
+        try {
+            // First, log the structure of first few surfaces to understand the data
+            console.log('[EFL Filter] ========== Optical System Structure ==========');
+            for (let i = 0; i < Math.min(3, opticalSystemData.length); i++) {
+                const row = opticalSystemData[i];
+                const keys = Object.keys(row || {});
+                console.log(`[EFL Filter] Surface ${i} - All keys:`, keys);
+                console.log(`[EFL Filter] Surface ${i} - Sample values:`, {
+                    type: row?.type,
+                    surfaceType: row?.surfaceType,
+                    blockId: row?.blockId,
+                    block: row?.block,
+                    comment: row?.comment,
+                    radius: row?.radius
+                });
+            }
+            console.log('[EFL Filter] ===================================================');
+            
+            // Parse comma-separated block IDs (case-insensitive)
+            const blockIds = param2Raw.split(',')
+                .map(s => s.trim().toUpperCase())
+                .filter(s => s.length > 0);
+            
+            if (blockIds.length === 0) return opticalSystemData;
+
+            console.log(`[EFL Filter] Looking for blocks: ${blockIds.join(', ')}`);
+
+            // Find all surfaces that belong to the specified blocks
+            const filtered: any[] = [];
+            
+            // Always include Object surface (first surface)
+            if (opticalSystemData.length > 0) {
+                filtered.push({ ...opticalSystemData[0] });
+            }
+
+            for (let i = 1; i < opticalSystemData.length; i++) {
+                const row = opticalSystemData[i];
+                const blockId = row?.blockId ? String(row.blockId).trim().toUpperCase() : '';
+                
+                // Log every surface
+                if (i <= 10) {  // Log first 10 surfaces in detail
+                    console.log(`[EFL Filter] Surface ${i}: type=${row?.type}, blockId="${blockId}"`);
+                }
+
+                // Include surfaces that belong to specified blocks
+                if (blockId && blockIds.includes(blockId)) {
+                    filtered.push({ ...row });
+                    console.log(`[EFL Filter] ✅ Included surface ${i} (blockId=${blockId})`);
+                }
+                // Also include Image surface
+                else if (row?.type === 'Image' || i === opticalSystemData.length - 1) {
+                    filtered.push({ ...row });
+                    console.log(`[EFL Filter] ✅ Included Image surface ${i}`);
+                }
+            }
+
+            console.log(`[EFL Filter] Result: ${filtered.length} surfaces from ${opticalSystemData.length} total`);
+            console.log(`[EFL Filter] Filtered surfaces:`, filtered.map((r, i) => `${i}:${r?.type || 'unknown'}`).join(', '));
+            
+            // Need at least Object and Image surfaces
+            if (filtered.length < 2) {
+                console.warn(`[EFL Filter] Too few surfaces (${filtered.length}), using full system`);
+                return opticalSystemData;
+            }
+
+            return filtered;
+        } catch (err) {
+            console.error('[EFL Filter] Error filtering optical data:', err);
+            return opticalSystemData;
+        }
     }
 
     calculateSeidelTotal(operand: any, opticalSystemData: any[], totalKey: string): number {
@@ -2052,7 +2341,7 @@ class MeritFunctionEditor {
                 seidel = calculateSeidelCoefficients(
                     opticalSystemData,
                     baseWavelength,
-                    objectRows,
+                    objectRows as any,
                     { referenceFocalLengthOverride: referenceFocalLengthOverrideImaging }
                 );
             }
@@ -2084,17 +2373,25 @@ class MeritFunctionEditor {
 
     getOpticalSystemDataByConfigId(configId: any): any[] {
         try {
-            try {
-                if (typeof window !== 'undefined' && w.__cooptOpticalSystemByConfigId) {
-                    const cfgId = (configId !== undefined && configId !== null) ? String(configId).trim() : '';
-                    if (cfgId) {
-                        const cached = w.__cooptOpticalSystemByConfigId[cfgId];
-                        if (Array.isArray(cached) && cached.length > 0) {
-                            return cached;
+            // Always skip cache to ensure fresh data for Requirements calculations
+            // Cache can contain stale/incomplete data during initial page load
+            const useCache = false;
+            
+            if (useCache) {
+                try {
+                    if (typeof window !== 'undefined' && w.__cooptOpticalSystemByConfigId) {
+                        const cfgId = (configId !== undefined && configId !== null) ? String(configId).trim() : '';
+                        if (cfgId) {
+                            const cached = w.__cooptOpticalSystemByConfigId[cfgId];
+                            // Validate cache: must have reasonable surface count (>= 3 actual surfaces)
+                            if (Array.isArray(cached) && cached.length >= 5) {
+                                return cached;
+                            } else if (Array.isArray(cached)) {
+                            }
                         }
                     }
-                }
-            } catch (_) {}
+                } catch (_) {}
+            }
 
             let systemConfig: any = null;
             let memSystemConfig: any = null;
@@ -2135,7 +2432,9 @@ class MeritFunctionEditor {
 
             if (isActiveConfig || wantsCurrent) {
                 const hasBlocksForActive = Array.isArray(config?.blocks);
-                if (!hasBlocksForActive) return getOpticalSystemRows({});
+                if (!hasBlocksForActive) {
+                    return getOpticalSystemRows({});
+                }
             }
 
             if (!config) {
@@ -2187,7 +2486,9 @@ class MeritFunctionEditor {
                                 const bt = String(b?.blockType ?? '').trim();
                                 return bt === 'ObjectSurface' || bt === 'ObjectPlane';
                             });
-                            if (hasObjectSurface) return expanded.rows;
+                            if (hasObjectSurface) {
+                                return expanded.rows;
+                            }
 
                             let preferredThickness: any = undefined;
 
@@ -2243,13 +2544,6 @@ class MeritFunctionEditor {
             return 0;
         }
 
-        console.log('🔍 EFFL計算開始:', {
-            param1: operand.param1,
-            param2: operand.param2,
-            param3: operand.param3,
-            dataLength: opticalSystemData.length
-        });
-
         const sourceIndex = parseInt(operand.param1) || 1;
         const startSurf = parseInt(operand.param2) || 1;
         const endSurf = parseInt(operand.param3) || (opticalSystemData.length - 2);
@@ -2261,21 +2555,8 @@ class MeritFunctionEditor {
             const sourceRow = sourceRows[sourceIndex - 1];
             if (sourceRow && sourceRow.wavelength) {
                 wavelength = parseFloat(sourceRow.wavelength);
-                console.log(`📡 Source${sourceIndex}の波長を使用: ${wavelength} μm`);
-            } else {
-                console.warn(`⚠️ Source${sourceIndex}が見つかりません。デフォルト波長を使用: ${wavelength} μm`);
             }
-        } else {
-            console.warn(`⚠️ Sourceテーブルが空です。デフォルト波長を使用: ${wavelength} μm`);
         }
-
-        console.log('📊 面範囲:', {
-            startSurf,
-            endSurf,
-            sourceIndex,
-            wavelength,
-            totalSurfaces: opticalSystemData.length
-        });
 
         let subSystemData: any[] = [];
 
@@ -2283,7 +2564,6 @@ class MeritFunctionEditor {
         const objectSurfaceId = Number.isFinite(objectSurfaceIdNum) ? objectSurfaceIdNum : 1;
         if (startSurf === objectSurfaceId) {
             subSystemData.push(opticalSystemData[0]);
-            console.log(`✓ Object面追加（id=${objectSurfaceId}）:`, opticalSystemData[0]);
         } else {
             const virtualObject = {
                 surface: 0,
@@ -2292,7 +2572,6 @@ class MeritFunctionEditor {
                 comment: "Virtual Object"
             };
             subSystemData.push(virtualObject);
-            console.log(`✓ 仮想Object面追加（開始id=${startSurf}）`);
         }
 
         for (let i = 1; i < opticalSystemData.length - 1; i++) {
@@ -2301,7 +2580,6 @@ class MeritFunctionEditor {
             if (!Number.isFinite(surfaceIdNum)) continue;
             if (surfaceIdNum >= startSurf && surfaceIdNum <= endSurf) {
                 subSystemData.push({ ...surface, id: surfaceIdNum });
-                console.log(`✓ 面${i}追加（id=${surfaceIdNum}）:`, surface);
             }
         }
 
@@ -2312,13 +2590,8 @@ class MeritFunctionEditor {
             comment: "Image"
         };
         subSystemData.push(imageSurface);
-        console.log('✓ Image面追加');
-
-        console.log('📋 サブシステムデータ:', subSystemData);
 
         const paraxialResult = calculateFullSystemParaxialTrace(subSystemData, wavelength) as any;
-
-        console.log('🎯 近軸追跡結果:', paraxialResult);
 
         if (!paraxialResult || Math.abs(paraxialResult.finalAlpha) < 1e-10) {
             console.warn(`❌ EFFL計算失敗: 面${startSurf}〜${endSurf}, 波長${wavelength}μm`);
@@ -2486,6 +2759,47 @@ class MeritFunctionEditor {
         }
     }
 
+    getSurfaceList(rowData: any): any {
+        const operandType = rowData?.operand || '';
+        const isSpotSizeOperand = operandType.startsWith('SPOT_SIZE');
+        
+        if (!isSpotSizeOperand) {
+            return {};
+        }
+
+        try {
+            const opticalSystemData = this.getOpticalSystemDataByConfigId(rowData?.configId);
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) {
+                return { '': '(Image)' };
+            }
+
+            const surfaceList: any = { '': '(Image)' };
+            
+            for (let i = 0; i < opticalSystemData.length; i++) {
+                const row = opticalSystemData[i];
+                if (!row) continue;
+                
+                const surfaceNumber = i;
+                const objectType = String(row['object type'] || row.objectType || row.object || '').trim();
+                const comment = String(row.comment || '').trim();
+                
+                let label = `S${surfaceNumber}`;
+                if (objectType) {
+                    label += ` (${objectType})`;
+                } else if (comment) {
+                    label += ` (${comment})`
+                }
+                
+                surfaceList[String(surfaceNumber + 1)] = label;
+            }
+            
+            return surfaceList;
+        } catch (err) {
+            console.warn('Surface list generation error:', err);
+            return { '': '(Image)' };
+        }
+    }
+
     getConfigName(configId: any): string {
         if (!configId && configId !== 0) {
             try {
@@ -2520,9 +2834,17 @@ class MeritFunctionEditor {
 const __cooptInitMeritFunctionEditor = (): boolean => {
     try {
         if (typeof window === 'undefined') return false;
-        if (w.meritFunctionEditor) return true;
+        
         const container = document.getElementById('table-merit-function');
         if (!container) return false;
+        
+        if (w.meritFunctionEditor) {
+            console.log('[Merit Function] Editor already exists, re-initializing event listeners');
+            // Re-initialize event listeners for React remount
+            w.meritFunctionEditor.initializeEventListeners();
+            return true;
+        }
+        
         w.meritFunctionEditor = new MeritFunctionEditor();
 
         try {

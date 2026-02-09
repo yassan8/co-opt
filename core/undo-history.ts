@@ -11,7 +11,7 @@ const w: Record<string, any> = window;
  * Implements Command Pattern for system-wide undo functionality
  */
 
-import type { Block, Configuration } from '../types/index.js';
+import type { Block, Configuration } from '../types/index.ts';
 
 interface SystemRequirement {
   id: string;

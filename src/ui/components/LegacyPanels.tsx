@@ -1,4 +1,48 @@
+import { useEffect } from 'react';
+
 export default function LegacyPanels() {
+  useEffect(() => {
+    // Re-initialize event listeners when component mounts
+    if (typeof window !== 'undefined') {
+      const meritEditor = (window as any).meritFunctionEditor;
+      if (meritEditor && typeof meritEditor.initializeEventListeners === 'function') {
+        console.log('[LegacyPanels] Re-initializing Merit Function event listeners on mount');
+        meritEditor.initializeEventListeners();
+      }
+    }
+  }, []);
+
+  // React-style Merit Function button handlers
+  const handleAddOperand = () => {
+    console.log('[LegacyPanels] Add Term button clicked (React handler)');
+    const editor = (window as any).meritFunctionEditor;
+    if (editor && typeof editor.addOperand === 'function') {
+      editor.addOperand();
+    } else {
+      console.error('[LegacyPanels] Merit Function Editor or addOperand method not available');
+    }
+  };
+
+  const handleDeleteOperand = () => {
+    console.log('[LegacyPanels] Delete Term button clicked (React handler)');
+    const editor = (window as any).meritFunctionEditor;
+    if (editor && typeof editor.deleteOperand === 'function') {
+      editor.deleteOperand();
+    } else {
+      console.error('[LegacyPanels] Merit Function Editor or deleteOperand method not available');
+    }
+  };
+
+  const handleCalculateMerit = () => {
+    console.log('[LegacyPanels] Calculate Evaluation button clicked (React handler)');
+    const editor = (window as any).meritFunctionEditor;
+    if (editor && typeof editor.calculateMerit === 'function') {
+      editor.calculateMerit();
+    } else {
+      console.error('[LegacyPanels] Merit Function Editor or calculateMerit method not available');
+    }
+  };
+
   return (
     <>
       <div className="merit-function-section" style={{ display: "none" }}>
@@ -10,9 +54,9 @@ export default function LegacyPanels() {
           Target = requirement value（要求値／目標の数字）, Weight = scoring weight（評価の重み／採点上の重要度）.
         </div>
         <div className="merit-function-buttons-container">
-          <button id="add-operand-btn">Add Term</button>
-          <button id="delete-operand-btn">Del Term</button>
-          <button id="calculate-merit-btn">Calculate Evaluation</button>
+          <button onClick={handleAddOperand}>Add Term</button>
+          <button onClick={handleDeleteOperand}>Del Term</button>
+          <button onClick={handleCalculateMerit}>Calculate Evaluation</button>
         </div>
         <div id="table-merit-function"></div>
         <div className="merit-summary">

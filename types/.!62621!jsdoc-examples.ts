@@ -1,0 +1,2 @@
+/**
+ * JSDoc Type Annotations Examples

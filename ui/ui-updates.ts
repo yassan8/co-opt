@@ -11,7 +11,7 @@ const w: Record<string, any> = window;
  * Handles updating UI elements based on data changes
  */
 
-import { generateSurfaceOptions } from '../evaluation/spot-diagram.js';
+import { generateSurfaceOptions } from '../evaluation/spot-diagram.ts';
 
 /**
  * Update surface number select options

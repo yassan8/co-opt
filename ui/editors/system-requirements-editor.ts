@@ -6,8 +6,8 @@
 
 console.log('[Requirements] Module loading...');
 
-import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.js';
-import { getOpticalSystemRows } from '../../utils/data-utils.js';
+import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.ts';
+import { getOpticalSystemRows } from '../../utils/data-utils.ts';
 
 console.log('[Requirements] Imports loaded');
 
@@ -107,13 +107,18 @@ class SystemRequirementsEditor {
     this._paramToggleBtn = null;
     this.inspector = new InspectorManager('requirement-inspector', 'requirement-inspector-content');
 
-    console.log('[Requirements] Initializing SystemRequirementsEditor');
+    console.log('[Requirements] ==========================================');
+    console.log('[Requirements] Initializing SystemRequirementsEditor constructor');
     this.loadFromStorage();
-    console.log('[Requirements] Loaded requirements:', this.requirements.length);
+    console.log('[Requirements] Loaded requirements from storage:', this.requirements.length);
+    console.log('[Requirements] Requirements data:', JSON.stringify(this.requirements.slice(0, 2)));
     this.initializeTable();
-    console.log('[Requirements] Table initialized');
+    console.log('[Requirements] ✅ Table initialized in constructor');
     this.initializeEventListeners();
+    console.log('[Requirements] ✅ Event listeners initialized');
     this._ensureProgressUI();
+    console.log('[Requirements] ✅ Progress UI setup complete');
+    console.log('[Requirements] ==========================================');
 
     // Auto-update status when Merit is recalculated
     this.installMeritHook();
@@ -256,12 +261,14 @@ class SystemRequirementsEditor {
 
     const ensureEflBlocksDatalist = (blocks: any[]): string | null => {
       try {
+        console.log('[EFL Datalist] Creating datalist for blocks:', blocks?.length || 0);
         const id = 'coopt-efl-blocks-datalist';
         let dl = document.getElementById(id) as HTMLDataListElement | null;
         if (!dl) {
           dl = document.createElement('datalist');
           dl.id = id;
           document.body.appendChild(dl);
+          console.log('[EFL Datalist] Created new datalist element');
         }
         dl.innerHTML = '';
         const displayLabelById = getEflDisplayLabelByBlockId(blocks || []);
@@ -269,6 +276,7 @@ class SystemRequirementsEditor {
           const o = document.createElement('option');
           o.value = value;
           dl!.appendChild(o);
+          console.log(`[EFL Datalist] Added option: ${value}`);
         };
         addOpt('ALL');
         for (const b of blocks || []) {
@@ -277,6 +285,7 @@ class SystemRequirementsEditor {
           const label = displayLabelById.get(bid) || bid;
           addOpt(label);
         }
+        console.log(`[EFL Datalist] Total options: ${dl.children.length}`);
         return id;
       } catch (_) {
         return null;
@@ -284,7 +293,13 @@ class SystemRequirementsEditor {
     };
 
     const container = document.getElementById('table-system-requirements');
-    if (!container) return;
+    if (!container) {
+      console.warn('[Requirements] Table container not found');
+      return;
+    }
+    
+    // Clear only table-related content, preserve other elements
+    console.log('[Requirements] Initializing table in container');
     container.innerHTML = '';
 
     const wrap = document.createElement('div');
@@ -669,7 +684,50 @@ class SystemRequirementsEditor {
         const isSamplingParam = paramLabel === 'Sampling';
         const isS1Param = paramLabel === 'S1' || (paramLabel.startsWith('S') && paramDesc.includes('Surface'));
         
-        if (isS1Param) {
+        // SPOT_SIZE param5: Surface selection (1-based, empty=image)
+        const isSpotSizeSurfaceParam = field === 'param5' && String(row?.operand ?? '').startsWith('SPOT_SIZE');
+        
+        if (isSpotSizeSurfaceParam) {
+          // SPOT_SIZE param5: Surface selection dropdown (1-based surface numbers, empty=image)
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          
+          // Add "Image" option (empty value)
+          const imageOpt = document.createElement('option');
+          imageOpt.value = '';
+          imageOpt.textContent = '(Image)';
+          control.appendChild(imageOpt);
+          
+          // Get optical system rows from Design Intent or config
+          try {
+            const opticalRows = (getOpticalSystemRows as any)(null);
+            if (Array.isArray(opticalRows)) {
+              for (let i = 0; i < opticalRows.length; i++) {
+                const surfRow = opticalRows[i];
+                if (!surfRow) continue;
+                
+                const objType = String(surfRow['object type'] || surfRow.object || surfRow.surfType || '').trim();
+                const displayNumber = i; // Display as S0, S1, S2... (0-based display)
+                const surfaceValue = i + 1; // Store as 1-based for compatibility with merit-function calculation
+                const surfLabel = surfRow.comment || surfRow.label || `S${displayNumber}`;
+                
+                const opt = document.createElement('option');
+                opt.value = String(surfaceValue);
+                opt.textContent = objType ? `S${displayNumber} (${objType})` : `S${displayNumber}: ${surfLabel}`;
+                control.appendChild(opt);
+              }
+            }
+          } catch (err) {
+            console.warn('Failed to populate SPOT_SIZE param5 dropdown:', err);
+          }
+          
+          control.value = String(row[field] || '');
+        } else if (isS1Param) {
           // S1 (Surface) dropdown: 0=Total, then surfaces from Design Intent
           control = document.createElement('select');
           control.style.width = '100%';
@@ -1314,37 +1372,64 @@ class SystemRequirementsEditor {
   }
 
   initializeEventListeners(): void {
+    console.log('[Requirements] ============================================');
     console.log('[Requirements] Initializing event listeners...');
+    console.log('[Requirements] Timestamp:', new Date().toISOString());
+    
+    // Add button
     const addBtn = document.getElementById('add-requirement-btn');
+    console.log('[Requirements] Add button element:', addBtn);
     if (addBtn) {
-      addBtn.addEventListener('click', () => this.addRequirement());
-      console.log('[Requirements] Add button listener attached');
+      // Clone and replace to remove old listeners
+      const newAddBtn = addBtn.cloneNode(true) as HTMLElement;
+      addBtn.parentNode?.replaceChild(newAddBtn, addBtn);
+      newAddBtn.addEventListener('click', () => {
+        console.log('[Requirements] Add button clicked!');
+        this.addRequirement();
+      });
+      console.log('[Requirements] ✅ Add button listener attached');
     } else {
-      console.warn('[Requirements] Add button not found');
+      console.warn('[Requirements] ⚠️ Add button not found');
     }
 
+    // Delete button
     const delBtn = document.getElementById('delete-requirement-btn');
+    console.log('[Requirements] Delete button element:', delBtn);
     if (delBtn) {
-      delBtn.addEventListener('click', () => this.deleteRequirement());
-      console.log('[Requirements] Delete button listener attached');
+      const newDelBtn = delBtn.cloneNode(true) as HTMLElement;
+      delBtn.parentNode?.replaceChild(newDelBtn, delBtn);
+      newDelBtn.addEventListener('click', () => {
+        console.log('[Requirements] Delete button clicked!');
+        this.deleteRequirement();
+      });
+      console.log('[Requirements] ✅ Delete button listener attached');
     } else {
-      console.warn('[Requirements] Delete button not found');
+      console.warn('[Requirements] ⚠️ Delete button not found');
     }
 
+    // Update button
     const updateBtn = document.getElementById('update-requirement-btn');
+    console.log('[Requirements] Update button element:', updateBtn);
+    console.log('[Requirements] Update button parent:', updateBtn?.parentNode);
     if (updateBtn) {
-      updateBtn.addEventListener('click', async () => {
-        console.log('[Requirements] Update button clicked');
+      const newUpdateBtn = updateBtn.cloneNode(true) as HTMLElement;
+      updateBtn.parentNode?.replaceChild(newUpdateBtn, updateBtn);
+      newUpdateBtn.addEventListener('click', async () => {
+        console.log('[Requirements] ========================================');
+        console.log('[Requirements] Update button clicked!');
+        console.log('[Requirements] ========================================');
         try {
           await this.updateAllConfigsAndEvaluate();
         } catch (err) {
           console.error('[Requirements] Error in updateAllConfigsAndEvaluate:', err);
         }
       });
-      console.log('[Requirements] Update button listener attached');
+      console.log('[Requirements] ✅ Update button listener attached');
+      console.log('[Requirements] New update button:', document.getElementById('update-requirement-btn'));
     } else {
-      console.warn('[Requirements] Update button not found');
+      console.warn('[Requirements] ⚠️ Update button not found');
     }
+    console.log('[Requirements] ============================================');
   }
 
   renderTable(): void {
@@ -1355,9 +1440,33 @@ class SystemRequirementsEditor {
 
   _ensureProgressUI(): any {
     try {
-      if (this._progressEls) return this._progressEls;
+      if (this._progressEls) {
+        console.log('[Requirements] ✅ Returning cached progress elements');
+        return this._progressEls;
+      }
+      
+      // First, try to use existing progress elements from React component
+      console.log('[Requirements] 🔍 Looking for progress elements...');
+      const existingWrap = document.getElementById('requirements-progress-wrap');
+      const existingLabel = document.getElementById('requirements-progress-label');
+      const existingProg = document.getElementById('requirements-progress');
+      
+      console.log('[Requirements] Found wrap:', existingWrap ? '✅' : '❌');
+      console.log('[Requirements] Found label:', existingLabel ? '✅' : '❌');
+      console.log('[Requirements] Found prog:', existingProg ? '✅' : '❌');
+      
+      if (existingWrap && existingLabel && existingProg) {
+        console.log('[Requirements] ✅ Using existing progress elements from React');
+        this._progressEls = { wrap: existingWrap, label: existingLabel, prog: existingProg };
+        return this._progressEls;
+      }
+      
+      // Fallback: create progress elements dynamically (legacy approach)
       const btns = document.querySelector('.merit-function-buttons-container');
-      if (!btns || !btns.parentElement) return null;
+      if (!btns || !btns.parentElement) {
+        console.warn('[Requirements] Could not find buttons container for progress bar');
+        return null;
+      }
 
       const wrap = document.createElement('div');
       wrap.id = 'requirements-progress-wrap';
@@ -1379,25 +1488,38 @@ class SystemRequirementsEditor {
       wrap.appendChild(prog);
 
       btns.parentElement.insertBefore(wrap, btns.nextSibling);
+      console.log('[Requirements] Created new progress elements dynamically');
       this._progressEls = { wrap, label, prog };
       return this._progressEls;
-    } catch (_) {
+    } catch (err) {
+      console.error('[Requirements] Error in _ensureProgressUI:', err);
       return null;
     }
   }
 
   _setProgressVisible(visible: boolean): void {
     try {
+      console.log(`[Requirements] _setProgressVisible(${visible}) called`);
       const els = this._ensureProgressUI();
-      if (!els || !els.wrap) return;
+      if (!els || !els.wrap) {
+        console.error('[Requirements] ❌ No progress elements available');
+        return;
+      }
+      console.log(`[Requirements] Setting display to: ${visible ? 'block' : 'none'}`);
       els.wrap.style.display = visible ? 'block' : 'none';
-    } catch (_) {}
+    } catch (err) {
+      console.error('[Requirements] Error in _setProgressVisible:', err);
+    }
   }
 
   _setProgress(labelText: string, value: number, max: number): void {
     try {
+      console.log(`[Requirements] _setProgress("${labelText}", ${value}, ${max})`);
       const els = this._ensureProgressUI();
-      if (!els) return;
+      if (!els) {
+        console.error('[Requirements] ❌ No progress elements in _setProgress');
+        return;
+      }
       if (els.label) els.label.textContent = String(labelText ?? '');
       if (els.prog) {
         const m = Number(max);
@@ -1405,7 +1527,10 @@ class SystemRequirementsEditor {
         const v = Number(value);
         els.prog.value = (Number.isFinite(v) && v >= 0) ? v : 0;
       }
-    } catch (_) {}
+      console.log('[Requirements] ✅ Progress updated');
+    } catch (err) {
+      console.error('[Requirements] Error in _setProgress:', err);
+    }
   }
 
   async _yieldToUI(): Promise<void> {
@@ -1575,6 +1700,10 @@ class SystemRequirementsEditor {
   }
 
   async updateAllConfigsAndEvaluate(): Promise<void> {
+    console.log('[Requirements] ========================================');
+    console.log('[Requirements] updateAllConfigsAndEvaluate START');
+    console.log('[Requirements] ========================================');
+    
     // Force using UI table rows during this update cycle (blocks may be stale after CB insertion).
     let prevPreferTable: any;
     try {
@@ -1596,7 +1725,9 @@ class SystemRequirementsEditor {
     // Ensure each configuration has an up-to-date expanded opticalSystem snapshot
     // and has a per-config Spot Diagram settings entry.
     const editor = w.meritFunctionEditor;
+    console.log('[Requirements] Merit editor exists:', !!editor);
     if (!editor || typeof editor.getOpticalSystemDataByConfigId !== 'function') {
+      console.log('[Requirements] ⚠️ No merit editor, calling evaluateAndUpdateNow');
       try { await this.evaluateAndUpdateNow({ reason: 'no-merit-editor' }); } catch (_) {}
       return;
     }
@@ -1606,7 +1737,9 @@ class SystemRequirementsEditor {
       systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
     } catch (_) {}
     const configs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
+    console.log('[Requirements] Found configs:', configs.length);
     if (!systemConfig || configs.length === 0) {
+      console.log('[Requirements] ⚠️ No configs, calling evaluateAndUpdateNow');
       await this.evaluateAndUpdateNow({ reason: 'no-configs' });
       return;
     }
@@ -1615,14 +1748,16 @@ class SystemRequirementsEditor {
     try { if (updateBtn) updateBtn.disabled = true; } catch (_) {}
 
     // Show progress during the refresh, then reuse the same bar for evaluation.
+    console.log('[Requirements] Setting up progress timer (0ms)...');
     let showTimer: any = null;
     try {
       showTimer = setTimeout(() => {
         try {
+          console.log('[Requirements] Progress timer fired! Showing progress bar...');
           this._setProgressVisible(true);
           this._setProgress('Updating config snapshots…', 0, Math.max(1, configs.length));
         } catch (_) {}
-      }, 150);
+      }, 0); // Changed from 150ms to 0ms for immediate display
     } catch (_) {}
 
     try {
@@ -2071,11 +2206,12 @@ class SystemRequirementsEditor {
     try {
       showTimer = setTimeout(() => {
         try {
+          console.log('[Requirements] 📊 Showing progress bar in evaluateAndUpdateNow');
           progressVisible = true;
           this._setProgressVisible(true);
           this._setProgress('Evaluating requirements…', 0, Math.max(1, live.length));
         } catch (_) {}
-      }, 150);
+      }, 0); // Changed from 150ms to 0ms for immediate display
     } catch (_) {}
 
     // Requirements are a pass/fail spec. They should reflect the same semantics as the UI analyses
@@ -2133,6 +2269,20 @@ class SystemRequirementsEditor {
 
       let current: any = null;
       try {
+        const isSpotSize = String(opObj.operand || '').includes('SPOT_SIZE');
+        if (isSpotSize) {
+          console.log('🔍 [REQUIREMENTS EVAL SPOT_SIZE] Calling calculateOperandValue:', {
+            operand: opObj.operand,
+            param1: opObj.param1,
+            param2: opObj.param2,
+            param3: opObj.param3,
+            param4: opObj.param4,
+            param5: opObj.param5,
+            configId: opObj.configId,
+            editorExists: !!editor,
+            funcExists: typeof editor.calculateOperandValue === 'function'
+          });
+        }
         current = editor.calculateOperandValue(opObj);
 
         // If this is a Spot Size operand, capture its debug snapshot keyed by requirement row id.
@@ -2503,24 +2653,52 @@ class SystemRequirementsEditor {
 
 const __cooptInitSystemRequirementsEditor = (): boolean => {
   try {
+    console.log('[Requirements] ==========================================');
     console.log('[Requirements] Attempting to initialize editor');
+    console.log('[Requirements] Timestamp:', new Date().toISOString());
     if (typeof window === 'undefined') return false;
-    if (w.systemRequirementsEditor) {
-      console.log('[Requirements] Editor already initialized');
-      return true;
-    }
+    
     const container = document.getElementById('table-system-requirements');
     console.log('[Requirements] Container element:', container);
     if (!container) {
-      console.warn('[Requirements] Container element not found');
+      console.warn('[Requirements] ⚠️ Container element not found');
       return false;
     }
+    
+    if (w.systemRequirementsEditor) {
+      console.log('[Requirements] Editor already exists, reinitializing for React remount');
+      // Clear cached elements
+      w.systemRequirementsEditor._progressEls = null;
+      w.systemRequirementsEditor._tableRoot = null;
+      w.systemRequirementsEditor._tbody = null;
+      console.log('[Requirements] Cleared cached elements');
+      
+      // Re-initialize table to render content
+      console.log('[Requirements] Calling initializeTable()...');
+      w.systemRequirementsEditor.initializeTable();
+      console.log('[Requirements] ✅ Table reinitialized');
+      
+      // Re-initialize event listeners
+      console.log('[Requirements] Calling initializeEventListeners()...');
+      w.systemRequirementsEditor.initializeEventListeners();
+      console.log('[Requirements] ✅ Event listeners reinitialized');
+      
+      // Ensure progress UI
+      w.systemRequirementsEditor._ensureProgressUI();
+      console.log('[Requirements] ✅ Progress UI ensured');
+      console.log('[Requirements] ==========================================');
+      return true;
+    }
+    
     console.log('[Requirements] Creating new SystemRequirementsEditor instance');
     w.systemRequirementsEditor = new SystemRequirementsEditor();
-    console.log('[Requirements] Editor created successfully');
+    console.log('[Requirements] ✅ Editor created successfully');
+    console.log('[Requirements] Editor requirements count:', w.systemRequirementsEditor.requirements.length);
+    console.log('[Requirements] ==========================================');
     return true;
   } catch (e) {
     console.error('❌ System Requirements Editor init failed:', e);
+    console.error('Stack:', e instanceof Error ? e.stack : 'N/A');
     return false;
   }
 };

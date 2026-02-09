@@ -127,8 +127,15 @@ function createDefaultConfiguration(id: number, name: string): Configuration {
     // Block schema (canonical for AI designs; optional during transition)
     schemaVersion: BLOCK_SCHEMA_VERSION,
     blocks: defaultBlocks,
-    source: [],
-    object: [],
+    source: [
+      { id: 1, wavelength: 0.4358343, weight: 1, primary: '', angle: 0 },
+      { id: 2, wavelength: 0.5875618, weight: 1, primary: 'Primary Wavelength', angle: 0 },
+      { id: 3, wavelength: 0.6562725, weight: 1, primary: '', angle: 0 }
+    ],
+    object: [
+      { id: 1, xHeightAngle: 0, yHeightAngle: 0, position: 'Angle', angle: 0 },
+      { id: 2, xHeightAngle: 0, yHeightAngle: 17.05, position: 'Angle', angle: 0 }
+    ],
     opticalSystem: [],
     // meritFunctionは各configから削除（グローバルに移動）
     systemData: {

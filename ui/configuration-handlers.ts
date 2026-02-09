@@ -19,7 +19,7 @@ import {
   duplicateConfiguration,
   renameConfiguration,
   getConfigurationList
-} from '../data/table-configuration.js';
+} from '../data/table-configuration.ts';
 
 let autoSaveIntervalId: number | null = null;
 let isConfigurationSwitching = false;
@@ -136,17 +136,30 @@ function initializeConfigurationSystem(): void {
   const opticalData = localStorage.getItem('OpticalSystemTableData');
   const meritData = localStorage.getItem('meritFunctionData');
   
+  const config1 = systemConfig.configurations[0];
+  let needsSave = false;
+  
   if (systemConfig.configurations.length === 1 && 
-      systemConfig.configurations[0].source.length === 0 &&
       (sourceData || objectData || opticalData || meritData)) {
     
     console.log('🔄 [Configuration] Migrating existing data to Config 1...');
     
-    const config1 = systemConfig.configurations[0];
-    config1.source = sourceData ? JSON.parse(sourceData) : [];
-    config1.object = objectData ? JSON.parse(objectData) : [];
-    config1.opticalSystem = opticalData ? JSON.parse(opticalData) : [];
-    config1.meritFunction = meritData ? JSON.parse(meritData) : [];
+    if (sourceData) {
+      config1.source = JSON.parse(sourceData);
+      needsSave = true;
+    }
+    if (objectData) {
+      config1.object = JSON.parse(objectData);
+      needsSave = true;
+    }
+    if (opticalData) {
+      config1.opticalSystem = JSON.parse(opticalData);
+      needsSave = true;
+    }
+    if (meritData) {
+      config1.meritFunction = JSON.parse(meritData);
+      needsSave = true;
+    }
     
     // System Data を移行
     const refFLInput = document.getElementById('reference-focal-length') as HTMLInputElement | null;
@@ -155,8 +168,21 @@ function initializeConfigurationSystem(): void {
     }
     config1.systemData.referenceFocalLength = refFLInput ? refFLInput.value : '';
     
-    saveSystemConfigurations(systemConfig);
-    console.log('✅ [Configuration] Migration complete');
+    if (needsSave) {
+      saveSystemConfigurations(systemConfig);
+      console.log('✅ [Configuration] Migration complete');
+    }
+  }
+  
+  // 初回起動時、またはlocalStorageにsource/objectデータがない場合は、
+  // Config 1のデフォルトデータをlocalStorageに保存
+  if (!sourceData && config1 && Array.isArray(config1.source) && config1.source.length > 0) {
+    console.log('🔄 [Configuration] Initializing sourceTableData with default values');
+    localStorage.setItem('sourceTableData', JSON.stringify(config1.source));
+  }
+  if (!objectData && config1 && Array.isArray(config1.object) && config1.object.length > 0) {
+    console.log('🔄 [Configuration] Initializing objectTableData with default values');
+    localStorage.setItem('objectTableData', JSON.stringify(config1.object));
   }
 }
 

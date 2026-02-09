@@ -6,21 +6,21 @@ declare global {
 }
 const w: Record<string, any> = window;
 
-import { clearAllOpticalElements } from '../optical/system-renderer.js';
-import { setRayEmissionPattern, setRayColorMode } from '../optical/ray-renderer.js';
-import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.js';
-import { calculateOpticalSystemOffset } from '../utils/math.js';
+import { clearAllOpticalElements } from '../optical/system-renderer.ts';
+import { setRayEmissionPattern, setRayColorMode } from '../optical/ray-renderer.ts';
+import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
+import { calculateOpticalSystemOffset } from '../utils/math.ts';
 import {
     drawLensCrossSectionWithSurfaceOrigins,
     harmonizeSceneGeometry,
     validateSceneGeometry
-} from '../optical/surface.js';
-import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.js';
-import { PSFPlotter } from '../evaluation/psf/psf-plot.js';
-import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../evaluation/wavefront/wavefront.js';
-import { PSFCalculator } from '../evaluation/psf/psf-calculator.js';
-import { calculateFocalLength, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.js';
-import { DEFAULT_STOP_SEMI_DIAMETER } from '../data/block-schema.js';
+} from '../optical/surface.ts';
+import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.ts';
+import { PSFPlotter } from '../evaluation/psf/psf-plot.ts';
+import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../evaluation/wavefront/wavefront.ts';
+import { PSFCalculator } from '../evaluation/psf/psf-calculator.ts';
+import { calculateFocalLength, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.ts';
+import { DEFAULT_STOP_SEMI_DIAMETER } from '../data/block-schema.ts';
 
 // ============================================================================
 // GLOBAL CONFIGURATION: FORCE INFINITE PUPIL MODE
@@ -4577,7 +4577,14 @@ export function setupAnalysisWindows() {
                                 if (Array.isArray(r) && r.length > 0) return cloneRows(r);
                             }
                         } catch (_) {}
-                        return getOpticalSystemRows(window.tableOpticalSystem);
+                        // Fallback: try opener again without parameter
+                        try {
+                            if (window.opener && typeof window.opener.getOpticalSystemRows === 'function') {
+                                const r = window.opener.getOpticalSystemRows();
+                                if (Array.isArray(r) && r.length > 0) return cloneRows(r);
+                            }
+                        } catch (_) {}
+                        return [];
                     })();
 
                     const objects = (() => {
@@ -4587,7 +4594,14 @@ export function setupAnalysisWindows() {
                                 if (Array.isArray(r) && r.length > 0) return cloneRows(r);
                             }
                         } catch (_) {}
-                        return getObjectRows(window.tableObject);
+                        // Fallback: try opener again without parameter
+                        try {
+                            if (window.opener && typeof window.opener.getObjectRows === 'function') {
+                                const r = window.opener.getObjectRows();
+                                if (Array.isArray(r) && r.length > 0) return cloneRows(r);
+                            }
+                        } catch (_) {}
+                        return [];
                     })();
 
                     const sources = (() => {
@@ -4597,7 +4611,14 @@ export function setupAnalysisWindows() {
                                 if (Array.isArray(r) && r.length > 0) return cloneRows(r);
                             }
                         } catch (_) {}
-                        return getSourceRows(window.tableSource);
+                        // Fallback: try opener again without tableSource parameter
+                        try {
+                            if (window.opener && typeof window.opener.getSourceRows === 'function') {
+                                const r = window.opener.getSourceRows();
+                                if (Array.isArray(r) && r.length > 0) return cloneRows(r);
+                            }
+                        } catch (_) {}
+                        return [];
                     })();
                     if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) throw new Error('No optical system data (popup).');
                     if (!Array.isArray(objects) || objects.length === 0) throw new Error('No object data (popup).');
@@ -4763,8 +4784,22 @@ export function setupAnalysisWindows() {
                         } catch (_) {}
                     };
 
-                    const opdCalculator = createOPDCalculator(opticalSystemRows, wavelength);
-                    const analyzer = new WavefrontAberrationAnalyzer(opdCalculator);
+                    const opdCalculator = (() => {
+                        try {
+                            if (window.opener && typeof window.opener.createOPDCalculator === 'function') {
+                                return window.opener.createOPDCalculator(opticalSystemRows, wavelength);
+                            }
+                        } catch (_) {}
+                        throw new Error('createOPDCalculator not available from opener window');
+                    })();
+                    const analyzer = (() => {
+                        try {
+                            if (window.opener && window.opener.WavefrontAberrationAnalyzer) {
+                                return new window.opener.WavefrontAberrationAnalyzer(opdCalculator);
+                            }
+                        } catch (_) {}
+                        throw new Error('WavefrontAberrationAnalyzer not available from opener window');
+                    })();
                     
                     // CRITICAL: Force stop mode to match render behavior
                     // PSF calculation should use same pupil sampling as render, not entrance pupil
@@ -4975,13 +5010,24 @@ export function setupAnalysisWindows() {
                     }
                     
                     try {
-                        const fl = calculateFocalLength(opticalSystemRows, wavelength);
-                        if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) focalLengthMm = Math.abs(fl);
+                        const calcFL = window.opener && typeof window.opener.calculateFocalLength === 'function'
+                            ? window.opener.calculateFocalLength
+                            : null;
+                        if (calcFL) {
+                            const fl = calcFL(opticalSystemRows, wavelength);
+                            if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) focalLengthMm = Math.abs(fl);
+                        }
                     } catch (_) {}
 
                     logScaleInputs(pupilDiameterMm, focalLengthMm, stopIndexForLog);
 
-                    if (!window.__popupPsfCalculator) window.__popupPsfCalculator = new PSFCalculator();
+                    if (!window.__popupPsfCalculator) {
+                        if (window.opener && window.opener.PSFCalculator) {
+                            window.__popupPsfCalculator = new window.opener.PSFCalculator();
+                        } else {
+                            throw new Error('PSFCalculator not available from opener window');
+                        }
+                    }
                     const psfCalculator = window.__popupPsfCalculator;
                     const psfSamplingSize = Number.isFinite(zernikeSampling) ? zernikeSampling : 128;
                     const zeroPadTo = (zeroPadRaw === 'none')
@@ -4994,7 +5040,7 @@ export function setupAnalysisWindows() {
                         zeroPadTo,
                         pupilDiameter: pupilDiameterMm,
                         focalLength: focalLengthMm,
-                        forceImplementation: forceWasm ? 'wasm' : null,
+                        forceImplementation: 'javascript', // Force JavaScript to use zeroPadTo parameter
                         // Zernike render removes piston+tilt (Noll 1..3) by design.
                         // Still safe to leave removeTilt=true for robustness; but keep it off to preserve definition.
                         removeTilt: false,
@@ -5008,7 +5054,12 @@ export function setupAnalysisWindows() {
                     }), activeCancelToken);
                     throwIfCancelled(activeCancelToken);
 
-                    const plotter = new PSFPlotter(containerEl);
+                    const plotter = (() => {
+                        if (window.opener && window.opener.PSFPlotter) {
+                            return new window.opener.PSFPlotter(containerEl);
+                        }
+                        throw new Error('PSFPlotter not available from opener window');
+                    })();
                     await plotter.plot2DPSF(psfResult, { logScale, title: 'Point Spread Function' });
                 }
 

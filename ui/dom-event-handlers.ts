@@ -10,23 +10,23 @@ declare global {
 const w: Record<string, any> = window;
 
 // Import statements (all .ts → .js for ESM runtime)
-import { getGlassDataWithSellmeier, findSimilarGlassNames, findSimilarGlassesByNdVd } from '../data/glass.js';
-import { openGlassMapWindow } from '../data/glass-map.js';
+import { getGlassDataWithSellmeier, findSimilarGlassNames, findSimilarGlassesByNdVd } from '../data/glass.ts';
+import { openGlassMapWindow } from '../data/glass-map.ts';
 import {
     expandBlocksToOpticalSystemRows,
     deriveBlocksFromLegacyOpticalSystemRows,
     validateBlocksConfiguration,
     BLOCK_SCHEMA_VERSION
-} from '../compat/block-schema.js';
-import { SetBlockParameterCommand } from '../core/undo-history.js';
+} from '../compat/block-schema.ts';
+import { SetBlockParameterCommand } from '../core/undo-history.ts';
 import { 
     getCompressedStringFromLocation, 
     decodeAllDataFromCompressedString,
     encodeAllDataToCompressedString,
     buildShareUrlFromCompressedString
-} from '../utils/url-share.js';
-import { setupOpticalSystemChangeListeners } from './event-handlers.js';
-import { listDesignVariablesFromBlocks } from '../optimization/design-variables.js';
+} from '../utils/url-share.ts';
+import { setupOpticalSystemChangeListeners } from './event-handlers.ts';
+import { listDesignVariablesFromBlocks } from '../optimization/design-variables.ts';
 
 // Type definitions
 type BlockType = string;
@@ -679,8 +679,13 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
             if (configurationHasBlocks(activeCfg) && Array.isArray(activeCfg.opticalSystem)) {
                 effectiveOpticalSystem = activeCfg.opticalSystem;
             }
-            if (!effectiveSource && activeCfg.source) effectiveSource = activeCfg.source;
-            if (!effectiveObject && activeCfg.object) effectiveObject = activeCfg.object;
+            // Prefer activeConfig source/object if available
+            if (activeCfg.source && Array.isArray(activeCfg.source) && activeCfg.source.length > 0) {
+                effectiveSource = activeCfg.source;
+            }
+            if (activeCfg.object && Array.isArray(activeCfg.object) && activeCfg.object.length > 0) {
+                effectiveObject = activeCfg.object;
+            }
             if (!effectiveOpticalSystem && activeCfg.opticalSystem) effectiveOpticalSystem = activeCfg.opticalSystem;
         }
         if (!effectiveMeritFunction && candidateConfig?.meritFunction) effectiveMeritFunction = candidateConfig.meritFunction;
@@ -688,6 +693,27 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     } catch (_) {}
 
     // Save to localStorage for table loading
+    try {
+        if (effectiveSource) {
+            localStorage.setItem('sourceTableData', JSON.stringify(effectiveSource));
+            console.log('🔵 [Load] Source data saved to localStorage');
+        }
+    } catch (_) {}
+
+    try {
+        if (effectiveObject) {
+            localStorage.setItem('objectTableData', JSON.stringify(effectiveObject));
+            console.log('🔵 [Load] Object data saved to localStorage');
+        }
+    } catch (_) {}
+
+    try {
+        if (effectiveOpticalSystem) {
+            localStorage.setItem('OpticalSystemTableData', JSON.stringify(effectiveOpticalSystem));
+            console.log('🔵 [Load] Optical system data saved to localStorage');
+        }
+    } catch (_) {}
+
     try {
         if (effectiveSystemRequirements) {
             localStorage.setItem('systemRequirementsData', JSON.stringify(effectiveSystemRequirements));
@@ -869,6 +895,49 @@ function setupImportZemaxButton(): void {
     newBtn.addEventListener('click', importHandler);
 }
 
+// Setup Zemax Export Button
+function setupExportZemaxButton(): void {
+    const btn = document.getElementById('export-zemax-btn');
+    if (!btn) return;
+
+    const exportHandler = () => {
+        try {
+            // Get optical system rows from table
+            const opticalSystemRows = w.getOpticalSystemRows ? w.getOpticalSystemRows(w.tableOpticalSystem) : [];
+            
+            if (!opticalSystemRows || opticalSystemRows.length === 0) {
+                alert('No optical system data to export');
+                return;
+            }
+            
+            // Generate ZMX text
+            if (typeof w.generateZMXText === 'function') {
+                const zmxText = w.generateZMXText(opticalSystemRows);
+                
+                // Download the file
+                if (typeof w.downloadZMX === 'function') {
+                    const filename = 'co-opt-export.zmx';
+                    w.downloadZMX(zmxText, filename);
+                    console.log('✅ Zemax file exported successfully');
+                } else {
+                    console.error('❌ downloadZMX function not available');
+                    alert('Export function not available');
+                }
+            } else {
+                console.error('❌ generateZMXText function not available');
+                alert('Export function not available');
+            }
+        } catch (err) {
+            console.error('❌ Zemax export failed:', err);
+            alert(`Export failed: ${(err as Error)?.message || String(err)}`);
+        }
+    };
+    
+    const newBtn = btn.cloneNode(true) as HTMLElement;
+    btn.parentNode?.replaceChild(newBtn, btn);
+    newBtn.addEventListener('click', exportHandler);
+}
+
 // Setup Optimization Buttons
 function setupOptimizeDesignIntentButton(): void {
     const optimizeBtn = document.getElementById('optimize-design-intent-btn') as HTMLButtonElement | null;
@@ -928,7 +997,7 @@ function setupOptimizeDesignIntentButton(): void {
             // Progress popup window
             let popup: Window | null = null;
             const stopFlag = { stop: false };
-            let popupWatchTimer: ReturnType<typeof setInterval> | null = null;
+            let popupWatchTimer: any = null;
             let isRunning = false;
             try {
                 popup = window.open('', 'coopt-optimizer-progress', 'width=500,height=550,resizable=yes,scrollbars=no');
@@ -2022,8 +2091,15 @@ function setupNewFileButton(): void {
                         metadata: { source: 'default' }
                     }
                 ],
-                source: [],
-                object: [],
+                source: [
+                    { id: 1, wavelength: 0.4358343, weight: 1, primary: '', angle: 0 },
+                    { id: 2, wavelength: 0.5875618, weight: 1, primary: 'Primary Wavelength', angle: 0 },
+                    { id: 3, wavelength: 0.6562725, weight: 1, primary: '', angle: 0 }
+                ],
+                object: [
+                    { id: 1, xHeightAngle: 0, yHeightAngle: 0, position: 'Angle', angle: 0 },
+                    { id: 2, xHeightAngle: 0, yHeightAngle: 17.05, position: 'Angle', angle: 0 }
+                ],
                 opticalSystem: [],
                 systemData: { referenceFocalLength: '' },
                 metadata: {
@@ -2707,8 +2783,15 @@ function createDefaultConfiguration(id: number, name: string): any {
         name: name,
         schemaVersion: BLOCK_SCHEMA_VERSION,
         blocks: defaultBlocks,
-        source: [],
-        object: [],
+        source: [
+            { id: 1, wavelength: 0.4358343, weight: 1, primary: '', angle: 0 },
+            { id: 2, wavelength: 0.5875618, weight: 1, primary: 'Primary Wavelength', angle: 0 },
+            { id: 3, wavelength: 0.6562725, weight: 1, primary: '', angle: 0 }
+        ],
+        object: [
+            { id: 1, xHeightAngle: 0, yHeightAngle: 0, position: 'Angle', angle: 0 },
+            { id: 2, xHeightAngle: 0, yHeightAngle: 17.05, position: 'Angle', angle: 0 }
+        ],
         opticalSystem: [],
         meritFunction: [],
         metadata: {
@@ -3839,7 +3922,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         // Simple glass picker for Design Intent
                         const currentMaterial = input.value.trim();
                         
-                        let similarGlasses = [];
+                        let similarGlasses: any[] = [];
                         let isNumericSearch = false;
                         
                         // Check if current material is a numeric value
@@ -4435,6 +4518,7 @@ export function setupDOMEventHandlers(): void {
 
     try {
         setupImportZemaxButton();
+        setupExportZemaxButton();
         setupOptimizeDesignIntentButton();
         setupSuggestOptimizeButtons();
         setupNewFileButton();

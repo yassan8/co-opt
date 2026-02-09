@@ -3,6 +3,14 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./app.css";
 
+// Extend Window interface
+declare global {
+  interface Window {
+    __cooptReactMounted?: boolean;
+    initializeAllTables?: () => void;
+  }
+}
+
 const container = document.getElementById("react-root");
 
 if (!container) {

@@ -1,7 +1,7 @@
 // Glass map (Abbe diagram) popup window using Plotly.
 // ES module entry point.
 
-import { getAllGlassDatabases } from './glass.js';
+import { getAllGlassDatabases } from './glass.ts';
 
 interface GlassPoint {
   name: string;

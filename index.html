@@ -29,7 +29,7 @@
   <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
   
   <!-- WASM Module (V3 with memory management) -->
-  <script src="wasm/raytracing/ray-tracing-wasm-v3.js"></script>
+  <script src="wasm/raytracing/ray-tracing-wasm-v3.ts"></script>
 
   <script>
     // Warn (in English) when the user tries to leave via the browser Back button.
@@ -138,7 +138,8 @@
 
   <div id="react-root"></div>
   
-  <!-- main.ts will be injected by Vite plugin -->
+  <!-- Load main.ts in dev mode (will be replaced by Vite plugin in production) -->
+  <script type="module" src="/main.ts"></script>
   
   <!-- Undo/Redo System -->
   <script src="core/undo-history.ts" type="module"></script>
@@ -183,10 +184,10 @@
   
   <!-- Configuration System -->
   <script type="module" src="data/table-configuration.ts"></script>
-  <script type="module" src="ui/configuration-handlers.js"></script>
+  <script type="module" src="ui/configuration-handlers.ts"></script>
   
   <!-- Merit Function Inspector (must load before editor) -->
-  <script type="module" src="ui/editors/merit-function-inspector.js"></script>
+  <script type="module" src="ui/editors/merit-function-inspector.ts"></script>
   
   <!-- Merit Function Editor -->
   <script type="module" src="ui/editors/merit-function-editor.ts"></script>
@@ -195,16 +196,16 @@
   <script type="module" src="core/scenarios.ts"></script>
 
   <!-- MVP Optimizer (console-driven; uses Blocks variable flags) -->
-  <script type="module" src="optimization/optimizer-mvp.js"></script>
+  <script type="module" src="optimization/optimizer-mvp.ts"></script>
 
   <!-- System Requirements Editor -->
   <script type="module" src="ui/editors/system-requirements-editor.ts"></script>
   
   <!-- PSFプロット機能を読み込み -->
-  <script type="module" src="evaluation/psf/psf-plot.js"></script>
+  <script type="module" src="evaluation/psf/psf-plot.ts"></script>
   
   <!-- OPDプロファイル実行ハーネス（コンソールから runOPDProfiling(...) を呼び出し） -->
-  <script type="module" src="evaluation/wavefront/opd-profiler.js"></script>
+  <script type="module" src="evaluation/wavefront/opd-profiler.ts"></script>
   
   <!-- PSF WASM計算器を読み込み -->
   <script>
@@ -236,22 +237,19 @@
       };
     })();
   </script>
-  <script src="wasm/psf/psf-wasm.js"></script>
+  <script src="wasm/psf/psf-wasm.ts"></script>
 
   <!-- Core functionality scripts -->
   <script>
     
         // ray-tracing.jsの関数をグローバルに公開
-        setTimeout(async () => {
+        // main.ts is now loaded synchronously before this script
+        (async () => {
           try {
-            const main = await import('./main.ts');
-            const rayTracing = await import('./raytracing/core/ray-tracing.js');
-            const debugUtils = await import('./debug/debug-utils.js');
+            const rayTracing = await import('./raytracing/core/ray-tracing.ts');
+            const debugUtils = await import('./debug/debug-utils.ts');
             
-            // まずmain.tsからgetWASMSystemをグローバルに公開
-            if (typeof main.getWASMSystem === 'function') {
-              window.getWASMSystem = main.getWASMSystem;
-            }
+            // getWASMSystemは既にmain.tsでグローバルに公開済み
             
             // グローバルに公開
             window.rayTracingModule = rayTracing;
@@ -299,17 +297,14 @@
               window.surfaceNormal = rayTracing.surfaceNormal;
             }
             
-            // WASMデバッグ関数をグローバルにエクスポート
-            if (typeof main.getWASMSystem === 'function') {
-              window.getWASMSystem = main.getWASMSystem;
-            }
+            // WASMデバッグ関数はmain.tsで既にグローバルに公開済み
             if (typeof debugUtils.debugWASMSystem === 'function') {
               window.debugWASMSystem = debugUtils.debugWASMSystem;
               window.quickWASMComparison = debugUtils.quickWASMComparison;
             }
             
             // 絞り周辺光線モジュールを読み込み
-            import('./raytracing/core/ray-marginal.js').then(marginalRayModule => {
+            import('./raytracing/core/ray-marginal.ts').then(marginalRayModule => {
               window.calculateMarginalRay = marginalRayModule.calculateMarginalRay;
               window.calculateAllMarginalRays = marginalRayModule.calculateAllMarginalRays;
             }).catch(error => {
@@ -318,14 +313,14 @@
           } catch (error) {
             console.error('❌ ray-tracing.js モジュールの読み込みに失敗:', error);
           }
-        }, 1000);
+        })();
   </script>
 
   <!-- 絞り周辺光線計算スクリプト -->
-  <script type="module" src="raytracing/core/ray-aperture-edge.js"></script>
+  <script type="module" src="raytracing/core/ray-aperture-edge.ts"></script>
 
   <!-- WASM最適化モジュール -->
-  <script src="wasm/raytracing/force-wasm-system.js"></script>
+  <script src="wasm/raytracing/force-wasm-system.ts"></script>
     <!-- NOTE: Do not load legacy ray-tracing-wasm.js here.
       It overwrites the global RayTracingWASM symbol and can hide newer exports
       (e.g. _aspheric_sag_rt10) provided by ray-tracing-wasm-v3.js. -->
@@ -565,7 +560,7 @@
       
       try {
         // PSFCalculatorを動的インポート
-        const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.js');
+        const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.ts');
         const psfCalculator = new PSFCalculator();
         
         // 初期化を待機
@@ -595,7 +590,7 @@
   </script>
 
   <!-- Coordinate Transform Test (Temporary - remove after testing) -->
-  <!-- <script type="module" src="testing/test-coordinate-transform.js"></script> -->
+  <!-- <script type="module" src="testing/test-coordinate-transform.ts"></script> -->
 
   <!-- React App Entry Point -->
   <script type="module" src="src/main.tsx"></script>

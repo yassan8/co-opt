@@ -1,16 +1,8 @@
-// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
-declare global {
-  interface Window {
-    [key: string]: any;
-  }
-}
-const w: Record<string, any> = window;
-
-import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex, getGlassDataWithSellmeier, getAllGlassDatabases, getPrimaryWavelength } from './glass.js';
+import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex, getGlassDataWithSellmeier, getAllGlassDatabases, getPrimaryWavelength } from './glass.ts';
 import { loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables, getActiveConfiguration } from './table-configuration.ts';
 import { configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows, deriveBlocksFromLegacyOpticalSystemRows } from './block-schema.ts';
 
-function shouldDisableExpandedOpticalSystemUI(): boolean {
+function shouldDisableExpandedOpticalSystemUI() {
   try {
     // Blocks are canonical. When present, do not generate Expanded Optical System UI.
     // This prevents surface-table drift and enforces the Design Intent workflow.
@@ -21,12 +13,33 @@ function shouldDisableExpandedOpticalSystemUI(): boolean {
   }
 }
 
-function createNoopOpticalSystemTable(): any {
+function createNoopOpticalSystemTable() {
   let _data = [];
-  return {
-    on() { return this; },
-    off() { return this; },
+  const self = {
+    on() { return self; },
+    off() { return self; },
     getData() { return Array.isArray(_data) ? _data : []; },
+    getRows() {
+      return (Array.isArray(_data) ? _data : []).map((row, idx) => {
+        const rowData = row && typeof row === 'object' ? { ...row } : {};
+        return {
+          getData: () => rowData,
+          getIndex: () => idx,
+          getCell: (field) => ({
+            setValue: (val) => {
+              rowData[field] = val;
+              try {
+                const idNum = Number(rowData.id);
+                if (Number.isFinite(idNum)) {
+                  const di = Array.isArray(_data) ? _data.findIndex(r => Number(r?.id) === idNum) : -1;
+                  if (di >= 0) { _data[di] = { ..._data[di], [field]: val }; }
+                }
+              } catch (_) {}
+            }
+          })
+        };
+      });
+    },
     setData(d) { _data = Array.isArray(d) ? d : []; return Promise.resolve(); },
     replaceData(d) { _data = Array.isArray(d) ? d : []; return Promise.resolve(); },
     updateRow(rowId, patch) {
@@ -71,18 +84,37 @@ function createNoopOpticalSystemTable(): any {
       }
     }
   };
+  return self;
 }
 
 // cellEdited ハンドラ内で参照されるフラグ（重複削除の副作用で未宣言になっていた）
 let isUpdatingFromCellEdit = false;
 
-function makePendingSurfaceEditKey(surfaceId: any, field: any): string {
+function withCellEditSuppressed(fn) {
+  const prev = isUpdatingFromCellEdit;
+  isUpdatingFromCellEdit = true;
+  try {
+    return fn();
+  } finally {
+    isUpdatingFromCellEdit = prev;
+  }
+}
+
+function runWithCellEditSuppressed(fn) {
+  try {
+    return (typeof withCellEditSuppressed === 'function') ? withCellEditSuppressed(fn) : fn();
+  } catch (_) {
+    return fn();
+  }
+}
+
+function makePendingSurfaceEditKey(surfaceId, field) {
   const sid = (surfaceId === null || surfaceId === undefined) ? '' : String(surfaceId);
   const f = (field === null || field === undefined) ? '' : String(field);
   return `${sid}:${f}`;
 }
 
-function valuesEquivalentForApply(oldValue: any, newValue: any): boolean {
+function valuesEquivalentForApply(oldValue, newValue) {
   // Conservative equivalence: prevents noisy no-op edits from becoming Apply targets.
   if (oldValue === newValue) return true;
 
@@ -242,7 +274,7 @@ const initialTableData = [
 ];
 
 // ローカルストレージからデータを取得
-export function loadTableData(): any[] {
+export function loadTableData() {
   const json = localStorage.getItem(STORAGE_KEY);
   if (json) {
     try {
@@ -258,7 +290,7 @@ export function loadTableData(): any[] {
 }
 
 // テーブルデータをローカルストレージに保存
-export function saveTableData(data: any[]): void {
+export function saveTableData(data) {
   if (data && Array.isArray(data)) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     // Verify save
@@ -269,25 +301,25 @@ export function saveTableData(data: any[]): void {
 }
 
 // 行追加
-export function addRow(data: any[], newRow: any): void {
+export function addRow(data, newRow) {
   data.push(newRow);
 }
 
 // 行削除
-export function deleteRow(data: any[], rowId: number): void {
+export function deleteRow(data, rowId) {
   const idx = data.findIndex(row => row.id === rowId);
   if (idx !== -1) data.splice(idx, 1);
 }
 
 // idを0から振り直す
-export function renumberIds(data: any[]): void {
+export function renumberIds(data) {
   data.forEach((row, idx) => {
     row.id = idx;
   });
 }
 
 // Object typeを自動設定する（1行目="Object", 最終行="Image"）
-export function updateObjectTypes(data: any[]): void {
+export function updateObjectTypes(data) {
   data.forEach((row, idx) => {
     if (idx === 0) {
       row["object type"] = "Object";
@@ -435,7 +467,7 @@ function updateTitlesForCoordTrans(enabled) {
   setTabulatorColumnTitle('coef1', titles.coef1);
 }
 
-function updateCoefTitles(mode?: string) {
+function updateCoefTitles(mode) {
   const m = String(mode ?? '').trim().toLowerCase();
 
   /** @type {Record<string, string>} */
@@ -448,13 +480,13 @@ function updateCoefTitles(mode?: string) {
   } else if (m === 'odd') {
     // Odd asphere: coef1*r^3 + coef2*r^5 + ...
     for (let i = 1; i <= 10; i++) {
-      (titles as any)[`coef${i}`] = `A${2 * i + 1}`;
+      titles[`coef${i}`] = `A${2 * i + 1}`;
     }
   } else if (m === 'coordtrans') {
     // Coord Break uses coef1 as an order flag; other coefs are not used.
-    (titles as any).coef1 = (COORDTRANS_COLUMN_TITLES as any).coef1;
+    titles.coef1 = COORDTRANS_COLUMN_TITLES.coef1;
     for (let i = 2; i <= 10; i++) {
-      (titles as any)[`coef${i}`] = (DEFAULT_COLUMN_TITLES as any)[`coef${i}`];
+      titles[`coef${i}`] = DEFAULT_COLUMN_TITLES[`coef${i}`];
     }
   } else {
     // Default surface: keep Coef1..Coef10
@@ -556,7 +588,7 @@ let tabulatorOptions = {
         // Temporarily always visible for debugging
         return true;
         // try {
-        //   return typeof window !== 'undefined' && w._showLocalCoords === true;
+        //   return typeof window !== 'undefined' && window._showLocalCoords === true;
         // } catch (_) {
         //   return false;
         // }
@@ -564,7 +596,7 @@ let tabulatorOptions = {
       formatter: function(cell) {
         try {
           const rowData = cell.getRow().getData();
-          const localData = (typeof window !== 'undefined' && w._cachedLocalCoords) ? w._cachedLocalCoords : null;
+          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
           
           // Debug every call to see if formatter is being invoked
           console.log(`[Local X Formatter] Row ${rowData.id}:`, {
@@ -683,7 +715,7 @@ let tabulatorOptions = {
       formatter: function(cell) {
         try {
           const rowData = cell.getRow().getData();
-          const localData = (typeof window !== 'undefined' && w._cachedLocalCoords) ? w._cachedLocalCoords : null;
+          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
           if (!localData || !localData.surfaces) return '-';
           const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
           if (!surfData) return '-';
@@ -701,7 +733,7 @@ let tabulatorOptions = {
       formatter: function(cell) {
         try {
           const rowData = cell.getRow().getData();
-          const localData = (typeof window !== 'undefined' && w._cachedLocalCoords) ? w._cachedLocalCoords : null;
+          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
           if (!localData || !localData.surfaces) return '-';
           const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
           if (!surfData) return '-';
@@ -727,7 +759,7 @@ let tabulatorOptions = {
       formatter: function(cell) {
         try {
           const rowData = cell.getRow().getData();
-          const localData = (typeof window !== 'undefined' && w._cachedLocalCoords) ? w._cachedLocalCoords : null;
+          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
           if (!localData || !localData.surfaces) return '-';
           const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
           if (!surfData) return '-';
@@ -753,7 +785,7 @@ let tabulatorOptions = {
       formatter: function(cell) {
         try {
           const rowData = cell.getRow().getData();
-          const localData = (typeof window !== 'undefined' && w._cachedLocalCoords) ? w._cachedLocalCoords : null;
+          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
           if (!localData || !localData.surfaces) return '-';
           const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
           if (!surfData) return '-';
@@ -779,7 +811,7 @@ let tabulatorOptions = {
       formatter: function(cell) {
         try {
           const rowData = cell.getRow().getData();
-          const localData = (typeof window !== 'undefined' && w._cachedLocalCoords) ? w._cachedLocalCoords : null;
+          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
           if (!localData || !localData.surfaces) return '-';
           const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
           if (!surfData) return '-';
@@ -874,89 +906,59 @@ let tabulatorOptions = {
     ]
   }; // ←columns配列の直後はオプションオブジェクトの終端
 
-  // Mount function to initialize table after DOM is ready
-  export function mountTableOpticalSystemIfReady(): boolean {
-    const hasDocument = typeof document !== 'undefined';
-    if (!hasDocument) return false;
-    
-    const tableContainer = document.getElementById('table-optical-system');
-    if (!tableContainer) {
-      const reactMounted = typeof window !== 'undefined' && w.__cooptReactMounted;
-      if (reactMounted) {
-        console.warn('[TableOpticalSystem] Container #table-optical-system not found');
-      }
-      return false;
-    }
-    
-    // If already initialized and pointing to the same container, skip
-    if (tableOpticalSystem && (tableOpticalSystem as any).__cooptIsDom && (tableOpticalSystem as any).__cooptContainer === tableContainer) {
-      console.log('[TableOpticalSystem] Already initialized');
-      return true;
-    }
-    
-    console.log('[TableOpticalSystem] Initializing table...');
-    
-    // Create the table instance
-    if (__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) {
-      tableOpticalSystem = createNoopOpticalSystemTable();
-      
-      // In Blocks-only mode, seed the table with expanded data
-      try {
-        let rows = Array.isArray(initialData) ? initialData : [];
-        const cfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
-        if (cfg && configurationHasBlocks(cfg) && Array.isArray(cfg.blocks)) {
-          const expanded = expandBlocksToOpticalSystemRows(cfg.blocks);
-          const fatals = Array.isArray(expanded?.issues) ? expanded.issues.filter(i => i && i.severity === 'fatal') : [];
-          if (Array.isArray(expanded?.rows) && fatals.length === 0) {
-            rows = expanded.rows;
-          }
-        }
-        // Ensure ids exist for updateRow().
-        try { renumberIds(rows); } catch (_) {}
-        try { updateObjectTypes(rows); } catch (_) {}
-        if (typeof tableOpticalSystem.setData === 'function') {
-          tableOpticalSystem.setData(rows);
-        }
-      } catch (_) {
-        // ignore
-      }
-    } else {
-      try {
-        tableOpticalSystem = new w.Tabulator('#table-optical-system', tabulatorOptions);
-        (tableOpticalSystem as any).__cooptIsDom = true;
-        (tableOpticalSystem as any).__cooptContainer = tableContainer;
-        console.log('[TableOpticalSystem] Table initialized successfully');
-        
-        // Setup table event handlers only for real Tabulator instances
-        setupTableHandlers();
-      } catch (error) {
-        console.warn('Tabulator initialization failed. Falling back to noop table.', error);
-        tableOpticalSystem = createNoopOpticalSystemTable();
-      }
-    }
-    
-    // Store global reference
+  // Tabulatorインスタンスを作成 (disabled when Blocks exist)
+  if (__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) {
+    tableOpticalSystem = createNoopOpticalSystemTable();
+  } else {
     try {
-      if (typeof window !== 'undefined') w.tableOpticalSystem = tableOpticalSystem;
-    } catch (_) {}
-    
-    return true;
+      tableOpticalSystem = new Tabulator('#table-optical-system', tabulatorOptions);
+    } catch (error) {
+      console.warn('Tabulator initialization failed. Falling back to noop table.', error);
+      tableOpticalSystem = createNoopOpticalSystemTable();
+    }
   }
 
-  // Setup event handlers for the table (only called for real Tabulator instances)
-  function setupTableHandlers() {
-    if (!tableOpticalSystem || typeof tableOpticalSystem.on !== 'function') {
-      console.warn('[TableOpticalSystem] setupTableHandlers called but table.on is not available');
-      return;
+  // In Blocks-only mode, the optical system table is a no-op UI, but downstream
+  // evaluation (chief ray / PSF) still expects tableOpticalSystem.getData() to
+  // return the expanded surface rows. Seed it here so it is never empty.
+  if (__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) {
+    try {
+      let rows = Array.isArray(initialData) ? initialData : [];
+      const cfg = (typeof getActiveConfiguration === 'function') ? getActiveConfiguration() : null;
+      if (cfg && configurationHasBlocks(cfg) && Array.isArray(cfg.blocks)) {
+        const expanded = expandBlocksToOpticalSystemRows(cfg.blocks);
+        const fatals = Array.isArray(expanded?.issues) ? expanded.issues.filter(i => i && i.severity === 'fatal') : [];
+        if (Array.isArray(expanded?.rows) && fatals.length === 0) {
+          rows = expanded.rows;
+        }
+      }
+      // Ensure ids exist for updateRow().
+      try { renumberIds(rows); } catch (_) {}
+      try { updateObjectTypes(rows); } catch (_) {}
+      if (typeof tableOpticalSystem.setData === 'function') {
+        tableOpticalSystem.setData(rows);
+      }
+    } catch (_) {
+      // ignore
     }
+  }
 
-    // Tabulator error handling
+  try {
+    // Keep the historical global reference stable.
+    if (typeof window !== 'undefined') window.tableOpticalSystem = tableOpticalSystem;
+  } catch (_) {}
+
+  // console.log(tableOpticalSystem); // Tabulatorインスタンスが出力されるか確認
+
+  // Tabulatorエラーハンドリング
+  if (!__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) {
     tableOpticalSystem.on("error", function(error) {
       console.warn("Tabulator error:", error);
     });
+  }
 
-    // Setup table built event
-    tableOpticalSystem.on("tableBuilt", function(){
+  // 初期化完了後にイベントリスナーを設定
+  if (!__DISABLE_EXPANDED_OPTICAL_SYSTEM_UI) tableOpticalSystem.on("tableBuilt", function(){
     // console.log("Optical System Tabulator initialized successfully");
 
     const updateDynamicHeadersForSurfType = (surfTypeValue) => {
@@ -1147,34 +1149,14 @@ let tabulatorOptions = {
         console.warn("Cell edit cancelled scroll restore error:", error);
       }
     });
-  }); // end of tableBuilt event handler
-  } // end of setupTableHandlers function
-
-  // Initial attempt to mount (will fail if DOM not ready, that's OK)
-  try {
-    mountTableOpticalSystemIfReady();
-  } catch (_) {
-    console.log('[TableOpticalSystem] Initial mount failed, will retry after React mount');
-  }
-  
-  // Listen for React mount event
-  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-    window.addEventListener('coopt:react-mounted', () => {
-      console.log('[TableOpticalSystem] React mounted event received, attempting to mount table');
-      try {
-        mountTableOpticalSystemIfReady();
-      } catch (err) {
-        console.error('[TableOpticalSystem] Mount failed:', err);
-      }
-    }, { once: true });
-  }
+  });
 
 try {
   // Initialization code is above, but if needed, add here
 } catch (error) {
   console.error("❌ Failed to initialize Optical System Tabulator:", error);
   console.error("❌ Stack trace:", error.stack);
-  console.error("❌ Tabulator available?", typeof w.Tabulator);
+  console.error("❌ Tabulator available?", typeof Tabulator);
   console.error("❌ DOM element:", document.getElementById('table-optical-system'));
   console.error("❌ Initial data:", initialData);
   // フォールバック処理
@@ -1183,7 +1165,7 @@ try {
 
 // グローバルに公開（Node実行ではwindowが無いのでガード）
 if (typeof window !== 'undefined') {
-  w.calculateImageSemiDiaFromChiefRays = calculateImageSemiDiaFromChiefRays;
+  window.calculateImageSemiDiaFromChiefRays = calculateImageSemiDiaFromChiefRays;
 }
 
 /**
@@ -1191,7 +1173,7 @@ if (typeof window !== 'undefined') {
  * @param {number} rowIndex - テーブル行のインデックス
  * @param {string} materialName - 硝材名
  */
-export function updateOpticalPropertiesFromMaterial(rowIndex: number, materialName: string): void {
+export function updateOpticalPropertiesFromMaterial(rowIndex, materialName) {
     try {
         console.log(`🔧 updateOpticalPropertiesFromMaterial: rowIndex=${rowIndex}, material="${materialName}"`);
         
@@ -1270,7 +1252,27 @@ export function updateOpticalPropertiesFromMaterial(rowIndex: number, materialNa
         // 5. 算出した屈折率をRef Indexカラムに出力する
         // 6. 取得したアッベ数をAbbeカラムに出力する
         // 特定のセルのみを更新（他のフィールドを変更しない）
-        const allRows = tableOpticalSystem.getRows();
+        const allRows = (tableOpticalSystem && typeof tableOpticalSystem.getRows === 'function')
+          ? tableOpticalSystem.getRows()
+          : (tableOpticalSystem && typeof tableOpticalSystem.getData === 'function')
+            ? tableOpticalSystem.getData().map((row, idx) => {
+              const rowData = row && typeof row === 'object' ? { ...row } : {};
+              return {
+                getData: () => rowData,
+                getIndex: () => idx,
+                getCell: (field) => ({
+                  setValue: (val) => {
+                    rowData[field] = val;
+                    try {
+                      if (typeof tableOpticalSystem.updateRow === 'function') {
+                        tableOpticalSystem.updateRow(rowData.id ?? idx, { [field]: val });
+                      }
+                    } catch (_) {}
+                  }
+                })
+              };
+            })
+            : [];
         if (rowIndex >= 0 && rowIndex < allRows.length) {
             const targetRow = allRows[rowIndex];
             const targetData = targetRow.getData();
@@ -1304,7 +1306,7 @@ export function updateOpticalPropertiesFromMaterial(rowIndex: number, materialNa
 
             console.log(`🎯 Updating row ${rowIndex + 1} (Surf ${targetData.id})`);
 
-            w.withCellEditSuppressed(() => {
+            runWithCellEditSuppressed(() => {
               if (!rindexEquivalent) {
                 targetRow.getCell("rindex").setValue(desiredRindexStr);
               }
@@ -1328,7 +1330,11 @@ export function updateOpticalPropertiesFromMaterial(rowIndex: number, materialNa
             }
             
             // Avoid save storms during bulk material validation; dataChanged will persist once.
-            if (!w.isValidatingMaterials) {
+            try {
+              if (typeof isValidatingMaterials === 'undefined' || !isValidatingMaterials) {
+                saveTableData(tableOpticalSystem.getData());
+              }
+            } catch (_) {
               saveTableData(tableOpticalSystem.getData());
             }
         } else {
@@ -1342,7 +1348,7 @@ export function updateOpticalPropertiesFromMaterial(rowIndex: number, materialNa
 
 // テーブル全行の屈折率/アッベ数を現在の主波長で更新
 // (main.js / table-source.js から呼ばれる)
-export function updateAllRefractiveIndices(): void {
+export function updateAllRefractiveIndices() {
   try {
     if (!tableOpticalSystem || typeof tableOpticalSystem.getData !== 'function') {
       return;
@@ -1366,11 +1372,7 @@ export function updateAllRefractiveIndices(): void {
 
 // ガラス名変更時に自動で屈折率とアッベ数を更新
 // 屈折率・Abbe数変更時に自動でガラスを検索・設定
-const attachOpticalSystemCellEditedHandler = () => {
-  if (!tableOpticalSystem || typeof tableOpticalSystem.on !== 'function') {
-    return false;
-  }
-  tableOpticalSystem.on("cellEdited", function(cell){
+tableOpticalSystem.on("cellEdited", function(cell){
   try {
     // When we programmatically update cells (e.g. rindex/abbe derived from material),
     // Tabulator still fires cellEdited. Those events must NOT overwrite the user's
@@ -1394,18 +1396,18 @@ const attachOpticalSystemCellEditedHandler = () => {
     } catch (_) {}
 
     // Step2: show/update Apply Reason panel immediately after an edit.
-    try { w.updateApplyReasonPanelFromCell(cell, 'edited'); } catch (_) {}
+    try { updateApplyReasonPanelFromCell(cell, 'edited'); } catch (_) {}
 
     // Clear local coordinate cache on data change
     try {
       if (typeof window !== 'undefined') {
-        w._cachedLocalCoords = null;
-        w._showLocalCoords = false;
+        window._cachedLocalCoords = null;
+        window._showLocalCoords = false;
       }
     } catch (_) {}
 
     // System Constraints (BFL): update on edits (read-only; no table mutations).
-    try { w.requestSystemConstraintsUpdate('cell-edited'); } catch (_) {}
+    try { requestSystemConstraintsUpdate('cell-edited'); } catch (_) {}
 
     // Capture last edit for explicit Apply-to-Design-Intent gate.
     try {
@@ -1442,17 +1444,17 @@ const attachOpticalSystemCellEditedHandler = () => {
 
       // Avoid noisy no-op edits (often triggered by formatting/mutators).
       if (valuesEquivalentForApply(oldValue, newValue)) {
-        try { w.updateApplyToDesignIntentButtonState(); } catch (_) {}
+        try { updateApplyToDesignIntentButtonState(); } catch (_) {}
         return;
       }
       globalThis.__lastSurfaceEdit = { row: rowData, field, oldValue, newValue };
 
       // Record undo command for this surface edit
       try {
-        if (window.undoHistory && w.SetSurfaceFieldCommand && !window.undoHistory.isExecuting) {
-          const sysConfig = w.loadSystemConfigurations();
+        if (window.undoHistory && window.SetSurfaceFieldCommand && !window.undoHistory.isExecuting) {
+          const sysConfig = window.loadSystemConfigurations();
           const activeConfigId = sysConfig.activeConfiguration;
-          const command = new w.SetSurfaceFieldCommand(
+          const command = new window.SetSurfaceFieldCommand(
             activeConfigId,
             rowData.id,
             field,
@@ -1476,7 +1478,7 @@ const attachOpticalSystemCellEditedHandler = () => {
       }
 
       // Update Apply button state after capturing a meaningful pending edit.
-      try { w.updateApplyToDesignIntentButtonState(); } catch (_) {}
+      try { updateApplyToDesignIntentButtonState(); } catch (_) {}
     } catch (_) {
       // ignore
     }
@@ -1624,8 +1626,8 @@ const attachOpticalSystemCellEditedHandler = () => {
         try {
           setTimeout(() => {
             try {
-              if (typeof window !== 'undefined' && typeof w.updateSurfaceNumberSelect === 'function') {
-                w.updateSurfaceNumberSelect();
+              if (typeof window !== 'undefined' && typeof window.updateSurfaceNumberSelect === 'function') {
+                window.updateSurfaceNumberSelect();
               }
             } catch (_) {}
           }, 0);
@@ -1729,20 +1731,7 @@ function findClosestGlassByProperties(targetRindex, targetVd, maxResults = 20) {
       isUpdatingFromCellEdit = false;
     }, 100);
   }
-  });
-  return true;
-};
-
-if (!attachOpticalSystemCellEditedHandler()) {
-  if (typeof window !== 'undefined') {
-    window.addEventListener('coopt:react-mounted', () => {
-      try { attachOpticalSystemCellEditedHandler(); } catch (_) {}
-    }, { once: true });
-    setTimeout(() => {
-      try { attachOpticalSystemCellEditedHandler(); } catch (_) {}
-    }, 0);
-  }
-}
+});
 
 
 // 屈折率またはAbbe数入力時にガラスを自動検索・設定する関数
@@ -1828,7 +1817,7 @@ function autoSetGlassByProperties(rowIndex, field, value) {
                     const targetRow = allRows[rowIndex];
                     
                     // Material、屈折率、Abbe数を更新
-                  w.withCellEditSuppressed(() => {
+                  runWithCellEditSuppressed(() => {
                     targetRow.getCell("material").setValue(closestGlass.name);
                     targetRow.getCell("rindex").setValue(calculatedRI.toFixed(6));
                     targetRow.getCell("abbe").setValue(closestGlass.vd.toString());
@@ -1858,26 +1847,26 @@ function autoSetGlassByProperties(rowIndex, field, value) {
 if (typeof window !== 'undefined') {
   // window.findClosestGlassByProperties = findClosestGlassByProperties;
   // window.autoSetGlassByProperties = autoSetGlassByProperties;
-  w.updateOpticalPropertiesFromMaterial = updateOpticalPropertiesFromMaterial;
-  w.updateAllRefractiveIndices = updateAllRefractiveIndices;
+  window.updateOpticalPropertiesFromMaterial = updateOpticalPropertiesFromMaterial;
+  window.updateAllRefractiveIndices = updateAllRefractiveIndices;
   
   // Material名検証機能をテスト用に公開
-  if (typeof w.validateMaterialNames === 'function') {
-    w.validateMaterialNames = w.validateMaterialNames;
+  if (typeof validateMaterialNames === 'function') {
+    window.validateMaterialNames = validateMaterialNames;
   }
-  if (typeof w.showSimilarGlassNamesDialog === 'function') {
-    w.showSimilarGlassNamesDialog = w.showSimilarGlassNamesDialog;
+  if (typeof showSimilarGlassNamesDialog === 'function') {
+    window.showSimilarGlassNamesDialog = showSimilarGlassNamesDialog;
   }
-  if (typeof w.findSimilarGlassNames === 'function') {
-    w.findSimilarGlassNames = w.findSimilarGlassNames;
+  if (typeof findSimilarGlassNames === 'function') {
+    window.findSimilarGlassNames = findSimilarGlassNames;
   }
   
   // テスト用の手動検証関数
-  w.testMaterialValidation = function() {
+  window.testMaterialValidation = function() {
     console.log('🧪 Manual material validation test');
     const data = tableOpticalSystem.getData();
-    if (typeof w.validateMaterialNames === 'function') {
-      w.validateMaterialNames(data);
+    if (typeof validateMaterialNames === 'function') {
+      validateMaterialNames(data);
     } else {
       console.warn('⚠️ validateMaterialNames is not available');
     }
@@ -2085,9 +2074,9 @@ function showGlassSearchDialog(rowData, rowIndex) {
             // 新しい選択
             tr.classList.add('selected');
             selectedGlass = {
-                name: (tr as HTMLElement).dataset!.glassName!,
-                nd: parseFloat((tr as HTMLElement).dataset!.glassNd!),
-                vd: parseFloat((tr as HTMLElement).dataset!.glassVd!)
+                name: tr.dataset.glassName,
+                nd: parseFloat(tr.dataset.glassNd),
+                vd: parseFloat(tr.dataset.glassVd)
             };
             selectBtn.disabled = false;
         });
@@ -2198,8 +2187,8 @@ setTimeout(() => {
           try {
             setTimeout(() => {
               try {
-                if (typeof window !== 'undefined' && typeof w.updateSurfaceNumberSelect === 'function') {
-                  w.updateSurfaceNumberSelect();
+                if (typeof window !== 'undefined' && typeof window.updateSurfaceNumberSelect === 'function') {
+                  window.updateSurfaceNumberSelect();
                 }
               } catch (_) {}
             }, 0);
@@ -2248,8 +2237,8 @@ setTimeout(() => {
           try {
             setTimeout(() => {
               try {
-                if (typeof window !== 'undefined' && typeof w.updateSurfaceNumberSelect === 'function') {
-                  w.updateSurfaceNumberSelect();
+                if (typeof window !== 'undefined' && typeof window.updateSurfaceNumberSelect === 'function') {
+                  window.updateSurfaceNumberSelect();
                 }
               } catch (_) {}
             }, 0);
@@ -2288,8 +2277,8 @@ async function calculateImageSemiDiaFromChiefRays() {
     try {
     // Blocks-first / Blocks-only を含め、常に「評価系と同じ rows」を使う。
     // Expanded table は Blocks-only だと no-op / stale になり得るため。
-    const opticalSystemRows = (typeof window !== 'undefined' && typeof w.getOpticalSystemRows === 'function')
-      ? w.getOpticalSystemRows(tableOpticalSystem)
+    const opticalSystemRows = (typeof window !== 'undefined' && typeof window.getOpticalSystemRows === 'function')
+      ? window.getOpticalSystemRows(tableOpticalSystem)
       : tableOpticalSystem.getData();
 
     // Image面を見つける
@@ -2336,9 +2325,9 @@ async function calculateImageSemiDiaFromChiefRays() {
           return false;
         }
         // 光学系データとObjectデータを取得
-        const objectRows = (typeof window !== 'undefined' && typeof w.getObjectRows === 'function')
-          ? w.getObjectRows(w.tableObject)
-          : (w.tableObject ? w.tableObject.getData() : []);
+        const objectRows = (typeof window !== 'undefined' && typeof window.getObjectRows === 'function')
+          ? window.getObjectRows(window.tableObject)
+          : (window.tableObject ? window.tableObject.getData() : []);
         if (!objectRows || objectRows.length === 0) {
             console.warn('⚠️ Objectが設定されていません');
             return false;
@@ -2350,8 +2339,8 @@ async function calculateImageSemiDiaFromChiefRays() {
             z: 0
         }));
         // 主波長を取得
-        const primaryWavelength = (typeof w.getPrimaryWavelength === 'function') 
-            ? Number(w.getPrimaryWavelength()) || 0.5876 
+        const primaryWavelength = (typeof window.getPrimaryWavelength === 'function') 
+            ? Number(window.getPrimaryWavelength()) || 0.5876 
             : 0.5876;
         // 主光線のみを生成（光線数=1）
         const objectSurface = opticalSystemRows[0];
@@ -2369,7 +2358,7 @@ async function calculateImageSemiDiaFromChiefRays() {
             return { ...o, thickness: 0 };
           });
           const objectAngles = allObjectPositions.map(pos => ({ x: pos.x || 0, y: pos.y || 0 }));
-          crossBeamResult = await w.generateInfiniteSystemCrossBeam(tracingRows, objectAngles, {
+          crossBeamResult = await window.generateInfiniteSystemCrossBeam(tracingRows, objectAngles, {
             rayCount: 1,
             debugMode: false,
             wavelength: primaryWavelength,
@@ -2379,7 +2368,7 @@ async function calculateImageSemiDiaFromChiefRays() {
             chiefZ: -20
           });
         } else {
-            crossBeamResult = await w.generateCrossBeam(opticalSystemRows, allObjectPositions, {
+            crossBeamResult = await window.generateCrossBeam(opticalSystemRows, allObjectPositions, {
                 rayCount: 1,
                 debugMode: false,
                 wavelength: primaryWavelength,
@@ -2586,7 +2575,7 @@ async function calculateImageSemiDiaFromChiefRays() {
                     if (imgBlock) {
                       if (!imgBlock.parameters || typeof imgBlock.parameters !== 'object') imgBlock.parameters = {};
                       imgBlock.parameters.semidia = maxHeight;
-                      if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {} as any;
+                      if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
                       activeCfg.metadata.modified = new Date().toISOString();
                       if (typeof saveSystemConfigurations === 'function') {
                         saveSystemConfigurations(systemConfig);
@@ -2767,7 +2756,7 @@ function autoSetGlassByProperties(rowIndex, field, value) {
                     const targetRow = allRows[rowIndex];
                     
                     // Material、屈折率、Abbe数を更新
-                  w.withCellEditSuppressed(() => {
+                  runWithCellEditSuppressed(() => {
                     targetRow.getCell("material").setValue(closestGlass.name);
                     targetRow.getCell("rindex").setValue(calculatedRI.toFixed(6));
                     targetRow.getCell("abbe").setValue(closestGlass.vd.toString());
@@ -2792,5 +2781,21 @@ function autoSetGlassByProperties(rowIndex, field, value) {
 }
 */
 
-// Export showGlassSearchDialog to window for use in DOM event handlers
-w.showGlassSearchDialog = showGlassSearchDialog;
+// Mount function for table initialization
+export function mountTableOpticalSystemIfReady(): boolean {
+  try {
+    const container = document.getElementById('optical-system-table');
+    if (!container) return false;
+    
+    if (shouldDisableExpandedOpticalSystemUI()) {
+      tableOpticalSystem = createNoopOpticalSystemTable();
+      return true;
+    }
+    
+    // Table mounting logic would go here
+    return true;
+  } catch (e) {
+    console.error('Failed to mount optical system table:', e);
+    return false;
+  }
+}

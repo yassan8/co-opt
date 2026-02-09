@@ -12,11 +12,11 @@ const w: Record<string, any> = window;
  */
 
 import * as THREE from 'three';
-import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.js';
-import { expandBlocksToOpticalSystemRows } from '../data/block-schema.js';
+import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.ts';
+import { expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
 import { getScene, getCamera, getRenderer, getControls, getTableOpticalSystem, getTableObject, getTableSource,
          getIsGeneratingSpotDiagram, getIsGeneratingTransverseAberration,
-         setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration } from '../core/app-config.js';
+         setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration } from '../core/app-config.ts';
 
 /**
  * Create field setting from object data for PSF calculation

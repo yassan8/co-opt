@@ -21,7 +21,7 @@ const w: Record<string, any> = window;
  */
 
 import { expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
-import type { Block, Configuration } from '../types/index.js';
+import type { Block, Configuration } from '../types/index.ts';
 
 interface Scenario {
   id: string;

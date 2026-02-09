@@ -12,6 +12,9 @@ export default defineConfig({
       transformIndexHtml: {
         order: 'post',
         handler(html, ctx) {
+          // Remove the dev mode main.ts script tag
+          html = html.replace(/<script type="module" src="\/main\.ts"><\/script>\s*/g, '');
+          
           // Find the main.js bundle file name from the bundle
           if (ctx.bundle) {
             const mainChunk = Object.values(ctx.bundle).find(

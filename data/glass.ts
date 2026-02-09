@@ -1,11 +1,3 @@
-// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
-declare global {
-  interface Window {
-    [key: string]: any;
-  }
-}
-const w: Record<string, any> = window;
-
 // Relative price index maps (embedded).
 //
 // Interpretation:
@@ -4333,7 +4325,7 @@ export function calculateRefractiveIndex(sellmeierCoeffs, wavelength) {
  * @param {number} wavelength - Wavelength in micrometers (μm)
  * @returns {number} Calculated refractive index
  */
-export function calculateRefractiveIndexSchott(schottCoeffs: any, wavelength: number): number {
+export function calculateRefractiveIndexSchott(schottCoeffs, wavelength) {
   if (!schottCoeffs || wavelength <= 0) {
     return 1.0;
   }
@@ -4406,7 +4398,7 @@ export function calculateRefractiveIndexSumita(sumitaCoeffs, wavelength) {
  * @param {number} wavelength - Wavelength in micrometers (μm)
  * @returns {number} Calculated refractive index
  */
-export function calculateGlassRefractiveIndex(glassData: any, wavelength: number): number {
+export function calculateGlassRefractiveIndex(glassData, wavelength) {
   if (!glassData || wavelength <= 0) {
     return 1.0;
   }
@@ -13792,7 +13784,7 @@ export const cdgmGlassDB = [
 ];
 
 
-export function getAllGlassDatabases(): any[] {
+export function getAllGlassDatabases() {
   return [miscellaneousDB, oharaGlassDB, schottGlassDB, hoyaGlassDB, hikariGlassDB, sumitaGlassDB, cdgmGlassDB];
 }
 
@@ -13832,20 +13824,18 @@ function __applyPriceIndexToGlassDb() {
             if (!Number.isFinite(v)) continue;
             const nk = __normalizeGlassNameKey(k);
             if (!nk) continue;
-            if (Object.prototype.hasOwnProperty.call(normalizedVendorMap, nk) && (normalizedVendorMap as any)[nk] !== v) {
+            if (Object.prototype.hasOwnProperty.call(normalizedVendorMap, nk) && normalizedVendorMap[nk] !== v) {
               ambiguous.add(nk);
               continue;
             }
-            (normalizedVendorMap as any)[nk] = v;
+            normalizedVendorMap[nk] = v;
           }
-          for (const nk of ambiguous) {
-            delete (normalizedVendorMap as any)[nk as string];
-          }
+          for (const nk of ambiguous) delete normalizedVendorMap[nk];
           normalizedVendorMapCache.set(manufacturerKey, normalizedVendorMap);
         }
 
         const nk = __normalizeGlassNameKey(name);
-        raw = nk ? (normalizedVendorMap as any)[nk] : undefined;
+        raw = nk ? normalizedVendorMap[nk] : undefined;
         if (!Number.isFinite(raw) && nk && nk.length >= 2) {
           // Common OHARA suffix variants (fallback only):
           // - trailing P/Q/N: L-BAL35P, S-PHM52Q, S-TIH53WN
@@ -13889,7 +13879,7 @@ __applyPriceIndexToGlassDb();
  * @param {number} [maxResults=20]
  * @returns {Array<{name:string, nd:number, vd:number, manufacturer:string, price:(number|null), ndDiff:number, vdDiff:number, totalDiff:number}>}
  */
-export function findSimilarGlassesByNdVd(targetNd: number, targetVd: number, maxResults: number = 20): any[] {
+export function findSimilarGlassesByNdVd(targetNd, targetVd, maxResults = 20) {
   if (!Number.isFinite(targetNd) || !Number.isFinite(targetVd)) return [];
   if (targetNd <= 0 || targetNd >= 4) return [];
   if (targetVd <= 0) return [];
@@ -13923,46 +13913,6 @@ export function findSimilarGlassesByNdVd(targetNd: number, targetVd: number, max
   }
 
   out.sort((a, b) => a.totalDiff - b.totalDiff);
-  const n = Number(maxResults);
-  const limit = Number.isFinite(n) && n > 0 ? Math.floor(n) : 20;
-  return out.slice(0, limit);
-}
-
-/**
- * Find glasses by nd value only (useful when vd is unknown, e.g., numeric refractive index input)
- * 
- * @param {number} targetNd - Target refractive index
- * @param {number} [maxResults=20] - Maximum number of results
- * @returns {Array<{name:string, nd:number, vd:number, manufacturer:string, price:(number|null), ndDiff:number}>}
- */
-export function findGlassesByNd(targetNd: number, maxResults: number = 20): any[] {
-  if (!Number.isFinite(targetNd)) return [];
-  if (targetNd <= 0 || targetNd >= 4) return [];
-
-  const dbs = getAllGlassDatabases();
-  const out = [];
-
-  for (const db of dbs) {
-    if (!Array.isArray(db)) continue;
-    for (const glass of db) {
-      if (!glass) continue;
-      const nd = glass.nd;
-      const vd = glass.vd;
-      if (!Number.isFinite(nd) || !Number.isFinite(vd)) continue;
-      
-      const ndDiff = Math.abs(nd - targetNd);
-      out.push({
-        name: String(glass.name),
-        nd,
-        vd,
-        manufacturer: glass.manufacturer || 'Unknown',
-        price: Number.isFinite(glass.price) ? Number(glass.price) : null,
-        ndDiff
-      });
-    }
-  }
-
-  out.sort((a, b) => a.ndDiff - b.ndDiff);
   const n = Number(maxResults);
   const limit = Number.isFinite(n) && n > 0 ? Math.floor(n) : 20;
   return out.slice(0, limit);
@@ -14021,7 +13971,7 @@ function __levenshteinDistance(a, b, maxDistance = 32) {
  * @param {number} [maxResults=20]
  * @returns {Array<{name:string, score:number, manufacturer:string, price:(number|null)}>} 
  */
-export function findSimilarGlassNames(query: string, maxResults: number = 20): any[] {
+export function findSimilarGlassNames(query, maxResults = 20) {
   const q = String(query ?? '').trim();
   if (q === '') return [];
 
@@ -14066,13 +14016,13 @@ export function findSimilarGlassNames(query: string, maxResults: number = 20): a
  * Get primary wavelength from Source table
  * @returns {number} Primary wavelength in micrometers (μm)
  */
-export function getPrimaryWavelength(): number {
+export function getPrimaryWavelength() {
   const DEBUG = !!(typeof globalThis !== 'undefined' && (globalThis.__PSF_DEBUG || globalThis.__OPD_DEBUG));
   if (DEBUG) console.log('🔍 getPrimaryWavelength called from glass.js');
   try {
     // グローバルのtableSourceオブジェクトを使用
-    if (typeof window !== 'undefined' && w.tableSource && typeof w.tableSource.getData === 'function') {
-      const sourceData = w.tableSource.getData();
+    if (typeof window !== 'undefined' && window.tableSource && typeof window.tableSource.getData === 'function') {
+      const sourceData = window.tableSource.getData();
       if (DEBUG) console.log('📊 Source data (glass.js):', sourceData);
       
       // Primary Wavelengthに設定されているエントリを探す
@@ -14091,7 +14041,7 @@ export function getPrimaryWavelength(): number {
       if (DEBUG) console.log('⚠️ Primary wavelength not found (glass.js), using default: 0.5876 μm');
       return 0.5876;
     } else {
-      if (DEBUG) console.warn('⚠️ w.tableSource not available in glass.js');
+      if (DEBUG) console.warn('⚠️ window.tableSource not available in glass.js');
     }
   } catch (error) {
     if (DEBUG) console.warn('❌ Error getting primary wavelength (glass.js):', error);
@@ -14103,11 +14053,10 @@ export function getPrimaryWavelength(): number {
 
 // グローバルに公開（テスト用）
 if (typeof window !== 'undefined') {
-  w.getPrimaryWavelength = getPrimaryWavelength;
-  w.calculateRefractiveIndex = calculateRefractiveIndex;
-  w.getGlassDataWithSellmeier = getGlassDataWithSellmeier;
-  w.getAllGlassDatabases = getAllGlassDatabases;
-  w.findSimilarGlassesByNdVd = findSimilarGlassesByNdVd;
-  w.findGlassesByNd = findGlassesByNd;
-  w.findSimilarGlassNames = findSimilarGlassNames;
+  window.getPrimaryWavelength = getPrimaryWavelength;
+  window.calculateRefractiveIndex = calculateRefractiveIndex;
+  window.getGlassDataWithSellmeier = getGlassDataWithSellmeier;
+  window.getAllGlassDatabases = getAllGlassDatabases;
+  window.findSimilarGlassesByNdVd = findSimilarGlassesByNdVd;
+  window.findSimilarGlassNames = findSimilarGlassNames;
 }

@@ -2007,7 +2007,8 @@ h4 {
 
 /* System Evaluation Editor Section */
 .merit-function-section {
-    margin: 10px 20px 20px 20px;
+    margin: 20px;
+    margin-top: 35px;
 }
 
 .merit-function-section h2 {

@@ -4,7 +4,7 @@
 // - Supported blocks (MVP): ObjectSurface, Lens, Stop, AirGap, ImageSurface
 // - Glass material must exist in glass.js DB; numeric refractive index is disallowed.
 
-import { getAllGlassDatabases, getGlassDataWithSellmeier } from './glass.js';
+import { getAllGlassDatabases, getGlassDataWithSellmeier } from './glass.ts';
 
 export const BLOCK_SCHEMA_VERSION = '0.1';
 export const DEFAULT_SEMIDIA = '10';
