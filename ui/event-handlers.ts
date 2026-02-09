@@ -5917,7 +5917,7 @@ export function setupTransformationControls(): void {
     const errorText = document.getElementById('transform-error-text') as HTMLElement | null;
     const progressWrapper = document.getElementById('transform-progress-wrapper') as HTMLElement | null;
     const progressText = document.getElementById('transform-progress-text') as HTMLElement | null;
-    const progressBar = document.getElementById('transform-progressbar') as HTMLProgressElement | null;
+    const progressBar = document.getElementById('transform-progressbar') as HTMLProgressElement | HTMLElement | null;
     
     // Helper functions
     const showError = (message: string): void => {

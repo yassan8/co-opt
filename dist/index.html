@@ -133,19 +133,19 @@
       }
     }
   </script>
-  <script type="module" crossorigin src="/co-opt/assets/app-CEltyBV4.js"></script>
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-D9G0wDis.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-ziA_DbOL.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/seidel-coefficients-afocal-CC12g6aG.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/longitudinal-aberration-CFyhkfj5.js">
+  <script type="module" crossorigin src="/co-opt/assets/main-DkVz2xSL.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-BJCE9yio.js"></script>
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-8GRfmg9a.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-DkVz2xSL.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/seidel-coefficients-afocal-DS_vK2Gk.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/longitudinal-aberration-CbVBcF8g.js">
   <link rel="stylesheet" crossorigin href="/co-opt/assets/app-CZf93wEg.css">
-  <script type="module" crossorigin src="/co-opt/assets/main-ziA_DbOL.js"></script>
 </head>
 <body>
 
   <div id="react-root"></div>
   
-  <!-- Load main.js first to initialize window functions -->
+  <!-- main.ts will be injected by Vite plugin -->
   
   <!-- Undo/Redo System -->
   <script>
@@ -223,11 +223,11 @@
         // ray-tracing.jsの関数をグローバルに公開
         setTimeout(async () => {
           try {
-            const main = await import('/co-opt/assets/main-DVZI1Me5.js');
+            const main = await import('/co-opt/assets/main-CyVC0XfU.ts');
             const rayTracing = await import('/co-opt/assets/ray-tracing-I16uSXiV.js');
             const debugUtils = await import('/co-opt/assets/debug-utils-BDPOHgxU.js');
             
-            // まずmain.jsからgetWASMSystemをグローバルに公開
+            // まずmain.tsからgetWASMSystemをグローバルに公開
             if (typeof main.getWASMSystem === 'function') {
               window.getWASMSystem = main.getWASMSystem;
             }

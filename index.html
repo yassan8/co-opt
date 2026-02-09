@@ -138,8 +138,7 @@
 
   <div id="react-root"></div>
   
-  <!-- Load main.js first to initialize window functions -->
-  <script type="module" src="./main.js"></script>
+  <!-- main.ts will be injected by Vite plugin -->
   
   <!-- Undo/Redo System -->
   <script src="core/undo-history.ts" type="module"></script>
@@ -245,11 +244,11 @@
         // ray-tracing.jsの関数をグローバルに公開
         setTimeout(async () => {
           try {
-            const main = await import('./main.js');
+            const main = await import('./main.ts');
             const rayTracing = await import('./raytracing/core/ray-tracing.js');
             const debugUtils = await import('./debug/debug-utils.js');
             
-            // まずmain.jsからgetWASMSystemをグローバルに公開
+            // まずmain.tsからgetWASMSystemをグローバルに公開
             if (typeof main.getWASMSystem === 'function') {
               window.getWASMSystem = main.getWASMSystem;
             }

@@ -88,6 +88,21 @@ import { clearAllDrawing, showSpotDiagram, showTransverseAberrationDiagram, show
 import * as THREE from 'three';
 import { OrbitControls } from 'OrbitControls';
 
+// Type definitions for camera options
+interface CameraOptions {
+  camera?: THREE.Camera;
+  controls?: OrbitControls;
+  scene?: THREE.Scene;
+  renderer?: THREE.WebGLRenderer;
+  includeRayStartMargin?: boolean;
+  preserveDrawCrossBounds?: boolean;
+  centerZOverride?: number;
+  targetOverride?: { x: number; y: number; z: number };
+  preserveCurrentOrthoBounds?: boolean;
+  storeDrawCrossBounds?: boolean;
+  cameraDistance?: number;
+}
+
 // Export THREE and OrbitControls to global scope for popup windows
 window.THREE = THREE;
 window.OrbitControls = OrbitControls;
@@ -472,7 +487,7 @@ function improvedDrawOpticalSystemSurfaceWrapper() {
     
     try {
         // Clear existing optical elements first
-        clearAllOpticalElements();
+        clearAllOpticalElements(window.scene);
         
         // Get optical system data
         const opticalSystemRows = getOpticalSystemRows();
@@ -484,11 +499,17 @@ function improvedDrawOpticalSystemSurfaceWrapper() {
         // Draw optical system surfaces
         drawOpticalSystemSurfaces({
             opticalSystemData: opticalSystemRows,
-            scene: window.scene || document.scene
+            scene: window.scene!,
+            crossSectionOnly: false,
+            showSurfaceOrigins: false,
+            showSemidiaRing: true,
+            showMirrorBackText: false,
+            crossSectionDirection: 'z',
+            crossSectionCenterOffset: 0
         });
         
         // Adjust camera view to fit the drawn surfaces
-        adjustCameraView();
+        adjustCameraView(window.scene, window.camera, window.controls, window.renderer);
         
     } catch (error) {
     }
@@ -519,8 +540,8 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
         objectRows.forEach((obj, objIndex) => {
 
             // Get ray count from UI input
-            const rayCountInput = document.getElementById('draw-ray-count-input');
-            const rayCount = rayCountInput ? (parseInt(rayCountInput.value, 10) || 5) : 5;
+            const rayCountInput = document.getElementById('draw-ray-count-input') as HTMLInputElement | null;
+            const rayCount = rayCountInput ? (parseInt(rayCountInput.value || '5', 10) || 5) : 5;
 
             const isAngle = (obj?.position === 'Angle' || obj?.position === 'angle');
             const rayStartPoints = generateRayStartPointsForObject(
@@ -627,7 +648,13 @@ function forceDrawEverything() {
         // Force draw optical surfaces
         drawOpticalSystemSurfaces({
             opticalSystemData: getOpticalSystemRows(),
-            scene: window.scene
+            scene: window.scene!,
+            crossSectionOnly: false,
+            showSurfaceOrigins: false,
+            showSemidiaRing: true,
+            showMirrorBackText: false,
+            crossSectionDirection: 'z',
+            crossSectionCenterOffset: 0
         });
         
         // Force draw rays
@@ -646,8 +673,8 @@ function forceDrawEverything() {
             
             const rayStartPoints = generateRayStartPointsForObject(defaultObject, finalOpticalSystemRows, 11);
             if (rayStartPoints && rayStartPoints.length > 0) {
-                rayStartPoints.forEach(rayStart => {
-                    drawRayWithSegmentColors(rayStart, finalOpticalSystemRows, []);
+                rayStartPoints.forEach((rayStart: any) => {
+                    drawRayWithSegmentColors(rayStart, finalOpticalSystemRows, [], window.scene);
                 });
             }
         }
@@ -1034,7 +1061,7 @@ function expandOrthoBoundsToAspect(camera, aspect) {
 /**
  * Set camera for Y-Z cross section front view (for Draw Cross)
  */
-function setCameraForYZCrossSection(options = {}) {
+function setCameraForYZCrossSection(options: CameraOptions = {}) {
     
     try {
         const camera = options.camera || window.camera;
@@ -1217,7 +1244,7 @@ function setCameraForYZCrossSection(options = {}) {
     }
 }
 
-function setCameraForXZCrossSection(options = {}) {
+function setCameraForXZCrossSection(options: CameraOptions = {}) {
 
     try {
         const camera = options.camera || window.camera;
@@ -1808,7 +1835,7 @@ const startApplicationOnce = (() => {
                         }));
                         console.log('Stored draw-cross rays for overlay:', window.currentDrawCrossRays.length);
                         
-                        drawCrossBeamRays(allRays);
+                        drawCrossBeamRays(allRays, window.scene);
                     } else {
                         window.currentDrawCrossRays = [];
                     }
@@ -2146,9 +2173,9 @@ window.isFiniteSystem = function(opticalSystemRows) {
         
         // 数値に変換して有限かつ正の値であれば有限系
         const numThickness = parseFloat(thickness);
-        const isFinite = Number.isFinite(numThickness) && numThickness > 0;
+        const isFiniteLocal = Number.isFinite(numThickness) && numThickness > 0;
         
-        return isFinite;
+        return isFiniteLocal;
     }
     return false;
 };
@@ -2167,7 +2194,7 @@ window.mainDebugFunctions = {
     traceRay,
     findStopSurface,
     calculateSurfaceOrigins,
-    isFiniteSystem
+    isFiniteSystem: window.isFiniteSystem
 };
 
 // Distortion helpers
@@ -2218,7 +2245,7 @@ function convertObjectToFieldSetting(objectData, index) {
 window.convertObjectToFieldSetting = convertObjectToFieldSetting;
 
 // 絞り周辺光線の描画関数
-function drawMarginalRays(marginalRaysData, opticalSystem) {
+function drawMarginalRays(marginalRaysData: any, opticalSystem: any) {
     if (!marginalRaysData || !window.scene) {
         return;
     }
@@ -2227,7 +2254,7 @@ function drawMarginalRays(marginalRaysData, opticalSystem) {
     const marginalRays = marginalRaysData.marginalRays || marginalRaysData;
 
     // 要望: X-Z(水平:左右) も Y-Z(上下) と同じ青で表示する
-    const rayColors = {
+    const rayColors: Record<string, number> = {
         up: 0x0000ff,    // 青
         down: 0x0000ff,  // 青
         left: 0x0000ff,  // 青
@@ -2235,7 +2262,7 @@ function drawMarginalRays(marginalRaysData, opticalSystem) {
     };
 
 
-    Object.entries(marginalRays).forEach(([direction, rayData]) => {
+    Object.entries(marginalRays).forEach(([direction, rayData]: [string, any]) => {
         if (!rayData || !rayData.success || !rayData.surfacePoints) {
             return;
         }
@@ -2289,11 +2316,12 @@ window.getWASMSystem = getWASMSystem;
 const analysisSelect = document.getElementById('analysis-select');
 if (analysisSelect) {
     analysisSelect.addEventListener('change', (e) => {
-        const value = e.target.value;
+        const target = e.target as HTMLSelectElement;
+        const value = target.value;
         if (!value) return;
         
         // Map dropdown values to existing button IDs
-        const buttonMap = {
+        const buttonMap: Record<string, string> = {
             'spot-diagram': 'open-spot-diagram-window-btn',
             'spherical-aberration': 'open-spherical-aberration-window-btn',
             'astigmatism': 'open-astigmatism-window-btn',
@@ -2314,7 +2342,7 @@ if (analysisSelect) {
         }
         
         // Reset dropdown to placeholder
-        e.target.value = '';
+        target.value = '';
     });
 }
 
@@ -2325,7 +2353,7 @@ document.addEventListener('keydown', (e) => {
     const isInInput = activeElement && (
         activeElement.tagName === 'INPUT' ||
         activeElement.tagName === 'TEXTAREA' ||
-        activeElement.isContentEditable
+        (activeElement as any).isContentEditable
     );
     
     // Ctrl+Z / Cmd+Z for Undo

@@ -18,8 +18,15 @@ export default defineConfig({
               (chunk: any) => chunk.type === 'chunk' && chunk.name === 'main'
             );
             if (mainChunk && 'fileName' in mainChunk) {
-              const scriptTag = `  <script type="module" crossorigin src="/co-opt/${mainChunk.fileName}"></script>\n`;
-              return html.replace('</head>', scriptTag + '</head>');
+              const scriptTag = `<script type="module" crossorigin src="/co-opt/${mainChunk.fileName}"></script>\n`;
+              // Insert main.js script as the first script tag (before app.js)
+              // Find the first <script type="module" and insert before it
+              const firstScriptMatch = html.match(/(<script type="module" crossorigin src="[^"]+app-[^"]+\.js"><\/script>)/);
+              if (firstScriptMatch) {
+                return html.replace(firstScriptMatch[1], scriptTag + '  ' + firstScriptMatch[1]);
+              }
+              // Fallback: insert before </head>
+              return html.replace('</head>', '  ' + scriptTag + '</head>');
             }
           }
           return html;
@@ -41,7 +48,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         app: "index.html",
-        main: "main.js"
+        main: "main.ts",
       },
       output: {
         entryFileNames: (chunkInfo) => {
