@@ -648,3 +648,6 @@ try {
     const RAYTRACE_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__RAYTRACE_DEBUG);
     if (RAYTRACE_DEBUG) console.log('ForceWASMSystem: ES module export not available (normal for script tag loading)');
 }
+
+// Export for ES modules (this is what Vite/Rollup will use)
+export { ForceWASMSystem };

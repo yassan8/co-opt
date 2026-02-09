@@ -89,8 +89,7 @@ import { clearAllDrawing, showSpotDiagram, showTransverseAberrationDiagram, show
 // import { performanceMonitor } from './performance-monitor.ts';
 
 // WASM acceleration system
-// import { ForceWASMSystem } from './wasm/raytracing/force-wasm-system.ts';
-// グローバルスコープのForceWASMSystemを使用（スクリプトタグで読み込み済み）
+import { ForceWASMSystem } from './wasm/raytracing/force-wasm-system.ts';
 
 // THREE.js and OrbitControls imports
 import * as THREE from 'three';
@@ -115,6 +114,12 @@ interface CameraOptions {
 window.THREE = THREE;
 window.OrbitControls = OrbitControls;
 
+// Export ForceWASMSystem class to global scope
+window.ForceWASMSystem = ForceWASMSystem;
+if (typeof globalThis !== 'undefined') {
+    globalThis.ForceWASMSystem = ForceWASMSystem;
+}
+
 // Global WASM system instance
 let wasmSystem = null;
 
@@ -134,15 +139,7 @@ if (typeof globalThis !== 'undefined' && typeof globalThis.getWASMSystem !== 'fu
 async function initializeApplication() {
     try {
         // Initialize WASM system
-        
-        // ForceWASMSystemがグローバルに利用可能かチェック
-        const ForceWASMSystemClass = globalThis.ForceWASMSystem || window?.ForceWASMSystem;
-        if (!ForceWASMSystemClass) {
-            console.warn('ForceWASMSystem not available. Continuing without WASM acceleration.');
-            wasmSystem = null;
-        } else {
-            wasmSystem = new ForceWASMSystemClass();
-        }
+        wasmSystem = new ForceWASMSystem();
         // Ensure getter returns the latest instance even if initialization fails.
         try {
             if (typeof globalThis !== 'undefined') globalThis.getWASMSystem = () => wasmSystem;
