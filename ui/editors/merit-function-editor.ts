@@ -990,14 +990,37 @@ class MeritFunctionEditor {
             ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
             : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
 
-        const results = calculateLongitudinalAberration(opticalSystemData, wavelength) as any;
+        const imageSurfaceIndex = (() => {
+            for (let i = opticalSystemData.length - 1; i >= 0; i--) {
+                const row = opticalSystemData[i];
+                if (row && typeof row === 'object') {
+                    const ot = String(row['object type'] || row.objectType || row.object || '').trim().toLowerCase();
+                    if (ot === 'image') return i;
+                }
+            }
+            return Math.max(0, opticalSystemData.length - 1);
+        })();
 
-        if (!results || !Array.isArray(results.data) || results.data.length === 0) {
+        const results = calculateLongitudinalAberration(
+            opticalSystemData,
+            imageSurfaceIndex,
+            [wavelength],
+            51,
+            { silent: true }
+        ) as any;
+
+        const meridional = (() => {
+            const list = results?.meridionalData;
+            if (!Array.isArray(list) || list.length === 0) return null;
+            const target = list.find((d: any) => Math.abs(Number(d?.wavelength) - wavelength) < 1e-9);
+            return target || list[0];
+        })();
+
+        const data = meridional?.points;
+        if (!Array.isArray(data) || data.length === 0) {
             console.warn('⚠️ LA_RMS_UM: longitudinal aberration calculation failed');
             return 0;
         }
-
-        const data = results.data;
         const N = data.length;
 
         let sumWeightedL = 0;
@@ -1006,14 +1029,14 @@ class MeritFunctionEditor {
 
         for (let i = 0; i < N; i++) {
             const d = data[i];
-            const r = toFiniteNumber(d.pupilRadius, 0);
+            const r = toFiniteNumber(d.pupilCoordinate, 0);
             const L = toFiniteNumber(d.longitudinalAberration, 0);
 
             if (i === 0) {
                 continue;
             }
 
-            const rPrev = (i > 0) ? toFiniteNumber(data[i - 1].pupilRadius, 0) : 0;
+            const rPrev = (i > 0) ? toFiniteNumber(data[i - 1].pupilCoordinate, 0) : 0;
             const weight = 2 * r * (r - rPrev);
 
             sumWeightedL += weight * L;
