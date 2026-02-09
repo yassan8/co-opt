@@ -568,13 +568,99 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         }
     } catch (_) {}
 
-    // Build candidate configuration object
-    let candidateConfig: any;
-    if (allData && allData.configurations) {
+    // Build candidate configuration object (accept multiple legacy shapes)
+    let candidateConfig: any = null;
+    if (allData?.systemConfigurations && allData.systemConfigurations.configurations) {
+        candidateConfig = allData.systemConfigurations;
+    } else if (allData && allData.configurations && allData.configurations.configurations) {
         candidateConfig = allData.configurations;
+    } else if (Array.isArray(allData?.configurations)) {
+        candidateConfig = {
+            configurations: allData.configurations,
+            activeConfigId: allData.activeConfigId,
+            meritFunction: allData.meritFunction || [],
+            systemRequirements: allData.systemRequirements || [],
+            optimizationRules: allData.optimizationRules || {}
+        };
+    } else if (Array.isArray(allData)) {
+        candidateConfig = { configurations: allData };
     } else {
         candidateConfig = allData;
     }
+
+    // Ensure candidateConfig has configurations array
+    if (!candidateConfig || !Array.isArray(candidateConfig.configurations)) {
+        console.error('❌ [Load] Invalid configurations format:', candidateConfig);
+        return false;
+    }
+
+    // Ensure config IDs and activeConfigId
+    try {
+        let maxId = 0;
+        for (let i = 0; i < candidateConfig.configurations.length; i++) {
+            const cfg = candidateConfig.configurations[i];
+            if (!cfg) continue;
+            if (cfg.id === undefined || cfg.id === null || String(cfg.id).trim() === '') {
+                cfg.id = i + 1;
+            }
+            const n = Number(cfg.id);
+            if (Number.isFinite(n) && n > maxId) maxId = n;
+        }
+        if (!candidateConfig.activeConfigId) {
+            candidateConfig.activeConfigId = candidateConfig.configurations[0]?.id ?? maxId ?? 1;
+        }
+    } catch (_) {}
+
+    // If configurations are empty but legacy top-level data exists, build a single config
+    try {
+        if (Array.isArray(candidateConfig.configurations) && candidateConfig.configurations.length === 0) {
+            const fallbackCfg: any = {
+                id: 1,
+                name: 'Config 1',
+                schemaVersion: candidateConfig.schemaVersion || BLOCK_SCHEMA_VERSION,
+                blocks: Array.isArray(allData?.blocks) ? allData.blocks : [],
+                source: Array.isArray(allData?.source) ? allData.source : [],
+                object: Array.isArray(allData?.object) ? allData.object : [],
+                opticalSystem: Array.isArray(allData?.opticalSystem) ? allData.opticalSystem : [],
+                meritFunction: Array.isArray(allData?.meritFunction) ? allData.meritFunction : [],
+                systemData: allData?.systemData || { referenceFocalLength: '' },
+                metadata: {
+                    created: new Date().toISOString(),
+                    modified: new Date().toISOString(),
+                    locked: false
+                }
+            };
+            candidateConfig.configurations.push(fallbackCfg);
+            candidateConfig.activeConfigId = 1;
+        }
+    } catch (_) {}
+
+    // Merge top-level data into active config if missing
+    try {
+        const activeId = candidateConfig.activeConfigId;
+        const cfgs = candidateConfig.configurations || [];
+        const activeCfg = cfgs.find((c: any) => String(c?.id ?? '') === String(activeId)) || cfgs[0];
+        if (activeCfg) {
+            if ((!activeCfg.source || activeCfg.source.length === 0) && Array.isArray(allData?.source)) {
+                activeCfg.source = allData.source;
+            }
+            if ((!activeCfg.object || activeCfg.object.length === 0) && Array.isArray(allData?.object)) {
+                activeCfg.object = allData.object;
+            }
+            if ((!activeCfg.opticalSystem || activeCfg.opticalSystem.length === 0) && Array.isArray(allData?.opticalSystem)) {
+                activeCfg.opticalSystem = allData.opticalSystem;
+            }
+            if ((!activeCfg.systemData || typeof activeCfg.systemData !== 'object') && allData?.systemData) {
+                activeCfg.systemData = allData.systemData;
+            }
+        }
+        if (!candidateConfig.meritFunction && Array.isArray(allData?.meritFunction)) {
+            candidateConfig.meritFunction = allData.meritFunction;
+        }
+        if (!candidateConfig.systemRequirements && Array.isArray(allData?.systemRequirements)) {
+            candidateConfig.systemRequirements = allData.systemRequirements;
+        }
+    } catch (_) {}
 
     // Process blocks: derive from opticalSystem if missing or suspicious
     const cfgList = Array.isArray(candidateConfig?.configurations) ? candidateConfig.configurations : [];
@@ -824,6 +910,13 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     return true;
 }
 
+// Expose loader for React toolbar handlers
+if (typeof window !== 'undefined') {
+    try {
+        w.__loadAllDataObjectIntoApp = __loadAllDataObjectIntoApp;
+    } catch (_) {}
+}
+
 function setupLoadAllButton(): void {
     const btn = document.getElementById('load-all-btn');
     console.log('🔧 [Setup] setupLoadAllButton - button found:', !!btn);
@@ -1026,7 +1119,7 @@ function setupOptimizeDesignIntentButton(): void {
 <div style="margin-bottom:10px; display:flex; align-items:center; gap:10px;">
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         Max Iterations
-        <input id="opt-max-iter" type="number" min="1" step="1" value="10000" style="width:100px; padding:4px 6px;" />
+        <input id="opt-max-iter" type="number" min="1" step="1" value="5000" style="width:100px; padding:4px 6px;" />
     </label>
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         <input id="opt-auto-render" type="checkbox" style="width:16px; height:16px;" />
@@ -1112,7 +1205,7 @@ function setupOptimizeDesignIntentButton(): void {
         <div>係数の段階的解放</div>
 
         <div>stageStallLimit</div>
-        <input id="opt-stage-stall-limit" type="number" step="1" value="2" style="width:120px; padding:4px 6px;" />
+        <input id="opt-stage-stall-limit" type="number" step="1" value="5" style="width:120px; padding:4px 6px;" />
         <div>段階の停滞許容回数</div>
 
         <div>restartOnRejectStreak</div>
@@ -1512,7 +1605,7 @@ function setupOptimizeDesignIntentButton(): void {
                     const shouldStopNow = () => !!stopFlag.stop;
 
                     const resolveMaxIterations = (): number => {
-                        let n = 1000;
+                        let n = 5000;
                         try {
                             if (popup && !popup.closed) {
                                 const el = popup.document.getElementById('opt-max-iter') as HTMLInputElement | null;
@@ -1520,7 +1613,7 @@ function setupOptimizeDesignIntentButton(): void {
                                 if (Number.isFinite(v)) n = Math.trunc(v);
                             }
                         } catch (_) {}
-                        if (!Number.isFinite(n) || n < 1) n = 1000;
+                        if (!Number.isFinite(n) || n < 1) n = 5000;
                         return n;
                     };
 
@@ -1566,7 +1659,7 @@ function setupOptimizeDesignIntentButton(): void {
                             fdMinStep: readNum('opt-fd-min-step', 1e-18),
                             fdScaledStep: readNum('opt-fd-scaled-step', 1e-3),
                             staged: readBool('opt-staged', true),
-                            stageStallLimit: Math.max(1, Math.floor(readNum('opt-stage-stall-limit', 2))),
+                            stageStallLimit: Math.max(1, Math.floor(readNum('opt-stage-stall-limit', 5))),
                             restartOnRejectStreak: Math.max(1, Math.floor(readNum('opt-restart-on-reject-streak', 8))),
                             restartMaxCount: Math.max(0, Math.floor(readNum('opt-restart-max-count', 2))),
                             restartJitterScaled: Math.max(0, readNum('opt-restart-jitter-scaled', 0.035)),
@@ -3592,6 +3685,43 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             const paramKeys = sortParameterKeys(allParamKeys);
             const varKeys = Object.keys(vars || {}).sort();
 
+            const normalizeSurfTypeLabel = (value: any) => {
+                return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '');
+            };
+
+            const getSurfTypeForCoefKey = (key: string) => {
+                const lower = String(key).toLowerCase();
+                if (lower.startsWith('frontcoef')) return params.frontSurfType;
+                if (lower.startsWith('backcoef')) return params.backSurfType;
+                if (lower.startsWith('surf1coef')) return params.surf1SurfType;
+                if (lower.startsWith('surf2coef')) return params.surf2SurfType;
+                if (lower.startsWith('surf3coef')) return params.surf3SurfType;
+                return params.surfType;
+            };
+
+            const getCoefDisplayLabel = (key: string) => {
+                const match = String(key).match(/coef(\d+)/i);
+                if (!match) return null;
+                const idx = parseInt(match[1], 10);
+                if (!Number.isFinite(idx) || idx <= 0) return null;
+
+                const surfTypeRaw = getSurfTypeForCoefKey(key);
+                const surfType = normalizeSurfTypeLabel(surfTypeRaw);
+                const isEven = surfType === 'asphericeven' || surfType === 'asphericaleven' || surfType === 'aspheric-even' || surfType === 'aspherical-even';
+                const isOdd = surfType === 'asphericodd' || surfType === 'asphericalodd' || surfType === 'aspheric-odd' || surfType === 'aspherical-odd';
+                if (!isEven && !isOdd) return null;
+
+                const aIndex = isEven ? (2 * idx + 2) : (2 * idx + 1);
+                const lower = String(key).toLowerCase();
+                let prefix = '';
+                if (lower.startsWith('frontcoef')) prefix = 'front ';
+                else if (lower.startsWith('backcoef')) prefix = 'back ';
+                else if (lower.startsWith('surf1coef')) prefix = 'surf1 ';
+                else if (lower.startsWith('surf2coef')) prefix = 'surf2 ';
+                else if (lower.startsWith('surf3coef')) prefix = 'surf3 ';
+                return `${prefix}A${aIndex}`.trim();
+            };
+
             const createSectionTitle = (label: string) => {
                 const title = document.createElement('div');
                 title.textContent = label;
@@ -3609,7 +3739,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 row.style.marginBottom = '6px';
 
                 const name = document.createElement('div');
-                name.textContent = label;
+                const coefLabel = getCoefDisplayLabel(label);
+                name.textContent = coefLabel || label;
                 name.style.fontSize = '12px';
                 name.style.color = isDarkMode ? '#d1d5db' : '#374151';
                 name.style.flex = '0 0 140px';
@@ -4588,6 +4719,419 @@ function setupApplyToDesignIntentButton(): void {
     });
 }
 
+function __blocks_normalizeBlockType(raw: any): string {
+    const t = String(raw ?? '').trim();
+    if (t === 'ObjectPlane') return 'ObjectSurface';
+    if (t === 'ImagePlane') return 'ImageSurface';
+    if (t === 'AirGap') return 'Gap';
+    return t;
+}
+
+function __blocks_generateUniqueBlockId(blocks: any[], blockType: string): string {
+    const type = __blocks_normalizeBlockType(blockType);
+    const base = type || 'Block';
+    let maxNum = 0;
+    const pattern = new RegExp(`^${base}-(\\d+)$`);
+    for (const b of blocks || []) {
+        const m = pattern.exec(String(b?.blockId || ''));
+        if (m) {
+            const num = parseInt(m[1], 10);
+            if (num > maxNum) maxNum = num;
+        }
+    }
+    return `${base}-${maxNum + 1}`;
+}
+
+function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
+    const type = __blocks_normalizeBlockType(blockType);
+    const id = String(blockId ?? '').trim();
+    const base: any = {
+        blockId: id,
+        blockType: type,
+        role: null,
+        constraints: {},
+        parameters: {},
+        variables: {},
+        metadata: { source: 'ui-add' }
+    };
+
+    if (type === 'Lens' || type === 'PositiveLens') {
+        base.parameters = {
+            frontRadius: 'INF',
+            backRadius: 'INF',
+            centerThickness: 1,
+            material: 'N-BK7'
+        };
+        return base;
+    }
+    if (type === 'Doublet') {
+        base.parameters = {
+            radius1: 'INF',
+            radius2: 'INF',
+            radius3: 'INF',
+            thickness1: 1,
+            thickness2: 1,
+            material1: 'N-BK7',
+            material2: 'N-F2'
+        };
+        return base;
+    }
+    if (type === 'Triplet') {
+        base.parameters = {
+            radius1: 'INF',
+            radius2: 'INF',
+            radius3: 'INF',
+            radius4: 'INF',
+            thickness1: 1,
+            thickness2: 1,
+            thickness3: 1,
+            material1: 'N-BK7',
+            material2: 'N-F2',
+            material3: 'N-BK7'
+        };
+        return base;
+    }
+    if (type === 'Gap') {
+        base.blockType = 'Gap';
+        base.parameters = { thickness: 1, material: 'AIR', thicknessMode: '' };
+        return base;
+    }
+    if (type === 'ObjectSurface') {
+        base.parameters = {
+            objectDistanceMode: 'Finite',
+            objectDistance: 100
+        };
+        return base;
+    }
+    if (type === 'Stop') {
+        base.parameters = { semiDiameter: DEFAULT_STOP_SEMI_DIAMETER };
+        return base;
+    }
+    if (type === 'Mirror') {
+        base.parameters = {
+            radius: 'INF',
+            thickness: 0,
+            material: 'MIRROR',
+            surfType: 'Spherical',
+            conic: 0,
+            coef1: 0,
+            coef2: 0,
+            coef3: 0,
+            coef4: 0,
+            coef5: 0,
+            coef6: 0,
+            coef7: 0,
+            coef8: 0,
+            coef9: 0,
+            coef10: 0,
+            apertureShape: 'Circular',
+            semidia: 10,
+            apertureWidth: 20,
+            apertureHeight: 20
+        };
+        return base;
+    }
+    if (type === 'CoordTrans') {
+        base.parameters = {
+            decenterX: 0,
+            decenterY: 0,
+            decenterZ: 0,
+            tiltX: 0,
+            tiltY: 0,
+            tiltZ: 0,
+            order: 0
+        };
+        return base;
+    }
+    if (type === 'SingleSurface') {
+        base.parameters = {
+            radius: 'INF',
+            thickness: 10,
+            material: 'AIR',
+            surfType: 'Spherical',
+            conic: 0,
+            coef1: 0,
+            coef2: 0,
+            coef3: 0,
+            coef4: 0,
+            coef5: 0,
+            coef6: 0,
+            coef7: 0,
+            coef8: 0,
+            coef9: 0,
+            coef10: 0,
+            apertureShape: 'Circular',
+            semidia: 10,
+            apertureWidth: 20,
+            apertureHeight: 20
+        };
+        return base;
+    }
+    if (type === 'ImageSurface') {
+        base.parameters = {
+            semidia: '',
+            optimizeSemiDia: ''
+        };
+        delete base.variables;
+        return base;
+    }
+
+    base.parameters = {};
+    return base;
+}
+
+function __blocks_addBlockToActiveConfig(blockType: string, insertAfterBlockId: string | null = null): any {
+    const systemConfig = loadSystemConfigurations();
+    if (!systemConfig || !Array.isArray(systemConfig.configurations)) {
+        return { ok: false, reason: 'systemConfigurations not found.' };
+    }
+
+    const activeId = systemConfig.activeConfigId;
+    const cfgIdx = systemConfig.configurations.findIndex((c: any) => c && c.id === activeId);
+    if (cfgIdx < 0) return { ok: false, reason: 'active config not found.' };
+
+    const activeCfg = systemConfig.configurations[cfgIdx];
+    if (!activeCfg || !Array.isArray(activeCfg.blocks)) return { ok: false, reason: 'active config has no blocks.' };
+    const blocks = activeCfg.blocks;
+
+    const type = __blocks_normalizeBlockType(blockType);
+    if (!type) return { ok: false, reason: 'blockType is required.' };
+
+    if (type === 'ImageSurface') {
+        const already = blocks.some(b => b && String(b.blockType ?? '').trim() === 'ImageSurface');
+        if (already) return { ok: false, reason: 'ImageSurface already exists (only one is supported).' };
+    }
+
+    if (type === 'ObjectSurface') {
+        const already = blocks.some(b => {
+            const bt = String(b?.blockType ?? '').trim();
+            return bt === 'ObjectSurface' || bt === 'ObjectPlane';
+        });
+        if (already) return { ok: false, reason: 'ObjectSurface/ObjectPlane already exists (only one is supported).' };
+    }
+
+    const newId = __blocks_generateUniqueBlockId(blocks, type);
+    const newBlock = __blocks_makeDefaultBlock(type, newId);
+
+    let imageIdx = blocks.findIndex(b => b && String(b.blockType ?? '').trim() === 'ImageSurface');
+    if (imageIdx < 0) imageIdx = blocks.length;
+
+    let insertIdx = imageIdx;
+    if (type === 'ObjectSurface') insertIdx = 0;
+
+    const afterId = String(insertAfterBlockId ?? '').trim();
+    if (afterId) {
+        const idx = blocks.findIndex(b => b && String(b.blockId ?? '').trim() === afterId);
+        if (idx >= 0) insertIdx = Math.min(idx + 1, imageIdx);
+    }
+
+    blocks.splice(insertIdx, 0, newBlock);
+
+    try {
+        if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+        activeCfg.metadata.modified = new Date().toISOString();
+    } catch (_) {}
+
+    try {
+        const issues = validateBlocksConfiguration(activeCfg);
+        const fatals = issues.filter(i => i && i.severity === 'fatal');
+        if (fatals.length > 0) {
+            blocks.splice(insertIdx, 1);
+            return { ok: false, reason: 'block validation failed.' };
+        }
+    } catch (_) {}
+
+    try {
+        saveSystemConfigurations(systemConfig);
+    } catch (e) {
+        return { ok: false, reason: `failed to save: ${e?.message || String(e)}` };
+    }
+
+    return { ok: true, blockId: newId, blockData: JSON.parse(JSON.stringify(newBlock)), insertIndex: insertIdx };
+}
+
+function __blocks_deleteBlockFromActiveConfig(blockId: string): any {
+    const systemConfig = loadSystemConfigurations();
+    if (!systemConfig || !Array.isArray(systemConfig.configurations)) {
+        return { ok: false, reason: 'systemConfigurations not found.' };
+    }
+
+    const activeId = systemConfig.activeConfigId;
+    const cfgIdx = systemConfig.configurations.findIndex((c: any) => c && c.id === activeId);
+    if (cfgIdx < 0) return { ok: false, reason: 'active config not found.' };
+
+    const activeCfg = systemConfig.configurations[cfgIdx];
+    if (!activeCfg || !Array.isArray(activeCfg.blocks)) return { ok: false, reason: 'active config has no blocks.' };
+    const blocks = activeCfg.blocks;
+
+    const id = String(blockId ?? '').trim();
+    if (!id) return { ok: false, reason: 'blockId is required.' };
+
+    const idx = blocks.findIndex(b => b && String(b.blockId ?? '').trim() === id);
+    if (idx < 0) return { ok: false, reason: `block not found: ${id}` };
+
+    const type = String(blocks[idx]?.blockType ?? '').trim();
+
+    const removedBlock = JSON.parse(JSON.stringify(blocks[idx]));
+    const removed = blocks.splice(idx, 1);
+
+    // If ImageSurface was deleted, immediately recreate it at the end to keep system valid
+    if (type === 'ImageSurface') {
+        const newId = __blocks_generateUniqueBlockId(blocks, 'ImageSurface');
+        const newBlock = __blocks_makeDefaultBlock('ImageSurface', newId);
+        blocks.push(newBlock);
+    }
+
+    try {
+        if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
+        activeCfg.metadata.modified = new Date().toISOString();
+    } catch (_) {}
+
+    try {
+        const issues = validateBlocksConfiguration(activeCfg);
+        const fatals = issues.filter(i => i && i.severity === 'fatal');
+        if (fatals.length > 0) {
+            blocks.splice(idx, 0, ...(removed || []));
+            return { ok: false, reason: 'block validation failed.' };
+        }
+    } catch (_) {}
+
+    try {
+        const expanded = expandBlocksToOpticalSystemRows(activeCfg.blocks);
+        if (expanded && Array.isArray(expanded.rows)) {
+            activeCfg.opticalSystem = expanded.rows;
+            try { localStorage.setItem('OpticalSystemTableData', JSON.stringify(expanded.rows)); } catch (_) {}
+            try { if (typeof w.saveLensTableData === 'function') w.saveLensTableData(expanded.rows); } catch (_) {}
+            try {
+                if (w.tableOpticalSystem && typeof w.tableOpticalSystem.setData === 'function') {
+                    w.tableOpticalSystem.setData(expanded.rows);
+                }
+            } catch (_) {}
+        }
+    } catch (_) {}
+
+    try {
+        saveSystemConfigurations(systemConfig);
+    } catch (e) {
+        return { ok: false, reason: `failed to save: ${e?.message || String(e)}` };
+    }
+
+    return { ok: true, blockData: removedBlock, blockIndex: idx };
+}
+
+// Design Intent Add/Delete Buttons Setup
+function setupDesignIntentButtons(): void {
+    console.log('🔵 [DesignIntent] Setting up Design Intent buttons...');
+    const addBtn = document.getElementById('design-intent-add-block-btn');
+    const deleteBtn = document.getElementById('design-intent-delete-block-btn');
+    const typeSelect = document.getElementById('design-intent-add-block-type') as HTMLSelectElement | null;
+
+    console.log('🔵 [DesignIntent] Button elements:', { 
+        addBtn: addBtn ? '✅' : '❌', 
+        deleteBtn: deleteBtn ? '✅' : '❌', 
+        typeSelect: typeSelect ? '✅' : '❌' 
+    });
+
+    if (addBtn && !addBtn.dataset.designIntentAddBound) {
+        console.log('🔵 [DesignIntent] Attaching Add button event listener...');
+        addBtn.dataset.designIntentAddBound = '1';
+
+        addBtn.addEventListener('click', (e) => {
+            try { e?.preventDefault?.(); } catch (_) {}
+            try { e?.stopPropagation?.(); } catch (_) {}
+
+            try {
+                const type = String(typeSelect?.value ?? 'Lens').trim();
+                const after = __blockInspectorExpandedBlockId;
+                const res = __blocks_addBlockToActiveConfig(type, after);
+                if (!res || res.ok !== true) {
+                    alert(`Failed to add block: ${res?.reason || 'unknown error'}`);
+                    return;
+                }
+                __blockInspectorExpandedBlockId = String(res.blockId ?? '') || null;
+
+                // Record undo
+                try {
+                    if (w.undoHistory && w.AddBlockCommand && !w.undoHistory.isExecuting && res.blockData && typeof res.insertIndex === 'number') {
+                        const sysConfig = loadSystemConfigurations();
+                        const cmd = new w.AddBlockCommand(sysConfig.activeConfigId, res.blockData, res.insertIndex);
+                        w.undoHistory.record(cmd);
+                    }
+                } catch (undoError) {
+                    console.warn('[Undo] Failed to record block add:', undoError);
+                }
+
+                try { refreshBlockInspector(); } catch (_) {}
+                try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
+                try {
+                    if (w.popup3DWindow && !w.popup3DWindow.closed) {
+                        w.popup3DWindow.postMessage({ action: 'request-redraw' }, '*');
+                    }
+                } catch (_) {}
+            } catch (e) {
+                console.error('❌ Failed to add block:', e);
+                alert(`Failed to add block: ${(e as Error)?.message || String(e)}`);
+            }
+        });
+        console.log('✅ [DesignIntent] Add button event listener attached');
+    } else if (addBtn) {
+        console.log('⚠️ [DesignIntent] Add button already has event listener');
+    } else {
+        console.log('❌ [DesignIntent] Add button not found in DOM');
+    }
+
+    if (deleteBtn && !deleteBtn.dataset.designIntentDeleteBound) {
+        console.log('🔵 [DesignIntent] Attaching Delete button event listener...');
+        deleteBtn.dataset.designIntentDeleteBound = '1';
+
+        deleteBtn.addEventListener('click', (e) => {
+            try { e?.preventDefault?.(); } catch (_) {}
+            try { e?.stopPropagation?.(); } catch (_) {}
+
+            try {
+                const bid = String(__blockInspectorExpandedBlockId ?? '').trim();
+                if (!bid) {
+                    alert('Select (expand) a block first to delete.');
+                    return;
+                }
+                const res = __blocks_deleteBlockFromActiveConfig(bid);
+                if (!res || res.ok !== true) {
+                    alert(`Failed to delete block: ${res?.reason || 'unknown error'}`);
+                    return;
+                }
+
+                // Record undo
+                try {
+                    if (w.undoHistory && w.DeleteBlockCommand && !w.undoHistory.isExecuting && res.blockData && typeof res.blockIndex === 'number') {
+                        const sysConfig = loadSystemConfigurations();
+                        const cmd = new w.DeleteBlockCommand(sysConfig.activeConfigId, res.blockData, res.blockIndex);
+                        w.undoHistory.record(cmd);
+                    }
+                } catch (undoError) {
+                    console.warn('[Undo] Failed to record block delete:', undoError);
+                }
+
+                __blockInspectorExpandedBlockId = null;
+                try { refreshBlockInspector(); } catch (_) {}
+                try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
+                try {
+                    if (w.popup3DWindow && !w.popup3DWindow.closed) {
+                        w.popup3DWindow.postMessage({ action: 'request-redraw' }, '*');
+                    }
+                } catch (_) {}
+            } catch (e) {
+                console.error('❌ Failed to delete block:', e);
+                alert(`Failed to delete block: ${(e as Error)?.message || String(e)}`);
+            }
+        });
+        console.log('✅ [DesignIntent] Delete button event listener attached');
+    } else if (deleteBtn) {
+        console.log('⚠️ [DesignIntent] Delete button already has event listener');
+    } else {
+        console.log('❌ [DesignIntent] Delete button not found in DOM');
+    }
+}
+
 // Main DOM Event Handlers Setup Function
 export function setupDOMEventHandlers(): void {
     console.log('🔵 [DOM] Setting up DOM event handlers...');
@@ -4615,6 +5159,7 @@ export function setupDOMEventHandlers(): void {
         setupLoadDefaultButton();
         setupLoadAllButton();
         setupClearStorageButton();
+        setupDesignIntentButtons(); // Add Design Intent Add/Delete buttons
         
         // setupOpticalSystemChangeListeners needs to wait for React to mount the button
         // It will be called after React mount event

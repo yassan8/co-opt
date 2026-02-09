@@ -960,6 +960,12 @@ function setJointDesignVariableValue({ blocksByConfigId, targetConfigIds, active
     const cfgView = { blocks };
     const v2 = clampValueIfNeeded(blocks, newValue);
     const ok = setDesignVariableValue(cfgView, baseId, v2);
+    
+    // Debug: Log conic changes
+    if (ok && baseId && baseId.toLowerCase().includes('conic')) {
+      console.log(`🔄 [Variable Update] ${baseId} = ${v2} (config: ${cid})`);
+    }
+    
     if (ok) okAny = true;
     if (cid === activeId) {
       updateActiveOpticalSystemOverrideFromBlocks(blocks);
@@ -2188,13 +2194,13 @@ export async function runOptimizationMVP(options = {}) {
   const method = (methodRaw === 'cd' || methodRaw === 'coordinatedescent') ? 'cd' : 'lm';
   const maxIterations = runUntilStopped
     ? Number.MAX_SAFE_INTEGER
-    : (Number.isFinite(Number(opts.maxIterations)) ? Math.max(1, Math.floor(Number(opts.maxIterations))) : 50);
+    : (Number.isFinite(Number(opts.maxIterations)) ? Math.max(1, Math.floor(Number(opts.maxIterations))) : 100);
   const stepFraction = Number.isFinite(Number(opts.stepFraction)) ? Math.max(1e-6, Number(opts.stepFraction)) : 0.02;
   const minStep = Number.isFinite(Number(opts.minStep)) ? Math.max(1e-12, Number(opts.minStep)) : 1e-6;
   const stepDecay = Number.isFinite(Number(opts.stepDecay)) ? Math.min(0.95, Math.max(0.1, Number(opts.stepDecay))) : 0.5;
   const stallLimit = runUntilStopped
     ? Number.MAX_SAFE_INTEGER
-    : (Number.isFinite(Number(opts.stallLimit)) ? Math.max(1, Math.floor(Number(opts.stallLimit))) : 3);
+    : (Number.isFinite(Number(opts.stallLimit)) ? Math.max(1, Math.floor(Number(opts.stallLimit))) : 5);
   const logEvery = Number.isFinite(Number(opts.logEvery)) ? Math.max(1, Math.floor(Number(opts.logEvery))) : 1;
 
   const lmLambda0 = Number.isFinite(Number(opts.lmLambda0)) ? Math.max(1e-12, Number(opts.lmLambda0)) : 1e-3;
@@ -2223,7 +2229,7 @@ export async function runOptimizationMVP(options = {}) {
   const staged = (opts.staged === undefined) ? true : !!opts.staged;
   const stageMaxCoefList = staged ? buildStagedCoefMaxList(opts) : [10];
   // Fast stall limit: move to next stage quickly
-  const stageStallLimit = Number.isFinite(Number(opts.stageStallLimit)) ? Math.max(1, Math.floor(Number(opts.stageStallLimit))) : 4;
+  const stageStallLimit = Number.isFinite(Number(opts.stageStallLimit)) ? Math.max(1, Math.floor(Number(opts.stageStallLimit))) : 5;
 
   // Trust region / step control in scaled coordinates.
   const trustRegion = (opts.trustRegion === undefined) ? true : !!opts.trustRegion;
@@ -2595,6 +2601,27 @@ export async function runOptimizationMVP(options = {}) {
     .map(coerceBlankAsphereToZero)
     .filter(v => v && typeof v.value === 'number' && Number.isFinite(v.value));
   const catVars = Array.isArray(jointVars.categoricalMaterial) ? jointVars.categoricalMaterial : [];
+  
+  // Debug: Log all recognized variables
+  console.log(`🔍 [Optimizer] Found ${vars.length} numeric variables:`);
+  for (const v of vars.slice(0, 20)) {
+    console.log(`   ${v.id}: ${v.key} = ${v.value} (blockType: ${v.blockType})`);
+  }
+  if (vars.length > 20) {
+    console.log(`   ... and ${vars.length - 20} more`);
+  }
+  
+  // Debug: Check for conic-related variables
+  const conicVars = vars.filter(v => v.key && v.key.toLowerCase().includes('conic'));
+  if (conicVars.length > 0) {
+    console.log(`✅ [Optimizer] Found ${conicVars.length} conic variables:`);
+    for (const v of conicVars) {
+      console.log(`   ${v.id}: ${v.key} = ${v.value}`);
+    }
+  } else {
+    console.warn(`❌ [Optimizer] No conic variables found - check that variables are marked with optimize.mode='V'`);
+  }
+  
   if (vars.length === 0 && catVars.length === 0) {
     return { ok: false, reason: formatNoVariableReason(activeCfg) };
   }
@@ -3192,7 +3219,17 @@ export async function runOptimizationMVP(options = {}) {
       await nextFrame();
     }
 
-    console.log('🚀 [OptimizerMVP] start', { method: 'lm', vars: vars.length, before, maxIterations, multiScenario });
+    console.log('🚀 [OptimizerMVP] start', { 
+      method: 'lm', 
+      vars: vars.length, 
+      before: before.toFixed(6), 
+      maxIterations, 
+      stallLimit,
+      stageStallLimit,
+      multiScenario,
+      staged,
+      stages: staged ? stageMaxCoefList.length : 1
+    });
 
     // Reset aspheric coefficients at the start if option is enabled (helps avoid local minima)
     if (resetAsphericCoefs) {
@@ -3324,6 +3361,11 @@ export async function runOptimizationMVP(options = {}) {
         const xPert = x0.slice();
         xPert[j] = xj + h;
 
+        // Debug: Log step size for conic variables
+        if (keys[j] && keys[j].toLowerCase().includes('conic')) {
+          console.log(`🔬 [Jacobian] ${keys[j]}: value=${xj.toFixed(6)}, step=${h.toFixed(8)}, perturbed=${(xj+h).toFixed(6)}`);
+        }
+
         // apply perturbed
         for (let k = 0; k < n; k++) {
           setJointDesignVariableValue(jointState, ids[k], xPert[k]);
@@ -3333,8 +3375,12 @@ export async function runOptimizationMVP(options = {}) {
         const br = evalResidualsNowProfiled();
         const r1 = br.residuals;
         const mm = Math.min(m, r1.length);
+        
+        // Calculate column magnitude for debugging
+        let colMagnitude = 0;
         for (let i = 0; i < mm; i++) {
           const derivative = (r1[i] - r0[i]) / h;
+          colMagnitude += derivative * derivative;
           // Numerical stability: clamp extremely large derivatives (likely numerical errors)
           // This prevents singular or near-singular Jacobian matrices
           const maxDerivMag = 1e12;
@@ -3346,6 +3392,15 @@ export async function runOptimizationMVP(options = {}) {
         }
         for (let i = mm; i < m; i++) {
           J[i][j] = 0;
+        }
+        
+        // Debug: Log Jacobian column magnitude for conic variables
+        if (keys[j] && keys[j].toLowerCase().includes('conic')) {
+          const colNorm = Math.sqrt(colMagnitude);
+          console.log(`🔬 [Jacobian] ${keys[j]}: ||J[:,${j}]|| = ${colNorm.toExponential(3)}`);
+          if (colNorm < 1e-6) {
+            console.warn(`⚠️ [Jacobian] ${keys[j]}: Column has very small magnitude - parameter may not affect merit function`);
+          }
         }
 
         if (onProgress) {
@@ -3825,7 +3880,8 @@ export async function runOptimizationMVP(options = {}) {
       }
 
       if (iter % logEvery === 0) {
-        console.log(`🔁 [OptimizerMVP] iter ${iter}/${maxIterations}`, { method: 'lm', best, lambda });
+        const stageInfo = staged ? ` stage=${stageIndex}/${lastStageIndex} stall=${stageNoImprove}/${stageStallLimit}` : '';
+        console.log(`🔁 [OptimizerMVP] iter ${iter}/${maxIterations}${stageInfo}`, { method: 'lm', best, lambda: lambda.toExponential(2) });
       }
     }
 
@@ -3858,7 +3914,15 @@ export async function runOptimizationMVP(options = {}) {
     } catch (_) {}
 
     const t1 = nowMs();
-    console.log('✅ [OptimizerMVP] done', { method: 'lm', before, best, ms: Math.round(t1 - t0) });
+    const improvement = before > 0 ? ((before - best) / before * 100).toFixed(2) : '0.00';
+    console.log('✅ [OptimizerMVP] done', { 
+      method: 'lm', 
+      before: before.toFixed(6), 
+      best: best.toFixed(6), 
+      improvement: `${improvement}%`,
+      iterations: completedIterations,
+      ms: Math.round(t1 - t0) 
+    });
 
     if (onProgress) {
       const finalEval = getBestEvalSoFar();

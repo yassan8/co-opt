@@ -18,6 +18,11 @@ import("../main.ts").then(() => {
   console.log("[React] Mounting React app to #react-root");
   ReactDOM.createRoot(container).render(<App />);
   console.log("[React] React app mounted successfully");
+
+  // Notify main.ts that React has been mounted
+  (window as any).__cooptReactMounted = true;
+  window.dispatchEvent(new CustomEvent('coopt:react-mounted'));
+  console.log("[React] Dispatched coopt:react-mounted event");
 }).catch(error => {
   console.error("[src/main.tsx] Failed to load main.ts:", error);
   
@@ -25,5 +30,9 @@ import("../main.ts").then(() => {
   const container = document.getElementById("react-root");
   if (container) {
     ReactDOM.createRoot(container).render(<App />);
+    // Notify main.ts that React has been mounted (fallback path)
+    (window as any).__cooptReactMounted = true;
+    window.dispatchEvent(new CustomEvent('coopt:react-mounted'));
+    console.log("[React] Dispatched coopt:react-mounted event (fallback)");
   }
 });

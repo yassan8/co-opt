@@ -11,7 +11,7 @@
  * 作成日: 2025/07/15
  */
 
-import { traceRay, calculateSurfaceOrigins } from '../core/ray-tracing.ts';
+import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../core/ray-tracing.ts';
 
 // Runtime build stamp (for cache/stale-module diagnostics)
 const GEN_RAY_CROSS_INFINITE_BUILD = '2025-12-31a';
@@ -66,6 +66,48 @@ function fnv1a32(str) {
         hash = Math.imul(hash, 0x01000193);
     }
     return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function cooptParseNumberOrInfinity(value: any, fallback: number): number {
+    if (value === null || value === undefined) return fallback;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const s = String(value).trim();
+    if (s === '') return fallback;
+    if (/^inf(inity)?$/i.test(s)) return Infinity;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function cooptNormalizeOpticalSystemRows(rows: any[]): any[] {
+    if (!Array.isArray(rows)) return rows;
+    return rows.map((row) => {
+        if (!row || typeof row !== 'object') return row;
+        const out = { ...row };
+        out.radius = cooptParseNumberOrInfinity(row.radius ?? row.Radius, Infinity);
+        out.thickness = cooptParseNumberOrInfinity(row.thickness ?? row.Thickness, 0);
+        return out;
+    });
+}
+
+function cooptResolveInfiniteObjectInitialZ(opticalSystemRows, renderDist, stopCenter) {
+    if (typeof renderDist === 'number' && Number.isFinite(renderDist) && renderDist > 0) {
+        return -Math.abs(renderDist);
+    }
+
+    let systemLength = 0;
+    if (Array.isArray(opticalSystemRows)) {
+        for (let i = 0; i < opticalSystemRows.length; i++) {
+            const tRaw = opticalSystemRows[i]?.thickness ?? opticalSystemRows[i]?.Thickness;
+            const t = (typeof tRaw === 'number') ? tRaw : parseFloat(String(tRaw ?? ''));
+            if (Number.isFinite(t) && Math.abs(t) < 1e6) {
+                systemLength += Math.abs(t);
+            }
+        }
+    }
+
+    const stopZ = Number.isFinite(stopCenter?.z) ? Math.abs(stopCenter.z) : 0;
+    const fallbackDist = Math.max(100, systemLength * 2, stopZ + 100);
+    return -fallbackDist;
 }
 
 function fingerprintOpticalSystemRows(opticalSystemRows) {
@@ -848,6 +890,7 @@ function brent(f, a, b, tol = 1e-8, maxIter = 100) {
  * @returns {Object} 生成結果
  */
 export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, options = {}) {
+    opticalSystemRows = cooptNormalizeOpticalSystemRows(opticalSystemRows);
     if (!generateInfiniteSystemCrossBeam.__loggedBuildStamp) {
         generateInfiniteSystemCrossBeam.__loggedBuildStamp = true;
         console.log(`[gen-ray-cross-infinite] build=${GEN_RAY_CROSS_INFINITE_BUILD}`);
@@ -953,24 +996,112 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         // → 以降の境界探索は前提（chiefがtrace可能）を満たさないため、このobjectはスキップ。
         if (!chiefRayOrigin) {
             console.warn(`⚠️ [InfiniteSystem] Object${objectIndex + 1}: Stop中心へ到達可能な主光線が見つかりません（stop unreachable）`);
-            if (typeof window !== 'undefined') {
-                window.lastChiefRayResult = {
-                    direction: direction,
-                    optimalX: NaN,
-                    optimalY: NaN,
-                    error: 999.999,
-                    method: 'failed-stop-unreachable'
-                };
+            
+            // Diagnose optical system validity
+            diagnoseOpticalSystem(opticalSystemRows);
 
-                outputChiefRayConvergenceToSystemData(
-                    objectIndex + 1,
-                    objectAngle.x || 0,
-                    objectAngle.y || 0,
-                    999.999,
-                    'failed-stop-unreachable'
-                );
+            // Fallback: 幾何学的推定で主光線発射点を生成し、以降の解析を継続する。
+            try {
+                const objectRow = opticalSystemRows && opticalSystemRows[0];
+                const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
+                const initialZ = cooptResolveInfiniteObjectInitialZ(opticalSystemRows, renderDist, stopSurfaceInfo?.center);
+                const dzToStop = (stopSurfaceInfo?.center?.z ?? 0) - initialZ;
+                const dx = direction?.i ?? 0;
+                const dy = direction?.j ?? 0;
+                const dk = direction?.k ?? 0;
+                
+                console.warn(`🔍 [Fallback Debug] renderDist=${renderDist}, initialZ=${initialZ}, dzToStop=${dzToStop}`);
+                console.warn(`🔍 [Fallback Debug] direction=(${dx.toFixed(6)}, ${dy.toFixed(6)}, ${dk.toFixed(6)})`);
+                console.warn(`🔍 [Fallback Debug] stopCenter=(${stopSurfaceInfo?.center?.x ?? 0}, ${stopSurfaceInfo?.center?.y ?? 0}, ${stopSurfaceInfo?.center?.z ?? 0})`);
+                
+                const safeK = (Math.abs(dk) > 1e-12) ? dk : 1.0;
+                const guessX = (stopSurfaceInfo?.center?.x ?? 0) - (dx / safeK) * dzToStop;
+                const guessY = (stopSurfaceInfo?.center?.y ?? 0) - (dy / safeK) * dzToStop;
+
+                console.warn(`🔍 [Fallback Debug] Calculated guess=(${guessX.toFixed(3)}, ${guessY.toFixed(3)}, ${initialZ.toFixed(3)})`);
+
+                if (Number.isFinite(guessX) && Number.isFinite(guessY) && Number.isFinite(initialZ)) {
+                    chiefRayOrigin = { x: guessX, y: guessY, z: initialZ };
+                    console.warn(`⚠️ [InfiniteSystem] Object${objectIndex + 1}: Fallback chief ray origin=(${guessX.toFixed(3)}, ${guessY.toFixed(3)}, ${initialZ.toFixed(3)})`);
+                    
+                    // Test if fallback ray can actually trace
+                    const testRay = {
+                        pos: { x: guessX, y: guessY, z: initialZ },
+                        dir: { x: direction.i, y: direction.j, z: direction.k },
+                        wavelength: wavelength
+                    };
+                    
+                    try {
+                        const prevSuppressFlag = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_SUPPRESS_RAY_ERRORS : undefined;
+                        try {
+                            if (typeof globalThis !== 'undefined') globalThis.__COOPT_SUPPRESS_RAY_ERRORS = true;
+                            const testPath = traceRay(opticalSystemRows, testRay, 1.0, null, targetSurfaceIndex);
+                            if (!testPath || testPath.length === 0) {
+                                console.error(`❌ [Fallback Test] Ray tracing returned empty path - optical system may have invalid surfaces`);
+                                console.error(`❌ [Fallback Test] Check for: zero radius, negative thickness, invalid glass indices, TIR, vignetting`);
+                            } else {
+                                console.warn(`✅ [Fallback Test] Ray traced through ${testPath.length} surfaces successfully`);
+                            }
+                        } finally {
+                            if (typeof globalThis !== 'undefined') globalThis.__COOPT_SUPPRESS_RAY_ERRORS = prevSuppressFlag;
+                        }
+                    } catch (err) {
+                        console.error(`❌ [Fallback Test] Ray tracing exception: ${err.message}`);
+                    }
+                    if (typeof window !== 'undefined') {
+                        window.lastChiefRayResult = {
+                            direction: direction,
+                            optimalX: guessX,
+                            optimalY: guessY,
+                            error: 999.999,
+                            method: 'fallback-guess'
+                        };
+                        outputChiefRayConvergenceToSystemData(
+                            objectIndex + 1,
+                            objectAngle.x || 0,
+                            objectAngle.y || 0,
+                            999.999,
+                            'fallback-guess'
+                        );
+                    }
+                } else {
+                    if (typeof window !== 'undefined') {
+                        window.lastChiefRayResult = {
+                            direction: direction,
+                            optimalX: NaN,
+                            optimalY: NaN,
+                            error: 999.999,
+                            method: 'failed-stop-unreachable'
+                        };
+                        outputChiefRayConvergenceToSystemData(
+                            objectIndex + 1,
+                            objectAngle.x || 0,
+                            objectAngle.y || 0,
+                            999.999,
+                            'failed-stop-unreachable'
+                        );
+                    }
+                    continue;
+                }
+            } catch (_) {
+                if (typeof window !== 'undefined') {
+                    window.lastChiefRayResult = {
+                        direction: direction,
+                        optimalX: NaN,
+                        optimalY: NaN,
+                        error: 999.999,
+                        method: 'failed-stop-unreachable'
+                    };
+                    outputChiefRayConvergenceToSystemData(
+                        objectIndex + 1,
+                        objectAngle.x || 0,
+                        objectAngle.y || 0,
+                        999.999,
+                        'failed-stop-unreachable'
+                    );
+                }
+                continue;
             }
-            continue;
         }
 
         // System Data出力: 主光線最適化結果（成功時またはフォールバック時）
@@ -1246,6 +1377,60 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
 }
 
 /**
+ * 光学系の有効性を診断（デバッグ用）
+ */
+function diagnoseOpticalSystem(opticalSystemRows) {
+    if (!opticalSystemRows || opticalSystemRows.length === 0) {
+        console.error(`❌ [System Diagnosis] No optical system rows`);
+        return;
+    }
+    
+    console.warn(`🔍 [System Diagnosis] Checking ${opticalSystemRows.length} surfaces...`);
+    let invalidCount = 0;
+    
+    for (let i = 0; i < opticalSystemRows.length; i++) {
+        const surf = opticalSystemRows[i];
+        const surfId = surf?.id ?? i;
+        const objectType = surf?.['object type'] ?? surf?.objectType ?? 'Unknown';
+        const radius = cooptParseNumberOrInfinity(surf?.radius ?? surf?.Radius, Infinity);
+        const thickness = cooptParseNumberOrInfinity(surf?.thickness ?? surf?.Thickness, 0);
+        const glass = surf?.glass ?? surf?.Glass ?? 'AIR';
+        
+        const issues = [];
+        
+        // Check for invalid radius on refracting surfaces
+        if (objectType !== 'Object' && objectType !== 'Image' && objectType !== 'Stop') {
+            if (Math.abs(radius) < 0.01 && Math.abs(radius) > 0) {
+                issues.push(`radius too small: ${radius}`);
+            }
+            if (!Number.isFinite(radius) && radius !== Infinity) {
+                issues.push(`radius is NaN`);
+            }
+        }
+        
+        // Check for invalid thickness
+        if (thickness < 0 && objectType !== 'Object') {
+            issues.push(`negative thickness: ${thickness}`);
+        }
+        if (!Number.isFinite(thickness) && thickness !== Infinity) {
+            issues.push(`thickness is NaN`);
+        }
+        
+        if (issues.length > 0) {
+            console.error(`❌ [Surface ${surfId}] ${objectType}: ${issues.join(', ')}`);
+            invalidCount++;
+        }
+    }
+    
+    if (invalidCount > 0) {
+        console.error(`❌ [System Diagnosis] Found ${invalidCount} invalid surfaces - optimization may have driven parameters out of valid range`);
+        console.error(`💡 [Suggestion] Check VAR bounds, add constraints, or reset to valid starting configuration`);
+    } else {
+        console.warn(`✅ [System Diagnosis] All surfaces have valid basic parameters`);
+    }
+}
+
+/**
  * 無限系での主光線方向ベクトルを角度から計算
  * @param {Object} objectAngle - Object角度 {x, y} (度)
  * @returns {Object} 正規化された方向ベクトル {i, j, k}
@@ -1313,7 +1498,7 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
     // Use objectRenderDistance from Object row for INF objects (positive value converted to negative Z)
     const objectRow = opticalSystemRows && opticalSystemRows[0];
     const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
-    const initialZ = -Math.abs(renderDist);
+    const initialZ = cooptResolveInfiniteObjectInitialZ(opticalSystemRows, renderDist, stopCenter);
 
     const stopX = Number.isFinite(stopCenter?.x) ? stopCenter.x : 0;
     const stopY = Number.isFinite(stopCenter?.y) ? stopCenter.y : 0;
@@ -1358,14 +1543,13 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             try {
                 // Suppress NO INTERSECTION errors during grid search (expected for many trial points)
                 const prevSuppressFlag = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_SUPPRESS_RAY_ERRORS : undefined;
+                let actualStopPoint = null;
                 try {
                     if (typeof globalThis !== 'undefined') globalThis.__COOPT_SUPPRESS_RAY_ERRORS = true;
-                    var rayPath = traceRay(opticalSystemRows, ray, 1.0, null, targetSurfaceIndex);
+                    actualStopPoint = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
                 } finally {
                     if (typeof globalThis !== 'undefined') globalThis.__COOPT_SUPPRESS_RAY_ERRORS = prevSuppressFlag;
                 }
-                if (!rayPath) return { valid: false, error: Infinity, stopPoint: null };
-                const actualStopPoint = getRayPointAtSurfaceIndex(rayPath, opticalSystemRows, stopSurfaceIndex);
                 if (!actualStopPoint) return { valid: false, error: Infinity, stopPoint: null };
 
                 const errorX = actualStopPoint.x - stopX;
@@ -1685,15 +1869,8 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             wavelength: wavelength
         };
         
-        const verificationPath = traceRay(opticalSystemRows, verificationRay, 1.0, null, targetSurfaceIndex);
-        if (verificationPath && verificationPath.length > stopSurfaceIndex) {
-            const actualPoint = getRayPointAtSurfaceIndex(verificationPath, opticalSystemRows, stopSurfaceIndex);
-            if (!actualPoint) {
-                if (debugMode) {
-                    console.warn(`⚠️ [Grid+Brent] 検証でStop点が取得できません（到達していない可能性）`);
-                }
-                return null;
-            }
+        const actualPoint = traceRayHitPoint(opticalSystemRows, verificationRay, 1.0, stopSurfaceIndex);
+        if (actualPoint) {
             const errorX = actualPoint.x - stopX;
             const errorY = actualPoint.y - stopY;
             const totalError = Math.hypot(errorX, errorY);

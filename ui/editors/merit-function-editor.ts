@@ -1223,7 +1223,17 @@ class MeritFunctionEditor {
 
             const isCurrentOperand = !operand.configId || String(operand.configId).trim() === '';
 
-            const useUiTablesEffective = useUiTables || (!useUiDefaults && (isOperandActiveConfig || isCurrentOperand));
+            const hasOptOverride = (() => {
+                try {
+                    if (typeof globalThis === 'undefined') return false;
+                    const g = globalThis as any;
+                    return Array.isArray(g.__cooptOpticalSystemRowsOverride) && g.__cooptOpticalSystemRowsOverride.length > 0;
+                } catch {
+                    return false;
+                }
+            })();
+            const forceOpticalSystemData = !!(options.forceOpticalSystemData || (hasOptOverride && !useUiDefaults));
+            const useUiTablesEffective = !forceOpticalSystemData && (useUiTables || (!useUiDefaults && (isOperandActiveConfig || isCurrentOperand)));
 
             const getUiTableRowsForSpot = () => {
                 if (useUiTablesEffective && (isOperandActiveConfig || isCurrentOperand)) {
@@ -1285,9 +1295,20 @@ class MeritFunctionEditor {
                 return null;
             })();
 
+            const overrideOpticalRows = (() => {
+                try {
+                    if (!forceOpticalSystemData) return null;
+                    if (typeof globalThis === 'undefined') return null;
+                    const g = globalThis as any;
+                    return Array.isArray(g.__cooptOpticalSystemRowsOverride) ? g.__cooptOpticalSystemRowsOverride : null;
+                } catch {
+                    return null;
+                }
+            })();
+
             const spotOpticalRows = uiTableRows
                 ? uiTableRows.optical
-                : (Array.isArray(uiOpticalFallback) ? uiOpticalFallback : opticalSystemData);
+                : (overrideOpticalRows || (Array.isArray(uiOpticalFallback) ? uiOpticalFallback : opticalSystemData));
             const spotObjectRowsForOperand = uiTableRows ? uiTableRows.object : (uiObjectSourceFallback?.object || objectRows);
             const spotSourceRowsForOperand = uiTableRows ? uiTableRows.source : (uiObjectSourceFallback?.source || sourceRows);
 

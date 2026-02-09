@@ -351,8 +351,12 @@ export function handleOptimize(): void {
 }
 
 export function handleRender3D(): void {
-  console.log('[Render3D] Button clicked');
   const w = window as any;
+  if (w.__render3DInProgress) {
+    return;
+  }
+  w.__render3DInProgress = true;
+  console.log('[Render3D] Button clicked');
   
   // Ensure event listeners are set up first
   if (typeof w.setupOpticalSystemChangeListeners === 'function' && !w.__opticalSystemChangeListenersBound) {
@@ -385,24 +389,22 @@ export function handleRender3D(): void {
   // The full initialization will be handled by the existing popup initialization code
   if (typeof w.initialize3DPopup === 'function') {
     w.initialize3DPopup(popup);
-  } else {
-    // Fallback: trigger the button's event listener if it exists
-    const btn = document.getElementById('open-3d-window-btn');
-    if (btn) {
-      const clickEvent = new MouseEvent('click', {
-        bubbles: true,
-        cancelable: true,
-        view: window
-      });
-      // Temporarily remove React's onClick to avoid recursion
-      const reactOnClick = (btn as any).onclick;
-      (btn as any).onclick = null;
-      btn.dispatchEvent(clickEvent);
-      setTimeout(() => {
-        (btn as any).onclick = reactOnClick;
-      }, 0);
-    }
+    w.__render3DInProgress = false;
+    return;
   }
+
+  // Fallback: trigger legacy handler (event-handlers.ts) without recursion
+  try {
+    if (typeof w.setupOpticalSystemChangeListeners === 'function') {
+      w.setupOpticalSystemChangeListeners(w.scene || null);
+    }
+  } catch (_) {}
+
+  if (typeof w.__open3DWindowLegacy === 'function') {
+    try { w.__open3DWindowLegacy(); } catch (_) {}
+  }
+
+  w.__render3DInProgress = false;
 }
 
 export function handleSystemData(): void {
@@ -454,5 +456,40 @@ export function handleSystemData(): void {
         (btn as any).onclick = reactOnClick;
       }, 0);
     }
+  }
+}
+
+export function handleAnalysisSelect(selectedValue: string): void {
+  const value = String(selectedValue || '').trim();
+  if (!value) return;
+
+  const analysisButtonMap: Record<string, string> = {
+    'spot-diagram': 'open-spot-diagram-window-btn',
+    'spherical-aberration': 'open-spherical-aberration-window-btn',
+    'astigmatism': 'open-astigmatism-window-btn',
+    'distortion': 'open-distortion-window-btn',
+    'integrated-aberration': 'open-integrated-aberration-window-btn',
+    'transverse-aberration': 'open-transverse-aberration-window-btn',
+    'opd': 'open-opd-window-btn',
+    'psf': 'open-psf-window-btn',
+    'mtf': 'open-mtf-window-btn'
+  };
+
+  const buttonId = analysisButtonMap[value];
+  if (!buttonId) return;
+
+  const w = window as any;
+  try {
+    if (typeof w.setupAnalysisWindows === 'function') {
+      w.setupAnalysisWindows();
+    }
+  } catch (_) {}
+
+  const button = document.getElementById(buttonId);
+  if (button) {
+    const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+    button.dispatchEvent(clickEvent);
+  } else {
+    console.warn(`[Analysis] Button not found: ${buttonId}`);
   }
 }

@@ -1234,9 +1234,8 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
     ensurePopupMessageHandler();
     
     const open3DWindowBtn = document.getElementById('open-3d-window-btn');
-    if (open3DWindowBtn) {
-        open3DWindowBtn.addEventListener('click', () => {
-            const existingPopup = w.popup3DWindow;
+    const open3DWindowHandler = () => {
+        const existingPopup = w.popup3DWindow;
             if (existingPopup && !existingPopup.closed) {
                 try {
                     existingPopup.focus();
@@ -2000,7 +1999,12 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             popup.document.close();
             
             w.popup3DWindow = popup;
-        });
+    };
+    if (typeof window !== 'undefined') {
+        try { (window as any).__open3DWindowLegacy = open3DWindowHandler; } catch (_) {}
+    }
+    if (open3DWindowBtn) {
+        open3DWindowBtn.addEventListener('click', open3DWindowHandler);
     }
 }
 
@@ -2009,6 +2013,23 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
  * Must be called after React components are mounted
  */
 export function setupAnalysisWindows() {
+        const hasAnyAnalysisButton = !!(
+            document.getElementById('open-system-data-window-btn') ||
+            document.getElementById('open-spot-diagram-window-btn') ||
+            document.getElementById('open-opd-window-btn') ||
+            document.getElementById('open-psf-window-btn') ||
+            document.getElementById('analysis-select')
+        );
+
+        if (!hasAnyAnalysisButton) {
+            console.warn('[Analysis] setupAnalysisWindows skipped: buttons not mounted yet');
+            return;
+        }
+
+        if (w.__analysisWindowsBound) {
+            return;
+        }
+        w.__analysisWindowsBound = true;
         console.log('[Analysis] setupAnalysisWindows called');
         // System Data popup window button
         const openSystemDataWindowBtn = document.getElementById('open-system-data-window-btn');

@@ -1246,10 +1246,29 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       }
     };
 
-    const applyAsphereFieldsFromParams = (row, surfTypeRaw, conicRaw, coefsRaw, radiusXRaw, radiusYRaw, axisRaw) => {
+    const hasVFlag = (vars, key) => !!(vars && Object.prototype.hasOwnProperty.call(vars, key) && shouldMarkV(vars[key]));
+    const hasAnyCoefV = (vars, prefix, count = 10) => {
+      if (!vars) return false;
+      for (let i = 1; i <= count; i++) {
+        const k = `${prefix}${i}`;
+        if (Object.prototype.hasOwnProperty.call(vars, k) && shouldMarkV(vars[k])) return true;
+      }
+      return false;
+    };
+
+    const applyAsphereFieldsFromParams = (row, surfTypeRaw, conicRaw, coefsRaw, radiusXRaw, radiusYRaw, axisRaw, forceAsphere = false) => {
       const stNorm = normalizeSurfTypeValue(surfTypeRaw);
-      const st = (stNorm && ALLOWED_SURF_TYPES.has(stNorm)) ? stNorm : '';
+      let st = (stNorm && ALLOWED_SURF_TYPES.has(stNorm)) ? stNorm : '';
+      if (forceAsphere && (!st || st === 'Spherical')) {
+        st = 'Aspheric even';
+      }
       row.surfType = st || (blockAsphereLooksNonZero({ surfType: stNorm, conic: conicRaw, coefs: coefsRaw }) ? 'Aspheric even' : 'Spherical');
+      
+      // Debug: Log conic application
+      if (conicRaw !== undefined && conicRaw !== null && conicRaw !== '' && row._blockId) {
+        const conicVal = normalizeOptionalNumberToRowValue(conicRaw);
+        console.log(`🔧 [Block→Row] Block ${row._blockId} role=${row._surfaceRole}: applying conic=${conicVal}, surfType=${row.surfType}`);
+      }
       
       if (row.surfType === 'Toric') {
         // Toric surfaces use radiusX (tangential) and row.radius (sagittal/radiusY)
@@ -1355,13 +1374,16 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
 
       applyDerivedGlassDisplay(front);
 
-      applyAsphereFieldsFromParams(front, frontSurfTypeRaw, frontConicRaw, frontCoefsRaw, frontRadiusXRaw, undefined, frontAxisRaw);
+      const frontForceAsphere = hasVFlag(vars, 'frontConic') || hasAnyCoefV(vars, 'frontCoef');
+      const backForceAsphere = hasVFlag(vars, 'backConic') || hasAnyCoefV(vars, 'backCoef');
+
+      applyAsphereFieldsFromParams(front, frontSurfTypeRaw, frontConicRaw, frontCoefsRaw, frontRadiusXRaw, undefined, frontAxisRaw, frontForceAsphere);
 
       back.radius = normalizeRadiusToRowValue(backRadius);
       back.thickness = 0; // post spacing is handled by AirGap block only
       back.material = 'AIR';
 
-      applyAsphereFieldsFromParams(back, backSurfTypeRaw, backConicRaw, backCoefsRaw, backRadiusXRaw, undefined, backAxisRaw);
+      applyAsphereFieldsFromParams(back, backSurfTypeRaw, backConicRaw, backCoefsRaw, backRadiusXRaw, undefined, backAxisRaw, backForceAsphere);
 
       // Only set optimize flags for variables explicitly present.
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'frontRadius') && shouldMarkV(vars.frontRadius)) {
@@ -1373,8 +1395,26 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'material') && shouldMarkV(vars.material)) {
         applyVFlag(front, 'optimizeMaterial');
       }
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'frontConic') && shouldMarkV(vars.frontConic)) {
+        applyVFlag(front, 'optimizeConic');
+      }
+      for (let i = 1; i <= 10; i++) {
+        const frontKey = `frontCoef${i}`;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, frontKey) && shouldMarkV(vars[frontKey])) {
+          applyVFlag(front, `optimizeCoef${i}`);
+        }
+      }
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'backRadius') && shouldMarkV(vars.backRadius)) {
         applyVFlag(back, 'optimizeR');
+      }
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'backConic') && shouldMarkV(vars.backConic)) {
+        applyVFlag(back, 'optimizeConic');
+      }
+      for (let i = 1; i <= 10; i++) {
+        const backKey = `backCoef${i}`;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, backKey) && shouldMarkV(vars[backKey])) {
+          applyVFlag(back, `optimizeCoef${i}`);
+        }
       }
 
       rows.push(front, back);
@@ -1417,7 +1457,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       }
 
       applyDerivedGlassDisplay(surf);
-      applyAsphereFieldsFromParams(surf, surfTypeRaw, conicRaw, coefsRaw, radiusXRaw, radiusYRaw, axisRaw);
+      const surfForceAsphere = hasVFlag(vars, 'conic') || hasAnyCoefV(vars, 'coef');
+      applyAsphereFieldsFromParams(surf, surfTypeRaw, conicRaw, coefsRaw, radiusXRaw, radiusYRaw, axisRaw, surfForceAsphere);
 
       // Aperture shape handling (same as Mirror)
       const shape = normalizeApertureShape(getParamOrVarValue(params, vars, 'apertureShape'));
@@ -1631,17 +1672,42 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       const s2Axis = getParamOrVarValue(params, vars, 'surf2Axis');
       const s3Axis = getParamOrVarValue(params, vars, 'surf3Axis');
 
-      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, s1RadiusX, undefined, s1Axis);
-      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, s2RadiusX, undefined, s2Axis);
-      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, s3RadiusX, undefined, s3Axis);
+      const s1ForceAsphere = hasVFlag(vars, 'surf1Conic') || hasAnyCoefV(vars, 'surf1Coef');
+      const s2ForceAsphere = hasVFlag(vars, 'surf2Conic') || hasAnyCoefV(vars, 'surf2Coef');
+      const s3ForceAsphere = hasVFlag(vars, 'surf3Conic') || hasAnyCoefV(vars, 'surf3Coef');
+
+      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, s1RadiusX, undefined, s1Axis, s1ForceAsphere);
+      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, s2RadiusX, undefined, s2Axis, s2ForceAsphere);
+      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, s3RadiusX, undefined, s3Axis, s3ForceAsphere);
 
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius1') && shouldMarkV(vars.radius1)) applyVFlag(s1, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness1') && shouldMarkV(vars.thickness1)) applyVFlag(s1, 'optimizeT');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'material1') && shouldMarkV(vars.material1)) applyVFlag(s1, 'optimizeMaterial');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'surf1Conic') && shouldMarkV(vars.surf1Conic)) applyVFlag(s1, 'optimizeConic');
+      for (let i = 1; i <= 10; i++) {
+        const key = `surf1Coef${i}`;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, key) && shouldMarkV(vars[key])) {
+          applyVFlag(s1, `optimizeCoef${i}`);
+        }
+      }
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius2') && shouldMarkV(vars.radius2)) applyVFlag(s2, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness2') && shouldMarkV(vars.thickness2)) applyVFlag(s2, 'optimizeT');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'material2') && shouldMarkV(vars.material2)) applyVFlag(s2, 'optimizeMaterial');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'surf2Conic') && shouldMarkV(vars.surf2Conic)) applyVFlag(s2, 'optimizeConic');
+      for (let i = 1; i <= 10; i++) {
+        const key = `surf2Coef${i}`;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, key) && shouldMarkV(vars[key])) {
+          applyVFlag(s2, `optimizeCoef${i}`);
+        }
+      }
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius3') && shouldMarkV(vars.radius3)) applyVFlag(s3, 'optimizeR');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'surf3Conic') && shouldMarkV(vars.surf3Conic)) applyVFlag(s3, 'optimizeConic');
+      for (let i = 1; i <= 10; i++) {
+        const key = `surf3Coef${i}`;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, key) && shouldMarkV(vars[key])) {
+          applyVFlag(s3, `optimizeCoef${i}`);
+        }
+      }
 
       rows.push(s1, s2, s3);
       continue;
@@ -1773,21 +1839,54 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       console.log(`[Triplet Toric] s3RadiusX=${s3RadiusX}, s3Axis=${s3Axis}, s3SurfType=${s3SurfType}`);
       console.log(`[Triplet Toric] s4RadiusX=${s4RadiusX}, s4Axis=${s4Axis}, s4SurfType=${s4SurfType}`);
 
-      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, s1RadiusX, undefined, s1Axis);
-      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, s2RadiusX, undefined, s2Axis);
-      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, s3RadiusX, undefined, s3Axis);
-      applyAsphereFieldsFromParams(s4, s4SurfType, s4Conic, s4Coefs, s4RadiusX, undefined, s4Axis);
+      const s1ForceAsphere = hasVFlag(vars, 'surf1Conic') || hasAnyCoefV(vars, 'surf1Coef');
+      const s2ForceAsphere = hasVFlag(vars, 'surf2Conic') || hasAnyCoefV(vars, 'surf2Coef');
+      const s3ForceAsphere = hasVFlag(vars, 'surf3Conic') || hasAnyCoefV(vars, 'surf3Coef');
+      const s4ForceAsphere = hasVFlag(vars, 'surf4Conic') || hasAnyCoefV(vars, 'surf4Coef');
+
+      applyAsphereFieldsFromParams(s1, s1SurfType, s1Conic, s1Coefs, s1RadiusX, undefined, s1Axis, s1ForceAsphere);
+      applyAsphereFieldsFromParams(s2, s2SurfType, s2Conic, s2Coefs, s2RadiusX, undefined, s2Axis, s2ForceAsphere);
+      applyAsphereFieldsFromParams(s3, s3SurfType, s3Conic, s3Coefs, s3RadiusX, undefined, s3Axis, s3ForceAsphere);
+      applyAsphereFieldsFromParams(s4, s4SurfType, s4Conic, s4Coefs, s4RadiusX, undefined, s4Axis, s4ForceAsphere);
 
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius1') && shouldMarkV(vars.radius1)) applyVFlag(s1, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness1') && shouldMarkV(vars.thickness1)) applyVFlag(s1, 'optimizeT');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'material1') && shouldMarkV(vars.material1)) applyVFlag(s1, 'optimizeMaterial');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'surf1Conic') && shouldMarkV(vars.surf1Conic)) applyVFlag(s1, 'optimizeConic');
+      for (let i = 1; i <= 10; i++) {
+        const key = `surf1Coef${i}`;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, key) && shouldMarkV(vars[key])) {
+          applyVFlag(s1, `optimizeCoef${i}`);
+        }
+      }
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius2') && shouldMarkV(vars.radius2)) applyVFlag(s2, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness2') && shouldMarkV(vars.thickness2)) applyVFlag(s2, 'optimizeT');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'material2') && shouldMarkV(vars.material2)) applyVFlag(s2, 'optimizeMaterial');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'surf2Conic') && shouldMarkV(vars.surf2Conic)) applyVFlag(s2, 'optimizeConic');
+      for (let i = 1; i <= 10; i++) {
+        const key = `surf2Coef${i}`;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, key) && shouldMarkV(vars[key])) {
+          applyVFlag(s2, `optimizeCoef${i}`);
+        }
+      }
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius3') && shouldMarkV(vars.radius3)) applyVFlag(s3, 'optimizeR');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness3') && shouldMarkV(vars.thickness3)) applyVFlag(s3, 'optimizeT');
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'material3') && shouldMarkV(vars.material3)) applyVFlag(s3, 'optimizeMaterial');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'surf3Conic') && shouldMarkV(vars.surf3Conic)) applyVFlag(s3, 'optimizeConic');
+      for (let i = 1; i <= 10; i++) {
+        const key = `surf3Coef${i}`;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, key) && shouldMarkV(vars[key])) {
+          applyVFlag(s3, `optimizeCoef${i}`);
+        }
+      }
       if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius4') && shouldMarkV(vars.radius4)) applyVFlag(s4, 'optimizeR');
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'surf4Conic') && shouldMarkV(vars.surf4Conic)) applyVFlag(s4, 'optimizeConic');
+      for (let i = 1; i <= 10; i++) {
+        const key = `surf4Coef${i}`;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, key) && shouldMarkV(vars[key])) {
+          applyVFlag(s4, `optimizeCoef${i}`);
+        }
+      }
 
       rows.push(s1, s2, s3, s4);
       continue;
@@ -1808,7 +1907,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       const surfTypeRaw = getParamOrVarValue(params, vars, 'surfType');
       const conicRaw = getParamOrVarValue(params, vars, 'conic');
       const coefsRaw = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `coef${i + 1}`));
-      applyAsphereFieldsFromParams(mirror, surfTypeRaw, conicRaw, coefsRaw, undefined, undefined, undefined);
+      const mirrorForceAsphere = hasVFlag(vars, 'conic') || hasAnyCoefV(vars, 'coef');
+      applyAsphereFieldsFromParams(mirror, surfTypeRaw, conicRaw, coefsRaw, undefined, undefined, undefined, mirrorForceAsphere);
 
       const mat = String(matRaw ?? '').trim();
       mirror.material = mat ? mat : 'MIRROR';
@@ -1844,6 +1944,22 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       // Mirror flips propagation direction for subsequent thickness values.
       currentZSign *= -1;
       mirror.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness));
+
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'radius') && shouldMarkV(vars.radius)) {
+        applyVFlag(mirror, 'optimizeR');
+      }
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness') && shouldMarkV(vars.thickness)) {
+        applyVFlag(mirror, 'optimizeT');
+      }
+      if (vars && Object.prototype.hasOwnProperty.call(vars, 'conic') && shouldMarkV(vars.conic)) {
+        applyVFlag(mirror, 'optimizeConic');
+      }
+      for (let i = 1; i <= 10; i++) {
+        const key = `coef${i}`;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, key) && shouldMarkV(vars[key])) {
+          applyVFlag(mirror, `optimizeCoef${i}`);
+        }
+      }
 
       rows.push(mirror);
       continue;
@@ -2435,6 +2551,20 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
       return isNumericString(s) ? Number(s) : (typeof vv === 'number' && Number.isFinite(vv) ? vv : 0);
     });
 
+    const lensVariables: any = {};
+    if (legacyHasV(r, 'optimizeR')) lensVariables.frontRadius = legacyVarV(frontRadius);
+    if (legacyHasV(r, 'optimizeT')) lensVariables.centerThickness = legacyVarV(centerThickness);
+    if (legacyHasV(r, 'optimizeMaterial')) lensVariables.material = legacyVarV(material);
+    if (legacyHasV(r, 'optimizeConic')) lensVariables.frontConic = legacyVarV(frontConic);
+    for (let i = 1; i <= 10; i++) {
+      if (legacyHasV(r, `optimizeCoef${i}`)) lensVariables[`frontCoef${i}`] = legacyVarV(frontCoefs[i - 1]);
+    }
+    if (legacyHasV(back, 'optimizeR')) lensVariables.backRadius = legacyVarV(backRadius);
+    if (legacyHasV(back, 'optimizeConic')) lensVariables.backConic = legacyVarV(backConic);
+    for (let i = 1; i <= 10; i++) {
+      if (legacyHasV(back, `optimizeCoef${i}`)) lensVariables[`backCoef${i}`] = legacyVarV(backCoefs[i - 1]);
+    }
+
     blocks.push({
       blockId: lensId,
       blockType: 'Lens',
@@ -2458,7 +2588,7 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
         front: getLegacySemidiaRaw(r),
         back: getLegacySemidiaRaw(back),
       },
-      variables: {},
+      variables: lensVariables,
       metadata: { source: 'legacy-opticalSystem' }
     });
 

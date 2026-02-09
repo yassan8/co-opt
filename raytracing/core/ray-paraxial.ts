@@ -502,12 +502,12 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
         // 手動設定のRef Indexまたは材料名がある場合
         const hasManualRefIndex = surface.rindex || surface['ref index'] || surface.refIndex || surface['Ref Index'];
         const hasMaterial = surface.material && surface.material !== "" && surface.material !== "0";
-        
-        if (thickness > 0 && (hasManualRefIndex || hasMaterial)) {
-          // 手動設定の屈折率または材料が指定されている場合
+
+        if (hasManualRefIndex || hasMaterial) {
+          // 屈折率/材料が指定されていれば厚みが0でも屈折を適用する
           nextN = getRefractiveIndex(surface, wavelength);
         } else {
-          // 材料なし、手動屈折率なし、またはthickness=0の場合は空気
+          // 材料なし、手動屈折率なしは空気
           nextN = 1.0;
         }
       }

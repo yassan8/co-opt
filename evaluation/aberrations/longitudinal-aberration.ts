@@ -830,14 +830,16 @@ export function calculateLongitudinalAberration(
     let nImg = 1.0; // デフォルトは空気
     if (targetSurfaceIndex < opticalSystemRows.length - 1) {
         const lastSurface = opticalSystemRows[targetSurfaceIndex];
-        const material = lastSurface.glass || lastSurface.Glass || '';
-        if (material && material !== '' && material !== 'AIR') {
-            // 主波長での屈折率を計算
-            nImg = getRefractiveIndex(lastSurface, primaryWavelength);
-            if (!nImg || nImg === 1.0) {
-                // 取得に失敗した場合はデフォルトのガラス屈折率
-                nImg = 1.5;
-                console.warn(`⚠️ 屈折率の取得に失敗、デフォルト値 ${nImg} を使用`);
+        if (lastSurface) {
+            const material = lastSurface.glass || lastSurface.Glass || '';
+            if (material && material !== '' && material !== 'AIR') {
+                // 主波長での屈折率を計算
+                nImg = getRefractiveIndex(lastSurface, primaryWavelength);
+                if (!nImg || nImg === 1.0) {
+                    // 取得に失敗した場合はデフォルトのガラス屈折率
+                    nImg = 1.5;
+                    console.warn(`⚠️ 屈折率の取得に失敗、デフォルト値 ${nImg} を使用`);
+                }
             }
         }
     }

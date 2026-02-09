@@ -6,7 +6,9 @@ import {
   handleClearStorage,
   handleImportZemax,
   handleExportZemax,
-  handleOptimize
+  handleOptimize,
+  handleRender3D,
+  handleAnalysisSelect
 } from '../../../ui/toolbar-handlers';
 
 export default function MainToolbar() {
@@ -57,7 +59,7 @@ export default function MainToolbar() {
 
         <div className="button-group">
           <span className="button-group-label">View</span>
-          <button id="open-3d-window-btn" title="Render 3D view in popup window">
+          <button id="open-3d-window-btn" title="Render 3D view in popup window" onClick={handleRender3D}>
             Render
           </button>
           <button
@@ -87,7 +89,15 @@ export default function MainToolbar() {
 
         <div className="button-group">
           <span className="button-group-label">Analysis</span>
-          <select id="analysis-select" style={{ minWidth: 180 }}>
+          <select
+            id="analysis-select"
+            style={{ minWidth: 180 }}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              handleAnalysisSelect(value);
+              event.currentTarget.value = '';
+            }}
+          >
             <option value="">Select Analysis...</option>
             <option value="spot-diagram">Spot Diagram</option>
             <option value="spherical-aberration">Spherical Aberration</option>

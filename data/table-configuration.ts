@@ -316,6 +316,19 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
     return;
   }
 
+  // Normalize legacy blockType values before validation
+  try {
+    if (Array.isArray(activeConfig.blocks)) {
+      for (const b of activeConfig.blocks) {
+        if (!b || typeof b !== 'object') continue;
+        const t = String((b as any).blockType ?? '').trim();
+        if (t === 'ImagePlane') (b as any).blockType = 'ImageSurface';
+        else if (t === 'ObjectPlane') (b as any).blockType = 'ObjectSurface';
+        else if (t === 'AirGap') (b as any).blockType = 'Gap';
+      }
+    }
+  } catch (_) {}
+
   // If the active config uses blocks, deterministically expand to legacy surface rows for UI/evaluation.
   let effectiveOpticalSystem = activeConfig.opticalSystem;
   if (configurationHasBlocks(activeConfig)) {

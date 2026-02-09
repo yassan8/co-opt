@@ -298,6 +298,12 @@ async function initializeApplication() {
             };
         } catch (_) {}
 
+        // Expose analysis/setup helpers for React timing
+        try {
+            window.setupAnalysisWindows = setupAnalysisWindows;
+            window.setupOpticalSystemChangeListeners = setupOpticalSystemChangeListeners;
+        } catch (_) {}
+
         try {
             window.rebindEventHandlers = () => {
                 console.log('🔄 [Rebind] rebindEventHandlers called');
@@ -315,6 +321,7 @@ async function initializeApplication() {
                 try { setupDOMEventHandlers(); } catch (_) {}
                 try { initializeConfigurationUI(); } catch (_) {}
                 try { if (window.scene) setupOpticalSystemChangeListeners(window.scene); } catch (_) {}
+                try { setupAnalysisWindows(); } catch (_) {}
                 
                 console.log('✅ [Rebind] rebindEventHandlers completed');
             };
