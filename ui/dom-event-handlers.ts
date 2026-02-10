@@ -27,6 +27,7 @@ import {
 } from '../utils/url-share.ts';
 import { setupOpticalSystemChangeListeners, setupAnalysisWindows } from './event-handlers.ts';
 import { listDesignVariablesFromBlocks } from '../optimization/design-variables.ts';
+import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 
 // Type definitions
 type BlockType = string;
@@ -3677,10 +3678,13 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             
             const blockType = String(realBlock.blockType || realBlock.type || 'unknown');
             
-            // For Gap blocks, ensure material is always in paramKeys even if not set
+            // For Gap blocks, ensure material/thicknessMode are always in paramKeys even if not set
             const allParamKeys = Object.keys(params || {});
             if ((blockType === 'Gap' || blockType === 'AirGap') && !allParamKeys.includes('material')) {
                 allParamKeys.push('material');
+            }
+            if ((blockType === 'Gap' || blockType === 'AirGap') && !allParamKeys.includes('thicknessMode')) {
+                allParamKeys.push('thicknessMode');
             }
             const paramKeys = sortParameterKeys(allParamKeys);
             const varKeys = Object.keys(vars || {}).sort();
@@ -3749,9 +3753,10 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const isSurfType = label === 'surfType' || label === 'frontSurfType' || label === 'backSurfType' || 
                                    label === 'surf1SurfType' || label === 'surf2SurfType' || label === 'surf3SurfType';
                 const isMaterial = label.toLowerCase().includes('material') || paramType === 'material';
+                const isGapThicknessMode = (blockType === 'Gap' || blockType === 'AirGap') && label === 'thicknessMode';
                 // Exclude nd, vd, abbe from slider display - they should be text input only
                 const isGlassProperty = label === 'nd' || label === 'vd' || label === 'abbe';
-                const isNumeric = !isMaterial && !isSurfType && !isGlassProperty && !isNaN(parseFloat(String(value)));
+                const isNumeric = !isMaterial && !isSurfType && !isGlassProperty && !isGapThicknessMode && !isNaN(parseFloat(String(value)));
                 
                 // Determine if this parameter should show coef parameters based on surfType
                 const shouldHideCoef = (key: string, surfTypeValue: string) => {
@@ -3793,6 +3798,75 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         const newValue = select.value;
                         if (newValue !== value) {
                             cooptApplyBlockValue(blockId, path, value, newValue);
+                        }
+                    });
+
+                    inputElement = select;
+                } else if (isGapThicknessMode) {
+                    const select = document.createElement('select');
+                    select.style.fontSize = '12px';
+                    select.style.padding = '4px 6px';
+                    select.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
+                    select.style.background = isDarkMode ? '#111827' : '#fff';
+                    select.style.color = isDarkMode ? '#f9fafb' : '#111827';
+                    select.style.borderRadius = '4px';
+                    select.style.flex = '1';
+                    select.style.cursor = 'pointer';
+                    select.style.minWidth = '200px';
+                    select.style.height = '28px';
+                    select.style.boxSizing = 'border-box';
+
+                    const normalized = String(value ?? '').trim().replace(/\s+/g, '').toUpperCase();
+                    const currentValue = (normalized === 'IMD' || normalized === 'BFL') ? normalized : '';
+
+                    const options = [
+                        { value: '', label: 'Manual' },
+                        { value: 'IMD', label: 'Image distance (IMD)' },
+                        { value: 'BFL', label: 'Back focal length (BFL)' }
+                    ];
+
+                    options.forEach(({ value: optValue, label: optLabel }) => {
+                        const option = document.createElement('option');
+                        option.value = optValue;
+                        option.textContent = optLabel;
+                        if (optValue === currentValue) {
+                            option.selected = true;
+                        }
+                        select.appendChild(option);
+                    });
+
+                    const applyThicknessFromMode = (mode: string) => {
+                        if (mode !== 'IMD' && mode !== 'BFL') return;
+                        try {
+                            const blocks = Array.isArray(blocksInOrder) && blocksInOrder.length > 0
+                                ? blocksInOrder
+                                : (() => {
+                                    const systemConfig = loadSystemConfigurations();
+                                    const activeConfig = systemConfig?.configurations?.find((c: any) => c.id === systemConfig?.activeConfigId)
+                                        || systemConfig?.configurations?.[0];
+                                    return Array.isArray(activeConfig?.blocks) ? activeConfig.blocks : [];
+                                })();
+
+                            const exp = expandBlocksToOpticalSystemRows(blocks);
+                            const rows = exp && Array.isArray(exp.rows) ? exp.rows : [];
+                            if (rows.length === 0) return;
+                            const paraxial = calculateParaxialData(rows);
+                            const target = mode === 'IMD' ? paraxial?.imageDistance : paraxial?.backFocalLength;
+                            const numeric = Number(target);
+                            if (Number.isFinite(numeric)) {
+                                const currentThickness = (params as any)?.thickness;
+                                cooptApplyBlockValue(blockId, 'parameters.thickness', currentThickness, numeric);
+                            }
+                        } catch (err) {
+                            console.warn('⚠️ [DesignIntent] Failed to apply thicknessMode:', err);
+                        }
+                    };
+
+                    select.addEventListener('change', () => {
+                        const newValue = select.value;
+                        if (newValue !== value) {
+                            cooptApplyBlockValue(blockId, path, value, newValue);
+                            applyThicknessFromMode(newValue);
                         }
                     });
 
