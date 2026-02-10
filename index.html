@@ -14,10 +14,9 @@
   </script>
   <title>co-opt</title>
   <!-- SVG favicon for modern browsers -->
-  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="icon" type="image/svg+xml" href="/co-opt/assets/favicon-DBJeJkyS.svg">
   <!-- Fallback for Safari and older browsers -->
   <link rel="icon" type="image/png" sizes="32x32" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231a4d8f' rx='4'/><text x='16' y='22' font-family='Arial, sans-serif' font-size='18' font-weight='bold' fill='%23ffffff' text-anchor='middle'>CO</text></svg>">
-  <link rel="stylesheet" href="styles.css">
   <!-- TabulatorのCSSとJSを追加 -->
   <link href="https://unpkg.com/tabulator-tables@6.2.5/dist/css/tabulator.min.css" rel="stylesheet">
   <script src="https://unpkg.com/tabulator-tables@6.2.5/dist/js/tabulator.min.js"></script>
@@ -124,6 +123,7 @@
   </script>
 
   <!-- Import map for Three.js to resolve bare module specifiers -->
+
   <script type="importmap">
     {
       "imports": {
@@ -133,6 +133,11 @@
       }
     }
   </script>
+  <script type="module" crossorigin src="/co-opt/assets/main-DWCx0Nws.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-C_jdIO4l.js"></script>
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-D8J8bRgG.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-DWCx0Nws.js">
+  <link rel="stylesheet" crossorigin href="/co-opt/assets/app-BXfHVPvf.css">
 </head>
 <body>
 
@@ -167,7 +172,6 @@
   </script>
   
   <!-- Undo/Redo System -->
-  <script src="core/undo-history.ts" type="module"></script>
   <script>
     // Initialize undo history system
     if (typeof UndoHistory !== 'undefined') {
@@ -188,49 +192,22 @@
     We only do this when the configuration system has already been initialized (systemConfigurations exists),
     to avoid wiping legacy single-config data before the migration runs.
   -->
-  <script type="module">
-    try {
-      const systemConfigurationsJson = localStorage.getItem('systemConfigurations');
-      if (systemConfigurationsJson) {
-        try {
-          const parsed = JSON.parse(systemConfigurationsJson);
-          if (parsed && Array.isArray(parsed.configurations) && parsed.configurations.length > 0) {
-            const { loadActiveConfigurationToTables } = await import('./data/table-configuration.ts');
-            loadActiveConfigurationToTables();
-          }
-        } catch (e) {
-          console.warn('⚠️ [Startup] Failed to parse systemConfigurations; skipping pre-load:', e);
-        }
-      }
-    } catch (e) {
-      console.warn('⚠️ [Startup] Failed to pre-load active configuration:', e);
-    }
-  </script>
   
   <!-- Configuration System -->
-  <script type="module" src="data/table-configuration.ts"></script>
-  <script type="module" src="ui/configuration-handlers.ts"></script>
   
   <!-- Merit Function Inspector (must load before editor) -->
-  <script type="module" src="ui/editors/merit-function-inspector.ts"></script>
   
   <!-- Merit Function Editor -->
-  <script type="module" src="ui/editors/merit-function-editor.ts"></script>
 
   <!-- Multi-State / Scenarios (console-driven) -->
-  <script type="module" src="core/scenarios.ts"></script>
 
   <!-- MVP Optimizer (console-driven; uses Blocks variable flags) -->
-  <script type="module" src="optimization/optimizer-mvp.ts"></script>
 
   <!-- System Requirements Editor -->
-  <script type="module" src="ui/editors/system-requirements-editor.ts"></script>
   
   <!-- PSFプロット機能を読み込み -->
-  <script type="module" src="evaluation/psf/psf-plot.ts"></script>
   
   <!-- OPDプロファイル実行ハーネス（コンソールから runOPDProfiling(...) を呼び出し） -->
-  <script type="module" src="evaluation/wavefront/opd-profiler.ts"></script>
   
   <!-- PSF WASM計算器を読み込み -->
   <script>
@@ -271,7 +248,7 @@
         // main.ts is now loaded synchronously before this script
         (async () => {
           try {
-            const rayTracing = await import('./raytracing/core/ray-tracing.ts');
+            const rayTracing = await import('/co-opt/assets/ray-tracing-BeYAlKn2.ts');
             
             // getWASMSystemは既にmain.tsでグローバルに公開済み
             
@@ -322,7 +299,7 @@
             }
             
             // 絞り周辺光線モジュールを読み込み
-            import('./raytracing/core/ray-marginal.ts').then(marginalRayModule => {
+            import('/co-opt/assets/ray-marginal-D2MMmUb6.ts').then(marginalRayModule => {
               window.calculateMarginalRay = marginalRayModule.calculateMarginalRay;
               window.calculateAllMarginalRays = marginalRayModule.calculateAllMarginalRays;
             }).catch(error => {
@@ -335,7 +312,6 @@
   </script>
 
   <!-- 絞り周辺光線計算スクリプト -->
-  <script type="module" src="raytracing/core/ray-aperture-edge.ts"></script>
 
   <!-- WASM最適化モジュール -->
   <!-- force-wasm-system is now imported in main.ts instead of loaded as a script tag -->
@@ -581,7 +557,7 @@
       
       try {
         // PSFCalculatorを動的インポート
-        const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.ts');
+        const { PSFCalculator } = await import('/co-opt/assets/psf-calculator-B7Kx4qWO.ts');
         const psfCalculator = new PSFCalculator();
         
         // 初期化を待機
@@ -614,7 +590,6 @@
   <!-- <script type="module" src="testing/test-coordinate-transform.ts"></script> -->
 
   <!-- React App Entry Point -->
-  <script type="module" src="src/main.tsx"></script>
 
 </body>
 

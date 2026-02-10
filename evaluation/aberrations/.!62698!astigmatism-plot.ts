@@ -1,2 +1,0 @@
-/**
- * Astigmatism Diagram Plotter

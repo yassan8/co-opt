@@ -3,37 +3,11 @@
  * JS_lensDraw v3 - Core Configuration Module
  */
 
-import type * as THREE from 'three';
-import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-
-// =============================================================================
-// TYPE DEFINITIONS
-// =============================================================================
-
-export interface AppConfig {
-    CANVAS_WIDTH: number;
-    CANVAS_HEIGHT: number;
-    VIEW_SIZE: number;
-    CAMERA_CLIP_NEAR: number;
-    CAMERA_CLIP_FAR: number;
-    CAMERA_INITIAL_POSITION: { x: number; y: number; z: number };
-    CAMERA_INITIAL_TARGET: { x: number; y: number; z: number };
-    AMBIENT_LIGHT_INTENSITY: number;
-    DIRECTIONAL_LIGHT_INTENSITY: number;
-    DIRECTIONAL_LIGHT_POSITION: { x: number; y: number; z: number };
-    DEFAULT_RAY_COUNT: number;
-    DEFAULT_SPOT_DIAGRAM_RAYS: number;
-    DEFAULT_TRANSVERSE_RAYS: number;
-}
-
-// Type for Tabulator table (using any for now as Tabulator doesn't have TS types)
-export type TabulatorTable = any;
-
 // =============================================================================
 // APPLICATION CONSTANTS
 // =============================================================================
 
-export const APP_CONFIG: AppConfig = {
+export const APP_CONFIG = {
     CANVAS_WIDTH: 800,
     CANVAS_HEIGHT: 600,
     VIEW_SIZE: 800,  // Increased from 500 to 800 for better optical system viewing
@@ -54,106 +28,98 @@ export const APP_CONFIG: AppConfig = {
 // =============================================================================
 
 // Control flags for preventing multiple simultaneous operations
-export let isGeneratingSpotDiagram: boolean = false;
-export let isGeneratingTransverseAberration: boolean = false;
+export let isGeneratingSpotDiagram = false;
+export let isGeneratingTransverseAberration = false;
 
 // Global scene, camera, renderer, controls references
-export let scene: THREE.Scene | null = null;
-export let camera: THREE.PerspectiveCamera | null = null;
-export let renderer: THREE.WebGLRenderer | null = null;
-export let controls: OrbitControls | null = null;
+export let scene = null;
+export let camera = null;
+export let renderer = null;
+export let controls = null;
 
 // Setters for global THREE.js objects
-export function setScene(sceneInstance: THREE.Scene): void {
+export function setScene(sceneInstance) {
     scene = sceneInstance;
 }
 
-export function setCamera(cameraInstance: THREE.PerspectiveCamera): void {
+export function setCamera(cameraInstance) {
     camera = cameraInstance;
 }
 
-export function setRenderer(rendererInstance: THREE.WebGLRenderer): void {
+export function setRenderer(rendererInstance) {
     renderer = rendererInstance;
 }
 
-export function setControls(controlsInstance: OrbitControls): void {
+export function setControls(controlsInstance) {
     controls = controlsInstance;
 }
 
 // Global table references
-export let tableSource: TabulatorTable | null = null;
-export let tableObject: TabulatorTable | null = null;
-export let tableOpticalSystem: TabulatorTable | null = null;
+export let tableSource = null;
+export let tableObject = null;
+export let tableOpticalSystem = null;
 
-export function setTableSource(table: TabulatorTable): void {
+export function setTableSource(table) {
     tableSource = table;
 }
 
-export function setTableObject(table: TabulatorTable): void {
+export function setTableObject(table) {
     tableObject = table;
 }
 
-export function setTableOpticalSystem(table: TabulatorTable): void {
+export function setTableOpticalSystem(table) {
     tableOpticalSystem = table;
 }
 
 // Getters for THREE.js objects
-export function getScene(): THREE.Scene | null {
+export function getScene() {
     return scene;
 }
 
-export function getCamera(): THREE.PerspectiveCamera | null {
+export function getCamera() {
     return camera;
 }
 
-export function getRenderer(): THREE.WebGLRenderer | null {
+export function getRenderer() {
     return renderer;
 }
 
 // Getters for global state variables
-export function getIsGeneratingSpotDiagram(): boolean {
+export function getIsGeneratingSpotDiagram() {
     return isGeneratingSpotDiagram;
 }
 
-export function getIsGeneratingTransverseAberration(): boolean {
+export function getIsGeneratingTransverseAberration() {
     return isGeneratingTransverseAberration;
 }
 
 // Updated setters with proper naming
-export function setIsGeneratingSpotDiagram(value: boolean): void {
+export function setIsGeneratingSpotDiagram(value) {
     isGeneratingSpotDiagram = value;
 }
 
-export function setIsGeneratingTransverseAberration(value: boolean): void {
+export function setIsGeneratingTransverseAberration(value) {
     isGeneratingTransverseAberration = value;
 }
 
-export function getControls(): OrbitControls | null {
+export function getControls() {
     return controls;
 }
 
-export function getTableSource(): TabulatorTable | null {
+export function getTableSource() {
     return tableSource;
 }
 
-export function getTableObject(): TabulatorTable | null {
+export function getTableObject() {
     return tableObject;
 }
 
-export function getTableOpticalSystem(): TabulatorTable | null {
+export function getTableOpticalSystem() {
     return tableOpticalSystem;
 }
 
 // Initialize all references - used during application startup
-export function initializeReferences(
-    sceneRef: THREE.Scene,
-    cameraRef: THREE.PerspectiveCamera,
-    rendererRef: THREE.WebGLRenderer,
-    controlsRef: OrbitControls,
-    tableOpticalSystemRef: TabulatorTable,
-    tableObjectRef: TabulatorTable,
-    tableSourceRef: TabulatorTable
-): void {
+export function initializeReferences(sceneRef, cameraRef, rendererRef, controlsRef, tableOpticalSystemRef, tableObjectRef, tableSourceRef) {
     scene = sceneRef;
     camera = cameraRef;
     renderer = rendererRef;
@@ -161,4 +127,6 @@ export function initializeReferences(
     tableOpticalSystem = tableOpticalSystemRef;
     tableObject = tableObjectRef;
     tableSource = tableSourceRef;
+    
+
 }

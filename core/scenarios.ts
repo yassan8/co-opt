@@ -1,11 +1,3 @@
-// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
-declare global {
-  interface Window {
-    [key: string]: any;
-  }
-}
-const w: Record<string, any> = window;
-
 /**
  * Multi-State / Scenarios support (console-driven).
  *
@@ -21,37 +13,12 @@ const w: Record<string, any> = window;
  */
 
 import { expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
-import type { Block, Configuration } from '../types/index.ts';
 
-interface Scenario {
-  id: string;
-  name: string;
-  weight: number;
-  overrides: Record<string, any>;
-}
-
-interface SystemConfigurations {
-  configurations: Configuration[];
-  activeConfigId: string;
-}
-
-interface ExpandResult {
-  rows: any[];
-  issues: Array<{ severity: string; phase: string; message: string }>;
-}
-
-interface ScenarioResult {
-  ok: boolean;
-  reason?: string;
-  id?: string;
-  issues?: any[];
-}
-
-function isPlainObject(v: any): v is Record<string, any> {
+function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
-function cloneJson<T>(v: T): T | null {
+function cloneJson(v) {
   try {
     // structuredClone is not guaranteed everywhere; JSON clone is enough for our schema.
     return JSON.parse(JSON.stringify(v));
@@ -60,7 +27,7 @@ function cloneJson<T>(v: T): T | null {
   }
 }
 
-function loadSystemConfigurationsRaw(): SystemConfigurations | null {
+function loadSystemConfigurationsRaw() {
   try {
     const json = localStorage.getItem('systemConfigurations');
     if (!json) return null;
@@ -70,7 +37,7 @@ function loadSystemConfigurationsRaw(): SystemConfigurations | null {
   }
 }
 
-function saveSystemConfigurationsRaw(systemConfig: SystemConfigurations): boolean {
+function saveSystemConfigurationsRaw(systemConfig) {
   try {
     localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
     return true;
@@ -79,13 +46,13 @@ function saveSystemConfigurationsRaw(systemConfig: SystemConfigurations): boolea
   }
 }
 
-function getActiveConfigRef(systemConfig: SystemConfigurations | null): Configuration | null {
+function getActiveConfigRef(systemConfig) {
   if (!systemConfig || !Array.isArray(systemConfig.configurations)) return null;
   const activeId = systemConfig.activeConfigId;
   return systemConfig.configurations.find(c => c && String(c.id) === String(activeId)) || systemConfig.configurations[0] || null;
 }
 
-function ensureScenarioContainer(activeCfg: Configuration): void {
+function ensureScenarioContainer(activeCfg) {
   if (!activeCfg) return;
   if (!Array.isArray(activeCfg.scenarios) || activeCfg.scenarios.length === 0) {
     activeCfg.scenarios = [
@@ -102,18 +69,13 @@ function ensureScenarioContainer(activeCfg: Configuration): void {
   }
 }
 
-function findScenario(activeCfg: Configuration, scenarioId: string): Scenario | null {
+function findScenario(activeCfg, scenarioId) {
   if (!activeCfg || !Array.isArray(activeCfg.scenarios)) return null;
   const id = String(scenarioId);
   return activeCfg.scenarios.find(s => s && String(s.id) === id) || null;
 }
 
-interface ParsedOverrideKey {
-  blockId: string;
-  key: string;
-}
-
-function parseOverrideKey(variableId: string): ParsedOverrideKey | null {
+function parseOverrideKey(variableId) {
   const s = String(variableId ?? '');
   const dot = s.indexOf('.');
   if (dot <= 0) return null;
@@ -123,12 +85,12 @@ function parseOverrideKey(variableId: string): ParsedOverrideKey | null {
   return { blockId, key };
 }
 
-function applyOverridesToBlocks(blocks: Block[], overrides: Record<string, any>): Block[] {
+function applyOverridesToBlocks(blocks, overrides) {
   const cloned = cloneJson(blocks);
   if (!Array.isArray(cloned)) return Array.isArray(blocks) ? blocks : [];
   if (!isPlainObject(overrides)) return cloned;
 
-  const byId = new Map<string, Block>();
+  const byId = new Map();
   for (const b of cloned) {
     const id = isPlainObject(b) ? String(b.blockId ?? '') : '';
     if (id) byId.set(id, b);
@@ -138,25 +100,25 @@ function applyOverridesToBlocks(blocks: Block[], overrides: Record<string, any>)
     const parsed = parseOverrideKey(varId);
     if (!parsed) continue;
     const blk = byId.get(String(parsed.blockId));
-    if (!blk || !isPlainObject((blk as any).parameters)) continue;
+    if (!blk || !isPlainObject(blk.parameters)) continue;
 
     // Prefer numeric when possible.
     const n = Number(rawVal);
-    (blk as any).parameters[parsed.key] = Number.isFinite(n) ? n : rawVal;
+    blk.parameters[parsed.key] = Number.isFinite(n) ? n : rawVal;
   }
 
   return cloned;
 }
 
-function preserveLegacySemidiaIntoExpandedRows(expandedRows: any[], legacyRows: any[]): void {
+function preserveLegacySemidiaIntoExpandedRows(expandedRows, legacyRows) {
   if (!Array.isArray(expandedRows) || !Array.isArray(legacyRows)) return;
   const n = Math.min(expandedRows.length, legacyRows.length);
-  const hasValue = (v: any): boolean => {
+  const hasValue = (v) => {
     if (v === null || v === undefined) return false;
     const s = String(v).trim();
     return s !== '';
   };
-  const getLegacySemidia = (row: any): any => {
+  const getLegacySemidia = (row) => {
     if (!row || typeof row !== 'object') return null;
     return row.semidia ?? row['Semi Diameter'] ?? row['semi diameter'] ?? row.semiDiameter ?? row.semiDia;
   };
@@ -172,7 +134,7 @@ function preserveLegacySemidiaIntoExpandedRows(expandedRows: any[], legacyRows: 
   }
 }
 
-function pickLegacyRowsForSemidia(activeCfg: Configuration): any[] | null {
+function pickLegacyRowsForSemidia(activeCfg) {
   try {
     const legacy = Array.isArray(activeCfg?.opticalSystem) ? activeCfg.opticalSystem : null;
     if (legacy && legacy.length > 0) return legacy;
@@ -189,11 +151,11 @@ function pickLegacyRowsForSemidia(activeCfg: Configuration): any[] | null {
   }
 }
 
-function expandActiveConfigWithScenario(activeCfg: Configuration, scenarioId?: string): ExpandResult {
+function expandActiveConfigWithScenario(activeCfg, scenarioId) {
   if (!activeCfg || !Array.isArray(activeCfg.blocks)) return { rows: [], issues: [{ severity: 'fatal', phase: 'expand', message: 'Active config has no blocks.' }] };
 
   ensureScenarioContainer(activeCfg);
-  const scn = findScenario(activeCfg, scenarioId || activeCfg.activeScenarioId || 'base');
+  const scn = findScenario(activeCfg, scenarioId || activeCfg.activeScenarioId);
   const overrides = scn && isPlainObject(scn.overrides) ? scn.overrides : {};
 
   const blocksToExpand = applyOverridesToBlocks(activeCfg.blocks, overrides);
@@ -204,36 +166,36 @@ function expandActiveConfigWithScenario(activeCfg: Configuration, scenarioId?: s
       preserveLegacySemidiaIntoExpandedRows(expanded.rows, legacyRows);
     }
   } catch (_) {}
-  return expanded as ExpandResult;
+  return expanded;
 }
 
-function refreshUI(): void {
+function refreshUI() {
   try {
-    if (w.ConfigurationManager && typeof w.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
-      w.ConfigurationManager.loadActiveConfigurationToTables();
+    if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+      window.ConfigurationManager.loadActiveConfigurationToTables();
     }
   } catch (_) {}
 
   try {
-    if (typeof w.refreshBlockInspector === 'function') w.refreshBlockInspector();
+    if (typeof window.refreshBlockInspector === 'function') window.refreshBlockInspector();
   } catch (_) {}
 
   try {
-    if (w.meritFunctionEditor && typeof w.meritFunctionEditor.calculateMerit === 'function') {
-      w.meritFunctionEditor.calculateMerit();
+    if (window.meritFunctionEditor && typeof window.meritFunctionEditor.calculateMerit === 'function') {
+      window.meritFunctionEditor.calculateMerit();
     }
   } catch (_) {}
 }
 
-export function listScenarios(): Array<{ id: string; name: string; weight: number }> {
+export function listScenarios() {
   const systemConfig = loadSystemConfigurationsRaw();
   const activeCfg = getActiveConfigRef(systemConfig);
   if (!activeCfg) return [];
   ensureScenarioContainer(activeCfg);
-  return (activeCfg.scenarios || []).map(s => ({ id: s.id, name: s.name, weight: s.weight }));
+  return activeCfg.scenarios.map(s => ({ id: s.id, name: s.name, weight: s.weight }));
 }
 
-export function addScenario(name: string = 'Scenario', weight: number = 1): ScenarioResult {
+export function addScenario(name = 'Scenario', weight = 1) {
   const systemConfig = loadSystemConfigurationsRaw();
   if (!systemConfig) return { ok: false, reason: 'systemConfigurations not found.' };
   const activeCfg = getActiveConfigRef(systemConfig);
@@ -241,7 +203,6 @@ export function addScenario(name: string = 'Scenario', weight: number = 1): Scen
   ensureScenarioContainer(activeCfg);
 
   const id = `scn_${Date.now()}`;
-  if (!activeCfg.scenarios) activeCfg.scenarios = [];
   activeCfg.scenarios.push({ id, name: String(name), weight: Number(weight) || 1, overrides: {} });
   activeCfg.activeScenarioId = id;
 
@@ -250,7 +211,7 @@ export function addScenario(name: string = 'Scenario', weight: number = 1): Scen
   return { ok: true, id };
 }
 
-export function setActiveScenario(scenarioId: string): ScenarioResult {
+export function setActiveScenario(scenarioId) {
   const systemConfig = loadSystemConfigurationsRaw();
   if (!systemConfig) return { ok: false, reason: 'systemConfigurations not found.' };
   const activeCfg = getActiveConfigRef(systemConfig);
@@ -273,14 +234,14 @@ export function setActiveScenario(scenarioId: string): ScenarioResult {
   return { ok: true };
 }
 
-export function setOverride(scenarioId: string, variableId: string, value: any): ScenarioResult {
+export function setOverride(scenarioId, variableId, value) {
   const systemConfig = loadSystemConfigurationsRaw();
   if (!systemConfig) return { ok: false, reason: 'systemConfigurations not found.' };
   const activeCfg = getActiveConfigRef(systemConfig);
   if (!activeCfg) return { ok: false, reason: 'Active configuration not found.' };
   ensureScenarioContainer(activeCfg);
 
-  const scn = findScenario(activeCfg, scenarioId || activeCfg.activeScenarioId || 'base');
+  const scn = findScenario(activeCfg, scenarioId || activeCfg.activeScenarioId);
   if (!scn) return { ok: false, reason: `Scenario not found: ${scenarioId}` };
 
   if (!isPlainObject(scn.overrides)) scn.overrides = {};
@@ -299,14 +260,14 @@ export function setOverride(scenarioId: string, variableId: string, value: any):
   return { ok: true };
 }
 
-export function clearOverride(scenarioId: string, variableId: string): ScenarioResult {
+export function clearOverride(scenarioId, variableId) {
   const systemConfig = loadSystemConfigurationsRaw();
   if (!systemConfig) return { ok: false, reason: 'systemConfigurations not found.' };
   const activeCfg = getActiveConfigRef(systemConfig);
   if (!activeCfg) return { ok: false, reason: 'Active configuration not found.' };
   ensureScenarioContainer(activeCfg);
 
-  const scn = findScenario(activeCfg, scenarioId || activeCfg.activeScenarioId || 'base');
+  const scn = findScenario(activeCfg, scenarioId || activeCfg.activeScenarioId);
   if (!scn) return { ok: false, reason: `Scenario not found: ${scenarioId}` };
 
   if (isPlainObject(scn.overrides)) {
@@ -325,7 +286,7 @@ export function clearOverride(scenarioId: string, variableId: string): ScenarioR
   return { ok: true };
 }
 
-export function rebuildOpticalSystemFromActiveScenario(): ScenarioResult {
+export function rebuildOpticalSystemFromActiveScenario() {
   const systemConfig = loadSystemConfigurationsRaw();
   if (!systemConfig) return { ok: false, reason: 'systemConfigurations not found.' };
   const activeCfg = getActiveConfigRef(systemConfig);
@@ -344,7 +305,7 @@ export function rebuildOpticalSystemFromActiveScenario(): ScenarioResult {
 
 // Global entrypoint
 if (typeof window !== 'undefined') {
-  w.Scenarios = {
+  window.Scenarios = {
     list: listScenarios,
     add: addScenario,
     setActive: setActiveScenario,

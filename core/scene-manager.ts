@@ -1,26 +1,12 @@
-// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
-declare global {
-  interface Window {
-    [key: string]: any;
-  }
-}
-const w: Record<string, any> = window;
-
 /**
  * Three.js Scene Management Module
  * Three.jsのシーン、カメラ、レンダラーを管理
  */
 
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { OrbitControls } from 'OrbitControls';
 
 export class SceneManager {
-    scene: THREE.Scene | null;
-    camera: THREE.OrthographicCamera | THREE.PerspectiveCamera | null;
-    renderer: THREE.WebGLRenderer | null;
-    controls: OrbitControls | null;
-    container: HTMLElement | null;
-    
     constructor() {
         this.scene = null;
         this.camera = null;
@@ -31,7 +17,7 @@ export class SceneManager {
         this.initializeScene();
     }
     
-    initializeScene(): void {
+    initializeScene() {
         // シーンの作成
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0xf0f0f0);
@@ -54,7 +40,7 @@ export class SceneManager {
         console.log('✅ Scene Manager initialized');
     }
     
-    setupCamera(): void {
+    setupCamera() {
         // コンテナのサイズを取得（まだない場合はデフォルト値）
         const container = document.getElementById('threejs-canvas-container');
         const width = container ? container.clientWidth : 800;
@@ -68,12 +54,12 @@ export class SceneManager {
             1, 2000
         );
         
-        (this.camera as any).position.set(100, 100, 100);
+        this.camera.position.set(100, 100, 100);
         this.camera.lookAt(0, 0, 100);
         this.camera.up.set(0, 1, 0);
     }
     
-    setupRenderer(): void {
+    setupRenderer() {
         this.renderer = new THREE.WebGLRenderer({ 
             antialias: true,
             preserveDrawingBuffer: true 
@@ -86,7 +72,7 @@ export class SceneManager {
         this.container = document.getElementById('threejs-canvas-container');
         if (this.container) {
             this.container.innerHTML = '';
-            this.container.appendChild(this.renderer.domElement as HTMLCanvasElement);
+            this.container.appendChild(this.renderer.domElement);
             
             // 初期サイズ設定（DOMレンダリング後に実行）
             requestAnimationFrame(() => {
@@ -100,11 +86,11 @@ export class SceneManager {
             this.renderer.setSize(800, 600);
         }
         
-        (this.renderer as any).shadowMap.enabled = true;
-        (this.renderer as any).shadowMap.type = THREE.PCFSoftShadowMap;
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     }
     
-    updateRendererSize(): void {
+    updateRendererSize() {
         console.log('📐 updateRendererSize called');
         console.log('📐 this.container:', !!this.container);
         console.log('📐 this.renderer:', !!this.renderer);
@@ -123,22 +109,22 @@ export class SceneManager {
             this.renderer.setSize(width, height, false);
             
             // キャンバス要素のスタイルを直接設定（コンテナいっぱいに広げる）
-            (this.renderer.domElement as HTMLCanvasElement).style.width = '100%';
-            (this.renderer.domElement as HTMLCanvasElement).style.height = '100%';
+            this.renderer.domElement.style.width = '100%';
+            this.renderer.domElement.style.height = '100%';
             
-            console.log('📐 Camera type check: isOrthographicCamera =', (this.camera as any).isOrthographicCamera);
+            console.log('📐 Camera type check: isOrthographicCamera =', this.camera.isOrthographicCamera);
             
             // OrthographicCameraの場合、光学系がロード済みなら視野範囲を再計算
-            if ((this.camera as any).isOrthographicCamera) {
+            if (this.camera.isOrthographicCamera) {
                 console.log('📐 Is OrthographicCamera');
-                console.log('📐 window.updateCameraViewBounds:', typeof w.updateCameraViewBounds);
+                console.log('📐 window.updateCameraViewBounds:', typeof window.updateCameraViewBounds);
                 
                 // 光学系がロード済みで、updateCameraViewBounds関数が利用可能な場合
-                if (w.updateCameraViewBounds) {
+                if (window.updateCameraViewBounds) {
                     try {
                         // 光学系のサイズに基づいて視野範囲のみを再計算（カメラ位置は変更しない）
                         console.log('📷 Calling updateCameraViewBounds for resized window...');
-                        w.updateCameraViewBounds();
+                        window.updateCameraViewBounds();
                         console.log('📷 updateCameraViewBounds completed');
                     } catch (error) {
                         console.error('❌ Error in updateCameraViewBounds:', error);
@@ -152,9 +138,7 @@ export class SceneManager {
             } else {
                 console.log('📐 Not OrthographicCamera, updating aspect ratio');
                 // PerspectiveCameraの場合はアスペクト比を更新
-                if (this.camera instanceof THREE.PerspectiveCamera) {
-                    this.camera.aspect = width / height;
-                }
+                this.camera.aspect = width / height;
                 this.camera.updateProjectionMatrix();
             }
             
@@ -164,15 +148,15 @@ export class SceneManager {
         }
     }
     
-    onWindowResize(): void {
+    onWindowResize() {
         console.log('🔄 Window resize event triggered');
-        console.log('🔍 Checking window.updateCameraViewBounds:', typeof w.updateCameraViewBounds);
+        console.log('🔍 Checking window.updateCameraViewBounds:', typeof window.updateCameraViewBounds);
         this.updateRendererSize();
     }
     
-    setupControls(): void {
+    setupControls() {
         if (this.camera && this.renderer) {
-            this.controls = new OrbitControls(this.camera, this.renderer.domElement as HTMLElement);
+            this.controls = new OrbitControls(this.camera, this.renderer.domElement);
             this.controls.enableDamping = true;
             this.controls.dampingFactor = 0.05;
             this.controls.target.set(0, 0, 100);
@@ -180,16 +164,14 @@ export class SceneManager {
         }
     }
     
-    setupLights(): void {
-        if (!this.scene) return;
-        
+    setupLights() {
         // 環境光
         const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
         this.scene.add(ambientLight);
         
         // 指向性ライト
         const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        (directionalLight as any).position.set(100, 100, 50);
+        directionalLight.position.set(100, 100, 50);
         directionalLight.castShadow = true;
         directionalLight.shadow.mapSize.width = 2048;
         directionalLight.shadow.mapSize.height = 2048;
@@ -197,33 +179,30 @@ export class SceneManager {
         
         // 補助ライト
         const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
-        (directionalLight2 as any).position.set(-100, -100, -50);
+        directionalLight2.position.set(-100, -100, -50);
         this.scene.add(directionalLight2);
     }
     
-    addAxisHelper(): void {
-        if (!this.scene) return;
+    addAxisHelper() {
         const axesHelper = new THREE.AxesHelper(50);
-        this.scene.add(axesHelper as any);
+        this.scene.add(axesHelper);
     }
     
     // カメラビューの設定
-    setView(viewType: string): void {
-        if (!this.camera || !this.controls) return;
-        
+    setView(viewType) {
         switch (viewType) {
             case 'xz':
-                (this.camera as any).position.set(0, 100, 100);
+                this.camera.position.set(0, 100, 100);
                 this.camera.lookAt(0, 0, 100);
                 this.camera.up.set(1, 0, 0);
                 break;
             case 'yz':
-                (this.camera as any).position.set(100, 0, 100);
+                this.camera.position.set(100, 0, 100);
                 this.camera.lookAt(0, 0, 100);
                 this.camera.up.set(0, 1, 0);
                 break;
             default:
-                (this.camera as any).position.set(100, 100, 100);
+                this.camera.position.set(100, 100, 100);
                 this.camera.lookAt(0, 0, 100);
                 this.camera.up.set(0, 1, 0);
         }
@@ -233,9 +212,7 @@ export class SceneManager {
     }
     
     // レンダリング
-    render(): void {
-        if (!this.renderer || !this.scene || !this.camera) return;
-        
+    render() {
         if (this.controls) {
             this.controls.update();
         }
@@ -243,7 +220,7 @@ export class SceneManager {
     }
     
     // アニメーションループ
-    startRenderLoop(): void {
+    startRenderLoop() {
         const animate = () => {
             requestAnimationFrame(animate);
             this.render();
@@ -252,11 +229,9 @@ export class SceneManager {
     }
     
     // シーンクリア
-    clearScene(): void {
-        if (!this.scene) return;
-        
-        const elementsToRemove: THREE.Object3D[] = [];
-        this.scene.traverse((child: any) => {
+    clearScene() {
+        const elementsToRemove = [];
+        this.scene.traverse((child) => {
             if (child.userData && (
                 child.userData.isLensSurface ||
                 child.userData.type === 'ray' ||
@@ -267,16 +242,13 @@ export class SceneManager {
         });
         
         elementsToRemove.forEach(element => {
-            if (this.scene) {
-                this.scene.remove(element);
-            }
-            if ((element as any).geometry) (element as any).geometry.dispose();
-            if ((element as any).material) {
-                const material = (element as any).material;
-                if (Array.isArray(material)) {
-                    material.forEach(mat => mat.dispose());
+            this.scene.remove(element);
+            if (element.geometry) element.geometry.dispose();
+            if (element.material) {
+                if (Array.isArray(element.material)) {
+                    element.material.forEach(mat => mat.dispose());
                 } else {
-                    material.dispose();
+                    element.material.dispose();
                 }
             }
         });
@@ -285,24 +257,34 @@ export class SceneManager {
     }
     
     // オブジェクトをシーンに追加
-    addToScene(object: THREE.Object3D): void {
-        if (this.scene) {
-            this.scene.add(object);
-        }
+    addToScene(object) {
+        this.scene.add(object);
     }
     
     // オブジェクトをシーンから削除
-    removeFromScene(object: THREE.Object3D): void {
-        if (this.scene) {
-            this.scene.remove(object);
-        }
+    removeFromScene(object) {
+        this.scene.remove(object);
+    }
+    
+    // リサイズ処理
+    onWindowResize(width, height) {
+        const viewSize = 200;
+        const aspectRatio = width / height;
+        
+        this.camera.left = -viewSize * aspectRatio / 2;
+        this.camera.right = viewSize * aspectRatio / 2;
+        this.camera.top = viewSize / 2;
+        this.camera.bottom = -viewSize / 2;
+        this.camera.updateProjectionMatrix();
+        
+        this.renderer.setSize(width, height);
     }
 }
 
 // グローバルアクセス用のシングルトンインスタンス
-let sceneManagerInstance: SceneManager | null = null;
+let sceneManagerInstance = null;
 
-export function getSceneManager(): SceneManager {
+export function getSceneManager() {
     if (!sceneManagerInstance) {
         sceneManagerInstance = new SceneManager();
     }
@@ -310,12 +292,12 @@ export function getSceneManager(): SceneManager {
 }
 
 // 従来のグローバル変数との互換性のためのエクスポート
-export function initializeGlobalThreeJS(): SceneManager {
+export function initializeGlobalThreeJS() {
     const manager = getSceneManager();
-    w.scene = manager.scene;
-    w.camera = manager.camera;
-    w.renderer = manager.renderer;
-    w.controls = manager.controls;
+    window.scene = manager.scene;
+    window.camera = manager.camera;
+    window.renderer = manager.renderer;
+    window.controls = manager.controls;
     
     // レンダリングループ開始
     manager.startRenderLoop();

@@ -1,45 +1,17 @@
-// Typed window reference to avoid TypeScript 'as any' syntax in compiled output
-declare global {
-  interface Window {
-    [key: string]: any;
-  }
-}
-const w: Record<string, any> = window;
-
 /**
  * THREE.js Scene Setup Module
  * JS_lensDraw v3 - Scene Initialization and Management
  */
 
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { APP_CONFIG, type AppConfig } from './app-config.ts';
-
-// =============================================================================
-// TYPE DEFINITIONS
-// =============================================================================
-
-export interface SceneComponents {
-    scene: THREE.Scene;
-    camera: THREE.OrthographicCamera;
-    renderer: THREE.WebGLRenderer;
-    controls: OrbitControls;
-}
-
-export interface LightComponents {
-    ambientLight: THREE.AmbientLight;
-    directionalLight: THREE.DirectionalLight;
-}
-
-// =============================================================================
-// SCENE INITIALIZATION
-// =============================================================================
+import { OrbitControls } from 'OrbitControls';
+import { APP_CONFIG } from './app-config.ts';
 
 /**
  * Initialize THREE.js scene, camera, renderer, and controls
- * @returns Object containing scene, camera, renderer, controls instances
+ * @returns {Object} Object containing scene, camera, renderer, controls instances
  */
-export function initializeThreeJS(): SceneComponents {
+export function initializeThreeJS() {
     // Get container size dynamically
     const container = document.getElementById('threejs-canvas-container');
     const width = container ? container.clientWidth : APP_CONFIG.CANVAS_WIDTH;
@@ -136,10 +108,10 @@ export function initializeThreeJS(): SceneComponents {
             renderer.domElement.style.height = '100%';
             
             // OrthographicCameraの視野範囲を更新
-            if (w.updateCameraViewBounds) {
+            if (window.updateCameraViewBounds) {
                 // 光学系のサイズに基づいて視野範囲を再計算
                 console.log('📷 Calling updateCameraViewBounds from resize handler');
-                w.updateCameraViewBounds();
+                window.updateCameraViewBounds();
             } else {
                 // フォールバック: 固定viewSizeを使用（光学系ロード前）
                 const newAspect = newWidth / newHeight;
@@ -157,16 +129,13 @@ export function initializeThreeJS(): SceneComponents {
     return { scene, camera, renderer, controls };
 }
 
-// =============================================================================
-// LIGHTING SETUP
-// =============================================================================
-
 /**
  * Initialize scene lighting
- * @param scene - The THREE.js scene
- * @returns Object containing light instances
+ * @param {THREE.Scene} scene - The THREE.js scene
+ * @returns {Object} Object containing light instances
  */
-export function initializeLighting(scene: THREE.Scene): LightComponents {
+export function initializeLighting(scene) {
+    
     try {
         // Ambient light
         const ambientLight = new THREE.AmbientLight(0xffffff, APP_CONFIG.AMBIENT_LIGHT_INTENSITY);
@@ -187,41 +156,27 @@ export function initializeLighting(scene: THREE.Scene): LightComponents {
     }
 }
 
-// =============================================================================
-// RENDERING
-// =============================================================================
-
 /**
  * Render the scene
- * @param scene - The scene to render
- * @param camera - The camera
- * @param renderer - The renderer
- * @param controls - The orbit controls
+ * @param {THREE.Scene} scene - The scene to render
+ * @param {THREE.Camera} camera - The camera
+ * @param {THREE.WebGLRenderer} renderer - The renderer
+ * @param {OrbitControls} controls - The orbit controls
  */
-export function renderScene(
-    scene: THREE.Scene,
-    camera: THREE.Camera,
-    renderer: THREE.WebGLRenderer,
-    controls: OrbitControls
-): void {
+export function renderScene(scene, camera, renderer, controls) {
     controls.update();
     renderer.render(scene, camera);
 }
 
 /**
  * Animation loop setup
- * @param scene - The scene to render
- * @param camera - The camera
- * @param renderer - The renderer
- * @param controls - The orbit controls
+ * @param {THREE.Scene} scene - The scene to render
+ * @param {THREE.Camera} camera - The camera
+ * @param {THREE.WebGLRenderer} renderer - The renderer
+ * @param {OrbitControls} controls - The orbit controls
  */
-export function setupAnimationLoop(
-    scene: THREE.Scene,
-    camera: THREE.Camera,
-    renderer: THREE.WebGLRenderer,
-    controls: OrbitControls
-): void {
-    function animate(): void {
+export function setupAnimationLoop(scene, camera, renderer, controls) {
+    function animate() {
         requestAnimationFrame(animate);
         renderScene(scene, camera, renderer, controls);
     }
@@ -231,15 +186,17 @@ export function setupAnimationLoop(
 /**
  * Start the animation loop with global variables from app-config
  */
-export function animate(): void {
-    function animationLoop(): void {
+export function animate() {
+
+    
+    function animationLoop() {
         requestAnimationFrame(animationLoop);
         
         // Get global references
-        const scene = w.scene as THREE.Scene | undefined;
-        const camera = w.camera as THREE.Camera | undefined;
-        const renderer = w.renderer as THREE.WebGLRenderer | undefined;
-        const controls = w.controls as OrbitControls | undefined;
+        const scene = window.scene;
+        const camera = window.camera;
+        const renderer = window.renderer;
+        const controls = window.controls;
         
         if (scene && camera && renderer && controls) {
             // Update controls
