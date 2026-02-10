@@ -2442,70 +2442,8 @@ function setupShareUrlButton(): void {
 
 // Setup Clear Storage Button
 function setupClearStorageButton(): void {
-    const attachModal = () => {
-        const existing = document.getElementById('clear-storage-modal');
-        if (existing && existing.parentElement) existing.parentElement.removeChild(existing);
-
-        const modal = document.createElement('div');
-        modal.id = 'clear-storage-modal';
-        modal.style.position = 'fixed';
-        modal.style.top = '0';
-        modal.style.left = '0';
-        modal.style.width = '100%';
-        modal.style.height = '100%';
-        modal.style.background = 'rgba(0,0,0,0.5)';
-        modal.style.display = 'flex';
-        modal.style.alignItems = 'center';
-        modal.style.justifyContent = 'center';
-        modal.style.zIndex = '10000';
-        modal.style.pointerEvents = 'auto';
-
-        const dialog = document.createElement('div');
-        dialog.style.background = 'white';
-        dialog.style.padding = '24px';
-        dialog.style.borderRadius = '8px';
-        dialog.style.maxWidth = '400px';
-        dialog.innerHTML = `
-            <h2 style="margin: 0 0 16px 0;">Clear Chashe</h2>
-            <p>This will delete all saved data. Continue?</p>
-            <div style="display: flex; gap: 12px; margin-top: 20px;">
-                <button id="confirm-clear" style="flex: 1; padding: 10px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;">Clear</button>
-                <button id="cancel-clear" style="flex: 1; padding: 10px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-            </div>
-        `;
-
-        modal.appendChild(dialog);
-        document.body.appendChild(modal);
-
-        const confirmBtn = document.getElementById('confirm-clear');
-        const cancelBtn = document.getElementById('cancel-clear');
-
-        confirmBtn?.addEventListener('click', () => {
-            localStorage.clear();
-            location.reload();
-        });
-
-        cancelBtn?.addEventListener('click', () => {
-            document.body.removeChild(modal);
-        });
-    };
-
-    const btn = document.getElementById('clear-storage-btn');
-    if (btn) {
-        if ((btn as any).dataset && (btn as any).dataset.clearStorageBound === '1') return;
-        if ((btn as any).dataset) (btn as any).dataset.clearStorageBound = '1';
-        btn.addEventListener('click', attachModal);
-        return;
-    }
-
-    if ((document.body as any).dataset && (document.body as any).dataset.clearStorageDelegated === '1') return;
-    if ((document.body as any).dataset) (document.body as any).dataset.clearStorageDelegated = '1';
-    document.addEventListener('click', (evt) => {
-        const target = evt.target as HTMLElement | null;
-        if (!target) return;
-        const trigger = target.closest('#clear-storage-btn');
-        if (trigger) attachModal();
-    });
+    // No-op: Clear Storage is handled by React toolbar handler.
+    // This prevents legacy modal (red button) from flashing.
 }
 
 // Setup Analysis Buttons
