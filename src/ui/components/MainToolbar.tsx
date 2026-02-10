@@ -13,6 +13,24 @@ import {
 
 export default function MainToolbar() {
   console.log('[React] MainToolbar rendering');
+
+  const handleUndoClick = () => {
+    console.log('[Undo] Undo button clicked');
+    if (window.undoHistory) {
+      window.undoHistory.undo();
+    } else {
+      console.error('[Undo] window.undoHistory not found');
+    }
+  };
+
+  const handleRedoClick = () => {
+    console.log('[Undo] Redo button clicked');
+    if (window.undoHistory) {
+      window.undoHistory.redo();
+    } else {
+      console.error('[Undo] window.undoHistory not found');
+    }
+  };
   
   return (
     <div className="top-buttons-container">
@@ -72,10 +90,10 @@ export default function MainToolbar() {
 
         <div className="button-group">
           <span className="button-group-label">Tools</span>
-          <button id="undo-btn" title="Undo (Ctrl+Z / Cmd+Z)" disabled>
+          <button id="undo-btn" title="Undo (Ctrl+Z / Cmd+Z)" onClick={handleUndoClick}>
             ↶ Undo
           </button>
-          <button id="redo-btn" title="Redo (Ctrl+Y / Cmd+Shift+Z)" disabled>
+          <button id="redo-btn" title="Redo (Ctrl+Y / Cmd+Shift+Z)" onClick={handleRedoClick}>
             ↷ Redo
           </button>
           <button

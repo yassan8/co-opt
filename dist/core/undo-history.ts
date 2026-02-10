@@ -55,7 +55,11 @@ class SetBlockParameterCommand extends Command {
     }
     try {
       const sysConfig = window.loadSystemConfigurations();
-      const cfg = sysConfig.configurations.find(c => c.id === this.configId);
+        const cfg = sysConfig.configurations.find(c => c.name === this.configId);
+        if (!cfg) {
+          console.warn('[Undo] execute() aborted: config not found', { configId: this.configId });
+          return;
+        }
       const block = this.findBlock(cfg);
       this.setNestedValue(block, this.parameterPath, this.newValue);
       this.refreshSystem(sysConfig, cfg);
@@ -74,7 +78,11 @@ class SetBlockParameterCommand extends Command {
     }
     try {
       const sysConfig = window.loadSystemConfigurations();
-      const cfg = sysConfig.configurations.find(c => c.id === this.configId);
+        const cfg = sysConfig.configurations.find(c => c.name === this.configId);
+        if (!cfg) {
+          console.warn('[Undo] undo() aborted: config not found', { configId: this.configId });
+          return;
+        }
       console.log('[Undo] Config found:', cfg ? cfg.id : 'null');
       const block = this.findBlock(cfg);
       console.log('[Undo] Block found:', block ? block.blockId : 'null');
@@ -789,13 +797,20 @@ class UndoHistory {
     this.redoStack = [];
     this.maxSize = maxSize;
     this.isExecuting = false; // Prevent recording during undo/redo
+    console.log('[Undo] UndoHistory initialized', { maxSize });
   }
   
   /**
    * Record a new command in the undo history
    */
   record(command) {
-    if (this.isExecuting) return; // Don't record undo/redo operations
+    if (this.isExecuting) {
+      console.warn('[Undo] record() skipped because isExecuting=true', {
+        description: command?.description,
+        commandId: command?.id
+      });
+      return; // Don't record undo/redo operations
+    }
     
     this.undoStack.push(command);
     this.redoStack = []; // Clear redo stack on new command
@@ -807,7 +822,12 @@ class UndoHistory {
     
     this.notifyListeners();
     
-    console.log(`[Undo] Recorded: ${command.description}`);
+    console.log('[Undo] Recorded', {
+      description: command.description,
+      commandId: command.id,
+      undoStackSize: this.undoStack.length,
+      redoStackSize: this.redoStack.length
+    });
   }
   
   /**
@@ -888,6 +908,15 @@ class UndoHistory {
   notifyListeners() {
     const undoBtn = document.getElementById('undo-btn');
     const redoBtn = document.getElementById('redo-btn');
+
+    console.log('[Undo] notifyListeners()', {
+      undoStackSize: this.undoStack.length,
+      redoStackSize: this.redoStack.length,
+      canUndo: this.canUndo(),
+      canRedo: this.canRedo(),
+      hasUndoBtn: !!undoBtn,
+      hasRedoBtn: !!redoBtn
+    });
     
     if (undoBtn) {
       undoBtn.disabled = !this.canUndo();
@@ -934,7 +963,9 @@ try {
 
 // Create global instance
 if (typeof window !== 'undefined') {
+  console.log('[Undo] Creating global UndoHistory instance');
   window.undoHistory = new UndoHistory();
+  console.log('[Undo] Global UndoHistory ready', window.undoHistory.getInfo());
   
   // Export command classes for use in other modules
   window.Command = Command;

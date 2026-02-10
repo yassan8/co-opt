@@ -550,7 +550,7 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
   
   // 3. セミ径ベースの推定値（新規追加）
   // セミ径境界での交点を狙った推定値
-  if (semidia > 0) {
+  if (Number.isFinite(semidia) && semidia > 0) {
     const currentR = Math.sqrt(ray.pos.x * ray.pos.x + ray.pos.y * ray.pos.y);
     const dirR = Math.sqrt(ray.dir.x * ray.dir.x + ray.dir.y * ray.dir.y);
     if (dirR > 1e-10) {
@@ -574,7 +574,13 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
   }
   
   // 重複除去とソート
-  const uniqueGuesses = [...new Set(initialGuesses)].sort((a, b) => a - b);
+  let uniqueGuesses = [...new Set(initialGuesses)]
+    .filter(t => Number.isFinite(t) && t > 1e-10)
+    .sort((a, b) => a - b);
+
+  if (uniqueGuesses.length === 0) {
+    uniqueGuesses = [1e-6, 0.001, 0.01, 0.1, 1.0, 10.0];
+  }
   
   if (debugLog) {
     debugLog.push(`   🎯 Initial guesses: [${uniqueGuesses.map(t => t.toFixed(6)).join(', ')}]`);
