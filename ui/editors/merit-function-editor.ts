@@ -2913,16 +2913,38 @@ const __cooptInitMeritFunctionEditor = (): boolean => {
     }
 };
 
-document.addEventListener('DOMContentLoaded', () => {
-    if (__cooptInitMeritFunctionEditor()) return;
+// Expose initializer for React fallback (GitHub Pages can miss auto-init timing).
+try {
     if (typeof window !== 'undefined') {
-        window.addEventListener('coopt:react-mounted', () => {
-            __cooptInitMeritFunctionEditor();
-        }, { once: true });
-        setTimeout(() => {
-            __cooptInitMeritFunctionEditor();
-        }, 0);
+        (window as any).__cooptInitMeritFunctionEditor = __cooptInitMeritFunctionEditor;
     }
+} catch (_) {}
+
+const __cooptScheduleMeritFunctionInit = (): void => {
+    if (__cooptInitMeritFunctionEditor()) return;
+
+    if (typeof window !== 'undefined') {
+        if (w.__cooptReactMounted) {
+            setTimeout(() => __cooptInitMeritFunctionEditor(), 50);
+        } else {
+            window.addEventListener('coopt:react-mounted', () => {
+                setTimeout(() => __cooptInitMeritFunctionEditor(), 100);
+            }, { once: true });
+        }
+
+        let retryCount = 0;
+        const maxRetries = 20;
+        const retryInterval = setInterval(() => {
+            retryCount++;
+            if (__cooptInitMeritFunctionEditor() || retryCount >= maxRetries) {
+                clearInterval(retryInterval);
+            }
+        }, 100);
+    }
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+    __cooptScheduleMeritFunctionInit();
 });
 
 export { MeritFunctionEditor, OPERAND_DEFINITIONS };

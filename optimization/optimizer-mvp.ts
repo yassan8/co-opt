@@ -2309,7 +2309,27 @@ export async function runOptimizationMVP(options = {}) {
     try { return userShouldStop ? !!userShouldStop() : false; } catch (_) { return false; }
   };
 
-  const editor = (typeof window !== 'undefined') ? window.meritFunctionEditor : null;
+  const waitForMeritEditorReady = async (): Promise<any | null> => {
+    const w = (typeof window !== 'undefined') ? (window as any) : null;
+    const start = Date.now();
+    const maxWaitMs = Number.isFinite(Number(opts?.meritEditorWaitMs))
+      ? Math.max(0, Math.min(10000, Number(opts.meritEditorWaitMs)))
+      : 2500;
+    const intervalMs = 50;
+    while (Date.now() - start <= maxWaitMs) {
+      try {
+        if (w && typeof w.__cooptInitMeritFunctionEditor === 'function') {
+          w.__cooptInitMeritFunctionEditor();
+        }
+      } catch (_) {}
+      const ed = w ? w.meritFunctionEditor : null;
+      if (ed && typeof ed.calculateOperandValue === 'function') return ed;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    return null;
+  };
+
+  const editor = await waitForMeritEditorReady();
   if (!editor || typeof editor.calculateOperandValue !== 'function') {
     return { ok: false, reason: 'meritFunctionEditor.calculateOperandValue() is not ready.' };
   }

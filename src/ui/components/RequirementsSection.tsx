@@ -13,6 +13,26 @@ export default function RequirementsSection() {
     } catch (_) {}
   }, []);
 
+  const waitForRequirementsEditorReady = async () => {
+    const w = window as any;
+    const start = Date.now();
+    const maxWaitMs = 2500;
+    const intervalMs = 50;
+    while (Date.now() - start <= maxWaitMs) {
+      try {
+        if (typeof w.__cooptInitSystemRequirementsEditor === 'function') {
+          w.__cooptInitSystemRequirementsEditor();
+        }
+      } catch (_) {}
+      const editor = w.systemRequirementsEditor;
+      if (editor && (typeof editor.updateAllConfigsAndEvaluate === 'function' || typeof editor.evaluateAndUpdateNow === 'function')) {
+        return editor;
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    return w.systemRequirementsEditor || null;
+  };
+
   // React-style button handlers
   const handleAddRequirement = () => {
     console.log('[RequirementsSection] Add button clicked (React handler)');
@@ -38,7 +58,7 @@ export default function RequirementsSection() {
     console.log('[RequirementsSection] ========================================');
     console.log('[RequirementsSection] Update button clicked (React handler)!');
     console.log('[RequirementsSection] ========================================');
-    const editor = (window as any).systemRequirementsEditor;
+    const editor = await waitForRequirementsEditorReady();
     console.log('[RequirementsSection] Editor exists:', !!editor);
     console.log('[RequirementsSection] Editor type:', typeof editor);
     if (editor) {
