@@ -918,6 +918,16 @@ class UndoHistory {
   }
 }
 
+// Expose to global scope for inline initializer in index.html
+try {
+  if (typeof globalThis !== 'undefined') {
+    globalThis.UndoHistory = UndoHistory;
+  }
+  if (typeof window !== 'undefined') {
+    window.UndoHistory = UndoHistory;
+  }
+} catch (_) {}
+
 // ============================================================================
 // Global Instance & Exports
 // ============================================================================
