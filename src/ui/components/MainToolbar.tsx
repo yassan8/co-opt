@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { 
   handleNewFile, 
   handleSave, 
@@ -13,6 +14,55 @@ import {
 
 export default function MainToolbar() {
   console.log('[React] MainToolbar rendering');
+
+  const resolveToolbarCollapsed = () => {
+    try {
+      return localStorage.getItem('toolbarCollapsed') === '1';
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const resolveLoadedFileName = () => {
+    try {
+      const name = localStorage.getItem('loadedFileName');
+      const warn = localStorage.getItem('loadedFileWarn');
+      if (name) {
+        const suffix = warn ? ' (surfaces only)' : '';
+        return {
+          text: `${name}${suffix}`,
+          color: warn ? '#b45309' : '#1a4d8f'
+        };
+      }
+    } catch (_) {}
+    return { text: 'No file loaded', color: '#999' };
+  };
+
+  const [{ text: loadedFileText, color: loadedFileColor }, setLoadedFile] = useState(resolveLoadedFileName);
+  const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(resolveToolbarCollapsed);
+
+  useEffect(() => {
+    const refresh = () => {
+      setLoadedFile(resolveLoadedFileName());
+    };
+
+    refresh();
+
+    window.addEventListener('coopt:loaded-file-updated', refresh as EventListener);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('coopt:loaded-file-updated', refresh as EventListener);
+      window.removeEventListener('storage', refresh);
+    };
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('toolbarCollapsed', isToolbarCollapsed ? '1' : '0');
+    } catch (_) {
+      // ignore
+    }
+  }, [isToolbarCollapsed]);
 
   const handleUndoClick = () => {
     console.log('[Undo] Undo button clicked');
@@ -31,22 +81,36 @@ export default function MainToolbar() {
       console.error('[Undo] window.undoHistory not found');
     }
   };
+
+  const handleToggleToolbar = () => {
+    setIsToolbarCollapsed((prev) => !prev);
+  };
   
   return (
     <div className="top-buttons-container">
       <div className="top-file-row" id="loaded-file-display">
         <span className="top-file-icon">📁</span>
-        <span id="loaded-file-name" className="top-file-name">
-          No file loaded
+        <span id="loaded-file-name" className="top-file-name" style={{ color: loadedFileColor }}>
+          {loadedFileText}
         </span>
         <button id="open-settings-btn" className="top-settings-btn" title="Settings">
           ⚙️
         </button>
-        <button id="toggle-toolbar-btn" className="top-toggle-btn" title="Toggle toolbar">
+        <button
+          id="toggle-toolbar-btn"
+          className={`top-toggle-btn${isToolbarCollapsed ? ' collapsed' : ''}`}
+          title="Toggle toolbar"
+          onClick={handleToggleToolbar}
+          data-toggle-handled="react"
+          type="button"
+        >
           ▼
         </button>
       </div>
-      <div className="top-buttons-row" id="top-buttons-row">
+      <div
+        className={`top-buttons-row${isToolbarCollapsed ? ' collapsed' : ''}`}
+        id="top-buttons-row"
+      >
         <div className="button-group">
           <span className="button-group-label">File</span>
           <button id="new-file-btn" onClick={handleNewFile}>New</button>

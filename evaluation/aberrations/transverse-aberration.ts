@@ -98,7 +98,8 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
 
     const uniqueFieldKey = (fs) => {
         const positionType = (fs.position || fs.fieldType || fs.type || '').toLowerCase();
-        const isAngle = positionType.includes('angle');
+        const isRectangle = positionType.includes('rectangle') || positionType.includes('rect') || positionType.includes('height');
+        const isAngle = !isRectangle && positionType.includes('angle');
         const xVal = isAngle
             ? safeNumber(fs.xFieldAngle ?? fs.xAngle ?? fs.xHeightAngle ?? fs.x)
             : safeNumber(fs.xHeight ?? fs.x ?? fs.xFieldAngle ?? fs.xAngle);
@@ -338,23 +339,31 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
     try {
         let rawCrossBeamData = null;
         
-        const forceInfiniteByField = fieldSetting.fieldType === 'Angle';
+        // Object Position Angleは無限系、それ以外（Rectangle/Height）は有限系として扱う
+        const positionType = (fieldSetting.position || fieldSetting.fieldType || '').toLowerCase();
+        const isAngleField = positionType.includes('angle') && !positionType.includes('rectangle');
+        const forceInfiniteByAngle = isAngleField;  // angle指定は無限系として強制
+        const forceFiniteByRectangle = positionType.includes('rectangle') || positionType.includes('height');
 
-        if (isFinite && !forceInfiniteByField) {
-            // 有限系: Object位置を使用（Rectangle/Angleを区別）
-            const objectPosition = {
+        if (debugMode) {
+            console.log(`🔍 Field type determination: position="${positionType}", isAngleField=${isAngleField}, forceInfinite=${forceInfiniteByAngle}, forceFinite=${forceFiniteByRectangle}`);
+        }
+
+        if ((isFinite || forceFiniteByRectangle) && !forceInfiniteByAngle) {
+            // 有限系: Object位置を使用（Rectangle/Heightを使用）
+            const objectPosition: any = {
                 comment: fieldSetting.displayName,
                 objectIndex: fieldSetting.objectIndex - 1
             };
 
-            if (fieldSetting.fieldType === 'Angle') {
+            if (false) {  // このブランチは使用されない（Angle指定は上で除外済み）
                 objectPosition.position = 'Angle';
-                objectPosition.xHeightAngle = parseFloat(fieldSetting.xFieldAngle ?? fieldSetting.xAngle ?? fieldSetting.x ?? 0) || 0;
-                objectPosition.yHeightAngle = parseFloat(fieldSetting.yFieldAngle ?? fieldSetting.fieldAngle ?? fieldSetting.y ?? 0) || 0;
+                objectPosition.xHeightAngle = parseFloat((fieldSetting as any).xFieldAngle ?? (fieldSetting as any).xAngle ?? (fieldSetting as any).x ?? 0) || 0;
+                objectPosition.yHeightAngle = parseFloat((fieldSetting as any).yFieldAngle ?? (fieldSetting as any).fieldAngle ?? (fieldSetting as any).y ?? 0) || 0;
             } else {
                 objectPosition.position = 'Rectangle';
-                const xVal = parseFloat(fieldSetting.xHeight ?? fieldSetting.x ?? 0) || 0;
-                const yVal = parseFloat(fieldSetting.yHeight ?? fieldSetting.y ?? 0) || 0;
+                const xVal = parseFloat((fieldSetting as any).xHeight ?? (fieldSetting as any).x ?? 0) || 0;
+                const yVal = parseFloat((fieldSetting as any).yHeight ?? (fieldSetting as any).y ?? 0) || 0;
                 objectPosition.x = xVal;
                 objectPosition.y = yVal;
                 objectPosition.xHeight = objectPosition.x;
@@ -370,34 +379,29 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
             rawCrossBeamData = generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions, options);
             
         } else {
-            // 無限系: 画角を使用
-            let xFieldAngle = 0;
-            let yFieldAngle = 0;
+            // 無限系: 画角を使用（Object Position Angle）
+            // X方向の角度
+            const xFieldAngle = parseFloat(fieldSetting.xFieldAngle || fieldSetting.xHeightAngle || fieldSetting.x || 0) || 0;
             
-            if (fieldSetting.fieldType === 'Angle' || fieldSetting.fieldType === 'angle') {
-                // X方向の角度
-                xFieldAngle = fieldSetting.xFieldAngle || fieldSetting.xHeightAngle || 0;
-                
-                // Y方向の角度
-                if (fieldSetting.yFieldAngle !== undefined) {
-                    yFieldAngle = fieldSetting.yFieldAngle;
-                } else if (fieldSetting.yHeightAngle !== undefined) {
-                    yFieldAngle = fieldSetting.yHeightAngle;
-                } else if (fieldSetting.fieldAngle !== undefined) {
-                    if (typeof fieldSetting.fieldAngle === 'object') {
-                        yFieldAngle = fieldSetting.fieldAngle.y || fieldSetting.fieldAngle.yFieldAngle || 0;
-                    } else {
-                        yFieldAngle = fieldSetting.fieldAngle;
-                    }
+            // Y方向の角度
+            let yFieldAngle = 0;
+            if (fieldSetting.yFieldAngle !== undefined) {
+                yFieldAngle = parseFloat(fieldSetting.yFieldAngle) || 0;
+            } else if (fieldSetting.fieldAngle !== undefined) {
+                if (typeof fieldSetting.fieldAngle === 'object') {
+                    yFieldAngle = parseFloat(fieldSetting.fieldAngle.y || fieldSetting.fieldAngle.yFieldAngle || 0) || 0;
+                } else {
+                    yFieldAngle = parseFloat(fieldSetting.fieldAngle) || 0;
                 }
+            } else if (fieldSetting.yHeightAngle !== undefined) {
+                yFieldAngle = parseFloat(fieldSetting.yHeightAngle) || 0;
+            } else if (fieldSetting.y !== undefined) {
+                yFieldAngle = parseFloat(fieldSetting.y) || 0;
             }
             
-            console.log(`🎯 [DEBUG] 無限系角度取得詳細:`, {
-                fieldType: fieldSetting.fieldType,
-                xFieldAngle: xFieldAngle,
-                yFieldAngle: yFieldAngle,
-                originalFieldSetting: fieldSetting
-            });
+            if (debugMode) {
+                console.log(`🎯 無限系角度取得: position="${positionType}", x=${xFieldAngle}°, y=${yFieldAngle}°`);
+            }
             
             const objectAngles = [{
                 x: xFieldAngle,
@@ -407,7 +411,6 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
             
             if (debugMode) {
                 console.log(`🎯 無限系十字光線生成: (${xFieldAngle}°, ${yFieldAngle}°)`);
-                console.log(`🎯 objectAngles:`, objectAngles);
             }
             rawCrossBeamData = generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, options);
         }        if (!rawCrossBeamData || !rawCrossBeamData.success) {
@@ -1794,7 +1797,7 @@ function getFieldSettingsFromObject() {
                 // より柔軟な位置タイプ判定
                 const positionType = (row.position || row.Position || '').toLowerCase();
                 const isRectangle = positionType.includes('rectangle') || positionType.includes('rect') || positionType.includes('height') || positionType.includes('座標');
-                const isAngle = positionType.includes('angle') || positionType.includes('角度');
+                const isAngle = !isRectangle && (positionType.includes('angle') || positionType.includes('角度'));
                 
                 if (debugMode) console.log(`🔍 [DEBUG] Object ${index + 1} 位置タイプ判定: positionType="${positionType}", isRectangle=${isRectangle}, isAngle=${isAngle}`);
                 
@@ -2920,14 +2923,17 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
         }
         
         // 有限系・無限系の判定
-        // フィールド指定が角度の場合は強制的に無限系として扱う（厚み判定だけだと誤って有限系になるため）
-        const isAngleField = (fieldSetting.fieldType || fieldSetting.position || '').toLowerCase().includes('angle');
+        // Object Position Angleは無限系、Rectangle/Heightは有限系として扱う
+        const positionType = (fieldSetting.position || fieldSetting.fieldType || '').toLowerCase();
+        const isAngleField = positionType.includes('angle') && !positionType.includes('rectangle');
         const isFinite = isAngleField ? false : isFiniteSystem(opticalSystemRows);
+        
+        console.log(`🔍 [calculateChiefRayNewton] Field type: position="${positionType}", isAngleField=${isAngleField}, isFinite=${isFinite}`);
         
         // クロスビーム生成でオブジェクト点数を1に設定
         // options.rayCountが指定されていればそれを使用、なければデフォルト51
         const crossBeamOptions = {
-            rayCount: options.rayCount || 51, // ユーザー指定の光線数または非点収差計算用のデフォルト値
+            rayCount: (options as any).rayCount || 51, // ユーザー指定の光線数または非点収差計算用のデフォルト値
             wavelength: wavelength,
             colorMode: 'segment'
         };
@@ -2935,40 +2941,44 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
         let crossBeamData = null;
         
         if (isFinite) {
-            // 有限系: Object位置を使用
+            // 有限系: Object位置を使用（Rectangle/Height）
+            const xVal = parseFloat(fieldSetting.xHeight || fieldSetting.x || 0) || 0;
+            const yVal = parseFloat(fieldSetting.yHeight || fieldSetting.y || 0) || 0;
+            
             const objectPositions = [{
-                x: fieldSetting.xHeight || 0,
-                y: fieldSetting.yHeight || 0,
+                x: xVal,
+                y: yVal,
                 comment: fieldSetting.displayName
             }];
+            
+            console.log(`🔍 [calculateChiefRayNewton] 有限系: Object位置 x=${xVal}mm, y=${yVal}mm`);
             
             // 有限系の十字光線生成は raw 形式なので、rayGroups 形式へ変換する
             const rawCrossBeamData = generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions, crossBeamOptions);
             crossBeamData = convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex);
         } else {
-            // 無限系: 画角を使用
-            console.log('🔍 [calculateChiefRayNewton] fieldSetting受信:', JSON.stringify(fieldSetting, null, 2));
+            // 無限系: 画角を使用（Object Position Angle）
+            const xFieldAngle = parseFloat(fieldSetting.xFieldAngle || fieldSetting.xHeightAngle || fieldSetting.x || 0) || 0;
             
-            let xFieldAngle = 0;
+            // Y方向の角度を取得
             let yFieldAngle = 0;
-            
-            if (fieldSetting.fieldType === 'Angle' || fieldSetting.fieldType === 'angle') {
-                // X方向の角度 - 優先順位: x > xFieldAngle > xHeightAngle
-                xFieldAngle = fieldSetting.x ?? fieldSetting.xFieldAngle ?? fieldSetting.xHeightAngle ?? 0;
-                
-                // Y方向の角度 - 優先順位: y > yFieldAngle > yHeightAngle > fieldAngle
-                yFieldAngle = fieldSetting.y ?? fieldSetting.yFieldAngle ?? fieldSetting.yHeightAngle ?? fieldSetting.fieldAngle ?? 0;
+            if (fieldSetting.yFieldAngle !== undefined) {
+                yFieldAngle = parseFloat(fieldSetting.yFieldAngle) || 0;
+            } else if (fieldSetting.fieldAngle !== undefined) {
+                yFieldAngle = parseFloat(fieldSetting.fieldAngle) || 0;
+            } else if (fieldSetting.yHeightAngle !== undefined) {
+                yFieldAngle = parseFloat(fieldSetting.yHeightAngle) || 0;
+            } else if (fieldSetting.y !== undefined) {
+                yFieldAngle = parseFloat(fieldSetting.y) || 0;
             }
             
-            console.log(`🔍 [calculateChiefRayNewton] 角度計算結果: x=${xFieldAngle}°, y=${yFieldAngle}°`);
+            console.log(`🔍 [calculateChiefRayNewton] 無限系: Object角度 x=${xFieldAngle}°, y=${yFieldAngle}°`);
             
             const objectAngles = [{
                 x: xFieldAngle,
                 y: yFieldAngle,
                 comment: fieldSetting.displayName
             }];
-            
-            console.log('🔍 [calculateChiefRayNewton] objectAngles:', JSON.stringify(objectAngles, null, 2));
             
             const rawCrossBeamData = generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, crossBeamOptions);
             
@@ -2987,7 +2997,108 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
         
         // 主光線を抽出
         const rayGroup = crossBeamData.rayGroups[0];
-        const chiefRay = rayGroup.rays.find(ray => ray.rayType === 'chief');
+        const chiefRayDefinition = (typeof (options as any)?.chiefRayDefinition === 'string')
+            ? (options as any).chiefRayDefinition
+            : 'stop-center';
+        const logChiefRayDefinition = (options as any)?.logChiefRayDefinition === true;
+        const fallbackTargetSurfaceIndex = Array.isArray(opticalSystemRows) ? (opticalSystemRows.length - 1) : null;
+        const targetSurfaceIndex = Number.isInteger((options as any)?.targetSurfaceIndex)
+            ? (options as any).targetSurfaceIndex
+            : fallbackTargetSurfaceIndex;
+
+        let chiefRay = rayGroup.rays.find(ray => ray.rayType === 'chief');
+
+        if (chiefRayDefinition !== 'stop-center' && Array.isArray(rayGroup.rays)) {
+            // Evaluate at stop surface instead of image surface
+            const evalSurfaceIndex = stopSurfaceIndex;
+            const targetPointIndexRaw = surfaceIndexToRayPathPointIndex(opticalSystemRows, evalSurfaceIndex);
+            const intersections = [] as Array<{ ray: any; x: number; y: number }>;
+
+            let targetSurfaceInfo = null;
+            try {
+                const origins = calculateSurfaceOrigins(opticalSystemRows);
+                targetSurfaceInfo = origins?.[evalSurfaceIndex] || null;
+            } catch (_) {
+                targetSurfaceInfo = null;
+            }
+            const toLocal = (point) => {
+                if (!targetSurfaceInfo?.origin || !targetSurfaceInfo?.rotationMatrix) return point;
+                const dx = point.x - targetSurfaceInfo.origin.x;
+                const dy = point.y - targetSurfaceInfo.origin.y;
+                const dz = point.z - targetSurfaceInfo.origin.z;
+                const R = targetSurfaceInfo.rotationMatrix;
+                return {
+                    x: R[0][0] * dx + R[1][0] * dy + R[2][0] * dz,
+                    y: R[0][1] * dx + R[1][1] * dy + R[2][1] * dz,
+                    z: R[0][2] * dx + R[1][2] * dy + R[2][2] * dz
+                };
+            };
+
+            for (const ray of rayGroup.rays) {
+                const path = ray?.rayPathToTarget || ray?.path;
+                if (!Array.isArray(path) || path.length === 0) continue;
+                let idx = targetPointIndexRaw;
+                if (idx === null || idx === undefined) idx = path.length - 1;
+                if (idx < 0 || idx >= path.length) continue;
+                const p = path[idx];
+                const local = (p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)) ? toLocal(p) : p;
+                const x = local?.x;
+                const y = local?.y;
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                intersections.push({ ray, x, y });
+            }
+
+            if (intersections.length > 0) {
+                let targetX = 0;
+                let targetY = 0;
+
+                if (chiefRayDefinition === 'beam-midpoint') {
+                    let minX = intersections[0].x;
+                    let maxX = intersections[0].x;
+                    let minY = intersections[0].y;
+                    let maxY = intersections[0].y;
+                    for (const hit of intersections) {
+                        if (hit.x < minX) minX = hit.x;
+                        if (hit.x > maxX) maxX = hit.x;
+                        if (hit.y < minY) minY = hit.y;
+                        if (hit.y > maxY) maxY = hit.y;
+                    }
+                    targetX = (minX + maxX) * 0.5;
+                    targetY = (minY + maxY) * 0.5;
+                } else if (chiefRayDefinition === 'beam-centroid') {
+                    let sumX = 0;
+                    let sumY = 0;
+                    for (const hit of intersections) {
+                        sumX += hit.x;
+                        sumY += hit.y;
+                    }
+                    targetX = sumX / intersections.length;
+                    targetY = sumY / intersections.length;
+                }
+
+                let bestRay = null;
+                let bestDist2 = Infinity;
+                for (const hit of intersections) {
+                    const dx = hit.x - targetX;
+                    const dy = hit.y - targetY;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < bestDist2) {
+                        bestDist2 = d2;
+                        bestRay = hit.ray;
+                    }
+                }
+                if (bestRay) {
+                    chiefRay = bestRay;
+                }
+            }
+        }
+
+        if (logChiefRayDefinition) {
+            let label = 'stop center';
+            if (chiefRayDefinition === 'beam-midpoint') label = 'beam midpoint (stop plane)';
+            if (chiefRayDefinition === 'beam-centroid') label = 'beam centroid (stop plane)';
+            console.log(`Chief ray definition: ${label}`);
+        }
         
         if (!chiefRay) {
             console.warn('⚠️ 主光線が見つかりません');

@@ -24,6 +24,48 @@ import {
 let autoSaveIntervalId: number | null = null;
 let isConfigurationSwitching = false;
 let beforeUnloadHandlerInstalled = false;
+let delegatedConfigListenerInstalled = false;
+
+function areTablesReady(): boolean {
+  return !!(w.tableSource && w.tableObject && w.tableOpticalSystem);
+}
+
+function ensureActiveConfigAppliedToTables(): void {
+  try {
+    if (typeof window === 'undefined') return;
+    if (w.__configurationApplyPending) return;
+    w.__configurationApplyPending = true;
+
+    const tryApply = (): boolean => {
+      if (!areTablesReady()) return false;
+      loadActiveConfigurationToTables({ applyToUI: true }).catch(e => {
+        console.error('❌ [Configuration UI] Failed to apply active configuration:', e);
+      });
+      return true;
+    };
+
+    if (tryApply()) {
+      w.__configurationApplyPending = false;
+      return;
+    }
+
+    let attempts = 0;
+    const maxAttempts = 8;
+    const timer = setInterval(() => {
+      attempts += 1;
+      if (tryApply() || attempts >= maxAttempts) {
+        clearInterval(timer);
+        w.__configurationApplyPending = false;
+      }
+    }, 200);
+
+    try {
+      window.addEventListener('coopt:react-mounted', () => {
+        tryApply();
+      }, { once: true });
+    } catch (_) {}
+  } catch (_) {}
+}
 
 function setConfigControlsEnabled(enabled: boolean): void {
   const ids = [
@@ -63,10 +105,15 @@ export function initializeConfigurationUI(): void {
   // 既に初期化済みの場合はUIを更新してイベントリスナーを再設定
   try {
     if (typeof window !== 'undefined' && w.__configurationUIInitialized) {
-      console.log('🔵 [Configuration UI] Already initialized, refreshing UI');
+      console.log('🔵 [Configuration UI] Already initialized, refreshing UI and loading active config');
       updateConfigurationSelect();
       updateConfigInfo();
       setupConfigurationEventListeners();
+      // ページリロード後、アクティブなconfigurationをテーブルに読み込む
+      loadActiveConfigurationToTables({ applyToUI: true }).catch(e => {
+        console.error('❌ [Configuration UI] Failed to load active configuration:', e);
+      });
+      ensureActiveConfigAppliedToTables();
       return;
     }
   } catch (_) {}
@@ -74,6 +121,17 @@ export function initializeConfigurationUI(): void {
   try {
     if (typeof window !== 'undefined') {
       w.__configurationUIInitialized = true;
+    }
+  } catch (_) {}
+
+  try {
+    if (typeof window !== 'undefined' && !w.__configurationReactHook) {
+      w.__configurationReactHook = true;
+      window.addEventListener('coopt:react-mounted', () => {
+        try { updateConfigurationSelect(); } catch (_) {}
+        try { updateConfigInfo(); } catch (_) {}
+        try { setupConfigurationEventListeners(); } catch (_) {}
+      }, { once: true });
     }
   } catch (_) {}
   
@@ -90,6 +148,12 @@ export function initializeConfigurationUI(): void {
   // イベントリスナー設定
   console.log('🔵 [Configuration UI] Setting up event listeners');
   setupConfigurationEventListeners();
+  
+  // 初回起動時もアクティブなconfigurationをテーブルに読み込む
+  loadActiveConfigurationToTables({ applyToUI: true }).catch(e => {
+    console.error('❌ [Configuration UI] Failed to load active configuration:', e);
+  });
+  ensureActiveConfigAppliedToTables();
   
   console.log('✅ [Configuration UI] Initialization complete');
 }
@@ -255,11 +319,28 @@ function updateConfigInfo(): void {
  * イベントリスナー設定
  */
 function setupConfigurationEventListeners(): void {
+  console.log('🔵 [Configuration UI] setupConfigurationEventListeners called');
+
+  if (!delegatedConfigListenerInstalled) {
+    delegatedConfigListenerInstalled = true;
+    document.addEventListener('change', (event) => {
+      const target = event.target as HTMLElement | null;
+      if (target && target.id === 'config-select') {
+        handleConfigurationChange(event);
+      }
+    });
+  }
   
   // Configuration選択変更
   const select = document.getElementById('config-select');
+  console.log('🔍 [Configuration UI] config-select element found:', !!select);
   if (select) {
+    // 既存のリスナーを削除してから追加（重複防止）
+    select.removeEventListener('change', handleConfigurationChange);
     select.addEventListener('change', handleConfigurationChange);
+    console.log('✅ [Configuration UI] Event listener attached to config-select');
+  } else {
+    console.warn('⚠️ [Configuration UI] config-select element not found for event listener');
   }
   
   // Add Configボタン
@@ -294,16 +375,25 @@ function setupConfigurationEventListeners(): void {
  * Configuration変更ハンドラー
  */
 async function handleConfigurationChange(event: Event): Promise<void> {
+  console.log('🔥 [Configuration] handleConfigurationChange triggered!', event.type);
+  
   const target = event.target as HTMLSelectElement;
-  const newConfigId = parseInt(target.value);
+  console.log('🔍 [Configuration] Select element value:', target.value);
+  
+  const newConfigId = String(target.value ?? '').trim();
   const currentConfigId = getActiveConfigId();
   
-  if (newConfigId === currentConfigId) return;
+  console.log('🔍 [Configuration] newConfigId:', newConfigId, ', currentConfigId:', currentConfigId);
+  
+  if (!newConfigId || String(newConfigId) === String(currentConfigId)) {
+    console.log('⏩ [Configuration] Same config selected, skipping');
+    return;
+  }
 
   // Prevent overlapping async switches which can overwrite the wrong config
   // (rare but possible with fast UI interactions).
   if (isConfigurationSwitching) {
-    try { target.value = String(currentConfigId); } catch (_) {}
+    try { target.value = String(currentConfigId ?? ''); } catch (_) {}
     return;
   }
   isConfigurationSwitching = true;
@@ -319,8 +409,17 @@ async function handleConfigurationChange(event: Event): Promise<void> {
     // 新しいConfigurationに切り替え
     setActiveConfiguration(newConfigId);
     
+    console.log(`🔄 [Configuration] Loading configuration ${newConfigId} to tables...`);
+    console.log(`🔍 [Configuration] Tables available:`, {
+      source: !!w.tableSource,
+      object: !!w.tableObject,
+      opticalSystem: !!w.tableOpticalSystem
+    });
+    
     // 新しいConfigurationのデータをロード
     await loadActiveConfigurationToTables({ applyToUI: true });
+    
+    console.log(`✅ [Configuration] Configuration ${newConfigId} loaded to tables`);
 
   // Config切替後、Objectリストを即時反映（PSF/Wavefront）
   try {

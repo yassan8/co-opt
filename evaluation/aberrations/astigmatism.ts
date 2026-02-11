@@ -76,9 +76,130 @@ function surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex) {
 }
 
 function normalize3(v) {
-    const mag = Math.hypot(v?.x ?? 0, v?.y ?? 0, v?.z ?? 0);
-    if (!Number.isFinite(mag) || mag <= 0) return null;
-    return { x: v.x / mag, y: v.y / mag, z: v.z / mag };
+    if (!v) return null;
+    const x = (v.x !== undefined) ? v.x : v.i;
+    const y = (v.y !== undefined) ? v.y : v.j;
+    const z = (v.z !== undefined) ? v.z : v.k;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+    const mag = Math.hypot(x, y, z);
+    if (!Number.isFinite(mag) || mag <= 1e-12) return null;
+    return { x: x / mag, y: y / mag, z: z / mag };
+}
+
+/**
+ * 主光線モードに応じて主光線を調整
+ * @param {Object} chiefRay - 絞り中心を通る主光線データ
+ * @param {Object} rayGroup - 光線グループ（全光線データ）
+ * @param {number} targetSurfaceIndex - 評価面インデックス
+ * @param {Array} opticalSystemRows - 光学系データ
+ * @param {string} mode - 'stopCenter' | 'beamCenter' | 'centroid' | '*Image'
+ * @param {boolean} verbose - 詳細ログ
+ * @returns {Object|null} 調整後の主光線データ
+ */
+function adjustChiefRayByMode(chiefRay, rayGroup, targetSurfaceIndex, opticalSystemRows, mode, verbose = false, imageSurfaceInfo = null) {
+    const useImagePlane = typeof mode === 'string' && mode.endsWith('Image');
+    const baseMode = useImagePlane ? mode.slice(0, -'Image'.length) : mode;
+    if (baseMode === 'stopCenter') return chiefRay; // 変更なし
+    
+    const rawTargetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
+    if (rawTargetPointIndex === null) return chiefRay;
+    
+    const targetPointIndex = Math.min(rawTargetPointIndex, chiefRay.segments.length - 1);
+    
+    const toLocal = (point) => {
+        if (!useImagePlane || !imageSurfaceInfo?.origin || !imageSurfaceInfo?.rotationMatrix) return point;
+        const dx = point.x - imageSurfaceInfo.origin.x;
+        const dy = point.y - imageSurfaceInfo.origin.y;
+        const dz = point.z - imageSurfaceInfo.origin.z;
+        const R = imageSurfaceInfo.rotationMatrix;
+        return {
+            x: R[0][0] * dx + R[1][0] * dy + R[2][0] * dz,
+            y: R[0][1] * dx + R[1][1] * dy + R[2][1] * dz,
+            z: R[0][2] * dx + R[1][2] * dy + R[2][2] * dz
+        };
+    };
+
+    const toGlobalDelta = (delta) => {
+        if (!useImagePlane || !imageSurfaceInfo?.rotationMatrix) return delta;
+        const R = imageSurfaceInfo.rotationMatrix;
+        return {
+            x: R[0][0] * delta.x + R[0][1] * delta.y + R[0][2] * delta.z,
+            y: R[1][0] * delta.x + R[1][1] * delta.y + R[1][2] * delta.z,
+            z: R[2][0] * delta.x + R[2][1] * delta.y + R[2][2] * delta.z
+        };
+    };
+
+    // 像面上での全光線の位置を収集
+    const rays = rayGroup.rays || [];
+    const positions = [];
+    
+    for (const ray of rays) {
+        if (!ray.path || ray.path.length <= targetPointIndex) continue;
+        const point = ray.path[targetPointIndex];
+        if (Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z)) {
+            const localPoint = toLocal(point);
+            positions.push({ x: localPoint.x, y: localPoint.y, z: localPoint.z });
+        }
+    }
+    
+    if (positions.length === 0) {
+        if (verbose) console.warn('      ⚠️ 像面上の光線位置データなし');
+        return chiefRay;
+    }
+    
+    let referenceX = 0;
+    let referenceY = 0;
+    
+    if (baseMode === 'beamCenter') {
+        // 光束巾の真ん中：X, Y方向の最小～最大の中点
+        const xValues = positions.map(p => p.x);
+        const yValues = positions.map(p => p.y);
+        const xMin = Math.min(...xValues);
+        const xMax = Math.max(...xValues);
+        const yMin = Math.min(...yValues);
+        const yMax = Math.max(...yValues);
+        
+        referenceX = (xMin + xMax) / 2;
+        referenceY = (yMin + yMax) / 2;
+        
+        if (verbose) {
+            console.log(`      📐 光束巾の真ん中: X=${referenceX.toFixed(4)}mm (範囲: ${xMin.toFixed(4)}～${xMax.toFixed(4)}mm)`);
+            console.log(`      📐 光束巾の真ん中: Y=${referenceY.toFixed(4)}mm (範囲: ${yMin.toFixed(4)}～${yMax.toFixed(4)}mm)`);
+        }
+    } else if (baseMode === 'centroid') {
+        // 光束の重心：全光線の平均位置
+        referenceX = positions.reduce((sum, p) => sum + p.x, 0) / positions.length;
+        referenceY = positions.reduce((sum, p) => sum + p.y, 0) / positions.length;
+        
+        if (verbose) {
+            console.log(`      📐 光束の重心: X=${referenceX.toFixed(4)}mm, Y=${referenceY.toFixed(4)}mm (${positions.length}本の平均)`);
+        }
+    }
+    
+    // 元の主光線の像面上位置
+    const originalPoint = chiefRay.segments[targetPointIndex];
+    const localOriginal = toLocal(originalPoint);
+    const offsetX = referenceX - localOriginal.x;
+    const offsetY = referenceY - localOriginal.y;
+    
+    if (verbose) {
+        console.log(`      📊 元の主光線位置: (${originalPoint.x.toFixed(4)}, ${originalPoint.y.toFixed(4)})mm`);
+        console.log(`      📊 オフセット: (${offsetX.toFixed(4)}, ${offsetY.toFixed(4)})mm`);
+    }
+    
+    // 主光線の全セグメントをオフセット（像面上の位置を基準位置に合わせる）
+    const deltaGlobal = toGlobalDelta({ x: offsetX, y: offsetY, z: 0 });
+    const adjustedSegments = chiefRay.segments.map(seg => ({
+        ...seg,
+        x: seg.x + deltaGlobal.x,
+        y: seg.y + deltaGlobal.y,
+        z: seg.z + deltaGlobal.z
+    }));
+    
+    return {
+        ...chiefRay,
+        segments: adjustedSegments
+    };
 }
 
 function traceRayPathWrapped(opticalSystemRows, ray0, targetSurfaceIndex) {
@@ -106,11 +227,9 @@ function solveRayDirectionToStopPointFast(origin, stopTarget, stopSurfaceIndex, 
             opticalSystemRows,
             { pos: origin, dir, wavelength },
             1.0,
-            null,
-            stopSurfaceIndex,
-            stopTarget
+            stopSurfaceIndex
         );
-        if (!p) return null;
+        if (!p || Array.isArray(p)) return null;
         const err = {
             x: stopTarget.x - p.x,
             y: stopTarget.y - p.y,
@@ -124,19 +243,15 @@ function solveRayDirectionToStopPointFast(origin, stopTarget, stopSurfaceIndex, 
             opticalSystemRows,
             { pos: origin, dir: normalize3({ x: dir.x + eps, y: dir.y, z: dir.z }) || dir, wavelength },
             1.0,
-            null,
-            stopSurfaceIndex,
-            stopTarget
+            stopSurfaceIndex
         );
         const py = traceRayHitPoint(
             opticalSystemRows,
             { pos: origin, dir: normalize3({ x: dir.x, y: dir.y + eps, z: dir.z }) || dir, wavelength },
             1.0,
-            null,
-            stopSurfaceIndex,
-            stopTarget
+            stopSurfaceIndex
         );
-        if (!px || !py) return null;
+        if (!px || Array.isArray(px) || !py || Array.isArray(py)) return null;
 
         const dx = {
             x: (px.x - p.x) / eps,
@@ -184,11 +299,9 @@ function solveRayOriginToStopPointFast(originGuess, direction, stopTarget, stopS
             opticalSystemRows,
             { pos: origin, dir, wavelength },
             1.0,
-            null,
-            stopSurfaceIndex,
-            stopTarget
+            stopSurfaceIndex
         );
-        if (!p) return null;
+        if (!p || Array.isArray(p)) return null;
         const err = { x: stopTarget.x - p.x, y: stopTarget.y - p.y, z: stopTarget.z - p.z };
         const errNorm = Math.hypot(err.x, err.y, err.z);
         if (!Number.isFinite(errNorm)) return null;
@@ -198,19 +311,15 @@ function solveRayOriginToStopPointFast(originGuess, direction, stopTarget, stopS
             opticalSystemRows,
             { pos: { x: origin.x + eps, y: origin.y, z: origin.z }, dir, wavelength },
             1.0,
-            null,
-            stopSurfaceIndex,
-            stopTarget
+            stopSurfaceIndex
         );
         const py = traceRayHitPoint(
             opticalSystemRows,
             { pos: { x: origin.x, y: origin.y + eps, z: origin.z }, dir, wavelength },
             1.0,
-            null,
-            stopSurfaceIndex,
-            stopTarget
+            stopSurfaceIndex
         );
-        if (!px || !py) return null;
+        if (!px || Array.isArray(px) || !py || Array.isArray(py)) return null;
 
         const dx = { x: (px.x - p.x) / eps, y: (px.y - p.y) / eps };
         const dy = { x: (py.x - p.x) / eps, y: (py.y - p.y) / eps };
@@ -259,7 +368,7 @@ function computeStopPlaneFrame(opticalSystemRows, stopSurfaceIndex) {
     let stopPlaneV = { x: 0, y: 1, z: 0 };
 
     try {
-        const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows, 1.0);
+        const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
         const stopOrigin = surfaceOrigins?.[stopSurfaceIndex] || null;
         if (stopOrigin?.origin) {
             stopPlaneCenter3d = { x: stopOrigin.origin.x, y: stopOrigin.origin.y, z: stopOrigin.origin.z };
@@ -293,11 +402,11 @@ function buildStopSolveRayFan(opticalSystemRows, chiefRayResult, wavelength, sto
     // CBの有無で crossBeamData の有無/内容が揺れることがあるので、フィールド種別で判定する。
     const isInfinite = !!isAngleField;
 
-    const n = 21;
+    const n = 25;
     const fan = [];
 
     if (isInfinite) {
-        const dir = normalize3({ x: dirBase?.x ?? 0, y: dirBase?.y ?? 0, z: dirBase?.z ?? 1 }) || { x: 0, y: 0, z: 1 };
+        const dir = normalize3(dirBase) || { x: 0, y: 0, z: 1 };
         for (let i = 0; i < n; i++) {
             const pNorm = -1 + (2 * i) / (n - 1);
             const offset = pNorm * stopSolveMax;
@@ -955,7 +1064,25 @@ function traceSagittalMarginalRay(
  * フィールド設定を取得
  * @returns {Array} フィールド設定の配列
  */
-function getFieldSettingsFromObject(objectRowsParam) {
+/**
+ * システムの共役モード（無限遠 vs 有限）を判定
+ * @param {Array} opticalSystemRows
+ * @returns {'angle' | 'height'}
+ */
+function detectSystemConjugateMode(opticalSystemRows) {
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return 'height';
+
+    const objRow = opticalSystemRows[0] || {};
+    const thickness = parseFloat(objRow.thickness ?? objRow.Thickness ?? 0);
+
+    if (!Number.isFinite(thickness) || thickness > 1e9) {
+        return 'angle';
+    }
+
+    return 'height';
+}
+
+function getFieldSettingsFromObject(objectRowsParam, systemMode = 'height') {
     try {
         // 可能なら引数のObject行を優先し、未指定の場合のみテーブルから取得
         const objectRows = (objectRowsParam && objectRowsParam.length > 0)
@@ -966,21 +1093,15 @@ function getFieldSettingsFromObject(objectRowsParam) {
             return [];
         }
         
-        console.log(`   Object行数: ${objectRows.length}`);
-        console.log(`   🔍 Object生データ:`, objectRows);
+        console.log(`   Object行数: ${objectRows.length}, SystemMode: ${systemMode}`);
         
         const fieldSettings = [];
         
         for (let i = 0; i < objectRows.length; i++) {
             const obj = objectRows[i];
             const name = obj.name || obj.Name || `Object${i + 1}`;
-            
-            // 位置タイプを判定（"rectangle" に含まれる "angle" を誤検出しない）
-                const positionType = (obj.position || obj.fieldType || obj.type || '').toLowerCase();
-                const isAngle = positionType === 'angle' || positionType.includes(' angle') || positionType.startsWith('angle ');
-            
-            console.log(`   Object ${i + 1}: name="${name}", position="${positionType}", isAngle=${isAngle}`);
-            console.log(`      生データ:`, obj);
+
+            const isAngle = (systemMode === 'angle');
             
             // X座標を取得
             let xValue = 0;
@@ -999,25 +1120,26 @@ function getFieldSettingsFromObject(objectRowsParam) {
                 // Heightフィールドでも yHeightAngle に値が入ることがあるためフォールバックに含める
                 yValue = parseFloat(obj.yHeight || obj.y || obj.yHeightAngle || obj.yFieldAngle || obj.yAngle || 0);
             }
-            
-            console.log(`      解析結果: x=${xValue}, y=${yValue}`);
+
+            const normalizedPosition = isAngle ? 'angle' : 'height';
             
             fieldSettings.push({
                 name: name,
                 displayName: name,
                 x: xValue,
                 y: yValue,
-                xHeight: isAngle ? undefined : xValue,
-                yHeight: isAngle ? undefined : yValue,
-                xHeightAngle: isAngle ? undefined : xValue, // mirror for downstream consumers expecting ...HeightAngle
-                yHeightAngle: isAngle ? undefined : yValue, // mirror for downstream consumers expecting ...HeightAngle
+                xHeight: isAngle ? 0 : xValue,
+                yHeight: isAngle ? 0 : yValue,
+                xHeightAngle: xValue,
+                yHeightAngle: yValue,
                 fieldType: isAngle ? 'angle' : 'height',
                 objectIndex: i,
-                position: positionType
+                position: normalizedPosition
             });
+
+            console.log(`      Object ${i + 1}: "${name}" -> ${normalizedPosition.toUpperCase()} (x=${xValue}, y=${yValue})`);
         }
         
-        console.log(`   ✅ フィールド設定取得完了: ${fieldSettings.length}件`);
         return fieldSettings;
         
     } catch (error) {
@@ -1114,14 +1236,29 @@ function interpolateHeightFieldSettings(originalFields, totalPoints = 9) {
  * @param {number} options.interpolationPoints - 補間する点数
  * @returns {Object} 非点収差データ
  */
-export async function calculateAstigmatismData(opticalSystemRows, sourceRows, objectRows, targetSurfaceIndex, options = {}) {
+export async function calculateAstigmatismData(
+    opticalSystemRows: any,
+    sourceRows: any,
+    objectRows: any,
+    targetSurfaceIndex: any,
+    options: {
+        spotDiagramMode?: boolean;
+        rayCount?: number;
+        interpolationPoints?: number;
+        verbose?: boolean;
+        onProgress?: any;
+        yieldEvery?: number;
+        chiefRayMode?: 'stopCenter' | 'beamCenter' | 'centroid' | 'stopCenterImage' | 'beamCenterImage' | 'centroidImage';
+    } = {}
+) {
     const {
         spotDiagramMode = false,
         rayCount = 51,
-        interpolationPoints = 9,
+        interpolationPoints = 20,  // プロット点数を20点に増加
         verbose = false,  // 詳細ログを制御
         onProgress = null,
-        yieldEvery = 1
+        yieldEvery = 1,
+        chiefRayMode = 'stopCenter'  // 'stopCenter' | 'beamCenter' | 'centroid' | '*Image'
     } = options;
 
     const isMirrorRow = (row) => {
@@ -1151,6 +1288,7 @@ export async function calculateAstigmatismData(opticalSystemRows, sourceRows, ob
         console.log(`   光線本数: ${rayCount}本`);
         console.log(`   モード: ${spotDiagramMode ? 'スポットダイアグラム（全画角表示）' : '非点収差図'}`);
         console.log(`   🔍 spotDiagramMode = ${spotDiagramMode}`);
+        console.log(`   🔍 主光線モード: ${chiefRayMode}`);
     }
     
     try {
@@ -1163,14 +1301,15 @@ export async function calculateAstigmatismData(opticalSystemRows, sourceRows, ob
             .filter(w => Number.isFinite(w) && w > 0);
         if (verbose) console.log(`   波長数: ${wavelengths.length}`);
         
-        // Objectテーブルからフィールド設定を取得
-        // 角度指定ならangle、矩形指定なら高さとして扱う（Rectangleは物体高）
-        let fieldSettings = getFieldSettingsFromObject(objectRows);
+        const systemConjugateMode = detectSystemConjugateMode(opticalSystemRows);
+        console.log(`   ⚖️ システム共役モード判定: ${systemConjugateMode.toUpperCase()} (Based on Surface 0 Thickness)`);
+
+        let fieldSettings = getFieldSettingsFromObject(objectRows, systemConjugateMode);
         if (!fieldSettings || fieldSettings.length === 0) {
             // フォールバック（従来の簡易パス）
             fieldSettings = objectRows.map((obj, index) => {
-                const positionType = (obj.position || obj.fieldType || obj.type || '').toLowerCase();
-                const isAngle = positionType.includes('angle');
+                const isAngle = systemConjugateMode === 'angle';
+                const normalizedPosition = isAngle ? 'angle' : 'height';
                 const xVal = isAngle
                     ? parseFloat(obj.xFieldAngle || obj.xHeightAngle || obj.xAngle || obj.x || 0)
                     : parseFloat(obj.xHeight || obj.x || obj.xHeightAngle || obj.xFieldAngle || obj.xAngle || 0);
@@ -1187,7 +1326,7 @@ export async function calculateAstigmatismData(opticalSystemRows, sourceRows, ob
                     yHeightAngle: isAngle ? undefined : yVal,
                     fieldType: isAngle ? 'angle' : 'height',
                     objectIndex: index,
-                    position: positionType || (isAngle ? 'angle' : 'height')
+                    position: normalizedPosition
                 };
             });
         }
@@ -1207,14 +1346,10 @@ export async function calculateAstigmatismData(opticalSystemRows, sourceRows, ob
         
         // スポット表示モードでは補間を行わない。補間は角度フィールドのときのみ実行（Rectangle/heightの場合はそのまま）。
         if (!spotDiagramMode && interpolationPoints > 0) {
-            const allAngle = fieldSettings.every(f => (f.fieldType || '').toLowerCase() === 'angle');
-            const allHeight = fieldSettings.every(f => (f.fieldType || '').toLowerCase() === 'height');
-            if (allAngle) {
+            if (systemConjugateMode === 'angle') {
                 fieldSettings = interpolateFieldSettings(fieldSettings, interpolationPoints);
-            } else if (allHeight && fieldSettings.length >= 2) {
+            } else if (fieldSettings.length >= 2) {
                 fieldSettings = interpolateHeightFieldSettings(fieldSettings, interpolationPoints);
-            } else {
-                console.log('   ℹ️ 異種フィールド混在のため補間をスキップ');
             }
         }
         
@@ -1251,9 +1386,8 @@ export async function calculateAstigmatismData(opticalSystemRows, sourceRows, ob
             const spotArray = spotResult?.spotData || [];
             const primaryWl = spotResult?.primaryWavelength?.wavelength || spotResult?.primaryWavelength || wavelengths[0] || 0.5876;
 
-            const hasHeight = (fieldSettings || []).some(f => (f.fieldType || '').toLowerCase() === 'height');
-            const hasAngle = (fieldSettings || []).some(f => (f.fieldType || '').toLowerCase() === 'angle');
-            const isAngleField = hasHeight ? false : hasAngle;
+            // Object Position Angleは無限系、Rectangle/Heightは有限系
+            const isAngleField = systemConjugateMode === 'angle';
 
             const data = spotArray.map((sd, idx) => {
                 const obj = objectRows[sd.objectIndex] || fieldSettings[sd.objectIndex] || {};
@@ -1283,6 +1417,7 @@ export async function calculateAstigmatismData(opticalSystemRows, sourceRows, ob
                 relativeTargetIndex: null,
                 wavelengths: wavelengths,
                 fieldSettings: fieldSettings,
+                fieldMode: systemConjugateMode,
                 isAngleField,
                 primaryWavelength: primaryWl,
                 primaryReferenceZ: null,
@@ -1306,12 +1441,15 @@ export async function calculateAstigmatismData(opticalSystemRows, sourceRows, ob
             relativeTargetIndex: relativeTargetIndex,
             wavelengths: wavelengths,
             fieldSettings: fieldSettings,
-            // 角度フィールドのみかどうかのフラグ（プロット側の単位切替に使用）
-            isAngleField: fieldSettings.every(f => (f.fieldType || '').toLowerCase() === 'angle'),
+            // Object Position Angleは無限系（角度）、Rectangle/Heightは有限系（物体高）
+            isAngleField: systemConjugateMode === 'angle',
+            fieldMode: systemConjugateMode,
             primaryWavelength: null, // 主波長
             primaryReferenceZ: null, // 主波長の軸上（0°）近軸像点位置（すべての基準0点）
             data: [] // { wavelength, fieldAngle, paraxialImageZ, meridionalDeviation, sagittalDeviation }
         };
+        
+        console.log(`   ⭐ astigmatismData.isAngleField = ${astigmatismData.isAngleField}`);
         
         // 主波長を特定（Sourceテーブルの Primary Wavelength を優先）
         const primaryWavelength = __pickPrimaryWavelengthMicrons(sourceRows, wavelengths[0] || 0.5876);
@@ -1323,15 +1461,19 @@ export async function calculateAstigmatismData(opticalSystemRows, sourceRows, ob
             wavelengths.push(primaryWavelength);
         }
         
-        // 軸上（0°）フィールドを検索
+        // 軸上（0°または0mm）フィールドを検索
         const axialField = fieldSettings.find(f => {
-            const fieldType = (f.fieldType || '').toLowerCase();
-            if (fieldType === 'angle') {
-                const angle = Math.abs(f.y || 0);  // yフィールドを直接使用
+            const posType = (f.position || f.fieldType || '').toLowerCase();
+            const isAngle = posType.includes('angle') && !posType.includes('rectangle');
+            
+            if (isAngle) {
+                // 無限系: 角度が0に近い
+                const angle = Math.abs(f.y || 0);
                 return angle < 0.001; // ほぼ0°
             } else {
+                // 有限系: 高さが0に近い
                 const height = Math.abs(f.y || 0);
-                return height < 0.001;
+                return height < 0.001; // ほぼ0mm
             }
         });
         
@@ -1433,7 +1575,8 @@ export async function calculateAstigmatismData(opticalSystemRows, sourceRows, ob
                     astigmatismData.primaryReferenceZ,
                     verbose,
                     imageSurfaceInfo,
-                    mirrorSign
+                    mirrorSign,
+                    chiefRayMode
                 );
 
                 if (result) {
@@ -1482,14 +1625,19 @@ function calculateFieldData(
     primaryReferenceZ,
     verbose,
     imageSurfaceInfo,
-    mirrorSign
+    mirrorSign,
+    chiefRayMode = 'stopCenter'
 ) {
-    // フィールド角を取得（角度の場合はそのまま、高さの場合は0とする）
+    // フィールド角を取得
+    // Object Position Angle: 無限系として画角を使用
+    // Rectangle/Height: 有限系として物体高さを使用
     let fieldAngle;
-    const fieldType = (fieldSetting.fieldType || '').toLowerCase();
+    const positionType = (fieldSetting.position || fieldSetting.fieldType || '').toLowerCase();
+    const isAngleField = positionType.includes('angle') && !positionType.includes('rectangle');
+    const fieldType = isAngleField ? 'angle' : 'height';
     
-    if (fieldType === 'angle') {
-        // Y方向の角度を使用（複数のフィールド名に対応）
+    if (isAngleField) {
+        // 無限系: Y方向の角度を使用（複数のフィールド名に対応）
         fieldAngle = Math.abs(
             fieldSetting.yFieldAngle || 
             fieldSetting.fieldAngle || 
@@ -1498,7 +1646,7 @@ function calculateFieldData(
             0
         );
     } else {
-        // 高さの場合はyHeight値を使用、または0
+        // 有限系: 高さの場合はyHeight値を使用、または0
         fieldAngle = Math.abs(fieldSetting.yHeight || fieldSetting.y || 0);
     }
     
@@ -1513,17 +1661,38 @@ function calculateFieldData(
             fieldSetting, 
             wavelength, 
             'unified',
-            { rayCount: rayCount }  // クロスビームの光線本数を渡す
+            { rayCount: rayCount, chiefRayMode: chiefRayMode }  // クロスビームの光線本数と主光線モードを渡す
         );
         if (!chiefRayResult || !chiefRayResult.success) {
             if (verbose) console.warn(`      ⚠️ 主光線の計算に失敗しました`);
             return null;
         }
         
-        const chiefRay = chiefRayResult.rayData;
+        let chiefRay = chiefRayResult.rayData;
         if (!chiefRay || !chiefRay.segments) {
             if (verbose) console.warn(`      ⚠️ 主光線データが不正です`);
             return null;
+        }
+        
+        // 主光線モードに応じて像面上の基準位置を調整
+        const chiefRayModeBase = (typeof chiefRayMode === 'string' && chiefRayMode.endsWith('Image'))
+            ? chiefRayMode.slice(0, -'Image'.length)
+            : chiefRayMode;
+
+        if (chiefRayModeBase !== 'stopCenter' && chiefRayResult.rayGroups && chiefRayResult.rayGroups[0]) {
+            const adjustedChief = adjustChiefRayByMode(
+                chiefRay, 
+                chiefRayResult.rayGroups[0], 
+                targetSurfaceIndex, 
+                opticalSystemRows, 
+                chiefRayMode,
+                verbose,
+                imageSurfaceInfo
+            );
+            if (adjustedChief) {
+                chiefRay = adjustedChief;
+                if (verbose) console.log(`      ✅ 主光線を${chiefRayMode}モードで調整しました`);
+            }
         }
         
         if (verbose) {

@@ -277,7 +277,7 @@ function tryGetLocalStorageArray(key) {
  * @param {Object} tableOpticalSystem - The optical system table instance (optional)
  * @returns {Array} Optical system data
  */
-export function getOpticalSystemRows(tableOpticalSystem) {
+export function getOpticalSystemRows(tableOpticalSystem?) {
   duLog('🔍 getOpticalSystemRows called with tableOpticalSystem:', !!tableOpticalSystem);
   try {
     // Optimization override: allow callers (e.g. optimizer) to provide a transient
@@ -391,7 +391,7 @@ export function getOpticalSystemRows(tableOpticalSystem) {
  * @param {Object} tableObject - The object table instance
  * @returns {Array} Object data
  */
-export function getObjectRows(tableObject) {
+export function getObjectRows(tableObject?) {
   try {
     if (tableObject && typeof tableObject.getData === 'function') {
       return tableObject.getData();
@@ -754,9 +754,10 @@ export function outputParaxialDataToDebug(tableOpticalSystem = null) {
       debugOutput += "\n";
       
       // === SURFACE DETAILS ===
-      if (paraxialData.surfaceDetails && paraxialData.surfaceDetails.length > 0) {
+      const paraxialDataWithDetails = paraxialData as any;
+      if (paraxialDataWithDetails.surfaceDetails && paraxialDataWithDetails.surfaceDetails.length > 0) {
         debugOutput += "=== Surface Details ===\n";
-        paraxialData.surfaceDetails.forEach((surface, index) => {
+        paraxialDataWithDetails.surfaceDetails.forEach((surface, index) => {
           debugOutput += `Surface ${index + 1}:\n`;
           if (surface.power !== undefined) {
             debugOutput += `  Power: ${surface.power.toFixed(6)} D\n`;

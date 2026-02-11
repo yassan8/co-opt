@@ -106,6 +106,18 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
+    const chiefRayDefinition = (options && typeof options === 'object' && typeof options.chiefRayDefinition === 'string')
+        ? options.chiefRayDefinition
+        : 'stop-center';
+    const logChiefRayDefinition = (options && typeof options === 'object')
+        ? !!options.logChiefRayDefinition
+        : false;
+    const useActiveConfigSnapshot = (options && typeof options === 'object')
+        ? options.useActiveConfigSnapshot === true
+        : false;
+    const configId = (options && typeof options === 'object')
+        ? options.configId
+        : null;
 
     // Default target container is the in-page one
     let containerTarget: any = 'spot-diagram-container';
@@ -1179,6 +1191,18 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
+    const chiefRayDefinition = (options && typeof options === 'object' && typeof options.chiefRayDefinition === 'string')
+        ? options.chiefRayDefinition
+        : 'stop-center';
+    const logChiefRayDefinition = (options && typeof options === 'object')
+        ? !!options.logChiefRayDefinition
+        : false;
+    const useActiveConfigSnapshot = (options && typeof options === 'object')
+        ? options.useActiveConfigSnapshot === true
+        : false;
+    const configId = (options && typeof options === 'object')
+        ? options.configId
+        : null;
 
     // Default target container is the in-page one
     let containerTarget: any = 'astigmatic-field-curves-container';
@@ -1200,12 +1224,67 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
 
         try { onProgress?.({ percent: 0, message: 'Preparing astigmatism...' }); } catch (_) {}
 
+        const normalizeObjectRows = (rows: any) => {
+            if (!Array.isArray(rows)) return [];
+            return rows.map((r: any) => {
+                if (!r || typeof r !== 'object') return r;
+                const out = { ...r } as any;
+                if (out.xHeightAngle == null && out['object x'] != null) out.xHeightAngle = out['object x'];
+                if (out.yHeightAngle == null && out['object y'] != null) out.yHeightAngle = out['object y'];
+                if (out.xHeightAngle == null && out.x != null) out.xHeightAngle = out.x;
+                if (out.yHeightAngle == null && out.y != null) out.yHeightAngle = out.y;
+                if (out.position == null && out.objectType != null) out.position = out.objectType;
+                return out;
+            });
+        };
+        const loadConfigSnapshot = () => {
+            try {
+                const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
+                const sys = raw ? JSON.parse(raw) : null;
+                if (!sys || !Array.isArray(sys.configurations)) return null;
+                const activeId = (sys.activeConfigId !== undefined && sys.activeConfigId !== null)
+                    ? String(sys.activeConfigId)
+                    : '';
+                const targetId = (configId !== null && configId !== undefined)
+                    ? String(configId)
+                    : activeId;
+                if (!targetId) return null;
+                const cfg = sys.configurations.find((c: any) => String(c?.id) === targetId);
+                if (!cfg) return null;
+                const sourceRows = (() => {
+                    try {
+                        const json = localStorage.getItem('sourceTableData');
+                        const parsed = json ? JSON.parse(json) : null;
+                        return Array.isArray(parsed) ? parsed : [];
+                    } catch (_) {
+                        return [];
+                    }
+                })();
+                return {
+                    opticalSystemRows: Array.isArray(cfg.opticalSystem) ? cfg.opticalSystem : [],
+                    objectRows: normalizeObjectRows(Array.isArray(cfg.object) ? cfg.object : []),
+                    sourceRows
+                };
+            } catch (e) {
+                console.warn('⚠️ Failed to load config snapshot for astigmatism:', e);
+                return null;
+            }
+        };
+
         const tableOpticalSystem = getTableOpticalSystem();
         const tableSource = getTableSource();
         const tableObject = getTableObject();
-        const opticalSystemRows = getOpticalSystemRows(tableOpticalSystem);
-        const sourceRows = getSourceRows(tableSource);
-        const objectRows = getObjectRows(tableObject);
+        let opticalSystemRows = getOpticalSystemRows(tableOpticalSystem);
+        let sourceRows = getSourceRows(tableSource);
+        let objectRows = getObjectRows(tableObject);
+        if (useActiveConfigSnapshot || (configId !== null && configId !== undefined)) {
+            const snapshot = loadConfigSnapshot();
+            if (snapshot?.opticalSystemRows?.length) {
+                opticalSystemRows = snapshot.opticalSystemRows;
+                sourceRows = snapshot.sourceRows;
+                objectRows = snapshot.objectRows;
+            }
+        }
 
         if (!opticalSystemRows || opticalSystemRows.length === 0) {
             throw new Error('光学系データが見つかりません');
@@ -1231,12 +1310,40 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
         // Get field mode setting (optional)
         const fieldModeSelect = document.getElementById('astigmatism-field-mode') as HTMLSelectElement | null;
         const fieldMode = fieldModeSelect ? fieldModeSelect.value : 'object';
+        
+        // Get chief ray mode setting (optional)
+        const chiefRayModeSelect = document.getElementById('astigmatism-chief-ray-mode') as HTMLSelectElement | null;
+        const chiefRayDefinitionMap: Record<string, ChiefRayMode> = {
+            'stop-center': 'stopCenter',
+            'beam-midpoint': 'beamCenter',
+            'beam-centroid': 'centroid',
+            'stop-center-image': 'stopCenterImage',
+            'beam-midpoint-image': 'beamCenterImage',
+            'beam-centroid-image': 'centroidImage'
+        };
+        const chiefRayModeFromPopup = chiefRayDefinitionMap[chiefRayDefinition] || null;
+        const chiefRayModeValue = chiefRayModeFromPopup
+            ? chiefRayModeFromPopup
+            : (chiefRayModeSelect ? chiefRayModeSelect.value : 'stopCenter');
+        type ChiefRayMode = 'stopCenter' | 'beamCenter' | 'centroid' | 'stopCenterImage' | 'beamCenterImage' | 'centroidImage';
+        const chiefRayModeCandidates: ChiefRayMode[] = [
+            'stopCenter',
+            'beamCenter',
+            'centroid',
+            'stopCenterImage',
+            'beamCenterImage',
+            'centroidImage'
+        ];
+        const chiefRayMode: ChiefRayMode = chiefRayModeCandidates.includes(chiefRayModeValue as ChiefRayMode)
+            ? (chiefRayModeValue as ChiefRayMode)
+            : 'stopCenter';
 
         console.log(`📊 光線本数: ${rayCount}本`);
         console.log(`📊 光線フィルタ: ${rayFilter}`);
         console.log(`📊 画角モード: ${fieldMode}`);
+        console.log(`📊 主光線モード: ${chiefRayMode}`);
 
-        // 補間モードの場合、0°から最大値まで10等分した画角を生成
+        // 補間モードの場合、0°から最大値まで20等分した画角を生成
         // ただし Rectangle/height 指定が1件でもあれば高さモードとみなし、補間は行わずそのまま使う
         let processedObjectRows = objectRows;
         const hasHeightRect = (objectRows || []).some((obj: any) => {
@@ -1250,10 +1357,10 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
 
             console.log(`📊 最大Y角度: ${maxYAngle}°`);
 
-            // 0°から最大値まで10等分（11点: 0%, 10%, 20%, ..., 100%）
+            // 0°から最大値まで20等分（21点: 0%, 5%, 10%, ..., 100%）
             processedObjectRows = [];
-            for (let i = 0; i <= 10; i++) {
-                const angle = (maxYAngle * i) / 10;
+            for (let i = 0; i <= 20; i++) {
+                const angle = (maxYAngle * i) / 20;
                 processedObjectRows.push({
                     name: `Field${i}`,
                     xHeightAngle: 0,
@@ -1283,7 +1390,9 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
             {
                 spotDiagramMode: false,
                 rayCount: rayCount,
-                interpolationPoints: 10
+                interpolationPoints: 20,
+                chiefRayMode: chiefRayMode,
+                onProgress
             }
         );
 
@@ -1791,7 +1900,7 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
             sourceRows,
             objectRows,
             surfaceIndex,
-            { spotDiagramMode: false, rayCount: rayCountAstigmatism, interpolationPoints: 10 }
+            { spotDiagramMode: false, rayCount: rayCountAstigmatism, interpolationPoints: 20 }
         );
         
         if (!astigmatismData) {

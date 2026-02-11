@@ -221,7 +221,24 @@ export default function LegacyPanels() {
               <strong>Note:</strong> Astigmatism diagram shows the sagittal and meridional focal positions across different field angles.
             </div>
             <div className="astigmatism-controls">
-              <button id="show-astigmatism-diagram-btn">Show astigmatism diagram</button>
+              <label htmlFor="astigmatism-chief-ray-mode" style={{ marginRight: 8 }}>
+                Chief Ray Definition:
+              </label>
+              <select id="astigmatism-chief-ray-mode" defaultValue="stopCenter">
+                <option value="stopCenter">① 絞り中央通過 (Stop Center)</option>
+                <option value="beamCenter">② 光束巾の真ん中 (Beam Center)</option>
+                <option value="centroid">③ 光束の重心 (Centroid)</option>
+                <option value="stopCenterImage">④ 絞り中央通過（像面基準）</option>
+                <option value="beamCenterImage">⑤ 光束巾の真ん中（像面基準）</option>
+                <option value="centroidImage">⑥ 光束の重心（像面基準）</option>
+              </select>
+              <button id="show-astigmatism-diagram-btn" style={{ marginLeft: 12 }}>Show astigmatism diagram</button>
+            </div>
+            <div id="astigmatism-progress-wrapper" style={{ display: "none", margin: "8px 0" }}>
+              <div id="astigmatism-progress-text" style={{ marginBottom: 6, fontSize: 12, color: "#333" }}>
+                Calculating astigmatism...
+              </div>
+              <progress id="astigmatism-progressbar" max={100} value={0} style={{ width: "100%" }}></progress>
             </div>
             <div id="astigmatism-container"></div>
             <div id="astigmatic-field-curves-container"></div>

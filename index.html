@@ -519,8 +519,9 @@
 
           if (loadedFileWarn && loadedFileName) {
             const s = String(fileNameElement.textContent || '');
-            if (!s.includes('LOAD WARN')) {
-              fileNameElement.textContent = s + ' (LOAD WARN)';
+            if (!s.includes('LOAD WARN') && !s.includes('(surfaces only)')) {
+              fileNameElement.textContent = s + ' (surfaces only)';
+              fileNameElement.style.color = '#b45309';
             }
           }
         }
@@ -533,19 +534,39 @@
             const refFLInput = document.getElementById('reference-focal-length');
             if (refFLInput && systemData.referenceFocalLength !== undefined) {
               refFLInput.value = systemData.referenceFocalLength;
-
             }
           } catch (e) {
             console.warn('⚠️ System Data復元エラー:', e);
           }
         }
         
-        // Configuration UI を初期化
-        if (typeof window.initializeConfigurationUI === 'function') {
-          window.initializeConfigurationUI();
-        } else {
-          console.warn('⚠️ initializeConfigurationUI関数が見つかりません');
-        }
+        // Configuration UI を初期化（リトライロジック付き）
+        const initConfigUI = async () => {
+          let retries = 0;
+          const maxRetries = 30;
+          
+          while (retries < maxRetries) {
+            if (typeof window.initializeConfigurationUI === 'function') {
+              console.log('✅ [DOMContentLoaded] Initializing Configuration UI');
+              window.initializeConfigurationUI();
+              
+              // UI初期化後、確実に選択状態を更新
+              setTimeout(() => {
+                if (typeof window.refreshConfigurationUI === 'function') {
+                  window.refreshConfigurationUI();
+                  console.log('✅ [DOMContentLoaded] Configuration UI refreshed');
+                }
+              }, 200);
+              return;
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+            retries++;
+          }
+          
+          console.warn('⚠️ [DOMContentLoaded] initializeConfigurationUI関数が見つかりません');
+        };
+        
+        await initConfigUI();
         
         // 基本テスト関数のみ公開
         window.testBasicFunctionality = () => {

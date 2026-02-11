@@ -353,6 +353,43 @@ async function initializeApplication() {
         window.showTransverseAberrationDiagram = showTransverseAberrationDiagram;
         window.showLongitudinalAberrationDiagram = showLongitudinalAberrationDiagram;
         window.showAstigmatismDiagram = showAstigmatismDiagram;
+        window.showAstigmatism = async () => {
+            const progressWrapper = document.getElementById('astigmatism-progress-wrapper');
+            const progressBarRaw = document.getElementById('astigmatism-progressbar');
+            const progressBarEl = progressBarRaw instanceof HTMLProgressElement ? progressBarRaw : null;
+            const progressTextEl = document.getElementById('astigmatism-progress-text');
+
+            const setProgress = (value?: number, text?: string) => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'block';
+                    if (progressBarEl && Number.isFinite(value)) {
+                        progressBarEl.value = Math.max(0, Math.min(100, value as number));
+                    }
+                    if (progressTextEl && typeof text === 'string') {
+                        progressTextEl.textContent = text;
+                    }
+                } catch (_) {}
+            };
+
+            setProgress(0, 'Starting...');
+
+            try {
+                const onProgress = (evt: any) => {
+                    try {
+                        const p = Number(evt?.percent);
+                        const msg = evt?.message || evt?.phase || 'Working...';
+                        if (Number.isFinite(p)) setProgress(p, msg);
+                        else setProgress(undefined, msg);
+                    } catch (_) {}
+                };
+
+                await showAstigmatismDiagram({ onProgress });
+                setProgress(100, 'Done');
+            } catch (error) {
+                console.error('❌ Astigmatism diagram error:', error);
+                setProgress(100, 'Failed');
+            }
+        };
         window.showIntegratedAberrationDiagram = showIntegratedAberrationDiagram;
         window.showWavefrontDiagram = showWavefrontDiagram;
         window.showMTFDiagram = showMTFDiagram;
@@ -571,7 +608,9 @@ function improvedDrawOpticalSystemSurfaceWrapper() {
         });
         
         // Adjust camera view to fit the drawn surfaces
-        adjustCameraView(window.scene, window.camera, window.controls, window.renderer);
+        if (typeof window.adjustCameraView === 'function') {
+            window.adjustCameraView(window.scene, window.camera, window.controls, window.renderer);
+        }
         
     } catch (error) {
     }
@@ -1985,7 +2024,8 @@ const startApplicationOnce = (() => {
         const toggleToolbarBtn = document.getElementById('toggle-toolbar-btn');
         const topButtonsRow = document.getElementById('top-buttons-row');
         
-        if (toggleToolbarBtn && topButtonsRow) {
+        const isReactHandled = toggleToolbarBtn?.getAttribute('data-toggle-handled') === 'react';
+        if (toggleToolbarBtn && topButtonsRow && !isReactHandled) {
             toggleToolbarBtn.addEventListener('click', () => {
                 const isCollapsed = topButtonsRow.classList.toggle('collapsed');
                 toggleToolbarBtn.classList.toggle('collapsed', isCollapsed);
@@ -2181,7 +2221,7 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             
             if (currentColorMode === 'object') {
                 // Object別色分け
-                rayColor = colorSystem.getColor(colorSystem.MODE.OBJECT, objectIndex);
+                rayColor = colorSystem.getColor(colorSystem.MODE.OBJECT, objectIndex, null);
             } else if (currentColorMode === 'segment') {
                 // Segment別色分け（光線タイプに基づく）
                 const segmentType = rayData.segmentType || 'chief';

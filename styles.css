@@ -304,15 +304,11 @@ h3 {
 }
 
 #table-optical-system {
-    margin: 10px 1px;
+    margin: 10px 1px; /* 10px から 5px に */
     width: 100%;
-    border-collapse: collapse;
-    /* 内容に応じて動的に高さを調整 */
-    height: auto;          /* 内容に応じて高さを自動調整 */
-    min-height: 150px;     /* 最小高さを設定 */
-    max-height: 70vh;      /* 最大高さを画面の70%に制限 */
-    overflow-y: auto;      /* 内容が多い場合はスクロール */
-    display: block;        /* ブロック要素として表示 */
+    height: auto !important;
+    min-height: 0 !important; /* 150px から 0 に強制変更 */
+    overflow: auto;
 }
 
 #table-optical-system:focus {
@@ -1047,9 +1043,10 @@ button:active {
 .optical-system-section {
     margin: 20px;
     margin-top: 20px;
-    padding-top: 15px;
+    padding-top: 0;
+    /* 下方向の余白をリセットして、Requirements の margin-top と重複しないようにします */
+    margin-bottom: 0;
 }
-
 
 .optical-system-title {
     margin: 12px 0 6px 0;
@@ -2008,7 +2005,7 @@ h4 {
 /* System Evaluation Editor Section */
 .merit-function-section {
     margin: 20px;
-    margin-top: 35px;
+    margin-top: 20px;
 }
 
 .merit-function-section h2 {

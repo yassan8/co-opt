@@ -1013,6 +1013,15 @@ export function setupAnalysisWindows() {
 <body>
     <div class="header">Astigmatism</div>
     <div class="controls">
+        <label for="popup-astigmatism-chief-ray" style="font-size:12px;color:#333;white-space:nowrap;">Chief ray:</label>
+        <select id="popup-astigmatism-chief-ray" style="padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;">
+            <option value="stop-center">Stop center</option>
+            <option value="beam-midpoint">Beam midpoint</option>
+            <option value="beam-centroid">Beam centroid</option>
+            <option value="stop-center-image">Stop center (image plane)</option>
+            <option value="beam-midpoint-image">Beam midpoint (image plane)</option>
+            <option value="beam-centroid-image">Beam centroid (image plane)</option>
+        </select>
         <button id="popup-show-astigmatism-btn" type="button">Show astigmatism diagram</button>
     </div>
     <div id="popup-astigmatism-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
@@ -1034,6 +1043,8 @@ export function setupAnalysisWindows() {
             const progressWrapper = document.getElementById('popup-astigmatism-progress-wrapper');
             const progressBarEl = document.getElementById('popup-astigmatism-progressbar');
             const progressTextEl = document.getElementById('popup-astigmatism-progress-text');
+            const chiefRaySelect = document.getElementById('popup-astigmatism-chief-ray');
+            const chiefRayDefinition = (chiefRaySelect && chiefRaySelect.value) ? chiefRaySelect.value : 'stop-center';
 
             const setProgress = (value, text) => {
                 try {
@@ -1058,7 +1069,10 @@ export function setupAnalysisWindows() {
                 };
                 await window.opener.showAstigmatismDiagram({
                     containerElement: containerEl,
-                    onProgress
+                    onProgress,
+                    chiefRayDefinition,
+                    logChiefRayDefinition: true,
+                    useActiveConfigSnapshot: true
                 });
                 setProgress(100, 'Done');
             } catch (err) {

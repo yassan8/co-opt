@@ -183,6 +183,9 @@ export function handleSave(): void {
     URL.revokeObjectURL(url);
     
     localStorage.setItem('loadedFileName', filename);
+    try {
+      window.dispatchEvent(new CustomEvent('coopt:loaded-file-updated'));
+    } catch (_) {}
     console.log('✅ データが保存されました:', filename);
   } catch (err) {
     console.error('❌ Failed to save:', err);

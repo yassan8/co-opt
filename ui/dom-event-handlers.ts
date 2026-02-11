@@ -832,6 +832,9 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                 fileNameElement.textContent = `${fileNameElement.textContent} (surfaces only)`;
             }
         }
+        try {
+            window.dispatchEvent(new CustomEvent('coopt:loaded-file-updated'));
+        } catch (_) {}
     } catch (_) {}
 
     try {
@@ -924,23 +927,46 @@ function setupLoadAllButton(): void {
     if (!btn) return;
 
     const loadHandler = () => {
+        console.log('🔵 [Load] Load button clicked, creating file input');
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = '.json';
+        input.style.display = 'none';
+        
         input.addEventListener('change', async (e: Event) => {
+            console.log('🔵 [Load] File selected event triggered');
             const target = e.target as HTMLInputElement;
             const file = target?.files?.[0];
-            if (!file) return;
+            
+            // Remove input from DOM after file selection
+            try {
+                if (input.parentNode) {
+                    input.parentNode.removeChild(input);
+                }
+            } catch (_) {}
+            
+            if (!file) {
+                console.warn('⚠️ [Load] No file selected');
+                return;
+            }
 
+            console.log('🔵 [Load] Reading file:', file.name);
             try {
                 const text = await file.text();
+                console.log('🔵 [Load] File read successfully, length:', text.length);
                 const parsed = JSON.parse(text);
+                console.log('🔵 [Load] JSON parsed successfully, keys:', Object.keys(parsed));
                 await __loadAllDataObjectIntoApp(parsed, { filename: file.name });
+                console.log('✅ [Load] Data loaded successfully');
             } catch (err) {
                 console.error('❌ Load failed:', err);
                 alert(`Load failed: ${(err as Error)?.message || String(err)}`);
             }
         });
+        
+        // Add to DOM before triggering click
+        document.body.appendChild(input);
+        console.log('🔵 [Load] Triggering file input click');
         input.click();
     };
     

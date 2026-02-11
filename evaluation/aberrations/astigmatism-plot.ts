@@ -23,6 +23,9 @@
  * 更新日: 2025/11/14 - RMSベースの実光線追跡アルゴリズムに対応
  */
 
+// Plotly global reference (loaded via script tag in HTML)
+declare const Plotly: any;
+
 // Plotlyが読み込まれているか確認
 if (typeof Plotly === 'undefined') {
     console.error('❌ Plotly.js が読み込まれていません');
@@ -306,15 +309,33 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
     }
     
     // デフォルトオプション
+    // Object Position Angleは無限系（角度）、Rectangle/Heightは有限系（物体高）
     const fsList = astigmatismData.fieldSettings || [];
-    const hasHeight = fsList.some(fs => {
-        const ft = (fs.fieldType || fs.position || '').toLowerCase();
-        return ft.includes('height') || ft.includes('rect');
+    const hasRectangleOrHeight = fsList.some(fs => {
+        const posType = (fs.position || fs.fieldType || '').toLowerCase();
+        return posType.includes('rectangle') || posType.includes('height');
     });
-    const hasAngle = fsList.some(fs => (fs.fieldType || fs.position || '').toLowerCase().includes('angle'));
-    // Rectangleがあれば無条件に高さ、heightがあれば高さ。明示angleのみの場合だけ角度。
-    const hasRectangle = fsList.some(fs => (fs.position || fs.fieldType || '').toLowerCase().includes('rect'));
-    const isAngleField = astigmatismData.isAngleField ?? (hasRectangle ? false : hasHeight ? false : hasAngle);
+    const hasAngleOnly = fsList.some(fs => {
+        const posType = (fs.position || fs.fieldType || '').toLowerCase();
+        return posType.includes('angle') && !posType.includes('rectangle');
+    });
+    
+    const fieldMode = astigmatismData.fieldMode
+        ?? (astigmatismData.isAngleField ? 'angle' : null)
+        ?? (hasRectangleOrHeight ? 'height' : (hasAngleOnly ? 'angle' : 'height'));
+    const isAngleField = fieldMode === 'angle';
+    
+    console.log(`📊 フィールドタイプ判定: hasRectangleOrHeight=${hasRectangleOrHeight}, hasAngleOnly=${hasAngleOnly}, fieldMode=${fieldMode}, isAngleField=${isAngleField}`);
+    console.log(`🔍 astigmatismData.isAngleField = ${astigmatismData.isAngleField}, fieldMode=${astigmatismData.fieldMode}`);
+    console.log(`🔍 fieldSettings詳細:`, fsList.map(fs => ({
+        name: fs.name || fs.displayName,
+        position: fs.position,
+        fieldType: fs.fieldType,
+        y: fs.y,
+        yHeight: fs.yHeight,
+        yFieldAngle: fs.yFieldAngle
+    })));
+    console.log(`🔍 data[0]サンプル:`, astigmatismData.data[0]);
     const yAxisTitle = isAngleField ? 'Object Angle θ (deg)' : 'Object Height (mm)';
     const yUnit = isAngleField ? 'deg' : 'mm';
     const yValueLabel = isAngleField ? 'Object Angle θ' : 'Object Height';
@@ -332,6 +353,16 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
     const plotOptions = { ...defaultOptions, ...options };
     
     const traces = [];
+
+    const maxAbsAngle = isAngleField
+        ? Math.max(...fsList.map(fs => Math.abs(parseFloat(fs?.y ?? fs?.yFieldAngle ?? fs?.fieldAngle ?? 0) || 0)))
+        : 0;
+    const normalizeAngleDeg = (angle) => {
+        if (!Number.isFinite(angle)) return angle;
+        if (!isAngleField || !Number.isFinite(maxAbsAngle) || maxAbsAngle <= 0) return angle;
+        // Wrap to [-180, 180] so 360+θ does not blow up the axis.
+        return ((((angle + 180) % 360) + 360) % 360) - 180;
+    };
     
     // 波長ごとにグループ化
     const wavelengthGroups = {};
@@ -359,7 +390,7 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
         const meridionalZ = [];
         wlData.forEach(d => {
             if (d.meridionalDeviation !== null) {
-                meridionalAngles.push(d.fieldAngle);
+                meridionalAngles.push(normalizeAngleDeg(d.fieldAngle));
                 meridionalZ.push(d.meridionalDeviation);  // 既に相対値
             }
         });
@@ -368,17 +399,12 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
             traces.push({
                 x: meridionalZ,
                 y: meridionalAngles,
-                mode: 'lines+markers',
+                mode: 'lines',
                 name: `M (${(wlNum * 1000).toFixed(1)}nm)`,
                 line: {
                     color: color,
                     width: 2,
                     dash: 'dash'  // メリディオナルは破線
-                },
-                marker: {
-                    color: color,
-                    size: 6,
-                    symbol: 'circle'
                 },
                 hovertemplate: `<b>Meridional ${(wlNum * 1000).toFixed(1)}nm</b><br>` +
                               `${yValueLabel}: %{y:.4f}${yUnit}<br>` +
@@ -392,7 +418,7 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
         const sagittalZ = [];
         wlData.forEach(d => {
             if (d.sagittalDeviation !== null) {
-                sagittalAngles.push(d.fieldAngle);
+                sagittalAngles.push(normalizeAngleDeg(d.fieldAngle));
                 sagittalZ.push(d.sagittalDeviation);  // 既に相対値
             }
         });
@@ -401,17 +427,12 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
             traces.push({
                 x: sagittalZ,
                 y: sagittalAngles,
-                mode: 'lines+markers',
+                mode: 'lines',
                 name: `S (${(wlNum * 1000).toFixed(1)}nm)`,
                 line: {
                     color: color,
                     width: 2,
                     dash: 'solid'  // サジタルは実線
-                },
-                marker: {
-                    color: color,
-                    size: 6,
-                    symbol: 'square'
                 },
                 hovertemplate: `<b>Sagittal ${(wlNum * 1000).toFixed(1)}nm</b><br>` +
                               `${yValueLabel}: %{y:.4f}${yUnit}<br>` +

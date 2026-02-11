@@ -61,6 +61,8 @@ export interface Configuration {
   systemData: SystemData;
   metadata: ConfigurationMetadata;
   meritFunction?: any[];
+  scenarios?: any[];
+  activeScenarioId?: string | number;
 }
 
 interface SystemConfiguration {
@@ -628,6 +630,12 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
     await applyTableData(w.tableObject, activeConfig.object || []);
     await applyTableData(w.tableOpticalSystem, effectiveOpticalSystem || []);
 
+    console.log(`🔍 [Configuration] Applied data to tables:`, {
+      source: globalSourceRows.length,
+      object: (activeConfig.object || []).length,
+      opticalSystem: (effectiveOpticalSystem || []).length
+    });
+
     // Update system data input (reference focal length)
     try {
       const refFLInput = document.getElementById('reference-focal-length') as HTMLInputElement | null;
@@ -751,7 +759,7 @@ export function getConfigurationList(): ConfigurationListItem[] {
   return systemConfig.configurations.map(c => ({
     id: c.id,
     name: c.name,
-    active: c.id === systemConfig.activeConfigId,
+    active: idsEqual(c.id, systemConfig.activeConfigId),
     created: c.metadata.created,
     modified: c.metadata.modified,
     locked: c.metadata.locked
