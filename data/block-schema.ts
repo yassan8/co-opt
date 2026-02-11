@@ -2180,6 +2180,17 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
 
   const legacyVarV = (value) => ({ value, optimize: { mode: 'V' } });
 
+  const inferLegacySurfType = (rowObj, conicValue, coefValues) => {
+    const raw = normalizeSurfTypeValue(rowObj?.surfType);
+    const looksAsphere = blockAsphereLooksNonZero({
+      surfType: raw,
+      conic: conicValue,
+      coefs: Array.isArray(coefValues) ? coefValues : []
+    });
+    if (looksAsphere && (!raw || raw === 'Spherical')) return 'Aspheric even';
+    return raw || 'Spherical';
+  };
+
   let lensCount = 0;
   let doubletCount = 0;
   let tripletCount = 0;
@@ -2319,7 +2330,6 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
       && !isEmptyMaterial(backMaterialRaw);
 
     const readSurfaceAsphere = (rowObj, surfIdx) => {
-      const surfType = normalizeSurfTypeValue(rowObj?.surfType) || 'Spherical';
       const conic = isNumericString(String(rowObj?.conic ?? '').trim()) ? Number(String(rowObj.conic).trim()) : (typeof rowObj?.conic === 'number' ? rowObj.conic : 0);
       const coefs = Array.from({ length: 10 }, (_, k) => {
         const vv = rowObj?.[`coef${k + 1}`];
@@ -2327,6 +2337,7 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
         if (s === '') return 0;
         return isNumericString(s) ? Number(s) : (typeof vv === 'number' && Number.isFinite(vv) ? vv : 0);
       });
+      const surfType = inferLegacySurfType(rowObj, conic, coefs);
       return {
         [`surf${surfIdx}SurfType`]: surfType,
         [`surf${surfIdx}Conic`]: conic,
@@ -2534,8 +2545,6 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
     const backRadius = parseRadiusValue(back.radius);
     const centerThickness = asNumberOrInfOrZero(r.thickness);
 
-    const frontSurfType = normalizeSurfTypeValue(r.surfType) || 'Spherical';
-    const backSurfType = normalizeSurfTypeValue(back.surfType) || 'Spherical';
     const frontConic = isNumericString(String(r.conic ?? '').trim()) ? Number(String(r.conic).trim()) : (typeof r.conic === 'number' ? r.conic : 0);
     const backConic = isNumericString(String(back.conic ?? '').trim()) ? Number(String(back.conic).trim()) : (typeof back.conic === 'number' ? back.conic : 0);
     const frontCoefs = Array.from({ length: 10 }, (_, k) => {
@@ -2550,6 +2559,9 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
       if (s === '') return 0;
       return isNumericString(s) ? Number(s) : (typeof vv === 'number' && Number.isFinite(vv) ? vv : 0);
     });
+
+    const frontSurfType = inferLegacySurfType(r, frontConic, frontCoefs);
+    const backSurfType = inferLegacySurfType(back, backConic, backCoefs);
 
     const lensVariables: any = {};
     if (legacyHasV(r, 'optimizeR')) lensVariables.frontRadius = legacyVarV(frontRadius);
