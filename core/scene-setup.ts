@@ -41,7 +41,7 @@ export interface LightComponents {
  */
 export function initializeThreeJS(): SceneComponents {
     // Get container size dynamically
-    const container = document.getElementById('threejs-canvas-container');
+    let container = document.getElementById('threejs-canvas-container');
     const width = container ? container.clientWidth : APP_CONFIG.CANVAS_WIDTH;
     const height = container ? container.clientHeight : APP_CONFIG.CANVAS_HEIGHT;
     const aspect = width / height;
@@ -80,13 +80,25 @@ export function initializeThreeJS(): SceneComponents {
     renderer.setClearColor(0x000000, 0); // Set transparent background
     renderer.sortObjects = false; // Disable sorting for better performance
     renderer.shadowMap.enabled = false; // Disable shadows for better performance
-    
-    // Attach renderer to DOM
-    if (container) {
-        container.appendChild(renderer.domElement);
-        // Set canvas style to fill container
+
+    const attachRendererToContainer = (): HTMLElement | null => {
+        const currentContainer = document.getElementById('threejs-canvas-container');
+        if (!currentContainer) {
+            return null;
+        }
+        if (renderer.domElement.parentElement !== currentContainer) {
+            currentContainer.appendChild(renderer.domElement);
+        }
         renderer.domElement.style.width = '100%';
         renderer.domElement.style.height = '100%';
+        container = currentContainer;
+        return currentContainer;
+    };
+    
+    // Attach renderer to DOM
+    const initialContainer = attachRendererToContainer();
+    if (initialContainer && initialContainer.clientWidth > 0 && initialContainer.clientHeight > 0) {
+        renderer.setSize(initialContainer.clientWidth, initialContainer.clientHeight, false);
     }
     
     // Create orbit controls
@@ -124,10 +136,15 @@ export function initializeThreeJS(): SceneComponents {
     // Add window resize listener
     window.addEventListener('resize', () => {
         console.log('🔄 Window resize event (scene-setup.js)');
-        
-        if (container) {
-            const newWidth = container.clientWidth;
-            const newHeight = container.clientHeight;
+
+        const currentContainer = attachRendererToContainer();
+
+        if (currentContainer) {
+            const newWidth = currentContainer.clientWidth;
+            const newHeight = currentContainer.clientHeight;
+            if (newWidth <= 0 || newHeight <= 0) {
+                return;
+            }
             
             // Update renderer
             renderer.setPixelRatio(window.devicePixelRatio);
@@ -152,6 +169,20 @@ export function initializeThreeJS(): SceneComponents {
             
             console.log(`Canvas resized to: ${newWidth}x${newHeight} (pixelRatio: ${window.devicePixelRatio})`);
         }
+    });
+
+    window.addEventListener('coopt:react-mounted', () => {
+        const currentContainer = attachRendererToContainer();
+        if (!currentContainer) {
+            return;
+        }
+        const newWidth = currentContainer.clientWidth;
+        const newHeight = currentContainer.clientHeight;
+        if (newWidth <= 0 || newHeight <= 0) {
+            return;
+        }
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(newWidth, newHeight, false);
     });
     
     return { scene, camera, renderer, controls };

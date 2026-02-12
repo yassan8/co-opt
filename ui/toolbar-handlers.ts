@@ -368,54 +368,33 @@ export function handleRender3D(): void {
   }
   w.__render3DInProgress = true;
   console.log('[Render3D] Button clicked');
-  
-  // Ensure event listeners are set up first
-  if (typeof w.setupOpticalSystemChangeListeners === 'function' && !w.__opticalSystemChangeListenersBound) {
-    console.log('[Render3D] Setting up optical system change listeners');
-    w.setupOpticalSystemChangeListeners(w.scene || null);
-  }
-  
-  const existingPopup = w.popup3DWindow;
-  if (existingPopup && !existingPopup.closed) {
-    try {
-      existingPopup.focus();
-      const hasContent = existingPopup.document && existingPopup.document.getElementById('threejs-container');
-      if (hasContent) {
-        console.log('[Render3D] Existing popup found, focusing');
-        return;
-      }
-    } catch (_) {}
-  }
-  
-  // Open popup directly using the same logic as event-handlers.ts
-  const popup = window.open('', '3D Optical System', 'width=800,height=600');
-  if (!popup) {
-    alert('Popup blocked. Please allow popups for this site.');
-    return;
-  }
-  
-  w.popup3DWindow = popup;
-  
-  // Initialize the popup with basic structure
-  // The full initialization will be handled by the existing popup initialization code
-  if (typeof w.initialize3DPopup === 'function') {
-    w.initialize3DPopup(popup);
-    w.__render3DInProgress = false;
-    return;
-  }
 
-  // Fallback: trigger legacy handler (event-handlers.ts) without recursion
   try {
-    if (typeof w.setupOpticalSystemChangeListeners === 'function') {
+    // Ensure legacy popup infrastructure is bound first
+    if (typeof w.setupOpticalSystemChangeListeners === 'function' && !w.__opticalSystemChangeListenersBound) {
+      console.log('[Render3D] Setting up optical system change listeners');
       w.setupOpticalSystemChangeListeners(w.scene || null);
     }
-  } catch (_) {}
 
-  if (typeof w.__open3DWindowLegacy === 'function') {
-    try { w.__open3DWindowLegacy(); } catch (_) {}
+    // Delegate to the proven legacy popup renderer path
+    if (typeof w.__open3DWindowLegacy === 'function') {
+      w.__open3DWindowLegacy();
+      return;
+    }
+
+    // Safety fallback if legacy bridge is unavailable
+    const popup = window.open('', '3D Optical System', 'width=800,height=600');
+    if (!popup) {
+      alert('Popup blocked. Please allow popups for this site.');
+      return;
+    }
+    w.popup3DWindow = popup;
+    if (typeof w.initialize3DPopup === 'function') {
+      w.initialize3DPopup(popup);
+    }
+  } finally {
+    w.__render3DInProgress = false;
   }
-
-  w.__render3DInProgress = false;
 }
 
 export function handleSystemData(): void {

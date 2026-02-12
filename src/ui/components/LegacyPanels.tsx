@@ -134,6 +134,8 @@ export default function LegacyPanels() {
 
       <div className="draw-system-container">
         <div className="draw-section">
+          <div id="threejs-canvas-container" aria-label="Optical system 3D canvas" />
+
           <div className="spot-diagram-section" style={{ display: "none" }}>
             <h2>Spot Diagram</h2>
             <div className="spot-diagram-controls">

@@ -28,6 +28,17 @@
   <!-- URL Share compression (global LZString) -->
   <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
 
+  <!-- Import map for Three.js to resolve bare module specifiers -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+        "three/examples/jsm/controls/OrbitControls.js": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js",
+        "OrbitControls": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js"
+      }
+    }
+  </script>
+
   <!-- Early WASM service globals (getWASMSystem/_setWASMSystem) -->
   <script type="module" src="core/wasm-service.ts"></script>
 
@@ -132,16 +143,6 @@
     }, true);
   </script>
 
-  <!-- Import map for Three.js to resolve bare module specifiers -->
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
-        "three/examples/jsm/controls/OrbitControls.js": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js",
-        "OrbitControls": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js"
-      }
-    }
-  </script>
 </head>
 <body>
 

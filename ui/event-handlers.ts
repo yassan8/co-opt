@@ -269,15 +269,16 @@ function ensurePopupMessageHandler(): void {
                     return;
                 }
 
-                const popupScene = w.popup3DWindow.scene;
+                const popupScene = w.popupScene || w.popup3DWindow?.scene || null;
 
                 if (!popupScene) {
                     w.popup3DWindow.postMessage({ status: 'Error: Scene not ready' }, '*');
                     return;
                 }
 
-                if (w.popup3DWindow && w.popup3DWindow.renderer) {
-                    w.popup3DWindow.renderer.clear();
+                const popupRenderer = w.popupRenderer || w.popup3DWindow?.renderer || null;
+                if (popupRenderer) {
+                    popupRenderer.clear();
                 }
                 if (popupScene) {
                     const allChildren = [...popupScene.children];
@@ -434,103 +435,44 @@ function ensurePopupMessageHandler(): void {
                             (popupWindow as any).__lastCrossRays = allRays;
                             w.__lastCrossRays = allRays;
                         } catch (_) {}
-                        harmonizeSceneGeometry(popupScene);
-                        console.log('📍 Refitting camera after ray drawing...');
-                        if (popupWindow && popupWindow.camera && popupWindow.renderer) {
-                            const THREE = popupWindow.THREE || w.THREE;
-                            const renderer = popupWindow.renderer;
-                            const camera = popupWindow.camera;
-                            const controls = popupWindow.controls;
+                    }
 
-                            const sceneBounds = new THREE.Box3();
-                            popupScene.traverse((obj) => {
-                                if (obj.isMesh || obj.isLine) {
-                                    const box = new THREE.Box3().setFromObject(obj);
-                                    if (!box.isEmpty()) {
-                                        sceneBounds.union(box);
-                                    }
-                                }
-                            });
+                    harmonizeSceneGeometry(popupScene);
+                    console.log(`📷 Setting camera for ${viewAxis} in popup...`);
 
-                            if (!sceneBounds.isEmpty()) {
-                                const center = new THREE.Vector3();
-                                sceneBounds.getCenter(center);
-                                const sceneSize = new THREE.Vector3();
-                                sceneBounds.getSize(sceneSize);
-
-                                const fitWidth = sceneSize.z;
-                                const fitHeight = (viewAxis === 'YZ') ? sceneSize.y : sceneSize.x;
-
-                                // Disable damping temporarily so controls.update() doesn't drift
-                                const wasDamping = controls ? controls.enableDamping : false;
-                                if (controls) controls.enableDamping = false;
-
-                                // Set camera position and orientation
-                                if (viewAxis === 'YZ') {
-                                    camera.position.set(-500, center.y, center.z);
-                                    camera.up.set(0, 1, 0);
-                                    if (controls) {
-                                        controls.target.set(0, center.y, center.z);
-                                        controls.update();
-                                    }
-                                    camera.lookAt(0, center.y, center.z);
-                                } else { // XZ
-                                    camera.position.set(center.x, 500, center.z);
-                                    camera.up.set(1, 0, 0);
-                                    if (controls) {
-                                        controls.target.set(center.x, 0, center.z);
-                                        controls.update();
-                                    }
-                                    camera.lookAt(center.x, 0, center.z);
-                                }
-
-                                // Calculate orthographic bounds from content
-                                const rendererSize = renderer.getSize(new THREE.Vector2());
-                                const aspect = rendererSize.x / rendererSize.y;
-
-                                let halfWidth: number, halfHeight: number;
-                                const contentAspect = fitWidth / Math.max(fitHeight, 1e-6);
-                                if (contentAspect >= aspect) {
-                                    halfWidth = fitWidth / 2;
-                                    halfHeight = halfWidth / aspect;
-                                } else {
-                                    halfHeight = fitHeight / 2;
-                                    halfWidth = halfHeight * aspect;
-                                }
-
-                                const horizontalCenter = center.z;
-                                const verticalCenter = (viewAxis === 'YZ') ? center.y : center.x;
-
-                                camera.left = horizontalCenter - halfWidth;
-                                camera.right = horizontalCenter + halfWidth;
-                                camera.top = verticalCenter + halfHeight;
-                                camera.bottom = verticalCenter - halfHeight;
-                                camera.updateProjectionMatrix();
-
-                                // Save bounds state
-                                camera.userData.__drawCrossOrthoBounds = {
-                                    left: camera.left,
-                                    right: camera.right,
-                                    top: camera.top,
-                                    bottom: camera.bottom,
-                                    centerZ: center.z
-                                };
-                                camera.userData.__drawCrossLastFitCenter = { x: center.x, y: center.y, z: center.z };
-
-                                // Save OrbitControls state so it doesn't drift
-                                if (controls && typeof controls.saveState === 'function') {
-                                    controls.saveState();
-                                }
-
-                                // Re-enable damping
-                                if (controls) controls.enableDamping = wasDamping;
-
-                                // Reset user-adjusted flag in popup state
-                                try { popupWindow.postMessage({ action: 'set-user-adjusted-view', value: false }, '*'); } catch (_) {}
-
-                                renderer.render(popupScene, camera);
-                            }
+                    if (!popupWindow) {
+                        console.warn('⚠️ Popup window reference missing (camera)');
+                    } else if (viewAxis === 'XZ' && typeof w.setCameraForXZCrossSection === 'function') {
+                        w.setCameraForXZCrossSection({
+                            camera: w.popupCamera || popupWindow.camera,
+                            controls: w.popupControls || popupWindow.controls,
+                            scene: w.popupScene || popupWindow.scene,
+                            renderer: w.popupRenderer || popupWindow.renderer,
+                            includeRayStartMargin: true,
+                            preserveDrawCrossBounds: userAdjustedView === true,
+                            preserveCurrentOrthoBounds: userAdjustedView === true,
+                            storeDrawCrossBounds: userAdjustedView !== true,
+                            ...(userAdjustedView === true && targetOverride ? { targetOverride } : {})
+                        });
+                    } else if (viewAxis === 'YZ' && typeof w.setCameraForYZCrossSection === 'function') {
+                        w.setCameraForYZCrossSection({
+                            camera: w.popupCamera || popupWindow.camera,
+                            controls: w.popupControls || popupWindow.controls,
+                            scene: w.popupScene || popupWindow.scene,
+                            renderer: w.popupRenderer || popupWindow.renderer,
+                            includeRayStartMargin: true,
+                            preserveDrawCrossBounds: userAdjustedView === true,
+                            preserveCurrentOrthoBounds: userAdjustedView === true,
+                            storeDrawCrossBounds: userAdjustedView !== true,
+                            ...(userAdjustedView === true && targetOverride ? { targetOverride } : {})
+                        });
+                    } else {
+                        const popupRenderer = w.popupRenderer || popupWindow?.renderer;
+                        const popupCamera = w.popupCamera || popupWindow?.camera;
+                        if (popupRenderer && popupScene && popupCamera) {
+                            popupRenderer.render(popupScene, popupCamera);
                         }
+                        console.warn(`⚠️ setCameraFor${viewAxis}CrossSection not available`);
                     }
 
                     w.popup3DWindow.postMessage({ status: 'Drawing complete' }, '*');
@@ -552,6 +494,10 @@ function ensurePopupMessageHandler(): void {
             }
 
             const popupWindow = w.popup3DWindow;
+            const popupScene = w.popupScene || popupWindow.scene || null;
+            const popupCamera = w.popupCamera || popupWindow.camera || null;
+            const popupControls = w.popupControls || popupWindow.controls || null;
+            const popupRenderer = w.popupRenderer || popupWindow.renderer || null;
             const popupStatus = popupWindow.document?.getElementById('status') || null;
             
             try {
@@ -564,22 +510,22 @@ function ensurePopupMessageHandler(): void {
                     ? data.target
                     : null;
 
-                const hasSavedBounds = !!(popupWindow.camera?.userData?.__drawCrossOrthoBounds);
+                const hasSavedBounds = !!(popupCamera?.userData?.__drawCrossOrthoBounds);
                 const canSwitchCameraOnly =
                     hasSavedBounds &&
-                    popupWindow.scene &&
-                    popupWindow.camera &&
-                    popupWindow.controls &&
-                    popupWindow.renderer &&
+                    popupScene &&
+                    popupCamera &&
+                    popupControls &&
+                    popupRenderer &&
                     (typeof w.setCameraForXZCrossSection === 'function') &&
                     (typeof w.setCameraForYZCrossSection === 'function');
 
                 if (canSwitchCameraOnly) {
                     const rotateCameraAroundZOnly = ({ viewAxis, target }: any) => {
-                        const cam = popupWindow.camera;
-                        const ctr = popupWindow.controls;
-                        const rnd = popupWindow.renderer;
-                        const scn = popupWindow.scene;
+                        const cam = popupCamera;
+                        const ctr = popupControls;
+                        const rnd = popupRenderer;
+                        const scn = popupScene;
 
                         if (!cam || !ctr) return;
 
@@ -692,7 +638,7 @@ function ensurePopupMessageHandler(): void {
                             });
                         };
 
-                        clearSurfacesOnly(popupWindow.scene);
+                        clearSurfacesOnly(popupScene);
 
                         const { getOpticalSystemRows, drawOpticalSystemSurfaces, drawCrossBeamRays, harmonizeSceneGeometry } = getRequiredFunctions();
                         const clearRaysOnly = (scene: any) => {
@@ -717,25 +663,25 @@ function ensurePopupMessageHandler(): void {
                         if (Array.isArray(opticalSystemRows) && opticalSystemRows.length > 0) {
                             drawOpticalSystemSurfaces({
                                 opticalSystemData: opticalSystemRows,
-                                scene: popupWindow.scene,
+                                scene: popupScene,
                                 showSemidiaRing: false,
                                 showSurfaceOrigins: false,
                                 crossSectionOnly: true,
                                 crossSectionDirection: viewAxis
                             });
-                            harmonizeSceneGeometry(popupWindow.scene);
+                            harmonizeSceneGeometry(popupScene);
                         }
 
                         const cachedRays = (popupWindow as any).__lastCrossRays || w.__lastCrossRays;
                         if (Array.isArray(cachedRays) && cachedRays.length > 0 && typeof drawCrossBeamRays === 'function') {
-                            clearRaysOnly(popupWindow.scene);
-                            drawCrossBeamRays(cachedRays, popupWindow.scene);
-                            harmonizeSceneGeometry(popupWindow.scene);
+                            clearRaysOnly(popupScene);
+                            drawCrossBeamRays(cachedRays, popupScene);
+                            harmonizeSceneGeometry(popupScene);
                         }
                         
                         // Re-render to show both rays and updated surfaces
-                        if (popupWindow.renderer && popupWindow.scene && popupWindow.camera) {
-                            popupWindow.renderer.render(popupWindow.scene, popupWindow.camera);
+                        if (popupRenderer && popupScene && popupCamera) {
+                            popupRenderer.render(popupScene, popupCamera);
                         }
                     } catch (e) {
                         console.error('Error updating surfaces:', e);
@@ -749,10 +695,10 @@ function ensurePopupMessageHandler(): void {
                     await executeCrossSectionView({
                         viewAxis,
                         statusElement: popupStatus,
-                        targetScene: popupWindow.scene,
-                        targetCamera: popupWindow.camera,
-                        targetControls: popupWindow.controls,
-                        targetRenderer: popupWindow.renderer,
+                        targetScene: popupScene,
+                        targetCamera: popupCamera,
+                        targetControls: popupControls,
+                        targetRenderer: popupRenderer,
                         showAlerts: false
                     });
                     popupWindow.postMessage({ status: `${viewAxis === 'XZ' ? 'X-Z' : 'Y-Z'} view ready` }, '*');
@@ -1337,6 +1283,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             display: flex;
             flex-direction: row;
             min-height: 0;
+            position: relative;
         }
         #threejs-container {
             flex: 1 1 auto;
@@ -1345,16 +1292,21 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             background: white;
         }
         #surface-colors {
-            flex: 0 0 240px;
+            position: absolute;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 240px;
             display: flex;
             flex-direction: column;
             background: #fafafa;
             border-left: 1px solid #ddd;
             overflow: hidden;
-            transition: flex-basis 0.2s;
+            transition: width 0.2s;
+            z-index: 10;
         }
         #surface-colors.collapsed {
-            flex: 0 0 32px;
+            width: 32px;
         }
         #surface-colors .header-row {
             padding: 8px 12px;
@@ -1455,7 +1407,6 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
 
     <script type="module">
         import * as THREE from 'three';
-        import { setRenderingContext } from '../core/rendering-context.ts';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         
         console.log('THREE.js loaded in popup:', !!THREE);
@@ -1510,8 +1461,8 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             controls.enableZoom = true;
 
             let popupUserAdjustedView = false;
-            let popupCurrentViewAxis: 'XZ' | 'YZ' = 'YZ';
-            let popupRayColorMode: 'object' | 'segment' = 'object';
+            let popupCurrentViewAxis = 'YZ';
+            let popupRayColorMode = 'object';
             let popupSurfaceColorsCollapsed = true;
 
             function setPopupUserAdjustedView(v) {
@@ -1558,7 +1509,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             camera.position.set(0, 50, 100);
             camera.lookAt(0, 0, 0);
             camera.up.set(0, 1, 0);
-            controls.target.set(0, 0, 100);
+            controls.target.set(0, 0, 0);
             controls.update();
             
             function animate() {
@@ -1573,13 +1524,13 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             let lastResizeWidth = -1;
             let lastResizeHeight = -1;
 
-            const shouldSendPopupResize = (now: number, width: number, height: number, thresholdMs: number): boolean => {
+            const shouldSendPopupResize = (now, width, height, thresholdMs) => {
                 return !lastResizeSentAt ||
                     (now - lastResizeSentAt > thresholdMs) ||
                     (lastResizeWidth !== width || lastResizeHeight !== height);
             };
 
-            const markPopupResizeSent = (now: number, width: number, height: number): void => {
+            const markPopupResizeSent = (now, width, height) => {
                 lastResizeSentAt = now;
                 lastResizeWidth = width;
                 lastResizeHeight = height;
@@ -1737,8 +1688,13 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 return null;
             };
             
-            setRenderingContext({ scene, camera, renderer, controls });
-            
+            try {
+                window.scene = scene;
+                window.camera = camera;
+                window.renderer = renderer;
+                window.controls = controls;
+            } catch (_) {}
+
             if (window.opener) {
                 window.opener.popupScene = scene;
                 window.opener.popupCamera = camera;
@@ -1876,7 +1832,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 if (!surfaceColorsPanel || !surfaceColorsToggle) return;
                 const isCollapsed = collapsed === true;
                 surfaceColorsPanel.classList.toggle('collapsed', isCollapsed);
-                surfaceColorsToggle.textContent = isCollapsed ? '▶' : '◀';
+                surfaceColorsToggle.textContent = isCollapsed ? '◀' : '▶';
             }
 
             setSurfaceColorsCollapsed(true);
