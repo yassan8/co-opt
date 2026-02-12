@@ -281,9 +281,6 @@ function ensurePopupMessageHandler(): void {
                 }
 
                 const popupRenderer = w.popupRenderer || w.popup3DWindow?.renderer || null;
-                if (popupRenderer) {
-                    popupRenderer.clear();
-                }
                 if (popupScene) {
                     const allChildren = [...popupScene.children];
                     allChildren.forEach((child: any) => {
@@ -1444,18 +1441,23 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 10000
             );
             
-            const rendererOptions = { antialias: true, alpha: true, precision: 'highp' };
-            if (!isIOSLike()) {
+            const isLowPowerRenderer = isIOSLike();
+            const rendererOptions = {
+                antialias: !isLowPowerRenderer,
+                alpha: false,
+                precision: isLowPowerRenderer ? 'mediump' : 'highp',
+                powerPreference: isLowPowerRenderer ? 'low-power' : 'high-performance'
+            };
+            if (!isLowPowerRenderer) {
                 rendererOptions.logarithmicDepthBuffer = true;
             }
             const renderer = new THREE.WebGLRenderer(rendererOptions);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isLowPowerRenderer ? 1.25 : 2));
             renderer.setSize(container.clientWidth, container.clientHeight, false);
             renderer.setClearColor(0xffffff, 1);
             renderer.sortObjects = false;
             renderer.shadowMap.enabled = false;
             container.appendChild(renderer.domElement);
-            const isLowPowerRenderer = isIOSLike();
             
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
             scene.add(ambientLight);
@@ -1600,7 +1602,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 const h = container.clientHeight;
                 if (w < 2 || h < 2) return;
                 
-                renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+                renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isLowPowerRenderer ? 1.25 : 2));
                 renderer.setSize(w, h, false);
                 
                 const aspect = w / h;
