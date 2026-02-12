@@ -1225,14 +1225,6 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
 <head>
     <meta charset="UTF-8" />
     <title>Render Optical System</title>
-    <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-      }
-    }
-    </script>
     <style>
         html, body { height: 100%; }
         body {
@@ -1410,8 +1402,8 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
     </div>
 
     <script type="module">
-        import * as THREE from 'three';
-        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+        import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
         
         console.log('THREE.js loaded in popup:', !!THREE);
         
@@ -1425,6 +1417,15 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
         function initializePopup(THREE, OrbitControls) {
             const container = document.getElementById('threejs-container');
             const status = document.getElementById('status');
+
+            const isIOSLike = () => {
+                try {
+                    const ua = String(navigator.userAgent || '');
+                    if (/iPad|iPhone|iPod/i.test(ua)) return true;
+                    if (/Macintosh/i.test(ua) && Number(navigator.maxTouchPoints || 0) > 1) return true;
+                } catch (_) {}
+                return false;
+            };
             
             const scene = new THREE.Scene();
             scene.userData.renderContext = {
@@ -1443,8 +1444,12 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 10000
             );
             
-            const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, precision: 'highp', logarithmicDepthBuffer: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
+            const rendererOptions = { antialias: true, alpha: true, precision: 'highp' };
+            if (!isIOSLike()) {
+                rendererOptions.logarithmicDepthBuffer = true;
+            }
+            const renderer = new THREE.WebGLRenderer(rendererOptions);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
             renderer.setSize(container.clientWidth, container.clientHeight, false);
             renderer.setClearColor(0xffffff, 1);
             renderer.sortObjects = false;
@@ -1556,7 +1561,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 const h = container.clientHeight;
                 if (w < 2 || h < 2) return;
                 
-                renderer.setPixelRatio(window.devicePixelRatio);
+                renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
                 renderer.setSize(w, h, false);
                 
                 const aspect = w / h;
@@ -1584,8 +1589,23 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 }
             };
             
-            const resizeObserver = new ResizeObserver(() => scheduleResize());
-            resizeObserver.observe(container);
+            let resizeObserver = null;
+            if (typeof ResizeObserver !== 'undefined') {
+                resizeObserver = new ResizeObserver(() => scheduleResize());
+                resizeObserver.observe(container);
+            } else {
+                let lastW = -1;
+                let lastH = -1;
+                setInterval(() => {
+                    const w = container.clientWidth;
+                    const h = container.clientHeight;
+                    if (w !== lastW || h !== lastH) {
+                        lastW = w;
+                        lastH = h;
+                        scheduleResize();
+                    }
+                }, 300);
+            }
             window.addEventListener('resize', scheduleResize);
             
             const normalizeSceneGeometry = (scene) => {
