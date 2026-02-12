@@ -157,7 +157,7 @@
  * 作成日: 2025/07/26
  */
 
-import * as THREE from 'https://unpkg.com/three@0.153.0/build/three.module.ts';
+import * as THREE from 'three';
 import { drawRayWithSegmentColors } from '../../optical/ray-renderer.ts';
 
 function getThreeForScene(scene) {
