@@ -1788,6 +1788,14 @@ class MeritFunctionEditor {
                 ? String(systemConfig.activeConfigId)
                 : '';
 
+            const isConfigSwitching = (() => {
+                try {
+                    return typeof window !== 'undefined' && (w as any).__configurationSwitching === true;
+                } catch {
+                    return false;
+                }
+            })();
+
             const preferConfigTables = !!options.preferConfigTables;
 
             let targetConfigId = configId;
@@ -1797,6 +1805,20 @@ class MeritFunctionEditor {
             const targetIdStr = (targetConfigId !== undefined && targetConfigId !== null) ? String(targetConfigId) : '';
 
             if (activeConfigId && targetIdStr && targetIdStr === activeConfigId) {
+                // During config switching, Tabulator tables can be mid-update; avoid reading live tables.
+                // Use the persisted snapshot instead to prevent mixing rows across configs.
+                if (isConfigSwitching) {
+                    const cfg = systemConfig?.configurations?.find((c: any) => String(c.id) === String(targetIdStr)) || null;
+                    return {
+                        source: getSourceRows({}),
+                        object: Array.isArray(cfg?.object)
+                            ? cfg.object
+                            : ((typeof window !== 'undefined' && w.getObjectRows)
+                                ? w.getObjectRows()
+                                : (w.tableObject ? w.tableObject.getData() : []))
+                    };
+                }
+
                 return {
                     source: getSourceRows({}),
                     object: (typeof window !== 'undefined' && w.getObjectRows)
@@ -2417,9 +2439,10 @@ class MeritFunctionEditor {
 
     getOpticalSystemDataByConfigId(configId: any): any[] {
         try {
-            // Always skip cache to ensure fresh data for Requirements calculations
-            // Cache can contain stale/incomplete data during initial page load
-            const useCache = false;
+            // Prefer cache for NON-active configs when it's valid.
+            // This aligns Requirements (spot size, etc) with the same expanded rows used by Analysis.
+            // We still avoid cache for the active config during switching to prevent mid-update reads.
+            const useCache = true;
             
             if (useCache) {
                 try {
@@ -2427,10 +2450,14 @@ class MeritFunctionEditor {
                         const cfgId = (configId !== undefined && configId !== null) ? String(configId).trim() : '';
                         if (cfgId) {
                             const cached = w.__cooptOpticalSystemByConfigId[cfgId];
-                            // Validate cache: must have reasonable surface count (>= 3 actual surfaces)
+                            // Validate cache: must have reasonable surface count and a usable object thickness.
                             if (Array.isArray(cached) && cached.length >= 5) {
-                                return cached;
-                            } else if (Array.isArray(cached)) {
+                                const t0 = cached[0]?.thickness;
+                                const ts = (t0 === undefined || t0 === null) ? '' : String(t0).trim().toUpperCase();
+                                // Accept finite thickness or explicit INF (both are meaningful).
+                                if (t0 === Infinity || ts === 'INF' || ts === 'INFINITY' || ts !== '') {
+                                    return cached;
+                                }
                             }
                         }
                     }
@@ -2474,10 +2501,28 @@ class MeritFunctionEditor {
 
             const isActiveConfig = activeConfigId && targetIdStr && targetIdStr === activeConfigId;
 
-            if (isActiveConfig || wantsCurrent) {
+            const isConfigSwitching = (() => {
+                try {
+                    return typeof window !== 'undefined' && (w as any).__configurationSwitching === true;
+                } catch {
+                    return false;
+                }
+            })();
+
+            if ((isActiveConfig || wantsCurrent) && !isConfigSwitching) {
                 const hasBlocksForActive = Array.isArray(config?.blocks);
                 if (!hasBlocksForActive) {
                     return getOpticalSystemRows({});
+                }
+            }
+
+            // If we are switching configs, avoid reading the UI tables even for the active config.
+            // Use the persisted config rows (or blocks expansion) for a consistent snapshot.
+            if ((isActiveConfig || wantsCurrent) && isConfigSwitching && config) {
+                const hasBlocksForActive = Array.isArray(config?.blocks) && config.blocks.length > 0;
+                if (!hasBlocksForActive) {
+                    const persisted = Array.isArray(config.opticalSystem) ? config.opticalSystem : null;
+                    if (persisted && persisted.length > 0) return persisted;
                 }
             }
 

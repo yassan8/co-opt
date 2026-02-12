@@ -4,6 +4,7 @@
 import { traceRay, calculateSurfaceOrigins, transformPointToLocal } from '../raytracing/core/ray-tracing.ts';
 import { findStopSurfaceIndex, calculateFocalLength, calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 import { generateRayStartPointsForObject } from '../optical/ray-renderer.ts';
+import { detectConjugateType, ConjugateType } from '../utils/conjugate-detection.ts';
 
 function derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthMicrons, preferEntrancePupil) {
     let pupilDiameterMm = 10.0;
@@ -1268,6 +1269,28 @@ export async function generateSpotDiagramAsync(
 
     safeProgress(0, 'Preparing spot diagram...');
     await yieldToUI();
+    
+    // Detect and validate conjugate type
+    const conjugateType = options?.conjugateType || detectConjugateType(opticalSystemRows, options);
+    console.log(`🔍 [SpotDiagram] Conjugate type: ${conjugateType}`);
+    
+    // Ensure conjugateType is passed to all ray generation
+    // For infinite conjugate, enable chief ray analysis to find proper emission origin
+    const enhancedOptions = { 
+        ...options, 
+        conjugateType,
+        // Enable chief ray analysis ONLY for infinite systems
+        useChiefRayAnalysis: conjugateType === 'infinite' ? true : false,
+        aimThroughStop: conjugateType === 'infinite' ? true : false,
+        allowStopBasedOriginSolve: conjugateType === 'infinite' ? true : false
+    };
+    
+    console.log(`🔍 [SpotDiagram] Enhanced options:`, {
+        conjugateType: enhancedOptions.conjugateType,
+        useChiefRayAnalysis: enhancedOptions.useChiefRayAnalysis,
+        aimThroughStop: enhancedOptions.aimThroughStop,
+        allowStopBasedOriginSolve: enhancedOptions.allowStopBasedOriginSolve
+    });
 
     // Input validation (match sync behavior)
     if (!opticalSystemRows || !Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
@@ -1357,6 +1380,15 @@ export async function generateSpotDiagramAsync(
         let pupilScaleUsed = null;
         const attempts = [];
 
+        const resolvePattern = () => {
+            const raw = (options && typeof options === 'object' && typeof options.pattern === 'string')
+                ? options.pattern
+                : (typeof window !== 'undefined' && typeof window.getRayEmissionPattern === 'function')
+                    ? window.getRayEmissionPattern()
+                    : (typeof window !== 'undefined' ? window.rayEmissionPattern : null);
+            const p = String(raw || '').trim().toLowerCase();
+            return (p === 'grid' || p === 'annular') ? p : 'annular';
+        };
         const traceOnceWithScale = async (scale, aimThroughStop, opts) => {
             const disableAngleObjectPositionOptimizationRequested = !!opts?.disableAngleObjectPositionOptimizationRequested;
             const allowStopBasedOriginSolveRequested = !!opts?.allowStopBasedOriginSolveRequested;
@@ -1366,6 +1398,7 @@ export async function generateSpotDiagramAsync(
                 rayNumber,
                 null,
                 {
+                    conjugateType,
                     annularRingCount: ringCount,
                     targetSurfaceIndex,
                     useChiefRayAnalysis: !!aimThroughStop,
@@ -1374,6 +1407,7 @@ export async function generateSpotDiagramAsync(
                     allowStopBasedOriginSolve: opdCompatibleAngle && !!aimThroughStop && allowStopBasedOriginSolveRequested,
                     wavelengthUm: Number(primaryWavelength?.wavelength) || 0.5876,
                     pupilScale: scale,
+                    pattern: resolvePattern(),
                     // Spot-diagram should be based on the physical stop/pupil, not on any temporary
                     // Draw-Cross-ray extent cached on window.
                     disableCrossExtent: true,
@@ -1618,8 +1652,14 @@ export async function generateSpotDiagramAsync(
         // Prefer the nominal field definition first (aimThroughStop=false).
         // In physical-vignetting mode, do NOT fall back to aimThroughStop=true by default.
         // However, for Angle objects in physical mode, match OPD behavior by aiming through stop.
+        // CRITICAL: For infinite conjugate, ALWAYS use aimThroughStop=true to enable chief ray analysis
         if (opdCompatibleAngle) {
-            await tryPupilScales(true);
+            // For infinite conjugate, use chief ray analysis; for finite conjugate, use geometric ray generation
+            const useAimThroughStop = (conjugateType === 'infinite');
+            const ok = await tryPupilScales(useAimThroughStop);
+            if (!ok) {
+                await tryPupilScales(!useAimThroughStop);
+            }
         } else if (!(await tryPupilScales(false)) && !physicalVignetting) {
             await tryPupilScales(true);
         }

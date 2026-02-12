@@ -16,6 +16,7 @@ import {
     validateSceneGeometry
 } from '../optical/surface.ts';
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.ts';
+import { generateSurfaceOptions } from '../evaluation/spot-diagram.ts';
 import { PSFPlotter } from '../evaluation/psf/psf-plot.ts';
 import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../evaluation/wavefront/wavefront.ts';
 import { PSFCalculator } from '../evaluation/psf/psf-calculator.ts';
@@ -2407,9 +2408,6 @@ export function setupAnalysisWindows() {
 
                         // Ensure parent window selects are populated before opening popup
                         try {
-                            if (typeof w.updateSpotDiagramConfigSelect === 'function') {
-                                w.updateSpotDiagramConfigSelect();
-                            }
                             if (typeof w.updateSurfaceNumberSelect === 'function') {
                                 w.updateSurfaceNumberSelect();
                             }
@@ -2499,9 +2497,6 @@ export function setupAnalysisWindows() {
 <body>
     <div class="header">Spot Diagram</div>
     <div class="controls">
-        <label for="popup-spot-diagram-config-select">Config:</label>
-        <select id="popup-spot-diagram-config-select"></select>
-
         <label for="popup-surface-number-select">Surf:</label>
         <select id="popup-surface-number-select"></select>
 
@@ -2618,30 +2613,6 @@ export function setupAnalysisWindows() {
             popupSelect.value = openerSelect.value;
         }
 
-        function syncConfigOptionsFromOpener() {
-            const openerCfg = getOpenerEl('spot-diagram-config-select');
-            const popupCfg = document.getElementById('popup-spot-diagram-config-select');
-            if (!popupCfg) return;
-
-            popupCfg.innerHTML = '';
-            if (!openerCfg || !openerCfg.options) {
-                const opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = 'Current';
-                popupCfg.appendChild(opt);
-                return;
-            }
-
-            for (const o of openerCfg.options) {
-                const opt = document.createElement('option');
-                opt.value = o.value;
-                opt.textContent = o.textContent || '';
-                popupCfg.appendChild(opt);
-            }
-
-            popupCfg.value = openerCfg.value;
-        }
-
         function syncInputsFromOpener() {
             const openerRay = getOpenerEl('ray-count-input');
             const openerRing = getOpenerEl('ring-count-select');
@@ -2663,24 +2634,6 @@ export function setupAnalysisWindows() {
             }
         }
 
-        function syncConfigToOpener() {
-            const popupCfg = document.getElementById('popup-spot-diagram-config-select');
-            const openerCfg = getOpenerEl('spot-diagram-config-select');
-            if (!popupCfg || !openerCfg) return;
-            openerCfg.value = popupCfg.value;
-            try {
-                openerCfg.dispatchEvent(new Event('change', { bubbles: true }));
-            } catch (_) {
-                // ignore
-            }
-        }
-
-        document.getElementById('popup-spot-diagram-config-select').addEventListener('change', () => {
-            syncConfigToOpener();
-            // surface options depend on config, so resync
-            syncSurfaceOptionsFromOpener();
-        });
-
         function setPopupPattern(isAnnular) {
             const popupAnnular = document.getElementById('popup-annular-pattern-btn');
             const popupGrid = document.getElementById('popup-grid-pattern-btn');
@@ -2691,6 +2644,19 @@ export function setupAnalysisWindows() {
             const openerGrid = getOpenerEl('grid-pattern-btn');
             if (isAnnular && openerAnnular) openerAnnular.click();
             if (!isAnnular && openerGrid) openerGrid.click();
+
+            try {
+                if (window.opener) {
+                    window.opener.__cooptSpotPattern = isAnnular ? 'annular' : 'grid';
+                }
+            } catch (_) {}
+            try {
+                if (window.opener && window.opener.localStorage) {
+                    window.opener.localStorage.setItem('spotDiagramPattern', isAnnular ? 'annular' : 'grid');
+                } else {
+                    localStorage.setItem('spotDiagramPattern', isAnnular ? 'annular' : 'grid');
+                }
+            } catch (_) {}
         }
 
         document.getElementById('popup-annular-pattern-btn').addEventListener('click', () => setPopupPattern(true));
@@ -2718,19 +2684,13 @@ export function setupAnalysisWindows() {
             const openerRay = getOpenerEl('ray-count-input');
             const openerRing = getOpenerEl('ring-count-select');
             const openerSurface = getOpenerEl('surface-number-select');
-            const openerCfg = getOpenerEl('spot-diagram-config-select');
             const popupRay = document.getElementById('popup-ray-count-input');
             const popupRing = document.getElementById('popup-ring-count-select');
             const popupSurface = document.getElementById('popup-surface-number-select');
-            const popupCfg = document.getElementById('popup-spot-diagram-config-select');
 
             if (openerRay && popupRay) openerRay.value = popupRay.value;
             if (openerRing && popupRing) openerRing.value = popupRing.value;
             if (openerSurface && popupSurface) openerSurface.value = popupSurface.value;
-            if (openerCfg && popupCfg) {
-                openerCfg.value = popupCfg.value;
-                try { openerCfg.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
-            }
 
             if (!window.opener || typeof window.opener.showSpotDiagram !== 'function') {
                 if (popupContainer) popupContainer.textContent = 'showSpotDiagram is not available in the main window.';
@@ -2752,7 +2712,6 @@ export function setupAnalysisWindows() {
                     surfaceIndex: popupSurface && popupSurface.value !== '' ? parseInt(popupSurface.value, 10) : undefined,
                     rayCount: popupRay && popupRay.value !== '' ? parseInt(popupRay.value, 10) : undefined,
                     ringCount: popupRing && popupRing.value !== '' ? parseInt(popupRing.value, 10) : undefined,
-                    configId: popupCfg && popupCfg.value !== '' ? String(popupCfg.value) : undefined,
                     containerElement: popupContainer,
                     onProgress
                 });
@@ -2764,7 +2723,6 @@ export function setupAnalysisWindows() {
         });
 
         function syncAll() {
-            syncConfigOptionsFromOpener();
             syncSurfaceOptionsFromOpener();
             syncInputsFromOpener();
         }
@@ -6249,56 +6207,6 @@ export function updateTransformSurfaceSelect(): void {
     }
 }
 
-/**
- * Update spot diagram config select with available configurations
- */
-export function updateSpotDiagramConfigSelect(): void {
-    console.log('[DEBUG] updateSpotDiagramConfigSelect called');
-    const spotCfg = document.getElementById('spot-diagram-config-select') as HTMLSelectElement | null;
-    console.log('[DEBUG] spot-diagram-config-select element:', spotCfg);
-    if (!spotCfg) {
-        console.log('[DEBUG] spot-diagram-config-select element not found!');
-        return;
-    }
-    
-    try {
-        const systemConfig = localStorage.getItem('systemConfigurations');
-        console.log('[DEBUG] systemConfigurations:', systemConfig);
-        if (!systemConfig) {
-            console.log('[DEBUG] No systemConfigurations in localStorage');
-            return;
-        }
-        
-        const parsed = JSON.parse(systemConfig);
-        const configurations = Array.isArray(parsed?.configurations) ? parsed.configurations : [];
-        const activeId = parsed?.activeConfigId;
-        console.log('[DEBUG] Found configurations:', configurations.length, 'activeId:', activeId);
-        
-        // Clear existing options
-        spotCfg.innerHTML = '';
-        
-        // Add configuration options
-        configurations.forEach((config: any) => {
-            if (!config || !config.id) return;
-            const option = document.createElement('option');
-            option.value = String(config.id);
-            option.textContent = String(config.name || config.id);
-            if (String(config.id) === String(activeId)) {
-                option.selected = true;
-            }
-            spotCfg.appendChild(option);
-            console.log('[DEBUG] Added option:', config.name || config.id);
-        });
-        
-        // If no selection and has options, select first
-        if (spotCfg.options.length > 0 && !spotCfg.value) {
-            spotCfg.selectedIndex = 0;
-        }
-        console.log('[DEBUG] Final options count:', spotCfg.options.length);
-    } catch (error) {
-        console.error('Error updating spot diagram config select:', error);
-    }
-}
 
 /**
  * Update surface number select with current optical system surfaces
@@ -6327,40 +6235,43 @@ export function updateSurfaceNumberSelect(): void {
             return;
         }
         
-        // Save current selection
+        // Save current selection (value + rowId/rowSig)
         const prevValue = surfaceSelect.value;
+        const prevOption = surfaceSelect.selectedOptions && surfaceSelect.selectedOptions.length > 0
+            ? surfaceSelect.selectedOptions[0]
+            : null;
+        const prevRowId = prevOption?.dataset?.rowId ? String(prevOption.dataset.rowId) : '';
+        const prevRowSig = prevOption?.dataset?.rowSig ? String(prevOption.dataset.rowSig) : '';
         
         // Clear existing options
         surfaceSelect.innerHTML = '<option value="">Select surface...</option>';
         
-        // Add surface options
-        opticalSystemRows.forEach((row: any, index: number) => {
+        // Add surface options (CB-invariant ids)
+        const opts = generateSurfaceOptions(opticalSystemRows);
+        opts.forEach((o: any) => {
             const option = document.createElement('option');
-            option.value = String(index);
-            
-            // Create label
-            let label = `Surf ${index}`;
-            const objectType = String(row?.['object type'] ?? row?.object ?? '').toLowerCase();
-            if (objectType === 'object') {
-                label = `Surf ${index}: Object`;
-            } else if (objectType === 'image') {
-                label = `Surf ${index}: Image`;
-            } else if (row.comment) {
-                label += `: ${row.comment}`;
-            } else if (row.material && row.material !== 'AIR') {
-                label += `: ${row.material}`;
-            }
-            
-            option.textContent = label;
+            option.value = String(o.surfaceId);
+            option.textContent = String(o.label ?? o.value ?? `Surf ${o.surfaceId}`);
+            if (o.rowId) option.dataset.rowId = String(o.rowId);
+            if (o.rowSig) option.dataset.rowSig = String(o.rowSig);
+            if (Number.isInteger(o.rowIndex)) option.dataset.rowIndex = String(o.rowIndex);
             surfaceSelect.appendChild(option);
         });
         
         // Restore selection if still valid
         if (prevValue && Array.from(surfaceSelect.options).some(opt => opt.value === prevValue)) {
             surfaceSelect.value = prevValue;
-        } else if (surfaceSelect.options.length > 1) {
-            // Default to last surface (usually Image)
-            surfaceSelect.selectedIndex = surfaceSelect.options.length - 1;
+        } else if (prevRowId) {
+            const match = Array.from(surfaceSelect.options).find(opt => opt.dataset?.rowId === prevRowId);
+            if (match) surfaceSelect.value = match.value;
+        } else if (prevRowSig) {
+            const match = Array.from(surfaceSelect.options).find(opt => opt.dataset?.rowSig === prevRowSig);
+            if (match) surfaceSelect.value = match.value;
+        }
+        if (!surfaceSelect.value && surfaceSelect.options.length > 1) {
+            const img = Array.from(surfaceSelect.options).find(opt => String(opt.textContent || '').includes('(Image)'));
+            if (img) surfaceSelect.value = img.value;
+            else surfaceSelect.selectedIndex = surfaceSelect.options.length - 1;
         }
     } catch (error) {
         console.error('Error updating surface number select:', error);
@@ -6369,6 +6280,5 @@ export function updateSurfaceNumberSelect(): void {
 
 // Expose functions to window for backwards compatibility
 if (typeof window !== 'undefined') {
-    w.updateSpotDiagramConfigSelect = updateSpotDiagramConfigSelect;
     w.updateSurfaceNumberSelect = updateSurfaceNumberSelect;
 }

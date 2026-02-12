@@ -14,9 +14,13 @@ const w: Record<string, any> = window;
 import * as THREE from 'three';
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.ts';
 import { expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
+import { detectConjugateType, ConjugateType } from '../utils/conjugate-detection.ts';
 import { getScene, getCamera, getRenderer, getControls, getTableOpticalSystem, getTableObject, getTableSource,
          getIsGeneratingSpotDiagram, getIsGeneratingTransverseAberration,
          setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration } from '../core/app-config.ts';
+
+let spotDiagramRequestCounter = 0;
+let pendingSpotDiagramRequest: { requestId: number; options: any; requestedAt: number } | null = null;
 
 /**
  * Create field setting from object data for PSF calculation
@@ -103,6 +107,28 @@ export function clearAllDrawing(): void {
 export async function showSpotDiagram(options: any = {}): Promise<void> {
     console.log('🎯 Starting spot diagram generation...');
 
+    const requestId = ++spotDiagramRequestCounter;
+
+    // If a configuration switch is in progress, the Tabulator tables can be mid-update.
+    // Defer this request so we don't mix old object rows with the new optical system.
+    try {
+        const isSwitching = typeof window !== 'undefined' && (w as any).__configurationSwitching === true;
+        if (isSwitching) {
+            pendingSpotDiagramRequest = { requestId, options, requestedAt: Date.now() };
+            console.warn(`⚠️ Spot diagram requested during configuration switching; queued request ${requestId}`);
+            // Retry soon; the finally-block queue runner will also pick up the latest request.
+            setTimeout(() => {
+                try {
+                    const still = typeof window !== 'undefined' && (w as any).__configurationSwitching === true;
+                    if (!still) {
+                        showSpotDiagram(options).catch(() => {});
+                    }
+                } catch (_) {}
+            }, 50);
+            return;
+        }
+    } catch (_) {}
+
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
@@ -130,8 +156,11 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
     }
     
     // Check if already generating
+    // IMPORTANT: When switching configurations quickly, we must not drop the latest request.
+    // If we just `return`, the UI can keep showing spot data computed from the previous config.
     if (getIsGeneratingSpotDiagram()) {
-        console.warn('⚠️ Spot diagram generation already in progress');
+        pendingSpotDiagramRequest = { requestId, options, requestedAt: Date.now() };
+        console.warn(`⚠️ Spot diagram generation already in progress; queued request ${requestId}`);
         return;
     }
     
@@ -147,15 +176,9 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
 
         // Get selected parameters with fallback defaults
         const surfaceSelect = document.getElementById('surface-number-select') as HTMLSelectElement | null;
-        const configSelect = document.getElementById('spot-diagram-config-select') as HTMLSelectElement | null;
         const rayCountInput = document.getElementById('ray-count-input') as HTMLInputElement | null;
         const wavelengthInput = document.getElementById('wavelength-input') as HTMLInputElement | null;
         const ringCountSelect = document.getElementById('ring-count-select') as HTMLSelectElement | null;
-
-        const providedConfigId = (options && typeof options === 'object' && options.configId !== undefined && options.configId !== null)
-            ? String(options.configId).trim()
-            : '';
-        const selectedConfigIdRaw = providedConfigId || (configSelect && configSelect.value !== undefined && configSelect.value !== null ? String(configSelect.value).trim() : '');
         const resolveActiveConfigId = () => {
             try {
                 const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
@@ -169,32 +192,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             }
         };
         const activeConfigId = resolveActiveConfigId();
-
-        // If Spot Diagram config differs from main config, switch main config to match before calculation.
-        if (selectedConfigIdRaw && activeConfigId && selectedConfigIdRaw !== activeConfigId) {
-            console.warn(`⚠️ [SpotDiagram] Selected config (${selectedConfigIdRaw}) differs from active (${activeConfigId}); switching main config to match.`);
-            try {
-                const mod = await import('../data/table-configuration.js');
-                if (typeof mod.saveCurrentToActiveConfiguration === 'function') {
-                    mod.saveCurrentToActiveConfiguration();
-                }
-                if (typeof mod.setActiveConfiguration === 'function') {
-                    mod.setActiveConfiguration(Number(selectedConfigIdRaw));
-                }
-                if (typeof mod.loadActiveConfigurationToTables === 'function') {
-                    await mod.loadActiveConfigurationToTables({ applyToUI: true });
-                }
-                // Keep UI selection aligned.
-                try {
-                    const cfgSelect = document.getElementById('config-select') as HTMLSelectElement | null;
-                    if (cfgSelect) cfgSelect.value = String(selectedConfigIdRaw);
-                } catch (_) {}
-            } catch (err) {
-                console.error(`❌ [SpotDiagram] Failed to switch main config:`, err);
-            }
-        }
-
-        const selectedConfigId = selectedConfigIdRaw;
+        const selectedConfigId = activeConfigId;
         
         // Use defaults if form elements not found
         // NOTE: Spot Diagram UI uses a CB-invariant "surface id" (Object=0, first physical surface=1, ...).
@@ -254,11 +252,53 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             console.warn('⚠️ Invalid surface id, using default (0)');
         }
 
+        const resolveSpotPattern = () => {
+            try {
+                const stored = (typeof window !== 'undefined') ? (window as any).__cooptSpotPattern : null;
+                const p0 = String(stored || '').trim().toLowerCase();
+                if (p0 === 'grid' || p0 === 'annular') return p0;
+            } catch (_) {}
+            try {
+                const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('spotDiagramPattern') : null;
+                const p1 = String(raw || '').trim().toLowerCase();
+                if (p1 === 'grid' || p1 === 'annular') return p1;
+            } catch (_) {}
+            const annularBtn = document.getElementById('annular-pattern-btn');
+            const gridBtn = document.getElementById('grid-pattern-btn');
+            if (gridBtn && gridBtn.classList.contains('active')) return 'grid';
+            if (annularBtn && annularBtn.classList.contains('active')) return 'annular';
+            try {
+                if (typeof window !== 'undefined' && typeof w.getRayEmissionPattern === 'function') {
+                    const p = String(w.getRayEmissionPattern() || '').trim().toLowerCase();
+                    if (p === 'grid' || p === 'annular') return p;
+                }
+            } catch (_) {}
+            try {
+                const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('spotDiagramSettingsByConfigId') : null;
+                const map = raw ? JSON.parse(raw) : null;
+                const entry = (map && selectedConfigId) ? map[selectedConfigId] : null;
+                const p = entry && typeof entry.pattern === 'string' ? entry.pattern.trim().toLowerCase() : '';
+                if (p === 'grid' || p === 'annular') return p;
+            } catch (_) {}
+            return 'annular';
+        };
+        const patternFromUi = resolveSpotPattern();
+        try {
+            if (typeof window !== 'undefined' && typeof w.setRayEmissionPattern === 'function') {
+                w.setRayEmissionPattern(patternFromUi);
+            }
+        } catch (_) {}
+
         const surfaceId = surfaceIndex;
         console.log(`🎯 Generating spot diagram for surfaceId ${surfaceId}, ${rayCount} rays, ${wavelength}nm, ring count ${ringCount}`);
         
         // Get data either from active UI tables or from a selected configuration snapshot.
         const loadRowsForSelectedConfig = () => {
+            // Spot diagram should not depend on whatever config is currently active.
+            // In particular, do NOT override semidia/aperture values from the current UI table when evaluating
+            // a different configuration, otherwise spot sizes change after switching configs.
+            const USE_CURRENT_TABLE_SEMIDIA_FOR_OTHER_CONFIGS = false;
+
             if (!selectedConfigId) {
                 console.log(`🔍 [Load Rows] Using CURRENT tables (no config selected)`);
                 const tableOpticalSystem = getTableOpticalSystem();
@@ -354,17 +394,67 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                     ? String(sys.activeConfigId)
                     : '';
 
+                const isConfigSwitching = (() => {
+                    try {
+                        return typeof window !== 'undefined' && (w as any).__configurationSwitching === true;
+                    } catch {
+                        return false;
+                    }
+                })();
+
                 // If the selected config is the active one, prefer live UI tables to avoid stale snapshot data.
-                if (activeId && String(activeId) === String(selectedConfigId)) {
+                // However, if the UI tables are still stale (race after config switch), fall back to snapshot.
+                if (activeId && String(activeId) === String(selectedConfigId) && !isConfigSwitching) {
                     console.log(`🔍 [Load Rows] Selected config is ACTIVE; using current tables instead of snapshot`);
                     const tableOpticalSystem = getTableOpticalSystem();
                     const tableObject = getTableObject();
                     const tableSource = getTableSource();
-                    return {
+
+                    const live = {
                         opticalSystemRows: getOpticalSystemRows(tableOpticalSystem),
                         objectRows: getObjectRows(tableObject),
                         sourceRows: getSourceRows(tableSource)
                     };
+
+                    try {
+                        const cfg = Array.isArray(sys?.configurations)
+                            ? sys.configurations.find((c: any) => String(c?.id) === String(selectedConfigId))
+                            : null;
+                        const snapObj = normalizeObjectRows(Array.isArray(cfg?.object) ? cfg.object : []);
+                        const liveObj = normalizeObjectRows(Array.isArray(live.objectRows) ? live.objectRows : []);
+                        const keyOf = (r: any) => String(r?.id ?? '');
+                        const byId = (rows: any[]) => {
+                            const m = new Map<string, any>();
+                            for (const r of rows) {
+                                if (r && typeof r === 'object') {
+                                    const k = keyOf(r);
+                                    if (k) m.set(k, r);
+                                }
+                            }
+                            return m;
+                        };
+                        const lm = byId(liveObj);
+                        const sm = byId(snapObj);
+                        const probeId = '2';
+                        const l2 = lm.get(probeId);
+                        const s2 = sm.get(probeId);
+                        const normPos = (v: any) => String(v ?? '').trim().toLowerCase();
+                        if (l2 && s2) {
+                            const lp = normPos(l2.position);
+                            const sp = normPos(s2.position);
+                            const ly = Number(l2.yHeightAngle ?? l2.y ?? l2['object y']);
+                            const sy = Number(s2.yHeightAngle ?? s2.y ?? s2['object y']);
+                            if (lp !== sp || (Number.isFinite(ly) && Number.isFinite(sy) && Math.abs(ly - sy) > 1e-9)) {
+                                console.warn('⚠️ [Load Rows] Live Object table differs from config snapshot; using snapshot for Object rows', {
+                                    live: { position: l2.position, yHeightAngle: l2.yHeightAngle },
+                                    snapshot: { position: s2.position, yHeightAngle: s2.yHeightAngle }
+                                });
+                                return { ...live, objectRows: snapObj };
+                            }
+                        }
+                    } catch (_) {}
+
+                    return live;
                 }
 
                 // Always use the selected config snapshot (not active UI tables).
@@ -381,29 +471,9 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                         if (Array.isArray(cached) && cached.length > 0) {
                             console.log(`🔍 [Cache Hit] Config "${selectedConfigId}": Using cached opticalSystemRows (${cached.length} surfaces)`);
                             
-                            // Clone cached data and apply current table semidias (for Spot Diagram evaluation)
+                            // Clone cached data. Do NOT override semidias from the current UI table here;
+                            // cached rows belong to the selected config and should be self-consistent.
                             const cachedRows = JSON.parse(JSON.stringify(cached));
-                            try {
-                                const tableOpticalSystem = getTableOpticalSystem();
-                                const currentOpticalRows = getOpticalSystemRows(tableOpticalSystem);
-                                
-                                if (currentOpticalRows && cachedRows && cachedRows.length > 0) {
-                                    console.log(`🔧 [CACHE SEMIDIA OVERRIDE] Applying current table semidias to ${cachedRows.length} cached surfaces`);
-                                    const n = Math.min(cachedRows.length, currentOpticalRows.length);
-                                    for (let i = 0; i < n; i++) {
-                                        const currentSemidia = currentOpticalRows[i]?.semidia;
-                                        if (currentSemidia !== undefined && currentSemidia !== null && String(currentSemidia).trim() !== '') {
-                                            const oldSemidia = cachedRows[i]?.semidia;
-                                            if (currentSemidia !== oldSemidia) {
-                                                console.log(`  🔧 Surface ${i}: ${oldSemidia} → ${currentSemidia}`);
-                                            }
-                                            cachedRows[i] = { ...cachedRows[i], semidia: currentSemidia };
-                                        }
-                                    }
-                                }
-                            } catch (err) {
-                                console.error(`❌ [CACHE SEMIDIA OVERRIDE Error]`, err);
-                            }
                             
                             return {
                                 opticalSystemRows: cachedRows,
@@ -449,10 +519,9 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                         // Preserve semidia (aperture) from persisted opticalSystem when available.
                         // Blocks expansion uses schema defaults (e.g., DEFAULT_SEMIDIA / DEFAULT_STOP_SEMI_DIAMETER),
                         // which can vignette rays unexpectedly compared to the saved table.
-                        // DISABLED FOR SPOT DIAGRAM: Always use current table semidias to prevent vignetting off-axis objects.
-                        // (Legacy semidias may be too small for angle objects like Object 2)
+                        // For Spot Diagram, keep per-config semidias so other configs don't change when switching active config.
                         try {
-                            const DISABLE_LEGACY_SEMIDIA_FOR_SPOT_DIAGRAM = true;
+                            const DISABLE_LEGACY_SEMIDIA_FOR_SPOT_DIAGRAM = false;
                             
                             if (!DISABLE_LEGACY_SEMIDIA_FOR_SPOT_DIAGRAM) {
                                 const legacyRows = Array.isArray(cfg?.opticalSystem) ? cfg.opticalSystem : null;
@@ -501,38 +570,27 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                                         row.semidia = lsRaw;
                                     }
                                 }
-                            } else {
-                                console.log(`🚫 [Legacy Semidia Restore] DISABLED for Spot Diagram - using current table semidias`);
                             }
                         } catch (_) {}
-                        
-                        // Override ALL semidias from current table for Spot Diagram evaluation
-                        // (Block expansion may use schema defaults that are too small for angle objects)
-                        try {
-                            const rows = exp.rows;
-                            const tableOpticalSystem = getTableOpticalSystem();
-                            const currentOpticalRows = getOpticalSystemRows(tableOpticalSystem);
-                            
-                            console.log(`🔍 [ALL SEMIDIA OVERRIDE] Config "${cfg?.name || cfg?.id || selectedConfigId}": rows=${rows?.length}, currentOpticalRows=${currentOpticalRows?.length}`);
-                            
-                            if (currentOpticalRows && rows && rows.length > 0) {
-                                console.log(`🔧 [ALL SEMIDIA OVERRIDE] Config "${cfg?.name || cfg?.id || selectedConfigId}": Applying current table semidias to all ${rows.length} surfaces`);
-                                const n = Math.min(rows.length, currentOpticalRows.length);
-                                for (let i = 0; i < n; i++) {
-                                    const currentSemidia = currentOpticalRows[i]?.semidia;
-                                    if (currentSemidia !== undefined && currentSemidia !== null && String(currentSemidia).trim() !== '') {
-                                        const oldSemidia = rows[i]?.semidia;
-                                        if (currentSemidia !== oldSemidia) {
-                                            console.log(`  🔧 Surface ${i}: ${oldSemidia} → ${currentSemidia}`);
+                        // Historically we overrode semidias from the current UI table to avoid vignetting.
+                        // That caused cross-config coupling, so keep it disabled by default.
+                        if (USE_CURRENT_TABLE_SEMIDIA_FOR_OTHER_CONFIGS) {
+                            try {
+                                const rows = exp.rows;
+                                const tableOpticalSystem = getTableOpticalSystem();
+                                const currentOpticalRows = getOpticalSystemRows(tableOpticalSystem);
+                                if (currentOpticalRows && rows && rows.length > 0) {
+                                    const n = Math.min(rows.length, currentOpticalRows.length);
+                                    for (let i = 0; i < n; i++) {
+                                        const currentSemidia = currentOpticalRows[i]?.semidia;
+                                        if (currentSemidia !== undefined && currentSemidia !== null && String(currentSemidia).trim() !== '') {
+                                            rows[i] = { ...rows[i], semidia: currentSemidia };
                                         }
-                                        rows[i] = { ...rows[i], semidia: currentSemidia };
                                     }
                                 }
-                            } else {
-                                console.log(`⚠️ [ALL SEMIDIA OVERRIDE] Config "${cfg?.name || cfg?.id || selectedConfigId}": Skipped (rows=${!!rows}, currentOpticalRows=${!!currentOpticalRows})`);
+                            } catch (err) {
+                                console.error(`❌ [ALL SEMIDIA OVERRIDE Error] Config "${cfg?.name || cfg?.id || selectedConfigId}":`, err);
                             }
-                        } catch (err) {
-                            console.error(`❌ [ALL SEMIDIA OVERRIDE Error] Config "${cfg?.name || cfg?.id || selectedConfigId}":`, err);
                         }
                         // Preserve Object row from persisted config (critical for finite object distance).
                         // Do NOT override with current table when evaluating non-active configs.
@@ -639,73 +697,8 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 };
                 
                 
-                // CRITICAL: Apply current table semidias to ALL configs for Spot Diagram evaluation
-                // All configs should use the same optical system geometry (current table state)
-                try {
-                    console.log(`🔍 [SEMIDIA OVERRIDE START] Config "${cfg?.name || cfg?.id || selectedConfigId}"`);
-                    
-                    const rows = result.opticalSystemRows;
-                    console.log(`  Step 1: Got rows, type=${typeof rows}, isArray=${Array.isArray(rows)}, length=${rows?.length}`);
-                    
-                    if (!Array.isArray(rows)) {
-                        console.error(`  ❌ rows is not an array: ${typeof rows}`);
-                        throw new Error('rows is not an array');
-                    }
-                    
-                    if (rows.length === 0) {
-                        console.error(`  ❌ rows is empty`);
-                        throw new Error('rows is empty');
-                    }
-                    
-                    console.log(`  Step 2: Getting current table...`);
-                    const tableOpticalSystem = getTableOpticalSystem();
-                    console.log(`  Step 3: tableOpticalSystem = ${!!tableOpticalSystem}`);
-                    
-                    const currentOpticalRows = getOpticalSystemRows(tableOpticalSystem);
-                    console.log(`  Step 4: currentOpticalRows length = ${currentOpticalRows?.length}`);
-                    
-                    if (!currentOpticalRows || currentOpticalRows.length === 0) {
-                        console.error(`  ❌ Cannot get current optical rows`);
-                        throw new Error('Cannot get current optical rows');
-                    }
-                    
-                    // Debug: Log first 3 rows structure
-                    console.log(`  📋 First 3 rows in result.opticalSystemRows:`);
-                    for (let i = 0; i < Math.min(3, rows.length); i++) {
-                        const row = rows[i];
-                        console.log(`    [${i}] semidia=${row?.semidia}, surfType=${row?.surfType}, object=${row?.object}`);
-                    }
-                    
-                    console.log(`  📋 First 3 rows in currentOpticalRows:`);
-                    for (let i = 0; i < Math.min(3, currentOpticalRows.length); i++) {
-                        const row = currentOpticalRows[i];
-                        console.log(`    [${i}] semidia=${row?.semidia}, surfType=${row?.surfType}, object=${row?.object}`);
-                    }
-                    
-                    console.log(`  Step 5: Starting semidia override loop...`);
-                    const n = Math.min(rows.length, currentOpticalRows.length);
-                    let changeCount = 0;
-                    
-                    for (let i = 0; i < n; i++) {
-                        const currentSemidia = currentOpticalRows[i]?.semidia;
-                        const oldSemidia = rows[i]?.semidia;
-                        
-                        if (currentSemidia !== undefined && currentSemidia !== null && String(currentSemidia).trim() !== '') {
-                            if (currentSemidia !== oldSemidia) {
-                                console.log(`    🔧 Surface ${i}: ${oldSemidia} → ${currentSemidia}`);
-                                changeCount++;
-                            }
-                            rows[i] = { ...rows[i], semidia: currentSemidia };
-                        }
-                    }
-                    
-                    console.log(`  ✅ Completed: ${changeCount} changed, ${n - changeCount} unchanged`);
-                    
-                } catch (err) {
-                    console.error(`❌ [SEMIDIA OVERRIDE Error] Config "${cfg?.name || cfg?.id || selectedConfigId}":`, err);
-                    console.error(`  Error message:`, (err as any).message);
-                    console.error(`  Error stack:`, (err as any).stack);
-                }
+                // Do not globally override semidias from the current UI table.
+                // If needed, enable USE_CURRENT_TABLE_SEMIDIA_FOR_OTHER_CONFIGS (kept false by default).
                 
                 console.log(`🔍 [Load Result] Config "${selectedConfigId}": opticalSystem=${result.opticalSystemRows?.length} (from ${Array.isArray(expandedOptical) ? 'BLOCK EXPANSION' : 'DIRECT cfg.opticalSystem'}), objects=${result.objectRows?.length}`);
                 
@@ -725,42 +718,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
 
         let { opticalSystemRows, objectRows, sourceRows } = loadRowsForSelectedConfig();
 
-        console.log(`🔍 [Config Debug] selectedConfigId="${selectedConfigId}", opticalSystemRows.length=${opticalSystemRows?.length}`);
-        if (opticalSystemRows && opticalSystemRows.length > 0) {
-            console.log(`🔍 [Config Debug] First 3 surfaces:`, opticalSystemRows.slice(0, 3).map((r: any, i: number) => ({ 
-                index: i, 
-                surfType: r.surfType || r['surf type'], 
-                objectType: r['object type'] || r.objectType,
-                radius: r.radius,
-                thickness: r.thickness,
-                semidia: r.semidia
-            })));
-            console.log(`🔍 [Config Debug] Last 3 surfaces:`, opticalSystemRows.slice(-3).map((r: any, i: number) => ({ 
-                index: opticalSystemRows.length - 3 + i, 
-                surfType: r.surfType || r['surf type'], 
-                objectType: r['object type'] || r.objectType,
-                radius: r.radius,
-                thickness: r.thickness,
-                semidia: r.semidia
-            })));
-            // Find surfaces with smallest semidia (potential vignetting source)
-            const surfacesWithSemidia = opticalSystemRows
-                .map((r: any, i: number) => ({ index: i, semidia: parseFloat(r.semidia), surfType: r.surfType }))
-                .filter((s: any) => isFinite(s.semidia) && s.semidia > 0)
-                .sort((a: any, b: any) => a.semidia - b.semidia);
-            if (surfacesWithSemidia.length > 0) {
-                console.log(`🔍 [Config Debug] Smallest 3 semidias (potential vignetting):`, surfacesWithSemidia.slice(0, 3));
-            }
-            // Calculate cumulative Z position to Image surface
-            let cumulativeZ = 0;
-            for (let i = 0; i < opticalSystemRows.length; i++) {
-                const t = parseFloat(opticalSystemRows[i]?.thickness);
-                if (isFinite(t)) {
-                    cumulativeZ += t;
-                }
-            }
-            console.log(`🔍 [Config Debug] Cumulative Z to end: ${cumulativeZ.toFixed(3)}mm`);
-        }
+        // (Debug logs removed) Config preview logs were too noisy for normal operation.
         
         // Check Image surface (index=20) semidia specifically
         if (opticalSystemRows && opticalSystemRows.length > 20) {
@@ -793,40 +751,109 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         }
 
         // Resolve CB-invariant surfaceId -> actual rowIndex in opticalSystemRows.
+        // Use separated functions for finite and infinite conjugates to prevent mutual interference.
         let resolvedSurfaceRowIndex: number | null = null;
         try {
             const { generateSurfaceOptions } = await import('../evaluation/spot-diagram.js');
             const opts = generateSurfaceOptions(opticalSystemRows || []);
-            console.log(`🔍 [Surface Resolution] Looking for surfaceId=${surfaceId} in ${opts.length} options`);
+            
+            // Detect conjugate type using unified detection
+            const conjugateType = detectConjugateType(opticalSystemRows);
+            
+            console.log(`🔍 [Surface Resolution] Conjugate: ${conjugateType}, Looking for surfaceId=${surfaceId} in ${opts.length} options`);
             console.log(`🔍 [Surface Options Sample]:`, opts.slice(0, 3).map((o: any) => ({ surfaceId: o.surfaceId, value: o.value, rowIndex: o.rowIndex, label: o.label })));
-            const selectedOption = (surfaceSelect && surfaceSelect.selectedIndex >= 0 && surfaceSelect.options)
-                ? surfaceSelect.options[surfaceSelect.selectedIndex]
-                : null;
-            const selectedRowId = selectedOption?.dataset?.rowId ? String(selectedOption.dataset.rowId) : '';
-            const selectedRowSig = selectedOption?.dataset?.rowSig ? String(selectedOption.dataset.rowSig) : '';
-
-            // Match by surfaceId (CB-invariant UI number), not by value (row-based index)
-            let match = opts.find((o: any) => Number(o?.surfaceId) === Number(surfaceId));
-            if (!match && selectedRowId) {
-                match = opts.find((o: any) => String(o?.rowId ?? '') === selectedRowId);
-                if (match) {
-                    console.warn(`⚠️ [Surface Resolution] surfaceId mismatch; matched by rowId=${selectedRowId}`);
+            
+            /**
+             * Resolve surface for FINITE conjugate systems.
+             * Strategy: Ensure Image surface selection is preserved across configs.
+             * Detect if surfaceId accidentally matches Image-1 due to CB number differences.
+             */
+            const resolveSurfaceForFiniteConjugate = (): number | null => {
+                // First, identify if Image surface exists in current config
+                const imageOpt = opts.find((o: any) => typeof o?.label === 'string' && o.label.includes('(Image)'));
+                
+                console.log(`🔍 [Finite] Image surface found:`, imageOpt ? `surfaceId=${imageOpt.surfaceId}, rowIndex=${imageOpt.rowIndex}, label="${imageOpt.label}"` : 'NOT FOUND');
+                
+                // Strategy 1: Check if surfaceId matches Image surface's ID
+                if (imageOpt && Number(imageOpt.surfaceId) === Number(surfaceId)) {
+                    console.log(`✅ [Finite] surfaceId=${surfaceId} is Image surface at rowIndex=${imageOpt.rowIndex}`);
+                    return imageOpt.rowIndex;
                 }
-            }
-            if (!match && selectedRowSig) {
-                match = opts.find((o: any) => String(o?.rowSig ?? '') === selectedRowSig);
-                if (match) {
-                    console.warn(`⚠️ [Surface Resolution] surfaceId mismatch; matched by rowSig=${selectedRowSig}`);
+                
+                // Strategy 2: Direct surfaceId match (for non-Image surfaces)
+                const match = opts.find((o: any) => Number(o?.surfaceId) === Number(surfaceId));
+                if (match && Number.isInteger(match.rowIndex)) {
+                    console.log(`🔍 [Finite] Found match: surfaceId=${surfaceId} → rowIndex=${match.rowIndex}, label="${match.label}"`);
+                    
+                    // Verify this isn't accidentally matching wrong surface due to CB differences
+                    const isImageSurface = typeof match.label === 'string' && match.label.includes('(Image)');
+                    if (!isImageSurface && imageOpt) {
+                        const distance = Math.abs(match.rowIndex - imageOpt.rowIndex);
+                        console.log(`🔍 [Finite] Distance from Image: ${distance} (match.rowIndex=${match.rowIndex}, imageOpt.rowIndex=${imageOpt.rowIndex})`);
+                        
+                        if (distance <= 1) {
+                            // Matched surface is very close to Image surface, likely config mismatch
+                            console.warn(`⚠️ [Finite] surfaceId=${surfaceId} matched rowIndex=${match.rowIndex} (${match.label}) is adjacent to Image at ${imageOpt.rowIndex}, using Image instead`);
+                            return imageOpt.rowIndex;
+                        }
+                    }
+                    console.log(`✅ [Finite] Matched surfaceId=${surfaceId} → rowIndex=${match.rowIndex} (${match.label})`);
+                    return match.rowIndex;
                 }
-            }
-
-            if (match && Number.isInteger(match.rowIndex)) {
-                resolvedSurfaceRowIndex = match.rowIndex;
-                console.log(`✅ [Surface Resolution] Matched: surfaceId=${surfaceId} → rowIndex=${resolvedSurfaceRowIndex}, label="${match.label}"`);
-            } else if (opts.length > 0) {
-                const img = opts.find((o: any) => typeof o?.label === 'string' && o.label.includes('(Image)'));
-                resolvedSurfaceRowIndex = img && Number.isInteger(img.rowIndex) ? img.rowIndex : opts[opts.length - 1].rowIndex;
-                console.warn(`⚠️ [Surface Resolution] No match for surfaceId=${surfaceId}, using fallback: rowIndex=${resolvedSurfaceRowIndex}`);
+                
+                console.warn(`⚠️ [Finite] surfaceId=${surfaceId} not found in current config`);
+                
+                // Strategy 3: Default to Image surface (most common expectation)
+                if (imageOpt && Number.isInteger(imageOpt.rowIndex)) {
+                    console.warn(`⚠️ [Finite] Using Image surface at rowIndex=${imageOpt.rowIndex}`);
+                    return imageOpt.rowIndex;
+                }
+                
+                // Strategy 4: Fallback to last surface
+                if (opts.length > 0 && Number.isInteger(opts[opts.length - 1].rowIndex)) {
+                    console.warn(`⚠️ [Finite] Using last surface at rowIndex=${opts[opts.length - 1].rowIndex}`);
+                    return opts[opts.length - 1].rowIndex;
+                }
+                
+                return null;
+            };
+            
+            /**
+             * Resolve surface for INFINITE conjugate systems.
+             * Strategy: ALWAYS prioritize Image surface for infinite systems.
+             * Infinite systems typically focus at the image plane regardless of surfaceId.
+             */
+            const resolveSurfaceForInfiniteConjugate = (): number | null => {
+                // Strategy 1: For infinite systems, ALWAYS use Image surface (physical expectation)
+                const imageOpt = opts.find((o: any) => typeof o?.label === 'string' && o.label.includes('(Image)'));
+                if (imageOpt && Number.isInteger(imageOpt.rowIndex)) {
+                    console.log(`✅ [Infinite] Using Image surface at rowIndex=${imageOpt.rowIndex} (surfaceId=${imageOpt.surfaceId})`);
+                    return imageOpt.rowIndex;
+                }
+                
+                // Strategy 2: If no Image surface found (unusual), try surfaceId match
+                const match = opts.find((o: any) => Number(o?.surfaceId) === Number(surfaceId));
+                if (match && Number.isInteger(match.rowIndex)) {
+                    console.warn(`⚠️ [Infinite] No Image surface, matched surfaceId=${surfaceId} → rowIndex=${match.rowIndex}`);
+                    return match.rowIndex;
+                }
+                
+                // Strategy 3: Fallback to last surface
+                if (opts.length > 0 && Number.isInteger(opts[opts.length - 1].rowIndex)) {
+                    console.warn(`⚠️ [Infinite] Using last surface at rowIndex=${opts[opts.length - 1].rowIndex}`);
+                    return opts[opts.length - 1].rowIndex;
+                }
+                
+                return null;
+            };
+            
+            // Route to appropriate resolver based on conjugate type
+            resolvedSurfaceRowIndex = (conjugateType === 'finite')
+                ? resolveSurfaceForFiniteConjugate()
+                : resolveSurfaceForInfiniteConjugate();
+            
+            if (Number.isInteger(resolvedSurfaceRowIndex)) {
+                console.log(`✅ [Surface Resolution] ${conjugateType} resolved: surfaceId=${surfaceId} → rowIndex=${resolvedSurfaceRowIndex}`);
             }
         } catch (e) {
             // As a last resort, keep the original number as an index.
@@ -845,9 +872,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         // Persist the current spot-diagram settings for other modules (e.g., Requirements spot size operands).
         // This also bridges main window vs popup window differences by using shared localStorage.
         try {
-            const pattern = (typeof window !== 'undefined' && typeof w.getRayEmissionPattern === 'function')
-                ? String(w.getRayEmissionPattern() || '').trim().toLowerCase()
-                : String(w.rayEmissionPattern || '').trim().toLowerCase();
+            const pattern = patternFromUi;
 
             let primaryWavelengthUm = 0.5876;
             if (Array.isArray(sourceRows) && sourceRows.length > 0) {
@@ -981,7 +1006,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 surfaceNumber,
                 rayCount,
                 ringCount,
-                { onProgress, physicalVignetting: true, displaySurfaceNumber: surfaceId }
+                { onProgress, physicalVignetting: true, displaySurfaceNumber: surfaceId, pattern: patternFromUi }
             );
             
             if (!spotDiagramData) {
@@ -1009,7 +1034,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 surfaceNumber,
                 rayCount,
                 ringCount,
-                { onProgress, physicalVignetting: true, displaySurfaceNumber: surfaceId }
+                { onProgress, physicalVignetting: true, displaySurfaceNumber: surfaceId, pattern: patternFromUi }
             );
             
             if (!spotDiagramData) {
@@ -1057,6 +1082,23 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         alert(`Spot diagram error:\n${(error as any).message}`);
     } finally {
         setIsGeneratingSpotDiagram(false);
+
+        // If a newer request arrived while we were generating, run it now (last request wins).
+        try {
+            const pending = pendingSpotDiagramRequest;
+            if (pending && pending.requestId > requestId) {
+                pendingSpotDiagramRequest = null;
+                setTimeout(() => {
+                    showSpotDiagram(pending.options).catch((e) => {
+                        console.error('❌ Error running queued spot diagram request:', e);
+                    });
+                }, 0);
+            } else if (pending && pending.requestId === requestId) {
+                pendingSpotDiagramRequest = null;
+            }
+        } catch (_) {
+            // Best-effort only
+        }
     }
 }
 

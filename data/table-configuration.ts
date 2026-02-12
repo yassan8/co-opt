@@ -258,7 +258,7 @@ export function saveCurrentToActiveConfiguration(): void {
   cfgLog('🔵 [Configuration] Saving current table data to active configuration...');
   
   const systemConfig = loadSystemConfigurations();
-  const activeConfig = systemConfig.configurations.find(c => c.id === systemConfig.activeConfigId);
+  const activeConfig = systemConfig.configurations.find(c => idsEqual(c?.id, systemConfig.activeConfigId));
   
   if (!activeConfig) {
     console.error('❌ [Configuration] Active config not found');
@@ -272,12 +272,33 @@ export function saveCurrentToActiveConfiguration(): void {
     const globalSource = w.tableSource ? w.tableSource.getData() : [];
     localStorage.setItem('sourceTableData', JSON.stringify(globalSource));
   } catch (_) {}
-  activeConfig.object = w.tableObject ? w.tableObject.getData() : [];
+  
+  const objectDataFromTable = w.tableObject ? w.tableObject.getData() : [];
+  activeConfig.object = objectDataFromTable;
 
   // Expanded Optical System is derived from Blocks.
   // When Blocks exist, do NOT overwrite config.opticalSystem from the (disabled/no-op) surface table.
+  const opticalRowsFromTable = w.tableOpticalSystem ? w.tableOpticalSystem.getData() : [];
   if (!configurationHasBlocks(activeConfig)) {
-    activeConfig.opticalSystem = w.tableOpticalSystem ? w.tableOpticalSystem.getData() : [];
+    activeConfig.opticalSystem = opticalRowsFromTable;
+  } else {
+    // Even in Blocks mode, we still need a persisted legacy Object row thickness for conjugate detection
+    // in non-active config evaluations (e.g., Requirements Spot Size).
+    try {
+      const objectRow0 = Array.isArray(opticalRowsFromTable) ? opticalRowsFromTable[0] : null;
+      if (objectRow0 && typeof objectRow0 === 'object') {
+        if (!Array.isArray(activeConfig.opticalSystem)) activeConfig.opticalSystem = [] as any;
+        const existing0 = (activeConfig.opticalSystem as any[])[0];
+        (activeConfig.opticalSystem as any[])[0] = {
+          ...(existing0 && typeof existing0 === 'object' ? existing0 : {}),
+          thickness: objectRow0.thickness,
+          objectRenderDistance: (objectRow0 as any).objectRenderDistance,
+          fieldX: (objectRow0 as any).fieldX,
+          fieldY: (objectRow0 as any).fieldY,
+          semidia: (objectRow0 as any).semidia
+        };
+      }
+    } catch (_) {}
   }
   
   // Merit Function はグローバルに保存（各configには保存しない）
@@ -589,7 +610,9 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
     };
 
     const applyTableData = async (table: any, data: any[]): Promise<void> => {
-      if (!table || !Array.isArray(data)) return;
+      if (!table || !Array.isArray(data)) {
+        return;
+      }
       try {
         if (typeof table.blockRedraw === 'function') table.blockRedraw();
 
@@ -625,16 +648,10 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
       const parsed = json ? JSON.parse(json) : null;
       globalSourceRows = Array.isArray(parsed) ? parsed : [];
     } catch (_) {}
-
+    
     await applyTableData(w.tableSource, globalSourceRows);
     await applyTableData(w.tableObject, activeConfig.object || []);
     await applyTableData(w.tableOpticalSystem, effectiveOpticalSystem || []);
-
-    console.log(`🔍 [Configuration] Applied data to tables:`, {
-      source: globalSourceRows.length,
-      object: (activeConfig.object || []).length,
-      opticalSystem: (effectiveOpticalSystem || []).length
-    });
 
     // Update system data input (reference focal length)
     try {

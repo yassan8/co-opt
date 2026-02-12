@@ -137,9 +137,6 @@ export default function LegacyPanels() {
           <div className="spot-diagram-section" style={{ display: "none" }}>
             <h2>Spot Diagram</h2>
             <div className="spot-diagram-controls">
-              <label htmlFor="spot-diagram-config-select">Config:</label>
-              <select id="spot-diagram-config-select"></select>
-
               <label htmlFor="surface-number-select">Surface number:</label>
               <select id="surface-number-select">
                 <option value="">Select surface...</option>

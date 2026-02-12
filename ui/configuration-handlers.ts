@@ -25,6 +25,7 @@ let autoSaveIntervalId: number | null = null;
 let isConfigurationSwitching = false;
 let beforeUnloadHandlerInstalled = false;
 let delegatedConfigListenerInstalled = false;
+let lastConfigSwitchTimestamp = 0;
 
 function areTablesReady(): boolean {
   return !!(w.tableSource && w.tableObject && w.tableOpticalSystem);
@@ -83,7 +84,20 @@ function setConfigControlsEnabled(enabled: boolean): void {
 
 function shouldSkipAutoSave(): boolean {
   try {
-    return isConfigurationSwitching || w.__configurationAutoSaveDisabled === true;
+    // Skip if config switching is in progress
+    if (isConfigurationSwitching) return true;
+    
+    // Skip if explicitly disabled
+    if (w.__configurationAutoSaveDisabled === true) return true;
+    
+    // CRITICAL: Skip autosave for 10 seconds after config switch to prevent saving stale table data
+    const timeSinceSwitch = Date.now() - lastConfigSwitchTimestamp;
+    if (timeSinceSwitch < 10000) {
+      console.log(`⏸️ [Configuration] Skipping autosave (${Math.floor(timeSinceSwitch/1000)}s since config switch)`);
+      return true;
+    }
+    
+    return false;
   } catch (_) {
     return isConfigurationSwitching;
   }
@@ -110,7 +124,9 @@ export function initializeConfigurationUI(): void {
       updateConfigInfo();
       setupConfigurationEventListeners();
       // ページリロード後、アクティブなconfigurationをテーブルに読み込む
-      loadActiveConfigurationToTables({ applyToUI: true }).catch(e => {
+      loadActiveConfigurationToTables({ applyToUI: true }).then(() => {
+        console.log('✅ [Configuration UI] Config reloaded');
+      }).catch(e => {
         console.error('❌ [Configuration UI] Failed to load active configuration:', e);
       });
       ensureActiveConfigAppliedToTables();
@@ -150,7 +166,9 @@ export function initializeConfigurationUI(): void {
   setupConfigurationEventListeners();
   
   // 初回起動時もアクティブなconfigurationをテーブルに読み込む
-  loadActiveConfigurationToTables({ applyToUI: true }).catch(e => {
+  loadActiveConfigurationToTables({ applyToUI: true }).then(() => {
+    console.log('✅ [Configuration UI] Initial config loaded');
+  }).catch(e => {
     console.error('❌ [Configuration UI] Failed to load active configuration:', e);
   });
   ensureActiveConfigAppliedToTables();
@@ -247,6 +265,63 @@ function initializeConfigurationSystem(): void {
   if (!objectData && config1 && Array.isArray(config1.object) && config1.object.length > 0) {
     console.log('🔄 [Configuration] Initializing objectTableData with default values');
     localStorage.setItem('objectTableData', JSON.stringify(config1.object));
+  }
+
+  // Migration: ensure block-based configs preserve legacy Object row thickness for conjugate detection.
+  try {
+    let changed = false;
+    for (const cfg of systemConfig.configurations || []) {
+      if (!cfg || typeof cfg !== 'object') continue;
+      const hasBlocks = Array.isArray((cfg as any).blocks) && (cfg as any).blocks.length > 0;
+      if (!hasBlocks) continue;
+
+      const t = (cfg as any).opticalSystem?.[0]?.thickness;
+      const tStr = (t === undefined || t === null) ? '' : String(t).trim().toUpperCase();
+      const hasThickness = (t === Infinity) || (tStr !== '' && tStr !== 'UNDEFINED');
+      if (hasThickness) continue;
+
+      // If the config has a legacy opticalSystem snapshot, use its first-row thickness.
+      const legacy0 = Array.isArray((cfg as any).opticalSystem) ? (cfg as any).opticalSystem[0] : null;
+      if (legacy0 && typeof legacy0 === 'object' && legacy0.thickness !== undefined && legacy0.thickness !== null) {
+        continue;
+      }
+
+      // As a fallback, if cfg.opticalSystem exists with rows, keep it; otherwise leave as-is.
+      // The updated saveCurrentToActiveConfiguration will populate this going forward.
+      if (!Array.isArray((cfg as any).opticalSystem)) {
+        (cfg as any).opticalSystem = [];
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      saveSystemConfigurations(systemConfig);
+      console.log('✅ [Configuration] Migration: ensured opticalSystem array for block configs');
+    }
+  } catch (_) {}
+  
+  // CRITICAL: Validate all configurations on startup
+  // Ensure localStorage contains fresh data for all configs
+  console.log('🔍 [Configuration] Validating all configs on startup...');
+  let configsRefreshed = false;
+  for (const cfg of systemConfig.configurations) {
+    if (!cfg || typeof cfg !== 'object') continue;
+    
+    // Check if config has valid data structure
+    const hasObject = Array.isArray(cfg.object) && cfg.object.length > 0;
+    const hasOptical = Array.isArray(cfg.opticalSystem) && cfg.opticalSystem.length > 0;
+    
+    // If config data looks valid, ensure it's current
+    if (hasObject || hasOptical) {
+      // Config has data, mark as refreshed to ensure localStorage has latest
+      configsRefreshed = true;
+    }
+  }
+  
+  // If we have multiple configs with data, save to ensure localStorage sync
+  if (systemConfig.configurations.length > 1 || configsRefreshed) {
+    console.log('✅ [Configuration] Saving all configs to ensure localStorage sync');
+    saveSystemConfigurations(systemConfig);
   }
 }
 
@@ -390,6 +465,20 @@ async function handleConfigurationChange(event: Event): Promise<void> {
     return;
   }
 
+  // Check if tables are ready before allowing config switch
+  if (!areTablesReady()) {
+    console.warn('⚠️ [Configuration] Tables not ready yet, deferring config switch...');
+    try { target.value = String(currentConfigId ?? ''); } catch (_) {}
+    // Retry after a short delay
+    setTimeout(() => {
+      if (areTablesReady()) {
+        target.value = String(newConfigId);
+        target.dispatchEvent(new Event('change'));
+      }
+    }, 500);
+    return;
+  }
+
   // Prevent overlapping async switches which can overwrite the wrong config
   // (rare but possible with fast UI interactions).
   if (isConfigurationSwitching) {
@@ -397,19 +486,52 @@ async function handleConfigurationChange(event: Event): Promise<void> {
     return;
   }
   isConfigurationSwitching = true;
+  try {
+    if (typeof window !== 'undefined') {
+      (w as any).__configurationSwitching = true;
+    }
+  } catch (_) {}
   stopAutoSave();
   setConfigControlsEnabled(false);
   
   console.log(`🔄 [Configuration] Switching from ${currentConfigId} to ${newConfigId}...`);
   
   // 現在の編集内容を保存
+  console.log(`💾 [Configuration] Saving current config ${currentConfigId} before switch...`);
   saveCurrentToActiveConfiguration();
+  console.log(`✅ [Configuration] Current config saved`);
 
   try {
     // 新しいConfigurationに切り替え
     setActiveConfiguration(newConfigId);
     
-    console.log(`🔄 [Configuration] Loading configuration ${newConfigId} to tables...`);
+    // CRITICAL: Validate target config has valid data before loading
+    const targetConfig = getActiveConfiguration();
+    if (!targetConfig) {
+      throw new Error(`Target configuration ${newConfigId} not found`);
+    }
+    
+    const hasValidObject = Array.isArray(targetConfig.object) && targetConfig.object.length > 0;
+    const hasValidOptical = Array.isArray(targetConfig.opticalSystem) && targetConfig.opticalSystem.length > 0;
+    const hasValidBlocks = Array.isArray(targetConfig.blocks) && targetConfig.blocks.length > 0;
+    
+    if (!hasValidObject) {
+      console.warn(`⚠️ [Configuration] Target config ${targetConfig.name} has no Object data`);
+    }
+    
+    if (!hasValidOptical && !hasValidBlocks) {
+      console.warn(`⚠️ [Configuration] Target config ${targetConfig.name} has no Optical System or Blocks data`);
+    }
+    
+    console.log(`🔄 [Configuration] Loading configuration ${newConfigId} "${targetConfig.name}" to tables...`);
+    console.log(`🔍 [Configuration] Target config data:`, {
+      hasObject: hasValidObject,
+      objectCount: targetConfig.object?.length || 0,
+      hasOptical: hasValidOptical,
+      opticalCount: targetConfig.opticalSystem?.length || 0,
+      hasBlocks: hasValidBlocks,
+      blocksCount: targetConfig.blocks?.length || 0
+    });
     console.log(`🔍 [Configuration] Tables available:`, {
       source: !!w.tableSource,
       object: !!w.tableObject,
@@ -481,9 +603,20 @@ async function handleConfigurationChange(event: Event): Promise<void> {
 
   } finally {
     // Switching guard解除 + autosave再開
+    // Release immediately to allow next config switch
     isConfigurationSwitching = false;
+    // Evaluation can fire immediately due to Tabulator events; keep the global flag true until next tick.
+    try {
+      if (typeof window !== 'undefined') {
+        setTimeout(() => {
+          try { (w as any).__configurationSwitching = false; } catch (_) {}
+        }, 0);
+      }
+    } catch (_) {}
+    lastConfigSwitchTimestamp = Date.now();  // Record switch completion time
     setConfigControlsEnabled(true);
     setupAutoSave();
+    console.log('✅ [Configuration] Config switch complete, autosave will resume after 10s');
   }
 }
 

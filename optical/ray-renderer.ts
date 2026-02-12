@@ -8,6 +8,51 @@ import { findStopSurface } from './system-renderer.ts';
 import { asphericSurfaceZ } from './surface.ts';
 import { findInfiniteSystemChiefRayOrigin } from '../raytracing/generation/gen-ray-cross-infinite.ts';
 import { findFiniteSystemChiefRayDirection } from '../raytracing/generation/gen-ray-cross-finite.ts';
+import { detectConjugateType, ConjugateType } from '../utils/conjugate-detection.ts';
+
+type Vec3 = { x: number; y: number; z: number };
+
+type RayStartDataArray = Array<any> & {
+    annularRingsUsed?: number;
+    selectedRingOverride?: number;
+    emissionBasis?: any;
+    expectedChiefDir?: Vec3;
+    nominalFieldDir?: Vec3;
+    expectedChiefOrigin?: Vec3;
+    chiefRayAnalysis?: any;
+};
+
+type RayGenerationOptions = {
+    annularRingCount?: number;
+    wavelengthUm?: number;
+    wavelength?: number;
+    pattern?: 'grid' | 'annular';
+    conjugateType?: ConjugateType;
+    forceInfiniteObject?: boolean;
+    forceFiniteObject?: boolean;
+    useChiefRayAnalysis?: boolean;
+    aimThroughStop?: boolean;
+    chiefRaySolveMode?: string;
+    disableAngleObjectPositionOptimization?: boolean;
+    allowStopBasedOriginSolve?: boolean;
+    targetSurfaceIndex?: number;
+    debugChiefRay?: boolean;
+    apertureLimitMm?: number;
+    apertureLimit?: number;
+    disableCrossExtent?: boolean;
+    pupilScale?: number;
+    rectangleAsAngleWhenInfinite?: boolean;
+};
+
+// Helper function to normalize hit points
+function normalizeHitPoint(hit): Vec3 | null {
+    if (!hit || Array.isArray(hit)) return null;
+    const x = Number(hit.x);
+    const y = Number(hit.y);
+    const z = Number(hit.z);
+    if (![x, y, z].every(Number.isFinite)) return null;
+    return { x, y, z };
+}
 
 // Global variables for ray pattern and color mode
 let rayEmissionPattern = 'annular'; // 'grid' or 'annular'
@@ -18,6 +63,23 @@ function normalizeAnnularRingCount(value) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric) || numeric <= 0) return null;
     return Math.max(1, Math.min(Math.floor(numeric), 32));
+}
+
+function resolveInfiniteObjectZ(opticalSystemRows, renderDist) {
+    const rd = Number(renderDist);
+    if (Number.isFinite(rd) && rd > 0) return -Math.abs(rd);
+    let systemLength = 0;
+    if (Array.isArray(opticalSystemRows)) {
+        for (let i = 0; i < opticalSystemRows.length; i++) {
+            const tRaw = opticalSystemRows[i]?.thickness;
+            const t = (typeof tRaw === 'number') ? tRaw : parseFloat(String(tRaw ?? ''));
+            if (Number.isFinite(t) && Math.abs(t) < 1e6) {
+                systemLength += Math.abs(t);
+            }
+        }
+    }
+    const fallbackDist = Math.max(1000, systemLength * 5);
+    return -fallbackDist;
 }
 
 function normalizeVector3(vec, fallback = { x: 0, y: 0, z: 1 }) {
@@ -85,11 +147,11 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
 
         const dir = buildDirFromSlopes(u, v);
         const ray = { wavelength: wavelengthUm, pos: { ...centerPoint }, dir };
-        const hit = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopIdx);
+        const hit = normalizeHitPoint(traceRayHitPoint(opticalSystemRows, ray, 1.0, stopIdx));
         if (!hit) return null;
 
-        const ex = Number(hit.x) - Number(stopTarget3d.x);
-        const ey = Number(hit.y) - Number(stopTarget3d.y);
+        const ex = hit.x - Number(stopTarget3d.x);
+        const ey = hit.y - Number(stopTarget3d.y);
         if (!Number.isFinite(ex) || !Number.isFinite(ey)) return null;
         const err = Math.hypot(ex, ey);
         if (err < tolMm) {
@@ -97,14 +159,14 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
         }
 
         // Finite-difference Jacobian.
-        const hitU = traceRayHitPoint(opticalSystemRows, { wavelength: wavelengthUm, pos: { ...centerPoint }, dir: buildDirFromSlopes(u + eps, v) }, 1.0, stopIdx);
-        const hitV = traceRayHitPoint(opticalSystemRows, { wavelength: wavelengthUm, pos: { ...centerPoint }, dir: buildDirFromSlopes(u, v + eps) }, 1.0, stopIdx);
+        const hitU = normalizeHitPoint(traceRayHitPoint(opticalSystemRows, { wavelength: wavelengthUm, pos: { ...centerPoint }, dir: buildDirFromSlopes(u + eps, v) }, 1.0, stopIdx));
+        const hitV = normalizeHitPoint(traceRayHitPoint(opticalSystemRows, { wavelength: wavelengthUm, pos: { ...centerPoint }, dir: buildDirFromSlopes(u, v + eps) }, 1.0, stopIdx));
         if (!hitU || !hitV) return null;
 
-        const j11 = (Number(hitU.x) - Number(hit.x)) / eps;
-        const j21 = (Number(hitU.y) - Number(hit.y)) / eps;
-        const j12 = (Number(hitV.x) - Number(hit.x)) / eps;
-        const j22 = (Number(hitV.y) - Number(hit.y)) / eps;
+        const j11 = (hitU.x - hit.x) / eps;
+        const j21 = (hitU.y - hit.y) / eps;
+        const j12 = (hitV.x - hit.x) / eps;
+        const j22 = (hitV.y - hit.y) / eps;
         if (![j11, j12, j21, j22].every(Number.isFinite)) return null;
 
         const det = j11 * j22 - j12 * j21;
@@ -160,24 +222,24 @@ function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, s
     };
 
     for (let iter = 0; iter < maxIter; iter++) {
-        const hit = hitAt(origin);
+        const hit = normalizeHitPoint(hitAt(origin));
         if (!hit) return null;
-        const ex = Number(hit.x) - Number(stopTarget3d.x);
-        const ey = Number(hit.y) - Number(stopTarget3d.y);
+        const ex = hit.x - Number(stopTarget3d.x);
+        const ey = hit.y - Number(stopTarget3d.y);
         if (!Number.isFinite(ex) || !Number.isFinite(ey)) return null;
         const err = Math.hypot(ex, ey);
         if (err < tolMm) {
             return origin;
         }
 
-        const hitX = hitAt({ x: origin.x + eps, y: origin.y, z: origin.z });
-        const hitY = hitAt({ x: origin.x, y: origin.y + eps, z: origin.z });
+        const hitX = normalizeHitPoint(hitAt({ x: origin.x + eps, y: origin.y, z: origin.z }));
+        const hitY = normalizeHitPoint(hitAt({ x: origin.x, y: origin.y + eps, z: origin.z }));
         if (!hitX || !hitY) return null;
 
-        const j11 = (Number(hitX.x) - Number(hit.x)) / eps;
-        const j21 = (Number(hitX.y) - Number(hit.y)) / eps;
-        const j12 = (Number(hitY.x) - Number(hit.x)) / eps;
-        const j22 = (Number(hitY.y) - Number(hit.y)) / eps;
+        const j11 = (hitX.x - hit.x) / eps;
+        const j21 = (hitX.y - hit.y) / eps;
+        const j12 = (hitY.x - hit.x) / eps;
+        const j22 = (hitY.y - hit.y) / eps;
         if (![j11, j12, j21, j22].every(Number.isFinite)) return null;
 
         const det = j11 * j22 - j12 * j21;
@@ -537,7 +599,7 @@ export function optimizeAngleObjectPosition(angleX, angleY, opticalSystemRows) {
         const stopOrigin = stopInfo.origin?.origin ?? stopInfo.origin ?? stopInfo.center ?? stopInfo.position;
         const stopX = Number(stopOrigin?.x ?? 0);
         const stopY = Number(stopOrigin?.y ?? 0);
-        const stopZ = Number(stopOrigin?.z ?? stopInfo.zPosition);
+        const stopZ = Number(stopOrigin?.z ?? stopInfo?.position?.z);
 
         // Use objectRenderDistance from Object row for INF objects (positive value converted to negative Z)
         const objectRow = opticalSystemRows && opticalSystemRows[0];
@@ -565,7 +627,7 @@ export function optimizeAngleObjectPosition(angleX, angleY, opticalSystemRows) {
     })();
     const distanceToStop = (stopOriginZ !== null)
         ? (stopOriginZ - firstSurfaceOrigin.z)
-        : (Number(stopInfo.zPosition) - firstSurfaceOrigin.z);
+        : (Number(stopInfo?.position?.z) - firstSurfaceOrigin.z);
     
     // 距離の妥当性チェック
     if (!isFinite(distanceToStop) || Math.abs(distanceToStop) > 1e6) {
@@ -847,16 +909,19 @@ const rrLog = (...args) => { if (RAY_RENDERER_DEBUG) console.log(...args); };
  * @param {Object} apertureLimit - Aperture limit (optional)
  * @returns {Array} Array of ray start data
  */
-export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount, apertureLimit = null, options = {}) {
+export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount, apertureLimit = null, options: RayGenerationOptions = {}) {
     // console.log(`🎯 generateRayStartPointsForObject called for object type: ${obj.position}`);
     // console.log(`🔍 Current ray emission pattern: ${rayEmissionPattern}`);
     
-    const rayStartData = [];
+    const rayStartData: RayStartDataArray = [];
     const annularRingCount = normalizeAnnularRingCount(options?.annularRingCount);
     const wavelengthUmRaw = options?.wavelengthUm ?? options?.wavelength;
     const wavelengthUm = (typeof wavelengthUmRaw === 'number' && Number.isFinite(wavelengthUmRaw) && wavelengthUmRaw > 0)
         ? wavelengthUmRaw
         : 0.5876;
+    
+    // Detect conjugate type once and pass to all generation functions
+    const conjugateType = detectConjugateType(opticalSystemRows, options);
     
     // options.pattern が指定されていればそれを優先（Requirements計算等でUI状態に依存しないため）
     const effectivePattern = (options && typeof options.pattern === 'string' && (options.pattern === 'grid' || options.pattern === 'annular'))
@@ -865,12 +930,15 @@ export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount
 
     const posNorm = String(obj?.position ?? '').trim().toLowerCase();
 
+    // Pass conjugateType to all generation functions
+    const enhancedOptions = { ...options, conjugateType };
+
     if (posNorm === "point") {
-        return generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLimit, effectivePattern, annularRingCount, wavelengthUm, options);
+        return generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLimit, effectivePattern, annularRingCount, wavelengthUm, enhancedOptions);
     } else if (posNorm === "angle") {
-        return generateRaysForAngleObject(obj, opticalSystemRows, rayCount, effectivePattern, annularRingCount, { ...options, wavelengthUm, apertureLimitMm: apertureLimit });
+        return generateRaysForAngleObject(obj, opticalSystemRows, rayCount, effectivePattern, annularRingCount, { ...enhancedOptions, wavelengthUm, apertureLimitMm: apertureLimit });
     } else if (posNorm === "rectangle") {
-        return generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, effectivePattern, apertureLimit, annularRingCount, wavelengthUm);
+        return generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, effectivePattern, apertureLimit, annularRingCount, wavelengthUm, enhancedOptions);
     } else {
         console.warn(`⚠️ Unknown object position type: ${obj.position}`);
         return [];
@@ -888,35 +956,33 @@ export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount
  * @param {Object} apertureLimit - Aperture limit
  * @returns {Array} Ray start data
  */
-function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLimit, pattern = 'annular', annularRingCount, wavelengthUm = 0.5876, options = {}) {
-    const rayStartData = [];
+function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLimit, pattern = 'annular', annularRingCount, wavelengthUm = 0.5876, options: RayGenerationOptions = {}) {
+    const rayStartData: RayStartDataArray = [];
     rayStartData.annularRingsUsed = 0;
     rayStartData.selectedRingOverride = annularRingCount ?? 0;
     
     try {
+        // Use unified conjugate type detection
+        const conjugateType = options?.conjugateType || detectConjugateType(opticalSystemRows, options);
+        const isInfiniteObject = (conjugateType === 'infinite');
+        
+        console.log(`🔍 [PointObject] Conjugate type: ${conjugateType}`);
+        
         // Get surface origins for object position calculation
         const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
         const firstSurfaceOrigin = surfaceOrigins[0] ? surfaceOrigins[0].origin : { x: 0, y: 0, z: 0 };
         const finiteObjectZ = Number.isFinite(firstSurfaceOrigin?.z) ? firstSurfaceOrigin.z : 0;
         const surf = opticalSystemRows[0];
-        const objectThicknessRaw = surf.thickness;
-        const thicknessStr = (objectThicknessRaw !== undefined && objectThicknessRaw !== null) ? String(objectThicknessRaw).trim().toUpperCase() : '';
-        const objectThicknessVal = Number(objectThicknessRaw);
-        const isInfiniteObject = (
-            objectThicknessRaw === Infinity ||
-            thicknessStr === 'INF' ||
-            thicknessStr === 'INFINITY' ||
-            thicknessStr === '∞' ||
-            (Number.isFinite(objectThicknessVal) && Math.abs(objectThicknessVal) > 1e6)
-        );
         
         // Object position (Point objects use xHeightAngle and yHeightAngle for positioning)
         const objectX = Number(obj.xHeightAngle) || 0;
         const objectY = Number(obj.yHeightAngle) || 0;
         // Object Z coordinate: use actual surface origin for finite objects, use objectRenderDistance for infinite objects
         const objectRow = opticalSystemRows && opticalSystemRows[0];
-        const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
-        let objectZ = isInfiniteObject ? -Math.abs(renderDist) : finiteObjectZ;
+        const renderDist = (objectRow && Number.isFinite(Number(objectRow.objectRenderDistance)))
+            ? Number(objectRow.objectRenderDistance)
+            : 0;
+        let objectZ = isInfiniteObject ? resolveInfiniteObjectZ(opticalSystemRows, renderDist) : finiteObjectZ;
         
         // Calculate Object surface sag at object position (finite objectのみ)
         let objectSag = 0;
@@ -1287,15 +1353,21 @@ function generateRaysForPointObject(obj, opticalSystemRows, rayCount, apertureLi
  * @param {string} pattern - Emission pattern
  * @returns {Array} Ray start data
  */
-function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, annularRingCount, options = {}) {
+function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, annularRingCount, options: RayGenerationOptions = {}) {
     // console.log(`🔍 generateRaysForAngleObject called for object:`, obj);
     // console.log(`📊 Parameters: rayCount=${rayCount}, pattern=${pattern}`);
     
-    const rayStartData = [];
+    const rayStartData: RayStartDataArray = [];
     rayStartData.annularRingsUsed = 0;
     rayStartData.selectedRingOverride = annularRingCount ?? 0;
     
     try {
+        // Use unified conjugate type detection
+        const conjugateType = options?.conjugateType || detectConjugateType(opticalSystemRows, options);
+        const isInfiniteObject = (conjugateType === 'infinite');
+        
+        console.log(`🔍 [AngleObject] Conjugate type: ${conjugateType}`);
+        
         const angleX = parseAngleInput(
             obj.xAngle ?? obj.objectAngleX ?? obj.xHeightAngle ?? obj.x ?? obj.angleX
         );
@@ -1319,23 +1391,10 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         // through the stop center, we should solve/adjust the emission ORIGIN (not override
         // the direction to point at the stop center).
         // Default to enabled unless explicitly disabled.
-        const allowStopBasedOriginSolve = options?.allowStopBasedOriginSolve !== false;
+        let allowStopBasedOriginSolve = options?.allowStopBasedOriginSolve !== false;
         
         // 軸上オブジェクトかどうかを判定
         const isOnAxis = (Math.abs(angleX) < 1e-10 && Math.abs(angleY) < 1e-10);
-        
-        // Object thickness をチェック
-        const firstSurface = opticalSystemRows[0];
-        const objectThicknessRaw = firstSurface.thickness;
-        const thicknessStr = (objectThicknessRaw !== undefined && objectThicknessRaw !== null) ? String(objectThicknessRaw).trim().toUpperCase() : '';
-        const objectThicknessVal = Number(objectThicknessRaw);
-        const isInfiniteObject = (
-            objectThicknessRaw === Infinity ||
-            thicknessStr === 'INF' ||
-            thicknessStr === 'INFINITY' ||
-            thicknessStr === '∞' ||
-            (Number.isFinite(objectThicknessVal) && Math.abs(objectThicknessVal) > 1e6)
-        );
         
         // 位置最適化の実行
         let optimizedPosition;
@@ -1383,8 +1442,10 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         
         // Use actual object-plane origin for finite objects; use objectRenderDistance for infinite objects
         const objectRow = opticalSystemRows && opticalSystemRows[0];
-        const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
-        let objectZ = isInfiniteObject ? -Math.abs(renderDist) : finiteObjectZ;
+        const renderDist = (objectRow && Number.isFinite(Number(objectRow.objectRenderDistance)))
+            ? Number(objectRow.objectRenderDistance)
+            : 0;
+        let objectZ = isInfiniteObject ? resolveInfiniteObjectZ(opticalSystemRows, renderDist) : finiteObjectZ;
         
         const surf = opticalSystemRows[0];
 
@@ -1420,7 +1481,17 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         let chiefRayOrigin = null;
         let chiefRayAnalysisMeta = null;
 
+        console.log(`🔍 [AngleObject] Chief ray analysis conditions:`, {
+            allowStopBasedOriginSolve,
+            aimThroughStop,
+            useChiefRayAnalysis,
+            hasStopCenter: !!stopSurfaceCenter3d,
+            stopSurfaceIndex,
+            isInfiniteObject
+        });
+
         if (allowStopBasedOriginSolve && aimThroughStop && useChiefRayAnalysis && stopSurfaceCenter3d && Number.isInteger(stopSurfaceIndex)) {
+            console.log(`✅ [AngleObject] Starting chief ray analysis for infinite system...`);
             try {
                 const directionForAnalysis = { i: chiefDir.x, j: chiefDir.y, k: chiefDir.z };
                 const analysisResult = findInfiniteSystemChiefRayOrigin(
@@ -1433,6 +1504,11 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                     options?.wavelength ?? 0.5876
                 );
                 if (analysisResult && Number.isFinite(analysisResult.x) && Number.isFinite(analysisResult.y)) {
+                    console.log(`✅ [AngleObject] Chief ray analysis succeeded:`, {
+                        x: analysisResult.x,
+                        y: analysisResult.y,
+                        z: analysisResult.z
+                    });
                     chiefRayOrigin = analysisResult;
                     optimizedPosition = { x: analysisResult.x, y: analysisResult.y };
                     if (Number.isFinite(analysisResult.z)) {
@@ -1441,17 +1517,20 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                     if (typeof window !== 'undefined' && window.lastChiefRayResult) {
                         chiefRayAnalysisMeta = { ...window.lastChiefRayResult };
                     }
+                } else {
+                    console.warn(`⚠️ [AngleObject] Chief ray analysis returned invalid result:`, analysisResult);
                 }
             } catch (error) {
-                console.error(`❌ [AngleRayRenderer] Failed to find chief ray origin for Object ${objectPosition?.id || 'unknown'}:`, error);
+                console.error(`❌ [AngleRayRenderer] Failed to find chief ray origin for Object ${obj?.id || 'unknown'}:`, error);
                 console.error(`   Object details:`, {
-                    id: objectPosition?.id,
-                    xAngle: xAngle,
-                    yAngle: yAngle,
-                    direction: directionForAnalysis
+                    id: obj?.id,
+                    angleX: angleX,
+                    angleY: angleY
                 });
                 console.warn('⚠️ [AngleRayRenderer] Chief ray analysis failed, using fallback position:', error);
             }
+        } else {
+            console.warn(`⚠️ [AngleObject] Chief ray analysis skipped, conditions not met`);
         }
 
         // NOTE: We intentionally do not apply geometric back-projection fallback here.
@@ -1787,31 +1866,25 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
  * @param {Object} apertureLimit - Aperture limit
  * @returns {Array} Ray start data
  */
-function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, pattern, apertureLimit, annularRingCount, wavelengthUm = 0.5876) {
+function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, pattern, apertureLimit, annularRingCount, wavelengthUm = 0.5876, options: RayGenerationOptions = {}) {
     // console.log(`🔍 generateRaysForRectangleObject called for object:`, obj);
     // console.log(`📊 Parameters: rayCount=${rayCount}, pattern=${pattern}`);
     
-    const rayStartData = [];
+    const rayStartData: RayStartDataArray = [];
     rayStartData.annularRingsUsed = 0;
     rayStartData.selectedRingOverride = annularRingCount ?? 0;
     
     try {
+        // Use unified conjugate type detection
+        const conjugateType = options?.conjugateType || detectConjugateType(opticalSystemRows, options);
+        const isInfiniteObject = (conjugateType === 'infinite');
+        
+        console.log(`🔍 [RectangleObject] Conjugate type: ${conjugateType}`);
+        
         // Get surface origins for object position calculation
         const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
         const firstSurfaceOrigin = surfaceOrigins[0] ? surfaceOrigins[0].origin : { x: 0, y: 0, z: 0 };
         const surf = opticalSystemRows[0];
-        const objectThicknessRaw = surf?.thickness;
-        const thicknessStr = (objectThicknessRaw !== undefined && objectThicknessRaw !== null)
-            ? String(objectThicknessRaw).trim().toUpperCase()
-            : '';
-        const objectThicknessVal = Number(objectThicknessRaw);
-        const isInfiniteObject = (
-            objectThicknessRaw === Infinity ||
-            thicknessStr === 'INF' ||
-            thicknessStr === 'INFINITY' ||
-            thicknessStr === '∞' ||
-            (Number.isFinite(objectThicknessVal) && Math.abs(objectThicknessVal) > 1e6)
-        );
         
         // Object position (Rectangle objects use xHeightAngle and yHeightAngle for positioning)
         const centerX = parseNumericValue(obj.xHeight ?? obj.x ?? obj.xHeightAngle ?? obj.xAngle);
@@ -1819,8 +1892,31 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
         const finiteObjectZ = Number.isFinite(firstSurfaceOrigin?.z) ? firstSurfaceOrigin.z : 0;
         // Use true surface origin for finite objects; use objectRenderDistance for infinite objects
         const objectRow = opticalSystemRows && opticalSystemRows[0];
-        const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
-        const objectZ = isInfiniteObject ? -Math.abs(renderDist) : finiteObjectZ;
+        const renderDist = (objectRow && Number.isFinite(Number(objectRow.objectRenderDistance)))
+            ? Number(objectRow.objectRenderDistance)
+            : 0;
+        const objectZ = isInfiniteObject ? resolveInfiniteObjectZ(opticalSystemRows, renderDist) : finiteObjectZ;
+
+        if (isInfiniteObject && options?.rectangleAsAngleWhenInfinite !== false) {
+            const refDist = Math.max(1e-6, Math.abs(objectZ));
+            const angleX = Math.atan2(centerX, refDist) * 180 / Math.PI;
+            const angleY = Math.atan2(centerY, refDist) * 180 / Math.PI;
+            console.log(`🔄 [RectangleObject] Converting to Angle object: centerX=${centerX}, centerY=${centerY} → angleX=${angleX}°, angleY=${angleY}°`);
+            const angleObj = {
+                ...obj,
+                position: 'Angle',
+                xAngle: angleX,
+                yAngle: angleY,
+                xHeightAngle: angleX,
+                yHeightAngle: angleY
+            };
+            return generateRaysForAngleObject(angleObj, opticalSystemRows, rayCount, pattern, annularRingCount, {
+                ...options,
+                wavelengthUm,
+                apertureLimitMm: apertureLimit,
+                conjugateType: 'infinite'  // Pass conjugate type instead of force flag
+            });
+        }
         
         // Calculate Object surface sag at object position
         let objectSag = 0;
@@ -1854,7 +1950,7 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
         const stopCenter = stopConfig.center || { x: 0, y: 0 };
         const stopZ = stopConfig.z;
         const stopDeltaZ = stopZ - actualObjectZ;
-        const canAimAtStop = Number.isFinite(stopDeltaZ) && stopDeltaZ > 1e-6;
+        const canAimAtStop = !isInfiniteObject && Number.isFinite(stopDeltaZ) && stopDeltaZ > 1e-6;
         
         const pointEmission = true; // Rectangle objects now emit from their central point
 
@@ -1957,7 +2053,7 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
                         z: centerPoint.z + coord.offsetU * u.z + coord.offsetV * v.z
                     };
                 let dirVector = unitChief;
-                if (canAimAtStop) {
+                if (canAimAtStop && !isInfiniteObject) {
                     // Aim at offset position around chief ray intersection on stop surface
                     const targetPoint = {
                         x: chiefStopIntersection.x + coord.offsetU * u.x + coord.offsetV * v.x,
