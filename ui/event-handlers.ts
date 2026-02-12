@@ -192,7 +192,7 @@ function ensurePopupMessageHandler(): void {
                     controls: popupWindow.controls,
                     scene: popupWindow.scene,
                     renderer: popupWindow.renderer,
-                    includeRayStartMargin: true,
+                    includeRayStartMargin: false,
                     preserveDrawCrossBounds: false,
                     ...(Number.isFinite(centerZOverride) ? { centerZOverride } : {})
                 };

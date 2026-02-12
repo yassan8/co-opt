@@ -1163,237 +1163,29 @@ function expandOrthoBoundsToAspect(camera, aspect) {
  * Set camera for Y-Z cross section front view (for Draw Cross)
  */
 function setCameraForYZCrossSection(options: CameraOptions = {}) {
-    
     try {
         const camera = options.camera || getCamera?.();
         const controls = options.controls || getControls?.();
         const scene = options.scene || getScene?.();
         const renderer = options.renderer || getRenderer?.();
-        
+
         if (!camera || !controls || !scene) {
             return;
         }
-        
-        // 光学系のZ範囲とY範囲を動的に計算
-        // まずシーン内の実際のオブジェクト（光線含む）のバウンディングボックスを取得
-        const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
-        
-        // sceneBoundsが取得できた場合は、それを優先的に使用
-        let fitMinZ, fitMaxZ, fitMinY, fitMaxY, fitCenterZ, fitCenterY;
-        
-        if (sceneBounds && !sceneBounds.isEmpty()) {
-            fitMinZ = sceneBounds.min.z;
-            fitMaxZ = sceneBounds.max.z;
-            fitMinY = sceneBounds.min.y;
-            fitMaxY = sceneBounds.max.y;
-            fitCenterZ = (fitMinZ + fitMaxZ) / 2;
-            fitCenterY = (fitMinY + fitMaxY) / 2;
-            
-            console.log('🎯 YZ Camera Fit - Scene Bounds:', {
-                minZ: fitMinZ.toFixed(2),
-                maxZ: fitMaxZ.toFixed(2),
-                centerZ: fitCenterZ.toFixed(2),
-                minY: fitMinY.toFixed(2),
-                maxY: fitMaxY.toFixed(2),
-                centerY: fitCenterY.toFixed(2),
-                width: (fitMaxZ - fitMinZ).toFixed(2),
-                height: (fitMaxY - fitMinY).toFixed(2)
-            });
-        } else {
-            // フォールバック: 光学系データから推定
-            const { minZ, maxZ, centerZ, totalLength, maxY } = calculateOpticalSystemZRange();
-            const includeRayStartMargin = options.includeRayStartMargin !== false;
-            const rayStartMargin = includeRayStartMargin ? 50 : 0;
-            fitMinZ = Math.min(minZ, -rayStartMargin);
-            fitMaxZ = maxZ;
-            fitCenterZ = (fitMinZ + fitMaxZ) / 2;
-            fitCenterY = 0;
-            fitMinY = -(maxY || 50);
-            fitMaxY = (maxY || 50);
-        }
 
-        // Draw Crossの表示範囲を保存/再利用（XZ/YZ切り替えでスケールが変わらないように）
+        const { minZ, maxZ, centerZ, totalLength, maxY } = calculateOpticalSystemZRange();
+        const includeRayStartMargin = options.includeRayStartMargin !== false;
+        const rayStartMargin = includeRayStartMargin ? 25 : 0;
+        const effectiveMinZ = Math.min(minZ, -rayStartMargin);
+        const effectiveMaxZ = maxZ;
+        const effectiveTotalLength = effectiveMaxZ - effectiveMinZ;
+        const effectiveCenterZ = (effectiveMinZ + effectiveMaxZ) / 2;
+
         const savedBounds = camera?.userData?.__drawCrossOrthoBounds;
         const preserveDrawCrossBounds = options.preserveDrawCrossBounds === true && savedBounds;
         const systemCenterZ = Number.isFinite(options.centerZOverride)
             ? options.centerZOverride
-            : (preserveDrawCrossBounds && Number.isFinite(savedBounds.centerZ) ? savedBounds.centerZ : fitCenterZ);
-
-        const targetOverride = options.targetOverride &&
-            Number.isFinite(options.targetOverride.x) &&
-            Number.isFinite(options.targetOverride.y) &&
-            Number.isFinite(options.targetOverride.z)
-            ? options.targetOverride
-            : null;
-        
-        // レンダラーの実際のサイズを取得してアスペクト比を計算
-        let aspect = 1.5; // デフォルト値
-        if (renderer) {
-            const size = renderer.getSize(new THREE.Vector2());
-            aspect = size.x / size.y;
-        }
-        
-        // 描画枠全体に光学系が収まるように視野サイズを計算
-        const marginFactor = 1.2;
-        const visibleHeight = (fitMaxY - fitMinY) * marginFactor;
-        const visibleWidth = (fitMaxZ - fitMinZ) * marginFactor;
-        
-        // OrthographicCameraの場合、視野範囲を直接設定
-        if (camera.isOrthographicCamera) {
-            const preserveRequested = options.preserveCurrentOrthoBounds === true;
-            const hasReliableExtent = sceneBounds && !sceneBounds.isEmpty();
-            const preserveCurrentOrthoBounds = preserveRequested && hasReliableExtent;
-            if (preserveCurrentOrthoBounds) {
-                // User already adjusted the view (pan/zoom/rotate).
-                // Keep the current bounds so pressing Render does not change the scale.
-                expandOrthoBoundsToAspect(camera, aspect);
-            } else if (preserveDrawCrossBounds) {
-                camera.left = savedBounds.left;
-                camera.right = savedBounds.right;
-                camera.top = savedBounds.top;
-                camera.bottom = savedBounds.bottom;
-                expandOrthoBoundsToAspect(camera, aspect);
-            } else {
-                // アスペクト比に基づいて、どちらの方向を基準にするか決定
-                let viewHeight, viewWidth;
-
-                // 光学系のアスペクト比
-                const contentAspect = visibleWidth / Math.max(1e-9, visibleHeight);
-
-                if (contentAspect > aspect) {
-                    // 光学系が横長 → 横幅を基準に
-                    viewWidth = visibleWidth / 2;
-                    viewHeight = viewWidth / aspect;
-                } else {
-                    // 光学系が縦長 → 高さを基準に
-                    viewHeight = visibleHeight / 2;
-                    viewWidth = viewHeight * aspect;
-                }
-
-                // カメラの視野範囲を更新
-                // Y-Z view: left/right = Z軸, top/bottom = Y軸
-                camera.left = fitCenterZ - viewWidth;
-                camera.right = fitCenterZ + viewWidth;
-                camera.top = fitCenterY + viewHeight;
-                camera.bottom = fitCenterY - viewHeight;
-                
-                console.log('📐 YZ Camera bounds set:', {
-                    left: camera.left.toFixed(2),
-                    right: camera.right.toFixed(2),
-                    top: camera.top.toFixed(2),
-                    bottom: camera.bottom.toFixed(2),
-                    viewWidth: viewWidth.toFixed(2),
-                    viewHeight: viewHeight.toFixed(2)
-                });
-
-            }
-        }
-        
-        if (sceneBounds) {
-        }
-        
-        // カメラをX軸負方向に配置（Y-Z断面の正面）- 距離は任意（正投影なので影響なし）
-        const cameraDistance = 300; // 正投影カメラでは距離は見た目に影響しない
-        const baseTargetX = 0;
-        const baseTargetY = fitCenterY;
-        const baseTargetZ = systemCenterZ;
-
-        const targetX = baseTargetX;
-        const targetY = targetOverride ? targetOverride.y : baseTargetY;
-        const targetZ = targetOverride ? targetOverride.z : baseTargetZ;
-
-        camera.position.set(targetX - cameraDistance, targetY, targetZ);
-        camera.lookAt(targetX, targetY, targetZ);
-        camera.up.set(0, 1, 0); // Y軸が上方向
-        
-        // コントロールのターゲットを光学系の中心に設定
-        controls.target.set(targetX, targetY, targetZ);
-        controls.update();
-        
-        // カメラ投影行列を更新
-        camera.updateProjectionMatrix();
-
-        // Remember the latest content center used for relative-pan preservation.
-        camera.userData.__drawCrossLastFitCenter = { x: 0, y: baseTargetY, z: baseTargetZ };
-
-        if (options.storeDrawCrossBounds === true && camera.isOrthographicCamera) {
-            camera.userData.__drawCrossOrthoBounds = {
-                left: camera.left,
-                right: camera.right,
-                top: camera.top,
-                bottom: camera.bottom,
-                centerZ: targetZ
-            };
-        }
-        
-        // 強制レンダリング
-        if (renderer && scene) {
-            renderer.render(scene, camera);
-        }
-        
-        
-    } catch (error) {
-    }
-}
-
-function setCameraForXZCrossSection(options: CameraOptions = {}) {
-
-    try {
-        const camera = options.camera || getCamera?.();
-        const controls = options.controls || getControls?.();
-        const scene = options.scene || getScene?.();
-        const renderer = options.renderer || getRenderer?.();
-
-        if (!camera || !controls || !scene) {
-            return;
-        }
-
-        // まずシーン内の実際のオブジェクト（光線含む）のバウンディングボックスを取得
-        const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
-        
-        // sceneBoundsが取得できた場合は、それを優先的に使用
-        let fitMinZ, fitMaxZ, fitMinX, fitMaxX, fitCenterZ, fitCenterX;
-        
-        if (sceneBounds && !sceneBounds.isEmpty()) {
-            fitMinZ = sceneBounds.min.z;
-            fitMaxZ = sceneBounds.max.z;
-            fitMinX = sceneBounds.min.x;
-            fitMaxX = sceneBounds.max.x;
-            fitCenterZ = (fitMinZ + fitMaxZ) / 2;
-            fitCenterX = (fitMinX + fitMaxX) / 2;
-            
-            console.log('🎯 XZ Camera Fit - Scene Bounds:', {
-                minZ: fitMinZ.toFixed(2),
-                maxZ: fitMaxZ.toFixed(2),
-                centerZ: fitCenterZ.toFixed(2),
-                minX: fitMinX.toFixed(2),
-                maxX: fitMaxX.toFixed(2),
-                centerX: fitCenterX.toFixed(2),
-                width: (fitMaxZ - fitMinZ).toFixed(2),
-                height: (fitMaxX - fitMinX).toFixed(2)
-            });
-        } else {
-            // フォールバック: 光学系データから推定
-            const rangeData = calculateOpticalSystemZRange();
-            if (!rangeData) {
-                return;
-            }
-            const { minZ, maxZ, maxY } = rangeData;
-            const includeRayStartMargin = options.includeRayStartMargin !== false;
-            const rayStartMargin = includeRayStartMargin ? 50 : 0;
-            fitMinZ = Math.min(minZ, -rayStartMargin);
-            fitMaxZ = maxZ;
-            fitCenterZ = (fitMinZ + fitMaxZ) / 2;
-            fitCenterX = 0;
-            fitMinX = -(maxY || 50);
-            fitMaxX = (maxY || 50);
-        }
-
-        const savedBounds = camera?.userData?.__drawCrossOrthoBounds;
-        const preserveDrawCrossBounds = options.preserveDrawCrossBounds === true && savedBounds;
-        const targetCenterZ = Number.isFinite(options.centerZOverride)
-            ? options.centerZOverride
-            : (preserveDrawCrossBounds && Number.isFinite(savedBounds.centerZ) ? savedBounds.centerZ : fitCenterZ);
+            : (preserveDrawCrossBounds && Number.isFinite(savedBounds.centerZ) ? savedBounds.centerZ : effectiveCenterZ);
 
         const targetOverride = options.targetOverride &&
             Number.isFinite(options.targetOverride.x) &&
@@ -1408,25 +1200,19 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
             aspect = size.x / size.y;
         }
 
-        const marginFactor = 1.2;
-        const visibleHeight = (fitMaxX - fitMinX) * marginFactor;
-        const visibleWidth = (fitMaxZ - fitMinZ) * marginFactor;
+        const marginFactor = 1.1;
+        const visibleHeight = maxY * 2 * marginFactor;
+        const visibleWidth = effectiveTotalLength * marginFactor;
 
         if (camera.isOrthographicCamera) {
-            const preserveRequested = options.preserveCurrentOrthoBounds === true;
-            const hasReliableExtent = sceneBounds && !sceneBounds.isEmpty();
-            const preserveCurrentOrthoBounds = preserveRequested && hasReliableExtent;
-            if (preserveCurrentOrthoBounds) {
-                expandOrthoBoundsToAspect(camera, aspect);
-            } else if (preserveDrawCrossBounds) {
+            if (preserveDrawCrossBounds) {
                 camera.left = savedBounds.left;
                 camera.right = savedBounds.right;
                 camera.top = savedBounds.top;
                 camera.bottom = savedBounds.bottom;
-                expandOrthoBoundsToAspect(camera, aspect);
             } else {
                 let viewHeight, viewWidth;
-                const contentAspect = visibleWidth / Math.max(1e-9, visibleHeight);
+                const contentAspect = visibleWidth / visibleHeight;
 
                 if (contentAspect > aspect) {
                     viewWidth = visibleWidth / 2;
@@ -1436,30 +1222,121 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
                     viewWidth = viewHeight * aspect;
                 }
 
-                camera.left = fitCenterZ - viewWidth;
-                camera.right = fitCenterZ + viewWidth;
-                camera.top = fitCenterX + viewHeight;
-                camera.bottom = fitCenterX - viewHeight;
-                
-                console.log('📐 XZ Camera bounds set:', {
-                    left: camera.left.toFixed(2),
-                    right: camera.right.toFixed(2),
-                    top: camera.top.toFixed(2),
-                    bottom: camera.bottom.toFixed(2),
-                    viewWidth: viewWidth.toFixed(2),
-                    viewHeight: viewHeight.toFixed(2)
-                });
+                camera.left = -viewWidth;
+                camera.right = viewWidth;
+                camera.top = viewHeight;
+                camera.bottom = -viewHeight;
+            }
+        }
+
+        const cameraDistance = 300;
+        const targetX = targetOverride ? targetOverride.x : 0;
+        const targetY = targetOverride ? targetOverride.y : 0;
+        const targetZ = targetOverride ? targetOverride.z : systemCenterZ;
+
+        camera.position.set(targetX - cameraDistance, targetY, targetZ);
+        camera.lookAt(targetX, targetY, targetZ);
+        camera.up.set(0, 1, 0);
+
+        controls.target.set(targetX, targetY, targetZ);
+        controls.update();
+
+        camera.updateProjectionMatrix();
+
+        if (options.storeDrawCrossBounds === true && camera.isOrthographicCamera) {
+            camera.userData.__drawCrossOrthoBounds = {
+                left: camera.left,
+                right: camera.right,
+                top: camera.top,
+                bottom: camera.bottom,
+                centerZ: targetZ
+            };
+        }
+
+        if (renderer && scene) {
+            renderer.render(scene, camera);
+        }
+
+    } catch (error) {
+    }
+}
+
+function setCameraForXZCrossSection(options: CameraOptions = {}) {
+    try {
+        const camera = options.camera || getCamera?.();
+        const controls = options.controls || getControls?.();
+        const scene = options.scene || getScene?.();
+        const renderer = options.renderer || getRenderer?.();
+
+        if (!camera || !controls || !scene) {
+            return;
+        }
+
+        const rangeData = calculateOpticalSystemZRange();
+        if (!rangeData) {
+            return;
+        }
+
+        const { minZ, maxZ, maxY } = rangeData;
+        const includeRayStartMargin = options.includeRayStartMargin !== false;
+        const rayStartMargin = includeRayStartMargin ? 25 : 0;
+        const effectiveMinZ = Math.min(minZ, -rayStartMargin);
+        const effectiveMaxZ = maxZ;
+        const effectiveTotalLength = effectiveMaxZ - effectiveMinZ;
+        const effectiveCenterZ = (effectiveMinZ + effectiveMaxZ) / 2;
+
+        const savedBounds = camera?.userData?.__drawCrossOrthoBounds;
+        const preserveDrawCrossBounds = options.preserveDrawCrossBounds === true && savedBounds;
+        const targetCenterZ = Number.isFinite(options.centerZOverride)
+            ? options.centerZOverride
+            : (preserveDrawCrossBounds && Number.isFinite(savedBounds.centerZ) ? savedBounds.centerZ : effectiveCenterZ);
+
+        const targetOverride = options.targetOverride &&
+            Number.isFinite(options.targetOverride.x) &&
+            Number.isFinite(options.targetOverride.y) &&
+            Number.isFinite(options.targetOverride.z)
+            ? options.targetOverride
+            : null;
+
+        let aspect = 1.5;
+        if (renderer) {
+            const size = renderer.getSize(new THREE.Vector2());
+            aspect = size.x / size.y;
+        }
+
+        const marginFactor = 1.1;
+        const visibleHeight = maxY * 2 * marginFactor;
+        const visibleWidth = effectiveTotalLength * marginFactor;
+
+        if (camera.isOrthographicCamera) {
+            if (preserveDrawCrossBounds) {
+                camera.left = savedBounds.left;
+                camera.right = savedBounds.right;
+                camera.top = savedBounds.top;
+                camera.bottom = savedBounds.bottom;
+            } else {
+                let viewHeight, viewWidth;
+                const contentAspect = visibleWidth / visibleHeight;
+
+                if (contentAspect > aspect) {
+                    viewWidth = visibleWidth / 2;
+                    viewHeight = viewWidth / aspect;
+                } else {
+                    viewHeight = visibleHeight / 2;
+                    viewWidth = viewHeight * aspect;
+                }
+
+                camera.left = -viewWidth;
+                camera.right = viewWidth;
+                camera.top = viewHeight;
+                camera.bottom = -viewHeight;
             }
         }
 
         const cameraDistance = options.cameraDistance || 300;
-        const baseTargetX = fitCenterX;
-        const baseTargetY = 0;
-        const baseTargetZ = targetCenterZ;
-
-        const targetX = targetOverride ? targetOverride.x : baseTargetX;
-        const targetY = baseTargetY;
-        const targetZ = targetOverride ? targetOverride.z : baseTargetZ;
+        const targetX = targetOverride ? targetOverride.x : 0;
+        const targetY = targetOverride ? targetOverride.y : 0;
+        const targetZ = targetOverride ? targetOverride.z : targetCenterZ;
 
         camera.position.set(targetX, targetY + cameraDistance, targetZ);
         camera.lookAt(targetX, targetY, targetZ);
@@ -1468,8 +1345,6 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
 
         controls.target.set(targetX, targetY, targetZ);
         controls.update();
-
-        camera.userData.__drawCrossLastFitCenter = { x: baseTargetX, y: 0, z: baseTargetZ };
 
         if (renderer && scene) {
             renderer.render(scene, camera);
