@@ -18,7 +18,7 @@ import {
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.ts';
 import { generateSurfaceOptions } from '../evaluation/spot-diagram.ts';
 import { PSFPlotter } from '../evaluation/psf/psf-plot.ts';
-import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../evaluation/wavefront/wavefront.ts';
+import { createOPDCalculator, createWavefrontAnalyzer, WavefrontAberrationAnalyzer } from '../evaluation/wavefront/wavefront.ts';
 import { PSFCalculator } from '../evaluation/psf/psf-calculator.ts';
 import { getLastWavefrontMap, getLastWavefrontMeta, patchLastWavefrontMap } from '../evaluation/wavefront/last-wavefront-runtime.ts';
 import { calculateFocalLength, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.ts';
@@ -32,11 +32,15 @@ function getPopupPsfCalculator(): PSFCalculator {
     if (popupPsfCalculatorCache) {
         return popupPsfCalculatorCache;
     }
-    if (window.opener && window.opener.PSFCalculator) {
-        popupPsfCalculatorCache = new window.opener.PSFCalculator();
-        return popupPsfCalculatorCache;
+    const PsfCalculatorCtor =
+        (window.opener && window.opener.PSFCalculator)
+        || window.PSFCalculator
+        || PSFCalculator;
+    if (typeof PsfCalculatorCtor !== 'function') {
+        throw new Error('PSFCalculator is not available');
     }
-    throw new Error('PSFCalculator not available from opener window');
+    popupPsfCalculatorCache = new PsfCalculatorCtor();
+    return popupPsfCalculatorCache;
 }
 
 // ============================================================================
@@ -3952,12 +3956,17 @@ export function setupAnalysisWindows() {
                                 const opticalSystemRows = (typeof opener?.getOpticalSystemRows === 'function')
                                     ? opener.getOpticalSystemRows()
                                     : null;
-                                const calculator = opener?.createOPDCalculator
-                                    ? opener.createOPDCalculator(opticalSystemRows, wavelength)
-                                    : null;
-                                const analyzer = opener?.createWavefrontAnalyzer
-                                    ? opener.createWavefrontAnalyzer(calculator)
-                                    : null;
+                                const host = opener || window;
+                                const calculatorFactory =
+                                    (host && typeof host.createOPDCalculator === 'function' && host.createOPDCalculator)
+                                    || (typeof window.createOPDCalculator === 'function' && window.createOPDCalculator)
+                                    || (typeof createOPDCalculator === 'function' ? createOPDCalculator : null);
+                                const analyzerFactory =
+                                    (host && typeof host.createWavefrontAnalyzer === 'function' && host.createWavefrontAnalyzer)
+                                    || (typeof window.createWavefrontAnalyzer === 'function' && window.createWavefrontAnalyzer)
+                                    || (typeof createWavefrontAnalyzer === 'function' ? createWavefrontAnalyzer : null);
+                                const calculator = calculatorFactory ? calculatorFactory(opticalSystemRows, wavelength) : null;
+                                const analyzer = (calculator && analyzerFactory) ? analyzerFactory(calculator) : null;
 
                                 if (!analyzer || typeof analyzer.fitZernikePolynomials !== 'function' || typeof analyzer.formatZernikeReportText !== 'function') {
                                     throw new Error('Wavefront analyzer is not available for Zernike fitting');
@@ -4813,22 +4822,23 @@ export function setupAnalysisWindows() {
                         } catch (_) {}
                     };
 
-                    const opdCalculator = (() => {
-                        try {
-                            if (window.opener && typeof window.opener.createOPDCalculator === 'function') {
-                                return window.opener.createOPDCalculator(opticalSystemRows, wavelength);
-                            }
-                        } catch (_) {}
-                        throw new Error('createOPDCalculator not available from opener window');
-                    })();
-                    const analyzer = (() => {
-                        try {
-                            if (window.opener && window.opener.WavefrontAberrationAnalyzer) {
-                                return new window.opener.WavefrontAberrationAnalyzer(opdCalculator);
-                            }
-                        } catch (_) {}
-                        throw new Error('WavefrontAberrationAnalyzer not available from opener window');
-                    })();
+                    const host = window.opener || window;
+                    const calculatorFactory =
+                        (host && typeof host.createOPDCalculator === 'function' && host.createOPDCalculator)
+                        || (typeof window.createOPDCalculator === 'function' && window.createOPDCalculator)
+                        || (typeof createOPDCalculator === 'function' ? createOPDCalculator : null);
+                    const analyzerFactory =
+                        (host && typeof host.createWavefrontAnalyzer === 'function' && host.createWavefrontAnalyzer)
+                        || (typeof window.createWavefrontAnalyzer === 'function' && window.createWavefrontAnalyzer)
+                        || (typeof createWavefrontAnalyzer === 'function' ? createWavefrontAnalyzer : null);
+                    const opdCalculator = calculatorFactory ? calculatorFactory(opticalSystemRows, wavelength) : null;
+                    if (!opdCalculator) {
+                        throw new Error('createOPDCalculator is not available');
+                    }
+                    const analyzer = analyzerFactory ? analyzerFactory(opdCalculator) : null;
+                    if (!analyzer) {
+                        throw new Error('WavefrontAberrationAnalyzer is not available');
+                    }
                     
                     // CRITICAL: Force stop mode to match render behavior
                     // PSF calculation should use same pupil sampling as render, not entrance pupil
@@ -5050,7 +5060,16 @@ export function setupAnalysisWindows() {
 
                     logScaleInputs(pupilDiameterMm, focalLengthMm, stopIndexForLog);
 
-                    const psfCalculator = getPopupPsfCalculator();
+                    const psfCalculator = (() => {
+                        const host = window.opener || window;
+                        const PsfCalculatorCtor =
+                            (host && host.PSFCalculator)
+                            || window.PSFCalculator;
+                        if (typeof PsfCalculatorCtor !== 'function') {
+                            throw new Error('PSFCalculator is not available');
+                        }
+                        return new PsfCalculatorCtor();
+                    })();
                     const psfSamplingSize = Number.isFinite(zernikeSampling) ? zernikeSampling : 128;
                     const zeroPadTo = (zeroPadRaw === 'none')
                         ? psfSamplingSize

@@ -9889,6 +9889,7 @@ export function createWavefrontAnalyzer(opdCalculator) {
 if (typeof window !== 'undefined') {
     window['OpticalPathDifferenceCalculator'] = OpticalPathDifferenceCalculator;
     window['WavefrontAberrationAnalyzer'] = WavefrontAberrationAnalyzer;
+    window['createOPDCalculator'] = createOPDCalculator;
     window['createWavefrontAnalyzer'] = createWavefrontAnalyzer;
 
 }

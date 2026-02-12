@@ -18,6 +18,7 @@
 import { loadSystemConfigurations } from '../../data/table-configuration.ts';
 import { saveLastWavefrontSnapshot } from './wavefront-snapshot-storage.ts';
 import { setLastWavefrontState, getLastWavefrontMeta } from './last-wavefront-runtime.ts';
+import { createOPDCalculator, createWavefrontAnalyzer } from './wavefront.ts';
 
 export class WavefrontPlotter {
     constructor(containerElementIdOrElement) {
@@ -27,6 +28,33 @@ export class WavefrontPlotter {
             modeBarButtonsToRemove: ['pan2d', 'lasso2d'],
             responsive: true
         };
+    }
+
+    _createWavefrontEngine(opticalSystemRows, wavelength = 0.5876) {
+        const globalWindow = (typeof window !== 'undefined') ? window : null;
+        const hostWindow = globalWindow?.opener || globalWindow;
+
+        const calculatorFactory =
+            (typeof hostWindow?.createOPDCalculator === 'function' && hostWindow.createOPDCalculator)
+            || (typeof globalWindow?.createOPDCalculator === 'function' && globalWindow.createOPDCalculator)
+            || createOPDCalculator;
+
+        const analyzerFactory =
+            (typeof hostWindow?.createWavefrontAnalyzer === 'function' && hostWindow.createWavefrontAnalyzer)
+            || (typeof globalWindow?.createWavefrontAnalyzer === 'function' && globalWindow.createWavefrontAnalyzer)
+            || createWavefrontAnalyzer;
+
+        const calculator = calculatorFactory ? calculatorFactory(opticalSystemRows, wavelength) : null;
+        if (!calculator) {
+            throw new Error('波面収差計算機の初期化に失敗しました: OPDCalculator を作成できません');
+        }
+
+        const analyzer = analyzerFactory ? analyzerFactory(calculator) : null;
+        if (!analyzer) {
+            throw new Error('波面収差計算機の初期化に失敗しました: WavefrontAnalyzer を作成できません');
+        }
+
+        return { calculator, analyzer };
     }
 
     /**
@@ -175,13 +203,7 @@ export class WavefrontPlotter {
             // Enable profiling automatically when progress UI is active.
             const profileEnabled = !!((typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_PROFILE === true) || options?.onProgress);
 
-            // 計算機を作成（windowオブジェクト経由）
-            const calculator = window.createOPDCalculator ? window.createOPDCalculator(opticalSystemRows, wavelength) : null;
-            const analyzer = window.createWavefrontAnalyzer ? window.createWavefrontAnalyzer(calculator) : null;
-
-            if (!calculator || !analyzer) {
-                throw new Error('波面収差計算機の初期化に失敗しました');
-            }
+            const { analyzer } = this._createWavefrontEngine(opticalSystemRows, wavelength);
 
             // Discontinuity診断は重いためデフォルトOFF（必要なら runtime でON）
             //   globalThis.__WAVEFRONT_DIAG_DISCONTINUITIES = true
@@ -399,13 +421,7 @@ export class WavefrontPlotter {
             console.log('🌊 波面収差（Wλ）3Dサーフェスプロット生成開始...');
             const profileEnabled = (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_PROFILE === true);
 
-            // 計算機を作成（windowオブジェクト経由）
-            const calculator = window.createOPDCalculator ? window.createOPDCalculator(opticalSystemRows, wavelength) : null;
-            const analyzer = window.createWavefrontAnalyzer ? window.createWavefrontAnalyzer(calculator) : null;
-
-            if (!calculator || !analyzer) {
-                throw new Error('波面収差計算機の初期化に失敗しました');
-            }
+            const { analyzer } = this._createWavefrontEngine(opticalSystemRows, wavelength);
 
             const diagnoseDiscontinuities = (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_DIAG_DISCONTINUITIES === true);
 
@@ -602,13 +618,7 @@ export class WavefrontPlotter {
         try {
             console.log('🌊 OPD ヒートマップ生成開始...');
             const profileEnabled = !!((typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_PROFILE === true) || options?.onProgress);
-            // 計算機を作成（windowオブジェクト経由）
-            const calculator = window.createOPDCalculator ? window.createOPDCalculator(opticalSystemRows, wavelength) : null;
-            const analyzer = window.createWavefrontAnalyzer ? window.createWavefrontAnalyzer(calculator) : null;
-            
-            if (!calculator || !analyzer) {
-                throw new Error('波面収差計算機の初期化に失敗しました');
-            }
+            const { analyzer } = this._createWavefrontEngine(opticalSystemRows, wavelength);
             // 波面収差マップを生成（Zernike 37項で関数面を描画）
             const diagnoseDiscontinuities = (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_DIAG_DISCONTINUITIES === true);
             const displayMode = options?.opdDisplayMode || 'pistonTiltRemoved';
@@ -711,12 +721,7 @@ export class WavefrontPlotter {
     async plotWavefrontHeatmap(opticalSystemRows, fieldSetting, wavelength = 0.5876, gridSize = 31) {
         try {
             console.log('🌊 波面収差（Wλ）ヒートマップ生成開始...');
-            const calculator = window.createOPDCalculator ? window.createOPDCalculator(opticalSystemRows, wavelength) : null;
-            const analyzer = window.createWavefrontAnalyzer ? window.createWavefrontAnalyzer(calculator) : null;
-
-            if (!calculator || !analyzer) {
-                throw new Error('波面収差計算機の初期化に失敗しました');
-            }
+            const { analyzer } = this._createWavefrontEngine(opticalSystemRows, wavelength);
 
             const diagnoseDiscontinuities = (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_DIAG_DISCONTINUITIES === true);
             const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, 'circular', {
@@ -795,12 +800,7 @@ export class WavefrontPlotter {
             console.log('🌊 マルチフィールド波面収差比較プロット生成開始...');
             
             const traces = [];
-            const calculator = window.createOPDCalculator ? window.createOPDCalculator(opticalSystemRows, wavelength) : null;
-            const analyzer = window.createWavefrontAnalyzer ? window.createWavefrontAnalyzer(calculator) : null;
-            
-            if (!calculator || !analyzer) {
-                throw new Error('波面収差計算機の初期化に失敗しました');
-            }
+            const { analyzer } = this._createWavefrontEngine(opticalSystemRows, wavelength);
             
             for (const fieldSetting of fieldSettings) {
                 // 各フィールドでの波面収差マップを生成
