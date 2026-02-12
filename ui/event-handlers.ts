@@ -174,28 +174,36 @@ function ensurePopupMessageHandler(): void {
         // Handle popup-resize message
         if (data.action === 'popup-resize') {
             console.log('📥 Received popup-resize message');
-            
-            const scene = w.popupScene;
-            const camera = w.popupCamera;
-            const renderer = w.popupRenderer;
-            const viewAxis = w.__currentPopupViewAxis || 'YZ';
-            
-            if (!scene || !camera || !renderer) {
-                console.log('⚠️ popup-resize: Missing scene/camera/renderer');
+            if (!w.popup3DWindow) {
+                console.warn('⚠️ Popup window reference is unavailable (resize)');
                 return;
             }
-            
-            const savedBounds = camera.userData?.__drawCrossOrthoBounds;
-            if (!savedBounds) {
-                console.log('⚠️ popup-resize: No saved bounds, skipping');
-                return;
-            }
-            
-            // Keep draw-cross bounds; avoid resizing altering fit.
-            camera.updateProjectionMatrix();
-            
-            if (renderer && scene) {
-                renderer.render(scene, camera);
+
+            const popupWindow = w.popup3DWindow;
+            const viewAxisRaw = (data?.viewAxis || w.__currentPopupViewAxis || 'YZ').toString().toUpperCase();
+            const viewAxis = viewAxisRaw === 'XZ' ? 'XZ' : 'YZ';
+
+            try {
+                const cameraRef = popupWindow.camera;
+                const savedBounds = cameraRef?.userData?.__drawCrossOrthoBounds;
+                const centerZOverride = Number.isFinite(savedBounds?.centerZ) ? savedBounds.centerZ : undefined;
+                const cameraOptions: any = {
+                    camera: popupWindow.camera,
+                    controls: popupWindow.controls,
+                    scene: popupWindow.scene,
+                    renderer: popupWindow.renderer,
+                    includeRayStartMargin: true,
+                    preserveDrawCrossBounds: false,
+                    ...(Number.isFinite(centerZOverride) ? { centerZOverride } : {})
+                };
+
+                if (viewAxis === 'XZ' && typeof w.setCameraForXZCrossSection === 'function') {
+                    w.setCameraForXZCrossSection(cameraOptions);
+                } else if (viewAxis === 'YZ' && typeof w.setCameraForYZCrossSection === 'function') {
+                    w.setCameraForYZCrossSection(cameraOptions);
+                }
+            } catch (error) {
+                console.error('❌ Popup resize handling error:', error);
             }
             
             return;
@@ -1598,37 +1606,24 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             };
             
             const applyResize = () => {
-                const w = container.clientWidth;
-                const h = container.clientHeight;
+                const r = container.getBoundingClientRect();
+                const w = Math.max(1, Math.round(r.width));
+                const h = Math.max(1, Math.round(r.height));
                 if (w < 2 || h < 2) return;
                 
                 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isLowPowerRenderer ? 1.25 : 2));
                 renderer.setSize(w, h, false);
+                controls.update();
                 
                 const aspect = w / h;
-                // iOS: anchor to last draw-cross bounds to avoid center drift on repeated resize ticks.
-                const savedBounds = camera?.userData?.__drawCrossOrthoBounds;
-                const useSavedBounds = isLowPowerRenderer && savedBounds &&
-                    Number.isFinite(savedBounds.left) && Number.isFinite(savedBounds.right) &&
-                    Number.isFinite(savedBounds.top) && Number.isFinite(savedBounds.bottom);
-
-                const currentHeight = useSavedBounds
-                    ? (savedBounds.top - savedBounds.bottom)
-                    : (camera.top - camera.bottom);
-                const currentCenterX = useSavedBounds
-                    ? ((savedBounds.left + savedBounds.right) / 2)
-                    : ((camera.left + camera.right) / 2);
-                const currentCenterY = useSavedBounds
-                    ? ((savedBounds.top + savedBounds.bottom) / 2)
-                    : ((camera.top + camera.bottom) / 2);
+                const currentHeight = camera.top - camera.bottom;
+                const currentCenterX = (camera.left + camera.right) / 2;
+                const currentCenterY = (camera.top + camera.bottom) / 2;
                 const newWidth = currentHeight * aspect;
                 camera.left = currentCenterX - newWidth / 2;
                 camera.right = currentCenterX + newWidth / 2;
-                // Keep top/bottom unchanged to preserve vertical extent
-                if (useSavedBounds) {
-                    camera.top = savedBounds.top;
-                    camera.bottom = savedBounds.bottom;
-                }
+                camera.top = currentCenterY + currentHeight / 2;
+                camera.bottom = currentCenterY - currentHeight / 2;
                 camera.updateProjectionMatrix();
                 
                 if (!getPopupUserAdjustedView()) {
@@ -1636,10 +1631,11 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                     const threshold = 80;
                     const shouldSend = shouldSendPopupResize(now, w, h, threshold);
                     
-                    if (!isLowPowerRenderer && shouldSend && window.opener) {
+                    if (shouldSend && window.opener) {
                         markPopupResizeSent(now, w, h);
                         try {
-                            window.opener.postMessage({ action: 'popup-resize' }, '*');
+                            const axis = getCurrentViewAxis() || 'YZ';
+                            window.opener.postMessage({ action: 'popup-resize', viewAxis: axis }, '*');
                         } catch (_) {}
                     }
                 }
