@@ -1294,22 +1294,13 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
         
         // カメラをX軸負方向に配置（Y-Z断面の正面）- 距離は任意（正投影なので影響なし）
         const cameraDistance = 300; // 正投影カメラでは距離は見た目に影響しない
-        // When the popup user has panned/zoomed, it sends us an absolute OrbitControls target.
-        // If we reuse that absolute target across optical edits (e.g., CoordTrans -> 0), the view can
-        // appear "stuck" even though geometry returned. Preserve pan *relative to the content center*.
-        const lastFitCenter = camera?.userData?.__drawCrossLastFitCenter;
-        const hasLastFitCenter = !!(lastFitCenter && Number.isFinite(lastFitCenter.y) && Number.isFinite(lastFitCenter.z));
-
         const baseTargetX = 0;
         const baseTargetY = fitCenterY;
         const baseTargetZ = systemCenterZ;
 
-        const panDeltaY = (targetOverride && hasLastFitCenter) ? (targetOverride.y - lastFitCenter.y) : 0;
-        const panDeltaZ = (targetOverride && hasLastFitCenter) ? (targetOverride.z - lastFitCenter.z) : 0;
-
         const targetX = baseTargetX;
-        const targetY = targetOverride ? (baseTargetY + panDeltaY) : baseTargetY;
-        const targetZ = targetOverride ? (baseTargetZ + panDeltaZ) : baseTargetZ;
+        const targetY = targetOverride ? targetOverride.y : baseTargetY;
+        const targetZ = targetOverride ? targetOverride.z : baseTargetZ;
 
         camera.position.set(targetX - cameraDistance, targetY, targetZ);
         camera.lookAt(targetX, targetY, targetZ);
@@ -1462,19 +1453,13 @@ function setCameraForXZCrossSection(options: CameraOptions = {}) {
         }
 
         const cameraDistance = options.cameraDistance || 300;
-        const lastFitCenter = camera?.userData?.__drawCrossLastFitCenter;
-        const hasLastFitCenter = !!(lastFitCenter && Number.isFinite(lastFitCenter.x) && Number.isFinite(lastFitCenter.z));
-
         const baseTargetX = fitCenterX;
         const baseTargetY = 0;
         const baseTargetZ = targetCenterZ;
 
-        const panDeltaX = (targetOverride && hasLastFitCenter) ? (targetOverride.x - lastFitCenter.x) : 0;
-        const panDeltaZ = (targetOverride && hasLastFitCenter) ? (targetOverride.z - lastFitCenter.z) : 0;
-
-        const targetX = targetOverride ? (baseTargetX + panDeltaX) : baseTargetX;
+        const targetX = targetOverride ? targetOverride.x : baseTargetX;
         const targetY = baseTargetY;
-        const targetZ = targetOverride ? (baseTargetZ + panDeltaZ) : baseTargetZ;
+        const targetZ = targetOverride ? targetOverride.z : baseTargetZ;
 
         camera.position.set(targetX, targetY + cameraDistance, targetZ);
         camera.lookAt(targetX, targetY, targetZ);
