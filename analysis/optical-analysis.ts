@@ -14,7 +14,10 @@ const w: Record<string, any> = window;
 import * as THREE from 'three';
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.ts';
 import { expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
+import { loadSystemConfigurations } from '../data/table-configuration.ts';
+import { loadTableData as loadSourceTableData } from '../data/table-source.ts';
 import { detectConjugateType, ConjugateType } from '../utils/conjugate-detection.ts';
+import { getSpotDiagramPattern, loadSpotDiagramSettingsByConfigId, saveSpotDiagramSettingsByConfigId, saveLastSpotDiagramSettings } from '../ui/spot-diagram-settings-storage.ts';
 import { getScene, getCamera, getRenderer, getControls, getTableOpticalSystem, getTableObject, getTableSource,
          getIsGeneratingSpotDiagram, getIsGeneratingTransverseAberration,
          setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration } from '../core/app-config.ts';
@@ -181,8 +184,8 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         const ringCountSelect = document.getElementById('ring-count-select') as HTMLSelectElement | null;
         const resolveActiveConfigId = () => {
             try {
-                const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
-                const sys = raw ? JSON.parse(raw) : null;
+                if (typeof localStorage === 'undefined') return '';
+                const sys = loadSystemConfigurations();
                 const activeId = (sys && sys.activeConfigId !== undefined && sys.activeConfigId !== null)
                     ? String(sys.activeConfigId).trim()
                     : '';
@@ -254,14 +257,8 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
 
         const resolveSpotPattern = () => {
             try {
-                const stored = (typeof window !== 'undefined') ? (window as any).__cooptSpotPattern : null;
-                const p0 = String(stored || '').trim().toLowerCase();
-                if (p0 === 'grid' || p0 === 'annular') return p0;
-            } catch (_) {}
-            try {
-                const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('spotDiagramPattern') : null;
-                const p1 = String(raw || '').trim().toLowerCase();
-                if (p1 === 'grid' || p1 === 'annular') return p1;
+                const p = getSpotDiagramPattern();
+                if (p === 'grid' || p === 'annular') return p;
             } catch (_) {}
             const annularBtn = document.getElementById('annular-pattern-btn');
             const gridBtn = document.getElementById('grid-pattern-btn');
@@ -274,8 +271,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 }
             } catch (_) {}
             try {
-                const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('spotDiagramSettingsByConfigId') : null;
-                const map = raw ? JSON.parse(raw) : null;
+                const map = loadSpotDiagramSettingsByConfigId();
                 const entry = (map && selectedConfigId) ? map[selectedConfigId] : null;
                 const p = entry && typeof entry.pattern === 'string' ? entry.pattern.trim().toLowerCase() : '';
                 if (p === 'grid' || p === 'annular') return p;
@@ -321,8 +317,8 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             
             // Debug: Check what's in localStorage
             try {
-                const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
-                const sys = raw ? JSON.parse(raw) : null;
+                if (typeof localStorage === 'undefined') throw new Error('localStorage unavailable');
+                const sys = loadSystemConfigurations();
                 const cfg = Array.isArray(sys?.configurations) ? sys.configurations.find((c: any) => String(c?.id) === String(selectedConfigId)) : null;
                 if (cfg) {
                     console.log(`🔍 [Config Content] Config "${selectedConfigId}":`, {
@@ -387,8 +383,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             };
 
             try {
-                const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
-                const sys = raw ? JSON.parse(raw) : null;
+                const sys = (typeof localStorage === 'undefined') ? null : loadSystemConfigurations();
 
                 const activeId = (sys && sys.activeConfigId !== undefined && sys.activeConfigId !== null)
                     ? String(sys.activeConfigId)
@@ -480,9 +475,8 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                                 objectRows: normalizeObjectRows(Array.isArray(cfg?.object) ? cfg.object : []),
                                 sourceRows: (() => {
                                     try {
-                                        const json = localStorage.getItem('sourceTableData');
-                                        const parsed = json ? JSON.parse(json) : null;
-                                        return Array.isArray(parsed) ? parsed : [];
+                                        const rows = loadSourceTableData();
+                                        return Array.isArray(rows) ? rows : [];
                                     } catch (_) {
                                         return [];
                                     }
@@ -687,9 +681,8 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                     // Source is global (shared across configurations).
                     sourceRows: (() => {
                         try {
-                            const json = localStorage.getItem('sourceTableData');
-                            const parsed = json ? JSON.parse(json) : null;
-                            return Array.isArray(parsed) ? parsed : [];
+                            const rows = loadSourceTableData();
+                            return Array.isArray(rows) ? rows : [];
                         } catch (_) {
                             return [];
                         }
@@ -887,7 +880,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 if (primary) primaryWavelengthUm = primary.wl;
             }
 
-            localStorage.setItem('lastSpotDiagramSettings', JSON.stringify({
+            saveLastSpotDiagramSettings({
                 surfaceId,
                 surfaceRowIndex: surfaceIndex,
                 rayCount,
@@ -896,23 +889,22 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 primaryWavelengthUm,
                 configId: selectedConfigId || null,
                 updatedAt: Date.now()
-            }));
+            });
 
             // Also persist per-config settings so Requirements can evaluate
             // non-active configs without depending on whichever config was last opened.
             try {
                 let cfgKey = selectedConfigId ? String(selectedConfigId).trim() : '';
                 if (!cfgKey) {
-                    const sysRaw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
-                    const sys = sysRaw ? JSON.parse(sysRaw) : null;
+                    if (typeof localStorage === 'undefined') return;
+                    const sys = loadSystemConfigurations();
                     cfgKey = (sys && sys.activeConfigId !== undefined && sys.activeConfigId !== null)
                         ? String(sys.activeConfigId).trim()
                         : '';
                 }
 
                 if (cfgKey) {
-                    const rawMap = (typeof localStorage !== 'undefined') ? localStorage.getItem('spotDiagramSettingsByConfigId') : null;
-                    const map = rawMap ? (JSON.parse(rawMap) || {}) : {};
+                    const map = loadSpotDiagramSettingsByConfigId();
                     map[cfgKey] = {
                         // Backward compat: surfaceIndex was historically a row index.
                         surfaceIndex,
@@ -925,7 +917,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                         configId: cfgKey,
                         updatedAt: Date.now()
                     };
-                    localStorage.setItem('spotDiagramSettingsByConfigId', JSON.stringify(map));
+                    saveSpotDiagramSettingsByConfigId(map);
                     
                     // CRITICAL: Also update in-memory cache so merit evaluation uses latest settings immediately.
                     // This prevents Spot Diagram execution from requiring browser reload to update UR values.
@@ -1281,8 +1273,8 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
         };
         const loadConfigSnapshot = () => {
             try {
-                const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
-                const sys = raw ? JSON.parse(raw) : null;
+                if (typeof localStorage === 'undefined') return null;
+                const sys = loadSystemConfigurations();
                 if (!sys || !Array.isArray(sys.configurations)) return null;
                 const activeId = (sys.activeConfigId !== undefined && sys.activeConfigId !== null)
                     ? String(sys.activeConfigId)
@@ -1295,9 +1287,8 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
                 if (!cfg) return null;
                 const sourceRows = (() => {
                     try {
-                        const json = localStorage.getItem('sourceTableData');
-                        const parsed = json ? JSON.parse(json) : null;
-                        return Array.isArray(parsed) ? parsed : [];
+                        const rows = loadSourceTableData();
+                        return Array.isArray(rows) ? rows : [];
                     } catch (_) {
                         return [];
                     }
@@ -2038,8 +2029,8 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
         try { onProgress?.({ percent: 96, message: 'Rendering...' }); } catch (_) {}
         
         // System Configuration名を取得
-        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
-        const activeConfig = systemConfig.configurations?.find((c: any) => c.id === systemConfig.activeConfigId);
+        const systemConfig = (typeof localStorage === 'undefined') ? null : loadSystemConfigurations();
+        const activeConfig = systemConfig?.configurations?.find((c: any) => c && String(c.id) === String(systemConfig.activeConfigId));
         const configName = activeConfig ? activeConfig.name : 'Default';
         
         plotIntegratedAberrationDiagram(longitudinalData, astigmatismData, distortionDataByWavelength, {

@@ -2,7 +2,7 @@
  * Test Zernike Fitting with Vignetting
  * 
  * Run in browser console:
- *   (async () => { const result = await testZernikeFitting(); window.zernikeResult = result; })();
+ *   (async () => { const result = await testZernikeFitting(); console.log(result); })();
  *   displayZernikeAnalysis(window.zernikeResult);
  */
 
@@ -112,7 +112,7 @@ export async function compareZernikeOrders() {
 
 // Export for browser console
 if (typeof window !== 'undefined') {
-  window.testZernikeFitting = testZernikeFitting;
-  window.testVignettedPupil = testVignettedPupil;
-  window.compareZernikeOrders = compareZernikeOrders;
+  window['testZernikeFitting'] = testZernikeFitting;
+  window['testVignettedPupil'] = testVignettedPupil;
+  window['compareZernikeOrders'] = compareZernikeOrders;
 }

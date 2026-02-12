@@ -11,6 +11,15 @@
  * 作成日: 2025/08/06
  */
 
+import {
+    getDotProductImplementation,
+    getCrossProductImplementation,
+    getNormalizeImplementation,
+    setDotProductImplementation,
+    setCrossProductImplementation,
+    setNormalizeImplementation,
+} from '../../core/vector-math-service.ts';
+
 // SIMD対応チェック
 const SIMD_AVAILABLE = typeof SIMD !== 'undefined' && 
                        typeof SIMD.Float32x4 !== 'undefined' &&
@@ -302,27 +311,18 @@ function enableSIMDOptimization() {
     console.log('🚀 SIMD最適化を有効化...');
     
     // 既存関数のバックアップ
-    if (!window.originalVectorMath) {
-        window.originalVectorMath = {
-            dotProduct: window.dotProduct || function(a, b) { return a.x * b.x + a.y * b.y + a.z * b.z; },
-            crossProduct: window.crossProduct || function(a, b) { 
-                return {
-                    x: a.y * b.z - a.z * b.y,
-                    y: a.z * b.x - a.x * b.z,
-                    z: a.x * b.y - a.y * b.x
-                };
-            },
-            normalize: window.normalize || function(v) {
-                const len = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-                return len === 0 ? {x: 0, y: 0, z: 0} : {x: v.x/len, y: v.y/len, z: v.z/len};
-            }
+    if (!window['originalVectorMath']) {
+        window['originalVectorMath'] = {
+            dotProduct: getDotProductImplementation(),
+            crossProduct: getCrossProductImplementation(),
+            normalize: getNormalizeImplementation()
         };
     }
     
-    // SIMD最適化版で置き換え
-    window.dotProduct = SIMDVectorMath.dotProduct3;
-    window.crossProduct = SIMDVectorMath.crossProduct3;
-    window.normalize = SIMDVectorMath.normalize3;
+    // SIMD最適化版で置き換え（service経由）
+    setDotProductImplementation(SIMDVectorMath.dotProduct3);
+    setCrossProductImplementation(SIMDVectorMath.crossProduct3);
+    setNormalizeImplementation(SIMDVectorMath.normalize3);
     
     console.log('✅ SIMD最適化が有効になりました');
 }
@@ -333,10 +333,10 @@ function enableSIMDOptimization() {
 function disableSIMDOptimization() {
     console.log('🔄 SIMD最適化を無効化...');
     
-    if (window.originalVectorMath) {
-        window.dotProduct = window.originalVectorMath.dotProduct;
-        window.crossProduct = window.originalVectorMath.crossProduct;
-        window.normalize = window.originalVectorMath.normalize;
+    if (window['originalVectorMath']) {
+        setDotProductImplementation(window['originalVectorMath'].dotProduct);
+        setCrossProductImplementation(window['originalVectorMath'].crossProduct);
+        setNormalizeImplementation(window['originalVectorMath'].normalize);
         console.log('✅ 元の関数に戻しました');
     } else {
         console.log('⚠️ バックアップされた関数が見つかりません');
@@ -344,12 +344,12 @@ function disableSIMDOptimization() {
 }
 
 // グローバルに公開
-window.SIMDVectorMath = SIMDVectorMath;
-window.SIMDRayMath = SIMDRayMath;
-window.SIMDAsphericMath = SIMDAsphericMath;
-window.testSIMDOptimization = testSIMDOptimization;
-window.enableSIMDOptimization = enableSIMDOptimization;
-window.disableSIMDOptimization = disableSIMDOptimization;
+window['SIMDVectorMath'] = SIMDVectorMath;
+window['SIMDRayMath'] = SIMDRayMath;
+window['SIMDAsphericMath'] = SIMDAsphericMath;
+window['testSIMDOptimization'] = testSIMDOptimization;
+window['enableSIMDOptimization'] = enableSIMDOptimization;
+window['disableSIMDOptimization'] = disableSIMDOptimization;
 
 // 初期化メッセージ
 console.log('🔧 SIMD最適化モジュールが読み込まれました');

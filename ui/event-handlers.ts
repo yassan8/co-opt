@@ -20,8 +20,24 @@ import { generateSurfaceOptions } from '../evaluation/spot-diagram.ts';
 import { PSFPlotter } from '../evaluation/psf/psf-plot.ts';
 import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../evaluation/wavefront/wavefront.ts';
 import { PSFCalculator } from '../evaluation/psf/psf-calculator.ts';
+import { getLastWavefrontMap, getLastWavefrontMeta, patchLastWavefrontMap } from '../evaluation/wavefront/last-wavefront-runtime.ts';
 import { calculateFocalLength, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.ts';
 import { DEFAULT_STOP_SEMI_DIAMETER } from '../data/block-schema.ts';
+import { loadSystemConfigurations } from '../data/table-configuration.ts';
+import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
+
+let popupPsfCalculatorCache: PSFCalculator | null = null;
+
+function getPopupPsfCalculator(): PSFCalculator {
+    if (popupPsfCalculatorCache) {
+        return popupPsfCalculatorCache;
+    }
+    if (window.opener && window.opener.PSFCalculator) {
+        popupPsfCalculatorCache = new window.opener.PSFCalculator();
+        return popupPsfCalculatorCache;
+    }
+    throw new Error('PSFCalculator not available from opener window');
+}
 
 // ============================================================================
 // GLOBAL CONFIGURATION: FORCE INFINITE PUPIL MODE
@@ -509,8 +525,8 @@ function ensurePopupMessageHandler(): void {
                                 // Re-enable damping
                                 if (controls) controls.enableDamping = wasDamping;
 
-                                // Reset user-adjusted flag
-                                try { popupWindow.__userAdjustedView = false; } catch (_) {}
+                                // Reset user-adjusted flag in popup state
+                                try { popupWindow.postMessage({ action: 'set-user-adjusted-view', value: false }, '*'); } catch (_) {}
 
                                 renderer.render(popupScene, camera);
                             }
@@ -1439,6 +1455,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
 
     <script type="module">
         import * as THREE from 'three';
+        import { setRenderingContext } from '../core/rendering-context.ts';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         
         console.log('THREE.js loaded in popup:', !!THREE);
@@ -1491,10 +1508,51 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             controls.enableRotate = true;
             controls.enablePan = true;
             controls.enableZoom = true;
+
+            let popupUserAdjustedView = false;
+            let popupCurrentViewAxis: 'XZ' | 'YZ' = 'YZ';
+            let popupRayColorMode: 'object' | 'segment' = 'object';
+            let popupSurfaceColorsCollapsed = true;
+
+            function setPopupUserAdjustedView(v) {
+                popupUserAdjustedView = v === true;
+            }
+
+            function getPopupUserAdjustedView() {
+                return popupUserAdjustedView === true;
+            }
+
+            function setCurrentViewAxis(axis) {
+                popupCurrentViewAxis = axis === 'XZ' ? 'XZ' : 'YZ';
+            }
+
+            function getCurrentViewAxis() {
+                return popupCurrentViewAxis;
+            }
+
+            function setPopupRayColorModeValue(mode) {
+                popupRayColorMode = mode === 'segment' ? 'segment' : 'object';
+            }
+
+            function getPopupRayColorMode() {
+                return popupRayColorMode;
+            }
+
+            function setSurfaceColorsCollapsed(collapsed) {
+                popupSurfaceColorsCollapsed = collapsed === true;
+            }
+
+            function getSurfaceColorsCollapsed() {
+                return popupSurfaceColorsCollapsed === true;
+            }
+
+            function toggleSurfaceColorsCollapsed() {
+                setSurfaceColorsCollapsed(!getSurfaceColorsCollapsed());
+            }
             
-            window.__userAdjustedView = false;
+            setPopupUserAdjustedView(false);
             controls.addEventListener('start', () => {
-                window.__userAdjustedView = true;
+                setPopupUserAdjustedView(true);
             });
             
             camera.position.set(0, 50, 100);
@@ -1511,6 +1569,22 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             animate();
             
             let resizeScheduled = false;
+            let lastResizeSentAt = 0;
+            let lastResizeWidth = -1;
+            let lastResizeHeight = -1;
+
+            const shouldSendPopupResize = (now: number, width: number, height: number, thresholdMs: number): boolean => {
+                return !lastResizeSentAt ||
+                    (now - lastResizeSentAt > thresholdMs) ||
+                    (lastResizeWidth !== width || lastResizeHeight !== height);
+            };
+
+            const markPopupResizeSent = (now: number, width: number, height: number): void => {
+                lastResizeSentAt = now;
+                lastResizeWidth = width;
+                lastResizeHeight = height;
+            };
+
             const scheduleResize = () => {
                 if (resizeScheduled) return;
                 resizeScheduled = true;
@@ -1541,17 +1615,13 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 // Keep top/bottom unchanged to preserve vertical extent
                 camera.updateProjectionMatrix();
                 
-                if (!window.__userAdjustedView) {
+                if (!getPopupUserAdjustedView()) {
                     const now = Date.now();
                     const threshold = 80;
-                    const shouldSend = !window.__lastResizeSent || 
-                                      (now - window.__lastResizeSent > threshold) ||
-                                      (window.__lastResizeW !== w || window.__lastResizeH !== h);
+                    const shouldSend = shouldSendPopupResize(now, w, h, threshold);
                     
                     if (shouldSend && window.opener) {
-                        window.__lastResizeSent = now;
-                        window.__lastResizeW = w;
-                        window.__lastResizeH = h;
+                        markPopupResizeSent(now, w, h);
                         try {
                             window.opener.postMessage({ action: 'popup-resize' }, '*');
                         } catch (_) {}
@@ -1563,7 +1633,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             resizeObserver.observe(container);
             window.addEventListener('resize', scheduleResize);
             
-            window.__cooptNormalizeSceneGeometry = (scene) => {
+            const normalizeSceneGeometry = (scene) => {
                 const normalizeArray = (attr, isIndex) => {
                     if (!attr || !attr.array) return;
                     const arr = attr.array;
@@ -1619,7 +1689,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 });
             };
             
-            window.__cooptFindBadGeometry = (scene) => {
+            const findBadGeometry = (scene) => {
                 const tempScene = new THREE.Scene();
                 const tempCamera = new THREE.PerspectiveCamera();
                 const tempRenderer = new THREE.WebGLRenderer();
@@ -1667,10 +1737,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 return null;
             };
             
-            window.scene = scene;
-            window.camera = camera;
-            window.renderer = renderer;
-            window.controls = controls;
+            setRenderingContext({ scene, camera, renderer, controls });
             
             if (window.opener) {
                 window.opener.popupScene = scene;
@@ -1811,27 +1878,27 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 surfaceColorsPanel.classList.toggle('collapsed', isCollapsed);
                 surfaceColorsToggle.textContent = isCollapsed ? '▶' : '◀';
             }
-            
-            window.__surfaceColorsCollapsed = true;
-            applySurfaceColorsCollapsedState(window.__surfaceColorsCollapsed);
+
+            setSurfaceColorsCollapsed(true);
+            applySurfaceColorsCollapsedState(getSurfaceColorsCollapsed());
             
             const surfaceColorsToggle = document.getElementById('surface-colors-toggle');
             if (surfaceColorsToggle) {
                 surfaceColorsToggle.addEventListener('click', () => {
-                    window.__surfaceColorsCollapsed = !window.__surfaceColorsCollapsed;
-                    applySurfaceColorsCollapsedState(window.__surfaceColorsCollapsed);
+                    toggleSurfaceColorsCollapsed();
+                    applySurfaceColorsCollapsedState(getSurfaceColorsCollapsed());
                 });
             }
             
-            window.__rayColorMode = 'object';
+            setPopupRayColorModeValue('object');
             
             function setPopupRayColorMode(mode) {
-                window.__rayColorMode = mode === 'segment' ? 'segment' : 'object';
+                setPopupRayColorModeValue(mode);
                 const objectColorBtn = document.getElementById('object-color-btn');
                 const segmentColorBtn = document.getElementById('segment-color-btn');
                 if (objectColorBtn && segmentColorBtn) {
-                    objectColorBtn.classList.toggle('active', window.__rayColorMode === 'object');
-                    segmentColorBtn.classList.toggle('active', window.__rayColorMode === 'segment');
+                    objectColorBtn.classList.toggle('active', getPopupRayColorMode() === 'object');
+                    segmentColorBtn.classList.toggle('active', getPopupRayColorMode() === 'segment');
                 }
             }
             
@@ -1863,10 +1930,16 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                     } catch (e) {}
                     return;
                 }
+                if (data && data.action === 'set-user-adjusted-view') {
+                    try {
+                        setPopupUserAdjustedView(data.value === true);
+                    } catch (_) {}
+                    return;
+                }
                 if (data && data.action === 'request-redraw') {
                     try {
-                        const axisRaw = (data.viewAxis || window.__currentViewAxis || 'YZ').toString().toUpperCase();
-                        window.__currentViewAxis = axisRaw === 'XZ' ? 'XZ' : 'YZ';
+                        const axisRaw = (data.viewAxis || getCurrentViewAxis() || 'YZ').toString().toUpperCase();
+                        setCurrentViewAxis(axisRaw);
                     } catch (_) {}
                     
                     try {
@@ -1890,10 +1963,10 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                     return Number.isFinite(v) && v > 0 ? v : 51;
                 })();
                 return {
-                    userAdjustedView: !!window.__userAdjustedView,
-                    viewAxis: window.__currentViewAxis || 'YZ',
+                    userAdjustedView: getPopupUserAdjustedView(),
+                    viewAxis: getCurrentViewAxis(),
                     rayCount,
-                    rayColorMode: window.__rayColorMode || 'object',
+                    rayColorMode: getPopupRayColorMode(),
                     target: {
                         x: controls?.target?.x ?? 0,
                         y: controls?.target?.y ?? 0,
@@ -1907,7 +1980,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                     zoom: camera?.zoom ?? 1
                 };
             }
-            
+
             const drawBtn = document.getElementById('draw-btn');
             if (drawBtn) {
                 drawBtn.addEventListener('click', () => {
@@ -1923,7 +1996,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             const xzBtn = document.getElementById('view-xz-btn');
             if (xzBtn) {
                 xzBtn.addEventListener('click', () => {
-                    window.__currentViewAxis = 'XZ';
+                    setCurrentViewAxis('XZ');
                     if (window.opener) {
                         const viewState = getPopupViewState();
                         window.opener.postMessage({ action: 'view-xz', ...viewState }, '*');
@@ -1935,7 +2008,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             const yzBtn = document.getElementById('view-yz-btn');
             if (yzBtn) {
                 yzBtn.addEventListener('click', () => {
-                    window.__currentViewAxis = 'YZ';
+                    setCurrentViewAxis('YZ');
                     if (window.opener) {
                         const viewState = getPopupViewState();
                         window.opener.postMessage({ action: 'view-yz', ...viewState }, '*');
@@ -2195,7 +2268,9 @@ export function setupAnalysisWindows() {
             const ref = getOpenerEl('reference-focal-length');
             if (ref) ref.value = value;
             try {
-                localStorage.setItem('systemData', JSON.stringify({ referenceFocalLength: value }));
+                import('../data/table-configuration.ts').then(({ saveReferenceFocalLengthProjection }) => {
+                    try { saveReferenceFocalLengthProjection(value); } catch (_) {}
+                });
             } catch (_) {}
         });
 
@@ -2408,9 +2483,7 @@ export function setupAnalysisWindows() {
 
                         // Ensure parent window selects are populated before opening popup
                         try {
-                            if (typeof w.updateSurfaceNumberSelect === 'function') {
-                                w.updateSurfaceNumberSelect();
-                            }
+                            requestUpdateSurfaceNumberSelect(w);
                         } catch (e) {
                             console.warn('Failed to update spot diagram selects:', e);
                         }
@@ -2646,16 +2719,11 @@ export function setupAnalysisWindows() {
             if (!isAnnular && openerGrid) openerGrid.click();
 
             try {
-                if (window.opener) {
-                    window.opener.__cooptSpotPattern = isAnnular ? 'annular' : 'grid';
-                }
-            } catch (_) {}
-            try {
-                if (window.opener && window.opener.localStorage) {
-                    window.opener.localStorage.setItem('spotDiagramPattern', isAnnular ? 'annular' : 'grid');
-                } else {
-                    localStorage.setItem('spotDiagramPattern', isAnnular ? 'annular' : 'grid');
-                }
+                import('./spot-diagram-settings-storage.ts').then(({ setSpotDiagramPattern }) => {
+                    try {
+                        setSpotDiagramPattern(isAnnular ? 'annular' : 'grid', { preferOpener: true });
+                    } catch (_) {}
+                });
             } catch (_) {}
         }
 
@@ -2879,7 +2947,7 @@ export function setupAnalysisWindows() {
             }
         }
 
-        window.renderSphericalAberration = async () => {
+        window['renderSphericalAberration'] = async () => {
             const progressWrapper = document.getElementById('popup-spherical-progress-wrapper');
             const progressBarEl = document.getElementById('popup-spherical-progressbar');
             const progressTextEl = document.getElementById('popup-spherical-progress-text');
@@ -3058,7 +3126,7 @@ export function setupAnalysisWindows() {
     </div>
 
     <script>
-        window.renderAstigmatism = async () => {
+        window['renderAstigmatism'] = async () => {
             const containerEl = document.getElementById('popup-astigmatic-field-curves-container');
             if (containerEl) containerEl.innerHTML = '';
 
@@ -3284,7 +3352,7 @@ export function setupAnalysisWindows() {
             setTimeout(resizePlots, 0);
         }
 
-        window.renderDistortion = async () => {
+        window['renderDistortion'] = async () => {
             const percentEl = document.getElementById('popup-distortion-percent');
             if (percentEl) percentEl.innerHTML = '';
             // Default to full-height distortion plot
@@ -3327,7 +3395,7 @@ export function setupAnalysisWindows() {
             }
         };
 
-        window.renderGridDistortion = async () => {
+        window['renderGridDistortion'] = async () => {
             const gridEl = document.getElementById('popup-distortion-grid');
             if (gridEl) gridEl.innerHTML = '';
             // Split view when grid is requested
@@ -3492,7 +3560,7 @@ export function setupAnalysisWindows() {
             } catch (_) {}
         }
 
-        window.renderIntegratedAberration = async () => {
+        window['renderIntegratedAberration'] = async () => {
             const containerEl = document.getElementById('popup-integrated-aberration-container');
             if (containerEl) containerEl.innerHTML = '';
             resizePlot();
@@ -3778,7 +3846,7 @@ export function setupAnalysisWindows() {
             } catch (_) {}
         }
 
-        window.renderOPD = async () => {
+        window['renderOPD'] = async () => {
             const containerEl = document.getElementById('popup-wavefront-container');
             if (containerEl) containerEl.innerHTML = '';
 
@@ -3844,7 +3912,7 @@ export function setupAnalysisWindows() {
                 });
                 
                 const popupCancelToken = createCancelToken();
-                window.__popupOpdCancelToken = popupCancelToken;
+                window['__popupOpdCancelToken'] = popupCancelToken;
                 
                 const stopBtn = document.getElementById('popup-stop-opd-btn');
                 
@@ -3887,8 +3955,8 @@ export function setupAnalysisWindows() {
                                 setProgress(98, 'Zernike fitting...');
 
                                 const opener = window.opener;
-                                const map = opener ? opener.__lastWavefrontMap : null;
-                                const meta = opener ? opener.__lastWavefrontMeta : null;
+                                const map = opener ? getLastWavefrontMap(opener) : null;
+                                const meta = opener ? getLastWavefrontMeta(opener) : null;
                                 if (!map || map?.error) {
                                     throw new Error('No valid wavefrontMap to fit');
                                 }
@@ -3944,10 +4012,11 @@ export function setupAnalysisWindows() {
 
                                 // Store coefficients for the main window Zernike Fit button
                                 try {
-                                    opener.__lastWavefrontMap = opener.__lastWavefrontMap || map;
-                                    opener.__lastWavefrontMap.zernike = fit;
-                                    opener.__lastWavefrontMap.statistics = opener.__lastWavefrontMap.statistics || (map.statistics || {});
-                                    opener.__lastWavefrontMap.statistics.skipZernikeFit = false;
+                                    patchLastWavefrontMap((current) => {
+                                        current.zernike = fit;
+                                        current.statistics = current.statistics || (map.statistics || {});
+                                        current.statistics.skipZernikeFit = false;
+                                    }, { host: opener, fallbackMap: map });
                                 } catch (_) {}
 
                                 // Build a lightweight report map so formatting can rely on aligned sample arrays
@@ -4068,7 +4137,7 @@ export function setupAnalysisWindows() {
                         stopBtn.disabled = true;
                         stopBtn.textContent = 'Stop';
                     }
-                    window.__popupOpdCancelToken = null;
+                    window['__popupOpdCancelToken'] = null;
                 }
             } catch (err) {
                 console.error(err);
@@ -4442,7 +4511,7 @@ export function setupAnalysisWindows() {
             } catch (_) {}
         }
 
-        window.renderPSF = async () => {
+        window['renderPSF'] = async () => {
             const containerEl = document.getElementById('popup-psf-container');
             if (containerEl) containerEl.innerHTML = '';
 
@@ -4701,9 +4770,7 @@ export function setupAnalysisWindows() {
                     const getActiveConfigLabel = () => {
                         try {
                             if (typeof localStorage === 'undefined') return '';
-                            const raw = localStorage.getItem('systemConfigurations');
-                            if (!raw) return '';
-                            const sys = JSON.parse(raw);
+                            const sys = loadSystemConfigurations();
                             const activeId = sys?.activeConfigId;
                             const cfg = Array.isArray(sys?.configurations)
                                 ? sys.configurations.find(c => String(c?.id) === String(activeId))
@@ -5027,14 +5094,7 @@ export function setupAnalysisWindows() {
 
                     logScaleInputs(pupilDiameterMm, focalLengthMm, stopIndexForLog);
 
-                    if (!window.__popupPsfCalculator) {
-                        if (window.opener && window.opener.PSFCalculator) {
-                            window.__popupPsfCalculator = new window.opener.PSFCalculator();
-                        } else {
-                            throw new Error('PSFCalculator not available from opener window');
-                        }
-                    }
-                    const psfCalculator = window.__popupPsfCalculator;
+                    const psfCalculator = getPopupPsfCalculator();
                     const psfSamplingSize = Number.isFinite(zernikeSampling) ? zernikeSampling : 128;
                     const zeroPadTo = (zeroPadRaw === 'none')
                         ? psfSamplingSize
@@ -5117,8 +5177,8 @@ export function setupAnalysisWindows() {
             syncInputsFromOpener();
         }
         // Expose for opener-triggered refresh when reusing an existing popup window.
-        window.syncAll = syncAll;
-        window.syncObjectOptionsFromOpener = syncObjectOptionsFromOpener;
+        window['syncAll'] = syncAll;
+        window['syncObjectOptionsFromOpener'] = syncObjectOptionsFromOpener;
         window.addEventListener('resize', resizePlot);
         window.addEventListener('focus', syncAll);
         syncAll();
@@ -5373,7 +5433,7 @@ export function setupAnalysisWindows() {
             populateSelect(document.getElementById('popup-mtf-object-select'), buildObjectOptions());
         }
 
-        window.renderMTF = async () => {
+        window['renderMTF'] = async () => {
             const containerEl = document.getElementById('popup-mtf-container');
             if (containerEl) containerEl.innerHTML = '';
 
@@ -5585,7 +5645,7 @@ export function setupAnalysisWindows() {
             }
         }
 
-        window.renderTransverseAberration = async () => {
+        window['renderTransverseAberration'] = async () => {
             const progressWrap = document.getElementById('popup-transverse-progress-wrapper');
             const progressBar = document.getElementById('popup-transverse-progressbar');
             const progressText = document.getElementById('popup-transverse-progress-text');
@@ -6278,7 +6338,4 @@ export function updateSurfaceNumberSelect(): void {
     }
 }
 
-// Expose functions to window for backwards compatibility
-if (typeof window !== 'undefined') {
-    w.updateSurfaceNumberSelect = updateSurfaceNumberSelect;
-}
+// NOTE: window.updateSurfaceNumberSelect is owned by main.ts (Facade).

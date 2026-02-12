@@ -22,7 +22,7 @@ ReactDOM.createRoot(container).render(<App />);
 console.log("[React] React app mounted successfully");
 
 // Notify main.js that React has been mounted
-window.__cooptReactMounted = true;
+window['__cooptReactMounted'] = true;
 window.dispatchEvent(new CustomEvent('coopt:react-mounted'));
 console.log("[React] Dispatched coopt:react-mounted event");
 

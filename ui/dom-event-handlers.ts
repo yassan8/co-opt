@@ -19,6 +19,7 @@ import {
     BLOCK_SCHEMA_VERSION
 } from '../compat/block-schema.ts';
 import { SetBlockParameterCommand } from '../core/undo-history.ts';
+import { requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
 import { 
     getCompressedStringFromLocation, 
     decodeAllDataFromCompressedString,
@@ -28,6 +29,32 @@ import {
 import { setupOpticalSystemChangeListeners, setupAnalysisWindows } from './event-handlers.ts';
 import { listDesignVariablesFromBlocks } from '../optimization/design-variables.ts';
 import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
+import {
+    loadSystemConfigurations as loadSystemConfigurationsFromTableConfig,
+    saveSystemConfigurations as saveSystemConfigurationsFromTableConfig,
+    clearAllPersistedState
+} from '../data/table-configuration.ts';
+import {
+    loadTableData as loadSourceTableData,
+    saveTableData as saveSourceTableData,
+    tryLoadPersistedTableData as tryLoadPersistedSourceTableData
+} from '../data/table-source.ts';
+import {
+    loadTableData as loadOpticalSystemTableData,
+    saveTableData as saveOpticalSystemTableData
+} from '../data/table-optical-system.ts';
+import {
+    loadTableData as loadMeritFunctionTableData,
+    saveTableData as saveMeritFunctionTableData
+} from '../data/table-merit-function.ts';
+import {
+    loadTableData as loadObjectTableData,
+    saveTableData as saveObjectTableData
+} from '../data/table-object.ts';
+import {
+    loadTableData as loadSystemRequirementsTableData,
+    saveTableData as saveSystemRequirementsTableData
+} from '../data/table-system-requirements.ts';
 
 // Type definitions
 type BlockType = string;
@@ -395,9 +422,7 @@ w.__performCoordTransCalculation = async (blockId: string, panel: HTMLElement): 
 
         console.log(`✅ [CoordTrans] Applied: dx=${dx.toFixed(6)}, dy=${dy.toFixed(6)}, dz=${dz.toFixed(6)}`);
 
-        try {
-            w.refreshBlockInspector?.();
-        } catch (_) {}
+        try { requestRefreshBlockInspector(w); } catch (_) {}
     } catch (err) {
         console.error('❌ Failed to perform coordinate transformation calculation:', err);
     }
@@ -744,7 +769,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
 
     // Save configurations to localStorage
     try {
-        localStorage.setItem('systemConfigurations', JSON.stringify(candidateConfig));
+        saveSystemConfigurations(candidateConfig);
         console.log('🔵 [Load] Configurations data saved');
     } catch (e) {
         console.error('❌ Failed to save configurations:', e);
@@ -782,34 +807,34 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     // Save to localStorage for table loading
     try {
         if (effectiveSource) {
-            localStorage.setItem('sourceTableData', JSON.stringify(effectiveSource));
+            saveSourceTableData(effectiveSource as any);
             console.log('🔵 [Load] Source data saved to localStorage');
         }
     } catch (_) {}
 
     try {
         if (effectiveObject) {
-            localStorage.setItem('objectTableData', JSON.stringify(effectiveObject));
+            saveObjectTableData(effectiveObject as any);
             console.log('🔵 [Load] Object data saved to localStorage');
         }
     } catch (_) {}
 
     try {
         if (effectiveOpticalSystem) {
-            localStorage.setItem('OpticalSystemTableData', JSON.stringify(effectiveOpticalSystem));
+            saveOpticalSystemTableData(effectiveOpticalSystem as any);
             console.log('🔵 [Load] Optical system data saved to localStorage');
         }
     } catch (_) {}
 
     try {
         if (effectiveSystemRequirements) {
-            localStorage.setItem('systemRequirementsData', JSON.stringify(effectiveSystemRequirements));
+            saveSystemRequirementsTableData(effectiveSystemRequirements as any);
         }
     } catch (_) {}
 
     try {
         if (effectiveMeritFunction) {
-            localStorage.setItem('meritFunctionData', JSON.stringify(effectiveMeritFunction));
+            saveMeritFunctionTableData(effectiveMeritFunction as any);
         }
     } catch (_) {}
 
@@ -822,8 +847,12 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         } catch (_) {}
         
         const warn = !hasBlocksInAnyConfig;
-        localStorage.setItem('loadedFileName', displayName);
-        localStorage.setItem('loadedFileWarn', warn ? '1' : '');
+        try {
+            const { setLoadedFileState } = await import('./loaded-file-storage.ts');
+            setLoadedFileState(displayName, warn);
+        } catch (_) {
+            // ignore
+        }
         const fileNameElement = document.getElementById('loaded-file-name');
         if (fileNameElement) {
             fileNameElement.textContent = displayName;
@@ -845,7 +874,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                 }
             } catch (_) {}
             try {
-                const sourceData = JSON.parse(localStorage.getItem('sourceTableData') || '[]');
+                const sourceData = loadSourceTableData();
                 const tableSource = w.tableSource;
                 if (tableSource && typeof tableSource.replaceData === 'function') {
                     tableSource.replaceData(sourceData);
@@ -854,7 +883,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                 }
             } catch (_) {}
             try {
-                const objectData = JSON.parse(localStorage.getItem('objectTableData') || '[]');
+                const objectData = loadObjectTableData();
                 const tableObject = w.tableObject;
                 if (tableObject && typeof tableObject.replaceData === 'function') {
                     tableObject.replaceData(objectData);
@@ -863,7 +892,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                 }
             } catch (_) {}
             try {
-                const opticalData = JSON.parse(localStorage.getItem('OpticalSystemTableData') || '[]');
+                const opticalData = loadOpticalSystemTableData();
                 const tableOptical = w.tableOpticalSystem || w.opticalSystemTabulator;
                 if (tableOptical && typeof tableOptical.replaceData === 'function') {
                     tableOptical.replaceData(opticalData);
@@ -872,14 +901,14 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                 }
             } catch (_) {}
             try {
-                const meritData = JSON.parse(localStorage.getItem('meritFunctionData') || '[]');
+                const meritData = loadMeritFunctionTableData();
                 const meritEditor = w.meritFunctionEditor;
                 if (meritEditor && typeof meritEditor.setData === 'function') {
                     meritEditor.setData(meritData);
                 }
             } catch (_) {}
             try {
-                const reqData = JSON.parse(localStorage.getItem('systemRequirementsData') || '[]');
+                const reqData = loadSystemRequirementsTableData();
                 const reqEditor = w.systemRequirementsEditor;
                 if (reqEditor && typeof reqEditor.setData === 'function') {
                     reqEditor.setData(reqData);
@@ -1099,7 +1128,7 @@ function setupOptimizeDesignIntentButton(): void {
             try {
                 const systemConfig = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
                     ? w.loadSystemConfigurationsFromTableConfig()
-                    : JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+                    : loadSystemConfigurations();
                 const activeId = systemConfig?.activeConfigId;
                 activeCfg = systemConfig?.configurations?.find((c: any) => c && c.id === activeId)
                     || systemConfig?.configurations?.[0]
@@ -1561,8 +1590,8 @@ function setupOptimizeDesignIntentButton(): void {
                     // Save state before optimization for undo
                     let beforeOptimizationState: any = null;
                     try {
-                        const json = localStorage.getItem('systemConfigurations');
-                        if (json) beforeOptimizationState = JSON.parse(json);
+                        const sys = loadSystemConfigurations();
+                        beforeOptimizationState = sys ? JSON.parse(JSON.stringify(sys)) : null;
                     } catch (_) {}
 
                     stopFlag.stop = false;
@@ -1580,7 +1609,7 @@ function setupOptimizeDesignIntentButton(): void {
                     try {
                         const systemConfig = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
                             ? w.loadSystemConfigurationsFromTableConfig()
-                            : JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+                            : loadSystemConfigurations();
                         const activeId = systemConfig?.activeConfigId;
                         activeCfg = systemConfig?.configurations?.find((c: any) => c && c.id === activeId)
                             || systemConfig?.configurations?.[0]
@@ -1743,30 +1772,31 @@ function setupOptimizeDesignIntentButton(): void {
                         // Record optimization as a single undo operation
                         try {
                             if (beforeOptimizationState && w.undoHistory && result?.ok) {
-                                const afterOptimizationState = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+                                const sys = loadSystemConfigurations();
+                                const afterOptimizationState = sys ? JSON.parse(JSON.stringify(sys)) : null;
                                 if (JSON.stringify(beforeOptimizationState) !== JSON.stringify(afterOptimizationState)) {
                                     const command = {
                                         name: 'Optimization',
                                         execute: async () => {
-                                            localStorage.setItem('systemConfigurations', JSON.stringify(afterOptimizationState));
+                                            saveSystemConfigurations(afterOptimizationState);
                                             try {
                                                 if (w.ConfigurationManager && typeof w.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
                                                     await w.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
                                                 }
                                             } catch (_) {}
                                             try {
-                                                if (typeof w.refreshBlockInspector === 'function') w.refreshBlockInspector();
+                                                requestRefreshBlockInspector(w);
                                             } catch (_) {}
                                         },
                                         undo: async () => {
-                                            localStorage.setItem('systemConfigurations', JSON.stringify(beforeOptimizationState));
+                                            saveSystemConfigurations(beforeOptimizationState);
                                             try {
                                                 if (w.ConfigurationManager && typeof w.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
                                                     await w.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
                                                 }
                                             } catch (_) {}
                                             try {
-                                                if (typeof w.refreshBlockInspector === 'function') w.refreshBlockInspector();
+                                                requestRefreshBlockInspector(w);
                                             } catch (_) {}
                                         },
                                         redo: function() { return this.execute(); }
@@ -2178,7 +2208,7 @@ function setupNewFileButton(): void {
         
         try {
             console.log('🔵 [New File] Clearing localStorage and creating default configuration...');
-            localStorage.clear();
+            clearAllPersistedState();
             
             // Create default configuration using the same structure as table-configuration.ts
             const defaultConfig = {
@@ -2241,7 +2271,7 @@ function setupNewFileButton(): void {
                 optimizationRules: {}
             };
             
-            localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
+            saveSystemConfigurations(systemConfig);
             console.log('✅ [New File] Default configuration created, reloading...');
             location.reload();
         } catch (err) {
@@ -2262,7 +2292,7 @@ function setupSaveButton(): void {
     console.log('🔧 [Setup] setupSaveButton - button found:', !!btn);
     if (!btn) return;
 
-    const saveHandler = () => {
+    const saveHandler = async () => {
         try {
             if (document.activeElement) (document.activeElement as HTMLElement).blur();
 
@@ -2270,7 +2300,11 @@ function setupSaveButton(): void {
             const allData = buildAllDataForExport();
 
             // Get loaded filename for default
-            const loadedFileName = localStorage.getItem('loadedFileName');
+            let loadedFileName: string | null = null;
+            try {
+                const { getLoadedFileName } = await import('./loaded-file-storage.ts');
+                loadedFileName = getLoadedFileName();
+            } catch (_) {}
             let defaultName = 'optical_system_data';
             
             if (loadedFileName) {
@@ -2295,7 +2329,10 @@ function setupSaveButton(): void {
             URL.revokeObjectURL(url);
             
             // Save filename for next time
-            localStorage.setItem('loadedFileName', filename);
+            try {
+                const { setLoadedFileName } = await import('./loaded-file-storage.ts');
+                setLoadedFileName(filename);
+            } catch (_) {}
             
             console.log('✅ データが保存されました:', filename);
         } catch (err) {
@@ -2310,8 +2347,7 @@ function setupSaveButton(): void {
 }
 
 function getSanitizedConfigurationsForExport(): any {
-    const systemConfigurations = localStorage.getItem('systemConfigurations');
-    const parsedConfig = systemConfigurations ? JSON.parse(systemConfigurations) : null;
+    const parsedConfig = loadSystemConfigurations();
     
     const sanitizedConfig = parsedConfig ? JSON.parse(JSON.stringify(parsedConfig)) : null;
     if (sanitizedConfig) {
@@ -2803,7 +2839,6 @@ async function showMTFDiagram(options: {
 }
 
 // Configuration Management
-const STORAGE_KEY = "systemConfigurations";
 
 function createDefaultConfiguration(id: number, name: string): any {
     const defaultBlocks = [
@@ -2874,26 +2909,19 @@ const defaultSystemConfig = {
 };
 
 export function loadSystemConfigurations(): any {
-    const json = localStorage.getItem(STORAGE_KEY);
-    
-    if (json) {
-        try {
-            const parsed = JSON.parse(json);
-            return parsed;
-        } catch (e) {
-            console.warn('⚠️ [Configuration] Parse error:', e);
-        }
+    try {
+        return loadSystemConfigurationsFromTableConfig();
+    } catch (e) {
+        console.warn('⚠️ [Configuration] Load failed; using default system config:', e);
+        return defaultSystemConfig;
     }
-    
-    console.log('🔵 [Configuration] Using default system config');
-    return defaultSystemConfig;
 }
 
 export function saveSystemConfigurations(systemConfig: any): void {
-    if (systemConfig && systemConfig.configurations) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(systemConfig));
-    } else {
-        console.warn('⚠️ [Configuration] Invalid system config, not saving:', systemConfig);
+    try {
+        saveSystemConfigurationsFromTableConfig(systemConfig);
+    } catch (e) {
+        console.warn('⚠️ [Configuration] Save failed:', e);
     }
 }
 
@@ -2942,7 +2970,7 @@ export function saveCurrentToActiveConfiguration(): void {
     
     try {
         const globalSource = w.tableSource ? w.tableSource.getData() : [];
-        localStorage.setItem('sourceTableData', JSON.stringify(globalSource));
+        saveSourceTableData(globalSource as any);
     } catch (_) {}
     
     activeConfig.object = w.tableObject ? w.tableObject.getData() : [];
@@ -2974,21 +3002,21 @@ export function loadActiveConfigurationToTables(): void {
     }
     
     try {
-        const hasGlobal = !!localStorage.getItem('sourceTableData');
+        const hasGlobal = tryLoadPersistedSourceTableData() !== null;
         const legacy = Array.isArray(activeConfig.source) ? activeConfig.source : null;
         if (!hasGlobal && legacy && legacy.length > 0) {
-            localStorage.setItem('sourceTableData', JSON.stringify(legacy));
+            saveSourceTableData(legacy as any);
         }
     } catch (_) {}
     
     if (activeConfig.object) {
-        localStorage.setItem('objectTableData', JSON.stringify(activeConfig.object));
+        saveObjectTableData(activeConfig.object as any);
     }
     if (activeConfig.opticalSystem) {
-        localStorage.setItem('OpticalSystemTableData', JSON.stringify(activeConfig.opticalSystem));
+        saveOpticalSystemTableData(activeConfig.opticalSystem as any);
     }
     if (activeConfig.meritFunction) {
-        localStorage.setItem('meritFunctionData', JSON.stringify(activeConfig.meritFunction));
+        saveMeritFunctionTableData(activeConfig.meritFunction as any);
     }
     
     console.log(`✅ [Configuration] Loaded: ${activeConfig.name}`);
@@ -4640,7 +4668,7 @@ export function refreshBlockInspector(): void {
                     }
 
                     try {
-                        if (typeof w.updateSurfaceNumberSelect === 'function') w.updateSurfaceNumberSelect();
+                        requestUpdateSurfaceNumberSelect(w);
                     } catch (_) {}
                 }
             } catch (_) {}
@@ -5038,7 +5066,7 @@ function __blocks_deleteBlockFromActiveConfig(blockId: string): any {
         const expanded = expandBlocksToOpticalSystemRows(activeCfg.blocks);
         if (expanded && Array.isArray(expanded.rows)) {
             activeCfg.opticalSystem = expanded.rows;
-            try { localStorage.setItem('OpticalSystemTableData', JSON.stringify(expanded.rows)); } catch (_) {}
+            try { saveOpticalSystemTableData(expanded.rows as any); } catch (_) {}
             try { if (typeof w.saveLensTableData === 'function') w.saveLensTableData(expanded.rows); } catch (_) {}
             try {
                 if (w.tableOpticalSystem && typeof w.tableOpticalSystem.setData === 'function') {

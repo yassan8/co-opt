@@ -32,6 +32,20 @@ import { expandBlocksToOpticalSystemRows } from '../../data/block-schema.ts';
 import { generateRayStartPointsForObject, setRayEmissionPattern, getRayEmissionPattern } from '../../optical/ray-renderer.ts';
 import { calculateLongitudinalAberration } from '../../evaluation/aberrations/longitudinal-aberration.ts';
 import { getTableOpticalSystem, getTableObject, getTableSource } from '../../core/app-config.ts';
+import { loadSystemConfigurations } from '../../data/table-configuration.ts';
+import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../../data/table-optical-system.ts';
+import { loadTableData as loadMeritFunctionTableData, saveTableData as saveMeritFunctionTableData } from '../../data/table-merit-function.ts';
+import { loadLastSpotSettings } from '../spot-diagram-settings-storage.ts';
+import { getLastWavefrontMap } from '../../evaluation/wavefront/last-wavefront-runtime.ts';
+
+function tryLoadSystemConfigurations(): any {
+    try {
+        if (typeof localStorage === 'undefined') return null;
+        return loadSystemConfigurations();
+    } catch {
+        return null;
+    }
+}
 
 function isPlainObject(value: any): boolean {
     return (
@@ -576,7 +590,7 @@ class MeritFunctionEditor {
             operand: operandType || null,
             configId: (() => {
                 try {
-                    const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+                    const systemConfig = tryLoadSystemConfigurations();
                     const activeConfigId = systemConfig?.activeConfigId;
                     return (activeConfigId !== undefined && activeConfigId !== null) ? String(activeConfigId) : "";
                 } catch {
@@ -761,7 +775,7 @@ class MeritFunctionEditor {
 
         const isOperandActiveConfig = (() => {
             try {
-                const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+                const systemConfig = tryLoadSystemConfigurations();
                 const activeConfigId = (systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null)
                     ? String(systemConfig.activeConfigId)
                     : '';
@@ -877,7 +891,7 @@ class MeritFunctionEditor {
                 const existingZernike = (() => {
                     try {
                         if (typeof window === 'undefined') return null;
-                        const wfMap = w.__lastWavefrontMap;
+                        const wfMap = getLastWavefrontMap(window);
                         if (!wfMap || typeof wfMap !== 'object') return null;
                         if (!wfMap.zernike || typeof wfMap.zernike !== 'object') return null;
                         const z = wfMap.zernike;
@@ -1231,7 +1245,7 @@ class MeritFunctionEditor {
 
             const isOperandActiveConfig = (() => {
                 try {
-                    const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+                    const systemConfig = tryLoadSystemConfigurations() || {};
                     const activeConfigId = (systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null)
                         ? String(systemConfig.activeConfigId)
                         : '';
@@ -1399,8 +1413,7 @@ class MeritFunctionEditor {
             const lastSpotSettings = (() => {
                 if (!useUiDefaults) return {};
                 try {
-                    const raw = localStorage.getItem('lastSpotSettings');
-                    return raw ? JSON.parse(raw) : {};
+                    return loadLastSpotSettings();
                 } catch {
                     return {};
                 }
@@ -1783,7 +1796,7 @@ class MeritFunctionEditor {
 
     getConfigTablesByConfigId(configId: any, options: { preferConfigTables?: boolean } = {}): { source: any[]; object: any[] } {
         try {
-            const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+            const systemConfig = tryLoadSystemConfigurations();
             const activeConfigId = (systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null)
                 ? String(systemConfig.activeConfigId)
                 : '';
@@ -2072,8 +2085,7 @@ class MeritFunctionEditor {
 
     _getBlockSurfaceRange(blockLabel: string, configId: any): { startSurf: number; endSurf: number } | null {
         try {
-            const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
-            const sys = raw ? JSON.parse(raw) : null;
+            const sys = tryLoadSystemConfigurations();
             const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
             
             let cfg = null;
@@ -2206,9 +2218,7 @@ class MeritFunctionEditor {
     _convertLabelToBlockId(label: string, configId: any): string {
         try {
             // Get blocks from config
-            let sys = null;
-            const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
-            sys = raw ? JSON.parse(raw) : null;
+            const sys = tryLoadSystemConfigurations();
             
             const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
             const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null) ? String(sys.activeConfigId) : '';
@@ -2442,7 +2452,17 @@ class MeritFunctionEditor {
             // Prefer cache for NON-active configs when it's valid.
             // This aligns Requirements (spot size, etc) with the same expanded rows used by Analysis.
             // We still avoid cache for the active config during switching to prevent mid-update reads.
-            const useCache = true;
+            const useCache = (() => {
+                try {
+                    if (typeof globalThis === 'undefined') return true;
+                    const isOptimizerRunning = !!w.__cooptOptimizerIsRunning;
+                    const isEvaluatingRequirements = !!w.__COOPT_EVALUATING_REQUIREMENTS;
+                    if (isOptimizerRunning && isEvaluatingRequirements) {
+                        return false;
+                    }
+                } catch (_) {}
+                return true;
+            })();
             
             if (useCache) {
                 try {
@@ -2473,7 +2493,7 @@ class MeritFunctionEditor {
                 }
             } catch (_) {}
             try {
-                lsSystemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+                lsSystemConfig = tryLoadSystemConfigurations();
             } catch (_) {}
 
             if (memSystemConfig && lsSystemConfig) {
@@ -2587,9 +2607,8 @@ class MeritFunctionEditor {
                             } else if (systemConfig && String(systemConfig.activeConfigId) === String(targetConfigId)) {
                                 const tableRows = (() => {
                                     try {
-                                        const raw = localStorage.getItem('OpticalSystemTableData');
-                                        const parsed = raw ? JSON.parse(raw) : null;
-                                        return Array.isArray(parsed) ? parsed : null;
+                                        const rows = tryLoadPersistedOpticalSystemTableData();
+                                        return Array.isArray(rows) ? rows : null;
                                     } catch {
                                         return null;
                                     }
@@ -2783,19 +2802,18 @@ class MeritFunctionEditor {
 
     loadFromStorage(): void {
         try {
-            const savedData = localStorage.getItem('meritFunctionData');
-            if (savedData) {
-                const data = JSON.parse(savedData);
+            const data = loadMeritFunctionTableData();
+            if (Array.isArray(data) && data.length > 0) {
 
                 const dropDeprecated = (op: any) => {
                     const name = String(op?.operand ?? '').trim();
                     return name === 'ZERN_WL_UM' || name === 'ZERN_FIT_TERMS';
                 };
-                const sanitized = Array.isArray(data) ? data.filter((op: any) => !dropDeprecated(op)) : [];
+                const sanitized = data.filter((op: any) => !dropDeprecated(op));
 
                 let activeConfigId = "";
                 try {
-                    const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+                    const systemConfig = tryLoadSystemConfigurations();
                     if (systemConfig && systemConfig.activeConfigId) {
                         activeConfigId = String(systemConfig.activeConfigId);
                     }
@@ -2817,7 +2835,7 @@ class MeritFunctionEditor {
 
     saveToStorage(): void {
         try {
-            localStorage.setItem('meritFunctionData', JSON.stringify(this.operands));
+            saveMeritFunctionTableData(this.operands as any);
             console.log('✅ Merit Function データをローカルストレージに保存しました:', this.operands.length, '件');
         } catch (error) {
             console.error('❌ Merit Function ローカルストレージ保存エラー:', error);
@@ -2826,7 +2844,7 @@ class MeritFunctionEditor {
 
     getConfigurationList(): Record<string, string> {
         try {
-            const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+            const systemConfig = tryLoadSystemConfigurations();
             if (!systemConfig || !systemConfig.configurations) {
                 console.log('📋 Configuration リスト: デフォルト (Current のみ)');
                 return { "": 'Current' };
@@ -2892,7 +2910,7 @@ class MeritFunctionEditor {
     getConfigName(configId: any): string {
         if (!configId && configId !== 0) {
             try {
-                const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+                const systemConfig = tryLoadSystemConfigurations();
                 if (systemConfig && systemConfig.configurations) {
                     const activeConfig = systemConfig.configurations.find((c: any) => c.id === systemConfig.activeConfigId);
                     if (activeConfig) {
@@ -2906,7 +2924,7 @@ class MeritFunctionEditor {
         }
 
         try {
-            const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+            const systemConfig = tryLoadSystemConfigurations();
             if (!systemConfig || !systemConfig.configurations) {
                 return 'Current';
             }

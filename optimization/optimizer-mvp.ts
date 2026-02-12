@@ -11,6 +11,11 @@
 import { expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
 import { listDesignVariablesFromBlocks, setDesignVariableValue } from './design-variables.ts';
 import { getGlassDataWithSellmeier } from '../data/glass.ts';
+import { loadSystemConfigurations, saveSystemConfigurations } from '../data/table-configuration.ts';
+import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
+import { loadTableData as loadSystemRequirementsTableData } from '../data/table-system-requirements.ts';
+import { requestRefreshBlockInspector } from '../core/window-facade.ts';
+import { getWindowDebugBagValue, setWindowDebugBagValue } from '../utils/window-debug-bag.ts';
 
 let __optimizerStopRequested = false;
 
@@ -22,6 +27,72 @@ function nowMs() {
   return (typeof performance !== 'undefined' && typeof performance.now === 'function')
     ? performance.now()
     : Date.now();
+}
+
+function getScenarioOverrideGlobal() {
+  try {
+    return (typeof window !== 'undefined') ? (window as any).__cooptScenarioOverride : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function setScenarioOverrideGlobal(value) {
+  try {
+    if (typeof window === 'undefined') return;
+    if (value && typeof value === 'object') {
+      (window as any)['__cooptScenarioOverride'] = value;
+      return;
+    }
+    try { delete (window as any).__cooptScenarioOverride; } catch (_) {}
+  } catch (_) {
+    // ignore
+  }
+}
+
+function setBlocksOverrideGlobal(value) {
+  try {
+    if (typeof window === 'undefined') return;
+    if (value !== undefined) {
+      (window as any)['__cooptBlocksOverride'] = value;
+      return;
+    }
+    try { delete (window as any).__cooptBlocksOverride; } catch (_) {}
+  } catch (_) {
+    // ignore
+  }
+}
+
+function getSpotSizeDebugFastByKeyMap() {
+  const fromBag = getWindowDebugBagValue('optimizerMvp', 'spotSizeDebugFastByKey', null);
+  if (fromBag && typeof fromBag === 'object') return fromBag;
+  try {
+    if (typeof window === 'undefined') return null;
+    const legacy = (window as any).__cooptSpotSizeDebugFastByKey;
+    return (legacy && typeof legacy === 'object') ? legacy : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function getLastOptimizerResidualDebug() {
+  const fromBag = getWindowDebugBagValue('optimizerMvp', 'lastOptimizerResidualDebug', null);
+  if (fromBag && typeof fromBag === 'object') return fromBag;
+  try {
+    if (typeof window === 'undefined') return null;
+    const legacy = (window as any).__cooptLastOptimizerResidualDebug;
+    return (legacy && typeof legacy === 'object') ? legacy : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function setLastOptimizerResidualDebug(value) {
+  setWindowDebugBagValue('optimizerMvp', 'lastOptimizerResidualDebug', value && typeof value === 'object' ? value : null);
+}
+
+function setLastOptimizeProfile(value) {
+  setWindowDebugBagValue('optimizerMvp', 'lastOptimizeProfile', value && typeof value === 'object' ? value : null);
 }
 
 function nextFrame() {
@@ -293,7 +364,7 @@ function evalResidualsAllScenarios(activeCfg, evalBreakdown, configId) {
   }
 
   const key = String(configId);
-  const prev = (typeof window !== 'undefined') ? window.__cooptScenarioOverride : null;
+  const prev = getScenarioOverrideGlobal();
   const overrideMap = (prev && typeof prev === 'object') ? { ...prev } : {};
 
   const stacked = [];
@@ -306,7 +377,7 @@ function evalResidualsAllScenarios(activeCfg, evalBreakdown, configId) {
       const sqrtW = (weight >= 0) ? Math.sqrt(weight) : NaN;
 
       overrideMap[key] = String(scn.id);
-      if (typeof window !== 'undefined') window.__cooptScenarioOverride = overrideMap;
+      setScenarioOverrideGlobal(overrideMap);
 
       const br = evalBreakdown();
       const r0 = buildResidualVectorFromBreakdown(br);
@@ -318,13 +389,7 @@ function evalResidualsAllScenarios(activeCfg, evalBreakdown, configId) {
     }
     return { cost, residuals: stacked, breakdown: null };
   } finally {
-    if (typeof window !== 'undefined') {
-      if (prev && typeof prev === 'object') {
-        window.__cooptScenarioOverride = prev;
-      } else {
-        try { delete window.__cooptScenarioOverride; } catch (_) {}
-      }
-    }
+    setScenarioOverrideGlobal((prev && typeof prev === 'object') ? prev : null);
   }
 }
 
@@ -334,7 +399,7 @@ function evalMeritAllScenarios(activeCfg, evalMerit, configId) {
 
   // Non-persistent override hook consumed by merit-function-editor.
   const key = String(configId);
-  const prev = (typeof window !== 'undefined') ? window.__cooptScenarioOverride : null;
+  const prev = getScenarioOverrideGlobal();
   const overrideMap = (prev && typeof prev === 'object') ? { ...prev } : {};
 
   let total = 0;
@@ -344,28 +409,20 @@ function evalMeritAllScenarios(activeCfg, evalMerit, configId) {
       const w = Number(scn.weight);
       const weight = Number.isFinite(w) ? w : 1;
       overrideMap[key] = String(scn.id);
-      if (typeof window !== 'undefined') window.__cooptScenarioOverride = overrideMap;
+      setScenarioOverrideGlobal(overrideMap);
       const m = evalMerit();
       total += weight * m;
     }
     return total;
   } finally {
-    if (typeof window !== 'undefined') {
-      // Restore previous override (or delete)
-      if (prev && typeof prev === 'object') {
-        window.__cooptScenarioOverride = prev;
-      } else {
-        try { delete window.__cooptScenarioOverride; } catch (_) {}
-      }
-    }
+    setScenarioOverrideGlobal((prev && typeof prev === 'object') ? prev : null);
   }
 }
 
 function loadSystemConfigurationsRaw() {
   try {
-    const json = localStorage.getItem('systemConfigurations');
-    if (!json) return null;
-    return JSON.parse(json);
+    if (typeof localStorage === 'undefined') return null;
+    return loadSystemConfigurations();
   } catch {
     return null;
   }
@@ -373,7 +430,8 @@ function loadSystemConfigurationsRaw() {
 
 function saveSystemConfigurationsRaw(systemConfig) {
   try {
-    localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
+    if (typeof localStorage === 'undefined') return false;
+    saveSystemConfigurations(systemConfig);
     return true;
   } catch {
     return false;
@@ -401,9 +459,7 @@ function updateExpandedOpticalSystemInConfig(config) {
 
     // Fallback: preserve from the currently displayed table data (localStorage)
     try {
-      const json = localStorage.getItem('OpticalSystemTableData');
-      if (!json) return null;
-      const rows = JSON.parse(json);
+      const rows = tryLoadPersistedOpticalSystemTableData();
       return Array.isArray(rows) ? rows : null;
     } catch (_) {
       return null;
@@ -428,9 +484,8 @@ function updateExpandedOpticalSystemInConfig(config) {
 
     // Fallback: preserve from the currently displayed table data (localStorage)
     try {
-      const json = localStorage.getItem('OpticalSystemTableData');
-      if (!json) return null;
-      const rows = JSON.parse(json);
+      const rows = tryLoadPersistedOpticalSystemTableData();
+      if (!rows) return null;
       const v = rows?.[0]?.thickness;
       if (typeof v === 'number' && Number.isFinite(v)) return v;
       const s = String(v ?? '').trim();
@@ -1100,8 +1155,7 @@ function getSystemRequirementsRaw(systemConfig) {
     }
   } catch (_) {}
   try {
-    const json = localStorage.getItem('systemRequirementsData');
-    const d = json ? JSON.parse(json) : null;
+    const d = loadSystemRequirementsTableData();
     return Array.isArray(d) ? d : [];
   } catch (_) {
     // ignore
@@ -1213,7 +1267,7 @@ function evaluateRequirementsAllScenarios({
   }
 
   const key = String(activeConfigId);
-  const prev = (typeof window !== 'undefined') ? window.__cooptScenarioOverride : null;
+  const prev = getScenarioOverrideGlobal();
   const overrideMap = (prev && typeof prev === 'object') ? { ...prev } : {};
 
   let feasible = true;
@@ -1277,20 +1331,14 @@ function evaluateRequirementsAllScenarios({
         const w = toFiniteNumber(scn.weight, 1);
         const scenarioWeight = Number.isFinite(w) ? w : 1;
         overrideMap[key] = String(scn.id);
-        if (typeof window !== 'undefined') window.__cooptScenarioOverride = overrideMap;
+        setScenarioOverrideGlobal(overrideMap);
         evalOnce(scn.id, scenarioWeight);
       }
     }
 
     return { feasible, violationScore, softPenalty, hardViolations, softViolations };
   } finally {
-    if (typeof window !== 'undefined') {
-      if (prev && typeof prev === 'object') {
-        window.__cooptScenarioOverride = prev;
-      } else {
-        try { delete window.__cooptScenarioOverride; } catch (_) {}
-      }
-    }
+    setScenarioOverrideGlobal((prev && typeof prev === 'object') ? prev : null);
   }
 }
 
@@ -1357,7 +1405,7 @@ function evaluateRequirementsAllConfigsAllScenarios({
   }
 
   const items = Array.isArray(residualItems) ? residualItems : buildResidualItemsForConfigs(rows, {}, !!multiScenario);
-  const prev = (typeof window !== 'undefined') ? window.__cooptScenarioOverride : null;
+  const prev = getScenarioOverrideGlobal();
   const overrideMap = (prev && typeof prev === 'object') ? { ...prev } : {};
 
   let feasible = true;
@@ -1380,7 +1428,7 @@ function evaluateRequirementsAllConfigsAllScenarios({
       } else {
         delete overrideMap[cfgId];
       }
-      if (typeof window !== 'undefined') window.__cooptScenarioOverride = overrideMap;
+      setScenarioOverrideGlobal(overrideMap);
 
       const opObj = {
         operand: r.operand,
@@ -1419,13 +1467,7 @@ function evaluateRequirementsAllConfigsAllScenarios({
 
     return { feasible, violationScore, softPenalty, hardViolations, softViolations };
   } finally {
-    if (typeof window !== 'undefined') {
-      if (prev && typeof prev === 'object') {
-        window.__cooptScenarioOverride = prev;
-      } else {
-        try { delete window.__cooptScenarioOverride; } catch (_) {}
-      }
-    }
+    setScenarioOverrideGlobal((prev && typeof prev === 'object') ? prev : null);
   }
 }
 
@@ -1992,7 +2034,7 @@ export async function runOptimizationMVP(options = {}) {
     } catch (_) {}
 
     try {
-      if (typeof window !== 'undefined') window.__cooptLastOptimizeProfile = __profile;
+      setLastOptimizeProfile(__profile);
     } catch (_) {}
 
     try {
@@ -2111,9 +2153,7 @@ export async function runOptimizationMVP(options = {}) {
 
           let spotDebug = null;
           try {
-            const fastByKey = (typeof window !== 'undefined' && window.__cooptSpotSizeDebugFastByKey && typeof window.__cooptSpotSizeDebugFastByKey === 'object')
-              ? window.__cooptSpotSizeDebugFastByKey
-              : null;
+            const fastByKey = getSpotSizeDebugFastByKeyMap();
             const anyByKey = (typeof window !== 'undefined' && window.__cooptSpotSizeDebugByKey && typeof window.__cooptSpotSizeDebugByKey === 'object')
               ? window.__cooptSpotSizeDebugByKey
               : null;
@@ -2163,12 +2203,8 @@ export async function runOptimizationMVP(options = {}) {
   // Clear spot diagram debug cache to ensure fresh evaluations
   try {
     if (typeof window !== 'undefined') {
-      if (window.__cooptSpotSizeDebugFast) {
-        window.__cooptSpotSizeDebugFast = null;
-      }
-      if (window.__cooptSpotSizeDebugFastByKey) {
-        window.__cooptSpotSizeDebugFastByKey = {};
-      }
+      setWindowDebugBagValue('optimizerMvp', 'spotSizeDebugFast', null);
+      setWindowDebugBagValue('optimizerMvp', 'spotSizeDebugFastByKey', {});
     }
   } catch (_) {}
   
@@ -2177,9 +2213,9 @@ export async function runOptimizationMVP(options = {}) {
   try {
     if (typeof window !== 'undefined') {
       // Clear blocks override (will be set fresh during this run)
-      delete window.__cooptBlocksOverride;
+      setBlocksOverrideGlobal(undefined);
       // Clear scenario override (will be managed within this run)
-      delete window.__cooptScenarioOverride;
+      setScenarioOverrideGlobal(null);
     }
     if (typeof globalThis !== 'undefined') {
       // Clear optical system rows override (will be managed within this run)
@@ -2459,7 +2495,7 @@ export async function runOptimizationMVP(options = {}) {
   try { __prevDisableRayTraceDebug = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG : undefined; } catch (_) { __prevDisableRayTraceDebug = undefined; }
 
   try {
-    if (typeof window !== 'undefined') window.__cooptBlocksOverride = blocksByConfigId;
+    setBlocksOverrideGlobal(blocksByConfigId);
   } catch (_) {}
 
   // Allow shared yield helpers (e.g. nextFrame()) to attribute time to this run.
@@ -2696,7 +2732,7 @@ export async function runOptimizationMVP(options = {}) {
       let worstContribution = -Infinity;
       let nonFiniteCount = 0;
 
-      const prev = (typeof window !== 'undefined') ? window.__cooptScenarioOverride : null;
+      const prev = getScenarioOverrideGlobal();
       const overrideMap = (prev && typeof prev === 'object') ? { ...prev } : {};
 
       const itemsArr = Array.isArray(residualItemsForLM) ? residualItemsForLM : [];
@@ -2730,7 +2766,7 @@ export async function runOptimizationMVP(options = {}) {
         if (cfgId) {
           if (sid) overrideMap[cfgId] = sid;
           else delete overrideMap[cfgId];
-          if (typeof window !== 'undefined') window.__cooptScenarioOverride = overrideMap;
+          setScenarioOverrideGlobal(overrideMap);
         }
 
         // Switch optical system override to the config under evaluation.
@@ -2838,10 +2874,7 @@ export async function runOptimizationMVP(options = {}) {
         // residuals were evaluated in the loop above.
       } finally {
         try {
-          if (typeof window !== 'undefined') {
-            if (prev && typeof prev === 'object') window.__cooptScenarioOverride = prev;
-            else delete window.__cooptScenarioOverride;
-          }
+          setScenarioOverrideGlobal((prev && typeof prev === 'object') ? prev : null);
         } catch (_) {}
       }
 
@@ -2871,9 +2904,7 @@ export async function runOptimizationMVP(options = {}) {
               spotDebugKey = `operand:${String(worst.operand ?? '')}|cfg:${String(worst.configId ?? '')}`
                 + `|p1:${String(worst.param1 ?? '')}|p2:${String(worst.param2 ?? '')}`
                 + `|p3:${String(worst.param3 ?? '')}|p4:${String(worst.param4 ?? '')}`;
-              const fastByKey = (window.__cooptSpotSizeDebugFastByKey && typeof window.__cooptSpotSizeDebugFastByKey === 'object')
-                ? window.__cooptSpotSizeDebugFastByKey
-                : null;
+              const fastByKey = getSpotSizeDebugFastByKeyMap();
               const anyByKey = (window.__cooptSpotSizeDebugByKey && typeof window.__cooptSpotSizeDebugByKey === 'object')
                 ? window.__cooptSpotSizeDebugByKey
                 : null;
@@ -2889,14 +2920,12 @@ export async function runOptimizationMVP(options = {}) {
             spotDebug = null;
           }
 
-          const prevDbg = (window.__cooptLastOptimizerResidualDebug && typeof window.__cooptLastOptimizerResidualDebug === 'object')
-            ? window.__cooptLastOptimizerResidualDebug
-            : null;
+          const prevDbg = getLastOptimizerResidualDebug();
           const shouldForceUpdateForSpot = isSpotWorst && (spotDebugKey && (!prevDbg || prevDbg.spotDebugKey !== spotDebugKey || !prevDbg.spotDebug));
           const shouldUpdate = shouldForceUpdateForSpot || (t - __cooptLastResidualDebugAt >= __cooptResidualDebugThrottleMs);
           if (shouldUpdate) {
             __cooptLastResidualDebugAt = t;
-            window.__cooptLastOptimizerResidualDebug = {
+            setLastOptimizerResidualDebug({
               at: t,
               method: 'lm',
               residualCount: residuals.length,
@@ -2905,7 +2934,7 @@ export async function runOptimizationMVP(options = {}) {
               worst,
               spotDebugKey,
               spotDebug
-            };
+            });
           }
         }
       } catch (_) {}
@@ -3169,7 +3198,7 @@ export async function runOptimizationMVP(options = {}) {
         }
       } catch (_) {}
       try {
-        if (typeof window.refreshBlockInspector === 'function') window.refreshBlockInspector();
+        requestRefreshBlockInspector();
       } catch (_) {}
       try {
         if (window.meritFunctionEditor && typeof window.meritFunctionEditor.calculateMerit === 'function') {
@@ -3920,7 +3949,7 @@ export async function runOptimizationMVP(options = {}) {
       }
     } catch (_) {}
     try {
-      if (typeof window.refreshBlockInspector === 'function') window.refreshBlockInspector();
+      requestRefreshBlockInspector();
     } catch (_) {}
     try {
       if (window.meritFunctionEditor && typeof window.meritFunctionEditor.calculateMerit === 'function') {
@@ -4064,7 +4093,7 @@ export async function runOptimizationMVP(options = {}) {
     } catch (_) {}
 
     try {
-      if (typeof window.refreshBlockInspector === 'function') window.refreshBlockInspector();
+      requestRefreshBlockInspector();
     } catch (_) {}
 
     try {
@@ -4339,7 +4368,7 @@ export async function runOptimizationMVP(options = {}) {
   } catch (_) {}
 
   try {
-    if (typeof window.refreshBlockInspector === 'function') window.refreshBlockInspector();
+    requestRefreshBlockInspector();
   } catch (_) {}
 
   try {
@@ -4384,12 +4413,7 @@ export async function runOptimizationMVP(options = {}) {
   } finally {
     // Always restore global overrides, even on early return/errors.
     try {
-      if (typeof window !== 'undefined') {
-        if (__prevBlocksOverride !== undefined) window.__cooptBlocksOverride = __prevBlocksOverride;
-        else {
-          try { delete window.__cooptBlocksOverride; } catch (_) {}
-        }
-      }
+      setBlocksOverrideGlobal(__prevBlocksOverride);
     } catch (_) {}
     try {
       if (typeof globalThis !== 'undefined') {
@@ -4397,12 +4421,7 @@ export async function runOptimizationMVP(options = {}) {
       }
     } catch (_) {}
     try {
-      if (typeof window !== 'undefined') {
-        if (__prevScenarioOverride && typeof __prevScenarioOverride === 'object') window.__cooptScenarioOverride = __prevScenarioOverride;
-        else {
-          try { delete window.__cooptScenarioOverride; } catch (_) {}
-        }
-      }
+      setScenarioOverrideGlobal((__prevScenarioOverride && typeof __prevScenarioOverride === 'object') ? __prevScenarioOverride : null);
     } catch (_) {}
 
     try {
@@ -4452,7 +4471,7 @@ export async function runOptimizationMVP(options = {}) {
 
 // Global entrypoint (console-driven)
 if (typeof window !== 'undefined') {
-  window.OptimizationMVP = {
+  window['OptimizationMVP'] = {
     run: runOptimizationMVP,
     stop: () => { __optimizerStopRequested = true; }
   };

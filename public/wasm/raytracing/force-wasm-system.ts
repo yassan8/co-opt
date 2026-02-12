@@ -55,10 +55,6 @@ class ForceWASMSystem {
             
             // WASMモジュールを初期化
             const cacheBust = this._getRayTracingWasmCacheBustParam();
-            try {
-                // Expose for debugging in DevTools.
-                if (typeof window !== 'undefined') window.__rayTracingWasmCacheBust = cacheBust;
-            } catch (_) {}
             const initOptions = {
                 locateFile: (path, prefix) => {
                     const p = String(path || '');
@@ -611,29 +607,11 @@ function getWASMSystemStatus() {
     return forceWasmSystem.getSystemStatus();
 }
 
-// モジュール公開
-if (typeof window !== 'undefined') {
-    window.initializeForceWASM = initializeForceWASM;
-    window.runForceWASMTest = runForceWASMTest;
-    window.runWASMDirectComparison = runWASMDirectComparison;
-    window.getWASMSystemStatus = getWASMSystemStatus;
-    window.ForceWASMSystem = ForceWASMSystem;
-    
-    const RAYTRACE_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__RAYTRACE_DEBUG);
-    if (RAYTRACE_DEBUG) {
-        console.log('🚀 WASM強制実行システムが読み込まれました');
-        console.log('   initializeForceWASM() - WASM強制初期化');
-        console.log('   runForceWASMTest() - WASM性能強制測定');
-        console.log('   runWASMDirectComparison() - JS vs WASM直接比較');
-        console.log('   getWASMSystemStatus() - システム状態確認');
-    }
-}
+// Note: window.* exports are owned by wasm/raytracing/force-wasm-system.ts.
 
 // Browser環境用のexport
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { ForceWASMSystem };
-} else if (typeof window !== 'undefined') {
-    window.ForceWASMSystem = ForceWASMSystem;
 }
 
 // ES Module export for browser import (only if in module context)

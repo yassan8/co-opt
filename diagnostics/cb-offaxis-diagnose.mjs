@@ -13,18 +13,18 @@ if (!globalThis.localStorage || typeof globalThis.localStorage.getItem !== 'func
     clear: () => { store.clear(); },
   };
   globalThis.localStorage = ls;
-  try { globalThis.window.localStorage = ls; } catch (_) {}
 }
-if (typeof globalThis.window.rayColorMode === 'undefined') globalThis.window.rayColorMode = 'object';
-if (typeof globalThis.window.getRayColorMode !== 'function') globalThis.window.getRayColorMode = () => 'object';
+const w = globalThis.window;
+if (typeof w['rayColorMode'] === 'undefined') w['rayColorMode'] = 'object';
+if (typeof w['getRayColorMode'] !== 'function') w['getRayColorMode'] = () => 'object';
 
-if (typeof globalThis.window.rayEmissionPattern === 'undefined') globalThis.window.rayEmissionPattern = 'annular';
-if (typeof globalThis.window.getRayEmissionPattern !== 'function') {
-  globalThis.window.getRayEmissionPattern = () => String(globalThis.window.rayEmissionPattern || 'annular');
+if (typeof w['rayEmissionPattern'] === 'undefined') w['rayEmissionPattern'] = 'annular';
+if (typeof w['getRayEmissionPattern'] !== 'function') {
+  w['getRayEmissionPattern'] = () => String(w['rayEmissionPattern'] || 'annular');
 }
-if (typeof globalThis.window.setRayEmissionPattern !== 'function') {
-  globalThis.window.setRayEmissionPattern = (p) => {
-    globalThis.window.rayEmissionPattern = String(p || 'annular');
+if (typeof w['setRayEmissionPattern'] !== 'function') {
+  w['setRayEmissionPattern'] = (p) => {
+    w['rayEmissionPattern'] = String(p || 'annular');
   };
 }
 

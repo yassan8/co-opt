@@ -5,6 +5,7 @@ import SourceObjectSection from "../ui/components/SourceObjectSection";
 import DesignIntentSection from "../ui/components/DesignIntentSection";
 import RequirementsSection from "../ui/components/RequirementsSection";
 import LegacyPanels from "../ui/components/LegacyPanels";
+import { requestRefreshBlockInspector } from "../../core/window-facade.ts";
 
 export default function App() {
   useEffect(() => {
@@ -53,15 +54,7 @@ export default function App() {
         (window as any).initializeAllTables();
       }
       
-      // Refresh block inspector
-      if (typeof (window as any).refreshBlockInspector === 'function') {
-        try {
-          (window as any).refreshBlockInspector();
-          console.log("[React] Block inspector refreshed");
-        } catch (err) {
-          console.error("[React] Failed to refresh block inspector:", err);
-        }
-      }
+      requestRefreshBlockInspector();
       
       // Ensure analysis windows are set up
       console.log("[React] Setting up analysis windows directly...");

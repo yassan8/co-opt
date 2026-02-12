@@ -20,6 +20,11 @@ import {
   renameConfiguration,
   getConfigurationList
 } from '../data/table-configuration.ts';
+import { saveTableData as saveSourceTableData, tryLoadPersistedTableData as tryLoadPersistedSourceTableData } from '../data/table-source.ts';
+import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
+import { tryLoadPersistedTableData as tryLoadPersistedMeritFunctionTableData } from '../data/table-merit-function.ts';
+import { saveTableData as saveObjectTableData, tryLoadPersistedTableData as tryLoadPersistedObjectTableData } from '../data/table-object.ts';
+import { requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
 
 let autoSaveIntervalId: number | null = null;
 let isConfigurationSwitching = false;
@@ -213,33 +218,37 @@ function initializeConfigurationSystem(): void {
   let systemConfig = loadSystemConfigurations();
   
   // 既存データのマイグレーション: localStorageに個別データがある場合、Config 1に統合
-  const sourceData = localStorage.getItem('sourceTableData');
-  const objectData = localStorage.getItem('objectTableData');
-  const opticalData = localStorage.getItem('OpticalSystemTableData');
-  const meritData = localStorage.getItem('meritFunctionData');
+  const persistedSource = tryLoadPersistedSourceTableData();
+  const hasSourceData = persistedSource !== null;
+  const persistedObject = tryLoadPersistedObjectTableData();
+  const hasObjectData = persistedObject !== null;
+  const persistedOptical = tryLoadPersistedOpticalSystemTableData();
+  const hasOpticalData = persistedOptical !== null;
+  const persistedMerit = tryLoadPersistedMeritFunctionTableData();
+  const hasMeritData = persistedMerit !== null;
   
   const config1 = systemConfig.configurations[0];
   let needsSave = false;
   
   if (systemConfig.configurations.length === 1 && 
-      (sourceData || objectData || opticalData || meritData)) {
+      (hasSourceData || hasObjectData || hasOpticalData || hasMeritData)) {
     
     console.log('🔄 [Configuration] Migrating existing data to Config 1...');
     
-    if (sourceData) {
-      config1.source = JSON.parse(sourceData);
+    if (hasSourceData) {
+      config1.source = persistedSource as any;
       needsSave = true;
     }
-    if (objectData) {
-      config1.object = JSON.parse(objectData);
+    if (hasObjectData) {
+      config1.object = persistedObject as any;
       needsSave = true;
     }
-    if (opticalData) {
-      config1.opticalSystem = JSON.parse(opticalData);
+    if (hasOpticalData) {
+      config1.opticalSystem = persistedOptical as any;
       needsSave = true;
     }
-    if (meritData) {
-      config1.meritFunction = JSON.parse(meritData);
+    if (hasMeritData) {
+      config1.meritFunction = persistedMerit as any;
       needsSave = true;
     }
     
@@ -258,13 +267,13 @@ function initializeConfigurationSystem(): void {
   
   // 初回起動時、またはlocalStorageにsource/objectデータがない場合は、
   // Config 1のデフォルトデータをlocalStorageに保存
-  if (!sourceData && config1 && Array.isArray(config1.source) && config1.source.length > 0) {
+  if (!hasSourceData && config1 && Array.isArray(config1.source) && config1.source.length > 0) {
     console.log('🔄 [Configuration] Initializing sourceTableData with default values');
-    localStorage.setItem('sourceTableData', JSON.stringify(config1.source));
+    saveSourceTableData(config1.source as any);
   }
-  if (!objectData && config1 && Array.isArray(config1.object) && config1.object.length > 0) {
+  if (!hasObjectData && config1 && Array.isArray(config1.object) && config1.object.length > 0) {
     console.log('🔄 [Configuration] Initializing objectTableData with default values');
-    localStorage.setItem('objectTableData', JSON.stringify(config1.object));
+    saveObjectTableData(config1.object as any);
   }
 
   // Migration: ensure block-based configs preserve legacy Object row thickness for conjugate detection.
@@ -573,7 +582,7 @@ async function handleConfigurationChange(event: Event): Promise<void> {
     }
   } catch (_) {}
   try { w.updateSurfaceNumberSelectLegacy(); } catch (_) {}
-  try { w.updateSurfaceNumberSelect(); } catch (_) {}
+  try { requestUpdateSurfaceNumberSelect(); } catch (_) {}
 
   // Spot Diagram config selector may exist and should mirror available configs.
   try {
@@ -584,9 +593,7 @@ async function handleConfigurationChange(event: Event): Promise<void> {
 
   // Design Intent (Blocks) 表示を更新
   try {
-    if (typeof window !== 'undefined' && typeof w.refreshBlockInspector === 'function') {
-      w.refreshBlockInspector();
-    }
+    requestRefreshBlockInspector();
   } catch (e) {
     console.warn('⚠️ [Configuration] Failed to refresh Design Intent (Blocks):', e);
   }
@@ -672,9 +679,7 @@ function handleDeleteConfiguration(): void {
       updateConfigInfo();
 
       try {
-        if (typeof window !== 'undefined' && typeof w.refreshBlockInspector === 'function') {
-          w.refreshBlockInspector();
-        }
+        requestRefreshBlockInspector();
       } catch (e) {
         console.warn('⚠️ [Configuration] Failed to refresh Design Intent (Blocks):', e);
       }

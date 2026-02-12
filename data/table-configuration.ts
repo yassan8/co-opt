@@ -10,6 +10,7 @@ const w: Record<string, any> = window;
 // 複数のConfigurationを保存・切り替え可能にする
 
 import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows } from './block-schema.ts';
+import { storageGetItem, storageSetItem, storageRemoveItem } from '../utils/local-storage-gateway.ts';
 
 // Block interface (for type safety with block-schema)
 interface Block {
@@ -171,7 +172,7 @@ const defaultSystemConfig: SystemConfiguration = {
 // localStorageからConfiguration全体を読み込み
 export function loadSystemConfigurations(): SystemConfiguration {
   cfgLog('🔵 [Configuration] Loading system configurations from localStorage...');
-  const json = localStorage.getItem(STORAGE_KEY);
+  const json = storageGetItem(STORAGE_KEY);
   
   if (json) {
     try {
@@ -207,11 +208,95 @@ export function loadSystemConfigurations(): SystemConfiguration {
 export function saveSystemConfigurations(systemConfig: SystemConfiguration): void {
   cfgLog('🔵 [Configuration] Saving system configurations...');
   if (systemConfig && systemConfig.configurations) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(systemConfig));
+    storageSetItem(STORAGE_KEY, JSON.stringify(systemConfig));
     cfgLog(`💾 [Configuration] Saved ${systemConfig.configurations.length} configurations`);
   } else {
     console.error('❌ [Configuration] Invalid system config, not saving:', systemConfig);
   }
+}
+
+// Projection cache helpers (legacy localStorage keys)
+// Keep these in one place so other modules don't touch localStorage keys directly.
+export function clearObjectTableDataProjection(): void {
+  try {
+    storageRemoveItem('objectTableData');
+  } catch (_) {
+    // ignore
+  }
+}
+
+export function loadSystemDataProjection(): SystemData {
+  try {
+    const json = storageGetItem('systemData');
+    if (!json) return { referenceFocalLength: '' };
+    const parsed = JSON.parse(json);
+    if (!parsed || typeof parsed !== 'object') return { referenceFocalLength: '' };
+    return {
+      referenceFocalLength: (parsed as any).referenceFocalLength ?? ''
+    };
+  } catch (_) {
+    return { referenceFocalLength: '' };
+  }
+}
+
+export function saveSystemDataProjection(data: SystemData): void {
+  try {
+    storageSetItem('systemData', JSON.stringify({
+      referenceFocalLength: data?.referenceFocalLength ?? ''
+    }));
+  } catch (_) {
+    // ignore
+  }
+}
+
+export function saveReferenceFocalLengthProjection(value: string | number): void {
+  saveSystemDataProjection({ referenceFocalLength: value });
+}
+
+export function clearAllPersistedState(): void {
+  try {
+    const keys = [
+      'systemConfigurations',
+      'sourceTableData',
+      'objectTableData',
+      'OpticalSystemTableData',
+      'meritFunctionData',
+      'systemRequirementsData',
+      'systemData',
+      'spotDiagramSettingsByConfigId',
+      'spotDiagramPattern',
+      'loadedFileName',
+      'loadedFileWarn',
+      'toolbarCollapsed',
+      'lastWavefrontSnapshot',
+      'lastPsfMeta',
+      'lastPsfError',
+      'lastSpotDiagramSettings',
+      'lastSpotSettings',
+      'coopt.forceInfinitePupilMode',
+      'coopt.glassMap.defaultManufacturers',
+      'coopt.darkMode'
+    ];
+    for (const key of keys) {
+      try { storageRemoveItem(key); } catch (_) {}
+    }
+  } catch (_) {
+    // ignore
+  }
+}
+
+// Legacy/non-module callers (index.html inline scripts)
+try {
+  if (!w.__cooptSystemDataProjection) {
+    w.__cooptSystemDataProjection = {
+      loadSystemDataProjection,
+      saveSystemDataProjection,
+      saveReferenceFocalLengthProjection,
+      clearAllPersistedState
+    };
+  }
+} catch (_) {
+  // ignore
 }
 
 // アクティブなConfigurationを取得
@@ -270,7 +355,7 @@ export function saveCurrentToActiveConfiguration(): void {
   // Persist it to the shared storage key, but do not store it per-config.
   try {
     const globalSource = w.tableSource ? w.tableSource.getData() : [];
-    localStorage.setItem('sourceTableData', JSON.stringify(globalSource));
+    storageSetItem('sourceTableData', JSON.stringify(globalSource));
   } catch (_) {}
   
   const objectDataFromTable = w.tableObject ? w.tableObject.getData() : [];
@@ -315,7 +400,7 @@ export function saveCurrentToActiveConfiguration(): void {
   activeConfig.systemData.referenceFocalLength = refFLInput ? refFLInput.value : '';
   
   // localStorageにも保存
-  localStorage.setItem('systemData', JSON.stringify(activeConfig.systemData));
+  saveSystemDataProjection(activeConfig.systemData);
   
   // メタデータ更新
   activeConfig.metadata.modified = new Date().toISOString();
@@ -461,7 +546,7 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
       } catch (_) {}
 
       try {
-        const json = localStorage.getItem('OpticalSystemTableData');
+        const json = storageGetItem('OpticalSystemTableData');
         if (!json) return null;
         const rows = JSON.parse(json);
         const v = rows?.[0]?.thickness;
@@ -558,40 +643,40 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
   // Source is global. Do not override it on configuration switches.
   // Back-compat: if global source is missing but this config has legacy source, seed it once.
   try {
-    const hasGlobal = !!localStorage.getItem('sourceTableData');
+    const hasGlobal = !!storageGetItem('sourceTableData');
     const legacy = Array.isArray(activeConfig.source) ? activeConfig.source : null;
     if (!hasGlobal && legacy && legacy.length > 0) {
-      localStorage.setItem('sourceTableData', JSON.stringify(legacy));
+      storageSetItem('sourceTableData', JSON.stringify(legacy));
     }
   } catch (_) {}
   if (activeConfig.object) {
-    localStorage.setItem('objectTableData', JSON.stringify(activeConfig.object));
+    storageSetItem('objectTableData', JSON.stringify(activeConfig.object));
   }
   if (effectiveOpticalSystem) {
     if (configurationHasBlocks(activeConfig)) {
       // Blocks-only evaluation path should not persist Expanded Optical System rows.
       // This avoids drift between Design Intent and any stale surface-table snapshots.
-      try { localStorage.removeItem('OpticalSystemTableData'); } catch (_) {}
+      try { storageRemoveItem('OpticalSystemTableData'); } catch (_) {}
     } else {
-      localStorage.setItem('OpticalSystemTableData', JSON.stringify(effectiveOpticalSystem));
+      storageSetItem('OpticalSystemTableData', JSON.stringify(effectiveOpticalSystem));
     }
   }
   
   // Merit Function はグローバルから読み込み
   if (systemConfig.meritFunction) {
-    localStorage.setItem('meritFunctionData', JSON.stringify(systemConfig.meritFunction));
+    storageSetItem('meritFunctionData', JSON.stringify(systemConfig.meritFunction));
   }
 
   // System Requirements はグローバルから読み込み
   if (systemConfig.systemRequirements) {
-    localStorage.setItem('systemRequirementsData', JSON.stringify(systemConfig.systemRequirements));
+    storageSetItem('systemRequirementsData', JSON.stringify(systemConfig.systemRequirements));
   }
   
   // System Data をlocalStorageに保存（リロード後も復元できるように）
   if (activeConfig.systemData) {
-    localStorage.setItem('systemData', JSON.stringify(activeConfig.systemData));
+    saveSystemDataProjection(activeConfig.systemData);
   } else {
-    localStorage.setItem('systemData', JSON.stringify({ referenceFocalLength: '' }));
+    saveSystemDataProjection({ referenceFocalLength: '' });
   }
 
   // Optional: apply to already-initialized UI (avoids full reload)
@@ -644,7 +729,7 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
     // Source is global; do not swap per config.
     let globalSourceRows: any[] = [];
     try {
-      const json = localStorage.getItem('sourceTableData');
+      const json = storageGetItem('sourceTableData');
       const parsed = json ? JSON.parse(json) : null;
       globalSourceRows = Array.isArray(parsed) ? parsed : [];
     } catch (_) {}

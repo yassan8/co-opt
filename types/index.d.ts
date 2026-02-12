@@ -280,5 +280,10 @@ declare global {
     tableConfiguration?: any;
     currentConfig?: Configuration;
     getWASMSystem?: () => any;
+    _setWASMSystem?: (instance: any) => void;
+    __cooptAsphericSagService?: {
+      getImplementation?: () => any;
+      setImplementation?: (fn: any) => void;
+    };
   }
 }

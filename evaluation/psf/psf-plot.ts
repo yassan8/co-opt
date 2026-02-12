@@ -1098,9 +1098,9 @@ export function displaySimplePSFResult(psfResult, containerId = 'psf-container')
 
 // グローバル公開
 if (typeof window !== 'undefined') {
-    window.PSFPlotter = PSFPlotter;
-    window.PSFDisplayManager = PSFDisplayManager;
-    window.displayPSFResult = displayPSFResult;
-    window.displaySimplePSFResult = displaySimplePSFResult;
+    window['PSFPlotter'] = PSFPlotter;
+    window['PSFDisplayManager'] = PSFDisplayManager;
+    window['displayPSFResult'] = displayPSFResult;
+    window['displaySimplePSFResult'] = displaySimplePSFResult;
     // console.log('✅ [PSFPlot] PSFプロットモジュール読み込み完了');
 }

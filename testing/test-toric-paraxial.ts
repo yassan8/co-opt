@@ -117,7 +117,7 @@ function testToricParaxial() {
 
 // ブラウザ環境での実行
 if (typeof window !== 'undefined') {
-  window.testToricParaxial = testToricParaxial;
+  window['testToricParaxial'] = testToricParaxial;
   console.log('トーリック面近軸計算テストをロードしました');
   console.log('実行するには: testToricParaxial()');
 }

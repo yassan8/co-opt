@@ -14,13 +14,14 @@ console.log('🚀 [main.ts] Starting to load main.ts module');
 console.log('🚀 [main.ts] Importing THREE.js...');
 
 // Core modules
-import { APP_CONFIG, initializeReferences, setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration, getCamera, getControls } from './core/app-config.ts';
+import { APP_CONFIG, initializeReferences, setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration, getScene, getCamera, getRenderer, getControls } from './core/app-config.ts';
 import { initializeThreeJS, initializeLighting, renderScene, animate } from './core/scene-setup.ts';
 
 // Table data modules
 import { loadTableData as loadSourceTableData, saveTableData as saveSourceTableData, tableSource, mountTableSourceIfReady } from './data/table-source.ts';
 import { loadTableData as loadObjectTableData, saveTableData as saveObjectTableData, tableObject, mountTableObjectIfReady } from './data/table-object.ts';
 import { loadTableData as loadOpticalSystemTableData, saveTableData as saveLensTableData, tableOpticalSystem, updateAllRefractiveIndices, updateOpticalPropertiesFromMaterial, mountTableOpticalSystemIfReady } from './data/table-optical-system.ts';
+import { loadTableData as loadSystemRequirementsTableData, saveTableData as saveSystemRequirementsTableData } from './data/table-system-requirements.ts';
 
 // Optical system modules
 import { drawOpticalSystemSurfaces, clearAllOpticalElements, findStopSurface } from './optical/system-renderer.ts';
@@ -67,13 +68,14 @@ import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayCo
 import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons, setupTransformationControls, updateTransformSurfaceSelect, setupAnalysisWindows } from './ui/event-handlers.ts';
 import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListeners } from './ui/ui-updates.ts';
 import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers, loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables, refreshBlockInspector } from './ui/dom-event-handlers.ts';
+import { getToolbarCollapsed, setToolbarCollapsed } from './ui/toolbar-collapsed-storage.ts';
 import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.ts';
 import { initializeConfigurationUI } from './ui/configuration-handlers.ts';
 import { getActiveConfiguration } from './data/table-configuration.ts';
 import { expandBlocksToOpticalSystemRows } from './data/block-schema.ts';
+import { exposeWindowValue, installCooptWindowFacadeMarker, requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from './core/window-facade.ts';
+import { setRenderingContext } from './core/rendering-context.ts';
 
-// Editor modules (must be imported to initialize)
-import './ui/editors/system-requirements-editor.ts';
 // Editor modules (must be imported to initialize)
 import './ui/editors/system-requirements-editor.ts';
 import './ui/editors/merit-function-editor.ts';
@@ -113,33 +115,18 @@ interface CameraOptions {
 }
 
 // Export THREE and OrbitControls to global scope for popup windows
-window.THREE = THREE;
-window.OrbitControls = OrbitControls;
+window['THREE'] = THREE;
+window['OrbitControls'] = OrbitControls;
 
-// Export ForceWASMSystem class to global scope
-// Temporarily commented out
-// window.ForceWASMSystem = ForceWASMSystem;
-// if (typeof globalThis !== 'undefined') {
-//     globalThis.ForceWASMSystem = ForceWASMSystem;
-// }
+// ForceWASMSystem globals are owned by wasm/raytracing/force-wasm-system.ts (legacy) or a dedicated service module.
 
 // Global WASM system instance
 let wasmSystem = null;
 
-// Note: window.getWASMSystem is pre-initialized in index.html
-// We just need to update the instance reference when WASM is ready
-if (typeof window !== 'undefined' && typeof window._setWASMSystem === 'function') {
-    console.log('🔧 [Init] 事前設定されたgetWASMSystemを使用します');
-} else {
-    // Fallback: Set up our own getter if not pre-initialized
-    const getWASMSystemGlobal = () => wasmSystem;
-    if (typeof globalThis !== 'undefined') {
-        globalThis.getWASMSystem = getWASMSystemGlobal;
-    }
-    if (typeof window !== 'undefined') {
-        window.getWASMSystem = getWASMSystemGlobal;
-        console.log('🔧 [Init] window.getWASMSystem をフォールバックとして設定しました');
-    }
+// Note: getWASMSystem/_setWASMSystem globals are installed by core/wasm-service.ts (index.html <head>).
+// main.ts only updates the instance via window._setWASMSystem once WASM is ready.
+if (typeof window !== 'undefined' && typeof (window as any)._setWASMSystem === 'function') {
+    console.log('🔧 [Init] WASM service globals are available');
 }
 
 // =============================================================================
@@ -238,9 +225,7 @@ async function initializeApplication() {
                     if (typeof window.updateSpotDiagramConfigSelect === 'function') {
                         window.updateSpotDiagramConfigSelect();
                     }
-                    if (typeof window.updateSurfaceNumberSelect === 'function') {
-                        window.updateSurfaceNumberSelect();
-                    }
+                    requestUpdateSurfaceNumberSelect();
                 } catch (e) {
                     console.warn('Failed to initialize spot diagram selects:', e);
                 }
@@ -288,24 +273,24 @@ async function initializeApplication() {
 
         // Expose rebind helpers for React-mount timing
         try {
-            window.initializeAllTables = () => {
+            window['initializeAllTables'] = () => {
                 try { mountTableSourceIfReady(); } catch (_) {}
                 try { mountTableObjectIfReady(); } catch (_) {}
                 try { mountTableOpticalSystemIfReady(); } catch (_) {}
                 try { updateAllUIElements(); } catch (_) {}
-                try { if (typeof window.refreshBlockInspector === 'function') window.refreshBlockInspector(); } catch (_) {}
-                try { if (typeof window.updateSurfaceNumberSelect === 'function') window.updateSurfaceNumberSelect(); } catch (_) {}
+                try { requestRefreshBlockInspector(); } catch (_) {}
+                try { requestUpdateSurfaceNumberSelect(); } catch (_) {}
             };
         } catch (_) {}
 
         // Expose analysis/setup helpers for React timing
         try {
-            window.setupAnalysisWindows = setupAnalysisWindows;
-            window.setupOpticalSystemChangeListeners = setupOpticalSystemChangeListeners;
+            window['setupAnalysisWindows'] = setupAnalysisWindows;
+            window['setupOpticalSystemChangeListeners'] = setupOpticalSystemChangeListeners;
         } catch (_) {}
 
         try {
-            window.rebindEventHandlers = () => {
+            window['rebindEventHandlers'] = () => {
                 console.log('🔄 [Rebind] rebindEventHandlers called');
                 const mainToolbarBtns = [
                     'new-file-btn', 'save-all-btn', 'load-all-btn', 'load-default-btn',
@@ -320,7 +305,10 @@ async function initializeApplication() {
                 try { initializeUIEventListeners(); } catch (_) {}
                 try { setupDOMEventHandlers(); } catch (_) {}
                 try { initializeConfigurationUI(); } catch (_) {}
-                try { if (window.scene) setupOpticalSystemChangeListeners(window.scene); } catch (_) {}
+                try {
+                    const scene = getScene?.();
+                    if (scene) setupOpticalSystemChangeListeners(scene);
+                } catch (_) {}
                 try { setupAnalysisWindows(); } catch (_) {}
                 
                 console.log('✅ [Rebind] rebindEventHandlers completed');
@@ -344,16 +332,16 @@ async function initializeApplication() {
         }, 1000);
         
         // Export functions to global scope for debugging
-        // window.debugSceneContents = debugSceneContents; // removed - debug-utils.ts deleted
-        // window.adjustCameraView = adjustCameraView; // removed - debug-utils.ts deleted
-        // window.showSceneBoundingBox = showSceneBoundingBox; // removed - debug-utils.ts deleted
-        window.fitCameraToScene = fitCameraToScene;
-        window.clearAllDrawing = clearAllDrawing;
-        window.showSpotDiagram = showSpotDiagram;
-        window.showTransverseAberrationDiagram = showTransverseAberrationDiagram;
-        window.showLongitudinalAberrationDiagram = showLongitudinalAberrationDiagram;
-        window.showAstigmatismDiagram = showAstigmatismDiagram;
-        window.showAstigmatism = async () => {
+        // debugSceneContents global export removed (debug-utils.ts deleted)
+        // legacy debug camera helper export removed (debug-utils.ts deleted)
+        // showSceneBoundingBox global export removed (debug-utils.ts deleted)
+        window['fitCameraToScene'] = fitCameraToScene;
+        window['clearAllDrawing'] = clearAllDrawing;
+        window['showSpotDiagram'] = showSpotDiagram;
+        window['showTransverseAberrationDiagram'] = showTransverseAberrationDiagram;
+        window['showLongitudinalAberrationDiagram'] = showLongitudinalAberrationDiagram;
+        window['showAstigmatismDiagram'] = showAstigmatismDiagram;
+        window['showAstigmatism'] = async () => {
             const progressWrapper = document.getElementById('astigmatism-progress-wrapper');
             const progressBarRaw = document.getElementById('astigmatism-progressbar');
             const progressBarEl = progressBarRaw instanceof HTMLProgressElement ? progressBarRaw : null;
@@ -390,75 +378,66 @@ async function initializeApplication() {
                 setProgress(100, 'Failed');
             }
         };
-        window.showIntegratedAberrationDiagram = showIntegratedAberrationDiagram;
-        window.showWavefrontDiagram = showWavefrontDiagram;
-        window.showMTFDiagram = showMTFDiagram;
+        window['showIntegratedAberrationDiagram'] = showIntegratedAberrationDiagram;
+        window['showWavefrontDiagram'] = showWavefrontDiagram;
+        window['showMTFDiagram'] = showMTFDiagram;
         
         // Wavefront analysis functions (for debugging)
-        window.OpticalPathDifferenceCalculator = OpticalPathDifferenceCalculator;
-        window.WavefrontAberrationAnalyzer = WavefrontAberrationAnalyzer;
-        window.createOPDCalculator = createOPDCalculator;
-        window.createWavefrontAnalyzer = createWavefrontAnalyzer;
+        // window.OpticalPathDifferenceCalculator / window.WavefrontAberrationAnalyzer / window.createWavefrontAnalyzer
+        // are owned by evaluation/wavefront/wavefront.ts
         
-        window.outputParaxialDataToDebug = outputParaxialDataToDebug;
-        window.outputSeidelCoefficientsToDebug = outputSeidelCoefficientsToDebug;
-        window.outputDebugSystemData = outputDebugSystemData;
-        window.displayCoordinateTransformMatrix = displayCoordinateTransformMatrix;
-        window.renderBlockContributionSummaryFromSeidel = renderBlockContributionSummaryFromSeidel;
-        window.renderSystemConstraintsFromSurfaceRows = renderSystemConstraintsFromSurfaceRows;
+        window['outputParaxialDataToDebug'] = outputParaxialDataToDebug;
+        window['outputSeidelCoefficientsToDebug'] = outputSeidelCoefficientsToDebug;
+        window['outputDebugSystemData'] = outputDebugSystemData;
+        window['displayCoordinateTransformMatrix'] = displayCoordinateTransformMatrix;
+        window['renderBlockContributionSummaryFromSeidel'] = renderBlockContributionSummaryFromSeidel;
+        window['renderSystemConstraintsFromSurfaceRows'] = renderSystemConstraintsFromSurfaceRows;
         
         // Debug functions
-        window.debugTableStatus = debugTableStatus;
-        window.initializeTablesWithDummyData = initializeTablesWithDummyData;
+        window['debugTableStatus'] = debugTableStatus;
+        window['initializeTablesWithDummyData'] = initializeTablesWithDummyData;
         
         // Export ray rendering functions
-        window.generateRayStartPointsForObject = generateRayStartPointsForObject;
-        window.drawRayWithSegmentColors = drawRayWithSegmentColors;
-        window.setRayEmissionPattern = setRayEmissionPattern;
-        window.getRayEmissionPattern = getRayEmissionPattern;
-        window.setRayColorMode = setRayColorMode;
-        window.getRayColorMode = getRayColorMode;
-        window.traceRay = traceRay;
-        window.getOpticalSystemRows = getOpticalSystemRows;
-        window.getObjectRows = getObjectRows;
-        window.getSourceRows = getSourceRows;
+        // (already exported at module top-level backward-compat section)
         
         // Export Zemax import/export functions
-        window.generateZMXText = generateZMXText;
-        window.downloadZMX = downloadZMX;
-        window.parseZMXTextToOpticalSystemRows = parseZMXTextToOpticalSystemRows;
-        window.parseZMXArrayBufferToOpticalSystemRows = parseZMXArrayBufferToOpticalSystemRows;
+        window['generateZMXText'] = generateZMXText;
+        window['downloadZMX'] = downloadZMX;
+        window['parseZMXTextToOpticalSystemRows'] = parseZMXTextToOpticalSystemRows;
+        window['parseZMXArrayBufferToOpticalSystemRows'] = parseZMXArrayBufferToOpticalSystemRows;
         
         // Export evaluation/analysis functions for popup windows
-        window.createOPDCalculator = createOPDCalculator;
-        window.WavefrontAberrationAnalyzer = WavefrontAberrationAnalyzer;
-        window.PSFCalculator = PSFCalculator;
-        window.PSFPlotter = PSFPlotter;
-        window.calculateFocalLength = calculateFocalLength;
-        window.findStopSurfaceIndex = findStopSurfaceIndex;
+        // window.createOPDCalculator is already exported at module top-level
+        // window.PSFCalculator / window.PSFPlotter are owned by evaluation/psf modules
+        window['calculateFocalLength'] = calculateFocalLength;
+        window['findStopSurfaceIndex'] = findStopSurfaceIndex;
         
         // Export coordinate transformation functions
-        window.calculateAllSurfacesLocalCoordinates = calculateAllSurfacesLocalCoordinates;
-        window.resetToSurfaceCoordinates = resetToSurfaceCoordinates;
-        window.shiftToChiefRayOrigin = shiftToChiefRayOrigin;
-        window.restoreFromLocalCoordinates = restoreFromLocalCoordinates;
-        window.transformToChiefRayLocalCoordinates = transformToChiefRayLocalCoordinates;
-        window.calculateSurfaceOrigins = calculateSurfaceOrigins;
-        window.calculateChiefRaySurfaceIntersections = calculateChiefRaySurfaceIntersections;
-        window.updateTransformSurfaceSelect = updateTransformSurfaceSelect;
+        window['calculateAllSurfacesLocalCoordinates'] = calculateAllSurfacesLocalCoordinates;
+        window['resetToSurfaceCoordinates'] = resetToSurfaceCoordinates;
+        window['shiftToChiefRayOrigin'] = shiftToChiefRayOrigin;
+        window['restoreFromLocalCoordinates'] = restoreFromLocalCoordinates;
+        window['transformToChiefRayLocalCoordinates'] = transformToChiefRayLocalCoordinates;
+        window['calculateChiefRaySurfaceIntersections'] = calculateChiefRaySurfaceIntersections;
+        window['updateTransformSurfaceSelect'] = updateTransformSurfaceSelect;
         
         // Export undo system dependencies
-        window.loadSystemConfigurations = loadSystemConfigurations;
-        window.saveSystemConfigurations = saveSystemConfigurations;
-        window.loadActiveConfigurationToTables = loadActiveConfigurationToTables;
-        window.refreshBlockInspector = refreshBlockInspector;
-        window.expandBlocksToOpticalSystemRows = expandBlocksToOpticalSystemRows;
-        window.getActiveConfiguration = getActiveConfiguration;
-        window.loadSourceTableData = loadSourceTableData;
-        window.loadObjectTableData = loadObjectTableData;
+        window['loadSystemConfigurations'] = loadSystemConfigurations;
+        window['saveSystemConfigurations'] = saveSystemConfigurations;
+        window['loadActiveConfigurationToTables'] = loadActiveConfigurationToTables;
+        installCooptWindowFacadeMarker();
+        exposeWindowValue('refreshBlockInspector', refreshBlockInspector, { overwrite: true });
+        window['expandBlocksToOpticalSystemRows'] = expandBlocksToOpticalSystemRows;
+        window['getActiveConfiguration'] = getActiveConfiguration;
+        window['loadSourceTableData'] = loadSourceTableData;
+        window['saveSourceTableData'] = saveSourceTableData;
+        window['loadObjectTableData'] = loadObjectTableData;
+        window['saveObjectTableData'] = saveObjectTableData;
+        window['loadSystemRequirementsTableData'] = loadSystemRequirementsTableData;
+        window['saveSystemRequirementsTableData'] = saveSystemRequirementsTableData;
         
         // Export Configuration UI initialization
-        window.initializeConfigurationUI = initializeConfigurationUI;
+        window['initializeConfigurationUI'] = initializeConfigurationUI;
 
         // Initialize System Constraints (BFL) on startup.
         setTimeout(() => {
@@ -471,13 +450,10 @@ async function initializeApplication() {
         }, 0);
         
         // Export chief ray optimization functions
-        window.outputChiefRayConvergenceData = outputChiefRayConvergenceData;
+        window['outputChiefRayConvergenceData'] = outputChiefRayConvergenceData;
         
-        // Export THREE.js components to global scope for simplified buttons
-        window.scene = scene;
-        window.camera = camera;
-        window.renderer = renderer;
-        window.controls = controls;
+        // Export THREE.js components to global scope (debug/legacy)
+        setRenderingContext({ scene, camera, renderer, controls });
         
         return {
             scene,
@@ -535,17 +511,20 @@ function drawOpticalSystemSurfaceWrapper(options = {}) {
         const systemTypeChanged = lastSystemType && lastSystemType !== currentSystemType;
         
         
+        const scene = getScene?.();
+        const renderer = getRenderer?.();
+
         // システムタイプが変更された場合、より完全なクリアを実行
         if (systemTypeChanged) {
             // レンダラーとシーンを完全にクリア
-            if (window.renderer) {
-                window.renderer.clear();
+            if (renderer) {
+                renderer.clear();
             }
-            if (window.scene) {
+            if (scene) {
                 // より厳密なクリア：すべての子要素を削除
-                const allChildren = [...window.scene.children];
+                const allChildren = [...scene.children];
                 allChildren.forEach(child => {
-                    window.scene.remove(child);
+                    scene.remove(child);
                     // ジオメトリとマテリアルを解放
                     if (child.geometry) child.geometry.dispose();
                     if (child.material) {
@@ -560,12 +539,12 @@ function drawOpticalSystemSurfaceWrapper(options = {}) {
         }
         
         // 現在のシステムタイプを記録
-        window.lastSystemType = currentSystemType;
+        setLastSystemType(currentSystemType);
         
         // Draw optical system surfaces
         drawOpticalSystemSurfaces({
             opticalSystemData: finalOptions.opticalSystemData,
-            scene: window.scene || document.scene,
+            scene: scene || (document as any).scene,
             crossSectionOnly: finalOptions.crossSectionOnly,
             showSemidiaRing: finalOptions.showSemidiaRing,
             showSurfaceOrigins: finalOptions.showSurfaceOrigins,
@@ -585,8 +564,13 @@ function drawOpticalSystemSurfaceWrapper(options = {}) {
 function improvedDrawOpticalSystemSurfaceWrapper() {
     
     try {
+        const scene = getScene?.();
+        const camera = getCamera?.();
+        const controls = getControls?.();
+        const renderer = getRenderer?.();
+
         // Clear existing optical elements first
-        clearAllOpticalElements(window.scene);
+        if (scene) clearAllOpticalElements(scene);
         
         // Get optical system data
         const opticalSystemRows = getOpticalSystemRows();
@@ -598,7 +582,7 @@ function improvedDrawOpticalSystemSurfaceWrapper() {
         // Draw optical system surfaces
         drawOpticalSystemSurfaces({
             opticalSystemData: opticalSystemRows,
-            scene: window.scene!,
+            scene: scene!,
             crossSectionOnly: false,
             showSurfaceOrigins: false,
             showSemidiaRing: true,
@@ -609,11 +593,19 @@ function improvedDrawOpticalSystemSurfaceWrapper() {
         
         // Adjust camera view to fit the drawn surfaces
         if (typeof window.adjustCameraView === 'function') {
-            window.adjustCameraView(window.scene, window.camera, window.controls, window.renderer);
+            window.adjustCameraView(scene, camera, controls, renderer);
         }
         
     } catch (error) {
     }
+}
+
+function setLastSystemType(systemType: string) {
+    (window as any)['lastSystemType'] = systemType;
+}
+
+function setCurrentDrawCrossRays(rays: any[]) {
+    (window as any)['currentDrawCrossRays'] = rays;
 }
 
 /**
@@ -623,7 +615,7 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
     
     try {
         const objectRows = getObjectRows();
-        const scene = window.scene;
+        const scene = getScene?.();
         
         if (!scene) {
             return;
@@ -723,7 +715,7 @@ function forceDrawEverything() {
     
     try {
         // Clear scene first
-        const scene = window.scene;
+        const scene = getScene?.();
         if (scene) {
             // Remove all optical elements
             const objectsToRemove = [];
@@ -747,9 +739,12 @@ function forceDrawEverything() {
         }
         
         // Force draw optical surfaces
+        if (!scene) {
+            return;
+        }
         drawOpticalSystemSurfaces({
             opticalSystemData: getOpticalSystemRows(),
-            scene: window.scene!,
+            scene: scene,
             crossSectionOnly: false,
             showSurfaceOrigins: false,
             showSemidiaRing: true,
@@ -775,14 +770,16 @@ function forceDrawEverything() {
             const rayStartPoints = generateRayStartPointsForObject(defaultObject, finalOpticalSystemRows, 11);
             if (rayStartPoints && rayStartPoints.length > 0) {
                 rayStartPoints.forEach((rayStart: any) => {
-                    drawRayWithSegmentColors(rayStart, finalOpticalSystemRows, [], window.scene);
+                    drawRayWithSegmentColors(rayStart, finalOpticalSystemRows, [], scene);
                 });
             }
         }
         
         // Force render
-        if (window.renderer && window.scene && window.camera) {
-            window.renderer.render(window.scene, window.camera);
+        const renderer = getRenderer?.();
+        const camera = getCamera?.();
+        if (renderer && scene && camera) {
+            renderer.render(scene, camera);
         }
         
         
@@ -796,9 +793,10 @@ function forceDrawEverything() {
 function fitCameraToOpticalSystem() {
     
     try {
-        const camera = window.camera;
-        const controls = window.controls;
-        const scene = window.scene;
+        const camera = getCamera?.();
+        const controls = getControls?.();
+        const scene = getScene?.();
+        const renderer = getRenderer?.();
         
         if (!camera || !controls || !scene) {
             return;
@@ -829,8 +827,8 @@ function fitCameraToOpticalSystem() {
         camera.updateProjectionMatrix();
         
         // Force render
-        if (window.renderer) {
-            window.renderer.render(scene, camera);
+        if (renderer) {
+            renderer.render(scene, camera);
         }
         
         
@@ -1013,7 +1011,7 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
  */
 function updateCameraViewBounds() {
     
-    const camera = window.camera;
+    const camera = getCamera?.();
     if (!camera) {
         return;
     }
@@ -1023,7 +1021,8 @@ function updateCameraViewBounds() {
     }
     
     try {
-        const sceneBounds = __coopt_calculateOpticalElementsBounds(window.scene);
+        const scene = getScene?.();
+        const sceneBounds = __coopt_calculateOpticalElementsBounds(scene);
 
         // 光学系のZ範囲とY範囲を動的に計算
         const rangeData = calculateOpticalSystemZRange();
@@ -1051,8 +1050,9 @@ function updateCameraViewBounds() {
         
         // レンダラーの実際のサイズを取得してアスペクト比を計算
         let aspect = 1.5;
-        if (window.renderer) {
-            const size = window.renderer.getSize(new THREE.Vector2());
+        const renderer = getRenderer?.();
+        if (renderer) {
+            const size = renderer.getSize(new THREE.Vector2());
             aspect = size.x / size.y;
         }
         
@@ -1087,7 +1087,7 @@ function updateCameraViewBounds() {
 }
 
 // グローバルに公開
-window.updateCameraViewBounds = updateCameraViewBounds;
+window['updateCameraViewBounds'] = updateCameraViewBounds;
 
 function __coopt_calculateOpticalElementsBounds(scene) {
     try {
@@ -1165,10 +1165,10 @@ function expandOrthoBoundsToAspect(camera, aspect) {
 function setCameraForYZCrossSection(options: CameraOptions = {}) {
     
     try {
-        const camera = options.camera || window.camera;
-        const controls = options.controls || window.controls;
-        const scene = options.scene || window.scene;
-        const renderer = options.renderer || window.renderer;
+        const camera = options.camera || getCamera?.();
+        const controls = options.controls || getControls?.();
+        const scene = options.scene || getScene?.();
+        const renderer = options.renderer || getRenderer?.();
         
         if (!camera || !controls || !scene) {
             return;
@@ -1348,10 +1348,10 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
 function setCameraForXZCrossSection(options: CameraOptions = {}) {
 
     try {
-        const camera = options.camera || window.camera;
-        const controls = options.controls || window.controls;
-        const scene = options.scene || window.scene;
-        const renderer = options.renderer || window.renderer;
+        const camera = options.camera || getCamera?.();
+        const controls = options.controls || getControls?.();
+        const scene = options.scene || getScene?.();
+        const renderer = options.renderer || getRenderer?.();
 
         if (!camera || !controls || !scene) {
             return;
@@ -1501,7 +1501,11 @@ function debug3DCanvas() {
     console.log('🖼️ Debugging 3D canvas status...');
     
     const canvasContainer = document.getElementById('threejs-canvas-container');
-    const canvas = window.renderer?.domElement;
+    const renderer = getRenderer?.();
+    const scene = getScene?.();
+    const camera = getCamera?.();
+    const controls = getControls?.();
+    const canvas = renderer?.domElement;
     
     console.log('Canvas container:', !!canvasContainer);
     if (canvasContainer) {
@@ -1516,23 +1520,23 @@ function debug3DCanvas() {
         console.log('Canvas parent:', canvas.parentElement?.id);
     }
     
-    console.log('Renderer:', !!window.renderer);
-    if (window.renderer) {
-        const size = window.renderer.getSize(new THREE.Vector2());
+    console.log('Renderer:', !!renderer);
+    if (renderer) {
+        const size = renderer.getSize(new THREE.Vector2());
         console.log('Renderer size:', size.x, 'x', size.y);
     }
     
-    console.log('Scene children count:', window.scene?.children?.length || 0);
-    console.log('Camera position:', window.camera?.position);
-    console.log('Controls target:', window.controls?.target);
+    console.log('Scene children count:', scene?.children?.length || 0);
+    console.log('Camera position:', camera?.position);
+    console.log('Controls target:', controls?.target);
     
     return {
         canvasContainer: !!canvasContainer,
         canvas: !!canvas,
-        renderer: !!window.renderer,
-        scene: !!window.scene,
-        camera: !!window.camera,
-        controls: !!window.controls
+        renderer: !!renderer,
+        scene: !!scene,
+        camera: !!camera,
+        controls: !!controls
     };
 }
 
@@ -1541,31 +1545,32 @@ function debug3DCanvas() {
 // =============================================================================
 
 // Export legacy functions to global scope
-window.drawOpticalSystemSurfaceWrapper = drawOpticalSystemSurfaceWrapper;
-window.improvedDrawOpticalSystemSurfaceWrapper = improvedDrawOpticalSystemSurfaceWrapper;
-window.drawOptimizedRaysFromObjects = drawOptimizedRaysFromObjects;
-window.generateRayStartPointsForObject = generateRayStartPointsForObject;
-window.drawRayWithSegmentColors = drawRayWithSegmentColors;
-window.setRayEmissionPattern = setRayEmissionPattern;
-window.getRayEmissionPattern = getRayEmissionPattern;
-window.setRayColorMode = setRayColorMode;
-window.getRayColorMode = getRayColorMode;
-window.forceDrawEverything = forceDrawEverything;
-window.fitCameraToOpticalSystem = fitCameraToOpticalSystem;
-window.setCameraForYZCrossSection = setCameraForYZCrossSection;
-window.setCameraForXZCrossSection = setCameraForXZCrossSection;
-window.calculateOpticalSystemZRange = calculateOpticalSystemZRange;
-window.debug3DCanvas = debug3DCanvas;
+window['drawOpticalSystemSurfaceWrapper'] = drawOpticalSystemSurfaceWrapper;
+window['improvedDrawOpticalSystemSurfaceWrapper'] = improvedDrawOpticalSystemSurfaceWrapper;
+window['drawOptimizedRaysFromObjects'] = drawOptimizedRaysFromObjects;
+window['generateRayStartPointsForObject'] = generateRayStartPointsForObject;
+window['drawRayWithSegmentColors'] = drawRayWithSegmentColors;
+window['setRayEmissionPattern'] = setRayEmissionPattern;
+window['getRayEmissionPattern'] = getRayEmissionPattern;
+window['setRayColorMode'] = setRayColorMode;
+window['getRayColorMode'] = getRayColorMode;
+window['forceDrawEverything'] = forceDrawEverything;
+window['fitCameraToOpticalSystem'] = fitCameraToOpticalSystem;
+window['setCameraForYZCrossSection'] = setCameraForYZCrossSection;
+window['setCameraForXZCrossSection'] = setCameraForXZCrossSection;
+window['calculateOpticalSystemZRange'] = calculateOpticalSystemZRange;
+window['debug3DCanvas'] = debug3DCanvas;
 
 // Export imported functions to global scope
-window.traceRay = traceRay;
-window.getOpticalSystemRows = getOpticalSystemRows;
-window.getObjectRows = getObjectRows;
-window.getSourceRows = getSourceRows;
+window['traceRay'] = traceRay;
+window['getOpticalSystemRows'] = getOpticalSystemRows;
+window['getObjectRows'] = getObjectRows;
+window['getSourceRows'] = getSourceRows;
 
 // Export main functions
-window.initializeApplication = initializeApplication;
-window.updateSurfaceNumberSelect = updateSurfaceNumberSelect;
+window['initializeApplication'] = initializeApplication;
+installCooptWindowFacadeMarker();
+exposeWindowValue('updateSurfaceNumberSelect', updateSurfaceNumberSelect, { overwrite: true });
 
 // =============================================================================
 // APPLICATION STARTUP
@@ -1586,19 +1591,21 @@ const startApplicationOnce = (() => {
         
         // Store references globally for backward compatibility
             if (appComponents) {
-                window.scene = appComponents.scene;
-                window.camera = appComponents.camera;
-                window.renderer = appComponents.renderer;
-                window.controls = appComponents.controls;
-                window.ambientLight = appComponents.ambientLight;
-                window.directionalLight = appComponents.directionalLight;
+                setRenderingContext({
+                    scene: appComponents.scene,
+                    camera: appComponents.camera,
+                    renderer: appComponents.renderer,
+                    controls: appComponents.controls
+                });
+                window['ambientLight'] = appComponents.ambientLight;
+                window['directionalLight'] = appComponents.directionalLight;
             } else {
             }
         
         // Store table references globally
-            window.tableOpticalSystem = tableOpticalSystem;
-            window.tableObject = tableObject;
-            window.tableSource = tableSource;
+            // window.tableOpticalSystem is owned by data/table-optical-system.ts
+            window['tableObject'] = tableObject;
+            window['tableSource'] = tableSource;
 
         // URL share load (hash: #compressed_data=...)
         // Run on next tick so other DOMContentLoaded listeners can finish too.
@@ -1704,14 +1711,16 @@ const startApplicationOnce = (() => {
                     // システムタイプが変更された場合、より完全なクリアを実行
                     if (systemTypeChanged) {
                         // レンダラーとシーンを完全にクリア
-                        if (window.renderer) {
-                            window.renderer.clear();
+                        const renderer = getRenderer?.();
+                        const scene = getScene?.();
+                        if (renderer) {
+                            renderer.clear();
                         }
-                        if (window.scene) {
+                        if (scene) {
                             // より厳密なクリア：すべての子要素を削除
-                            const allChildren = [...window.scene.children];
+                            const allChildren = [...scene.children];
                             allChildren.forEach(child => {
-                                window.scene.remove(child);
+                                scene.remove(child);
                                 // ジオメトリとマテリアルを解放
                                 if (child.geometry) child.geometry.dispose();
                                 if (child.material) {
@@ -1726,7 +1735,7 @@ const startApplicationOnce = (() => {
                     }
                     
                     // 現在のシステムタイプを記録
-                    window.lastSystemType = currentSystemType;
+                    setLastSystemType(currentSystemType);
                     
                     if (isInfiniteSystem) {
                     } else {
@@ -1898,14 +1907,18 @@ const startApplicationOnce = (() => {
                         console.log(`   縦方向光線: ${verticalCount}`);
                     }
                     
+                    const scene = getScene?.();
+
                     // 既存の光学要素と光線をクリア
-                    clearAllOpticalElements(window.scene);
+                    if (scene) {
+                        clearAllOpticalElements(scene);
+                    }
                     
                     // 光学系の描画（レンズリング表示を含む）
                     // クロスビーム描画時はレンズのリング表示をオフにして、円環状の見かけを防ぐ
                     drawOpticalSystemSurfaces({
                         opticalSystemData: opticalSystemRows,
-                        scene: window.scene || document.scene,
+                        scene: scene || (document as any).scene,
                         showSemidiaRing: true,  // 要望: セミダイアリングを表示
                         showSurfaceOrigins: false,  // 表面の原点は表示しない
                         crossSectionOnly: false  // 断面のみではなく、完全な3D表示
@@ -1924,7 +1937,7 @@ const startApplicationOnce = (() => {
                         console.log(`   Object分布:`, objectDistribution);
                         
                         const successfulCrossRays = allRays.filter(ray => ray && ray.success && Array.isArray(ray.rayPath) && ray.rayPath.length > 0);
-                        window.currentDrawCrossRays = successfulCrossRays.map(ray => ({
+                        setCurrentDrawCrossRays(successfulCrossRays.map(ray => ({
                             orientation: (() => {
                                 const labels = [ray.beamType, ray.type, ray.originalRay?.type, ray.originalRay?.beamType];
                                 const labelStr = labels.filter(Boolean).map(v => String(v).toLowerCase()).join(' ');
@@ -1937,17 +1950,17 @@ const startApplicationOnce = (() => {
                             crossParameter: ray.originalRay?.crossParameter ?? ray.crossParameter ?? null,
                             description: ray.description || ray.originalRay?.description || '',
                             source: ray
-                        }));
+                        })));
                         console.log('Stored draw-cross rays for overlay:', window.currentDrawCrossRays.length);
                         
-                        drawCrossBeamRays(allRays, window.scene);
+                        drawCrossBeamRays(allRays, scene);
                     } else {
-                        window.currentDrawCrossRays = [];
+                        setCurrentDrawCrossRays([]);
                     }
                     
                     // 結果をグローバルに保存
-                    window.crossBeamResult = crossBeamResult;
-                    window.lastGeneratedRays = allRays;
+                    window['crossBeamResult'] = crossBeamResult;
+                    window['lastGeneratedRays'] = allRays;
                     
                     // Image面のSemi Diaを主光線の最大高さで更新（optimizeSemiDiaが"U"の場合）
                     updateImageSemiDiaFromChiefRays(allRays, opticalSystemRows);
@@ -2030,12 +2043,11 @@ const startApplicationOnce = (() => {
                 const isCollapsed = topButtonsRow.classList.toggle('collapsed');
                 toggleToolbarBtn.classList.toggle('collapsed', isCollapsed);
                 // Save state to localStorage
-                localStorage.setItem('toolbarCollapsed', isCollapsed ? '1' : '0');
+                setToolbarCollapsed(isCollapsed);
             });
             
             // Restore state from localStorage
-            const savedState = localStorage.getItem('toolbarCollapsed');
-            if (savedState === '1') {
+            if (getToolbarCollapsed()) {
                 topButtonsRow.classList.add('collapsed');
                 toggleToolbarBtn.classList.add('collapsed');
             }
@@ -2098,8 +2110,8 @@ export {
  * Draw cross beam rays in the 3D scene (複数Object対応)
  */
 function drawCrossBeamRays(tracedRays, targetScene) {
-    // Use provided scene or default to window.scene
-    const scene = targetScene || window.scene;
+    // Prefer explicit scene; fall back to app-config getter
+    const scene = targetScene || getScene?.();
     
     
     if (!tracedRays || tracedRays.length === 0) {
@@ -2260,28 +2272,26 @@ function drawCrossBeamRays(tracedRays, targetScene) {
 }
 
 // drawCrossBeamRays関数をグローバルに公開
-window.drawCrossBeamRays = drawCrossBeamRays;
+window['drawCrossBeamRays'] = drawCrossBeamRays;
 
 // generateInfiniteSystemCrossBeam関数をグローバルに公開
-window.generateInfiniteSystemCrossBeam = generateInfiniteSystemCrossBeam;
+window['generateInfiniteSystemCrossBeam'] = generateInfiniteSystemCrossBeam;
 
 // generateCrossBeam関数（有限系用）をグローバルに公開
-window.generateCrossBeam = generateCrossBeam;
+window['generateCrossBeam'] = generateCrossBeam;
 
 // drawOpticalSystemSurfaces関数をグローバルに公開
-window.drawOpticalSystemSurfaces = drawOpticalSystemSurfaces;
+window['drawOpticalSystemSurfaces'] = drawOpticalSystemSurfaces;
 
 // =============================================================================
 // DEBUGGING EXPORTS - グローバルスコープに関数を公開
 // =============================================================================
 
-window.calculateChiefRayNewton = calculateChiefRayNewton;
-window.traceRay = traceRay;
-window.findStopSurface = findStopSurface;
-window.calculateSurfaceOrigins = calculateSurfaceOrigins;
+window['calculateChiefRayNewton'] = calculateChiefRayNewton;
+window['findStopSurface'] = findStopSurface;
 
 // 光学系判定関数を公開（gen-ray-cross-finite.jsから）
-window.isFiniteSystem = function(opticalSystemRows) {
+window['isFiniteSystem'] = function(opticalSystemRows) {
     // 最初の面の厚さが有限であれば有限系
     if (opticalSystemRows && opticalSystemRows.length > 0) {
         const firstSurface = opticalSystemRows[0];
@@ -2302,14 +2312,12 @@ window.isFiniteSystem = function(opticalSystemRows) {
 };
 
 // Distortion functions global expose
-window.calculateDistortionData = calculateDistortionData;
-window.plotDistortionPercent = plotDistortionPercent;
-window.generateDistortionPlots = generateDistortionPlots;
-window.plotGridDistortion = plotGridDistortion;
-window.generateGridDistortionPlot = generateGridDistortionPlot;
+// window.calculateDistortionData is owned by evaluation/aberrations/distortion.ts
+// window.plotDistortionPercent / window.generateDistortionPlots / window.plotGridDistortion /
+// window.generateGridDistortionPlot are owned by evaluation/aberrations/distortion-plot.ts
 
 // グローバルスコープへの公開用変数をまとめて定義
-window.mainDebugFunctions = {
+window['mainDebugFunctions'] = {
     generateCrossBeam,
     calculateChiefRayNewton,
     traceRay,
@@ -2319,8 +2327,8 @@ window.mainDebugFunctions = {
 };
 
 // Distortion helpers
-window.mainDebugFunctions.generateDistortionPlots = generateDistortionPlots;
-window.mainDebugFunctions.calculateDistortionData = calculateDistortionData;
+window['mainDebugFunctions'].generateDistortionPlots = generateDistortionPlots;
+window['mainDebugFunctions'].calculateDistortionData = calculateDistortionData;
 
 // 🔍 Object → FieldSetting変換ヘルパー関数
 function convertObjectToFieldSetting(objectData, index) {
@@ -2363,11 +2371,12 @@ function convertObjectToFieldSetting(objectData, index) {
 }
 
 // グローバルスコープに公開
-window.convertObjectToFieldSetting = convertObjectToFieldSetting;
+window['convertObjectToFieldSetting'] = convertObjectToFieldSetting;
 
 // 絞り周辺光線の描画関数
 function drawMarginalRays(marginalRaysData: any, opticalSystem: any) {
-    if (!marginalRaysData || !window.scene) {
+    const scene = getScene?.();
+    if (!marginalRaysData || !scene) {
         return;
     }
 
@@ -2412,7 +2421,7 @@ function drawMarginalRays(marginalRaysData: any, opticalSystem: any) {
             isOpticalRay: true 
         };
         
-        window.scene.add(rayLine);
+        scene.add(rayLine);
     });
 }
 
@@ -2426,7 +2435,7 @@ function getWASMSystem() {
     return wasmSystem;
 }
 
-// Note: window.getWASMSystem is already set at module top level
+// Note: getWASMSystem/_setWASMSystem globals are installed by core/wasm-service.ts
 
 // =============================================================================
 // ANALYSIS DROPDOWN HANDLER
@@ -2505,4 +2514,4 @@ function clearUndoHistoryOnMajorChange(reason) {
 }
 
 // Export for use in other modules
-window.clearUndoHistoryOnMajorChange = clearUndoHistoryOnMajorChange;
+window['clearUndoHistoryOnMajorChange'] = clearUndoHistoryOnMajorChange;

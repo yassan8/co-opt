@@ -254,14 +254,16 @@ class SetRequirementCommand extends Command {
       window.undoHistory.isExecuting = true;
     }
     try {
-      // Load from systemRequirementsData localStorage key
-      const json = localStorage.getItem('systemRequirementsData');
-      const data = json ? JSON.parse(json) : [];
+      const data = (window.loadSystemRequirementsTableData && typeof window.loadSystemRequirementsTableData === 'function')
+        ? window.loadSystemRequirementsTableData()
+        : [];
       const req = data.find(r => r.id === this.requirementId);
       if (req) {
         console.log(`[Undo] Setting ${this.field} from ${req[this.field]} to ${this.newValue}`);
         req[this.field] = this.newValue;
-        localStorage.setItem('systemRequirementsData', JSON.stringify(data));
+        if (window.saveSystemRequirementsTableData && typeof window.saveSystemRequirementsTableData === 'function') {
+          window.saveSystemRequirementsTableData(data);
+        }
         console.log('[Undo] Saved to systemRequirementsData');
         this.refreshUI();
       }
@@ -278,19 +280,25 @@ class SetRequirementCommand extends Command {
       window.undoHistory.isExecuting = true;
     }
     try {
-      // Load from systemRequirementsData localStorage key
-      const json = localStorage.getItem('systemRequirementsData');
-      const data = json ? JSON.parse(json) : [];
+      const data = (window.loadSystemRequirementsTableData && typeof window.loadSystemRequirementsTableData === 'function')
+        ? window.loadSystemRequirementsTableData()
+        : [];
       const req = data.find(r => r.id === this.requirementId);
       if (req) {
         console.log(`[Undo] Setting ${this.field} from ${req[this.field]} to ${this.oldValue}`);
         req[this.field] = this.oldValue;
-        localStorage.setItem('systemRequirementsData', JSON.stringify(data));
+        if (window.saveSystemRequirementsTableData && typeof window.saveSystemRequirementsTableData === 'function') {
+          window.saveSystemRequirementsTableData(data);
+        }
         console.log('[Undo] Saved to systemRequirementsData');
         
         // Verify save
-        const reloaded = JSON.parse(localStorage.getItem('systemRequirementsData'));
-        const reloadedReq = reloaded.find(r => r.id === this.requirementId);
+        const reloaded = (window.loadSystemRequirementsTableData && typeof window.loadSystemRequirementsTableData === 'function')
+          ? window.loadSystemRequirementsTableData()
+          : [];
+        const reloadedReq = Array.isArray(reloaded)
+          ? reloaded.find(r => r && String(r.id) === String(this.requirementId))
+          : null;
         console.log(`[Undo] After save, reloaded value for ${this.field}:`, reloadedReq?.[this.field]);
         
         console.log('[Undo] Calling refreshUI()...');
@@ -349,14 +357,18 @@ class SetSourceFieldCommand extends Command {
       window.undoHistory.isExecuting = true;
     }
     try {
-      // Load from sourceTableData localStorage key
-      const json = localStorage.getItem('sourceTableData');
-      const data = json ? JSON.parse(json) : [];
-      const source = data.find(s => s.id === this.sourceId);
+      const data = (window.loadSourceTableData && typeof window.loadSourceTableData === 'function')
+        ? window.loadSourceTableData()
+        : [];
+      const source = Array.isArray(data)
+        ? data.find(s => s && String(s.id) === String(this.sourceId))
+        : null;
       if (source) {
         console.log(`[Undo] Setting ${this.field} from ${source[this.field]} to ${this.newValue}`);
         source[this.field] = this.newValue;
-        localStorage.setItem('sourceTableData', JSON.stringify(data));
+        if (window.saveSourceTableData && typeof window.saveSourceTableData === 'function') {
+          window.saveSourceTableData(data);
+        }
         console.log('[Undo] Saved to sourceTableData');
         this.refreshUI();
       }
@@ -373,14 +385,18 @@ class SetSourceFieldCommand extends Command {
       window.undoHistory.isExecuting = true;
     }
     try {
-      // Load from sourceTableData localStorage key
-      const json = localStorage.getItem('sourceTableData');
-      const data = json ? JSON.parse(json) : [];
-      const source = data.find(s => s.id === this.sourceId);
+      const data = (window.loadSourceTableData && typeof window.loadSourceTableData === 'function')
+        ? window.loadSourceTableData()
+        : [];
+      const source = Array.isArray(data)
+        ? data.find(s => s && String(s.id) === String(this.sourceId))
+        : null;
       if (source) {
         console.log(`[Undo] Setting ${this.field} from ${source[this.field]} to ${this.oldValue}`);
         source[this.field] = this.oldValue;
-        localStorage.setItem('sourceTableData', JSON.stringify(data));
+        if (window.saveSourceTableData && typeof window.saveSourceTableData === 'function') {
+          window.saveSourceTableData(data);
+        }
         console.log('[Undo] Saved to sourceTableData');
         this.refreshUI();
       }
@@ -427,14 +443,18 @@ class SetObjectFieldCommand extends Command {
       window.undoHistory.isExecuting = true;
     }
     try {
-      // Load from objectTableData localStorage key
-      const json = localStorage.getItem('objectTableData');
-      const data = json ? JSON.parse(json) : [];
-      const obj = data.find(o => o.id === this.objectId);
+      const data = (window.loadObjectTableData && typeof window.loadObjectTableData === 'function')
+        ? window.loadObjectTableData()
+        : [];
+      const obj = Array.isArray(data)
+        ? data.find(o => o && String(o.id) === String(this.objectId))
+        : null;
       if (obj) {
         console.log(`[Undo] Setting ${this.field} from ${obj[this.field]} to ${this.newValue}`);
         obj[this.field] = this.newValue;
-        localStorage.setItem('objectTableData', JSON.stringify(data));
+        if (window.saveObjectTableData && typeof window.saveObjectTableData === 'function') {
+          window.saveObjectTableData(data);
+        }
         console.log('[Undo] Saved to objectTableData');
         this.refreshUI();
       }
@@ -451,19 +471,27 @@ class SetObjectFieldCommand extends Command {
       window.undoHistory.isExecuting = true;
     }
     try {
-      // Load from objectTableData localStorage key
-      const json = localStorage.getItem('objectTableData');
-      const data = json ? JSON.parse(json) : [];
-      const obj = data.find(o => o.id === this.objectId);
+      const data = (window.loadObjectTableData && typeof window.loadObjectTableData === 'function')
+        ? window.loadObjectTableData()
+        : [];
+      const obj = Array.isArray(data)
+        ? data.find(o => o && String(o.id) === String(this.objectId))
+        : null;
       if (obj) {
         console.log(`[Undo] Setting ${this.field} from ${obj[this.field]} to ${this.oldValue}`);
         obj[this.field] = this.oldValue;
-        localStorage.setItem('objectTableData', JSON.stringify(data));
+        if (window.saveObjectTableData && typeof window.saveObjectTableData === 'function') {
+          window.saveObjectTableData(data);
+        }
         console.log('[Undo] Saved to objectTableData');
         
         // Verify save
-        const reloaded = JSON.parse(localStorage.getItem('objectTableData'));
-        const reloadedObj = reloaded.find(o => o.id === this.objectId);
+        const reloaded = (window.loadObjectTableData && typeof window.loadObjectTableData === 'function')
+          ? window.loadObjectTableData()
+          : [];
+        const reloadedObj = Array.isArray(reloaded)
+          ? reloaded.find(o => o && String(o.id) === String(this.objectId))
+          : null;
         console.log(`[Undo] After save, reloaded value for ${this.field}:`, reloadedObj?.[this.field]);
         
         console.log('[Undo] Calling refreshUI()...');
@@ -947,16 +975,7 @@ class UndoHistory {
   }
 }
 
-// Expose to global scope for inline initializer in index.html
 try {
-  if (typeof globalThis !== 'undefined') {
-    globalThis.UndoHistory = UndoHistory;
-  }
-  if (typeof window !== 'undefined') {
-    window.UndoHistory = UndoHistory;
-  }
-} catch (_) {}
-
 // ============================================================================
 // Global Instance & Exports
 // ============================================================================
@@ -964,22 +983,22 @@ try {
 // Create global instance
 if (typeof window !== 'undefined') {
   console.log('[Undo] Creating global UndoHistory instance');
-  window.undoHistory = new UndoHistory();
-  console.log('[Undo] Global UndoHistory ready', window.undoHistory.getInfo());
+  window['undoHistory'] = new UndoHistory();
+  console.log('[Undo] Global UndoHistory ready', window['undoHistory'].getInfo());
   
   // Export command classes for use in other modules
-  window.Command = Command;
-  window.SetBlockParameterCommand = SetBlockParameterCommand;
-  window.SetSurfaceFieldCommand = SetSurfaceFieldCommand;
-  window.SetRequirementCommand = SetRequirementCommand;
-  window.SetSourceFieldCommand = SetSourceFieldCommand;
-  window.SetObjectFieldCommand = SetObjectFieldCommand;
-  window.AddBlockCommand = AddBlockCommand;
-  window.DeleteBlockCommand = DeleteBlockCommand;
-  window.AddRowCommand = AddRowCommand;
-  window.DeleteRowCommand = DeleteRowCommand;
-  window.CompoundCommand = CompoundCommand;
-  window.UndoHistory = UndoHistory;
+  window['Command'] = Command;
+  window['SetBlockParameterCommand'] = SetBlockParameterCommand;
+  window['SetSurfaceFieldCommand'] = SetSurfaceFieldCommand;
+  window['SetRequirementCommand'] = SetRequirementCommand;
+  window['SetSourceFieldCommand'] = SetSourceFieldCommand;
+  window['SetObjectFieldCommand'] = SetObjectFieldCommand;
+  window['AddBlockCommand'] = AddBlockCommand;
+  window['DeleteBlockCommand'] = DeleteBlockCommand;
+  window['AddRowCommand'] = AddRowCommand;
+  window['DeleteRowCommand'] = DeleteRowCommand;
+  window['CompoundCommand'] = CompoundCommand;
+  window['UndoHistory'] = UndoHistory;
   
 
 }

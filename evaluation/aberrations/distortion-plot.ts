@@ -455,8 +455,8 @@ export async function generateGridDistortionPlot({
 }
 
 if (typeof window !== 'undefined') {
-  window.plotDistortionPercent = plotDistortionPercent;
-  window.generateDistortionPlots = generateDistortionPlots;
-  window.plotGridDistortion = plotGridDistortion;
-  window.generateGridDistortionPlot = generateGridDistortionPlot;
+  window['plotDistortionPercent'] = plotDistortionPercent;
+  window['generateDistortionPlots'] = generateDistortionPlots;
+  window['plotGridDistortion'] = plotGridDistortion;
+  window['generateGridDistortionPlot'] = generateGridDistortionPlot;
 }

@@ -360,11 +360,11 @@ async function initializeOptimizedRayTracing() {
         await optimizedRayTracing.initialize();
         
         // グローバル関数として公開
-        window.optimizedAsphericSag = optimizedRayTracing.optimizedAsphericSag.bind(optimizedRayTracing);
-        window.optimizedBatchAsphericSag = optimizedRayTracing.batchAsphericSag.bind(optimizedRayTracing);
-        window.optimizedVectorDot = optimizedRayTracing.vectorDot.bind(optimizedRayTracing);
-        window.getOptimizationStats = () => optimizedRayTracing.getStats();
-        window.benchmarkOptimizations = () => optimizedRayTracing.benchmarkAllMethods();
+        window['optimizedAsphericSag'] = optimizedRayTracing.optimizedAsphericSag.bind(optimizedRayTracing);
+        window['optimizedBatchAsphericSag'] = optimizedRayTracing.batchAsphericSag.bind(optimizedRayTracing);
+        window['optimizedVectorDot'] = optimizedRayTracing.vectorDot.bind(optimizedRayTracing);
+        window['getOptimizationStats'] = () => optimizedRayTracing.getStats();
+        window['benchmarkOptimizations'] = () => optimizedRayTracing.benchmarkAllMethods();
     }
     
     return optimizedRayTracing;
@@ -396,10 +396,10 @@ async function testOptimizedRayTracing() {
 
 // グローバル公開
 if (typeof window !== 'undefined') {
-    window.initializeOptimizedRayTracing = initializeOptimizedRayTracing;
-    window.testOptimizedRayTracing = testOptimizedRayTracing;
-    window.OptimizedRayTracing = OptimizedRayTracing;
-    window.TypedArrayOptimizer = TypedArrayOptimizer;
+    window['initializeOptimizedRayTracing'] = initializeOptimizedRayTracing;
+    window['testOptimizedRayTracing'] = testOptimizedRayTracing;
+    window['OptimizedRayTracing'] = OptimizedRayTracing;
+    window['TypedArrayOptimizer'] = TypedArrayOptimizer;
     
     const RAYTRACE_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__RAYTRACE_DEBUG);
     if (RAYTRACE_DEBUG) {

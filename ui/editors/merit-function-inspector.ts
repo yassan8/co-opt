@@ -6,6 +6,17 @@ declare global {
 }
 const w: Record<string, any> = window;
 
+import { loadSystemConfigurations } from '../../data/table-configuration.ts';
+
+function tryLoadSystemConfigurations(): any {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    return loadSystemConfigurations();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * System Evaluation Inspector Configuration
  * Manages operand definitions and inspector display logic
@@ -728,8 +739,7 @@ export class InspectorManager {
         sys = null;
       }
       if (!sys) {
-        const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
-        sys = raw ? JSON.parse(raw) : null;
+        sys = tryLoadSystemConfigurations();
       }
       const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
       const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null) ? String(sys.activeConfigId) : '';

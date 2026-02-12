@@ -162,11 +162,11 @@ export async function runOPDProfiling(options = {}) {
   console.table(priorities.groupTotals.map(g => ({ group: g.label, ms: g.ms.toFixed(1) })));
   console.table(priorities.ranked.slice(0, 10).map(x => ({ rank: x.rank, name: x.name, ms: x.ms.toFixed(1) })));
   // 使いやすいようにwindowに保存
-  if (typeof window !== 'undefined') window.lastOPDProfile = out;
+  if (typeof window !== 'undefined') window['lastOPDProfile'] = out;
   return out;
 }
 
 // 便利関数をグローバルに公開
 if (typeof window !== 'undefined') {
-  window.runOPDProfiling = runOPDProfiling;
+  window['runOPDProfiling'] = runOPDProfiling;
 }

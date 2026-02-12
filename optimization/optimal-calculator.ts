@@ -352,8 +352,8 @@ async function demonstrateOptimalCalculator() {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = OptimalAsphericCalculator;
 } else if (typeof window !== 'undefined') {
-    window.OptimalAsphericCalculator = OptimalAsphericCalculator;
-    window.demonstrateOptimalCalculator = demonstrateOptimalCalculator;
+    window['OptimalAsphericCalculator'] = OptimalAsphericCalculator;
+    window['demonstrateOptimalCalculator'] = demonstrateOptimalCalculator;
 }
 
 console.log('🎯 Optimal Aspheric Calculator loaded');

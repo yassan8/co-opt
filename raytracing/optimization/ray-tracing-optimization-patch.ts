@@ -3,6 +3,12 @@
  * 既存のray-tracing.jsにWASM/asm.js最適化を統合するためのパッチモジュール
  */
 
+import { getAsphericSagImplementation, setAsphericSagImplementation } from '../../core/aspheric-sag-service.ts';
+
+function setWindowDot(fn) {
+    (window as any)['dot'] = fn;
+}
+
 class RayTracingOptimizationPatch {
     constructor() {
         this.optimizedSystem = null;
@@ -109,14 +115,12 @@ class RayTracingOptimizationPatch {
      * ray-tracing.js関数をパッチ
      */
     patchRayTracingFunctions() {
-        // 元のasphericSag関数をバックアップ
-        if (typeof window.asphericSag === 'function') {
-            this.originalFunctions.asphericSag = window.asphericSag;
-        }
+        // 元のasphericSag実装をバックアップ
+        this.originalFunctions.asphericSagImpl = getAsphericSagImplementation();
 
         // 最適化版asphericSag関数を作成
         const self = this;
-        window.asphericSag = function(r, params, mode = "even") {
+        const optimizedImpl = function(r, params, mode = "even") {
             try {
                 if (!self.fallbackMode && self.optimizedSystem) {
                     // パラメータ変換
@@ -130,24 +134,26 @@ class RayTracingOptimizationPatch {
                     return self.optimizedSystem.optimizedAsphericSag(r, curvature, conic, a4, a6, a8, a10);
                 } else {
                     // フォールバック: 元の実装を呼び出し
-                    return self.originalFunctions.asphericSag ? 
-                           self.originalFunctions.asphericSag(r, params, mode) : 
+                    return self.originalFunctions.asphericSagImpl ?
+                           self.originalFunctions.asphericSagImpl(r, params, mode) :
                            self.fallbackAsphericSag(r, params, mode);
                 }
             } catch (error) {
                 console.warn(`⚠️ 最適化asphericSag実行エラー: ${error.message}`);
-                return self.originalFunctions.asphericSag ? 
-                       self.originalFunctions.asphericSag(r, params, mode) : 
+                return self.originalFunctions.asphericSagImpl ?
+                       self.originalFunctions.asphericSagImpl(r, params, mode) :
                        self.fallbackAsphericSag(r, params, mode);
             }
         };
+
+        setAsphericSagImplementation(optimizedImpl);
 
         // ベクトル演算の最適化（可能であれば）
         if (this.optimizedSystem && this.optimizedSystem.vectorDot) {
             if (typeof window.dot === 'function') {
                 this.originalFunctions.dot = window.dot;
                 
-                window.dot = function(a, b) {
+                setWindowDot(function(a, b) {
                     try {
                         if (!self.fallbackMode && a && b && 
                             typeof a.x === 'number' && typeof a.y === 'number' && typeof a.z === 'number' &&
@@ -159,7 +165,7 @@ class RayTracingOptimizationPatch {
                     } catch (error) {
                         return self.originalFunctions.dot(a, b);
                     }
-                };
+                });
             }
         }
 
@@ -196,11 +202,9 @@ class RayTracingOptimizationPatch {
      * パッチを元に戻す
      */
     unpatch() {
-        if (this.originalFunctions.asphericSag) {
-            window.asphericSag = this.originalFunctions.asphericSag;
-        }
+        setAsphericSagImplementation(this.originalFunctions.asphericSagImpl || null);
         if (this.originalFunctions.dot) {
-            window.dot = this.originalFunctions.dot;
+            setWindowDot(this.originalFunctions.dot);
         }
         console.log('🔄 ray-tracing.js関数パッチを除去');
     }
@@ -258,10 +262,10 @@ function getRayTracingOptimizationStats() {
 
 // モジュール公開
 if (typeof window !== 'undefined') {
-    window.initializeRayTracingOptimization = initializeRayTracingOptimization;
-    window.applyRayTracingOptimization = applyRayTracingOptimization;
-    window.getRayTracingOptimizationStats = getRayTracingOptimizationStats;
-    window.RayTracingOptimizationPatch = RayTracingOptimizationPatch;
+    window['initializeRayTracingOptimization'] = initializeRayTracingOptimization;
+    window['applyRayTracingOptimization'] = applyRayTracingOptimization;
+    window['getRayTracingOptimizationStats'] = getRayTracingOptimizationStats;
+    window['RayTracingOptimizationPatch'] = RayTracingOptimizationPatch;
     
     const RAYTRACE_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__RAYTRACE_DEBUG);
     if (RAYTRACE_DEBUG) console.log('⚡ ray-tracing.js最適化パッチモジュールが読み込まれました');

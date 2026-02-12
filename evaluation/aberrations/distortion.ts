@@ -452,6 +452,6 @@ export async function calculateGridDistortion(opticalSystemRows, gridSize = 20, 
 
 // Minimal global exposure of calculation only (plotting moved to eva-distortion-plot.js)
 if (typeof window !== 'undefined') {
-  window.calculateDistortionData = calculateDistortionData;
-  window.calculateGridDistortion = calculateGridDistortion;
+  window['calculateDistortionData'] = calculateDistortionData;
+  window['calculateGridDistortion'] = calculateGridDistortion;
 }

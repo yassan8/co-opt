@@ -12,6 +12,10 @@ const w: Record<string, any> = window;
  */
 
 import type { Block, Configuration } from '../types/index.ts';
+import { loadTableData as loadSourceTableData, saveTableData as saveSourceTableData } from '../data/table-source.ts';
+import { loadTableData as loadObjectTableData, saveTableData as saveObjectTableData } from '../data/table-object.ts';
+import { loadTableData as loadSystemRequirementsTableData, saveTableData as saveSystemRequirementsTableData } from '../data/table-system-requirements.ts';
+import { requestRefreshBlockInspector } from './window-facade.ts';
 
 interface SystemRequirement {
   id: string;
@@ -208,7 +212,7 @@ export class SetBlockParameterCommand extends Command {
     // Refresh UI
     if (w.refreshBlockInspector) {
       console.log('[Undo] Calling refreshBlockInspector');
-      w.refreshBlockInspector();
+      requestRefreshBlockInspector(w);
     }
     if (w.loadActiveConfigurationToTables) {
       console.log('[Undo] Calling loadActiveConfigurationToTables');
@@ -304,13 +308,12 @@ export class SetRequirementCommand extends Command {
     }
     try {
       // Load from systemRequirementsData localStorage key
-      const json = localStorage.getItem('systemRequirementsData');
-      const data: SystemRequirement[] = json ? JSON.parse(json) : [];
+      const data: any[] = loadSystemRequirementsTableData() as any;
       const req = data.find((r: SystemRequirement) => r.id === this.requirementId);
       if (req) {
         console.log(`[Undo] Setting ${this.field} from ${req[this.field]} to ${this.newValue}`);
         req[this.field] = this.newValue;
-        localStorage.setItem('systemRequirementsData', JSON.stringify(data));
+        saveSystemRequirementsTableData(data as any);
         console.log('[Undo] Saved to systemRequirementsData');
         this.refreshUI();
       }
@@ -328,18 +331,19 @@ export class SetRequirementCommand extends Command {
     }
     try {
       // Load from systemRequirementsData localStorage key
-      const json = localStorage.getItem('systemRequirementsData');
-      const data: SystemRequirement[] = json ? JSON.parse(json) : [];
+      const data: any[] = loadSystemRequirementsTableData() as any;
       const req = data.find((r: SystemRequirement) => r.id === this.requirementId);
       if (req) {
         console.log(`[Undo] Setting ${this.field} from ${req[this.field]} to ${this.oldValue}`);
         req[this.field] = this.oldValue;
-        localStorage.setItem('systemRequirementsData', JSON.stringify(data));
+        saveSystemRequirementsTableData(data as any);
         console.log('[Undo] Saved to systemRequirementsData');
         
         // Verify save
-        const reloaded: SystemRequirement[] = JSON.parse(localStorage.getItem('systemRequirementsData') || '[]');
-        const reloadedReq = reloaded.find((r: SystemRequirement) => r.id === this.requirementId);
+        const reloaded: any[] = loadSystemRequirementsTableData() as any;
+        const reloadedReq = Array.isArray(reloaded)
+          ? reloaded.find((r: any) => r && String(r.id) === String(this.requirementId))
+          : null;
         console.log(`[Undo] After save, reloaded value for ${this.field}:`, reloadedReq?.[this.field]);
         
         console.log('[Undo] Calling refreshUI()...');
@@ -404,14 +408,14 @@ export class SetSourceFieldCommand extends Command {
       w.undoHistory.isExecuting = true;
     }
     try {
-      // Load from sourceTableData localStorage key
-      const json = localStorage.getItem('sourceTableData');
-      const data: SourceData[] = json ? JSON.parse(json) : [];
-      const source = data.find((s: SourceData) => s.id === this.sourceId);
+      const data: any[] = loadSourceTableData() as any;
+      const source = Array.isArray(data)
+        ? data.find((s: any) => s && String(s.id) === String(this.sourceId))
+        : null;
       if (source) {
         console.log(`[Undo] Setting ${this.field} from ${source[this.field]} to ${this.newValue}`);
         source[this.field] = this.newValue;
-        localStorage.setItem('sourceTableData', JSON.stringify(data));
+        saveSourceTableData(data as any);
         console.log('[Undo] Saved to sourceTableData');
         this.refreshUI();
       }
@@ -428,14 +432,14 @@ export class SetSourceFieldCommand extends Command {
       w.undoHistory.isExecuting = true;
     }
     try {
-      // Load from sourceTableData localStorage key
-      const json = localStorage.getItem('sourceTableData');
-      const data: SourceData[] = json ? JSON.parse(json) : [];
-      const source = data.find((s: SourceData) => s.id === this.sourceId);
+      const data: any[] = loadSourceTableData() as any;
+      const source = Array.isArray(data)
+        ? data.find((s: any) => s && String(s.id) === String(this.sourceId))
+        : null;
       if (source) {
         console.log(`[Undo] Setting ${this.field} from ${source[this.field]} to ${this.oldValue}`);
         source[this.field] = this.oldValue;
-        localStorage.setItem('sourceTableData', JSON.stringify(data));
+        saveSourceTableData(data as any);
         console.log('[Undo] Saved to sourceTableData');
         this.refreshUI();
       }
@@ -488,14 +492,14 @@ export class SetObjectFieldCommand extends Command {
       w.undoHistory.isExecuting = true;
     }
     try {
-      // Load from objectTableData localStorage key
-      const json = localStorage.getItem('objectTableData');
-      const data: ObjectData[] = json ? JSON.parse(json) : [];
-      const obj = data.find((o: ObjectData) => o.id === this.objectId);
+      const data: any[] = loadObjectTableData() as any;
+      const obj = Array.isArray(data)
+        ? data.find((o: any) => o && String(o.id) === String(this.objectId))
+        : null;
       if (obj) {
         console.log(`[Undo] Setting ${this.field} from ${obj[this.field]} to ${this.newValue}`);
         obj[this.field] = this.newValue;
-        localStorage.setItem('objectTableData', JSON.stringify(data));
+        saveObjectTableData(data as any);
         console.log('[Undo] Saved to objectTableData');
         this.refreshUI();
       }
@@ -512,19 +516,21 @@ export class SetObjectFieldCommand extends Command {
       w.undoHistory.isExecuting = true;
     }
     try {
-      // Load from objectTableData localStorage key
-      const json = localStorage.getItem('objectTableData');
-      const data: ObjectData[] = json ? JSON.parse(json) : [];
-      const obj = data.find((o: ObjectData) => o.id === this.objectId);
+      const data: any[] = loadObjectTableData() as any;
+      const obj = Array.isArray(data)
+        ? data.find((o: any) => o && String(o.id) === String(this.objectId))
+        : null;
       if (obj) {
         console.log(`[Undo] Setting ${this.field} from ${obj[this.field]} to ${this.oldValue}`);
         obj[this.field] = this.oldValue;
-        localStorage.setItem('objectTableData', JSON.stringify(data));
+        saveObjectTableData(data as any);
         console.log('[Undo] Saved to objectTableData');
         
         // Verify save
-        const reloaded: ObjectData[] = JSON.parse(localStorage.getItem('objectTableData') || '[]');
-        const reloadedObj = reloaded.find((o: ObjectData) => o.id === this.objectId);
+        const reloaded: any[] = loadObjectTableData() as any;
+        const reloadedObj = Array.isArray(reloaded)
+          ? reloaded.find((o: any) => o && String(o.id) === String(this.objectId))
+          : null;
         console.log(`[Undo] After save, reloaded value for ${this.field}:`, reloadedObj?.[this.field]);
         
         console.log('[Undo] Calling refreshUI()...');
@@ -611,7 +617,7 @@ export class AddBlockCommand extends Command {
       if (expanded && expanded.rows) cfg.opticalSystemRows = expanded.rows;
     }
     if (w.saveSystemConfigurations) w.saveSystemConfigurations(sysConfig);
-    if (w.refreshBlockInspector) w.refreshBlockInspector();
+    if (w.refreshBlockInspector) requestRefreshBlockInspector(w);
     if (w.loadActiveConfigurationToTables) w.loadActiveConfigurationToTables();
     if (w.refreshAllUI) w.refreshAllUI();
   }
@@ -666,7 +672,7 @@ export class DeleteBlockCommand extends Command {
       if (expanded && expanded.rows) cfg.opticalSystemRows = expanded.rows;
     }
     if (w.saveSystemConfigurations) w.saveSystemConfigurations(sysConfig);
-    if (w.refreshBlockInspector) w.refreshBlockInspector();
+    if (w.refreshBlockInspector) requestRefreshBlockInspector(w);
     if (w.loadActiveConfigurationToTables) w.loadActiveConfigurationToTables();
     if (w.refreshAllUI) w.refreshAllUI();
   }
@@ -1054,9 +1060,9 @@ if (typeof window !== 'undefined') {
   w.SetRequirementCommand = SetRequirementCommand;
   w.SetSourceFieldCommand = SetSourceFieldCommand;
   w.SetObjectFieldCommand = SetObjectFieldCommand;
-  w.AddBlockCommand = AddBlockCommand;
+  w['AddBlockCommand'] = AddBlockCommand;
   w.DeleteBlockCommand = DeleteBlockCommand;
-  w.AddRowCommand = AddRowCommand;
+  w['AddRowCommand'] = AddRowCommand;
   w.DeleteRowCommand = DeleteRowCommand;
   w.CompoundCommand = CompoundCommand;
   w.UndoHistory = UndoHistory;

@@ -200,7 +200,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
     // 現在のカラーモードを表示
     const currentColorMode = window.rayColorMode || window.getRayColorMode?.() || 'object';
     // console.log(`🎨 Current ray color mode: ${currentColorMode}`);
-    // console.log(`🔍 Debug rayColorMode sources: window.rayColorMode=${window.rayColorMode}, getRayColorMode=${window.getRayColorMode?.()}`);
+    // console.log(`🔍 Debug rayColorMode sources (window): ${window.rayColorMode}, getRayColorMode(): ${window.getRayColorMode?.()}`);
     
     // 利用可能なwindowプロパティも表示
     const rayColorRelated = Object.keys(window).filter(k => k.toLowerCase().includes('color') || k.toLowerCase().includes('ray'));
@@ -1112,7 +1112,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
 
 // Diagnostic helper: Check if all objects evaluated the same surface
 if (typeof window !== 'undefined') {
-    window.__cooptCheckSpotSurfaceConsistency = function() {
+    window['__cooptCheckSpotSurfaceConsistency'] = function() {
         const run = (typeof globalThis !== 'undefined') ? globalThis.__cooptLastSpotDiagramRun : null;
         if (!run || !Array.isArray(run.objects)) {
             console.warn('No spot diagram run data available. Run a spot diagram first.');
@@ -2975,7 +2975,7 @@ function getSpotColor(point, objectId, pointIndex) {
     // デバッグ出力を抑制（コメントアウト）
     // if (pointIndex < 5) {
     //     console.log(`🎨 getSpotColor called: mode=${colorMode}, objectId=${objectId}, pointIndex=${pointIndex}`);
-    //     console.log(`🔍 Debug rayColorMode sources: window.rayColorMode=${window.rayColorMode}, getRayColorMode=${window.getRayColorMode?.()}`);
+    //     console.log(`🔍 Debug rayColorMode sources (window): ${window.rayColorMode}, getRayColorMode(): ${window.getRayColorMode?.()}`);
     // }
     
     switch (colorMode) {

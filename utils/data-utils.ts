@@ -12,6 +12,7 @@ import { getPrimaryWavelength } from '../data/glass.ts';
 import { calculateSeidelCoefficients, formatSeidelCoefficients } from '../evaluation/aberrations/seidel-coefficients.ts';
 import { getActiveConfiguration } from '../data/table-configuration.ts';
 import { configurationHasBlocks, expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
+import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
 
 const DATA_UTILS_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__DATA_UTILS_DEBUG);
 const duLog = (...args) => { if (DATA_UTILS_DEBUG) console.log(...args); };
@@ -91,9 +92,7 @@ function __du_pickLegacyRowsForSemidia(activeCfg) {
   } catch (_) {}
 
   try {
-    const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('OpticalSystemTableData') : null;
-    if (!raw) return null;
-    const rows = JSON.parse(raw);
+    const rows = tryLoadPersistedOpticalSystemTableData();
     return Array.isArray(rows) ? rows : null;
   } catch (_) {
     return null;

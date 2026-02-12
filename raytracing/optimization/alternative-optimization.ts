@@ -11,6 +11,8 @@
  * 作成日: 2025/08/06
  */
 
+import { getDotProductImplementation, getNormalizeImplementation, setDotProductImplementation, setNormalizeImplementation } from '../../core/vector-math-service.ts';
+
 /**
  * 型付き配列ベクトル演算クラス
  */
@@ -472,30 +474,30 @@ function enableAlternativeOptimization() {
     console.log('🚀 代替最適化を有効化...');
     
     // バックアップ
-    if (!window.originalMathFunctions) {
-        window.originalMathFunctions = {
-            dotProduct: window.dotProduct,
-            normalize: window.normalize
+    if (!window['originalMathFunctions']) {
+        window['originalMathFunctions'] = {
+            dotProduct: getDotProductImplementation(),
+            normalize: getNormalizeImplementation()
         };
     }
     
-    // 型付き配列版で置き換え
-    window.dotProduct = TypedArrayVectorMath.dotProduct3;
-    window.normalize = TypedArrayVectorMath.normalize3Fast;
+    // 型付き配列版で置き換え（service経由）
+    setDotProductImplementation(TypedArrayVectorMath.dotProduct3);
+    setNormalizeImplementation(TypedArrayVectorMath.normalize3Fast);
     
     console.log('✅ 代替最適化が有効になりました');
 }
 
 // グローバル公開
-window.TypedArrayVectorMath = TypedArrayVectorMath;
-window.MemoryPool = MemoryPool;
-window.FastAsphericMath = FastAsphericMath;
-window.ParallelProcessor = ParallelProcessor;
-window.testAlternativeOptimization = testAlternativeOptimization;
-window.enableAlternativeOptimization = enableAlternativeOptimization;
-window.vector3Pool = vector3Pool;
-window.rayPool = rayPool;
-window.parallelProcessor = parallelProcessor;
+window['TypedArrayVectorMath'] = TypedArrayVectorMath;
+window['MemoryPool'] = MemoryPool;
+window['FastAsphericMath'] = FastAsphericMath;
+window['ParallelProcessor'] = ParallelProcessor;
+window['testAlternativeOptimization'] = testAlternativeOptimization;
+window['enableAlternativeOptimization'] = enableAlternativeOptimization;
+window['vector3Pool'] = vector3Pool;
+window['rayPool'] = rayPool;
+window['parallelProcessor'] = parallelProcessor;
 
 console.log('⚡ 代替最適化モジュールが読み込まれました');
 console.log('   テスト実行: testAlternativeOptimization()');

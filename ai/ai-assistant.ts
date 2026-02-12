@@ -5,7 +5,13 @@
  */
 
 import { getSystemContext } from './ai-context.ts';
+import { requestRefreshBlockInspector } from '../core/window-facade.ts';
 import { BLOCK_SCHEMA_VERSION, expandBlocksToOpticalSystemRows, deriveBlocksFromLegacyOpticalSystemRows } from '../data/block-schema.ts';
+import {
+    loadSystemConfigurations as loadSystemConfigurationsFromTableConfig,
+    saveSystemConfigurations as saveSystemConfigurationsFromTableConfig
+} from '../data/table-configuration.ts';
+import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
 
 const AI_CONFIG_KEY = 'ai_assistant_config';
 const AI_HISTORY_KEY = 'ai_assistant_history';
@@ -43,14 +49,14 @@ const DEFAULT_AI_STREAM_TIMEOUT_MS = 180000;
 // Export minimal debug info to `window` to help confirm which build is running.
 try {
     if (typeof window !== 'undefined') {
-        if (!window.__COOPT_AI_ASSISTANT_VERSION) {
-            window.__COOPT_AI_ASSISTANT_VERSION = 'co-opt 1.9.6 (ai-assistant) 2026-01-05';
+        if (!window['__COOPT_AI_ASSISTANT_VERSION']) {
+            window['__COOPT_AI_ASSISTANT_VERSION'] = 'co-opt 1.9.6 (ai-assistant) 2026-01-05';
         }
-        if (typeof window.DEFAULT_AI_REQUEST_TIMEOUT_MS === 'undefined') {
-            window.DEFAULT_AI_REQUEST_TIMEOUT_MS = DEFAULT_AI_REQUEST_TIMEOUT_MS;
+        if (typeof window['DEFAULT_AI_REQUEST_TIMEOUT_MS'] === 'undefined') {
+            window['DEFAULT_AI_REQUEST_TIMEOUT_MS'] = DEFAULT_AI_REQUEST_TIMEOUT_MS;
         }
-        if (typeof window.DEFAULT_AI_STREAM_TIMEOUT_MS === 'undefined') {
-            window.DEFAULT_AI_STREAM_TIMEOUT_MS = DEFAULT_AI_STREAM_TIMEOUT_MS;
+        if (typeof window['DEFAULT_AI_STREAM_TIMEOUT_MS'] === 'undefined') {
+            window['DEFAULT_AI_STREAM_TIMEOUT_MS'] = DEFAULT_AI_STREAM_TIMEOUT_MS;
         }
     }
 } catch (_) {}
@@ -176,7 +182,7 @@ async function refreshUIInWindow(targetWin) {
             });
         }
     } catch (_) {}
-    try { if (typeof w.refreshBlockInspector === 'function') w.refreshBlockInspector(); } catch (_) {}
+    try { requestRefreshBlockInspector(w); } catch (_) {}
     try {
         if (w.meritFunctionEditor && typeof w.meritFunctionEditor.calculateMerit === 'function') {
             w.meritFunctionEditor.calculateMerit();
@@ -575,7 +581,7 @@ function openAIAssistantPopup() {
     <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-    <script>window.__AI_ASSISTANT_MODE = 'popup';<\/script>
+    <script>window['__AI_ASSISTANT_MODE'] = 'popup';<\/script>
     <script type="module">
         import { initAIAssistantPopup } from './ai-assistant.ts';
         initAIAssistantPopup();
@@ -2039,9 +2045,8 @@ function deepClone(obj) {
 
 function loadSystemConfigurations() {
     try {
-        const raw = localStorage.getItem('systemConfigurations');
-        if (!raw) return null;
-        return JSON.parse(raw);
+        if (typeof localStorage === 'undefined') return null;
+        return loadSystemConfigurationsFromTableConfig();
     } catch {
         return null;
     }
@@ -2071,9 +2076,8 @@ function pickPreservedObjectThickness(cfg, systemConfig) {
     // If this is the active config, fall back to current UI table snapshot.
     try {
         if (systemConfig && String(systemConfig.activeConfigId) === String(cfg?.id)) {
-            const raw = localStorage.getItem('OpticalSystemTableData');
-            if (raw) {
-                const rows = JSON.parse(raw);
+            const rows = tryLoadPersistedOpticalSystemTableData();
+            if (rows) {
                 const v = rows?.[0]?.thickness;
                 const s = String(v ?? '').trim();
                 if (s !== '') return v;
@@ -2092,11 +2096,8 @@ function pickLegacyRowsForSemidia(cfg, systemConfig) {
     // If this is the active config, fall back to current UI table snapshot.
     try {
         if (systemConfig && String(systemConfig.activeConfigId) === String(cfg?.id)) {
-            const raw = localStorage.getItem('OpticalSystemTableData');
-            if (raw) {
-                const rows = JSON.parse(raw);
-                if (Array.isArray(rows) && rows.length) return rows;
-            }
+            const rows = tryLoadPersistedOpticalSystemTableData();
+            if (Array.isArray(rows) && rows.length) return rows;
         }
     } catch (_) {}
 
@@ -2128,7 +2129,11 @@ function preserveLegacySemidiaIntoExpandedRows(expandedRows, legacyRows) {
 }
 
 async function saveAndRefreshUI(systemConfig) {
-    localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
+    try {
+        if (typeof localStorage !== 'undefined') {
+            saveSystemConfigurationsFromTableConfig(systemConfig);
+        }
+    } catch (_) {}
 
     const pickUIWindow = () => {
         try {

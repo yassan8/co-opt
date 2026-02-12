@@ -12,11 +12,12 @@
  */
 
 import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../core/ray-tracing.ts';
+import { setWindowDebugBagValue } from '../../utils/window-debug-bag.ts';
 
 // Runtime build stamp (for cache/stale-module diagnostics)
 const GEN_RAY_CROSS_INFINITE_BUILD = '2025-12-31a';
 if (typeof window !== 'undefined') {
-    window.__GEN_RAY_CROSS_INFINITE_BUILD = GEN_RAY_CROSS_INFINITE_BUILD;
+    setWindowDebugBagValue('buildStamps', 'genRayCrossInfinite', GEN_RAY_CROSS_INFINITE_BUILD);
 }
 
 function isCoordTransRow(row) {
@@ -34,6 +35,15 @@ function isStopRow(row) {
     const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? row?.Type ?? '';
     const t = String(raw ?? '').trim().toLowerCase();
     return t === 'stop' || t === 'sto';
+}
+
+function setLastChiefRayResult(result) {
+    try {
+        if (typeof window === 'undefined') return;
+        (window as any)['lastChiefRayResult'] = result;
+    } catch (_) {
+        // ignore
+    }
 }
 
 // traceRay の rayPath は Object 行 / Coord Trans 行を交点として記録しない。
@@ -1049,13 +1059,13 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                         console.error(`❌ [Fallback Test] Ray tracing exception: ${err.message}`);
                     }
                     if (typeof window !== 'undefined') {
-                        window.lastChiefRayResult = {
+                        setLastChiefRayResult({
                             direction: direction,
                             optimalX: guessX,
                             optimalY: guessY,
                             error: 999.999,
                             method: 'fallback-guess'
-                        };
+                        });
                         outputChiefRayConvergenceToSystemData(
                             objectIndex + 1,
                             objectAngle.x || 0,
@@ -1066,13 +1076,13 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                     }
                 } else {
                     if (typeof window !== 'undefined') {
-                        window.lastChiefRayResult = {
+                        setLastChiefRayResult({
                             direction: direction,
                             optimalX: NaN,
                             optimalY: NaN,
                             error: 999.999,
                             method: 'failed-stop-unreachable'
-                        };
+                        });
                         outputChiefRayConvergenceToSystemData(
                             objectIndex + 1,
                             objectAngle.x || 0,
@@ -1085,13 +1095,13 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                 }
             } catch (_) {
                 if (typeof window !== 'undefined') {
-                    window.lastChiefRayResult = {
+                    setLastChiefRayResult({
                         direction: direction,
                         optimalX: NaN,
                         optimalY: NaN,
                         error: 999.999,
                         method: 'failed-stop-unreachable'
-                    };
+                    });
                     outputChiefRayConvergenceToSystemData(
                         objectIndex + 1,
                         objectAngle.x || 0,
@@ -1114,13 +1124,13 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                     Math.pow(chiefRayOrigin.x - stopSurfaceInfo.center.x, 2) +
                     Math.pow(chiefRayOrigin.y - stopSurfaceInfo.center.y, 2)
                 );
-                window.lastChiefRayResult = {
+                setLastChiefRayResult({
                     direction: direction,
                     optimalX: chiefRayOrigin.x,
                     optimalY: chiefRayOrigin.y,
                     error: estimatedError,
                     method: 'geometric-approximation'
-                };
+                });
             }
             
             if (window.lastChiefRayResult) {
@@ -1885,13 +1895,13 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             
             // System Data出力用の情報を保存（グローバル変数として保存）
             if (typeof window !== 'undefined') {
-                window.lastChiefRayResult = {
+                setLastChiefRayResult({
                     direction: direction,
                     optimalX: result.x,
                     optimalY: result.y,
                     error: totalError,
                     method: 'grid-brent-hybrid'
-                };
+                });
             }
         }
         

@@ -3,6 +3,8 @@
  * WASMの問題を回避してJavaScript最適化の効果を直接測定
  */
 
+import { getWASMSystem } from '../core/wasm-service.ts';
+
 // 標準JavaScript版非球面SAG計算
 function standardAsphericSag(r, c, k, a4 = 0, a6 = 0, a8 = 0, a10 = 0) {
     if (r === 0) return 0;
@@ -276,24 +278,19 @@ function runRealWorldSimulation() {
 
 // グローバル関数として公開
 if (typeof window !== 'undefined') {
-    window.runDirectBenchmark = runDirectBenchmark;
-    window.runRealWorldSimulation = runRealWorldSimulation;
-    window.standardAsphericSag = standardAsphericSag;
-    window.optimizedAsphericSag = optimizedAsphericSag;
-    window.typedArrayAsphericSag = typedArrayAsphericSag;
+    window['runDirectBenchmark'] = runDirectBenchmark;
+    window['runRealWorldSimulation'] = runRealWorldSimulation;
+    window['standardAsphericSag'] = standardAsphericSag;
+    window['typedArrayAsphericSag'] = typedArrayAsphericSag;
     
     // WASM比較機能
-    window.runWASMComparison = async function() {
+    window['runWASMComparison'] = async function() {
         console.log('🤖 === WASM vs JavaScript Ultimate Comparison ===');
         
         // WASM system check
         let wasmSystem = null;
         try {
-            if (typeof getWASMSystem === 'function') {
-                wasmSystem = getWASMSystem();
-            } else if (typeof window.getWASMSystem === 'function') {
-                wasmSystem = window.getWASMSystem();
-            }
+            wasmSystem = getWASMSystem();
             
             if (!wasmSystem || !wasmSystem.isWASMReady) {
                 console.log('⚠️ WASM system not available, skipping WASM comparison');

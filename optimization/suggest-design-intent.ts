@@ -7,6 +7,9 @@
  */
 
 import { expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
+import { loadSystemConfigurations, saveSystemConfigurations } from '../data/table-configuration.ts';
+import { requestRefreshBlockInspector } from '../core/window-facade.ts';
+import { getWindowDebugBagValue, setWindowDebugBagValue } from '../utils/window-debug-bag.ts';
 
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -24,9 +27,26 @@ function nowString() {
   }
 }
 
+function setLastSuggestState(value) {
+  setWindowDebugBagValue('suggestDesignIntent', 'lastSuggest', value && typeof value === 'object' ? value : null);
+}
+
+function getLastSuggestState() {
+  const fromBag = getWindowDebugBagValue('suggestDesignIntent', 'lastSuggest', null);
+  if (fromBag && typeof fromBag === 'object') return fromBag;
+  try {
+    if (typeof window === 'undefined') return null;
+    const legacy = (window as any).__cooptLastSuggest;
+    return (legacy && typeof legacy === 'object') ? legacy : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function getActiveConfig() {
   try {
-    const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations'));
+    if (typeof localStorage === 'undefined') return { systemConfig: null, cfg: null };
+    const systemConfig = loadSystemConfigurations();
     const activeId = systemConfig?.activeConfigId;
     const cfg = systemConfig?.configurations?.find(c => c && c.id === activeId) || systemConfig?.configurations?.[0];
     return { systemConfig, cfg };
@@ -109,7 +129,7 @@ async function applyBlocksToActiveConfig(recommendedBlocks) {
   }
 
   try {
-    localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
+    saveSystemConfigurations(systemConfig);
   } catch {
     return { ok: false, reason: 'localStorage への保存に失敗しました。' };
   }
@@ -124,7 +144,7 @@ async function applyBlocksToActiveConfig(recommendedBlocks) {
     }
   } catch (_) {}
   try {
-    if (typeof window.refreshBlockInspector === 'function') window.refreshBlockInspector();
+    requestRefreshBlockInspector();
   } catch (_) {}
   try {
     if (window.meritFunctionEditor && typeof window.meritFunctionEditor.calculateMerit === 'function') {
@@ -306,10 +326,16 @@ function evaluateCandidateByOverride({ configId, blocks }) {
   const editor = (typeof window !== 'undefined') ? window.meritFunctionEditor : null;
   if (!editor) return { ok: false, reason: 'meritFunctionEditor is not available.' };
 
+  const hadOverrideProp = (typeof window !== 'undefined')
+    ? Object.prototype.hasOwnProperty.call(window, '__cooptBlocksOverride')
+    : false;
   const prev = (typeof window !== 'undefined') ? window.__cooptBlocksOverride : null;
-  const map = (prev && typeof prev === 'object') ? { ...prev } : {};
+  const prevSnapshot = (prev && typeof prev === 'object') ? { ...prev } : null;
+
+  const map = (prev && typeof prev === 'object')
+    ? prev
+    : ((typeof window !== 'undefined') ? (window.__cooptBlocksOverride ||= {}) : {});
   map[String(configId)] = blocks;
-  window.__cooptBlocksOverride = map;
 
   try {
     if (typeof editor.calculateMeritBreakdownOnly === 'function') {
@@ -325,8 +351,14 @@ function evaluateCandidateByOverride({ configId, blocks }) {
     return { ok: false, reason: 'No merit evaluator available.' };
   } finally {
     if (typeof window !== 'undefined') {
-      if (prev && typeof prev === 'object') {
-        window.__cooptBlocksOverride = prev;
+      if (hadOverrideProp && prevSnapshot && typeof prevSnapshot === 'object') {
+        const cur = (window.__cooptBlocksOverride && typeof window.__cooptBlocksOverride === 'object')
+          ? window.__cooptBlocksOverride
+          : (window.__cooptBlocksOverride ||= {});
+        for (const k of Object.keys(cur)) {
+          try { delete cur[k]; } catch (_) {}
+        }
+        Object.assign(cur, prevSnapshot);
       } else {
         try { delete window.__cooptBlocksOverride; } catch (_) {}
       }
@@ -721,7 +753,7 @@ export function runSuggestDesignIntent(options = {}) {
 
   // Store last suggestion for one-click apply (non-persistent until user applies).
   try {
-    window.__cooptLastSuggest = {
+    setLastSuggestState({
       version: 1,
       createdAt: Date.now(),
       configId: String(configId),
@@ -731,7 +763,7 @@ export function runSuggestDesignIntent(options = {}) {
         blocks: deepClone(best.blocks)
       },
       candidates: results.map(r => ({ idx: r.idx, title: r.title, merit: r.merit }))
-    };
+    });
   } catch (_) {}
 
   // Output
@@ -786,10 +818,10 @@ export function runSuggestDesignIntent(options = {}) {
 
 // Register global hook for the existing Suggest button
 if (typeof window !== 'undefined') {
-  window.SuggestDesignIntent = {
+  window['SuggestDesignIntent'] = {
     run: runSuggestDesignIntent,
     applyLastRecommendation: async () => {
-      const last = window.__cooptLastSuggest;
+      const last = getLastSuggestState();
       const blocks = last?.recommendation?.blocks;
       if (!Array.isArray(blocks) || blocks.length === 0) {
         return { ok: false, reason: 'Suggestion の Recommendation がありません。先に Suggest を実行してください。' };

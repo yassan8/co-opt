@@ -20,6 +20,7 @@ import { generateInfiniteSystemCrossBeam } from '../../raytracing/generation/gen
 import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../../raytracing/core/ray-tracing.ts';
 import { getObjectRows } from '../../utils/data-utils.ts';
 import { calculateBackFocalLength, getRefractiveIndex } from '../../raytracing/core/ray-paraxial.ts';
+import { setWindowDebugBagValue } from '../../utils/window-debug-bag.ts';
 
 function applyRotationMatrixToVector(matrix, v) {
     if (!matrix) return { x: v.x, y: v.y, z: v.z };
@@ -787,7 +788,7 @@ export function calculateLongitudinalAberration(
         wavelengths = getAllWavelengths();
     }
     // デバッグカウンタをリセット
-    window._sphericalAberDebugCount = 0;
+    setWindowDebugBagValue('longitudinalAberration', 'sphericalAberDebugCount', 0);
     
     console.log('📊 球面収差計算開始（軸上光線、各波長）');
     console.log(`📊 波長: ${wavelengths.map(w => w.toFixed(4)).join(', ')} μm`);

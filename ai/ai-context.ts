@@ -7,12 +7,14 @@
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.ts';
 import { calculateSeidelCoefficients } from '../evaluation/aberrations/seidel-coefficients.ts';
 import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
+import { loadSystemConfigurations } from '../data/table-configuration.ts';
+import { loadLastWavefrontSnapshot, loadLastPsfMeta, loadLastPsfError } from '../evaluation/wavefront/wavefront-snapshot-storage.ts';
+import { getLastWavefrontMap, getLastWavefrontMeta } from '../evaluation/wavefront/last-wavefront-runtime.ts';
 
 function loadSystemConfigurationsRaw() {
     try {
-        const json = localStorage.getItem('systemConfigurations');
-        if (!json) return null;
-        return JSON.parse(json);
+        if (typeof localStorage === 'undefined') return null;
+        return loadSystemConfigurations();
     } catch {
         return null;
     }
@@ -227,8 +229,8 @@ export async function getSystemContext() {
         const out = {};
 
         try {
-            const wfMeta = g.__lastWavefrontMeta || null;
-            const wfMap = g.__lastWavefrontMap || null;
+            const wfMeta = getLastWavefrontMeta(g) || null;
+            const wfMap = getLastWavefrontMap(g) || null;
 
             if (wfMeta || wfMap) {
                 const wfError = wfMap && wfMap.error ? {
@@ -316,30 +318,27 @@ export async function getSystemContext() {
             if (typeof localStorage !== 'undefined') {
                 // Fallback: Wavefront/OPD might be rendered via popup or other window context
                 try {
-                    const wfSnapJson = localStorage.getItem('lastWavefrontSnapshot');
-                    if (wfSnapJson) {
-                        const snap = JSON.parse(wfSnapJson);
-                        if (snap && typeof snap === 'object') {
-                            if (!out.wavefront && snap.wavefront && typeof snap.wavefront === 'object') {
-                                const w = snap.wavefront;
-                                out.wavefront = {
-                                    meta: w.meta ?? null,
-                                    hasError: !!w.hasError,
-                                    error: w.error ?? null,
-                                    statistics: w.statistics ?? null,
-                                    from: snap.from ?? 'localStorage:lastWavefrontSnapshot'
-                                };
-                            }
-                            if (!out.opdLastRay && snap.opdLastRay && typeof snap.opdLastRay === 'object') {
-                                out.opdLastRay = {
-                                    success: snap.opdLastRay.success ?? null,
-                                    error: snap.opdLastRay.error ?? null,
-                                    fieldKey: snap.opdLastRay.fieldKey ?? null,
-                                    pupilCoord: snap.opdLastRay.pupilCoord ?? null,
-                                    stopHit: snap.opdLastRay.stopHit ?? null,
-                                    from: snap.from ?? 'localStorage:lastWavefrontSnapshot'
-                                };
-                            }
+                    const snap = loadLastWavefrontSnapshot();
+                    if (snap && typeof snap === 'object') {
+                        if (!out.wavefront && snap.wavefront && typeof snap.wavefront === 'object') {
+                            const w = snap.wavefront;
+                            out.wavefront = {
+                                meta: w.meta ?? null,
+                                hasError: !!w.hasError,
+                                error: w.error ?? null,
+                                statistics: w.statistics ?? null,
+                                from: snap.from ?? 'localStorage:lastWavefrontSnapshot'
+                            };
+                        }
+                        if (!out.opdLastRay && snap.opdLastRay && typeof snap.opdLastRay === 'object') {
+                            out.opdLastRay = {
+                                success: snap.opdLastRay.success ?? null,
+                                error: snap.opdLastRay.error ?? null,
+                                fieldKey: snap.opdLastRay.fieldKey ?? null,
+                                pupilCoord: snap.opdLastRay.pupilCoord ?? null,
+                                stopHit: snap.opdLastRay.stopHit ?? null,
+                                from: snap.from ?? 'localStorage:lastWavefrontSnapshot'
+                            };
                         }
                     }
                 } catch (_) {
@@ -347,45 +346,39 @@ export async function getSystemContext() {
                 }
 
                 if (!out.psfLastResult) {
-                    const metaJson = localStorage.getItem('lastPsfMeta');
-                    if (metaJson) {
-                        const meta = JSON.parse(metaJson);
-                        if (meta && typeof meta === 'object') {
-                            out.psfLastResult = {
-                                wavelength: meta.wavelength ?? null,
-                                gridSize: meta.gridSize ?? null,
-                                calculationTime: meta.calculationTime ?? null,
-                                hasMetrics: !!meta.hasMetrics,
-                                metricKeys: Array.isArray(meta.metricKeys) ? meta.metricKeys.slice(0, 30) : [],
-                                psfMethod: meta.psfMethod ?? null,
-                                performanceMode: meta.performanceMode ?? null,
-                                zernikeFitSamplingSize: meta.zernikeFitSamplingSize ?? null,
-                                objectIndex: meta.objectIndex ?? null,
-                                psfSummary: meta.psfSummary ?? null,
-                                at: meta.at ?? null,
-                                from: 'localStorage:lastPsfMeta'
-                            };
-                        }
+                    const meta = loadLastPsfMeta();
+                    if (meta && typeof meta === 'object') {
+                        out.psfLastResult = {
+                            wavelength: meta.wavelength ?? null,
+                            gridSize: meta.gridSize ?? null,
+                            calculationTime: meta.calculationTime ?? null,
+                            hasMetrics: !!meta.hasMetrics,
+                            metricKeys: Array.isArray(meta.metricKeys) ? meta.metricKeys.slice(0, 30) : [],
+                            psfMethod: meta.psfMethod ?? null,
+                            performanceMode: meta.performanceMode ?? null,
+                            zernikeFitSamplingSize: meta.zernikeFitSamplingSize ?? null,
+                            objectIndex: meta.objectIndex ?? null,
+                            psfSummary: meta.psfSummary ?? null,
+                            at: meta.at ?? null,
+                            from: 'localStorage:lastPsfMeta'
+                        };
                     }
                 }
 
                 if (!out.psfError) {
-                    const errJson = localStorage.getItem('lastPsfError');
-                    if (errJson) {
-                        const err = JSON.parse(errJson);
-                        if (err && typeof err === 'object') {
-                            out.psfError = {
-                                at: err.at ?? null,
-                                code: err.code ?? null,
-                                message: truncate(err.message ?? err.rawMessage ?? 'PSF error', 700),
-                                hint: truncate(err.hint ?? '', 300) || null,
-                                wavelength: err.wavelength ?? null,
-                                gridSize: err.gridSize ?? null,
-                                objectIndex: err.objectIndex ?? null,
-                                debugMode: err.debugMode ?? null,
-                                from: 'localStorage:lastPsfError'
-                            };
-                        }
+                    const err = loadLastPsfError();
+                    if (err && typeof err === 'object') {
+                        out.psfError = {
+                            at: err.at ?? null,
+                            code: err.code ?? null,
+                            message: truncate(err.message ?? err.rawMessage ?? 'PSF error', 700),
+                            hint: truncate(err.hint ?? '', 300) || null,
+                            wavelength: err.wavelength ?? null,
+                            gridSize: err.gridSize ?? null,
+                            objectIndex: err.objectIndex ?? null,
+                            debugMode: err.debugMode ?? null,
+                            from: 'localStorage:lastPsfError'
+                        };
                     }
                 }
             }

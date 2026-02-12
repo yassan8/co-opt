@@ -1,6 +1,7 @@
 import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex, getGlassDataWithSellmeier, getAllGlassDatabases, getPrimaryWavelength } from './glass.ts';
 import { loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables, getActiveConfiguration } from './table-configuration.ts';
 import { configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows, deriveBlocksFromLegacyOpticalSystemRows } from './block-schema.ts';
+import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
 
 function shouldDisableExpandedOpticalSystemUI() {
   try {
@@ -106,6 +107,50 @@ function runWithCellEditSuppressed(fn) {
   } catch (_) {
     return fn();
   }
+}
+
+function getGlassPropertiesUpdatesMap() {
+  const existing = (window as any)['glassPropertiesUpdates'];
+  if (existing instanceof Map) return existing;
+  const created = new Map();
+  (window as any)['glassPropertiesUpdates'] = created;
+  return created;
+}
+
+let cachedLocalCoordsState = null;
+let showLocalCoordsState = false;
+
+function setCachedLocalCoordsState(value) {
+  cachedLocalCoordsState = value ?? null;
+  try {
+    if (typeof window !== 'undefined') {
+      (window as any)['_cachedLocalCoords'] = cachedLocalCoordsState;
+    }
+  } catch (_) {}
+}
+
+function getCachedLocalCoordsState() {
+  if (cachedLocalCoordsState) return cachedLocalCoordsState;
+  try {
+    if (typeof window === 'undefined') return null;
+    return (window as any)['_cachedLocalCoords'] ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function setShowLocalCoordsState(value) {
+  showLocalCoordsState = value === true;
+  try {
+    if (typeof window !== 'undefined') {
+      (window as any)['_showLocalCoords'] = showLocalCoordsState;
+    }
+  } catch (_) {}
+}
+
+function clearLocalCoordsState() {
+  setCachedLocalCoordsState(null);
+  setShowLocalCoordsState(false);
 }
 
 function makePendingSurfaceEditKey(surfaceId, field) {
@@ -287,6 +332,20 @@ export function loadTableData() {
   }
 
   return initialTableData;
+}
+
+// localStorage に実データがある場合のみ読み込む（無い場合は null）
+// Migration/初期化判定に使う。デフォルト値 (initialTableData) を返さない点が重要。
+export function tryLoadPersistedTableData() {
+  try {
+    if (typeof localStorage === 'undefined' || !localStorage) return null;
+    const json = localStorage.getItem(STORAGE_KEY);
+    if (!json) return null;
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 // テーブルデータをローカルストレージに保存
@@ -596,7 +655,7 @@ let tabulatorOptions = {
       formatter: function(cell) {
         try {
           const rowData = cell.getRow().getData();
-          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
+          const localData = getCachedLocalCoordsState();
           
           // Debug every call to see if formatter is being invoked
           console.log(`[Local X Formatter] Row ${rowData.id}:`, {
@@ -715,7 +774,7 @@ let tabulatorOptions = {
       formatter: function(cell) {
         try {
           const rowData = cell.getRow().getData();
-          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
+          const localData = getCachedLocalCoordsState();
           if (!localData || !localData.surfaces) return '-';
           const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
           if (!surfData) return '-';
@@ -733,7 +792,7 @@ let tabulatorOptions = {
       formatter: function(cell) {
         try {
           const rowData = cell.getRow().getData();
-          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
+          const localData = getCachedLocalCoordsState();
           if (!localData || !localData.surfaces) return '-';
           const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
           if (!surfData) return '-';
@@ -759,7 +818,7 @@ let tabulatorOptions = {
       formatter: function(cell) {
         try {
           const rowData = cell.getRow().getData();
-          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
+          const localData = getCachedLocalCoordsState();
           if (!localData || !localData.surfaces) return '-';
           const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
           if (!surfData) return '-';
@@ -785,7 +844,7 @@ let tabulatorOptions = {
       formatter: function(cell) {
         try {
           const rowData = cell.getRow().getData();
-          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
+          const localData = getCachedLocalCoordsState();
           if (!localData || !localData.surfaces) return '-';
           const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
           if (!surfData) return '-';
@@ -811,7 +870,7 @@ let tabulatorOptions = {
       formatter: function(cell) {
         try {
           const rowData = cell.getRow().getData();
-          const localData = (typeof window !== 'undefined' && window._cachedLocalCoords) ? window._cachedLocalCoords : null;
+          const localData = getCachedLocalCoordsState();
           if (!localData || !localData.surfaces) return '-';
           const surfData = localData.surfaces[rowData.id] || localData.surfaces[String(rowData.id)];
           if (!surfData) return '-';
@@ -945,7 +1004,7 @@ let tabulatorOptions = {
 
   try {
     // Keep the historical global reference stable.
-    if (typeof window !== 'undefined') window.tableOpticalSystem = tableOpticalSystem;
+    if (typeof window !== 'undefined') window['tableOpticalSystem'] = tableOpticalSystem;
   } catch (_) {}
 
   // console.log(tableOpticalSystem); // Tabulatorインスタンスが出力されるか確認
@@ -1165,7 +1224,7 @@ try {
 
 // グローバルに公開（Node実行ではwindowが無いのでガード）
 if (typeof window !== 'undefined') {
-  window.calculateImageSemiDiaFromChiefRays = calculateImageSemiDiaFromChiefRays;
+  window['calculateImageSemiDiaFromChiefRays'] = calculateImageSemiDiaFromChiefRays;
 }
 
 /**
@@ -1400,10 +1459,7 @@ tableOpticalSystem.on("cellEdited", function(cell){
 
     // Clear local coordinate cache on data change
     try {
-      if (typeof window !== 'undefined') {
-        window._cachedLocalCoords = null;
-        window._showLocalCoords = false;
-      }
+      clearLocalCoordsState();
     } catch (_) {}
 
     // System Constraints (BFL): update on edits (read-only; no table mutations).
@@ -1626,9 +1682,7 @@ tableOpticalSystem.on("cellEdited", function(cell){
         try {
           setTimeout(() => {
             try {
-              if (typeof window !== 'undefined' && typeof window.updateSurfaceNumberSelect === 'function') {
-                window.updateSurfaceNumberSelect();
-              }
+              requestUpdateSurfaceNumberSelect();
             } catch (_) {}
           }, 0);
         } catch (_) {}
@@ -1796,11 +1850,8 @@ function autoSetGlassByProperties(rowIndex, field, value) {
                 }
                 
                 // グローバルな更新状態を記録
-                if (!window.glassPropertiesUpdates) {
-                    window.glassPropertiesUpdates = new Map();
-                }
-                
-                window.glassPropertiesUpdates.set(rowIndex, {
+                const glassPropertiesUpdates = getGlassPropertiesUpdatesMap();
+                glassPropertiesUpdates.set(rowIndex, {
                     material: closestGlass.name,
                     rindex: calculatedRI,
                     abbe: closestGlass.vd
@@ -1843,26 +1894,23 @@ function autoSetGlassByProperties(rowIndex, field, value) {
 */
 
 // グローバルに公開(テスト用)
-// Note: findClosestGlassByProperties と autoSetGlassByProperties は無効化されました
+// Note: nearest-glass helper functions are disabled in this path
 if (typeof window !== 'undefined') {
-  // window.findClosestGlassByProperties = findClosestGlassByProperties;
-  // window.autoSetGlassByProperties = autoSetGlassByProperties;
-  window.updateOpticalPropertiesFromMaterial = updateOpticalPropertiesFromMaterial;
-  window.updateAllRefractiveIndices = updateAllRefractiveIndices;
+  // findClosestGlassByProperties global export is intentionally removed
+  // legacy global helper export was intentionally removed
+  window['updateOpticalPropertiesFromMaterial'] = updateOpticalPropertiesFromMaterial;
+  window['updateAllRefractiveIndices'] = updateAllRefractiveIndices;
   
   // Material名検証機能をテスト用に公開
   if (typeof validateMaterialNames === 'function') {
-    window.validateMaterialNames = validateMaterialNames;
+    window['validateMaterialNames'] = validateMaterialNames;
   }
   if (typeof showSimilarGlassNamesDialog === 'function') {
-    window.showSimilarGlassNamesDialog = showSimilarGlassNamesDialog;
-  }
-  if (typeof findSimilarGlassNames === 'function') {
-    window.findSimilarGlassNames = findSimilarGlassNames;
+    window['showSimilarGlassNamesDialog'] = showSimilarGlassNamesDialog;
   }
   
   // テスト用の手動検証関数
-  window.testMaterialValidation = function() {
+  window['testMaterialValidation'] = function() {
     console.log('🧪 Manual material validation test');
     const data = tableOpticalSystem.getData();
     if (typeof validateMaterialNames === 'function') {
@@ -2187,9 +2235,7 @@ setTimeout(() => {
           try {
             setTimeout(() => {
               try {
-                if (typeof window !== 'undefined' && typeof window.updateSurfaceNumberSelect === 'function') {
-                  window.updateSurfaceNumberSelect();
-                }
+                requestUpdateSurfaceNumberSelect();
               } catch (_) {}
             }, 0);
           } catch (_) {}
@@ -2237,9 +2283,7 @@ setTimeout(() => {
           try {
             setTimeout(() => {
               try {
-                if (typeof window !== 'undefined' && typeof window.updateSurfaceNumberSelect === 'function') {
-                  window.updateSurfaceNumberSelect();
-                }
+                requestUpdateSurfaceNumberSelect();
               } catch (_) {}
             }, 0);
           } catch (_) {}
@@ -2577,11 +2621,7 @@ async function calculateImageSemiDiaFromChiefRays() {
                       imgBlock.parameters.semidia = maxHeight;
                       if (!activeCfg.metadata || typeof activeCfg.metadata !== 'object') activeCfg.metadata = {};
                       activeCfg.metadata.modified = new Date().toISOString();
-                      if (typeof saveSystemConfigurations === 'function') {
-                        saveSystemConfigurations(systemConfig);
-                      } else if (typeof localStorage !== 'undefined') {
-                        localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
-                      }
+                      saveSystemConfigurations(systemConfig);
                     }
                   }
                 }
@@ -2735,11 +2775,8 @@ function autoSetGlassByProperties(rowIndex, field, value) {
                 }
                 
                 // グローバルな更新状態を記録
-                if (!window.glassPropertiesUpdates) {
-                    window.glassPropertiesUpdates = new Map();
-                }
-                
-                window.glassPropertiesUpdates.set(rowIndex, {
+                const glassPropertiesUpdates = getGlassPropertiesUpdatesMap();
+                glassPropertiesUpdates.set(rowIndex, {
                     material: closestGlass.name,
                     rindex: calculatedRI,
                     abbe: closestGlass.vd

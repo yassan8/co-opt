@@ -11,22 +11,20 @@ import {
   handleRender3D,
   handleAnalysisSelect
 } from '../../../ui/toolbar-handlers';
+import { getLoadedFileName, getLoadedFileWarn } from '../../../ui/loaded-file-storage';
+import { getToolbarCollapsed, setToolbarCollapsed } from '../../../ui/toolbar-collapsed-storage';
 
 export default function MainToolbar() {
   console.log('[React] MainToolbar rendering');
 
   const resolveToolbarCollapsed = () => {
-    try {
-      return localStorage.getItem('toolbarCollapsed') === '1';
-    } catch (_) {
-      return false;
-    }
+    return getToolbarCollapsed();
   };
 
   const resolveLoadedFileName = () => {
     try {
-      const name = localStorage.getItem('loadedFileName');
-      const warn = localStorage.getItem('loadedFileWarn');
+      const name = getLoadedFileName();
+      const warn = getLoadedFileWarn();
       if (name) {
         const suffix = warn ? ' (surfaces only)' : '';
         return {
@@ -57,11 +55,7 @@ export default function MainToolbar() {
   }, []);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('toolbarCollapsed', isToolbarCollapsed ? '1' : '0');
-    } catch (_) {
-      // ignore
-    }
+    setToolbarCollapsed(isToolbarCollapsed);
   }, [isToolbarCollapsed]);
 
   const handleUndoClick = () => {

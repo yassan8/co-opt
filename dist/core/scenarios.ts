@@ -13,6 +13,8 @@
  */
 
 import { expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
+import { loadSystemConfigurations, saveSystemConfigurations } from '../data/table-configuration.ts';
+import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
 
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -29,9 +31,8 @@ function cloneJson(v) {
 
 function loadSystemConfigurationsRaw() {
   try {
-    const json = localStorage.getItem('systemConfigurations');
-    if (!json) return null;
-    return JSON.parse(json);
+    if (typeof localStorage === 'undefined') return null;
+    return loadSystemConfigurations();
   } catch {
     return null;
   }
@@ -39,7 +40,8 @@ function loadSystemConfigurationsRaw() {
 
 function saveSystemConfigurationsRaw(systemConfig) {
   try {
-    localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
+    if (typeof localStorage === 'undefined') return false;
+    saveSystemConfigurations(systemConfig);
     return true;
   } catch {
     return false;
@@ -142,9 +144,7 @@ function pickLegacyRowsForSemidia(activeCfg) {
 
   // Fallback: current UI table snapshot (active config only).
   try {
-    const raw = localStorage.getItem('OpticalSystemTableData');
-    if (!raw) return null;
-    const rows = JSON.parse(raw);
+    const rows = tryLoadPersistedOpticalSystemTableData();
     return Array.isArray(rows) ? rows : null;
   } catch (_) {
     return null;
@@ -305,7 +305,7 @@ export function rebuildOpticalSystemFromActiveScenario() {
 
 // Global entrypoint
 if (typeof window !== 'undefined') {
-  window.Scenarios = {
+  window['Scenarios'] = {
     list: listScenarios,
     add: addScenario,
     setActive: setActiveScenario,

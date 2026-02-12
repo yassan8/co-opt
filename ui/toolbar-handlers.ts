@@ -4,6 +4,8 @@
  */
 
 import { BLOCK_SCHEMA_VERSION } from '../compat/block-schema.ts';
+import { loadSystemConfigurations, saveSystemConfigurations, clearAllPersistedState } from '../data/table-configuration.ts';
+import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 
 declare global {
   interface Window {
@@ -17,7 +19,7 @@ export function handleNewFile(): void {
   
   try {
     console.log('🔵 [New File] Clearing localStorage and creating default configuration...');
-    localStorage.clear();
+    clearAllPersistedState();
     
     const defaultConfig = {
       id: 1,
@@ -79,7 +81,7 @@ export function handleNewFile(): void {
       optimizationRules: {}
     };
     
-    localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
+    saveSystemConfigurations(systemConfig);
     console.log('✅ [New File] Default configuration created, reloading...');
     location.reload();
   } catch (err) {
@@ -89,8 +91,14 @@ export function handleNewFile(): void {
 }
 
 function getSanitizedConfigurationsForExport(): any {
-  const systemConfigurations = localStorage.getItem('systemConfigurations');
-  const parsedConfig = systemConfigurations ? JSON.parse(systemConfigurations) : null;
+  const parsedConfig = (() => {
+    try {
+      if (typeof localStorage === 'undefined') return null;
+      return loadSystemConfigurations();
+    } catch {
+      return null;
+    }
+  })();
   
   const sanitizedConfig = parsedConfig ? JSON.parse(JSON.stringify(parsedConfig)) : null;
   if (sanitizedConfig) {
@@ -158,7 +166,7 @@ export function handleSave(): void {
     if (document.activeElement) (document.activeElement as HTMLElement).blur();
 
     const allData = buildAllDataForExport();
-    const loadedFileName = localStorage.getItem('loadedFileName');
+    const loadedFileName = getLoadedFileName();
     let defaultName = 'optical_system_data';
     
     if (loadedFileName) {
@@ -182,7 +190,7 @@ export function handleSave(): void {
     a.click();
     URL.revokeObjectURL(url);
     
-    localStorage.setItem('loadedFileName', filename);
+    setLoadedFileName(filename);
     try {
       window.dispatchEvent(new CustomEvent('coopt:loaded-file-updated'));
     } catch (_) {}
@@ -253,7 +261,7 @@ export function handleClearStorage(): void {
   )) return;
   
   try {
-    localStorage.clear();
+    clearAllPersistedState();
     console.log('✅ localStorage cleared');
     alert('Storage cleared. Page will reload.');
     location.reload();

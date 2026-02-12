@@ -12,7 +12,6 @@ if (!globalThis.localStorage || typeof globalThis.localStorage.getItem !== 'func
     clear: () => { store.clear(); },
   };
   globalThis.localStorage = ls;
-  try { globalThis.window.localStorage = ls; } catch (_) {}
 }
 
 // Load Longitudinal Aberration module

@@ -8,6 +8,11 @@ console.log('[Requirements] Module loading...');
 
 import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.ts';
 import { getOpticalSystemRows } from '../../utils/data-utils.ts';
+import { loadSystemConfigurations, saveSystemConfigurations } from '../../data/table-configuration.ts';
+import { loadTableData as loadSourceTableData } from '../../data/table-source.ts';
+import { loadTableData as loadObjectTableData } from '../../data/table-object.ts';
+import { loadTableData as loadSystemRequirementsTableData, saveTableData as saveSystemRequirementsTableData } from '../../data/table-system-requirements.ts';
+import { loadSpotDiagramSettingsByConfigId, saveSpotDiagramSettingsByConfigId } from '../spot-diagram-settings-storage.ts';
 
 console.log('[Requirements] Imports loaded');
 
@@ -20,6 +25,25 @@ declare global {
 
 // Safe window property accessors (avoiding 'as' to prevent compilation issues)
 const w: Record<string, any> = window;
+
+function tryLoadSystemConfigurations(): any {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    return loadSystemConfigurations();
+  } catch {
+    return null;
+  }
+}
+
+function trySaveSystemConfigurations(systemConfig: any): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    saveSystemConfigurations(systemConfig);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 console.log('[Requirements] Module initialized, setting up event listeners...');
 
@@ -140,8 +164,7 @@ class SystemRequirementsEditor {
         sys = null;
       }
       if (!sys) {
-        const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('systemConfigurations') : null;
-        sys = raw ? JSON.parse(raw) : null;
+        sys = tryLoadSystemConfigurations();
       }
       const configs = Array.isArray(sys?.configurations) ? sys.configurations : [];
       const activeId = (sys?.activeConfigId !== undefined && sys?.activeConfigId !== null)
@@ -1283,7 +1306,7 @@ class SystemRequirementsEditor {
       // Try to get from global source first
       let sourceRows: any = null;
       try {
-        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+        const systemConfig = tryLoadSystemConfigurations() || {};
         if (systemConfig && Array.isArray(systemConfig.source)) {
           sourceRows = systemConfig.source;
         }
@@ -1291,7 +1314,7 @@ class SystemRequirementsEditor {
       
       // Fallback to sourceTableData
       if (!sourceRows) {
-        sourceRows = JSON.parse(localStorage.getItem('sourceTableData') || '[]');
+        sourceRows = loadSourceTableData();
       }
       
       const options = [{ value: '', label: '(Primary)' }];
@@ -1317,7 +1340,7 @@ class SystemRequirementsEditor {
       // Try to get from active config first
       let objectRows: any = null;
       try {
-        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+        const systemConfig = tryLoadSystemConfigurations() || {};
         const activeId = systemConfig?.activeConfigId;
         const desiredId = (configId !== undefined && configId !== null && String(configId).trim() !== '')
           ? String(configId)
@@ -1329,7 +1352,7 @@ class SystemRequirementsEditor {
       
       // Fallback to objectTableData
       if (!objectRows) {
-        objectRows = JSON.parse(localStorage.getItem('objectTableData') || '[]');
+        objectRows = loadObjectTableData();
       }
       
       const options = [{ value: '', label: '(default 1)' }];
@@ -1628,8 +1651,7 @@ class SystemRequirementsEditor {
         return (Number.isFinite(wl) && wl > 0) ? wl : 0.5876;
       })();
 
-      const rawMap = localStorage.getItem('spotDiagramSettingsByConfigId');
-      const map = rawMap ? (JSON.parse(rawMap) || {}) : {};
+      const map = loadSpotDiagramSettingsByConfigId();
       const existing = map[cfgKey];
       if (existing && typeof existing === 'object') {
         // Keep user-chosen values if present; only fill missing fields.
@@ -1685,7 +1707,7 @@ class SystemRequirementsEditor {
           updatedAt: Date.now()
         };
       }
-      localStorage.setItem('spotDiagramSettingsByConfigId', JSON.stringify(map));
+      saveSpotDiagramSettingsByConfigId(map);
       
       // CRITICAL: Also update in-memory cache so merit evaluation uses the latest settings immediately.
       // This prevents CB insertion from causing stale surfaceId resolution during the next evaluation.
@@ -1734,8 +1756,10 @@ class SystemRequirementsEditor {
 
     let systemConfig: any = null;
     try {
-      systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
-    } catch (_) {}
+      systemConfig = tryLoadSystemConfigurations() || {};
+    } catch (_) {
+      systemConfig = {};
+    }
     const configs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
     console.log('[Requirements] Found configs:', configs.length);
     if (!systemConfig || configs.length === 0) {
@@ -1763,9 +1787,8 @@ class SystemRequirementsEditor {
     try {
       let globalSourceRows: any[] = [];
       try {
-        const json = localStorage.getItem('sourceTableData');
-        const parsed = json ? JSON.parse(json) : null;
-        globalSourceRows = Array.isArray(parsed) ? parsed : [];
+        const rows = loadSourceTableData();
+        globalSourceRows = Array.isArray(rows) ? rows : [];
       } catch (_) {}
       
       // CRITICAL: Get active config's optical rows first (CB-aware).
@@ -1890,8 +1913,7 @@ class SystemRequirementsEditor {
           ? String(systemConfig.activeConfigId)
           : '';
         if (activeId) {
-          const rawMap = localStorage.getItem('spotDiagramSettingsByConfigId');
-          const map = rawMap ? (JSON.parse(rawMap) || {}) : {};
+          const map = loadSpotDiagramSettingsByConfigId();
           const activeCfgSettings = map[activeId];
           
           try {
@@ -1929,16 +1951,13 @@ class SystemRequirementsEditor {
               }
             }
             
-            localStorage.setItem('spotDiagramSettingsByConfigId', JSON.stringify(map));
-            if (typeof window !== 'undefined') {
-              w.__cooptSpotDiagramSettingsByConfigId = map;
-            }
+            saveSpotDiagramSettingsByConfigId(map);
           }
         }
       } catch (_) {}
 
       try {
-        localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
+        trySaveSystemConfigurations(systemConfig);
         // CRITICAL: Also cache in memory so getOpticalSystemDataByConfigId
         // reads fresh data immediately after CB insertion (before localStorage sync).
         if (typeof window !== 'undefined') {
@@ -1967,7 +1986,7 @@ class SystemRequirementsEditor {
   createDefaultRequirementRow(): any {
     let activeConfigId = '';
     try {
-      const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+      const systemConfig = tryLoadSystemConfigurations() || {};
       if (systemConfig && systemConfig.activeConfigId) activeConfigId = String(systemConfig.activeConfigId);
     } catch (_) {}
 
@@ -1991,7 +2010,7 @@ class SystemRequirementsEditor {
 
   addRequirement(): void {
     // Get current data from localStorage to ensure consistency
-    const storageData = JSON.parse(localStorage.getItem('systemRequirementsData') || '[]');
+    const storageData = loadSystemRequirementsTableData();
     
     // Calculate insertIndex based on current selection in this.requirements
     const selectedIndex = this.requirements.findIndex((r: any) => r && String(r.id) === String(this._selectedId));
@@ -2035,7 +2054,7 @@ class SystemRequirementsEditor {
         });
         // Fallback if undo system is not available
         storageData.splice(insertIndex, 0, JSON.parse(JSON.stringify(newRow)));
-        localStorage.setItem('systemRequirementsData', JSON.stringify(storageData));
+        saveSystemRequirementsTableData(storageData);
         this.loadFromStorage();
         this.renderTable();
       }
@@ -2043,7 +2062,7 @@ class SystemRequirementsEditor {
       console.warn('[Undo] Failed to add requirement:', e);
       // Fallback
       storageData.splice(insertIndex, 0, JSON.parse(JSON.stringify(newRow)));
-      localStorage.setItem('systemRequirementsData', JSON.stringify(storageData));
+      saveSystemRequirementsTableData(storageData);
       this.loadFromStorage();
       this.renderTable();
     }
@@ -2060,7 +2079,7 @@ class SystemRequirementsEditor {
     if (idx === -1) return;
     
     // Get the actual data from localStorage to ensure we're deleting the right row
-    const storageData = JSON.parse(localStorage.getItem('systemRequirementsData') || '[]');
+    const storageData = loadSystemRequirementsTableData();
     if (idx >= storageData.length) {
       console.warn('[Undo] Index out of bounds for delete');
       return;
@@ -2102,7 +2121,7 @@ class SystemRequirementsEditor {
         });
         // Fallback if undo system is not available
         storageData.splice(idx, 1);
-        localStorage.setItem('systemRequirementsData', JSON.stringify(storageData));
+        saveSystemRequirementsTableData(storageData);
         this.loadFromStorage();
         this.renderTable();
         
@@ -2114,7 +2133,7 @@ class SystemRequirementsEditor {
       console.warn('[Undo] Failed to delete requirement:', e);
       // Fallback
       storageData.splice(idx, 1);
-      localStorage.setItem('systemRequirementsData', JSON.stringify(storageData));
+      saveSystemRequirementsTableData(storageData);
       this.loadFromStorage();
       this.renderTable();
       
@@ -2191,8 +2210,10 @@ class SystemRequirementsEditor {
 
     let systemConfig: any = null;
     try {
-      systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
-    } catch (_) {}
+      systemConfig = tryLoadSystemConfigurations() || {};
+    } catch (_) {
+      systemConfig = {};
+    }
     const activeConfigId = systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null
       ? String(systemConfig.activeConfigId)
       : '';
@@ -2491,8 +2512,10 @@ class SystemRequirementsEditor {
 
     let systemConfig: any = null;
     try {
-      systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
-    } catch (_) {}
+      systemConfig = tryLoadSystemConfigurations() || {};
+    } catch (_) {
+      systemConfig = {};
+    }
     const activeConfigId = systemConfig?.activeConfigId !== undefined && systemConfig?.activeConfigId !== null
       ? String(systemConfig.activeConfigId)
       : '';
@@ -2525,20 +2548,13 @@ class SystemRequirementsEditor {
 
   loadFromStorage(): void {
     try {
-      const saved = localStorage.getItem('systemRequirementsData');
-      if (!saved) return;
-      const data = JSON.parse(saved);
+      const data = loadSystemRequirementsTableData();
+      if (!Array.isArray(data) || data.length === 0) return;
 
-      let activeConfigId = '';
-      try {
-        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
-        if (systemConfig && systemConfig.activeConfigId) activeConfigId = String(systemConfig.activeConfigId);
-      } catch (_) {}
-
-      let systemConfig: any = null;
-      try {
-        systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
-      } catch (_) {}
+      const systemConfig: any = tryLoadSystemConfigurations() || {};
+      const activeConfigId = (systemConfig && systemConfig.activeConfigId !== undefined && systemConfig.activeConfigId !== null)
+        ? String(systemConfig.activeConfigId)
+        : '';
 
       this.requirements = (Array.isArray(data) ? data : []).map((row: any) => {
         const r = row && typeof row === 'object' ? { ...row } : {};
@@ -2604,7 +2620,7 @@ class SystemRequirementsEditor {
         } = r;
         return { id, enabled, operand, rationale, configId, param1, param2, param3, param4, param5, op, tol, target, weight };
       });
-      localStorage.setItem('systemRequirementsData', JSON.stringify(toSave));
+      saveSystemRequirementsTableData(toSave as any);
     } catch (e) {
       console.warn('System Requirements saveToStorage failed:', e);
     }
@@ -2612,7 +2628,7 @@ class SystemRequirementsEditor {
 
   getConfigurationList(): Record<string, string> {
     try {
-      const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+      const systemConfig = tryLoadSystemConfigurations() || {};
       if (!systemConfig || !systemConfig.configurations) return { '': 'Current' };
 
       const activeConfig = systemConfig.configurations.find((c: any) => c.id === systemConfig.activeConfigId);
@@ -2631,7 +2647,7 @@ class SystemRequirementsEditor {
   getConfigName(configId: any): string {
     if (!configId && configId !== 0) {
       try {
-        const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+        const systemConfig = tryLoadSystemConfigurations() || {};
         if (systemConfig && systemConfig.configurations) {
           const activeConfig = systemConfig.configurations.find((c: any) => c.id === systemConfig.activeConfigId);
           if (activeConfig) return `Current (${activeConfig.name})`;
@@ -2641,7 +2657,7 @@ class SystemRequirementsEditor {
     }
 
     try {
-      const systemConfig = JSON.parse(localStorage.getItem('systemConfigurations') || '{}');
+      const systemConfig = tryLoadSystemConfigurations() || {};
       if (!systemConfig || !systemConfig.configurations) return 'Current';
       const cfg = systemConfig.configurations.find((c: any) => String(c.id) === String(configId));
       return cfg ? cfg.name : 'Current';

@@ -281,7 +281,7 @@ export function exportZernikeAnalysisJSON(result) {
 
 // Export for browser console usage
 if (typeof window !== 'undefined') {
-  window.calculateOPDWithZernike = calculateOPDWithZernike;
-  window.displayZernikeAnalysis = displayZernikeAnalysis;
-  window.exportZernikeAnalysisJSON = exportZernikeAnalysisJSON;
+  window['calculateOPDWithZernike'] = calculateOPDWithZernike;
+  window['displayZernikeAnalysis'] = displayZernikeAnalysis;
+  window['exportZernikeAnalysisJSON'] = exportZernikeAnalysisJSON;
 }

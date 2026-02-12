@@ -91,6 +91,22 @@ export function loadTableData(): ObjectRow[] {
   return initialTableData;
 }
 
+// localStorage に実データがある場合のみ読み込む（無い場合は null）
+// Migration/初期化判定に使う。デフォルト値 (initialTableData) を返さない点が重要。
+export function tryLoadPersistedTableData(): ObjectRow[] | null {
+  if (typeof localStorage === 'undefined' || !localStorage) {
+    return null;
+  }
+  const json = localStorage.getItem(STORAGE_KEY);
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 // テーブルデータをローカルストレージに保存
 export function saveTableData(data: ObjectRow[]): void {
   console.log('🔵 [TableObject] Saving data to localStorage...');

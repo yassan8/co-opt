@@ -15,6 +15,10 @@
  * 波面収差プロット生成クラス
  * Plotly.jsを使用した3D可視化を担当
  */
+import { loadSystemConfigurations } from '../../data/table-configuration.ts';
+import { saveLastWavefrontSnapshot } from './wavefront-snapshot-storage.ts';
+import { setLastWavefrontState, getLastWavefrontMeta } from './last-wavefront-runtime.ts';
+
 export class WavefrontPlotter {
     constructor(containerElementIdOrElement) {
         this.containerElementIdOrElement = containerElementIdOrElement;
@@ -1682,9 +1686,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
         const getActiveConfigLabel = () => {
             try {
                 if (typeof localStorage === 'undefined') return '';
-                const raw = localStorage.getItem('systemConfigurations');
-                if (!raw) return '';
-                const sys = JSON.parse(raw);
+                const sys = loadSystemConfigurations();
                 const activeId = sys?.activeConfigId;
                 const cfg = Array.isArray(sys?.configurations)
                     ? sys.configurations.find(c => String(c?.id) === String(activeId))
@@ -1833,8 +1835,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
         // プロットタイプに応じて描画
         const storeLast = (wavefrontMap) => {
             try {
-                window.__lastWavefrontMap = wavefrontMap;
-                window.__lastWavefrontMeta = {
+                const lastMeta = {
                     plotType,
                     dataType,
                     gridSize,
@@ -1842,6 +1843,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                     wavelength,
                     fieldSetting
                 };
+                setLastWavefrontState(wavefrontMap, lastMeta, window);
 
                 // Token-light snapshot for cross-window diagnostics (avoid storing full grids)
                 try {
@@ -1851,7 +1853,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                             at: new Date().toISOString(),
                             from: 'eva-wavefront-plot.js:storeLast',
                             wavefront: {
-                                meta: window.__lastWavefrontMeta,
+                                meta: getLastWavefrontMeta(window),
                                 hasError: !!wavefrontMap?.error,
                                 error: wavefrontMap?.error ? {
                                     message: String(wavefrontMap.error?.message || wavefrontMap.error || 'Wavefront error').slice(0, 600),
@@ -1887,13 +1889,13 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                             }
                         } catch (_) {}
 
-                        localStorage.setItem('lastWavefrontSnapshot', JSON.stringify(snap));
+                        saveLastWavefrontSnapshot(snap);
                     }
                 } catch (_) {}
 
                 try {
                     window.dispatchEvent(new CustomEvent('coopt:lastWavefrontMapUpdated', {
-                        detail: window.__lastWavefrontMeta
+                        detail: getLastWavefrontMeta(window)
                     }));
                 } catch (_) {}
             } catch (_) {}

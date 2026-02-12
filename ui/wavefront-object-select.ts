@@ -6,6 +6,8 @@ declare global {
 }
 const w: Record<string, any> = window;
 
+import { clearObjectTableDataProjection } from '../data/table-configuration.ts';
+
 /**
  * 波面収差図Object選択UI管理
  * Objectの数に応じて動的にドロップダウンオプションを更新
@@ -140,7 +142,7 @@ export function initializeWavefrontObjectUI(): void {
  */
 export function debugResetObjectTable(): void {
     try {
-        localStorage.removeItem('objectTableData');
+        clearObjectTableDataProjection();
         location.reload();
         console.log('🔄 Objectテーブルデータをリセットしました');
     } catch (error) {

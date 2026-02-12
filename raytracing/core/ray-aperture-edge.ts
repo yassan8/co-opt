@@ -456,5 +456,5 @@ function calculateExitDirection(rayPath) {
 
 // グローバルスコープで利用できるように設定
 if (typeof window !== 'undefined') {
-    window.calculateApertureEdgeRays = calculateApertureEdgeRays;
+    window['calculateApertureEdgeRays'] = calculateApertureEdgeRays;
 }

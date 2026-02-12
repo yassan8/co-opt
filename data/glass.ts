@@ -14053,10 +14053,10 @@ export function getPrimaryWavelength() {
 
 // グローバルに公開（テスト用）
 if (typeof window !== 'undefined') {
-  window.getPrimaryWavelength = getPrimaryWavelength;
-  window.calculateRefractiveIndex = calculateRefractiveIndex;
-  window.getGlassDataWithSellmeier = getGlassDataWithSellmeier;
-  window.getAllGlassDatabases = getAllGlassDatabases;
-  window.findSimilarGlassesByNdVd = findSimilarGlassesByNdVd;
-  window.findSimilarGlassNames = findSimilarGlassNames;
+  window['getPrimaryWavelength'] = getPrimaryWavelength;
+  window['calculateRefractiveIndex'] = calculateRefractiveIndex;
+  window['getGlassDataWithSellmeier'] = getGlassDataWithSellmeier;
+  window['getAllGlassDatabases'] = getAllGlassDatabases;
+  window['findSimilarGlassesByNdVd'] = findSimilarGlassesByNdVd;
+  window['findSimilarGlassNames'] = findSimilarGlassNames;
 }

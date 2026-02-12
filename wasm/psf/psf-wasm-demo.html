@@ -182,7 +182,7 @@
         }
         
         // パフォーマンスモード設定
-        window.setPerformanceMode = function(mode) {
+        window['setPerformanceMode'] = function(mode) {
             if (!psfCalculator) {
                 alert('PSF calculator not initialized');
                 return;
@@ -264,7 +264,7 @@
         }
         
         // PSFテスト実行
-        window.runPSFTest = async function() {
+        window['runPSFTest'] = async function() {
             if (!psfCalculator) {
                 alert('PSF calculator not ready');
                 return;
@@ -305,7 +305,7 @@
         };
         
         // ベンチマーク実行
-        window.runBenchmark = async function() {
+        window['runBenchmark'] = async function() {
             if (!psfCalculator) {
                 alert('PSF calculator not ready');
                 return;

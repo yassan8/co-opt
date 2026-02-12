@@ -9,6 +9,18 @@ class MemoryLocalStorage {
   clear() { this._m.clear(); }
 }
 
+function storageGetItem(key) {
+  try { return globalThis.localStorage?.getItem(String(key)) ?? null; } catch (_) { return null; }
+}
+
+function storageSetItem(key, value) {
+  try { globalThis.localStorage?.setItem(String(key), String(value)); } catch (_) {}
+}
+
+function storageClear() {
+  try { globalThis.localStorage?.clear(); } catch (_) {}
+}
+
 function installBrowserStubs() {
   globalThis.window = globalThis;
   globalThis.localStorage = new MemoryLocalStorage();
@@ -72,7 +84,7 @@ function seedSystemConfigurations() {
       }
     ]
   };
-  localStorage.setItem('systemConfigurations', JSON.stringify(systemConfigurations));
+  storageSetItem('systemConfigurations', JSON.stringify(systemConfigurations));
 }
 
 function sampleLegacyRows() {
@@ -89,7 +101,7 @@ function sampleLegacyRows() {
 async function runOnce(label, moduleUrl) {
   console.log(`SMOKE_STEP ${label}: begin`);
   // Reset persistent state per run.
-  localStorage.clear();
+  storageClear();
   seedSystemConfigurations();
 
   console.log(`SMOKE_STEP ${label}: importing ${moduleUrl}`);
@@ -104,7 +116,7 @@ async function runOnce(label, moduleUrl) {
   const result = await mod.__debug_apply_optical_system_rows({ rows: sampleLegacyRows() });
   console.log(`SMOKE_STEP ${label}: tool returned`);
 
-  const saved = JSON.parse(localStorage.getItem('systemConfigurations'));
+  const saved = JSON.parse(storageGetItem('systemConfigurations'));
   const cfg = saved?.configurations?.[0];
 
   const blocksOk = Array.isArray(cfg?.blocks) && cfg.blocks.length > 0;
@@ -127,12 +139,10 @@ installBrowserStubs();
 
 // Use URLs relative to this script (stable even when cwd changes).
 const srcUrl = new URL('../ai/ai-assistant.js', import.meta.url).href;
-const docsUrl = new URL('../docs/ai/ai-assistant.js', import.meta.url).href;
 
 const reports = [];
 try {
   reports.push(await runOnce('src', srcUrl));
-  reports.push(await runOnce('docs', docsUrl));
 } catch (e) {
   console.error('SMOKE_FAIL', e?.message || String(e));
   try {

@@ -21,6 +21,9 @@ const w: Record<string, any> = window;
  */
 
 import { expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
+import { loadSystemConfigurations, saveSystemConfigurations } from '../data/table-configuration.ts';
+import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
+import { requestRefreshBlockInspector } from './window-facade.ts';
 import type { Block, Configuration } from '../types/index.ts';
 
 interface Scenario {
@@ -28,11 +31,6 @@ interface Scenario {
   name: string;
   weight: number;
   overrides: Record<string, any>;
-}
-
-interface SystemConfigurations {
-  configurations: Configuration[];
-  activeConfigId: string;
 }
 
 interface ExpandResult {
@@ -60,26 +58,26 @@ function cloneJson<T>(v: T): T | null {
   }
 }
 
-function loadSystemConfigurationsRaw(): SystemConfigurations | null {
+function loadSystemConfigurationsRaw(): any {
   try {
-    const json = localStorage.getItem('systemConfigurations');
-    if (!json) return null;
-    return JSON.parse(json);
+    if (typeof localStorage === 'undefined') return null;
+    return loadSystemConfigurations();
   } catch {
     return null;
   }
 }
 
-function saveSystemConfigurationsRaw(systemConfig: SystemConfigurations): boolean {
+function saveSystemConfigurationsRaw(systemConfig: any): boolean {
   try {
-    localStorage.setItem('systemConfigurations', JSON.stringify(systemConfig));
+    if (typeof localStorage === 'undefined') return false;
+    saveSystemConfigurations(systemConfig);
     return true;
   } catch {
     return false;
   }
 }
 
-function getActiveConfigRef(systemConfig: SystemConfigurations | null): Configuration | null {
+function getActiveConfigRef(systemConfig: any): Configuration | null {
   if (!systemConfig || !Array.isArray(systemConfig.configurations)) return null;
   const activeId = systemConfig.activeConfigId;
   return systemConfig.configurations.find(c => c && String(c.id) === String(activeId)) || systemConfig.configurations[0] || null;
@@ -180,9 +178,7 @@ function pickLegacyRowsForSemidia(activeCfg: Configuration): any[] | null {
 
   // Fallback: current UI table snapshot (active config only).
   try {
-    const raw = localStorage.getItem('OpticalSystemTableData');
-    if (!raw) return null;
-    const rows = JSON.parse(raw);
+    const rows = tryLoadPersistedOpticalSystemTableData();
     return Array.isArray(rows) ? rows : null;
   } catch (_) {
     return null;
@@ -215,7 +211,7 @@ function refreshUI(): void {
   } catch (_) {}
 
   try {
-    if (typeof w.refreshBlockInspector === 'function') w.refreshBlockInspector();
+    requestRefreshBlockInspector(w);
   } catch (_) {}
 
   try {

@@ -294,10 +294,17 @@ export function getSceneManager() {
 // 従来のグローバル変数との互換性のためのエクスポート
 export function initializeGlobalThreeJS() {
     const manager = getSceneManager();
-    window.scene = manager.scene;
-    window.camera = manager.camera;
-    window.renderer = manager.renderer;
-    window.controls = manager.controls;
+    try {
+        // Prefer the shared rendering context (keeps debug globals owned in one place).
+        if (typeof window !== 'undefined' && typeof window.__cooptSetRenderingContext === 'function') {
+            window.__cooptSetRenderingContext({
+                scene: manager.scene,
+                camera: manager.camera,
+                renderer: manager.renderer,
+                controls: manager.controls
+            });
+        }
+    } catch (_) {}
     
     // レンダリングループ開始
     manager.startRenderLoop();

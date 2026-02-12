@@ -25,11 +25,31 @@ function isMirrorRow(row) {
     const surfType = String(row.surfType ?? row.type ?? row.surfaceType ?? '').trim().toLowerCase();
     return surfType === 'mirror';
 }
+function setCheckOnAxisOPDSymmetry(enabled) {
+    try {
+        if (typeof window === 'undefined') return;
+        window['__checkOnAxisOPDSymmetry'] = enabled === true;
+    } catch (_) {
+        // ignore
+    }
+}
+
+function setWavefrontDebugValue(key, value) {
+    try {
+        if (typeof window === 'undefined') return;
+        const existing = window['__cooptWavefrontDebug'];
+        const bag = (existing && typeof existing === 'object') ? existing : {};
+        bag[key] = value;
+        window['__cooptWavefrontDebug'] = bag;
+    } catch (_) {
+        // ignore
+    }
+}
 
 // Runtime build stamp (for cache/stale-module diagnostics)
 const EVA_WAVEFRONT_BUILD = '2026-01-17a';
 try {
-    if (typeof window !== 'undefined') window.__EVA_WAVEFRONT_BUILD = EVA_WAVEFRONT_BUILD;
+    setWavefrontDebugValue('build', EVA_WAVEFRONT_BUILD);
 } catch (_) {}
 
 function __cooptIsOPDDebugNow() {
@@ -6515,9 +6535,9 @@ export class WavefrontAberrationAnalyzer {
                 
                 // デバッグ用：グローバルに保存
                 if (typeof window !== 'undefined') {
-                    window.__DEBUG_STOP_INDEX = this.opdCalculator.stopSurfaceIndex;
-                    window.__DEBUG_SURFACE_ORIGINS = this.opdCalculator._surfaceOrigins;
-                    window.__DEBUG_STOP_ORIGIN = stopOrigin;
+                    setWavefrontDebugValue('stopIndex', this.opdCalculator.stopSurfaceIndex);
+                    setWavefrontDebugValue('surfaceOrigins', this.opdCalculator._surfaceOrigins);
+                    setWavefrontDebugValue('stopOrigin', stopOrigin);
                 }
                 
                 if (stopOrigin) {
@@ -6526,7 +6546,7 @@ export class WavefrontAberrationAnalyzer {
                     
                     // デバッグ用：グローバルに保存
                     if (typeof window !== 'undefined') {
-                        window.__DEBUG_STOP_OFFSET = stopGlobalOffset;
+                        setWavefrontDebugValue('stopOffset', stopGlobalOffset);
                     }
                     
                     if (stopGlobalOffset > 0.001) {
@@ -6614,7 +6634,7 @@ export class WavefrontAberrationAnalyzer {
             }
             
             // Check OPD value symmetry - will be checked after ray tracing
-            window.__checkOnAxisOPDSymmetry = true;
+            setCheckOnAxisOPDSymmetry(true);
         }
         
         if (prof) prof.marks.gridGenEnd = now();
@@ -7460,7 +7480,7 @@ export class WavefrontAberrationAnalyzer {
         
         // Check OPD value symmetry for on-axis fields
         if (window.__checkOnAxisOPDSymmetry && wavefrontMap.pupilCoordinates && wavefrontMap.opds) {
-            window.__checkOnAxisOPDSymmetry = false; // Clear flag
+            setCheckOnAxisOPDSymmetry(false); // Clear flag
             console.log(`🔍 [OPD Symmetry] Checking ${wavefrontMap.opds.length} OPD values...`);
             
             // Build map of OPD values by mirrored pupil positions
@@ -9867,8 +9887,8 @@ export function createWavefrontAnalyzer(opdCalculator) {
 
 // グローバル公開（デバッグ・テスト用）
 if (typeof window !== 'undefined') {
-    window.OpticalPathDifferenceCalculator = OpticalPathDifferenceCalculator;
-    window.WavefrontAberrationAnalyzer = WavefrontAberrationAnalyzer;
-    window.createWavefrontAnalyzer = createWavefrontAnalyzer;
+    window['OpticalPathDifferenceCalculator'] = OpticalPathDifferenceCalculator;
+    window['WavefrontAberrationAnalyzer'] = WavefrontAberrationAnalyzer;
+    window['createWavefrontAnalyzer'] = createWavefrontAnalyzer;
 
 }

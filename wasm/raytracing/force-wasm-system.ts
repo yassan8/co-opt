@@ -3,6 +3,8 @@
  * WASMを確実に機能させるための専用実装
  */
 
+import { setWindowDebugBagValue } from '../../utils/window-debug-bag.ts';
+
 class ForceWASMSystem {
     constructor() {
         this.wasmModule = null;
@@ -57,7 +59,7 @@ class ForceWASMSystem {
             const cacheBust = this._getRayTracingWasmCacheBustParam();
             try {
                 // Expose for debugging in DevTools.
-                if (typeof window !== 'undefined') window.__rayTracingWasmCacheBust = cacheBust;
+                setWindowDebugBagValue('wasm', 'rayTracingCacheBust', cacheBust);
             } catch (_) {}
             const initOptions = {
                 locateFile: (path, prefix) => {
@@ -613,11 +615,11 @@ function getWASMSystemStatus() {
 
 // モジュール公開
 if (typeof window !== 'undefined') {
-    window.initializeForceWASM = initializeForceWASM;
-    window.runForceWASMTest = runForceWASMTest;
-    window.runWASMDirectComparison = runWASMDirectComparison;
-    window.getWASMSystemStatus = getWASMSystemStatus;
-    window.ForceWASMSystem = ForceWASMSystem;
+    window['initializeForceWASM'] = initializeForceWASM;
+    window['runForceWASMTest'] = runForceWASMTest;
+    window['runWASMDirectComparison'] = runWASMDirectComparison;
+    window['getWASMSystemStatus'] = getWASMSystemStatus;
+    window['ForceWASMSystem'] = ForceWASMSystem;
     
     const RAYTRACE_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__RAYTRACE_DEBUG);
     if (RAYTRACE_DEBUG) {
@@ -632,8 +634,6 @@ if (typeof window !== 'undefined') {
 // Browser環境用のexport
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { ForceWASMSystem };
-} else if (typeof window !== 'undefined') {
-    window.ForceWASMSystem = ForceWASMSystem;
 }
 
 // ES Module export for browser import (only if in module context)

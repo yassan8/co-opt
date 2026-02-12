@@ -19,7 +19,7 @@ async function loadRayTracingModule() {
 }
 
 // パフォーマンス比較テスト関数
-window.runPerformanceDiagnosis = async function() {
+window['runPerformanceDiagnosis'] = async function() {
   console.log('\n🔍 光線追跡パフォーマンス診断開始...');
   
   const rayTracing = await loadRayTracingModule();
@@ -152,7 +152,7 @@ window.runPerformanceDiagnosis = async function() {
 };
 
 // 簡単なテスト関数
-window.quickPerformanceTest = async function() {
+window['quickPerformanceTest'] = async function() {
   console.log('⚡ クイックパフォーマンステスト');
   
   const rayTracing = await loadRayTracingModule();
@@ -178,7 +178,7 @@ window.quickPerformanceTest = async function() {
 };
 
 // 個別の制御関数
-window.disableCacheFunction = async function() {
+window['disableCacheFunction'] = async function() {
   const rayTracing = await loadRayTracingModule();
   if (rayTracing && rayTracing.disableCache) {
     rayTracing.disableCache();
@@ -186,7 +186,7 @@ window.disableCacheFunction = async function() {
   }
 };
 
-window.enableCacheFunction = async function() {
+window['enableCacheFunction'] = async function() {
   const rayTracing = await loadRayTracingModule();
   if (rayTracing && rayTracing.enableCache) {
     rayTracing.enableCache();
@@ -194,7 +194,7 @@ window.enableCacheFunction = async function() {
   }
 };
 
-window.displayCacheStatsFunction = async function() {
+window['displayCacheStatsFunction'] = async function() {
   const rayTracing = await loadRayTracingModule();
   if (rayTracing && rayTracing.displayCacheStats) {
     rayTracing.displayCacheStats();

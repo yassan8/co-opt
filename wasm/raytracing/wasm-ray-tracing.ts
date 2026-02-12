@@ -422,15 +422,15 @@ async function initializeWASMRayTracing() {
         await wasmRayTracing.initialize();
         
         // グローバル関数として公開
-        window.wasmAsphericSag = wasmRayTracing.asphericSag.bind(wasmRayTracing);
-        window.wasmVectorDot = wasmRayTracing.vectorDot.bind(wasmRayTracing);
-        window.wasmVectorCross = wasmRayTracing.vectorCross.bind(wasmRayTracing);
-        window.wasmVectorNormalize = wasmRayTracing.vectorNormalize.bind(wasmRayTracing);
-        window.wasmBatchAsphericSag = wasmRayTracing.batchAsphericSag.bind(wasmRayTracing);
+        window['wasmAsphericSag'] = wasmRayTracing.asphericSag.bind(wasmRayTracing);
+        window['wasmVectorDot'] = wasmRayTracing.vectorDot.bind(wasmRayTracing);
+        window['wasmVectorCross'] = wasmRayTracing.vectorCross.bind(wasmRayTracing);
+        window['wasmVectorNormalize'] = wasmRayTracing.vectorNormalize.bind(wasmRayTracing);
+        window['wasmBatchAsphericSag'] = wasmRayTracing.batchAsphericSag.bind(wasmRayTracing);
         
         // WASMステータス確認関数
-        window.getWASMStats = () => wasmRayTracing.getStats();
-        window.isWASMEnabled = () => wasmRayTracing && !wasmRayTracing.fallbackMode;
+        window['getWASMStats'] = () => wasmRayTracing.getStats();
+        window['isWASMEnabled'] = () => wasmRayTracing && !wasmRayTracing.fallbackMode;
     }
     
     return wasmRayTracing;
@@ -460,9 +460,9 @@ async function testWASMPerformance() {
 // モジュールの自動初期化
 if (typeof window !== 'undefined') {
     // ブラウザ環境
-    window.initializeWASMRayTracing = initializeWASMRayTracing;
-    window.testWASMPerformance = testWASMPerformance;
-    window.WASMRayTracing = WASMRayTracing;
+    window['initializeWASMRayTracing'] = initializeWASMRayTracing;
+    window['testWASMPerformance'] = testWASMPerformance;
+    window['WASMRayTracing'] = WASMRayTracing;
     
     console.log('🔧 WASM光線追跡モジュールが読み込まれました');
     console.log('   初期化: initializeWASMRayTracing()');

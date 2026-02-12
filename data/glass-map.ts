@@ -136,7 +136,7 @@ export function openGlassMapWindow(
         if (window.Plotly) return Promise.resolve(window.Plotly);
         try {
           if (window.opener && window.opener.Plotly) {
-            window.Plotly = window.opener.Plotly;
+            window['Plotly'] = window.opener.Plotly;
             return Promise.resolve(window.Plotly);
           }
         } catch (e) {}
