@@ -1606,14 +1606,29 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 renderer.setSize(w, h, false);
                 
                 const aspect = w / h;
-                // Preserve current camera bounds and only adjust aspect ratio
-                const currentHeight = camera.top - camera.bottom;
-                const currentCenterX = (camera.left + camera.right) / 2;
-                const currentCenterY = (camera.top + camera.bottom) / 2;
+                // iOS: anchor to last draw-cross bounds to avoid center drift on repeated resize ticks.
+                const savedBounds = camera?.userData?.__drawCrossOrthoBounds;
+                const useSavedBounds = isLowPowerRenderer && savedBounds &&
+                    Number.isFinite(savedBounds.left) && Number.isFinite(savedBounds.right) &&
+                    Number.isFinite(savedBounds.top) && Number.isFinite(savedBounds.bottom);
+
+                const currentHeight = useSavedBounds
+                    ? (savedBounds.top - savedBounds.bottom)
+                    : (camera.top - camera.bottom);
+                const currentCenterX = useSavedBounds
+                    ? ((savedBounds.left + savedBounds.right) / 2)
+                    : ((camera.left + camera.right) / 2);
+                const currentCenterY = useSavedBounds
+                    ? ((savedBounds.top + savedBounds.bottom) / 2)
+                    : ((camera.top + camera.bottom) / 2);
                 const newWidth = currentHeight * aspect;
                 camera.left = currentCenterX - newWidth / 2;
                 camera.right = currentCenterX + newWidth / 2;
                 // Keep top/bottom unchanged to preserve vertical extent
+                if (useSavedBounds) {
+                    camera.top = savedBounds.top;
+                    camera.bottom = savedBounds.bottom;
+                }
                 camera.updateProjectionMatrix();
                 
                 if (!getPopupUserAdjustedView()) {
@@ -1621,13 +1636,14 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                     const threshold = 80;
                     const shouldSend = shouldSendPopupResize(now, w, h, threshold);
                     
-                    if (shouldSend && window.opener) {
+                    if (!isLowPowerRenderer && shouldSend && window.opener) {
                         markPopupResizeSent(now, w, h);
                         try {
                             window.opener.postMessage({ action: 'popup-resize' }, '*');
                         } catch (_) {}
                     }
                 }
+                renderNow();
             };
             
             let resizeObserver = null;
