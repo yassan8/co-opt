@@ -1455,6 +1455,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             renderer.sortObjects = false;
             renderer.shadowMap.enabled = false;
             container.appendChild(renderer.domElement);
+            const isLowPowerRenderer = isIOSLike();
             
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
             scene.add(ambientLight);
@@ -1463,8 +1464,8 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             scene.add(directionalLight);
             
             const controls = new OrbitControls(camera, renderer.domElement);
-            controls.enableDamping = true;
-            controls.dampingFactor = 0.05;
+            controls.enableDamping = !isLowPowerRenderer;
+            controls.dampingFactor = isLowPowerRenderer ? 0 : 0.05;
             controls.enableRotate = true;
             controls.enablePan = true;
             controls.enableZoom = true;
@@ -1520,13 +1521,51 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             camera.up.set(0, 1, 0);
             controls.target.set(0, 0, 0);
             controls.update();
+
+            const renderNow = () => {
+                try {
+                    renderer.render(scene, camera);
+                } catch (e) {
+                    if (status) {
+                        status.textContent = 'Render error';
+                    }
+                }
+            };
             
             function animate() {
+                if (isLowPowerRenderer) {
+                    return;
+                }
                 requestAnimationFrame(animate);
                 controls.update();
-                renderer.render(scene, camera);
+                renderNow();
             }
             animate();
+
+            if (isLowPowerRenderer) {
+                controls.addEventListener('change', () => renderNow());
+                renderNow();
+            }
+
+            renderer.domElement.addEventListener('webglcontextlost', (event) => {
+                try { event.preventDefault(); } catch (_) {}
+                if (status) {
+                    status.textContent = 'WebGL context lost...';
+                }
+            }, false);
+
+            renderer.domElement.addEventListener('webglcontextrestored', () => {
+                if (status) {
+                    status.textContent = 'Context restored. Redrawing...';
+                }
+                renderNow();
+                try {
+                    if (window.opener) {
+                        const viewState = getPopupViewState();
+                        window.opener.postMessage({ action: 'draw-cross', ...viewState }, '*');
+                    }
+                } catch (_) {}
+            }, false);
             
             let resizeScheduled = false;
             let lastResizeSentAt = 0;
@@ -2017,7 +2056,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                             }
                         }
                     });
-                    renderer.render(scene, camera);
+                    renderNow();
                     status.textContent = 'Cleared';
                 });
             }
