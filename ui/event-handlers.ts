@@ -2537,7 +2537,6 @@ export function setupAnalysisWindows() {
             border-radius: 4px;
             background: white;
         }
-        .pattern-btn.active { background: #e9e9e9; }
         .content {
             flex: 1 1 auto;
             min-height: 0;
@@ -2586,9 +2585,11 @@ export function setupAnalysisWindows() {
             <option value="32">32</option>
         </select>
 
-        <label>Ray pattern:</label>
-        <button id="popup-annular-pattern-btn" class="pattern-btn active" type="button">Annular</button>
-        <button id="popup-grid-pattern-btn" class="pattern-btn" type="button">Rectangle</button>
+        <label for="popup-pattern-select">Ray pattern:</label>
+        <select id="popup-pattern-select">
+            <option value="annular" selected>Annular</option>
+            <option value="grid">Rectangle</option>
+        </select>
 
         <button id="popup-show-spot-diagram-btn" type="button">Show spot diagram</button>
     </div>
@@ -2688,37 +2689,36 @@ export function setupAnalysisWindows() {
             // pattern
             const annular = getOpenerEl('annular-pattern-btn');
             const grid = getOpenerEl('grid-pattern-btn');
-            const popupAnnular = document.getElementById('popup-annular-pattern-btn');
-            const popupGrid = document.getElementById('popup-grid-pattern-btn');
-            if (popupAnnular && popupGrid) {
+            const popupPattern = document.getElementById('popup-pattern-select');
+            if (popupPattern) {
                 const isAnnular = !!annular && annular.classList.contains('active');
-                popupAnnular.classList.toggle('active', isAnnular);
-                popupGrid.classList.toggle('active', !isAnnular);
+                const isGrid = !!grid && grid.classList.contains('active');
+                if (isAnnular) popupPattern.value = 'annular';
+                else if (isGrid) popupPattern.value = 'grid';
             }
         }
 
-        function setPopupPattern(isAnnular) {
-            const popupAnnular = document.getElementById('popup-annular-pattern-btn');
-            const popupGrid = document.getElementById('popup-grid-pattern-btn');
-            popupAnnular.classList.toggle('active', isAnnular);
-            popupGrid.classList.toggle('active', !isAnnular);
+        function setPopupPattern(pattern) {
+            const mode = (String(pattern || '').toLowerCase() === 'grid') ? 'grid' : 'annular';
 
             const openerAnnular = getOpenerEl('annular-pattern-btn');
             const openerGrid = getOpenerEl('grid-pattern-btn');
-            if (isAnnular && openerAnnular) openerAnnular.click();
-            if (!isAnnular && openerGrid) openerGrid.click();
+            if (mode === 'annular' && openerAnnular) openerAnnular.click();
+            if (mode === 'grid' && openerGrid) openerGrid.click();
 
             try {
                 import('./spot-diagram-settings-storage.ts').then(({ setSpotDiagramPattern }) => {
                     try {
-                        setSpotDiagramPattern(isAnnular ? 'annular' : 'grid', { preferOpener: true });
+                        setSpotDiagramPattern(mode, { preferOpener: true });
                     } catch (_) {}
                 });
             } catch (_) {}
         }
 
-        document.getElementById('popup-annular-pattern-btn').addEventListener('click', () => setPopupPattern(true));
-        document.getElementById('popup-grid-pattern-btn').addEventListener('click', () => setPopupPattern(false));
+        document.getElementById('popup-pattern-select').addEventListener('change', (ev) => {
+            const v = ev && ev.target ? ev.target.value : 'annular';
+            setPopupPattern(v);
+        });
 
         document.getElementById('popup-show-spot-diagram-btn').addEventListener('click', async () => {
             const popupContainer = document.getElementById('popup-spot-diagram-container');
@@ -2745,10 +2745,12 @@ export function setupAnalysisWindows() {
             const popupRay = document.getElementById('popup-ray-count-input');
             const popupRing = document.getElementById('popup-ring-count-select');
             const popupSurface = document.getElementById('popup-surface-number-select');
+            const popupPattern = document.getElementById('popup-pattern-select');
 
             if (openerRay && popupRay) openerRay.value = popupRay.value;
             if (openerRing && popupRing) openerRing.value = popupRing.value;
             if (openerSurface && popupSurface) openerSurface.value = popupSurface.value;
+            if (popupPattern) setPopupPattern(popupPattern.value);
 
             if (!window.opener || typeof window.opener.showSpotDiagram !== 'function') {
                 if (popupContainer) popupContainer.textContent = 'showSpotDiagram is not available in the main window.';
@@ -2770,6 +2772,7 @@ export function setupAnalysisWindows() {
                     surfaceIndex: popupSurface && popupSurface.value !== '' ? parseInt(popupSurface.value, 10) : undefined,
                     rayCount: popupRay && popupRay.value !== '' ? parseInt(popupRay.value, 10) : undefined,
                     ringCount: popupRing && popupRing.value !== '' ? parseInt(popupRing.value, 10) : undefined,
+                    pattern: popupPattern ? String(popupPattern.value || 'annular') : 'annular',
                     containerElement: popupContainer,
                     onProgress
                 });
