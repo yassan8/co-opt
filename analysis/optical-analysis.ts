@@ -276,6 +276,8 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         }
 
         const resolveSpotPattern = () => {
+            const explicit = String(options?.pattern || '').trim().toLowerCase();
+            if (explicit === 'grid' || explicit === 'annular') return explicit;
             try {
                 const p = getSpotDiagramPattern();
                 if (p === 'grid' || p === 'annular') return p;
