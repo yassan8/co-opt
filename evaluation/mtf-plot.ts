@@ -445,7 +445,10 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
         });
 
         if (String(psfResult?.implementationUsed || '').toLowerCase() !== 'wasm') {
-            throw new Error('PSF WASM strict mode: JavaScript fallback is not allowed for MTF');
+            if (forceStrictByFlag) {
+                throw new Error('PSF WASM strict mode: JavaScript fallback is not allowed for MTF');
+            }
+            console.warn('⚠️ PSF calculation fell back to JavaScript; continuing MTF in compatibility mode.');
         }
 
         reportProgress(localBase + localSpan * 0.85, `λ=${titleNmLocal} nm: Computing OTF/MTF...`);
