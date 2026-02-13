@@ -5896,7 +5896,6 @@ export function setupAnalysisWindows() {
         }
         #popup-through-focus-mtf-container { flex: 1 1 auto; min-height: 0; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
     <div class="header">Through-Focus MTF</div>
@@ -5942,6 +5941,33 @@ export function setupAnalysisWindows() {
     </div>
 
     <script>
+        async function ensurePlotlyLoaded() {
+            try {
+                if (window.Plotly) return window.Plotly;
+                const openerPlotly = window.opener && window.opener.Plotly;
+                if (openerPlotly) {
+                    window.Plotly = openerPlotly;
+                    return window.Plotly;
+                }
+            } catch (_) {}
+
+            if (window.Plotly) return window.Plotly;
+
+            await new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                s.async = true;
+                s.onload = () => resolve(undefined);
+                s.onerror = () => reject(new Error('Failed to load Plotly')); 
+                document.head.appendChild(s);
+            });
+
+            if (!window.Plotly) {
+                throw new Error('Plotly is not available');
+            }
+            return window.Plotly;
+        }
+
         function safeCall(fn, fallback) {
             try { return fn(); } catch (_) { return fallback; }
         }
@@ -6082,6 +6108,7 @@ export function setupAnalysisWindows() {
                 : 'pistonTiltRemoved';
 
             try {
+                await ensurePlotlyLoaded();
                 const opener = getOpener();
                 if (!opener || typeof opener.showThroughFocusMTFDiagram !== 'function') {
                     throw new Error('showThroughFocusMTFDiagram is not available on opener');
