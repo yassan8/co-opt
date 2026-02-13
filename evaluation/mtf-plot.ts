@@ -20,27 +20,17 @@ function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows, defocusShiftM
     const cloned = opticalSystemRows.map((row) => (row && typeof row === 'object') ? { ...row } : row);
     if (!Number.isFinite(shift) || Math.abs(shift) < 1e-15) return cloned;
 
-    if (isFiniteObject) {
-        // Finite object: shift the object plane (first thickness)
-        if (cloned.length > 0 && cloned[0]) {
-            const objRow = (cloned[0] && typeof cloned[0] === 'object') ? { ...cloned[0] } : {};
-            const baseThickness = Number(objRow.thickness);
-            const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
-            objRow.thickness = safeBaseThickness - shift; // Negative to move object away/closer
-            cloned[0] = objRow;
-        }
-    } else {
-        // Infinite object: shift the image plane
-        const imageIdx = cloned.findIndex((row) => row && (row['object type'] === 'Image' || row.object === 'Image'));
-        const targetIdx = (imageIdx > 0) ? (imageIdx - 1) : Math.max(0, cloned.length - 2);
-        if (targetIdx < 0 || targetIdx >= cloned.length) return cloned;
+    // Through-Focus: always shift the image plane (evaluation surface)
+    // This is standard for both finite and infinite conjugates
+    const imageIdx = cloned.findIndex((row) => row && (row['object type'] === 'Image' || row.object === 'Image'));
+    const targetIdx = (imageIdx > 0) ? (imageIdx - 1) : Math.max(0, cloned.length - 2);
+    if (targetIdx < 0 || targetIdx >= cloned.length) return cloned;
 
-        const target = (cloned[targetIdx] && typeof cloned[targetIdx] === 'object') ? { ...cloned[targetIdx] } : {};
-        const baseThickness = Number(target.thickness);
-        const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
-        target.thickness = safeBaseThickness + shift;
-        cloned[targetIdx] = target;
-    }
+    const target = (cloned[targetIdx] && typeof cloned[targetIdx] === 'object') ? { ...cloned[targetIdx] } : {};
+    const baseThickness = Number(target.thickness);
+    const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
+    target.thickness = safeBaseThickness + shift;
+    cloned[targetIdx] = target;
 
     return cloned;
 }
