@@ -659,7 +659,8 @@ async function showThroughFocusMTFDiagram({
 
         const traces = Array.isArray(result?.traces) ? result.traces : [];
         for (const tr of traces) {
-            const name = String(tr?.name ?? 'MTF');
+            const rawName = String(tr?.name ?? 'MTF');
+            const name = rawName.replace(/^Tangential\b/, 'Meridional');
             const x = Array.isArray(tr?.x) ? tr.x : [];
             const y = Array.isArray(tr?.y) ? tr.y : [];
             if (x.length === 0 || y.length === 0) continue;
