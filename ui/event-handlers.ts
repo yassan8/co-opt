@@ -2554,7 +2554,16 @@ export function setupAnalysisWindows() {
             background: #fff;
         }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+        <script>
+            (function(){
+                if (window.Plotly) return;
+                if (window.opener && window.opener.Plotly) { window.Plotly = window.opener.Plotly; return; }
+                var s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                s.async = true;
+                document.head.appendChild(s);
+            })();
+        </script>
 </head>
 <body>
     <div class="header">Spot Diagram</div>
@@ -2902,7 +2911,16 @@ export function setupAnalysisWindows() {
         }
         #popup-longitudinal-aberration-container { height: 100%; min-height: 100%; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+        <script>
+            (function(){
+                if (window.Plotly) return;
+                if (window.opener && window.opener.Plotly) { window.Plotly = window.opener.Plotly; return; }
+                var s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                s.async = true;
+                document.head.appendChild(s);
+            })();
+        </script>
 </head>
 <body>
     <div class="header">Spherical Aberration</div>
@@ -3091,7 +3109,16 @@ export function setupAnalysisWindows() {
         }
         #popup-astigmatic-field-curves-container { height: 100%; min-height: 100%; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+        <script>
+            (function(){
+                if (window.Plotly) return;
+                if (window.opener && window.opener.Plotly) { window.Plotly = window.opener.Plotly; return; }
+                var s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                s.async = true;
+                document.head.appendChild(s);
+            })();
+        </script>
 </head>
 <body>
     <div class="header">Astigmatism</div>
@@ -3270,7 +3297,16 @@ export function setupAnalysisWindows() {
         #popup-distortion-percent { height: 100%; }
         #popup-distortion-grid { height: 100%; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+        <script>
+            (function(){
+                if (window.Plotly) return;
+                if (window.opener && window.opener.Plotly) { window.Plotly = window.opener.Plotly; return; }
+                var s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                s.async = true;
+                document.head.appendChild(s);
+            })();
+        </script>
 </head>
 <body>
     <div class="header">Distortion</div>
@@ -3528,7 +3564,16 @@ export function setupAnalysisWindows() {
         }
         #popup-integrated-aberration-container { height: 100%; min-height: 100%; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+        <script>
+            (function(){
+                if (window.Plotly) return;
+                if (window.opener && window.opener.Plotly) { window.Plotly = window.opener.Plotly; return; }
+                var s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                s.async = true;
+                document.head.appendChild(s);
+            })();
+        </script>
 </head>
 <body>
     <div class="header">Integrated Aberration</div>
@@ -3696,7 +3741,16 @@ export function setupAnalysisWindows() {
         #popup-wavefront-container { flex: 1 1 auto; min-height: 0; }
         #popup-wavefront-container-stats { flex: 0 0 auto; padding: 8px 12px; font-size: 12px; color: #333; border-top: 1px solid #eee; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+        <script>
+            (function(){
+                if (window.Plotly) return;
+                if (window.opener && window.opener.Plotly) { window.Plotly = window.opener.Plotly; return; }
+                var s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                s.async = true;
+                document.head.appendChild(s);
+            })();
+        </script>
 </head>
 <body>
     <div class="header">Optical Path Difference</div>
@@ -4260,7 +4314,16 @@ export function setupAnalysisWindows() {
         #popup-psf-container-stats { flex: 0 0 auto; padding: 8px 12px; font-size: 12px; color: #333; border-top: 1px solid #eee; }
         .note { padding: 8px 12px; font-size: 12px; color: #666; border-bottom: 1px solid #eee; background: #fff; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+        <script>
+            (function(){
+                if (window.Plotly) return;
+                if (window.opener && window.opener.Plotly) { window.Plotly = window.opener.Plotly; return; }
+                var s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                s.async = true;
+                document.head.appendChild(s);
+            })();
+        </script>
 </head>
 <body>
     <div class="header">Point Spread Function</div>
@@ -5304,7 +5367,16 @@ export function setupAnalysisWindows() {
         }
         #popup-mtf-container { flex: 1 1 auto; min-height: 0; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+        <script>
+            (function(){
+                if (window.Plotly) return;
+                if (window.opener && window.opener.Plotly) { window.Plotly = window.opener.Plotly; return; }
+                var s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                s.async = true;
+                document.head.appendChild(s);
+            })();
+        </script>
 </head>
 <body>
     <div class="header">Modulation Transfer Function</div>
@@ -5607,7 +5679,16 @@ export function setupAnalysisWindows() {
         }
         #popup-through-focus-spot-container { flex: 1 1 auto; min-height: 0; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+        <script>
+            (function(){
+                if (window.Plotly) return;
+                if (window.opener && window.opener.Plotly) { window.Plotly = window.opener.Plotly; return; }
+                var s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                s.async = true;
+                document.head.appendChild(s);
+            })();
+        </script>
 </head>
 <body>
     <div class="header">Through-Focus Spot Diagram</div>
@@ -5896,7 +5977,16 @@ export function setupAnalysisWindows() {
         }
         #popup-through-focus-mtf-container { flex: 1 1 auto; min-height: 0; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+        <script>
+            (function(){
+                if (window.Plotly) return;
+                if (window.opener && window.opener.Plotly) { window.Plotly = window.opener.Plotly; return; }
+                var s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                s.async = true;
+                document.head.appendChild(s);
+            })();
+        </script>
 </head>
 <body>
     <div class="header">Through-Focus MTF</div>
@@ -6219,7 +6309,16 @@ export function setupAnalysisWindows() {
         }
         #popup-transverse-aberration-container { height: 100%; min-height: 100%; }
     </style>
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+        <script>
+            (function(){
+                if (window.Plotly) return;
+                if (window.opener && window.opener.Plotly) { window.Plotly = window.opener.Plotly; return; }
+                var s = document.createElement('script');
+                s.src = 'https://cdn.plot.ly/plotly-2.32.0.min.js';
+                s.async = true;
+                document.head.appendChild(s);
+            })();
+        </script>
 </head>
 <body>
     <div class="header">Transverse Aberration</div>

@@ -34,7 +34,10 @@ class ForceWASMSystem {
             return this.initializationPromise;
         }
 
-        this.initializationPromise = this._performInitialization();
+        this.initializationPromise = this._performInitialization().catch((error) => {
+            this.initializationPromise = null;
+            throw error;
+        });
         return this.initializationPromise;
     }
 
