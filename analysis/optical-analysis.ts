@@ -25,22 +25,34 @@ import { getScene, getCamera, getRenderer, getControls, getTableOpticalSystem, g
 let spotDiagramRequestCounter = 0;
 let pendingSpotDiagramRequest: { requestId: number; options: any; requestedAt: number } | null = null;
 
-function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows: any[], defocusShiftMm: number): any[] {
+function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows: any[], defocusShiftMm: number, isFiniteObject: boolean = false): any[] {
     const shift = Number(defocusShiftMm);
     if (!Array.isArray(opticalSystemRows)) return [];
 
     const cloned = opticalSystemRows.map((row) => (row && typeof row === 'object') ? { ...row } : row);
     if (!Number.isFinite(shift) || Math.abs(shift) < 1e-15) return cloned;
 
-    const imageIdx = cloned.findIndex((row) => row && (row['object type'] === 'Image' || row.object === 'Image'));
-    const targetIdx = (imageIdx > 0) ? (imageIdx - 1) : Math.max(0, cloned.length - 2);
-    if (targetIdx < 0 || targetIdx >= cloned.length) return cloned;
+    if (isFiniteObject) {
+        // Finite object: shift the object plane (first thickness)
+        if (cloned.length > 0 && cloned[0]) {
+            const objRow = (cloned[0] && typeof cloned[0] === 'object') ? { ...cloned[0] } : {};
+            const baseThickness = Number(objRow.thickness);
+            const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
+            objRow.thickness = safeBaseThickness - shift; // Negative to move object away/closer
+            cloned[0] = objRow;
+        }
+    } else {
+        // Infinite object: shift the image plane
+        const imageIdx = cloned.findIndex((row) => row && (row['object type'] === 'Image' || row.object === 'Image'));
+        const targetIdx = (imageIdx > 0) ? (imageIdx - 1) : Math.max(0, cloned.length - 2);
+        if (targetIdx < 0 || targetIdx >= cloned.length) return cloned;
 
-    const target = (cloned[targetIdx] && typeof cloned[targetIdx] === 'object') ? { ...cloned[targetIdx] } : {};
-    const baseThickness = Number(target.thickness);
-    const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
-    target.thickness = safeBaseThickness + shift;
-    cloned[targetIdx] = target;
+        const target = (cloned[targetIdx] && typeof cloned[targetIdx] === 'object') ? { ...cloned[targetIdx] } : {};
+        const baseThickness = Number(target.thickness);
+        const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
+        target.thickness = safeBaseThickness + shift;
+        cloned[targetIdx] = target;
+    }
 
     return cloned;
 }
@@ -1248,6 +1260,11 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
             ? (primaryWavelengthRow ? [primaryWavelengthRow] : [{ wavelength: 0.5876, weight: 1, __isPrimary: true, __label: '587.6 nm (primary)' }])
             : (wavelengthRows.length > 0 ? wavelengthRows : [{ wavelength: 0.5876, weight: 1, __isPrimary: true, __label: '587.6 nm (primary)' }]);
 
+        // Determine if using finite object (Point/Height) vs infinite object (Angle)
+        const firstObject = objectRows[0] || {};
+        const objectTypeRaw = String(firstObject.position ?? firstObject.object ?? firstObject.Object ?? firstObject.objectType ?? 'Angle').toLowerCase();
+        const isFiniteObject = !objectTypeRaw.includes('angle');
+
         const focusGrid: any[][] = Array.from({ length: objectRows.length }, () => []);
         const patternFromOption = String(options?.pattern || '').trim().toLowerCase();
         const pattern = (patternFromOption === 'grid' || patternFromOption === 'annular')
@@ -1259,7 +1276,7 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
             const p = Math.floor((i / Math.max(1, defocusValues.length)) * 90);
             reportProgress(p, `Defocus ${shift.toFixed(4)} mm (${i + 1}/${defocusValues.length})`);
 
-            const shiftedRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, shift);
+            const shiftedRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, shift, isFiniteObject);
             for (let objIdx = 0; objIdx < objectRows.length; objIdx++) {
                 const mergedRawPoints: Array<{ x: number; y: number }> = [];
                 const perWavelengthRaw: Array<{ key: string; label: string; color: string; points: Array<{ x: number; y: number }> }> = [];
