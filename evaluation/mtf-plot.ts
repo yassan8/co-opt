@@ -14,21 +14,33 @@ async function getPSFCalculatorSingleton() {
     return _psfCalculatorSingletonPromise;
 }
 
-function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows, defocusShiftMm) {
+function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows, defocusShiftMm, isFiniteObject = false) {
     const shift = Number(defocusShiftMm);
     if (!Array.isArray(opticalSystemRows)) return [];
     const cloned = opticalSystemRows.map((row) => (row && typeof row === 'object') ? { ...row } : row);
     if (!Number.isFinite(shift) || Math.abs(shift) < 1e-15) return cloned;
 
-    const imageIdx = cloned.findIndex((row) => row && (row['object type'] === 'Image' || row.object === 'Image'));
-    const targetIdx = (imageIdx > 0) ? (imageIdx - 1) : Math.max(0, cloned.length - 2);
-    if (targetIdx < 0 || targetIdx >= cloned.length) return cloned;
+    if (isFiniteObject) {
+        // Finite object: shift the object plane (first thickness)
+        if (cloned.length > 0 && cloned[0]) {
+            const objRow = (cloned[0] && typeof cloned[0] === 'object') ? { ...cloned[0] } : {};
+            const baseThickness = Number(objRow.thickness);
+            const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
+            objRow.thickness = safeBaseThickness - shift; // Negative to move object away/closer
+            cloned[0] = objRow;
+        }
+    } else {
+        // Infinite object: shift the image plane
+        const imageIdx = cloned.findIndex((row) => row && (row['object type'] === 'Image' || row.object === 'Image'));
+        const targetIdx = (imageIdx > 0) ? (imageIdx - 1) : Math.max(0, cloned.length - 2);
+        if (targetIdx < 0 || targetIdx >= cloned.length) return cloned;
 
-    const target = (cloned[targetIdx] && typeof cloned[targetIdx] === 'object') ? { ...cloned[targetIdx] } : {};
-    const baseThickness = Number(target.thickness);
-    const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
-    target.thickness = safeBaseThickness + shift;
-    cloned[targetIdx] = target;
+        const target = (cloned[targetIdx] && typeof cloned[targetIdx] === 'object') ? { ...cloned[targetIdx] } : {};
+        const baseThickness = Number(target.thickness);
+        const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
+        target.thickness = safeBaseThickness + shift;
+        cloned[targetIdx] = target;
+    }
 
     return cloned;
 }
@@ -150,10 +162,6 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
 
     // Optical system and objects (use imported functions)
     const baseOpticalSystemRows = getOpticalSystemRows(window.tableOpticalSystem);
-    const opticalSystemRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, defocusShiftMm);
-    if (!opticalSystemRows || opticalSystemRows.length === 0) {
-        throw new Error('光学システムデータがありません。まず光学システムを設定してください。');
-    }
     const objects = getObjectRows(window.tableObject);
     if (!objects || objects.length === 0) {
         throw new Error('オブジェクトデータがありません。まずオブジェクトを設定してください。');
@@ -167,6 +175,12 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     const objectY = (selectedObject.y ?? selectedObject.yHeightAngle ?? 0);
     const objectTypeRaw = String(selectedObject.position ?? selectedObject.object ?? selectedObject.Object ?? selectedObject.objectType ?? 'Point');
     const objectTypeLower = objectTypeRaw.toLowerCase();
+    const isFiniteObject = !/\bangle\b/.test(objectTypeLower);
+
+    const opticalSystemRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, defocusShiftMm, isFiniteObject);
+    if (!opticalSystemRows || opticalSystemRows.length === 0) {
+        throw new Error('光学システムデータがありません。まず光学システムを設定してください。');
+    }
 
     let fieldAngle = { x: 0, y: 0 };
     let xHeight = 0;
