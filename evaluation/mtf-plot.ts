@@ -683,15 +683,26 @@ async function showThroughFocusMTFDiagram({
             const mtfVal = Number.isFinite(v) ? v : null;
 
             if (!traceMap.has(name)) {
-                traceMap.set(name, {
+                const trace: any = {
                     x: [],
                     y: [],
                     type: 'scatter',
-                    mode: 'lines',
+                    mode: (typeof tr?.mode === 'string' && tr.mode) ? tr.mode : 'lines',
                     name,
-                    showlegend: true,
-                    line: tr?.line || { width: 2 }
-                });
+                    showlegend: true
+                };
+
+                if (tr?.line && typeof tr.line === 'object') {
+                    trace.line = { ...tr.line };
+                } else {
+                    trace.line = { width: 2 };
+                }
+
+                if (tr?.marker && typeof tr.marker === 'object') {
+                    trace.marker = { ...tr.marker };
+                }
+
+                traceMap.set(name, trace);
             }
             const agg = traceMap.get(name);
             agg.x.push(shift);
