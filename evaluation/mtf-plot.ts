@@ -687,7 +687,7 @@ async function showThroughFocusMTFDiagram({
                     x: [],
                     y: [],
                     type: 'scatter',
-                    mode: 'lines+markers',
+                    mode: 'lines',
                     name,
                     showlegend: true,
                     line: tr?.line || { width: 2 }
