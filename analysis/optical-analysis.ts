@@ -1254,6 +1254,8 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
         const firstObject = objectRows[0] || {};
         const objectTypeRaw = String(firstObject.position ?? firstObject.object ?? firstObject.Object ?? firstObject.objectType ?? 'Angle').toLowerCase();
         const isFiniteObject = !objectTypeRaw.includes('angle');
+        
+        console.log(`🔍 [TFSD] Object type: "${objectTypeRaw}", isFinite: ${isFiniteObject}, conjugate: ${isFiniteObject ? 'finite' : 'infinite'}`);
 
         const focusGrid: any[][] = Array.from({ length: objectRows.length }, () => []);
         const patternFromOption = String(options?.pattern || '').trim().toLowerCase();
@@ -1284,7 +1286,7 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
                     const spotResult = await generateSpotDiagramAsync(
                         shiftedRows,
                         [wlRow],
-                        objectRows,
+                        [objectRows[objIdx]], // Pass single object like MTF does
                         surfaceNumber,
                         rayCount,
                         ringCount,
@@ -1293,12 +1295,20 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
                             physicalVignetting: true,
                             displaySurfaceNumber: surfaceId,
                             pattern,
-                            conjugateType: isFiniteObject ? 'finite' : 'infinite'
+                            conjugateType: isFiniteObject ? 'finite' : 'infinite',
+                            // For Through-Focus with infinite conjugate, disable origin solving
+                            // since defocus shifts can confuse the chief ray calculation
+                            allowStopBasedOriginSolve: false
                         }
                     );
 
+                    console.log(`🔍 [TFSD] Spot result for defocus ${shift.toFixed(4)} mm, wl ${wlLabel}, obj ${objIdx}:`, {
+                        spotDataLength: spotResult?.spotData?.length,
+                        firstObjPointCount: spotResult?.spotData?.[0]?.spotPoints?.length
+                    });
+
                     const objects = Array.isArray(spotResult?.spotData) ? spotResult.spotData : [];
-                    const objData = objects[objIdx] || {};
+                    const objData = objects[0] || {}; // Always use index 0 since we passed single object
                     const points = Array.isArray(objData?.spotPoints) ? objData.spotPoints : [];
 
                     const wlPoints: Array<{ x: number; y: number }> = [];
