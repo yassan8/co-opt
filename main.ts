@@ -145,7 +145,7 @@ import './core/undo-history.ts';
 import './optimization/suggest-design-intent.ts';
 
 // Analysis modules
-import { clearAllDrawing, showSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene } from './analysis/optical-analysis.ts';
+import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene } from './analysis/optical-analysis.ts';
 
 // Performance monitoring (削除されたファイルなのでコメントアウト)
 // import { performanceMonitor } from './performance-monitor.ts';
@@ -416,6 +416,7 @@ async function initializeApplication() {
         window['fitCameraToScene'] = fitCameraToScene;
         window['clearAllDrawing'] = clearAllDrawing;
         window['showSpotDiagram'] = showSpotDiagram;
+        window['showThroughFocusSpotDiagram'] = showThroughFocusSpotDiagram;
         window['showTransverseAberrationDiagram'] = showTransverseAberrationDiagram;
         window['showLongitudinalAberrationDiagram'] = showLongitudinalAberrationDiagram;
         window['showAstigmatismDiagram'] = showAstigmatismDiagram;
@@ -2533,7 +2534,9 @@ if (analysisSelect) {
             'transverse-aberration': 'open-transverse-aberration-window-btn',
             'opd': 'open-opd-window-btn',
             'psf': 'open-psf-window-btn',
-            'mtf': 'open-mtf-window-btn'
+            'mtf': 'open-mtf-window-btn',
+            'through-focus-spot': 'open-through-focus-spot-window-btn',
+            'through-focus-mtf': 'open-through-focus-mtf-window-btn'
         };
         
         const btnId = buttonMap[value];

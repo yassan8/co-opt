@@ -184,6 +184,7 @@ export default function MainToolbar() {
             <option value="opd">Optical Path Difference</option>
             <option value="psf">Point Spread Function</option>
             <option value="mtf">Modulation Transfer Function</option>
+            <option value="through-focus-spot">Through-Focus Spot</option>
             <option value="through-focus-mtf">Through-Focus MTF</option>
           </select>
         </div>
@@ -201,6 +202,12 @@ export default function MainToolbar() {
           title="Open Spherical Aberration in popup window"
         >
           Spherical Aberration
+        </button>
+        <button
+          id="open-through-focus-spot-window-btn"
+          title="Open Through-Focus Spot in popup window"
+        >
+          Through-Focus Spot
         </button>
         <button
           id="open-through-focus-mtf-window-btn"

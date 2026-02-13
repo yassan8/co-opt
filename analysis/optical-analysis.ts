@@ -25,6 +25,26 @@ import { getScene, getCamera, getRenderer, getControls, getTableOpticalSystem, g
 let spotDiagramRequestCounter = 0;
 let pendingSpotDiagramRequest: { requestId: number; options: any; requestedAt: number } | null = null;
 
+function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows: any[], defocusShiftMm: number): any[] {
+    const shift = Number(defocusShiftMm);
+    if (!Array.isArray(opticalSystemRows)) return [];
+
+    const cloned = opticalSystemRows.map((row) => (row && typeof row === 'object') ? { ...row } : row);
+    if (!Number.isFinite(shift) || Math.abs(shift) < 1e-15) return cloned;
+
+    const imageIdx = cloned.findIndex((row) => row && (row['object type'] === 'Image' || row.object === 'Image'));
+    const targetIdx = (imageIdx > 0) ? (imageIdx - 1) : Math.max(0, cloned.length - 2);
+    if (targetIdx < 0 || targetIdx >= cloned.length) return cloned;
+
+    const target = (cloned[targetIdx] && typeof cloned[targetIdx] === 'object') ? { ...cloned[targetIdx] } : {};
+    const baseThickness = Number(target.thickness);
+    const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
+    target.thickness = safeBaseThickness + shift;
+    cloned[targetIdx] = target;
+
+    return cloned;
+}
+
 /**
  * Create field setting from object data for PSF calculation
  */
@@ -1091,6 +1111,356 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         } catch (_) {
             // Best-effort only
         }
+    }
+}
+
+export async function showThroughFocusSpotDiagram(options: any = {}): Promise<void> {
+    const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
+        ? options.onProgress
+        : null;
+
+    let containerTarget: any = 'through-focus-spot-container';
+    if (options && typeof options === 'object') {
+        if (options.containerElement) {
+            containerTarget = options.containerElement;
+        } else if (typeof options.containerId === 'string' && options.containerId.trim() !== '') {
+            containerTarget = options.containerId;
+        }
+    }
+
+    const reportProgress = (percent: number, message: string) => {
+        try { onProgress?.({ percent, message }); } catch (_) {}
+    };
+
+    const parseIntOr = (v: any, fallback: number) => {
+        const n = parseInt(String(v ?? ''), 10);
+        return Number.isInteger(n) ? n : fallback;
+    };
+    const parseFloatOr = (v: any, fallback: number) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : fallback;
+    };
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+    const getColorForWavelength = (wavelengthUm: number): string => {
+        if (!Number.isFinite(wavelengthUm) || wavelengthUm <= 0) return '#1f77b4';
+        if (wavelengthUm < 0.45) return '#8B00FF';
+        if (wavelengthUm < 0.495) return '#0000FF';
+        if (wavelengthUm < 0.57) return '#00CC44';
+        if (wavelengthUm < 0.59) return '#C6C400';
+        if (wavelengthUm < 0.62) return '#FF8800';
+        return '#FF0000';
+    };
+
+    try {
+        const tableOpticalSystem = getTableOpticalSystem();
+        const tableObject = getTableObject();
+        const tableSource = getTableSource();
+
+        const baseOpticalSystemRows = getOpticalSystemRows(tableOpticalSystem);
+        const objectRows = getObjectRows(tableObject);
+        const sourceRows = getSourceRows(tableSource);
+
+        if (!Array.isArray(baseOpticalSystemRows) || baseOpticalSystemRows.length === 0) {
+            throw new Error('No optical system data available');
+        }
+        if (!Array.isArray(objectRows) || objectRows.length === 0) {
+            throw new Error('No object data available');
+        }
+
+        const surfaceSelect = document.getElementById('surface-number-select') as HTMLSelectElement | null;
+        const rayCountInput = document.getElementById('ray-count-input') as HTMLInputElement | null;
+        const ringCountSelect = document.getElementById('ring-count-select') as HTMLSelectElement | null;
+
+        const surfaceId = Number.isInteger(options?.surfaceIndex)
+            ? Number(options.surfaceIndex)
+            : parseIntOr(surfaceSelect?.value, 0);
+        const rayCount = clamp(
+            Number.isInteger(options?.rayCount) ? Number(options.rayCount) : parseIntOr(rayCountInput?.value, 101),
+            1,
+            20001
+        );
+        const ringCount = clamp(
+            Number.isInteger(options?.ringCount) ? Number(options.ringCount) : parseIntOr(ringCountSelect?.value, 10),
+            1,
+            64
+        );
+
+        const minDefocusMm = parseFloatOr(options?.defocusMinMm, -0.1);
+        const maxDefocusMm = parseFloatOr(options?.defocusMaxMm, 0.1);
+        const steps = clamp(parseIntOr(options?.steps, 5), 3, 61);
+        const scaleWidthUm = Math.max(1, parseFloatOr(options?.scaleUm, 100));
+        const halfScaleUm = scaleWidthUm * 0.5;
+        const wavelengthModeRaw = String(options?.wavelengthMode || 'all').trim().toLowerCase();
+        const wavelengthMode: 'all' | 'primary' = (wavelengthModeRaw === 'primary') ? 'primary' : 'all';
+
+        const { generateSurfaceOptions, generateSpotDiagramAsync } = await import('../evaluation/spot-diagram.js');
+
+        const surfaceOptions = generateSurfaceOptions(baseOpticalSystemRows || []);
+        let surfaceIndex = 0;
+        const matched = Array.isArray(surfaceOptions)
+            ? surfaceOptions.find((o: any) => Number(o?.surfaceId) === Number(surfaceId))
+            : null;
+        if (matched && Number.isInteger(matched.rowIndex)) {
+            surfaceIndex = matched.rowIndex;
+        } else {
+            const imageOption = Array.isArray(surfaceOptions)
+                ? surfaceOptions.find((o: any) => typeof o?.label === 'string' && o.label.includes('(Image)'))
+                : null;
+            if (imageOption && Number.isInteger(imageOption.rowIndex)) {
+                surfaceIndex = imageOption.rowIndex;
+            } else {
+                surfaceIndex = Math.max(0, baseOpticalSystemRows.length - 1);
+            }
+        }
+
+        const surfaceNumber = surfaceIndex + 1;
+        const defocusValues = Array.from({ length: steps }, (_, i) => {
+            if (steps <= 1) return minDefocusMm;
+            const t = i / (steps - 1);
+            return minDefocusMm + t * (maxDefocusMm - minDefocusMm);
+        });
+
+        const wavelengthRows: any[] = (() => {
+            if (!Array.isArray(sourceRows) || sourceRows.length === 0) return [];
+            return sourceRows
+                .map((row: any, index: number) => {
+                    const wl = Number(row?.wavelength);
+                    if (!Number.isFinite(wl) || wl <= 0) return null;
+                    const primaryText = String(row?.primary || '').toLowerCase();
+                    const isPrimary = primaryText.includes('primary');
+                    return {
+                        ...row,
+                        wavelength: wl,
+                        __wlIndex: index,
+                        __isPrimary: isPrimary,
+                        __label: `${(wl * 1000).toFixed(1)} nm${isPrimary ? ' (primary)' : ''}`
+                    };
+                })
+                .filter(Boolean);
+        })();
+
+        const primaryWavelengthRow = wavelengthRows.find((row: any) => row?.__isPrimary)
+            || (wavelengthRows.length > 0 ? wavelengthRows[0] : null);
+
+        const effectiveWavelengthRows = wavelengthMode === 'primary'
+            ? (primaryWavelengthRow ? [primaryWavelengthRow] : [{ wavelength: 0.5876, weight: 1, __isPrimary: true, __label: '587.6 nm (primary)' }])
+            : (wavelengthRows.length > 0 ? wavelengthRows : [{ wavelength: 0.5876, weight: 1, __isPrimary: true, __label: '587.6 nm (primary)' }]);
+
+        const focusGrid: any[][] = Array.from({ length: objectRows.length }, () => []);
+        const patternFromOption = String(options?.pattern || '').trim().toLowerCase();
+        const pattern = (patternFromOption === 'grid' || patternFromOption === 'annular')
+            ? patternFromOption
+            : getSpotDiagramPattern();
+
+        for (let i = 0; i < defocusValues.length; i++) {
+            const shift = defocusValues[i];
+            const p = Math.floor((i / Math.max(1, defocusValues.length)) * 90);
+            reportProgress(p, `Defocus ${shift.toFixed(4)} mm (${i + 1}/${defocusValues.length})`);
+
+            const shiftedRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, shift);
+            for (let objIdx = 0; objIdx < objectRows.length; objIdx++) {
+                const mergedRawPoints: Array<{ x: number; y: number }> = [];
+                const perWavelengthRaw: Array<{ key: string; label: string; color: string; points: Array<{ x: number; y: number }> }> = [];
+
+                for (let wlIdx = 0; wlIdx < effectiveWavelengthRows.length; wlIdx++) {
+                    const wlRow = effectiveWavelengthRows[wlIdx];
+                    const wlValueUm = Number(wlRow?.wavelength);
+                    const wlColor = getColorForWavelength(wlValueUm);
+                    const wlLabel = String(wlRow.__label || `${(Number(wlRow.wavelength) * 1000).toFixed(1)} nm`);
+                    reportProgress(
+                        p,
+                        `Defocus ${shift.toFixed(4)} mm (${i + 1}/${defocusValues.length}), λ ${wlIdx + 1}/${effectiveWavelengthRows.length}`
+                    );
+
+                    const spotResult = await generateSpotDiagramAsync(
+                        shiftedRows,
+                        [wlRow],
+                        objectRows,
+                        surfaceNumber,
+                        rayCount,
+                        ringCount,
+                        {
+                            onProgress: null,
+                            physicalVignetting: true,
+                            displaySurfaceNumber: surfaceId,
+                            pattern
+                        }
+                    );
+
+                    const objects = Array.isArray(spotResult?.spotData) ? spotResult.spotData : [];
+                    const objData = objects[objIdx] || {};
+                    const points = Array.isArray(objData?.spotPoints) ? objData.spotPoints : [];
+
+                    const wlPoints: Array<{ x: number; y: number }> = [];
+
+                    for (const pt of points) {
+                        const x = Number(pt?.x || 0);
+                        const y = Number(pt?.y || 0);
+                        mergedRawPoints.push({ x, y });
+                        wlPoints.push({ x, y });
+                    }
+
+                    perWavelengthRaw.push({
+                        key: wlLabel,
+                        label: wlLabel,
+                        color: wlColor,
+                        points: wlPoints
+                    });
+                }
+
+                let cx = 0;
+                let cy = 0;
+                if (mergedRawPoints.length > 0) {
+                    cx = mergedRawPoints.reduce((sum, pt) => sum + pt.x, 0) / mergedRawPoints.length;
+                    cy = mergedRawPoints.reduce((sum, pt) => sum + pt.y, 0) / mergedRawPoints.length;
+                }
+
+                focusGrid[objIdx].push({
+                    shiftMm: shift,
+                    pointsByWavelength: perWavelengthRaw.map((group) => ({
+                        key: group.key,
+                        label: group.label,
+                        color: group.color,
+                        points: group.points.map((pt) => ({
+                            xUm: (pt.x - cx) * 1000,
+                            yUm: (pt.y - cy) * 1000
+                        }))
+                    }))
+                });
+            }
+        }
+
+        const containerEl = (typeof containerTarget === 'string')
+            ? document.getElementById(containerTarget)
+            : containerTarget;
+        if (!containerEl) {
+            throw new Error('Through-Focus Spot container element not found');
+        }
+
+        const targetWindow = containerEl?.ownerDocument?.defaultView || window;
+        const plotly = targetWindow?.Plotly || (window as any)?.Plotly;
+        if (!plotly || typeof plotly.newPlot !== 'function') {
+            throw new Error('Plotly is not available');
+        }
+
+        reportProgress(92, 'Building plot...');
+        const rows = objectRows.length;
+        const cols = defocusValues.length;
+        const traces: any[] = [];
+        const layout: any = {
+            title: {
+                text: 'Through-Focus Spot Diagram',
+                x: 0.5,
+                xanchor: 'center',
+                y: 0.98,
+                yanchor: 'top'
+            },
+            showlegend: true,
+            grid: { rows, columns: cols, pattern: 'independent' },
+            margin: { l: 60, r: 20, t: 95, b: 60 },
+            paper_bgcolor: '#ffffff',
+            plot_bgcolor: '#ffffff',
+            height: Math.max(420, rows * 145 + 90),
+            legend: {
+                orientation: 'h',
+                yanchor: 'bottom',
+                y: 1.06,
+                xanchor: 'center',
+                x: 0.5
+            },
+            legendgroupclick: 'togglegroup'
+        };
+
+        const shownLegendGroups = new Set<string>();
+        const legendEntries = new Map<string, { label: string; color: string }>();
+
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const idx = r * cols + c + 1;
+                const axisRefX = idx === 1 ? 'x' : `x${idx}`;
+                const axisRefY = idx === 1 ? 'y' : `y${idx}`;
+                const axisKeyX = idx === 1 ? 'xaxis' : `xaxis${idx}`;
+                const axisKeyY = idx === 1 ? 'yaxis' : `yaxis${idx}`;
+                const cell = focusGrid?.[r]?.[c] || { pointsByWavelength: [] };
+                const groups = Array.isArray(cell.pointsByWavelength) ? cell.pointsByWavelength : [];
+
+                for (const group of groups) {
+                    const pts = Array.isArray(group?.points) ? group.points : [];
+                    const groupKey = String(group?.key || group?.label || 'wavelength');
+                    if (!legendEntries.has(groupKey)) {
+                        legendEntries.set(groupKey, {
+                            label: String(group?.label || groupKey),
+                            color: String(group?.color || 'blue')
+                        });
+                    }
+                    traces.push({
+                        x: pts.map((p: any) => p.xUm),
+                        y: pts.map((p: any) => p.yUm),
+                        mode: 'markers',
+                        type: 'scattergl',
+                        name: String(group?.label || groupKey),
+                        legendgroup: groupKey,
+                        showlegend: false,
+                        marker: {
+                            size: 3,
+                            color: String(group?.color || 'blue'),
+                            opacity: 0.75
+                        },
+                        xaxis: axisRefX,
+                        yaxis: axisRefY,
+                        hovertemplate: 'x=%{x:.2f} µm<br>y=%{y:.2f} µm<extra></extra>'
+                    });
+                    shownLegendGroups.add(groupKey);
+                }
+
+                layout[axisKeyX] = {
+                    range: [-halfScaleUm, halfScaleUm],
+                    showgrid: true,
+                    zeroline: true,
+                    showticklabels: r === rows - 1,
+                    title: r === rows - 1 ? `${defocusValues[c].toFixed(3)} mm` : ''
+                };
+                layout[axisKeyY] = {
+                    range: [-halfScaleUm, halfScaleUm],
+                    showgrid: true,
+                    zeroline: true,
+                    showticklabels: c === 0,
+                    title: c === 0 ? `Field ${r + 1}` : '',
+                    scaleanchor: axisRefX,
+                    scaleratio: 1
+                };
+            }
+        }
+
+        for (const [groupKey, entry] of legendEntries.entries()) {
+            traces.push({
+                x: [null],
+                y: [null],
+                mode: 'markers',
+                type: 'scatter',
+                name: entry.label,
+                legendgroup: groupKey,
+                showlegend: true,
+                marker: {
+                    size: 8,
+                    color: entry.color,
+                    symbol: 'circle'
+                },
+                hoverinfo: 'skip'
+            });
+        }
+
+        reportProgress(98, 'Rendering plot...');
+        await plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
+        reportProgress(100, 'Done');
+    } catch (error: any) {
+        const container = typeof containerTarget === 'string'
+            ? document.getElementById(containerTarget)
+            : containerTarget;
+        if (container) {
+            container.innerHTML = `<div style="padding:20px;color:red;font-family:Arial;">Failed to generate Through-Focus Spot Diagram.<br>${String(error?.message || error)}</div>`;
+        }
+        throw error;
     }
 }
 

@@ -5523,6 +5523,283 @@ export function setupAnalysisWindows() {
                 });
         }
 
+        // Through-Focus Spot popup window button
+        const openThroughFocusSpotWindowBtn = document.getElementById('open-through-focus-spot-window-btn');
+        if (openThroughFocusSpotWindowBtn) {
+                openThroughFocusSpotWindowBtn.addEventListener('click', () => {
+                        if (w.__throughFocusSpotPopup && !w.__throughFocusSpotPopup.closed) {
+                                try { w.__throughFocusSpotPopup.focus(); } catch (_) {}
+                                return;
+                        }
+
+                        const popup = window.open('', 'Through-Focus Spot', 'width=980,height=720');
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__throughFocusSpotPopup = popup;
+
+                        popup.document.write(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Through-Focus Spot</title>
+    <style>
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: #f4f4f4;
+        }
+        .header {
+            padding: 10px 12px;
+            background: #f8f8f8;
+            color: #333;
+            border-bottom: 1px solid #ddd;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .controls {
+            padding: 10px 12px;
+            background: #f8f8f8;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 10px;
+            align-items: center;
+            flex: 0 0 auto;
+        }
+        .controls label { font-size: 12px; color: #333; white-space: nowrap; }
+        .controls select,
+        .controls input {
+            padding: 5px 8px;
+            font-size: 12px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            background: white;
+        }
+        .controls input { width: 92px; }
+        .controls button {
+            padding: 6px 10px;
+            border: 1px solid #bbb;
+            background: #f8f8f8;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #333;
+        }
+        .controls button:hover { background: #e9e9e9; }
+        .note { padding: 8px 12px; font-size: 12px; color: #666; border-bottom: 1px solid #eee; background: #fff; }
+        .content {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: hidden;
+            background: white;
+            display: flex;
+            flex-direction: column;
+        }
+        #popup-through-focus-spot-container { flex: 1 1 auto; min-height: 0; }
+    </style>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body>
+    <div class="header">Through-Focus Spot Diagram</div>
+    <div class="controls">
+        <label for="popup-through-focus-spot-surface-select">Surf:</label>
+        <select id="popup-through-focus-spot-surface-select"></select>
+        <label for="popup-through-focus-spot-ray-count">Ray:</label>
+        <input id="popup-through-focus-spot-ray-count" type="number" min="1" step="1" value="101" />
+        <label for="popup-through-focus-spot-ring-count">Ring:</label>
+        <select id="popup-through-focus-spot-ring-count">
+            <option value="3">3</option>
+            <option value="5">5</option>
+            <option value="8">8</option>
+            <option value="10" selected>10</option>
+            <option value="12">12</option>
+            <option value="16">16</option>
+            <option value="20">20</option>
+        </select>
+        <label for="popup-through-focus-spot-pattern">Pattern:</label>
+        <select id="popup-through-focus-spot-pattern">
+            <option value="annular" selected>Annular</option>
+            <option value="grid">Rectangle</option>
+        </select>
+        <label for="popup-through-focus-spot-min-defocus">Defocus min (mm):</label>
+        <input id="popup-through-focus-spot-min-defocus" type="number" step="0.001" value="-0.100" />
+        <label for="popup-through-focus-spot-max-defocus">Defocus max (mm):</label>
+        <input id="popup-through-focus-spot-max-defocus" type="number" step="0.001" value="0.100" />
+        <label for="popup-through-focus-spot-steps">Steps:</label>
+        <input id="popup-through-focus-spot-steps" type="number" min="3" max="61" step="1" value="5" />
+        <label for="popup-through-focus-spot-scale">Scale (μm):</label>
+        <input id="popup-through-focus-spot-scale" type="number" min="1" step="1" value="100" />
+        <label for="popup-through-focus-spot-wavelength-mode">Wavelength:</label>
+        <select id="popup-through-focus-spot-wavelength-mode">
+            <option value="all" selected>All</option>
+            <option value="primary">Primary only</option>
+        </select>
+        <button id="popup-show-through-focus-spot-btn" type="button">Show Through-Focus Spot</button>
+    </div>
+    <div class="note">
+        Note: Rows are field points and columns are defocus shifts. Each cell is centroid-centered for spot spread comparison.
+    </div>
+    <div id="popup-through-focus-spot-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
+        <div id="popup-through-focus-spot-progress-text" style="margin-bottom: 6px;">Calculating Through-Focus Spot...</div>
+        <progress id="popup-through-focus-spot-progress" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
+    </div>
+    <div class="content">
+        <div id="popup-through-focus-spot-container"></div>
+    </div>
+
+    <script>
+        function getOpenerEl(id) {
+            try {
+                return window.opener && window.opener.document ? window.opener.document.getElementById(id) : null;
+            } catch (_) {
+                return null;
+            }
+        }
+
+        function syncSurfaceOptionsFromOpener() {
+            const openerSelect = getOpenerEl('surface-number-select');
+            const popupSelect = document.getElementById('popup-through-focus-spot-surface-select');
+            if (!popupSelect) return;
+
+            popupSelect.innerHTML = '';
+            if (!openerSelect || !openerSelect.options) {
+                const opt = document.createElement('option');
+                opt.value = '0';
+                opt.textContent = 'Surf 0';
+                popupSelect.appendChild(opt);
+                return;
+            }
+
+            for (const o of openerSelect.options) {
+                const opt = document.createElement('option');
+                opt.value = o.value;
+                opt.textContent = (o.textContent || '').replace(/^面\s*/, 'Surf ').replace(/^Surface\s*/i, 'Surf ');
+                popupSelect.appendChild(opt);
+            }
+            popupSelect.value = openerSelect.value;
+        }
+
+        function syncInputsFromOpener() {
+            const openerRing = getOpenerEl('ring-count-select');
+            const openerAnnular = getOpenerEl('annular-pattern-btn');
+            const openerGrid = getOpenerEl('grid-pattern-btn');
+            const popupRay = document.getElementById('popup-through-focus-spot-ray-count');
+            const popupRing = document.getElementById('popup-through-focus-spot-ring-count');
+            const popupPattern = document.getElementById('popup-through-focus-spot-pattern');
+
+            if (popupRay && (!popupRay.value || popupRay.value.trim() === '')) popupRay.value = '101';
+            if (popupRing && openerRing && popupRing.value !== openerRing.value) popupRing.value = openerRing.value;
+            if (popupPattern) {
+                const isAnnular = !!openerAnnular && openerAnnular.classList.contains('active');
+                const isGrid = !!openerGrid && openerGrid.classList.contains('active');
+                if (isAnnular) popupPattern.value = 'annular';
+                else if (isGrid) popupPattern.value = 'grid';
+            }
+        }
+
+        function syncAll() {
+            syncSurfaceOptionsFromOpener();
+            syncInputsFromOpener();
+        }
+
+        window['renderThroughFocusSpot'] = async () => {
+            const containerEl = document.getElementById('popup-through-focus-spot-container');
+            if (containerEl) containerEl.innerHTML = '';
+
+            const progressWrapper = document.getElementById('popup-through-focus-spot-progress-wrapper');
+            const progressEl = document.getElementById('popup-through-focus-spot-progress');
+            const progressTextEl = document.getElementById('popup-through-focus-spot-progress-text');
+
+            const setProgress = (value, text) => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'block';
+                    if (progressEl && Number.isFinite(value)) progressEl.value = Math.max(0, Math.min(100, value));
+                    if (progressTextEl && typeof text === 'string') progressTextEl.textContent = text;
+                } catch (_) {}
+            };
+
+            const hideProgress = () => {
+                try { if (progressWrapper) progressWrapper.style.display = 'none'; } catch (_) {}
+            };
+
+            try {
+                const opener = window.opener || null;
+                if (!opener || typeof opener.showThroughFocusSpotDiagram !== 'function') {
+                    throw new Error('showThroughFocusSpotDiagram is not available on opener');
+                }
+
+                const surfaceEl = document.getElementById('popup-through-focus-spot-surface-select');
+                const rayEl = document.getElementById('popup-through-focus-spot-ray-count');
+                const ringEl = document.getElementById('popup-through-focus-spot-ring-count');
+                const patternEl = document.getElementById('popup-through-focus-spot-pattern');
+                const minEl = document.getElementById('popup-through-focus-spot-min-defocus');
+                const maxEl = document.getElementById('popup-through-focus-spot-max-defocus');
+                const stepsEl = document.getElementById('popup-through-focus-spot-steps');
+                const scaleEl = document.getElementById('popup-through-focus-spot-scale');
+                const wavelengthModeEl = document.getElementById('popup-through-focus-spot-wavelength-mode');
+
+                const openerAnnular = getOpenerEl('annular-pattern-btn');
+                const openerGrid = getOpenerEl('grid-pattern-btn');
+                if (patternEl) {
+                    const selectedPattern = String(patternEl.value || 'annular');
+                    if (selectedPattern === 'annular' && openerAnnular) openerAnnular.click();
+                    if (selectedPattern === 'grid' && openerGrid) openerGrid.click();
+                }
+
+                setProgress(0, 'Starting...');
+                await new Promise(r => setTimeout(r, 0));
+
+                await opener.showThroughFocusSpotDiagram({
+                    surfaceIndex: surfaceEl && surfaceEl.value !== '' ? parseInt(surfaceEl.value, 10) : undefined,
+                    rayCount: rayEl ? parseInt(rayEl.value, 10) : undefined,
+                    ringCount: ringEl ? parseInt(ringEl.value, 10) : undefined,
+                    pattern: patternEl ? String(patternEl.value || 'annular') : 'annular',
+                    defocusMinMm: minEl ? Number(minEl.value) : undefined,
+                    defocusMaxMm: maxEl ? Number(maxEl.value) : undefined,
+                    steps: stepsEl ? parseInt(stepsEl.value, 10) : undefined,
+                    scaleUm: scaleEl ? Number(scaleEl.value) : undefined,
+                    wavelengthMode: wavelengthModeEl ? String(wavelengthModeEl.value || 'all') : 'all',
+                    onProgress: (evt) => {
+                        try {
+                            const p = Number(evt?.percent);
+                            const msg = evt?.message || evt?.phase || 'Working...';
+                            if (Number.isFinite(p)) setProgress(p, msg);
+                            else setProgress(undefined, msg);
+                        } catch (_) {}
+                    },
+                    containerElement: containerEl
+                });
+
+                setProgress(100, 'Done');
+                hideProgress();
+            } catch (err) {
+                console.error(err);
+                setProgress(100, 'Failed');
+                if (containerEl) {
+                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate Through-Focus Spot. Check console.</div>';
+                }
+            }
+        };
+
+        document.getElementById('popup-show-through-focus-spot-btn').addEventListener('click', () => window.renderThroughFocusSpot());
+        window.addEventListener('focus', syncAll);
+        window.addEventListener('load', () => syncAll());
+    </script>
+</body>
+</html>
+                        `);
+
+                        try { popup.document.close(); } catch (_) {}
+                });
+        }
+
         // Through-Focus MTF popup window button
         const openThroughFocusMtfWindowBtn = document.getElementById('open-through-focus-mtf-window-btn');
         if (openThroughFocusMtfWindowBtn) {
@@ -6533,6 +6810,7 @@ export function setupTransformationControls(): void {
                 'opd': 'open-opd-window-btn',
                 'psf': 'open-psf-window-btn',
                 'mtf': 'open-mtf-window-btn',
+                'through-focus-spot': 'open-through-focus-spot-window-btn',
                 'through-focus-mtf': 'open-through-focus-mtf-window-btn'
             };
             
