@@ -192,7 +192,7 @@ function ensurePopupMessageHandler(): void {
                     controls: popupWindow.controls,
                     scene: popupWindow.scene,
                     renderer: popupWindow.renderer,
-                    includeRayStartMargin: false,
+                    includeRayStartMargin: true,
                     preserveDrawCrossBounds: false,
                     ...(Number.isFinite(centerZOverride) ? { centerZOverride } : {})
                 };
@@ -1449,18 +1449,9 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 10000
             );
             
-            const isLowPowerRenderer = isIOSLike();
-            const rendererOptions = {
-                antialias: !isLowPowerRenderer,
-                alpha: false,
-                precision: isLowPowerRenderer ? 'mediump' : 'highp',
-                powerPreference: isLowPowerRenderer ? 'low-power' : 'high-performance'
-            };
-            if (!isLowPowerRenderer) {
-                rendererOptions.logarithmicDepthBuffer = true;
-            }
+            const rendererOptions = { antialias: true, alpha: true, precision: 'highp', logarithmicDepthBuffer: true };
             const renderer = new THREE.WebGLRenderer(rendererOptions);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isLowPowerRenderer ? 1.25 : 2));
+            renderer.setPixelRatio(window.devicePixelRatio || 1);
             renderer.setSize(container.clientWidth, container.clientHeight, false);
             renderer.setClearColor(0xffffff, 1);
             renderer.sortObjects = false;
@@ -1474,8 +1465,8 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             scene.add(directionalLight);
             
             const controls = new OrbitControls(camera, renderer.domElement);
-            controls.enableDamping = !isLowPowerRenderer;
-            controls.dampingFactor = isLowPowerRenderer ? 0 : 0.05;
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
             controls.enableRotate = true;
             controls.enablePan = true;
             controls.enableZoom = true;
@@ -1529,53 +1520,19 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             camera.position.set(0, 50, 100);
             camera.lookAt(0, 0, 0);
             camera.up.set(0, 1, 0);
-            controls.target.set(0, 0, 0);
+            controls.target.set(0, 0, 100);
             controls.update();
 
             const renderNow = () => {
-                try {
-                    renderer.render(scene, camera);
-                } catch (e) {
-                    if (status) {
-                        status.textContent = 'Render error';
-                    }
-                }
+                renderer.render(scene, camera);
             };
             
             function animate() {
-                if (isLowPowerRenderer) {
-                    return;
-                }
                 requestAnimationFrame(animate);
                 controls.update();
                 renderNow();
             }
             animate();
-
-            if (isLowPowerRenderer) {
-                controls.addEventListener('change', () => renderNow());
-                renderNow();
-            }
-
-            renderer.domElement.addEventListener('webglcontextlost', (event) => {
-                try { event.preventDefault(); } catch (_) {}
-                if (status) {
-                    status.textContent = 'WebGL context lost...';
-                }
-            }, false);
-
-            renderer.domElement.addEventListener('webglcontextrestored', () => {
-                if (status) {
-                    status.textContent = 'Context restored. Redrawing...';
-                }
-                renderNow();
-                try {
-                    if (window.opener) {
-                        const viewState = getPopupViewState();
-                        window.opener.postMessage({ action: 'draw-cross', ...viewState }, '*');
-                    }
-                } catch (_) {}
-            }, false);
             
             let resizeScheduled = false;
             let lastResizeSentAt = 0;
@@ -1611,7 +1568,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 const h = Math.max(1, Math.round(r.height));
                 if (w < 2 || h < 2) return;
                 
-                renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isLowPowerRenderer ? 1.25 : 2));
+                renderer.setPixelRatio(window.devicePixelRatio || 1);
                 renderer.setSize(w, h, false);
                 controls.update();
                 
