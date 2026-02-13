@@ -188,16 +188,12 @@ export async function ensureMtfWasmReady(): Promise<{
     );
   }
 
-  const strictPsfWasm = !!((typeof globalThis !== 'undefined') && (globalThis as any).__COOPT_MTF_PSF_WASM_STRICT === true);
   let psfReady = false;
 
   try {
     const mod = await import('../wasm/psf/psf-wasm-wrapper.ts');
     const W = mod?.PSFCalculatorWasm;
     if (typeof W !== 'function') {
-      if (strictPsfWasm) {
-        throw new Error('MTF requires PSF WASM wrapper, but PSFCalculatorWasm is unavailable');
-      }
       console.warn('⚠️ PSF WASM wrapper is unavailable; continuing with fallback path.');
     } else {
       const psf = new W();
@@ -207,16 +203,10 @@ export async function ensureMtfWasmReady(): Promise<{
       psfReady = !!psf.isReady && !psf.initializationFailed;
       if (!psfReady) {
         const message = 'MTF requires PSF WASM, but initialization failed or module is not ready';
-        if (strictPsfWasm) {
-          throw new Error(message);
-        }
         console.warn(`⚠️ ${message}; continuing with fallback path.`);
       }
     }
   } catch (error) {
-    if (strictPsfWasm) {
-      throw error;
-    }
     console.warn('⚠️ PSF WASM readiness check failed; continuing with fallback path:', error);
     psfReady = false;
   }
