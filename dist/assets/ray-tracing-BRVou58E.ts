@@ -9,7 +9,7 @@ if (typeof window !== 'undefined') {
 // Import functions from ray-paraxial.js without destructuring for compatibility
 import * as rayParaxial from './ray-paraxial.ts';
 import { asphericSagDerivative, toricSurfaceZ, toricSagDerivatives } from '../../optical/surface-math.ts';
-import { getWASMSystem as getWASMSystemService } from '../../core/wasm-service.ts';
+import { getWASMSystem as getWASMSystemService, isRayTracingWasmStrict } from '../../core/wasm-service.ts';
 import { setAsphericSagImplementation } from '../../core/aspheric-sag-service.ts';
 const getSafeThickness = rayParaxial.getSafeThickness;
 const getRefractiveIndex = rayParaxial.getRefractiveIndex;
@@ -24,6 +24,7 @@ const __WASM_SYSTEM_RECHECK_MS = 1000;
 
 let __wasmSagRt10Fn = null;
 let __wasmIntersectRt10Fn = null;
+let __wasmIntersectRt10WithRetryFn = null;
 
 let __wasmTmpVec3Ptr = 0;
 let __wasmTmpVec3Module = null;
@@ -109,6 +110,19 @@ function __getWasmIntersectRt10Fn() {
     const fn = wasmModule?._intersect_aspheric_rt10;
     if (typeof fn === 'function') {
       __wasmIntersectRt10Fn = fn;
+      return fn;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function __getWasmIntersectRt10WithRetryFn() {
+  if (__wasmIntersectRt10WithRetryFn) return __wasmIntersectRt10WithRetryFn;
+  try {
+    const wasmModule = __getWasmModuleCached();
+    const fn = wasmModule?._intersect_aspheric_rt10_with_retry;
+    if (typeof fn === 'function') {
+      __wasmIntersectRt10WithRetryFn = fn;
       return fn;
     }
   } catch (_) {}
@@ -395,7 +409,7 @@ function __asphericSag_impl(r, params, mode = "even") {
 }
 
 // --- 非球面サーフェスとの交点探索（ニュートン法） ---
-export function intersectAsphericSurface(ray, params, mode = "even", maxIter = 20, tol = 1e-7, debugLog = null) {
+export function intersectAsphericSurface(ray, params, mode = "even", maxIter = 20, tol = 1e-7, debugLog = null, strictOptions = null) {
   // During optimization / merit fast-mode, disable detailed debug logging.
   // This keeps the WASM intersection fast-path enabled regardless of call site.
   try {
@@ -410,7 +424,7 @@ export function intersectAsphericSurface(ray, params, mode = "even", maxIter = 2
     var __t0 = now();
     var __itersBefore = RT_PROF.stats.intersectIterationsTotal;
     try {
-      const res = __intersectAsphericSurface_impl(ray, params, mode, maxIter, tol, debugLog);
+      const res = __intersectAsphericSurface_impl(ray, params, mode, maxIter, tol, debugLog, strictOptions);
       return res;
     } finally {
       RT_PROF.stats.intersectTime += now() - __t0;
@@ -419,10 +433,10 @@ export function intersectAsphericSurface(ray, params, mode = "even", maxIter = 2
       if (RT_PROF.stats.__lastIterCount > RT_PROF.stats.intersectIterationsMax) RT_PROF.stats.intersectIterationsMax = RT_PROF.stats.__lastIterCount;
     }
   }
-  return __intersectAsphericSurface_impl(ray, params, mode, maxIter, tol, debugLog);
+  return __intersectAsphericSurface_impl(ray, params, mode, maxIter, tol, debugLog, strictOptions);
 }
 
-function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 20, tol = 1e-7, debugLog = null) {
+function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 20, tol = 1e-7, debugLog = null, strictOptions = null) {
   // Last line of defense: never run detailed intersection debug during optimization.
   // Some call sites may bypass the exported wrapper; ensure the WASM fast-path is not skipped.
   try {
@@ -449,12 +463,23 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
   const coef8 = safeParams.coef8 !== undefined ? safeParams.coef8 : 0;
   const coef9 = safeParams.coef9 !== undefined ? safeParams.coef9 : 0;
   const coef10 = safeParams.coef10 !== undefined ? safeParams.coef10 : 0;
+  const allowNonStrict = !!(strictOptions && strictOptions.allowNonStrict === true);
+  const requireWasmRayTracing = !!(strictOptions && strictOptions.requireWasmRayTracing)
+    || (isRayTracingWasmStrict() && !allowNonStrict);
+
+  if (requireWasmRayTracing && debugLog) {
+    debugLog = null;
+  }
 
   // Optional WASM fast-path (skip when debugLog is requested to preserve diagnostics).
   try {
     if (!debugLog) {
       const wasmIntersect = __getWasmIntersectRt10Fn();
+      const wasmIntersectWithRetry = __getWasmIntersectRt10WithRetryFn();
       if (RT_PROF.enabled) RT_PROF.stats.wasmIntersectAttempts++;
+      if (requireWasmRayTracing && typeof wasmIntersect !== 'function') {
+        throw new Error('WASM strict mode: _intersect_aspheric_rt10 is unavailable');
+      }
       if (wasmIntersect) {
         const ox = Number(ray?.pos?.x);
         const oy = Number(ray?.pos?.y);
@@ -467,29 +492,86 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
         const k = Number(conic) || 0;
         const modeOdd = (String(mode || '').toLowerCase() === 'odd') ? 1 : 0;
         if (Number.isFinite(ox) && Number.isFinite(oy) && Number.isFinite(oz) && Number.isFinite(dx) && Number.isFinite(dy) && Number.isFinite(dz)) {
-          const tHit = wasmIntersect(
-            ox, oy, oz,
-            dx, dy, dz,
-            sm,
-            R, k,
-            coef1 || 0,
-            coef2 || 0,
-            coef3 || 0,
-            coef4 || 0,
-            coef5 || 0,
-            coef6 || 0,
-            coef7 || 0,
-            coef8 || 0,
-            coef9 || 0,
-            coef10 || 0,
-            modeOdd,
-            maxIter | 0,
-            Number(tol) || 1e-7
-          );
+          const retryMaxIter = Math.max(40, (maxIter | 0) * 3);
+          const retryTol = Math.max(1e-6, (Number(tol) || 1e-7) * 10);
+          let tHit = -1;
+
+          // Strict mode: prefer a single WASM entrypoint that performs retry internally.
+          if (requireWasmRayTracing && wasmIntersectWithRetry) {
+            tHit = wasmIntersectWithRetry(
+              ox, oy, oz,
+              dx, dy, dz,
+              sm,
+              R, k,
+              coef1 || 0,
+              coef2 || 0,
+              coef3 || 0,
+              coef4 || 0,
+              coef5 || 0,
+              coef6 || 0,
+              coef7 || 0,
+              coef8 || 0,
+              coef9 || 0,
+              coef10 || 0,
+              modeOdd,
+              maxIter | 0,
+              Number(tol) || 1e-7,
+              retryMaxIter,
+              retryTol
+            );
+          } else {
+            tHit = wasmIntersect(
+              ox, oy, oz,
+              dx, dy, dz,
+              sm,
+              R, k,
+              coef1 || 0,
+              coef2 || 0,
+              coef3 || 0,
+              coef4 || 0,
+              coef5 || 0,
+              coef6 || 0,
+              coef7 || 0,
+              coef8 || 0,
+              coef9 || 0,
+              coef10 || 0,
+              modeOdd,
+              maxIter | 0,
+              Number(tol) || 1e-7
+            );
+
+            // Strict mode fallback path when unified retry export is unavailable.
+            if (requireWasmRayTracing && !(Number.isFinite(tHit) && tHit > 0)) {
+              tHit = wasmIntersect(
+                ox, oy, oz,
+                dx, dy, dz,
+                sm,
+                R, k,
+                coef1 || 0,
+                coef2 || 0,
+                coef3 || 0,
+                coef4 || 0,
+                coef5 || 0,
+                coef6 || 0,
+                coef7 || 0,
+                coef8 || 0,
+                coef9 || 0,
+                coef10 || 0,
+                modeOdd,
+                retryMaxIter,
+                retryTol
+              );
+            }
+          }
+
           if (Number.isFinite(tHit) && tHit > 0) {
             if (RT_PROF.enabled) RT_PROF.stats.wasmIntersectHits++;
             const pt = add(ray.pos, scale(ray.dir, tHit));
             if (pt && isFinite(pt.x) && isFinite(pt.y) && isFinite(pt.z)) return pt;
+          }
+          if (requireWasmRayTracing) {
+            if (RT_PROF.enabled) RT_PROF.stats.wasmIntersectMisses++;
+            return null;
           }
           if (RT_PROF.enabled) RT_PROF.stats.wasmIntersectMisses++;
         }
@@ -511,6 +593,9 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
     }
   } catch (_) {
     // Fallback to JS implementation
+    if (requireWasmRayTracing) {
+      throw _;
+    }
     if (RT_PROF.enabled) RT_PROF.stats.wasmIntersectErrors++;
   }
   
@@ -1740,7 +1825,7 @@ function __getCachedSurfaceData(opticalSystemRows, maxSurfaceIndex, effectiveSys
   }
 }
 
-export function traceRay(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, maxSurfaceIndex = null) {
+export function traceRay(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, maxSurfaceIndex = null, options = null) {
   // During optimization / merit fast-mode, disable detailed debug logging.
   // This keeps the WASM intersection fast-path enabled and avoids heavy per-ray diagnostics.
   try {
@@ -1754,37 +1839,45 @@ export function traceRay(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
     RT_PROF.stats.traceCalls++;
     var __t0 = now();
     try {
-      return __traceRay_impl(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex);
+      return __traceRay_impl(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, options);
     } finally {
       RT_PROF.stats.traceTime += now() - __t0;
     }
   }
-  return __traceRay_impl(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex);
+  return __traceRay_impl(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, options);
 }
 
 // Fast path: return only the global hit point on the specified surface.
 // - Avoids allocating rayPath arrays/objects.
 // - Stops immediately after computing the target surface intersection (no refraction / thickness advance).
 // - Returns null if the ray is physically blocked before reaching the target.
-export function traceRayHitPoint(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null) {
+export function traceRayHitPoint(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null, options = null) {
   if (targetSurfaceIndex === null || targetSurfaceIndex === undefined) return null;
   const idx = Number(targetSurfaceIndex);
   if (!Number.isFinite(idx) || idx < 0) return null;
+
+  const callOptions = {
+    ...(options && typeof options === 'object' ? options : null),
+    returnHitPointOnly: true
+  };
 
   if (RT_PROF.enabled) {
     RT_PROF.stats.traceCalls++;
     var __t0 = now();
     try {
-      return __traceRay_impl(opticalSystemRows, ray0, n0, null, idx, { returnHitPointOnly: true });
+      return __traceRay_impl(opticalSystemRows, ray0, n0, null, idx, callOptions);
     } finally {
       RT_PROF.stats.traceTime += now() - __t0;
     }
   }
-  return __traceRay_impl(opticalSystemRows, ray0, n0, null, idx, { returnHitPointOnly: true });
+  return __traceRay_impl(opticalSystemRows, ray0, n0, null, idx, callOptions);
 }
 
 function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, maxSurfaceIndex = null, options = null) {
   const returnHitPointOnly = !!(options && typeof options === 'object' && options.returnHitPointOnly);
+  const allowNonStrict = !!(options && typeof options === 'object' && options.allowNonStrict === true);
+  const requireWasmRayTracing = !!(options && typeof options === 'object' && options.requireWasmRayTracing)
+    || (isRayTracingWasmStrict() && !allowNonStrict);
 
   // Same rule as traceRay(): never do detailed debug logging during optimization.
   try {
@@ -2309,13 +2402,22 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
         hitPoint = intersectToricSurface(localRay, toricParams, 50, 1e-10, isDetailedDebug ? debugLog : null);
       } else {
         // 非球面交点計算（球面も同様に処理）
-        hitPoint = intersectAsphericSurface(localRay, surfaceParams, asphereMode, 20, 1e-7, isDetailedDebug ? debugLog : null);
+        hitPoint = intersectAsphericSurface(
+          localRay,
+          surfaceParams,
+          asphereMode,
+          20,
+          1e-7,
+          isDetailedDebug ? debugLog : null,
+          { requireWasmRayTracing, allowNonStrict }
+        );
       }
       
       if (!hitPoint) {
         // Suppress error logging during chief ray search grid trials (expected failures)
         const suppressErrors = (typeof globalThis !== 'undefined' && globalThis.__COOPT_SUPPRESS_RAY_ERRORS === true);
-        if (!suppressErrors) {
+        const enableRayErrorLog = (typeof globalThis !== 'undefined' && globalThis.__COOPT_ENABLE_RAY_ERROR_LOG === true);
+        if (!suppressErrors && enableRayErrorLog) {
           console.error(`❌ [Ray Trace] NO INTERSECTION at surface ${i + 1}, surfType=${row.surfType}, radius=${row.radius}`);
         }
         if (isDetailedDebug) {

@@ -40,6 +40,7 @@ export class PSFCalculatorWasm {
     _initPromise: Promise<void> | null;
     calculatePSF: any;
     calculatePSFGrid: any;
+    calculateMTFAxesFromPSFCore: any;
     calculateStrehl: any;
     calculateEncircledEnergy: any;
     freePSFResult: any;
@@ -62,6 +63,7 @@ export class PSFCalculatorWasm {
         // WASM関数のラッパー
         this.calculatePSF = null;
         this.calculatePSFGrid = null;
+        this.calculateMTFAxesFromPSFCore = null;
         this.calculateStrehl = null;
         this.calculateEncircledEnergy = null;
         this.freePSFResult = null;
@@ -176,6 +178,13 @@ export class PSFCalculatorWasm {
                         ['number', 'number', 'number', 'number', 'number']);
                 } catch {
                     this.calculatePSFGrid = null;
+                }
+
+                try {
+                    this.calculateMTFAxesFromPSFCore = this.wasmModule.cwrap('calculate_mtf_axes_from_psf_wasm', 'number',
+                        ['number', 'number', 'number']);
+                } catch {
+                    this.calculateMTFAxesFromPSFCore = null;
                 }
                 
                 this.calculateStrehl = this.wasmModule.cwrap('calculate_strehl_wasm', 'number', 
@@ -397,6 +406,39 @@ export class PSFCalculatorWasm {
             
         } catch (memoryError) {
             throw new Error('WASM memory access not available');
+        }
+    }
+
+    calculateMTFAxesFromPSF(psfFlat, size, kMax) {
+        if (!this.wasmModule || !this.isReady || !this.calculateMTFAxesFromPSFCore) {
+            return null;
+        }
+        if (!(Number.isFinite(size) && size > 1 && Number.isFinite(kMax) && kMax >= 0)) {
+            return null;
+        }
+        if (!(psfFlat instanceof Float64Array) || psfFlat.length !== size * size) {
+            return null;
+        }
+
+        let ptrPSF = 0;
+        let ptrOut = 0;
+        try {
+            ptrPSF = this.copyArrayToWasm(psfFlat);
+            ptrOut = this.calculateMTFAxesFromPSFCore(ptrPSF, size, kMax | 0);
+            if (!ptrOut) return null;
+
+            const len = (kMax + 1) * 2;
+            const out = this.copyArrayFromWasm(ptrOut, len);
+            if (!(out instanceof Float64Array) || out.length !== len) return null;
+
+            const xAxis = out.slice(0, kMax + 1);
+            const yAxis = out.slice(kMax + 1);
+            return { xAxis, yAxis };
+        } catch (_) {
+            return null;
+        } finally {
+            try { if (ptrPSF) this.wasmModule._free(ptrPSF); } catch (_) {}
+            try { if (ptrOut) this.freePSFResult(ptrOut); } catch (_) {}
         }
     }
 

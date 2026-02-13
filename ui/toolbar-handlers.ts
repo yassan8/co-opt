@@ -462,7 +462,8 @@ export function handleAnalysisSelect(selectedValue: string): void {
     'transverse-aberration': 'open-transverse-aberration-window-btn',
     'opd': 'open-opd-window-btn',
     'psf': 'open-psf-window-btn',
-    'mtf': 'open-mtf-window-btn'
+    'mtf': 'open-mtf-window-btn',
+    'through-focus-mtf': 'open-through-focus-mtf-window-btn'
   };
 
   const buttonId = analysisButtonMap[value];

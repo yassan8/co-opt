@@ -462,3 +462,54 @@ double intersect_aspheric_rt10(
 
     return -1.0;
 }
+
+/**
+ * ray-tracing.js互換: 非球面交点探索（WASM内リトライ統合版）
+ * - 1回目の設定で失敗した場合のみ、2回目の設定で再試行する。
+ * - JS側の strict mode 再試行をWASM内に寄せ、境界呼び出し回数を削減する。
+ */
+EMSCRIPTEN_KEEPALIVE
+double intersect_aspheric_rt10_with_retry(
+    double ox, double oy, double oz,
+    double dx, double dy, double dz,
+    double semidia,
+    double radius, double conic,
+    double coef1, double coef2, double coef3, double coef4, double coef5,
+    double coef6, double coef7, double coef8, double coef9, double coef10,
+    int modeOdd,
+    int maxIter1,
+    double tol1,
+    int maxIter2,
+    double tol2
+) {
+    double t1 = intersect_aspheric_rt10(
+        ox, oy, oz,
+        dx, dy, dz,
+        semidia,
+        radius, conic,
+        coef1, coef2, coef3, coef4, coef5,
+        coef6, coef7, coef8, coef9, coef10,
+        modeOdd,
+        maxIter1,
+        tol1
+    );
+    if (isfinite(t1) && t1 > 0.0) {
+        return t1;
+    }
+
+    double t2 = intersect_aspheric_rt10(
+        ox, oy, oz,
+        dx, dy, dz,
+        semidia,
+        radius, conic,
+        coef1, coef2, coef3, coef4, coef5,
+        coef6, coef7, coef8, coef9, coef10,
+        modeOdd,
+        maxIter2,
+        tol2
+    );
+    if (isfinite(t2) && t2 > 0.0) {
+        return t2;
+    }
+    return -1.0;
+}

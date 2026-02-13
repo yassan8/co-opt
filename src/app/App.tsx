@@ -17,26 +17,17 @@ export default function App() {
       .__cooptReactMounted = true;
     window.dispatchEvent(new CustomEvent("coopt:react-mounted"));
     console.log("[React] coopt:react-mounted event dispatched immediately to trigger main.ts initialization");
+
+    const w = window as any;
     
-    let attempts = 0;
-    
-    // Check if main.ts functions are available
-    const checkMainTSReady = () => {
-      const w = window as any;
-      const ready = typeof w.getOpticalSystemRows === 'function' && 
-                    typeof w.THREE !== 'undefined';
-      if (!ready && attempts % 20 === 0) { // Log every 2 seconds
-        console.log("[React] main.ts ready check:", {
-          getOpticalSystemRows: typeof w.getOpticalSystemRows,
-          THREE: typeof w.THREE,
-          ready
-        });
+    const initializeAfterMainTS = (mode: "main-ready" | "module-loaded" | "fallback") => {
+      if (mode === "main-ready") {
+        console.log("[React] main.ts is ready, initializing application features");
+      } else if (mode === "module-loaded") {
+        console.log("[React] main.ts module loaded, starting best-effort initialization");
+      } else {
+        console.log("[React] Proceeding with fallback initialization");
       }
-      return ready;
-    };
-    
-    const initializeAfterMainTS = () => {
-      console.log("[React] main.ts is ready, initializing application features");
       
       // Load active configuration to tables (this expands Blocks to Optical System rows)
       console.log("[React] Loading active configuration to tables...");
@@ -74,31 +65,63 @@ export default function App() {
         }
       }, 200);
     };
-    
-    // Wait for main.ts to be ready
-    if (checkMainTSReady()) {
-      setTimeout(initializeAfterMainTS, 100);
-    } else {
-      console.log("[React] Waiting for main.ts to initialize...");
-      let attempts = 0;
-      const maxAttempts = 100; // Increase to 10 seconds
-      const checkInterval = setInterval(() => {
-        attempts++;
-        if (checkMainTSReady()) {
-          clearInterval(checkInterval);
-          console.log(`[React] main.ts ready after ${attempts} attempts`);
-          setTimeout(initializeAfterMainTS, 100);
-        } else if (attempts >= maxAttempts) {
-          clearInterval(checkInterval);
-          console.warn(`[React] main.ts not ready after ${maxAttempts} attempts, initializing anyway...`);
-          // Initialize anyway - most handlers will be set up by dom-event-handlers.ts
-          setTimeout(() => {
-            window.dispatchEvent(new CustomEvent("coopt:react-mounted"));
-            console.log("[React] coopt:react-mounted event dispatched (delayed)");
-          }, 100);
-        }
-      }, 100);
+
+    const isMainReady = () => !!w.__cooptMainReady;
+    const isMainModuleLoaded = () => !!w.__cooptMainModuleLoaded || typeof w.getOpticalSystemRows === "function";
+
+    if (isMainReady()) {
+      setTimeout(() => initializeAfterMainTS("main-ready"), 0);
+      return;
     }
+
+    if (isMainModuleLoaded()) {
+      setTimeout(() => initializeAfterMainTS("module-loaded"), 0);
+      return;
+    }
+
+    console.log("[React] Waiting for main.ts bootstrap events...");
+    let initialized = false;
+    const completeInit = (mode: "main-ready" | "module-loaded" | "fallback") => {
+      if (initialized) return;
+      initialized = true;
+      setTimeout(() => initializeAfterMainTS(mode), 0);
+    };
+
+    const onMainReady = () => completeInit("main-ready");
+    const onMainModuleLoaded = () => completeInit("module-loaded");
+    const onMainLoadFailed = (evt: Event) => {
+      const detail = (evt as CustomEvent<any>)?.detail;
+      console.error("[React] main.ts load failed", detail || { message: w.__cooptMainLoadError || "unknown" });
+    };
+
+    window.addEventListener("coopt:main-ready", onMainReady, { once: true });
+    window.addEventListener("coopt:main-module-loaded", onMainModuleLoaded, { once: true });
+    window.addEventListener("coopt:main-load-failed", onMainLoadFailed);
+
+    const fallbackTimer = window.setTimeout(() => {
+      if (initialized) return;
+      const status = {
+        getOpticalSystemRows: typeof w.getOpticalSystemRows,
+        initializeAllTables: typeof w.initializeAllTables,
+        loadActiveConfigurationToTables: typeof w.loadActiveConfigurationToTables,
+        mainReadyFlag: !!w.__cooptMainReady,
+        mainModuleLoaded: !!w.__cooptMainModuleLoaded,
+        mainLoadError: w.__cooptMainLoadError || null
+      };
+      if (status.mainLoadError) {
+        console.warn("[React] main bootstrap timeout after load error, proceeding with fallback", status);
+      } else {
+        console.info("[React] main bootstrap slow-start, proceeding with fallback", status);
+      }
+      completeInit("fallback");
+    }, 30000);
+
+    return () => {
+      window.clearTimeout(fallbackTimer);
+      window.removeEventListener("coopt:main-ready", onMainReady);
+      window.removeEventListener("coopt:main-module-loaded", onMainModuleLoaded);
+      window.removeEventListener("coopt:main-load-failed", onMainLoadFailed);
+    };
   }, []);
 
   console.log("[React] Rendering App component");

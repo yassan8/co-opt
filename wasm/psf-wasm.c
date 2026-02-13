@@ -73,6 +73,7 @@ void init_fast_trig_tables(int max_size);
 void init_twiddle_table(int max_size);
 static double fast_sin(double x);
 static double fast_cos(double x);
+double* calculate_mtf_axes_from_psf_wasm(double* psf, int size, int k_max);
 
 /**
  * FFTシフト（DC成分を中央に移動）
@@ -805,6 +806,68 @@ double* calculate_psf_grid_wasm(double* grid_opd, double* amplitude, int* pupil_
 
     free(complex_amp);
     return psf_intensity;
+}
+
+/**
+ * PSFからMTFのx/y軸断面を計算
+ * @param psf PSF強度（row-major, size*size）
+ * @param size PSFサイズ（NxN）
+ * @param k_max 取得する周波数ビン上限（0..size/2）
+ * @return 先頭にx軸、後半にy軸を格納した配列ポインタ（length=2*(k_max+1)）
+ */
+double* calculate_mtf_axes_from_psf_wasm(double* psf, int size, int k_max) {
+    if (!psf || size < 2) return NULL;
+
+    const int max_bin = size / 2;
+    if (k_max < 0) k_max = 0;
+    if (k_max > max_bin) k_max = max_bin;
+
+    const int n = size * size;
+    Complex* otf = (Complex*)calloc((size_t)n, sizeof(Complex));
+    if (!otf) return NULL;
+
+    for (int i = 0; i < n; i++) {
+        otf[i].real = psf[i];
+        otf[i].imag = 0.0;
+    }
+
+    fft_2d(otf, size, size, 0);
+
+    const double dc_re = otf[0].real;
+    const double dc_im = otf[0].imag;
+    const double dc_mag = sqrt(dc_re * dc_re + dc_im * dc_im);
+    if (!(isfinite(dc_mag) && dc_mag > 0.0)) {
+        free(otf);
+        return NULL;
+    }
+
+    const int out_len = (k_max + 1) * 2;
+    double* out = (double*)malloc((size_t)out_len * sizeof(double));
+    if (!out) {
+        free(otf);
+        return NULL;
+    }
+
+    for (int k = 0; k <= k_max; k++) {
+        const int idx_x = k;
+        const int idx_y = k * size;
+
+        const double x_re = otf[idx_x].real;
+        const double x_im = otf[idx_x].imag;
+        const double y_re = otf[idx_y].real;
+        const double y_im = otf[idx_y].imag;
+
+        out[k] = sqrt(x_re * x_re + x_im * x_im) / dc_mag;
+        out[(k_max + 1) + k] = sqrt(y_re * y_re + y_im * y_im) / dc_mag;
+    }
+
+    if (out_len > 0) {
+        out[0] = 1.0;
+        out[k_max + 1] = 1.0;
+    }
+
+    free(otf);
+    return out;
 }
 
 /**

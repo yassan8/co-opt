@@ -5330,7 +5330,7 @@ export function setupAnalysisWindows() {
         <button id="popup-show-mtf-btn" type="button">Show MTF</button>
     </div>
     <div class="note">
-        Note: MTF is computed from PSF via Fourier transform.
+        Note: MTF is computed from PSF via Fourier transform. Curves are Tangential/Sagittal (not Spherical Aberration analysis).
     </div>
     <div id="popup-mtf-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
         <div id="popup-mtf-progress-text" style="margin-bottom: 6px;">Calculating MTF...</div>
@@ -5512,6 +5512,333 @@ export function setupAnalysisWindows() {
         };
 
         document.getElementById('popup-show-mtf-btn').addEventListener('click', () => window.renderMTF());
+        window.addEventListener('focus', syncAllOptions);
+        window.addEventListener('load', () => syncAllOptions());
+    </script>
+</body>
+</html>
+                        `);
+
+                        try { popup.document.close(); } catch (_) {}
+                });
+        }
+
+        // Through-Focus MTF popup window button
+        const openThroughFocusMtfWindowBtn = document.getElementById('open-through-focus-mtf-window-btn');
+        if (openThroughFocusMtfWindowBtn) {
+                openThroughFocusMtfWindowBtn.addEventListener('click', () => {
+                        if (w.__throughFocusMtfPopup && !w.__throughFocusMtfPopup.closed) {
+                                try { w.__throughFocusMtfPopup.focus(); } catch (_) {}
+                                return;
+                        }
+
+                        const popup = window.open('', 'Through-Focus MTF', 'width=900,height=680');
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__throughFocusMtfPopup = popup;
+
+                        popup.document.write(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Through-Focus MTF</title>
+    <style>
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: #f4f4f4;
+        }
+        .header {
+            padding: 10px 12px;
+            background: #f8f8f8;
+            color: #333;
+            border-bottom: 1px solid #ddd;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .controls {
+            padding: 10px 12px;
+            background: #f8f8f8;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 10px;
+            align-items: center;
+            flex: 0 0 auto;
+        }
+        .controls label { font-size: 12px; color: #333; white-space: nowrap; }
+        .controls select {
+            padding: 5px 8px;
+            font-size: 12px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            background: white;
+        }
+        .controls input {
+            padding: 5px 8px;
+            font-size: 12px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            background: white;
+            width: 110px;
+        }
+        .controls input[type="checkbox"] {
+            width: auto;
+            padding: 0;
+            border: none;
+            background: transparent;
+        }
+        .controls button {
+            padding: 6px 10px;
+            border: 1px solid #bbb;
+            background: #f8f8f8;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #333;
+        }
+        .controls button:hover { background: #e9e9e9; }
+        .note { padding: 8px 12px; font-size: 12px; color: #666; border-bottom: 1px solid #eee; background: #fff; }
+        .content {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: hidden;
+            background: white;
+            display: flex;
+            flex-direction: column;
+        }
+        #popup-through-focus-mtf-container { flex: 1 1 auto; min-height: 0; }
+    </style>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body>
+    <div class="header">Through-Focus MTF</div>
+    <div class="controls">
+        <label for="popup-through-focus-mtf-wavelength-select">Wavelength:</label>
+        <select id="popup-through-focus-mtf-wavelength-select"></select>
+        <label for="popup-through-focus-mtf-object-select">Object:</label>
+        <select id="popup-through-focus-mtf-object-select"></select>
+        <label for="popup-through-focus-mtf-target-freq-input">Freq (lp/mm):</label>
+        <input id="popup-through-focus-mtf-target-freq-input" type="number" min="0" step="1" value="30" />
+        <label for="popup-through-focus-mtf-min-defocus-input">Defocus min (mm):</label>
+        <input id="popup-through-focus-mtf-min-defocus-input" type="number" step="0.001" value="-0.1" />
+        <label for="popup-through-focus-mtf-max-defocus-input">Defocus max (mm):</label>
+        <input id="popup-through-focus-mtf-max-defocus-input" type="number" step="0.001" value="0.1" />
+        <label for="popup-through-focus-mtf-steps-input">Steps:</label>
+        <input id="popup-through-focus-mtf-steps-input" type="number" min="3" max="201" step="1" value="21" />
+        <label for="popup-through-focus-mtf-sampling-select">Sampling:</label>
+        <select id="popup-through-focus-mtf-sampling-select">
+            <option value="32">32x32</option>
+            <option value="64">64x64</option>
+            <option value="128">128x128</option>
+            <option value="256" selected>256x256</option>
+            <option value="512">512x512</option>
+            <option value="1024">1024x1024</option>
+            <option value="2048">2048x2048</option>
+            <option value="4096">4096x4096</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:6px;">
+            <input id="popup-through-focus-mtf-remove-ptd-checkbox" type="checkbox" />
+            Remove P/T/D
+        </label>
+        <button id="popup-show-through-focus-mtf-btn" type="button">Show Through-Focus MTF</button>
+    </div>
+    <div class="note">
+        Note: X-axis is defocus shift (mm), Y-axis is MTF at the selected spatial frequency. Curves are Tangential/Sagittal.
+    </div>
+    <div id="popup-through-focus-mtf-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
+        <div id="popup-through-focus-mtf-progress-text" style="margin-bottom: 6px;">Calculating Through-Focus MTF...</div>
+        <progress id="popup-through-focus-mtf-progress" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
+    </div>
+    <div class="content">
+        <div id="popup-through-focus-mtf-container"></div>
+    </div>
+
+    <script>
+        function safeCall(fn, fallback) {
+            try { return fn(); } catch (_) { return fallback; }
+        }
+
+        function getOpener() {
+            try { return window.opener || null; } catch (_) { return null; }
+        }
+
+        function getPrimaryWavelength() {
+            const opener = getOpener();
+            if (!opener) return null;
+            if (typeof opener.getPrimaryWavelength !== 'function') return null;
+            const v = Number(safeCall(() => opener.getPrimaryWavelength(), 0));
+            return Number.isFinite(v) && v > 0 ? v : null;
+        }
+
+        function buildWavelengthOptions() {
+            const opener = getOpener();
+            if (!opener) return [];
+            const getSourceRows = opener.getSourceRows;
+            const sources = (typeof getSourceRows === 'function')
+                ? safeCall(() => getSourceRows(opener.tableSource), [])
+                : [];
+            const primary = getPrimaryWavelength();
+            const out = [{ value: 'all', label: 'All' }];
+            if (Array.isArray(sources) && sources.length > 0) {
+                for (let i = 0; i < sources.length; i++) {
+                    const wl = Number(sources[i]?.wavelength);
+                    if (!Number.isFinite(wl) || wl <= 0) continue;
+                    const nm = wl * 1000;
+                    const label = Number.isFinite(primary) && Math.abs(wl - primary) < 1e-9
+                        ? (nm.toFixed(1) + ' nm (primary)')
+                        : (nm.toFixed(1) + ' nm');
+                    out.push({ value: String(wl), label });
+                }
+            }
+            if (out.length === 1) {
+                out.push({ value: String(primary || 0.5876), label: (((primary || 0.5876) * 1000).toFixed(1) + ' nm') });
+            }
+            return out;
+        }
+
+        function buildObjectOptions() {
+            const opener = getOpener();
+            if (!opener) return [];
+            const getObjectRows = opener.getObjectRows;
+            const objects = (typeof getObjectRows === 'function')
+                ? safeCall(() => getObjectRows(opener.tableObject), [])
+                : [];
+            const out = [];
+            if (Array.isArray(objects) && objects.length > 0) {
+                for (let i = 0; i < objects.length; i++) {
+                    const obj = objects[i];
+                    if (!obj) continue;
+                    const typeRaw = String(obj.position ?? obj.object ?? obj.Object ?? obj.objectType ?? 'Point');
+                    const x = (obj.x ?? obj.xHeightAngle ?? 0);
+                    const y = (obj.y ?? obj.yHeightAngle ?? 0);
+                    out.push({ value: String(i), label: (String(i + 1) + ': ' + typeRaw + ' (' + x + ', ' + y + ')') });
+                }
+            }
+            if (out.length === 0) out.push({ value: '0', label: '0' });
+            return out;
+        }
+
+        function populateSelect(selectEl, options) {
+            if (!selectEl) return;
+            const current = selectEl.value;
+            selectEl.innerHTML = '';
+            for (const opt of options) {
+                const o = document.createElement('option');
+                o.value = opt.value;
+                o.textContent = opt.label;
+                selectEl.appendChild(o);
+            }
+            if (current && Array.from(selectEl.options).some(o => o.value === current)) {
+                selectEl.value = current;
+            }
+        }
+
+        function syncAllOptions() {
+            const wlSel = document.getElementById('popup-through-focus-mtf-wavelength-select');
+            const prevWl = wlSel ? wlSel.value : '';
+            populateSelect(wlSel, buildWavelengthOptions());
+            if (wlSel && (!prevWl || !Array.from(wlSel.options).some(o => o.value === prevWl))) {
+                const primary = getPrimaryWavelength();
+                if (Number.isFinite(primary) && Array.from(wlSel.options).some(o => o.value === String(primary))) {
+                    wlSel.value = String(primary);
+                } else {
+                    const firstNumeric = Array.from(wlSel.options).find(o => o.value !== 'all');
+                    if (firstNumeric) wlSel.value = firstNumeric.value;
+                }
+            }
+            populateSelect(document.getElementById('popup-through-focus-mtf-object-select'), buildObjectOptions());
+        }
+
+        window['renderThroughFocusMTF'] = async () => {
+            const containerEl = document.getElementById('popup-through-focus-mtf-container');
+            if (containerEl) containerEl.innerHTML = '';
+
+            const progressWrapper = document.getElementById('popup-through-focus-mtf-progress-wrapper');
+            const progressEl = document.getElementById('popup-through-focus-mtf-progress');
+            const progressTextEl = document.getElementById('popup-through-focus-mtf-progress-text');
+
+            const setProgress = (value, text) => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'block';
+                    if (progressEl && Number.isFinite(value)) progressEl.value = Math.max(0, Math.min(100, value));
+                    if (progressTextEl && typeof text === 'string') progressTextEl.textContent = text;
+                } catch (_) {}
+            };
+
+            const hideProgress = () => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'none';
+                } catch (_) {}
+            };
+
+            const wlSel = document.getElementById('popup-through-focus-mtf-wavelength-select');
+            const objSel = document.getElementById('popup-through-focus-mtf-object-select');
+            const targetFreqEl = document.getElementById('popup-through-focus-mtf-target-freq-input');
+            const minDefocusEl = document.getElementById('popup-through-focus-mtf-min-defocus-input');
+            const maxDefocusEl = document.getElementById('popup-through-focus-mtf-max-defocus-input');
+            const stepsEl = document.getElementById('popup-through-focus-mtf-steps-input');
+            const samplingEl = document.getElementById('popup-through-focus-mtf-sampling-select');
+            const removePtdEl = document.getElementById('popup-through-focus-mtf-remove-ptd-checkbox');
+
+            const wlValue = wlSel ? String(wlSel.value) : '';
+            const primary = getPrimaryWavelength();
+            const wavelength = (wlValue === 'all') ? 'all' : Number(wlValue);
+            const objectIndex = objSel ? parseInt(objSel.value, 10) : 0;
+            const targetFrequencyLpmm = targetFreqEl ? Number(targetFreqEl.value) : 30;
+            const defocusMinMm = minDefocusEl ? Number(minDefocusEl.value) : -0.1;
+            const defocusMaxMm = maxDefocusEl ? Number(maxDefocusEl.value) : 0.1;
+            const steps = stepsEl ? Number(stepsEl.value) : 21;
+            const sampling = samplingEl ? Number(samplingEl.value) : 256;
+            const opdDisplayMode = (removePtdEl && removePtdEl.checked)
+                ? 'pistonTiltDefocusRemoved'
+                : 'pistonTiltRemoved';
+
+            try {
+                const opener = getOpener();
+                if (!opener || typeof opener.showThroughFocusMTFDiagram !== 'function') {
+                    throw new Error('showThroughFocusMTFDiagram is not available on opener');
+                }
+                setProgress(0, 'Starting...');
+                await new Promise(r => setTimeout(r, 0));
+                await opener.showThroughFocusMTFDiagram({
+                    wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : (primary || 0.5876)),
+                    objectIndex: Number.isFinite(objectIndex) ? objectIndex : 0,
+                    targetFrequencyLpmm: Number.isFinite(targetFrequencyLpmm) ? targetFrequencyLpmm : 30,
+                    defocusMinMm: Number.isFinite(defocusMinMm) ? defocusMinMm : -0.1,
+                    defocusMaxMm: Number.isFinite(defocusMaxMm) ? defocusMaxMm : 0.1,
+                    steps: Number.isFinite(steps) ? steps : 21,
+                    samplingSize: Number.isFinite(sampling) ? sampling : 256,
+                    opdDisplayMode,
+                    onProgress: (evt) => {
+                        try {
+                            const p = Number(evt?.percent);
+                            const msg = evt?.message || evt?.phase || 'Working...';
+                            if (Number.isFinite(p)) setProgress(p, msg);
+                            else setProgress(undefined, msg);
+                        } catch (_) {}
+                    },
+                    containerElement: containerEl
+                });
+                setProgress(100, 'Done');
+                hideProgress();
+            } catch (err) {
+                console.error(err);
+                setProgress(100, 'Failed');
+                if (containerEl) {
+                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate Through-Focus MTF. Check console.</div>';
+                }
+            }
+        };
+
+        document.getElementById('popup-show-through-focus-mtf-btn').addEventListener('click', () => window.renderThroughFocusMTF());
         window.addEventListener('focus', syncAllOptions);
         window.addEventListener('load', () => syncAllOptions());
     </script>
@@ -6205,7 +6532,8 @@ export function setupTransformationControls(): void {
                 'transverse-aberration': 'open-transverse-aberration-window-btn',
                 'opd': 'open-opd-window-btn',
                 'psf': 'open-psf-window-btn',
-                'mtf': 'open-mtf-window-btn'
+                'mtf': 'open-mtf-window-btn',
+                'through-focus-mtf': 'open-through-focus-mtf-window-btn'
             };
             
             const buttonId = analysisButtonMap[selectedValue];

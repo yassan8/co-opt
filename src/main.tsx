@@ -5,9 +5,32 @@ import "./app.css";
 
 console.log("[src/main.tsx] Starting React initialization");
 
+const notifyMainModuleLoaded = () => {
+  try {
+    (window as any).__cooptMainModuleLoaded = true;
+    window.dispatchEvent(new CustomEvent("coopt:main-module-loaded"));
+    console.log("[src/main.tsx] Dispatched coopt:main-module-loaded");
+  } catch (e) {
+    console.warn("[src/main.tsx] Failed to dispatch coopt:main-module-loaded", e);
+  }
+};
+
+const notifyMainModuleFailed = (error: unknown) => {
+  try {
+    (window as any).__cooptMainLoadError = String((error as any)?.message || error || "unknown");
+    window.dispatchEvent(new CustomEvent("coopt:main-load-failed", {
+      detail: { message: (window as any).__cooptMainLoadError }
+    }));
+    console.warn("[src/main.tsx] Dispatched coopt:main-load-failed");
+  } catch (_) {
+    // ignore
+  }
+};
+
 // Dynamically import main.ts to ensure it loads before React
 import("../main.ts").then(() => {
   console.log("[src/main.tsx] main.ts loaded successfully");
+  notifyMainModuleLoaded();
   
   const container = document.getElementById("react-root");
 
@@ -25,6 +48,7 @@ import("../main.ts").then(() => {
   console.log("[React] Dispatched coopt:react-mounted event");
 }).catch(error => {
   console.error("[src/main.tsx] Failed to load main.ts:", error);
+  notifyMainModuleFailed(error);
   
   // Still try to mount React even if main.ts fails
   const container = document.getElementById("react-root");

@@ -1,5 +1,6 @@
 // Import data utility functions
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.ts';
+import { ensureMtfWasmReady, setRayTracingWasmStrict, isRayTracingWasmStrict } from '../core/wasm-service.ts';
 
 // Singleton for PSF calculator to avoid repeated initialization
 let _psfCalculatorSingletonPromise = null;
@@ -13,7 +14,26 @@ async function getPSFCalculatorSingleton() {
     return _psfCalculatorSingletonPromise;
 }
 
-async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode } = {}) {
+function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows, defocusShiftMm) {
+    const shift = Number(defocusShiftMm);
+    if (!Array.isArray(opticalSystemRows)) return [];
+    const cloned = opticalSystemRows.map((row) => (row && typeof row === 'object') ? { ...row } : row);
+    if (!Number.isFinite(shift) || Math.abs(shift) < 1e-15) return cloned;
+
+    const imageIdx = cloned.findIndex((row) => row && (row['object type'] === 'Image' || row.object === 'Image'));
+    const targetIdx = (imageIdx > 0) ? (imageIdx - 1) : Math.max(0, cloned.length - 2);
+    if (targetIdx < 0 || targetIdx >= cloned.length) return cloned;
+
+    const target = (cloned[targetIdx] && typeof cloned[targetIdx] === 'object') ? { ...cloned[targetIdx] } : {};
+    const baseThickness = Number(target.thickness);
+    const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
+    target.thickness = safeBaseThickness + shift;
+    cloned[targetIdx] = target;
+
+    return cloned;
+}
+
+async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot } = {}) {
     const safeNumber = (v, fallback) => {
         const n = Number(v);
         return Number.isFinite(n) ? n : fallback;
@@ -44,6 +64,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
         } catch (_) {}
     };
 
+    const useWasmFastOnly = !!((typeof globalThis !== 'undefined') && (globalThis as any).__COOPT_MTF_WASM_FAST_ONLY);
+    const enableMtfProfileLog = !((typeof globalThis !== 'undefined') && (globalThis as any).__COOPT_MTF_PROFILE === false);
+
     const primaryWl = (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function')
         ? safeNumber(window.getPrimaryWavelength(), 0.5876)
         : 0.5876;
@@ -67,17 +90,51 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     const gridCandidate = Number.isFinite(samplingCandidate) ? samplingCandidate : legacyCandidate;
     const gridSize = isPowerOfTwo(gridCandidate) ? clamp(gridCandidate, 32, 4096) : 256;
 
+    const shouldRenderPlot = !skipPlot;
     const containerEl = containerElement || document.getElementById('mtf-container');
-    if (!containerEl) {
+    if (shouldRenderPlot && !containerEl) {
         throw new Error('MTF container element not found');
     }
-    try { containerEl.innerHTML = ''; } catch (_) {}
+    if (shouldRenderPlot) {
+        try { containerEl.innerHTML = ''; } catch (_) {}
+    }
 
     reportProgress(0, 'Starting...');
 
+    reportProgress(2, 'Checking WASM readiness...');
+    const g: any = (typeof globalThis !== 'undefined') ? globalThis : null;
+    await ensureMtfWasmReady();
+    const prevGlobalStrict = isRayTracingWasmStrict();
+    const forceStrictByFlag = !!(g && g.__COOPT_MTF_WASM_STRICT === true);
+    // Default: keep compatibility mode unless explicitly forced by runtime flag.
+    setRayTracingWasmStrict(forceStrictByFlag);
+
+    const withForcedInfinitePupilMode = async (mode, fn) => {
+        if (!g) return await fn();
+        const prev = g.__COOPT_FORCE_INFINITE_PUPIL_MODE;
+        try {
+            if (mode === undefined || mode === null || mode === '') {
+                try { delete g.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { g.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+            } else {
+                g.__COOPT_FORCE_INFINITE_PUPIL_MODE = mode;
+            }
+            return await fn();
+        } finally {
+            if (prev === undefined || prev === null) {
+                try { delete g.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { g.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+            } else {
+                g.__COOPT_FORCE_INFINITE_PUPIL_MODE = prev;
+            }
+        }
+    };
+
+    try {
+
     // Prefer Plotly from the container's window (popup), fallback to opener.
-    const plotly = containerEl?.ownerDocument?.defaultView?.Plotly || (typeof window !== 'undefined' ? window.Plotly : null);
-    if (!plotly) {
+    const plotly = shouldRenderPlot
+        ? (containerEl?.ownerDocument?.defaultView?.Plotly || (typeof window !== 'undefined' ? window.Plotly : null))
+        : null;
+    if (shouldRenderPlot && !plotly) {
         throw new Error('Plotly is not available');
     }
 
@@ -92,7 +149,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     reportProgress(10, 'Preparing optical system...');
 
     // Optical system and objects (use imported functions)
-    const opticalSystemRows = getOpticalSystemRows(window.tableOpticalSystem);
+    const baseOpticalSystemRows = getOpticalSystemRows(window.tableOpticalSystem);
+    const opticalSystemRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, defocusShiftMm);
     if (!opticalSystemRows || opticalSystemRows.length === 0) {
         throw new Error('光学システムデータがありません。まず光学システムを設定してください。');
     }
@@ -194,19 +252,125 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             } catch (_) {}
         };
 
-        // Use the same fixed OPD definition as OPD/PSF (referenceSphere, no Zernike fit, piston+tilt removed).
-        const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, samplingSizeForPSF, 'circular', {
-            recordRays: false,
-            progressEvery: 512,
-            zernikeMaxNoll: 37,
-            renderFromZernike: false,
-            skipZernikeFit: true,
-            opdMode: 'referenceSphere',
-            opdDisplayMode: effectiveOpdDisplayMode,
-            onProgress: onWavefrontProgress
-        });
-        if (wavefrontMap?.error) {
-            throw new Error(wavefrontMap.error?.message || 'Wavefront generation failed');
+        const generateWavefrontMapForMode = async (mode, customFieldSetting = fieldSetting) => {
+            return await withForcedInfinitePupilMode(mode, async () => {
+                return await analyzer.generateWavefrontMap(customFieldSetting, samplingSizeForPSF, 'circular', {
+                    recordRays: false,
+                    progressEvery: 512,
+                    profile: enableMtfProfileLog,
+                    suppressReferenceRayError: true,
+                    zernikeMaxNoll: 37,
+                    renderFromZernike: false,
+                    skipZernikeFit: true,
+                    wasmFastOnly: useWasmFastOnly,
+                    traceOptions: useWasmFastOnly ? { requireWasmRayTracing: true, allowNonStrict: false } : null,
+                    opdMode: 'referenceSphere',
+                    opdDisplayMode: effectiveOpdDisplayMode,
+                    onProgress: onWavefrontProgress
+                });
+            });
+        };
+
+        const shouldRetryWithEntrance = (message) => /stop unreachable|center\/chief ray|基準光線の生成に失敗/i.test(String(message || ''));
+
+        const runWavefrontAttempt = async (mode, customFieldSetting = fieldSetting, strictMode = true) => {
+            const prevStrict = isRayTracingWasmStrict();
+            try {
+                if (!strictMode) {
+                    setRayTracingWasmStrict(false);
+                }
+                const map = await generateWavefrontMapForMode(mode, customFieldSetting);
+                if (map?.error) {
+                    return { map: null, error: String(map.error?.message || 'Wavefront generation failed') };
+                }
+                return { map, error: '' };
+            } catch (error) {
+                return { map: null, error: String(error?.message || error || 'Wavefront generation failed') };
+            } finally {
+                if (!strictMode) {
+                    setRayTracingWasmStrict(prevStrict);
+                }
+            }
+        };
+
+        let wavefrontMap = null;
+        const errors = [];
+
+        // 1) Prefer stop mode (stable scaling)
+        const stopAttempt = await runWavefrontAttempt('stop', fieldSetting, true);
+        if (stopAttempt.map) {
+            wavefrontMap = stopAttempt.map;
+        } else {
+            errors.push(`stop=${stopAttempt.error}`);
+        }
+
+        // 2) Retry entrance mode for stop/chief failure patterns
+        if (!wavefrontMap && shouldRetryWithEntrance(stopAttempt.error)) {
+            reportProgress(localBase + localSpan * 0.10, `λ=${titleNmLocal} nm: Retrying with entrance pupil mode...`);
+            const entranceAttempt = await runWavefrontAttempt('entrance', fieldSetting, true);
+            if (entranceAttempt.map) {
+                wavefrontMap = entranceAttempt.map;
+            } else {
+                errors.push(`entrance=${entranceAttempt.error}`);
+            }
+        }
+
+        // 3) Last resort for on-axis: treat as finite-height field (object at (0,0) height)
+        if (!wavefrontMap) {
+            const onAxis = Math.abs(Number(fieldAngle?.x || 0)) < 1e-12
+                && Math.abs(Number(fieldAngle?.y || 0)) < 1e-12
+                && Math.abs(Number(xHeight || 0)) < 1e-12
+                && Math.abs(Number(yHeight || 0)) < 1e-12;
+            if (onAxis) {
+                reportProgress(localBase + localSpan * 0.14, `λ=${titleNmLocal} nm: Retrying with finite on-axis field...`);
+                const finiteFieldSetting = {
+                    ...fieldSetting,
+                    type: 'Height',
+                    fieldAngle: { x: 0, y: 0 },
+                    xHeight: 0,
+                    yHeight: 0,
+                    forceFinite: true
+                };
+
+                const finiteStopAttempt = await runWavefrontAttempt('stop', finiteFieldSetting, true);
+                if (finiteStopAttempt.map) {
+                    wavefrontMap = finiteStopAttempt.map;
+                } else {
+                    errors.push(`finite-stop=${finiteStopAttempt.error}`);
+                    const finiteEntranceAttempt = await runWavefrontAttempt('entrance', finiteFieldSetting, true);
+                    if (finiteEntranceAttempt.map) {
+                        wavefrontMap = finiteEntranceAttempt.map;
+                    } else {
+                        errors.push(`finite-entrance=${finiteEntranceAttempt.error}`);
+                    }
+                }
+            }
+        }
+
+        // 4) Compatibility rescue: keep WASM initialized, but relax strict no-fallback rule
+        // only when strict sampling produced zero valid OPD points.
+        if (!wavefrontMap) {
+            const joinedErrors = errors.join('; ');
+            const looksStrictSamplingCollapse = /No valid OPD samples|trace to eval failed/i.test(joinedErrors);
+            if (looksStrictSamplingCollapse) {
+                reportProgress(localBase + localSpan * 0.18, `λ=${titleNmLocal} nm: Retrying with compatibility ray tracing...`);
+                const compatStop = await runWavefrontAttempt('stop', fieldSetting, false);
+                if (compatStop.map) {
+                    wavefrontMap = compatStop.map;
+                } else {
+                    errors.push(`compat-stop=${compatStop.error}`);
+                    const compatEntrance = await runWavefrontAttempt('entrance', fieldSetting, false);
+                    if (compatEntrance.map) {
+                        wavefrontMap = compatEntrance.map;
+                    } else {
+                        errors.push(`compat-entrance=${compatEntrance.error}`);
+                    }
+                }
+            }
+        }
+
+        if (!wavefrontMap) {
+            throw new Error(errors.join('; ') || 'Wavefront generation failed');
         }
 
         reportProgress(localBase + localSpan * 0.60, `λ=${titleNmLocal} nm: Building OPD grid...`);
@@ -275,10 +439,14 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             pupilDiameter: pupilDiameterMm,
             focalLength: focalLengthMm,
             pixelSize: pixelSizeMicronsForMTF,
-            forceImplementation: null,
+            forceImplementation: 'wasm',
             // OPD grid is already piston+tilt removed by opdDisplayMode.
             removeTilt: false
         });
+
+        if (String(psfResult?.implementationUsed || '').toLowerCase() !== 'wasm') {
+            throw new Error('PSF WASM strict mode: JavaScript fallback is not allowed for MTF');
+        }
 
         reportProgress(localBase + localSpan * 0.85, `λ=${titleNmLocal} nm: Computing OTF/MTF...`);
 
@@ -292,16 +460,6 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             throw new Error('PSF grid must be NxN');
         }
 
-        const real = Array.from({ length: N }, (_, y) => Array.from({ length: N }, (_, x) => safeNumber(psf2D[y][x], 0)));
-        const imag = Array.from({ length: N }, () => Array.from({ length: N }, () => 0));
-        const otf = SimpleFFT.fft2D(real, imag);
-        const dcRe = safeNumber(otf?.real?.[0]?.[0], 0);
-        const dcIm = safeNumber(otf?.imag?.[0]?.[0], 0);
-        const dcMag = Math.hypot(dcRe, dcIm);
-        if (!Number.isFinite(dcMag) || dcMag <= 0) {
-            throw new Error('Invalid OTF DC component');
-        }
-
         const dfCyclesPerMicron = 1.0 / (N * pixelSizeMicrons);
         const dfLpmm = dfCyclesPerMicron * 1000.0;
         const nyquistLpmm = 0.5 / pixelSizeMicrons * 1000.0;
@@ -311,8 +469,55 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
         const maxBin = Math.floor(N / 2);
         const kMax = Math.max(0, Math.min(maxBin, Math.floor(maxPlotLpmm / (dfLpmm || 1e-9))));
 
-        const sample1DAxis = (axis) => {
-            const freq = [];
+        const freq = Array.from({ length: kMax + 1 }, (_, k) => k * dfLpmm);
+
+        const psfFlat = new Float64Array(N * N);
+        for (let y = 0; y < N; y++) {
+            for (let x = 0; x < N; x++) {
+                psfFlat[y * N + x] = safeNumber(psf2D[y]?.[x], 0);
+            }
+        }
+
+        const wasmMTFFn = psfCalculator?.wasmCalculator?.calculateMTFAxesFromPSF;
+        let tan: { freq: number[]; mtfVals: any[] } | null = null;
+        let sag: { freq: number[]; mtfVals: any[] } | null = null;
+
+        if (typeof wasmMTFFn === 'function') {
+            try {
+                const axes = wasmMTFFn.call(psfCalculator.wasmCalculator, psfFlat, N, kMax);
+                if (axes?.xAxis && axes?.yAxis) {
+                    const tanVals = (tanAxis === 'x') ? axes.xAxis : axes.yAxis;
+                    const sagVals = (sagAxis === 'x') ? axes.xAxis : axes.yAxis;
+                    tan = {
+                        freq,
+                        mtfVals: Array.from(tanVals, (v: number) => Number.isFinite(v) ? v : null)
+                    };
+                    sag = {
+                        freq,
+                        mtfVals: Array.from(sagVals, (v: number) => Number.isFinite(v) ? v : null)
+                    };
+                    if (tan.mtfVals.length > 0) tan.mtfVals[0] = 1.0;
+                    if (sag.mtfVals.length > 0) sag.mtfVals[0] = 1.0;
+                }
+            } catch (_) {
+                tan = null;
+                sag = null;
+            }
+        }
+
+        if (!tan || !sag) {
+            const real = Array.from({ length: N }, (_, y) => Array.from({ length: N }, (_, x) => psfFlat[y * N + x]));
+            const imag = Array.from({ length: N }, () => Array.from({ length: N }, () => 0));
+            const otf = SimpleFFT.fft2D(real, imag);
+            const dcRe = safeNumber(otf?.real?.[0]?.[0], 0);
+            const dcIm = safeNumber(otf?.imag?.[0]?.[0], 0);
+            const dcMag = Math.hypot(dcRe, dcIm);
+            if (!Number.isFinite(dcMag) || dcMag <= 0) {
+                throw new Error('Invalid OTF DC component');
+            }
+
+            const sample1DAxis = (axis) => {
+            const freqAxis = [];
             const mtfVals = [];
             for (let k = 0; k <= kMax; k++) {
                 const f = k * dfLpmm;
@@ -326,15 +531,15 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
                     im = safeNumber(otf.imag?.[k]?.[0], 0);
                 }
                 const mtf = Math.hypot(re, im) / dcMag;
-                freq.push(f);
+                freqAxis.push(f);
                 mtfVals.push(Number.isFinite(mtf) ? mtf : null);
             }
             if (mtfVals.length > 0) mtfVals[0] = 1.0;
-            return { freq, mtfVals };
+            return { freq: freqAxis, mtfVals };
         };
-
-        const tan = sample1DAxis(tanAxis);
-        const sag = sample1DAxis(sagAxis);
+            tan = sample1DAxis(tanAxis);
+            sag = sample1DAxis(sagAxis);
+        }
 
         const color = getColorForWavelength(wlLocal);
         traces.push({
@@ -342,7 +547,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             y: tan.mtfVals,
             type: 'scatter',
             mode: 'lines',
-            name: `M (${titleNmLocal}nm)`,
+            name: `Tangential (${titleNmLocal}nm)`,
             showlegend: true,
             line: { color, width: 2, dash: 'solid' }
         });
@@ -351,7 +556,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             y: sag.mtfVals,
             type: 'scatter',
             mode: 'lines',
-            name: `S (${titleNmLocal}nm)`,
+            name: `Sagittal (${titleNmLocal}nm)`,
             showlegend: true,
             line: { color, width: 2, dash: 'dot' }
         });
@@ -373,13 +578,143 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
         margin: { l: 60, r: 20, t: 50, b: 50 }
     };
 
-    reportProgress(95, 'Rendering plot...');
-    await plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
+    if (shouldRenderPlot) {
+        reportProgress(95, 'Rendering plot...');
+        await plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
+    }
     reportProgress(100, 'Done');
+    return { traces, layout, maxPlotLpmmGlobal };
+    } finally {
+        setRayTracingWasmStrict(prevGlobalStrict);
+    }
 }
 
+async function showThroughFocusMTFDiagram({
+    wavelengthMicrons,
+    objectIndex,
+    targetFrequencyLpmm,
+    defocusMinMm,
+    defocusMaxMm,
+    steps,
+    samplingSize,
+    samplingPoints,
+    containerElement,
+    onProgress,
+    opdDisplayMode
+} = {}) {
+    const safeNumber = (v, fallback) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : fallback;
+    };
+    const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+
+    const containerEl = containerElement || document.getElementById('mtf-container');
+    if (!containerEl) {
+        throw new Error('MTF container element not found');
+    }
+    try { containerEl.innerHTML = ''; } catch (_) {}
+
+    const plotly = containerEl?.ownerDocument?.defaultView?.Plotly || (typeof window !== 'undefined' ? window.Plotly : null);
+    if (!plotly) {
+        throw new Error('Plotly is not available');
+    }
+
+    const reportProgress = (percent, message) => {
+        try {
+            if (typeof onProgress !== 'function') return;
+            onProgress({ percent, message });
+        } catch (_) {}
+    };
+
+    const minMm = safeNumber(defocusMinMm, -0.1);
+    const maxMm = safeNumber(defocusMaxMm, 0.1);
+    const nSteps = clamp(Math.floor(safeNumber(steps, 21)), 3, 201);
+    const targetFreq = Math.max(0, safeNumber(targetFrequencyLpmm, 30));
+    const samplingCandidate = Math.floor(safeNumber(samplingSize, safeNumber(samplingPoints, 256)));
+    const sampling = Number.isFinite(samplingCandidate) && samplingCandidate > 0 ? samplingCandidate : 256;
+
+    const defocusValues = Array.from({ length: nSteps }, (_, i) => {
+        if (nSteps <= 1) return minMm;
+        const t = i / (nSteps - 1);
+        return minMm + t * (maxMm - minMm);
+    });
+
+    const traceMap = new Map();
+    for (let i = 0; i < defocusValues.length; i++) {
+        const shift = defocusValues[i];
+        const pct = Math.floor((i / Math.max(1, defocusValues.length)) * 95);
+        reportProgress(pct, `Defocus ${shift.toFixed(4)} mm (${i + 1}/${defocusValues.length})`);
+
+        const result = await showMTFDiagram({
+            wavelengthMicrons,
+            objectIndex,
+            maxFrequencyLpmm: targetFreq,
+            samplingSize: sampling,
+            opdDisplayMode,
+            defocusShiftMm: shift,
+            skipPlot: true,
+            onProgress: null,
+            containerElement
+        });
+
+        const traces = Array.isArray(result?.traces) ? result.traces : [];
+        for (const tr of traces) {
+            const name = String(tr?.name ?? 'MTF');
+            const x = Array.isArray(tr?.x) ? tr.x : [];
+            const y = Array.isArray(tr?.y) ? tr.y : [];
+            if (x.length === 0 || y.length === 0) continue;
+
+            let bestIdx = 0;
+            let bestDf = Infinity;
+            for (let k = 0; k < x.length; k++) {
+                const f = Number(x[k]);
+                if (!Number.isFinite(f)) continue;
+                const df = Math.abs(f - targetFreq);
+                if (df < bestDf) {
+                    bestDf = df;
+                    bestIdx = k;
+                }
+            }
+            const v = Number(y[bestIdx]);
+            const mtfVal = Number.isFinite(v) ? v : null;
+
+            if (!traceMap.has(name)) {
+                traceMap.set(name, {
+                    x: [],
+                    y: [],
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name,
+                    showlegend: true,
+                    line: tr?.line || { width: 2 }
+                });
+            }
+            const agg = traceMap.get(name);
+            agg.x.push(shift);
+            agg.y.push(mtfVal);
+        }
+    }
+
+    const traces = Array.from(traceMap.values());
+    const titleWl = (typeof wavelengthMicrons === 'string' && String(wavelengthMicrons).toLowerCase() === 'all')
+        ? 'All wavelengths'
+        : `${(safeNumber(wavelengthMicrons, 0.5876) * 1000).toFixed(1)} nm`;
+    const objIndex = Number.isFinite(Number(objectIndex)) ? Math.max(0, Math.floor(Number(objectIndex))) : 0;
+
+    const layout = {
+        title: `Through-Focus MTF (${targetFreq.toFixed(1)} lp/mm, ${titleWl}, Object ${objIndex})`,
+        xaxis: { title: 'Defocus shift (mm)', range: [Math.min(minMm, maxMm), Math.max(minMm, maxMm)] },
+        yaxis: { title: 'MTF', range: [0, 1.05] },
+        margin: { l: 60, r: 20, t: 50, b: 50 }
+    };
+
+    reportProgress(98, 'Rendering plot...');
+    await plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
+    reportProgress(100, 'Done');
+    return { traces, layout };
+}
 /**
  * PSF Object選択肢のセットアップ
  */
 
-export { showMTFDiagram };
+export { showMTFDiagram, showThroughFocusMTFDiagram };

@@ -40,7 +40,7 @@ emcc "$SRC" \
   -s MODULARIZE=1 \
   -s EXPORT_NAME='RayTracingWASM' \
   -s ALLOW_MEMORY_GROWTH=1 \
-  -s EXPORTED_FUNCTIONS="['_aspheric_sag','_aspheric_sag10','_aspheric_sag_rt10','_intersect_aspheric_rt10','_batch_aspheric_sag','_batch_aspheric_sag10','_vector_dot','_vector_cross','_vector_normalize','_ray_sphere_intersect','_batch_vector_normalize','_malloc','_free']" \
+  -s EXPORTED_FUNCTIONS="['_aspheric_sag','_aspheric_sag10','_aspheric_sag_rt10','_intersect_aspheric_rt10','_intersect_aspheric_rt10_with_retry','_batch_aspheric_sag','_batch_aspheric_sag10','_vector_dot','_vector_cross','_vector_normalize','_ray_sphere_intersect','_batch_vector_normalize','_malloc','_free']" \
   -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap']"
 
 echo "✅ [WASM] Build complete"

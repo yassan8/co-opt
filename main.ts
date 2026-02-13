@@ -5,6 +5,64 @@
  * It initializes the application using modular components and sets up the main functionality.
  */
 
+(() => {
+    const globalScope = globalThis as any;
+    if (globalScope.__mtfOnlyConsoleFilterInstalled) return;
+    globalScope.__mtfOnlyConsoleFilterInstalled = true;
+
+    const methods: Array<'log' | 'info' | 'warn' | 'error' | 'debug'> = ['log', 'info', 'warn', 'error', 'debug'];
+    const originalConsole: Partial<Record<'log' | 'info' | 'warn' | 'error' | 'debug', (...args: any[]) => void>> = {};
+
+    const containsMTF = (value: unknown, depth = 0): boolean => {
+        try {
+            if (depth > 2 || value == null) return false;
+            if (typeof value === 'string') return /mtf/i.test(value);
+            if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'symbol') return false;
+            if (value instanceof Error) return /mtf/i.test(`${value.message || ''} ${value.stack || ''}`);
+            if (Array.isArray(value)) return value.some(v => containsMTF(v, depth + 1));
+            if (typeof value === 'object') {
+                if (Object.prototype.toString.call(value) !== '[object Object]') {
+                    return false;
+                }
+                const obj = value as Record<string, unknown>;
+                for (const key in obj) {
+                    if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+                    if (/mtf/i.test(key)) return true;
+                    const val = obj[key];
+                    if (typeof val === 'string' && /mtf/i.test(val)) return true;
+                    if (depth < 2 && containsMTF(val, depth + 1)) return true;
+                }
+            }
+            return false;
+        } catch {
+            return false;
+        }
+    };
+
+    const shouldAllow = (args: unknown[]): boolean => {
+        try {
+            return args.some(arg => containsMTF(arg));
+        } catch {
+            return false;
+        }
+    };
+
+    for (const method of methods) {
+        const original = console[method].bind(console);
+        originalConsole[method] = original;
+        console[method] = (...args: any[]) => {
+            try {
+                if (shouldAllow(args)) {
+                    original(...args);
+                }
+            } catch {
+            }
+        };
+    }
+
+    globalScope.__mtfOriginalConsole = originalConsole;
+})();
+
 console.log('🚀 [main.ts] Starting to load main.ts module');
 
 // =============================================================================
@@ -42,7 +100,7 @@ import { showWavefrontDiagram } from './evaluation/wavefront/wavefront-plot.ts';
 import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './evaluation/wavefront/wavefront.ts';
 import { PSFCalculator } from './evaluation/psf/psf-calculator.ts';
 import { PSFPlotter, PSFDisplayManager } from './evaluation/psf/psf-plot.ts';
-import { showMTFDiagram } from './evaluation/mtf-plot.ts';
+import { showMTFDiagram, showThroughFocusMTFDiagram } from './evaluation/mtf-plot.ts';
 import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './evaluation/wavefront/zernike-fitting.ts';
 import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './evaluation/wavefront/opd-zernike-analysis.ts';
 import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './raytracing/generation/gen-ray-cross-finite.ts';
@@ -79,6 +137,7 @@ import { setRenderingContext } from './core/rendering-context.ts';
 // Editor modules (must be imported to initialize)
 import './ui/editors/system-requirements-editor.ts';
 import './ui/editors/merit-function-editor.ts';
+import './core/undo-history.ts';
 
 
 
@@ -92,8 +151,24 @@ import { clearAllDrawing, showSpotDiagram, showTransverseAberrationDiagram, show
 // import { performanceMonitor } from './performance-monitor.ts';
 
 // WASM acceleration system
-// Temporarily commented out to test loading
-// import { ForceWASMSystem } from './wasm/raytracing/force-wasm-system.ts';
+let __forceWasmSystemClassPromise: Promise<any> | null = null;
+async function loadForceWASMSystemClass() {
+    const w = (typeof window !== 'undefined') ? (window as any) : null;
+    if (w && typeof w.ForceWASMSystem === 'function') {
+        return w.ForceWASMSystem;
+    }
+
+    if (!__forceWasmSystemClassPromise) {
+        __forceWasmSystemClassPromise = import('./wasm/raytracing/force-wasm-system.ts')
+            .then(mod => mod?.ForceWASMSystem || null)
+            .catch((error) => {
+                console.warn('⚠️ [Init] Failed to load ForceWASMSystem module:', error);
+                return null;
+            });
+    }
+
+    return __forceWasmSystemClassPromise;
+}
 
 // THREE.js and OrbitControls imports
 import * as THREE from 'three';
@@ -142,10 +217,13 @@ async function initializeApplication() {
         // Initialize WASM system (non-blocking - run in background)
         const wasmInitPromise = (async () => {
             try {
-                // Temporarily skip WASM initialization
-                console.log('⚠️ [Init] WASM system temporarily disabled');
-                return;
-                // wasmSystem = new ForceWASMSystem();
+                const ForceWASMSystemClass = await loadForceWASMSystemClass();
+                if (!ForceWASMSystemClass) {
+                    console.warn('⚠️ [Init] ForceWASMSystem class unavailable, skipping RayTracing WASM bootstrap');
+                    return;
+                }
+
+                wasmSystem = new ForceWASMSystemClass();
                 console.log('🔧 [Init] ForceWASMSystem インスタンスを作成しました');
                 
                 // Update the global reference immediately
@@ -381,6 +459,128 @@ async function initializeApplication() {
         window['showIntegratedAberrationDiagram'] = showIntegratedAberrationDiagram;
         window['showWavefrontDiagram'] = showWavefrontDiagram;
         window['showMTFDiagram'] = showMTFDiagram;
+        window['showThroughFocusMTFDiagram'] = showThroughFocusMTFDiagram;
+        window['benchmarkMTFOnce'] = async (options: any = {}) => {
+            const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+            const prevWavefrontProfile = g ? g.__WAVEFRONT_PROFILE : undefined;
+            const prevOpdDebug = g ? g.__OPD_DEBUG : undefined;
+            const prevPsfDebug = g ? g.__PSF_DEBUG : undefined;
+
+            const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                ? () => performance.now()
+                : () => Date.now();
+
+            const container = document.createElement('div');
+            container.id = `mtf-benchmark-${Date.now()}`;
+            container.style.cssText = 'position:fixed;left:-99999px;top:-99999px;width:800px;height:600px;overflow:hidden;';
+            document.body.appendChild(container);
+
+            try {
+                if (g) {
+                    g.__WAVEFRONT_PROFILE = true;
+                    g.__OPD_DEBUG = false;
+                    g.__PSF_DEBUG = false;
+                }
+
+                const t0 = now();
+                await showMTFDiagram({
+                    wavelengthMicrons: options.wavelengthMicrons ?? 'all',
+                    objectIndex: Number.isFinite(Number(options.objectIndex)) ? Number(options.objectIndex) : 0,
+                    maxFrequencyLpmm: Number.isFinite(Number(options.maxFrequencyLpmm)) ? Number(options.maxFrequencyLpmm) : 100,
+                    samplingSize: Number.isFinite(Number(options.samplingSize)) ? Number(options.samplingSize) : 256,
+                    samplingPoints: Number.isFinite(Number(options.samplingPoints)) ? Number(options.samplingPoints) : 64,
+                    opdDisplayMode: options.opdDisplayMode ?? 'pistonTiltRemoved',
+                    containerElement: container,
+                    onProgress: null
+                });
+                const elapsedMs = now() - t0;
+                const result = {
+                    elapsedMs,
+                    samplingSize: Number.isFinite(Number(options.samplingSize)) ? Number(options.samplingSize) : 256,
+                    samplingPoints: Number.isFinite(Number(options.samplingPoints)) ? Number(options.samplingPoints) : 64,
+                    wavelengthMicrons: options.wavelengthMicrons ?? 'all',
+                    maxFrequencyLpmm: Number.isFinite(Number(options.maxFrequencyLpmm)) ? Number(options.maxFrequencyLpmm) : 100,
+                    objectIndex: Number.isFinite(Number(options.objectIndex)) ? Number(options.objectIndex) : 0,
+                    note: 'See [OPD Profile] logs for wavefront/raytrace breakdown.'
+                };
+                console.log('📊 benchmarkMTFOnce result:', result);
+                return result;
+            } finally {
+                try { container.remove(); } catch (_) {}
+                if (g) {
+                    g.__WAVEFRONT_PROFILE = prevWavefrontProfile;
+                    g.__OPD_DEBUG = prevOpdDebug;
+                    g.__PSF_DEBUG = prevPsfDebug;
+                }
+            }
+        };
+        window['benchmarkMTF'] = async (options: any = {}) => {
+            const runs = Math.max(1, Math.floor(Number(options.runs) || 3));
+            const warmup = Math.max(0, Math.floor(Number(options.warmup) || 1));
+            const samples: number[] = [];
+
+            for (let i = 0; i < warmup; i++) {
+                await (window as any).benchmarkMTFOnce(options);
+            }
+            for (let i = 0; i < runs; i++) {
+                const r = await (window as any).benchmarkMTFOnce(options);
+                const ms = Number(r?.elapsedMs);
+                if (Number.isFinite(ms)) samples.push(ms);
+            }
+
+            const avg = samples.length > 0 ? samples.reduce((a, b) => a + b, 0) / samples.length : NaN;
+            const min = samples.length > 0 ? Math.min(...samples) : NaN;
+            const max = samples.length > 0 ? Math.max(...samples) : NaN;
+            const summary = { runs, warmup, samples, avgMs: avg, minMs: min, maxMs: max };
+            console.log('📈 benchmarkMTF summary:', summary);
+            return summary;
+        };
+        window['benchmarkMTFCompare'] = async (options: any = {}) => {
+            const beforeLabel = String(options.beforeLabel ?? 'before');
+            const afterLabel = String(options.afterLabel ?? 'after');
+            const beforeOptions = { ...(options.beforeOptions ?? {}) };
+            const afterOptions = { ...(options.afterOptions ?? {}) };
+
+            if (options.runs !== undefined) {
+                beforeOptions.runs = options.runs;
+                afterOptions.runs = options.runs;
+            }
+            if (options.warmup !== undefined) {
+                beforeOptions.warmup = options.warmup;
+                afterOptions.warmup = options.warmup;
+            }
+
+            const before = await (window as any).benchmarkMTF(beforeOptions);
+            const after = await (window as any).benchmarkMTF(afterOptions);
+
+            const beforeAvg = Number(before?.avgMs);
+            const afterAvg = Number(after?.avgMs);
+            const beforeMin = Number(before?.minMs);
+            const afterMin = Number(after?.minMs);
+            const beforeMax = Number(before?.maxMs);
+            const afterMax = Number(after?.maxMs);
+
+            const avgDeltaMs = (Number.isFinite(beforeAvg) && Number.isFinite(afterAvg)) ? (afterAvg - beforeAvg) : NaN;
+            const minDeltaMs = (Number.isFinite(beforeMin) && Number.isFinite(afterMin)) ? (afterMin - beforeMin) : NaN;
+            const maxDeltaMs = (Number.isFinite(beforeMax) && Number.isFinite(afterMax)) ? (afterMax - beforeMax) : NaN;
+            const avgImprovementPct = (Number.isFinite(beforeAvg) && beforeAvg > 0 && Number.isFinite(afterAvg))
+                ? ((beforeAvg - afterAvg) / beforeAvg) * 100
+                : NaN;
+
+            const comparison = {
+                labels: { before: beforeLabel, after: afterLabel },
+                before,
+                after,
+                delta: {
+                    avgMs: avgDeltaMs,
+                    minMs: minDeltaMs,
+                    maxMs: maxDeltaMs,
+                    avgImprovementPct
+                }
+            };
+            console.log('🧪 benchmarkMTFCompare result:', comparison);
+            return comparison;
+        };
         
         // Wavefront analysis functions (for debugging)
         // window.OpticalPathDifferenceCalculator / window.WavefrontAberrationAnalyzer / window.createWavefrontAnalyzer
@@ -1438,6 +1638,18 @@ exposeWindowValue('updateSurfaceNumberSelect', updateSurfaceNumberSelect, { over
 
 const startApplicationOnce = (() => {
     let started = false;
+    let readyEmitted = false;
+    const emitMainReady = () => {
+        if (readyEmitted) return;
+        readyEmitted = true;
+        try {
+            window['__cooptMainReady'] = true;
+            window.dispatchEvent(new CustomEvent('coopt:main-ready'));
+            console.log('🚀 [Init] Dispatched coopt:main-ready');
+        } catch (e) {
+            console.warn('⚠️ [Init] Failed to dispatch coopt:main-ready', e);
+        }
+    };
     return async () => {
         if (started) return;
         started = true;
@@ -1448,6 +1660,8 @@ const startApplicationOnce = (() => {
             if (!appComponents) {
                 throw new Error('Failed to initialize application components');
             }
+
+            emitMainReady();
         
         // Store references globally for backward compatibility
             if (appComponents) {

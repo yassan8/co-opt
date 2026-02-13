@@ -6,8 +6,7 @@ CFLAGS = -O3 -msimd128 -s WASM=1 -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","
          -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=134217728 \
          -s MAXIMUM_MEMORY=536870912 -s NO_EXIT_RUNTIME=1 \
          -s MODULARIZE=1 -s EXPORT_NAME="PSFWasm" \
-         -s EXPORTED_FUNCTIONS='["_calculate_psf_wasm","_calculate_psf_grid_wasm","_calculate_strehl_wasm","_calculate_encircled_energy_wasm","_free_psf_result","_malloc","_free"]' \
-         --pre-js pre.js \
+         -s EXPORTED_FUNCTIONS='["_calculate_psf_wasm","_calculate_psf_grid_wasm","_calculate_mtf_axes_from_psf_wasm","_calculate_strehl_wasm","_calculate_encircled_energy_wasm","_free_psf_result","_malloc","_free"]' \
          -s MALLOC=emmalloc \
          -s AGGRESSIVE_VARIABLE_ELIMINATION=1 \
          -s ELIMINATE_DUPLICATE_FUNCTIONS=1 \
@@ -35,7 +34,7 @@ clean:
 
 # インストール（wasm/psf にコピー）
 install: $(TARGET).js
-    @mkdir -p ../wasm/psf
-    cp $(TARGET).js $(TARGET).wasm ../wasm/psf/
+	@mkdir -p ../wasm/psf
+	cp $(TARGET).js $(TARGET).wasm ../wasm/psf/
 
 .PHONY: all clean install

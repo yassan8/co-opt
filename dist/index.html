@@ -27,6 +27,9 @@
   <!-- URL Share compression (global LZString) -->
   <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
 
+  <!-- Import map polyfill for older Safari/iOS -->
+  <script src="https://ga.jspm.io/npm:es-module-shims@1.10.0/dist/es-module-shims.js"></script>
+
   <!-- Import map for Three.js to resolve bare module specifiers -->
 
 
@@ -135,15 +138,16 @@
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
         "three/examples/jsm/controls/OrbitControls.js": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js",
         "OrbitControls": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js"
       }
     }
   </script>
-  <script type="module" crossorigin src="/co-opt/assets/main-DvUF2DYX.js"></script>
-  <script type="module" crossorigin src="/co-opt/assets/app-DNNSCt2i.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/main-C6XkU8Eg.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-HXStN86H.js"></script>
   <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-rDxcvDua.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-DvUF2DYX.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-C6XkU8Eg.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/loaded-file-storage-C2a0on5O.js">
   <link rel="stylesheet" crossorigin href="/co-opt/assets/app-6Y_gxZDB.css">
 </head>
@@ -152,8 +156,6 @@
   <div id="react-root"></div>
   
   <!-- Early WASM globals are installed by core/wasm-service.ts (in <head>) -->
-  
-  <!-- Undo/Redo System -->
   
   <!--
     IMPORTANT:
@@ -221,7 +223,7 @@
         // main.ts is now loaded synchronously before this script
         (async () => {
           try {
-            const rayTracing = await import('/co-opt/assets/ray-tracing-CETsng8G.ts');
+            const rayTracing = await import('/co-opt/assets/ray-tracing-BRVou58E.ts');
             
             // getWASMSystemは既にmain.tsでグローバルに公開済み
             

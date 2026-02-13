@@ -90,7 +90,14 @@ class ForceWASMSystem {
             // 関数の存在確認
             // Keep backward compatibility: require legacy functions.
             // Extended functions (_aspheric_sag10/_batch_aspheric_sag10) are optional.
-            const requiredFunctions = ['_aspheric_sag', '_batch_aspheric_sag'];
+            const requiredFunctions = [
+                '_aspheric_sag',
+                '_batch_aspheric_sag',
+                '_aspheric_sag_rt10',
+                '_intersect_aspheric_rt10',
+                '_vector_dot',
+                '_vector_normalize'
+            ];
             for (const funcName of requiredFunctions) {
                 if (typeof this.wasmModule[funcName] !== 'function') {
                     throw new Error(`WASM関数 ${funcName} が見つかりません`);
