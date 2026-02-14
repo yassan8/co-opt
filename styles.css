@@ -1365,10 +1365,22 @@ button:active {
     background: transparent;
     margin: 0;
     padding: 0;
+    position: relative; /* iOS: Establish positioning context */
+}
+
+/* iOS-specific fix: Disable flexbox, use absolute positioning for more reliable centering */
+@supports (-webkit-touch-callout: none) {
+    #threejs-canvas-container:not(:empty) {
+        display: block !important; /* Override flex */
+        min-height: 600px !important;
+        height: calc(100vh - 200px) !important;
+    }
 }
 
 #threejs-canvas-container:not(:empty) {
     display: flex;
+    min-height: 600px;
+    height: calc(100vh - 200px);
     max-height: calc(100vh - 200px);
 }
 
@@ -1380,6 +1392,27 @@ button:active {
 #threejs-canvas-container canvas {
     display: block;
     background: transparent !important;
+    /* iOS-specific rendering fix: Force GPU acceleration and prevent auto-positioning */
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+    position: relative;
+    left: 0 !important;
+    right: 0 !important;
+    top: 0 !important;
+    margin: 0 auto !important; /* Force horizontal centering */
+    max-width: 100% !important; /* Prevent overflow to the right */
+    max-height: 100% !important;
+}
+
+/* iOS-specific: Additional centering for block-displayed container */
+@supports (-webkit-touch-callout: none) {
+    #threejs-canvas-container canvas {
+        position: absolute !important;
+        left: 50% !important;
+        top: 50% !important;
+        transform: translate(-50%, -50%) translateZ(0) !important;
+        -webkit-transform: translate(-50%, -50%) translateZ(0) !important;
+    }
 }
 
 /* Save, Load, Clear Storage ボタン用の横並びスタイル */
