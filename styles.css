@@ -1358,7 +1358,7 @@ button:active {
     width: 100%;
     min-height: 0;
     max-height: none;
-    display: flex;
+    display: none;
     justify-content: center;
     align-items: center;
     overflow: hidden;
@@ -1368,7 +1368,7 @@ button:active {
 }
 
 #threejs-canvas-container:not(:empty) {
-    min-height: 320px;
+    display: flex;
     max-height: calc(100vh - 200px);
 }
 
