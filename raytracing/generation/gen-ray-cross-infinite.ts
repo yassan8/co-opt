@@ -288,7 +288,7 @@ const RayColorSystem = {
  * @param {Object} options - オプション
  * @returns {Array} 4方向の周辺光線情報
  */
-export function findApertureBoundaryRays(chiefOrigin, direction, opticalSystemRows, stopInfo, options = {}) {
+export function findApertureBoundaryRays(chiefOrigin, direction, opticalSystemRows, stopInfo, options: any = {}) {
     const { debugMode = false, wavelength = 0.5876, targetSurfaceIndex = null } = options;
     const tolerance = 0.001; // 0.001mm精度
     
@@ -899,10 +899,11 @@ function brent(f, a, b, tol = 1e-8, maxIter = 100) {
  * @param {Object} options - オプション
  * @returns {Object} 生成結果
  */
-export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, options = {}) {
+export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, options: any = {}) {
     opticalSystemRows = cooptNormalizeOpticalSystemRows(opticalSystemRows);
-    if (!generateInfiniteSystemCrossBeam.__loggedBuildStamp) {
-        generateInfiniteSystemCrossBeam.__loggedBuildStamp = true;
+    const infiniteCrossBeamFn = generateInfiniteSystemCrossBeam as any;
+    if (!infiniteCrossBeamFn.__loggedBuildStamp) {
+        infiniteCrossBeamFn.__loggedBuildStamp = true;
         console.log(`[gen-ray-cross-infinite] build=${GEN_RAY_CROSS_INFINITE_BUILD}`);
     }
     

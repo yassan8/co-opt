@@ -11,6 +11,8 @@
  * データ生成には `eva-wavefront.js` をimportして使用する。
  */
 
+// @ts-nocheck
+
 /**
  * 波面収差プロット生成クラス
  * Plotly.jsを使用した3D可視化を担当
@@ -1677,7 +1679,7 @@ export class WavefrontPlotter {
  * @param {number} gridSize - グリッドサイズ
  * @param {number} selectedObjectIndex - 選択されたObjectのインデックス
  */
-export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wavefront', gridSize = 64, selectedObjectIndex = 0, options = {}) {
+export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wavefront', gridSize = 64, selectedObjectIndex = 0, options: any = {}) {
     try {
         // Extract cancelToken and progressCallback from options
         const cancelToken = options?.cancelToken || null;
@@ -1849,7 +1851,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                 try {
                     if (typeof localStorage !== 'undefined') {
                         const stats = wavefrontMap?.statistics || null;
-                        const snap = {
+                        const snap: any = {
                             at: new Date().toISOString(),
                             from: 'eva-wavefront-plot.js:storeLast',
                             wavefront: {

@@ -1,6 +1,8 @@
 // ray-paraxial.js
 // 近軸光線追跡による光学系の主要諸量計算関数
 
+// @ts-nocheck
+
 import { miscellaneousDB, oharaGlassDB, schottGlassDB, calculateRefractiveIndex } from '../../data/glass.ts';
 
 // デバッグレベル設定（0: エラーのみ、1: 警告+エラー、2: 情報+警告+エラー、3: すべて）
@@ -820,7 +822,7 @@ export function calculateFullSystemParaxialTraceWithToric(opticalSystemRows, wav
   if (!hasToric) {
     const result = calculateFullSystemParaxialTrace(opticalSystemRows, wavelength, 'average');
     if (result) {
-      result.hasToric = false;
+      (result as any).hasToric = false;
     }
     return result;
   }

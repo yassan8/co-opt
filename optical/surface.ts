@@ -156,7 +156,7 @@ function cloneAttributeArrayToScope(attribute, globalScope) {
   attribute.needsUpdate = true;
 }
 
-function normalizeAttributeArray(attribute, globalScope, options = {}) {
+function normalizeAttributeArray(attribute, globalScope, options: any = {}) {
   if (!attribute || !globalScope) {
     return;
   }
@@ -391,9 +391,10 @@ export function asphericSurfaceZ(r, params, mode = "even") {
   
   // JavaScript fallback
   if (!isFinite(radius) || radius === 0) {
-    if (!asphericSurfaceZ._radiusWarned) {
+    const asphericSurfaceZAny = asphericSurfaceZ as any;
+    if (!asphericSurfaceZAny._radiusWarned) {
       // console.warn(`asphericSurfaceZ: radius=${radius} is invalid, returning NaN`);
-      asphericSurfaceZ._radiusWarned = true;
+      asphericSurfaceZAny._radiusWarned = true;
     return NaN;}
   }
   
@@ -402,9 +403,10 @@ export function asphericSurfaceZ(r, params, mode = "even") {
   const sqrtTerm = 1 - (1 + conic) * r2 / (absRadius * absRadius);
   
   if (!isFinite(sqrtTerm) || sqrtTerm < 0) {
-    if (!asphericSurfaceZ._sqrtWarned) {
+    const asphericSurfaceZAny = asphericSurfaceZ as any;
+    if (!asphericSurfaceZAny._sqrtWarned) {
       // console.warn(`asphericSurfaceZ: sqrtTerm=${sqrtTerm} is invalid (r=${r}, conic=${conic}, radius=${radius}), returning NaN`);
-      asphericSurfaceZ._sqrtWarned = true;
+      asphericSurfaceZAny._sqrtWarned = true;
     }
     return NaN;
   }
@@ -428,9 +430,10 @@ export function asphericSurfaceZ(r, params, mode = "even") {
   const result = base + asphere;
   
   // 結果が無効な場合のデバッグ
-  if (!isFinite(result) && !asphericSurfaceZ._resultWarned) {
+  const asphericSurfaceZAny = asphericSurfaceZ as any;
+  if (!isFinite(result) && !asphericSurfaceZAny._resultWarned) {
     // console.warn(`asphericSurfaceZ: result=${result} is invalid (base=${base}, asphere=${asphere})`);
-    asphericSurfaceZ._resultWarned = true;
+    asphericSurfaceZAny._resultWarned = true;
   }
   
   return result;

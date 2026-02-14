@@ -473,11 +473,11 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
         // Zemax TORICS uses PARM 1=radiusX curvature, PARM 2=radiusY curvature, PARM 3=axis
         // Will be handled in PARM section below
       } else if (typeName === 'COORDBRK' || typeName === 'COORD' || typeName === 'COORDINATEBREAK') {
-        const err = new Error(`Zemax import: Coord Break surfaces are not supported yet (surface ${currentSurf}).`);
+        const err: any = new Error(`Zemax import: Coord Break surfaces are not supported yet (surface ${currentSurf}).`);
         err.code = 'ZMX_UNSUPPORTED_COORDBRK';
         throw err;
       } else if (typeName.includes('ODD')) {
-        const err = new Error(`Zemax import: Aspheric odd surfaces are not supported yet (surface ${currentSurf}).`);
+        const err: any = new Error(`Zemax import: Aspheric odd surfaces are not supported yet (surface ${currentSurf}).`);
         err.code = 'ZMX_UNSUPPORTED_ODD';
         throw err;
       } else {
@@ -540,7 +540,7 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
 
     // Soft-detect unsupported surface types even without TYPE.
     if (key === 'COORDBRK' || key === 'COORD' || key === 'COORDINATEBREAK') {
-      const err = new Error(`Zemax import: Coord Break surfaces are not supported yet (surface ${currentSurf}).`);
+      const err: any = new Error(`Zemax import: Coord Break surfaces are not supported yet (surface ${currentSurf}).`);
       err.code = 'ZMX_UNSUPPORTED_COORDBRK';
       throw err;
     }
@@ -574,7 +574,7 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
 
   // Basic guard: avoid empty import
   if (rows.length === 0) {
-    const err = new Error('Zemax import: no SURF records found.');
+    const err: any = new Error('Zemax import: no SURF records found.');
     err.code = 'ZMX_EMPTY';
     throw err;
   }

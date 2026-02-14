@@ -136,7 +136,7 @@ export function nmToJ(n, m) {
  * @param {boolean} options.skipTilt - Skip tilt terms in fitting (for hybrid approach)
  * @returns {{coefficients: Array<number>, rms: number, pv: number}} Zernike coefficients and residual statistics
  */
-export function fitZernikeWeighted(points, maxOrder, options = {}) {
+export function fitZernikeWeighted(points, maxOrder, options: any = {}) {
   const epsilon = options.epsilon || 0; // Annular obscuration ratio
   const removePiston = options.removePiston !== false;
   const removeTilt = options.removeTilt || false;

@@ -367,7 +367,7 @@ function evaluateCandidateByOverride({ configId, blocks }) {
 }
 
 function pickKeyMetrics(terms) {
-  const out = {};
+  const out: any = {};
   for (const t of terms) {
     const op = String(t?.operand ?? '');
     if (!op) continue;
@@ -564,7 +564,7 @@ function compareTermsLines(baseTerms, candTerms, { kImprove = 3, kRegress = 2 } 
   return out;
 }
 
-function formatCandidateReport({ idx, title, intent, merit, metrics, diffs, baseTerms, candTerms }, explain = {}) {
+function formatCandidateReport({ idx, title, intent, merit, metrics, diffs, baseTerms, candTerms }, explain: any = {}) {
   const lines = [];
   lines.push(`Candidate ${idx}: ${title}`);
   lines.push(`  Intent: ${intent}`);
@@ -598,7 +598,7 @@ function formatCandidateReport({ idx, title, intent, merit, metrics, diffs, base
   return lines.join('\n');
 }
 
-function formatCandidateCompact({ idx, title, tag, merit, deltaMerit, baseTerms, candTerms }, explain = {}) {
+function formatCandidateCompact({ idx, title, tag, merit, deltaMerit, baseTerms, candTerms }, explain: any = {}) {
   const topK = Number.isFinite(Number(explain.topK)) ? Number(explain.topK) : 2;
   const improveK = Number.isFinite(Number(explain.improveK)) ? Number(explain.improveK) : 2;
   const regressK = Number.isFinite(Number(explain.regressK)) ? Number(explain.regressK) : 1;
@@ -631,7 +631,7 @@ function summarizeBlocks(blocks) {
   return parts.join(' → ');
 }
 
-export function runSuggestDesignIntent(options = {}) {
+export function runSuggestDesignIntent(options: any = {}) {
   const defaults = {
     candidateCount: 5,
     topK: 2,

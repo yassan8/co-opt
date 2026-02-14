@@ -76,21 +76,21 @@ function inferPrimaryWavelengthIndexOneBased(sourceRows) {
   return 1;
 }
 
-export function generateZMXText(opticalSystemRows, options = {}) {
+export function generateZMXText(opticalSystemRows, options: any = {}) {
   const rows = Array.isArray(opticalSystemRows) ? opticalSystemRows : [];
 
   const { odd, coord } = inferUnsupportedSurfaceTypes(rows);
   if (odd.length > 0) {
     const list = odd.slice(0, 20).join(', ');
     const more = odd.length > 20 ? ` (+${odd.length - 20} more)` : '';
-    const err = new Error(`Zemax export: Aspheric odd surfaces are not supported yet. Surface(s): ${list}${more}`);
+    const err: any = new Error(`Zemax export: Aspheric odd surfaces are not supported yet. Surface(s): ${list}${more}`);
     err.code = 'ZMX_UNSUPPORTED_ODD';
     throw err;
   }
   if (coord.length > 0) {
     const list = coord.slice(0, 20).join(', ');
     const more = coord.length > 20 ? ` (+${coord.length - 20} more)` : '';
-    const err = new Error(`Zemax export: Coord Break surfaces are not supported yet. Surface(s): ${list}${more}`);
+    const err: any = new Error(`Zemax export: Coord Break surfaces are not supported yet. Surface(s): ${list}${more}`);
     err.code = 'ZMX_UNSUPPORTED_COORDBRK';
     throw err;
   }
