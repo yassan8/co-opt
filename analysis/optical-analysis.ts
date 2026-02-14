@@ -1119,6 +1119,22 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
 }
 
 export async function showThroughFocusSpotDiagram(options: any = {}): Promise<void> {
+    try {
+        const isSwitching = typeof window !== 'undefined' && (w as any).__configurationSwitching === true;
+        if (isSwitching) {
+            console.warn('⚠️ Through-Focus Spot requested during configuration switching; retrying shortly');
+            setTimeout(() => {
+                try {
+                    const still = typeof window !== 'undefined' && (w as any).__configurationSwitching === true;
+                    if (!still) {
+                        showThroughFocusSpotDiagram(options).catch(() => {});
+                    }
+                } catch (_) {}
+            }, 60);
+            return;
+        }
+    } catch (_) {}
+
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
@@ -1156,13 +1172,53 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
     };
 
     try {
+        try {
+            const loadActiveConfigurationToTables = w.loadActiveConfigurationToTables;
+            if (typeof loadActiveConfigurationToTables === 'function') {
+                await loadActiveConfigurationToTables({
+                    applyToUI: true,
+                    suppressOpticalSystemDataChanged: true
+                });
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+        } catch (_) {}
+
         const tableOpticalSystem = getTableOpticalSystem();
         const tableObject = getTableObject();
         const tableSource = getTableSource();
 
-        const baseOpticalSystemRows = getOpticalSystemRows(tableOpticalSystem);
-        const objectRows = getObjectRows(tableObject);
+        let baseOpticalSystemRows = getOpticalSystemRows(tableOpticalSystem);
+        let objectRows = getObjectRows(tableObject);
         const sourceRows = getSourceRows(tableSource);
+
+        try {
+            const systemConfig = loadSystemConfigurations();
+            const configs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
+            const activeConfig = configs.find((cfg: any) => String(cfg?.id) === String(systemConfig?.activeConfigId)) || configs[0] || null;
+            if (activeConfig) {
+                let snapshotOpticalRows: any[] = Array.isArray(activeConfig?.opticalSystem)
+                    ? activeConfig.opticalSystem.map((row: any) => (row && typeof row === 'object') ? { ...row } : row)
+                    : [];
+
+                if (Array.isArray(activeConfig?.blocks) && activeConfig.blocks.length > 0) {
+                    const expanded = expandBlocksToOpticalSystemRows(activeConfig.blocks);
+                    if (Array.isArray(expanded?.rows) && expanded.rows.length > 0) {
+                        snapshotOpticalRows = expanded.rows.map((row: any) => (row && typeof row === 'object') ? { ...row } : row);
+                    }
+                }
+
+                const snapshotObjectRows = Array.isArray(activeConfig?.object)
+                    ? activeConfig.object.map((row: any) => (row && typeof row === 'object') ? { ...row } : row)
+                    : [];
+
+                if (snapshotOpticalRows.length > 0) {
+                    baseOpticalSystemRows = snapshotOpticalRows;
+                }
+                if (snapshotObjectRows.length > 0) {
+                    objectRows = snapshotObjectRows;
+                }
+            }
+        } catch (_) {}
 
         if (!Array.isArray(baseOpticalSystemRows) || baseOpticalSystemRows.length === 0) {
             throw new Error('No optical system data available');
@@ -1250,13 +1306,6 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
             ? (primaryWavelengthRow ? [primaryWavelengthRow] : [{ wavelength: 0.5876, weight: 1, __isPrimary: true, __label: '587.6 nm (primary)' }])
             : (wavelengthRows.length > 0 ? wavelengthRows : [{ wavelength: 0.5876, weight: 1, __isPrimary: true, __label: '587.6 nm (primary)' }]);
 
-        // Determine if using finite object (Point/Height) vs infinite object (Angle)
-        const firstObject = objectRows[0] || {};
-        const objectTypeRaw = String(firstObject.position ?? firstObject.object ?? firstObject.Object ?? firstObject.objectType ?? 'Angle').toLowerCase();
-        const isFiniteObject = !objectTypeRaw.includes('angle');
-        
-        console.log(`🔍 [TFSD] Object type: "${objectTypeRaw}", isFinite: ${isFiniteObject}, conjugate: ${isFiniteObject ? 'finite' : 'infinite'}`);
-
         const focusGrid: any[][] = Array.from({ length: objectRows.length }, () => []);
         const patternFromOption = String(options?.pattern || '').trim().toLowerCase();
         const pattern = (patternFromOption === 'grid' || patternFromOption === 'annular')
@@ -1268,8 +1317,13 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
             const p = Math.floor((i / Math.max(1, defocusValues.length)) * 90);
             reportProgress(p, `Defocus ${shift.toFixed(4)} mm (${i + 1}/${defocusValues.length})`);
 
-            const shiftedRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, shift, isFiniteObject);
+            const shiftedRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, shift);
             for (let objIdx = 0; objIdx < objectRows.length; objIdx++) {
+                const objectRow = objectRows[objIdx] || {};
+                const objectTypeRaw = String(objectRow.position ?? objectRow.object ?? objectRow.Object ?? objectRow.objectType ?? 'Angle');
+                const objectTypeLower = objectTypeRaw.toLowerCase();
+                const isFiniteObject = !objectTypeLower.includes('angle');
+
                 const mergedRawPoints: Array<{ x: number; y: number }> = [];
                 const perWavelengthRaw: Array<{ key: string; label: string; color: string; points: Array<{ x: number; y: number }> }> = [];
 
@@ -1286,7 +1340,7 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
                     const spotResult = await generateSpotDiagramAsync(
                         shiftedRows,
                         [wlRow],
-                        [objectRows[objIdx]], // Pass single object like MTF does
+                        [objectRow], // Pass single object like MTF does
                         surfaceNumber,
                         rayCount,
                         ringCount,

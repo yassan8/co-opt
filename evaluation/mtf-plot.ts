@@ -29,7 +29,11 @@ function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows, defocusShiftM
     const target = (cloned[targetIdx] && typeof cloned[targetIdx] === 'object') ? { ...cloned[targetIdx] } : {};
     const baseThickness = Number(target.thickness);
     const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
-    target.thickness = safeBaseThickness + shift;
+    const newThickness = safeBaseThickness + shift;
+    
+    console.log(`🔍 [TFMTF Defocus] Conjugate: ${isFiniteObject ? 'FINITE' : 'INFINITE'}, Shift: ${shift.toFixed(4)} mm, Target surface ${targetIdx}: ${safeBaseThickness.toFixed(4)} → ${newThickness.toFixed(4)} mm`);
+    
+    target.thickness = newThickness;
     cloned[targetIdx] = target;
 
     return cloned;
@@ -166,6 +170,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     const objectTypeRaw = String(selectedObject.position ?? selectedObject.object ?? selectedObject.Object ?? selectedObject.objectType ?? 'Point');
     const objectTypeLower = objectTypeRaw.toLowerCase();
     const isFiniteObject = !/\bangle\b/.test(objectTypeLower);
+    
+    console.log(`🔍 [TFMTF Setup] Object ${objIndex}: type="${objectTypeRaw}", isFinite=${isFiniteObject}, defocusShift=${defocusShiftMm} mm`);
 
     const opticalSystemRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, defocusShiftMm, isFiniteObject);
     if (!opticalSystemRows || opticalSystemRows.length === 0) {
@@ -235,6 +241,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             yHeight,
             wavelength: wlLocal
         };
+        
+        console.log(`🔍 [TFMTF Field] λ=${(wlLocal*1000).toFixed(1)}nm, type="${objectTypeRaw}", fieldAngle=(${fieldAngle.x}, ${fieldAngle.y}), height=(${xHeight}, ${yHeight})`);
 
         const samplingSizeForPSF = gridSize;
 
@@ -304,8 +312,10 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
         const stopAttempt = await runWavefrontAttempt('stop', fieldSetting, true);
         if (stopAttempt.map) {
             wavefrontMap = stopAttempt.map;
+            console.log(`✅ [TFMTF Pupil] Stop mode succeeded`);
         } else {
             errors.push(`stop=${stopAttempt.error}`);
+            console.warn(`⚠️ [TFMTF Pupil] Stop mode failed: ${stopAttempt.error}`);
         }
 
         // 2) Retry entrance mode for stop/chief failure patterns

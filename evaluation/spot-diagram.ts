@@ -318,9 +318,9 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         }
         
         // positionプロパティをチェック（Objectテーブルの実際の構造に合わせる）
-        const objectType = obj.position || 'Unknown';
+        const objectType = obj.position || obj.object || obj.Object || obj.objectType || 'Unknown';
         const objectTypeNorm = String(objectType ?? '').trim().toLowerCase();
-        const isAngleObject = objectTypeNorm === 'angle';
+        const isAngleObject = objectTypeNorm.includes('angle');
         const objectId = obj.id || 'Unknown';
         const opdCompatibleAngle = physicalVignetting && isAngleObject;
         
@@ -518,8 +518,11 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                             // Try both to recover at least one passing ray.
                             return [true, false];
                         }
-                        if (!physicalVignetting) return [opdCompatibleAngle && !!aim];
-                        return [opdCompatibleAngle && !!aim];
+                        if (!physicalVignetting) return [false];
+                        // Finite objects: in physical-vignetting mode, origin solve can be required
+                        // for some conjugates/configurations (e.g. 2400/633) to get any passing rays.
+                        // Try conservative mode first, then fallback to stop-based origin solve.
+                        return [false, true];
                     })();
 
                     for (const allowOriginSolve of allowOriginSolveToggles) {
@@ -1351,9 +1354,10 @@ export async function generateSpotDiagramAsync(
         const obj = objectRows[objectIndex];
         if (!obj) continue;
 
-        const objectType = obj.position || 'Unknown';
+        const objectType = obj.position || obj.object || obj.Object || obj.objectType || 'Unknown';
+        const objectTypeNorm = String(objectType ?? '').trim().toLowerCase();
         const objectId = obj.id || 'Unknown';
-        const opdCompatibleAngle = physicalVignetting && objectType === 'Angle';
+        const opdCompatibleAngle = physicalVignetting && objectTypeNorm.includes('angle');
 
         safeProgress(
             Math.min(90, 5 + (85 * (objectIndex / Math.max(1, totalObjects)))),
@@ -1404,7 +1408,7 @@ export async function generateSpotDiagramAsync(
                     useChiefRayAnalysis: !!aimThroughStop,
                     chiefRaySolveMode: (aimThroughStop ? 'fast' : 'legacy'),
                     aimThroughStop: !!aimThroughStop,
-                    allowStopBasedOriginSolve: opdCompatibleAngle && !!aimThroughStop && allowStopBasedOriginSolveRequested,
+                    allowStopBasedOriginSolve: !!aimThroughStop && allowStopBasedOriginSolveRequested,
                     wavelengthUm: Number(primaryWavelength?.wavelength) || 0.5876,
                     pupilScale: scale,
                     pattern: resolvePattern(),
@@ -1542,9 +1546,9 @@ export async function generateSpotDiagramAsync(
                 const disableAngleObjectPositionOptimizationModes = (opdCompatibleAngle && physicalVignetting)
                     ? [true, false]
                     : [true];
-                const allowStopBasedOriginSolveModes = (opdCompatibleAngle && !!aim)
-                    ? [true, false]
-                    : [true];
+                const allowStopBasedOriginSolveModes = !!aim
+                    ? [false, true]
+                    : [false];
 
                 let r = null;
                 let succeeded = false;
@@ -1660,7 +1664,7 @@ export async function generateSpotDiagramAsync(
             if (!ok) {
                 await tryPupilScales(!useAimThroughStop);
             }
-        } else if (!(await tryPupilScales(false)) && !physicalVignetting) {
+        } else if (!(await tryPupilScales(false))) {
             await tryPupilScales(true);
         }
 
