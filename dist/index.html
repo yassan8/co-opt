@@ -139,6 +139,35 @@
   </script>
 
   <script>
+    // iOS Detection - Log immediately for debugging (before any console filtering)
+    (() => {
+      const isIOSLike = () => {
+        try {
+          const ua = String(navigator.userAgent || '');
+          if (/iPad|iPhone|iPod/i.test(ua)) return true;
+          if (/Macintosh/i.test(ua) && Number(navigator.maxTouchPoints || 0) > 1) return true;
+        } catch (_) {}
+        return false;
+      };
+      
+      const isIOS = isIOSLike();
+      const ua = navigator.userAgent;
+      const maxTouch = navigator.maxTouchPoints || 0;
+      
+      // Force log without any filtering
+      const log = console.log.bind(console);
+      log('📱 Device detection: iOS=' + isIOS + ', UA=' + ua.substring(0, 100) + '..., touchPoints=' + maxTouch);
+      
+      // Store for later use
+      window.__cooptIOSDetected = isIOS;
+      window.__cooptTouchPoints = maxTouch;
+      
+      // Also log window dimensions
+      log('📱 Window dimensions: ' + window.innerWidth + 'x' + window.innerHeight + ', devicePixelRatio=' + window.devicePixelRatio);
+    })();
+  </script>
+
+  <script>
     // Log resource load failures with concrete URLs.
     window.addEventListener('error', (event) => {
       try {
@@ -163,12 +192,12 @@
       }
     }
   </script>
-  <script type="module" crossorigin src="/co-opt/assets/main-PEk6bmIl.js"></script>
-  <script type="module" crossorigin src="/co-opt/assets/app-8Y87Newv.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/main-BfLByJHc.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-Cta6_DRz.js"></script>
   <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-vqgM2LVf.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-PEk6bmIl.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-BfLByJHc.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/loaded-file-storage-D0MiYECE.js">
-  <link rel="stylesheet" crossorigin href="/co-opt/assets/app-CIndw8BO.css">
+  <link rel="stylesheet" crossorigin href="/co-opt/assets/app-DGfWq9zn.css">
 </head>
 <body>
 
