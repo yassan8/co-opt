@@ -1114,7 +1114,7 @@ function reflectRay(dir, normal) {
 
 // --- Coordinate Break面の座標変換処理 ---
 function createCoordinateTransform(row, rotationCenterZ = 0) {
-  const cb = parseCoordTransParams(row) || {};
+  const cb = parseCoordTransParams(row);
   const decenterX = Number(cb.decenterX ?? 0);
   const decenterY = Number(cb.decenterY ?? 0);
   const decenterZ = Number(cb.decenterZ ?? 0);
@@ -1124,7 +1124,8 @@ function createCoordinateTransform(row, rotationCenterZ = 0) {
   const transformOrder = Number(cb.transformOrder ?? 1);
   
   return {
-    decenterX, decenterY, decenterZ, tiltX, tiltY, tiltZ, transformOrder, rotationCenterZ
+    decenterX, decenterY, decenterZ, tiltX, tiltY, tiltZ, transformOrder, rotationCenterZ,
+    matrix: createRotationMatrix(tiltX, tiltY, tiltZ, transformOrder)
   };
 }
 
@@ -1370,7 +1371,7 @@ function computeChiefRayDirectionToStop(rows, wavelength = 0.55, maxIter = 8) {
     const dir = normalize({ x: aX, y: aY, z: 1 });
     const ray = { pos: rayStart, dir, wavelength };
     const path = traceRay(rows, ray, 1.0);
-    if (!path || path.length === 0) return null;
+    if (!Array.isArray(path) || path.length === 0) return null;
     const idx = surfaceIndexToRayPathPointIndex(rows, stopIndex);
     if (idx === null || idx >= path.length) return null;
     const p = path[idx];
@@ -1504,7 +1505,7 @@ export function calculateSurfaceOrigins(opticalSystemRows) {
     }
     
     // デバッグ情報付きでsurfaceDataに追加
-    const debugInfo = {
+    const debugInfo: any = {
       surfaceIndex: s + 1,
       surfaceType: surface.surfType,
       origin: surfaceOrigin,
@@ -1578,7 +1579,7 @@ function createIdentityMatrix() {
 
 // 4x4行列の乗算
 function multiplyMatrices(A, B) {
-  const result = Array(4).fill().map(() => Array(4).fill(0));
+  const result = Array(4).fill(0).map(() => Array(4).fill(0));
   for (let i = 0; i < 4; i++) {
     for (let j = 0; j < 4; j++) {
       for (let k = 0; k < 4; k++) {
@@ -1786,7 +1787,7 @@ function __computeSurfaceOriginsSignature(opticalSystemRows) {
       mix(q(tPrev, 1e6));
 
       if (isCB) {
-        const cbParams = parseCoordTransParams(surface, prev) || {};
+        const cbParams = parseCoordTransParams(surface, prev);
         mix(q(cbParams.decenterX, 1e6));
         mix(q(cbParams.decenterY, 1e6));
         mix(q(cbParams.decenterZ, 1e6));
@@ -2049,7 +2050,7 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       
       if (isDetailedDebug) {
         const prevRow = (i > 0 && Array.isArray(opticalSystemRows)) ? opticalSystemRows[i - 1] : null;
-        const cb = parseCoordTransParams(row, prevRow) || {};
+        const cb = parseCoordTransParams(row, prevRow);
         debugLog.push(`Coord Break Parameters:`);
         debugLog.push(`  decenterX=${Number(cb.decenterX) || 0}, decenterY=${Number(cb.decenterY) || 0}, decenterZ=${Number(cb.decenterZ) || 0}`);
         debugLog.push(`  tiltX=${Number(cb.tiltX) || 0}°, tiltY=${Number(cb.tiltY) || 0}°, tiltZ=${Number(cb.tiltZ) || 0}°, order=${Number(cb.transformOrder) || 1}`);
@@ -2959,7 +2960,7 @@ function resetRayTracingProfiler() {
   s.wasmIntersectSkippedDebugFirstStack = null;
 }
 
-export function getRayTracingProfile(options = {}) {
+export function getRayTracingProfile(options: any = {}) {
   const reset = options && options.reset !== undefined ? options.reset : false;
   const snapshot = JSON.parse(JSON.stringify(RT_PROF.stats));
   if (reset) resetRayTracingProfiler();
@@ -3150,7 +3151,7 @@ export function transformToChiefRayLocalCoordinates(ray, surfaceIndex, chiefRayP
  * @param {Object} options
  * @returns {Array} [{ surfaceIndex, surfaceId, point }]
  */
-export function calculateChiefRaySurfaceIntersections(opticalSystemRows, options = {}) {
+export function calculateChiefRaySurfaceIntersections(opticalSystemRows, options: any = {}) {
   if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
     throw new Error('Invalid optical system data.');
   }
@@ -3172,7 +3173,7 @@ export function calculateChiefRaySurfaceIntersections(opticalSystemRows, options
   };
 
   const chiefRayPath = traceRay(rows, chiefRay, 1.0);
-  if (!chiefRayPath || chiefRayPath.length === 0) {
+  if (!Array.isArray(chiefRayPath) || chiefRayPath.length === 0) {
     throw new Error('Failed to trace chief ray.');
   }
 
@@ -3305,8 +3306,9 @@ export async function calculateAllSurfacesLocalCoordinates(opticalSystemRows, ta
     };
     
     // Trace chief ray through the system (using modified rows)
-    const chiefRayPath = traceRay(modifiedRows, chiefRay, 1.0);
-    
+    const chiefRayPathRaw = traceRay(modifiedRows, chiefRay, 1.0);
+    const chiefRayPath = Array.isArray(chiefRayPathRaw) ? chiefRayPathRaw : null;
+
     if (!chiefRayPath || chiefRayPath.length === 0) {
       throw new Error('Failed to trace chief ray. Check optical system configuration.');
     }
@@ -3947,7 +3949,7 @@ export async function calculateAllSurfacesLocalCoordinates(opticalSystemRows, ta
           const dy = chiefIntersectionGlobal.y - baseOrigin.y;
           const dz = chiefIntersectionGlobal.z - baseOrigin.z;
 
-          const cbParams = parseCoordTransParams(row, modifiedRows[i - 1]) || {};
+          const cbParams = parseCoordTransParams(row, modifiedRows[i - 1]);
           const transformOrder = (Number(cbParams.transformOrder) === 0) ? 0 : 1;
           const basisMat = (transformOrder === 0) ? prevRotMat : updatedSurfaceData[i].rotationMatrix;
 

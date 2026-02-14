@@ -13,6 +13,8 @@
  * WASM対応: 2025/08/08
  */
 
+// @ts-nocheck
+
 // WebAssembly版PSF計算器のインポート（動的）
 let PSFCalculatorWasm = null;
 let PSFCalculatorAuto = null;
