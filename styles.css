@@ -186,6 +186,11 @@ h3 {
     border: 1px solid #ddd;
     border-radius: 3px;
     padding: 6px;
+    height: 160px;
+    min-height: 120px;
+    max-height: 80vh;
+    overflow: auto;
+    resize: vertical;
     box-sizing: border-box;
 }
 
@@ -205,7 +210,7 @@ h3 {
 }
 
 #table-system-requirements .sr-table.sr-params-expanded tbody tr {
-    height: 38px;
+    min-height: 38px;
 }
 
 #table-system-requirements .sr-table.sr-params-expanded td:not([data-role="params-container"]) > input,

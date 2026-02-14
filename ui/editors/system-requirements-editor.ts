@@ -328,8 +328,8 @@ class SystemRequirementsEditor {
 
     const wrap = document.createElement('div');
     wrap.className = 'sr-table-wrap';
-    wrap.style.height = 'auto';
-    wrap.style.maxHeight = '300px';
+    wrap.style.height = '100%';
+    wrap.style.maxHeight = 'none';
     wrap.style.overflowX = 'auto';
     wrap.style.overflowY = 'auto';
     wrap.style.boxSizing = 'border-box';
@@ -1183,9 +1183,29 @@ class SystemRequirementsEditor {
       ratTa.style.width = '100%';
       ratTa.style.fontSize = '12px';
       ratTa.style.boxSizing = 'border-box';
+      ratTa.style.minHeight = '72px';
+      ratTa.style.resize = 'vertical';
+      ratTa.style.overflow = 'auto';
       ratTa.style.display = 'none';
+      const normalizeRationaleHeight = (v: any): string => {
+        const n = Number(v);
+        return Number.isFinite(n) && n >= 40 ? `${Math.round(n)}px` : '';
+      };
+      const applyRationaleHeight = (): void => {
+        const h = normalizeRationaleHeight(row?.rationaleHeight);
+        ratTa.style.height = h || '';
+      };
+      const persistRationaleHeight = (): void => {
+        const h = Math.round(ratTa.offsetHeight || ratTa.clientHeight || 0);
+        if (h >= 40) row.rationaleHeight = h;
+      };
+      applyRationaleHeight();
+      ratTa.addEventListener('mouseup', () => {
+        persistRationaleHeight();
+      });
       ratTa.addEventListener('focus', onCellFocus);
       ratTa.addEventListener('blur', () => {
+        persistRationaleHeight();
         row.rationale = ratTa.value;
         ratPreview.textContent = rationalePreview(row.rationale);
         ratPreview.title = (row.rationale === undefined || row.rationale === null) ? '' : String(row.rationale);
@@ -1198,6 +1218,7 @@ class SystemRequirementsEditor {
       ratPreview.addEventListener('click', () => {
         setSelectedRow(row.id);
         ratTa.value = (row.rationale === undefined || row.rationale === null) ? '' : String(row.rationale);
+        applyRationaleHeight();
         ratPreview.style.display = 'none';
         ratTa.style.display = 'block';
         try { ratTa.focus(); } catch (_) {}
@@ -2040,6 +2061,7 @@ class SystemRequirementsEditor {
       enabled: true,
       operand: 'EFFL',
       rationale: '',
+      rationaleHeight: 0,
       configId: activeConfigId,
       param1: '',
       param2: '',
@@ -2624,6 +2646,7 @@ class SystemRequirementsEditor {
         if (!r.op) r.op = '=';
         if (r.tol === undefined || r.tol === null || String(r.tol).trim() === '') r.tol = 0;
         if (r.param5 === undefined || r.param5 === null) r.param5 = '';
+        if (!Number.isFinite(Number(r.rationaleHeight)) || Number(r.rationaleHeight) < 40) r.rationaleHeight = 0;
 
         if (r && (r.configId === undefined || r.configId === null)) {
           r.configId = activeConfigId;
@@ -2652,6 +2675,7 @@ class SystemRequirementsEditor {
           enabled,
           operand,
           rationale,
+          rationaleHeight,
           configId,
           param1,
           param2,
@@ -2663,7 +2687,7 @@ class SystemRequirementsEditor {
           target,
           weight
         } = r;
-        return { id, enabled, operand, rationale, configId, param1, param2, param3, param4, param5, op, tol, target, weight };
+        return { id, enabled, operand, rationale, rationaleHeight, configId, param1, param2, param3, param4, param5, op, tol, target, weight };
       });
       saveSystemRequirementsTableData(toSave as any);
     } catch (e) {
