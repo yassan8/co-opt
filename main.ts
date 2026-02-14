@@ -5,65 +5,12 @@
  * It initializes the application using modular components and sets up the main functionality.
  */
 
-(() => {
-    const globalScope = globalThis as any;
-    if (globalScope.__mtfOnlyConsoleFilterInstalled) return;
-    globalScope.__mtfOnlyConsoleFilterInstalled = true;
+// Console filter temporarily disabled for debugging
+// (() => {
+//     ... filter code ...
+// })();
 
-    const methods: Array<'log' | 'info' | 'warn' | 'error' | 'debug'> = ['log', 'info', 'warn', 'error', 'debug'];
-    const originalConsole: Partial<Record<'log' | 'info' | 'warn' | 'error' | 'debug', (...args: any[]) => void>> = {};
-
-    const containsAllowedLogs = (value: unknown, depth = 0): boolean => {
-        try {
-            if (depth > 2 || value == null) return false;
-            if (typeof value === 'string') return /mtf/i.test(value);
-            if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'symbol') return false;
-            if (value instanceof Error) return /mtf/i.test(`${value.message || ''} ${value.stack || ''}`);
-            if (Array.isArray(value)) return value.some(v => containsAllowedLogs(v, depth + 1));
-            if (typeof value === 'object') {
-                if (Object.prototype.toString.call(value) !== '[object Object]') {
-                    return false;
-                }
-                const obj = value as Record<string, unknown>;
-                for (const key in obj) {
-                    if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
-                    if (/mtf/i.test(key)) return true;
-                    const val = obj[key];
-                    if (typeof val === 'string' && /mtf/i.test(val)) return true;
-                    if (depth < 2 && containsAllowedLogs(val, depth + 1)) return true;
-                }
-            }
-            return false;
-        } catch {
-            return false;
-        }
-    };
-
-    const shouldAllow = (args: unknown[]): boolean => {
-        try {
-            return args.some(arg => containsAllowedLogs(arg));
-        } catch {
-            return false;
-        }
-    };
-
-    for (const method of methods) {
-        const original = console[method].bind(console);
-        originalConsole[method] = original;
-        console[method] = (...args: any[]) => {
-            try {
-                if (shouldAllow(args)) {
-                    original(...args);
-                }
-            } catch {
-            }
-        };
-    }
-
-    globalScope.__mtfOriginalConsole = originalConsole;
-})();
-
-console.log('🚀 [main.ts] Starting to load main.ts module');
+console.log('🚀 [main.ts] Starting to load main.ts module - Console filter disabled for debugging');
 
 // =============================================================================
 // IMPORTS
