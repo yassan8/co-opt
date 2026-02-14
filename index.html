@@ -3,6 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+  <script>
+    // Auto cache-bust once per tab so users opening plain /co-opt/ get latest assets.
+    (() => {
+      try {
+        const url = new URL(location.href);
+        if (url.searchParams.has('v')) return;
+
+        const onceKey = '__coopt_auto_cache_bust_once__';
+        if (sessionStorage.getItem(onceKey) === '1') return;
+        sessionStorage.setItem(onceKey, '1');
+
+        url.searchParams.set('v', String(Date.now()));
+        location.replace(url.toString());
+      } catch (_) {
+        // ignore
+      }
+    })();
+  </script>
   <!-- Google tag (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-JCN7K04XZY"></script>
   <script>
