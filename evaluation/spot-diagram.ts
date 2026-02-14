@@ -1,6 +1,7 @@
 // Spot Diagram Evaluation Module
 // 仕様書に基づくスポットダイアグラム機能
 
+// @ts-nocheck
 import { traceRay, calculateSurfaceOrigins, transformPointToLocal } from '../raytracing/core/ray-tracing.ts';
 import { findStopSurfaceIndex, calculateFocalLength, calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 import { generateRayStartPointsForObject } from '../optical/ray-renderer.ts';

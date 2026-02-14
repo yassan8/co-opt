@@ -556,9 +556,8 @@ button:active {
 
 /* Draw Optical System コンテナ */
 .draw-system-container {
-    margin: 20px;
-    margin-top: 20px;
-    padding-top: 15px;
+    margin: 10px 20px 12px;
+    padding-top: 8px;
     border-top: 1px solid #ddd !important;
 }
 
@@ -1366,6 +1365,11 @@ button:active {
     background: transparent;
     margin: 0;
     padding: 0;
+}
+
+#threejs-canvas-container:empty {
+    min-height: 0;
+    max-height: none;
 }
 
 #threejs-canvas-container canvas {

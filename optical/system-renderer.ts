@@ -15,7 +15,7 @@ const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordTrans';
 
 function __coopt_isCoordTransDebugEnabled() {
     try {
-        const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+        const g: any = (typeof globalThis !== 'undefined') ? globalThis : null;
         if (g && g.__COOPT_DEBUG_COORD_BREAK) return true;
         // If running inside an iframe, allow enabling from parent.
         try {
@@ -197,7 +197,7 @@ function __coopt_loadSurfaceColorOverrides() {
  * @param {number} options.crossSectionCenterOffset - Center offset for cross-section
  * @param {Array} options.opticalSystemData - Optical system data
  */
-export function drawOpticalSystemSurfaces(options = {}) {
+export function drawOpticalSystemSurfaces(options: any = {}) {
     
     const {
         crossSectionOnly = false,
@@ -650,9 +650,8 @@ export function drawOpticalSystemSurfaces(options = {}) {
                     if (showMirrorBackText) {
                         addMirrorBackText(
                             scene, 
-                            surface, 
-                            surfaceOrigins[i], 
-                            i
+                            surfaceOrigins[i].origin,
+                            surfaceOrigins[i].rotationMatrix
                         );
                     }
                 } else if (surface.surfType === 'Toric') {
@@ -737,16 +736,13 @@ export function drawOpticalSystemSurfaces(options = {}) {
         drawLensCrossSectionWithSurfaceOrigins(
             scene, 
             opticalSystemData, 
-            surfaceOrigins, 
-            crossSectionCenterOffset
+            surfaceOrigins
         );
     } else if (actualCrossSectionDirection === 'XZ') {
         drawLensCrossSectionWithSurfaceOrigins(
             scene, 
             opticalSystemData, 
-            surfaceOrigins, 
-            crossSectionCenterOffset, 
-            'XZ'
+            surfaceOrigins
         );
     }
 }
@@ -807,7 +803,7 @@ export function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
             }
             
             // stopZが数値であることを確認
-            stopZ = parseFloat(stopZ) || 0;
+            stopZ = Number(stopZ) || 0;
             
             // Stop面の半径を取得（複数のフィールド名を試す）
             let stopRadius = 10; // デフォルト値

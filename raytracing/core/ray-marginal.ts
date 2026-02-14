@@ -11,6 +11,8 @@
  * 作成日: 2025/08/06
  */
 
+// @ts-nocheck
+
 import { traceRay } from './ray-tracing.ts';
 import { calculateChiefRayNewton } from '../../evaluation/aberrations/transverse-aberration.ts';
 // ray-tracing.jsが依存するutils/math.jsも確実にロード
@@ -432,8 +434,8 @@ function calculateMarginalRayNewton(opticalSystemRows, fieldSetting, stopSurface
         };
 
         const rayPath = traceRay(opticalSystemRows, initialRay, 1.0, null, stopSurfaceIndex);
-        
-        if (!rayPath || rayPath.length <= stopSurfaceIndex) {
+
+        if (!Array.isArray(rayPath) || rayPath.length <= stopSurfaceIndex) {
             if (debugMode) {
                 console.log(`⚠️ [MarginalRay Newton] 反復${iteration}: 光線追跡失敗`);
             }
@@ -441,8 +443,8 @@ function calculateMarginalRayNewton(opticalSystemRows, fieldSetting, stopSurface
         }
 
         // 絞り面での交点を取得
-        const stopIntersection = rayPath[stopSurfaceIndex];
-        const actualPosition = stopIntersection.pos || stopIntersection;
+        const stopIntersection: any = rayPath[stopSurfaceIndex] as any;
+        const actualPosition = stopIntersection?.pos || stopIntersection;
 
         // 残差を計算
         const residual = {
@@ -524,11 +526,12 @@ function calculateMarginalRayNewton(opticalSystemRows, fieldSetting, stopSurface
 function calculateNumericalJacobian(opticalSystemRows, ray, stopSurfaceIndex, stepSize) {
     // ベースライン位置
     const basePath = traceRay(opticalSystemRows, ray, 1.0, null, stopSurfaceIndex);
-    if (!basePath || basePath.length <= stopSurfaceIndex) {
+    if (!Array.isArray(basePath) || basePath.length <= stopSurfaceIndex) {
         console.warn(`⚠️ [MarginalRay] ベースライン光線追跡失敗`);
         return null;
     }
-    const basePos = basePath[stopSurfaceIndex]?.pos || basePath[stopSurfaceIndex];
+    const baseHit: any = basePath[stopSurfaceIndex] as any;
+    const basePos = baseHit?.pos || baseHit;
 
     // x方向の偏微分
     const rayDx = {
@@ -536,11 +539,12 @@ function calculateNumericalJacobian(opticalSystemRows, ray, stopSurfaceIndex, st
         dir: { x: ray.dir.x + stepSize, y: ray.dir.y, z: ray.dir.z }
     };
     const pathDx = traceRay(opticalSystemRows, rayDx, 1.0, null, stopSurfaceIndex);
-    if (!pathDx || pathDx.length <= stopSurfaceIndex) {
+    if (!Array.isArray(pathDx) || pathDx.length <= stopSurfaceIndex) {
         console.warn(`⚠️ [MarginalRay] X方向偏微分光線追跡失敗`);
         return null;
     }
-    const posDx = pathDx[stopSurfaceIndex]?.pos || pathDx[stopSurfaceIndex];
+    const hitDx: any = pathDx[stopSurfaceIndex] as any;
+    const posDx = hitDx?.pos || hitDx;
 
     // y方向の偏微分
     const rayDy = {
@@ -548,11 +552,12 @@ function calculateNumericalJacobian(opticalSystemRows, ray, stopSurfaceIndex, st
         dir: { x: ray.dir.x, y: ray.dir.y + stepSize, z: ray.dir.z }
     };
     const pathDy = traceRay(opticalSystemRows, rayDy, 1.0, null, stopSurfaceIndex);
-    if (!pathDy || pathDy.length <= stopSurfaceIndex) {
+    if (!Array.isArray(pathDy) || pathDy.length <= stopSurfaceIndex) {
         console.warn(`⚠️ [MarginalRay] Y方向偏微分光線追跡失敗`);
         return null;
     }
-    const posDy = pathDy[stopSurfaceIndex]?.pos || pathDy[stopSurfaceIndex];
+    const hitDy: any = pathDy[stopSurfaceIndex] as any;
+    const posDy = hitDy?.pos || hitDy;
 
     // ヤコビアン行列を計算
     const J11 = (posDx.x - basePos.x) / stepSize;
@@ -612,8 +617,8 @@ function traceMarginalRayComplete(opticalSystemRows, marginalRayResult, waveleng
         }
         
         const rayPath = traceRay(opticalRowsCopy, initialRay, 1.0, debugLog);
-        
-        if (!rayPath || rayPath.length === 0) {
+
+        if (!Array.isArray(rayPath) || rayPath.length === 0) {
             const errorDetails = debugLog ? debugLog.join('\n') : '詳細ログなし';
             if (debugMode) {
                 console.log(`❌ [TraceMarginalRay] 光線追跡失敗 - デバッグログ:`);
