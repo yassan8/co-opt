@@ -556,8 +556,8 @@ button:active {
 
 /* Draw Optical System コンテナ */
 .draw-system-container {
-    margin: 10px 20px 12px;
-    padding-top: 8px;
+    margin: 6px 20px 8px;
+    padding-top: 4px;
     border-top: 1px solid #ddd !important;
 }
 
@@ -1356,8 +1356,8 @@ button:active {
 /* Three.js Canvas の動的サイズ調整 */
 #threejs-canvas-container {
     width: 100%;
-    min-height: 500px;
-    max-height: calc(100vh - 200px);
+    min-height: 0;
+    max-height: none;
     display: flex;
     justify-content: center;
     align-items: center;
@@ -1365,6 +1365,11 @@ button:active {
     background: transparent;
     margin: 0;
     padding: 0;
+}
+
+#threejs-canvas-container:not(:empty) {
+    min-height: 320px;
+    max-height: calc(100vh - 200px);
 }
 
 #threejs-canvas-container:empty {
