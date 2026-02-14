@@ -1208,13 +1208,20 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
     const open3DWindowBtn = document.getElementById('open-3d-window-btn');
     const open3DWindowHandler = () => {
         const existingPopup = w.popup3DWindow;
+        const POPUP_RENDER_VERSION = '2';
             if (existingPopup && !existingPopup.closed) {
                 try {
-                    existingPopup.focus();
-                    const hasContent = existingPopup.document && existingPopup.document.getElementById('threejs-container');
-                    if (hasContent) {
+                    const popupVersion = existingPopup.document?.body?.dataset?.popupVersion || '';
+                    const hasContent = existingPopup.document && (
+                        existingPopup.document.getElementById('popup-threejs-canvas-container') ||
+                        existingPopup.document.getElementById('threejs-canvas-container') ||
+                        existingPopup.document.getElementById('threejs-container')
+                    );
+                    if (hasContent && popupVersion === POPUP_RENDER_VERSION) {
+                        existingPopup.focus();
                         return;
                     }
+                    try { existingPopup.close(); } catch (_) {}
                 } catch (_) {}
             }
             
@@ -1284,11 +1291,12 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             display: flex;
             flex-direction: row;
             min-height: 0;
+            width: 100%;
             position: relative;
         }
-        #threejs-container {
+        #popup-threejs-canvas-container {
             flex: 1 1 auto;
-            min-height: 0;
+            min-height: 320px;
             position: relative;
             background: white;
         }
@@ -1371,7 +1379,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
         }
     </style>
 </head>
-<body>
+<body data-popup-version="2">
     <div class="header">Render Optical System</div>
     <div class="controls">
         <button id="draw-btn" type="button">Render</button>
@@ -1386,7 +1394,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
         <span id="status"></span>
     </div>
     <div id="main">
-        <div id="threejs-container"></div>
+        <div id="popup-threejs-canvas-container" aria-label="Optical system 3D canvas"></div>
         <div id="surface-colors" class="collapsed">
             <div class="header-row">
                 <span class="title">Surface Colors</span>
@@ -1420,8 +1428,30 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
         console.log('Using THREE from:', parentTHREE ? 'parent window' : 'local import');
         
         function initializePopup(THREE, OrbitControls) {
-            const container = document.getElementById('threejs-container');
+            const container =
+                document.getElementById('popup-threejs-canvas-container') ||
+                document.getElementById('threejs-canvas-container') ||
+                document.getElementById('threejs-container');
             const status = document.getElementById('status');
+            const mainEl = document.getElementById('main');
+
+            let ensuredContainer = container;
+            if (!ensuredContainer && mainEl) {
+                ensuredContainer = document.createElement('div');
+                ensuredContainer.id = 'popup-threejs-canvas-container';
+                ensuredContainer.setAttribute('aria-label', 'Optical system 3D canvas');
+                ensuredContainer.style.flex = '1 1 auto';
+                ensuredContainer.style.minHeight = '320px';
+                ensuredContainer.style.position = 'relative';
+                ensuredContainer.style.background = 'white';
+                mainEl.insertBefore(ensuredContainer, mainEl.firstChild);
+            }
+            if (!ensuredContainer) {
+                return;
+            }
+            try {
+                window.__popupCanvasContainerId = ensuredContainer.id;
+            } catch (_) {}
 
             const isIOSLike = () => {
                 try {
@@ -1431,6 +1461,51 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 } catch (_) {}
                 return false;
             };
+            const isIOS = isIOSLike();
+            const getSafeViewportWidth = () => {
+                const candidates = [
+                    Number(window.innerWidth),
+                    Number(document.documentElement?.clientWidth),
+                    Number(document.body?.clientWidth),
+                    800
+                ];
+                const raw = candidates.find(v => Number.isFinite(v) && v > 0 && v < 10000) || 800;
+                return Math.max(320, Math.min(2048, Math.round(raw)));
+            };
+            const getSafeViewportHeight = () => {
+                const candidates = [
+                    Number(window.innerHeight),
+                    Number(document.documentElement?.clientHeight),
+                    Number(document.body?.clientHeight),
+                    800
+                ];
+                const raw = candidates.find(v => Number.isFinite(v) && v > 0 && v < 10000) || 800;
+                return Math.max(320, Math.min(2048, Math.round(raw)));
+            };
+            const clampDimension = (value, fallback) => {
+                const n = Number(value);
+                if (!Number.isFinite(n) || n <= 1 || n >= 10000) return fallback;
+                return Math.max(1, Math.min(4096, Math.round(n)));
+            };
+
+            if (isIOS && ensuredContainer) {
+                ensuredContainer.style.display = 'block';
+                ensuredContainer.style.minHeight = '600px';
+                ensuredContainer.style.height = 'calc(100vh - 180px)';
+            }
+            if (ensuredContainer) {
+                const fallbackWidth = getSafeViewportWidth();
+                const fallbackHeight = Math.max(320, getSafeViewportHeight() - 180);
+                ensuredContainer.style.width = '100%';
+                ensuredContainer.style.maxWidth = '100vw';
+                if ((ensuredContainer.clientWidth || 0) < 2) {
+                    ensuredContainer.style.minWidth = fallbackWidth + 'px';
+                }
+                if ((ensuredContainer.clientHeight || 0) < 2) {
+                    ensuredContainer.style.minHeight = fallbackHeight + 'px';
+                    ensuredContainer.style.height = fallbackHeight + 'px';
+                }
+            }
             
             const scene = new THREE.Scene();
             scene.userData.renderContext = {
@@ -1439,7 +1514,9 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             };
             
             const viewSize = 50;
-            const aspect = container.clientWidth / container.clientHeight || 1;
+            const safeWidth = clampDimension(ensuredContainer.clientWidth, getSafeViewportWidth());
+            const safeHeight = clampDimension(ensuredContainer.clientHeight, Math.max(320, getSafeViewportHeight() - 180));
+            const aspect = safeWidth / safeHeight || 1;
             const camera = new THREE.OrthographicCamera(
                 -viewSize * aspect / 2,
                 viewSize * aspect / 2,
@@ -1452,11 +1529,11 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             const rendererOptions = { antialias: true, alpha: true, precision: 'highp', logarithmicDepthBuffer: true };
             const renderer = new THREE.WebGLRenderer(rendererOptions);
             renderer.setPixelRatio(window.devicePixelRatio || 1);
-            renderer.setSize(container.clientWidth, container.clientHeight, false);
+            renderer.setSize(safeWidth, safeHeight, true);
             renderer.setClearColor(0xffffff, 1);
             renderer.sortObjects = false;
             renderer.shadowMap.enabled = false;
-            container.appendChild(renderer.domElement);
+            ensuredContainer.appendChild(renderer.domElement);
             
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
             scene.add(ambientLight);
@@ -1563,13 +1640,15 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             };
             
             const applyResize = () => {
-                const r = container.getBoundingClientRect();
-                const w = Math.max(1, Math.round(r.width));
-                const h = Math.max(1, Math.round(r.height));
+                const r = ensuredContainer.getBoundingClientRect();
+                const fallbackW = clampDimension(ensuredContainer.clientWidth, getSafeViewportWidth());
+                const fallbackH = clampDimension(ensuredContainer.clientHeight, Math.max(320, getSafeViewportHeight() - 180));
+                const w = clampDimension(r.width, fallbackW);
+                const h = clampDimension(r.height, fallbackH);
                 if (w < 2 || h < 2) return;
                 
                 renderer.setPixelRatio(window.devicePixelRatio || 1);
-                renderer.setSize(w, h, false);
+                renderer.setSize(w, h, true);
                 controls.update();
                 
                 const aspect = w / h;
@@ -1602,13 +1681,13 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             let resizeObserver = null;
             if (typeof ResizeObserver !== 'undefined') {
                 resizeObserver = new ResizeObserver(() => scheduleResize());
-                resizeObserver.observe(container);
+                resizeObserver.observe(ensuredContainer);
             } else {
                 let lastW = -1;
                 let lastH = -1;
                 setInterval(() => {
-                    const w = container.clientWidth;
-                    const h = container.clientHeight;
+                    const w = ensuredContainer.clientWidth;
+                    const h = ensuredContainer.clientHeight;
                     if (w !== lastW || h !== lastH) {
                         lastW = w;
                         lastH = h;
@@ -5772,12 +5851,113 @@ export function setupAnalysisWindows() {
             const popupSelect = document.getElementById('popup-through-focus-spot-surface-select');
             if (!popupSelect) return;
 
+            const buildSurfaceOptionsFromRows = (rows) => {
+                if (!Array.isArray(rows) || rows.length === 0) return [];
+
+                const normalizeType = (v) => String(v ?? '').trim().toLowerCase();
+                const compactType = (v) => normalizeType(v).replace(/[\s_-]+/g, '');
+                const isCoordTransType = (v) => {
+                    const n = normalizeType(v);
+                    const c = compactType(v);
+                    return (
+                        n === 'ct' ||
+                        n === 'coord trans' ||
+                        n === 'coordinate break' ||
+                        c === 'ct' ||
+                        c === 'coordtrans' ||
+                        c === 'coordinatebreak'
+                    );
+                };
+                const isObjectType = (v) => {
+                    const n = normalizeType(v);
+                    const c = compactType(v);
+                    if (!n && !c) return false;
+                    if (n === 'object' || c === 'object') return true;
+                    if (c === 'objectsurface') return true;
+                    if (n.startsWith('object ') || n.startsWith('object-') || n.startsWith('object_')) return true;
+                    return false;
+                };
+                const isImageType = (v) => {
+                    const n = normalizeType(v);
+                    const c = compactType(v);
+                    if (!n && !c) return false;
+                    return n === 'image' || c === 'image' || n.includes('image');
+                };
+                const isStopType = (v) => {
+                    const n = normalizeType(v);
+                    const c = compactType(v);
+                    if (!n && !c) return false;
+                    return n === 'stop' || c === 'stop' || n.includes('stop');
+                };
+
+                const options = [];
+                let surfaceId = 0;
+                for (let i = 0; i < rows.length; i++) {
+                    const row = rows[i] || {};
+                    const objTypeRaw = row['object type'] ?? row.objectType ?? row.object ?? '';
+                    const surfTypeRaw = row.surfType ?? row['surf type'] ?? row.type ?? '';
+                    const surfaceType = (objTypeRaw || surfTypeRaw || 'Standard');
+                    const radius = row.radius ?? 'INF';
+
+                    if (isObjectType(objTypeRaw) || isObjectType(surfTypeRaw) || isObjectType(surfaceType)) {
+                        continue;
+                    }
+
+                    surfaceId++;
+
+                    if (isCoordTransType(objTypeRaw) || isCoordTransType(surfTypeRaw) || isCoordTransType(surfaceType)) {
+                        continue;
+                    }
+
+                    const isStop = isStopType(objTypeRaw) || isStopType(surfTypeRaw) || isStopType(surfaceType);
+                    const isImage = isImageType(objTypeRaw) || isImageType(surfTypeRaw) || isImageType(surfaceType);
+
+                    let label = 'Surf ' + surfaceId;
+                    if (isStop) label += ' (Stop)';
+                    else if (isImage) label += ' (Image)';
+                    else label += ' (' + surfaceType + ')';
+                    if (radius !== 'INF') label += ', R=' + radius;
+
+                    options.push({ value: String(surfaceId), label });
+                }
+
+                return options;
+            };
+
+            const getSurfaceOptionsFromOpener = () => {
+                try {
+                    const opener = window.opener;
+                    if (!opener) return [];
+                    const getRows = opener.getOpticalSystemRows;
+                    if (typeof getRows !== 'function') return [];
+                    const rows = getRows();
+                    return buildSurfaceOptionsFromRows(rows);
+                } catch (_) {
+                    return [];
+                }
+            };
+
+            const prevValue = popupSelect.value;
+
             popupSelect.innerHTML = '';
             if (!openerSelect || !openerSelect.options) {
-                const opt = document.createElement('option');
-                opt.value = '0';
-                opt.textContent = 'Surf 0';
-                popupSelect.appendChild(opt);
+                const fallbackOptions = getSurfaceOptionsFromOpener();
+                if (fallbackOptions.length > 0) {
+                    for (const o of fallbackOptions) {
+                        const opt = document.createElement('option');
+                        opt.value = String(o.value);
+                        opt.textContent = String(o.label);
+                        popupSelect.appendChild(opt);
+                    }
+                    const hasPrev = prevValue !== '' && Array.from(popupSelect.options || []).some((opt) => String(opt.value) === String(prevValue));
+                    if (hasPrev) popupSelect.value = prevValue;
+                    else if (popupSelect.options.length > 0) popupSelect.selectedIndex = popupSelect.options.length - 1;
+                } else {
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.textContent = 'Select Surf';
+                    popupSelect.appendChild(opt);
+                }
                 return;
             }
 
@@ -5787,7 +5967,10 @@ export function setupAnalysisWindows() {
                 opt.textContent = (o.textContent || '').replace(/^面\s*/, 'Surf ').replace(/^Surface\s*/i, 'Surf ');
                 popupSelect.appendChild(opt);
             }
-            popupSelect.value = openerSelect.value;
+
+            const hasOpenerValue = Array.from(popupSelect.options || []).some((opt) => String(opt.value) === String(openerSelect.value));
+            if (hasOpenerValue) popupSelect.value = openerSelect.value;
+            else if (popupSelect.options.length > 0) popupSelect.selectedIndex = popupSelect.options.length - 1;
         }
 
         function syncInputsFromOpener() {

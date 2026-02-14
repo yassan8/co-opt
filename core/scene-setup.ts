@@ -32,6 +32,33 @@ export interface LightComponents {
 }
 
 // =============================================================================
+// UTILITY FUNCTIONS
+// =============================================================================
+
+/**
+ * Detect iOS devices (iPad, iPhone, iPod) including iPadOS 13+ (reported as Macintosh with touch)
+ * @returns true if running on iOS/iPadOS device
+ */
+function isIOSLike(): boolean {
+    // First check if already detected in index.html
+    const w = window as any;
+    if (typeof w.__cooptIOSDetected === 'boolean') {
+        return w.__cooptIOSDetected;
+    }
+    
+    // Fallback to detection
+    try {
+        const ua = String(navigator.userAgent || '');
+        if (/iPad|iPhone|iPod/i.test(ua)) return true;
+        // iPadOS 13+ reports as Macintosh with touch support
+        if (/Macintosh/i.test(ua) && Number(navigator.maxTouchPoints || 0) > 1) return true;
+    } catch (_) {
+        // Ignore errors in restricted environments
+    }
+    return false;
+}
+
+// =============================================================================
 // SCENE INITIALIZATION
 // =============================================================================
 
@@ -40,6 +67,22 @@ export interface LightComponents {
  * @returns Object containing scene, camera, renderer, controls instances
  */
 export function initializeThreeJS(): SceneComponents {
+    // Log iOS detection for debugging - use multiple methods to ensure it appears
+    const isIOS = isIOSLike();
+    const w = window as any;
+    
+    // Force logging with multiple attempts
+    try {
+        console.log(`📱 Device detection: iOS=${isIOS}, UA=${navigator.userAgent.substring(0, 100)}, touchPoints=${navigator.maxTouchPoints}`);
+    } catch (e) {}
+    
+    try {
+        console.info(`📱 [scene-setup.ts] iOS=${isIOS}`);
+    } catch (e) {}
+    
+    // Also store on window for inspection
+    w.__sceneSetupIOSDetected = isIOS;
+    
     // Get container size dynamically
     let container = document.getElementById('threejs-canvas-container');
     const width = container ? container.clientWidth : APP_CONFIG.CANVAS_WIDTH;
@@ -86,16 +129,116 @@ export function initializeThreeJS(): SceneComponents {
         if (!currentContainer) {
             return null;
         }
+        
+        // iOS-specific fix: Force synchronous layout calculation to prevent canvas position shift
+        const isIOS = isIOSLike();
+        if (isIOS) {
+            console.log('📱 iOS detected - applying rendering fix');
+            // Ensure container is displayed before measuring - use block instead of flex on iOS
+            currentContainer.style.display = 'block';
+            currentContainer.style.position = 'relative';
+            // iOS fix: Set minimum height to prevent 0-height container
+            currentContainer.style.minHeight = '600px';
+            currentContainer.style.height = 'calc(100vh - 200px)';
+            // Force reflow to ensure layout is calculated synchronously
+            void currentContainer.offsetHeight;
+            
+            // iOS-specific: Log container computed style for debugging
+            const containerStyle = window.getComputedStyle(currentContainer);
+            console.log('📱 iOS container computed style:', {
+                display: containerStyle.display,
+                position: containerStyle.position,
+                width: containerStyle.width,
+                height: containerStyle.height,
+                overflow: containerStyle.overflow,
+                justifyContent: containerStyle.justifyContent
+            });
+        }
+        
         if (renderer.domElement.parentElement !== currentContainer) {
             currentContainer.appendChild(renderer.domElement);
         }
-        renderer.domElement.style.width = '100%';
-        renderer.domElement.style.height = '100%';
+        
+        // iOS-specific fix: Get actual computed dimensions and constrain canvas strictly
+        if (isIOS) {
+            const rect = currentContainer.getBoundingClientRect();
+            console.log('📱 iOS container rect:', {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+                left: rect.left,
+                right: rect.right,
+                top: rect.top,
+                bottom: rect.bottom
+            });
+            
+            // Use clientWidth/clientHeight as fallback if rect is 0
+            const containerWidth = rect.width > 0 ? rect.width : currentContainer.clientWidth || 800;
+            const containerHeight = rect.height > 0 ? rect.height : currentContainer.clientHeight || 600;
+            
+            console.log(`📱 iOS container dimensions: ${containerWidth}x${containerHeight}`);
+            // Use updateStyle=true to separate CSS size from render buffer size
+            // This prevents the canvas from exceeding container bounds
+            renderer.setSize(containerWidth, containerHeight, true);
+            console.log(`📱 iOS canvas size set to: ${containerWidth}x${containerHeight} (updateStyle=true)`);
+            
+            // Log actual canvas element attributes
+            const canvas = renderer.domElement;
+            console.log('📱 iOS canvas attributes:', {
+                width: canvas.width,
+                height: canvas.height,
+                styleWidth: canvas.style.width,
+                styleHeight: canvas.style.height
+            });
+            
+            // Force canvas position reset on iOS - use absolute positioning with transform
+            canvas.style.width = `${containerWidth}px`;
+            canvas.style.height = `${containerHeight}px`;
+            canvas.style.position = 'absolute';
+            canvas.style.left = '50%';
+            canvas.style.top = '50%';
+            canvas.style.transform = 'translate(-50%, -50%)';
+            canvas.style.webkitTransform = 'translate(-50%, -50%)';
+            canvas.style.maxWidth = '100%';
+            canvas.style.maxHeight = '100%';
+            console.log(`📱 iOS canvas styled: ${containerWidth}px x ${containerHeight}px, positioned absolute with transform`);
+            
+            // Log canvas position after a short delay to see if it changes
+            setTimeout(() => {
+                const canvasRect = canvas.getBoundingClientRect();
+                console.log('📱 iOS canvas position after 100ms:', {
+                    x: canvasRect.x,
+                    y: canvasRect.y,
+                    width: canvasRect.width,
+                    height: canvasRect.height,
+                    left: canvasRect.left,
+                    right: canvasRect.right
+                });
+                
+                const canvasComputedStyle = window.getComputedStyle(canvas);
+                console.log('📱 iOS canvas computed style:', {
+                    position: canvasComputedStyle.position,
+                    left: canvasComputedStyle.left,
+                    top: canvasComputedStyle.top,
+                    transform: canvasComputedStyle.transform,
+                    width: canvasComputedStyle.width,
+                    height: canvasComputedStyle.height
+                });
+            }, 100);
+            
+            console.log('📱 iOS canvas positioned - CSS transform will center');
+        } else {
+            // Non-iOS: use percentage-based sizing
+            renderer.domElement.style.width = '100%';
+            renderer.domElement.style.height = '100%';
+        }
+        
         container = currentContainer;
         return currentContainer;
     };
     
-    // Attach renderer to DOM
+    // Attach renderer to DOM - with delayed re-initialization
     const initialContainer = attachRendererToContainer();
     if (initialContainer && initialContainer.clientWidth > 0 && initialContainer.clientHeight > 0) {
         renderer.setSize(initialContainer.clientWidth, initialContainer.clientHeight, false);
@@ -135,13 +278,17 @@ export function initializeThreeJS(): SceneComponents {
     
     // Add window resize listener
     window.addEventListener('resize', () => {
-        console.log('🔄 Window resize event (scene-setup.js)');
+        const isIOS = isIOSLike();
+        console.log(`🔄 Window resize event (scene-setup.js)${isIOS ? ' [iOS]' : ''}`);
 
         const currentContainer = attachRendererToContainer();
 
         if (currentContainer) {
             const newWidth = currentContainer.clientWidth;
             const newHeight = currentContainer.clientHeight;
+            if (isIOS) {
+                console.log(`📱 iOS resize - container: ${newWidth}x${newHeight}, devicePixelRatio: ${window.devicePixelRatio}`);
+            }
             if (newWidth <= 0 || newHeight <= 0) {
                 return;
             }
