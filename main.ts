@@ -13,13 +13,13 @@
     const methods: Array<'log' | 'info' | 'warn' | 'error' | 'debug'> = ['log', 'info', 'warn', 'error', 'debug'];
     const originalConsole: Partial<Record<'log' | 'info' | 'warn' | 'error' | 'debug', (...args: any[]) => void>> = {};
 
-    const containsMTF = (value: unknown, depth = 0): boolean => {
+    const containsAllowedLogs = (value: unknown, depth = 0): boolean => {
         try {
             if (depth > 2 || value == null) return false;
             if (typeof value === 'string') return /mtf/i.test(value);
             if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'symbol') return false;
             if (value instanceof Error) return /mtf/i.test(`${value.message || ''} ${value.stack || ''}`);
-            if (Array.isArray(value)) return value.some(v => containsMTF(v, depth + 1));
+            if (Array.isArray(value)) return value.some(v => containsAllowedLogs(v, depth + 1));
             if (typeof value === 'object') {
                 if (Object.prototype.toString.call(value) !== '[object Object]') {
                     return false;
@@ -30,7 +30,7 @@
                     if (/mtf/i.test(key)) return true;
                     const val = obj[key];
                     if (typeof val === 'string' && /mtf/i.test(val)) return true;
-                    if (depth < 2 && containsMTF(val, depth + 1)) return true;
+                    if (depth < 2 && containsAllowedLogs(val, depth + 1)) return true;
                 }
             }
             return false;
@@ -41,7 +41,7 @@
 
     const shouldAllow = (args: unknown[]): boolean => {
         try {
-            return args.some(arg => containsMTF(arg));
+            return args.some(arg => containsAllowedLogs(arg));
         } catch {
             return false;
         }
@@ -1073,6 +1073,40 @@ function calculateOpticalSystemZRange() {
                 maxY = Math.max(maxY, semidia);
             }
         });
+
+        // 無限遠 Angle object の光線開始高さも視野に含める
+        try {
+            const objectRows = getObjectRows?.() || [];
+            const firstSurface = opticalSystemRows[0] || {};
+            const objectRenderDistanceRaw = Number(firstSurface.objectRenderDistance);
+            const objectRenderDistance = Number.isFinite(objectRenderDistanceRaw) && objectRenderDistanceRaw !== 0
+                ? Math.abs(objectRenderDistanceRaw)
+                : 25;
+
+            objectRows.forEach((obj) => {
+                const position = String(obj?.position ?? obj?.Type ?? obj?.type ?? '').trim().toLowerCase();
+                if (position === 'angle') {
+                    const angleXDeg = Number(obj?.xHeightAngle ?? obj?.xAngle ?? obj?.x ?? 0);
+                    const angleYDeg = Number(obj?.yHeightAngle ?? obj?.yAngle ?? obj?.y ?? obj?.angle ?? 0);
+
+                    const ax = Number.isFinite(angleXDeg) ? Math.abs(angleXDeg) : 0;
+                    const ay = Number.isFinite(angleYDeg) ? Math.abs(angleYDeg) : 0;
+
+                    const extentX = Math.tan((ax * Math.PI) / 180) * objectRenderDistance;
+                    const extentY = Math.tan((ay * Math.PI) / 180) * objectRenderDistance;
+
+                    if (Number.isFinite(extentX)) maxY = Math.max(maxY, Math.abs(extentX));
+                    if (Number.isFinite(extentY)) maxY = Math.max(maxY, Math.abs(extentY));
+                    return;
+                }
+
+                const xHeight = Number(obj?.xHeight ?? obj?.x ?? obj?.xHeightAngle ?? 0);
+                const yHeight = Number(obj?.yHeight ?? obj?.y ?? obj?.yHeightAngle ?? 0);
+                if (Number.isFinite(xHeight)) maxY = Math.max(maxY, Math.abs(xHeight));
+                if (Number.isFinite(yHeight)) maxY = Math.max(maxY, Math.abs(yHeight));
+            });
+        } catch (error) {
+        }
         
         if (zPositions.length === 0) {
             return { minZ: 0, maxZ: 414, centerZ: 207, totalLength: 414, maxY: maxY || 50 };

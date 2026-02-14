@@ -270,7 +270,8 @@ function __captureBlockApertureFromLegacyRows(blocks, legacyRows) {
 }
 
 function includesDisallowedSurfaceReference(value) {
-  // Disallow surfaceId / surfaceIndex anywhere inside Block.variables
+  // Disallow surfaceId / surfaceIndex only inside Block.variables.
+  // Legacy metadata may contain surfaceIndex for provenance and must not fail validation.
   const seen = new Set();
 
   const walk = (v) => {
@@ -292,7 +293,15 @@ function includesDisallowedSurfaceReference(value) {
     return false;
   };
 
-  return walk(value);
+  if (Array.isArray(value)) {
+    for (const block of value) {
+      if (!isPlainObject(block)) continue;
+      if (walk(block.variables)) return true;
+    }
+    return false;
+  }
+
+  return walk((value && typeof value === 'object') ? (value as any).variables : value);
 }
 
 function isKnownGlassNameOnly(glassName) {

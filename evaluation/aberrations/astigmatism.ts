@@ -1183,6 +1183,28 @@ function interpolateFieldSettings(originalFields, totalPoints = 9) {
             isInterpolated: true
         });
     }
+
+    // 範囲が0°を跨ぐ場合は、補間点数が偶数でも必ず0°を含める
+    if (minAngle < 0 && maxAngle > 0 && interpolatedFields.length > 0) {
+        const hasZero = interpolatedFields.some(f => Math.abs(Number(f?.y ?? 0)) < 1e-9);
+        if (!hasZero) {
+            let nearestIndex = 0;
+            let nearestAbs = Infinity;
+            for (let i = 0; i < interpolatedFields.length; i++) {
+                const ay = Math.abs(Number(interpolatedFields[i]?.y ?? 0));
+                if (ay < nearestAbs) {
+                    nearestAbs = ay;
+                    nearestIndex = i;
+                }
+            }
+            interpolatedFields[nearestIndex] = {
+                ...interpolatedFields[nearestIndex],
+                displayName: '0.0°',
+                y: 0,
+                yHeightAngle: 0
+            };
+        }
+    }
     
     return interpolatedFields;
 }
@@ -1219,6 +1241,29 @@ function interpolateHeightFieldSettings(originalFields, totalPoints = 9) {
             position: 'height',
             isInterpolated: true
         });
+    }
+
+    // 範囲が0mmを跨ぐ場合は、補間点数が偶数でも必ず0mmを含める
+    if (minH < 0 && maxH > 0 && interpolatedFields.length > 0) {
+        const hasZero = interpolatedFields.some(f => Math.abs(Number(f?.y ?? 0)) < 1e-9);
+        if (!hasZero) {
+            let nearestIndex = 0;
+            let nearestAbs = Infinity;
+            for (let i = 0; i < interpolatedFields.length; i++) {
+                const ah = Math.abs(Number(interpolatedFields[i]?.y ?? 0));
+                if (ah < nearestAbs) {
+                    nearestAbs = ah;
+                    nearestIndex = i;
+                }
+            }
+            interpolatedFields[nearestIndex] = {
+                ...interpolatedFields[nearestIndex],
+                displayName: '0.00mm',
+                y: 0,
+                yHeight: 0,
+                yHeightAngle: 0
+            };
+        }
     }
 
     return interpolatedFields;
@@ -1281,6 +1326,11 @@ export async function calculateAstigmatismData(
         try { progressCb?.({ percent, message }); } catch (_) {}
     };
     const yieldToUI = async () => new Promise(resolve => setTimeout(resolve, 0));
+
+    console.log(
+        `[ASTIG_DIAG][ENTRY] spotDiagramMode=${spotDiagramMode} ` +
+        `targetSurfaceIndex=${targetSurfaceIndex} rayCount=${rayCount} interpolationPoints=${interpolationPoints}`
+    );
     
     if (verbose) {
         console.log('🎯🎯🎯 非点収差計算開始（新バージョン） 🎯🎯🎯');
@@ -1362,6 +1412,10 @@ export async function calculateAstigmatismData(
         // スポット表示モードでは、既存のスポットダイアグラム計算ロジックをそのまま使用し、
         // 結果を非点データ形式に詰め替えて返す
         if (spotDiagramMode) {
+            console.log(
+                `[ASTIG_DIAG][SPOT_MODE] enter=true targetSurfaceIndex=${targetSurfaceIndex} ` +
+                `fields=${Array.isArray(fieldSettings) ? fieldSettings.length : 0}`
+            );
             const { generateSpotDiagram } = await import('../spot-diagram.js');
 
             // eva-spot-diagram は面番号を1始まりで受け取る
@@ -1461,37 +1515,43 @@ export async function calculateAstigmatismData(
             wavelengths.push(primaryWavelength);
         }
         
+        const getFieldAxisValue = (field) => {
+            if (!field) return 0;
+            if (astigmatismData.isAngleField) {
+                const angle = Number(field.yFieldAngle ?? field.fieldAngle ?? field.yHeightAngle ?? field.y ?? 0);
+                return Number.isFinite(angle) ? angle : 0;
+            }
+            const height = Number(field.yHeight ?? field.y ?? field.yFieldAngle ?? field.fieldAngle ?? 0);
+            return Number.isFinite(height) ? height : 0;
+        };
+
         // 軸上（0°または0mm）フィールドを検索
         const axialField = fieldSettings.find(f => {
-            const posType = (f.position || f.fieldType || '').toLowerCase();
-            const isAngle = posType.includes('angle') && !posType.includes('rectangle');
-            
-            if (isAngle) {
-                // 無限系: 角度が0に近い
-                const angle = Math.abs(f.y || 0);
-                return angle < 0.001; // ほぼ0°
-            } else {
-                // 有限系: 高さが0に近い
-                const height = Math.abs(f.y || 0);
-                return height < 0.001; // ほぼ0mm
-            }
+            const axisValue = Math.abs(getFieldAxisValue(f));
+            return axisValue < 0.001; // ほぼ0
         });
         
         if (verbose) {
-            console.log(`   🔍 フィールド設定一覧:`, fieldSettings.map(f => `${f.displayName} (y=${f.y})`));
-            console.log(`   🔍 軸上フィールド検索結果: ${axialField ? axialField.displayName + ' (y=' + axialField.y + ')' : '見つからず'}`);
+            console.log(`   🔍 フィールド設定一覧:`, fieldSettings.map(f => `${f.displayName} (axis=${getFieldAxisValue(f)})`));
+            console.log(`   🔍 軸上フィールド検索結果: ${axialField ? axialField.displayName + ' (axis=' + getFieldAxisValue(axialField) + ')' : '見つからず'}`);
         }
         
         // 主波長の基準位置を計算（すべての基準0点）
         let referenceField = axialField;
         
-        // 軸上フィールドが見つからない場合は、最小画角のフィールドを使用
+        // 軸上フィールドが見つからない場合は、最小角度/高さのフィールドを使用
         if (!referenceField && fieldSettings.length > 0) {
-            // Y角度でソートして最小のものを取得
-            const sortedFields = [...fieldSettings].sort((a, b) => Math.abs(a.y) - Math.abs(b.y));
+            const sortedFields = [...fieldSettings].sort((a, b) => Math.abs(getFieldAxisValue(a)) - Math.abs(getFieldAxisValue(b)));
             referenceField = sortedFields[0];
-            console.warn(`   ⚠️ 軸上フィールドが見つからないため、最小画角を基準とします: ${referenceField.displayName} (y=${referenceField.y})`);
+            console.warn(`   ⚠️ 軸上フィールドが見つからないため、最小角度/高さを基準とします: ${referenceField.displayName} (axis=${getFieldAxisValue(referenceField)})`);
         }
+
+        console.log(
+            `[ASTIG_DIAG][REFERENCE_SELECT] mode=${astigmatismData.isAngleField ? 'angle' : 'height'} ` +
+            `axial=${axialField ? axialField.displayName : 'none'} ` +
+            `reference=${referenceField ? referenceField.displayName : 'none'} ` +
+            `axis=${referenceField ? getFieldAxisValue(referenceField) : 'n/a'}`
+        );
         
         if (referenceField) {
             console.log(`   🎯 主波長の基準フィールドで基準像面を計算: ${referenceField.displayName}`);
@@ -1519,18 +1579,47 @@ export async function calculateAstigmatismData(
                 }
 
                 if (referenceChiefRay && referenceChiefRay.segments && referenceTargetPointIndex !== null) {
-                    const clampedTargetIndex = Math.min(referenceTargetPointIndex, referenceChiefRay.segments.length - 1);
+                    const refTargetPointIndex = Math.min(referenceTargetPointIndex, referenceChiefRay.segments.length - 1);
+                    const refTargetSegment = referenceChiefRay.segments[refTargetPointIndex] || null;
+                    const toLocal = (point) => {
+                        if (!point) return point;
+                        if (!imageSurfaceInfo || !imageSurfaceInfo.origin || !imageSurfaceInfo.rotationMatrix) return point;
+                        const dx = point.x - imageSurfaceInfo.origin.x;
+                        const dy = point.y - imageSurfaceInfo.origin.y;
+                        const dz = point.z - imageSurfaceInfo.origin.z;
+                        const R = imageSurfaceInfo.rotationMatrix;
+                        return {
+                            x: R[0][0] * dx + R[1][0] * dy + R[2][0] * dz,
+                            y: R[0][1] * dx + R[1][1] * dy + R[2][1] * dz,
+                            z: R[0][2] * dx + R[1][2] * dy + R[2][2] * dz
+                        };
+                    };
+
+                    const referenceImageSurfaceZ = (refTargetSegment && Number.isFinite(refTargetSegment.x) && Number.isFinite(refTargetSegment.y) && Number.isFinite(refTargetSegment.z))
+                        ? toLocal(refTargetSegment).z
+                        : null;
+
                     const referenceIntersection = findAxisIntersection(
                         opticalSystemRows,
                         { segments: referenceChiefRay.segments },
-                        clampedTargetIndex,
+                        targetSurfaceIndex,
                         imageSurfaceInfo
                     );
                     console.log(`   🔍 findAxisIntersection結果: ${referenceIntersection}`);
+                    console.log(`   🔍 referenceImageSurfaceZ(ローカル): ${referenceImageSurfaceZ}`);
                     
-                    if (referenceIntersection !== null) {
-                        astigmatismData.primaryReferenceZ = referenceIntersection;
-                        console.log(`   ✅✅✅ 主波長の基準像面位置: Z = ${referenceIntersection.toFixed(4)}mm（この位置を0とする） ✅✅✅`);
+                    const referenceForRelative = (referenceImageSurfaceZ !== null && Number.isFinite(referenceImageSurfaceZ))
+                        ? referenceImageSurfaceZ
+                        : referenceIntersection;
+
+                    if (referenceForRelative !== null) {
+                        astigmatismData.primaryReferenceZ = referenceForRelative;
+                        console.log(`   ✅✅✅ 主波長の基準像面位置: Z = ${referenceForRelative.toFixed(4)}mm（この位置を0とする） ✅✅✅`);
+                        console.log(
+                            `[ASTIG_DIAG][REFERENCE_Z] wavelength=${primaryWavelength} ` +
+                            `field=${referenceField.displayName} axis=${getFieldAxisValue(referenceField)} ` +
+                            `primaryReferenceZ=${referenceForRelative} axisIntersection=${referenceIntersection} imageSurfaceZ=${referenceImageSurfaceZ}`
+                        );
                     } else {
                         console.error(`   ❌ findAxisIntersection が null を返しました`);
                     }
@@ -1546,6 +1635,7 @@ export async function calculateAstigmatismData(
         
         if (astigmatismData.primaryReferenceZ === null) {
             console.warn(`   ⚠️⚠️⚠️ 主波長の軸上フィールドで基準像面取得失敗 ⚠️⚠️⚠️`);
+            console.warn(`[ASTIG_DIAG][REFERENCE_Z] primaryReferenceZ=null`);
         }
         
         // 各波長×各フィールドについて計算
@@ -1591,6 +1681,56 @@ export async function calculateAstigmatismData(
                     await yieldToUI();
                 }
             }
+        }
+
+        // 仕上げ: 主波長の軸上（最小|fieldAngle|）をゼロ基準に再調整
+        // 数値探索の微小バイアスを吸収し、表示基準を安定化する。
+        try {
+            const primaryRows = (astigmatismData.data || []).filter(d => {
+                const wl = Number(d?.wavelength);
+                return Number.isFinite(wl) && Math.abs(wl - primaryWavelength) < 1e-9;
+            });
+
+            if (primaryRows.length > 0) {
+                let referenceRow = primaryRows[0];
+                let minAbsAxis = Math.abs(Number(referenceRow?.fieldAngle ?? 0));
+                for (let i = 1; i < primaryRows.length; i++) {
+                    const a = Math.abs(Number(primaryRows[i]?.fieldAngle ?? 0));
+                    if (a < minAbsAxis) {
+                        minAbsAxis = a;
+                        referenceRow = primaryRows[i];
+                    }
+                }
+
+                const m0 = Number(referenceRow?.meridionalDeviation);
+                const s0 = Number(referenceRow?.sagittalDeviation);
+                const values: number[] = [];
+                if (Number.isFinite(m0)) values.push(m0);
+                if (Number.isFinite(s0)) values.push(s0);
+
+                if (values.length > 0) {
+                    const rezeroOffset = values.reduce((sum, v) => sum + v, 0) / values.length;
+                    if (Number.isFinite(rezeroOffset) && Math.abs(rezeroOffset) > 1e-12) {
+                        for (const row of astigmatismData.data) {
+                            if (row?.meridionalDeviation !== null && row?.meridionalDeviation !== undefined) {
+                                row.meridionalDeviation = Number(row.meridionalDeviation) - rezeroOffset;
+                            }
+                            if (row?.sagittalDeviation !== null && row?.sagittalDeviation !== undefined) {
+                                row.sagittalDeviation = Number(row.sagittalDeviation) - rezeroOffset;
+                            }
+                        }
+                        if (astigmatismData.primaryReferenceZ !== null && Number.isFinite(Number(astigmatismData.primaryReferenceZ))) {
+                            astigmatismData.primaryReferenceZ = Number(astigmatismData.primaryReferenceZ) + rezeroOffset;
+                        }
+                        console.log(
+                            `[ASTIG_DIAG][REFERENCE_REZERO] wavelength=${primaryWavelength} ` +
+                            `axis=${Number(referenceRow?.fieldAngle ?? 0)} offset=${rezeroOffset}`
+                        );
+                    }
+                }
+            }
+        } catch (rezeroError) {
+            console.warn('[ASTIG_DIAG][REFERENCE_REZERO] skipped due to error', rezeroError);
         }
 
         safeProgress(95, 'Finalizing...');
@@ -1882,6 +2022,14 @@ function calculateFieldData(
         }
         
         // データを返す（主波長軸上基準の相対値として保存）
+        console.log(
+            `[ASTIG_DIAG][FIELD_Z] wl=${wavelength} field=${fieldSetting.displayName} ` +
+            `type=${fieldType} axis=${fieldAngle} ` +
+            `paraxial=${paraxialImageZ} primaryRef=${primaryReferenceZ} ` +
+            `M_focus=${meridionalFocusZ} S_focus=${sagittalFocusZ} ` +
+            `M_rel=${meridionalDeviationRelative} S_rel=${sagittalDeviationRelative}`
+        );
+
         return {
             wavelength: wavelength,
             fieldAngle: fieldAngle,
