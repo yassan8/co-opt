@@ -132,7 +132,7 @@ export default function LegacyPanels() {
         <textarea id="system-data" rows={15} cols={100} placeholder="System information will appear here..."></textarea>
       </div>
 
-      <div className="draw-system-container">
+      <div className="draw-system-container" style={{ display: "none" }}>
         <div className="draw-section">
           <div id="threejs-canvas-container" aria-label="Optical system 3D canvas" />
 
