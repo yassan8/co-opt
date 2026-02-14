@@ -152,6 +152,35 @@
   </script>
 
   <script>
+    // iOS Detection - Log immediately for debugging (before any console filtering)
+    (() => {
+      const isIOSLike = () => {
+        try {
+          const ua = String(navigator.userAgent || '');
+          if (/iPad|iPhone|iPod/i.test(ua)) return true;
+          if (/Macintosh/i.test(ua) && Number(navigator.maxTouchPoints || 0) > 1) return true;
+        } catch (_) {}
+        return false;
+      };
+      
+      const isIOS = isIOSLike();
+      const ua = navigator.userAgent;
+      const maxTouch = navigator.maxTouchPoints || 0;
+      
+      // Force log without any filtering
+      const log = console.log.bind(console);
+      log('📱 Device detection: iOS=' + isIOS + ', UA=' + ua.substring(0, 100) + '..., touchPoints=' + maxTouch);
+      
+      // Store for later use
+      window.__cooptIOSDetected = isIOS;
+      window.__cooptTouchPoints = maxTouch;
+      
+      // Also log window dimensions
+      log('📱 Window dimensions: ' + window.innerWidth + 'x' + window.innerHeight + ', devicePixelRatio=' + window.devicePixelRatio);
+    })();
+  </script>
+
+  <script>
     // Log resource load failures with concrete URLs.
     window.addEventListener('error', (event) => {
       try {
