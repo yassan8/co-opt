@@ -133,9 +133,6 @@ export default function App() {
       <DesignIntentSection />
       <RequirementsSection />
       <LegacyPanels />
-      <div className="react-migration-badge" role="status" aria-live="polite">
-        React移行中…
-      </div>
     </>
   );
 }
