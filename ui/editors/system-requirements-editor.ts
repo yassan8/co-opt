@@ -328,9 +328,10 @@ class SystemRequirementsEditor {
 
     const wrap = document.createElement('div');
     wrap.className = 'sr-table-wrap';
-    wrap.style.height = '300px';
-    wrap.style.overflow = 'auto';
-    wrap.style.resize = 'vertical';
+    wrap.style.height = 'auto';
+    wrap.style.maxHeight = '300px';
+    wrap.style.overflowX = 'auto';
+    wrap.style.overflowY = 'auto';
     wrap.style.boxSizing = 'border-box';
 
     const table = document.createElement('table');
@@ -1219,7 +1220,7 @@ class SystemRequirementsEditor {
         const td = document.createElement('td');
         td.colSpan = 100;
         td.style.textAlign = 'center';
-        td.style.padding = '40px 20px';
+        td.style.padding = '16px 20px';
         td.style.color = '#999';
         td.style.fontStyle = 'italic';
         td.textContent = 'No requirements defined. Click "Add Requirement" to create one.';
