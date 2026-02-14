@@ -1316,9 +1316,26 @@ class SystemRequirementsEditor {
       const options = [{ value: '', label: '(Primary)' }];
       
       if (Array.isArray(sourceRows) && sourceRows.length > 0) {
+        const isPrimaryRow = (row: any): boolean => {
+          if (!row || typeof row !== 'object') return false;
+          const flags = [
+            row?.primary,
+            row?.Primary,
+            row?.['Primary Wavelength'],
+            row?.isPrimary,
+            row?.primaryWavelength,
+            row?.primary_flag
+          ];
+          return flags.some((f: any) => {
+            if (f === true) return true;
+            if (f === 1) return true;
+            const s = String(f ?? '').trim().toLowerCase();
+            return s === '1' || s === 'true' || s === 'yes' || s === 'on' || s === 'primary' || s === 'primary wavelength' || s.includes('primary');
+          });
+        };
         sourceRows.forEach((row: any, idx: number) => {
           const wl = row?.wavelength;
-          const isPrimary = row?.primary;
+          const isPrimary = isPrimaryRow(row);
           const label = `${idx + 1}: ${wl}µm${isPrimary ? ' (Primary)' : ''}`;
           options.push({ value: String(idx + 1), label });
         });
@@ -1642,9 +1659,40 @@ class SystemRequirementsEditor {
 
       const primaryWavelengthUm = (() => {
         if (!Array.isArray(sourceRows) || sourceRows.length === 0) return 0.5876;
-        const primaryRow = sourceRows.find((r: any) => r && r.primary && String(r.primary).toLowerCase().includes('primary'));
-        const wl = Number(primaryRow ? primaryRow.wavelength : sourceRows[0]?.wavelength);
-        return (Number.isFinite(wl) && wl > 0) ? wl : 0.5876;
+        const isPrimaryRow = (r: any): boolean => {
+          if (!r || typeof r !== 'object') return false;
+          const flags = [
+            r?.primary,
+            r?.Primary,
+            r?.['Primary Wavelength'],
+            r?.isPrimary,
+            r?.primaryWavelength,
+            r?.primary_flag
+          ];
+          return flags.some((f: any) => {
+            if (f === true) return true;
+            if (f === 1) return true;
+            const s = String(f ?? '').trim().toLowerCase();
+            return s === '1' || s === 'true' || s === 'yes' || s === 'on' || s === 'primary' || s === 'primary wavelength' || s.includes('primary');
+          });
+        };
+        const primaryRow = sourceRows.find((r: any) => isPrimaryRow(r));
+        const wl = Number(primaryRow ? (primaryRow.wavelength ?? primaryRow.Wavelength) : NaN);
+        if (Number.isFinite(wl) && wl > 0) return wl;
+
+        const dLine = 0.5875618;
+        let bestWl = NaN;
+        let bestDiff = Infinity;
+        for (const row of sourceRows) {
+          const candidate = Number(row?.wavelength ?? row?.Wavelength);
+          if (!Number.isFinite(candidate) || candidate <= 0) continue;
+          const diff = Math.abs(candidate - dLine);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestWl = candidate;
+          }
+        }
+        return (Number.isFinite(bestWl) && bestWl > 0) ? bestWl : dLine;
       })();
 
       const map = loadSpotDiagramSettingsByConfigId();

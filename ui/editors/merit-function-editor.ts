@@ -1891,19 +1891,59 @@ class MeritFunctionEditor {
 
     getPrimaryWavelengthFromSourceRows(sourceRows: any[]): number {
         if (!Array.isArray(sourceRows) || sourceRows.length === 0) return 0.5875618;
-        const primaryRow = sourceRows.find((r: any) => r && r.primary && String(r.primary).toLowerCase().includes('primary'));
-        const wl = primaryRow ? Number(primaryRow.wavelength) : NaN;
+        const isPrimaryRow = (r: any): boolean => {
+            if (!r || typeof r !== 'object') return false;
+            const flags = [
+                r?.primary,
+                r?.Primary,
+                r?.['Primary Wavelength'],
+                r?.isPrimary,
+                r?.primaryWavelength,
+                r?.primary_flag
+            ];
+            return flags.some((f: any) => {
+                if (f === true) return true;
+                if (f === 1) return true;
+                const s = String(f ?? '').trim().toLowerCase();
+                return s === '1' || s === 'true' || s === 'yes' || s === 'on' || s === 'primary' || s === 'primary wavelength' || s.includes('primary');
+            });
+        };
+        const primaryRow = sourceRows.find((r: any) => isPrimaryRow(r));
+        const wl = primaryRow ? Number(primaryRow.wavelength ?? primaryRow.Wavelength) : NaN;
         if (Number.isFinite(wl) && wl > 0) return wl;
-        const wl0 = Number(sourceRows[0]?.wavelength);
-        return (Number.isFinite(wl0) && wl0 > 0) ? wl0 : 0.5875618;
+
+        try {
+            if (typeof window !== 'undefined' && typeof w.getPrimaryWavelength === 'function') {
+                const byApi = Number(w.getPrimaryWavelength());
+                if (Number.isFinite(byApi) && byApi > 0) return byApi;
+            }
+        } catch (_) {}
+
+        const dLine = 0.5875618;
+        let bestWl = NaN;
+        let bestDiff = Infinity;
+        for (const row of sourceRows) {
+            const candidate = Number(row?.wavelength ?? row?.Wavelength);
+            if (!Number.isFinite(candidate) || candidate <= 0) continue;
+            const diff = Math.abs(candidate - dLine);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                bestWl = candidate;
+            }
+        }
+        return (Number.isFinite(bestWl) && bestWl > 0) ? bestWl : dLine;
     }
 
     getSystemWavelengthFromOperandOrPrimary(operand: any, sourceRows: any[]): number {
         const raw = (operand && operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
-        if (raw === '') return this.getPrimaryWavelengthFromSourceRows(sourceRows);
+        if (raw === '') {
+            return this.getPrimaryWavelengthFromSourceRows(sourceRows);
+        }
 
         const n = Number(raw);
-        if (!Number.isFinite(n) || n <= 0) return this.getPrimaryWavelengthFromSourceRows(sourceRows);
+        if (!Number.isFinite(n) || n <= 0) {
+            return this.getPrimaryWavelengthFromSourceRows(sourceRows);
+        }
 
         const s = raw.toLowerCase();
         const isNonIntegerLiteral = (s.includes('.') || s.includes('e')) && Math.abs(n - Math.round(n)) > 1e-12;
@@ -2062,13 +2102,16 @@ class MeritFunctionEditor {
                 const blockInfo = this._getBlockSurfaceRange(param2Raw, operand.configId);
                 if (blockInfo) {
                     console.log(`[EFL Calculation] Block "${param2Raw}" → surfaces ${blockInfo.startSurf} to ${blockInfo.endSurf}`);
+
+                    const { source: sourceRows } = this.getConfigTablesByConfigId(operand?.configId);
+                    const wavelength = this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
                     
                     // Use EFFL-style calculation with surface range
                     return this._calculateEFLForSurfaceRange(
                         opticalSystemData,
                         blockInfo.startSurf,
                         blockInfo.endSurf,
-                        operand
+                        wavelength
                     );
                 } else {
                     console.warn(`[EFL Calculation] Could not find block "${param2Raw}"`);
@@ -2672,19 +2715,16 @@ class MeritFunctionEditor {
             return 0;
         }
 
-        const sourceIndex = parseInt(operand.param1) || 1;
         const startSurf = parseInt(operand.param2) || 1;
         const endSurf = parseInt(operand.param3) || (opticalSystemData.length - 2);
 
         const sourceRows = this.getConfigTablesByConfigId(operand.configId).source;
-        let wavelength = 0.5875618;
-
-        if (sourceRows && sourceRows.length > 0) {
-            const sourceRow = sourceRows[sourceIndex - 1];
-            if (sourceRow && sourceRow.wavelength) {
-                wavelength = parseFloat(sourceRow.wavelength);
-            }
-        }
+        const param1Raw = (operand && operand.param1 !== undefined && operand.param1 !== null)
+            ? String(operand.param1).trim()
+            : '';
+        const wavelength = (param1Raw === '')
+            ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+            : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
 
         let subSystemData: any[] = [];
 
