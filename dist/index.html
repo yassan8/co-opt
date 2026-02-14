@@ -215,7 +215,7 @@
       };
     })();
   </script>
-  <script src="wasm/psf/psf-wasm.ts"></script>
+  <script src="wasm/psf/psf-wasm.js"></script>
 
   <!-- Core functionality scripts -->
   <script>
@@ -224,7 +224,7 @@
         // main.ts is now loaded synchronously before this script
         (async () => {
           try {
-            const rayTracing = await import('/co-opt/assets/ray-tracing-Col8PM-V.ts');
+            const rayTracing = await import('data:text/javascript;base64,ZXhwb3J0ICogZnJvbSAiLi9yYXktdHJhY2luZy50cyI7Cg==');
             
             // getWASMSystemは既にmain.tsでグローバルに公開済み
             
@@ -269,7 +269,7 @@
             // asphericSagDerivative/surfaceNormal は ray-tracing 側で window.* に公開済み
             
             // 絞り周辺光線モジュールを読み込み
-            import('/co-opt/assets/ray-marginal-DqbEPtt-.ts').then(marginalRayModule => {
+            import('data:text/javascript;base64,ZXhwb3J0ICogZnJvbSAiLi9yYXktbWFyZ2luYWwudHMiOwo=').then(marginalRayModule => {
               window['calculateMarginalRay'] = marginalRayModule.calculateMarginalRay;
               window['calculateAllMarginalRays'] = marginalRayModule.calculateAllMarginalRays;
             }).catch(error => {
@@ -545,7 +545,7 @@
       
       try {
         // PSFCalculatorを動的インポート
-        const { PSFCalculator } = await import('/co-opt/assets/psf-calculator-uRUR-ODg.ts');
+        const { PSFCalculator } = await import('data:text/javascript;base64,ZXhwb3J0ICogZnJvbSAiLi9wc2YtY2FsY3VsYXRvci50cyI7Cg==');
         const psfCalculator = new PSFCalculator();
         
         // 初期化を待機
