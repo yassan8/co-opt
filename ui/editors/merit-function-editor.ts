@@ -1421,12 +1421,32 @@ class MeritFunctionEditor {
 
             const forceSpotDiagramPrimary = !options.pattern || options.pattern === 'current';
 
+            const resolveSurfaceIndexFromSurfaceId = (surfaceIdRaw: any, rows: any[]): number | null => {
+                try {
+                    const sid = Math.floor(Number(surfaceIdRaw));
+                    if (!Number.isFinite(sid) || sid <= 0 || !Array.isArray(rows) || rows.length === 0) return null;
+
+                    const opts = generateSurfaceOptions(rows);
+                    const hit = Array.isArray(opts)
+                        ? opts.find((o: any) => Number(o?.value) === sid || Number(o?.surfaceId) === sid)
+                        : null;
+                    if (hit && Number.isInteger(hit.rowIndex) && hit.rowIndex >= 0 && hit.rowIndex < rows.length) {
+                        return hit.rowIndex;
+                    }
+
+                    // Backward-compatible fallback: older data may store row-based 1-origin numbers.
+                    const idx = sid - 1;
+                    if (idx >= 0 && idx < rows.length) return idx;
+                } catch (_) {}
+                return null;
+            };
+
             const uiSurfaceIndex = (() => {
                 // If param5 is specified, use it as the target surface (1-based to 0-based)
                 if (targetSurfaceNumber1 !== null) {
-                    const idx = targetSurfaceNumber1 - 1;
-                    if (idx >= 0 && idx < spotOpticalRows.length) {
-                        return idx;
+                    const resolved = resolveSurfaceIndexFromSurfaceId(targetSurfaceNumber1, spotOpticalRows);
+                    if (resolved !== null) {
+                        return resolved;
                     }
                 }
                 // Otherwise, use UI settings only if useUiDefaults is true
@@ -1436,8 +1456,8 @@ class MeritFunctionEditor {
                 if (Number.isFinite(idx) && idx >= 0) return idx;
                 const sel = document.getElementById('surface-number-select') as HTMLSelectElement | null;
                 if (sel && sel.value) {
-                    const v = Number(sel.value);
-                    if (Number.isFinite(v) && v >= 0) return v;
+                    const resolved = resolveSurfaceIndexFromSurfaceId(sel.value, spotOpticalRows);
+                    if (resolved !== null) return resolved;
                 }
                 return null;
             })();

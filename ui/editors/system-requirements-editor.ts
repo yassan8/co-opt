@@ -13,6 +13,7 @@ import { loadTableData as loadSourceTableData } from '../../data/table-source.ts
 import { loadTableData as loadObjectTableData } from '../../data/table-object.ts';
 import { loadTableData as loadSystemRequirementsTableData, saveTableData as saveSystemRequirementsTableData } from '../../data/table-system-requirements.ts';
 import { loadSpotDiagramSettingsByConfigId, saveSpotDiagramSettingsByConfigId } from '../spot-diagram-settings-storage.ts';
+import { generateSurfaceOptions } from '../../evaluation/spot-diagram.ts';
 
 console.log('[Requirements] Imports loaded');
 
@@ -726,23 +727,18 @@ class SystemRequirementsEditor {
           imageOpt.textContent = '(Image)';
           control.appendChild(imageOpt);
           
-          // Get optical system rows from Design Intent or config
+          // Get optical system rows from Design Intent/config and use Spot Diagram-compatible numbering.
           try {
             const opticalRows = (getOpticalSystemRows as any)(null);
             if (Array.isArray(opticalRows)) {
-              for (let i = 0; i < opticalRows.length; i++) {
-                const surfRow = opticalRows[i];
-                if (!surfRow) continue;
-                
-                const objType = String(surfRow['object type'] || surfRow.object || surfRow.surfType || '').trim();
-                const displayNumber = i; // Display as S0, S1, S2... (0-based display)
-                const surfaceValue = i + 1; // Store as 1-based for compatibility with merit-function calculation
-                const surfLabel = surfRow.comment || surfRow.label || `S${displayNumber}`;
-                
-                const opt = document.createElement('option');
-                opt.value = String(surfaceValue);
-                opt.textContent = objType ? `S${displayNumber} (${objType})` : `S${displayNumber}: ${surfLabel}`;
-                control.appendChild(opt);
+              const surfaceOptions = generateSurfaceOptions(opticalRows);
+              if (Array.isArray(surfaceOptions) && surfaceOptions.length > 0) {
+                for (const s of surfaceOptions) {
+                  const opt = document.createElement('option');
+                  opt.value = String(s.value);
+                  opt.textContent = String(s.label || `Surf ${s.value}`);
+                  control.appendChild(opt);
+                }
               }
             }
           } catch (err) {

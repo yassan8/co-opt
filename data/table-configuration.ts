@@ -612,7 +612,11 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
 
     for (const w of warnings) cfgWarn('⚠️ [Configuration] Block validation warning:', w);
     if (fatals.length > 0) {
-      for (const f of fatals) console.error('❌ [Configuration] Block validation error:', f);
+      for (const f of fatals) {
+        const msg = (f && typeof f === 'object' && 'message' in f) ? (f as any).message : String(f);
+        const bid = (f && typeof f === 'object' && (f as any).blockId) ? ` [blockId=${(f as any).blockId}]` : '';
+        console.error(`❌ [Configuration] Block validation error${bid}: ${msg}`, f);
+      }
       // Keep legacy opticalSystem as-is to avoid breaking the UI.
     } else {
       const expanded = expandBlocksToOpticalSystemRows(activeConfig.blocks);

@@ -2618,6 +2618,94 @@ export function setupAnalysisWindows() {
             const popupSelect = document.getElementById('popup-surface-number-select');
             if (!popupSelect) return;
 
+            const buildSurfaceOptionsFromRows = (rows) => {
+                if (!Array.isArray(rows) || rows.length === 0) return [];
+
+                const normalizeType = (v) => String(v ?? '').trim().toLowerCase();
+                const compactType = (v) => normalizeType(v).replace(/[\s_-]+/g, '');
+                const isCoordTransType = (v) => {
+                    const n = normalizeType(v);
+                    const c = compactType(v);
+                    return (
+                        n === 'ct' ||
+                        n === 'coord trans' ||
+                        n === 'coordinate break' ||
+                        c === 'ct' ||
+                        c === 'coordtrans' ||
+                        c === 'coordinatebreak'
+                    );
+                };
+                const isObjectType = (v) => {
+                    const n = normalizeType(v);
+                    const c = compactType(v);
+                    if (!n && !c) return false;
+                    if (n === 'object' || c === 'object') return true;
+                    if (c === 'objectsurface') return true;
+                    if (n.startsWith('object ') || n.startsWith('object-') || n.startsWith('object_')) return true;
+                    return false;
+                };
+                const isImageType = (v) => {
+                    const n = normalizeType(v);
+                    const c = compactType(v);
+                    if (!n && !c) return false;
+                    return n === 'image' || c === 'image' || n.includes('image');
+                };
+                const isStopType = (v) => {
+                    const n = normalizeType(v);
+                    const c = compactType(v);
+                    if (!n && !c) return false;
+                    return n === 'stop' || c === 'stop' || n.includes('stop');
+                };
+
+                const options = [];
+                let surfaceId = 0;
+                for (let i = 0; i < rows.length; i++) {
+                    const row = rows[i] || {};
+                    const objTypeRaw = row['object type'] ?? row.objectType ?? row.object ?? '';
+                    const surfTypeRaw = row.surfType ?? row['surf type'] ?? row.type ?? '';
+                    const surfaceType = (objTypeRaw || surfTypeRaw || 'Standard');
+                    const radius = row.radius ?? 'INF';
+
+                    if (isObjectType(objTypeRaw) || isObjectType(surfTypeRaw) || isObjectType(surfaceType)) {
+                        continue;
+                    }
+
+                    surfaceId++;
+
+                    if (isCoordTransType(objTypeRaw) || isCoordTransType(surfTypeRaw) || isCoordTransType(surfaceType)) {
+                        continue;
+                    }
+
+                    const isStop = isStopType(objTypeRaw) || isStopType(surfTypeRaw) || isStopType(surfaceType);
+                    const isImage = isImageType(objTypeRaw) || isImageType(surfTypeRaw) || isImageType(surfaceType);
+
+                    let label = 'Surf ' + surfaceId;
+                    if (isStop) label += ' (Stop)';
+                    else if (isImage) label += ' (Image)';
+                    else label += ' (' + surfaceType + ')';
+                    if (radius !== 'INF') label += ', R=' + radius;
+
+                    options.push({ value: String(surfaceId), label });
+                }
+
+                return options;
+            };
+
+            const getSurfaceOptionsFromOpener = () => {
+                try {
+                    const opener = window.opener;
+                    if (!opener) return [];
+
+                    const getRows = opener.getOpticalSystemRows;
+                    if (typeof getRows !== 'function') return [];
+
+                    const rows = getRows();
+                    return buildSurfaceOptionsFromRows(rows);
+                } catch (_) {
+                    return [];
+                }
+            };
+
             const normalizeLabel = (text) => {
                 const t = String(text || '').trim();
                 // Drop leading "Surf N:" / "Surface N:" / "面 N" etc.
@@ -2639,10 +2727,23 @@ export function setupAnalysisWindows() {
 
             popupSelect.innerHTML = '';
             if (!openerSelect || !openerSelect.options) {
-                const opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = 'Select Surf';
-                popupSelect.appendChild(opt);
+                const fallbackOptions = getSurfaceOptionsFromOpener();
+                if (fallbackOptions.length > 0) {
+                    for (const o of fallbackOptions) {
+                        const opt = document.createElement('option');
+                        opt.value = String(o.value);
+                        opt.textContent = String(o.label);
+                        popupSelect.appendChild(opt);
+                    }
+                    if (popupSelect.options.length > 0) {
+                        popupSelect.selectedIndex = popupSelect.options.length - 1;
+                    }
+                } else {
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.textContent = 'Select Surf';
+                    popupSelect.appendChild(opt);
+                }
                 return;
             }
 

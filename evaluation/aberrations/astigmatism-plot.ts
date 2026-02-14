@@ -455,6 +455,7 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
         ? Math.max(symmetricMin, maxAbsX * 1.1)
         : symmetricMin;
     const computedXRange = [-symmetricRange, symmetricRange];
+    const xTickStep = (Number.isFinite(maxAbsX) && maxAbsX > 0.5) ? 0.5 : 0.1;
 
     // 縦軸（画角/物体高）はデータから自動算出
     const yValues = [];
@@ -497,7 +498,7 @@ export function plotAstigmaticFieldCurves(containerId, astigmatismData, options 
             zerolinecolor: '#000000',
             zerolinewidth: 1,
             range: Array.isArray(plotOptions.xRange) ? plotOptions.xRange : computedXRange,
-            dtick: 0.1
+            dtick: xTickStep
         },
         yaxis: {
             title: {
