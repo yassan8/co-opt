@@ -1208,20 +1208,13 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
     const open3DWindowBtn = document.getElementById('open-3d-window-btn');
     const open3DWindowHandler = () => {
         const existingPopup = w.popup3DWindow;
-        const POPUP_RENDER_VERSION = '2';
             if (existingPopup && !existingPopup.closed) {
                 try {
-                    const popupVersion = existingPopup.document?.body?.dataset?.popupVersion || '';
-                    const hasContent = existingPopup.document && (
-                        existingPopup.document.getElementById('popup-threejs-canvas-container') ||
-                        existingPopup.document.getElementById('threejs-canvas-container') ||
-                        existingPopup.document.getElementById('threejs-container')
-                    );
-                    if (hasContent && popupVersion === POPUP_RENDER_VERSION) {
-                        existingPopup.focus();
+                    existingPopup.focus();
+                    const hasContent = existingPopup.document && existingPopup.document.getElementById('threejs-container');
+                    if (hasContent) {
                         return;
                     }
-                    try { existingPopup.close(); } catch (_) {}
                 } catch (_) {}
             }
             
@@ -1291,12 +1284,11 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             display: flex;
             flex-direction: row;
             min-height: 0;
-            width: 100%;
             position: relative;
         }
-        #popup-threejs-canvas-container {
+        #threejs-container {
             flex: 1 1 auto;
-            min-height: 320px;
+            min-height: 0;
             position: relative;
             background: white;
         }
@@ -1379,7 +1371,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
         }
     </style>
 </head>
-<body data-popup-version="2">
+<body>
     <div class="header">Render Optical System</div>
     <div class="controls">
         <button id="draw-btn" type="button">Render</button>
@@ -1394,7 +1386,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
         <span id="status"></span>
     </div>
     <div id="main">
-        <div id="popup-threejs-canvas-container" aria-label="Optical system 3D canvas"></div>
+        <div id="threejs-container"></div>
         <div id="surface-colors" class="collapsed">
             <div class="header-row">
                 <span class="title">Surface Colors</span>
@@ -1428,30 +1420,8 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
         console.log('Using THREE from:', parentTHREE ? 'parent window' : 'local import');
         
         function initializePopup(THREE, OrbitControls) {
-            const container =
-                document.getElementById('popup-threejs-canvas-container') ||
-                document.getElementById('threejs-canvas-container') ||
-                document.getElementById('threejs-container');
+            const container = document.getElementById('threejs-container');
             const status = document.getElementById('status');
-            const mainEl = document.getElementById('main');
-
-            let ensuredContainer = container;
-            if (!ensuredContainer && mainEl) {
-                ensuredContainer = document.createElement('div');
-                ensuredContainer.id = 'popup-threejs-canvas-container';
-                ensuredContainer.setAttribute('aria-label', 'Optical system 3D canvas');
-                ensuredContainer.style.flex = '1 1 auto';
-                ensuredContainer.style.minHeight = '320px';
-                ensuredContainer.style.position = 'relative';
-                ensuredContainer.style.background = 'white';
-                mainEl.insertBefore(ensuredContainer, mainEl.firstChild);
-            }
-            if (!ensuredContainer) {
-                return;
-            }
-            try {
-                window.__popupCanvasContainerId = ensuredContainer.id;
-            } catch (_) {}
 
             const isIOSLike = () => {
                 try {
@@ -1461,51 +1431,6 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 } catch (_) {}
                 return false;
             };
-            const isIOS = isIOSLike();
-            const getSafeViewportWidth = () => {
-                const candidates = [
-                    Number(window.innerWidth),
-                    Number(document.documentElement?.clientWidth),
-                    Number(document.body?.clientWidth),
-                    800
-                ];
-                const raw = candidates.find(v => Number.isFinite(v) && v > 0 && v < 10000) || 800;
-                return Math.max(320, Math.min(2048, Math.round(raw)));
-            };
-            const getSafeViewportHeight = () => {
-                const candidates = [
-                    Number(window.innerHeight),
-                    Number(document.documentElement?.clientHeight),
-                    Number(document.body?.clientHeight),
-                    800
-                ];
-                const raw = candidates.find(v => Number.isFinite(v) && v > 0 && v < 10000) || 800;
-                return Math.max(320, Math.min(2048, Math.round(raw)));
-            };
-            const clampDimension = (value, fallback) => {
-                const n = Number(value);
-                if (!Number.isFinite(n) || n <= 1 || n >= 10000) return fallback;
-                return Math.max(1, Math.min(4096, Math.round(n)));
-            };
-
-            if (isIOS && ensuredContainer) {
-                ensuredContainer.style.display = 'block';
-                ensuredContainer.style.minHeight = '600px';
-                ensuredContainer.style.height = 'calc(100vh - 180px)';
-            }
-            if (ensuredContainer) {
-                const fallbackWidth = getSafeViewportWidth();
-                const fallbackHeight = Math.max(320, getSafeViewportHeight() - 180);
-                ensuredContainer.style.width = '100%';
-                ensuredContainer.style.maxWidth = '100vw';
-                if ((ensuredContainer.clientWidth || 0) < 2) {
-                    ensuredContainer.style.minWidth = fallbackWidth + 'px';
-                }
-                if ((ensuredContainer.clientHeight || 0) < 2) {
-                    ensuredContainer.style.minHeight = fallbackHeight + 'px';
-                    ensuredContainer.style.height = fallbackHeight + 'px';
-                }
-            }
             
             const scene = new THREE.Scene();
             scene.userData.renderContext = {
@@ -1514,9 +1439,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             };
             
             const viewSize = 50;
-            const safeWidth = clampDimension(ensuredContainer.clientWidth, getSafeViewportWidth());
-            const safeHeight = clampDimension(ensuredContainer.clientHeight, Math.max(320, getSafeViewportHeight() - 180));
-            const aspect = safeWidth / safeHeight || 1;
+            const aspect = container.clientWidth / container.clientHeight || 1;
             const camera = new THREE.OrthographicCamera(
                 -viewSize * aspect / 2,
                 viewSize * aspect / 2,
@@ -1529,11 +1452,11 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             const rendererOptions = { antialias: true, alpha: true, precision: 'highp', logarithmicDepthBuffer: true };
             const renderer = new THREE.WebGLRenderer(rendererOptions);
             renderer.setPixelRatio(window.devicePixelRatio || 1);
-            renderer.setSize(safeWidth, safeHeight, true);
+            renderer.setSize(container.clientWidth, container.clientHeight, false);
             renderer.setClearColor(0xffffff, 1);
             renderer.sortObjects = false;
             renderer.shadowMap.enabled = false;
-            ensuredContainer.appendChild(renderer.domElement);
+            container.appendChild(renderer.domElement);
             
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
             scene.add(ambientLight);
@@ -1640,15 +1563,13 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             };
             
             const applyResize = () => {
-                const r = ensuredContainer.getBoundingClientRect();
-                const fallbackW = clampDimension(ensuredContainer.clientWidth, getSafeViewportWidth());
-                const fallbackH = clampDimension(ensuredContainer.clientHeight, Math.max(320, getSafeViewportHeight() - 180));
-                const w = clampDimension(r.width, fallbackW);
-                const h = clampDimension(r.height, fallbackH);
+                const r = container.getBoundingClientRect();
+                const w = Math.max(1, Math.round(r.width));
+                const h = Math.max(1, Math.round(r.height));
                 if (w < 2 || h < 2) return;
                 
                 renderer.setPixelRatio(window.devicePixelRatio || 1);
-                renderer.setSize(w, h, true);
+                renderer.setSize(w, h, false);
                 controls.update();
                 
                 const aspect = w / h;
@@ -1681,13 +1602,13 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             let resizeObserver = null;
             if (typeof ResizeObserver !== 'undefined') {
                 resizeObserver = new ResizeObserver(() => scheduleResize());
-                resizeObserver.observe(ensuredContainer);
+                resizeObserver.observe(container);
             } else {
                 let lastW = -1;
                 let lastH = -1;
                 setInterval(() => {
-                    const w = ensuredContainer.clientWidth;
-                    const h = ensuredContainer.clientHeight;
+                    const w = container.clientWidth;
+                    const h = container.clientHeight;
                     if (w !== lastW || h !== lastH) {
                         lastW = w;
                         lastH = h;
@@ -2616,6 +2537,7 @@ export function setupAnalysisWindows() {
             border-radius: 4px;
             background: white;
         }
+        .pattern-btn.active { background: #e9e9e9; }
         .content {
             flex: 1 1 auto;
             min-height: 0;
@@ -2633,7 +2555,7 @@ export function setupAnalysisWindows() {
             background: #fff;
         }
     </style>
-        <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
     <div class="header">Spot Diagram</div>
@@ -2664,11 +2586,9 @@ export function setupAnalysisWindows() {
             <option value="32">32</option>
         </select>
 
-        <label for="popup-pattern-select">Ray pattern:</label>
-        <select id="popup-pattern-select">
-            <option value="annular" selected>Annular</option>
-            <option value="grid">Rectangle</option>
-        </select>
+        <label>Ray pattern:</label>
+        <button id="popup-annular-pattern-btn" class="pattern-btn active" type="button">Annular</button>
+        <button id="popup-grid-pattern-btn" class="pattern-btn" type="button">Rectangle</button>
 
         <button id="popup-show-spot-diagram-btn" type="button">Show spot diagram</button>
     </div>
@@ -2697,94 +2617,6 @@ export function setupAnalysisWindows() {
             const popupSelect = document.getElementById('popup-surface-number-select');
             if (!popupSelect) return;
 
-            const buildSurfaceOptionsFromRows = (rows) => {
-                if (!Array.isArray(rows) || rows.length === 0) return [];
-
-                const normalizeType = (v) => String(v ?? '').trim().toLowerCase();
-                const compactType = (v) => normalizeType(v).replace(/[\s_-]+/g, '');
-                const isCoordTransType = (v) => {
-                    const n = normalizeType(v);
-                    const c = compactType(v);
-                    return (
-                        n === 'ct' ||
-                        n === 'coord trans' ||
-                        n === 'coordinate break' ||
-                        c === 'ct' ||
-                        c === 'coordtrans' ||
-                        c === 'coordinatebreak'
-                    );
-                };
-                const isObjectType = (v) => {
-                    const n = normalizeType(v);
-                    const c = compactType(v);
-                    if (!n && !c) return false;
-                    if (n === 'object' || c === 'object') return true;
-                    if (c === 'objectsurface') return true;
-                    if (n.startsWith('object ') || n.startsWith('object-') || n.startsWith('object_')) return true;
-                    return false;
-                };
-                const isImageType = (v) => {
-                    const n = normalizeType(v);
-                    const c = compactType(v);
-                    if (!n && !c) return false;
-                    return n === 'image' || c === 'image' || n.includes('image');
-                };
-                const isStopType = (v) => {
-                    const n = normalizeType(v);
-                    const c = compactType(v);
-                    if (!n && !c) return false;
-                    return n === 'stop' || c === 'stop' || n.includes('stop');
-                };
-
-                const options = [];
-                let surfaceId = 0;
-                for (let i = 0; i < rows.length; i++) {
-                    const row = rows[i] || {};
-                    const objTypeRaw = row['object type'] ?? row.objectType ?? row.object ?? '';
-                    const surfTypeRaw = row.surfType ?? row['surf type'] ?? row.type ?? '';
-                    const surfaceType = (objTypeRaw || surfTypeRaw || 'Standard');
-                    const radius = row.radius ?? 'INF';
-
-                    if (isObjectType(objTypeRaw) || isObjectType(surfTypeRaw) || isObjectType(surfaceType)) {
-                        continue;
-                    }
-
-                    surfaceId++;
-
-                    if (isCoordTransType(objTypeRaw) || isCoordTransType(surfTypeRaw) || isCoordTransType(surfaceType)) {
-                        continue;
-                    }
-
-                    const isStop = isStopType(objTypeRaw) || isStopType(surfTypeRaw) || isStopType(surfaceType);
-                    const isImage = isImageType(objTypeRaw) || isImageType(surfTypeRaw) || isImageType(surfaceType);
-
-                    let label = 'Surf ' + surfaceId;
-                    if (isStop) label += ' (Stop)';
-                    else if (isImage) label += ' (Image)';
-                    else label += ' (' + surfaceType + ')';
-                    if (radius !== 'INF') label += ', R=' + radius;
-
-                    options.push({ value: String(surfaceId), label });
-                }
-
-                return options;
-            };
-
-            const getSurfaceOptionsFromOpener = () => {
-                try {
-                    const opener = window.opener;
-                    if (!opener) return [];
-
-                    const getRows = opener.getOpticalSystemRows;
-                    if (typeof getRows !== 'function') return [];
-
-                    const rows = getRows();
-                    return buildSurfaceOptionsFromRows(rows);
-                } catch (_) {
-                    return [];
-                }
-            };
-
             const normalizeLabel = (text) => {
                 const t = String(text || '').trim();
                 // Drop leading "Surf N:" / "Surface N:" / "面 N" etc.
@@ -2806,23 +2638,10 @@ export function setupAnalysisWindows() {
 
             popupSelect.innerHTML = '';
             if (!openerSelect || !openerSelect.options) {
-                const fallbackOptions = getSurfaceOptionsFromOpener();
-                if (fallbackOptions.length > 0) {
-                    for (const o of fallbackOptions) {
-                        const opt = document.createElement('option');
-                        opt.value = String(o.value);
-                        opt.textContent = String(o.label);
-                        popupSelect.appendChild(opt);
-                    }
-                    if (popupSelect.options.length > 0) {
-                        popupSelect.selectedIndex = popupSelect.options.length - 1;
-                    }
-                } else {
-                    const opt = document.createElement('option');
-                    opt.value = '';
-                    opt.textContent = 'Select Surf';
-                    popupSelect.appendChild(opt);
-                }
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'Select Surf';
+                popupSelect.appendChild(opt);
                 return;
             }
 
@@ -2869,36 +2688,37 @@ export function setupAnalysisWindows() {
             // pattern
             const annular = getOpenerEl('annular-pattern-btn');
             const grid = getOpenerEl('grid-pattern-btn');
-            const popupPattern = document.getElementById('popup-pattern-select');
-            if (popupPattern) {
+            const popupAnnular = document.getElementById('popup-annular-pattern-btn');
+            const popupGrid = document.getElementById('popup-grid-pattern-btn');
+            if (popupAnnular && popupGrid) {
                 const isAnnular = !!annular && annular.classList.contains('active');
-                const isGrid = !!grid && grid.classList.contains('active');
-                if (isAnnular) popupPattern.value = 'annular';
-                else if (isGrid) popupPattern.value = 'grid';
+                popupAnnular.classList.toggle('active', isAnnular);
+                popupGrid.classList.toggle('active', !isAnnular);
             }
         }
 
-        function setPopupPattern(pattern) {
-            const mode = (String(pattern || '').toLowerCase() === 'grid') ? 'grid' : 'annular';
+        function setPopupPattern(isAnnular) {
+            const popupAnnular = document.getElementById('popup-annular-pattern-btn');
+            const popupGrid = document.getElementById('popup-grid-pattern-btn');
+            popupAnnular.classList.toggle('active', isAnnular);
+            popupGrid.classList.toggle('active', !isAnnular);
 
             const openerAnnular = getOpenerEl('annular-pattern-btn');
             const openerGrid = getOpenerEl('grid-pattern-btn');
-            if (mode === 'annular' && openerAnnular) openerAnnular.click();
-            if (mode === 'grid' && openerGrid) openerGrid.click();
+            if (isAnnular && openerAnnular) openerAnnular.click();
+            if (!isAnnular && openerGrid) openerGrid.click();
 
             try {
                 import('./spot-diagram-settings-storage.ts').then(({ setSpotDiagramPattern }) => {
                     try {
-                        setSpotDiagramPattern(mode, { preferOpener: true });
+                        setSpotDiagramPattern(isAnnular ? 'annular' : 'grid', { preferOpener: true });
                     } catch (_) {}
                 });
             } catch (_) {}
         }
 
-        document.getElementById('popup-pattern-select').addEventListener('change', (ev) => {
-            const v = ev && ev.target ? ev.target.value : 'annular';
-            setPopupPattern(v);
-        });
+        document.getElementById('popup-annular-pattern-btn').addEventListener('click', () => setPopupPattern(true));
+        document.getElementById('popup-grid-pattern-btn').addEventListener('click', () => setPopupPattern(false));
 
         document.getElementById('popup-show-spot-diagram-btn').addEventListener('click', async () => {
             const popupContainer = document.getElementById('popup-spot-diagram-container');
@@ -2925,12 +2745,10 @@ export function setupAnalysisWindows() {
             const popupRay = document.getElementById('popup-ray-count-input');
             const popupRing = document.getElementById('popup-ring-count-select');
             const popupSurface = document.getElementById('popup-surface-number-select');
-            const popupPattern = document.getElementById('popup-pattern-select');
 
             if (openerRay && popupRay) openerRay.value = popupRay.value;
             if (openerRing && popupRing) openerRing.value = popupRing.value;
             if (openerSurface && popupSurface) openerSurface.value = popupSurface.value;
-            if (popupPattern) setPopupPattern(popupPattern.value);
 
             if (!window.opener || typeof window.opener.showSpotDiagram !== 'function') {
                 if (popupContainer) popupContainer.textContent = 'showSpotDiagram is not available in the main window.';
@@ -2952,7 +2770,6 @@ export function setupAnalysisWindows() {
                     surfaceIndex: popupSurface && popupSurface.value !== '' ? parseInt(popupSurface.value, 10) : undefined,
                     rayCount: popupRay && popupRay.value !== '' ? parseInt(popupRay.value, 10) : undefined,
                     ringCount: popupRing && popupRing.value !== '' ? parseInt(popupRing.value, 10) : undefined,
-                    pattern: popupPattern ? String(popupPattern.value || 'annular') : 'annular',
                     containerElement: popupContainer,
                     onProgress
                 });
@@ -3082,7 +2899,7 @@ export function setupAnalysisWindows() {
         }
         #popup-longitudinal-aberration-container { height: 100%; min-height: 100%; }
     </style>
-        <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
     <div class="header">Spherical Aberration</div>
@@ -3271,7 +3088,7 @@ export function setupAnalysisWindows() {
         }
         #popup-astigmatic-field-curves-container { height: 100%; min-height: 100%; }
     </style>
-        <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
     <div class="header">Astigmatism</div>
@@ -3450,7 +3267,7 @@ export function setupAnalysisWindows() {
         #popup-distortion-percent { height: 100%; }
         #popup-distortion-grid { height: 100%; }
     </style>
-        <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
     <div class="header">Distortion</div>
@@ -3708,7 +3525,7 @@ export function setupAnalysisWindows() {
         }
         #popup-integrated-aberration-container { height: 100%; min-height: 100%; }
     </style>
-        <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
     <div class="header">Integrated Aberration</div>
@@ -3876,7 +3693,7 @@ export function setupAnalysisWindows() {
         #popup-wavefront-container { flex: 1 1 auto; min-height: 0; }
         #popup-wavefront-container-stats { flex: 0 0 auto; padding: 8px 12px; font-size: 12px; color: #333; border-top: 1px solid #eee; }
     </style>
-        <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
     <div class="header">Optical Path Difference</div>
@@ -4440,7 +4257,7 @@ export function setupAnalysisWindows() {
         #popup-psf-container-stats { flex: 0 0 auto; padding: 8px 12px; font-size: 12px; color: #333; border-top: 1px solid #eee; }
         .note { padding: 8px 12px; font-size: 12px; color: #666; border-bottom: 1px solid #eee; background: #fff; }
     </style>
-        <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
     <div class="header">Point Spread Function</div>
@@ -5484,7 +5301,7 @@ export function setupAnalysisWindows() {
         }
         #popup-mtf-container { flex: 1 1 auto; min-height: 0; }
     </style>
-        <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
     <div class="header">Modulation Transfer Function</div>
@@ -5513,7 +5330,7 @@ export function setupAnalysisWindows() {
         <button id="popup-show-mtf-btn" type="button">Show MTF</button>
     </div>
     <div class="note">
-        Note: MTF is computed from PSF via Fourier transform. Curves are Tangential/Sagittal (not Spherical Aberration analysis).
+        Note: MTF is computed from PSF via Fourier transform.
     </div>
     <div id="popup-mtf-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
         <div id="popup-mtf-progress-text" style="margin-bottom: 6px;">Calculating MTF...</div>
@@ -5706,394 +5523,13 @@ export function setupAnalysisWindows() {
                 });
         }
 
-        // Through-Focus Spot popup window button
-        const openThroughFocusSpotWindowBtn = document.getElementById('open-through-focus-spot-window-btn');
-        if (openThroughFocusSpotWindowBtn) {
-                openThroughFocusSpotWindowBtn.addEventListener('click', () => {
-                        if (w.__throughFocusSpotPopup && !w.__throughFocusSpotPopup.closed) {
-                                try { w.__throughFocusSpotPopup.focus(); } catch (_) {}
-                                return;
-                        }
-
-                        const popup = window.open('', 'Through-Focus Spot', 'width=980,height=720');
-                        if (!popup) {
-                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
-                            return;
-                        }
-                        w.__throughFocusSpotPopup = popup;
-
-                        popup.document.write(`
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8" />
-    <title>Through-Focus Spot</title>
-    <style>
-        html, body { height: 100%; }
-        body {
-            margin: 0;
-            font-family: Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-            background: #f4f4f4;
-        }
-        .header {
-            padding: 10px 12px;
-            background: #f8f8f8;
-            color: #333;
-            border-bottom: 1px solid #ddd;
-            font-size: 14px;
-            font-weight: 600;
-        }
-        .controls {
-            padding: 10px 12px;
-            background: #f8f8f8;
-            border-bottom: 1px solid #ddd;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px 10px;
-            align-items: center;
-            flex: 0 0 auto;
-        }
-        .controls label { font-size: 12px; color: #333; white-space: nowrap; }
-        .controls select,
-        .controls input {
-            padding: 5px 8px;
-            font-size: 12px;
-            border: 1px solid #bbb;
-            border-radius: 4px;
-            background: white;
-        }
-        .controls input { width: 92px; }
-        .controls button {
-            padding: 6px 10px;
-            border: 1px solid #bbb;
-            background: #f8f8f8;
-            cursor: pointer;
-            border-radius: 4px;
-            font-size: 12px;
-            color: #333;
-        }
-        .controls button:hover { background: #e9e9e9; }
-        .note { padding: 8px 12px; font-size: 12px; color: #666; border-bottom: 1px solid #eee; background: #fff; }
-        .content {
-            flex: 1 1 auto;
-            min-height: 0;
-            overflow: hidden;
-            background: white;
-            display: flex;
-            flex-direction: column;
-        }
-        #popup-through-focus-spot-container { flex: 1 1 auto; min-height: 0; }
-    </style>
-        <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
-</head>
-<body>
-    <div class="header">Through-Focus Spot Diagram</div>
-    <div class="controls">
-        <label for="popup-through-focus-spot-surface-select">Surf:</label>
-        <select id="popup-through-focus-spot-surface-select"></select>
-        <label for="popup-through-focus-spot-ray-count">Ray:</label>
-        <input id="popup-through-focus-spot-ray-count" type="number" min="1" step="1" value="101" />
-        <label for="popup-through-focus-spot-ring-count">Ring:</label>
-        <select id="popup-through-focus-spot-ring-count">
-            <option value="3">3</option>
-            <option value="5">5</option>
-            <option value="8">8</option>
-            <option value="10" selected>10</option>
-            <option value="12">12</option>
-            <option value="16">16</option>
-            <option value="20">20</option>
-        </select>
-        <label for="popup-through-focus-spot-pattern">Pattern:</label>
-        <select id="popup-through-focus-spot-pattern">
-            <option value="annular" selected>Annular</option>
-            <option value="grid">Rectangle</option>
-        </select>
-        <label for="popup-through-focus-spot-min-defocus">Defocus min (mm):</label>
-        <input id="popup-through-focus-spot-min-defocus" type="number" step="0.001" value="-0.100" />
-        <label for="popup-through-focus-spot-max-defocus">Defocus max (mm):</label>
-        <input id="popup-through-focus-spot-max-defocus" type="number" step="0.001" value="0.100" />
-        <label for="popup-through-focus-spot-steps">Steps:</label>
-        <input id="popup-through-focus-spot-steps" type="number" min="3" max="61" step="1" value="5" />
-        <label for="popup-through-focus-spot-scale">Scale (μm):</label>
-        <input id="popup-through-focus-spot-scale" type="number" min="1" step="1" value="100" />
-        <label for="popup-through-focus-spot-wavelength-mode">Wavelength:</label>
-        <select id="popup-through-focus-spot-wavelength-mode">
-            <option value="all" selected>All</option>
-            <option value="primary">Primary only</option>
-        </select>
-        <button id="popup-show-through-focus-spot-btn" type="button">Show Through-Focus Spot</button>
-    </div>
-    <div class="note">
-        Note: Rows are field points and columns are defocus shifts. Each cell is centroid-centered for spot spread comparison.
-    </div>
-    <div id="popup-through-focus-spot-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
-        <div id="popup-through-focus-spot-progress-text" style="margin-bottom: 6px;">Calculating Through-Focus Spot...</div>
-        <progress id="popup-through-focus-spot-progress" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
-    </div>
-    <div class="content">
-        <div id="popup-through-focus-spot-container"></div>
-    </div>
-
-    <script>
-        function getOpenerEl(id) {
-            try {
-                return window.opener && window.opener.document ? window.opener.document.getElementById(id) : null;
-            } catch (_) {
-                return null;
-            }
-        }
-
-        function syncSurfaceOptionsFromOpener() {
-            const openerSelect = getOpenerEl('surface-number-select');
-            const popupSelect = document.getElementById('popup-through-focus-spot-surface-select');
-            if (!popupSelect) return;
-
-            const buildSurfaceOptionsFromRows = (rows) => {
-                if (!Array.isArray(rows) || rows.length === 0) return [];
-
-                const normalizeType = (v) => String(v ?? '').trim().toLowerCase();
-                const compactType = (v) => normalizeType(v).replace(/[\s_-]+/g, '');
-                const isCoordTransType = (v) => {
-                    const n = normalizeType(v);
-                    const c = compactType(v);
-                    return (
-                        n === 'ct' ||
-                        n === 'coord trans' ||
-                        n === 'coordinate break' ||
-                        c === 'ct' ||
-                        c === 'coordtrans' ||
-                        c === 'coordinatebreak'
-                    );
-                };
-                const isObjectType = (v) => {
-                    const n = normalizeType(v);
-                    const c = compactType(v);
-                    if (!n && !c) return false;
-                    if (n === 'object' || c === 'object') return true;
-                    if (c === 'objectsurface') return true;
-                    if (n.startsWith('object ') || n.startsWith('object-') || n.startsWith('object_')) return true;
-                    return false;
-                };
-                const isImageType = (v) => {
-                    const n = normalizeType(v);
-                    const c = compactType(v);
-                    if (!n && !c) return false;
-                    return n === 'image' || c === 'image' || n.includes('image');
-                };
-                const isStopType = (v) => {
-                    const n = normalizeType(v);
-                    const c = compactType(v);
-                    if (!n && !c) return false;
-                    return n === 'stop' || c === 'stop' || n.includes('stop');
-                };
-
-                const options = [];
-                let surfaceId = 0;
-                for (let i = 0; i < rows.length; i++) {
-                    const row = rows[i] || {};
-                    const objTypeRaw = row['object type'] ?? row.objectType ?? row.object ?? '';
-                    const surfTypeRaw = row.surfType ?? row['surf type'] ?? row.type ?? '';
-                    const surfaceType = (objTypeRaw || surfTypeRaw || 'Standard');
-                    const radius = row.radius ?? 'INF';
-
-                    if (isObjectType(objTypeRaw) || isObjectType(surfTypeRaw) || isObjectType(surfaceType)) {
-                        continue;
-                    }
-
-                    surfaceId++;
-
-                    if (isCoordTransType(objTypeRaw) || isCoordTransType(surfTypeRaw) || isCoordTransType(surfaceType)) {
-                        continue;
-                    }
-
-                    const isStop = isStopType(objTypeRaw) || isStopType(surfTypeRaw) || isStopType(surfaceType);
-                    const isImage = isImageType(objTypeRaw) || isImageType(surfTypeRaw) || isImageType(surfaceType);
-
-                    let label = 'Surf ' + surfaceId;
-                    if (isStop) label += ' (Stop)';
-                    else if (isImage) label += ' (Image)';
-                    else label += ' (' + surfaceType + ')';
-                    if (radius !== 'INF') label += ', R=' + radius;
-
-                    options.push({ value: String(surfaceId), label });
-                }
-
-                return options;
-            };
-
-            const getSurfaceOptionsFromOpener = () => {
-                try {
-                    const opener = window.opener;
-                    if (!opener) return [];
-                    const getRows = opener.getOpticalSystemRows;
-                    if (typeof getRows !== 'function') return [];
-                    const rows = getRows();
-                    return buildSurfaceOptionsFromRows(rows);
-                } catch (_) {
-                    return [];
-                }
-            };
-
-            const prevValue = popupSelect.value;
-
-            popupSelect.innerHTML = '';
-            if (!openerSelect || !openerSelect.options) {
-                const fallbackOptions = getSurfaceOptionsFromOpener();
-                if (fallbackOptions.length > 0) {
-                    for (const o of fallbackOptions) {
-                        const opt = document.createElement('option');
-                        opt.value = String(o.value);
-                        opt.textContent = String(o.label);
-                        popupSelect.appendChild(opt);
-                    }
-                    const hasPrev = prevValue !== '' && Array.from(popupSelect.options || []).some((opt) => String(opt.value) === String(prevValue));
-                    if (hasPrev) popupSelect.value = prevValue;
-                    else if (popupSelect.options.length > 0) popupSelect.selectedIndex = popupSelect.options.length - 1;
-                } else {
-                    const opt = document.createElement('option');
-                    opt.value = '';
-                    opt.textContent = 'Select Surf';
-                    popupSelect.appendChild(opt);
-                }
-                return;
-            }
-
-            for (const o of openerSelect.options) {
-                const opt = document.createElement('option');
-                opt.value = o.value;
-                opt.textContent = (o.textContent || '').replace(/^面\s*/, 'Surf ').replace(/^Surface\s*/i, 'Surf ');
-                popupSelect.appendChild(opt);
-            }
-
-            const hasOpenerValue = Array.from(popupSelect.options || []).some((opt) => String(opt.value) === String(openerSelect.value));
-            if (hasOpenerValue) popupSelect.value = openerSelect.value;
-            else if (popupSelect.options.length > 0) popupSelect.selectedIndex = popupSelect.options.length - 1;
-        }
-
-        function syncInputsFromOpener() {
-            const openerRing = getOpenerEl('ring-count-select');
-            const openerAnnular = getOpenerEl('annular-pattern-btn');
-            const openerGrid = getOpenerEl('grid-pattern-btn');
-            const popupRay = document.getElementById('popup-through-focus-spot-ray-count');
-            const popupRing = document.getElementById('popup-through-focus-spot-ring-count');
-            const popupPattern = document.getElementById('popup-through-focus-spot-pattern');
-
-            if (popupRay && (!popupRay.value || popupRay.value.trim() === '')) popupRay.value = '101';
-            if (popupRing && openerRing && popupRing.value !== openerRing.value) popupRing.value = openerRing.value;
-            if (popupPattern) {
-                const isAnnular = !!openerAnnular && openerAnnular.classList.contains('active');
-                const isGrid = !!openerGrid && openerGrid.classList.contains('active');
-                if (isAnnular) popupPattern.value = 'annular';
-                else if (isGrid) popupPattern.value = 'grid';
-            }
-        }
-
-        function syncAll() {
-            syncSurfaceOptionsFromOpener();
-            syncInputsFromOpener();
-        }
-
-        window['renderThroughFocusSpot'] = async () => {
-            const containerEl = document.getElementById('popup-through-focus-spot-container');
-            if (containerEl) containerEl.innerHTML = '';
-
-            const progressWrapper = document.getElementById('popup-through-focus-spot-progress-wrapper');
-            const progressEl = document.getElementById('popup-through-focus-spot-progress');
-            const progressTextEl = document.getElementById('popup-through-focus-spot-progress-text');
-
-            const setProgress = (value, text) => {
-                try {
-                    if (progressWrapper) progressWrapper.style.display = 'block';
-                    if (progressEl && Number.isFinite(value)) progressEl.value = Math.max(0, Math.min(100, value));
-                    if (progressTextEl && typeof text === 'string') progressTextEl.textContent = text;
-                } catch (_) {}
-            };
-
-            const hideProgress = () => {
-                try { if (progressWrapper) progressWrapper.style.display = 'none'; } catch (_) {}
-            };
-
-            try {
-                const opener = window.opener || null;
-                if (!opener || typeof opener.showThroughFocusSpotDiagram !== 'function') {
-                    throw new Error('showThroughFocusSpotDiagram is not available on opener');
-                }
-
-                const surfaceEl = document.getElementById('popup-through-focus-spot-surface-select');
-                const rayEl = document.getElementById('popup-through-focus-spot-ray-count');
-                const ringEl = document.getElementById('popup-through-focus-spot-ring-count');
-                const patternEl = document.getElementById('popup-through-focus-spot-pattern');
-                const minEl = document.getElementById('popup-through-focus-spot-min-defocus');
-                const maxEl = document.getElementById('popup-through-focus-spot-max-defocus');
-                const stepsEl = document.getElementById('popup-through-focus-spot-steps');
-                const scaleEl = document.getElementById('popup-through-focus-spot-scale');
-                const wavelengthModeEl = document.getElementById('popup-through-focus-spot-wavelength-mode');
-
-                const openerAnnular = getOpenerEl('annular-pattern-btn');
-                const openerGrid = getOpenerEl('grid-pattern-btn');
-                if (patternEl) {
-                    const selectedPattern = String(patternEl.value || 'annular');
-                    if (selectedPattern === 'annular' && openerAnnular) openerAnnular.click();
-                    if (selectedPattern === 'grid' && openerGrid) openerGrid.click();
-                }
-
-                setProgress(0, 'Starting...');
-                await new Promise(r => setTimeout(r, 0));
-
-                await opener.showThroughFocusSpotDiagram({
-                    surfaceIndex: surfaceEl && surfaceEl.value !== '' ? parseInt(surfaceEl.value, 10) : undefined,
-                    rayCount: rayEl ? parseInt(rayEl.value, 10) : undefined,
-                    ringCount: ringEl ? parseInt(ringEl.value, 10) : undefined,
-                    pattern: patternEl ? String(patternEl.value || 'annular') : 'annular',
-                    defocusMinMm: minEl ? Number(minEl.value) : undefined,
-                    defocusMaxMm: maxEl ? Number(maxEl.value) : undefined,
-                    steps: stepsEl ? parseInt(stepsEl.value, 10) : undefined,
-                    scaleUm: scaleEl ? Number(scaleEl.value) : undefined,
-                    wavelengthMode: wavelengthModeEl ? String(wavelengthModeEl.value || 'all') : 'all',
-                    onProgress: (evt) => {
-                        try {
-                            const p = Number(evt?.percent);
-                            const msg = evt?.message || evt?.phase || 'Working...';
-                            if (Number.isFinite(p)) setProgress(p, msg);
-                            else setProgress(undefined, msg);
-                        } catch (_) {}
-                    },
-                    containerElement: containerEl
-                });
-
-                setProgress(100, 'Done');
-                hideProgress();
-            } catch (err) {
-                console.error(err);
-                setProgress(100, 'Failed');
-                if (containerEl) {
-                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate Through-Focus Spot. Check console.</div>';
-                }
-            }
-        };
-
-        document.getElementById('popup-show-through-focus-spot-btn').addEventListener('click', () => window.renderThroughFocusSpot());
-        window.addEventListener('focus', syncAll);
-        window.addEventListener('load', () => syncAll());
-    </script>
-</body>
-</html>
-                        `);
-
-                        try { popup.document.close(); } catch (_) {}
-                });
-        }
-
         // Through-Focus MTF popup window button
         const openThroughFocusMtfWindowBtn = document.getElementById('open-through-focus-mtf-window-btn');
         if (openThroughFocusMtfWindowBtn) {
                 openThroughFocusMtfWindowBtn.addEventListener('click', () => {
                         if (w.__throughFocusMtfPopup && !w.__throughFocusMtfPopup.closed) {
-                    try { w.__throughFocusMtfPopup.close(); } catch (_) {}
-                    w.__throughFocusMtfPopup = null;
+                                try { w.__throughFocusMtfPopup.focus(); } catch (_) {}
+                                return;
                         }
 
                         const popup = window.open('', 'Through-Focus MTF', 'width=900,height=680');
@@ -6192,9 +5628,9 @@ export function setupAnalysisWindows() {
         <label for="popup-through-focus-mtf-target-freq-input">Freq (lp/mm):</label>
         <input id="popup-through-focus-mtf-target-freq-input" type="number" min="0" step="1" value="30" />
         <label for="popup-through-focus-mtf-min-defocus-input">Defocus min (mm):</label>
-        <input id="popup-through-focus-mtf-min-defocus-input" type="number" step="0.001" value="-0.1" />
+        <input id="popup-through-focus-mtf-min-defocus-input" type="number" step="0.001" value="-0.05" />
         <label for="popup-through-focus-mtf-max-defocus-input">Defocus max (mm):</label>
-        <input id="popup-through-focus-mtf-max-defocus-input" type="number" step="0.001" value="0.1" />
+        <input id="popup-through-focus-mtf-max-defocus-input" type="number" step="0.001" value="0.05" />
         <label for="popup-through-focus-mtf-steps-input">Steps:</label>
         <input id="popup-through-focus-mtf-steps-input" type="number" min="3" max="201" step="1" value="21" />
         <label for="popup-through-focus-mtf-sampling-select">Sampling:</label>
@@ -6215,7 +5651,7 @@ export function setupAnalysisWindows() {
         <button id="popup-show-through-focus-mtf-btn" type="button">Show Through-Focus MTF</button>
     </div>
     <div class="note">
-        Note: X-axis is defocus shift (mm), Y-axis is MTF at the selected spatial frequency. Curves are Tangential/Sagittal.
+        Note: X-axis is defocus shift (mm), Y-axis is MTF at the selected spatial frequency.
     </div>
     <div id="popup-through-focus-mtf-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
         <div id="popup-through-focus-mtf-progress-text" style="margin-bottom: 6px;">Calculating Through-Focus MTF...</div>
@@ -6357,8 +5793,8 @@ export function setupAnalysisWindows() {
             const wavelength = (wlValue === 'all') ? 'all' : Number(wlValue);
             const objectIndex = objSel ? parseInt(objSel.value, 10) : 0;
             const targetFrequencyLpmm = targetFreqEl ? Number(targetFreqEl.value) : 30;
-            const defocusMinMm = minDefocusEl ? Number(minDefocusEl.value) : -0.1;
-            const defocusMaxMm = maxDefocusEl ? Number(maxDefocusEl.value) : 0.1;
+            const defocusMinMm = minDefocusEl ? Number(minDefocusEl.value) : -0.05;
+            const defocusMaxMm = maxDefocusEl ? Number(maxDefocusEl.value) : 0.05;
             const steps = stepsEl ? Number(stepsEl.value) : 21;
             const sampling = samplingEl ? Number(samplingEl.value) : 256;
             const opdDisplayMode = (removePtdEl && removePtdEl.checked)
@@ -6376,8 +5812,8 @@ export function setupAnalysisWindows() {
                     wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : (primary || 0.5876)),
                     objectIndex: Number.isFinite(objectIndex) ? objectIndex : 0,
                     targetFrequencyLpmm: Number.isFinite(targetFrequencyLpmm) ? targetFrequencyLpmm : 30,
-                    defocusMinMm: Number.isFinite(defocusMinMm) ? defocusMinMm : -0.1,
-                    defocusMaxMm: Number.isFinite(defocusMaxMm) ? defocusMaxMm : 0.1,
+                    defocusMinMm: Number.isFinite(defocusMinMm) ? defocusMinMm : -0.05,
+                    defocusMaxMm: Number.isFinite(defocusMaxMm) ? defocusMaxMm : 0.05,
                     steps: Number.isFinite(steps) ? steps : 21,
                     samplingSize: Number.isFinite(sampling) ? sampling : 256,
                     opdDisplayMode,
@@ -6503,7 +5939,7 @@ export function setupAnalysisWindows() {
         }
         #popup-transverse-aberration-container { height: 100%; min-height: 100%; }
     </style>
-        <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
     <div class="header">Transverse Aberration</div>
@@ -7096,9 +6532,7 @@ export function setupTransformationControls(): void {
                 'transverse-aberration': 'open-transverse-aberration-window-btn',
                 'opd': 'open-opd-window-btn',
                 'psf': 'open-psf-window-btn',
-                'mtf': 'open-mtf-window-btn',
-                'through-focus-spot': 'open-through-focus-spot-window-btn',
-                'through-focus-mtf': 'open-through-focus-mtf-window-btn'
+                'mtf': 'open-mtf-window-btn'
             };
             
             const buttonId = analysisButtonMap[selectedValue];
