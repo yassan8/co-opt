@@ -193,7 +193,8 @@ function ensurePopupMessageHandler(): void {
                     scene: popupWindow.scene,
                     renderer: popupWindow.renderer,
                     includeRayStartMargin: true,
-                    preserveDrawCrossBounds: false,
+                    preserveDrawCrossBounds: true,
+                    storeDrawCrossBounds: false,
                     ...(Number.isFinite(centerZOverride) ? { centerZOverride } : {})
                 };
 
@@ -1657,10 +1658,14 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             let lastResizeWidth = -1;
             let lastResizeHeight = -1;
 
-            const shouldSendPopupResize = (now, width, height, thresholdMs) => {
+            const shouldSendPopupResize = (now, width, height, thresholdMs, deltaPx) => {
+                const hasLastSize = lastResizeWidth > 0 && lastResizeHeight > 0;
+                const sizeChangedEnough = !hasLastSize ||
+                    Math.abs(lastResizeWidth - width) >= deltaPx ||
+                    Math.abs(lastResizeHeight - height) >= deltaPx;
                 return !lastResizeSentAt ||
                     (now - lastResizeSentAt > thresholdMs) ||
-                    (lastResizeWidth !== width || lastResizeHeight !== height);
+                    sizeChangedEnough;
             };
 
             const markPopupResizeSent = (now, width, height) => {
@@ -1703,8 +1708,9 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 
                 if (!getPopupUserAdjustedView()) {
                     const now = Date.now();
-                    const threshold = 80;
-                    const shouldSend = shouldSendPopupResize(now, w, h, threshold);
+                    const threshold = 200;
+                    const deltaPx = 8;
+                    const shouldSend = shouldSendPopupResize(now, w, h, threshold, deltaPx);
                     
                     if (shouldSend && window.opener) {
                         markPopupResizeSent(now, w, h);
