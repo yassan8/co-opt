@@ -1243,9 +1243,10 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
 <html>
 <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Render Optical System</title>
     <style>
-        html, body { height: 100%; }
+        html, body { height: 100%; width: 100%; overflow: hidden; }
         body {
             margin: 0;
             font-family: Arial, sans-serif;
@@ -1444,15 +1445,6 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             const status = document.getElementById('status');
             const MAX_SAFE_DIMENSION = 8192;
 
-            const isIOSLike = () => {
-                try {
-                    const ua = String(navigator.userAgent || '');
-                    if (/iPad|iPhone|iPod/i.test(ua)) return true;
-                    if (/Macintosh/i.test(ua) && Number(navigator.maxTouchPoints || 0) > 1) return true;
-                } catch (_) {}
-                return false;
-            };
-            
             const scene = new THREE.Scene();
             scene.userData.renderContext = {
                 three: THREE,
@@ -1530,8 +1522,11 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 const viewportWidthBaseline = baselineWidthCandidates[0] || viewport.width;
                 const viewportHeightBaseline = baselineHeightCandidates[0] || viewport.height;
 
-                const maxWidth = Math.min(MAX_SAFE_DIMENSION, Math.max(640, Math.round(viewportWidthBaseline * 1.35)));
-                const maxHeight = Math.min(MAX_SAFE_DIMENSION, Math.max(480, Math.round(viewportHeightBaseline * 1.5)));
+                const widthFactor = 1.35;
+                const heightFactor = 1.5;
+
+                const maxWidth = Math.min(MAX_SAFE_DIMENSION, Math.max(320, Math.round(viewportWidthBaseline * widthFactor)));
+                const maxHeight = Math.min(MAX_SAFE_DIMENSION, Math.max(320, Math.round(viewportHeightBaseline * heightFactor)));
 
                 const preferredWidth = Math.min(maxWidth, Math.max(2, Math.round(viewportWidthBaseline)));
                 const preferredHeight = Math.min(maxHeight, Math.max(2, Math.round(viewportHeightBaseline)));
