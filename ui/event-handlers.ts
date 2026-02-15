@@ -1436,6 +1436,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
         function initializePopup(THREE, OrbitControls) {
             const container = document.getElementById('threejs-container');
             const status = document.getElementById('status');
+            const MAX_SAFE_DIMENSION = 8192;
 
             const isIOSLike = () => {
                 try {
@@ -1451,9 +1452,71 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 three: THREE,
                 global: window.opener
             };
+
+            const pickSafeViewportDimension = (candidates, fallback) => {
+                for (const value of candidates) {
+                    const n = Number(value);
+                    if (Number.isFinite(n) && n >= 200 && n <= MAX_SAFE_DIMENSION) {
+                        return Math.round(n);
+                    }
+                }
+                return fallback;
+            };
+
+            const getSafeViewportSize = () => {
+                const width = pickSafeViewportDimension([
+                    window.visualViewport && window.visualViewport.width,
+                    document.documentElement && document.documentElement.clientWidth,
+                    window.outerWidth,
+                    window.screen && window.screen.width
+                ], 1280);
+                const height = pickSafeViewportDimension([
+                    window.visualViewport && window.visualViewport.height,
+                    document.documentElement && document.documentElement.clientHeight,
+                    window.outerHeight,
+                    window.screen && window.screen.height
+                ], 720);
+                return { width, height };
+            };
+
+            let lastGoodContainerWidth = 960;
+            let lastGoodContainerHeight = 640;
+
+            const getClampedContainerSize = () => {
+                const rect = container.getBoundingClientRect();
+                const rawWidth = Number(rect.width || container.clientWidth || 0);
+                const rawHeight = Number(rect.height || container.clientHeight || 0);
+                const viewport = getSafeViewportSize();
+                const maxWidth = Math.min(MAX_SAFE_DIMENSION, Math.max(640, Math.round(viewport.width * 2)));
+                const maxHeight = Math.min(MAX_SAFE_DIMENSION, Math.max(480, Math.round(viewport.height * 2)));
+
+                const pickValue = (raw, fallback, min, max) => {
+                    if (!Number.isFinite(raw)) return fallback;
+                    if (raw < min || raw > max) return fallback;
+                    return Math.round(raw);
+                };
+
+                let width = pickValue(rawWidth, Math.min(maxWidth, Math.max(2, lastGoodContainerWidth)), 2, maxWidth);
+                let height = pickValue(rawHeight, Math.min(maxHeight, Math.max(2, lastGoodContainerHeight)), 2, maxHeight);
+
+                if (width < 2) width = Math.min(maxWidth, Math.max(2, viewport.width));
+                if (height < 2) height = Math.min(maxHeight, Math.max(2, viewport.height));
+
+                if (Number.isFinite(rawWidth) && Math.round(rawWidth) !== width) {
+                    console.warn('[popup] Ignored abnormal container width:', rawWidth, '->', width, '(max=', maxWidth, ')');
+                }
+                if (Number.isFinite(rawHeight) && Math.round(rawHeight) !== height) {
+                    console.warn('[popup] Ignored abnormal container height:', rawHeight, '->', height, '(max=', maxHeight, ')');
+                }
+
+                lastGoodContainerWidth = width;
+                lastGoodContainerHeight = height;
+                return { width, height };
+            };
             
             const viewSize = 50;
-            const aspect = container.clientWidth / container.clientHeight || 1;
+            const initialSize = getClampedContainerSize();
+            const aspect = initialSize.width / initialSize.height || 1;
             const camera = new THREE.OrthographicCamera(
                 -viewSize * aspect / 2,
                 viewSize * aspect / 2,
@@ -1466,7 +1529,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             const rendererOptions = { antialias: true, alpha: true, precision: 'highp', logarithmicDepthBuffer: true };
             const renderer = new THREE.WebGLRenderer(rendererOptions);
             renderer.setPixelRatio(window.devicePixelRatio || 1);
-            renderer.setSize(container.clientWidth, container.clientHeight, false);
+            renderer.setSize(initialSize.width, initialSize.height, false);
             renderer.setClearColor(0xffffff, 1);
             renderer.sortObjects = false;
             renderer.shadowMap.enabled = false;
@@ -1577,9 +1640,9 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             };
             
             const applyResize = () => {
-                const r = container.getBoundingClientRect();
-                const w = Math.max(1, Math.round(r.width));
-                const h = Math.max(1, Math.round(r.height));
+                const size = getClampedContainerSize();
+                const w = Math.max(1, size.width);
+                const h = Math.max(1, size.height);
                 if (w < 2 || h < 2) return;
                 
                 renderer.setPixelRatio(window.devicePixelRatio || 1);
