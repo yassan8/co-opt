@@ -1299,12 +1299,18 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             flex-direction: row;
             min-height: 0;
             position: relative;
+            width: 100%;
+            max-width: 100vw;
+            overflow: hidden;
         }
         #threejs-container {
             flex: 1 1 auto;
             min-height: 0;
             position: relative;
             background: white;
+            width: 100%;
+            max-width: 100%;
+            overflow: hidden;
         }
         #surface-colors {
             position: absolute;
@@ -1454,24 +1460,37 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             };
 
             const pickSafeViewportDimension = (candidates, fallback) => {
-                for (const value of candidates) {
+                const dpr = Number(window.devicePixelRatio || 1);
+                const normalized = [];
+
+                const addCandidate = (value) => {
                     const n = Number(value);
-                    if (Number.isFinite(n) && n >= 200 && n <= MAX_SAFE_DIMENSION) {
-                        return Math.round(n);
+                    if (!Number.isFinite(n)) return;
+                    if (n >= 200 && n <= MAX_SAFE_DIMENSION) normalized.push(n);
+                    if (dpr > 1.25) {
+                        const cssLike = n / dpr;
+                        if (cssLike >= 200 && cssLike <= MAX_SAFE_DIMENSION) normalized.push(cssLike);
                     }
-                }
-                return fallback;
+                };
+
+                for (const value of candidates) addCandidate(value);
+                if (normalized.length === 0) return fallback;
+
+                normalized.sort((a, b) => a - b);
+                return Math.round(normalized[0]);
             };
 
             const getSafeViewportSize = () => {
                 const width = pickSafeViewportDimension([
                     window.visualViewport && window.visualViewport.width,
+                    window.innerWidth,
                     document.documentElement && document.documentElement.clientWidth,
                     window.outerWidth,
                     window.screen && window.screen.width
                 ], 1280);
                 const height = pickSafeViewportDimension([
                     window.visualViewport && window.visualViewport.height,
+                    window.innerHeight,
                     document.documentElement && document.documentElement.clientHeight,
                     window.outerHeight,
                     window.screen && window.screen.height
@@ -1487,8 +1506,35 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 const rawWidth = Number(rect.width || container.clientWidth || 0);
                 const rawHeight = Number(rect.height || container.clientHeight || 0);
                 const viewport = getSafeViewportSize();
-                const maxWidth = Math.min(MAX_SAFE_DIMENSION, Math.max(640, Math.round(viewport.width * 2)));
-                const maxHeight = Math.min(MAX_SAFE_DIMENSION, Math.max(480, Math.round(viewport.height * 2)));
+                const baselineWidthCandidates = [
+                    viewport.width,
+                    window.visualViewport && window.visualViewport.width,
+                    window.innerWidth,
+                    document.documentElement && document.documentElement.clientWidth,
+                    window.screen && window.screen.width
+                ]
+                    .map((v) => Number(v))
+                    .filter((v) => Number.isFinite(v) && v >= 200 && v <= MAX_SAFE_DIMENSION)
+                    .sort((a, b) => a - b);
+                const baselineHeightCandidates = [
+                    viewport.height,
+                    window.visualViewport && window.visualViewport.height,
+                    window.innerHeight,
+                    document.documentElement && document.documentElement.clientHeight,
+                    window.screen && window.screen.height
+                ]
+                    .map((v) => Number(v))
+                    .filter((v) => Number.isFinite(v) && v >= 200 && v <= MAX_SAFE_DIMENSION)
+                    .sort((a, b) => a - b);
+
+                const viewportWidthBaseline = baselineWidthCandidates[0] || viewport.width;
+                const viewportHeightBaseline = baselineHeightCandidates[0] || viewport.height;
+
+                const maxWidth = Math.min(MAX_SAFE_DIMENSION, Math.max(640, Math.round(viewportWidthBaseline * 1.35)));
+                const maxHeight = Math.min(MAX_SAFE_DIMENSION, Math.max(480, Math.round(viewportHeightBaseline * 1.5)));
+
+                const preferredWidth = Math.min(maxWidth, Math.max(2, Math.round(viewportWidthBaseline)));
+                const preferredHeight = Math.min(maxHeight, Math.max(2, Math.round(viewportHeightBaseline)));
 
                 const pickValue = (raw, fallback, min, max) => {
                     if (!Number.isFinite(raw)) return fallback;
@@ -1496,8 +1542,8 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                     return Math.round(raw);
                 };
 
-                let width = pickValue(rawWidth, Math.min(maxWidth, Math.max(2, lastGoodContainerWidth)), 2, maxWidth);
-                let height = pickValue(rawHeight, Math.min(maxHeight, Math.max(2, lastGoodContainerHeight)), 2, maxHeight);
+                let width = pickValue(rawWidth, preferredWidth, 2, maxWidth);
+                let height = pickValue(rawHeight, preferredHeight, 2, maxHeight);
 
                 if (width < 2) width = Math.min(maxWidth, Math.max(2, viewport.width));
                 if (height < 2) height = Math.min(maxHeight, Math.max(2, viewport.height));
