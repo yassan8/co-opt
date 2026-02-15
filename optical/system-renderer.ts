@@ -8,7 +8,8 @@ import * as THREE from 'three';
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
 import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurfaceWithOrigin, drawToricSurfaceWithOrigin,
          drawLensCrossSection, drawLensCrossSectionWithSurfaceOrigins, 
-         drawSemidiaRingWithOriginAndSurface, drawRectApertureWithOriginAndSurface, asphericSurfaceZ, toricSurfaceZ, addMirrorBackText } from './surface.ts';
+         drawSemidiaRingWithOriginAndSurface, drawRectApertureWithOriginAndSurface, asphericSurfaceZ, toricSurfaceZ, addMirrorBackText,
+         drawConnectionCornerRings3D } from './surface.ts';
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordTrans';
@@ -728,6 +729,9 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                 console.error(`❌ Error drawing surface ${i}:`, error);
             }
         }
+
+        // 3Dビュー専用: 接続直角部リングを描画
+        drawConnectionCornerRings3D(scene, opticalSystemData, surfaceOrigins);
     } else {
     }
 
