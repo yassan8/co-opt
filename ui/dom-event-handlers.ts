@@ -3279,17 +3279,25 @@ function formatBlockPreview(block: any): string {
     };
 
     const type = String(b.blockType ?? '');
+    const isAsphereType = (v: any): boolean => {
+        const s = String(v ?? '').trim().toLowerCase().replace(/\s+/g, '');
+        return s.includes('aspheric');
+    };
     
     if (type === 'Lens' || type === 'PositiveLens') {
         const r1 = pick('frontRadius');
         const r2 = pick('backRadius');
         const ct = pick('centerThickness');
         const mat = pick('material');
+        const frontSurfType = pick('frontSurfType');
+        const backSurfType = pick('backSurfType');
         const parts = [];
         if (String(r1) !== '') parts.push(`R1=${String(r1)}`);
         if (String(r2) !== '') parts.push(`R2=${String(r2)}`);
         if (String(ct) !== '') parts.push(`CT=${String(ct)}`);
         if (String(mat) !== '') parts.push(`G=${String(mat)}`);
+        if (isAsphereType(frontSurfType)) parts.push('Front=Asphere');
+        if (isAsphereType(backSurfType)) parts.push('Back=Asphere');
         return parts.join(' ');
     }
 
@@ -3300,7 +3308,12 @@ function formatBlockPreview(block: any): string {
         const t1 = pick('thickness1');
         const t2 = pick('thickness2');
         const mat1 = pick('material1');
+        const abbe1 = pick('abbe1') || pick('vd1');
         const mat2 = pick('material2');
+        const abbe2 = pick('abbe2') || pick('vd2');
+        const surf1Type = pick('surf1SurfType');
+        const surf2Type = pick('surf2SurfType');
+        const surf3Type = pick('surf3SurfType');
         const parts = [];
         if (String(r1) !== '') parts.push(`R1=${String(r1)}`);
         if (String(r2) !== '') parts.push(`R2=${String(r2)}`);
@@ -3308,7 +3321,25 @@ function formatBlockPreview(block: any): string {
         if (String(t1) !== '') parts.push(`T1=${String(t1)}`);
         if (String(t2) !== '') parts.push(`T2=${String(t2)}`);
         if (String(mat1) !== '') parts.push(`G1=${String(mat1)}`);
+        if (String(abbe1) !== '') parts.push(`V1=${String(abbe1)}`);
         if (String(mat2) !== '') parts.push(`G2=${String(mat2)}`);
+        if (String(abbe2) !== '') parts.push(`V2=${String(abbe2)}`);
+        if (isAsphereType(surf1Type)) parts.push('S1=Asphere');
+        if (isAsphereType(surf2Type)) parts.push('S2=Asphere');
+        if (isAsphereType(surf3Type)) parts.push('S3=Asphere');
+        return parts.join(' ');
+    }
+
+    if (type === 'SingleSurface' || type === 'Mirror') {
+        const radius = pick('radius');
+        const th = pick('thickness');
+        const mat = pick('material');
+        const surfType = pick('surfType');
+        const parts = [];
+        if (String(radius) !== '') parts.push(`R=${String(radius)}`);
+        if (String(th) !== '') parts.push(`T=${String(th)}`);
+        if (String(mat) !== '') parts.push(`M=${String(mat)}`);
+        if (isAsphereType(surfType)) parts.push('Asphere');
         return parts.join(' ');
     }
 
@@ -3552,6 +3583,22 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 return keys.sort((a, b) => {
                     const aLower = a.toLowerCase();
                     const bLower = b.toLowerCase();
+
+                    // Doublet display priority: material1 → abbe1/vd1 → material2 → abbe2/vd2
+                    const rank = (k: string): number => {
+                        switch (k) {
+                            case 'material1': return 0;
+                            case 'abbe1':
+                            case 'vd1': return 1;
+                            case 'material2': return 2;
+                            case 'abbe2':
+                            case 'vd2': return 3;
+                            default: return 100;
+                        }
+                    };
+                    const aRank = rank(a);
+                    const bRank = rank(b);
+                    if (aRank !== bRank) return aRank - bRank;
                     
                     // Material1 first, then material2
                     if (a === 'material1') return -1;
