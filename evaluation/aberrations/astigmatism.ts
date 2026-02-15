@@ -60,7 +60,24 @@ function isObjectRow(row) {
     return t === 'object';
 }
 
-// traceRay の rayPath は Object 行 / Coord Break 行を交点として記録しない。
+function isGapRow(row) {
+    if (!row || typeof row !== 'object') return false;
+    const norm = (v) => String(v ?? '').trim().toLowerCase();
+    const compact = (v) => norm(v).replace(/[\s_-]+/g, '');
+    const surfType = norm(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surface_type ?? '');
+    const surfTypeCompact = compact(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surface_type ?? '');
+    const blockType = norm(row?._blockType ?? row?.blockType ?? '');
+    const blockTypeCompact = compact(row?._blockType ?? row?.blockType ?? '');
+    const kind = norm(row?.kind ?? '');
+    const kindCompact = compact(row?.kind ?? '');
+    return (
+        surfType === 'gap' || surfType === 'air gap' || surfTypeCompact === 'gap' || surfTypeCompact === 'airgap' ||
+        blockType === 'gap' || blockType === 'air gap' || blockTypeCompact === 'gap' || blockTypeCompact === 'airgap' ||
+        kind === 'gap' || kind === 'air gap' || kindCompact === 'gap' || kindCompact === 'airgap'
+    );
+}
+
+// traceRay の rayPath は Object 行 / Coord Break 行 / Gap 行を交点として記録しない。
 // surfaceIndex(テーブル行) -> rayPath の point index への変換を行う。
 function surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex) {
     if (!Array.isArray(opticalSystemRows) || surfaceIndex === null || surfaceIndex === undefined) return null;
@@ -70,6 +87,7 @@ function surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex) {
         const row = opticalSystemRows[i];
         if (isCoordTransRow(row)) continue;
         if (isObjectRow(row)) continue;
+        if (isGapRow(row)) continue;
         count++;
     }
     return count > 0 ? count : null;

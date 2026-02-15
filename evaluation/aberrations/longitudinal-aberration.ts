@@ -284,7 +284,7 @@ function traceRayWrapped(opticalSystemRows, ray0, targetSurfaceIndex, originalRa
 }
 
 // Convert an optical table surface index to a rayPath point index.
-// NOTE: Object rows and Coord Break rows do not create intersection points in rayPath.
+// NOTE: Object rows, Coord Break rows, and Gap rows do not create intersection points in rayPath.
 function surfaceIndexToRayPathPointIndex(rows, surfaceIndex) {
     const idx = Number(surfaceIndex);
     if (!Array.isArray(rows) || !Number.isInteger(idx) || idx < 0) return null;
@@ -303,8 +303,17 @@ function surfaceIndexToRayPathPointIndex(rows, surfaceIndex) {
             compact(nObj) === 'coordtrans' || compact(nObj) === 'coordinatebreak' ||
             nSurf === 'coord break' || nSurf === 'coordinate break' || nSurf === 'cb' ||
             compact(nSurf) === 'coordtrans' || compact(nSurf) === 'coordinatebreak';
+        const blockTypeRaw = r?._blockType ?? r?.blockType ?? '';
+        const kindRaw = r?.kind ?? '';
+        const nBlock = String(blockTypeRaw ?? '').trim().toLowerCase();
+        const nKind = String(kindRaw ?? '').trim().toLowerCase();
+        const isGap =
+            nObj === 'gap' || nObj === 'air gap' || compact(nObj) === 'gap' || compact(nObj) === 'airgap' ||
+            nSurf === 'gap' || nSurf === 'air gap' || compact(nSurf) === 'gap' || compact(nSurf) === 'airgap' ||
+            nBlock === 'gap' || nBlock === 'air gap' || compact(nBlock) === 'gap' || compact(nBlock) === 'airgap' ||
+            nKind === 'gap' || nKind === 'air gap' || compact(nKind) === 'gap' || compact(nKind) === 'airgap';
 
-        if (isObject || isCoordTrans) continue;
+        if (isObject || isCoordTrans || isGap) continue;
         pointIndex++;
     }
     return pointIndex;
