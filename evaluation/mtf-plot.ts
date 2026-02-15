@@ -39,7 +39,7 @@ function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows, defocusShiftM
     return cloned;
 }
 
-async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot } = {}) {
+async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot, showDiffractionLimit, zeroPadTo } = {}) {
     const safeNumber = (v, fallback) => {
         const n = Number(v);
         return Number.isFinite(n) ? n : fallback;
@@ -74,8 +74,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     const enableMtfProfileLog = !((typeof globalThis !== 'undefined') && (globalThis as any).__COOPT_MTF_PROFILE === false);
 
     const primaryWl = (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function')
-        ? safeNumber(window.getPrimaryWavelength(), 0.5876)
-        : 0.5876;
+        ? Number(window.getPrimaryWavelength())
+        : NaN;
     const effectiveOpdDisplayMode = (typeof opdDisplayMode === 'string' && opdDisplayMode)
         ? opdDisplayMode
         : 'pistonTiltRemoved';
@@ -84,6 +84,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
         ? (String(wavelengthMicrons).toLowerCase() === 'all')
         : false;
 
+    if ((isAllWavelengths || !Number.isFinite(Number(wavelengthMicrons))) && !(Number.isFinite(primaryWl) && primaryWl > 0)) {
+        throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
+    }
     const wl = isAllWavelengths ? primaryWl : safeNumber(wavelengthMicrons, primaryWl);
     const objIndex = Number.isFinite(Number(objectIndex)) ? Math.max(0, Math.floor(Number(objectIndex))) : 0;
     const maxLpmm = Math.max(0, safeNumber(maxFrequencyLpmm, 100));
@@ -95,6 +98,14 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     const legacyCandidate = Math.floor(safeNumber(samplingPoints, NaN));
     const gridCandidate = Number.isFinite(samplingCandidate) ? samplingCandidate : legacyCandidate;
     const gridSize = isPowerOfTwo(gridCandidate) ? clamp(gridCandidate, 32, 4096) : 256;
+    const zeroPadCandidate = Math.floor(safeNumber(zeroPadTo, NaN));
+    const resolvedZeroPadTo = (Number.isFinite(zeroPadCandidate) && zeroPadCandidate >= gridSize && isPowerOfTwo(zeroPadCandidate))
+        ? clamp(zeroPadCandidate, 32, 4096)
+        : 0;
+
+    const showDiffractionLimitEnabled = (typeof showDiffractionLimit === 'boolean')
+        ? showDiffractionLimit
+        : true;
 
     const shouldRenderPlot = !skipPlot;
     const containerEl = containerElement || document.getElementById('mtf-container');
@@ -222,10 +233,34 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
 
     const wavelengthsToPlot = isAllWavelengths ? getAllWavelengths() : [wl];
     const uniqueWavelengths = Array.from(new Set(wavelengthsToPlot.map(w => Number(w)).filter(w => Number.isFinite(w) && w > 0)));
-    if (uniqueWavelengths.length === 0) uniqueWavelengths.push(primaryWl);
+    if (uniqueWavelengths.length === 0) {
+        if (Number.isFinite(primaryWl) && primaryWl > 0) uniqueWavelengths.push(primaryWl);
+        else throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
+    }
 
     const traces = [];
     let maxPlotLpmmGlobal = 0;
+
+    const computeCircularApertureDiffractionMtf = (freqLpmm, wavelengthMicron, fNumber) => {
+        const f = Number(freqLpmm);
+        const wlUm = Number(wavelengthMicron);
+        const fno = Number(fNumber);
+        if (!Number.isFinite(f) || f < 0) return null;
+        if (!Number.isFinite(wlUm) || wlUm <= 0) return null;
+        if (!Number.isFinite(fno) || fno <= 0) return null;
+
+        const cutoffLpmm = 1000.0 / (wlUm * fno);
+        if (!Number.isFinite(cutoffLpmm) || cutoffLpmm <= 0) return null;
+
+        const nu = f / cutoffLpmm;
+        if (!Number.isFinite(nu)) return null;
+        if (nu >= 1) return 0;
+        if (nu <= 0) return 1;
+
+        const clamped = Math.max(-1, Math.min(1, nu));
+        const val = (2 / Math.PI) * (Math.acos(clamped) - clamped * Math.sqrt(Math.max(0, 1 - clamped * clamped)));
+        return Number.isFinite(val) ? Math.max(0, Math.min(1, val)) : null;
+    };
 
     const computeForWavelength = async (wlLocal, idx, total) => {
         const wlProgressBase = 10;
@@ -446,29 +481,30 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
         const pixelSizeMicronsForMTF = (pupilDiameterMm > 0)
             ? (wlLocal * focalLengthMm / pupilDiameterMm)
             : 1.0;
+        const fNumberForDiffraction = (pupilDiameterMm > 0)
+            ? (focalLengthMm / pupilDiameterMm)
+            : NaN;
 
         reportProgress(localBase + localSpan * 0.75, `λ=${titleNmLocal} nm: Calculating PSF...`);
         const psfResult = await psfCalculator.calculatePSF(opdData, {
             samplingSize: s,
+            zeroPadTo: resolvedZeroPadTo,
             pupilDiameter: pupilDiameterMm,
             focalLength: focalLengthMm,
             pixelSize: pixelSizeMicronsForMTF,
-            forceImplementation: 'wasm',
+            forceImplementation: 'javascript',
             // OPD grid is already piston+tilt removed by opdDisplayMode.
             removeTilt: false
         });
 
-        if (String(psfResult?.implementationUsed || '').toLowerCase() !== 'wasm') {
-            if (forceStrictByFlag) {
-                throw new Error('PSF WASM strict mode: JavaScript fallback is not allowed for MTF');
-            }
-            console.warn('⚠️ PSF calculation fell back to JavaScript; continuing MTF in compatibility mode.');
+        if (String(psfResult?.implementationUsed || '').toLowerCase() !== 'javascript') {
+            console.warn('⚠️ MTF PSF path expected JavaScript (for zero-padding), but got a different implementation.');
         }
 
         reportProgress(localBase + localSpan * 0.85, `λ=${titleNmLocal} nm: Computing OTF/MTF...`);
 
         const psf2D = psfResult?.psfData || psfResult?.psf || psfResult?.intensity || null;
-        const pixelSizeMicrons = safeNumber(pixelSizeMicronsForMTF, safeNumber(psfResult?.options?.pixelSize, 1.0));
+        const pixelSizeMicrons = safeNumber(psfResult?.options?.pixelSize, safeNumber(pixelSizeMicronsForMTF, 1.0));
         if (!psf2D || !Array.isArray(psf2D) || !Array.isArray(psf2D[0])) {
             throw new Error('PSF data missing for MTF');
         }
@@ -577,6 +613,20 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             showlegend: true,
             line: { color, width: 2, dash: 'dot' }
         });
+
+        if (showDiffractionLimitEnabled) {
+            const diffVals = tan.freq.map((f) => computeCircularApertureDiffractionMtf(f, wlLocal, fNumberForDiffraction));
+            traces.push({
+                x: tan.freq,
+                y: diffVals,
+                type: 'scatter',
+                mode: 'lines',
+                name: `Diffraction Limit (${titleNmLocal}nm)`,
+                showlegend: true,
+                meta: { overlayType: 'diffractionLimit' },
+                line: { color, width: 1.75, dash: 'dash' }
+            });
+        }
     };
 
     const totalWl = uniqueWavelengths.length;
@@ -615,6 +665,7 @@ async function showThroughFocusMTFDiagram({
     steps,
     samplingSize,
     samplingPoints,
+    zeroPadTo,
     containerElement,
     onProgress,
     opdDisplayMode
@@ -667,6 +718,7 @@ async function showThroughFocusMTFDiagram({
             objectIndex,
             maxFrequencyLpmm: targetFreq,
             samplingSize: sampling,
+            zeroPadTo,
             opdDisplayMode,
             defocusShiftMm: shift,
             skipPlot: true,
@@ -676,6 +728,7 @@ async function showThroughFocusMTFDiagram({
 
         const traces = Array.isArray(result?.traces) ? result.traces : [];
         for (const tr of traces) {
+            if (tr?.meta?.overlayType === 'diffractionLimit') continue;
             const rawName = String(tr?.name ?? 'MTF');
             const name = rawName.replace(/^Tangential\b/, 'Meridional');
             const x = Array.isArray(tr?.x) ? tr.x : [];

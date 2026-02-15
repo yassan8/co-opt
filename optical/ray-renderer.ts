@@ -115,15 +115,33 @@ function buildPerpendicularBasis(direction) {
 }
 
 function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm) {
+    console.log('🔍 [ChiefRayDiag] solveRayDirectionToStopPointFast called', { 
+        stopSurfaceIndex, 
+        centerPoint: centerPoint ? 'present' : 'null',
+        stopTarget: stopTarget3d ? 'present' : 'null'
+    });
+    
     const stopIdx = Number(stopSurfaceIndex);
-    if (!Number.isInteger(stopIdx) || stopIdx < 0) return null;
-    if (!centerPoint || !stopTarget3d) return null;
+    if (!Number.isInteger(stopIdx) || stopIdx < 0) {
+        console.error('❌ [ChiefRayDiag] Direction solve aborted: invalid stop index', { stopSurfaceIndex });
+        return null;
+    }
+    if (!centerPoint || !stopTarget3d) {
+        console.error('❌ [ChiefRayDiag] Direction solve aborted: missing points', { hasCenterPoint: !!centerPoint, hasStopTarget: !!stopTarget3d });
+        return null;
+    }
 
     const dx0 = Number(stopTarget3d.x) - Number(centerPoint.x);
     const dy0 = Number(stopTarget3d.y) - Number(centerPoint.y);
     const dz0 = Number(stopTarget3d.z) - Number(centerPoint.z);
-    if (!Number.isFinite(dx0) || !Number.isFinite(dy0) || !Number.isFinite(dz0)) return null;
-    if (Math.abs(dz0) < 1e-9) return null;
+    if (!Number.isFinite(dx0) || !Number.isFinite(dy0) || !Number.isFinite(dz0)) {
+        console.error('❌ [ChiefRayDiag] Direction solve aborted: invalid geometry', { dx0, dy0, dz0 });
+        return null;
+    }
+    if (Math.abs(dz0) < 1e-9) {
+        console.error('❌ [ChiefRayDiag] Direction solve aborted: dz too small', { dz0 });
+        return null;
+    }
 
     const buildDirFromSlopes = (u, v) => {
         const zSign = dz0 >= 0 ? 1 : -1;
@@ -136,10 +154,18 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
     let u = (Math.abs(initial.z) > 1e-9) ? (initial.x / initial.z) : 0;
     let v = (Math.abs(initial.z) > 1e-9) ? (initial.y / initial.z) : 0;
 
-    const maxIter = 6;
+    const slopeGuess = Math.max(
+        Math.abs(dx0 / dz0),
+        Math.abs(dy0 / dz0),
+        0
+    );
+    const maxSlope = Math.max(3.0, Math.min(10.0, slopeGuess * 4 + 1.5));
+    const maxIter = 14;
     const tolMm = 1e-3;
     const eps = 1e-4;
-    const maxSlope = 2.5;
+    const maxNewtonStep = Math.max(0.5, Math.min(2.0, 0.25 * maxSlope));
+    let bestDir = buildDirFromSlopes(u, v);
+    let bestErr = Infinity;
 
     for (let iter = 0; iter < maxIter; iter++) {
         u = Math.max(-maxSlope, Math.min(maxSlope, u));
@@ -148,12 +174,20 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
         const dir = buildDirFromSlopes(u, v);
         const ray = { wavelength: wavelengthUm, pos: { ...centerPoint }, dir };
         const hit = normalizeHitPoint(traceRayHitPoint(opticalSystemRows, ray, 1.0, stopIdx));
-        if (!hit) return null;
+        if (!hit) {
+            u *= 0.8;
+            v *= 0.8;
+            continue;
+        }
 
         const ex = hit.x - Number(stopTarget3d.x);
         const ey = hit.y - Number(stopTarget3d.y);
         if (!Number.isFinite(ex) || !Number.isFinite(ey)) return null;
         const err = Math.hypot(ex, ey);
+        if (err < bestErr) {
+            bestErr = err;
+            bestDir = dir;
+        }
         if (err < tolMm) {
             return dir;
         }
@@ -161,16 +195,24 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
         // Finite-difference Jacobian.
         const hitU = normalizeHitPoint(traceRayHitPoint(opticalSystemRows, { wavelength: wavelengthUm, pos: { ...centerPoint }, dir: buildDirFromSlopes(u + eps, v) }, 1.0, stopIdx));
         const hitV = normalizeHitPoint(traceRayHitPoint(opticalSystemRows, { wavelength: wavelengthUm, pos: { ...centerPoint }, dir: buildDirFromSlopes(u, v + eps) }, 1.0, stopIdx));
-        if (!hitU || !hitV) return null;
+        if (!hitU || !hitV) {
+            u -= 0.03 * ex;
+            v -= 0.03 * ey;
+            continue;
+        }
 
         const j11 = (hitU.x - hit.x) / eps;
         const j21 = (hitU.y - hit.y) / eps;
         const j12 = (hitV.x - hit.x) / eps;
         const j22 = (hitV.y - hit.y) / eps;
-        if (![j11, j12, j21, j22].every(Number.isFinite)) return null;
+        if (![j11, j12, j21, j22].every(Number.isFinite)) {
+            u -= 0.03 * ex;
+            v -= 0.03 * ey;
+            continue;
+        }
 
         const det = j11 * j22 - j12 * j21;
-        if (!Number.isFinite(det) || Math.abs(det) < 1e-12) {
+        if (!Number.isFinite(det) || Math.abs(det) < 1e-14) {
             // Fallback: small proportional step.
             u -= 0.05 * ex;
             v -= 0.05 * ey;
@@ -183,8 +225,8 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
 
         // Clamp step to avoid wild jumps.
         const stepNorm = Math.hypot(du, dv);
-        if (stepNorm > 0.5) {
-            const scale = 0.5 / stepNorm;
+        if (stepNorm > maxNewtonStep) {
+            const scale = maxNewtonStep / stepNorm;
             du *= scale;
             dv *= scale;
         }
@@ -193,7 +235,18 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
     }
 
     // Not converged; use best-effort direction.
-    return buildDirFromSlopes(u, v);
+    const directionDiag = {
+        stopSurfaceIndex: stopIdx,
+        wavelengthUm,
+        bestErr,
+        maxIter,
+        maxSlope,
+        target: { x: Number(stopTarget3d.x), y: Number(stopTarget3d.y), z: Number(stopTarget3d.z) },
+        center: { x: Number(centerPoint.x), y: Number(centerPoint.y), z: Number(centerPoint.z) }
+    };
+    console.error('❌ [ChiefRayDiag] Direction solve not converged (best effort used)', directionDiag);
+    mirrorChiefRayDiagToOpener('Direction solve not converged (best effort used)', directionDiag);
+    return bestDir;
 }
 
 function solveChiefRayDirectionToStopCenterFast(centerPoint, stopCenter3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm) {
@@ -201,20 +254,45 @@ function solveChiefRayDirectionToStopCenterFast(centerPoint, stopCenter3d, stopS
 }
 
 function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm) {
+    console.log('🔍 [ChiefRayDiag] solveRayOriginToStopPointFast called', { 
+        stopSurfaceIndex,
+        initialOrigin: initialOrigin ? 'present' : 'null',
+        dirVector: dirVector ? 'present' : 'null',
+        stopTarget: stopTarget3d ? 'present' : 'null'
+    });
+    
     const stopIdx = Number(stopSurfaceIndex);
-    if (!Number.isInteger(stopIdx) || stopIdx < 0) return null;
-    if (!initialOrigin || !dirVector || !stopTarget3d) return null;
+    if (!Number.isInteger(stopIdx) || stopIdx < 0) {
+        console.error('❌ [ChiefRayDiag] Origin solve aborted: invalid stop index', { stopSurfaceIndex });
+        return null;
+    }
+    if (!initialOrigin || !dirVector || !stopTarget3d) {
+        console.error('❌ [ChiefRayDiag] Origin solve aborted: missing inputs', {
+            hasInitialOrigin: !!initialOrigin,
+            hasDirVector: !!dirVector,
+            hasStopTarget: !!stopTarget3d
+        });
+        return null;
+    }
 
     const baseDir = normalizeVector3(dirVector, { x: 0, y: 0, z: 1 });
-    if (!Number.isFinite(baseDir.x) || !Number.isFinite(baseDir.y) || !Number.isFinite(baseDir.z)) return null;
+    if (!Number.isFinite(baseDir.x) || !Number.isFinite(baseDir.y) || !Number.isFinite(baseDir.z)) {
+        console.error('❌ [ChiefRayDiag] Origin solve aborted: invalid base direction', { dirVector });
+        return null;
+    }
 
     let origin = { x: Number(initialOrigin.x), y: Number(initialOrigin.y), z: Number(initialOrigin.z) };
-    if (![origin.x, origin.y, origin.z].every(Number.isFinite)) return null;
+    if (![origin.x, origin.y, origin.z].every(Number.isFinite)) {
+        console.error('❌ [ChiefRayDiag] Origin solve aborted: invalid initial origin', { initialOrigin });
+        return null;
+    }
 
     const eps = 1e-3;
     const tolMm = 1e-3;
-    const maxIter = 10;
-    const maxStep = 5.0;
+    const maxIter = 20;
+    const maxStep = 10.0;
+    let bestOrigin = { ...origin };
+    let bestErr = Infinity;
 
     const hitAt = (o) => {
         const ray = { wavelength: wavelengthUm, pos: { ...o }, dir: { ...baseDir } };
@@ -223,27 +301,66 @@ function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, s
 
     for (let iter = 0; iter < maxIter; iter++) {
         const hit = normalizeHitPoint(hitAt(origin));
-        if (!hit) return null;
+        if (!hit) {
+            origin = {
+                x: 0.5 * (origin.x + bestOrigin.x),
+                y: 0.5 * (origin.y + bestOrigin.y),
+                z: origin.z
+            };
+            continue;
+        }
         const ex = hit.x - Number(stopTarget3d.x);
         const ey = hit.y - Number(stopTarget3d.y);
         if (!Number.isFinite(ex) || !Number.isFinite(ey)) return null;
         const err = Math.hypot(ex, ey);
+        if (err < bestErr) {
+            bestErr = err;
+            bestOrigin = { ...origin };
+        }
         if (err < tolMm) {
             return origin;
         }
 
         const hitX = normalizeHitPoint(hitAt({ x: origin.x + eps, y: origin.y, z: origin.z }));
         const hitY = normalizeHitPoint(hitAt({ x: origin.x, y: origin.y + eps, z: origin.z }));
-        if (!hitX || !hitY) return null;
+        if (!hitX || !hitY) {
+            const gain = 0.3;
+            let dx = -gain * ex;
+            let dy = -gain * ey;
+            const stepNorm = Math.hypot(dx, dy);
+            if (stepNorm > maxStep) {
+                const s = maxStep / stepNorm;
+                dx *= s;
+                dy *= s;
+            }
+            origin = { x: origin.x + dx, y: origin.y + dy, z: origin.z };
+            continue;
+        }
 
         const j11 = (hitX.x - hit.x) / eps;
         const j21 = (hitX.y - hit.y) / eps;
         const j12 = (hitY.x - hit.x) / eps;
         const j22 = (hitY.y - hit.y) / eps;
-        if (![j11, j12, j21, j22].every(Number.isFinite)) return null;
+        if (![j11, j12, j21, j22].every(Number.isFinite)) {
+            const gain = 0.2;
+            origin = {
+                x: origin.x - gain * ex,
+                y: origin.y - gain * ey,
+                z: origin.z
+            };
+            continue;
+        }
 
         const det = j11 * j22 - j12 * j21;
-        if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return null;
+        if (!Number.isFinite(det) || Math.abs(det) < 1e-14) {
+            const gain = 0.2;
+            origin = {
+                x: origin.x - gain * ex,
+                y: origin.y - gain * ey,
+                z: origin.z
+            };
+            continue;
+        }
 
         // Newton step: [dx dy]^T = -J^{-1} * e
         let dx = (-j22 * ex + j12 * ey) / det;
@@ -259,7 +376,18 @@ function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, s
         origin = { x: origin.x + dx, y: origin.y + dy, z: origin.z };
     }
 
-    return origin;
+    const result = bestErr < Infinity ? bestOrigin : origin;
+    const originDiag = {
+        stopSurfaceIndex: stopIdx,
+        wavelengthUm,
+        bestErr,
+        maxIter,
+        maxStep,
+        result
+    };
+    console.error('❌ [ChiefRayDiag] Origin solve not converged (best effort used)', originDiag);
+    mirrorChiefRayDiagToOpener('Origin solve not converged (best effort used)', originDiag);
+    return result;
 }
 
 function selectSymmetricSubset(points, needed) {
@@ -900,6 +1028,22 @@ export function clearAllRays(scene) {
 
 const RAY_RENDERER_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__RAY_RENDERER_DEBUG);
 const rrLog = (...args) => { if (RAY_RENDERER_DEBUG) console.log(...args); };
+const mirrorChiefRayDiagToOpener = (label, payload) => {
+    try {
+        if (typeof window === 'undefined') return;
+        const openerRef = (window as any).opener;
+        if (!openerRef || openerRef.closed) return;
+        const mirrored = {
+            at: new Date().toISOString(),
+            source: 'ray-renderer',
+            label,
+            ...payload
+        };
+        try { openerRef.__LAST_CHIEF_RAY_DIAG = mirrored; } catch (_) {}
+        try { openerRef.console?.error?.(`❌ [ChiefRayDiag][MirroredFromPopup] ${label}`, mirrored); } catch (_) {}
+        try { openerRef.postMessage?.({ type: 'COOPT_CHIEF_RAY_DIAG', payload: mirrored }, '*'); } catch (_) {}
+    } catch (_) {}
+};
 
 /**
  * Generate ray start points for object based on ray count
@@ -1375,6 +1519,19 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
             obj.yAngle ?? obj.objectAngleY ?? obj.yHeightAngle ?? obj.y ?? obj.angle ?? obj.angleY
         );
         const chiefDir = buildDirectionFromFieldAngles(angleX, angleY);
+        const maxFieldDeg = Math.max(Math.abs(angleX), Math.abs(angleY));
+        const isHighField = maxFieldDeg >= 15;
+        const logHighFieldChiefRayFailure = (reason, details = {}) => {
+            if (!isHighField) return;
+            console.warn('⚠️ [HighFieldChiefRay] Render chief-ray solve issue', {
+                reason,
+                angleX,
+                angleY,
+                maxFieldDeg,
+                objectId: obj?.id ?? null,
+                ...details
+            });
+        };
 
         // Spot diagram (physical-vignetting mode) may request disabling origin optimization
         // to preserve angle↔chief correlation.
@@ -1519,6 +1676,10 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                     }
                 } else {
                     console.warn(`⚠️ [AngleObject] Chief ray analysis returned invalid result:`, analysisResult);
+                    logHighFieldChiefRayFailure('analysis-invalid-result', {
+                        stopSurfaceIndex,
+                        hasStopCenter: !!stopSurfaceCenter3d
+                    });
                 }
             } catch (error) {
                 console.error(`❌ [AngleRayRenderer] Failed to find chief ray origin for Object ${obj?.id || 'unknown'}:`, error);
@@ -1528,9 +1689,24 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                     angleY: angleY
                 });
                 console.warn('⚠️ [AngleRayRenderer] Chief ray analysis failed, using fallback position:', error);
+                logHighFieldChiefRayFailure('analysis-exception', {
+                    stopSurfaceIndex,
+                    hasStopCenter: !!stopSurfaceCenter3d,
+                    error: (error && typeof error === 'object' && 'message' in error)
+                        ? error.message
+                        : String(error)
+                });
             }
         } else {
             console.warn(`⚠️ [AngleObject] Chief ray analysis skipped, conditions not met`);
+            logHighFieldChiefRayFailure('analysis-skipped', {
+                allowStopBasedOriginSolve,
+                aimThroughStop,
+                useChiefRayAnalysis,
+                hasStopCenter: !!stopSurfaceCenter3d,
+                stopSurfaceIndex,
+                isInfiniteObject
+            });
         }
 
         // NOTE: We intentionally do not apply geometric back-projection fallback here.
@@ -1573,6 +1749,11 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
                 startZ = objectZ + centerSag;
                 stopDeltaZ = stopConfig.z - startZ;
                 canAimAtStop = Number.isFinite(stopDeltaZ) && stopDeltaZ > 1e-6;
+            } else {
+                logHighFieldChiefRayFailure('origin-refine-failed', {
+                    stopSurfaceIndex,
+                    stopDeltaZ
+                });
             }
         }
 
@@ -2231,4 +2412,13 @@ function generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, patter
     }
     
     return rayStartData;
+}
+
+// Module loaded confirmation
+console.log('✅ [ray-renderer.ts] Module loaded with chief ray diagnostics enabled');
+if (typeof window !== 'undefined' && (window as any).opener) {
+    console.log('🔍 [ray-renderer.ts] Running in popup window - logs will mirror to parent');
+    try {
+        (window as any).opener.console?.log?.('✅ [ray-renderer.ts] Child popup loaded');
+    } catch (_) {}
 }

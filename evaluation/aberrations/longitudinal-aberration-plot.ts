@@ -91,6 +91,7 @@ export function plotLongitudinalAberration(containerId, aberrationData, options 
             name: `${wavelengthNm}nm`,
             legendgroup: legendGroup,
             showlegend: true,
+            hovertemplate: 'Longitudinal Aberration: %{x:.6f} mm<br>Normalized Pupil: %{y:.6f}<extra></extra>',
             line: {
                 color: color,
                 width: 2
@@ -124,6 +125,7 @@ export function plotLongitudinalAberration(containerId, aberrationData, options 
             name: `${wavelengthNm}nm`,
             legendgroup: legendGroup,
             showlegend: false,
+            hovertemplate: 'Longitudinal Aberration: %{x:.6f} mm<br>Normalized Pupil: %{y:.6f}<extra></extra>',
             line: {
                 color: color,
                 width: 2,

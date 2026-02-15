@@ -12,6 +12,7 @@ const w: Record<string, any> = window;
  */
 
 import { generateSurfaceOptions } from '../evaluation/spot-diagram.ts';
+import { getOpticalSystemRows } from '../utils/data-utils.ts';
 
 /**
  * Update surface number select options
@@ -45,6 +46,24 @@ export function updateSurfaceNumberSelect(): void {
         try {
             const d2 = w.opticalSystemTabulator?.getData?.();
             if (Array.isArray(d2) && d2.length > 0) opticalSystemData = d2;
+        } catch (_) {}
+    }
+    if (!opticalSystemData) {
+        try {
+            const d3 = w.getOpticalSystemRows?.();
+            if (Array.isArray(d3) && d3.length > 0) opticalSystemData = d3;
+        } catch (_) {}
+    }
+    if (!opticalSystemData) {
+        try {
+            const d4 = getOpticalSystemRows(w.tableOpticalSystem);
+            if (Array.isArray(d4) && d4.length > 0) opticalSystemData = d4;
+        } catch (_) {}
+    }
+    if (!opticalSystemData) {
+        try {
+            const d5 = getOpticalSystemRows();
+            if (Array.isArray(d5) && d5.length > 0) opticalSystemData = d5;
         } catch (_) {}
     }
     if (!opticalSystemData || opticalSystemData.length === 0) {

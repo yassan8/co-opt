@@ -360,6 +360,15 @@ function ensurePopupMessageHandler(): void {
                         (!row.height && !row.y && !row.xHeightAngle && !row.yHeightAngle) ||
                         parseFloat(row.height || 0) === 0);
                 const isInfiniteSystem = hasThicknessInfo ? thicknessIndicatesInfinite : objectRowsIndicateInfinite;
+                const primaryWavelength = (() => {
+                    try {
+                        if (typeof w.getPrimaryWavelength === 'function') {
+                            const wl = Number(w.getPrimaryWavelength());
+                            if (Number.isFinite(wl) && wl > 0) return wl;
+                        }
+                    } catch (_) {}
+                    throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
+                })();
 
                 let crossBeamResult: any;
                 if (isInfiniteSystem) {
@@ -368,13 +377,18 @@ function ensurePopupMessageHandler(): void {
                         y: parseFloat(row.yHeightAngle) || 0
                     }));
 
+                    const isImageRow = (row: any) => {
+                        const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
+                        const normalized = String(raw).trim().toLowerCase().replace(/[\s_-]+/g, '');
+                        return normalized === 'image' || normalized.startsWith('image');
+                    };
                     const imageSurfaceIndex = opticalSystemRows.findIndex((row: any) =>
-                        row && (row['object type'] === 'Image' || row.object === 'Image')
+                        row && isImageRow(row)
                     );
                     const targetSurfaceIndex = imageSurfaceIndex >= 0 ? imageSurfaceIndex : Math.max(0, opticalSystemRows.length - 1);
-                    const primaryWavelength = (typeof w.getPrimaryWavelength === 'function')
-                        ? Number(w.getPrimaryWavelength()) || 0.5876
-                        : 0.5876;
+                    if (imageSurfaceIndex < 0) {
+                        console.warn(`⚠️ [DrawCross] Image surface not detected by object type. Falling back to last row index=${targetSurfaceIndex}.`);
+                    }
 
                     crossBeamResult = await generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, {
                         rayCount,
@@ -416,7 +430,7 @@ function ensurePopupMessageHandler(): void {
                     crossBeamResult = await generateCrossBeam(opticalSystemRows, allObjectPositions, {
                         rayCount,
                         debugMode: false,
-                        wavelength: 0.5876,
+                        wavelength: primaryWavelength,
                         crossType: 'both'
                     });
                 }
@@ -2586,9 +2600,11 @@ export function setupAnalysisWindows() {
             <option value="32">32</option>
         </select>
 
-        <label>Ray pattern:</label>
-        <button id="popup-annular-pattern-btn" class="pattern-btn active" type="button">Annular</button>
-        <button id="popup-grid-pattern-btn" class="pattern-btn" type="button">Rectangle</button>
+        <label for="popup-pattern-select">Ray pattern:</label>
+        <select id="popup-pattern-select">
+            <option value="annular" selected>Annular</option>
+            <option value="grid">Rectangle</option>
+        </select>
 
         <button id="popup-show-spot-diagram-btn" type="button">Show spot diagram</button>
     </div>
@@ -2617,6 +2633,85 @@ export function setupAnalysisWindows() {
             const popupSelect = document.getElementById('popup-surface-number-select');
             if (!popupSelect) return;
 
+            const populateFromOpenerRows = () => {
+                try {
+                    const rows = (window.opener && typeof window.opener.getOpticalSystemRows === 'function')
+                        ? window.opener.getOpticalSystemRows()
+                        : null;
+                    if (!Array.isArray(rows) || rows.length === 0) return false;
+
+                    const normalizeType = (v) => String(v || '').trim().toLowerCase();
+                    const compactType = (v) => normalizeType(v).replace(/[\s_-]+/g, '');
+                    const isObjectType = (v) => {
+                        const n = normalizeType(v);
+                        const c = compactType(v);
+                        if (!n && !c) return false;
+                        if (n === 'object' || c === 'object' || c === 'objectsurface') return true;
+                        return n.startsWith('object ') || n.startsWith('object-') || n.startsWith('object_');
+                    };
+                    const isCoordTransType = (v) => {
+                        const n = normalizeType(v);
+                        const c = compactType(v);
+                        return n === 'ct' || n === 'coord trans' || n === 'coordinate break' || c === 'ct' || c === 'coordtrans' || c === 'coordinatebreak';
+                    };
+                    const isGapType = (v) => {
+                        const n = normalizeType(v);
+                        const c = compactType(v);
+                        return n === 'gap' || n === 'air gap' || c === 'gap' || c === 'airgap';
+                    };
+                    const isSkippableRow = (row) => {
+                        const objTypeRaw = row && (row['object type'] ?? row.objectType ?? row.object ?? '');
+                        const surfTypeRaw = row && (row.surfType ?? row['surf type'] ?? row.type ?? '');
+                        const surfaceType = objTypeRaw || surfTypeRaw || 'Standard';
+                        const blockType = row && (row._blockType ?? row.blockType ?? '');
+                        const blockRole = row && (row._surfaceRole ?? row.surfaceRole ?? '');
+                        return (
+                            isObjectType(objTypeRaw) || isObjectType(surfTypeRaw) || isObjectType(surfaceType) ||
+                            isCoordTransType(objTypeRaw) || isCoordTransType(surfTypeRaw) || isCoordTransType(surfaceType) ||
+                            isGapType(objTypeRaw) || isGapType(surfTypeRaw) || isGapType(surfaceType) ||
+                            isGapType(blockType) || isGapType(blockRole)
+                        );
+                    };
+
+                    let surfaceId = 0;
+                    let added = 0;
+                    popupSelect.innerHTML = '';
+
+                    const placeholder = document.createElement('option');
+                    placeholder.value = '';
+                    placeholder.textContent = 'Select Surf';
+                    popupSelect.appendChild(placeholder);
+
+                    for (const row of rows) {
+                        const objTypeRaw = row && (row['object type'] ?? row.objectType ?? row.object ?? '');
+                        const surfTypeRaw = row && (row.surfType ?? row['surf type'] ?? row.type ?? '');
+                        const surfaceType = objTypeRaw || surfTypeRaw || 'Standard';
+
+                        if (isSkippableRow(row)) continue;
+                        surfaceId++;
+
+                        const n = normalizeType(surfaceType);
+                        const c = compactType(surfaceType);
+                        const isStop = (n === 'stop' || c === 'stop' || n.includes('stop'));
+                        const isImage = (n === 'image' || c === 'image' || n.includes('image'));
+
+                        let label = 'Surf ' + surfaceId;
+                        if (isStop) label += ' (Stop)';
+                        else if (isImage) label += ' (Image)';
+                        else label += ' (' + surfaceType + ')';
+
+                        const opt = document.createElement('option');
+                        opt.value = String(surfaceId);
+                        opt.textContent = label;
+                        popupSelect.appendChild(opt);
+                        added++;
+                    }
+                    return added > 0;
+                } catch (_) {
+                    return false;
+                }
+            };
+
             const normalizeLabel = (text) => {
                 const t = String(text || '').trim();
                 // Drop leading "Surf N:" / "Surface N:" / "面 N" etc.
@@ -2637,7 +2732,11 @@ export function setupAnalysisWindows() {
                 : false;
 
             popupSelect.innerHTML = '';
-            if (!openerSelect || !openerSelect.options) {
+            if (!openerSelect || !openerSelect.options || openerSelect.options.length <= 1) {
+                if (populateFromOpenerRows()) {
+                    if (prevValue !== '') popupSelect.value = prevValue;
+                    return;
+                }
                 const opt = document.createElement('option');
                 opt.value = '';
                 opt.textContent = 'Select Surf';
@@ -2687,21 +2786,15 @@ export function setupAnalysisWindows() {
 
             // pattern
             const annular = getOpenerEl('annular-pattern-btn');
-            const grid = getOpenerEl('grid-pattern-btn');
-            const popupAnnular = document.getElementById('popup-annular-pattern-btn');
-            const popupGrid = document.getElementById('popup-grid-pattern-btn');
-            if (popupAnnular && popupGrid) {
+            const popupPattern = document.getElementById('popup-pattern-select');
+            if (popupPattern) {
                 const isAnnular = !!annular && annular.classList.contains('active');
-                popupAnnular.classList.toggle('active', isAnnular);
-                popupGrid.classList.toggle('active', !isAnnular);
+                popupPattern.value = isAnnular ? 'annular' : 'grid';
             }
         }
 
-        function setPopupPattern(isAnnular) {
-            const popupAnnular = document.getElementById('popup-annular-pattern-btn');
-            const popupGrid = document.getElementById('popup-grid-pattern-btn');
-            popupAnnular.classList.toggle('active', isAnnular);
-            popupGrid.classList.toggle('active', !isAnnular);
+        function setPopupPattern(pattern) {
+            const isAnnular = String(pattern || 'annular') !== 'grid';
 
             const openerAnnular = getOpenerEl('annular-pattern-btn');
             const openerGrid = getOpenerEl('grid-pattern-btn');
@@ -2717,8 +2810,10 @@ export function setupAnalysisWindows() {
             } catch (_) {}
         }
 
-        document.getElementById('popup-annular-pattern-btn').addEventListener('click', () => setPopupPattern(true));
-        document.getElementById('popup-grid-pattern-btn').addEventListener('click', () => setPopupPattern(false));
+        document.getElementById('popup-pattern-select').addEventListener('change', (e) => {
+            const v = e && e.target && e.target.value ? String(e.target.value) : 'annular';
+            setPopupPattern(v);
+        });
 
         document.getElementById('popup-show-spot-diagram-btn').addEventListener('click', async () => {
             const popupContainer = document.getElementById('popup-spot-diagram-container');
@@ -2745,6 +2840,7 @@ export function setupAnalysisWindows() {
             const popupRay = document.getElementById('popup-ray-count-input');
             const popupRing = document.getElementById('popup-ring-count-select');
             const popupSurface = document.getElementById('popup-surface-number-select');
+            const popupPattern = document.getElementById('popup-pattern-select');
 
             if (openerRay && popupRay) openerRay.value = popupRay.value;
             if (openerRing && popupRing) openerRing.value = popupRing.value;
@@ -2770,6 +2866,7 @@ export function setupAnalysisWindows() {
                     surfaceIndex: popupSurface && popupSurface.value !== '' ? parseInt(popupSurface.value, 10) : undefined,
                     rayCount: popupRay && popupRay.value !== '' ? parseInt(popupRay.value, 10) : undefined,
                     ringCount: popupRing && popupRing.value !== '' ? parseInt(popupRing.value, 10) : undefined,
+                    pattern: popupPattern ? String(popupPattern.value || 'annular') : 'annular',
                     containerElement: popupContainer,
                     onProgress
                 });
@@ -3975,12 +4072,14 @@ export function setupAnalysisWindows() {
                                     throw new Error('Not enough valid samples for Zernike fitting');
                                 }
 
-                                const wavelength = Number(meta?.wavelength) || (() => {
+                                const wavelength = (() => {
+                                    const fromMeta = Number(meta?.wavelength);
+                                    if (Number.isFinite(fromMeta) && fromMeta > 0) return fromMeta;
                                     try {
                                         const w = Number(opener?.getPrimaryWavelength?.());
                                         if (Number.isFinite(w) && w > 0) return w;
                                     } catch (_) {}
-                                    return 0.5876;
+                                    throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                                 })();
 
                                 const opticalSystemRows = (typeof opener?.getOpticalSystemRows === 'function')
@@ -4727,7 +4826,9 @@ export function setupAnalysisWindows() {
                     })();
                     const s0 = (sources && sources.length > 0) ? sources[0] : null;
                     const wl0 = (s0 && s0.wavelength !== undefined && s0.wavelength !== null) ? Number(s0.wavelength) : NaN;
-                    const wavelength = Number.isFinite(primaryWl) ? primaryWl : (Number.isFinite(wl0) ? wl0 : 0.5876);
+                    const wavelength = Number.isFinite(primaryWl)
+                        ? primaryWl
+                        : (() => { throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.'); })();
 
                     // Match showPSFDiagram(): build a fieldSetting compatible with eva-wavefront.js.
                     const objectX = pickNumber(selectedObject, ['x', 'X', 'xFieldAngle', 'xAngle', 'xHeightAngle', 'XHeightAngle', 'x_height_angle', 'x_field_angle', 'x_angle'], 0);
@@ -5108,6 +5209,7 @@ export function setupAnalysisWindows() {
                             : (Number.isFinite(parseInt(zeroPadRaw)) ? parseInt(zeroPadRaw) : 0);
                     const psfResult = await raceWithCancel(psfCalculator.calculatePSF(opdData, {
                         samplingSize: psfSamplingSize,
+                        wavelength,
                         zeroPadTo,
                         pupilDiameter: pupilDiameterMm,
                         focalLength: focalLengthMm,
@@ -5323,9 +5425,22 @@ export function setupAnalysisWindows() {
             <option value="2048">2048x2048</option>
             <option value="4096">4096x4096</option>
         </select>
+        <label for="popup-mtf-zeropad-select" title="Zero-padding increases FFT size without increasing OPD ray grid.">Zero pad:</label>
+        <select id="popup-mtf-zeropad-select">
+            <option value="none">None</option>
+            <option value="auto" selected>Auto</option>
+            <option value="512">512</option>
+            <option value="1024">1024</option>
+            <option value="2048">2048</option>
+            <option value="4096">4096</option>
+        </select>
         <label style="display:flex;align-items:center;gap:6px;">
             <input id="popup-mtf-remove-ptd-checkbox" type="checkbox" />
             Remove P/T/D
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;">
+            <input id="popup-mtf-show-diff-limit-checkbox" type="checkbox" checked />
+            Diffraction Limit
         </label>
         <button id="popup-show-mtf-btn" type="button">Show MTF</button>
     </div>
@@ -5378,7 +5493,9 @@ export function setupAnalysisWindows() {
                 }
             }
             if (out.length === 1) {
-                out.push({ value: String(primary || 0.5876), label: (((primary || 0.5876) * 1000).toFixed(1) + ' nm') });
+                if (Number.isFinite(primary) && primary > 0) {
+                    out.push({ value: String(primary), label: ((primary * 1000).toFixed(1) + ' nm') });
+                }
             }
             return out;
         }
@@ -5464,7 +5581,9 @@ export function setupAnalysisWindows() {
             const objSel = document.getElementById('popup-mtf-object-select');
             const maxEl = document.getElementById('popup-mtf-max-freq-input');
             const samplingEl = document.getElementById('popup-mtf-sampling-select');
+            const zeroPadEl = document.getElementById('popup-mtf-zeropad-select');
             const removePtdEl = document.getElementById('popup-mtf-remove-ptd-checkbox');
+            const showDiffLimitEl = document.getElementById('popup-mtf-show-diff-limit-checkbox');
 
             const wlValue = wlSel ? String(wlSel.value) : '';
             const primary = getPrimaryWavelength();
@@ -5472,9 +5591,16 @@ export function setupAnalysisWindows() {
             const objectIndex = objSel ? parseInt(objSel.value, 10) : 0;
             const maxFreq = maxEl ? Number(maxEl.value) : 100;
             const sampling = samplingEl ? Number(samplingEl.value) : 256;
+            const zeroPadRaw = zeroPadEl ? String(zeroPadEl.value || 'auto') : 'auto';
             const opdDisplayMode = (removePtdEl && removePtdEl.checked)
                 ? 'pistonTiltDefocusRemoved'
                 : 'pistonTiltRemoved';
+            const showDiffractionLimit = !!(showDiffLimitEl && showDiffLimitEl.checked);
+            const zeroPadTo = (zeroPadRaw === 'none')
+                ? (Number.isFinite(sampling) ? sampling : 256)
+                : (zeroPadRaw === 'auto')
+                    ? 0
+                    : (Number.isFinite(parseInt(zeroPadRaw, 10)) ? parseInt(zeroPadRaw, 10) : 0);
 
             try {
                 const opener = getOpener();
@@ -5484,12 +5610,17 @@ export function setupAnalysisWindows() {
                 setProgress(0, 'Starting...');
                 // Allow the popup to paint the progress UI before heavy computation begins.
                 await new Promise(r => setTimeout(r, 0));
+                if (wavelength !== 'all' && !Number.isFinite(wavelength) && !(Number.isFinite(primary) && primary > 0)) {
+                    throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
+                }
                 await opener.showMTFDiagram({
-                    wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : (primary || 0.5876)),
+                    wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : primary),
                     objectIndex: Number.isFinite(objectIndex) ? objectIndex : 0,
                     maxFrequencyLpmm: Number.isFinite(maxFreq) ? maxFreq : 100,
                     samplingSize: Number.isFinite(sampling) ? sampling : 256,
+                    zeroPadTo,
                     opdDisplayMode,
+                    showDiffractionLimit,
                     onProgress: (evt) => {
                         try {
                             const p = Number(evt?.percent);
@@ -5514,6 +5645,331 @@ export function setupAnalysisWindows() {
         document.getElementById('popup-show-mtf-btn').addEventListener('click', () => window.renderMTF());
         window.addEventListener('focus', syncAllOptions);
         window.addEventListener('load', () => syncAllOptions());
+    </script>
+</body>
+</html>
+                        `);
+
+                        try { popup.document.close(); } catch (_) {}
+                });
+        }
+
+        // Through-Focus Spot popup window button
+        const openThroughFocusSpotWindowBtn = document.getElementById('open-through-focus-spot-window-btn');
+        if (openThroughFocusSpotWindowBtn) {
+                openThroughFocusSpotWindowBtn.addEventListener('click', () => {
+                        if (w.__throughFocusSpotPopup && !w.__throughFocusSpotPopup.closed) {
+                                try { w.__throughFocusSpotPopup.focus(); } catch (_) {}
+                                return;
+                        }
+
+                        try {
+                            requestUpdateSurfaceNumberSelect(w);
+                        } catch (_) {}
+
+                        const popup = window.open('', 'Through-Focus Spot', 'width=980,height=700');
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__throughFocusSpotPopup = popup;
+
+                        popup.document.write(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Through-Focus Spot</title>
+    <style>
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: #f4f4f4;
+        }
+        .header {
+            padding: 10px 12px;
+            background: #f8f8f8;
+            color: #333;
+            border-bottom: 1px solid #ddd;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .controls {
+            padding: 10px 12px;
+            background: #f8f8f8;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 10px;
+            align-items: center;
+            flex: 0 0 auto;
+        }
+        .controls label { font-size: 12px; color: #333; white-space: nowrap; }
+        .controls select {
+            padding: 5px 8px;
+            font-size: 12px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            background: white;
+        }
+        .controls input {
+            padding: 5px 8px;
+            font-size: 12px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            background: white;
+            width: 110px;
+        }
+        .controls button {
+            padding: 6px 10px;
+            border: 1px solid #bbb;
+            background: #f8f8f8;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #333;
+        }
+        .controls button:hover { background: #e9e9e9; }
+        .note {
+            padding: 8px 12px;
+            color: #666;
+            font-size: 12px;
+            border-bottom: 1px solid #eee;
+            background: #fff;
+        }
+        .content {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: hidden;
+            background: white;
+            display: flex;
+            flex-direction: column;
+        }
+        #popup-through-focus-spot-container {
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+    </style>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body>
+    <div class="header">Through-Focus Spot</div>
+    <div class="controls">
+        <label for="popup-through-focus-spot-surface-select">Surf:</label>
+        <select id="popup-through-focus-spot-surface-select"></select>
+
+        <label for="popup-through-focus-spot-wavelength-mode-select">Wavelength:</label>
+        <select id="popup-through-focus-spot-wavelength-mode-select">
+            <option value="all" selected>All</option>
+            <option value="primary">Primary</option>
+        </select>
+
+        <label for="popup-through-focus-spot-min-defocus-input">Defocus min (mm):</label>
+        <input id="popup-through-focus-spot-min-defocus-input" type="number" step="0.001" value="-0.1" />
+
+        <label for="popup-through-focus-spot-max-defocus-input">Defocus max (mm):</label>
+        <input id="popup-through-focus-spot-max-defocus-input" type="number" step="0.001" value="0.1" />
+
+        <label for="popup-through-focus-spot-steps-input">Steps:</label>
+        <input id="popup-through-focus-spot-steps-input" type="number" min="3" max="61" step="1" value="5" />
+
+        <label for="popup-through-focus-spot-scale-input">Scale (µm):</label>
+        <input id="popup-through-focus-spot-scale-input" type="number" min="1" step="1" value="100" />
+
+        <label for="popup-through-focus-spot-ray-count-input">Ray number:</label>
+        <input type="number" id="popup-through-focus-spot-ray-count-input" value="501" min="1" max="20001" step="1" />
+
+        <label for="popup-through-focus-spot-ring-count-select">Ring count:</label>
+        <select id="popup-through-focus-spot-ring-count-select">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10" selected>10</option>
+            <option value="12">12</option>
+            <option value="15">15</option>
+            <option value="16">16</option>
+            <option value="20">20</option>
+            <option value="24">24</option>
+            <option value="32">32</option>
+        </select>
+
+        <label for="popup-through-focus-spot-pattern-select">Ray pattern:</label>
+        <select id="popup-through-focus-spot-pattern-select">
+            <option value="annular" selected>Annular</option>
+            <option value="grid">Rectangle</option>
+        </select>
+
+        <button id="popup-show-through-focus-spot-btn" type="button">Show Through-Focus Spot</button>
+    </div>
+    <div class="note">
+        Note: Select a reachable surface (usually Image) and choose the defocus range.
+    </div>
+    <div id="popup-through-focus-spot-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
+        <div id="popup-through-focus-spot-progress-text" style="margin-bottom: 6px;">Calculating Through-Focus Spot...</div>
+        <progress id="popup-through-focus-spot-progress" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
+    </div>
+    <div class="content">
+        <div id="popup-through-focus-spot-container"></div>
+    </div>
+
+    <script>
+        function getOpenerEl(id) {
+            try {
+                return window.opener && window.opener.document ? window.opener.document.getElementById(id) : null;
+            } catch (_) {
+                return null;
+            }
+        }
+
+        function syncSurfaceOptionsFromOpener() {
+            const openerSelect = getOpenerEl('surface-number-select');
+            const popupSelect = document.getElementById('popup-through-focus-spot-surface-select');
+            if (!popupSelect) return;
+
+            const prevValue = popupSelect.value;
+            popupSelect.innerHTML = '';
+
+            if (!openerSelect || !openerSelect.options || openerSelect.options.length <= 1) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'Select Surf';
+                popupSelect.appendChild(opt);
+                return;
+            }
+
+            for (const o of openerSelect.options) {
+                const opt = document.createElement('option');
+                opt.value = o.value;
+                opt.textContent = (o.textContent || '').replace(/^面\s*/, 'Surf ').replace(/^Surface\s*/, 'Surf ');
+                popupSelect.appendChild(opt);
+            }
+
+            if (prevValue !== '' && Array.from(popupSelect.options).some((opt) => String(opt.value) === String(prevValue))) {
+                popupSelect.value = prevValue;
+                return;
+            }
+            popupSelect.value = openerSelect.value;
+        }
+
+        function syncInputsFromOpener() {
+            const openerRay = getOpenerEl('ray-count-input');
+            const openerRing = getOpenerEl('ring-count-select');
+            const popupRay = document.getElementById('popup-through-focus-spot-ray-count-input');
+            const popupRing = document.getElementById('popup-through-focus-spot-ring-count-select');
+            if (popupRay && openerRay && popupRay.value !== openerRay.value) popupRay.value = openerRay.value;
+            if (popupRing && openerRing && popupRing.value !== openerRing.value) popupRing.value = openerRing.value;
+
+            const annular = getOpenerEl('annular-pattern-btn');
+            const popupPattern = document.getElementById('popup-through-focus-spot-pattern-select');
+            if (popupPattern) {
+                const isAnnular = !!annular && annular.classList.contains('active');
+                popupPattern.value = isAnnular ? 'annular' : 'grid';
+            }
+        }
+
+        function setPopupPattern(pattern) {
+            const isAnnular = String(pattern || 'annular') !== 'grid';
+            const openerAnnular = getOpenerEl('annular-pattern-btn');
+            const openerGrid = getOpenerEl('grid-pattern-btn');
+            if (isAnnular && openerAnnular) openerAnnular.click();
+            if (!isAnnular && openerGrid) openerGrid.click();
+        }
+
+        function syncAll() {
+            syncSurfaceOptionsFromOpener();
+            syncInputsFromOpener();
+        }
+
+        window.renderThroughFocusSpot = async () => {
+            const containerEl = document.getElementById('popup-through-focus-spot-container');
+            if (containerEl) containerEl.innerHTML = '';
+
+            try { syncSurfaceOptionsFromOpener(); } catch (_) {}
+
+            const progressWrapper = document.getElementById('popup-through-focus-spot-progress-wrapper');
+            const progressEl = document.getElementById('popup-through-focus-spot-progress');
+            const progressTextEl = document.getElementById('popup-through-focus-spot-progress-text');
+
+            const setProgress = (value, text) => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'block';
+                    if (progressEl && Number.isFinite(value)) progressEl.value = Math.max(0, Math.min(100, value));
+                    if (progressTextEl && typeof text === 'string') progressTextEl.textContent = text;
+                } catch (_) {}
+            };
+
+            const openerSurface = getOpenerEl('surface-number-select');
+            const openerRay = getOpenerEl('ray-count-input');
+            const openerRing = getOpenerEl('ring-count-select');
+
+            const surfEl = document.getElementById('popup-through-focus-spot-surface-select');
+            const wlModeEl = document.getElementById('popup-through-focus-spot-wavelength-mode-select');
+            const minDefocusEl = document.getElementById('popup-through-focus-spot-min-defocus-input');
+            const maxDefocusEl = document.getElementById('popup-through-focus-spot-max-defocus-input');
+            const stepsEl = document.getElementById('popup-through-focus-spot-steps-input');
+            const scaleEl = document.getElementById('popup-through-focus-spot-scale-input');
+            const rayEl = document.getElementById('popup-through-focus-spot-ray-count-input');
+            const ringEl = document.getElementById('popup-through-focus-spot-ring-count-select');
+            const patternEl = document.getElementById('popup-through-focus-spot-pattern-select');
+
+            if (openerSurface && surfEl) openerSurface.value = surfEl.value;
+            if (openerRay && rayEl) openerRay.value = rayEl.value;
+            if (openerRing && ringEl) openerRing.value = ringEl.value;
+
+            const opener = window.opener;
+            if (!opener || typeof opener.showThroughFocusSpotDiagram !== 'function') {
+                if (containerEl) containerEl.textContent = 'showThroughFocusSpotDiagram is not available in the main window.';
+                return;
+            }
+
+            try {
+                setProgress(0, 'Starting...');
+                await opener.showThroughFocusSpotDiagram({
+                    surfaceIndex: surfEl && surfEl.value !== '' ? parseInt(surfEl.value, 10) : undefined,
+                    rayCount: rayEl && rayEl.value !== '' ? parseInt(rayEl.value, 10) : undefined,
+                    ringCount: ringEl && ringEl.value !== '' ? parseInt(ringEl.value, 10) : undefined,
+                    defocusMinMm: minDefocusEl ? Number(minDefocusEl.value) : undefined,
+                    defocusMaxMm: maxDefocusEl ? Number(maxDefocusEl.value) : undefined,
+                    steps: stepsEl ? parseInt(stepsEl.value, 10) : undefined,
+                    scaleUm: scaleEl ? Number(scaleEl.value) : undefined,
+                    wavelengthMode: wlModeEl ? String(wlModeEl.value || 'all') : 'all',
+                    pattern: patternEl ? String(patternEl.value || 'annular') : 'annular',
+                    containerElement: containerEl,
+                    onProgress: (evt) => {
+                        try {
+                            const p = Number(evt && evt.percent);
+                            const msg = (evt && (evt.message || evt.phase)) || 'Working...';
+                            if (Number.isFinite(p)) setProgress(p, msg);
+                            else setProgress(undefined, msg);
+                        } catch (_) {}
+                    }
+                });
+                setProgress(100, 'Done');
+            } catch (e) {
+                if (containerEl) containerEl.textContent = String(e && e.message ? e.message : e);
+                setProgress(100, 'Failed');
+            }
+        };
+
+        document.getElementById('popup-through-focus-spot-pattern-select').addEventListener('change', (e) => {
+            const target = e && e.target ? e.target : null;
+            const v = target && target.value ? String(target.value) : 'annular';
+            setPopupPattern(v);
+        });
+        document.getElementById('popup-show-through-focus-spot-btn').addEventListener('click', () => window.renderThroughFocusSpot());
+        window.addEventListener('focus', syncAll);
+        window.addEventListener('load', () => syncAll());
+        syncAll();
     </script>
 </body>
 </html>
@@ -5628,9 +6084,9 @@ export function setupAnalysisWindows() {
         <label for="popup-through-focus-mtf-target-freq-input">Freq (lp/mm):</label>
         <input id="popup-through-focus-mtf-target-freq-input" type="number" min="0" step="1" value="30" />
         <label for="popup-through-focus-mtf-min-defocus-input">Defocus min (mm):</label>
-        <input id="popup-through-focus-mtf-min-defocus-input" type="number" step="0.001" value="-0.05" />
+        <input id="popup-through-focus-mtf-min-defocus-input" type="number" step="0.001" value="-0.1" />
         <label for="popup-through-focus-mtf-max-defocus-input">Defocus max (mm):</label>
-        <input id="popup-through-focus-mtf-max-defocus-input" type="number" step="0.001" value="0.05" />
+        <input id="popup-through-focus-mtf-max-defocus-input" type="number" step="0.001" value="0.1" />
         <label for="popup-through-focus-mtf-steps-input">Steps:</label>
         <input id="popup-through-focus-mtf-steps-input" type="number" min="3" max="201" step="1" value="21" />
         <label for="popup-through-focus-mtf-sampling-select">Sampling:</label>
@@ -5643,6 +6099,15 @@ export function setupAnalysisWindows() {
             <option value="1024">1024x1024</option>
             <option value="2048">2048x2048</option>
             <option value="4096">4096x4096</option>
+        </select>
+        <label for="popup-through-focus-mtf-zeropad-select" title="Zero-padding increases FFT size without increasing OPD ray grid.">Zero pad:</label>
+        <select id="popup-through-focus-mtf-zeropad-select">
+            <option value="none">None</option>
+            <option value="auto" selected>Auto</option>
+            <option value="512">512</option>
+            <option value="1024">1024</option>
+            <option value="2048">2048</option>
+            <option value="4096">4096</option>
         </select>
         <label style="display:flex;align-items:center;gap:6px;">
             <input id="popup-through-focus-mtf-remove-ptd-checkbox" type="checkbox" />
@@ -5699,7 +6164,9 @@ export function setupAnalysisWindows() {
                 }
             }
             if (out.length === 1) {
-                out.push({ value: String(primary || 0.5876), label: (((primary || 0.5876) * 1000).toFixed(1) + ' nm') });
+                if (Number.isFinite(primary) && primary > 0) {
+                    out.push({ value: String(primary), label: ((primary * 1000).toFixed(1) + ' nm') });
+                }
             }
             return out;
         }
@@ -5786,6 +6253,7 @@ export function setupAnalysisWindows() {
             const maxDefocusEl = document.getElementById('popup-through-focus-mtf-max-defocus-input');
             const stepsEl = document.getElementById('popup-through-focus-mtf-steps-input');
             const samplingEl = document.getElementById('popup-through-focus-mtf-sampling-select');
+            const zeroPadEl = document.getElementById('popup-through-focus-mtf-zeropad-select');
             const removePtdEl = document.getElementById('popup-through-focus-mtf-remove-ptd-checkbox');
 
             const wlValue = wlSel ? String(wlSel.value) : '';
@@ -5793,13 +6261,19 @@ export function setupAnalysisWindows() {
             const wavelength = (wlValue === 'all') ? 'all' : Number(wlValue);
             const objectIndex = objSel ? parseInt(objSel.value, 10) : 0;
             const targetFrequencyLpmm = targetFreqEl ? Number(targetFreqEl.value) : 30;
-            const defocusMinMm = minDefocusEl ? Number(minDefocusEl.value) : -0.05;
-            const defocusMaxMm = maxDefocusEl ? Number(maxDefocusEl.value) : 0.05;
+            const defocusMinMm = minDefocusEl ? Number(minDefocusEl.value) : -0.1;
+            const defocusMaxMm = maxDefocusEl ? Number(maxDefocusEl.value) : 0.1;
             const steps = stepsEl ? Number(stepsEl.value) : 21;
             const sampling = samplingEl ? Number(samplingEl.value) : 256;
+            const zeroPadRaw = zeroPadEl ? String(zeroPadEl.value || 'auto') : 'auto';
             const opdDisplayMode = (removePtdEl && removePtdEl.checked)
                 ? 'pistonTiltDefocusRemoved'
                 : 'pistonTiltRemoved';
+            const zeroPadTo = (zeroPadRaw === 'none')
+                ? (Number.isFinite(sampling) ? sampling : 256)
+                : (zeroPadRaw === 'auto')
+                    ? 0
+                    : (Number.isFinite(parseInt(zeroPadRaw, 10)) ? parseInt(zeroPadRaw, 10) : 0);
 
             try {
                 const opener = getOpener();
@@ -5808,14 +6282,18 @@ export function setupAnalysisWindows() {
                 }
                 setProgress(0, 'Starting...');
                 await new Promise(r => setTimeout(r, 0));
+                if (wavelength !== 'all' && !Number.isFinite(wavelength) && !(Number.isFinite(primary) && primary > 0)) {
+                    throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
+                }
                 await opener.showThroughFocusMTFDiagram({
-                    wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : (primary || 0.5876)),
+                    wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : primary),
                     objectIndex: Number.isFinite(objectIndex) ? objectIndex : 0,
                     targetFrequencyLpmm: Number.isFinite(targetFrequencyLpmm) ? targetFrequencyLpmm : 30,
-                    defocusMinMm: Number.isFinite(defocusMinMm) ? defocusMinMm : -0.05,
-                    defocusMaxMm: Number.isFinite(defocusMaxMm) ? defocusMaxMm : 0.05,
+                    defocusMinMm: Number.isFinite(defocusMinMm) ? defocusMinMm : -0.1,
+                    defocusMaxMm: Number.isFinite(defocusMaxMm) ? defocusMaxMm : 0.1,
                     steps: Number.isFinite(steps) ? steps : 21,
                     samplingSize: Number.isFinite(sampling) ? sampling : 256,
+                    zeroPadTo,
                     opdDisplayMode,
                     onProgress: (evt) => {
                         try {

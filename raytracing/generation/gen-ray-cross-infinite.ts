@@ -31,10 +31,32 @@ function isObjectRow(row) {
     return t === 'object';
 }
 
+function isGapRow(row) {
+    const fields = [
+        row?.blockType, row?._blockType, row?.block_type, row?.blockTypeName,
+        row?.['object type'], row?.object, row?.Object,
+        row?.type, row?.Type,
+        row?.comment, row?.Comment
+    ];
+    const isGap = (v) => {
+        const s = String(v ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+        if (!s) return false;
+        if (s === 'gap' || s === 'airgap') return true;
+        return s.includes('airgap');
+    };
+    return fields.some(isGap);
+}
+
 function isStopRow(row) {
     const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? row?.Type ?? '';
     const t = String(raw ?? '').trim().toLowerCase();
     return t === 'stop' || t === 'sto';
+}
+
+function isImageRow(row) {
+    const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? row?.Type ?? '';
+    const normalized = String(raw ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+    return normalized === 'image' || normalized.startsWith('image');
 }
 
 function setLastChiefRayResult(result) {
@@ -56,6 +78,7 @@ function getRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
         const row = opticalSystemRows[i];
         if (isCoordTransRow(row)) continue;
         if (isObjectRow(row)) continue;
+        if (isGapRow(row)) continue;
         count++;
     }
     return count > 0 ? count : null;
@@ -442,6 +465,8 @@ function canTraceToFinalSurface(origin, direction, opticalSystemRows, wavelength
         const effectiveTargetIndex = Number.isInteger(targetSurfaceIndex)
             ? targetSurfaceIndex
             : Math.max(0, (opticalSystemRows?.length ?? 1) - 1);
+        const effectiveTargetPointIndex = getRayPathPointIndexForSurfaceIndex(opticalSystemRows, effectiveTargetIndex);
+        if (effectiveTargetPointIndex === null) return false;
 
         const rayPath = traceRay(
             opticalSystemRows,
@@ -450,17 +475,8 @@ function canTraceToFinalSurface(origin, direction, opticalSystemRows, wavelength
             null,
             effectiveTargetIndex
         );
-        
-        // traceRay() with maxSurfaceIndex returns a path up to (and including) that surface.
-        // After CB insertion, rayPath.length != effectiveTargetIndex because CB rows are skipped in the path.
-        // Therefore, we check: (1) rayPath exists, (2) has at least one point, (3) last point is valid.
-        // The presence of a non-empty rayPath implies the ray reached the target surface successfully.
-        if (rayPath && Array.isArray(rayPath) && rayPath.length > 0) {
-            const lastPoint = rayPath[rayPath.length - 1];
-            return !!(lastPoint && typeof lastPoint.x === 'number' && typeof lastPoint.y === 'number' && typeof lastPoint.z === 'number');
-        }
-        
-        return false;
+
+        return Array.isArray(rayPath) && rayPath.length > effectiveTargetPointIndex;
     } catch (error) {
         return false;
     }
@@ -640,13 +656,14 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
     return rays;
 }
 
-function estimateEffectiveEntrancePupilExtents(opticalSystemRows, centerOrigin, directionXYZ, planeU, planeV, radiusGuess, targetSurfaceIndex, wavelength, iterations = 12) {
+function estimateEffectiveEntrancePupilExtents(opticalSystemRows, centerOrigin, directionXYZ, planeU, planeV, radiusGuess, targetSurfaceIndex, wavelength, iterations = 12, fallbackSurfaceIndex = null) {
     try {
         const systemRowsForTrace = Array.isArray(opticalSystemRows) ? opticalSystemRows.slice() : opticalSystemRows;
-        const effectiveTargetIndex = Number.isInteger(targetSurfaceIndex)
+        let usedFallbackTarget = false;
+        let effectiveTargetIndex = Number.isInteger(targetSurfaceIndex)
             ? targetSurfaceIndex
             : Math.max(0, (systemRowsForTrace?.length ?? 1) - 1);
-        const effectiveTargetPointIndex = getRayPathPointIndexForSurfaceIndex(systemRowsForTrace, effectiveTargetIndex);
+        let effectiveTargetPointIndex = getRayPathPointIndexForSurfaceIndex(systemRowsForTrace, effectiveTargetIndex);
         if (effectiveTargetPointIndex === null) {
             return { uPos: radiusGuess, uNeg: radiusGuess, vPos: radiusGuess, vNeg: radiusGuess };
         }
@@ -679,8 +696,79 @@ function estimateEffectiveEntrancePupilExtents(opticalSystemRows, centerOrigin, 
             return lo;
         };
 
-        if (!traceOk(centerOrigin)) {
-            return { uPos: 0, uNeg: 0, vPos: 0, vNeg: 0 };
+        // Check if chief ray from centerOrigin can reach target surface
+        const centerTraceResult = traceOk(centerOrigin);
+        console.log(`🔍 [EntrancePupilExtents] Chief ray trace check:`, {
+            centerOrigin,
+            directionXYZ,
+            targetIndex: effectiveTargetIndex,
+            targetPointIndex: effectiveTargetPointIndex,
+            radiusGuess,
+            traceSuccess: centerTraceResult
+        });
+        
+        if (!centerTraceResult) {
+            const hasFallbackTarget = Number.isInteger(fallbackSurfaceIndex) && fallbackSurfaceIndex !== effectiveTargetIndex;
+            if (hasFallbackTarget) {
+                const fallbackPointIndex = getRayPathPointIndexForSurfaceIndex(systemRowsForTrace, fallbackSurfaceIndex);
+                if (fallbackPointIndex !== null) {
+                    const fallbackPath = traceRay(systemRowsForTrace, {
+                        pos: centerOrigin,
+                        dir: directionXYZ,
+                        wavelength
+                    }, 1.0, null, fallbackSurfaceIndex);
+                    const fallbackReachable = Array.isArray(fallbackPath) && fallbackPath.length > fallbackPointIndex;
+                    if (fallbackReachable) {
+                        console.warn(`⚠️ [EntrancePupilExtents] target surface ${effectiveTargetIndex} unreachable for chief ray. Fallback to surface ${fallbackSurfaceIndex} for pupil extent estimation.`);
+                        usedFallbackTarget = true;
+                        effectiveTargetIndex = fallbackSurfaceIndex;
+                        effectiveTargetPointIndex = fallbackPointIndex;
+                    }
+                }
+            }
+        }
+
+        const centerTraceAfterFallback = traceOk(centerOrigin);
+        if (!centerTraceAfterFallback) {
+            // Try to get actual ray path for debugging with detailed logging
+            const debugLog = [];
+            const debugPath = traceRay(systemRowsForTrace, {
+                pos: centerOrigin,
+                dir: directionXYZ,
+                wavelength
+            }, 1.0, debugLog, effectiveTargetIndex);
+            
+            // Output debug log
+            if (debugLog.length > 0) {
+                console.error(`📋 [RayTrace Debug Log]:`);
+                debugLog.forEach(line => console.error(`   ${line}`));
+            }
+            
+            // Check first few surfaces to see where it fails
+            const firstSurfaces = systemRowsForTrace.slice(0, 5).map((s, i) => ({
+                index: i,
+                type: s?.['object type'] || s?.object || s?.surfType || 'unknown',
+                semidia: s?.semidia || s?.SemiDia || 'N/A',
+                thickness: s?.thickness || 'N/A'
+            }));
+            
+            console.error(`❌ [EntrancePupilExtents] Chief ray cannot reach target surface!`);
+            console.error(`   Origin: (${centerOrigin.x.toFixed(3)}, ${centerOrigin.y.toFixed(3)}, ${centerOrigin.z.toFixed(3)})`);
+            console.error(`   Direction: (${directionXYZ.x.toFixed(6)}, ${directionXYZ.y.toFixed(6)}, ${directionXYZ.z.toFixed(6)})`);
+            console.error(`   Target surface: ${effectiveTargetIndex}, Path length: ${debugPath?.length || 0}/${effectiveTargetPointIndex + 1}`);
+            console.error(`   First 5 surfaces:`, firstSurfaces);
+            firstSurfaces.forEach((s, idx) => {
+                console.error(`     [${idx}] ${s.type}: semidia=${s.semidia}, thickness=${s.thickness}`);
+            });
+            
+            return {
+                uPos: radiusGuess,
+                uNeg: radiusGuess,
+                vPos: radiusGuess,
+                vNeg: radiusGuess,
+                __usedFallbackTarget: usedFallbackTarget,
+                __targetSurfaceIndexUsed: effectiveTargetIndex
+            };
         }
 
         const uPos = findMaxAlong(planeU);
@@ -692,7 +780,9 @@ function estimateEffectiveEntrancePupilExtents(opticalSystemRows, centerOrigin, 
             uPos: Number.isFinite(uPos) ? uPos : 0,
             uNeg: Number.isFinite(uNeg) ? uNeg : 0,
             vPos: Number.isFinite(vPos) ? vPos : 0,
-            vNeg: Number.isFinite(vNeg) ? vNeg : 0
+            vNeg: Number.isFinite(vNeg) ? vNeg : 0,
+            __usedFallbackTarget: usedFallbackTarget,
+            __targetSurfaceIndexUsed: effectiveTargetIndex
         };
     } catch (_) {
         return { uPos: radiusGuess, uNeg: radiusGuess, vPos: radiusGuess, vNeg: radiusGuess };
@@ -917,7 +1007,25 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         logEntrancePupilConfig = true
     } = options;
 
-    console.log(`[gen-ray-cross-infinite] options: targetSurfaceIndex=${targetSurfaceIndex}, wavelength=${wavelength}, debugMode=${debugMode}`);
+    const resolvedTargetSurfaceIndex = (() => {
+        const rows = Array.isArray(opticalSystemRows) ? opticalSystemRows : [];
+        const imageSurfaceIndex = rows.findIndex((row: any) => row && isImageRow(row));
+
+        if (Number.isInteger(targetSurfaceIndex)) {
+            const requested = Math.max(0, Math.min(Number(targetSurfaceIndex), Math.max(0, rows.length - 1)));
+            if (rows[requested] && isImageRow(rows[requested])) return requested;
+            if (imageSurfaceIndex >= 0) {
+                console.warn(`⚠️ [InfiniteSystem] targetSurfaceIndex=${requested} is not an Image row. Using detected Image index=${imageSurfaceIndex}.`);
+                return imageSurfaceIndex;
+            }
+            return requested;
+        }
+
+        if (imageSurfaceIndex >= 0) return imageSurfaceIndex;
+        return Math.max(0, rows.length - 1);
+    })();
+
+    console.log(`[gen-ray-cross-infinite] options: targetSurfaceIndex=${targetSurfaceIndex}, resolvedTargetSurfaceIndex=${resolvedTargetSurfaceIndex}, wavelength=${wavelength}, debugMode=${debugMode}`);
 
     if (debugMode) {
     }
@@ -990,7 +1098,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             stopSurfaceInfo.index,
             opticalSystemRows,
             debugMode,
-            targetSurfaceIndex,
+            resolvedTargetSurfaceIndex,
             wavelength
         );
 
@@ -1046,7 +1154,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                         const prevSuppressFlag = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_SUPPRESS_RAY_ERRORS : undefined;
                         try {
                             if (typeof globalThis !== 'undefined') globalThis.__COOPT_SUPPRESS_RAY_ERRORS = true;
-                            const testPath = traceRay(opticalSystemRows, testRay, 1.0, null, targetSurfaceIndex);
+                            const testPath = traceRay(opticalSystemRows, testRay, 1.0, null, resolvedTargetSurfaceIndex);
                             if (!testPath || testPath.length === 0) {
                                 console.error(`❌ [Fallback Test] Ray tracing returned empty path - optical system may have invalid surfaces`);
                                 console.error(`❌ [Fallback Test] Check for: zero radius, negative thickness, invalid glass indices, TIR, vignetting`);
@@ -1206,9 +1314,10 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                 entranceAxes.ex,
                 entranceAxes.ey,
                 entranceRadiusGuess,
-                targetSurfaceIndex,
+                resolvedTargetSurfaceIndex,
                 wavelength,
-                12
+                12,
+                stopSurfaceInfo?.index
             );
 
             const effectiveRadius = Math.min(
@@ -1238,18 +1347,42 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                 });
             }
 
-            crossBeamRays = generateCrossBeamFromEntrancePupil(
-                entrancePupil.centerOrigin,
-                dirXYZ,
-                entrancePupil.u,
-                entrancePupil.v,
-                entrancePupil.radius,
-                rayCount,
-                crossType,
-                objectIndex,
-                wavelength,
-                entrancePupil.extents
-            );
+            const usedFallbackTarget = entranceExtents?.__usedFallbackTarget === true;
+            if (usedFallbackTarget) {
+                console.warn(`⚠️ [DrawCrossEntrancePupil] Object${objectIndex + 1}: switching to stop-based boundary sampling because entrance estimation fell back from target surface.`);
+                const boundaryTargetSurfaceIndex = Number.isInteger(stopSurfaceInfo?.index)
+                    ? stopSurfaceInfo.index
+                    : resolvedTargetSurfaceIndex;
+                apertureBoundaryRays = findApertureBoundaryRays(
+                    chiefRayOrigin,
+                    dirXYZ,
+                    opticalSystemRows,
+                    stopSurfaceInfo,
+                    { debugMode, wavelength, targetSurfaceIndex: boundaryTargetSurfaceIndex }
+                );
+                crossBeamRays = generateCrossBeamFromBoundaryRays(
+                    chiefRayOrigin,
+                    dirXYZ,
+                    apertureBoundaryRays,
+                    rayCount,
+                    crossType,
+                    debugMode,
+                    objectIndex
+                );
+            } else {
+                crossBeamRays = generateCrossBeamFromEntrancePupil(
+                    entrancePupil.centerOrigin,
+                    dirXYZ,
+                    entrancePupil.u,
+                    entrancePupil.v,
+                    entrancePupil.radius,
+                    rayCount,
+                    crossType,
+                    objectIndex,
+                    wavelength,
+                    entrancePupil.extents
+                );
+            }
         } else {
             // stop-based boundary search
             if (debugMode) {
@@ -1260,7 +1393,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                 dirXYZ,
                 opticalSystemRows,
                 stopSurfaceInfo,
-                { debugMode, wavelength, targetSurfaceIndex }
+                { debugMode, wavelength, targetSurfaceIndex: resolvedTargetSurfaceIndex }
             );
 
             // デバッグ: 絞り周辺光線の探索結果を表示
@@ -1293,30 +1426,27 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             crossBeamRays,
             wavelength,
             debugMode,
-            targetSurfaceIndex
+            resolvedTargetSurfaceIndex
         );
 
-        // --- Diagnostics: if rays appear to "pass" visually, confirm which object is actually reaching the target.
-        // Keep this lightweight and only emit when debugMode is enabled.
-        if (debugMode) {
-            const successCount = tracedRays.filter(r => r && r.success).length;
-            console.log(`🧪 [DrawCrossDiag] Object${objectIndex}: angle=(${objectAngle.x}°, ${objectAngle.y}°) reachedTarget=${successCount}/${tracedRays.length}`);
+        // --- Diagnostics: always emit compact reachability summary.
+        const successCount = tracedRays.filter(r => r && r.success).length;
+        console.log(`🧪 [DrawCrossDiag] Object${objectIndex}: angle=(${objectAngle.x}°, ${objectAngle.y}°) reachedTarget=${successCount}/${tracedRays.length}`);
 
-            // If nothing reaches, do a detailed trace on the chief ray to identify where it is blocked.
-            if (successCount === 0 && chiefRayOrigin && direction) {
-                const dbg = [];
-                const ray0 = {
-                    pos: { x: chiefRayOrigin.x, y: chiefRayOrigin.y, z: chiefRayOrigin.z },
-                    dir: { x: direction.i, y: direction.j, z: direction.k },
-                    wavelength
-                };
-                traceRay(Array.isArray(opticalSystemRows) ? opticalSystemRows.slice() : opticalSystemRows, ray0, 1.0, dbg);
-                const block = _extractFirstApertureBlockFromDebugLog(dbg);
-                if (block) {
-                    console.warn(`🚫 [DrawCrossDiag] Object${objectIndex}: PHYSICAL_APERTURE_BLOCK at Surface ${block.surfaceNumber ?? '?'} (hitRadius=${block.hitRadiusMm ?? '?'}mm > limit=${block.apertureLimitMm ?? '?'}mm)`);
-                } else {
-                    console.warn(`🚫 [DrawCrossDiag] Object${objectIndex}: no rays reached target, but no PHYSICAL_APERTURE_BLOCK found in debugLog`);
-                }
+        // If nothing reaches, do a detailed trace on the chief ray to identify where it is blocked.
+        if (successCount === 0 && chiefRayOrigin && direction) {
+            const dbg = [];
+            const ray0 = {
+                pos: { x: chiefRayOrigin.x, y: chiefRayOrigin.y, z: chiefRayOrigin.z },
+                dir: { x: direction.i, y: direction.j, z: direction.k },
+                wavelength
+            };
+            traceRay(Array.isArray(opticalSystemRows) ? opticalSystemRows.slice() : opticalSystemRows, ray0, 1.0, dbg);
+            const block = _extractFirstApertureBlockFromDebugLog(dbg);
+            if (block) {
+                console.warn(`🚫 [DrawCrossDiag] Object${objectIndex}: PHYSICAL_APERTURE_BLOCK at Surface ${block.surfaceNumber ?? '?'} (hitRadius=${block.hitRadiusMm ?? '?'}mm > limit=${block.apertureLimitMm ?? '?'}mm)`);
+            } else {
+                console.warn(`🚫 [DrawCrossDiag] Object${objectIndex}: no rays reached target, but no PHYSICAL_APERTURE_BLOCK found in debugLog`);
             }
         }
 
@@ -1513,6 +1643,53 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
 
     const stopX = Number.isFinite(stopCenter?.x) ? stopCenter.x : 0;
     const stopY = Number.isFinite(stopCenter?.y) ? stopCenter.y : 0;
+    const dirI = Number(direction?.i) || 0;
+    const dirJ = Number(direction?.j) || 0;
+    const dirK = Number(direction?.k) || 0;
+    const angleXDeg = Math.atan2(dirI, Math.max(1e-12, Math.abs(dirK))) * 180 / Math.PI;
+    const angleYDeg = Math.atan2(dirJ, Math.max(1e-12, Math.abs(dirK))) * 180 / Math.PI;
+    const maxFieldDeg = Math.max(Math.abs(angleXDeg), Math.abs(angleYDeg));
+    const mirrorChiefRayDiagToOpener = (label, payload) => {
+        try {
+            if (typeof window === 'undefined') return;
+            const openerRef = (window as any).opener;
+            if (!openerRef || openerRef.closed) return;
+            const mirrored = {
+                at: new Date().toISOString(),
+                source: 'findInfiniteSystemChiefRayOrigin',
+                label,
+                ...payload
+            };
+            try { openerRef.__LAST_CHIEF_RAY_DIAG = mirrored; } catch (_) {}
+            try { openerRef.console?.error?.(`❌ [ChiefRayDiag][MirroredFromPopup] ${label}`, mirrored); } catch (_) {}
+            try { openerRef.postMessage?.({ type: 'COOPT_CHIEF_RAY_DIAG', payload: mirrored }, '*'); } catch (_) {}
+        } catch (_) {}
+    };
+    const logHighFieldChiefOriginFailure = (reason, details = {}) => {
+        try {
+            const key = `${reason}:${angleXDeg.toFixed(2)}:${angleYDeg.toFixed(2)}:${stopSurfaceIndex}`;
+            if (typeof globalThis !== 'undefined') {
+                if (!(globalThis as any).__COOPT_HIGH_FIELD_CHIEF_FAIL_KEYS) {
+                    (globalThis as any).__COOPT_HIGH_FIELD_CHIEF_FAIL_KEYS = new Set();
+                }
+                const keys = (globalThis as any).__COOPT_HIGH_FIELD_CHIEF_FAIL_KEYS as Set<string>;
+                if (keys.has(key)) return;
+                keys.add(key);
+            }
+        } catch (_) {}
+        const payload = {
+            reason,
+            angleX: Number(angleXDeg.toFixed(3)),
+            angleY: Number(angleYDeg.toFixed(3)),
+            maxFieldDeg: Number(maxFieldDeg.toFixed(3)),
+            highField: maxFieldDeg >= 15,
+            stopSurfaceIndex,
+            targetSurfaceIndex,
+            ...details
+        };
+        console.error('❌ [ChiefRayDiag] Chief origin solve issue', payload);
+        mirrorChiefRayDiagToOpener('Chief origin solve issue', payload);
+    };
 
     // 幾何学的な初期推定：屈折を無視した直進なら、この射出点で stopCenter を通る。
     // 実光学系ではズレるが、探索中心/探索範囲の見積りとして有効。
@@ -1635,6 +1812,12 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             if (debugMode) {
                 console.warn(`❌ [InfiniteSystem] Stop中心に到達できる光線が見つかりません（全候補が遮光/TIR/失敗）`);
             }
+            logHighFieldChiefOriginFailure('grid-no-valid-ray', {
+                guessX,
+                guessY,
+                dynamicHalfRange,
+                gridEvaluations
+            });
             return null;
         }
         
@@ -1912,6 +2095,11 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
         if (debugMode) {
             console.error(`❌ [Grid+Brent] 主光線探索エラー: ${error.message}`);
         }
+        logHighFieldChiefOriginFailure('solver-exception', {
+            error: (error && typeof error === 'object' && 'message' in error)
+                ? error.message
+                : String(error)
+        });
 
         // NOTE: traceRay が null を返すケース（遮光など）を「成功」に見せないため、
         // 幾何学フォールバックではなく null を返す。

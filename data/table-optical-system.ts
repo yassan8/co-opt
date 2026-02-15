@@ -2319,6 +2319,41 @@ setTimeout(() => {
  */
 async function calculateImageSemiDiaFromChiefRays() {
     try {
+    const emitChiefRayDiag = (reason, details = {}) => {
+      const payload = {
+        reason,
+        ...details
+      };
+      console.error('❌ [ChiefRayDiag] calculateImageSemiDiaFromChiefRays', payload);
+      try {
+        if (typeof window !== 'undefined') {
+          window.__LAST_CHIEF_RAY_DIAG = {
+            at: new Date().toISOString(),
+            source: 'calculateImageSemiDiaFromChiefRays',
+            ...payload
+          };
+
+          const openerRef = (window as any).opener;
+          if (openerRef && !openerRef.closed) {
+            const mirrored = {
+              at: new Date().toISOString(),
+              source: 'calculateImageSemiDiaFromChiefRays',
+              ...payload
+            };
+            try {
+              openerRef.__LAST_CHIEF_RAY_DIAG = mirrored;
+            } catch (_) {}
+            try {
+              openerRef.console?.error?.('❌ [ChiefRayDiag][MirroredFromPopup] calculateImageSemiDiaFromChiefRays', mirrored);
+            } catch (_) {}
+            try {
+              openerRef.postMessage?.({ type: 'COOPT_CHIEF_RAY_DIAG', payload: mirrored }, '*');
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    };
+
     // Blocks-first / Blocks-only を含め、常に「評価系と同じ rows」を使う。
     // Expanded table は Blocks-only だと no-op / stale になり得るため。
     const opticalSystemRows = (typeof window !== 'undefined' && typeof window.getOpticalSystemRows === 'function')
@@ -2331,6 +2366,9 @@ async function calculateImageSemiDiaFromChiefRays() {
     );
         if (imageSurfaceIndex === -1) {
             console.warn('⚠️ Image面が見つかりません');
+            emitChiefRayDiag('image-surface-not-found', {
+              opticalSystemRowsCount: Array.isArray(opticalSystemRows) ? opticalSystemRows.length : null
+            });
             return false;
         }
     const imageSurface = opticalSystemRows[imageSurfaceIndex];
@@ -2374,6 +2412,7 @@ async function calculateImageSemiDiaFromChiefRays() {
           : (window.tableObject ? window.tableObject.getData() : []);
         if (!objectRows || objectRows.length === 0) {
             console.warn('⚠️ Objectが設定されていません');
+          emitChiefRayDiag('object-rows-empty');
             return false;
         }
         // Objectの位置を取得
@@ -2418,6 +2457,15 @@ async function calculateImageSemiDiaFromChiefRays() {
                 wavelength: primaryWavelength,
                 crossType: 'both'
             });
+        }
+
+        if (!crossBeamResult) {
+          emitChiefRayDiag('crossbeam-result-null', {
+            isInfiniteSystem,
+            imageSurfaceIndex,
+            objectCount: allObjectPositions.length,
+            wavelength: primaryWavelength
+          });
         }
         // 主光線のImage面での最大高さを計算
         let rays = [];
@@ -2648,14 +2696,31 @@ async function calculateImageSemiDiaFromChiefRays() {
                 saveTableData(tableOpticalSystem.getData());
               }
             } else {
+              emitChiefRayDiag('image-hit-computation-failed', {
+                raysCount: rays.length,
+                imageSurfaceIndex,
+                imageRayPathIndex
+              });
               alert('主光線の高さを計算できませんでした。');
             }
           } else {
+            emitChiefRayDiag('no-rays-from-crossbeam', {
+              isInfiniteSystem,
+              hasRays: !!crossBeamResult?.rays,
+              raysLength: Array.isArray(crossBeamResult?.rays) ? crossBeamResult.rays.length : null,
+              hasAllTracedRays: !!crossBeamResult?.allTracedRays,
+              allTracedRaysLength: Array.isArray(crossBeamResult?.allTracedRays) ? crossBeamResult.allTracedRays.length : null,
+              hasObjectResults: !!crossBeamResult?.objectResults,
+              objectResultsLength: Array.isArray(crossBeamResult?.objectResults) ? crossBeamResult.objectResults.length : null
+            });
             alert('主光線追跡に失敗しました。');
           }
         }
     catch (error) {
       console.error('❌ Semi Dia 自動計算エラー:', error);
+      emitChiefRayDiag('exception', {
+        message: error?.message ?? String(error)
+      });
       alert('主光線追跡に失敗しました: ' + error.message);
     } finally {
       // フラグを解除（非同期処理を考慮して少し遅延）

@@ -255,12 +255,43 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             console.warn('⚠️ Ray count input not found, using default (501)');
         }
         
-        if (providedWavelengthNm !== null && providedWavelengthNm > 0) {
-            wavelength = providedWavelengthNm;
-        } else if (wavelengthInput && wavelengthInput.value !== '') {
-            wavelength = parseFloat(wavelengthInput.value) || 550;
+        const isPrimarySourceRow = (raw: any): boolean => {
+            if (raw === true || raw === 1) return true;
+            const s = String(raw ?? '').trim().toLowerCase();
+            return s.includes('primary') || s === 'true' || s === 'yes' || s === '1';
+        };
+
+        const resolveLivePrimaryWavelengthNm = (): number | null => {
+            try {
+                const src = (typeof window !== 'undefined' && w.tableSource && typeof w.tableSource.getData === 'function')
+                    ? w.tableSource.getData()
+                    : null;
+                if (!Array.isArray(src) || src.length === 0) return null;
+                const parsed = src
+                    .map((row: any) => ({
+                        wlUm: Number(row?.wavelength),
+                        isPrimary: isPrimarySourceRow(row?.primary)
+                    }))
+                    .filter((entry: any) => Number.isFinite(entry.wlUm) && entry.wlUm > 0);
+                const primary = parsed.find((entry: any) => entry.isPrimary) || parsed[0] || null;
+                if (!primary) return null;
+                return Number(primary.wlUm) * 1000;
+            } catch (_) {
+                return null;
+            }
+        };
+
+        const resolvedProvidedWavelengthNm = (() => {
+            if (providedWavelengthNm !== null && providedWavelengthNm > 0) return providedWavelengthNm;
+            const livePrimaryNm = resolveLivePrimaryWavelengthNm();
+            if (Number.isFinite(livePrimaryNm) && livePrimaryNm! > 0) return livePrimaryNm;
+            return null;
+        })();
+
+        if (resolvedProvidedWavelengthNm !== null && resolvedProvidedWavelengthNm > 0) {
+            wavelength = resolvedProvidedWavelengthNm;
         } else {
-            console.warn('⚠️ Wavelength input not found, using default (550nm)');
+            console.log('ℹ️ No explicit wavelength option, will use Source primary wavelength after rows load');
         }
 
         if (providedRingCount !== null && providedRingCount > 0) {
@@ -735,6 +766,59 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
 
         let { opticalSystemRows, objectRows, sourceRows } = loadRowsForSelectedConfig();
 
+        const resolveEffectiveSourceRowsForSpot = (rows: any[]): any[] => {
+            if (resolvedProvidedWavelengthNm !== null && resolvedProvidedWavelengthNm > 0) {
+                return [{
+                    id: 'spot-explicit-wavelength',
+                    wavelength: Number(resolvedProvidedWavelengthNm) / 1000,
+                    weight: 1,
+                    primary: 'Primary Wavelength',
+                    name: 'Explicit Wavelength'
+                }];
+            }
+
+            if (!Array.isArray(rows) || rows.length === 0) {
+                return [{
+                    id: 'spot-default-wavelength',
+                    wavelength: 0.5876,
+                    weight: 1,
+                    primary: 'Primary Wavelength',
+                    name: 'Default d-line'
+                }];
+            }
+
+            const parsed = rows
+                .map((row: any, idx: number) => ({
+                    idx,
+                    row,
+                    wl: Number(row?.wavelength),
+                    isPrimary: isPrimarySourceRow(row?.primary)
+                }))
+                .filter((entry: any) => Number.isFinite(entry.wl) && entry.wl > 0);
+
+            const primary = parsed.find((entry: any) => entry.isPrimary) || parsed[0] || null;
+            if (!primary) {
+                return [{
+                    id: 'spot-default-wavelength',
+                    wavelength: 0.5876,
+                    weight: 1,
+                    primary: 'Primary Wavelength',
+                    name: 'Default d-line'
+                }];
+            }
+
+            return [{
+                ...(primary.row && typeof primary.row === 'object' ? primary.row : {}),
+                wavelength: Number(primary.wl),
+                weight: Number.isFinite(Number(primary.row?.weight)) ? Number(primary.row.weight) : 1,
+                primary: 'Primary Wavelength'
+            }];
+        };
+
+        const effectiveSourceRowsForSpot = resolveEffectiveSourceRowsForSpot(sourceRows);
+        const sourcePrimaryWavelengthUm = Number(effectiveSourceRowsForSpot[0]?.wavelength) || 0.5876;
+        wavelength = sourcePrimaryWavelengthUm * 1000;
+
         // (Debug logs removed) Config preview logs were too noisy for normal operation.
         
         // Check Image surface (index=20) semidia specifically
@@ -891,17 +975,11 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         try {
             const pattern = patternFromUi;
 
-            let primaryWavelengthUm = 0.5876;
-            if (Array.isArray(sourceRows) && sourceRows.length > 0) {
-                const parsed = sourceRows
-                    .map((row: any, idx: number) => ({
-                        idx,
-                        wl: Number(row?.wavelength),
-                        isPrimary: row?.primary === 'Primary Wavelength'
-                    }))
-                    .filter((e: any) => Number.isFinite(e.wl) && e.wl > 0);
-                const primary = parsed.find((e: any) => e.isPrimary) || parsed[0] || null;
-                if (primary) primaryWavelengthUm = primary.wl;
+            let primaryWavelengthUm = sourcePrimaryWavelengthUm;
+
+            // If wavelength was not explicitly provided by options, bind it to Source primary.
+            if (!(resolvedProvidedWavelengthNm !== null && resolvedProvidedWavelengthNm > 0)) {
+                wavelength = primaryWavelengthUm * 1000;
             }
 
             saveLastSpotDiagramSettings({
@@ -979,6 +1057,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         }
         console.log('  - objectRows:', objectRows ? objectRows.length : 'null', objectRows);
         console.log('  - sourceRows:', sourceRows ? sourceRows.length : 'null', sourceRows);
+        console.log('  - effectiveSourceRowsForSpot:', effectiveSourceRowsForSpot);
         
         // Validate surface index against actual data
         if (opticalSystemRows && opticalSystemRows.length > 0) {
@@ -1017,7 +1096,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             
             const spotDiagramData = await generateSpotDiagramAsync(
                 opticalSystemRows,
-                sourceRows || [],
+                effectiveSourceRowsForSpot,
                 defaultObjectRows,
                 surfaceNumber,
                 rayCount,
@@ -1045,7 +1124,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             
             const spotDiagramData = await generateSpotDiagramAsync(
                 opticalSystemRows,
-                sourceRows || [],
+                effectiveSourceRowsForSpot,
                 objectRows,
                 surfaceNumber,
                 rayCount,
@@ -1596,6 +1675,18 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
             const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? row?.surface_type ?? '').toLowerCase();
             return t === 'object';
         };
+        const isGapRow = (row: any) => {
+            const norm = (v: any) => String(v ?? '').trim().toLowerCase();
+            const compact = (v: any) => norm(v).replace(/[\s_-]+/g, '');
+            const surfType = norm(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surface_type ?? '');
+            const surfTypeCompact = compact(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surface_type ?? '');
+            const blockType = norm(row?._blockType ?? row?.blockType ?? '');
+            const blockTypeCompact = compact(row?._blockType ?? row?.blockType ?? '');
+            return (
+                surfType === 'gap' || surfType === 'air gap' || surfTypeCompact === 'gap' || surfTypeCompact === 'airgap' ||
+                blockType === 'gap' || blockType === 'air gap' || blockTypeCompact === 'gap' || blockTypeCompact === 'airgap'
+            );
+        };
         const isImageRow = (row: any) => {
             const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').toLowerCase();
             return t === 'image';
@@ -1611,7 +1702,7 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
         if (targetSurfaceIndex < 0) {
             for (let i = opticalSystemRows.length - 1; i >= 0; i--) {
                 const row = opticalSystemRows[i];
-                if (isCoordTransRow(row) || isObjectRow(row)) continue;
+                if (isCoordTransRow(row) || isObjectRow(row) || isGapRow(row)) continue;
                 targetSurfaceIndex = i;
                 break;
             }

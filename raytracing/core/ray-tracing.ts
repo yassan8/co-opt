@@ -1315,6 +1315,23 @@ function __rtIsCoordTransRow(row) {
   return fields.some(isCb);
 }
 
+function __rtIsGapRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  const fields = [
+    row.blockType, row._blockType, row.block_type, row.blockTypeName,
+    row['object type'], row.object, row.Object,
+    row.type, row.Type,
+    row.comment, row.Comment
+  ];
+  const isGap = (v) => {
+    const s = String(v ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+    if (!s) return false;
+    if (s === 'gap' || s === 'airgap') return true;
+    return s.includes('airgap');
+  };
+  return fields.some(isGap);
+}
+
 // Normalize legacy CoordTrans rows into explicit fields (one-time in-memory migration).
 function normalizeCoordTransRows(rows) {
   if (!Array.isArray(rows)) return rows;
@@ -2086,16 +2103,52 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
 
     // 通常の面処理（非CB面）
     const surfaceInfo = surfaceData[i];
+
+    // Gap行の特別処理（非物理面: 交点/開口判定を行わない）
+    if (__rtIsGapRow(row)) {
+      // Medium override if explicitly provided on gap row
+      try {
+        const gapMatRaw = row.material ?? row.glass ?? row.Glass ?? row.__cooptGapMaterial;
+        const gapMat = String(gapMatRaw ?? '').trim();
+        if (gapMat !== '') {
+          if (gapMat.replace(/\s+/g, '').toUpperCase() === 'AIR') {
+            n = 1.0;
+          } else {
+            n = getCorrectRefractiveIndex({ material: gapMat }, safeRay0.wavelength);
+          }
+        }
+      } catch (_) {}
+
+      // Optional advancement if this row carries explicit thickness
+      const thickness = parseFloat(row.thickness) || 0;
+      if (thickness !== 0 && isFinite(thickness)) {
+        const newPos = add(safeRay0.pos, scale(safeRay0.dir, thickness));
+        safeRay0.pos = newPos;
+        if (isDetailedDebug) {
+          debugLog.push(`Gap row advancement: ${thickness}mm (non-physical surface, no intersection recorded)`);
+        }
+      } else if (isDetailedDebug) {
+        debugLog.push(`Gap row: non-physical surface, no intersection recorded`);
+      }
+      continue;
+    }
     
     // Object面の特別処理
     if (row["object type"] === "Object") {
-      // Object面では光学的な交点計算を行わず、thickness分だけ前進
+      // Object面では光学的な交点計算を行わず、有限distance分だけ前進
+      // 無限遠共役系（thickness=Infinity）では位置は変更しない
       const thickness = parseFloat(row.thickness) || 0;
-      if (thickness !== 0) {
+      if (thickness !== 0 && isFinite(thickness)) {
         const newPos = add(safeRay0.pos, scale(safeRay0.dir, thickness));
         safeRay0.pos = newPos;
         if (isDetailedDebug) {
           debugLog.push(`Object surface thickness advancement: ${thickness}mm (intermediate position not recorded for clean ray paths)`);
+        }
+      } else if (isDetailedDebug) {
+        if (!isFinite(thickness)) {
+          debugLog.push(`Object surface: Infinite conjugate system (thickness=Infinity), ray position unchanged`);
+        } else {
+          debugLog.push(`Object surface: Zero thickness, ray position unchanged`);
         }
       }
       continue;
@@ -2212,7 +2265,9 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       }
       
       // 🆕 物理的開口制限の適用（Image面と評価面は除く）
-      const isImageSurface = row["object type"] === "Image" || row.object === "Image";
+      const imageTypeRaw = row["object type"] ?? row.object ?? row.Object ?? row.type ?? '';
+      const imageTypeNorm = String(imageTypeRaw).trim().toLowerCase().replace(/[\s_-]+/g, '');
+      const isImageSurface = imageTypeNorm === 'image' || imageTypeNorm.startsWith('image');
       if (!isImageSurface && !isEvaluationSurface && useRectAperture) {
         const hitX = Math.abs(hitPoint.x);
         const hitY = Math.abs(hitPoint.y);
@@ -2524,7 +2579,9 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       }
       
       // 🆕 物理的開口制限の適用（Image面と評価面は除く）
-      const isImageSurface = row["object type"] === "Image" || row.object === "Image";
+      const imageTypeRaw = row["object type"] ?? row.object ?? row.Object ?? row.type ?? '';
+      const imageTypeNorm = String(imageTypeRaw).trim().toLowerCase().replace(/[\s_-]+/g, '');
+      const isImageSurface = imageTypeNorm === 'image' || imageTypeNorm.startsWith('image');
       if (!isImageSurface && !isEvaluationSurface && isFinite(apertureLimit) && hitRadius > apertureLimit) {
         if (isDetailedDebug) {
           debugLog.push(`❌ PHYSICAL APERTURE BLOCK: Ray physically blocked on Surface ${i + 1}`);
