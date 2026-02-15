@@ -25,6 +25,23 @@ function isMirrorRow(row) {
     const surfType = String(row.surfType ?? row.type ?? row.surfaceType ?? '').trim().toLowerCase();
     return surfType === 'mirror';
 }
+
+function __wavefrontIsGapRow(row) {
+    if (!row || typeof row !== 'object') return false;
+    const norm = (v) => String(v ?? '').trim().toLowerCase();
+    const compact = (v) => norm(v).replace(/[\s_-]+/g, '');
+    const surfType = norm(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surface_type ?? '');
+    const surfTypeCompact = compact(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surface_type ?? '');
+    const blockType = norm(row?._blockType ?? row?.blockType ?? '');
+    const blockTypeCompact = compact(row?._blockType ?? row?.blockType ?? '');
+    const kind = norm(row?.kind ?? '');
+    const kindCompact = compact(row?.kind ?? '');
+    return (
+        surfType === 'gap' || surfType === 'air gap' || surfTypeCompact === 'gap' || surfTypeCompact === 'airgap' ||
+        blockType === 'gap' || blockType === 'air gap' || blockTypeCompact === 'gap' || blockTypeCompact === 'airgap' ||
+        kind === 'gap' || kind === 'air gap' || kindCompact === 'gap' || kindCompact === 'airgap'
+    );
+}
 function setCheckOnAxisOPDSymmetry(enabled) {
     try {
         if (typeof window === 'undefined') return;
@@ -221,6 +238,9 @@ function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceInd
         const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
         return t === 'object';
     };
+        const isGapRow = (row) => {
+            return __wavefrontIsGapRow(row);
+        };
     const getRayPathPointIndexForSurfaceIndex = (rows, surfaceIndex) => {
         if (!Array.isArray(rows) || surfaceIndex === null || surfaceIndex === undefined) return null;
         const sIdx = Math.max(0, Math.min(Number(surfaceIndex) || 0, rows.length - 1));
@@ -229,6 +249,7 @@ function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceInd
             const row = rows[i];
             if (isCoordTransRow(row)) continue;
             if (isObjectRow(row)) continue;
+            if (isGapRow(row)) continue;
             count++;
         }
         return count;
@@ -312,6 +333,9 @@ function calculateApertureRayNewton(chiefRayOrigin, direction, targetStopPoint, 
         const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
         return t === 'object';
     };
+        const isGapRow = (row) => {
+            return __wavefrontIsGapRow(row);
+        };
     const getRayPathPointIndexForSurfaceIndex = (rows, surfaceIndex) => {
         if (!Array.isArray(rows) || surfaceIndex === null || surfaceIndex === undefined) return null;
         const sIdx = Math.max(0, Math.min(Number(surfaceIndex) || 0, rows.length - 1));
@@ -320,6 +344,7 @@ function calculateApertureRayNewton(chiefRayOrigin, direction, targetStopPoint, 
             const row = rows[i];
             if (isCoordTransRow(row)) continue;
             if (isObjectRow(row)) continue;
+            if (isGapRow(row)) continue;
             count++;
         }
         return count;
@@ -813,6 +838,7 @@ export class OpticalPathDifferenceCalculator {
                     const r = rows[i];
                     if (this.isCoordTransRow(r)) continue;
                     if (this.isObjectRow(r)) continue;
+                    if (this.isGapRow(r)) continue;
                     const semidia = parseFloat(r.semidia || r.SemiDia || r['semi dia'] || r['Semi Dia'] || 0);
                     const aperture = parseFloat(r.aperture || r.Aperture || 0);
                     const a = (Number.isFinite(semidia) && semidia > 0)
@@ -835,6 +861,7 @@ export class OpticalPathDifferenceCalculator {
                 const r = rows[i];
                 if (this.isCoordTransRow(r)) continue;
                 if (this.isObjectRow(r)) continue;
+                if (this.isGapRow(r)) continue;
                 const o = this.getSurfaceOrigin(i);
                 if (o && Number.isFinite(o.z)) firstSurfaceZ = o.z;
                 break;
@@ -1070,6 +1097,7 @@ export class OpticalPathDifferenceCalculator {
                     const r = rows[i];
                     if (this.isCoordTransRow(r)) continue;
                     if (this.isObjectRow(r)) continue;
+                    if (this.isGapRow(r)) continue;
                     const o = this.getSurfaceOrigin(i);
                     if (o && Number.isFinite(o.z)) z = o.z;
                     break;
@@ -1260,6 +1288,7 @@ export class OpticalPathDifferenceCalculator {
                     const row = this.opticalSystemRows[i];
                     if (this.isCoordTransRow(row)) continue;
                     if (this.isObjectRow(row)) continue;
+                    if (this.isGapRow(row)) continue;
                     count++;
                 }
                 return count > 0 ? count : null;
@@ -1458,6 +1487,7 @@ export class OpticalPathDifferenceCalculator {
                     const r = rows[i];
                     if (this.isCoordTransRow(r)) continue;
                     if (this.isObjectRow(r)) continue;
+                    if (this.isGapRow(r)) continue;
                     const o = this.getSurfaceOrigin(i);
                     if (o && Number.isFinite(o.z)) firstSurfaceZ = o.z;
                     break;
@@ -1683,6 +1713,10 @@ export class OpticalPathDifferenceCalculator {
         return String(objectType ?? '').toLowerCase() === 'object';
     }
 
+    isGapRow(row) {
+        return __wavefrontIsGapRow(row);
+    }
+
     getFiniteObjectPosition(fieldSetting) {
         const xObject = Number(fieldSetting?.xHeight ?? 0) || 0;
         const yObject = Number(fieldSetting?.yHeight ?? 0) || 0;
@@ -1741,6 +1775,7 @@ export class OpticalPathDifferenceCalculator {
             const row = rows[i];
             if (this.isCoordTransRow(row)) continue;
             if (this.isObjectRow(row)) continue;
+            if (this.isGapRow(row)) continue;
             indices.push(i);
         }
         return indices;
@@ -1789,6 +1824,7 @@ export class OpticalPathDifferenceCalculator {
                 const r = rows[i];
                 if (this.isCoordTransRow(r)) continue;
                 if (this.isObjectRow(r)) continue;
+                if (this.isGapRow(r)) continue;
                 const semidia = parseFloat(r.semidia || r.SemiDia || r['semi dia'] || r['Semi Dia'] || 0);
                 const aperture = parseFloat(r.aperture || r.Aperture || 0);
                 const a = (Number.isFinite(semidia) && semidia > 0)
@@ -1814,6 +1850,7 @@ export class OpticalPathDifferenceCalculator {
                 const r = rows[i];
                 if (this.isCoordTransRow(r)) continue;
                 if (this.isObjectRow(r)) continue;
+                if (this.isGapRow(r)) continue;
                 const o = this.getSurfaceOrigin(i);
                 if (o && Number.isFinite(o.z)) z = o.z;
                 break;
@@ -1869,11 +1906,17 @@ export class OpticalPathDifferenceCalculator {
             const st = String(row?.surfType ?? row?.['surf type'] ?? '').toLowerCase();
             return st === 'coord break' || st === 'coordinate break' || st === 'cb';
         };
+        const isGap = (row) => __wavefrontIsGapRow(row);
+        const isObject = (row) => {
+            const objectType = row?.['object type'] ?? row?.object ?? row?.Object;
+            return String(objectType ?? '').toLowerCase() === 'object';
+        };
 
         let lastImageIndex = -1;
         for (let i = 0; i < opticalSystemRows.length; i++) {
             const row = opticalSystemRows[i];
             if (isCoordTrans(row)) continue;
+            if (isGap(row)) continue;
 
             const surfType = String(row?.surfType ?? row?.['surf type'] ?? row?.surfTypeName ?? '').toLowerCase();
             const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').toLowerCase();
@@ -1888,8 +1931,14 @@ export class OpticalPathDifferenceCalculator {
             }
         }
 
-        // Image面が無ければ最終面（coord break除外はしない：traceRay側が処理するため）
-        return lastImageIndex >= 0 ? lastImageIndex : (opticalSystemRows.length - 1);
+        // Image面が無ければ最終の物理面（Object/CoordTrans/Gap を除外）
+        if (lastImageIndex >= 0) return lastImageIndex;
+        for (let i = opticalSystemRows.length - 1; i >= 0; i--) {
+            const row = opticalSystemRows[i];
+            if (isCoordTrans(row) || isObject(row) || isGap(row)) continue;
+            return i;
+        }
+        return Math.max(0, opticalSystemRows.length - 1);
     }
 
     traceRayToSurface(ray0, maxSurfaceIndex, n0 = 1.0, traceOptions = null) {
@@ -1973,6 +2022,7 @@ export class OpticalPathDifferenceCalculator {
                 const row = this.opticalSystemRows[i];
                 if (this.isCoordTransRow(row)) continue;
                 if (this.isObjectRow(row)) continue;
+                if (this.isGapRow(row)) continue;
                 nonCTCount++;
             }
         }

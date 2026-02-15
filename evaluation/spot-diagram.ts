@@ -237,16 +237,11 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
     
     // 選択された面の種類をチェック
     const selectedSurface = opticalSystemRows[surfaceNumber - 1]; // 0-indexed
-    const surfaceType = selectedSurface.surfType || 'Standard';
+    const surfaceType = selectedSurface.surfType || selectedSurface.type || selectedSurface['object type'] || 'Standard';
     
-    // Object面の除外
-    if (surfaceType === 'Object') {
-        throw new Error('The Object surface cannot be selected as the spot diagram evaluation surface.');
-    }
-    
-    // CB面（座標変換面）の除外
-    if (surfaceType === 'CB' || surfaceType === 'Coordinate Break' || surfaceType === 'Coord Break') {
-        throw new Error('The CB surface (coordinate transform surface) cannot be selected as the spot diagram evaluation surface. Please select a normal optical surface or the Image surface.');
+    // Object / CoordTrans / Gap rows are non-evaluable for Spot.
+    if (__spot_isSkippableRayPathRow(selectedSurface)) {
+        throw new Error('The selected row is a non-physical surface (Object / CoordTrans / Gap) and cannot be used as the spot diagram evaluation surface. Please select a normal optical surface or the Image surface.');
     }
     
     // console.log(`📊 Selected surface ${surfaceNumber}: ${surfaceType}`);
@@ -1153,8 +1148,18 @@ function __spot_isSkippableRayPathRow(row) {
     const ot = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
     if (ot === 'object') return true;
     // Coord Break rows are transforms only; traceRay() does not record hit points for them.
-    const st = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
-    if (st === 'coord trans' || st === 'coordtrans' || st === 'ct') return true;
+    const st = String(row.surfType ?? row['surf type'] ?? row.type ?? '').trim().toLowerCase();
+    if (st === 'coord trans' || st === 'coordtrans' || st === 'ct' || st === 'coordinate break' || st === 'coordinatebreak') return true;
+    // Gap rows are non-physical separators and do not create hit points in rayPath.
+    if (st === 'gap' || st === 'air gap' || st === 'airgap') return true;
+    const blockType = String(row._blockType ?? row.blockType ?? '').trim().toLowerCase();
+    if (blockType === 'gap' || blockType === 'air gap' || blockType === 'airgap') return true;
+    const blockRole = String(row._surfaceRole ?? row.surfaceRole ?? '').trim().toLowerCase();
+    if (blockRole === 'gap' || blockRole === 'air gap' || blockRole === 'airgap') return true;
+    const kind = String(row.kind ?? '').trim().toLowerCase();
+    if (kind === 'gap' || kind === 'air gap' || kind === 'airgap') return true;
+    const title = String(row.title ?? row.name ?? '').trim().toLowerCase();
+    if (title === 'gap' || title === 'air gap' || title === 'airgap') return true;
     return false;
 }
 
@@ -1311,12 +1316,9 @@ export async function generateSpotDiagramAsync(
     }
 
     const selectedSurface = opticalSystemRows[surfaceNumber - 1];
-    const surfaceType = selectedSurface.surfType || 'Standard';
-    if (surfaceType === 'Object') {
-        throw new Error('The Object surface cannot be selected as the spot diagram evaluation surface.');
-    }
-    if (surfaceType === 'CB' || surfaceType === 'Coordinate Break' || surfaceType === 'Coord Break') {
-        throw new Error('The CB surface (coordinate transform surface) cannot be selected as the spot diagram evaluation surface. Please select a normal optical surface or the Image surface.');
+    const surfaceType = selectedSurface.surfType || selectedSurface.type || selectedSurface['object type'] || 'Standard';
+    if (__spot_isSkippableRayPathRow(selectedSurface)) {
+        throw new Error('The selected row is a non-physical surface (Object / CoordTrans / Gap) and cannot be used as the spot diagram evaluation surface. Please select a normal optical surface or the Image surface.');
     }
 
     // Prepare system structure
@@ -3073,9 +3075,8 @@ export function generateSurfaceOptions(opticalSystemRows) {
     
     const options = [];
 
-    // Spot Diagram "surface id" matches Design Intent numbering:
-    // Object = 0 (not selectable), then first non-object row = 1.
-    // CB surfaces DO count in the id sequence (but are not selectable).
+    // Spot Diagram "surface id" is the 1-based index of evaluable physical surfaces.
+    // Non-physical rows (Object / CoordTrans / Gap) are not selectable and do not count.
     let surfaceId = 0;
 
     const normalizeType = (v) => String(v ?? '').trim().toLowerCase();
@@ -3091,6 +3092,12 @@ export function generateSurfaceOptions(opticalSystemRows) {
             c === 'coordtrans' ||
             c === 'coordinatebreak'
         );
+    };
+
+    const isGapType = (v) => {
+        const n = normalizeType(v);
+        const c = compactType(v);
+        return n === 'gap' || n === 'air gap' || c === 'airgap' || c === 'gap';
     };
 
     const isObjectType = (v) => {
@@ -3129,18 +3136,14 @@ export function generateSurfaceOptions(opticalSystemRows) {
         const surfaceType = (objTypeRaw || surfTypeRaw || 'Standard');
         const radius = surfaceData.radius || 'INF';
 
-        // Object is id 0 and is not selectable.
-        if (isObjectType(objTypeRaw) || isObjectType(surfTypeRaw) || isObjectType(surfaceType)) {
+        // Non-physical rows are not selectable and do not count in Spot surface numbering.
+        // Use the same predicate as rayPath index mapping to keep numbering consistent.
+        if (__spot_isSkippableRayPathRow(surfaceData)) {
             continue;
         }
 
-        // Increment id for every non-object row (including CB).
+        // Increment id only for evaluable physical surfaces.
         surfaceId++;
-
-        // CB surfaces are not selectable, but they DO count in the numbering.
-        if (isCoordTransType(objTypeRaw) || isCoordTransType(surfTypeRaw) || isCoordTransType(surfaceType)) {
-            continue;
-        }
         const rowId = (surfaceData && surfaceData.id !== undefined && surfaceData.id !== null)
             ? String(surfaceData.id)
             : null;
@@ -3188,10 +3191,10 @@ export function generateSurfaceOptions(opticalSystemRows) {
         }
         
         // IMPORTANT:
-        // - `surfaceId` is the CB-invariant UI-friendly label number.
-        // - `value` is what the UI select uses, so it MUST be surfaceId for stable selection.
+        // - `surfaceId` is the UI-facing physical-surface number used by Spot.
+        // - `value` is what the UI select uses.
         // - `rowIndex` is the actual 0-based index into opticalSystemRows.
-        // - optical-analysis.js resolves surfaceId back to rowIndex after loading the config's rows.
+        // - optical-analysis.js resolves surfaceId back to rowIndex via this options table.
         options.push({
             value: surfaceId,
             surfaceId,
@@ -3204,7 +3207,7 @@ export function generateSurfaceOptions(opticalSystemRows) {
     // console.log(`✅ Added surface option: ${displayName}`);
     }
     
-    // console.log(`✅ Generated ${options.length} valid surface options (excluding Object and CB surfaces)`);
+    // console.log(`✅ Generated ${options.length} valid surface options (excluding Object/CB/Gap surfaces)`);
     return options;
 }
 
@@ -3338,12 +3341,18 @@ function getWavelengthsFromSource(sourceRows) {
     
     const wavelengths = [];
     let primaryWavelength = null;
+
+    const isPrimaryRow = (raw: any): boolean => {
+        if (raw === true || raw === 1) return true;
+        const s = String(raw ?? '').trim().toLowerCase();
+        return s.includes('primary') || s === 'true' || s === 'yes' || s === '1';
+    };
     
     sourceRows.forEach((source, index) => {
         if (source && source.wavelength) {
             const wavelength = parseFloat(source.wavelength);
             if (!isNaN(wavelength) && wavelength > 0) {
-                const isPrimary = source.primary === "Primary Wavelength";
+                const isPrimary = isPrimaryRow(source.primary);
                 const wavelengthData = {
                     wavelength: wavelength,
                     name: source.name || `λ${index + 1}`,

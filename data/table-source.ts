@@ -620,9 +620,15 @@ function getPrimaryWavelength(): number {
   try {
     if (tableSource && typeof tableSource.getData === 'function') {
       const sourceData = tableSource.getData();
+
+      const isPrimaryRow = (raw: any): boolean => {
+        if (raw === true || raw === 1) return true;
+        const s = String(raw ?? '').trim().toLowerCase();
+        return s === 'primary wavelength' || s === 'primary' || s === 'true' || s === 'yes' || s === '1';
+      };
       
       // Primary Wavelengthに設定されているエントリを探す
-      const primaryEntry = sourceData.find(row => row.primary === "Primary Wavelength");
+      const primaryEntry = sourceData.find(row => isPrimaryRow(row?.primary));
       console.log('🎯 Primary entry found:', primaryEntry);
       
       if (primaryEntry && primaryEntry.wavelength) {

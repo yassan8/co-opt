@@ -253,17 +253,11 @@ function insertInterpolatedPoint(points, targetNormalized) {
 
 function buildNormalizedPupilSamples(rayCount) {
     const n = Math.max(2, Math.floor(rayCount));
+    const minPupil = 0.001;
     const samples = [];
     for (let i = 0; i < n; i++) {
-        samples.push(i / (n - 1));
-    }
-    // 0.001を必ず含める（rayCountを増やさずに2番目を置換）
-    if (n >= 3) {
-        samples[1] = 0.001;
-        if (samples[1] <= samples[0]) samples[1] = Math.max(1e-6, samples[0] + 1e-6);
-        if (samples[1] >= samples[2]) samples[1] = Math.max(1e-6, samples[2] * 0.5);
-    } else if (n === 2) {
-        // [0, 1] しか作れないので、0.001は後段の補間に任せる
+        const t = (n > 1) ? (i / (n - 1)) : 0;
+        samples.push(minPupil + t * (1 - minPupil));
     }
     // 重複排除＆昇順
     const unique = Array.from(new Set(samples.map(v => +v.toFixed(12)))).sort((a, b) => a - b);
@@ -716,14 +710,17 @@ function findRayAxisIntersection(tracedRay, imagePlaneZ, imageSurfaceInfo = null
     let localIntersectionZ;
     if (xyMagnitude < 1e-12) {
         debugInfo.earlyReturn = 'PARALLEL_LOCAL';
-        localIntersectionZ = lastLocal.z;
+        // 近軸で方向のXY成分が極小の場合、軸交点は数値的に不安定。
+        // ここで0近傍を返すと LA=0 の人工点が混入するため、この光線は無効として扱う。
+        return null;
     } else {
         const numerator = -(lastLocal.x * dirLocal.x + lastLocal.y * dirLocal.y);
         const denominator = dirLocal.x * dirLocal.x + dirLocal.y * dirLocal.y;
         debugInfo.numerator = numerator;
         debugInfo.denominator = denominator;
         if (Math.abs(denominator) < 1e-12) {
-            localIntersectionZ = lastLocal.z;
+            debugInfo.earlyReturn = 'DEGENERATE_DENOMINATOR';
+            return null;
         } else {
             const t = numerator / denominator;
             debugInfo.t = t;
@@ -1210,12 +1207,8 @@ export function calculateLongitudinalAberration(
                     if (trSolved.success) aimed.push(trSolved);
                 }
 
-                // chiefTrace が成功していれば先頭に保持（0の参照用）
-                if (chiefTr && chiefTr.success) {
-                    // 既にpNorm=0で生成されている場合は重複しない
-                    const hasZero = aimed.some(r => r.originalRay && r.originalRay.pupilCoordinateRequested === 0);
-                    if (!hasZero) aimed.unshift(chiefTr);
-                }
+                // NOTE:
+                // Normalized pupil = 0 は計算/描画しない方針のため、chiefTrace の追加は行わない。
 
                 if (diag && diag.stopSolveAttempt > 0) {
                     dbg('🐞 [SA] stop-solve summary (finite)', diag);

@@ -336,9 +336,15 @@ w.__performCoordTransCalculation = async (blockId: string, panel: HTMLElement): 
             ? w.tableObject.getData() 
             : [];
 
-        const primaryWavelength = (typeof w.getPrimaryWavelength === 'function')
-            ? (Number(w.getPrimaryWavelength()) || 0.5876)
-            : 0.5876;
+        const primaryWavelength = (() => {
+            if (typeof w.getPrimaryWavelength === 'function') {
+                const wl = Number(w.getPrimaryWavelength());
+                if (Number.isFinite(wl) && wl > 0) return wl;
+            }
+            console.warn('Primary wavelength is unavailable. Auto coordinate transform is skipped.');
+            return NaN;
+        })();
+        if (!Number.isFinite(primaryWavelength) || primaryWavelength <= 0) return;
 
         const objRow0 = Array.isArray(objectRows) && objectRows.length > 0 ? objectRows[0] : {};
         const isInfinite = (() => {
@@ -430,7 +436,7 @@ w.__performCoordTransCalculation = async (blockId: string, panel: HTMLElement): 
 
 // Zemax import/export utilities
 function __zmxPickPrimaryWavelengthMicrons(wavelengthsFromWAVE: number[]): number {
-    if (!Array.isArray(wavelengthsFromWAVE) || wavelengthsFromWAVE.length === 0) return 0.5876;
+    if (!Array.isArray(wavelengthsFromWAVE) || wavelengthsFromWAVE.length === 0) return NaN;
     return wavelengthsFromWAVE[0];
 }
 
@@ -569,9 +575,15 @@ function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[]): void
     if (!Array.isArray(rows) || rows.length < 2) return;
 
     try {
-        const primaryWavelength = (typeof w.getPrimaryWavelength === 'function')
-            ? (Number(w.getPrimaryWavelength()) || 0.5876)
-            : 0.5876;
+        const primaryWavelength = (() => {
+            if (typeof w.getPrimaryWavelength === 'function') {
+                const wl = Number(w.getPrimaryWavelength());
+                if (Number.isFinite(wl) && wl > 0) return wl;
+            }
+            console.warn('Primary wavelength is unavailable. Semidia auto-calculation is skipped.');
+            return NaN;
+        })();
+        if (!Number.isFinite(primaryWavelength) || primaryWavelength <= 0) return;
 
         __zmxApplySemidiaOverridesFromMarginalRays(rows, primaryWavelength);
 
@@ -2565,9 +2577,15 @@ function setupSeidelAfocalButton(): void {
                 return;
             }
 
-            const wavelength = sourceRows.length > 0 && sourceRows[0].wavelength
-                ? parseFloat(sourceRows[0].wavelength)
-                : 0.5876;
+            const wavelength = (() => {
+                if (typeof w.getPrimaryWavelength === 'function') {
+                    const wl = Number(w.getPrimaryWavelength());
+                    if (Number.isFinite(wl) && wl > 0) return wl;
+                }
+                alert('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
+                return NaN;
+            })();
+            if (!Number.isFinite(wavelength) || wavelength <= 0) return;
 
             let stopIndex = opticalSystemRows.findIndex((row: any) =>
                 row['object type'] === 'Stop' || row.object === 'Stop'
@@ -2720,9 +2738,15 @@ async function handlePSFCalculation(debugMode: boolean = false): Promise<void> {
         const selectedObjectKey = String((document.getElementById('psf-object-select') as HTMLSelectElement)?.value ?? '0');
         const objectIndex = Number(selectedObjectKey);
 
-        const primaryWavelength = (typeof w.getPrimaryWavelength === 'function')
-            ? (Number(w.getPrimaryWavelength()) || 0.5876)
-            : 0.5876;
+        const primaryWavelength = (() => {
+            if (typeof w.getPrimaryWavelength === 'function') {
+                const wl = Number(w.getPrimaryWavelength());
+                if (Number.isFinite(wl) && wl > 0) return wl;
+            }
+            alert('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
+            return NaN;
+        })();
+        if (!Number.isFinite(primaryWavelength) || primaryWavelength <= 0) return;
 
         const gridSize = 128;
         const zeroPadding = 'auto';
@@ -3889,7 +3913,21 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                             const exp = expandBlocksToOpticalSystemRows(blocks);
                             const rows = exp && Array.isArray(exp.rows) ? exp.rows : [];
                             if (rows.length === 0) return;
-                            const paraxial = calculateParaxialData(rows);
+                            const primaryWavelength = (() => {
+                                try {
+                                    if (typeof w.getPrimaryWavelength === 'function') {
+                                        const wl = Number(w.getPrimaryWavelength());
+                                        if (Number.isFinite(wl) && wl > 0) return wl;
+                                    }
+                                } catch (_) {}
+                                return NaN;
+                            })();
+                            if (!(Number.isFinite(primaryWavelength) && primaryWavelength > 0)) {
+                                console.warn('⚠️ [DesignIntent] Primary wavelength is unavailable. thicknessMode auto-apply is skipped.');
+                                return;
+                            }
+
+                            const paraxial = calculateParaxialData(rows, primaryWavelength);
                             const target = mode === 'IMD' ? paraxial?.imageDistance : paraxial?.backFocalLength;
                             const numeric = Number(target);
                             if (Number.isFinite(numeric)) {
@@ -4188,6 +4226,37 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         
                         // Simple glass picker for Design Intent
                         const currentMaterial = input.value.trim();
+
+                        const resolveAbbeKeyForMaterial = (materialKey: string): string => {
+                            const key = String(materialKey || '').trim().toLowerCase();
+                            const m = key.match(/^material(\d+)$/);
+                            if (m && m[1]) return `abbe${m[1]}`;
+                            return 'abbe';
+                        };
+
+                        const resolveVdKeyForMaterial = (materialKey: string): string => {
+                            const key = String(materialKey || '').trim().toLowerCase();
+                            const m = key.match(/^material(\d+)$/);
+                            if (m && m[1]) return `vd${m[1]}`;
+                            return 'vd';
+                        };
+
+                        const resolveTargetVdFromParameters = (): number | null => {
+                            const p: any = params && typeof params === 'object' ? params : null;
+                            if (!p) return null;
+
+                            const materialKey = String(label || '').trim();
+                            const abbeKey = resolveAbbeKeyForMaterial(materialKey);
+                            const vdKey = resolveVdKeyForMaterial(materialKey);
+
+                            const abbeVal = parseFloat(String(p[abbeKey]));
+                            if (Number.isFinite(abbeVal) && abbeVal > 0) return abbeVal;
+
+                            const vdVal = parseFloat(String(p[vdKey]));
+                            if (Number.isFinite(vdVal) && vdVal > 0) return vdVal;
+
+                            return null;
+                        };
                         
                         let similarGlasses: any[] = [];
                         let isNumericSearch = false;
@@ -4195,14 +4264,14 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         // Check if current material is a numeric value
                         const numericValue = parseFloat(currentMaterial);
                         if (currentMaterial && !isNaN(numericValue) && numericValue > 0 && numericValue < 4) {
-                            // Search by nd only for numeric input
+                            // Search by nd plus sibling abbe/vd (fallback to 50)
                             isNumericSearch = true;
                             try {
-                                // Use findSimilarGlassesByNdVd with a wide Vd range
-                                similarGlasses = findSimilarGlassesByNdVd(numericValue, 50, 20);
-                                console.log('✅ Found', similarGlasses.length, 'glasses with similar nd to', numericValue);
+                                const targetVd = resolveTargetVdFromParameters() ?? 50;
+                                similarGlasses = findSimilarGlassesByNdVd(numericValue, targetVd, 20);
+                                console.log('✅ Found', similarGlasses.length, 'glasses with similar nd/vd to', numericValue, targetVd);
                             } catch (err) {
-                                console.error('❌ Failed to find glasses by nd:', err);
+                                console.error('❌ Failed to find glasses by numeric nd/abbe:', err);
                             }
                         } else {
                             // Search by nd and vd for glass names

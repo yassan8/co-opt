@@ -1740,7 +1740,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
         
         const selectedObject = objectRows[selectedObjectIndex];
         
-        // 主波長を取得（0.55の固定値フォールバックは避ける）
+        // 主波長を取得（取得不能時は計算を中止）
         const wavelength = (() => {
             try {
                 if (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function') {
@@ -1748,13 +1748,7 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                     if (Number.isFinite(w) && w > 0) return w;
                 }
             } catch (_) {}
-            try {
-                if (typeof window !== 'undefined' && typeof window.getPrimaryWavelengthForAberration === 'function') {
-                    const w = Number(window.getPrimaryWavelengthForAberration());
-                    if (Number.isFinite(w) && w > 0) return w;
-                }
-            } catch (_) {}
-            return 0.5876;
+            throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
         })();
         
         const isInfiniteSystem = (() => {
