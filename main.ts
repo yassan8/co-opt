@@ -5,12 +5,65 @@
  * It initializes the application using modular components and sets up the main functionality.
  */
 
-// Console filter temporarily disabled for debugging
-// (() => {
-//     ... filter code ...
-// })();
+(() => {
+    const globalScope = globalThis as any;
+    if (globalScope.__mtfOnlyConsoleFilterInstalled) return;
+    globalScope.__mtfOnlyConsoleFilterInstalled = true;
 
-console.log('🚀 [main.ts] Starting to load main.ts module - Console filter disabled for debugging');
+    const methods: Array<'log' | 'info' | 'warn' | 'error' | 'debug'> = ['log', 'info', 'warn', 'error', 'debug'];
+    const originalConsole: Partial<Record<'log' | 'info' | 'warn' | 'error' | 'debug', (...args: any[]) => void>> = {};
+
+    const containsMTF = (value: unknown, depth = 0): boolean => {
+        try {
+            if (depth > 2 || value == null) return false;
+            if (typeof value === 'string') return /mtf/i.test(value);
+            if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint' || typeof value === 'symbol') return false;
+            if (value instanceof Error) return /mtf/i.test(`${value.message || ''} ${value.stack || ''}`);
+            if (Array.isArray(value)) return value.some(v => containsMTF(v, depth + 1));
+            if (typeof value === 'object') {
+                if (Object.prototype.toString.call(value) !== '[object Object]') {
+                    return false;
+                }
+                const obj = value as Record<string, unknown>;
+                for (const key in obj) {
+                    if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+                    if (/mtf/i.test(key)) return true;
+                    const val = obj[key];
+                    if (typeof val === 'string' && /mtf/i.test(val)) return true;
+                    if (depth < 2 && containsMTF(val, depth + 1)) return true;
+                }
+            }
+            return false;
+        } catch {
+            return false;
+        }
+    };
+
+    const shouldAllow = (args: unknown[]): boolean => {
+        try {
+            return args.some(arg => containsMTF(arg));
+        } catch {
+            return false;
+        }
+    };
+
+    for (const method of methods) {
+        const original = console[method].bind(console);
+        originalConsole[method] = original;
+        console[method] = (...args: any[]) => {
+            try {
+                if (shouldAllow(args)) {
+                    original(...args);
+                }
+            } catch {
+            }
+        };
+    }
+
+    globalScope.__mtfOriginalConsole = originalConsole;
+})();
+
+console.log('🚀 [main.ts] Starting to load main.ts module');
 
 // =============================================================================
 // IMPORTS
@@ -84,7 +137,6 @@ import { setRenderingContext } from './core/rendering-context.ts';
 // Editor modules (must be imported to initialize)
 import './ui/editors/system-requirements-editor.ts';
 import './ui/editors/merit-function-editor.ts';
-import './core/undo-history.ts';
 
 
 
@@ -92,7 +144,7 @@ import './core/undo-history.ts';
 import './optimization/suggest-design-intent.ts';
 
 // Analysis modules
-import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene } from './analysis/optical-analysis.ts';
+import { clearAllDrawing, showSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene } from './analysis/optical-analysis.ts';
 
 // Performance monitoring (削除されたファイルなのでコメントアウト)
 // import { performanceMonitor } from './performance-monitor.ts';
@@ -363,7 +415,6 @@ async function initializeApplication() {
         window['fitCameraToScene'] = fitCameraToScene;
         window['clearAllDrawing'] = clearAllDrawing;
         window['showSpotDiagram'] = showSpotDiagram;
-        window['showThroughFocusSpotDiagram'] = showThroughFocusSpotDiagram;
         window['showTransverseAberrationDiagram'] = showTransverseAberrationDiagram;
         window['showLongitudinalAberrationDiagram'] = showLongitudinalAberrationDiagram;
         window['showAstigmatismDiagram'] = showAstigmatismDiagram;
@@ -1020,40 +1071,6 @@ function calculateOpticalSystemZRange() {
                 maxY = Math.max(maxY, semidia);
             }
         });
-
-        // 無限遠 Angle object の光線開始高さも視野に含める
-        try {
-            const objectRows = getObjectRows?.() || [];
-            const firstSurface = opticalSystemRows[0] || {};
-            const objectRenderDistanceRaw = Number(firstSurface.objectRenderDistance);
-            const objectRenderDistance = Number.isFinite(objectRenderDistanceRaw) && objectRenderDistanceRaw !== 0
-                ? Math.abs(objectRenderDistanceRaw)
-                : 25;
-
-            objectRows.forEach((obj) => {
-                const position = String(obj?.position ?? obj?.Type ?? obj?.type ?? '').trim().toLowerCase();
-                if (position === 'angle') {
-                    const angleXDeg = Number(obj?.xHeightAngle ?? obj?.xAngle ?? obj?.x ?? 0);
-                    const angleYDeg = Number(obj?.yHeightAngle ?? obj?.yAngle ?? obj?.y ?? obj?.angle ?? 0);
-
-                    const ax = Number.isFinite(angleXDeg) ? Math.abs(angleXDeg) : 0;
-                    const ay = Number.isFinite(angleYDeg) ? Math.abs(angleYDeg) : 0;
-
-                    const extentX = Math.tan((ax * Math.PI) / 180) * objectRenderDistance;
-                    const extentY = Math.tan((ay * Math.PI) / 180) * objectRenderDistance;
-
-                    if (Number.isFinite(extentX)) maxY = Math.max(maxY, Math.abs(extentX));
-                    if (Number.isFinite(extentY)) maxY = Math.max(maxY, Math.abs(extentY));
-                    return;
-                }
-
-                const xHeight = Number(obj?.xHeight ?? obj?.x ?? obj?.xHeightAngle ?? 0);
-                const yHeight = Number(obj?.yHeight ?? obj?.y ?? obj?.yHeightAngle ?? 0);
-                if (Number.isFinite(xHeight)) maxY = Math.max(maxY, Math.abs(xHeight));
-                if (Number.isFinite(yHeight)) maxY = Math.max(maxY, Math.abs(yHeight));
-            });
-        } catch (error) {
-        }
         
         if (zPositions.length === 0) {
             return { minZ: 0, maxZ: 414, centerZ: 207, totalLength: 414, maxY: maxY || 50 };
@@ -2515,9 +2532,7 @@ if (analysisSelect) {
             'transverse-aberration': 'open-transverse-aberration-window-btn',
             'opd': 'open-opd-window-btn',
             'psf': 'open-psf-window-btn',
-            'mtf': 'open-mtf-window-btn',
-            'through-focus-spot': 'open-through-focus-spot-window-btn',
-            'through-focus-mtf': 'open-through-focus-mtf-window-btn'
+            'mtf': 'open-mtf-window-btn'
         };
         
         const btnId = buttonMap[value];
