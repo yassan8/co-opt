@@ -2203,7 +2203,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
                     };
                     
                     // 接続線を描画する関数（4本の線: +Y, -Y, +X, -X）
-                    const drawConnectionLine = (start, end, direction, sign, color) => {
+                    const drawConnectionLine = (direction, sign, color) => {
                         let startX = 0, startY = 0, endX = 0, endY = 0;
                         
                         if (direction === 'YZ') {
@@ -2288,8 +2288,40 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
                             return;
                         }
                         
-                        // 線分を描画
-                        const points = [startGlobal, endGlobal];
+                        const startSemidiaAbs = Math.abs(startSemidia);
+                        const endSemidiaAbs = Math.abs(endSemidia);
+
+                        const isStartLarger = startSemidiaAbs >= endSemidiaAbs;
+                        const largerGlobal = isStartLarger ? startGlobal : endGlobal;
+                        const smallerGlobal = isStartLarger ? endGlobal : startGlobal;
+                        const largerOrigin = isStartLarger ? startOrigin : endOrigin;
+
+                        // 大きい semidia 側のローカルZ軸（光軸方向）をグローバルに変換
+                        let parallelDir = new THREE.Vector3(0, 0, 1);
+                        if (largerOrigin.rotationMatrix) {
+                          const R = largerOrigin.rotationMatrix;
+                          parallelDir = new THREE.Vector3(R[0][2], R[1][2], R[2][2]);
+                        }
+
+                        if (!isFinite(parallelDir.x) || !isFinite(parallelDir.y) || !isFinite(parallelDir.z) || parallelDir.lengthSq() < 1e-12) {
+                          console.warn(`❌ Invalid parallel direction for connection line ${direction}:`, parallelDir);
+                          return;
+                        }
+                        parallelDir.normalize();
+
+                        // 平行→垂直のL字接続（小さい semidia 側へ向ける）
+                        const largerToSmaller = new THREE.Vector3().subVectors(smallerGlobal, largerGlobal);
+                        const parallelLength = largerToSmaller.dot(parallelDir);
+                        const elbowGlobal = new THREE.Vector3().copy(largerGlobal).addScaledVector(parallelDir, parallelLength);
+
+                        if (!isFinite(elbowGlobal.x) || !isFinite(elbowGlobal.y) || !isFinite(elbowGlobal.z)) {
+                          console.warn(`❌ Skipping connection line due to invalid elbow coordinates:`,
+                                 `elbow=(${elbowGlobal.x}, ${elbowGlobal.y}, ${elbowGlobal.z})`);
+                          return;
+                        }
+
+                        // 折れ線を描画（平行線 + 垂直線）
+                        const points = [largerGlobal, elbowGlobal, smallerGlobal];
                         const geometry = new THREE.BufferGeometry().setFromPoints(points);
                         const material = new THREE.LineBasicMaterial({ 
                             color: color,
@@ -2310,10 +2342,10 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
                     };
                     
                     // Y-Z方向（黒色）とX-Z方向（赤色）の接続線を4本描画
-                    drawConnectionLine(startOrigin.origin, endOrigin.origin, 'YZ', 1, 0x000000);   // +Y 黒
-                    drawConnectionLine(startOrigin.origin, endOrigin.origin, 'YZ', -1, 0x000000);  // -Y 黒
-                    drawConnectionLine(startOrigin.origin, endOrigin.origin, 'XZ', 1, 0xff0000);   // +X 赤
-                    drawConnectionLine(startOrigin.origin, endOrigin.origin, 'XZ', -1, 0xff0000);  // -X 赤
+                    drawConnectionLine('YZ', 1, 0x000000);   // +Y 黒
+                    drawConnectionLine('YZ', -1, 0x000000);  // -Y 黒
+                    drawConnectionLine('XZ', 1, 0xff0000);   // +X 赤
+                    drawConnectionLine('XZ', -1, 0xff0000);  // -X 赤
                     
                     connectionLineCount += 4;
                 }
@@ -2562,6 +2594,238 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
     debugLog(`🔸 Cross-section O(s)/R(s) drawing completed: ${yzProfileCount} YZ profiles, ${xzProfileCount} XZ profiles, ${connectionLineCount} connection lines`);
     // console.log(`✅ プロファイル描画完了: YZ=${yzProfileCount}, XZ=${xzProfileCount} 描画`);
     // console.log(`✅ Connection lines drawn: ${connectionLineCount} total`);
+}
+
+export function drawConnectionCornerRings3D(scene, rows, surfaceOrigins) {
+  if (!scene || !Array.isArray(rows) || !Array.isArray(surfaceOrigins)) {
+    return;
+  }
+
+  const calculateSag = (surf, x, y) => {
+    if (!surf) return 0;
+
+    if (surf.surfType === 'Toric') {
+      const radiusX = (surf.radiusX === "INF" || surf.radiusX === Infinity) ? Infinity : parseFloat(surf.radiusX);
+      const radiusY = (surf.radiusY === "INF" || surf.radiusY === Infinity || surf.radius === "INF" || surf.radius === Infinity)
+        ? Infinity
+        : parseFloat(surf.radiusY || surf.radius);
+
+      if ((isFinite(radiusX) || radiusX === Infinity) && (isFinite(radiusY) || radiusY === Infinity)) {
+        const toricParams = {
+          radiusX: radiusX,
+          radiusY: radiusY,
+          conic: Number(surf.conic) || 0,
+          axis: Number(surf.axis) || 0
+        };
+        const z = toricSurfaceZ(x, y, toricParams);
+        return isFinite(z) ? z : 0;
+      }
+      return 0;
+    }
+
+    if (!surf.radius || surf.radius === "INF") return 0;
+    const radius = parseFloat(surf.radius);
+    if (!isFinite(radius) || Math.abs(radius) < 0.001) return 0;
+
+    const asphericParams = {
+      radius: radius,
+      conic: Number(surf.conic) || 0,
+      coef1: Number(surf.coef1) || 0,
+      coef2: Number(surf.coef2) || 0,
+      coef3: Number(surf.coef3) || 0,
+      coef4: Number(surf.coef4) || 0,
+      coef5: Number(surf.coef5) || 0,
+      coef6: Number(surf.coef6) || 0,
+      coef7: Number(surf.coef7) || 0,
+      coef8: Number(surf.coef8) || 0,
+      coef9: Number(surf.coef9) || 0,
+      coef10: Number(surf.coef10) || 0
+    };
+
+    const r = Math.sqrt(x * x + y * y);
+    return asphericSurfaceZ(r, asphericParams, "even") || 0;
+  };
+
+  for (let i = 0; i < rows.length - 1; i++) {
+    const currentSurf = rows[i];
+    const nextSurf = rows[i + 1];
+
+    const currentObjectType = currentSurf?.["object type"] || "";
+    if (currentObjectType === "Object") continue;
+
+    const currentSurfType = String(currentSurf?.surfType || currentSurf?.type || '').trim().toLowerCase();
+    const currentObjType = String(currentSurf?.['object type'] || '').trim().toLowerCase();
+    const nextSurfType = String(nextSurf?.surfType || nextSurf?.type || '').trim().toLowerCase();
+    const nextObjType = String(nextSurf?.['object type'] || '').trim().toLowerCase();
+
+    const isCurrentCB = (
+      currentSurfType === 'coord break' || currentSurfType === 'coordinate break' ||
+      currentSurfType === 'cb' || currentSurfType === 'coordtrans' ||
+      currentSurfType === 'coordinatebreak' || currentSurfType === 'coord trans' ||
+      currentSurfType === 'coordinate transform' || currentSurfType === 'ct' ||
+      currentObjType === 'coord break' || currentObjType === 'coordinate break' ||
+      currentObjType === 'cb' || currentObjType === 'coordtrans' ||
+      currentObjType === 'coordinatebreak'
+    );
+    if (isCurrentCB) continue;
+
+    const isNextCB = (
+      nextSurfType === 'coord break' || nextSurfType === 'coordinate break' ||
+      nextSurfType === 'cb' || nextSurfType === 'coordtrans' ||
+      nextSurfType === 'coordinatebreak' || nextSurfType === 'coord trans' ||
+      nextSurfType === 'coordinate transform' || nextSurfType === 'ct' ||
+      nextObjType === 'coord break' || nextObjType === 'coordinate break' ||
+      nextObjType === 'cb' || nextObjType === 'coordtrans' ||
+      nextObjType === 'coordinatebreak'
+    );
+    if (isNextCB) continue;
+
+    const isLens = currentSurf.material &&
+      currentSurf.material !== '' &&
+      currentSurf.material !== 'AIR' &&
+      currentSurf.material !== '0' &&
+      currentSurf.material !== 'MIRROR';
+    if (!isLens) continue;
+
+    const startOrigin = surfaceOrigins[i];
+    const endOrigin = surfaceOrigins[i + 1];
+    if (!startOrigin?.origin || !endOrigin?.origin) continue;
+
+    const startSemidia = __coopt_getSemidiaMm(currentSurf) ?? 0;
+    const endSemidia = __coopt_getSemidiaMm(nextSurf) ?? 0;
+    if (!(startSemidia > 0 && endSemidia > 0)) continue;
+
+    const drawCornerRing = (direction, sign) => {
+      let startX = 0, startY = 0, endX = 0, endY = 0;
+
+      if (direction === 'YZ') {
+        startY = sign * startSemidia;
+        endY = sign * endSemidia;
+      } else {
+        startX = sign * startSemidia;
+        endX = sign * endSemidia;
+      }
+
+      const startSag = calculateSag(currentSurf, startX, startY);
+      const endSag = calculateSag(nextSurf, endX, endY);
+
+      let startLocal = new THREE.Vector3(startX, startY, startSag);
+      let endLocal = new THREE.Vector3(endX, endY, endSag);
+
+      if (startOrigin.rotationMatrix) {
+        const R = startOrigin.rotationMatrix;
+        const newX = R[0][0] * startLocal.x + R[0][1] * startLocal.y + R[0][2] * startLocal.z;
+        const newY = R[1][0] * startLocal.x + R[1][1] * startLocal.y + R[1][2] * startLocal.z;
+        const newZ = R[2][0] * startLocal.x + R[2][1] * startLocal.y + R[2][2] * startLocal.z;
+        if (isFinite(newX) && isFinite(newY) && isFinite(newZ)) {
+          startLocal = new THREE.Vector3(newX, newY, newZ);
+        }
+      }
+
+      if (endOrigin.rotationMatrix) {
+        const R = endOrigin.rotationMatrix;
+        const newX = R[0][0] * endLocal.x + R[0][1] * endLocal.y + R[0][2] * endLocal.z;
+        const newY = R[1][0] * endLocal.x + R[1][1] * endLocal.y + R[1][2] * endLocal.z;
+        const newZ = R[2][0] * endLocal.x + R[2][1] * endLocal.y + R[2][2] * endLocal.z;
+        if (isFinite(newX) && isFinite(newY) && isFinite(newZ)) {
+          endLocal = new THREE.Vector3(newX, newY, newZ);
+        }
+      }
+
+      const startGlobal = new THREE.Vector3(
+        startOrigin.origin.x + startLocal.x,
+        startOrigin.origin.y + startLocal.y,
+        startOrigin.origin.z + startLocal.z
+      );
+      const endGlobal = new THREE.Vector3(
+        endOrigin.origin.x + endLocal.x,
+        endOrigin.origin.y + endLocal.y,
+        endOrigin.origin.z + endLocal.z
+      );
+
+      if (!isFinite(startGlobal.x) || !isFinite(startGlobal.y) || !isFinite(startGlobal.z) ||
+        !isFinite(endGlobal.x) || !isFinite(endGlobal.y) || !isFinite(endGlobal.z)) {
+        return;
+      }
+
+      const isStartLarger = Math.abs(startSemidia) >= Math.abs(endSemidia);
+      const largerGlobal = isStartLarger ? startGlobal : endGlobal;
+      const smallerGlobal = isStartLarger ? endGlobal : startGlobal;
+      const largerOrigin = isStartLarger ? startOrigin : endOrigin;
+
+      let parallelDir = new THREE.Vector3(0, 0, 1);
+      if (largerOrigin.rotationMatrix) {
+        const R = largerOrigin.rotationMatrix;
+        parallelDir = new THREE.Vector3(R[0][2], R[1][2], R[2][2]);
+      }
+      if (!isFinite(parallelDir.x) || !isFinite(parallelDir.y) || !isFinite(parallelDir.z) || parallelDir.lengthSq() < 1e-12) {
+        return;
+      }
+      parallelDir.normalize();
+
+      const largerToSmaller = new THREE.Vector3().subVectors(smallerGlobal, largerGlobal);
+      const parallelLength = largerToSmaller.dot(parallelDir);
+      const elbowGlobal = new THREE.Vector3().copy(largerGlobal).addScaledVector(parallelDir, parallelLength);
+      if (!isFinite(elbowGlobal.x) || !isFinite(elbowGlobal.y) || !isFinite(elbowGlobal.z)) return;
+
+      const axisPoint = new THREE.Vector3(
+        largerOrigin.origin.x,
+        largerOrigin.origin.y,
+        largerOrigin.origin.z
+      );
+      const elbowFromAxisPoint = new THREE.Vector3().subVectors(elbowGlobal, axisPoint);
+      const axisProjectionLength = elbowFromAxisPoint.dot(parallelDir);
+      const ringCenter = new THREE.Vector3().copy(axisPoint).addScaledVector(parallelDir, axisProjectionLength);
+      const ringRadius = ringCenter.distanceTo(elbowGlobal);
+
+      if (!isFinite(ringCenter.x) || !isFinite(ringCenter.y) || !isFinite(ringCenter.z) ||
+        !isFinite(ringRadius) || ringRadius <= 1e-6) {
+        return;
+      }
+
+      let ringU = new THREE.Vector3().crossVectors(parallelDir, new THREE.Vector3(1, 0, 0));
+      if (ringU.lengthSq() < 1e-12) {
+        ringU = new THREE.Vector3().crossVectors(parallelDir, new THREE.Vector3(0, 1, 0));
+      }
+      if (ringU.lengthSq() < 1e-12) return;
+      ringU.normalize();
+
+      const ringV = new THREE.Vector3().crossVectors(parallelDir, ringU).normalize();
+      const ringSegments = 48;
+      const ringPoints: THREE.Vector3[] = [];
+      for (let seg = 0; seg < ringSegments; seg++) {
+        const theta = (seg / ringSegments) * Math.PI * 2;
+        ringPoints.push(
+          new THREE.Vector3().copy(ringCenter)
+            .addScaledVector(ringU, ringRadius * Math.cos(theta))
+            .addScaledVector(ringV, ringRadius * Math.sin(theta))
+        );
+      }
+
+      const ringGeometry = new THREE.BufferGeometry().setFromPoints(ringPoints);
+      const ringMaterial = new THREE.LineBasicMaterial({
+        color: 0x000000,
+        linewidth: 2,
+        transparent: true,
+        opacity: 1.0,
+        depthTest: false
+      });
+      const ring = new THREE.LineLoop(ringGeometry, ringMaterial);
+      ring.renderOrder = 1001;
+      ring.userData = {
+        type: 'connectionCornerRing',
+        direction,
+        surfaceIndex: i + 1,
+        isOpticalElement: true
+      };
+      scene.add(ring);
+    };
+
+    drawCornerRing('YZ', 1);
+    drawCornerRing('YZ', -1);
+    drawCornerRing('XZ', 1);
+    drawCornerRing('XZ', -1);
+  }
 }
 
 // Re-export toricSurfaceZ from surface-math.js for use by system-renderer.js
