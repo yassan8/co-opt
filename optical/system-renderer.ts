@@ -152,6 +152,21 @@ function __coopt_getCrosshairHalfExtents(surface, fallbackSemidia) {
     return { halfX: fallback, halfY: fallback };
 }
 
+function __coopt_isGapSurface(surface) {
+    if (!surface || typeof surface !== 'object') return false;
+
+    const blockType = String(surface._blockType ?? surface.blockType ?? '').trim().toLowerCase();
+    if (blockType === 'gap' || blockType === 'airgap') return true;
+
+    const objType = String(surface['object type'] ?? surface.object ?? surface.objectType ?? surface.type ?? '').trim().toLowerCase();
+    if (objType === 'gap' || objType === 'airgap' || objType === 'air gap') return true;
+
+    const role = String(surface._surfaceRole ?? '').trim().toLowerCase();
+    if (role === 'gap' || role === 'airgap') return true;
+
+    return false;
+}
+
 function __coopt_drawApertureOutline(scene, surface, semidia, origin, rotationMatrix, color) {
     const shape = __coopt_getRenderApertureShape(surface);
     const { width, height } = __coopt_getRenderApertureDims(surface);
@@ -307,6 +322,11 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
     if (!crossSectionOnly) {
         for (let i = 0; i < opticalSystemData.length; i++) {
             const surface = opticalSystemData[i];
+
+            // Gap/AirGap rows are spacing-only and should never be rendered as physical surfaces.
+            if (__coopt_isGapSurface(surface)) {
+                continue;
+            }
             
             
             // Object面のスキップ判定

@@ -1994,7 +1994,7 @@ const startApplicationOnce = (() => {
                     drawOpticalSystemSurfaces({
                         opticalSystemData: opticalSystemRows,
                         scene: scene || (document as any).scene,
-                        showSemidiaRing: true,  // 要望: セミダイアリングを表示
+                        showSemidiaRing: true,
                         showSurfaceOrigins: false,  // 表面の原点は表示しない
                         crossSectionOnly: false  // 断面のみではなく、完全な3D表示
                     });

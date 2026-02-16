@@ -27,6 +27,7 @@ import {
     buildShareUrlFromCompressedString
 } from '../utils/url-share.ts';
 import { setupOpticalSystemChangeListeners, setupAnalysisWindows } from './event-handlers.ts';
+import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.ts';
 import { listDesignVariablesFromBlocks } from '../optimization/design-variables.ts';
 import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 import {
@@ -1017,6 +1018,247 @@ function setupLoadAllButton(): void {
 }
 
 // Setup Zemax Import Button
+function __coopt_isInfLike(value: any): boolean {
+    if (value === Infinity) return true;
+    const s = String(value ?? '').trim().toUpperCase();
+    return s === 'INF' || s === 'INFINITY' || s === '∞';
+}
+
+function __coopt_buildFallbackBlocksFromRows(rows: any[]): any[] {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    const blocks: any[] = [];
+
+    const inferImageSemidia = (): number | null => {
+        for (let idx = safeRows.length - 1; idx >= 0; idx--) {
+            const row = safeRows[idx] || {};
+            const raw = row?.semidia ?? row?.semiDiameter ?? row?.semiDia ?? row?.['semi diameter'] ?? row?.['Semi Diameter'];
+            const n = Number(raw);
+            if (Number.isFinite(n) && n > 0) return n;
+        }
+        return null;
+    };
+
+    const first = safeRows[0] || {};
+    const objectDistanceMode = __coopt_isInfLike(first?.thickness) ? 'INF' : 'Finite';
+    const objectDistanceVal = Number(first?.thickness);
+    blocks.push({
+        blockId: 'ObjectSurface-1',
+        blockType: 'ObjectSurface',
+        role: null,
+        constraints: {},
+        parameters: objectDistanceMode === 'INF'
+            ? { objectDistanceMode: 'INF' }
+            : { objectDistanceMode: 'Finite', objectDistance: Number.isFinite(objectDistanceVal) ? objectDistanceVal : 10 },
+        variables: {},
+        metadata: { source: 'zemax-fallback' }
+    });
+
+    let stopCount = 0;
+    let singleCount = 0;
+    let gapCount = 0;
+
+    const end = Math.max(1, safeRows.length - 1);
+    for (let i = 1; i < end; i++) {
+        const row = safeRows[i] || {};
+        const objType = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+        const isStop = objType === 'stop' || objType === 'sto';
+
+        if (isStop) {
+            stopCount++;
+            const sdNum = Number(row?.semidia);
+            blocks.push({
+                blockId: `Stop-${stopCount}`,
+                blockType: 'Stop',
+                role: null,
+                constraints: {},
+                parameters: Number.isFinite(sdNum) && sdNum > 0 ? { semiDiameter: sdNum } : {},
+                variables: {},
+                metadata: { source: 'zemax-fallback' }
+            });
+
+            const tRaw = row?.thickness;
+            const tNum = Number(tRaw);
+            const hasGap = __coopt_isInfLike(tRaw) || (Number.isFinite(tNum) && Math.abs(tNum) > 1e-12);
+            if (hasGap) {
+                gapCount++;
+                blocks.push({
+                    blockId: `Gap-${gapCount}`,
+                    blockType: 'Gap',
+                    role: null,
+                    constraints: {},
+                    parameters: { thickness: __coopt_isInfLike(tRaw) ? 'INF' : tNum, material: 'AIR' },
+                    variables: {},
+                    metadata: { source: 'zemax-fallback', from: 'stop-thickness' }
+                });
+            }
+            continue;
+        }
+
+        singleCount++;
+        const surfTypeRaw = String(row?.surfType ?? '').trim();
+        const surfType = surfTypeRaw || 'Spherical';
+        const radius = __coopt_isInfLike(row?.radius) ? 'INF' : (String(row?.radius ?? '').trim() === '' ? 'INF' : row.radius);
+        const tRaw = row?.thickness;
+        const tNum = Number(tRaw);
+        const thickness = __coopt_isInfLike(tRaw) ? 'INF' : (Number.isFinite(tNum) ? tNum : 0);
+        const material = String(row?.material ?? '').trim();
+        const conicNum = Number(row?.conic);
+
+        const params: any = {
+            radius,
+            thickness,
+            material,
+            surfType,
+            conic: Number.isFinite(conicNum) ? conicNum : 0,
+            semidia: row?.semidia ?? ''
+        };
+
+        if (surfType === 'Toric') {
+            params.radiusX = __coopt_isInfLike(row?.radiusX) ? 'INF' : (String(row?.radiusX ?? '').trim() === '' ? 'INF' : row.radiusX);
+            params.radiusY = __coopt_isInfLike(row?.radiusY) ? 'INF' : (String(row?.radiusY ?? '').trim() === '' ? 'INF' : row.radiusY);
+            const axisNum = Number(row?.axis);
+            params.axis = Number.isFinite(axisNum) ? axisNum : 0;
+        }
+
+        for (let k = 1; k <= 10; k++) {
+            const n = Number(row?.[`coef${k}`]);
+            params[`coef${k}`] = Number.isFinite(n) ? n : 0;
+        }
+
+        blocks.push({
+            blockId: `SingleSurface-${singleCount}`,
+            blockType: 'SingleSurface',
+            role: null,
+            constraints: {},
+            parameters: params,
+            variables: {},
+            metadata: { source: 'zemax-fallback', rowIndex: i }
+        });
+    }
+
+    const imageSemidia = inferImageSemidia();
+    blocks.push({
+        blockId: 'ImageSurface-1',
+        blockType: 'ImageSurface',
+        role: null,
+        constraints: {},
+        parameters: Number.isFinite(imageSemidia as any) && (imageSemidia as number) > 0
+            ? { semidia: imageSemidia, semidiaMode: 'Auto', optimizeSemiDia: 'A' }
+            : { semidiaMode: 'Auto', optimizeSemiDia: 'A' },
+        variables: {},
+        metadata: { source: 'zemax-fallback' }
+    });
+
+    return blocks;
+}
+
+function __coopt_normalizeObjectDistanceInBlocks(blocks: any[]): any[] {
+    if (!Array.isArray(blocks)) return [];
+
+    let hasObjectSurface = false;
+    for (const block of blocks) {
+        if (!block || block.blockType !== 'ObjectSurface') continue;
+        hasObjectSurface = true;
+        const params = (block.parameters && typeof block.parameters === 'object')
+            ? block.parameters
+            : (block.parameters = {});
+
+        const modeRaw = String(params.objectDistanceMode ?? '').trim();
+        const infMode = __coopt_isInfLike(modeRaw);
+        if (infMode) {
+            params.objectDistanceMode = 'INF';
+            const dInf = Number(params.objectDistance);
+            params.objectDistance = Number.isFinite(dInf) ? dInf : 10;
+            continue;
+        }
+
+        params.objectDistanceMode = 'Finite';
+        const d = Number(params.objectDistance);
+        params.objectDistance = Number.isFinite(d) ? d : 10;
+    }
+
+    if (!hasObjectSurface) {
+        blocks.unshift({
+            blockId: 'ObjectSurface-1',
+            blockType: 'ObjectSurface',
+            role: null,
+            constraints: {},
+            parameters: { objectDistanceMode: 'Finite', objectDistance: 10 },
+            variables: {},
+            metadata: { source: 'zemax-fallback', inserted: true }
+        });
+    }
+
+    return blocks;
+}
+
+function __buildZemaxLoadPayload(parsed: any): any {
+    if (parsed && Array.isArray(parsed.configurations)) {
+        return parsed;
+    }
+
+    const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+    const sourceRows = Array.isArray(parsed?.sourceRows) ? parsed.sourceRows : [];
+    const objectRows = Array.isArray(parsed?.objectRows) ? parsed.objectRows : [];
+
+    let blocks: any[] = [];
+    try {
+        const derived = deriveBlocksFromLegacyOpticalSystemRows(rows);
+        const fatals = Array.isArray(derived?.issues)
+            ? derived.issues.filter((it: any) => it?.severity === 'fatal')
+            : [];
+        if (Array.isArray(derived?.blocks) && derived.blocks.length > 0 && fatals.length === 0) {
+            blocks = __coopt_normalizeObjectDistanceInBlocks(derived.blocks);
+        } else {
+            blocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(rows));
+            if (fatals.length > 0) {
+                console.warn('⚠️ [Zemax Import] deriveBlocks had fatals; fallback blocks generated:', fatals);
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️ [Zemax Import] deriveBlocks failed; fallback blocks generated:', e);
+        blocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(rows));
+    }
+
+    const now = new Date().toISOString();
+    return {
+        configurations: [{
+            id: 1,
+            name: 'Config 1',
+            schemaVersion: BLOCK_SCHEMA_VERSION,
+            blocks,
+            source: sourceRows,
+            object: objectRows,
+            opticalSystem: rows,
+            meritFunction: [],
+            systemData: { referenceFocalLength: '' },
+            metadata: {
+                created: now,
+                modified: now,
+                locked: false,
+                importedFrom: 'zemax'
+            }
+        }],
+        activeConfigId: 1,
+        meritFunction: [],
+        systemRequirements: [],
+        optimizationRules: {}
+    };
+}
+
+function __normalizeZmxFilenameDefault(name: string | null | undefined): string {
+    const raw = String(name ?? '').trim().replace(/\s*\(surfaces only\)\s*$/i, '');
+    if (!raw) return 'co-opt-export.zmx';
+
+    if (/\.json$/i.test(raw)) {
+        return raw.replace(/\.json$/i, '.zmx');
+    }
+    if (/\.zmx$/i.test(raw)) {
+        return raw;
+    }
+    return `${raw}.zmx`;
+}
+
 function setupImportZemaxButton(): void {
     const btn = document.getElementById('import-zemax-btn');
     if (!btn) return;
@@ -1028,27 +1270,49 @@ function setupImportZemaxButton(): void {
         input.addEventListener('change', async (e: Event) => {
             const target = e.target as HTMLInputElement;
             const file = target?.files?.[0];
+
+            try {
+                if (input.parentNode) input.parentNode.removeChild(input);
+            } catch (_) {}
+
             if (!file) return;
 
             try {
+                console.log('📥 [Zemax Import] Selected file:', file.name, `(${file.size} bytes)`);
                 const arrayBuffer = await file.arrayBuffer();
-                const decoder = new TextDecoder('utf-8');
-                const text = decoder.decode(arrayBuffer);
+                const parsed: any = parseZMXArrayBufferToOpticalSystemRows(arrayBuffer);
 
-                if (typeof w.parseZemaxFile === 'function') {
-                    const parsed = w.parseZemaxFile(text);
-                    if (parsed && typeof parsed === 'object') {
-                        await __loadAllDataObjectIntoApp(parsed, { filename: file.name });
-                        try {
-                            autoCalculateMissingSemidia([], []);
-                        } catch (_) {}
-                    }
+                if (!parsed || typeof parsed !== 'object') {
+                    throw new Error('Invalid Zemax parse result.');
                 }
+
+                console.log('📥 [Zemax Import] Parsed:', {
+                    rows: Array.isArray(parsed?.rows) ? parsed.rows.length : 0,
+                    sourceRows: Array.isArray(parsed?.sourceRows) ? parsed.sourceRows.length : 0,
+                    objectRows: Array.isArray(parsed?.objectRows) ? parsed.objectRows.length : 0,
+                    issues: Array.isArray(parsed?.issues) ? parsed.issues.length : 0
+                });
+
+                const payload = __buildZemaxLoadPayload(parsed);
+                const loaded = await __loadAllDataObjectIntoApp(payload, { filename: file.name });
+                if (!loaded) {
+                    throw new Error('Zemax import parsed, but app load step returned false.');
+                }
+
+                try {
+                    autoCalculateMissingSemidia(
+                        Array.isArray(parsed?.sourceRows) ? parsed.sourceRows : [],
+                        Array.isArray(parsed?.objectRows) ? parsed.objectRows : []
+                    );
+                } catch (_) {}
+
+                console.log('✅ [Zemax Import] Completed:', file.name);
             } catch (err) {
                 console.error('❌ Zemax import failed:', err);
                 alert(`Import failed: ${(err as Error)?.message || String(err)}`);
             }
         });
+        document.body.appendChild(input);
         input.click();
     };
     
@@ -1062,23 +1326,47 @@ function setupExportZemaxButton(): void {
     const btn = document.getElementById('export-zemax-btn');
     if (!btn) return;
 
-    const exportHandler = () => {
+    const exportHandler = async () => {
         try {
             // Get optical system rows from table
             const opticalSystemRows = w.getOpticalSystemRows ? w.getOpticalSystemRows(w.tableOpticalSystem) : [];
+            const sourceRows = w.tableSource && typeof w.tableSource.getData === 'function' ? w.tableSource.getData() : [];
+            const objectRows = w.tableObject && typeof w.tableObject.getData === 'function' ? w.tableObject.getData() : [];
             
             if (!opticalSystemRows || opticalSystemRows.length === 0) {
                 alert('No optical system data to export');
                 return;
             }
+
+            let loadedFileName: string | null = null;
+            try {
+                const loadedFileStorage = await import('./loaded-file-storage.ts');
+                loadedFileName = loadedFileStorage.getLoadedFileName();
+            } catch (_) {
+                try {
+                    loadedFileName = w.__cooptLoadedFileStorage?.getLoadedFileName?.() ?? null;
+                } catch (_) {}
+            }
+            const defaultFilename = __normalizeZmxFilenameDefault(loadedFileName);
+
+            let filename = prompt(
+                'Zemaxエクスポートのファイル名を入力してください（.zmx は自動補完）',
+                defaultFilename
+            );
+            if (!filename) return;
+            filename = filename.trim();
+            if (!filename) return;
+            if (!/\.zmx$/i.test(filename)) filename += '.zmx';
             
             // Generate ZMX text
             if (typeof w.generateZMXText === 'function') {
-                const zmxText = w.generateZMXText(opticalSystemRows);
+                const zmxText = w.generateZMXText(opticalSystemRows, {
+                    sourceRows,
+                    objectRows
+                });
                 
                 // Download the file
                 if (typeof w.downloadZMX === 'function') {
-                    const filename = 'co-opt-export.zmx';
                     w.downloadZMX(zmxText, filename);
                     console.log('✅ Zemax file exported successfully');
                 } else {
@@ -2251,7 +2539,7 @@ function setupNewFileButton(): void {
                         blockType: 'ImageSurface',
                         role: null,
                         constraints: {},
-                        parameters: {},
+                        parameters: { semidiaMode: 'Manual' },
                         variables: {},
                         metadata: { source: 'default' }
                     }
@@ -2893,7 +3181,7 @@ function createDefaultConfiguration(id: number, name: string): any {
             blockType: 'ImageSurface',
             role: null,
             constraints: {},
-            parameters: undefined,
+            parameters: { semidiaMode: 'Manual' },
             variables: {},
             metadata: { source: 'default' }
         }
@@ -3749,6 +4037,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             if ((blockType === 'Gap' || blockType === 'AirGap') && !allParamKeys.includes('thicknessMode')) {
                 allParamKeys.push('thicknessMode');
             }
+            if (blockType === 'ImageSurface' && !allParamKeys.includes('semidiaMode')) {
+                allParamKeys.push('semidiaMode');
+            }
             const paramKeys = sortParameterKeys(allParamKeys);
             const varKeys = Object.keys(vars || {}).sort();
 
@@ -3817,9 +4108,10 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                                    label === 'surf1SurfType' || label === 'surf2SurfType' || label === 'surf3SurfType';
                 const isMaterial = label.toLowerCase().includes('material') || paramType === 'material';
                 const isGapThicknessMode = (blockType === 'Gap' || blockType === 'AirGap') && label === 'thicknessMode';
+                const isImageSemidiaMode = blockType === 'ImageSurface' && label === 'semidiaMode';
                 // Exclude nd, vd, abbe from slider display - they should be text input only
                 const isGlassProperty = label === 'nd' || label === 'vd' || label === 'abbe';
-                const isNumeric = !isMaterial && !isSurfType && !isGlassProperty && !isGapThicknessMode && !isNaN(parseFloat(String(value)));
+                const isNumeric = !isMaterial && !isSurfType && !isGlassProperty && !isGapThicknessMode && !isImageSemidiaMode && !isNaN(parseFloat(String(value)));
                 
                 // Determine if this parameter should show coef parameters based on surfType
                 const shouldHideCoef = (key: string, surfTypeValue: string) => {
@@ -3944,6 +4236,62 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         if (newValue !== value) {
                             cooptApplyBlockValue(blockId, path, value, newValue);
                             applyThicknessFromMode(newValue);
+                        }
+                    });
+
+                    inputElement = select;
+                } else if (isImageSemidiaMode) {
+                    const select = document.createElement('select');
+                    select.style.fontSize = '12px';
+                    select.style.padding = '4px 6px';
+                    select.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
+                    select.style.background = isDarkMode ? '#111827' : '#fff';
+                    select.style.color = isDarkMode ? '#f9fafb' : '#111827';
+                    select.style.borderRadius = '4px';
+                    select.style.flex = '1';
+                    select.style.cursor = 'pointer';
+                    select.style.minWidth = '200px';
+                    select.style.height = '28px';
+                    select.style.boxSizing = 'border-box';
+
+                    const normalized = String(value ?? '').trim().toLowerCase();
+                    const currentValue = normalized === 'auto' ? 'Auto' : 'Manual';
+                    const options = ['Manual', 'Auto'];
+                    options.forEach((opt) => {
+                        const option = document.createElement('option');
+                        option.value = opt;
+                        option.textContent = opt;
+                        if (opt === currentValue) option.selected = true;
+                        select.appendChild(option);
+                    });
+
+                    select.addEventListener('change', () => {
+                        const newMode = select.value;
+                        if (newMode !== value) {
+                            cooptApplyBlockValue(blockId, path, value, newMode);
+                            const currentOpt = params ? (params as any).optimizeSemiDia : undefined;
+                            const nextOpt = newMode === 'Auto' ? 'A' : '';
+                            if (currentOpt !== nextOpt) {
+                                cooptApplyBlockValue(blockId, 'parameters.optimizeSemiDia', currentOpt, nextOpt);
+                            }
+
+                            if (newMode === 'Auto') {
+                                setTimeout(() => {
+                                    try {
+                                        if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
+                                            Promise.resolve(w.calculateImageSemiDiaFromChiefRays())
+                                                .then(() => {
+                                                    try { refreshBlockInspector(); } catch (_) {}
+                                                })
+                                                .catch((err: any) => {
+                                                    console.warn('⚠️ [DesignIntent] semidiaMode Auto recalculation failed:', err);
+                                                });
+                                        }
+                                    } catch (err) {
+                                        console.warn('⚠️ [DesignIntent] semidiaMode Auto trigger failed:', err);
+                                    }
+                                }, 0);
+                            }
                         }
                     });
 
@@ -4453,6 +4801,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             if (paramKeys.length > 0) {
                 panel.appendChild(createSectionTitle('Parameters'));
                 for (const key of paramKeys) {
+                    if (blockType === 'ImageSurface' && key === 'optimizeSemiDia') {
+                        continue;
+                    }
                     // Skip coef* parameters when surfType is "Spherical"
                     if (/^coef\d+$/.test(key) && params.surfType === 'Spherical') {
                         continue;
@@ -4474,6 +4825,10 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     }
                     
                     let value = (params as any)[key];
+                    if (blockType === 'ImageSurface' && key === 'semidiaMode' && (value === undefined || value === null || String(value).trim() === '')) {
+                        const opt = String((params as any)?.optimizeSemiDia ?? '').trim().toUpperCase();
+                        value = (opt === 'A' || opt === 'AUTO') ? 'Auto' : 'Manual';
+                    }
                     // For Gap/AirGap material, default to 'AIR' if undefined or empty
                     if ((blockType === 'Gap' || blockType === 'AirGap') && key === 'material' && (value === undefined || value === null || value === '')) {
                         value = 'AIR';
@@ -5052,6 +5407,7 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
     if (type === 'ImageSurface') {
         base.parameters = {
             semidia: '',
+            semidiaMode: 'Manual',
             optimizeSemiDia: ''
         };
         delete base.variables;

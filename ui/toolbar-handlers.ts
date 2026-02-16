@@ -3,8 +3,9 @@
  * Extracted from dom-event-handlers.ts for use in React components
  */
 
-import { BLOCK_SCHEMA_VERSION } from '../compat/block-schema.ts';
+import { BLOCK_SCHEMA_VERSION, deriveBlocksFromLegacyOpticalSystemRows } from '../compat/block-schema.ts';
 import { loadSystemConfigurations, saveSystemConfigurations, clearAllPersistedState } from '../data/table-configuration.ts';
+import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.ts';
 import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 
 declare global {
@@ -49,7 +50,7 @@ export function handleNewFile(): void {
           blockType: 'ImageSurface',
           role: null,
           constraints: {},
-          parameters: {},
+          parameters: { semidiaMode: 'Manual' },
           variables: {},
           metadata: { source: 'default' }
         }
@@ -271,6 +272,180 @@ export function handleClearStorage(): void {
   }
 }
 
+function __coopt_isInfLike(value: any): boolean {
+  if (value === Infinity) return true;
+  const s = String(value ?? '').trim().toUpperCase();
+  return s === 'INF' || s === 'INFINITY' || s === '∞';
+}
+
+function __coopt_buildFallbackBlocksFromRows(rows: any[]): any[] {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const blocks: any[] = [];
+
+  const inferImageSemidia = (): number | null => {
+    for (let idx = safeRows.length - 1; idx >= 0; idx--) {
+      const row = safeRows[idx] || {};
+      const raw = row?.semidia ?? row?.semiDiameter ?? row?.semiDia ?? row?.['semi diameter'] ?? row?.['Semi Diameter'];
+      const n = Number(raw);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+  };
+
+  const first = safeRows[0] || {};
+  const objectDistanceMode = __coopt_isInfLike(first?.thickness) ? 'INF' : 'Finite';
+  const objectDistanceVal = Number(first?.thickness);
+  blocks.push({
+    blockId: 'ObjectSurface-1',
+    blockType: 'ObjectSurface',
+    role: null,
+    constraints: {},
+    parameters: objectDistanceMode === 'INF'
+      ? { objectDistanceMode: 'INF' }
+      : { objectDistanceMode: 'Finite', objectDistance: Number.isFinite(objectDistanceVal) ? objectDistanceVal : 10 },
+    variables: {},
+    metadata: { source: 'zemax-fallback' }
+  });
+
+  let stopCount = 0;
+  let singleCount = 0;
+  let gapCount = 0;
+
+  const end = Math.max(1, safeRows.length - 1);
+  for (let i = 1; i < end; i++) {
+    const row = safeRows[i] || {};
+    const objType = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+    const isStop = objType === 'stop' || objType === 'sto';
+
+    if (isStop) {
+      stopCount++;
+      const sdNum = Number(row?.semidia);
+      blocks.push({
+        blockId: `Stop-${stopCount}`,
+        blockType: 'Stop',
+        role: null,
+        constraints: {},
+        parameters: Number.isFinite(sdNum) && sdNum > 0 ? { semiDiameter: sdNum } : {},
+        variables: {},
+        metadata: { source: 'zemax-fallback' }
+      });
+
+      const tRaw = row?.thickness;
+      const tNum = Number(tRaw);
+      const hasGap = __coopt_isInfLike(tRaw) || (Number.isFinite(tNum) && Math.abs(tNum) > 1e-12);
+      if (hasGap) {
+        gapCount++;
+        blocks.push({
+          blockId: `Gap-${gapCount}`,
+          blockType: 'Gap',
+          role: null,
+          constraints: {},
+          parameters: { thickness: __coopt_isInfLike(tRaw) ? 'INF' : tNum, material: 'AIR' },
+          variables: {},
+          metadata: { source: 'zemax-fallback', from: 'stop-thickness' }
+        });
+      }
+      continue;
+    }
+
+    singleCount++;
+    const surfTypeRaw = String(row?.surfType ?? '').trim();
+    const surfType = surfTypeRaw || 'Spherical';
+    const radius = __coopt_isInfLike(row?.radius) ? 'INF' : (String(row?.radius ?? '').trim() === '' ? 'INF' : row.radius);
+    const tRaw = row?.thickness;
+    const tNum = Number(tRaw);
+    const thickness = __coopt_isInfLike(tRaw) ? 'INF' : (Number.isFinite(tNum) ? tNum : 0);
+    const material = String(row?.material ?? '').trim();
+    const conicNum = Number(row?.conic);
+
+    const params: any = {
+      radius,
+      thickness,
+      material,
+      surfType,
+      conic: Number.isFinite(conicNum) ? conicNum : 0,
+      semidia: row?.semidia ?? ''
+    };
+
+    if (surfType === 'Toric') {
+      params.radiusX = __coopt_isInfLike(row?.radiusX) ? 'INF' : (String(row?.radiusX ?? '').trim() === '' ? 'INF' : row.radiusX);
+      params.radiusY = __coopt_isInfLike(row?.radiusY) ? 'INF' : (String(row?.radiusY ?? '').trim() === '' ? 'INF' : row.radiusY);
+      const axisNum = Number(row?.axis);
+      params.axis = Number.isFinite(axisNum) ? axisNum : 0;
+    }
+
+    for (let k = 1; k <= 10; k++) {
+      const n = Number(row?.[`coef${k}`]);
+      params[`coef${k}`] = Number.isFinite(n) ? n : 0;
+    }
+
+    blocks.push({
+      blockId: `SingleSurface-${singleCount}`,
+      blockType: 'SingleSurface',
+      role: null,
+      constraints: {},
+      parameters: params,
+      variables: {},
+      metadata: { source: 'zemax-fallback', rowIndex: i }
+    });
+  }
+
+  const imageSemidia = inferImageSemidia();
+  blocks.push({
+    blockId: 'ImageSurface-1',
+    blockType: 'ImageSurface',
+    role: null,
+    constraints: {},
+    parameters: Number.isFinite(imageSemidia as any) && (imageSemidia as number) > 0
+      ? { semidia: imageSemidia, semidiaMode: 'Auto', optimizeSemiDia: 'A' }
+      : { semidiaMode: 'Auto', optimizeSemiDia: 'A' },
+    variables: {},
+    metadata: { source: 'zemax-fallback' }
+  });
+
+  return blocks;
+}
+
+function __coopt_normalizeObjectDistanceInBlocks(blocks: any[]): any[] {
+  if (!Array.isArray(blocks)) return [];
+
+  let hasObjectSurface = false;
+  for (const block of blocks) {
+    if (!block || block.blockType !== 'ObjectSurface') continue;
+    hasObjectSurface = true;
+    const params = (block.parameters && typeof block.parameters === 'object')
+      ? block.parameters
+      : (block.parameters = {});
+
+    const modeRaw = String(params.objectDistanceMode ?? '').trim();
+    const infMode = __coopt_isInfLike(modeRaw);
+    if (infMode) {
+      params.objectDistanceMode = 'INF';
+      const dInf = Number(params.objectDistance);
+      params.objectDistance = Number.isFinite(dInf) ? dInf : 10;
+      continue;
+    }
+
+    params.objectDistanceMode = 'Finite';
+    const d = Number(params.objectDistance);
+    params.objectDistance = Number.isFinite(d) ? d : 10;
+  }
+
+  if (!hasObjectSurface) {
+    blocks.unshift({
+      blockId: 'ObjectSurface-1',
+      blockType: 'ObjectSurface',
+      role: null,
+      constraints: {},
+      parameters: { objectDistanceMode: 'Finite', objectDistance: 10 },
+      variables: {},
+      metadata: { source: 'zemax-fallback', inserted: true }
+    });
+  }
+
+  return blocks;
+}
+
 export function handleImportZemax(): void {
   const input = document.createElement('input');
   input.type = 'file';
@@ -279,24 +454,95 @@ export function handleImportZemax(): void {
   input.onchange = async (e: Event) => {
     const target = e.target as HTMLInputElement;
     const file = target?.files?.[0];
+
+    try {
+      if (input.parentNode) input.parentNode.removeChild(input);
+    } catch (_) {}
+
     if (!file) return;
 
     try {
+      console.log('📥 [Zemax Import] Selected file:', file.name, `(${file.size} bytes)`);
       const arrayBuffer = await file.arrayBuffer();
-      const decoder = new TextDecoder('utf-8');
-      const text = decoder.decode(arrayBuffer);
+      const now = new Date().toISOString();
+      const parsed: any = parseZMXArrayBufferToOpticalSystemRows(arrayBuffer);
 
-      if (typeof (window as any).parseZemaxFile === 'function') {
-        const parsed = (window as any).parseZemaxFile(text);
-        if (parsed && typeof parsed === 'object') {
-          if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
-            await (window as any).__loadAllDataObjectIntoApp(parsed, { filename: file.name });
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error('Invalid Zemax parse result.');
+      }
+
+      console.log('📥 [Zemax Import] Parsed:', {
+        rows: Array.isArray(parsed?.rows) ? parsed.rows.length : 0,
+        sourceRows: Array.isArray(parsed?.sourceRows) ? parsed.sourceRows.length : 0,
+        objectRows: Array.isArray(parsed?.objectRows) ? parsed.objectRows.length : 0,
+        issues: Array.isArray(parsed?.issues) ? parsed.issues.length : 0
+      });
+
+      const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+      const sourceRows = Array.isArray(parsed?.sourceRows) ? parsed.sourceRows : [];
+      const objectRows = Array.isArray(parsed?.objectRows) ? parsed.objectRows : [];
+
+      let blocks: any[] = [];
+      try {
+        const derived = deriveBlocksFromLegacyOpticalSystemRows(rows);
+        const fatals = Array.isArray(derived?.issues)
+          ? derived.issues.filter((it: any) => it?.severity === 'fatal')
+          : [];
+        if (Array.isArray(derived?.blocks) && derived.blocks.length > 0 && fatals.length === 0) {
+          blocks = __coopt_normalizeObjectDistanceInBlocks(derived.blocks);
+        } else {
+          blocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(rows));
+          if (fatals.length > 0) {
+            console.warn('⚠️ [Zemax Import] deriveBlocks had fatals; fallback blocks generated:', fatals);
           }
-          try {
-            if (typeof (window as any).autoCalculateMissingSemidia === 'function') {
-              (window as any).autoCalculateMissingSemidia([], []);
-            }
-          } catch (_) {}
+        }
+      } catch (e) {
+        console.warn('⚠️ [Zemax Import] deriveBlocks failed; fallback blocks generated:', e);
+        blocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(rows));
+      }
+
+      const payload = {
+        configurations: [{
+          id: 1,
+          name: 'Config 1',
+          schemaVersion: BLOCK_SCHEMA_VERSION,
+          blocks,
+          source: sourceRows,
+          object: objectRows,
+          opticalSystem: rows,
+          meritFunction: [],
+          systemData: { referenceFocalLength: '' },
+          metadata: {
+            created: now,
+            modified: now,
+            locked: false,
+            importedFrom: 'zemax'
+          }
+        }],
+        activeConfigId: 1,
+        meritFunction: [],
+        systemRequirements: [],
+        optimizationRules: {}
+      };
+
+      if (typeof (window as any).__loadAllDataObjectIntoApp !== 'function') {
+        throw new Error('App loader is not ready. Please reload and try again.');
+      }
+      const loaded = await (window as any).__loadAllDataObjectIntoApp(payload, { filename: file.name });
+      if (!loaded) {
+        throw new Error('Zemax import parsed, but app load step returned false.');
+      }
+
+      try {
+        if (typeof (window as any).autoCalculateMissingSemidia === 'function') {
+          (window as any).autoCalculateMissingSemidia(sourceRows, objectRows);
+        }
+      } catch (_) {}
+
+      if (Array.isArray(parsed?.issues)) {
+        const fatal = parsed.issues.filter((it: any) => it?.severity === 'fatal');
+        if (fatal.length > 0) {
+          console.warn('⚠️ Zemax import issues:', fatal);
         }
       }
       console.log('✅ Zemax file imported:', file.name);
@@ -306,6 +552,7 @@ export function handleImportZemax(): void {
     }
   };
   
+  document.body.appendChild(input);
   input.click();
 }
 
@@ -314,17 +561,39 @@ export function handleExportZemax(): void {
     const opticalSystemRows = (window as any).getOpticalSystemRows 
       ? (window as any).getOpticalSystemRows((window as any).tableOpticalSystem) 
       : [];
+    const sourceRows = (window as any).tableSource && typeof (window as any).tableSource.getData === 'function'
+      ? (window as any).tableSource.getData()
+      : [];
+    const objectRows = (window as any).tableObject && typeof (window as any).tableObject.getData === 'function'
+      ? (window as any).tableObject.getData()
+      : [];
     
     if (!opticalSystemRows || opticalSystemRows.length === 0) {
       alert('No optical system data to export');
       return;
     }
+
+    const loaded = String(getLoadedFileName() ?? '').replace(/\s*\(surfaces only\)\s*$/i, '').trim();
+    const defaultFilename = loaded
+      ? (/\.json$/i.test(loaded) ? loaded.replace(/\.json$/i, '.zmx') : (/\.zmx$/i.test(loaded) ? loaded : `${loaded}.zmx`))
+      : 'co-opt-export.zmx';
+
+    let filename = prompt(
+      'Zemaxエクスポートのファイル名を入力してください（.zmx は自動補完）',
+      defaultFilename
+    );
+    if (!filename) return;
+    filename = filename.trim();
+    if (!filename) return;
+    if (!/\.zmx$/i.test(filename)) filename += '.zmx';
     
     if (typeof (window as any).generateZMXText === 'function') {
-      const zmxText = (window as any).generateZMXText(opticalSystemRows);
+      const zmxText = (window as any).generateZMXText(opticalSystemRows, {
+        sourceRows,
+        objectRows
+      });
       
       if (typeof (window as any).downloadZMX === 'function') {
-        const filename = 'co-opt-export.zmx';
         (window as any).downloadZMX(zmxText, filename);
         console.log('✅ Zemax file exported successfully');
       } else {

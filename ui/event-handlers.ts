@@ -125,6 +125,325 @@ function getRequiredFunctions(): any {
     };
 }
 
+const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
+
+function __coopt_isPlainObject(v: any): boolean {
+    return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function __coopt_parseColorToInt(value: any): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value !== 'string') return null;
+    const s = value.trim();
+    if (!s) return null;
+    if (/^0x[0-9a-fA-F]{6}$/.test(s)) return parseInt(s.slice(2), 16);
+    if (/^#[0-9a-fA-F]{6}$/.test(s)) return parseInt(s.slice(1), 16);
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+}
+
+function __coopt_surfaceColorKey(surface: any, index0: number): string {
+    try {
+        const bid = String(surface?._blockId ?? '').trim();
+        const role = String(surface?._surfaceRole ?? '').trim();
+        if (bid && role) return `p:${bid}|${role}`;
+    } catch (_) {}
+
+    try {
+        const sid = Number(surface?.id);
+        if (Number.isFinite(sid)) return `id:${Math.floor(sid)}`;
+    } catch (_) {}
+
+    return `i:${Math.floor(Number(index0) || 0)}`;
+}
+
+function __coopt_isCoordBreakSurface(surface: any): boolean {
+    const surfType = String(surface?.surfType || surface?.type || '').trim().toLowerCase();
+    const objType = String(surface?.['object type'] || '').trim().toLowerCase();
+    return (
+        surfType === 'coord break' || surfType === 'coordinate break' ||
+        surfType === 'cb' || surfType === 'coordtrans' ||
+        surfType === 'coordinatebreak' || surfType === 'coord trans' ||
+        surfType === 'coordinate transform' || surfType === 'ct' ||
+        objType === 'coord break' || objType === 'coordinate break' ||
+        objType === 'cb' || objType === 'coordtrans' ||
+        objType === 'coordinatebreak'
+    );
+}
+
+function __coopt_isGapSurface(surface: any): boolean {
+    const blockType = String(surface?._blockType ?? surface?.blockType ?? '').trim().toLowerCase();
+    if (blockType === 'gap' || blockType === 'airgap') return true;
+
+    const objType = String(surface?.['object type'] ?? surface?.type ?? '').trim().toLowerCase();
+    if (
+        objType === 'gap' ||
+        objType === 'air gap' ||
+        objType === 'airgap'
+    ) {
+        return true;
+    }
+
+    const role = String(surface?._surfaceRole ?? '').trim().toLowerCase();
+    if (role === 'gap' || role === 'airgap') return true;
+
+    return false;
+}
+
+function __coopt_isLensInterval(frontSurface: any, backSurface: any): boolean {
+    if (!frontSurface || !backSurface) return false;
+    if ((frontSurface['object type'] || '') === 'Object') return false;
+    if (__coopt_isGapSurface(frontSurface) || __coopt_isGapSurface(backSurface)) return false;
+    if (__coopt_isCoordBreakSurface(frontSurface) || __coopt_isCoordBreakSurface(backSurface)) return false;
+
+    const material = String(frontSurface.material ?? '').trim().toUpperCase();
+    if (!material || material === 'AIR' || material === '0' || material === 'MIRROR') return false;
+    return true;
+}
+
+function __coopt_loadSurfaceColorOverridesSafe(): Record<string, any> {
+    try {
+        if (typeof localStorage === 'undefined') return {};
+        const raw = localStorage.getItem(SURFACE_COLOR_OVERRIDES_STORAGE_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return __coopt_isPlainObject(parsed) ? parsed : {};
+    } catch (_) {
+        return {};
+    }
+}
+
+function __coopt_clearPopupLensFillMeshes(scene: any): void {
+    if (!scene) return;
+    const toRemove: any[] = [];
+    scene.traverse((child: any) => {
+        if (child?.userData?.type === 'popupLensFill') {
+            toRemove.push(child);
+        }
+    });
+    [...new Set(toRemove)].forEach((obj: any) => {
+        scene.remove(obj);
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+            if (Array.isArray(obj.material)) obj.material.forEach((m: any) => m.dispose());
+            else obj.material.dispose();
+        }
+    });
+}
+
+function __coopt_readWorldPolylinePoints(lineObj: any, THREE: any): any[] {
+    if (!lineObj || !lineObj.geometry || !lineObj.geometry.attributes?.position || !THREE) return [];
+    const attr = lineObj.geometry.attributes.position;
+    const points: any[] = [];
+    for (let i = 0; i < attr.count; i++) {
+        const p = new THREE.Vector3(attr.getX(i), attr.getY(i), attr.getZ(i));
+        lineObj.localToWorld(p);
+        if (Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)) {
+            points.push(p);
+        }
+    }
+    return points;
+}
+
+function __coopt_orientPolyline(points: any[], startRef: any, endRef: any): any[] {
+    if (!Array.isArray(points) || points.length < 2 || !startRef || !endRef) return points || [];
+    const d1 = points[0].distanceTo(startRef) + points[points.length - 1].distanceTo(endRef);
+    const d2 = points[0].distanceTo(endRef) + points[points.length - 1].distanceTo(startRef);
+    return d1 <= d2 ? points.slice() : points.slice().reverse();
+}
+
+function __coopt_applyPopupCrossSectionLensFill(options: {
+    popupWindow: any;
+    scene: any;
+    viewAxis: 'XZ' | 'YZ';
+    opticalSystemRows: any[];
+}): void {
+    const { popupWindow, scene, viewAxis, opticalSystemRows } = options;
+    if (!scene || !Array.isArray(opticalSystemRows) || opticalSystemRows.length < 2) return;
+
+    const THREE = popupWindow?.THREE || w.THREE;
+    if (!THREE) return;
+
+    __coopt_clearPopupLensFillMeshes(scene);
+
+    const activeProfileMap = new Map<number, any>();
+    const activeConnectionMap = new Map<number, any[]>();
+
+    scene.traverse((child: any) => {
+        const ud = child?.userData || {};
+
+        if (ud.type === 'surfaceProfile' && (ud.profileType === 'XZ' || ud.profileType === 'YZ')) {
+            const si = Number(ud.surfaceIndex);
+            const row = Number.isFinite(si) ? opticalSystemRows[si - 1] : null;
+            if (row && __coopt_isGapSurface(row)) {
+                child.visible = false;
+                return;
+            }
+
+            const isActive = ud.profileType === viewAxis;
+            child.visible = isActive;
+            if (isActive) {
+                if (Number.isFinite(si)) {
+                    activeProfileMap.set(si, child);
+                }
+            }
+            return;
+        }
+
+        if (ud.type === 'connectionLine' && (ud.direction === 'XZ' || ud.direction === 'YZ')) {
+            const si = Number(ud.surfaceIndex);
+            const frontRow = Number.isFinite(si) ? opticalSystemRows[si - 1] : null;
+            if (frontRow && __coopt_isGapSurface(frontRow)) {
+                child.visible = false;
+                return;
+            }
+
+            const isActive = ud.direction === viewAxis;
+            child.visible = isActive;
+            if (isActive) {
+                if (Number.isFinite(si)) {
+                    if (!activeConnectionMap.has(si)) activeConnectionMap.set(si, []);
+                    activeConnectionMap.get(si)!.push(child);
+                }
+            }
+            return;
+        }
+
+        if (ud.isRayLine || ud.type === 'ray') {
+            child.renderOrder = Math.max(Number(child.renderOrder) || 0, 1300);
+            if (child.material) {
+                const materials = Array.isArray(child.material) ? child.material : [child.material];
+                materials.forEach((mat: any) => {
+                    if (mat) {
+                        mat.depthTest = false;
+                        mat.depthWrite = false;
+                        mat.transparent = true;
+                    }
+                });
+            }
+        }
+    });
+
+    const overrides = __coopt_loadSurfaceColorOverridesSafe();
+    const axisCoord = (p: any) => (viewAxis === 'YZ' ? p.y : p.x);
+
+    for (let i = 0; i < opticalSystemRows.length - 1; i++) {
+        const frontSurface = opticalSystemRows[i];
+        const backSurface = opticalSystemRows[i + 1];
+        if (!__coopt_isLensInterval(frontSurface, backSurface)) continue;
+
+        const frontSurfaceIndex = i + 1;
+        const backSurfaceIndex = i + 2;
+
+        const frontLine = activeProfileMap.get(frontSurfaceIndex);
+        const backLine = activeProfileMap.get(backSurfaceIndex);
+        const sideLines = activeConnectionMap.get(frontSurfaceIndex) || [];
+
+        if (!frontLine || !backLine || sideLines.length < 2) continue;
+
+        const frontPoints = __coopt_readWorldPolylinePoints(frontLine, THREE);
+        const backPoints = __coopt_readWorldPolylinePoints(backLine, THREE);
+        if (frontPoints.length < 2 || backPoints.length < 2) continue;
+
+        const sideCandidates = sideLines
+            .map((lineObj: any) => {
+                const pts = __coopt_readWorldPolylinePoints(lineObj, THREE);
+                if (pts.length < 2) return null;
+                const avg = pts.reduce((sum: number, p: any) => sum + axisCoord(p), 0) / pts.length;
+                return { pts, avg };
+            })
+            .filter(Boolean)
+            .sort((a: any, b: any) => a.avg - b.avg);
+
+        if (sideCandidates.length < 2) continue;
+
+        const negSideRaw = sideCandidates[0].pts;
+        const posSideRaw = sideCandidates[sideCandidates.length - 1].pts;
+
+        const frontNeg = frontPoints[0];
+        const frontPos = frontPoints[frontPoints.length - 1];
+        const backNeg = backPoints[0];
+        const backPos = backPoints[backPoints.length - 1];
+
+        const posSide = __coopt_orientPolyline(posSideRaw, frontPos, backPos);
+        const negSide = __coopt_orientPolyline(negSideRaw, backNeg, frontNeg);
+
+        const boundary3D: any[] = [];
+        boundary3D.push(...frontPoints);
+        boundary3D.push(...posSide.slice(1));
+        boundary3D.push(...backPoints.slice().reverse().slice(1));
+        boundary3D.push(...negSide.slice(1));
+
+        const cleaned3D: any[] = [];
+        for (const p of boundary3D) {
+            if (!Number.isFinite(p?.x) || !Number.isFinite(p?.y) || !Number.isFinite(p?.z)) continue;
+            if (cleaned3D.length === 0 || cleaned3D[cleaned3D.length - 1].distanceToSquared(p) > 1e-12) {
+                cleaned3D.push(p.clone());
+            }
+        }
+        if (cleaned3D.length < 3) continue;
+
+        const cleaned2D = cleaned3D.map((p: any) => new THREE.Vector2(axisCoord(p), p.z));
+        if (Math.abs(THREE.ShapeUtils.area(cleaned2D)) < 1e-8) continue;
+
+        let triangles: any[] = [];
+        try {
+            triangles = THREE.ShapeUtils.triangulateShape(cleaned2D, []);
+        } catch (_) {
+            triangles = [];
+        }
+        if (!Array.isArray(triangles) || triangles.length === 0) continue;
+
+        const positions = new Float32Array(cleaned3D.length * 3);
+        for (let j = 0; j < cleaned3D.length; j++) {
+            positions[j * 3] = cleaned3D[j].x;
+            positions[j * 3 + 1] = cleaned3D[j].y;
+            positions[j * 3 + 2] = cleaned3D[j].z;
+        }
+
+        const flatIndices: number[] = [];
+        triangles.forEach((tri: any) => {
+            if (Array.isArray(tri) && tri.length === 3) {
+                flatIndices.push(tri[0], tri[1], tri[2]);
+            }
+        });
+        if (flatIndices.length < 3) continue;
+
+        const indexArray = (cleaned3D.length > 65535)
+            ? new Uint32Array(flatIndices)
+            : new Uint16Array(flatIndices);
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setIndex(new THREE.BufferAttribute(indexArray, 1));
+        geometry.computeVertexNormals();
+
+        const key = __coopt_surfaceColorKey(frontSurface, i);
+        const colorOverride = __coopt_parseColorToInt(overrides?.[key]);
+        const lensColor = (colorOverride !== null) ? colorOverride : 0x00ccff;
+
+        const material = new THREE.MeshBasicMaterial({
+            color: lensColor,
+            transparent: true,
+            opacity: 0.35,
+            side: THREE.DoubleSide,
+            depthTest: false,
+            depthWrite: false
+        });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.frustumCulled = false;
+        mesh.renderOrder = 900;
+        mesh.userData = {
+            type: 'popupLensFill',
+            viewAxis,
+            surfaceIndex: frontSurfaceIndex,
+            isOpticalElement: true
+        };
+        scene.add(mesh);
+    }
+}
+
 // ============================================================================
 // POPUP MESSAGE HANDLER
 // ============================================================================
@@ -461,6 +780,17 @@ function ensurePopupMessageHandler(): void {
                         } catch (_) {}
                     }
 
+                    try {
+                        __coopt_applyPopupCrossSectionLensFill({
+                            popupWindow,
+                            scene: popupScene,
+                            viewAxis,
+                            opticalSystemRows
+                        });
+                    } catch (e) {
+                        console.warn('⚠️ Popup lens fill postprocess failed:', e);
+                    }
+
                     harmonizeSceneGeometry(popupScene);
                     console.log(`📷 Setting camera for ${viewAxis} in popup...`);
 
@@ -702,6 +1032,17 @@ function ensurePopupMessageHandler(): void {
                             drawCrossBeamRays(cachedRays, popupScene);
                             harmonizeSceneGeometry(popupScene);
                         }
+
+                        try {
+                            __coopt_applyPopupCrossSectionLensFill({
+                                popupWindow,
+                                scene: popupScene,
+                                viewAxis,
+                                opticalSystemRows: Array.isArray(opticalSystemRows) ? opticalSystemRows : []
+                            });
+                        } catch (e) {
+                            console.warn('⚠️ Popup lens fill postprocess failed:', e);
+                        }
                         
                         // Re-render to show both rays and updated surfaces
                         if (popupRenderer && popupScene && popupCamera) {
@@ -725,6 +1066,23 @@ function ensurePopupMessageHandler(): void {
                         targetRenderer: popupRenderer,
                         showAlerts: false
                     });
+
+                    try {
+                        const { getOpticalSystemRows } = getRequiredFunctions();
+                        const opticalSystemRows = getOpticalSystemRows();
+                        __coopt_applyPopupCrossSectionLensFill({
+                            popupWindow,
+                            scene: popupScene,
+                            viewAxis,
+                            opticalSystemRows: Array.isArray(opticalSystemRows) ? opticalSystemRows : []
+                        });
+                        if (popupRenderer && popupScene && popupCamera) {
+                            popupRenderer.render(popupScene, popupCamera);
+                        }
+                    } catch (e) {
+                        console.warn('⚠️ Popup lens fill postprocess failed:', e);
+                    }
+
                     popupWindow.postMessage({ status: `${viewAxis === 'XZ' ? 'X-Z' : 'Y-Z'} view ready` }, '*');
                 }
             } catch (error: any) {
