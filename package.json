@@ -8,7 +8,8 @@
     "build": "vite build",
     "build:check": "vite build",
     "preview": "vite preview",
-    "state:inventory": "node tools/state-inventory.mjs"
+    "state:inventory": "node tools/state-inventory.mjs",
+    "pr:all": "bash ./scripts/pr-all.sh"
   },
   "dependencies": {
     "react": "^18.3.1",
