@@ -29,7 +29,7 @@ h3 {
 /* Source と Object を横並びにするコンテナ */
 .source-object-container {
     display: flex;
-    gap: 20px;
+    gap: 12px;
     margin: 20px;
 }
 
@@ -50,19 +50,24 @@ h3 {
 
 .configuration-controls {
     display: flex;
-    gap: 10px;
+    gap: 8px;
     align-items: center;
-    margin-bottom: 10px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.source-object-toolbar {
+    margin-top: 10px;
 }
 
 #config-select {
     flex: 1;
     padding: 6px 10px;
-    font-size: 14px;
-    border: 1px solid #ccc;
-    border-radius: 3px;
+    font-size: 13px;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
     background-color: white;
-    color: #333;
+    color: #24292f;
     height: 30px;
     min-width: 200px;
 }
@@ -74,32 +79,41 @@ h3 {
 
 .configuration-controls button {
     padding: 6px 12px;
-    font-size: 14px;
+    font-size: 13px;
     white-space: nowrap;
+    margin: 0;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    background-color: #f6f8fa;
+    color: #24292f;
+}
+
+.configuration-controls button:hover {
+    background-color: #eef2f6;
+    border-color: #afb8c1;
 }
 
 .config-info {
     font-size: 13px;
-    color: #666;
+    color: #57606a;
     padding: 8px 0;
-    border-top: 1px solid #dee2e6;
+    border-top: 1px solid #d0d7de;
     margin-top: 10px;
 }
 
 .config-info strong {
-    color: #333;
+    color: #24292f;
 }
 
 #table-source{
-    margin: 10px 1px;
+    margin: 12px 0 0;
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
     background-color: white;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-    padding: 6px;
-    height: 160px;
-    min-height: 120px;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    padding: 8px;
+    min-height: 220px;
     max-height: 80vh;
     overflow: auto;
     resize: vertical;
@@ -162,15 +176,14 @@ h3 {
 }
 
 #table-object {
-    margin: 10px 1px;
+    margin: 12px 0 0;
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
     background-color: white;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-    padding: 6px;
-    height: 160px;
-    min-height: 120px;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    padding: 8px;
+    min-height: 220px;
     max-height: 80vh;
     overflow: auto;
     resize: vertical;
@@ -179,28 +192,30 @@ h3 {
 
 /* System Requirements (DOM table) */
 #table-system-requirements {
-    margin: 10px 1px;
+    margin: 12px 0 0;
     width: 100%;
-    border-collapse: collapse;
-    background-color: white;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-    padding: 6px;
-    height: 160px;
-    min-height: 120px;
+    border-collapse: separate;
+    background-color: #ffffff;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    padding: 8px;
+    min-height: 220px;
     max-height: 80vh;
     overflow: auto;
     resize: vertical;
     box-sizing: border-box;
+    box-shadow: inset 0 1px 0 rgba(208, 215, 222, 0.45);
 }
 
 #table-system-requirements .sr-table {
     font-family: inherit;
     font-size: 13px;
+    width: 100%;
 }
 
 #table-system-requirements .sr-table td {
     background-color: inherit;
+    border-bottom: 1px solid #eef2f6;
 }
 
 #table-system-requirements .sr-table.sr-params-expanded td {
@@ -222,12 +237,13 @@ h3 {
 }
 
 #table-system-requirements .sr-table tbody tr {
-    background: white;
+    background: #ffffff;
+    transition: background-color 120ms ease;
 }
 
 /* Hover: match Design Intent grey + pointer cursor */
 #table-system-requirements .sr-table tbody tr:hover {
-    background: #f5f5f5;
+    background: #f6f8fa;
     cursor: pointer;
 }
 
@@ -237,7 +253,7 @@ h3 {
 #table-system-requirements .sr-table tbody tr:hover select,
 #table-system-requirements .sr-table tbody tr:hover textarea,
 #table-system-requirements .sr-table tbody tr:hover div {
-    background: #f5f5f5;
+    background: #f6f8fa;
 }
 
 #table-system-requirements .sr-table input,
@@ -245,11 +261,12 @@ h3 {
 #table-system-requirements .sr-table textarea {
     font-family: inherit;
     font-size: 13px;
-    padding: 2px 6px;
-    height: 22px;
-    border: 1px solid #ddd;
+    padding: 4px 8px;
+    min-height: 24px;
+    border: 1px solid #d0d7de;
     border-radius: 4px;
     box-sizing: border-box;
+    background-color: #ffffff;
 }
 
 /* Parameters collapsible styling */
@@ -296,7 +313,7 @@ h3 {
 
 /* Selected row: ensure Num→Status (sticky) also shows the blue background */
 #table-system-requirements .sr-table tbody tr.sr-selected {
-    background-color: #e7f3ff;
+    background-color: #ddf4ff;
 }
 
 #table-system-requirements .sr-table tbody tr.sr-selected:hover,
@@ -305,40 +322,83 @@ h3 {
 #table-system-requirements .sr-table tbody tr.sr-selected:hover select,
 #table-system-requirements .sr-table tbody tr.sr-selected:hover textarea,
 #table-system-requirements .sr-table tbody tr.sr-selected:hover div {
-    background-color: #e7f3ff;
+    background-color: #ddf4ff;
 }
 
 #table-optical-system {
-    margin: 10px 1px; /* 10px から 5px に */
+    margin: 12px 0 0;
     width: 100%;
+    min-height: 0;
     height: auto !important;
-    min-height: 0 !important; /* 150px から 0 に強制変更 */
     overflow: auto;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+#table-optical-system:not(:empty) {
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    background-color: #ffffff;
+    padding: 8px;
+}
+
+#table-optical-system:empty {
+    display: none;
+    margin: 0;
+    border: 0;
 }
 
 #table-optical-system:focus {
   outline: none;
 }
 
+#table-optical-system .tabulator {
+    border: none;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+#table-optical-system .tabulator-header {
+    background-color: #f6f8fa;
+    border-bottom: 1px solid #d0d7de;
+}
+
+#table-optical-system .tabulator-col {
+    background-color: #f6f8fa;
+    border-right: 1px solid #d0d7de;
+}
+
+#table-optical-system .tabulator-row {
+    border-bottom: 1px solid #eef2f6;
+}
+
+#table-optical-system .tabulator-row:hover {
+    background-color: #f6f8fa;
+}
+
+#table-optical-system .tabulator-row.tabulator-selected {
+    background-color: #ddf4ff;
+}
+
 /* Step2: Evaluation → Apply reason panel (read-only) */
 .apply-reason-section {
-    margin: 10px 1px;
-    padding: 10px;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-    background-color: #fff;
+    margin: 12px 0 0;
+    padding: 12px;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    background-color: #f6f8fa;
 }
 
 .apply-reason-title {
     font-size: 14px;
     font-weight: 600;
-    color: #333;
+    color: #24292f;
     margin-bottom: 6px;
 }
 
 .apply-reason-help {
     font-size: 12px;
-    color: #666;
+    color: #57606a;
     margin-bottom: 8px;
     line-height: 1.35;
 }
@@ -348,6 +408,60 @@ h3 {
     box-sizing: border-box;
     font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Menlo', monospace;
     font-size: 13px;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    padding: 8px;
+    background-color: #ffffff;
+    color: #24292f;
+}
+
+.ide-section-card {
+    border: 1px solid #d0d7de;
+    border-radius: 10px;
+    background-color: #ffffff;
+    padding: 12px;
+    box-shadow: 0 1px 2px rgba(27, 31, 35, 0.06);
+}
+
+.section-title {
+    margin: 0;
+    font-size: 22px;
+    line-height: 1.25;
+    font-weight: 600;
+    color: #24292f;
+}
+
+.ide-toolbar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.ide-table-container {
+    width: 100%;
+}
+
+.requirements-progress-wrap {
+    display: block;
+    margin-top: 8px;
+}
+
+.requirements-progress-label {
+    margin-top: 0;
+}
+
+.requirements-progress-bar {
+    width: 320px;
+    max-width: 100%;
+}
+
+.ide-section-card button:focus-visible,
+.ide-section-card select:focus-visible,
+.ide-section-card input:focus-visible,
+.ide-section-card textarea:focus-visible {
+    outline: 2px solid #0969da;
+    outline-offset: 1px;
 }
 
 button {
@@ -1032,10 +1146,9 @@ button:active {
 /* Optical System セクション */
 .optical-system-section {
     margin: 20px;
-    margin-top: 20px;
-    padding-top: 0;
-    /* 下方向の余白をリセットして、Requirements の margin-top と重複しないようにします */
-    margin-bottom: 0;
+    margin-top: 0;
+    padding-top: 12px;
+    margin-bottom: 12px;
 }
 
 .optical-system-title {
@@ -1055,8 +1168,8 @@ button:active {
 /* Optical System ボタン用の横並びスタイル */
 .optical-system-buttons-container {
     display: flex;
-    gap: 10px;
-    margin: 10px 0;
+    gap: 8px;
+    margin: 10px 0 0;
     flex-wrap: wrap;
     align-items: center;
 }
@@ -1067,7 +1180,7 @@ button:active {
 
 /* Blocks Inspector (read-only) */
 .block-inspector-panel {
-    margin-top: 8px;
+    margin-top: 12px;
 }
 
 .block-inspector-readonly {
@@ -1077,10 +1190,10 @@ button:active {
 }
 
 .block-inspector {
-    background-color: white;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-    padding: 6px;
+    background-color: #ffffff;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    padding: 8px;
     height: 300px;
     min-height: 300px;
     max-height: 80vh;
@@ -1090,7 +1203,7 @@ button:active {
 
 .optical-system-divider {
     margin-top: 10px;
-    border-top: 1px solid #ddd;
+    border-top: 1px solid #d0d7de;
 }
 
 .block-inspector-row {
@@ -1098,11 +1211,12 @@ button:active {
     gap: 10px;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 8px;
-    border-bottom: 1px solid #eee;
+    padding: 7px 10px;
+    border-bottom: 1px solid #eef2f6;
     cursor: pointer;
     font-size: 13px;
-    color: #333;
+    color: #24292f;
+    transition: background-color 120ms ease;
 }
 
 .block-inspector-row:last-child {
@@ -1110,12 +1224,12 @@ button:active {
 }
 
 .block-inspector-row:hover {
-    background-color: #f5f5f5;
+    background-color: #f6f8fa;
 }
 
 .block-inspector-row.selected,
 .block-inspector-row.selected:hover {
-    background-color: #cfe2ff;
+    background-color: #ddf4ff;
 }
 
 .block-inspector-col-id {
@@ -1131,13 +1245,13 @@ button:active {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #666;
+    color: #57606a;
 }
 
 .block-inspector-col-count {
     width: 110px;
     text-align: left;
-    color: #666;
+    color: #57606a;
 }
 
 .block-inspector-col-params {
@@ -1146,7 +1260,7 @@ button:active {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #666;
+    color: #57606a;
 }
 
 /* レスポンシブデザイン: 小さい画面では縦並びに */
@@ -1976,7 +2090,7 @@ h4 {
 /* System Evaluation Editor Section */
 .merit-function-section {
     margin: 20px;
-    margin-top: 20px;
+    margin-top: 12px;
 }
 
 .merit-function-section h2 {
@@ -1985,18 +2099,19 @@ h4 {
 
 .merit-function-help {
     font-size: 12px;
-    color: #666;
-    margin: 10px 0;
+    color: #57606a;
+    margin: 8px 0;
     padding: 8px 12px;
-    background-color: #f9f9f9;
-    border-left: 3px solid #007acc;
-    border-radius: 3px;
+    background-color: #f6f8fa;
+    border-left: 3px solid #0969da;
+    border-radius: 6px;
 }
 
 .merit-function-buttons-container {
     display: flex;
-    gap: 10px;
-    margin-bottom: 15px;
+    gap: 8px;
+    margin: 10px 0 0;
+    flex-wrap: wrap;
 }
 
 .merit-function-buttons-container button {
@@ -2012,15 +2127,21 @@ h4 {
     box-sizing: border-box;
     line-height: 1.2;
     vertical-align: middle;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    transition: all 0.15s ease;
 }
 
 .merit-function-buttons-container button:hover {
     background-color: #e9e9e9;
     border-color: #999;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
 }
 
 .merit-function-buttons-container button:active {
     background-color: #ddd;
+    transform: translateY(0);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
 /* Tabulator table styling for System Evaluation */
@@ -2055,18 +2176,18 @@ h4 {
 /* Operand Inspector Styling */
 .operand-inspector {
     margin-top: 20px;
-    padding: 15px;
+    padding: 14px;
     background: #ffffff;
-    border: 2px solid #0056b3;
-    border-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    box-shadow: inset 0 1px 0 rgba(208, 215, 222, 0.35);
 }
 
 .operand-inspector h3 {
     margin: 0 0 15px 0;
-    padding-bottom: 10px;
-    border-bottom: 2px solid #0056b3;
-    color: #0056b3;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #d0d7de;
+    color: #24292f;
     font-size: 16px;
 }
 
@@ -2185,19 +2306,19 @@ h4 {
 /* Source/Object tables: match Design Intent hover + disable selected-row blue */
 #table-source .glass-search-table tr:hover,
 #table-object .glass-search-table tr:hover {
-    background: #f5f5f5;
+    background: #f6f8fa;
 }
 
 /* Inputs/selects cover the cell background; apply hover bg to cells and controls too */
 #table-source .glass-search-table tbody tr:hover td,
 #table-object .glass-search-table tbody tr:hover td {
-    background: #f5f5f5;
+    background: #f6f8fa;
 }
 
 #table-source .glass-search-table tbody tr:hover input,
 #table-object .glass-search-table tbody tr:hover input,
 #table-object .glass-search-table tbody tr:hover select {
-    background-color: #f5f5f5;
+    background-color: #f6f8fa;
 }
 
 .glass-search-table tr.selected {
@@ -3065,24 +3186,53 @@ body.dark-mode .design-intent-table {
 body.dark-mode #requirements-container,
 body.dark-mode .requirements-section,
 body.dark-mode .merit-function-section {
-    background-color: var(--bg-primary) !important;
+    background-color: var(--bg-secondary) !important;
     color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
 }
 
 body.dark-mode #requirements-table,
 body.dark-mode .requirements-table,
-body.dark-mode #table-system-requirements,
-body.dark-mode #table-system-requirements * {
+body.dark-mode #table-system-requirements {
     background-color: var(--bg-primary) !important;
     color: var(--text-primary) !important;
     border-color: var(--border-color) !important;
 }
 
+body.dark-mode #table-system-requirements .sr-table tbody tr {
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
+}
+
+body.dark-mode #table-system-requirements .sr-table td {
+    border-bottom-color: var(--border-color) !important;
+}
+
+body.dark-mode #table-system-requirements .sr-table tbody tr:hover,
+body.dark-mode #table-system-requirements .sr-table tbody tr:hover td,
+body.dark-mode #table-system-requirements .sr-table tbody tr:hover input,
+body.dark-mode #table-system-requirements .sr-table tbody tr:hover select,
+body.dark-mode #table-system-requirements .sr-table tbody tr:hover textarea,
+body.dark-mode #table-system-requirements .sr-table tbody tr:hover div {
+    background-color: var(--bg-hover) !important;
+}
+
+body.dark-mode #table-system-requirements .sr-table tbody tr.sr-selected,
+body.dark-mode #table-system-requirements .sr-table tbody tr.sr-selected:hover,
+body.dark-mode #table-system-requirements .sr-table tbody tr.sr-selected:hover td,
+body.dark-mode #table-system-requirements .sr-table tbody tr.sr-selected:hover input,
+body.dark-mode #table-system-requirements .sr-table tbody tr.sr-selected:hover select,
+body.dark-mode #table-system-requirements .sr-table tbody tr.sr-selected:hover textarea,
+body.dark-mode #table-system-requirements .sr-table tbody tr.sr-selected:hover div {
+    background-color: var(--bg-tertiary) !important;
+}
+
 /* Optical System section */
 body.dark-mode #optical-system-container,
 body.dark-mode .optical-system-section {
-    background-color: var(--bg-primary) !important;
+    background-color: var(--bg-secondary) !important;
     color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
 }
 
 body.dark-mode #optical-system-table,
@@ -3092,12 +3242,19 @@ body.dark-mode .optical-system-table {
     border-color: var(--border-color) !important;
 }
 
+body.dark-mode #table-optical-system {
+    background-color: var(--bg-primary) !important;
+    border-color: var(--border-color) !important;
+}
+
+body.dark-mode #table-optical-system:empty {
+    display: none;
+    border: 0 !important;
+}
+
 body.dark-mode .optical-system-section table,
-body.dark-mode .optical-system-section table *,
 body.dark-mode .merit-function-section table,
-body.dark-mode .merit-function-section table *,
-body.dark-mode .design-intent-section table,
-body.dark-mode .design-intent-section table * {
+body.dark-mode .design-intent-section table {
     background-color: var(--bg-primary) !important;
     color: var(--text-primary) !important;
 }
@@ -3191,43 +3348,20 @@ body.dark-mode .button-icon {
 
 /* Block Inspector (Design Intent) - Force black background */
 body.dark-mode #block-inspector,
-body.dark-mode #block-inspector *,
-body.dark-mode #block-inspector div,
-body.dark-mode #block-inspector table,
-body.dark-mode #block-inspector tr,
-body.dark-mode #block-inspector td,
-body.dark-mode #block-inspector th,
-body.dark-mode #block-inspector span,
-body.dark-mode #block-inspector input,
-body.dark-mode #block-inspector select,
-body.dark-mode #block-inspector button {
+body.dark-mode .block-inspector {
     background-color: var(--bg-primary) !important;
     color: var(--text-primary) !important;
 }
 
-/* Design Intent specific elements */
-body.dark-mode .optical-system-section #block-inspector *[style*="background"],
-body.dark-mode #block-inspector *[style*="background-color"] {
-    background-color: var(--bg-primary) !important;
-}
-
-body.dark-mode #block-inspector *[style*="color"] {
+body.dark-mode #block-inspector .block-inspector-row,
+body.dark-mode #block-inspector .block-inspector-col-id {
     color: var(--text-primary) !important;
-}
-
-/* Override any white backgrounds in block inspector */
-body.dark-mode #block-inspector div[style*="#fff"],
-body.dark-mode #block-inspector div[style*="white"],
-body.dark-mode #block-inspector *[style*="#fff"],
-body.dark-mode #block-inspector *[style*="white"] {
-    background-color: var(--bg-primary) !important;
 }
 
 /* Design Intent toolbar and controls */
 body.dark-mode #design-intent-toolbar,
-body.dark-mode #design-intent-toolbar *,
 body.dark-mode .optical-system-buttons-container {
-    background-color: var(--bg-primary) !important;
+    background-color: transparent !important;
     color: var(--text-primary) !important;
 }
 
@@ -3250,6 +3384,16 @@ body.dark-mode footer *[style*="color:black"] {
 body.dark-mode .block-inspector {
     border: 1px solid var(--border-color) !important;
     background-color: var(--bg-primary) !important;
+}
+
+body.dark-mode .ide-section-card {
+    background-color: var(--bg-secondary) !important;
+    border-color: var(--border-color) !important;
+    box-shadow: none;
+}
+
+body.dark-mode .section-title {
+    color: var(--text-primary) !important;
 }
 
 body.dark-mode .optical-system-divider {

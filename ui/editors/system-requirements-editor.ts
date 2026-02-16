@@ -128,7 +128,6 @@ class SystemRequirementsEditor {
 
     this.loadFromStorage();
     this.initializeTable();
-    this.initializeEventListeners();
     this._ensureProgressUI();
 
     // Auto-update status when Merit is recalculated
@@ -1391,43 +1390,6 @@ class SystemRequirementsEditor {
     }
   }
 
-  initializeEventListeners(): void {
-    // Add button
-    const addBtn = document.getElementById('add-requirement-btn');
-    if (addBtn) {
-      // Clone and replace to remove old listeners
-      const newAddBtn = addBtn.cloneNode(true) as HTMLElement;
-      addBtn.parentNode?.replaceChild(newAddBtn, addBtn);
-      newAddBtn.addEventListener('click', () => {
-        this.addRequirement();
-      });
-    }
-
-    // Delete button
-    const delBtn = document.getElementById('delete-requirement-btn');
-    if (delBtn) {
-      const newDelBtn = delBtn.cloneNode(true) as HTMLElement;
-      delBtn.parentNode?.replaceChild(newDelBtn, delBtn);
-      newDelBtn.addEventListener('click', () => {
-        this.deleteRequirement();
-      });
-    }
-
-    // Update button
-    const updateBtn = document.getElementById('update-requirement-btn');
-    if (updateBtn) {
-      const newUpdateBtn = updateBtn.cloneNode(true) as HTMLElement;
-      updateBtn.parentNode?.replaceChild(newUpdateBtn, updateBtn);
-      newUpdateBtn.addEventListener('click', async () => {
-        try {
-          await this.updateAllConfigsAndEvaluate();
-        } catch (err) {
-          console.error('[Requirements] Error in updateAllConfigsAndEvaluate:', err);
-        }
-      });
-    }
-  }
-
   renderTable(): void {
     if (typeof this._renderBody === 'function') {
       this._renderBody(() => '', () => '', () => null);
@@ -2649,9 +2611,6 @@ const __cooptInitSystemRequirementsEditor = (): boolean => {
       
       // Re-initialize table to render content
       w.systemRequirementsEditor.initializeTable();
-      
-      // Re-initialize event listeners
-      w.systemRequirementsEditor.initializeEventListeners();
       
       // Ensure progress UI
       w.systemRequirementsEditor._ensureProgressUI();

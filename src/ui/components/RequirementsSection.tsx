@@ -74,26 +74,26 @@ export default function RequirementsSection() {
   };
 
   return (
-    <div className="merit-function-section">
-      <h2>Requirements</h2>
-      <div className="merit-function-buttons-container">
-        <button onClick={handleAddRequirement}>Add Requirement</button>
-        <button onClick={handleDeleteRequirement}>Del Requirement</button>
-        <button onClick={handleUpdateRequirement}>Update Requirement</button>
+    <section className="merit-function-section requirements-section ide-section-card" id="requirements-container" aria-label="Requirements">
+      <h2 className="section-title">Requirements</h2>
+      <div className="merit-function-buttons-container ide-toolbar" role="toolbar" aria-label="Requirements controls">
+        <button id="add-requirement-btn" type="button" onClick={handleAddRequirement}>Add Requirement</button>
+        <button id="delete-requirement-btn" type="button" onClick={handleDeleteRequirement}>Delete Requirement</button>
+        <button id="update-requirement-btn" type="button" onClick={handleUpdateRequirement}>Update Requirement</button>
       </div>
 
       {/* Progress bar container - will be populated by the editor */}
-      <div id="requirements-progress-wrap" style={{ display: 'none', marginTop: '6px' }}>
-        <div id="requirements-progress-label" className="merit-function-help"></div>
-        <progress id="requirements-progress" max={1} value={0} style={{ width: '320px' }}></progress>
+      <div id="requirements-progress-wrap" className="requirements-progress-wrap" style={{ display: 'none' }}>
+        <div id="requirements-progress-label" className="merit-function-help requirements-progress-label"></div>
+        <progress id="requirements-progress" className="requirements-progress-bar" max={1} value={0}></progress>
       </div>
 
-      <div id="table-system-requirements"></div>
+      <div id="table-system-requirements" className="ide-table-container"></div>
 
-      <div id="requirement-inspector" className="operand-inspector" style={{ display: "none" }}>
+      <div id="requirement-inspector" className="operand-inspector requirement-inspector" style={{ display: "none" }}>
         <h3>Requirement Detail / Inspector</h3>
         <div id="requirement-inspector-content"></div>
       </div>
-    </div>
+    </section>
   );
 }
