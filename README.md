@@ -24,6 +24,24 @@ This repo publishes the web app via GitHub Pages from the Vite build output (`di
 	- `npm run build`
 	- `npm run preview`
 
+## 🔁 One-command PR flow
+If you want to run **branch creation → commit all files → PR creation → merge** in one command:
+
+- `npm run pr:all`
+
+Optional environment variables:
+
+- `BASE_BRANCH` (default: `main`)
+- `BRANCH_NAME` (default: `chore/all-files-pr-<timestamp>`)
+- `COMMIT_MESSAGE` (default: `chore: update all pending files`)
+- `PR_TITLE` / `PR_BODY`
+- `MERGE_METHOD` (`merge` / `squash` / `rebase`, default: `merge`)
+- `ALLOW_ADMIN_MERGE` (`1` or `0`, default: `1`)
+
+Example:
+
+- `BASE_BRANCH=main MERGE_METHOD=squash npm run pr:all`
+
 ## ✨ Features
 - **Dynamic Lens Management:** Add and delete lens blocks as needed.
 - **Parameter Control:** Modify curvature, thickness, and glass materials via a table interface.
