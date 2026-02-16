@@ -41,6 +41,7 @@ export default defineConfig({
     }
   ],
   resolve: {
+    dedupe: ["three"],
     alias: {
       OrbitControls: "three/examples/jsm/controls/OrbitControls.js",
       three: "three"

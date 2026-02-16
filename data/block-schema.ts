@@ -1290,16 +1290,9 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       }
       row.surfType = st || (blockAsphereLooksNonZero({ surfType: stNorm, conic: conicRaw, coefs: coefsRaw }) ? 'Aspheric even' : 'Spherical');
       
-      // Debug: Log conic application
-      if (conicRaw !== undefined && conicRaw !== null && conicRaw !== '' && row._blockId) {
-        const conicVal = normalizeOptionalNumberToRowValue(conicRaw);
-        console.log(`🔧 [Block→Row] Block ${row._blockId} role=${row._surfaceRole}: applying conic=${conicVal}, surfType=${row.surfType}`);
-      }
-      
       if (row.surfType === 'Toric') {
         // Toric surfaces use radiusX (tangential) and row.radius (sagittal/radiusY)
         // radiusY is always taken from row.radius, not a separate parameter
-        console.log(`[applyAsphereFields Toric] radiusXRaw=${radiusXRaw}, row.radius=${row.radius}`);
         
         // Only set radiusX if radiusXRaw is explicitly provided
         // Do NOT default to row.radius if radiusXRaw is undefined - that would overwrite user's radiusX
@@ -1309,7 +1302,6 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
         // If radiusXRaw is undefined and row.radiusX doesn't exist yet, keep row.radiusX as is
         
         row.radiusY = row.radius; // Use existing radius field for Y direction
-        console.log(`[applyAsphereFields Toric] After: radiusX=${row.radiusX}, radiusY=${row.radiusY}`);
         row.axis = normalizeOptionalNumberToRowValue(axisRaw);
         row.conic = normalizeOptionalNumberToRowValue(conicRaw);
         // Toric surfaces don't use aspheric coefficients in initial implementation

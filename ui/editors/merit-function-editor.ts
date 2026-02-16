@@ -523,7 +523,6 @@ class MeritFunctionEditor {
                 }
             });
 
-            console.log('✅ Merit Function テーブルを初期化しました');
         } catch (error) {
             console.error('❌ Merit Function Tabulator初期化エラー:', error);
             this.table = this.createNoopTable();
@@ -2767,8 +2766,6 @@ class MeritFunctionEditor {
         }
 
         const efl = 1.0 / paraxialResult.finalAlpha;
-
-        console.log(`✅ EFFL計算: 面${startSurf}〜${endSurf}, 波長${wavelength}μm = ${efl.toFixed(6)} mm`);
         return efl;
     }
 
@@ -2856,8 +2853,6 @@ class MeritFunctionEditor {
         if (this.table) {
             this.table.setData(this.operands);
         }
-
-        console.log('✅ Merit Function データを読み込みました:', this.operands.length, '件');
     }
 
     loadFromStorage(): void {
@@ -3006,7 +3001,6 @@ const __cooptInitMeritFunctionEditor = (): boolean => {
         if (!container) return false;
         
         if (w.meritFunctionEditor) {
-            console.log('[Merit Function] Editor already exists, re-initializing event listeners');
             // Re-initialize event listeners for React remount
             w.meritFunctionEditor.initializeEventListeners();
             return true;

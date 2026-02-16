@@ -6,7 +6,6 @@ export default function LegacyPanels() {
     if (typeof window !== 'undefined') {
       const meritEditor = (window as any).meritFunctionEditor;
       if (meritEditor && typeof meritEditor.initializeEventListeners === 'function') {
-        console.log('[LegacyPanels] Re-initializing Merit Function event listeners on mount');
         meritEditor.initializeEventListeners();
       }
     }
@@ -114,20 +113,6 @@ export default function LegacyPanels() {
           <label htmlFor="reference-focal-length">Reference Focal Length:</label>
           <input type="text" id="reference-focal-length" placeholder="Auto" style={{ width: '80px' }} />
           <button id="coord-transform-btn">Coord Transform</button>
-          <br />
-          <label htmlFor="transform-surface-select" style={{ marginTop: 8 }}>
-            Transform at surface:
-          </label>
-          <select id="transform-surface-select" style={{ marginRight: 8 }}>
-            <option value="">Select surface...</option>
-          </select>
-          <button id="show-local-coords-btn">Show Local Coords</button>
-          <button id="cancel-transform-btn" style={{ display: "none" }}>
-            Cancel
-          </button>
-          <button id="save-local-coords-btn" style={{ display: "none" }}>
-            Save as JSON
-          </button>
         </div>
         <textarea id="system-data" rows={15} cols={100} placeholder="System information will appear here..."></textarea>
       </div>

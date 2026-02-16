@@ -20,7 +20,6 @@ export function updateWavefrontObjectSelect(): void {
     try {
         const objectSelect = document.getElementById('wavefront-object-select') as HTMLSelectElement | null;
         if (!objectSelect) {
-            console.warn('⚠️ wavefront-object-select要素が見つかりません');
             return;
         }
         
@@ -30,7 +29,7 @@ export function updateWavefrontObjectSelect(): void {
             const allObjectRows = w.tableObject.getData();
             
             // 有効なObjectデータのみをフィルタリング
-            objectRows = allObjectRows.filter((obj, index) => {
+            objectRows = allObjectRows.filter((obj) => {
                 const isValid = obj && obj !== null && obj !== undefined;
                 return isValid;
             });
@@ -90,10 +89,6 @@ export function updateWavefrontObjectSelect(): void {
             objectSelect.value = '0'; // デフォルトは最初のObject
         }
         
-        // 選択されているObject
-        const selectedIndex = parseInt(objectSelect.value) || 0;
-        const selectedObject = objectRows[selectedIndex];
-        
     } catch (error) {
         console.error('❌ Object選択ドロップダウン更新エラー:', error);
     }
@@ -107,20 +102,7 @@ export function setupWavefrontObjectSelectListener(): void {
     if (objectSelect) {
         objectSelect.addEventListener('change', function(this: HTMLSelectElement) {
             const selectedIndex = parseInt(this.value) || 0;
-            console.log(`🔄 Object選択変更: Object${selectedIndex + 1}`);
-            
-            // 選択されたObjectの詳細をログ出力
-            try {
-                if (typeof window !== 'undefined' && w.tableObject && w.tableObject.getData) {
-                    const objectRows = w.tableObject.getData();
-                    const selectedObject = objectRows[selectedIndex];
-                    if (selectedObject) {
-                        console.log(`   詳細: (${selectedObject.xHeightAngle || 0}, ${selectedObject.yHeightAngle || 0})`);
-                    }
-                }
-            } catch (error) {
-                console.warn('Object詳細取得エラー:', error);
-            }
+            clearObjectTableDataProjection(selectedIndex);
         });
     }
 }
@@ -144,7 +126,6 @@ export function debugResetObjectTable(): void {
     try {
         clearObjectTableDataProjection();
         location.reload();
-        console.log('🔄 Objectテーブルデータをリセットしました');
     } catch (error) {
         console.error('❌ Objectテーブルリセットエラー:', error);
     }
@@ -155,6 +136,5 @@ export function debugResetObjectTable(): void {
  * main.jsや他のファイルから呼び出し可能
  */
 export function onObjectTableUpdated(): void {
-    console.log('🔄 Objectテーブル更新検出 - Object選択ドロップダウンを更新');
     updateWavefrontObjectSelect();
 }

@@ -4,8 +4,6 @@
  * - System Evaluation UI is deprecated (no transfer)
  */
 
-console.log('[Requirements] Module loading...');
-
 import { OPERAND_DEFINITIONS, InspectorManager } from './merit-function-inspector.ts';
 import { getOpticalSystemRows } from '../../utils/data-utils.ts';
 import { loadSystemConfigurations, saveSystemConfigurations } from '../../data/table-configuration.ts';
@@ -14,8 +12,6 @@ import { loadTableData as loadObjectTableData } from '../../data/table-object.ts
 import { loadTableData as loadSystemRequirementsTableData, saveTableData as saveSystemRequirementsTableData } from '../../data/table-system-requirements.ts';
 import { loadSpotDiagramSettingsByConfigId, saveSpotDiagramSettingsByConfigId } from '../spot-diagram-settings-storage.ts';
 import { generateSurfaceOptions } from '../../evaluation/spot-diagram.ts';
-
-console.log('[Requirements] Imports loaded');
 
 // Extend Window interface for global properties
 declare global {
@@ -45,8 +41,6 @@ function trySaveSystemConfigurations(systemConfig: any): boolean {
     return false;
   }
 }
-
-console.log('[Requirements] Module initialized, setting up event listeners...');
 
 // Zernike Noll index names (0-37)
 const ZERNIKE_NOLL_NAMES = [
@@ -132,18 +126,10 @@ class SystemRequirementsEditor {
     this._paramToggleBtn = null;
     this.inspector = new InspectorManager('requirement-inspector', 'requirement-inspector-content');
 
-    console.log('[Requirements] ==========================================');
-    console.log('[Requirements] Initializing SystemRequirementsEditor constructor');
     this.loadFromStorage();
-    console.log('[Requirements] Loaded requirements from storage:', this.requirements.length);
-    console.log('[Requirements] Requirements data:', JSON.stringify(this.requirements.slice(0, 2)));
     this.initializeTable();
-    console.log('[Requirements] ✅ Table initialized in constructor');
     this.initializeEventListeners();
-    console.log('[Requirements] ✅ Event listeners initialized');
     this._ensureProgressUI();
-    console.log('[Requirements] ✅ Progress UI setup complete');
-    console.log('[Requirements] ==========================================');
 
     // Auto-update status when Merit is recalculated
     this.installMeritHook();
@@ -323,7 +309,6 @@ class SystemRequirementsEditor {
     }
     
     // Clear only table-related content, preserve other elements
-    console.log('[Requirements] Initializing table in container');
     container.innerHTML = '';
 
     const wrap = document.createElement('div');
@@ -527,7 +512,6 @@ class SystemRequirementsEditor {
             row.enabled
           );
           w.undoHistory.record(command);
-          console.log(`[Undo] Recorded: Set Requirement ${row.id}.enabled from ${oldValue} to ${row.enabled}`);
         }
         
         this.saveToStorage();
@@ -554,19 +538,8 @@ class SystemRequirementsEditor {
       }
       operandSel.value = String(row.operand || '').trim();
       operandSel.addEventListener('change', () => {
-        console.log('[Undo] operandSel change event fired');
-        console.log('[Undo] row.operand before change:', row.operand);
-        console.log('[Undo] operandSel.value:', operandSel.value);
-        console.log('[Undo] window.undoHistory exists:', !!w.undoHistory);
-        console.log('[Undo] window.SetRequirementCommand exists:', !!w.SetRequirementCommand);
-        console.log('[Undo] window.undoHistory.isExecuting:', w.undoHistory?.isExecuting);
-        
         const oldValue = row.operand;
         row.operand = operandSel.value;
-        
-        console.log('[Undo] oldValue:', oldValue);
-        console.log('[Undo] new value (row.operand):', row.operand);
-        console.log('[Undo] values are different:', oldValue !== row.operand);
         
         // Record undo command
         if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== row.operand) {
@@ -577,13 +550,6 @@ class SystemRequirementsEditor {
             row.operand
           );
           w.undoHistory.record(command);
-          console.log(`[Undo] Recorded: Set Requirement ${row.id}.operand from ${oldValue} to ${row.operand}`);
-        } else {
-          console.log('[Undo] NOT recording operand change, reason:', 
-            !w.undoHistory ? 'undoHistory missing' :
-            !w.SetRequirementCommand ? 'SetRequirementCommand missing' :
-            w.undoHistory.isExecuting ? 'isExecuting=true' :
-            oldValue === row.operand ? 'values are same' : 'unknown');
         }
         
         this.saveToStorage();
@@ -665,7 +631,6 @@ class SystemRequirementsEditor {
             row.configId
           );
           w.undoHistory.record(command);
-          console.log(`[Undo] Recorded: Set Requirement ${row.id}.configId from ${oldValue} to ${row.configId}`);
         }
         
         this.saveToStorage();
@@ -977,7 +942,6 @@ class SystemRequirementsEditor {
                 w.undoHistory.record(command);
               }
             } catch (undoError) {
-              console.warn('[Undo] Failed to record requirement edit:', undoError);
             }
             
             this.saveToStorage();
@@ -1022,7 +986,6 @@ class SystemRequirementsEditor {
                 w.undoHistory.record(command);
               }
             } catch (undoError) {
-              console.warn('[Undo] Failed to record requirement edit:', undoError);
             }
             
             this.saveToStorage();
@@ -1150,7 +1113,6 @@ class SystemRequirementsEditor {
             row.op
           );
           w.undoHistory.record(command);
-          console.log(`[Undo] Recorded: Set Requirement ${row.id}.op from ${oldValue} to ${row.op}`);
         }
         
         this.saveToStorage();
@@ -1430,64 +1392,40 @@ class SystemRequirementsEditor {
   }
 
   initializeEventListeners(): void {
-    console.log('[Requirements] ============================================');
-    console.log('[Requirements] Initializing event listeners...');
-    console.log('[Requirements] Timestamp:', new Date().toISOString());
-    
     // Add button
     const addBtn = document.getElementById('add-requirement-btn');
-    console.log('[Requirements] Add button element:', addBtn);
     if (addBtn) {
       // Clone and replace to remove old listeners
       const newAddBtn = addBtn.cloneNode(true) as HTMLElement;
       addBtn.parentNode?.replaceChild(newAddBtn, addBtn);
       newAddBtn.addEventListener('click', () => {
-        console.log('[Requirements] Add button clicked!');
         this.addRequirement();
       });
-      console.log('[Requirements] ✅ Add button listener attached');
-    } else {
-      console.warn('[Requirements] ⚠️ Add button not found');
     }
 
     // Delete button
     const delBtn = document.getElementById('delete-requirement-btn');
-    console.log('[Requirements] Delete button element:', delBtn);
     if (delBtn) {
       const newDelBtn = delBtn.cloneNode(true) as HTMLElement;
       delBtn.parentNode?.replaceChild(newDelBtn, delBtn);
       newDelBtn.addEventListener('click', () => {
-        console.log('[Requirements] Delete button clicked!');
         this.deleteRequirement();
       });
-      console.log('[Requirements] ✅ Delete button listener attached');
-    } else {
-      console.warn('[Requirements] ⚠️ Delete button not found');
     }
 
     // Update button
     const updateBtn = document.getElementById('update-requirement-btn');
-    console.log('[Requirements] Update button element:', updateBtn);
-    console.log('[Requirements] Update button parent:', updateBtn?.parentNode);
     if (updateBtn) {
       const newUpdateBtn = updateBtn.cloneNode(true) as HTMLElement;
       updateBtn.parentNode?.replaceChild(newUpdateBtn, updateBtn);
       newUpdateBtn.addEventListener('click', async () => {
-        console.log('[Requirements] ========================================');
-        console.log('[Requirements] Update button clicked!');
-        console.log('[Requirements] ========================================');
         try {
           await this.updateAllConfigsAndEvaluate();
         } catch (err) {
           console.error('[Requirements] Error in updateAllConfigsAndEvaluate:', err);
         }
       });
-      console.log('[Requirements] ✅ Update button listener attached');
-      console.log('[Requirements] New update button:', document.getElementById('update-requirement-btn'));
-    } else {
-      console.warn('[Requirements] ⚠️ Update button not found');
     }
-    console.log('[Requirements] ============================================');
   }
 
   renderTable(): void {
@@ -1499,22 +1437,15 @@ class SystemRequirementsEditor {
   _ensureProgressUI(): any {
     try {
       if (this._progressEls) {
-        console.log('[Requirements] ✅ Returning cached progress elements');
         return this._progressEls;
       }
       
       // First, try to use existing progress elements from React component
-      console.log('[Requirements] 🔍 Looking for progress elements...');
       const existingWrap = document.getElementById('requirements-progress-wrap');
       const existingLabel = document.getElementById('requirements-progress-label');
       const existingProg = document.getElementById('requirements-progress');
       
-      console.log('[Requirements] Found wrap:', existingWrap ? '✅' : '❌');
-      console.log('[Requirements] Found label:', existingLabel ? '✅' : '❌');
-      console.log('[Requirements] Found prog:', existingProg ? '✅' : '❌');
-      
       if (existingWrap && existingLabel && existingProg) {
-        console.log('[Requirements] ✅ Using existing progress elements from React');
         this._progressEls = { wrap: existingWrap, label: existingLabel, prog: existingProg };
         return this._progressEls;
       }
@@ -1546,7 +1477,6 @@ class SystemRequirementsEditor {
       wrap.appendChild(prog);
 
       btns.parentElement.insertBefore(wrap, btns.nextSibling);
-      console.log('[Requirements] Created new progress elements dynamically');
       this._progressEls = { wrap, label, prog };
       return this._progressEls;
     } catch (err) {
@@ -1557,13 +1487,11 @@ class SystemRequirementsEditor {
 
   _setProgressVisible(visible: boolean): void {
     try {
-      console.log(`[Requirements] _setProgressVisible(${visible}) called`);
       const els = this._ensureProgressUI();
       if (!els || !els.wrap) {
         console.error('[Requirements] ❌ No progress elements available');
         return;
       }
-      console.log(`[Requirements] Setting display to: ${visible ? 'block' : 'none'}`);
       els.wrap.style.display = visible ? 'block' : 'none';
     } catch (err) {
       console.error('[Requirements] Error in _setProgressVisible:', err);
@@ -1572,7 +1500,6 @@ class SystemRequirementsEditor {
 
   _setProgress(labelText: string, value: number, max: number): void {
     try {
-      console.log(`[Requirements] _setProgress("${labelText}", ${value}, ${max})`);
       const els = this._ensureProgressUI();
       if (!els) {
         console.error('[Requirements] ❌ No progress elements in _setProgress');
@@ -1585,7 +1512,6 @@ class SystemRequirementsEditor {
         const v = Number(value);
         els.prog.value = (Number.isFinite(v) && v >= 0) ? v : 0;
       }
-      console.log('[Requirements] ✅ Progress updated');
     } catch (err) {
       console.error('[Requirements] Error in _setProgress:', err);
     }
@@ -1788,9 +1714,6 @@ class SystemRequirementsEditor {
   }
 
   async updateAllConfigsAndEvaluate(): Promise<void> {
-    console.log('[Requirements] ========================================');
-    console.log('[Requirements] updateAllConfigsAndEvaluate START');
-    console.log('[Requirements] ========================================');
     
     // Force using UI table rows during this update cycle (blocks may be stale after CB insertion).
     let prevPreferTable: any;
@@ -1813,9 +1736,7 @@ class SystemRequirementsEditor {
     // Ensure each configuration has an up-to-date expanded opticalSystem snapshot
     // and has a per-config Spot Diagram settings entry.
     const editor = w.meritFunctionEditor;
-    console.log('[Requirements] Merit editor exists:', !!editor);
     if (!editor || typeof editor.getOpticalSystemDataByConfigId !== 'function') {
-      console.log('[Requirements] ⚠️ No merit editor, calling evaluateAndUpdateNow');
       try { await this.evaluateAndUpdateNow({ reason: 'no-merit-editor' }); } catch (_) {}
       return;
     }
@@ -1827,9 +1748,7 @@ class SystemRequirementsEditor {
       systemConfig = {};
     }
     const configs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
-    console.log('[Requirements] Found configs:', configs.length);
     if (!systemConfig || configs.length === 0) {
-      console.log('[Requirements] ⚠️ No configs, calling evaluateAndUpdateNow');
       await this.evaluateAndUpdateNow({ reason: 'no-configs' });
       return;
     }
@@ -1838,12 +1757,10 @@ class SystemRequirementsEditor {
     try { if (updateBtn) updateBtn.disabled = true; } catch (_) {}
 
     // Show progress during the refresh, then reuse the same bar for evaluation.
-    console.log('[Requirements] Setting up progress timer (0ms)...');
     let showTimer: any = null;
     try {
       showTimer = setTimeout(() => {
         try {
-          console.log('[Requirements] Progress timer fired! Showing progress bar...');
           this._setProgressVisible(true);
           this._setProgress('Updating config snapshots…', 0, Math.max(1, configs.length));
         } catch (_) {}
@@ -1874,9 +1791,6 @@ class SystemRequirementsEditor {
             activeConfigOpticalRows = w.opticalSystemTabulator.getData();
           }
           
-          if (Array.isArray(activeConfigOpticalRows) && activeConfigOpticalRows.length > 0) {
-            console.log(`✅ Got ${activeConfigOpticalRows.length} rows from active config UI table (CB-aware, bypassing blocks)`);
-          }
         } catch (_) {}
         
         // Fallback: Set temporary flag to force table reading, then call getOpticalSystemRows
@@ -2126,7 +2040,6 @@ class SystemRequirementsEditor {
         this.renderTable();
       }
     } catch (e) {
-      console.warn('[Undo] Failed to add requirement:', e);
       // Fallback
       storageData.splice(insertIndex, 0, JSON.parse(JSON.stringify(newRow)));
       saveSystemRequirementsTableData(storageData);
@@ -2148,7 +2061,6 @@ class SystemRequirementsEditor {
     // Get the actual data from localStorage to ensure we're deleting the right row
     const storageData = loadSystemRequirementsTableData();
     if (idx >= storageData.length) {
-      console.warn('[Undo] Index out of bounds for delete');
       return;
     }
     
@@ -2197,7 +2109,6 @@ class SystemRequirementsEditor {
         } catch (_) {}
       }
     } catch (e) {
-      console.warn('[Undo] Failed to delete requirement:', e);
       // Fallback
       storageData.splice(idx, 1);
       saveSystemRequirementsTableData(storageData);
@@ -2294,7 +2205,6 @@ class SystemRequirementsEditor {
     try {
       showTimer = setTimeout(() => {
         try {
-          console.log('[Requirements] 📊 Showing progress bar in evaluateAndUpdateNow');
           progressVisible = true;
           this._setProgressVisible(true);
           this._setProgress('Evaluating requirements…', 0, Math.max(1, live.length));
@@ -2357,20 +2267,6 @@ class SystemRequirementsEditor {
 
       let current: any = null;
       try {
-        const isSpotSize = String(opObj.operand || '').includes('SPOT_SIZE');
-        if (isSpotSize) {
-          console.log('🔍 [REQUIREMENTS EVAL SPOT_SIZE] Calling calculateOperandValue:', {
-            operand: opObj.operand,
-            param1: opObj.param1,
-            param2: opObj.param2,
-            param3: opObj.param3,
-            param4: opObj.param4,
-            param5: opObj.param5,
-            configId: opObj.configId,
-            editorExists: !!editor,
-            funcExists: typeof editor.calculateOperandValue === 'function'
-          });
-        }
         current = editor.calculateOperandValue(opObj);
 
         // If this is a Spot Size operand, capture its debug snapshot keyed by requirement row id.
@@ -2738,48 +2634,31 @@ class SystemRequirementsEditor {
 
 const __cooptInitSystemRequirementsEditor = (): boolean => {
   try {
-    console.log('[Requirements] ==========================================');
-    console.log('[Requirements] Attempting to initialize editor');
-    console.log('[Requirements] Timestamp:', new Date().toISOString());
     if (typeof window === 'undefined') return false;
     
     const container = document.getElementById('table-system-requirements');
-    console.log('[Requirements] Container element:', container);
     if (!container) {
-      console.warn('[Requirements] ⚠️ Container element not found');
       return false;
     }
     
     if (w.systemRequirementsEditor) {
-      console.log('[Requirements] Editor already exists, reinitializing for React remount');
       // Clear cached elements
       w.systemRequirementsEditor._progressEls = null;
       w.systemRequirementsEditor._tableRoot = null;
       w.systemRequirementsEditor._tbody = null;
-      console.log('[Requirements] Cleared cached elements');
       
       // Re-initialize table to render content
-      console.log('[Requirements] Calling initializeTable()...');
       w.systemRequirementsEditor.initializeTable();
-      console.log('[Requirements] ✅ Table reinitialized');
       
       // Re-initialize event listeners
-      console.log('[Requirements] Calling initializeEventListeners()...');
       w.systemRequirementsEditor.initializeEventListeners();
-      console.log('[Requirements] ✅ Event listeners reinitialized');
       
       // Ensure progress UI
       w.systemRequirementsEditor._ensureProgressUI();
-      console.log('[Requirements] ✅ Progress UI ensured');
-      console.log('[Requirements] ==========================================');
       return true;
     }
     
-    console.log('[Requirements] Creating new SystemRequirementsEditor instance');
     w.systemRequirementsEditor = new SystemRequirementsEditor();
-    console.log('[Requirements] ✅ Editor created successfully');
-    console.log('[Requirements] Editor requirements count:', w.systemRequirementsEditor.requirements.length);
-    console.log('[Requirements] ==========================================');
     return true;
   } catch (e) {
     console.error('❌ System Requirements Editor init failed:', e);
@@ -2796,26 +2675,16 @@ try {
 } catch (_) {}
 
 const __cooptScheduleSystemRequirementsInit = (): void => {
-  console.log('[Requirements] __cooptScheduleSystemRequirementsInit called');
-  console.log('[Requirements] Checking container availability...');
-  const container = document.getElementById('table-system-requirements');
-  console.log('[Requirements] Container found:', !!container);
-  
   if (__cooptInitSystemRequirementsEditor()) {
-    console.log('[Requirements] Editor initialized successfully on first try');
     return;
   }
   
   if (typeof window !== 'undefined') {
-    console.log('[Requirements] Waiting for React mount, __cooptReactMounted:', w.__cooptReactMounted);
     if (w.__cooptReactMounted) {
-      console.log('[Requirements] React already mounted, trying again...');
       setTimeout(() => __cooptInitSystemRequirementsEditor(), 50);
       return;
     }
-    console.log('[Requirements] Adding coopt:react-mounted event listener');
     window.addEventListener('coopt:react-mounted', () => {
-      console.log('[Requirements] coopt:react-mounted event received, initializing...');
       // Give React a moment to fully render the DOM
       setTimeout(() => {
         __cooptInitSystemRequirementsEditor();
@@ -2827,7 +2696,6 @@ const __cooptScheduleSystemRequirementsInit = (): void => {
     const maxRetries = 20;
     const retryInterval = setInterval(() => {
       retryCount++;
-      console.log(`[Requirements] Retry attempt ${retryCount}/${maxRetries}`);
       if (__cooptInitSystemRequirementsEditor() || retryCount >= maxRetries) {
         clearInterval(retryInterval);
         if (retryCount >= maxRetries) {
@@ -2838,14 +2706,10 @@ const __cooptScheduleSystemRequirementsInit = (): void => {
   }
 };
 
-console.log('[Requirements] Setting up initialization, readyState:', document.readyState);
-
 if (typeof document !== 'undefined' && document?.addEventListener) {
   if (document.readyState === 'loading') {
-    console.log('[Requirements] Document loading, adding DOMContentLoaded listener');
     document.addEventListener('DOMContentLoaded', __cooptScheduleSystemRequirementsInit);
   } else {
-    console.log('[Requirements] Document already loaded, initializing immediately');
     __cooptScheduleSystemRequirementsInit();
   }
 }

@@ -104,7 +104,6 @@ export function getSafeRadius(surface, meridian = 'average') {
     // Get axis rotation (degrees)
     const axisDeg = Number(surface.axis) || 0;
     
-    console.log(`[getSafeRadius] Toric surface detected: meridian=${meridian}, axis=${axisDeg}, radiusX=${surface.radiusX}, radiusY=${surface.radiusY || surface.radius}`);
     
     // For meridian-based calculations, we need to determine which physical radius to use
     // based on the axis rotation. The axis parameter rotates the toric meridians.
@@ -134,7 +133,6 @@ export function getSafeRadius(surface, meridian = 'average') {
       const sinA = Math.sin(axisRad);
       const cosA = Math.cos(axisRad);
       
-      console.log(`[getSafeRadius Tangential] axis=${axisDeg}°, sinA=${sinA}, cosA=${cosA}`);
       
       // Get both radii
       const rxRaw = surface.radiusX;
@@ -169,7 +167,6 @@ export function getSafeRadius(surface, meridian = 'average') {
       // If both are infinite, return Infinity
       if (!isFinite(rx) && !isFinite(ry)) return Infinity;
       
-      console.log(`[getSafeRadius Tangential] Parsed: rx=${rx}, ry=${ry}, sin²=${sinA*sinA}, cos²=${cosA*cosA}`);
       
       // Calculate effective radius in tangential direction
       // Tangential (Y-direction): 1/R_eff = sin²(axis)/Rx + cos²(axis)/Ry
@@ -181,13 +178,11 @@ export function getSafeRadius(surface, meridian = 'average') {
       if (sin2 < 1e-10) {
         // axis ≈ 0°: only radiusY contributes
         const result = isFinite(ry) ? ry : Infinity;
-        console.log(`[getSafeRadius Tangential] axis≈0°, radiusX=${rx}, radiusY=${ry} → ${result}`);
         return result;
       }
       if (cos2 < 1e-10) {
         // axis ≈ 90°: only radiusX contributes
         const result = isFinite(rx) ? rx : Infinity;
-        console.log(`[getSafeRadius Tangential] axis≈90°, radiusX=${rx}, radiusY=${ry} → ${result}`);
         return result;
       }
       
@@ -215,7 +210,6 @@ export function getSafeRadius(surface, meridian = 'average') {
       const sinA = Math.sin(axisRad);
       const cosA = Math.cos(axisRad);
       
-      console.log(`[getSafeRadius Sagittal] axis=${axisDeg}°, sinA=${sinA}, cosA=${cosA}`);
       
       // Get both radii
       const rxRaw = surface.radiusX;
@@ -250,7 +244,6 @@ export function getSafeRadius(surface, meridian = 'average') {
       // If both are infinite, return Infinity
       if (!isFinite(rx) && !isFinite(ry)) return Infinity;
       
-      console.log(`[getSafeRadius Sagittal] Parsed: rx=${rx}, ry=${ry}, sin²=${sinA*sinA}, cos²=${cosA*cosA}`);
       
       // Calculate effective radius in sagittal direction
       // Sagittal (X-direction): 1/R_eff = cos²(axis)/Rx + sin²(axis)/Ry
@@ -262,13 +255,11 @@ export function getSafeRadius(surface, meridian = 'average') {
       if (cos2 < 1e-10) {
         // axis ≈ 90°: only radiusY contributes
         const result = isFinite(ry) ? ry : Infinity;
-        console.log(`[getSafeRadius Sagittal] axis≈90°, radiusX=${rx}, radiusY=${ry} → ${result}`);
         return result;
       }
       if (sin2 < 1e-10) {
         // axis ≈ 0°: only radiusX contributes
         const result = isFinite(rx) ? rx : Infinity;
-        console.log(`[getSafeRadius Sagittal] axis≈0°, radiusX=${rx}, radiusY=${ry} → ${result}`);
         return result;
       }
       
@@ -289,7 +280,6 @@ export function getSafeRadius(surface, meridian = 'average') {
       return 1 / curvEff;
     } else {
       // Average: harmonic mean (equivalent spherical radius for non-directional calculations)
-      console.log(`[getSafeRadius Average] Computing harmonic mean`);
       const rxRaw = surface.radiusX;
       const ryRaw = surface.radiusY !== undefined && surface.radiusY !== null && surface.radiusY !== ""
                     ? surface.radiusY 
@@ -325,16 +315,13 @@ export function getSafeRadius(surface, meridian = 'average') {
       const ry = parseFloat(ryRaw);
       
       if (rxIsInf) {
-        console.log(`[getSafeRadius Average] radiusX=INF, returning radiusY=${ry}`);
         return ry;
       }
       if (ryIsInf) {
-        console.log(`[getSafeRadius Average] radiusY=INF, returning radiusX=${rx}`);
         return rx;
       }
       
       const harmonicMean = 2 * rx * ry / (rx + ry);
-      console.log(`[getSafeRadius Average] radiusX=${rx}, radiusY=${ry}, harmonicMean=${harmonicMean}`);
       return harmonicMean;
     }
   }
@@ -498,7 +485,6 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
         // 反射を「負の屈折率空間への屈折」として扱う標準的な近軸光線追跡法
         // 屈折力: φ = (n' - n) / R = (-n - n) / R = -2n/R
         nextN = -prevN;
-        console.log(`  面${j}: MIRROR検出 - 屈折率反転 n = ${prevN} → n' = ${nextN}`);
         // ミラー通過後のαを記録（屈折計算後に更新される）
       } else {
         // 手動設定のRef Indexまたは材料名がある場合
@@ -601,7 +587,6 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
     let backFocalLength = null;
     if (objectDistance !== Infinity) {
       // 有限物体の場合、BFL計算のために無限遠物体条件での結果を使用
-      console.log(`[BFL Calc] Calling calculateEFLTrace with meridian=${meridian}`);
       const eflResult = calculateEFLTrace(opticalSystemRows, wavelength, meridian);
       if (eflResult && Math.abs(eflResult.finalAlpha) > 1e-10) {
         backFocalLength = eflResult.finalHeight / eflResult.finalAlpha;
@@ -625,18 +610,8 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       const TELECENTRIC_ALPHA_THRESHOLD = 1e-5;
       // ミラーが存在する場合は最後のミラー直後のαを使用、そうでなければ最終α
       const alphaForTelecentricCheck = (alphaAfterLastMirror !== null) ? alphaAfterLastMirror : alpha;
-      console.log(`[BFL Mirror補正判定] α = ${alphaForTelecentricCheck.toFixed(9)} rad (|α| = ${Math.abs(alphaForTelecentricCheck).toExponential(6)}), しきい値 = ${TELECENTRIC_ALPHA_THRESHOLD.toExponential(0)}`);
-      if (alphaAfterLastMirror !== null) {
-        console.log(`  → 最後のミラー直後のαを使用（最終α = ${alpha.toFixed(9)}）`);
-      }
       const isTelecentric = Math.abs(alphaForTelecentricCheck) < TELECENTRIC_ALPHA_THRESHOLD;
       
-      if (isTelecentric) {
-        console.log(`テレセントリック光学系検出 (|α| = ${Math.abs(alpha).toExponential(3)} < ${TELECENTRIC_ALPHA_THRESHOLD.toExponential(0)})`);
-        console.log(`BFL: ミラー折り返し補正をスキップ（テレセントリック系）`);
-      } else {
-        console.log(`[BFL Mirror補正] 非テレセントリック系 → ミラー光路補正を実行`);
-      }
       
       let mirrorPathCorrection = 0;
       let mirrorCount = 0;
@@ -678,10 +653,7 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
                   const thickness = getSafeThickness(nextSurface);
                   if (thickness !== 0) {
                     mirrorPathCorrection += Math.abs(thickness);
-                    console.log(`  折り返し光路補正: Mirror${currentMirrorIndex} 後の面${k} CoordTrans gap=${thickness.toFixed(3)}, 累積=${mirrorPathCorrection.toFixed(3)}`);
                   }
-                } else {
-                  console.log(`  Image面直前の面${k}のgapは補正から除外（Manual調整値）`);
                 }
                 break; // 最初のCoordTransのみを対象
               }
@@ -691,7 +663,6 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       }
       
       if (mirrorPathCorrection > 0) {
-        console.log(`BFL補正: 光学的BFL ${backFocalLength.toFixed(6)} - ミラー光路 ${mirrorPathCorrection.toFixed(6)} = ${(backFocalLength - mirrorPathCorrection).toFixed(6)} mm`);
         backFocalLength = backFocalLength - mirrorPathCorrection;
       }
     }
@@ -707,20 +678,12 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       const TELECENTRIC_ALPHA_THRESHOLD = 1e-5;
       // ミラーが存在する場合は最後のミラー直後のαを使用、そうでなければ最終α
       const alphaForTelecentricCheck = (alphaAfterLastMirror !== null) ? alphaAfterLastMirror : alpha;
-      console.log(`[IMD Mirror補正判定] α = ${alphaForTelecentricCheck.toFixed(9)} rad (|α| = ${Math.abs(alphaForTelecentricCheck).toExponential(6)}), しきい値 = ${TELECENTRIC_ALPHA_THRESHOLD.toExponential(0)}`);
-      if (alphaAfterLastMirror !== null) {
-        console.log(`  → 最後のミラー直後のαを使用（最終α = ${alpha.toFixed(9)}）`);
-      }
       const imdIsTelecentric = Math.abs(alphaForTelecentricCheck) < TELECENTRIC_ALPHA_THRESHOLD;
       
       // ミラー折り返し光路の補正
       let imdMirrorPathCorrection = 0;
       
-      if (imdIsTelecentric) {
-        console.log(`テレセントリック光学系検出 (|α| = ${Math.abs(alpha).toExponential(3)} < ${TELECENTRIC_ALPHA_THRESHOLD.toExponential(0)})`);
-        console.log(`Image Distance: ミラー折り返し補正をスキップ（テレセントリック系）`);
-      } else {
-        console.log(`[IMD Mirror補正] 非テレセントリック系 → ミラー光路補正を実行`);
+      if (!imdIsTelecentric) {
           let imdMirrorCount = 0;
           
           // Image面のインデックスを探す
@@ -756,10 +719,7 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
                     const thickness = getSafeThickness(nextSurface);
                     if (thickness !== 0) {
                         imdMirrorPathCorrection += Math.abs(thickness);
-                        console.log(`  Image Distance補正: Mirror${imdMirrorCount} 後の面${k} CoordTrans gap=${thickness.toFixed(3)}, 累積=${imdMirrorPathCorrection.toFixed(3)}`);
                     }
-                    } else {
-                    console.log(`  Image面直前の面${k}のgapは補正から除外（Manual調整値）`);
                     }
                     break; // 最初のCoordTransのみを対象
                 }
@@ -769,23 +729,16 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       }
       
       if (imdMirrorPathCorrection > 0) {
-        console.log(`Image Distance補正: 光学的 ${imageDistance.toFixed(6)} - ミラー光路 ${imdMirrorPathCorrection.toFixed(6)} = ${(imageDistance - imdMirrorPathCorrection).toFixed(6)} mm`);
         imageDistance = imageDistance - imdMirrorPathCorrection;
       }
     } else {
       imageDistance = Infinity;
-      console.log(`Image Distance = Infinity (α ≈ 0)`);
     }
     
     // console.log(`計算結果:`);
     // console.log(`  焦点距離 f = h[1]/α[final] = ${initialHeight.toFixed(6)}/${alpha.toFixed(6)} = ${focalLength.toFixed(6)} mm`);
     // console.log(`  バックフォーカス BFL = h[final]/α[final] = ${h.toFixed(6)}/${alpha.toFixed(6)} = ${backFocalLength.toFixed(6)} mm`);
     // console.log(`  イメージディスタンス = ${imageDistance.toFixed(6)} mm`);
-    
-    console.log(`=== 近軸計算結果 ===`);
-    console.log(`  焦点距離 f = h[1]/α[final] = ${initialHeight.toFixed(6)}/${alpha.toFixed(6)} = ${focalLength.toFixed(6)} mm`);
-    console.log(`  バックフォーカス BFL = ${backFocalLength !== null && backFocalLength !== Infinity ? backFocalLength.toFixed(6) : backFocalLength} mm (光学的計算 - ミラー補正)`);
-    console.log(`  イメージディスタンス = ${imageDistance !== null && imageDistance !== Infinity ? imageDistance.toFixed(6) : imageDistance} mm (光学的計算 - ミラー補正)`);
     
     return {
       focalLength: focalLength,
@@ -809,15 +762,11 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
  * @returns {Object} 計算結果（トーリック面がある場合は tangential/sagittal を含む）
  */
 export function calculateFullSystemParaxialTraceWithToric(opticalSystemRows, wavelength = 0.5875618) {
-  console.log('[calculateFullSystemParaxialTraceWithToric] Called');
-  
   if (!opticalSystemRows || opticalSystemRows.length === 0) {
-    console.log('[calculateFullSystemParaxialTraceWithToric] No optical system rows');
     return null;
   }
   
   const hasToric = hasToricSurfaces(opticalSystemRows);
-  console.log(`[calculateFullSystemParaxialTraceWithToric] hasToric=${hasToric}`);
   
   if (!hasToric) {
     const result = calculateFullSystemParaxialTrace(opticalSystemRows, wavelength, 'average');
@@ -838,7 +787,6 @@ export function calculateFullSystemParaxialTraceWithToric(opticalSystemRows, wav
   // 非点収差（astigmatism）の計算
   const astigmatism = tangentialResult.focalLength - sagittalResult.focalLength;
   
-  console.log(`タンジェンシャル焦点距離: ${tangentialResult.focalLength?.toFixed(6)} mm`);
   const resultObject = {
     hasToric: true,
     tangential: tangentialResult,
@@ -1058,7 +1006,6 @@ export function calculateExitPupilDiameter(opticalSystemRows, wavelength = 0.587
     
     if (newFormulaResult && newFormulaResult.isValid && newFormulaResult.diameter !== null) {
   // 新公式の射出瞳径を使用
-      console.log('==============================');
       return {
         diameter: newFormulaResult.diameter,
         position: newFormulaResult.position,
@@ -1068,7 +1015,6 @@ export function calculateExitPupilDiameter(opticalSystemRows, wavelength = 0.587
     }
     
     // フォールバック: Zemax準拠の主光線・周辺光線計算
-    console.log('=== フォールバック: Zemax準拠 主光線・周辺光線計算 ===');
     const primaryExitPupilData = calculateExitPupilByParaxialMethod(opticalSystemRows, stopIndex, wavelength);
     
     if (primaryExitPupilData && primaryExitPupilData.diameter !== null && isFinite(primaryExitPupilData.diameter)) {
@@ -1247,23 +1193,15 @@ function calculateExitPupilByNewSpecInternal(opticalSystemRows, stopIndex, stopR
  */
 function calculateEntrancePupilByNewSpecInternal(opticalSystemRows, stopIndex, stopRadius, wavelength) {
   try {
-    console.log('=== 入射瞳位置・径計算 ===');
-    console.log(`STOP面インデックス: ${stopIndex}`);
-    console.log(`STOP面半径: ${stopRadius}mm`);
     
     // **新仕様**: STOP面が最初面(Object面+1)の場合の特別処理
     const firstOpticalSurfaceIndex = 1; // Object面の次の面（最初の光学面）
     
     if (stopIndex === firstOpticalSurfaceIndex) {
-      console.log('🔵 STOP面が最初面(Object面+1)のため、入射瞳計算で特別処理を適用');
-      console.log('  ⚠️ 入射瞳位置 = 0mm（最初の面からの相対位置）');
-      console.log('  ⚠️ 入射瞳径 = STOP面のSemi Dia × 2');
       
       const entrancePupilPosition = 0; // 最初の面からの相対位置なので0
       const entrancePupilDiameter = stopRadius * 2; // Semi Dia × 2
       
-      console.log(`  入射瞳位置: ${entrancePupilPosition}mm`);
-      console.log(`  入射瞳径: ${entrancePupilDiameter}mm`);
       
       return {
         position: entrancePupilPosition,
@@ -1283,8 +1221,6 @@ function calculateEntrancePupilByNewSpecInternal(opticalSystemRows, stopIndex, s
     const lastOpticalSurfaceIndex = imageIndex - 1;  // 最終光学面のインデックス
     
     if (stopIndex === lastOpticalSurfaceIndex) {
-      console.log('🔴 STOP面が最終面(Image面-1)のため、入射瞳計算で特別処理を適用');
-      console.log('  ⚠️ STOP面のthickness、material、rindex、abbeを前の面の値にシフト');
       
       // STOP面のパラメータを面シフトした反転システムを作成
       const reversedSystemForLastStop = createReversedOpticalSystemForLastStopInternal(opticalSystemRows, stopIndex, wavelength);
@@ -1334,9 +1270,6 @@ function calculateEntrancePupilByNewSpecInternal(opticalSystemRows, stopIndex, s
       // 入射瞳径 = |β| × 絞り径
       const entrancePupilDiameter = Math.abs(beta) * stopRadius * 2;
       
-      console.log(`  入射瞳位置: ${entrancePupilPosition}mm`);
-      console.log(`  入射瞳径: ${entrancePupilDiameter}mm`);
-      console.log(`  倍率 β: ${beta}`);
       
       return {
         position: entrancePupilPosition,
@@ -1351,7 +1284,6 @@ function calculateEntrancePupilByNewSpecInternal(opticalSystemRows, stopIndex, s
       };
     }
     
-    console.log('🟢 通常のSTOP面位置、反転系での光線追跡を実行');
     
     // 通常の光線追跡による計算
     const reversedSystem = createReversedOpticalSystemInternal(opticalSystemRows, stopIndex);
@@ -1377,9 +1309,6 @@ function calculateEntrancePupilByNewSpecInternal(opticalSystemRows, stopIndex, s
     // 入射瞳径 = |β| × 絞り径
     const entrancePupilDiameter = Math.abs(beta) * stopRadius * 2;
     
-    console.log(`  入射瞳位置: ${entrancePupilPosition}mm`);
-    console.log(`  入射瞳径: ${entrancePupilDiameter}mm`);
-    console.log(`  倍率 β: ${beta}`);
     
     return {
       position: entrancePupilPosition,
@@ -1403,7 +1332,6 @@ function calculateEntrancePupilByNewSpecInternal(opticalSystemRows, stopIndex, s
 function createReversedOpticalSystemInternal(opticalSystemRows, stopIndex) {
   const reversed = [];
   
-  console.log(`  反転系作成: STOP面インデックス=${stopIndex}`);
   
   // 絞り面から物体面まで（逆順）の部分システムを作成
   for (let i = stopIndex; i >= 0; i--) {
@@ -1535,7 +1463,6 @@ function createReversedOpticalSystemForLastStopInternal(opticalSystemRows, stopI
  */
 export function traceParaxialRayFromStopInternal(opticalSystemRows, stopIndex, wavelength) {
   try {
-    console.log(`  絞り面 ${stopIndex} からの光線追跡開始`);
     
     // 初期値設定：絞り面で h[1]=1.0
     let h = 1.0;
@@ -1556,15 +1483,11 @@ export function traceParaxialRayFromStopInternal(opticalSystemRows, stopIndex, w
     let alpha = calculateMarginalAlphaAtStop(opticalSystemRows, stopIndex, wavelength);
     const initialAlpha = alpha; // 初期α値を記録
     
-    console.log(`  絞り面初期値: h=${h.toFixed(6)}, α=${alpha.toFixed(6)}`);
     
     // 絞り面自体での処理（屈折力φ=0、移行計算なし）
-    console.log(`  絞り面${stopIndex}: φ=0（屈折力なし）`);
     
     // 絞り面では移行計算をスキップ（表計算に合わせる）
-    console.log(`  絞り面移行: スキップ（h=${h.toFixed(6)}維持）`);
     
-    console.log(`  絞り面処理完了: h=${h.toFixed(6)}, α=${alpha.toFixed(6)}`);
     
     // 絞り面の次の面から像面まで追跡
     for (let i = stopIndex + 1; i < opticalSystemRows.length; i++) {
@@ -1629,8 +1552,6 @@ export function traceParaxialRayFromStopInternal(opticalSystemRows, stopIndex, w
     // イメージディスタンス計算
     const imageDistance = Math.abs(alpha) > 1e-10 ? h / alpha : Infinity;
     
-    console.log(`  最終値: h=${h.toFixed(6)}, α=${alpha.toFixed(6)}`);
-    console.log(`  イメージディスタンス: ${imageDistance.toFixed(6)}mm`);
     
     return {
       imageDistance: imageDistance,
@@ -1724,11 +1645,9 @@ export function getRefractiveIndex(surface, wavelength = 0.5875618) {
         } else if (glassData.nd && glassData.vd) {
           // Sellmeierデータがないが nd/vd がある場合、近似分散式を使用
           const n_approx = estimateRefractiveIndexFromNdVd(glassData.nd, glassData.vd, wavelength);
-          console.log(`📐 ${surface.material}: nd=${glassData.nd.toFixed(6)}, vd=${glassData.vd.toFixed(2)} → λ=${wavelength.toFixed(4)}μm: n≈${n_approx.toFixed(6)} (近似)`);
           return n_approx;
         } else {
           // Sellmeierデータもnd/vdもない場合はd線の屈折率を使用
-          console.log(`⚠️ ${surface.material}: Sellmeierデータなし、d線屈折率=${glassData.nd}を使用`);
           return glassData.nd;
         }
       }

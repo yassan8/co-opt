@@ -87,7 +87,6 @@ export function loadTableData(): ObjectRow[] {
       console.warn("保存データの読み込みに失敗しました。初期データを使用します。");
     }
   }
-  console.log('🔵 [TableObject] Using initial data, length:', initialTableData.length);
   return initialTableData;
 }
 
@@ -109,19 +108,11 @@ export function tryLoadPersistedTableData(): ObjectRow[] | null {
 
 // テーブルデータをローカルストレージに保存
 export function saveTableData(data: ObjectRow[]): void {
-  console.log('🔵 [TableObject] Saving data to localStorage...');
-  console.log('🔵 [TableObject] Data is array:', Array.isArray(data));
-  console.log('🔵 [TableObject] Data length:', data ? data.length : 'null');
   if (typeof localStorage === 'undefined' || !localStorage) {
-    console.log('🔵 [TableObject] localStorage unavailable; skipping save');
     return;
   }
   if (data && Array.isArray(data)) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    console.log(`💾 [TableObject] Saved ${data.length} entries to localStorage key: ${STORAGE_KEY}`);
-    // Verify save
-    const verify = localStorage.getItem(STORAGE_KEY);
-    console.log('🔵 [TableObject] Verification - data saved:', !!verify);
   } else {
     console.warn('⚠️ [TableObject] Invalid data, not saving:', data);
   }
@@ -301,7 +292,6 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
                 w.undoHistory.record(cmd);
               }
             } catch (e) {
-              console.warn('[Undo] Failed to record object delete:', e);
             }
             
             emit('rowDeleted');
@@ -470,7 +460,6 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
         w.undoHistory.record(cmd);
       }
     } catch (e) {
-      console.warn('[Undo] Failed to record object add:', e);
     }
     
     emit('rowAdded');
@@ -675,7 +664,6 @@ function updateWavefrontObjectOptionsIfAvailable(): void {
 function recalculateAutoSemiDiaIfAvailable(): void {
   try {
     if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
-      console.log('🔄 Object変更検知: Image面のSemi Dia自動計算を再実行');
       w.calculateImageSemiDiaFromChiefRays();
     }
   } catch (error: any) {

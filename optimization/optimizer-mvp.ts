@@ -1965,8 +1965,8 @@ export async function runOptimizationMVP(options = {}) {
   const opts = isPlainObject(options) ? options : {};
 
   // Lightweight profiler to quickly identify bottlenecks.
-  // Enabled by default; disable via { profile:false }.
-  const __profileEnabled = (opts.profile === undefined) ? true : !!opts.profile;
+  // Disabled by default; enable via { profile:true }.
+  const __profileEnabled = (opts.profile === undefined) ? false : !!opts.profile;
   const __profile = __profileEnabled ? {
     t0: nowMs(),
     startedAt: Date.now(),
@@ -2657,26 +2657,6 @@ export async function runOptimizationMVP(options = {}) {
     .map(coerceBlankAsphereToZero)
     .filter(v => v && typeof v.value === 'number' && Number.isFinite(v.value));
   const catVars = Array.isArray(jointVars.categoricalMaterial) ? jointVars.categoricalMaterial : [];
-  
-  // Debug: Log all recognized variables
-  console.log(`🔍 [Optimizer] Found ${vars.length} numeric variables:`);
-  for (const v of vars.slice(0, 20)) {
-    console.log(`   ${v.id}: ${v.key} = ${v.value} (blockType: ${v.blockType})`);
-  }
-  if (vars.length > 20) {
-    console.log(`   ... and ${vars.length - 20} more`);
-  }
-  
-  // Debug: Check for conic-related variables
-  const conicVars = vars.filter(v => v.key && v.key.toLowerCase().includes('conic'));
-  if (conicVars.length > 0) {
-    console.log(`✅ [Optimizer] Found ${conicVars.length} conic variables:`);
-    for (const v of conicVars) {
-      console.log(`   ${v.id}: ${v.key} = ${v.value}`);
-    }
-  } else {
-    console.warn(`❌ [Optimizer] No conic variables found - check that variables are marked with optimize.mode='V'`);
-  }
   
   if (vars.length === 0 && catVars.length === 0) {
     return { ok: false, reason: formatNoVariableReason(activeCfg) };

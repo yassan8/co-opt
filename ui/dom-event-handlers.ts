@@ -783,7 +783,6 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     // Save configurations to localStorage
     try {
         saveSystemConfigurations(candidateConfig);
-        console.log('🔵 [Load] Configurations data saved');
     } catch (e) {
         console.error('❌ Failed to save configurations:', e);
         return false;
@@ -821,21 +820,18 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
     try {
         if (effectiveSource) {
             saveSourceTableData(effectiveSource as any);
-            console.log('🔵 [Load] Source data saved to localStorage');
         }
     } catch (_) {}
 
     try {
         if (effectiveObject) {
             saveObjectTableData(effectiveObject as any);
-            console.log('🔵 [Load] Object data saved to localStorage');
         }
     } catch (_) {}
 
     try {
         if (effectiveOpticalSystem) {
             saveOpticalSystemTableData(effectiveOpticalSystem as any);
-            console.log('🔵 [Load] Optical system data saved to localStorage');
         }
     } catch (_) {}
 
@@ -941,10 +937,8 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
             const waitForConfigSelect = () => {
                 const selectElement = document.getElementById('config-select');
                 if (selectElement && typeof w.initializeConfigurationUI === 'function') {
-                    console.log('🔵 [Load] Calling initializeConfigurationUI()');
                     w.initializeConfigurationUI();
                 } else {
-                    console.log('🔵 [Load] Waiting for config-select element...');
                     setTimeout(waitForConfigSelect, 100);
                 }
             };
@@ -952,7 +946,6 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
         }, 0);
     } catch (_) {}
 
-    console.log(`✅ Loaded: ${displayName}`);
     return true;
 }
 
@@ -965,18 +958,15 @@ if (typeof window !== 'undefined') {
 
 function setupLoadAllButton(): void {
     const btn = document.getElementById('load-all-btn');
-    console.log('🔧 [Setup] setupLoadAllButton - button found:', !!btn);
     if (!btn) return;
 
     const loadHandler = () => {
-        console.log('🔵 [Load] Load button clicked, creating file input');
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = '.json';
         input.style.display = 'none';
         
         input.addEventListener('change', async (e: Event) => {
-            console.log('🔵 [Load] File selected event triggered');
             const target = e.target as HTMLInputElement;
             const file = target?.files?.[0];
             
@@ -992,14 +982,10 @@ function setupLoadAllButton(): void {
                 return;
             }
 
-            console.log('🔵 [Load] Reading file:', file.name);
             try {
                 const text = await file.text();
-                console.log('🔵 [Load] File read successfully, length:', text.length);
                 const parsed = JSON.parse(text);
-                console.log('🔵 [Load] JSON parsed successfully, keys:', Object.keys(parsed));
                 await __loadAllDataObjectIntoApp(parsed, { filename: file.name });
-                console.log('✅ [Load] Data loaded successfully');
             } catch (err) {
                 console.error('❌ Load failed:', err);
                 alert(`Load failed: ${(err as Error)?.message || String(err)}`);
@@ -1008,7 +994,6 @@ function setupLoadAllButton(): void {
         
         // Add to DOM before triggering click
         document.body.appendChild(input);
-        console.log('🔵 [Load] Triggering file input click');
         input.click();
     };
     
@@ -1391,7 +1376,6 @@ function setupExportZemaxButton(): void {
 // Setup Optimization Buttons
 function setupOptimizeDesignIntentButton(): void {
     const optimizeBtn = document.getElementById('optimize-design-intent-btn') as HTMLButtonElement | null;
-    console.log('🔧 [Setup] setupOptimizeDesignIntentButton - button found:', !!optimizeBtn);
     if (!optimizeBtn) return;
 
     optimizeBtn.addEventListener('click', async () => {
@@ -1399,7 +1383,6 @@ function setupOptimizeDesignIntentButton(): void {
         const isRunningFlag = !!_gThis.__cooptOptimizerIsRunning;
         const schedulerWindow = _gThis.__cooptOptimizerSchedulerWindow;
         const isStaleRunning = isRunningFlag && (!schedulerWindow || schedulerWindow.closed);
-        console.log('[Optimize] Button clicked, checking if already running:', isRunningFlag, { isStaleRunning });
 
         if (isRunningFlag && !isStaleRunning) {
             alert('Optimization is already running. Please wait for it to complete or stop it first.');
@@ -1883,7 +1866,6 @@ function setupOptimizeDesignIntentButton(): void {
 
             const startRun = async () => {
                 isRunning = true;
-                console.log('[Optimize] startRun called, setting flags to true');
                 _gThis.__cooptOptimizerIsRunning = true;
 
                 try {
@@ -1957,7 +1939,6 @@ function setupOptimizeDesignIntentButton(): void {
 
                     try { optimizeBtn.disabled = true; } catch (_) {}
 
-                    console.log('🛠️ [Optimize] Running OptimizationMVP...', { multiScenario });
                     const shouldStopNow = () => !!stopFlag.stop;
 
                     const resolveMaxIterations = (): number => {
@@ -2053,8 +2034,6 @@ function setupOptimizeDesignIntentButton(): void {
                             onProgress: updateProgressUI,
                             shouldStop: shouldStopNow
                         });
-                        console.log('✅ [Optimize] Done', result);
-
                         // Restore flags after successful completion
                         try {
                             if (__prevDisableRayTraceDebug !== undefined) _gThis.__COOPT_DISABLE_RAYTRACE_DEBUG = __prevDisableRayTraceDebug;
@@ -2105,7 +2084,6 @@ function setupOptimizeDesignIntentButton(): void {
                                 }
                             }
                         } catch (e) {
-                            console.warn('[Undo] Failed to record optimization:', e);
                         }
                     } catch (e: any) {
                         console.warn('⚠️ [Optimize] Failed:', e);
@@ -2124,7 +2102,6 @@ function setupOptimizeDesignIntentButton(): void {
                         }
                     } finally {
                         isRunning = false;
-                        console.log('[Optimize] Optimization completed in finally block, resetting isRunning flag');
                         _gThis.__cooptOptimizerIsRunning = false;
                         try { optimizeBtn.disabled = false; } catch (_) {}
                         try {
@@ -2164,15 +2141,12 @@ function setupOptimizeDesignIntentButton(): void {
                 w.__cooptStartOptimizationFromPopup = startRun;
             } catch (_) {}
 
-            console.log('[Optimize] Optimization ready. Press Run to start.');
-
         } catch (e) {
             console.warn('⚠️ [Optimize] Failed:', e);
             alert('Optimize の実行に失敗しました。console を確認してください。');
         } finally {
             try { optimizeBtn.disabled = false; } catch (_) {}
             const _gThis2 = (typeof globalThis !== 'undefined') ? globalThis as any : {} as any;
-            console.log('[Optimize] Resetting isRunning flag in finally block');
             _gThis2.__cooptOptimizerIsRunning = false;
         }
     });
@@ -2499,7 +2473,6 @@ function setupSuggestOptimizeButtons(): void {
 // Setup New File Button
 function setupNewFileButton(): void {
     const btn = document.getElementById('new-file-btn');
-    console.log('🔧 [Setup] setupNewFileButton - button found:', !!btn);
     if (!btn) return;
 
     // Remove existing listener to prevent duplicates
@@ -2589,7 +2562,6 @@ function setupNewFileButton(): void {
 // Setup Save Button
 function setupSaveButton(): void {
     const btn = document.getElementById('save-all-btn');
-    console.log('🔧 [Setup] setupSaveButton - button found:', !!btn);
     if (!btn) return;
 
     const saveHandler = async () => {
@@ -2730,7 +2702,6 @@ function setupLoadDefaultButton(): void {
             const data = await response.json();
             
             await __loadAllDataObjectIntoApp(data, { filename: 'default-load.json' });
-            console.log('✅ Default optical system loaded successfully');
         } catch (err) {
             console.error('❌ Failed to load default system:', err);
             alert('Failed to load default optical system. Check console for details.');
@@ -2813,12 +2784,10 @@ function setupParaxialButton(): void {
     const btn = document.getElementById('calculate-paraxial-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
-        console.log('📐 近軸計算ボタンがクリックされました');
         try {
             if (typeof w.outputParaxialDataToDebug === 'function') {
                 const tableOpticalSystem = w.tableOpticalSystem;
                 w.outputParaxialDataToDebug(tableOpticalSystem);
-                console.log('✅ 近軸計算が完了しました');
             } else {
                 console.error('❌ outputParaxialDataToDebug関数が見つかりません');
             }
@@ -2832,11 +2801,9 @@ function setupSeidelButton(): void {
     const btn = document.getElementById('calculate-seidel-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
-        console.log('🔬 Seidel係数計算ボタンがクリックされました');
         try {
             if (typeof w.outputSeidelCoefficientsToDebug === 'function') {
                 w.outputSeidelCoefficientsToDebug();
-                console.log('✅ Seidel係数計算が完了しました');
             } else {
                 console.error('❌ outputSeidelCoefficientsToDebug関数が見つかりません');
             }
@@ -2850,7 +2817,6 @@ function setupSeidelAfocalButton(): void {
     const btn = document.getElementById('calculate-seidel-afocal-btn');
     if (!btn) return;
     btn.addEventListener('click', async () => {
-        console.log('🔬 Seidel係数計算（アフォーカル）ボタンがクリックされました');
         try {
             const { calculateAfocalSeidelCoefficientsIntegrated } = await import('../evaluation/aberrations/seidel-coefficients-afocal.js');
             const { formatSeidelCoefficients } = await import('../evaluation/aberrations/seidel-coefficients.js');
@@ -2912,7 +2878,6 @@ function setupSeidelAfocalButton(): void {
             const systemDataTextarea = document.getElementById('system-data') as HTMLTextAreaElement | null;
             if (systemDataTextarea) {
                 systemDataTextarea.value = formatSeidelCoefficients(result);
-                console.log('✅ アフォーカル系Seidel係数計算が完了しました');
 
                 if (typeof w.renderBlockContributionSummaryFromSeidel === 'function') {
                     try {
@@ -2935,11 +2900,9 @@ function setupCoordinateTransformButton(): void {
     const btn = document.getElementById('coord-transform-btn');
     if (!btn) return;
     btn.addEventListener('click', () => {
-        console.log('🔄 座標変換ボタンがクリックされました');
         try {
             if (typeof w.displayCoordinateTransformMatrix === 'function') {
                 w.displayCoordinateTransformMatrix();
-                console.log('✅ 座標変換表示が完了しました');
             } else {
                 console.error('❌ displayCoordinateTransformMatrix関数が見つかりません');
             }
@@ -3304,8 +3267,6 @@ export function saveCurrentToActiveConfiguration(): void {
 }
 
 export function loadActiveConfigurationToTables(): void {
-    console.log('🔵 [Configuration] Loading active configuration to tables...');
-    
     const activeConfig = getActiveConfiguration();
     
     if (!activeConfig) {
@@ -3331,7 +3292,6 @@ export function loadActiveConfigurationToTables(): void {
         saveMeritFunctionTableData(activeConfig.meritFunction as any);
     }
     
-    console.log(`✅ [Configuration] Loaded: ${activeConfig.name}`);
 }
 
 export function addConfiguration(name: string): number {
@@ -5574,19 +5534,11 @@ function __blocks_deleteBlockFromActiveConfig(blockId: string): any {
 
 // Design Intent Add/Delete Buttons Setup
 function setupDesignIntentButtons(): void {
-    console.log('🔵 [DesignIntent] Setting up Design Intent buttons...');
     const addBtn = document.getElementById('design-intent-add-block-btn');
     const deleteBtn = document.getElementById('design-intent-delete-block-btn');
     const typeSelect = document.getElementById('design-intent-add-block-type') as HTMLSelectElement | null;
 
-    console.log('🔵 [DesignIntent] Button elements:', { 
-        addBtn: addBtn ? '✅' : '❌', 
-        deleteBtn: deleteBtn ? '✅' : '❌', 
-        typeSelect: typeSelect ? '✅' : '❌' 
-    });
-
     if (addBtn && !addBtn.dataset.designIntentAddBound) {
-        console.log('🔵 [DesignIntent] Attaching Add button event listener...');
         addBtn.dataset.designIntentAddBound = '1';
 
         addBtn.addEventListener('click', (e) => {
@@ -5611,7 +5563,6 @@ function setupDesignIntentButtons(): void {
                         w.undoHistory.record(cmd);
                     }
                 } catch (undoError) {
-                    console.warn('[Undo] Failed to record block add:', undoError);
                 }
 
                 try { refreshBlockInspector(); } catch (_) {}
@@ -5626,15 +5577,9 @@ function setupDesignIntentButtons(): void {
                 alert(`Failed to add block: ${(e as Error)?.message || String(e)}`);
             }
         });
-        console.log('✅ [DesignIntent] Add button event listener attached');
-    } else if (addBtn) {
-        console.log('⚠️ [DesignIntent] Add button already has event listener');
-    } else {
-        console.log('❌ [DesignIntent] Add button not found in DOM');
     }
 
     if (deleteBtn && !deleteBtn.dataset.designIntentDeleteBound) {
-        console.log('🔵 [DesignIntent] Attaching Delete button event listener...');
         deleteBtn.dataset.designIntentDeleteBound = '1';
 
         deleteBtn.addEventListener('click', (e) => {
@@ -5661,7 +5606,6 @@ function setupDesignIntentButtons(): void {
                         w.undoHistory.record(cmd);
                     }
                 } catch (undoError) {
-                    console.warn('[Undo] Failed to record block delete:', undoError);
                 }
 
                 __blockInspectorExpandedBlockId = null;
@@ -5677,30 +5621,11 @@ function setupDesignIntentButtons(): void {
                 alert(`Failed to delete block: ${(e as Error)?.message || String(e)}`);
             }
         });
-        console.log('✅ [DesignIntent] Delete button event listener attached');
-    } else if (deleteBtn) {
-        console.log('⚠️ [DesignIntent] Delete button already has event listener');
-    } else {
-        console.log('❌ [DesignIntent] Delete button not found in DOM');
     }
 }
 
 // Main DOM Event Handlers Setup Function
 export function setupDOMEventHandlers(): void {
-    console.log('🔵 [DOM] Setting up DOM event handlers...');
-    
-    // Check if main toolbar buttons exist
-    const criticalButtons = [
-        'new-file-btn', 'save-all-btn', 'load-all-btn', 'load-default-btn',
-        'import-zemax-btn', 'export-zemax-btn', 'optimize-design-intent-btn',
-        'clear-storage-btn'
-    ];
-    console.log('🔵 [DOM] Critical buttons check:');
-    criticalButtons.forEach(id => {
-        const btn = document.getElementById(id);
-        console.log(`  ${id}: ${btn ? '✅' : '❌'}`);
-    });
-
     try {
         setupImportZemaxButton();
         setupExportZemaxButton();
@@ -5732,8 +5657,6 @@ export function setupDOMEventHandlers(): void {
         setupPSFDisplayModeButtons();
         
         setupApplyToDesignIntentButton();
-        
-        console.log('✅ [DOM] DOM event handlers setup complete');
     } catch (err) {
         console.error('❌ [DOM] Failed to setup event handlers:', err);
     }
@@ -5774,16 +5697,11 @@ export async function loadFromCompressedDataHashIfPresent(): Promise<{ ok: boole
 if (typeof window !== 'undefined') {
     // Listen for React mount event to setup ALL handlers after React renders
     document.addEventListener('coopt:react-mounted', () => {
-        console.log('🔵 [DOM] React mounted, setting up ALL event handlers...');
         // Wait a bit for React to finish rendering all components
         setTimeout(() => {
-            console.log('🔵 [DOM] Executing setupDOMEventHandlers...');
             setupDOMEventHandlers();
-            console.log('🔵 [DOM] Executing setupOpticalSystemChangeListeners...');
             setupOpticalSystemChangeListeners(null);
-            console.log('🔵 [DOM] Executing setupAnalysisWindows...');
             setupAnalysisWindows();
-            console.log('✅ [DOM] All event handlers setup complete');
         }, 200);
     });
     
@@ -5791,7 +5709,6 @@ if (typeof window !== 'undefined') {
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
             setTimeout(() => {
-                console.log('⚠️ [DOM] Fallback initialization (React may not have mounted yet)');
                 setupDOMEventHandlers();
                 setupOpticalSystemChangeListeners(null);
                 setupAnalysisWindows();
@@ -5799,7 +5716,6 @@ if (typeof window !== 'undefined') {
         });
     } else {
         setTimeout(() => {
-            console.log('⚠️ [DOM] Immediate fallback initialization');
             setupDOMEventHandlers();
             setupOpticalSystemChangeListeners(null);
             setupAnalysisWindows();

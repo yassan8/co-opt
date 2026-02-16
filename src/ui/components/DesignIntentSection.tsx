@@ -1,5 +1,4 @@
 export default function DesignIntentSection() {
-  console.log('[React] DesignIntentSection rendering');
   return (
     <div className="optical-system-section">
       <h2>Design Intent</h2>

@@ -268,7 +268,6 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
                 w.undoHistory.record(cmd);
               }
             } catch (e) {
-              console.warn('[Undo] Failed to record source delete:', e);
             }
           }
         },
@@ -449,7 +448,6 @@ const createDOMTableSource = (container: HTMLElement | null, initialRows: Source
         w.undoHistory.record(cmd);
       }
     } catch (e) {
-      console.warn('[Undo] Failed to record source add:', e);
     }
     
     return Promise.resolve();
@@ -629,7 +627,6 @@ function getPrimaryWavelength(): number {
       
       // Primary Wavelengthに設定されているエントリを探す
       const primaryEntry = sourceData.find(row => isPrimaryRow(row?.primary));
-      console.log('🎯 Primary entry found:', primaryEntry);
       
       if (primaryEntry && primaryEntry.wavelength) {
         const wavelength = parseFloat(String(primaryEntry.wavelength));
@@ -639,7 +636,6 @@ function getPrimaryWavelength(): number {
       }
       
       // 見つからない場合はデフォルト値（d線）
-      console.log('⚠️ Primary wavelength not found (table-source.ts), using default: 0.5876 μm');
       return 0.5876;
     }
   } catch (error) {

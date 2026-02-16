@@ -30,6 +30,7 @@ const cfgLog = (...args: any[]): void => { if (CONFIG_DEBUG) console.log(...args
 const cfgWarn = (...args: any[]): void => { if (CONFIG_DEBUG) console.warn(...args); };
 
 let warnedActiveConfigNotFound = false;
+const loggedBlockValidationFatalKeys = new Set<string>();
 
 function idsEqual(a: any, b: any): boolean {
   return String(a ?? '') === String(b ?? '');
@@ -406,13 +407,10 @@ export function saveCurrentToActiveConfiguration(): void {
   activeConfig.metadata.modified = new Date().toISOString();
   
   saveSystemConfigurations(systemConfig);
-  cfgLog(`✅ [Configuration] Saved to: ${activeConfig.name}`);
 }
 
 // アクティブなConfigurationのデータをlocalStorageに展開（各テーブル用）
 export async function loadActiveConfigurationToTables(options: LoadConfigurationOptions = {}): Promise<void> {
-  cfgLog('🔵 [Configuration] Loading active configuration to tables...');
-  
   const systemConfig = loadSystemConfigurations();
   // IMPORTANT: Use the active config object from this `systemConfig` instance.
   // Calling getActiveConfiguration() would reload from localStorage and return a different object,
@@ -615,7 +613,11 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
       for (const f of fatals) {
         const msg = (f && typeof f === 'object' && 'message' in f) ? (f as any).message : String(f);
         const bid = (f && typeof f === 'object' && (f as any).blockId) ? ` [blockId=${(f as any).blockId}]` : '';
-        console.error(`❌ [Configuration] Block validation error${bid}: ${msg}`, f);
+        const key = `${String((f as any)?.blockId ?? '')}::${String(msg)}`;
+        if (!loggedBlockValidationFatalKeys.has(key)) {
+          loggedBlockValidationFatalKeys.add(key);
+          console.error(`❌ [Configuration] Block validation error${bid}: ${msg}`, f);
+        }
       }
       // Keep legacy opticalSystem as-is to avoid breaking the UI.
     } else {

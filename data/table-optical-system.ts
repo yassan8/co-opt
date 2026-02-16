@@ -1520,7 +1520,6 @@ tableOpticalSystem.on("cellEdited", function(cell){
           window.undoHistory.record(command);
         }
       } catch (undoError) {
-        console.warn('[Undo] Failed to record surface edit:', undoError);
       }
 
       // Also track per-cell pending edits so Apply can fall back to the currently selected cell.
@@ -2324,7 +2323,6 @@ async function calculateImageSemiDiaFromChiefRays() {
         reason,
         ...details
       };
-      console.error('❌ [ChiefRayDiag] calculateImageSemiDiaFromChiefRays', payload);
       try {
         if (typeof window !== 'undefined') {
           window.__LAST_CHIEF_RAY_DIAG = {
@@ -2342,9 +2340,6 @@ async function calculateImageSemiDiaFromChiefRays() {
             };
             try {
               openerRef.__LAST_CHIEF_RAY_DIAG = mirrored;
-            } catch (_) {}
-            try {
-              openerRef.console?.error?.('❌ [ChiefRayDiag][MirroredFromPopup] calculateImageSemiDiaFromChiefRays', mirrored);
             } catch (_) {}
             try {
               openerRef.postMessage?.({ type: 'COOPT_CHIEF_RAY_DIAG', payload: mirrored }, '*');
@@ -2403,7 +2398,6 @@ async function calculateImageSemiDiaFromChiefRays() {
         }
 
         if (!shouldAuto) {
-          console.log('📐 optimizeSemiDiaが"A"ではないのでスキップ');
           return false;
         }
         // 光学系データとObjectデータを取得

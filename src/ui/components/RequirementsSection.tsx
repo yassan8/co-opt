@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 
 export default function RequirementsSection() {
   useEffect(() => {
-    console.log('[RequirementsSection] Component mounted');
     // The editor will be reinitialized by __cooptInitSystemRequirementsEditor
     // which is triggered by the initialization system
     try {
@@ -35,7 +34,6 @@ export default function RequirementsSection() {
 
   // React-style button handlers
   const handleAddRequirement = () => {
-    console.log('[RequirementsSection] Add button clicked (React handler)');
     const editor = (window as any).systemRequirementsEditor;
     if (editor && typeof editor.addRequirement === 'function') {
       editor.addRequirement();
@@ -45,7 +43,6 @@ export default function RequirementsSection() {
   };
 
   const handleDeleteRequirement = () => {
-    console.log('[RequirementsSection] Delete button clicked (React handler)');
     const editor = (window as any).systemRequirementsEditor;
     if (editor && typeof editor.deleteRequirement === 'function') {
       editor.deleteRequirement();
@@ -55,21 +52,10 @@ export default function RequirementsSection() {
   };
 
   const handleUpdateRequirement = async () => {
-    console.log('[RequirementsSection] ========================================');
-    console.log('[RequirementsSection] Update button clicked (React handler)!');
-    console.log('[RequirementsSection] ========================================');
     const editor = await waitForRequirementsEditorReady();
-    console.log('[RequirementsSection] Editor exists:', !!editor);
-    console.log('[RequirementsSection] Editor type:', typeof editor);
-    if (editor) {
-      console.log('[RequirementsSection] updateAllConfigsAndEvaluate exists:', typeof editor.updateAllConfigsAndEvaluate);
-      console.log('[RequirementsSection] Editor keys:', Object.keys(editor).slice(0, 10));
-    }
     if (editor && typeof editor.updateAllConfigsAndEvaluate === 'function') {
       try {
-        console.log('[RequirementsSection] ✅ Calling updateAllConfigsAndEvaluate...');
         await editor.updateAllConfigsAndEvaluate();
-        console.log('[RequirementsSection] ✅ updateAllConfigsAndEvaluate completed');
       } catch (err) {
         console.error('[RequirementsSection] ❌ Error in updateAllConfigsAndEvaluate:', err);
       }
@@ -77,9 +63,7 @@ export default function RequirementsSection() {
     }
     if (editor && typeof editor.evaluateAndUpdateNow === 'function') {
       try {
-        console.log('[RequirementsSection] ✅ Calling evaluateAndUpdateNow...');
         await editor.evaluateAndUpdateNow({ reason: 'update-button-fallback' });
-        console.log('[RequirementsSection] ✅ evaluateAndUpdateNow completed');
       } catch (err) {
         console.error('[RequirementsSection] ❌ Error in evaluateAndUpdateNow:', err);
       }

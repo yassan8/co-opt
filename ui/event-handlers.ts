@@ -464,8 +464,6 @@ function ensurePopupMessageHandler(): void {
         
         // Handle popup-ready message
         if (data.action === 'popup-ready') {
-            console.log('📥 Received popup-ready message, triggering initial draw');
-            
             // Trigger initial draw when popup is ready
             const popup = w.popup3DWindow;
             if (popup && !popup.closed) {
@@ -492,7 +490,6 @@ function ensurePopupMessageHandler(): void {
         
         // Handle popup-resize message
         if (data.action === 'popup-resize') {
-            console.log('📥 Received popup-resize message');
             if (!w.popup3DWindow) {
                 console.warn('⚠️ Popup window reference is unavailable (resize)');
                 return;
@@ -717,7 +714,7 @@ function ensurePopupMessageHandler(): void {
                         crossType: 'both',
                         targetSurfaceIndex,
                         pupilSamplingMode: 'entrance',
-                        logEntrancePupilConfig: true,
+                        logEntrancePupilConfig: false,
                         angleUnit: 'deg',
                         chiefZ: -20
                     });
@@ -772,7 +769,6 @@ function ensurePopupMessageHandler(): void {
                     }
 
                     if (allRays && allRays.length > 0) {
-                        console.log('📍 Drawing rays:', allRays.length);
                         drawCrossBeamRays(allRays, popupScene);
                         try {
                             (popupWindow as any).__lastCrossRays = allRays;
@@ -792,7 +788,6 @@ function ensurePopupMessageHandler(): void {
                     }
 
                     harmonizeSceneGeometry(popupScene);
-                    console.log(`📷 Setting camera for ${viewAxis} in popup...`);
 
                     if (!popupWindow) {
                         console.warn('⚠️ Popup window reference missing (camera)');
@@ -2514,7 +2509,6 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
                 });
             }
             
-            console.log('📤 Sending popup-ready message to parent');
             if (window.opener) {
                 window.opener.postMessage({ action: 'popup-ready' }, '*');
             }
@@ -2568,7 +2562,6 @@ export function setupAnalysisWindows() {
         );
 
         if (!hasAnyAnalysisButton) {
-            console.warn('[Analysis] setupAnalysisWindows skipped: buttons not mounted yet');
             return;
         }
 
@@ -2576,10 +2569,8 @@ export function setupAnalysisWindows() {
             return;
         }
         w.__analysisWindowsBound = true;
-        console.log('[Analysis] setupAnalysisWindows called');
         // System Data popup window button
         const openSystemDataWindowBtn = document.getElementById('open-system-data-window-btn');
-        console.log('[Analysis] System Data button:', openSystemDataWindowBtn);
         if (openSystemDataWindowBtn) {
                 openSystemDataWindowBtn.addEventListener('click', () => {
                         if (w.__systemDataPopup && !w.__systemDataPopup.closed) {
@@ -2674,14 +2665,6 @@ export function setupAnalysisWindows() {
         <label for="popup-reference-focal-length">Reference Focal Length:</label>
         <input type="text" id="popup-reference-focal-length" placeholder="Auto" style="width: 80px;" />
         <button id="popup-coord-transform">Coord Transform</button>
-        <br>
-        <label for="popup-transform-surface-select">Transform at surface:</label>
-        <select id="popup-transform-surface-select" style="margin-right: 8px;">
-            <option value="">Select surface...</option>
-        </select>
-        <button id="popup-show-local-coords-btn">Show Local Coords</button>
-        <button id="popup-cancel-transform-btn" style="display:none;">Cancel</button>
-        <button id="popup-save-local-coords-btn" style="display:none;">Save as JSON</button>
     </div>
     <div class="content">
         <div id="popup-transform-error-bar" style="display:none; padding:8px 12px; margin-bottom:8px; background:#fff3cd; border:1px solid #ffc107; border-radius:3px; color:#856404;">
@@ -7458,11 +7441,9 @@ export function setupTransformationControls(): void {
     
     // Analysis dropdown selector
     const analysisSelect = document.getElementById('analysis-select') as HTMLSelectElement | null;
-    console.log('[Analysis] Dropdown selector:', analysisSelect);
     if (analysisSelect) {
         analysisSelect.addEventListener('change', () => {
             const selectedValue = analysisSelect.value;
-            console.log('[Analysis] Selected value:', selectedValue);
             if (!selectedValue) return;
             
             // Reset select to default after triggering
@@ -7482,15 +7463,10 @@ export function setupTransformationControls(): void {
             };
             
             const buttonId = analysisButtonMap[selectedValue];
-            console.log('[Analysis] Button ID:', buttonId);
             if (buttonId) {
                 const button = document.getElementById(buttonId);
-                console.log('[Analysis] Button element:', button);
                 if (button) {
-                    console.log('[Analysis] Clicking button:', buttonId);
                     button.click();
-                } else {
-                    console.warn(`Analysis button not found: ${buttonId}`);
                 }
             }
         });

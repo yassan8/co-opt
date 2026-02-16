@@ -218,7 +218,6 @@ export async function handleLoadDefault(): Promise<void> {
     if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
       await (window as any).__loadAllDataObjectIntoApp(data, { filename: 'default-load.json' });
     }
-    console.log('✅ Default optical system loaded successfully');
   } catch (err) {
     console.error('❌ Failed to load default system:', err);
     alert('Failed to load default optical system. Check console for details.');
@@ -615,8 +614,7 @@ export function handleExportZemax(): void {
 export function handleOptimize(): void {
   // The optimize function is complex and uses window globals
   // Just trigger the button click from the legacy handler
-  console.log('[Optimize] Triggering optimization through window function');
-  
+
   // Check if optimization is available
   if (!(window as any).OptimizationMVP) {
     alert('OptimizationMVP が利用できません。');
@@ -636,12 +634,10 @@ export function handleRender3D(): void {
     return;
   }
   w.__render3DInProgress = true;
-  console.log('[Render3D] Button clicked');
 
   try {
     // Ensure legacy popup infrastructure is bound first
     if (typeof w.setupOpticalSystemChangeListeners === 'function' && !w.__opticalSystemChangeListenersBound) {
-      console.log('[Render3D] Setting up optical system change listeners');
       w.setupOpticalSystemChangeListeners(w.scene || null);
     }
 
@@ -750,7 +746,5 @@ export function handleAnalysisSelect(selectedValue: string): void {
   if (button) {
     const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
     button.dispatchEvent(clickEvent);
-  } else {
-    console.warn(`[Analysis] Button not found: ${buttonId}`);
   }
 }

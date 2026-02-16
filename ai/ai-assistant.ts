@@ -2485,7 +2485,6 @@ async function tool_set_block_param(args) {
                     }
                 }
             } catch (undoError) {
-                console.warn('[Undo] Failed to record block parameter edit:', undoError);
             }
             
             if (!isPlainObject(b.parameters)) b.parameters = {};
@@ -2510,7 +2509,6 @@ async function tool_set_block_param(args) {
                     }
                 }
             } catch (undoError) {
-                console.warn('[Undo] Failed to record block variable edit:', undoError);
             }
             
             if (!isPlainObject(b.variables)) b.variables = {};

@@ -9,32 +9,20 @@ import { requestRefreshBlockInspector } from "../../core/window-facade.ts";
 
 export default function App() {
   useEffect(() => {
-    console.log("[React] App component mounted");
-    
     // FIRST: Signal that React is mounted so main.ts can start initializing
     // This breaks the deadlock where main.ts waits for React and React waits for main.ts
     (window as typeof window & { __cooptReactMounted?: boolean })
       .__cooptReactMounted = true;
     window.dispatchEvent(new CustomEvent("coopt:react-mounted"));
-    console.log("[React] coopt:react-mounted event dispatched immediately to trigger main.ts initialization");
 
     const w = window as any;
     
-    const initializeAfterMainTS = (mode: "main-ready" | "module-loaded" | "fallback") => {
-      if (mode === "main-ready") {
-        console.log("[React] main.ts is ready, initializing application features");
-      } else if (mode === "module-loaded") {
-        console.log("[React] main.ts module loaded, starting best-effort initialization");
-      } else {
-        console.log("[React] Proceeding with fallback initialization");
-      }
+    const initializeAfterMainTS = (_mode: "main-ready" | "module-loaded" | "fallback") => {
       
       // Load active configuration to tables (this expands Blocks to Optical System rows)
-      console.log("[React] Loading active configuration to tables...");
       if (typeof (window as any).loadActiveConfigurationToTables === 'function') {
         try {
           (window as any).loadActiveConfigurationToTables();
-          console.log("[React] Active configuration loaded");
         } catch (err) {
           console.error("[React] Failed to load active configuration:", err);
         }
@@ -48,7 +36,6 @@ export default function App() {
       requestRefreshBlockInspector();
       
       // Ensure analysis windows are set up
-      console.log("[React] Setting up analysis windows directly...");
       if (typeof (window as any).setupAnalysisWindows === 'function') {
         (window as any).setupAnalysisWindows();
       }
@@ -60,8 +47,7 @@ export default function App() {
       setTimeout(() => {
         const w = window as any;
         if (typeof w.getOpticalSystemRows === 'function' && w.tableOpticalSystem) {
-          const rows = w.getOpticalSystemRows(w.tableOpticalSystem);
-          console.log("[React] Optical system rows available:", rows?.length || 0);
+          w.getOpticalSystemRows(w.tableOpticalSystem);
         }
       }, 200);
     };
@@ -79,7 +65,6 @@ export default function App() {
       return;
     }
 
-    console.log("[React] Waiting for main.ts bootstrap events...");
     let initialized = false;
     const completeInit = (mode: "main-ready" | "module-loaded" | "fallback") => {
       if (initialized) return;
@@ -124,7 +109,6 @@ export default function App() {
     };
   }, []);
 
-  console.log("[React] Rendering App component");
   return (
     <>
       <MainToolbar />

@@ -64,13 +64,9 @@
 //     globalScope.__mtfOriginalConsole = originalConsole;
 // })();
 
-console.log('🚀 [main.ts] Starting to load main.ts module');
-
 // =============================================================================
 // IMPORTS
 // =============================================================================
-
-console.log('🚀 [main.ts] Importing THREE.js...');
 
 // Core modules
 import { APP_CONFIG, initializeReferences, setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration, getScene, getCamera, getRenderer, getControls } from './core/app-config.ts';
@@ -200,9 +196,6 @@ let wasmSystem = null;
 
 // Note: getWASMSystem/_setWASMSystem globals are installed by core/wasm-service.ts (index.html <head>).
 // main.ts only updates the instance via window._setWASMSystem once WASM is ready.
-if (typeof window !== 'undefined' && typeof (window as any)._setWASMSystem === 'function') {
-    console.log('🔧 [Init] WASM service globals are available');
-}
 
 // =============================================================================
 // MAIN APPLICATION INITIALIZATION
@@ -212,14 +205,12 @@ if (typeof window !== 'undefined' && typeof (window as any)._setWASMSystem === '
  * Initialize the main application
  */
 async function initializeApplication() {
-    console.log('🚀 [Init] initializeApplication() started');
     try {
         // Initialize WASM system (non-blocking - run in background)
         const wasmInitPromise = (async () => {
             try {
                 const ForceWASMSystemClass = await loadForceWASMSystemClass();
                 if (!ForceWASMSystemClass) {
-                    console.warn('⚠️ [Init] ForceWASMSystem class unavailable, skipping RayTracing WASM bootstrap');
                     return;
                 }
 
@@ -1646,7 +1637,6 @@ const startApplicationOnce = (() => {
         try {
             window['__cooptMainReady'] = true;
             window.dispatchEvent(new CustomEvent('coopt:main-ready'));
-            console.log('🚀 [Init] Dispatched coopt:main-ready');
         } catch (e) {
             console.warn('⚠️ [Init] Failed to dispatch coopt:main-ready', e);
         }
@@ -1958,30 +1948,6 @@ const startApplicationOnce = (() => {
                         }
                     }
                     
-                    console.log(`   処理Object数: ${processedCount}/${totalCount}`);
-                    console.log(`   総光線数: ${allRays.length}`);
-                    if (allRays.length > 0) {
-                        console.log(`   成功光線数: ${allRays.filter(r => r.success).length}`);
-                        
-                        // デバッグ: allRaysの最初の3本を詳細表示
-                        allRays.slice(0, 3).forEach((ray, idx) => {
-                            console.log(`   光線${idx}: type="${ray.type}", beamType="${ray.beamType}", success=${ray.success}`);
-                        });
-                        
-                        // 横方向光線: horizontal_cross, left_marginal, right_marginal
-                        const horizontalCount = allRays.filter(r => 
-                            r.type === 'horizontal_cross' || r.type === 'left_marginal' || r.type === 'right_marginal'
-                        ).length;
-                        
-                        // 縦方向光線: vertical_cross, upper_marginal, lower_marginal
-                        const verticalCount = allRays.filter(r => 
-                            r.type === 'vertical_cross' || r.type === 'upper_marginal' || r.type === 'lower_marginal'
-                        ).length;
-                        
-                        console.log(`   横方向光線: ${horizontalCount}`);
-                        console.log(`   縦方向光線: ${verticalCount}`);
-                    }
-                    
                     const scene = getScene?.();
 
                     // 既存の光学要素と光線をクリア
@@ -2074,39 +2040,21 @@ const startApplicationOnce = (() => {
         const undoBtn = document.getElementById('undo-btn');
         const redoBtn = document.getElementById('redo-btn');
         
-        console.log('[Init] Setting up Undo/Redo buttons:', { undoBtn: !!undoBtn, redoBtn: !!redoBtn });
-
         if (undoBtn) {
             undoBtn.addEventListener('click', () => {
-                console.log('[Undo] Undo button clicked');
                 if (window.undoHistory) {
-                    const success = window.undoHistory.undo();
-                    if (success) {
-                    }
-                } else {
-                    console.error('[Undo] window.undoHistory not found');
+                    window.undoHistory.undo();
                 }
             });
-        } else {
-            console.warn('[Undo] undo-btn not found');
         }
 
         if (redoBtn) {
             redoBtn.addEventListener('click', () => {
-                console.log('[Undo] Redo button clicked');
                 if (window.undoHistory) {
-                    const success = window.undoHistory.redo();
-                    if (success) {
-                    }
-                } else {
-                    console.error('[Undo] window.undoHistory not found');
+                    window.undoHistory.redo();
                 }
             });
-        } else {
-            console.warn('[Undo] redo-btn not found');
         }
-
-        console.log('[Undo] Button handlers registered');
         
         // Setup Toolbar Toggle button
         const toggleToolbarBtn = document.getElementById('toggle-toolbar-btn');
@@ -2138,13 +2086,10 @@ const scheduleApplicationStart = () => {
     const hasReactRoot = !!document.getElementById('react-root');
     if (hasReactRoot) {
         if (window.__cooptReactMounted) {
-            console.log('🚀 [Init] React already mounted, starting immediately');
             startApplicationOnce();
             return;
         }
-        console.log('🚀 [Init] Waiting for React to mount...');
         window.addEventListener('coopt:react-mounted', () => {
-            console.log('🚀 [Init] Received coopt:react-mounted event');
             startApplicationOnce();
         }, { once: true });
         
@@ -2156,7 +2101,6 @@ const scheduleApplicationStart = () => {
             }
         }, 2000);
     } else {
-        console.log('🚀 [Init] No React root found, starting immediately');
         startApplicationOnce();
     }
 };
@@ -2339,8 +2283,6 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             // 光線パスを描画（正しいパラメータで呼び出し）
             drawRayWithSegmentColors(rayPath, objectId, index, scene);
         });
-        
-        console.log(`   処理Object数: ${Object.keys(objectRayCount).length}`);
         
     } catch (error) {
     }
@@ -2584,7 +2526,6 @@ document.addEventListener('keydown', (e) => {
 function clearUndoHistoryOnMajorChange(reason) {
     if (window.undoHistory) {
         window.undoHistory.clear();
-        console.log(`[Undo] History cleared: ${reason}`);
     }
 }
 

@@ -698,14 +698,6 @@ function estimateEffectiveEntrancePupilExtents(opticalSystemRows, centerOrigin, 
 
         // Check if chief ray from centerOrigin can reach target surface
         const centerTraceResult = traceOk(centerOrigin);
-        console.log(`🔍 [EntrancePupilExtents] Chief ray trace check:`, {
-            centerOrigin,
-            directionXYZ,
-            targetIndex: effectiveTargetIndex,
-            targetPointIndex: effectiveTargetPointIndex,
-            radiusGuess,
-            traceSuccess: centerTraceResult
-        });
         
         if (!centerTraceResult) {
             const hasFallbackTarget = Number.isInteger(fallbackSurfaceIndex) && fallbackSurfaceIndex !== effectiveTargetIndex;
@@ -719,7 +711,6 @@ function estimateEffectiveEntrancePupilExtents(opticalSystemRows, centerOrigin, 
                     }, 1.0, null, fallbackSurfaceIndex);
                     const fallbackReachable = Array.isArray(fallbackPath) && fallbackPath.length > fallbackPointIndex;
                     if (fallbackReachable) {
-                        console.warn(`⚠️ [EntrancePupilExtents] target surface ${effectiveTargetIndex} unreachable for chief ray. Fallback to surface ${fallbackSurfaceIndex} for pupil extent estimation.`);
                         usedFallbackTarget = true;
                         effectiveTargetIndex = fallbackSurfaceIndex;
                         effectiveTargetPointIndex = fallbackPointIndex;
@@ -991,11 +982,6 @@ function brent(f, a, b, tol = 1e-8, maxIter = 100) {
  */
 export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, options: any = {}) {
     opticalSystemRows = cooptNormalizeOpticalSystemRows(opticalSystemRows);
-    const infiniteCrossBeamFn = generateInfiniteSystemCrossBeam as any;
-    if (!infiniteCrossBeamFn.__loggedBuildStamp) {
-        infiniteCrossBeamFn.__loggedBuildStamp = true;
-        console.log(`[gen-ray-cross-infinite] build=${GEN_RAY_CROSS_INFINITE_BUILD}`);
-    }
     
     const {
         rayCount = 51,  // 31 → 51 に増加（絞り周辺により密な光線配置）
@@ -1004,7 +990,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         crossType = 'both',
         targetSurfaceIndex = null,  // 評価面インデックス
         pupilSamplingMode = 'stop',
-        logEntrancePupilConfig = true
+        logEntrancePupilConfig = false
     } = options;
 
     const resolvedTargetSurfaceIndex = (() => {
@@ -1024,8 +1010,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         if (imageSurfaceIndex >= 0) return imageSurfaceIndex;
         return Math.max(0, rows.length - 1);
     })();
-
-    console.log(`[gen-ray-cross-infinite] options: targetSurfaceIndex=${targetSurfaceIndex}, resolvedTargetSurfaceIndex=${resolvedTargetSurfaceIndex}, wavelength=${wavelength}, debugMode=${debugMode}`);
 
     if (debugMode) {
     }
@@ -1091,7 +1075,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         const dirStr = (Number.isFinite(dirX) && Number.isFinite(dirY) && Number.isFinite(dirZ))
             ? `(${dirX.toFixed(6)}, ${dirY.toFixed(6)}, ${dirZ.toFixed(6)})`
             : '(invalid)';
-        console.log(`🔍 [Chief Ray Search] Object ${objectIndex + 1}: direction=${dirStr}, stopCenter=(${stopSurfaceInfo.center.x}, ${stopSurfaceInfo.center.y}), stopIndex=${stopSurfaceInfo.index}`);
         let chiefRayOrigin = findInfiniteSystemChiefRayOrigin(
             direction,
             stopSurfaceInfo.center,
@@ -1101,10 +1084,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             resolvedTargetSurfaceIndex,
             wavelength
         );
-
-        if (chiefRayOrigin) {
-            console.log(`✅ [Chief Ray Found] Object ${objectIndex + 1}: origin=(${chiefRayOrigin.x.toFixed(3)}, ${chiefRayOrigin.y.toFixed(3)}, ${chiefRayOrigin.z.toFixed(3)})`);
-        } else {
+        if (!chiefRayOrigin) {
             console.warn(`❌ [Chief Ray Failed] Object ${objectIndex + 1}: Could not find origin that reaches stop center`);
         }
 
@@ -1336,20 +1316,8 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                 extents: entranceExtents
             };
 
-            if (logEntrancePupilConfig) {
-                console.warn('🧩 [DrawCrossEntrancePupil] entrance pupil config', {
-                    object: objectIndex + 1,
-                    angle: objectAngle,
-                    centerOrigin: entrancePupil.centerOrigin,
-                    radius: entrancePupil.radius,
-                    extents: entrancePupil.extents,
-                    planeZ: entrancePupil.planeZ
-                });
-            }
-
             const usedFallbackTarget = entranceExtents?.__usedFallbackTarget === true;
             if (usedFallbackTarget) {
-                console.warn(`⚠️ [DrawCrossEntrancePupil] Object${objectIndex + 1}: switching to stop-based boundary sampling because entrance estimation fell back from target surface.`);
                 const boundaryTargetSurfaceIndex = Number.isInteger(stopSurfaceInfo?.index)
                     ? stopSurfaceInfo.index
                     : resolvedTargetSurfaceIndex;
@@ -1429,9 +1397,8 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             resolvedTargetSurfaceIndex
         );
 
-        // --- Diagnostics: always emit compact reachability summary.
+        // --- Diagnostics
         const successCount = tracedRays.filter(r => r && r.success).length;
-        console.log(`🧪 [DrawCrossDiag] Object${objectIndex}: angle=(${objectAngle.x}°, ${objectAngle.y}°) reachedTarget=${successCount}/${tracedRays.length}`);
 
         // If nothing reaches, do a detailed trace on the chief ray to identify where it is blocked.
         if (successCount === 0 && chiefRayOrigin && direction) {
@@ -1507,12 +1474,6 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         crossType: crossType,
         wavelength: wavelength
     };
-
-    if (debugMode) {
-        console.log(`   処理Object数: ${allResults.length}/${angles.length}`);
-        console.log(`   総生成光線数: ${allCrossBeamRays.length}`);
-        console.log(`   総追跡成功: ${allTracedRays.filter(r => r.success).length}/${allTracedRays.length}`);
-    }
 
     return result;
 }
@@ -1607,18 +1568,9 @@ function calculateInfiniteSystemDirection(objectAngle) {
     const normalizedK = k / magnitude;
     
     // 大きな角度のデバッグ情報
-    if (Math.abs(objectAngle.x) >= 15 || Math.abs(objectAngle.y) >= 15) {
-        console.log(`   入力角度: x=${objectAngle.x}°, y=${objectAngle.y}°`);
-        console.log(`   三角関数: cosX=${cosX.toFixed(6)}, cosY=${cosY.toFixed(6)}, sinX=${sinX.toFixed(6)}, sinY=${sinY.toFixed(6)}`);
-        console.log(`   生成ベクトル: i=${i.toFixed(6)}, j=${j.toFixed(6)}, k=${k.toFixed(6)}`);
-        console.log(`   正規化後: i=${normalizedI.toFixed(6)}, j=${normalizedJ.toFixed(6)}, k=${normalizedK.toFixed(6)}`);
-        console.log(`   大きさ: ${magnitude.toFixed(6)}`);
-    }
-    
     // 物理的に有効な方向ベクトルかチェック
     if (normalizedK <= 0) {
         console.warn(`⚠️ [InfiniteSystem] 後方を向く方向ベクトル: k=${normalizedK.toFixed(6)}`);
-        console.warn(`   入力角度: x=${objectAngle.x}°, y=${objectAngle.y}°`);
         // 90度以上の角度でも処理を続行
     }
     
@@ -1661,7 +1613,6 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
                 ...payload
             };
             try { openerRef.__LAST_CHIEF_RAY_DIAG = mirrored; } catch (_) {}
-            try { openerRef.console?.error?.(`❌ [ChiefRayDiag][MirroredFromPopup] ${label}`, mirrored); } catch (_) {}
             try { openerRef.postMessage?.({ type: 'COOPT_CHIEF_RAY_DIAG', payload: mirrored }, '*'); } catch (_) {}
         } catch (_) {}
     };
@@ -1687,7 +1638,6 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             targetSurfaceIndex,
             ...details
         };
-        console.error('❌ [ChiefRayDiag] Chief origin solve issue', payload);
         mirrorChiefRayDiagToOpener('Chief origin solve issue', payload);
     };
 
