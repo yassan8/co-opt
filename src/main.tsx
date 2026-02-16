@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./app/App";
 import "./app.css";
+import "../core/undo-history.ts";
 
 console.log("[src/main.tsx] Starting React initialization");
 

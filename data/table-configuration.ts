@@ -118,7 +118,7 @@ function createDefaultConfiguration(id: number, name: string): Configuration {
       blockType: 'ImageSurface',
       role: null,
       constraints: {},
-      parameters: undefined,
+      parameters: { semidiaMode: 'Manual' },
       variables: {},
       metadata: { source: 'default' }
     }

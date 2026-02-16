@@ -924,12 +924,21 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
     if (blockType === 'ImageSurface') {
       // Optional parameters supported:
       // - semidia: numeric (image semi diameter)
+      // - semidiaMode: 'Manual' | 'Auto'
       // - optimizeSemiDia: 'A' to auto-update semidia by chief ray tracing (UI-triggered)
       const semidiaRaw = parameters?.semidia;
       if (semidiaRaw !== undefined && semidiaRaw !== null && String(semidiaRaw).trim() !== '') {
         const n = (typeof semidiaRaw === 'number') ? semidiaRaw : (isNumericString(String(semidiaRaw)) ? Number(semidiaRaw) : NaN);
         if (!Number.isFinite(n) || n <= 0) {
           issues.push({ severity: 'fatal', phase: 'validate', message: `ImageSurface.parameters.semidia must be a positive number when provided (got: ${String(semidiaRaw)})`, blockId: block.blockId });
+        }
+      }
+
+      const modeRaw = parameters?.semidiaMode;
+      if (modeRaw !== undefined && modeRaw !== null && String(modeRaw).trim() !== '') {
+        const m = String(modeRaw).trim().toLowerCase();
+        if (m !== 'manual' && m !== 'auto') {
+          issues.push({ severity: 'warning', phase: 'validate', message: `ImageSurface.parameters.semidiaMode supports only 'Manual' or 'Auto' (got: ${String(modeRaw)}); ignoring.`, blockId: block.blockId });
         }
       }
 
@@ -1130,7 +1139,7 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
         rows[0].thickness = 'INF';
         const distRaw = getParamOrVarValue(params, vars, 'objectDistance');
         const distVal = normalizeThicknessToRowValue(distRaw);
-        rows[0].objectRenderDistance = (typeof distVal === 'number' && Number.isFinite(distVal)) ? distVal : 0;
+        rows[0].objectRenderDistance = (typeof distVal === 'number' && Number.isFinite(distVal)) ? distVal : 10;
       } else {
         const distRaw = getParamOrVarValue(params, vars, 'objectDistance');
         rows[0].thickness = normalizeThicknessToRowValue(distRaw);
@@ -1227,6 +1236,14 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
         if (Object.prototype.hasOwnProperty.call(p, 'optimizeSemiDia')) {
           const s = String(p.optimizeSemiDia ?? '').trim();
           if (s !== '') ov.optimizeSemiDia = p.optimizeSemiDia;
+        }
+        if (Object.prototype.hasOwnProperty.call(p, 'semidiaMode')) {
+          const m = String(p.semidiaMode ?? '').trim().toLowerCase();
+          if (m === 'auto') {
+            ov.optimizeSemiDia = 'A';
+          } else if (m === 'manual') {
+            ov.optimizeSemiDia = '';
+          }
         }
 
         imagePlaneOverrides = Object.keys(ov).length > 0 ? ov : null;
@@ -2180,6 +2197,20 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
     return row.semidia ?? row['Semi Diameter'] ?? row['semi diameter'] ?? row.semiDiameter ?? row.semiDia;
   };
 
+  const inferImageSemidiaFromLegacyRows = () => {
+    for (let idx = legacyRows.length - 1; idx >= 0; idx--) {
+      const row = legacyRows[idx];
+      if (!row || typeof row !== 'object') continue;
+      if (__isCoordTransRow(row)) continue;
+      const raw = getLegacySemidiaRaw(row);
+      const s = String(raw ?? '').trim();
+      if (s === '') continue;
+      const n = isNumericString(s) ? Number(s) : (typeof raw === 'number' ? raw : NaN);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+  };
+
   const legacyHasV = (rowObj, key) => {
     const raw = rowObj?.[key];
     if (raw === null || raw === undefined) return false;
@@ -2636,12 +2667,15 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
   }
 
   // Marker block
+  const inferredImageSemidia = inferImageSemidiaFromLegacyRows();
   blocks.push({
     blockId: 'ImageSurface-1',
     blockType: 'ImageSurface',
     role: null,
     constraints: {},
-    parameters: undefined,
+    parameters: (Number.isFinite(inferredImageSemidia as any) && (inferredImageSemidia as number) > 0)
+      ? { semidia: inferredImageSemidia, semidiaMode: 'Auto', optimizeSemiDia: 'A' }
+      : { semidiaMode: 'Auto', optimizeSemiDia: 'A' },
     variables: {},
     metadata: { source: 'legacy-opticalSystem' }
   });
