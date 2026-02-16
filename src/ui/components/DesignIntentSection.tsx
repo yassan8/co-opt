@@ -1,9 +1,9 @@
 export default function DesignIntentSection() {
   return (
-    <div className="optical-system-section">
-      <h2>Design Intent</h2>
-      <div id="design-intent-toolbar" className="optical-system-buttons-container">
-        <select id="design-intent-add-block-type">
+    <section className="optical-system-section ide-section-card" id="design-intent-container" aria-label="Design Intent">
+      <h2 className="section-title">Design Intent</h2>
+      <div id="design-intent-toolbar" className="optical-system-buttons-container ide-toolbar" role="toolbar" aria-label="Design Intent controls">
+        <select id="design-intent-add-block-type" aria-label="Block type">
           <option value="ObjectPlane">ObjectSurface</option>
           <option value="SingleSurface">SingleSurface</option>
           <option value="Lens">Lens</option>
@@ -15,8 +15,8 @@ export default function DesignIntentSection() {
           <option value="Mirror">Mirror</option>
           <option value="ImagePlane">ImageSurface</option>
         </select>
-        <button id="design-intent-add-block-btn">Add</button>
-        <button id="design-intent-delete-block-btn">Delete</button>
+        <button id="design-intent-add-block-btn" type="button">Add Block</button>
+        <button id="design-intent-delete-block-btn" type="button">Delete Block</button>
       </div>
 
       <div
@@ -45,8 +45,8 @@ export default function DesignIntentSection() {
         （Surface の解析・編集は可能ですが、設計意図は完全には利用できません）
       </div>
 
-      <div className="block-inspector-panel">
-        <div id="block-inspector" className="block-inspector"></div>
+      <div className="block-inspector-panel" aria-label="Block Inspector">
+        <div id="block-inspector" className="block-inspector" role="listbox" aria-label="Design blocks"></div>
       </div>
 
       <div id="apply-reason-section" className="apply-reason-section" style={{ display: "none" }}>
@@ -64,7 +64,7 @@ export default function DesignIntentSection() {
         ></textarea>
       </div>
 
-      <div id="table-optical-system"></div>
-    </div>
+      <div id="table-optical-system" className="ide-table-container"></div>
+    </section>
   );
 }

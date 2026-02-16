@@ -54,7 +54,7 @@ export default function LegacyPanels() {
         </div>
         <div className="merit-function-buttons-container">
           <button onClick={handleAddOperand}>Add Term</button>
-          <button onClick={handleDeleteOperand}>Del Term</button>
+          <button onClick={handleDeleteOperand}>Delete Term</button>
           <button onClick={handleCalculateMerit}>Calculate Evaluation</button>
         </div>
         <div id="table-merit-function"></div>

@@ -99,12 +99,12 @@ export default function MainToolbar() {
       >
         <div className="button-group">
           <span className="button-group-label">File</span>
-          <button id="new-file-btn" onClick={handleNewFile}>New</button>
-          <button id="save-all-btn" onClick={handleSave}>Save</button>
-          <button id="load-all-btn" onClick={handleLoad}>Load</button>
-          <button id="load-default-btn" onClick={handleLoadDefault}>Load Default System</button>
-          <button id="share-url-btn">Share</button>
-          <button id="clear-storage-btn" onClick={handleClearStorage}>Clear Chashe</button>
+          <button id="new-file-btn" onClick={handleNewFile}>New File</button>
+          <button id="save-all-btn" onClick={handleSave}>Save File</button>
+          <button id="load-all-btn" onClick={handleLoad}>Load File</button>
+          <button id="load-default-btn" onClick={handleLoadDefault}>Load Default</button>
+          <button id="share-url-btn">Share URL</button>
+          <button id="clear-storage-btn" onClick={handleClearStorage}>Clear Cache</button>
         </div>
 
         <div className="button-group">
@@ -128,13 +128,13 @@ export default function MainToolbar() {
         <div className="button-group">
           <span className="button-group-label">View</span>
           <button id="open-3d-window-btn" title="Render 3D view in popup window" onClick={handleRender3D}>
-            Render
+            Open Render
           </button>
           <button
             id="open-system-data-window-btn"
             title="Open System Data in popup window"
           >
-            System Data
+            Open System Data
           </button>
         </div>
 
@@ -166,18 +166,18 @@ export default function MainToolbar() {
               event.currentTarget.value = '';
             }}
           >
-            <option value="">Select Analysis...</option>
-            <option value="spot-diagram">Spot Diagram</option>
-            <option value="spherical-aberration">Spherical Aberration</option>
-            <option value="astigmatism">Astigmatism</option>
-            <option value="distortion">Distortion</option>
-            <option value="integrated-aberration">Integrated Aberration</option>
-            <option value="transverse-aberration">Transverse Aberration</option>
-            <option value="opd">Optical Path Difference</option>
-            <option value="psf">Point Spread Function</option>
-            <option value="mtf">Modulation Transfer Function</option>
-            <option value="through-focus-spot">Through-Focus Spot</option>
-            <option value="through-focus-mtf">Through-Focus MTF</option>
+            <option value="">Select Analysis</option>
+            <option value="spot-diagram">Analyze Spot Diagram</option>
+            <option value="spherical-aberration">Analyze Spherical Aberration</option>
+            <option value="astigmatism">Analyze Astigmatism</option>
+            <option value="distortion">Analyze Distortion</option>
+            <option value="integrated-aberration">Analyze Integrated Aberration</option>
+            <option value="transverse-aberration">Analyze Transverse Aberration</option>
+            <option value="opd">Analyze Optical Path Difference</option>
+            <option value="psf">Analyze Point Spread Function</option>
+            <option value="mtf">Analyze Modulation Transfer Function</option>
+            <option value="through-focus-spot">Analyze Through-Focus Spot</option>
+            <option value="through-focus-mtf">Analyze Through-Focus MTF</option>
           </select>
         </div>
       </div>
