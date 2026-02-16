@@ -50,14 +50,14 @@
   <!-- Import map polyfill for older Safari/iOS -->
   <script src="https://ga.jspm.io/npm:es-module-shims@1.10.0/dist/es-module-shims.js"></script>
 
-  <!-- Import map for Three.js to resolve bare module specifiers -->
+  <!-- Import map for native module scripts loaded directly from index.html -->
   <script type="importmap">
     {
       "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
-        "three/examples/jsm/controls/OrbitControls.js": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js",
-        "OrbitControls": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/controls/OrbitControls.js"
+        "three": "/co-opt/node_modules/three/build/three.module.js",
+        "three/addons/": "/co-opt/node_modules/three/examples/jsm/",
+        "three/examples/jsm/controls/OrbitControls.js": "/co-opt/node_modules/three/examples/jsm/controls/OrbitControls.js",
+        "OrbitControls": "/co-opt/node_modules/three/examples/jsm/controls/OrbitControls.js"
       }
     }
   </script>
@@ -164,19 +164,58 @@
       };
       
       const isIOS = isIOSLike();
-      const ua = navigator.userAgent;
       const maxTouch = navigator.maxTouchPoints || 0;
-      
-      // Force log without any filtering
-      const log = console.log.bind(console);
-      log('📱 Device detection: iOS=' + isIOS + ', UA=' + ua.substring(0, 100) + '..., touchPoints=' + maxTouch);
       
       // Store for later use
       window.__cooptIOSDetected = isIOS;
       window.__cooptTouchPoints = maxTouch;
-      
-      // Also log window dimensions
-      log('📱 Window dimensions: ' + window.innerWidth + 'x' + window.innerHeight + ', devicePixelRatio=' + window.devicePixelRatio);
+    })();
+  </script>
+
+  <script>
+    // Suppress only the known duplicate Three.js warning noise.
+    (() => {
+      if (globalThis.__cooptThreeWarnFilterInstalled) return;
+      globalThis.__cooptThreeWarnFilterInstalled = true;
+
+      const originalWarn = console.warn.bind(console);
+      console.warn = (...args) => {
+        try {
+          const first = args[0];
+          if (typeof first === 'string' && first.includes('THREE.WARNING: Multiple instances of Three.js being imported.')) {
+            return;
+          }
+        } catch (_) {
+          // ignore
+        }
+        originalWarn(...args);
+      };
+    })();
+  </script>
+
+  <script>
+    // Error-only console mode for the entire app.
+    (() => {
+      if (globalThis.__cooptErrorOnlyConsoleFilterInstalled) return;
+      globalThis.__cooptErrorOnlyConsoleFilterInstalled = true;
+
+      const methods = [
+        'log',
+        'warn',
+        'info',
+        'debug',
+        'table',
+        'group',
+        'groupCollapsed',
+        'groupEnd'
+      ];
+
+      for (const method of methods) {
+        const original = console[method]?.bind(console);
+        if (typeof original !== 'function') continue;
+
+        console[method] = () => {};
+      }
     })();
   </script>
 
@@ -365,11 +404,7 @@
       const checkWASMSystem = () => {
         checkCount++;
         if (typeof window.getWASMSystem === 'function') {
-          console.log('✅ getWASMSystem グローバル関数が利用可能です');
-          const wasmSystem = window.getWASMSystem?.();
-          if (wasmSystem) {
-            console.log('✅ ForceWASMSystem インスタンスが取得できました');
-          }
+          window.getWASMSystem?.();
           
           // PSF関連の初期化
           setTimeout(() => {
@@ -556,14 +591,12 @@
           
           while (retries < maxRetries) {
             if (typeof window.initializeConfigurationUI === 'function') {
-              console.log('✅ [DOMContentLoaded] Initializing Configuration UI');
               window.initializeConfigurationUI();
               
               // UI初期化後、確実に選択状態を更新
               setTimeout(() => {
                 if (typeof window.refreshConfigurationUI === 'function') {
                   window.refreshConfigurationUI();
-                  console.log('✅ [DOMContentLoaded] Configuration UI refreshed');
                 }
               }, 200);
               return;
@@ -571,8 +604,6 @@
             await new Promise(resolve => setTimeout(resolve, 100));
             retries++;
           }
-          
-          console.warn('⚠️ [DOMContentLoaded] initializeConfigurationUI関数が見つかりません');
         };
         
         await initConfigUI();

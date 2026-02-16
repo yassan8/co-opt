@@ -119,18 +119,14 @@ function stopAutoSave(): void {
  * Configuration UIを初期化
  */
 export function initializeConfigurationUI(): void {
-  console.log('🔵 [Configuration UI] initializeConfigurationUI called');
-  
   // 既に初期化済みの場合はUIを更新してイベントリスナーを再設定
   try {
     if (typeof window !== 'undefined' && w.__configurationUIInitialized) {
-      console.log('🔵 [Configuration UI] Already initialized, refreshing UI and loading active config');
       updateConfigurationSelect();
       updateConfigInfo();
       setupConfigurationEventListeners();
       // ページリロード後、アクティブなconfigurationをテーブルに読み込む
       loadActiveConfigurationToTables({ applyToUI: true }).then(() => {
-        console.log('✅ [Configuration UI] Config reloaded');
       }).catch(e => {
         console.error('❌ [Configuration UI] Failed to load active configuration:', e);
       });
@@ -156,29 +152,22 @@ export function initializeConfigurationUI(): void {
     }
   } catch (_) {}
   
-  console.log('🔵 [Configuration UI] First-time initialization');
-  
   // 既存のConfigurationシステムを初期化（初回起動時）
   initializeConfigurationSystem();
   
   // UIコンポーネントを更新
-  console.log('🔵 [Configuration UI] Updating UI components');
   updateConfigurationSelect();
   updateConfigInfo();
   
   // イベントリスナー設定
-  console.log('🔵 [Configuration UI] Setting up event listeners');
   setupConfigurationEventListeners();
   
   // 初回起動時もアクティブなconfigurationをテーブルに読み込む
   loadActiveConfigurationToTables({ applyToUI: true }).then(() => {
-    console.log('✅ [Configuration UI] Initial config loaded');
   }).catch(e => {
     console.error('❌ [Configuration UI] Failed to load active configuration:', e);
   });
   ensureActiveConfigAppliedToTables();
-  
-  console.log('✅ [Configuration UI] Initialization complete');
 }
 
 // Auto-init as a fallback if the host page doesn't call initializeConfigurationUI.
@@ -233,8 +222,6 @@ function initializeConfigurationSystem(): void {
   if (systemConfig.configurations.length === 1 && 
       (hasSourceData || hasObjectData || hasOpticalData || hasMeritData)) {
     
-    console.log('🔄 [Configuration] Migrating existing data to Config 1...');
-    
     if (hasSourceData) {
       config1.source = persistedSource as any;
       needsSave = true;
@@ -261,18 +248,15 @@ function initializeConfigurationSystem(): void {
     
     if (needsSave) {
       saveSystemConfigurations(systemConfig);
-      console.log('✅ [Configuration] Migration complete');
     }
   }
   
   // 初回起動時、またはlocalStorageにsource/objectデータがない場合は、
   // Config 1のデフォルトデータをlocalStorageに保存
   if (!hasSourceData && config1 && Array.isArray(config1.source) && config1.source.length > 0) {
-    console.log('🔄 [Configuration] Initializing sourceTableData with default values');
     saveSourceTableData(config1.source as any);
   }
   if (!hasObjectData && config1 && Array.isArray(config1.object) && config1.object.length > 0) {
-    console.log('🔄 [Configuration] Initializing objectTableData with default values');
     saveObjectTableData(config1.object as any);
   }
 
@@ -305,13 +289,11 @@ function initializeConfigurationSystem(): void {
 
     if (changed) {
       saveSystemConfigurations(systemConfig);
-      console.log('✅ [Configuration] Migration: ensured opticalSystem array for block configs');
     }
   } catch (_) {}
   
   // CRITICAL: Validate all configurations on startup
   // Ensure localStorage contains fresh data for all configs
-  console.log('🔍 [Configuration] Validating all configs on startup...');
   let configsRefreshed = false;
   for (const cfg of systemConfig.configurations) {
     if (!cfg || typeof cfg !== 'object') continue;
@@ -329,7 +311,6 @@ function initializeConfigurationSystem(): void {
   
   // If we have multiple configs with data, save to ensure localStorage sync
   if (systemConfig.configurations.length > 1 || configsRefreshed) {
-    console.log('✅ [Configuration] Saving all configs to ensure localStorage sync');
     saveSystemConfigurations(systemConfig);
   }
 }
@@ -339,15 +320,12 @@ function initializeConfigurationSystem(): void {
  */
 function updateConfigurationSelect(): void {
   const select = document.getElementById('config-select') as HTMLSelectElement | null;
-  console.log('🔵 [Configuration UI] updateConfigurationSelect - select element:', !!select);
   if (!select) {
-    console.warn('⚠️ [Configuration UI] config-select element not found!');
     return;
   }
   
   const configList = getConfigurationList();
   const activeId = getActiveConfigId();
-  console.log('🔵 [Configuration UI] Config list:', configList.length, 'items, active ID:', activeId);
   
   select.innerHTML = '';
   
@@ -365,8 +343,6 @@ function updateConfigurationSelect(): void {
     select.appendChild(option);
   });
   
-  console.log('✅ [Configuration UI] Updated config-select with', configList.length, 'options');
-
   // Keep Spot Diagram config selector synchronized with available configs.
   try {
     if (typeof window !== 'undefined' && typeof w.updateSpotDiagramConfigSelect === 'function') {
@@ -403,8 +379,6 @@ function updateConfigInfo(): void {
  * イベントリスナー設定
  */
 function setupConfigurationEventListeners(): void {
-  console.log('🔵 [Configuration UI] setupConfigurationEventListeners called');
-
   if (!delegatedConfigListenerInstalled) {
     delegatedConfigListenerInstalled = true;
     document.addEventListener('change', (event) => {
@@ -417,14 +391,10 @@ function setupConfigurationEventListeners(): void {
   
   // Configuration選択変更
   const select = document.getElementById('config-select');
-  console.log('🔍 [Configuration UI] config-select element found:', !!select);
   if (select) {
     // 既存のリスナーを削除してから追加（重複防止）
     select.removeEventListener('change', handleConfigurationChange);
     select.addEventListener('change', handleConfigurationChange);
-    console.log('✅ [Configuration UI] Event listener attached to config-select');
-  } else {
-    console.warn('⚠️ [Configuration UI] config-select element not found for event listener');
   }
   
   // Add Configボタン

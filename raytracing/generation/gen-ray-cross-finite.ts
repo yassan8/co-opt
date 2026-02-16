@@ -1875,14 +1875,6 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
             r.type === 'vertical_cross' || r.type === 'upper_marginal' || r.type === 'lower_marginal'
         ).length;
         
-        if (actualDebugMode) {
-            console.log(`   処理Object数: ${allResults.length}/${objectPositions.length}`);
-            console.log(`   総生成光線数: ${totalRays}`);
-            console.log(`   総追跡成功: ${totalSuccess}/${allTracedRays.length} (成功率${(totalSuccess/allTracedRays.length*100).toFixed(1)}%)`);
-            console.log(`   水平方向光線: ${horizontalCount}`);
-            console.log(`   垂直方向光線: ${verticalCount}`);
-        }
-        
         if (totalSuccess === 0) {
             console.error(`❌ [CRITICAL] 全ての光線追跡が失敗。システム設定を確認してください。`);
         }

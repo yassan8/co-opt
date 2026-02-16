@@ -299,10 +299,7 @@ export function getOpticalSystemRows(tableOpticalSystem?) {
     if (!preferTable) {
       const blockRows = __du_expandActiveBlocksToRows();
       if (Array.isArray(blockRows) && blockRows.length > 0) {
-        if (!warnedUsingBlocksOpticalSystemData) {
-          console.warn('⚠️ Using Design Intent (blocks) as the optical system source of truth; Optical System table edits are ignored. Set globalThis.__cooptPreferTableOpticalSystemRows=true to force using the table rows.');
-          warnedUsingBlocksOpticalSystemData = true;
-        }
+        warnedUsingBlocksOpticalSystemData = true;
         return blockRows;
       }
     }

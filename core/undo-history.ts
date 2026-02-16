@@ -93,7 +93,6 @@ export class SetBlockParameterCommand extends Command {
   }
   
   execute(): void {
-    console.log('[Undo] execute() called');
     if (w.undoHistory) {
       w.undoHistory.isExecuting = true;
     }
@@ -101,7 +100,6 @@ export class SetBlockParameterCommand extends Command {
       const sysConfig = w.loadSystemConfigurations();
       const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       if (!cfg) {
-        console.warn('[Undo] execute() aborted: config not found', { configId: this.configId });
         return;
       }
       const block = this.findBlock(cfg);
@@ -111,12 +109,10 @@ export class SetBlockParameterCommand extends Command {
       if (w.undoHistory) {
         w.undoHistory.isExecuting = false;
       }
-      console.log('[Undo] execute() completed');
     }
   }
   
   undo(): void {
-    console.log('[Undo] SetBlockParameterCommand.undo() starting');
     if (w.undoHistory) {
       w.undoHistory.isExecuting = true;
     }
@@ -124,18 +120,11 @@ export class SetBlockParameterCommand extends Command {
       const sysConfig = w.loadSystemConfigurations();
       const cfg = sysConfig.configurations.find((c: Configuration) => c.name === this.configId);
       if (!cfg) {
-        console.warn('[Undo] undo() aborted: config not found', { configId: this.configId });
         return;
       }
-      console.log('[Undo] Config found:', cfg ? cfg.name : 'null');
       const block = this.findBlock(cfg);
-      console.log('[Undo] Block found:', block ? block.blockId : 'null');
-      console.log('[Undo] Setting', this.parameterPath, 'to', this.oldValue);
       this.setNestedValue(block, this.parameterPath, this.oldValue);
-      console.log('[Undo] After setNestedValue, block value is:', this.getNestedValue(block, this.parameterPath));
-      console.log('[Undo] Value set, calling refreshSystem');
       this.refreshSystem(sysConfig, cfg);
-      console.log('[Undo] SetBlockParameterCommand.undo() completed');
     } finally {
       if (w.undoHistory) {
         w.undoHistory.isExecuting = false;
@@ -180,49 +169,40 @@ export class SetBlockParameterCommand extends Command {
   }
   
   refreshSystem(sysConfig: SystemConfigurations, cfg: Configuration): void {
-    console.log('[Undo] refreshSystem() starting');
-    
     // Re-expand blocks to optical system
     if (w.expandBlocksToOpticalSystemRows) {
-      console.log('[Undo] Expanding blocks to optical system');
       const expanded = w.expandBlocksToOpticalSystemRows(cfg.blocks);
       if (expanded && expanded.rows) {
         cfg.opticalSystemRows = expanded.rows;
-        console.log('[Undo] Optical system updated');
       }
     }
     
     // Debug: Check value before save
     const cfgInSysConfig = sysConfig.configurations.find((c: Configuration) => c.name === cfg.name);
     const blockInSysConfig = cfgInSysConfig?.blocks?.find((b: Block) => b.blockId === this.blockId);
-    console.log('[Undo] Before save, value in sysConfig:', this.getNestedValue(blockInSysConfig, this.parameterPath));
+    this.getNestedValue(blockInSysConfig, this.parameterPath);
     
     // Save to localStorage (sysConfig already contains the changes made to cfg)
     if (w.saveSystemConfigurations) {
-      console.log('[Undo] Saving system configurations');
       w.saveSystemConfigurations(sysConfig);
       
       // Verify save
       const reloaded = w.loadSystemConfigurations();
       const reloadedCfg = reloaded.configurations.find((c: Configuration) => c.name === cfg.name);
       const reloadedBlock = reloadedCfg?.blocks.find((b: Block) => b.blockId === this.blockId);
-      console.log('[Undo] After save, reloaded value:', this.getNestedValue(reloadedBlock, this.parameterPath));
+      this.getNestedValue(reloadedBlock, this.parameterPath);
     }
     
     // Refresh UI
     if (w.refreshBlockInspector) {
-      console.log('[Undo] Calling refreshBlockInspector');
       requestRefreshBlockInspector(w);
     }
     if (w.loadActiveConfigurationToTables) {
-      console.log('[Undo] Calling loadActiveConfigurationToTables');
       w.loadActiveConfigurationToTables();
     }
     if (w.refreshAllUI) {
-      console.log('[Undo] Calling refreshAllUI');
       w.refreshAllUI();
     }
-    console.log('[Undo] refreshSystem() completed');
   }
 }
 
@@ -302,7 +282,6 @@ export class SetRequirementCommand extends Command {
   }
   
   execute(): void {
-    console.log('[Undo] SetRequirementCommand.execute() starting');
     if (w.undoHistory) {
       w.undoHistory.isExecuting = true;
     }
@@ -311,10 +290,8 @@ export class SetRequirementCommand extends Command {
       const data: any[] = loadSystemRequirementsTableData() as any;
       const req = data.find((r: SystemRequirement) => r.id === this.requirementId);
       if (req) {
-        console.log(`[Undo] Setting ${this.field} from ${req[this.field]} to ${this.newValue}`);
         req[this.field] = this.newValue;
         saveSystemRequirementsTableData(data as any);
-        console.log('[Undo] Saved to systemRequirementsData');
         this.refreshUI();
       }
     } finally {
@@ -325,7 +302,6 @@ export class SetRequirementCommand extends Command {
   }
   
   undo(): void {
-    console.log('[Undo] SetRequirementCommand.undo() starting');
     if (w.undoHistory) {
       w.undoHistory.isExecuting = true;
     }
@@ -334,19 +310,16 @@ export class SetRequirementCommand extends Command {
       const data: any[] = loadSystemRequirementsTableData() as any;
       const req = data.find((r: SystemRequirement) => r.id === this.requirementId);
       if (req) {
-        console.log(`[Undo] Setting ${this.field} from ${req[this.field]} to ${this.oldValue}`);
         req[this.field] = this.oldValue;
         saveSystemRequirementsTableData(data as any);
-        console.log('[Undo] Saved to systemRequirementsData');
         
         // Verify save
         const reloaded: any[] = loadSystemRequirementsTableData() as any;
         const reloadedReq = Array.isArray(reloaded)
           ? reloaded.find((r: any) => r && String(r.id) === String(this.requirementId))
           : null;
-        console.log(`[Undo] After save, reloaded value for ${this.field}:`, reloadedReq?.[this.field]);
+        reloadedReq?.[this.field];
         
-        console.log('[Undo] Calling refreshUI()...');
         this.refreshUI();
       }
     } finally {
@@ -357,28 +330,20 @@ export class SetRequirementCommand extends Command {
   }
   
   refreshUI(): void {
-    console.log('[Undo] SetRequirementCommand.refreshUI() called');
     if (w.systemRequirementsEditor) {
-      console.log('[Undo] Calling systemRequirementsEditor.loadFromStorage()...');
       w.systemRequirementsEditor.loadFromStorage();
-      console.log('[Undo] loadFromStorage() completed, requirements:', w.systemRequirementsEditor.requirements);
       
       // Check if requirement data is correct
       const req = w.systemRequirementsEditor.requirements.find((r: SystemRequirement) => r.id === this.requirementId);
-      console.log(`[Undo] Requirement ${this.requirementId} data after loadFromStorage:`, req);
-      console.log(`[Undo] Field ${this.field} value:`, req?.[this.field]);
+      req?.[this.field];
       
-      console.log('[Undo] Calling systemRequirementsEditor.renderTable()...');
       w.systemRequirementsEditor.renderTable();
-      console.log('[Undo] renderTable() completed');
       
       // Verify UI after render
       setTimeout(() => {
         const reloadedReq = w.systemRequirementsEditor.requirements.find((r: SystemRequirement) => r.id === this.requirementId);
-        console.log(`[Undo] After renderTable, requirement ${this.requirementId}.${this.field}:`, reloadedReq?.[this.field]);
+        reloadedReq?.[this.field];
       }, 100);
-    } else {
-      console.error('[Undo] systemRequirementsEditor not found');
     }
   }
 }
@@ -403,7 +368,6 @@ export class SetSourceFieldCommand extends Command {
   }
   
   execute(): void {
-    console.log('[Undo] SetSourceFieldCommand.execute() starting');
     if (w.undoHistory) {
       w.undoHistory.isExecuting = true;
     }
@@ -413,10 +377,8 @@ export class SetSourceFieldCommand extends Command {
         ? data.find((s: any) => s && String(s.id) === String(this.sourceId))
         : null;
       if (source) {
-        console.log(`[Undo] Setting ${this.field} from ${source[this.field]} to ${this.newValue}`);
         source[this.field] = this.newValue;
         saveSourceTableData(data as any);
-        console.log('[Undo] Saved to sourceTableData');
         this.refreshUI();
       }
     } finally {
@@ -427,7 +389,6 @@ export class SetSourceFieldCommand extends Command {
   }
   
   undo(): void {
-    console.log('[Undo] SetSourceFieldCommand.undo() starting');
     if (w.undoHistory) {
       w.undoHistory.isExecuting = true;
     }
@@ -437,10 +398,8 @@ export class SetSourceFieldCommand extends Command {
         ? data.find((s: any) => s && String(s.id) === String(this.sourceId))
         : null;
       if (source) {
-        console.log(`[Undo] Setting ${this.field} from ${source[this.field]} to ${this.oldValue}`);
         source[this.field] = this.oldValue;
         saveSourceTableData(data as any);
-        console.log('[Undo] Saved to sourceTableData');
         this.refreshUI();
       }
     } finally {
@@ -451,18 +410,9 @@ export class SetSourceFieldCommand extends Command {
   }
   
   refreshUI(): void {
-    console.log('[Undo] SetSourceFieldCommand.refreshUI() called');
-    console.log('[Undo] window.tableSource exists:', !!w.tableSource);
-    console.log('[Undo] window.loadSourceTableData exists:', !!w.loadSourceTableData);
     if (w.tableSource && w.loadSourceTableData) {
-      console.log('[Undo] Calling loadSourceTableData()...');
       const data = w.loadSourceTableData();
-      console.log('[Undo] Loaded data:', data);
-      console.log('[Undo] Calling tableSource.replaceData()...');
       w.tableSource.replaceData(data);
-      console.log('[Undo] tableSource.replaceData() completed');
-    } else {
-      console.error('[Undo] Cannot refresh UI - missing tableSource or loadSourceTableData');
     }
   }
 }
@@ -487,7 +437,6 @@ export class SetObjectFieldCommand extends Command {
   }
   
   execute(): void {
-    console.log('[Undo] SetObjectFieldCommand.execute() starting');
     if (w.undoHistory) {
       w.undoHistory.isExecuting = true;
     }
@@ -497,10 +446,8 @@ export class SetObjectFieldCommand extends Command {
         ? data.find((o: any) => o && String(o.id) === String(this.objectId))
         : null;
       if (obj) {
-        console.log(`[Undo] Setting ${this.field} from ${obj[this.field]} to ${this.newValue}`);
         obj[this.field] = this.newValue;
         saveObjectTableData(data as any);
-        console.log('[Undo] Saved to objectTableData');
         this.refreshUI();
       }
     } finally {
@@ -511,7 +458,6 @@ export class SetObjectFieldCommand extends Command {
   }
   
   undo(): void {
-    console.log('[Undo] SetObjectFieldCommand.undo() starting');
     if (w.undoHistory) {
       w.undoHistory.isExecuting = true;
     }
@@ -521,23 +467,17 @@ export class SetObjectFieldCommand extends Command {
         ? data.find((o: any) => o && String(o.id) === String(this.objectId))
         : null;
       if (obj) {
-        console.log(`[Undo] Setting ${this.field} from ${obj[this.field]} to ${this.oldValue}`);
         obj[this.field] = this.oldValue;
         saveObjectTableData(data as any);
-        console.log('[Undo] Saved to objectTableData');
         
         // Verify save
         const reloaded: any[] = loadObjectTableData() as any;
         const reloadedObj = Array.isArray(reloaded)
           ? reloaded.find((o: any) => o && String(o.id) === String(this.objectId))
           : null;
-        console.log(`[Undo] After save, reloaded value for ${this.field}:`, reloadedObj?.[this.field]);
+        reloadedObj?.[this.field];
         
-        console.log('[Undo] Calling refreshUI()...');
         this.refreshUI();
-        console.log('[Undo] refreshUI() completed');
-      } else {
-        console.error('[Undo] Object not found! objectId:', this.objectId);
       }
     } finally {
       if (w.undoHistory) {
@@ -552,18 +492,9 @@ export class SetObjectFieldCommand extends Command {
   }
   
   refreshUI(): void {
-    console.log('[Undo] SetObjectFieldCommand.refreshUI() called');
-    console.log('[Undo] window.tableObject exists:', !!w.tableObject);
-    console.log('[Undo] window.loadObjectTableData exists:', !!w.loadObjectTableData);
     if (w.tableObject && w.loadObjectTableData) {
-      console.log('[Undo] Calling loadObjectTableData()...');
       const data = w.loadObjectTableData();
-      console.log('[Undo] Loaded data:', data);
-      console.log('[Undo] Calling tableObject.replaceData()...');
       w.tableObject.replaceData(data);
-      console.log('[Undo] tableObject.replaceData() completed');
-    } else {
-      console.error('[Undo] Cannot refresh UI - missing tableObject or loadObjectTableData');
     }
   }
 }
@@ -714,19 +645,11 @@ export class AddRowCommand extends Command {
   }
   
   undo(): void {
-    console.log('[DEBUG AddRowCommand.undo] Called:', {
-      tableName: this.tableName,
-      rowIndex: this.rowIndex,
-      rowDataId: this.rowData?.id
-    });
-    
     if (w.undoHistory) w.undoHistory.isExecuting = true;
     try {
       const storageKey = this.getStorageKey();
       const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
-      console.log('[DEBUG AddRowCommand.undo] Before splice:', { dataLength: data.length });
       data.splice(this.rowIndex, 1);
-      console.log('[DEBUG AddRowCommand.undo] After splice:', { dataLength: data.length });
       localStorage.setItem(storageKey, JSON.stringify(data));
       
       // Temporarily set isExecuting to false for refreshUI to work properly
@@ -736,7 +659,6 @@ export class AddRowCommand extends Command {
     } finally {
       if (w.undoHistory) w.undoHistory.isExecuting = false;
     }
-    console.log('[DEBUG AddRowCommand.undo] Completed');
   }
   
   getStorageKey(): string {
@@ -796,19 +718,11 @@ export class DeleteRowCommand extends Command {
   }
   
   undo(): void {
-    console.log('[DEBUG DeleteRowCommand.undo] Called:', {
-      tableName: this.tableName,
-      rowIndex: this.rowIndex,
-      rowDataId: this.rowData?.id
-    });
-    
     if (w.undoHistory) w.undoHistory.isExecuting = true;
     try {
       const storageKey = this.getStorageKey();
       const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
-      console.log('[DEBUG DeleteRowCommand.undo] Before splice:', { dataLength: data.length });
       data.splice(this.rowIndex, 0, this.rowData);
-      console.log('[DEBUG DeleteRowCommand.undo] After splice:', { dataLength: data.length });
       localStorage.setItem(storageKey, JSON.stringify(data));
       
       // Temporarily set isExecuting to false for refreshUI to work properly
@@ -818,7 +732,6 @@ export class DeleteRowCommand extends Command {
     } finally {
       if (w.undoHistory) w.undoHistory.isExecuting = false;
     }
-    console.log('[DEBUG DeleteRowCommand.undo] Completed');
   }
   
   getStorageKey(): string {
@@ -887,7 +800,6 @@ export class UndoHistory {
     this.redoStack = [];
     this.maxSize = maxSize;
     this.isExecuting = false;
-    console.log('[Undo] UndoHistory initialized', { maxSize });
   }
   
   /**
@@ -895,10 +807,6 @@ export class UndoHistory {
    */
   record(command: Command): void {
     if (this.isExecuting) {
-      console.warn('[Undo] record() skipped because isExecuting=true', {
-        description: command?.description,
-        commandId: command?.id
-      });
       return; // Don't record undo/redo operations
     }
     
@@ -911,36 +819,24 @@ export class UndoHistory {
     }
     
     this.notifyListeners();
-    
-    console.log('[Undo] Recorded', {
-      description: command.description,
-      commandId: command.id,
-      undoStackSize: this.undoStack.length,
-      redoStackSize: this.redoStack.length
-    });
   }
   
   /**
    * Undo the last command
    */
   undo(): boolean {
-    console.log('[Undo] undo() called, stack size:', this.undoStack.length);
     if (this.undoStack.length === 0) {
-      console.log('[Undo] Nothing to undo');
       return false;
     }
     
     this.isExecuting = true;
     try {
       const command = this.undoStack.pop()!;
-      console.log(`[Undo] Undoing: ${command.description}`, command);
       command.undo();
       this.redoStack.push(command);
       this.notifyListeners();
-      console.log('[Undo] Undo completed successfully');
       return true;
-    } catch (error) {
-      console.error('[Undo] Error during undo:', error);
+    } catch (_error) {
       return false;
     } finally {
       this.isExecuting = false;
@@ -951,23 +847,18 @@ export class UndoHistory {
    * Redo the last undone command
    */
   redo(): boolean {
-    console.log('[Undo] redo() called, stack size:', this.redoStack.length);
     if (this.redoStack.length === 0) {
-      console.log('[Undo] Nothing to redo');
       return false;
     }
     
     this.isExecuting = true;
     try {
       const command = this.redoStack.pop()!;
-      console.log(`[Undo] Redoing: ${command.description}`, command);
       command.execute();
       this.undoStack.push(command);
       this.notifyListeners();
-      console.log('[Undo] Redo completed successfully');
       return true;
-    } catch (error) {
-      console.error('[Undo] Error during redo:', error);
+    } catch (_error) {
       return false;
     } finally {
       this.isExecuting = false;
@@ -989,7 +880,6 @@ export class UndoHistory {
     this.undoStack = [];
     this.redoStack = [];
     this.notifyListeners();
-    console.log('[Undo] History cleared');
   }
   
   /**
@@ -998,15 +888,6 @@ export class UndoHistory {
   notifyListeners(): void {
     const undoBtn = document.getElementById('undo-btn') as HTMLButtonElement | null;
     const redoBtn = document.getElementById('redo-btn') as HTMLButtonElement | null;
-
-    console.log('[Undo] notifyListeners()', {
-      undoStackSize: this.undoStack.length,
-      redoStackSize: this.redoStack.length,
-      canUndo: this.canUndo(),
-      canRedo: this.canRedo(),
-      hasUndoBtn: !!undoBtn,
-      hasRedoBtn: !!redoBtn
-    });
     
     if (undoBtn) {
       undoBtn.disabled = !this.canUndo();
@@ -1049,9 +930,7 @@ export class UndoHistory {
 
 // Create global instance
 if (typeof window !== 'undefined') {
-  console.log('[Undo] Creating global UndoHistory instance');
   w.undoHistory = new UndoHistory();
-  console.log('[Undo] Global UndoHistory ready', w.undoHistory.getInfo());
   
   // Export command classes for use in other modules
   w.Command = Command;

@@ -17,6 +17,15 @@ import {
 } from '../../raytracing/core/ray-paraxial.ts';
 import { tableSource } from '../../data/table-source.ts';
 
+const console = new Proxy(globalThis.console, {
+    get(target, prop, receiver) {
+        if (prop === 'log') {
+            return () => {};
+        }
+        return Reflect.get(target, prop, receiver);
+    }
+}) as Console;
+
 // ガラス情報の補完: Ref Index/Abbeが無い場合でも、Materialが数値ならndとして扱う
 function getNdAbbeAfocal(surf) {
     if (!surf) return { nd: null, abbe: null };

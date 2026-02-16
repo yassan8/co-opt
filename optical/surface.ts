@@ -722,12 +722,6 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
   if (typeof origin.y !== 'number') origin.y = 0;
   if (typeof origin.z !== 'number') origin.z = 0;
   
-  debugLog(`🔸 drawLensSurfaceWithOrigin: Drawing 3D surface at origin O(s)=(${origin.x.toFixed(3)}, ${origin.y.toFixed(3)}, ${origin.z.toFixed(3)})`);
-  debugLog(`🔸 Rotation matrix available: ${rotationMatrix ? 'YES' : 'NO'}`);
-  if (rotationMatrix) {
-    debugLog(`🔸 Rotation matrix:`, rotationMatrix);
-  }
-  
   const semidia = __coopt_getSemidiaMm(params);
   if (semidia === null) return;
 
@@ -884,10 +878,6 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
     return;
   }
 
-  // Debug: Log array types and sample values
-  console.log('🔍 [WithOrigin] indices type:', indices.constructor.name, 'length:', indices.length, 'sample:', indices.slice(0, 6));
-  console.log('🔍 [WithOrigin] positions type:', positions.constructor.name, 'length:', positions.length, 'sample:', positions.slice(0, 9));
-
   const geometry = new THREE_CTX.BufferGeometry();
   const PositionArrayCtor = globalScope?.Float32Array || Float32Array;
   geometry.setAttribute("position", new THREE_CTX.BufferAttribute(new PositionArrayCtor(positions), 3));
@@ -902,7 +892,6 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
   // Try different approaches to set index
   try {
     geometry.setIndex(new THREE_CTX.BufferAttribute(indexArray, 1));
-    console.log('✅ [WithOrigin] setIndex succeeded');
   } catch (e) {
     console.error('❌ [WithOrigin] setIndex failed:', e.message);
     return;
@@ -920,8 +909,6 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
   mesh.userData = { type: 'lensSurface', isLensSurface: true, surfaceType: '3DSurface' };
   scene.add(mesh);
   
-  debugLog(`✅ drawLensSurfaceWithOrigin: Added 3D lens surface to scene, vertices: ${positions.length/3}, faces: ${indices.length/3}`);
-  debugLog(`✅ Scene children after adding surface: ${scene.children.length}`);
 }
 
 // Draw toric surface with origin and rotation using 50x50 grid mesh.
@@ -929,9 +916,6 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
 export function drawToricSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z: 0}, rotationMatrix = null, segments = 50, color = 0x00ccff, opacity = 0.5) {
   const { THREE: THREE_CTX, globalScope } = getSceneThreeContext(scene);
   const { radiusX, radiusY, conic, axis, semidia } = params;
-  
-  console.log(`[Toric Render] params:`, params);
-  console.log(`[Toric Render] radiusX=${radiusX}, radiusY=${radiusY}, axis=${axis}, radius=${params.radius}`);
   
   // Check if both radiusX and radiusY are INF (both flat) - that's just a plane, skip rendering
   const rxIsFlat = !isFinite(radiusX) || radiusX === 0;
@@ -950,26 +934,6 @@ export function drawToricSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, 
   
   const positions = [];
   const indices = [];
-  
-  // Debug: Log specific test points
-  console.log(`[Toric Debug] Testing key points for radiusX=${radiusX}, radiusY=${radiusY}, conic=${conic || 0}`);
-  
-  // Test center point
-  const z_center = toricSurfaceZ(0, 0, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
-  console.log(`[Toric Debug] Center (0,0): z=${z_center.toFixed(4)}`);
-  
-  // Test X-axis points (y=0)
-  const testR = semidia * 0.5; // Test at half semidia
-  const z_xPos = toricSurfaceZ(testR, 0, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
-  const z_xNeg = toricSurfaceZ(-testR, 0, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
-  console.log(`[Toric Debug] X-axis (+${testR.toFixed(2)}, 0): z=${z_xPos.toFixed(4)}`);
-  console.log(`[Toric Debug] X-axis (-${testR.toFixed(2)}, 0): z=${z_xNeg.toFixed(4)}`);
-  
-  // Test Y-axis points (x=0)
-  const z_yPos = toricSurfaceZ(0, testR, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
-  const z_yNeg = toricSurfaceZ(0, -testR, { radiusX, radiusY, conic: conic || 0, axis: params.axis || 0 });
-  console.log(`[Toric Debug] Y-axis (0, +${testR.toFixed(2)}): z=${z_yPos.toFixed(4)}`);
-  console.log(`[Toric Debug] Y-axis (0, -${testR.toFixed(2)}): z=${z_yNeg.toFixed(4)}`);
   
   // Build 50x50 grid mesh (non-rotationally symmetric)
   const vertexInAperture = []; // Track which vertices are within aperture
@@ -1094,8 +1058,6 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
   if (typeof origin.y !== 'number') origin.y = 0;
   if (typeof origin.z !== 'number') origin.z = 0;
   
-  debugLog('🔸 drawSemidiaRingWithOriginAndSurface called:', { semidia, origin, surf: surf?.surfType });
-  
   // Check if semidia is valid
   if (!isFinite(semidia) || semidia <= 0) {
     // console.warn('❌ Invalid semidia value:', semidia, 'skipping ring drawing');
@@ -1121,7 +1083,6 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
         conic: Number(surf.conic) || 0,
         axis: Number(surf.axis) || 0
       };
-      console.log(`[Ring Toric] Using toric params: radiusX=${radiusX}, radiusY=${radiusY}`);
     }
   } else if (surf && surf.radius && surf.radius !== "INF") {
     const radius = parseFloat(surf.radius);
@@ -1207,23 +1168,6 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
   };
   
   scene.add(line);
-  
-  debugLog(`🔸 ✅ Added semidia ring to scene, positions: ${positions.length/3}, scene children: ${scene.children.length}`);
-  debugLog(`🔸 Ring at origin: (${origin.x.toFixed(3)}, ${origin.y.toFixed(3)}, ${origin.z.toFixed(3)}), semidia: ${semidia}`);
-  
-  // Debug: Log some sample positions to verify sag calculation (only for test scenarios)
-  if (positions.length >= 6 && scene.children.length <= 10) { // Only show debug for simple test scenes
-    console.log(`🔸 Ring debug - First point: (${positions[0].toFixed(3)}, ${positions[1].toFixed(3)}, ${positions[2].toFixed(3)})`);
-    if (positions.length >= 12) {
-      console.log(`🔸 Ring debug - Second point: (${positions[3].toFixed(3)}, ${positions[4].toFixed(3)}, ${positions[5].toFixed(3)})`);
-    }
-    
-    // Debug: Check if sag calculation is working
-    if (asphericParams) {
-      const testSag = asphericSurfaceZ(semidia, asphericParams, "even");
-      console.log(`🔸 Ring debug - Expected sag at semidia ${semidia}: ${testSag.toFixed(3)}`);
-    }
-  }
 }
 
 // Sag計算を含む矩形アパーチャ描画関数（サグ追従）
@@ -2057,8 +2001,6 @@ export function addMirrorBackText(scene, origin, rotationMatrix) {
 // 新規追加: O(s)/R(s) での断面描画関数
 export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigins) {
     // console.log('🔸 drawLensCrossSectionWithSurfaceOrigins 開始');
-    debugLog('🔸 Cross-section O(s)/R(s) drawing started');
-    debugLog('🔸 Parameters check:', { scene: !!scene, rows: rows?.length, surfaceOrigins: surfaceOrigins?.length });
     
     // sceneの型チェック
     if (!scene) {
@@ -2591,7 +2533,6 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         }
     }
     
-    debugLog(`🔸 Cross-section O(s)/R(s) drawing completed: ${yzProfileCount} YZ profiles, ${xzProfileCount} XZ profiles, ${connectionLineCount} connection lines`);
     // console.log(`✅ プロファイル描画完了: YZ=${yzProfileCount}, XZ=${xzProfileCount} 描画`);
     // console.log(`✅ Connection lines drawn: ${connectionLineCount} total`);
 }

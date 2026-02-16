@@ -649,12 +649,12 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                 const ok = successfulRays;
                 const kinds = Object.entries(diagnostics.kindCounts).sort((a, b) => b[1] - a[1]);
                 const surfaces = Object.entries(diagnostics.surfaceCounts).sort((a, b) => b[1] - a[1]);
-                console.groupCollapsed(`🧪 SpotDiag diagnostics: Object ${objectId} (${objectType}) hits ${ok}/${total} @ surface ${surfaceNumber}`);
-                if (kinds.length) console.log('Failure kinds:', kinds.slice(0, 6));
-                if (surfaces.length) console.log('Top blocker surfaces:', surfaces.slice(0, 8));
                 const ex = diagnostics.examples.find(e => e.kind === 'PHYSICAL_APERTURE_BLOCK') || diagnostics.examples[0];
-                if (ex) console.log('Example failure:', ex);
-                console.groupEnd();
+                void total;
+                void ok;
+                void kinds;
+                void surfaces;
+                void ex;
             } catch (_) {}
         }
         
@@ -1281,7 +1281,6 @@ export async function generateSpotDiagramAsync(
     
     // Detect and validate conjugate type
     const conjugateType = options?.conjugateType || detectConjugateType(opticalSystemRows, options);
-    console.log(`🔍 [SpotDiagram] Conjugate type: ${conjugateType}`);
     
     // Ensure conjugateType is passed to all ray generation
     // For infinite conjugate, enable chief ray analysis to find proper emission origin
@@ -1294,13 +1293,6 @@ export async function generateSpotDiagramAsync(
         allowStopBasedOriginSolve: conjugateType === 'infinite' ? true : false
     };
     
-    console.log(`🔍 [SpotDiagram] Enhanced options:`, {
-        conjugateType: enhancedOptions.conjugateType,
-        useChiefRayAnalysis: enhancedOptions.useChiefRayAnalysis,
-        aimThroughStop: enhancedOptions.aimThroughStop,
-        allowStopBasedOriginSolve: enhancedOptions.allowStopBasedOriginSolve
-    });
-
     // Input validation (match sync behavior)
     if (!opticalSystemRows || !Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
         throw new Error('有効な光学系データが必要です。');
@@ -1787,12 +1779,12 @@ export async function generateSpotDiagramAsync(
                 const ok = successfulRays;
                 const kinds = Object.entries(diagnostics.kindCounts).sort((a, b) => b[1] - a[1]);
                 const surfaces = Object.entries(diagnostics.surfaceCounts).sort((a, b) => b[1] - a[1]);
-                console.groupCollapsed(`🧪 SpotDiag diagnostics(async): Object ${objectId} (${objectType}) hits ${ok}/${total} @ surface ${surfaceNumber}`);
-                if (kinds.length) console.log('Failure kinds:', kinds.slice(0, 6));
-                if (surfaces.length) console.log('Top blocker surfaces:', surfaces.slice(0, 8));
                 const ex = diagnostics.examples.find(e => e.kind === 'PHYSICAL_APERTURE_BLOCK') || diagnostics.examples[0];
-                if (ex) console.log('Example failure:', ex);
-                console.groupEnd();
+                void total;
+                void ok;
+                void kinds;
+                void surfaces;
+                void ex;
             } catch (_) {}
         }
 

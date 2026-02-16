@@ -67,19 +67,9 @@ function isIOSLike(): boolean {
  * @returns Object containing scene, camera, renderer, controls instances
  */
 export function initializeThreeJS(): SceneComponents {
-    // Log iOS detection for debugging - use multiple methods to ensure it appears
     const isIOS = isIOSLike();
     const w = window as any;
-    
-    // Force logging with multiple attempts
-    try {
-        console.log(`📱 Device detection: iOS=${isIOS}, UA=${navigator.userAgent.substring(0, 100)}, touchPoints=${navigator.maxTouchPoints}`);
-    } catch (e) {}
-    
-    try {
-        console.info(`📱 [scene-setup.ts] iOS=${isIOS}`);
-    } catch (e) {}
-    
+
     // Also store on window for inspection
     w.__sceneSetupIOSDetected = isIOS;
     

@@ -15,8 +15,6 @@ import { getLoadedFileName, getLoadedFileWarn } from '../../../ui/loaded-file-st
 import { getToolbarCollapsed, setToolbarCollapsed } from '../../../ui/toolbar-collapsed-storage';
 
 export default function MainToolbar() {
-  console.log('[React] MainToolbar rendering');
-
   const resolveToolbarCollapsed = () => {
     return getToolbarCollapsed();
   };
@@ -59,20 +57,14 @@ export default function MainToolbar() {
   }, [isToolbarCollapsed]);
 
   const handleUndoClick = () => {
-    console.log('[Undo] Undo button clicked');
     if (window.undoHistory) {
       window.undoHistory.undo();
-    } else {
-      console.error('[Undo] window.undoHistory not found');
     }
   };
 
   const handleRedoClick = () => {
-    console.log('[Undo] Redo button clicked');
     if (window.undoHistory) {
       window.undoHistory.redo();
-    } else {
-      console.error('[Undo] window.undoHistory not found');
     }
   };
 
