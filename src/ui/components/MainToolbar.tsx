@@ -167,17 +167,17 @@ export default function MainToolbar() {
             }}
           >
             <option value="">Select Analysis</option>
-            <option value="spot-diagram">Analyze Spot Diagram</option>
-            <option value="spherical-aberration">Analyze Spherical Aberration</option>
-            <option value="astigmatism">Analyze Astigmatism</option>
-            <option value="distortion">Analyze Distortion</option>
-            <option value="integrated-aberration">Analyze Integrated Aberration</option>
-            <option value="transverse-aberration">Analyze Transverse Aberration</option>
-            <option value="opd">Analyze Optical Path Difference</option>
-            <option value="psf">Analyze Point Spread Function</option>
-            <option value="mtf">Analyze Modulation Transfer Function</option>
-            <option value="through-focus-spot">Analyze Through-Focus Spot</option>
-            <option value="through-focus-mtf">Analyze Through-Focus MTF</option>
+            <option value="spot-diagram">Spot Diagram</option>
+            <option value="spherical-aberration">Spherical Aberration</option>
+            <option value="astigmatism">Astigmatism</option>
+            <option value="distortion">Distortion</option>
+            <option value="integrated-aberration">Integrated Aberration</option>
+            <option value="transverse-aberration">Transverse Aberration</option>
+            <option value="opd">Optical Path Difference</option>
+            <option value="psf">Point Spread Function</option>
+            <option value="mtf">Modulation Transfer Function</option>
+            <option value="through-focus-spot">Through-Focus Spot</option>
+            <option value="through-focus-mtf">Through-Focus MTF</option>
           </select>
         </div>
       </div>

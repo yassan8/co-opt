@@ -39,7 +39,7 @@ function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows, defocusShiftM
     return cloned;
 }
 
-async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot, showDiffractionLimit, zeroPadTo } = {}) {
+async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot, showDiffractionLimit, zeroPadTo, legacyBaselineMode, plotPointCount } = {}) {
     const safeNumber = (v, fallback) => {
         const n = Number(v);
         return Number.isFinite(n) ? n : fallback;
@@ -72,6 +72,19 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
 
     const useWasmFastOnly = !!((typeof globalThis !== 'undefined') && (globalThis as any).__COOPT_MTF_WASM_FAST_ONLY);
     const enableMtfProfileLog = !((typeof globalThis !== 'undefined') && (globalThis as any).__COOPT_MTF_PROFILE === false);
+    const useLegacyBaselineMode = (typeof legacyBaselineMode === 'boolean')
+        ? legacyBaselineMode
+        : !((typeof globalThis !== 'undefined') && (globalThis as any).__COOPT_MTF_LEGACY_BASELINE === false);
+    const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+    const plotPointCountFromGlobal = (typeof globalThis !== 'undefined')
+        ? Number((globalThis as any).__COOPT_MTF_PLOT_POINT_COUNT)
+        : NaN;
+    const plotPointCountCandidate = Math.floor(safeNumber(plotPointCount, plotPointCountFromGlobal));
+    const resolvedPlotPointCount = clamp(
+        Number.isFinite(plotPointCountCandidate) ? plotPointCountCandidate : 121,
+        5,
+        2001
+    );
 
     const primaryWl = (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function')
         ? Number(window.getPrimaryWavelength())
@@ -92,14 +105,20 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     const maxLpmm = Math.max(0, safeNumber(maxFrequencyLpmm, 100));
 
     const isPowerOfTwo = (n) => Number.isInteger(n) && n > 0 && (n & (n - 1)) === 0;
-    const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+    const nextPowerOfTwo = (n) => {
+        let p = 1;
+        const target = Math.max(1, Math.floor(Number(n) || 1));
+        while (p < target && p < 4096) p <<= 1;
+        return p;
+    };
     // samplingSize is the FFT grid size (NxN). Legacy samplingPoints is treated as alias when it looks like a valid grid size.
     const samplingCandidate = Math.floor(safeNumber(samplingSize, NaN));
     const legacyCandidate = Math.floor(safeNumber(samplingPoints, NaN));
     const gridCandidate = Number.isFinite(samplingCandidate) ? samplingCandidate : legacyCandidate;
     const gridSize = isPowerOfTwo(gridCandidate) ? clamp(gridCandidate, 32, 4096) : 256;
     const zeroPadCandidate = Math.floor(safeNumber(zeroPadTo, NaN));
-    const resolvedZeroPadTo = (Number.isFinite(zeroPadCandidate) && zeroPadCandidate >= gridSize && isPowerOfTwo(zeroPadCandidate))
+    const hasExplicitZeroPad = Number.isFinite(zeroPadCandidate) && zeroPadCandidate >= gridSize && isPowerOfTwo(zeroPadCandidate);
+    const explicitZeroPadTo = hasExplicitZeroPad
         ? clamp(zeroPadCandidate, 32, 4096)
         : 0;
 
@@ -108,9 +127,43 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
         : true;
 
     const shouldRenderPlot = !skipPlot;
-    const containerEl = containerElement || document.getElementById('mtf-container');
+    const resolveContainerElement = () => {
+        if (containerElement) return containerElement;
+        const byId = (id: string) => {
+            try { return document.getElementById(id); } catch (_) { return null; }
+        };
+        return (
+            byId('mtf-container')
+            || byId('popup-mtf-container')
+            || byId('popup-through-focus-mtf-container')
+            || null
+        );
+    };
+    let containerEl: any = resolveContainerElement();
     if (shouldRenderPlot && !containerEl) {
-        throw new Error('MTF container element not found');
+        try {
+            if (!document?.body) throw new Error('document.body is unavailable');
+            const autoId = 'mtf-container-auto';
+            const existing = document.getElementById(autoId);
+            containerEl = existing || document.createElement('div');
+            if (!existing) {
+                containerEl.id = autoId;
+                containerEl.style.position = 'fixed';
+                containerEl.style.right = '16px';
+                containerEl.style.bottom = '16px';
+                containerEl.style.width = '760px';
+                containerEl.style.height = '520px';
+                containerEl.style.background = '#ffffff';
+                containerEl.style.border = '1px solid #d0d0d0';
+                containerEl.style.boxShadow = '0 4px 16px rgba(0,0,0,0.15)';
+                containerEl.style.zIndex = '99999';
+                containerEl.style.borderRadius = '6px';
+                document.body.appendChild(containerEl);
+            }
+            console.warn('⚠️ MTF container not found. Auto-created #mtf-container-auto for plotting.');
+        } catch (_) {
+            throw new Error('MTF container element not found');
+        }
     }
     if (shouldRenderPlot) {
         try { containerEl.innerHTML = ''; } catch (_) {}
@@ -485,26 +538,48 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             ? (focalLengthMm / pupilDiameterMm)
             : NaN;
 
+        const desiredBinCount = Math.max(2, resolvedPlotPointCount);
+        // Keep MTF numerics independent of Max(lp/mm): Max should crop display range only.
+        // N/2 + 1 bins exist up to Nyquist, so require N >= 2*(desiredBinCount-1).
+        const minRequiredNForBins = Math.max(gridSize, 2 * (desiredBinCount - 1));
+        const adaptiveZeroPadToRaw = nextPowerOfTwo(minRequiredNForBins);
+        const adaptiveZeroPadTo = (adaptiveZeroPadToRaw > gridSize)
+            ? clamp(adaptiveZeroPadToRaw, 32, 4096)
+            : 0;
+        let effectiveZeroPadTo = hasExplicitZeroPad
+            ? explicitZeroPadTo
+            : adaptiveZeroPadTo;
+
+        // Safety fallback: with 32x32 and explicit "none" (zeroPadTo==sampling),
+        // MTF can become numerically unstable or too sparse for plotting in some systems.
+        // Promote to 64x64 only for this narrow edge case.
+        if (hasExplicitZeroPad && explicitZeroPadTo === gridSize && gridSize <= 32) {
+            effectiveZeroPadTo = 64;
+            console.warn('⚠️ MTF: sampling 32 with zero-pad none is unstable; promoted FFT size to 64 for robust plotting.');
+        }
+
         reportProgress(localBase + localSpan * 0.75, `λ=${titleNmLocal} nm: Calculating PSF...`);
         const psfResult = await psfCalculator.calculatePSF(opdData, {
             samplingSize: s,
-            zeroPadTo: resolvedZeroPadTo,
+            zeroPadTo: effectiveZeroPadTo,
             pupilDiameter: pupilDiameterMm,
             focalLength: focalLengthMm,
             pixelSize: pixelSizeMicronsForMTF,
-            forceImplementation: 'javascript',
+            forceImplementation: useLegacyBaselineMode ? null : 'javascript',
             // OPD grid is already piston+tilt removed by opdDisplayMode.
             removeTilt: false
         });
 
-        if (String(psfResult?.implementationUsed || '').toLowerCase() !== 'javascript') {
+        if (!useLegacyBaselineMode && String(psfResult?.implementationUsed || '').toLowerCase() !== 'javascript') {
             console.warn('⚠️ MTF PSF path expected JavaScript (for zero-padding), but got a different implementation.');
         }
 
         reportProgress(localBase + localSpan * 0.85, `λ=${titleNmLocal} nm: Computing OTF/MTF...`);
 
         const psf2D = psfResult?.psfData || psfResult?.psf || psfResult?.intensity || null;
-        const pixelSizeMicrons = safeNumber(psfResult?.options?.pixelSize, safeNumber(pixelSizeMicronsForMTF, 1.0));
+        const pixelSizeMicrons = useLegacyBaselineMode
+            ? safeNumber(pixelSizeMicronsForMTF, safeNumber(psfResult?.options?.pixelSize, 1.0))
+            : safeNumber(psfResult?.options?.pixelSize, safeNumber(pixelSizeMicronsForMTF, 1.0));
         if (!psf2D || !Array.isArray(psf2D) || !Array.isArray(psf2D[0])) {
             throw new Error('PSF data missing for MTF');
         }
@@ -531,7 +606,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             }
         }
 
-        const wasmMTFFn = psfCalculator?.wasmCalculator?.calculateMTFAxesFromPSF;
+        const wasmMTFFn = useLegacyBaselineMode
+            ? null
+            : psfCalculator?.wasmCalculator?.calculateMTFAxesFromPSF;
         let tan: { freq: number[]; mtfVals: any[] } | null = null;
         let sag: { freq: number[]; mtfVals: any[] } | null = null;
 
@@ -594,6 +671,63 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             sag = sample1DAxis(sagAxis);
         }
 
+        const densifyCurve = (curve) => {
+            if (!curve || !Array.isArray(curve.freq) || !Array.isArray(curve.mtfVals)) return curve;
+            const srcX = curve.freq;
+            const srcY = curve.mtfVals;
+            if (srcX.length < 2 || srcY.length !== srcX.length) return curve;
+
+            const targetCount = Math.max(srcX.length, resolvedPlotPointCount);
+            if (targetCount <= srcX.length) return curve;
+
+            const xStart = Number(srcX[0]);
+            const xEnd = Number(srcX[srcX.length - 1]);
+            if (!Number.isFinite(xStart) || !Number.isFinite(xEnd) || xEnd <= xStart) return curve;
+
+            const outX: number[] = [];
+            const outY: any[] = [];
+
+            const interpY = (x: number) => {
+                if (!Number.isFinite(x)) return null;
+                if (x <= Number(srcX[0])) {
+                    const y0 = Number(srcY[0]);
+                    return Number.isFinite(y0) ? y0 : null;
+                }
+                const last = srcX.length - 1;
+                if (x >= Number(srcX[last])) {
+                    const yl = Number(srcY[last]);
+                    return Number.isFinite(yl) ? yl : null;
+                }
+
+                for (let i = 1; i < srcX.length; i++) {
+                    const x0 = Number(srcX[i - 1]);
+                    const x1 = Number(srcX[i]);
+                    if (!Number.isFinite(x0) || !Number.isFinite(x1) || x1 === x0) continue;
+                    if (x <= x1) {
+                        const y0 = Number(srcY[i - 1]);
+                        const y1 = Number(srcY[i]);
+                        if (!Number.isFinite(y0) || !Number.isFinite(y1)) return null;
+                        const t = (x - x0) / (x1 - x0);
+                        return y0 + t * (y1 - y0);
+                    }
+                }
+                return null;
+            };
+
+            for (let i = 0; i < targetCount; i++) {
+                const t = (targetCount <= 1) ? 0 : (i / (targetCount - 1));
+                const x = xStart + (xEnd - xStart) * t;
+                outX.push(x);
+                outY.push(interpY(x));
+            }
+
+            if (outY.length > 0) outY[0] = 1.0;
+            return { freq: outX, mtfVals: outY };
+        };
+
+        tan = densifyCurve(tan);
+        sag = densifyCurve(sag);
+
         const color = getColorForWavelength(wlLocal);
         traces.push({
             x: tan.freq,
@@ -637,10 +771,11 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     const titlePart = isAllWavelengths
         ? 'All wavelengths'
         : `${(wl * 1000).toFixed(1)} nm`;
+    const xAxisMaxLpmm = (maxLpmm > 0) ? maxLpmm : (maxPlotLpmmGlobal || 0);
 
     const layout = {
         title: `Modulation Transfer Function (${titlePart}, Object ${objIndex})`,
-        xaxis: { title: 'Spatial frequency (lp/mm)', range: [0, maxPlotLpmmGlobal || 0] },
+        xaxis: { title: 'Spatial frequency (lp/mm)', range: [0, xAxisMaxLpmm] },
         yaxis: { title: 'MTF', range: [0, 1.05] },
         margin: { l: 60, r: 20, t: 50, b: 50 }
     };
@@ -795,8 +930,331 @@ async function showThroughFocusMTFDiagram({
     reportProgress(100, 'Done');
     return { traces, layout };
 }
+
+async function showMTFComparisonDiagram({
+    wavelengthMicrons,
+    objectIndex,
+    maxFrequencyLpmm,
+    samplingSize,
+    samplingPoints,
+    containerElement,
+    onProgress,
+    opdDisplayMode,
+    defocusShiftMm,
+    zeroPadTo,
+    showDelta,
+    timeoutMs
+} = {}) {
+    const safeNumber = (v, fallback) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : fallback;
+    };
+
+    const resolveContainerElement = () => {
+        if (containerElement) return containerElement;
+        const byId = (id: string) => {
+            try { return document.getElementById(id); } catch (_) { return null; }
+        };
+        return (
+            byId('mtf-container')
+            || byId('popup-mtf-container')
+            || byId('popup-through-focus-mtf-container')
+            || null
+        );
+    };
+
+    let containerEl: any = resolveContainerElement();
+    if (!containerEl) {
+        try {
+            if (!document?.body) throw new Error('document.body is unavailable');
+            const autoId = 'mtf-comparison-container-auto';
+            const existing = document.getElementById(autoId);
+            containerEl = existing || document.createElement('div');
+            if (!existing) {
+                containerEl.id = autoId;
+                containerEl.style.position = 'fixed';
+                containerEl.style.right = '16px';
+                containerEl.style.bottom = '16px';
+                containerEl.style.width = '760px';
+                containerEl.style.height = '520px';
+                containerEl.style.background = '#ffffff';
+                containerEl.style.border = '1px solid #d0d0d0';
+                containerEl.style.boxShadow = '0 4px 16px rgba(0,0,0,0.15)';
+                containerEl.style.zIndex = '99999';
+                containerEl.style.borderRadius = '6px';
+                document.body.appendChild(containerEl);
+            }
+            console.warn('⚠️ MTF container not found. Auto-created #mtf-comparison-container-auto for plotting.');
+        } catch (error) {
+            throw new Error('MTF container element not found');
+        }
+    }
+    try { containerEl.innerHTML = ''; } catch (_) {}
+
+    const plotly = containerEl?.ownerDocument?.defaultView?.Plotly || (typeof window !== 'undefined' ? window.Plotly : null);
+    if (!plotly) {
+        throw new Error('Plotly is not available');
+    }
+
+    const reportProgress = (percent, message) => {
+        try {
+            if (typeof onProgress !== 'function') return;
+            onProgress({ percent, message });
+        } catch (_) {}
+    };
+
+    const shouldShowDelta = (typeof showDelta === 'boolean') ? showDelta : true;
+    const perRunTimeoutMs = Math.max(1000, safeNumber(timeoutMs, 120000));
+
+    const setPhase = (phase: string, extra: any = null) => {
+        try {
+            if (typeof globalThis !== 'undefined') {
+                (globalThis as any).__mtfComparisonState = {
+                    phase,
+                    at: Date.now(),
+                    extra
+                };
+            }
+        } catch (_) {}
+    };
+
+    const withTimeout = async (promise: Promise<any>, ms: number, label: string) => {
+        let timeoutId: any = null;
+        try {
+            const timeoutPromise = new Promise((_, reject) => {
+                timeoutId = setTimeout(() => {
+                    reject(new Error(`${label} timed out after ${ms} ms`));
+                }, ms);
+            });
+            return await Promise.race([promise, timeoutPromise]);
+        } finally {
+            try { if (timeoutId) clearTimeout(timeoutId); } catch (_) {}
+        }
+    };
+
+    setPhase('start');
+    reportProgress(2, 'Running current MTF...');
+    setPhase('current-mtf');
+    const current = await withTimeout(showMTFDiagram({
+        wavelengthMicrons,
+        objectIndex,
+        maxFrequencyLpmm,
+        samplingSize,
+        samplingPoints,
+        containerElement: containerEl,
+        onProgress: null,
+        opdDisplayMode,
+        defocusShiftMm,
+        skipPlot: true,
+        showDiffractionLimit: false,
+        zeroPadTo,
+        legacyBaselineMode: false
+    }), perRunTimeoutMs, 'Current MTF run');
+
+    reportProgress(45, 'Running Feb-7 baseline-compatible MTF...');
+    setPhase('legacy-mtf');
+    const legacy = await withTimeout(showMTFDiagram({
+        wavelengthMicrons,
+        objectIndex,
+        maxFrequencyLpmm,
+        samplingSize,
+        samplingPoints,
+        containerElement: containerEl,
+        onProgress: null,
+        opdDisplayMode,
+        defocusShiftMm,
+        skipPlot: true,
+        showDiffractionLimit: false,
+        zeroPadTo,
+        legacyBaselineMode: true
+    }), perRunTimeoutMs, 'Feb-7 compatible MTF run');
+
+    const currentTraces = Array.isArray(current?.traces) ? current.traces : [];
+    const legacyTraces = Array.isArray(legacy?.traces) ? legacy.traces : [];
+
+    const stripSuffix = (name: string) => String(name || '').replace(/\s*\(.*\)\s*$/, '').trim();
+    const isPrimaryMTFCurve = (name: string) => {
+        const n = stripSuffix(name).toLowerCase();
+        return n === 'tangential' || n === 'sagittal';
+    };
+
+    const primaryCurrent = currentTraces.filter((tr) => isPrimaryMTFCurve(String(tr?.name ?? '')));
+    const primaryLegacy = legacyTraces.filter((tr) => isPrimaryMTFCurve(String(tr?.name ?? '')));
+
+    const legacyByKey = new Map<string, any>();
+    for (const tr of primaryLegacy) {
+        legacyByKey.set(stripSuffix(String(tr?.name ?? '')).toLowerCase(), tr);
+    }
+
+    const interpolateY = (xs: number[], ys: any[], x: number) => {
+        if (!Array.isArray(xs) || !Array.isArray(ys) || xs.length === 0 || ys.length === 0) return null;
+        if (xs.length !== ys.length) return null;
+        if (!Number.isFinite(x)) return null;
+
+        if (x <= Number(xs[0])) {
+            const y0 = Number(ys[0]);
+            return Number.isFinite(y0) ? y0 : null;
+        }
+        const last = xs.length - 1;
+        if (x >= Number(xs[last])) {
+            const yl = Number(ys[last]);
+            return Number.isFinite(yl) ? yl : null;
+        }
+
+        for (let i = 1; i < xs.length; i++) {
+            const x0 = Number(xs[i - 1]);
+            const x1 = Number(xs[i]);
+            if (!Number.isFinite(x0) || !Number.isFinite(x1) || x1 === x0) continue;
+            if (x <= x1) {
+                const y0 = Number(ys[i - 1]);
+                const y1 = Number(ys[i]);
+                if (!Number.isFinite(y0) || !Number.isFinite(y1)) return null;
+                const t = (x - x0) / (x1 - x0);
+                return y0 + t * (y1 - y0);
+            }
+        }
+        return null;
+    };
+
+    const comparisonTraces: any[] = [];
+    let maxAbsDelta = 0;
+
+    for (const tr of primaryCurrent) {
+        const key = stripSuffix(String(tr?.name ?? '')).toLowerCase();
+        const legacyTr = legacyByKey.get(key);
+        if (!legacyTr) continue;
+
+        const xCur = Array.isArray(tr?.x) ? tr.x : [];
+        const yCur = Array.isArray(tr?.y) ? tr.y : [];
+        const xOld = Array.isArray(legacyTr?.x) ? legacyTr.x : [];
+        const yOld = Array.isArray(legacyTr?.y) ? legacyTr.y : [];
+
+        const baseLabel = stripSuffix(String(tr?.name ?? 'MTF'));
+        const color = tr?.line?.color;
+
+        comparisonTraces.push({
+            x: xCur,
+            y: yCur,
+            type: 'scatter',
+            mode: 'lines',
+            name: `${baseLabel} (Current)`,
+            line: { ...(tr?.line || {}), width: 2.5 }
+        });
+
+        comparisonTraces.push({
+            x: xOld,
+            y: yOld,
+            type: 'scatter',
+            mode: 'lines',
+            name: `${baseLabel} (Feb-7 Compat)`,
+            line: {
+                color: color || '#888',
+                width: 1.75,
+                dash: 'dash'
+            }
+        });
+
+        if (shouldShowDelta) {
+            const deltaX: number[] = [];
+            const deltaY: any[] = [];
+            for (let i = 0; i < xCur.length; i++) {
+                const f = Number(xCur[i]);
+                const yc = Number(yCur[i]);
+                if (!Number.isFinite(f) || !Number.isFinite(yc)) continue;
+                const yo = interpolateY(xOld, yOld, f);
+                if (!Number.isFinite(Number(yo))) continue;
+                const d = yc - Number(yo);
+                deltaX.push(f);
+                deltaY.push(d);
+                maxAbsDelta = Math.max(maxAbsDelta, Math.abs(d));
+            }
+
+            comparisonTraces.push({
+                x: deltaX,
+                y: deltaY,
+                type: 'scatter',
+                mode: 'lines',
+                name: `${baseLabel} Δ(Current-Compat)`,
+                yaxis: 'y2',
+                line: {
+                    color: color || '#444',
+                    width: 1.2,
+                    dash: 'dot'
+                }
+            });
+        }
+    }
+
+    const maxLpmmCurrent = safeNumber(current?.maxPlotLpmmGlobal, 0);
+    const maxLpmmLegacy = safeNumber(legacy?.maxPlotLpmmGlobal, 0);
+    const maxPlotLpmmGlobal = Math.max(maxLpmmCurrent, maxLpmmLegacy, 0);
+
+    const primaryWl = (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function')
+        ? Number(window.getPrimaryWavelength())
+        : 0.5876;
+    const isAll = (typeof wavelengthMicrons === 'string') && (String(wavelengthMicrons).toLowerCase() === 'all');
+    const titleWl = isAll ? 'All wavelengths' : `${(safeNumber(wavelengthMicrons, primaryWl) * 1000).toFixed(1)} nm`;
+    const objIndex = Number.isFinite(Number(objectIndex)) ? Math.max(0, Math.floor(Number(objectIndex))) : 0;
+
+    const deltaRange = Math.max(0.02, Math.min(0.5, maxAbsDelta * 1.2 || 0.02));
+    const layout: any = {
+        title: `MTF Comparison (Current vs Feb-7 Compat, ${titleWl}, Object ${objIndex})`,
+        xaxis: { title: 'Spatial frequency (lp/mm)', range: [0, maxPlotLpmmGlobal || 0] },
+        yaxis: { title: 'MTF', range: [0, 1.05] },
+        margin: { l: 60, r: shouldShowDelta ? 60 : 20, t: 50, b: 50 },
+        legend: { orientation: 'h' }
+    };
+
+    if (shouldShowDelta) {
+        layout.yaxis2 = {
+            title: 'ΔMTF',
+            overlaying: 'y',
+            side: 'right',
+            range: [-deltaRange, deltaRange],
+            zeroline: true
+        };
+    }
+
+    reportProgress(92, 'Rendering comparison plot...');
+    setPhase('rendering', { traceCount: comparisonTraces.length });
+    await withTimeout(
+        plotly.newPlot(containerEl, comparisonTraces, layout, { responsive: true, displaylogo: false }),
+        Math.max(1000, Math.floor(perRunTimeoutMs / 2)),
+        'MTF comparison plotting'
+    );
+    reportProgress(100, 'Done');
+
+    const summary = {
+        curveCount: comparisonTraces.length,
+        maxPlotLpmmGlobal,
+        maxAbsDelta,
+        wavelengthMicrons,
+        objectIndex: objIndex
+    };
+    try {
+        if (typeof globalThis !== 'undefined') {
+            (globalThis as any).__lastMTFComparisonResult = summary;
+            (globalThis as any).__mtfComparisonState = {
+                phase: 'done',
+                at: Date.now(),
+                extra: summary
+            };
+        }
+        console.info('📊 [MTF Comparison] Summary:', summary);
+    } catch (_) {}
+
+    return {
+        curveCount: comparisonTraces.length,
+        traces: comparisonTraces,
+        layout,
+        maxPlotLpmmGlobal,
+        maxAbsDelta,
+        current,
+        legacy
+    };
+}
 /**
  * PSF Object選択肢のセットアップ
  */
 
-export { showMTFDiagram, showThroughFocusMTFDiagram };
+export { showMTFDiagram, showThroughFocusMTFDiagram, showMTFComparisonDiagram };

@@ -97,7 +97,7 @@ import { showWavefrontDiagram } from './evaluation/wavefront/wavefront-plot.ts';
 import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './evaluation/wavefront/wavefront.ts';
 import { PSFCalculator } from './evaluation/psf/psf-calculator.ts';
 import { PSFPlotter, PSFDisplayManager } from './evaluation/psf/psf-plot.ts';
-import { showMTFDiagram, showThroughFocusMTFDiagram } from './evaluation/mtf-plot.ts';
+import { showMTFDiagram, showThroughFocusMTFDiagram, showMTFComparisonDiagram } from './evaluation/mtf-plot.ts';
 import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './evaluation/wavefront/zernike-fitting.ts';
 import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './evaluation/wavefront/opd-zernike-analysis.ts';
 import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './raytracing/generation/gen-ray-cross-finite.ts';
@@ -450,6 +450,7 @@ async function initializeApplication() {
         window['showIntegratedAberrationDiagram'] = showIntegratedAberrationDiagram;
         window['showWavefrontDiagram'] = showWavefrontDiagram;
         window['showMTFDiagram'] = showMTFDiagram;
+        window['showMTFComparisonDiagram'] = showMTFComparisonDiagram;
         window['showThroughFocusSpotDiagram'] = showThroughFocusSpotDiagram;
         window['showThroughFocusMTFDiagram'] = showThroughFocusMTFDiagram;
         window['benchmarkMTFOnce'] = async (options: any = {}) => {
