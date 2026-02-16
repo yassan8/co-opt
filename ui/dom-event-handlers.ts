@@ -4950,10 +4950,25 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             if (aperture && Object.keys(aperture).length > 0) {
                 panel.appendChild(createSectionTitle('Aperture (Semidiameter)'));
                 
-                // Sort aperture keys (s1, s2, s3, etc.)
-                const apertureKeys = Object.keys(aperture).sort();
+                // Sort aperture keys with Lens compatibility:
+                // internal keys may be front/back, but UI should show s1/s2 and keep front->back order.
+                const apertureKeys = Object.keys(aperture).sort((a, b) => {
+                    const rank = (k: string): number => {
+                        const key = String(k ?? '').trim().toLowerCase();
+                        if (key === 'front') return 1;
+                        if (key === 'back') return 2;
+                        const m = key.match(/^s(\d+)$/);
+                        if (m) return 100 + parseInt(m[1], 10);
+                        return 1000;
+                    };
+                    const ra = rank(a);
+                    const rb = rank(b);
+                    if (ra !== rb) return ra - rb;
+                    return a.localeCompare(b);
+                });
                 for (const key of apertureKeys) {
                     const value = (aperture as any)[key];
+                    const displayKey = key === 'front' ? 's1' : (key === 'back' ? 's2' : key);
                     
                     // Create row with optimize checkbox and scope selector
                     const apertureRow = document.createElement('div');
@@ -4987,7 +5002,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         try { scopeSel.disabled = !cb.checked; } catch (_) {}
                     });
 
-                    const innerRow = createRow(key, value, `aperture.${key}`);
+                    const innerRow = createRow(displayKey, value, `aperture.${key}`);
                     innerRow.style.flex = '1';
                     innerRow.style.marginBottom = '0';
 
