@@ -1463,9 +1463,17 @@ export class PSFCalculator {
         const imagIn = Array.from({ length: complexAmplitude.imag.length }, (_, i) => Array.from(complexAmplitude.imag[i]));
 
         const onProgress = (options && typeof options.onProgress === 'function') ? options.onProgress : null;
-        const yieldEvery = (options && Number.isFinite(options.yieldEvery)) ? options.yieldEvery : undefined;
 
-        const fftResult = await SimpleFFT.fft2DAsync(realIn, imagIn, { onProgress, yieldEvery });
+        // Try WASM FFT first, fall back to JS if unavailable
+        let fftResult;
+        try {
+            const { fft2D_WASM } = await import('../../wasm/raytracing/fft-wasm-wrapper.ts');
+            fftResult = await fft2D_WASM(realIn, imagIn, { fallbackToJS: true });
+        } catch (error) {
+            console.warn('⚠️ [PSF] WASM FFT failed, using JavaScript:', error);
+            const yieldEvery = (options && Number.isFinite(options.yieldEvery)) ? options.yieldEvery : undefined;
+            fftResult = await SimpleFFT.fft2DAsync(realIn, imagIn, { onProgress, yieldEvery });
+        }
 
         const size = fftResult.real.length;
         const intensity = Array(size).fill().map(() => Array(size).fill(0));

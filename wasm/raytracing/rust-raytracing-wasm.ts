@@ -11,6 +11,11 @@ type RustRayTracingWasm = {
   advance_ray_batch: (pos: Float64Array, dirs: Float64Array, thickness: number, count: number) => Float64Array;
   calculate_surface_origins: (rows: any[]) => any;
   trace_ray_batch_with_system_json: (rayArrayPtr: number, systemMetaJSON: string, rowCount: number, nStart: number) => any;
+  fft_2d_forward: (realPtr: number, imagPtr: number, rows: number, cols: number, realOutPtr: number, imagOutPtr: number) => any;
+  fft_2d_inverse: (realPtr: number, imagPtr: number, rows: number, cols: number, realOutPtr: number, imagOutPtr: number) => any;
+  malloc: (size: number) => number;
+  free: (ptr: number) => void;
+  memory: { buffer: ArrayBuffer };
 };
 
 let rustWasmApi: RustRayTracingWasm | null = null;

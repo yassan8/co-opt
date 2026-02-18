@@ -1117,3 +1117,211 @@ pub fn trace_ray_batch_with_system_json(
     }))
     .map_err(|err| JsValue::from_str(&format!("serialize error: {}", err)))
 }
+
+/**
+ * High-performance 2D FFT for PSF calculation
+ * Input: real[rows*cols], imag[rows*cols] (WASM memory pointers)
+ * Output: real_out[rows*cols], imag_out[rows*cols]
+ * Returns: metadata JSON with timing info
+ */
+#[wasm_bindgen]
+pub fn fft_2d_forward(
+    real_ptr: u32,
+    imag_ptr: u32,
+    rows: u32,
+    cols: u32,
+    real_out_ptr: u32,
+    imag_out_ptr: u32,
+) -> Result<JsValue, JsValue> {
+    use num_complex::Complex;
+    use rustfft::num_traits::Zero;
+    use rustfft::FftPlanner;
+    
+    let rows = rows as usize;
+    let cols = cols as usize;
+    let size = rows * cols;
+    
+    let start = std::time::Instant::now();
+    
+    // Read input from WASM memory
+    let real_data: Vec<f64> = (0..size)
+        .map(|i| unsafe {
+            let ptr = (real_ptr as *const f64).add(i);
+            std::ptr::read(ptr)
+        })
+        .collect();
+    
+    let imag_data: Vec<f64> = (0..size)
+        .map(|i| unsafe {
+            let ptr = (imag_ptr as *const f64).add(i);
+            std::ptr::read(ptr)
+        })
+        .collect();
+    
+    let mut data: Vec<Complex<f64>> = real_data
+        .iter()
+        .zip(imag_data.iter())
+        .map(|(r, i)| Complex::new(*r, *i))
+        .collect();
+    
+    // Create FFT planner
+    let mut planner = FftPlanner::new();
+    
+    // Perform row-wise FFT
+    let row_fft = planner.plan_fft_forward(cols);
+    for row in 0..rows {
+        let start_idx = row * cols;
+        row_fft.process(&mut data[start_idx..start_idx + cols]);
+    }
+    
+    // Transpose
+    let mut transposed = vec![Complex::zero(); size];
+    for i in 0..rows {
+        for j in 0..cols {
+            transposed[j * rows + i] = data[i * cols + j];
+        }
+    }
+    data = transposed;
+    
+    // Perform column-wise FFT (now rows since we transposed)
+    let col_fft = planner.plan_fft_forward(rows);
+    for col in 0..cols {
+        let start_idx = col * rows;
+        col_fft.process(&mut data[start_idx..start_idx + rows]);
+    }
+    
+    // Transpose back
+    transposed = vec![Complex::zero(); size];
+    for i in 0..cols {
+        for j in 0..rows {
+            transposed[j * cols + i] = data[i * rows + j];
+        }
+    }
+    data = transposed;
+    
+    let elapsed = start.elapsed();
+    
+    // Write output to WASM memory
+    unsafe {
+        let mut out_real = real_out_ptr as *mut f64;
+        let mut out_imag = imag_out_ptr as *mut f64;
+        for value in data {
+            std::ptr::write(out_real, value.re);
+            std::ptr::write(out_imag, value.im);
+            out_real = out_real.add(1);
+            out_imag = out_imag.add(1);
+        }
+    }
+    
+    serde_wasm_bindgen::to_value(&serde_json::json!({
+        "status": "fft_complete",
+        "rows": rows,
+        "cols": cols,
+        "timeMs": elapsed.as_secs_f64() * 1000.0,
+        "method": "rustfft"
+    }))
+    .map_err(|err| JsValue::from_str(&format!("serialize error: {}", err)))
+}
+
+/**
+ * 2D Inverse FFT (IFFT)
+ */
+#[wasm_bindgen]
+pub fn fft_2d_inverse(
+    real_ptr: u32,
+    imag_ptr: u32,
+    rows: u32,
+    cols: u32,
+    real_out_ptr: u32,
+    imag_out_ptr: u32,
+) -> Result<JsValue, JsValue> {
+    use num_complex::Complex;
+    use rustfft::num_traits::Zero;
+    use rustfft::FftPlanner;
+    
+    let rows = rows as usize;
+    let cols = cols as usize;
+    let size = rows * cols;
+    let norm = 1.0 / (size as f64);
+    
+    let start = std::time::Instant::now();
+    
+    // Read input from WASM memory
+    let real_data: Vec<f64> = (0..size)
+        .map(|i| unsafe {
+            let ptr = (real_ptr as *const f64).add(i);
+            std::ptr::read(ptr)
+        })
+        .collect();
+    
+    let imag_data: Vec<f64> = (0..size)
+        .map(|i| unsafe {
+            let ptr = (imag_ptr as *const f64).add(i);
+            std::ptr::read(ptr)
+        })
+        .collect();
+    
+    let mut data: Vec<Complex<f64>> = real_data
+        .iter()
+        .zip(imag_data.iter())
+        .map(|(r, i)| Complex::new(*r, -i))  // Conjugate
+        .collect();
+    
+    // Create FFT planner
+    let mut planner = FftPlanner::new();
+    
+    // Perform row-wise FFT
+    let row_fft = planner.plan_fft_forward(cols);
+    for row in 0..rows {
+        let start_idx = row * cols;
+        row_fft.process(&mut data[start_idx..start_idx + cols]);
+    }
+    
+    // Transpose
+    let mut transposed = vec![Complex::zero(); size];
+    for i in 0..rows {
+        for j in 0..cols {
+            transposed[j * rows + i] = data[i * cols + j];
+        }
+    }
+    data = transposed;
+    
+    // Perform column-wise FFT
+    let col_fft = planner.plan_fft_forward(rows);
+    for col in 0..cols {
+        let start_idx = col * rows;
+        col_fft.process(&mut data[start_idx..start_idx + rows]);
+    }
+    
+    // Transpose back
+    transposed = vec![Complex::zero(); size];
+    for i in 0..cols {
+        for j in 0..rows {
+            transposed[j * cols + i] = data[i * rows + j] * norm;
+        }
+    }
+    data = transposed;
+    
+    let elapsed = start.elapsed();
+    
+    // Write output to WASM memory (conjugate back)
+    unsafe {
+        let mut out_real = real_out_ptr as *mut f64;
+        let mut out_imag = imag_out_ptr as *mut f64;
+        for value in data {
+            std::ptr::write(out_real, value.re);
+            std::ptr::write(out_imag, -value.im);  // Conjugate back
+            out_real = out_real.add(1);
+            out_imag = out_imag.add(1);
+        }
+    }
+    
+    serde_wasm_bindgen::to_value(&serde_json::json!({
+        "status": "ifft_complete",
+        "rows": rows,
+        "cols": cols,
+        "timeMs": elapsed.as_secs_f64() * 1000.0,
+        "method": "rustfft"
+    }))
+    .map_err(|err| JsValue::from_str(&format!("serialize error: {}", err)))
+}
