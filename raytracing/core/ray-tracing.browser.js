@@ -1,1 +1,1 @@
-export * from "./ray-tracing.ts";
+export * from "./ray-tracing";
