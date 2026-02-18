@@ -224,8 +224,8 @@ export class WavefrontPlotter {
                 progressEvery: 0,
                 diagnoseDiscontinuities,
                 diagTopK: 5,
-                // OPD is fixed to reference-sphere semantics.
-                opdMode: 'referenceSphere',
+                // OPD is fixed to simple (no reference-sphere correction) semantics.
+                opdMode: 'simple',
                 zernikeMaxNoll: 37,
                 // OPD is fixed to raw-grid computation (no Zernike fit).
                 skipZernikeFit: true,
@@ -440,8 +440,8 @@ export class WavefrontPlotter {
                 progressEvery: 512,
                 diagnoseDiscontinuities,
                 diagTopK: 5,
-                // Use reference-sphere OPD so wavefront/Wλ is comparable to PSF/Strehl.
-                opdMode: 'referenceSphere',
+                // Use simple OPD (no reference-sphere correction).
+                opdMode: 'simple',
                 zernikeMaxNoll: 37,
                 renderFromZernike: true,
                 profile: profileEnabled
@@ -640,8 +640,8 @@ export class WavefrontPlotter {
                 progressEvery: 0,
                 diagnoseDiscontinuities,
                 diagTopK: 5,
-                // OPD is fixed to reference-sphere semantics.
-                opdMode: 'referenceSphere',
+                // OPD is fixed to simple (no reference-sphere correction) semantics.
+                opdMode: 'simple',
                 zernikeMaxNoll: 37,
                 renderFromZernike: false,
                 // OPD is fixed to raw-grid computation (no Zernike fit).
@@ -743,8 +743,8 @@ export class WavefrontPlotter {
                 progressEvery: 512,
                 diagnoseDiscontinuities,
                 diagTopK: 5,
-                // Use reference-sphere OPD so wavefront/Wλ is comparable to PSF/Strehl.
-                opdMode: 'referenceSphere',
+                // Use simple OPD (no reference-sphere correction).
+                opdMode: 'simple',
                 zernikeMaxNoll: 37,
                 renderFromZernike: true
             });
@@ -819,15 +819,15 @@ export class WavefrontPlotter {
             for (const fieldSetting of fieldSettings) {
                 // 各フィールドでの波面収差マップを生成
                 // 🆕 【重要修正】Zernike除去を適用してフィールド間比較を可能にする
-                // - opdMode: 'referenceSphere' で参照球面補正（軸外Tilt成分を幾何学的に除去）
+                // - opdMode: 'simple' で参照球面補正を行わない
                 // - renderFromZernike: true でpiston/tilt除去後の波面を表示
                 // - zernikeMaxNoll: 37 で高次収差まで正確にフィッティング
                 // - これにより各フィールドの"本質的な高次収差"が比較可能になる
                 const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, 'circular', {
                     recordRays: false,
                     progressEvery: 512,
-                    // Use reference-sphere OPD (geometric tilt correction for off-axis fields)
-                    opdMode: 'referenceSphere',
+                    // Use simple OPD (no reference-sphere correction)
+                    opdMode: 'simple',
                     // 🆕 Zernike除去を適用（piston/tiltを各フィールドで個別に除去）
                     zernikeMaxNoll: 37,
                     renderFromZernike: true

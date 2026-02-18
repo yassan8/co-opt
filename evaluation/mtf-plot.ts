@@ -51,8 +51,8 @@ type ThroughFocusMtfOptions = {
 
 type FieldMtfOptions = {
     wavelengthMicrons?: number | string;
-    meridionalFrequencyLpmm?: number;
-    sagittalFrequencyLpmm?: number;
+    firstFrequencyLpmm?: number;
+    secondFrequencyLpmm?: number;
     fieldMin?: number;
     fieldMax?: number;
     steps?: number;
@@ -433,7 +433,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                     skipZernikeFit: true,
                     wasmFastOnly: useWasmFastOnly,
                     traceOptions: useWasmFastOnly ? { requireWasmRayTracing: true, allowNonStrict: false } : null,
-                    opdMode: 'referenceSphere',
+                    opdMode: 'simple',
                     opdDisplayMode: effectiveOpdDisplayMode,
                     onProgress: onWavefrontProgress
                 });
@@ -1152,8 +1152,8 @@ async function showThroughFocusMTFDiagram({
 
 async function showFieldMTFDiagram({
     wavelengthMicrons,
-    meridionalFrequencyLpmm,
-    sagittalFrequencyLpmm,
+    firstFrequencyLpmm,
+    secondFrequencyLpmm,
     fieldMin,
     fieldMax,
     steps,
@@ -1215,8 +1215,8 @@ async function showFieldMTFDiagram({
     const maxField = Math.max(minFieldRaw, maxFieldRaw);
     const nSteps = clamp(Math.floor(safeNumber(steps, 21)), 3, 201);
 
-    const meridionalFreq = Math.max(0, safeNumber(meridionalFrequencyLpmm, 10));
-    const sagittalFreq = Math.max(0, safeNumber(sagittalFrequencyLpmm, 30));
+    const firstFreq = Math.max(0, safeNumber(firstFrequencyLpmm, 10));
+    const secondFreq = Math.max(0, safeNumber(secondFrequencyLpmm, 30));
 
     const samplingCandidate = Math.floor(safeNumber(samplingSize, safeNumber(samplingPoints, 256)));
     const sampling = Number.isFinite(samplingCandidate) && samplingCandidate > 0 ? samplingCandidate : 256;
@@ -1255,7 +1255,7 @@ async function showFieldMTFDiagram({
                 wavelengthMicrons,
                 objectIndex: 0,
                 objectOverride,
-                maxFrequencyLpmm: Math.max(meridionalFreq, sagittalFreq) * 2,
+                maxFrequencyLpmm: Math.max(firstFreq, secondFreq) * 2,
                 samplingSize: sampling,
                 zeroPadTo,
                 opdDisplayMode,
@@ -1265,7 +1265,7 @@ async function showFieldMTFDiagram({
             });
             results.push({ fieldValue, mfResult: result });
         } catch (error) {
-            console.error(`❌ [Field MTF] MTF calculation failed for field ${fieldValue}:`, error);
+            console.error(`❌ [Object MTF] MTF calculation failed for field ${fieldValue}:`, error);
         }
     }
 
@@ -1274,7 +1274,7 @@ async function showFieldMTFDiagram({
         : `${(safeNumber(wavelengthMicrons, 0.5876) * 1000).toFixed(1)} nm`;
 
     const layout = {
-        title: `Field MTF (M ${meridionalFreq.toFixed(1)} / S ${sagittalFreq.toFixed(1)} lp/mm, ${titleWl})`,
+        title: `Object MTF (${firstFreq.toFixed(1)} / ${secondFreq.toFixed(1)} lp/mm, ${titleWl})`,
         xaxis: { title: axisLabel, range: [Math.min(minField, maxField), Math.max(minField, maxField)] },
         yaxis: { title: 'MTF', range: [0, 1.05] },
         margin: { l: 60, r: 20, t: 50, b: 50 },
@@ -1300,54 +1300,63 @@ async function showFieldMTFDiagram({
             const y = Array.isArray(tr?.y) ? tr.y : [];
             if (x.length === 0 || y.length === 0) continue;
 
-            const targetFreq = isTangential ? meridionalFreq : sagittalFreq;
-            let bestIdx = 0;
-            let bestDf = Infinity;
-            for (let k = 0; k < x.length; k++) {
-                const f = Number(x[k]);
-                if (!Number.isFinite(f)) continue;
-                const df = Math.abs(f - targetFreq);
-                if (df < bestDf) {
-                    bestDf = df;
-                    bestIdx = k;
-                }
-            }
-            const v = Number(y[bestIdx]);
-            const mtfVal = Number.isFinite(v) ? v : null;
-
             const suffix = rawName.replace(/^(Tangential|Sagittal)\b/, '').trim();
             const axisName = isTangential ? 'Meridional' : 'Sagittal';
-            const freqLabel = targetFreq.toFixed(1);
-            const name = suffix
-                ? `${axisName} ${freqLabel} lp/mm ${suffix}`
-                : `${axisName} ${freqLabel} lp/mm`;
 
-            if (!traceMap.has(name)) {
-                const trace: any = {
-                    x: [],
-                    y: [],
-                    type: 'scatter',
-                    mode: (typeof tr?.mode === 'string' && tr.mode) ? tr.mode : 'lines',
-                    name,
-                    showlegend: true
-                };
+            // Calculate MTF at both firstFreq and secondFreq
+            const frequencies = [
+                { freq: firstFreq, label: '1st' },
+                { freq: secondFreq, label: '2nd' }
+            ];
 
-                if (tr?.line && typeof tr.line === 'object') {
-                    trace.line = { ...tr.line };
-                } else {
-                    trace.line = { width: 2 };
+            for (const { freq, label } of frequencies) {
+                // Find closest frequency sample
+                let bestIdx = 0;
+                let bestDf = Infinity;
+                for (let k = 0; k < x.length; k++) {
+                    const f = Number(x[k]);
+                    if (!Number.isFinite(f)) continue;
+                    const df = Math.abs(f - freq);
+                    if (df < bestDf) {
+                        bestDf = df;
+                        bestIdx = k;
+                    }
+                }
+                const v = Number(y[bestIdx]);
+                const mtfVal = Number.isFinite(v) ? v : null;
+
+                const freqLabel = freq.toFixed(1);
+                const name = suffix
+                    ? `${axisName} ${freqLabel} lp/mm ${suffix}`
+                    : `${axisName} ${freqLabel} lp/mm`;
+
+                if (!traceMap.has(name)) {
+                    const trace: any = {
+                        x: [],
+                        y: [],
+                        type: 'scatter',
+                        mode: (typeof tr?.mode === 'string' && tr.mode) ? tr.mode : 'lines',
+                        name,
+                        showlegend: true
+                    };
+
+                    if (tr?.line && typeof tr.line === 'object') {
+                        trace.line = { ...tr.line };
+                    } else {
+                        trace.line = { width: 2 };
+                    }
+
+                    if (tr?.marker && typeof tr.marker === 'object') {
+                        trace.marker = { ...tr.marker };
+                    }
+
+                    traceMap.set(name, trace);
                 }
 
-                if (tr?.marker && typeof tr.marker === 'object') {
-                    trace.marker = { ...tr.marker };
-                }
-
-                traceMap.set(name, trace);
+                const agg = traceMap.get(name);
+                agg.x.push(fieldValue);
+                agg.y.push(mtfVal);
             }
-
-            const agg = traceMap.get(name);
-            agg.x.push(fieldValue);
-            agg.y.push(mtfVal);
         }
 
         const currentTraces = Array.from(traceMap.values());
@@ -1363,7 +1372,7 @@ async function showFieldMTFDiagram({
     plotly.newPlot(containerEl, finalTraces, layout, { responsive: true, displaylogo: false });
     reportProgress(100, 'Done', undefined, undefined);
 
-    console.log(`✅ [Field MTF] Computed ${results.length} field points with ${nSteps} steps`);
+    console.log(`✅ [Object MTF] Computed ${results.length} field points with ${nSteps} steps`);
 
     return { traces: finalTraces, layout };
 }

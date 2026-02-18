@@ -5494,14 +5494,14 @@ export function setupAnalysisWindows() {
                         : 128;
                     const wavefrontMap = await raceWithCancel(analyzer.generateWavefrontMap(fieldSetting, wavefrontGridSize, 'circular', {
                         // Match OPD display pipeline:
-                        // - referenceSphere
+                        // - simple (no referenceSphere)
                         // - no Zernike fit
                         // - piston+tilt removed (display)
                         recordRays: false,
                         progressEvery: 0,
                         renderFromZernike: false,
                         skipZernikeFit: true,
-                        opdMode: 'referenceSphere',
+                        opdMode: 'simple',
                         opdDisplayMode,
                         diagnoseDiscontinuities: PSF_DEBUG,
                         diagTopK: 8,
@@ -6845,7 +6845,7 @@ export function setupAnalysisWindows() {
                                 return;
                         }
 
-                        const popup = window.open('', 'Field MTF', 'width=900,height=650');
+                        const popup = window.open('', 'Object MTF', 'width=900,height=650');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -6857,7 +6857,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Field MTF</title>
+    <title>Object MTF</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -6932,18 +6932,17 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Field MTF</div>
+    <div class="header">Object MTF</div>
     <div class="controls">
         <label for="popup-field-mtf-wavelength-select">Wavelength:</label>
         <select id="popup-field-mtf-wavelength-select"></select>
-        <label for="popup-field-mtf-meridional-freq-input">Meridional Freq (lp/mm):</label>
+        <label for="popup-field-mtf-meridional-freq-input">1st Freq (lp/mm):</label>
         <input id="popup-field-mtf-meridional-freq-input" type="number" min="0" step="1" value="10" />
-        <label for="popup-field-mtf-sagittal-freq-input">Sagittal Freq (lp/mm):</label>
+        <label for="popup-field-mtf-sagittal-freq-input">2nd Freq (lp/mm):</label>
         <input id="popup-field-mtf-sagittal-freq-input" type="number" min="0" step="1" value="30" />
-        <label id="popup-field-mtf-axis-label" style="color:#888;">Object Angle (deg)</label>
-        <label for="popup-field-mtf-min-field-input">Field min:</label>
+        <label for="popup-field-mtf-min-field-input">Object min:</label>
         <input id="popup-field-mtf-min-field-input" type="number" step="0.001" value="0" />
-        <label for="popup-field-mtf-max-field-input">Field max:</label>
+        <label for="popup-field-mtf-max-field-input">Object max:</label>
         <input id="popup-field-mtf-max-field-input" type="number" step="0.001" value="10" />
         <label for="popup-field-mtf-steps-input">Steps:</label>
         <input id="popup-field-mtf-steps-input" type="number" min="3" max="201" step="1" value="21" />
@@ -6971,13 +6970,13 @@ export function setupAnalysisWindows() {
             <input id="popup-field-mtf-remove-ptd-checkbox" type="checkbox" />
             Remove P/T/D
         </label>
-        <button id="popup-show-field-mtf-btn" type="button">Show Field MTF</button>
+        <button id="popup-show-field-mtf-btn" type="button">Show Object MTF</button>
     </div>
     <div class="note">
-        Note: X-axis is object angle/height (auto-detected from Object table). Y-axis is MTF at the specified meridional/sagittal spatial frequencies.
+        Note: X-axis is object angle/height (auto-detected from Object table). Y-axis is MTF at the specified 1st/2nd spatial frequencies (both M and S calculated at each).
     </div>
     <div id="popup-field-mtf-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
-        <div id="popup-field-mtf-progress-text" style="margin-bottom: 6px;">Calculating Field MTF...</div>
+        <div id="popup-field-mtf-progress-text" style="margin-bottom: 6px;">Calculating Object MTF...</div>
         <progress id="popup-field-mtf-progress" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
     </div>
     <div class="content">
@@ -7076,13 +7075,7 @@ export function setupAnalysisWindows() {
             }
 
             const axisInfo = getAxisInfo();
-            const axisLabel = document.getElementById('popup-field-mtf-axis-label');
             const maxEl = document.getElementById('popup-field-mtf-max-field-input');
-            if (axisLabel) {
-                axisLabel.textContent = axisInfo.label;
-                axisLabel.style.fontWeight = '600';
-                axisLabel.style.color = '#555';
-            }
             if (maxEl && !maxEl.dataset.cooptInit) {
                 maxEl.dataset.cooptInit = '1';
                 maxEl.value = String(axisInfo.max || 10);
@@ -7154,8 +7147,8 @@ export function setupAnalysisWindows() {
                 }
                 await opener.showFieldMTFDiagram({
                     wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : primary),
-                    meridionalFrequencyLpmm: Number.isFinite(meridionalFreq) ? meridionalFreq : 10,
-                    sagittalFrequencyLpmm: Number.isFinite(sagittalFreq) ? sagittalFreq : 30,
+                    firstFrequencyLpmm: Number.isFinite(meridionalFreq) ? meridionalFreq : 10,
+                    secondFrequencyLpmm: Number.isFinite(sagittalFreq) ? sagittalFreq : 30,
                     fieldMin: Number.isFinite(fieldMin) ? fieldMin : 0,
                     fieldMax: Number.isFinite(fieldMax) ? fieldMax : 10,
                     steps: Number.isFinite(steps) ? steps : 21,
@@ -7180,7 +7173,7 @@ export function setupAnalysisWindows() {
                 console.error(err);
                 setProgress(100, 'Failed');
                 if (containerEl) {
-                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate Field MTF. Check console.</div>';
+                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate Object MTF. Check console.</div>';
                 }
             }
         };
