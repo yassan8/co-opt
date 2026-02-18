@@ -59,6 +59,8 @@
   <!-- Early vector math service globals (window.dotProduct/crossProduct/normalize) -->
   
   <!-- WASM Module (V3 with memory management) -->
+  <!-- Note: plain <script> (not module) so that var RayTracingWASM becomes a global -->
+  <script src="wasm/raytracing/ray-tracing-wasm-v3.js"></script>
 
   <script>
     // Warn (in English) when the user tries to leave via the browser Back button.
@@ -231,7 +233,7 @@
     }
   </script>
   <script type="module" crossorigin src="/co-opt/assets/main-CMBP6LjU.js"></script>
-  <script type="module" crossorigin src="/co-opt/assets/app-Bff__ktv.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-H77Zt_u8.js"></script>
   <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-BKW19xAK.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/main-CMBP6LjU.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/loaded-file-storage-DXFO8Z1Y.js">
@@ -300,6 +302,8 @@
       };
     })();
   </script>
+  <!-- Note: plain <script> (not module) so that var PSFWasm becomes a global -->
+  <script src="wasm/psf/psf-wasm.js"></script>
 
   <!-- Core functionality scripts -->
 
