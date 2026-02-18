@@ -5,6 +5,9 @@
  * Accessible via: await window.__tfmtfBenchmark()
  */
 
+// Immediate module load verification
+console.log('💾 [Module] benchmark-tfmtf.ts is being loaded...');
+
 export async function benchmarkTFMTF() {
     console.log('🧪 [benchmarkTFMTF] Function called at', new Date().toISOString());
     const startTotal = performance.now();
@@ -360,16 +363,23 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 if (typeof window !== 'undefined') {
     console.log('📝 [TFMTF Benchmark] Registering functions to window...');
     
-    // Keep reference to functions at module scope
-    const tfmtfBenchmark = benchmarkTFMTF;
-    const tfmtfBenchmarkQuick = benchmarkTFMTFQuick;
-    
-    // Register main benchmark
-    (window as any).__tfmtfBenchmark = tfmtfBenchmark;
+    // Create explicit wrapper functions that call the async functions
+    // This ensures proper Promise return handling
+    (window as any).__tfmtfBenchmark = async () => {
+        console.log('🔗 [Wrapper] __tfmtfBenchmark wrapper called');
+        const result = await benchmarkTFMTF();
+        console.log('🔗 [Wrapper] __tfmtfBenchmark got result:', typeof result);
+        return result;
+    };
     console.log('✅ [1/3] window.__tfmtfBenchmark registered');
     
-    // Register quick test
-    (window as any).__tfmtfBenchmarkQuick = tfmtfBenchmarkQuick;
+    // Create wrapper for quick test
+    (window as any).__tfmtfBenchmarkQuick = async () => {
+        console.log('🔗 [Wrapper] __tfmtfBenchmarkQuick wrapper called');
+        const result = await benchmarkTFMTFQuick();
+        console.log('🔗 [Wrapper] __tfmtfBenchmarkQuick got result:', typeof result);
+        return result;
+    };
     console.log('✅ [2/3] window.__tfmtfBenchmarkQuick registered');
     
     // Register simple test to verify registration works
