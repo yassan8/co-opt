@@ -995,9 +995,9 @@ async function showThroughFocusMTFDiagram({
         // Extract successful results and store with original indices
         const indexedResults: { index: number; data: any }[] = [];
         for (let i = 0; i < batchResults.length; i++) {
-            if (batchResults[i].status === 'fulfilled') {
-                const result = (batchResults[i] as PromiseSettledResult<any>).value;
-                indexedResults.push({ index: result.index, data: result });
+            const result = batchResults[i];
+            if (result.status === 'fulfilled') {
+                indexedResults.push({ index: result.value.index, data: result.value });
             }
         }
 
