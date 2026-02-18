@@ -141,6 +141,9 @@ import './ui/editors/merit-function-editor.ts';
 // Suggest (Design Intent) implementation (adds window.SuggestDesignIntent)
 import './optimization/suggest-design-intent.ts';
 
+// Benchmark tools (must be imported to initialize)
+import './tools/benchmark-tfmtf.ts';
+
 // Analysis modules
 import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene } from './analysis/optical-analysis.ts';
 
