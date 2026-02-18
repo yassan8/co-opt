@@ -44,7 +44,7 @@ type ThroughFocusMtfOptions = {
     samplingPoints?: number;
     zeroPadTo?: number;
     containerElement?: HTMLElement | null;
-    onProgress?: (evt: { percent: number; message?: string }) => void;
+    onProgress?: (evt: { percent: number; message?: string; trace?: any; subMessage?: string }) => void;
     opdDisplayMode?: string;
 };
 
@@ -873,17 +873,18 @@ async function showThroughFocusMTFDiagram({
         throw new Error('Plotly is not available');
     }
 
-    const reportProgress = (percent, message) => {
+    const reportProgress = (percent, message, trace, subMessage) => {
         try {
             if (typeof onProgress !== 'function') return;
-            onProgress({ percent, message });
+            onProgress({ percent, message, trace, subMessage });
         } catch (_) {}
     };
 
     const minMm = safeNumber(defocusMinMm, -0.1);
     const maxMm = safeNumber(defocusMaxMm, 0.1);
     const nSteps = clamp(Math.floor(safeNumber(steps, 21)), 3, 201);
-    const targetFreq = Math.max(0, safeNumber(targetFrequencyLpmm, 30));
+    // Freq (lp/mm)の初期値を10に
+    const targetFreq = Math.max(0, safeNumber(targetFrequencyLpmm, 10));
     const samplingCandidate = Math.floor(safeNumber(samplingSize, safeNumber(samplingPoints, 256)));
     const sampling = Number.isFinite(samplingCandidate) && samplingCandidate > 0 ? samplingCandidate : 256;
 
@@ -895,7 +896,7 @@ async function showThroughFocusMTFDiagram({
 
     const traceMap = new Map();
     
-    reportProgress(5, 'Initializing worker pool...');
+    reportProgress(5, 'Initializing worker pool...', undefined, undefined);
     
     // Initialize worker pool for parallel MTF extraction
     let workerPool: TFMTFWorkerPool | null = null;
@@ -909,14 +910,24 @@ async function showThroughFocusMTFDiagram({
     }
 
     // Collect PSF data from all defocus values first
-    reportProgress(10, 'Computing PSF for all defocus points...');
+    reportProgress(10, 'Computing PSF for all defocus points...', undefined, undefined);
     
     const psfResults: Array<{ shift: number; psfGrid: Float64Array; rows: number; cols: number; metadata: any; mfResult: any }> = [];
     
     for (let i = 0; i < defocusValues.length; i++) {
         const shift = defocusValues[i];
         const pct = Math.floor(10 + (i / Math.max(1, defocusValues.length)) * 50);
-        reportProgress(pct, `Computing PSF: Defocus ${shift.toFixed(4)} mm (${i + 1}/${defocusValues.length})`);
+        reportProgress(pct, `Computing PSF: Defocus ${shift.toFixed(4)} mm (${i + 1}/${defocusValues.length})`, undefined, undefined);
+
+        let subMessage = '';
+        // サンプリング進捗を受け取るonProgressラッパー
+        const mtfSubProgress = (evt: { percent?: number; message?: string }) => {
+            if (evt?.message) {
+                subMessage = evt.message;
+                // サンプリング進捗を即時伝播
+                reportProgress(pct, `Computing PSF: Defocus ${shift.toFixed(4)} mm (${i + 1}/${defocusValues.length})`, undefined, subMessage);
+            }
+        };
 
         try {
             const result = await showMTFDiagram({
@@ -928,7 +939,7 @@ async function showThroughFocusMTFDiagram({
                 opdDisplayMode,
                 defocusShiftMm: shift,
                 skipPlot: true,
-                onProgress: null,
+                onProgress: mtfSubProgress,
                 containerElement
             });
 
@@ -949,14 +960,19 @@ async function showThroughFocusMTFDiagram({
         }
     }
 
-    reportProgress(60, 'Extracting MTF values from PSF...');
+    reportProgress(60, 'Extracting MTF values from PSF...', undefined, undefined);
 
     // Process MTF traces from all defocus values
     // Since PSF calculation is the bottleneck (now with Rust FFT), and workers can't easily
     // calculate PSF, we process the traces sequentially but benefit from Phase 1 Rust FFT speedup
     for (let i = 0; i < psfResults.length; i++) {
         const { shift, mfResult } = psfResults[i];
-        
+        let subMessage = '';
+        // サンプリング進捗を受け取るonProgressラッパー
+        const mtfSubProgress = (evt: { percent?: number; message?: string }) => {
+            if (evt?.message) subMessage = evt.message;
+        };
+        // traces抽出
         const traces = Array.isArray(mfResult?.traces) ? mfResult.traces : [];
         for (const tr of traces) {
             if (tr?.meta?.overlayType === 'diffractionLimit') continue;
@@ -1007,8 +1023,10 @@ async function showThroughFocusMTFDiagram({
             agg.y.push(mtfVal);
         }
 
+        // 進捗ごとに現時点のtraceMapとサンプリング進捗テキストをonProgressで通知
         const pct = Math.floor(60 + ((i + 1) / psfResults.length) * 35);
-        reportProgress(pct, `Extracting MTF: ${i + 1}/${psfResults.length}`);
+        const tracesSnapshot = Array.from(traceMap.values()).map(t => ({ ...t, x: [...t.x], y: [...t.y] }));
+        reportProgress(pct, `Extracting MTF: ${i + 1}/${psfResults.length}`, tracesSnapshot, subMessage);
     }
 
     const traces = Array.from(traceMap.values());
@@ -1024,9 +1042,9 @@ async function showThroughFocusMTFDiagram({
         margin: { l: 60, r: 20, t: 50, b: 50 }
     };
 
-    reportProgress(98, 'Rendering plot...');
+    reportProgress(98, 'Rendering plot...', undefined, undefined);
     await plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
-    reportProgress(100, 'Done');
+    reportProgress(100, 'Done', undefined, undefined);
     
     console.log(`✅ [TFMTF] Computed ${psfResults.length} through-focus points with ${nSteps} steps`);
     

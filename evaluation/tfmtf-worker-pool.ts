@@ -314,7 +314,7 @@ self.onmessage = async (event) => {
         const {
             defocusRange = [-0.1, 0.1],
             defocusSteps = 21,
-            targetFrequencyLpmm = 30,
+            targetFrequencyLpmm = 10,
             wavelengthMicrons = 0.555,
             pupilDiameterMm = 10,
             onProgress
