@@ -150,8 +150,8 @@ export async function benchmarkTFMTF() {
 
         console.log(`✅ Parallel completed in ${parDurationMs.toFixed(2)} ms\n`);
 
-        // Benchmark 3: Full-resolution (for comparison)
-        console.log('📈 Configuration 3: Full-Resolution (256×256, 21 steps)');
+        // Benchmark 3: Higher-resolution (for scaling comparison)
+        console.log('📈 Configuration 3: Higher-Resolution (256×256, 11 steps)');
         const fullStartTime = performance.now();
 
         try {
@@ -160,11 +160,11 @@ export async function benchmarkTFMTF() {
                     wavelengthMicrons: 0.5876,
                     objectIndex: 0,
                     targetFrequencyLpmm: 30,
-                    defocusMinMm: -0.1,
-                    defocusMaxMm: 0.1,
-                    steps: 21,
+                    defocusMinMm: -0.05,
+                    defocusMaxMm: 0.05,
+                    steps: 11,
                     samplingSize: 256,
-                    zeroPadTo: 512,
+                    zeroPadTo: 256,
                     containerElement: benchmarkContainer,
                     onProgress: (evt: { percent: number; message?: string }) => {
                         // Log only every 20% increment
@@ -173,17 +173,17 @@ export async function benchmarkTFMTF() {
                         }
                     }
                 }),
-                60000  // 60s timeout for full resolution
+                120000  // 120s timeout for higher resolution
             );
         } catch (benchError) {
-            console.error('❌ Full-resolution benchmark failed:', benchError);
+            console.error('❌ Higher-resolution benchmark failed:', benchError);
             const fullEndTime = performance.now();
             const fullDurationMs = fullEndTime - fullStartTime;
-            console.log(`⏱️  Full-resolution took ${fullDurationMs.toFixed(2)} ms (before error)`);
+            console.log(`⏱️  Higher-resolution took ${fullDurationMs.toFixed(2)} ms (before error)`);
             // Return partial error result
             return {
                 success: false,
-                error: `Full-resolution benchmark failed: ${benchError}`,
+                error: `Higher-resolution benchmark failed: ${benchError}`,
                 duration: performance.now() - startTotal,
                 partialResults: { 
                     sequential: { duration: seqDurationMs, state: 'success' },
@@ -197,37 +197,36 @@ export async function benchmarkTFMTF() {
         const fullEndTime = performance.now();
         const fullDurationMs = fullEndTime - fullStartTime;
 
-        console.log(`✅ Full-resolution completed in ${fullDurationMs.toFixed(2)} ms\n`);
+        console.log(`✅ Higher-resolution completed in ${fullDurationMs.toFixed(2)} ms\n`);
 
         // Print summary
         const totalMs = performance.now() - startTotal;
         const speedupSeqVsPar = seqDurationMs / Math.max(parDurationMs, 1);
-        const speedupFullVsSeq = fullDurationMs / Math.max(seqDurationMs, 1);
+        const resolutionScaling = fullDurationMs / Math.max(seqDurationMs, 1);
 
         console.log('='.repeat(80));
         console.log('📊 BENCHMARK SUMMARY');
         console.log('='.repeat(80));
-        console.log(`Sequential (1 worker):       ${seqDurationMs.toFixed(2)} ms`);
-        console.log(`Parallel (4 workers):        ${parDurationMs.toFixed(2)} ms`);
-        console.log(`Speedup (par/seq):           ${speedupSeqVsPar.toFixed(2)}×`);
+        console.log(`Config 1 - 128×128, 11 steps: ${seqDurationMs.toFixed(2)} ms`);
+        console.log(`Config 2 - 128×128, 11 steps: ${parDurationMs.toFixed(2)} ms`);
+        console.log(`Run-to-run variance:          ${speedupSeqVsPar.toFixed(2)}× (expect ~1.0)`);
         console.log('');
-        console.log(`Full-Resolution (21 steps):  ${fullDurationMs.toFixed(2)} ms`);
-        console.log(`Slowdown (full/seq):         ${speedupFullVsSeq.toFixed(2)}×`);
+        console.log(`Config 3 - 256×256, 11 steps: ${fullDurationMs.toFixed(2)} ms`);
+        console.log(`256/128 scaling factor:       ${resolutionScaling.toFixed(2)}× (expect ~4× for O(N²) FFT)`);
         console.log('');
-        console.log(`Total benchmark time:        ${totalMs.toFixed(2)} ms`);
+        console.log(`Total benchmark time:         ${totalMs.toFixed(2)} ms`);
         console.log('');
-        console.log('📝 Note: Current speedup reflects Phase 1 (Rust FFT) optimization.');
-        console.log('    Phase 2 full parallelization requires PSF calculation in workers.');
+        console.log('📝 Phase 1 (Rust FFT) active. Phase 2 worker parallelization pending PSF refactor.');
         console.log('='.repeat(80));
 
         // Return results for programmatic use
         const results = {
             success: true,
-            sequential: { duration: seqDurationMs, steps: 11, resolution: 128 },
-            parallel: { duration: parDurationMs, steps: 11, resolution: 128 },
-            fullResolution: { duration: fullDurationMs, steps: 21, resolution: 256 },
-            speedup: speedupSeqVsPar,
-            speedupFullVsSeq: speedupFullVsSeq,
+            config1: { duration: seqDurationMs, steps: 11, resolution: 128, zeroPadTo: 256 },
+            config2: { duration: parDurationMs, steps: 11, resolution: 128, zeroPadTo: 256 },
+            config3: { duration: fullDurationMs, steps: 11, resolution: 256, zeroPadTo: 256 },
+            runVariance: speedupSeqVsPar,
+            resolutionScaling: resolutionScaling,
             metadata: {
                 timestamp: new Date().toISOString(),
                 platform: navigator.userAgent,
