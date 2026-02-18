@@ -353,7 +353,7 @@
             // asphericSagDerivative/surfaceNormal は ray-tracing 側で window.* に公開済み
             
             // 絞り周辺光線モジュールを読み込み
-            import('data:text/javascript;base64,ZXhwb3J0ICogZnJvbSAiLi9yYXktbWFyZ2luYWwudHMiOwo=').then(marginalRayModule => {
+            import('data:text/javascript;base64,ZXhwb3J0ICogZnJvbSAiLi9yYXktbWFyZ2luYWwiOwo=').then(marginalRayModule => {
               window['calculateMarginalRay'] = marginalRayModule.calculateMarginalRay;
               window['calculateAllMarginalRays'] = marginalRayModule.calculateAllMarginalRays;
             }).catch(error => {
@@ -621,7 +621,7 @@
       
       try {
         // PSFCalculatorを動的インポート
-        const { PSFCalculator } = await import('data:text/javascript;base64,ZXhwb3J0ICogZnJvbSAiLi9wc2YtY2FsY3VsYXRvci50cyI7Cg==');
+        const { PSFCalculator } = await import('data:text/javascript;base64,ZXhwb3J0ICogZnJvbSAiLi9wc2YtY2FsY3VsYXRvciI7Cg==');
         const psfCalculator = new PSFCalculator();
         
         // 初期化を待機

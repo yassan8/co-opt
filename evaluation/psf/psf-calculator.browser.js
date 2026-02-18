@@ -1,1 +1,1 @@
-export * from "./psf-calculator.ts";
+export * from "./psf-calculator";
