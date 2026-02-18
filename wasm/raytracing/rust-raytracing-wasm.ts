@@ -25,12 +25,22 @@ async function initRustRayTracingModule(mod: any): Promise<void> {
     return;
   }
 
-  const { readFile } = await import('node:fs/promises');
-  const { fileURLToPath } = await import('node:url');
-  const wasmUrl = new URL('../../rust-wasm/pkg/surface_origins_bg.wasm', import.meta.url);
-  const wasmPath = fileURLToPath(wasmUrl);
-  const bytes = await readFile(wasmPath);
-  await mod.default({ module_or_path: bytes });
+  // Node.js only - load WASM from filesystem
+  try {
+    // @ts-ignore - These imports only exist in Node.js
+    const { readFile } = await (globalThis as any).__vite_ssr_import?.('node:fs/promises') || { readFile: null };
+    // @ts-ignore
+    const { fileURLToPath } = await (globalThis as any).__vite_ssr_import?.('node:url') || { fileURLToPath: null };
+    
+    if (!readFile || !fileURLToPath) return;
+    
+    const wasmUrl = new URL('../../rust-wasm/pkg/surface_origins_bg.wasm', import.meta.url);
+    const wasmPath = fileURLToPath(wasmUrl);
+    const bytes = await readFile(wasmPath);
+    await mod.default({ module_or_path: bytes });
+  } catch {
+    // Fail silently in browser context
+  }
 }
 
 export function getRustRayTracingWasmSync(): RustRayTracingWasm | null {
@@ -46,6 +56,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
   if (!rustWasmInitPromise) {
     rustWasmInitPromise = (async () => {
       try {
+        // @vite-ignore
         const mod = await import('../../rust-wasm/pkg/surface_origins.js');
         await initRustRayTracingModule(mod);
         const api: RustRayTracingWasm = {
