@@ -141,17 +141,21 @@ export async function benchmarkTFMTF() {
         console.log('='.repeat(80));
 
         // Return results for programmatic use
-        return {
+        const results = {
             sequential: { duration: seqDurationMs, steps: 11, resolution: 128 },
             parallel: { duration: parDurationMs, steps: 11, resolution: 128 },
             fullResolution: { duration: fullDurationMs, steps: 21, resolution: 256 },
             speedup: speedupSeqVsPar,
+            speedupFullVsSeq: speedupFullVsSeq,
             metadata: {
                 timestamp: new Date().toISOString(),
                 platform: navigator.userAgent,
                 hardwareConcurrency: navigator.hardwareConcurrency || 'unknown'
             }
         };
+        
+        console.log('📦 Benchmark Results:', results);
+        return results;
     } catch (error) {
         console.error('❌ [Benchmark] Error during TFMTF benchmark:', error);
         throw error;
