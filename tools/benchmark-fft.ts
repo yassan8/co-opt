@@ -5,7 +5,7 @@
 
 export async function benchmarkFFT() {
     // Import both FFT implementations
-    const { fft2D_WASM, ensureFFTWasmReady } = await import('../../wasm/raytracing/fft-wasm-wrapper.ts');
+    const { fft2D_WASM, ensureFFTWasmReady } = await import('../wasm/raytracing/fft-wasm-wrapper.ts');
     const { SimpleFFT } = await import('../evaluation/psf/psf-calculator.ts');
 
     // Test sizes

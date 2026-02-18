@@ -77,7 +77,12 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           reflect_ray_batch: mod.reflect_ray_batch,
           advance_ray_batch: mod.advance_ray_batch,
           calculate_surface_origins: mod.calculate_surface_origins,
-          trace_ray_batch_with_system_json: mod.trace_ray_batch_with_system_json
+          trace_ray_batch_with_system_json: mod.trace_ray_batch_with_system_json,
+          fft_2d_forward: mod.fft_2d_forward,
+          fft_2d_inverse: mod.fft_2d_inverse,
+          malloc: mod.malloc,
+          free: mod.free,
+          memory: mod.memory
         };
         if (
           typeof api.intersect_aspheric_rt10 !== 'function' ||
@@ -91,7 +96,12 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           typeof api.reflect_ray_batch !== 'function' ||
           typeof api.advance_ray_batch !== 'function' ||
           typeof api.calculate_surface_origins !== 'function' ||
-          typeof api.trace_ray_batch_with_system_json !== 'function'
+          typeof api.trace_ray_batch_with_system_json !== 'function' ||
+          typeof api.fft_2d_forward !== 'function' ||
+          typeof api.fft_2d_inverse !== 'function' ||
+          typeof api.malloc !== 'function' ||
+          typeof api.free !== 'function' ||
+          !api.memory?.buffer
         ) {
           rustWasmInitError = 'Rust WASM exports are missing required functions.';
           rustWasmApi = null;

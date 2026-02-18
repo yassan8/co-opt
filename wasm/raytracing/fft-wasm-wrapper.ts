@@ -255,7 +255,7 @@ function fallbackToJSIFFT(
     console.warn('⚠️ [IFFT] JavaScript IFFT not fully implemented, returning zeros');
     const rows = real.length;
     const cols = real[0]?.length || 0;
-    const zeroArray = Array(rows).fill().map(() => Array(cols).fill(0));
+    const zeroArray = Array.from({ length: rows }, () => Array(cols).fill(0));
     return Promise.resolve({
         real: zeroArray,
         imag: zeroArray,
