@@ -909,55 +909,125 @@ async function showThroughFocusMTFDiagram({
         useWorkerPool = false;
     }
 
-    // Collect PSF data from all defocus values first
+    // Collect PSF data from all defocus values using parallel batch processing
     reportProgress(10, 'Computing PSF for all defocus points...', undefined, undefined);
     
     const psfResults: Array<{ shift: number; psfGrid: Float64Array; rows: number; cols: number; metadata: any; mfResult: any }> = [];
+    const PARALLEL_DEFOCUS_BATCH_SIZE = 4;  // Parallel batch size for PSF computation
     
-    for (let i = 0; i < defocusValues.length; i++) {
-        const shift = defocusValues[i];
-        const pct = Math.floor(10 + (i / Math.max(1, defocusValues.length)) * 50);
-        reportProgress(pct, `Computing PSF: Defocus ${shift.toFixed(4)} mm (${i + 1}/${defocusValues.length})`, undefined, undefined);
-
-        let subMessage = '';
-        // サンプリング進捗を受け取るonProgressラッパー
-        const mtfSubProgress = (evt: { percent?: number; message?: string }) => {
-            if (evt?.message) {
-                subMessage = evt.message;
-                // サンプリング進捗を即時伝播
-                reportProgress(pct, `Computing PSF: Defocus ${shift.toFixed(4)} mm (${i + 1}/${defocusValues.length})`, undefined, subMessage);
-            }
-        };
-
-        try {
-            const result = await showMTFDiagram({
-                wavelengthMicrons,
-                objectIndex,
-                maxFrequencyLpmm: targetFreq,
-                samplingSize: sampling,
-                zeroPadTo,
-                opdDisplayMode,
-                defocusShiftMm: shift,
-                skipPlot: true,
-                onProgress: mtfSubProgress,
-                containerElement
-            });
-
-            // Extract PSF grid from the MTF calculation result
-            // The result contains traces that were built from MTF calculation which used PSF
-            // We'll store the MTF result for later use when workers are available
-            psfResults.push({
-                shift,
-                psfGrid: new Float64Array(sampling * sampling),  // Placeholder
-                rows: sampling,
-                cols: sampling,
-                metadata: { wavelengthMicrons, targetFreq },
-                mfResult: result
-            });
-        } catch (error) {
-            console.error(`❌ [TFMTF] PSF calculation failed for defocus ${shift}:`, error);
-            // Continue with other defocus values
+    // Divide defocus values into batches
+    const batches: { shift: number; index: number }[][] = [];
+    for (let i = 0; i < defocusValues.length; i += PARALLEL_DEFOCUS_BATCH_SIZE) {
+        const batch: { shift: number; index: number }[] = [];
+        for (let j = i; j < Math.min(i + PARALLEL_DEFOCUS_BATCH_SIZE, defocusValues.length); j++) {
+            batch.push({ shift: defocusValues[j], index: j });
         }
+        batches.push(batch);
+    }
+
+    console.log(`🚀 [TFMTF] Starting PSF batch processing: ${defocusValues.length} defocus values in ${batches.length} batches (batch size: ${PARALLEL_DEFOCUS_BATCH_SIZE})`);
+
+    // Process batches sequentially, but compute items within each batch in parallel
+    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+        const batch = batches[batchIdx];
+        const batchNum = batchIdx + 1;
+        const batchTotal = batches.length;
+        
+        reportProgress(12 + batchIdx * 2, `Computing PSF: Batch ${batchNum}/${batchTotal} (${batch.length} points)`, undefined, undefined);
+        
+        // Create parallel computation tasks for this batch
+        const batchTasks = batch.map(({ shift, index }) => {
+            return (async () => {
+                let subMessage = '';
+                const mtfSubProgress = (evt: { percent?: number; message?: string }) => {
+                    if (evt?.message) {
+                        const defocusInfo = `Defocus ${shift.toFixed(4)}mm(${index + 1}/${defocusValues.length}) `;
+                        subMessage = defocusInfo + evt.message;
+                        const pct = Math.floor(10 + (index / Math.max(1, defocusValues.length)) * 50);
+                        reportProgress(pct, `Computing PSF: Defocus ${shift.toFixed(4)} mm (${index + 1}/${defocusValues.length})`, undefined, subMessage);
+                    }
+                };
+
+                try {
+                    const result = await showMTFDiagram({
+                        wavelengthMicrons,
+                        objectIndex,
+                        maxFrequencyLpmm: targetFreq,
+                        samplingSize: sampling,
+                        zeroPadTo,
+                        opdDisplayMode,
+                        defocusShiftMm: shift,
+                        skipPlot: true,
+                        onProgress: mtfSubProgress,
+                        containerElement
+                    });
+
+                    return {
+                        shift,
+                        index,
+                        psfGrid: new Float64Array(sampling * sampling),
+                        rows: sampling,
+                        cols: sampling,
+                        metadata: { wavelengthMicrons, targetFreq },
+                        mfResult: result,
+                        success: true
+                    };
+                } catch (error) {
+                    console.error(`❌ [TFMTF] PSF calculation failed for defocus ${shift}:`, error);
+                    return {
+                        shift,
+                        index,
+                        psfGrid: new Float64Array(0),
+                        rows: 0,
+                        cols: 0,
+                        metadata: {},
+                        mfResult: null,
+                        success: false,
+                        error
+                    };
+                }
+            })();
+        });
+
+        // Wait for all tasks in this batch to complete
+        const batchResults = await Promise.allSettled(batchTasks);
+
+        // Extract successful results and store with original indices
+        const indexedResults: { index: number; data: any }[] = [];
+        for (let i = 0; i < batchResults.length; i++) {
+            if (batchResults[i].status === 'fulfilled') {
+                const result = (batchResults[i] as PromiseSettledResult<any>).value;
+                indexedResults.push({ index: result.index, data: result });
+            }
+        }
+
+        // Sort by original index to maintain order
+        indexedResults.sort((a, b) => a.index - b.index);
+
+        // Add to psfResults
+        for (const { data } of indexedResults) {
+            if (data.success) {
+                psfResults.push({
+                    shift: data.shift,
+                    psfGrid: data.psfGrid,
+                    rows: data.rows,
+                    cols: data.cols,
+                    metadata: data.metadata,
+                    mfResult: data.mfResult
+                });
+            } else {
+                psfResults.push({
+                    shift: data.shift,
+                    psfGrid: new Float64Array(0),
+                    rows: 0,
+                    cols: 0,
+                    metadata: data.metadata,
+                    mfResult: null
+                });
+            }
+        }
+
+        console.log(`✅ [TFMTF] Batch ${batchNum}/${batchTotal} completed: ${indexedResults.length}/${batch.length} items successful`);
     }
 
     reportProgress(60, 'Extracting MTF values from PSF...', undefined, undefined);
@@ -977,7 +1047,7 @@ async function showThroughFocusMTFDiagram({
 
     // 初回プロット作成（空の状態で準備）
     reportProgress(62, 'Initializing plot...', undefined, undefined);
-    await plotly.newPlot(containerEl, [], layout, { responsive: true, displaylogo: false });
+    plotly.newPlot(containerEl, [], layout, { responsive: true, displaylogo: false });
 
     // Process MTF traces from all defocus values
     // Since PSF calculation is the bottleneck (now with Rust FFT), and workers can't easily
@@ -1041,16 +1111,8 @@ async function showThroughFocusMTFDiagram({
         }
 
         // 1プロット計算毎にグラフを更新
-        const currentTraces = Array.from(traceMap.values()).map(t => ({ ...t, x: [...t.x], y: [...t.y] }));
-        try {
-            // Plotlyの`react`を使用して効率的に更新
-            await plotly.react(containerEl, currentTraces, layout, { responsive: true, displaylogo: false });
-        } catch (_) {
-            // 互換性のため、reactが失敗した場合はnewPlotにフォールバック
-            try {
-                await plotly.newPlot(containerEl, currentTraces, layout, { responsive: true, displaylogo: false });
-            } catch (_) {}
-        }
+        const currentTraces = Array.from(traceMap.values());
+        plotly.newPlot(containerEl, currentTraces, layout, { responsive: true, displaylogo: false });
 
         // 進捗ごとに現時点のtraceMapとサンプリング進捗テキストをonProgressで通知
         const pct = Math.floor(60 + ((i + 1) / psfResults.length) * 35);
@@ -1060,7 +1122,7 @@ async function showThroughFocusMTFDiagram({
 
     const traces = Array.from(traceMap.values());
     reportProgress(98, 'Finalizing plot...', undefined, undefined);
-    await plotly.react(containerEl, traces, layout, { responsive: true, displaylogo: false });
+    plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
     reportProgress(100, 'Done', undefined, undefined);
     
     console.log(`✅ [TFMTF] Computed ${psfResults.length} through-focus points with ${nSteps} steps`);
