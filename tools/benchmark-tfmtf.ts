@@ -358,42 +358,32 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
  * Register benchmark globally for UI access
  */
 if (typeof window !== 'undefined') {
-    // Simple test function to verify registration
+    console.log('📝 [TFMTF Benchmark] Registering functions to window...');
+    
+    // Keep reference to functions at module scope
+    const tfmtfBenchmark = benchmarkTFMTF;
+    const tfmtfBenchmarkQuick = benchmarkTFMTFQuick;
+    
+    // Register main benchmark
+    (window as any).__tfmtfBenchmark = tfmtfBenchmark;
+    console.log('✅ [1/3] window.__tfmtfBenchmark registered');
+    
+    // Register quick test
+    (window as any).__tfmtfBenchmarkQuick = tfmtfBenchmarkQuick;
+    console.log('✅ [2/3] window.__tfmtfBenchmarkQuick registered');
+    
+    // Register simple test to verify registration works
     (window as any).__tfmtfBenchmarkTest = function() {
         console.log('✅ __tfmtfBenchmarkTest called - registration works!');
         return { test: true, timestamp: new Date().toISOString() };
     };
+    console.log('✅ [3/3] window.__tfmtfBenchmarkTest registered');
     
-    // Diagnostic function to check implementation
-    (window as any).__tfmtfBenchmarkCheckQuick = async function() {
-        console.log('🔍 Checking benchmarkTFMTFQuick implementation...');
-        console.log('Function type:', typeof benchmarkTFMTFQuick);
-        console.log('Function callable:', benchmarkTFMTFQuick instanceof Function);
-        try {
-            console.log('Calling benchmarkTFMTFQuick directly...');
-            const result = benchmarkTFMTFQuick();
-            console.log('Result type:', typeof result);
-            console.log('Result instanceof Promise:', result instanceof Promise);
-            if (result instanceof Promise) {
-                console.log('Awaiting promise...');
-                const resolved = await result;
-                console.log('Promise resolved with:', resolved);
-                return { directCall: true, resolved };
-            } else {
-                console.log('Not a promise, returned:', result);
-                return { directCall: false, result };
-            }
-        } catch (e) {
-            console.error('Error calling function:', e);
-            return { error: String(e) };
-        }
-    };
-    
-    (window as any).__tfmtfBenchmark = benchmarkTFMTF;
-    (window as any).__tfmtfBenchmarkQuick = benchmarkTFMTFQuick;
-    console.log('✅ [TFMTF Benchmark] Registered as window.__tfmtfBenchmark()');
-    console.log('✅ [TFMTF Benchmark] Quick test registered as window.__tfmtfBenchmarkQuick()');
-    console.log('✅ [TFMTF Benchmark] Diagnostic registered as window.__tfmtfBenchmarkCheckQuick()');
+    // Verify functions are actually there
+    console.log('🔍 Verification:');
+    console.log('  typeof __tfmtfBenchmark:', typeof (window as any).__tfmtfBenchmark);
+    console.log('  typeof __tfmtfBenchmarkQuick:', typeof (window as any).__tfmtfBenchmarkQuick);
+    console.log('  typeof __tfmtfBenchmarkTest:', typeof (window as any).__tfmtfBenchmarkTest);
 }
 
 // Export for programmatic use
