@@ -6589,7 +6589,7 @@ export function setupAnalysisWindows() {
         <label for="popup-through-focus-mtf-object-select">Object:</label>
         <select id="popup-through-focus-mtf-object-select"></select>
         <label for="popup-through-focus-mtf-target-freq-input">Freq (lp/mm):</label>
-        <input id="popup-through-focus-mtf-target-freq-input" type="number" min="0" step="1" value="30" />
+        <input id="popup-through-focus-mtf-target-freq-input" type="number" min="0" step="1" value="10" />
         <label for="popup-through-focus-mtf-min-defocus-input">Defocus min (mm):</label>
         <input id="popup-through-focus-mtf-min-defocus-input" type="number" step="0.001" value="-0.1" />
         <label for="popup-through-focus-mtf-max-defocus-input">Defocus max (mm):</label>
@@ -6767,7 +6767,7 @@ export function setupAnalysisWindows() {
             const primary = getPrimaryWavelength();
             const wavelength = (wlValue === 'all') ? 'all' : Number(wlValue);
             const objectIndex = objSel ? parseInt(objSel.value, 10) : 0;
-            const targetFrequencyLpmm = targetFreqEl ? Number(targetFreqEl.value) : 30;
+            const targetFrequencyLpmm = targetFreqEl ? Number(targetFreqEl.value) : 10;
             const defocusMinMm = minDefocusEl ? Number(minDefocusEl.value) : -0.1;
             const defocusMaxMm = maxDefocusEl ? Number(maxDefocusEl.value) : 0.1;
             const steps = stepsEl ? Number(stepsEl.value) : 21;
@@ -6795,7 +6795,7 @@ export function setupAnalysisWindows() {
                 await opener.showThroughFocusMTFDiagram({
                     wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : primary),
                     objectIndex: Number.isFinite(objectIndex) ? objectIndex : 0,
-                    targetFrequencyLpmm: Number.isFinite(targetFrequencyLpmm) ? targetFrequencyLpmm : 30,
+                    targetFrequencyLpmm: Number.isFinite(targetFrequencyLpmm) ? targetFrequencyLpmm : 10,
                     defocusMinMm: Number.isFinite(defocusMinMm) ? defocusMinMm : -0.1,
                     defocusMaxMm: Number.isFinite(defocusMaxMm) ? defocusMaxMm : 0.1,
                     steps: Number.isFinite(steps) ? steps : 21,
@@ -6805,7 +6805,8 @@ export function setupAnalysisWindows() {
                     onProgress: (evt) => {
                         try {
                             const p = Number(evt?.percent);
-                            const msg = evt?.message || evt?.phase || 'Working...';
+                            const sub = evt?.subMessage;
+                            const msg = sub || evt?.message || evt?.phase || 'Working...';
                             if (Number.isFinite(p)) setProgress(p, msg);
                             else setProgress(undefined, msg);
                         } catch (_) {}
