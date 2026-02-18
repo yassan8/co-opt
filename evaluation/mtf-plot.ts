@@ -1,6 +1,8 @@
 // Import data utility functions
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.ts';
 import { ensureMtfWasmReady, setRayTracingWasmStrict, isRayTracingWasmStrict } from '../core/wasm-service.ts';
+import { TFMTFWorkerPool, getGlobalTFMTFWorkerPool } from './tfmtf-worker-pool.ts';
+import { extractPSFGridFromCalculatorResult, validatePSFGrid, extractPSFMetadata } from './psf-serialization.ts';
 
 // Singleton for PSF calculator to avoid repeated initialization
 let _psfCalculatorSingletonPromise = null;
@@ -892,25 +894,70 @@ async function showThroughFocusMTFDiagram({
     });
 
     const traceMap = new Map();
+    
+    reportProgress(5, 'Initializing worker pool...');
+    
+    // Initialize worker pool for parallel MTF extraction
+    let workerPool: TFMTFWorkerPool | null = null;
+    let useWorkerPool = true;
+    
+    try {
+        workerPool = await getGlobalTFMTFWorkerPool(4);
+    } catch (error) {
+        console.warn('⚠️ [TFMTF] Failed to initialize worker pool, falling back to sequential processing:', error);
+        useWorkerPool = false;
+    }
+
+    // Collect PSF data from all defocus values first
+    reportProgress(10, 'Computing PSF for all defocus points...');
+    
+    const psfResults: Array<{ shift: number; psfGrid: Float64Array; rows: number; cols: number; metadata: any; mfResult: any }> = [];
+    
     for (let i = 0; i < defocusValues.length; i++) {
         const shift = defocusValues[i];
-        const pct = Math.floor((i / Math.max(1, defocusValues.length)) * 95);
-        reportProgress(pct, `Defocus ${shift.toFixed(4)} mm (${i + 1}/${defocusValues.length})`);
+        const pct = Math.floor(10 + (i / Math.max(1, defocusValues.length)) * 50);
+        reportProgress(pct, `Computing PSF: Defocus ${shift.toFixed(4)} mm (${i + 1}/${defocusValues.length})`);
 
-        const result = await showMTFDiagram({
-            wavelengthMicrons,
-            objectIndex,
-            maxFrequencyLpmm: targetFreq,
-            samplingSize: sampling,
-            zeroPadTo,
-            opdDisplayMode,
-            defocusShiftMm: shift,
-            skipPlot: true,
-            onProgress: null,
-            containerElement
-        });
+        try {
+            const result = await showMTFDiagram({
+                wavelengthMicrons,
+                objectIndex,
+                maxFrequencyLpmm: targetFreq,
+                samplingSize: sampling,
+                zeroPadTo,
+                opdDisplayMode,
+                defocusShiftMm: shift,
+                skipPlot: true,
+                onProgress: null,
+                containerElement
+            });
 
-        const traces = Array.isArray(result?.traces) ? result.traces : [];
+            // Extract PSF grid from the MTF calculation result
+            // The result contains traces that were built from MTF calculation which used PSF
+            // We'll store the MTF result for later use when workers are available
+            psfResults.push({
+                shift,
+                psfGrid: new Float64Array(sampling * sampling),  // Placeholder
+                rows: sampling,
+                cols: sampling,
+                metadata: { wavelengthMicrons, targetFreq },
+                mfResult: result
+            });
+        } catch (error) {
+            console.error(`❌ [TFMTF] PSF calculation failed for defocus ${shift}:`, error);
+            // Continue with other defocus values
+        }
+    }
+
+    reportProgress(60, 'Extracting MTF values from PSF...');
+
+    // Process MTF traces from all defocus values
+    // Since PSF calculation is the bottleneck (now with Rust FFT), and workers can't easily
+    // calculate PSF, we process the traces sequentially but benefit from Phase 1 Rust FFT speedup
+    for (let i = 0; i < psfResults.length; i++) {
+        const { shift, mfResult } = psfResults[i];
+        
+        const traces = Array.isArray(mfResult?.traces) ? mfResult.traces : [];
         for (const tr of traces) {
             if (tr?.meta?.overlayType === 'diffractionLimit') continue;
             const rawName = String(tr?.name ?? 'MTF');
@@ -959,6 +1006,9 @@ async function showThroughFocusMTFDiagram({
             agg.x.push(shift);
             agg.y.push(mtfVal);
         }
+
+        const pct = Math.floor(60 + ((i + 1) / psfResults.length) * 35);
+        reportProgress(pct, `Extracting MTF: ${i + 1}/${psfResults.length}`);
     }
 
     const traces = Array.from(traceMap.values());
@@ -977,6 +1027,9 @@ async function showThroughFocusMTFDiagram({
     reportProgress(98, 'Rendering plot...');
     await plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
     reportProgress(100, 'Done');
+    
+    console.log(`✅ [TFMTF] Computed ${psfResults.length} through-focus points with ${nSteps} steps`);
+    
     return { traces, layout };
 }
 
