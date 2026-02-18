@@ -98,7 +98,7 @@ import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPD
 import { runOPDProfiling } from './evaluation/wavefront/opd-profiler.ts'; // ✅ OPD profiling functions
 import { PSFCalculator } from './evaluation/psf/psf-calculator.ts';
 import { PSFPlotter, PSFDisplayManager } from './evaluation/psf/psf-plot.ts';
-import { showMTFDiagram, showThroughFocusMTFDiagram, showMTFComparisonDiagram } from './evaluation/mtf-plot.ts';
+import { showMTFDiagram, showThroughFocusMTFDiagram, showFieldMTFDiagram, showMTFComparisonDiagram } from './evaluation/mtf-plot.ts';
 import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './evaluation/wavefront/zernike-fitting.ts';
 import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './evaluation/wavefront/opd-zernike-analysis.ts';
 import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './raytracing/generation/gen-ray-cross-finite.ts';
@@ -458,6 +458,7 @@ async function initializeApplication() {
         window['showMTFComparisonDiagram'] = showMTFComparisonDiagram;
         window['showThroughFocusSpotDiagram'] = showThroughFocusSpotDiagram;
         window['showThroughFocusMTFDiagram'] = showThroughFocusMTFDiagram;
+        window['showFieldMTFDiagram'] = showFieldMTFDiagram;
         window['benchmarkMTFOnce'] = async (options: any = {}) => {
             const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
             const prevWavefrontProfile = g ? g.__WAVEFRONT_PROFILE : undefined;

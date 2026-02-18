@@ -19,6 +19,7 @@ async function getPSFCalculatorSingleton() {
 type MtfPlotOptions = {
     wavelengthMicrons?: number | string;
     objectIndex?: number;
+    objectOverride?: { xHeightAngle?: number; yHeightAngle?: number; position?: string; x?: number; y?: number } | null;
     maxFrequencyLpmm?: number;
     samplingSize?: number;
     samplingPoints?: number;
@@ -46,6 +47,22 @@ type ThroughFocusMtfOptions = {
     containerElement?: HTMLElement | null;
     onProgress?: (evt: { percent: number; message?: string; trace?: any; subMessage?: string }) => void;
     opdDisplayMode?: string;
+};
+
+type FieldMtfOptions = {
+    wavelengthMicrons?: number | string;
+    firstFrequencyLpmm?: number;
+    secondFrequencyLpmm?: number;
+    fieldMin?: number;
+    fieldMax?: number;
+    steps?: number;
+    samplingSize?: number;
+    samplingPoints?: number;
+    zeroPadTo?: number;
+    containerElement?: HTMLElement | null;
+    onProgress?: (evt: { percent: number; message?: string; trace?: any; subMessage?: string }) => void;
+    opdDisplayMode?: string;
+    fieldAxisMode?: 'auto' | 'angle' | 'height';
 };
 
 type MtfComparisonOptions = {
@@ -88,7 +105,7 @@ function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows, defocusShiftM
     return cloned;
 }
 
-async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot, showDiffractionLimit, zeroPadTo, legacyBaselineMode, plotPointCount }: MtfPlotOptions = {}) {
+async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot, showDiffractionLimit, zeroPadTo, legacyBaselineMode, plotPointCount }: MtfPlotOptions = {}) {
     const safeNumber = (v, fallback) => {
         const n = Number(v);
         return Number.isFinite(n) ? n : fallback;
@@ -270,14 +287,17 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
     // Optical system and objects (use imported functions)
     const baseOpticalSystemRows = getOpticalSystemRows(window.tableOpticalSystem);
     const objects = getObjectRows(window.tableObject);
-    if (!objects || objects.length === 0) {
-        throw new Error('オブジェクトデータがありません。まずオブジェクトを設定してください。');
-    }
-    if (objIndex >= objects.length) {
-        throw new Error('指定されたオブジェクトが見つかりません。');
+    const hasOverride = !!(objectOverride && typeof objectOverride === 'object');
+    if (!hasOverride) {
+        if (!objects || objects.length === 0) {
+            throw new Error('オブジェクトデータがありません。まずオブジェクトを設定してください。');
+        }
+        if (objIndex >= objects.length) {
+            throw new Error('指定されたオブジェクトが見つかりません。');
+        }
     }
 
-    const selectedObject = objects[objIndex];
+    const selectedObject = hasOverride ? objectOverride : objects[objIndex];
     const objectX = (selectedObject.x ?? selectedObject.xHeightAngle ?? 0);
     const objectY = (selectedObject.y ?? selectedObject.yHeightAngle ?? 0);
     const objectTypeRaw = String(selectedObject.position ?? selectedObject.object ?? selectedObject.Object ?? selectedObject.objectType ?? 'Point');
@@ -413,7 +433,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
                     skipZernikeFit: true,
                     wasmFastOnly: useWasmFastOnly,
                     traceOptions: useWasmFastOnly ? { requireWasmRayTracing: true, allowNonStrict: false } : null,
-                    opdMode: 'referenceSphere',
+                    opdMode: 'simple',
                     opdDisplayMode: effectiveOpdDisplayMode,
                     onProgress: onWavefrontProgress
                 });
@@ -1130,6 +1150,233 @@ async function showThroughFocusMTFDiagram({
     return { traces, layout };
 }
 
+async function showFieldMTFDiagram({
+    wavelengthMicrons,
+    firstFrequencyLpmm,
+    secondFrequencyLpmm,
+    fieldMin,
+    fieldMax,
+    steps,
+    samplingSize,
+    samplingPoints,
+    zeroPadTo,
+    containerElement,
+    onProgress,
+    opdDisplayMode,
+    fieldAxisMode
+}: FieldMtfOptions = {}) {
+    const safeNumber = (v, fallback) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : fallback;
+    };
+    const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+
+    const resolveContainerElement = () => {
+        if (containerElement) return containerElement;
+        const byId = (id: string) => {
+            try { return document.getElementById(id); } catch (_) { return null; }
+        };
+        return (
+            byId('mtf-container')
+            || byId('popup-field-mtf-container')
+            || byId('popup-through-focus-mtf-container')
+            || null
+        );
+    };
+
+    let containerEl: any = resolveContainerElement();
+    if (!containerEl) throw new Error('MTF container element not found');
+    try { containerEl.innerHTML = ''; } catch (_) {}
+
+    const plotly = containerEl?.ownerDocument?.defaultView?.Plotly || (typeof window !== 'undefined' ? window.Plotly : null);
+    if (!plotly) throw new Error('Plotly is not available');
+
+    const reportProgress = (percent, message, trace, subMessage) => {
+        try {
+            if (typeof onProgress !== 'function') return;
+            onProgress({ percent, message, trace, subMessage });
+        } catch (_) {}
+    };
+
+    const axisMode = (() => {
+        if (fieldAxisMode === 'angle' || fieldAxisMode === 'height') return fieldAxisMode;
+        const objects = getObjectRows(window.tableObject);
+        const first = Array.isArray(objects) && objects.length > 0 ? objects[0] : null;
+        const posRaw = String(first?.position ?? first?.object ?? first?.objectType ?? 'Angle');
+        return /\bangle\b/i.test(posRaw) ? 'angle' : 'height';
+    })();
+
+    const axisUnit = (axisMode === 'angle') ? 'deg' : 'mm';
+    const axisLabel = (axisMode === 'angle') ? 'Object Angle (deg)' : 'Object Height (mm)';
+
+    const minFieldRaw = safeNumber(fieldMin, 0);
+    const maxFieldRaw = safeNumber(fieldMax, 10);
+    const minField = Math.min(minFieldRaw, maxFieldRaw);
+    const maxField = Math.max(minFieldRaw, maxFieldRaw);
+    const nSteps = clamp(Math.floor(safeNumber(steps, 21)), 3, 201);
+
+    const firstFreq = Math.max(0, safeNumber(firstFrequencyLpmm, 10));
+    const secondFreq = Math.max(0, safeNumber(secondFrequencyLpmm, 30));
+
+    const samplingCandidate = Math.floor(safeNumber(samplingSize, safeNumber(samplingPoints, 256)));
+    const sampling = Number.isFinite(samplingCandidate) && samplingCandidate > 0 ? samplingCandidate : 256;
+
+    const fieldValues = Array.from({ length: nSteps }, (_, i) => {
+        if (nSteps <= 1) return minField;
+        const t = i / (nSteps - 1);
+        return minField + t * (maxField - minField);
+    });
+
+    const results: Array<{ fieldValue: number; mfResult: any }> = [];
+    const traceMap = new Map();
+
+    reportProgress(10, 'Computing MTF for all field points...', undefined, undefined);
+
+    for (let i = 0; i < fieldValues.length; i++) {
+        const fieldValue = fieldValues[i];
+        const pct = Math.floor(10 + (i / Math.max(1, fieldValues.length)) * 50);
+        reportProgress(pct, `Computing MTF: Field ${fieldValue.toFixed(4)} ${axisUnit} (${i + 1}/${fieldValues.length})`, undefined, undefined);
+
+        let subMessage = '';
+        const mtfSubProgress = (evt: { percent?: number; message?: string }) => {
+            if (evt?.message) {
+                const fieldInfo = `Field ${fieldValue.toFixed(4)}${axisUnit}(${i + 1}/${fieldValues.length}) `;
+                subMessage = fieldInfo + evt.message;
+                reportProgress(pct, `Computing MTF: Field ${fieldValue.toFixed(4)} ${axisUnit} (${i + 1}/${fieldValues.length})`, undefined, subMessage);
+            }
+        };
+
+        const objectOverride = (axisMode === 'angle')
+            ? { xHeightAngle: 0, yHeightAngle: fieldValue, position: 'Angle' }
+            : { xHeightAngle: 0, yHeightAngle: fieldValue, position: 'Rectangle' };
+
+        try {
+            const result = await showMTFDiagram({
+                wavelengthMicrons,
+                objectIndex: 0,
+                objectOverride,
+                maxFrequencyLpmm: Math.max(firstFreq, secondFreq) * 2,
+                samplingSize: sampling,
+                zeroPadTo,
+                opdDisplayMode,
+                skipPlot: true,
+                onProgress: mtfSubProgress,
+                containerElement
+            });
+            results.push({ fieldValue, mfResult: result });
+        } catch (error) {
+            console.error(`❌ [Object MTF] MTF calculation failed for field ${fieldValue}:`, error);
+        }
+    }
+
+    const titleWl = (typeof wavelengthMicrons === 'string' && String(wavelengthMicrons).toLowerCase() === 'all')
+        ? 'All wavelengths'
+        : `${(safeNumber(wavelengthMicrons, 0.5876) * 1000).toFixed(1)} nm`;
+
+    const layout = {
+        title: `Object MTF (${firstFreq.toFixed(1)} / ${secondFreq.toFixed(1)} lp/mm, ${titleWl})`,
+        xaxis: { title: axisLabel, range: [Math.min(minField, maxField), Math.max(minField, maxField)] },
+        yaxis: { title: 'MTF', range: [0, 1.05] },
+        margin: { l: 60, r: 20, t: 50, b: 50 },
+        showlegend: true,
+        legend: { x: 1.02, y: 1, xanchor: 'left', yanchor: 'top' }
+    };
+
+    reportProgress(62, 'Initializing plot...', undefined, undefined);
+    plotly.newPlot(containerEl, [], layout, { responsive: true, displaylogo: false });
+
+    for (let i = 0; i < results.length; i++) {
+        const { fieldValue, mfResult } = results[i];
+        const traces = Array.isArray(mfResult?.traces) ? mfResult.traces : [];
+
+        for (const tr of traces) {
+            if (tr?.meta?.overlayType === 'diffractionLimit') continue;
+            const rawName = String(tr?.name ?? 'MTF');
+            const isTangential = /^Tangential\b/.test(rawName);
+            const isSagittal = /^Sagittal\b/.test(rawName);
+            if (!isTangential && !isSagittal) continue;
+
+            const x = Array.isArray(tr?.x) ? tr.x : [];
+            const y = Array.isArray(tr?.y) ? tr.y : [];
+            if (x.length === 0 || y.length === 0) continue;
+
+            const suffix = rawName.replace(/^(Tangential|Sagittal)\b/, '').trim();
+            const axisName = isTangential ? 'Meridional' : 'Sagittal';
+
+            // Calculate MTF at both firstFreq and secondFreq
+            const frequencies = [
+                { freq: firstFreq, label: '1st' },
+                { freq: secondFreq, label: '2nd' }
+            ];
+
+            for (const { freq, label } of frequencies) {
+                // Find closest frequency sample
+                let bestIdx = 0;
+                let bestDf = Infinity;
+                for (let k = 0; k < x.length; k++) {
+                    const f = Number(x[k]);
+                    if (!Number.isFinite(f)) continue;
+                    const df = Math.abs(f - freq);
+                    if (df < bestDf) {
+                        bestDf = df;
+                        bestIdx = k;
+                    }
+                }
+                const v = Number(y[bestIdx]);
+                const mtfVal = Number.isFinite(v) ? v : null;
+
+                const freqLabel = freq.toFixed(1);
+                const name = suffix
+                    ? `${axisName} ${freqLabel} lp/mm ${suffix}`
+                    : `${axisName} ${freqLabel} lp/mm`;
+
+                if (!traceMap.has(name)) {
+                    const trace: any = {
+                        x: [],
+                        y: [],
+                        type: 'scatter',
+                        mode: (typeof tr?.mode === 'string' && tr.mode) ? tr.mode : 'lines',
+                        name,
+                        showlegend: true
+                    };
+
+                    if (tr?.line && typeof tr.line === 'object') {
+                        trace.line = { ...tr.line };
+                    } else {
+                        trace.line = { width: 2 };
+                    }
+
+                    if (tr?.marker && typeof tr.marker === 'object') {
+                        trace.marker = { ...tr.marker };
+                    }
+
+                    traceMap.set(name, trace);
+                }
+
+                const agg = traceMap.get(name);
+                agg.x.push(fieldValue);
+                agg.y.push(mtfVal);
+            }
+        }
+
+        const currentTraces = Array.from(traceMap.values());
+        plotly.newPlot(containerEl, currentTraces, layout, { responsive: true, displaylogo: false });
+
+        const pct = Math.floor(60 + ((i + 1) / results.length) * 35);
+        const tracesSnapshot = Array.from(traceMap.values()).map(t => ({ ...t, x: [...t.x], y: [...t.y] }));
+        reportProgress(pct, `Extracting MTF: ${i + 1}/${results.length}`, tracesSnapshot, undefined);
+    }
+
+    const finalTraces = Array.from(traceMap.values());
+    reportProgress(98, 'Finalizing plot...', undefined, undefined);
+    plotly.newPlot(containerEl, finalTraces, layout, { responsive: true, displaylogo: false });
+    reportProgress(100, 'Done', undefined, undefined);
+
+    console.log(`✅ [Object MTF] Computed ${results.length} field points with ${nSteps} steps`);
+
+    return { traces: finalTraces, layout };
+}
+
 async function showMTFComparisonDiagram({
     wavelengthMicrons,
     objectIndex,
@@ -1456,4 +1703,4 @@ async function showMTFComparisonDiagram({
  * PSF Object選択肢のセットアップ
  */
 
-export { showMTFDiagram, showThroughFocusMTFDiagram, showMTFComparisonDiagram };
+export { showMTFDiagram, showThroughFocusMTFDiagram, showFieldMTFDiagram, showMTFComparisonDiagram };
