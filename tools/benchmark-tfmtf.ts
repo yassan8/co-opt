@@ -6,6 +6,7 @@
  */
 
 export async function benchmarkTFMTF() {
+    console.log('🧪 [benchmarkTFMTF] Function called at', new Date().toISOString());
     const startTotal = performance.now();
 
     console.log('🧪 [Benchmark] TFMTF Through-Focus Performance Analysis');
@@ -267,6 +268,7 @@ function updateProgressDisplay(label: string, evt: { percent: number; message?: 
  * Quick test version - for rapid validation
  */
 export async function benchmarkTFMTFQuick() {
+    console.log('🧪 [benchmarkTFMTFQuick] Function called at', new Date().toISOString());
     console.log('🧪 [Benchmark] Quick TFMTF Test (No MTF computation)');
     console.log('='.repeat(80));
     
@@ -350,10 +352,17 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
  * Register benchmark globally for UI access
  */
 if (typeof window !== 'undefined') {
+    // Simple test function to verify registration
+    (window as any).__tfmtfBenchmarkTest = function() {
+        console.log('✅ __tfmtfBenchmarkTest called - registration works!');
+        return { test: true, timestamp: new Date().toISOString() };
+    };
+    
     (window as any).__tfmtfBenchmark = benchmarkTFMTF;
     (window as any).__tfmtfBenchmarkQuick = benchmarkTFMTFQuick;
     console.log('✅ [TFMTF Benchmark] Registered as window.__tfmtfBenchmark()');
     console.log('✅ [TFMTF Benchmark] Quick test registered as window.__tfmtfBenchmarkQuick()');
+    console.log('✅ [TFMTF Benchmark] Test function registered as window.__tfmtfBenchmarkTest()');
 }
 
 // Export for programmatic use
