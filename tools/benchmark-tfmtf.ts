@@ -13,7 +13,7 @@ export async function benchmarkTFMTF() {
 
     try {
         // Import required components
-        const { showThroughFocusMTFDiagram } = await import('./mtf-plot.ts');
+        const { showThroughFocusMTFDiagram } = await import('../evaluation/mtf-plot.ts');
 
         // Get or create a container for the benchmark plot
         let benchmarkContainer = document.getElementById('tfmtf-benchmark-container');
@@ -51,7 +51,7 @@ export async function benchmarkTFMTF() {
             samplingSize: 128,
             zeroPadTo: 256,
             containerElement: benchmarkContainer,
-            onProgress: (evt) => {
+            onProgress: (evt: { percent: number; message?: string }) => {
                 seqProgress.push(evt);
                 updateProgressDisplay('Sequential', evt);
             }
@@ -79,7 +79,7 @@ export async function benchmarkTFMTF() {
             samplingSize: 128,
             zeroPadTo: 256,
             containerElement: benchmarkContainer,
-            onProgress: (evt) => {
+            onProgress: (evt: { percent: number; message?: string }) => {
                 parProgress.push(evt);
                 updateProgressDisplay('Parallel', evt);
             }
@@ -104,7 +104,7 @@ export async function benchmarkTFMTF() {
             samplingSize: 256,
             zeroPadTo: 512,
             containerElement: benchmarkContainer,
-            onProgress: (evt) => {
+            onProgress: (evt: { percent: number; message?: string }) => {
                 // Log only every 20% increment
                 if (evt.percent % 20 === 0 || evt.percent === 100) {
                     console.log(`  ${evt.percent}%: ${evt.message}`);
