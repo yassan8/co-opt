@@ -245,32 +245,45 @@ export function fitZernikeWeighted(points, maxOrder, options: any = {}) {
 function solveWeightedLeastSquares(A, b, weights) {
   const m = A.length; // Number of observations
   const n = A[0].length; // Number of parameters
-  
 
-  // Compute A^T W A
-  const ATWA = Array(n).fill(0).map(() => Array(n).fill(0));
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) {
-      let sum = 0;
-      for (let k = 0; k < m; k++) {
-        sum += A[k][i] * weights[k] * A[k][j];
+  const ATWA = new Float64Array(n * n);
+  const ATWb = new Float64Array(n);
+
+  // Build normal equation in one pass with lower-triangular accumulation.
+  for (let k = 0; k < m; k++) {
+    const row = A[k];
+    const wk = Number(weights[k]) || 0;
+    const bk = Number(b[k]) || 0;
+    if (!Number.isFinite(wk) || wk === 0) continue;
+
+    for (let i = 0; i < n; i++) {
+      const ai = Number(row[i]) || 0;
+      if (!Number.isFinite(ai) || ai === 0) continue;
+
+      const wai = wk * ai;
+      ATWb[i] += wai * bk;
+
+      const iBase = i * n;
+      for (let j = 0; j <= i; j++) {
+        const aj = Number(row[j]) || 0;
+        if (!Number.isFinite(aj) || aj === 0) continue;
+        ATWA[iBase + j] += wai * aj;
       }
-      ATWA[i][j] = sum;
     }
   }
-  
-  // Compute A^T W b
-  const ATWb = Array(n).fill(0);
+
+  // Symmetrize upper triangle.
   for (let i = 0; i < n; i++) {
-    let sum = 0;
-    for (let k = 0; k < m; k++) {
-      sum += A[k][i] * weights[k] * b[k];
+    for (let j = i + 1; j < n; j++) {
+      ATWA[i * n + j] = ATWA[j * n + i];
     }
-    ATWb[i] = sum;
   }
-  
-  // Solve ATWA * x = ATWb using Cholesky decomposition
-  return solveSymmetricSystem(ATWA, ATWb);
+
+  const wasmSolved = trySolveSymmetricSystemWasm(ATWA, ATWb, n);
+  if (wasmSolved) return wasmSolved;
+
+  // Solve ATWA * x = ATWb using Cholesky decomposition (TS fallback)
+  return solveSymmetricSystemFlat(ATWA, ATWb, n);
 }
 
 /**
@@ -280,50 +293,70 @@ function solveWeightedLeastSquares(A, b, weights) {
  * @param {Array<number>} b - Right-hand side vector
  * @returns {Array<number>} Solution vector
  */
-function solveSymmetricSystem(A, b) {
-  const n = A.length;
-  
+function solveSymmetricSystemFlat(Aflat, b, n) {
+  const L = new Float64Array(n * n);
+
   // Cholesky decomposition: A = L L^T
-  const L = Array(n).fill(0).map(() => Array(n).fill(0));
-  
   for (let i = 0; i < n; i++) {
+    const iBase = i * n;
     for (let j = 0; j <= i; j++) {
+      const jBase = j * n;
       let sum = 0;
       for (let k = 0; k < j; k++) {
-        sum += L[i][k] * L[j][k];
+        sum += L[iBase + k] * L[jBase + k];
       }
-      
+
       if (i === j) {
-        L[i][j] = Math.sqrt(Math.max(0, A[i][i] - sum));
+        L[iBase + j] = Math.sqrt(Math.max(0, Aflat[iBase + i] - sum));
       } else {
-        if (L[j][j] !== 0) {
-          L[i][j] = (A[i][j] - sum) / L[j][j];
+        const ljj = L[jBase + j];
+        if (ljj !== 0) {
+          L[iBase + j] = (Aflat[iBase + j] - sum) / ljj;
         }
       }
     }
   }
-  
+
   // Forward substitution: L y = b
-  const y = Array(n).fill(0);
+  const y = new Float64Array(n);
   for (let i = 0; i < n; i++) {
+    const iBase = i * n;
     let sum = 0;
     for (let j = 0; j < i; j++) {
-      sum += L[i][j] * y[j];
+      sum += L[iBase + j] * y[j];
     }
-    y[i] = L[i][i] !== 0 ? (b[i] - sum) / L[i][i] : 0;
+    const lii = L[iBase + i];
+    y[i] = lii !== 0 ? (b[i] - sum) / lii : 0;
   }
-  
+
   // Back substitution: L^T x = y
-  const x = Array(n).fill(0);
+  const x = new Float64Array(n);
   for (let i = n - 1; i >= 0; i--) {
     let sum = 0;
     for (let j = i + 1; j < n; j++) {
-      sum += L[j][i] * x[j];
+      sum += L[j * n + i] * x[j];
     }
-    x[i] = L[i][i] !== 0 ? (y[i] - sum) / L[i][i] : 0;
+    const lii = L[i * n + i];
+    x[i] = lii !== 0 ? (y[i] - sum) / lii : 0;
   }
-  
-  return x;
+
+  return Array.from(x);
+}
+
+function trySolveSymmetricSystemWasm(Aflat, b, n) {
+  try {
+    const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+    const solver = g && g.__cooptWasmSolveSymmetricSystem;
+    if (typeof solver !== 'function') return null;
+    const out = solver(Aflat, b, n);
+    if (!Array.isArray(out) || out.length !== n) return null;
+    for (let i = 0; i < out.length; i++) {
+      if (!Number.isFinite(Number(out[i]))) return null;
+    }
+    return out;
+  } catch (_) {
+    return null;
+  }
 }
 
 /**

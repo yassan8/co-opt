@@ -248,6 +248,30 @@ void batch_vector_normalize(double* vectors_ptr, int count, double* result_ptr) 
 }
 
 /**
+ * 高速バッチ行列ベクトル積（3x3行列 × vec3配列）
+ * @param m00..m22 行列要素（行優先）
+ * @param vectors_ptr 入力ベクトル配列ポインタ (x1,y1,z1,x2,y2,z2,...)
+ * @param count ベクトル本数
+ * @param result_ptr 出力配列ポインタ
+ */
+EMSCRIPTEN_KEEPALIVE
+void batch_mat3_mul_vec3(double m00, double m01, double m02,
+                         double m10, double m11, double m12,
+                         double m20, double m21, double m22,
+                         double* vectors_ptr, int count, double* result_ptr) {
+    for (int i = 0; i < count; i++) {
+        int idx = i * 3;
+        const double x = vectors_ptr[idx];
+        const double y = vectors_ptr[idx + 1];
+        const double z = vectors_ptr[idx + 2];
+
+        result_ptr[idx]     = m00 * x + m01 * y + m02 * z;
+        result_ptr[idx + 1] = m10 * x + m11 * y + m12 * z;
+        result_ptr[idx + 2] = m20 * x + m21 * y + m22 * z;
+    }
+}
+
+/**
  * 高速バッチ非球面SAG計算
  * @param r_array 半径配列
  * @param count 要素数
@@ -461,4 +485,66 @@ double intersect_aspheric_rt10(
     }
 
     return -1.0;
+}
+
+/**
+ * ray-tracing.js互換: 非球面サーフェス交点探索のバッチ版
+ *
+ * 入力rayはAoS配列: [ox, oy, oz, dx, dy, dz] * count
+ * 出力tも配列: out_t[i] (失敗は-1)
+ */
+EMSCRIPTEN_KEEPALIVE
+void batch_intersect_aspheric_rt10(
+    const double* rays_ptr,
+    int count,
+    double semidia,
+    double radius,
+    double conic,
+    double coef1,
+    double coef2,
+    double coef3,
+    double coef4,
+    double coef5,
+    double coef6,
+    double coef7,
+    double coef8,
+    double coef9,
+    double coef10,
+    int modeOdd,
+    int maxIter,
+    double tol,
+    double* out_t_ptr
+) {
+    if (!rays_ptr || !out_t_ptr || count <= 0) return;
+
+    for (int i = 0; i < count; i++) {
+        const int j = i * 6;
+        const double ox = rays_ptr[j + 0];
+        const double oy = rays_ptr[j + 1];
+        const double oz = rays_ptr[j + 2];
+        const double dx = rays_ptr[j + 3];
+        const double dy = rays_ptr[j + 4];
+        const double dz = rays_ptr[j + 5];
+
+        out_t_ptr[i] = intersect_aspheric_rt10(
+            ox, oy, oz,
+            dx, dy, dz,
+            semidia,
+            radius,
+            conic,
+            coef1,
+            coef2,
+            coef3,
+            coef4,
+            coef5,
+            coef6,
+            coef7,
+            coef8,
+            coef9,
+            coef10,
+            modeOdd,
+            maxIter,
+            tol
+        );
+    }
 }

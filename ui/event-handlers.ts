@@ -4256,11 +4256,14 @@ export function setupAnalysisWindows() {
         </select>
         <label for="popup-wavefront-grid-size-select">Grid size:</label>
         <select id="popup-wavefront-grid-size-select">
-            <option value="16">16x16</option>
             <option value="32">32x32</option>
-            <option value="64" selected>64x64</option>
+            <option value="64">64x64</option>
             <option value="128">128x128</option>
-            <option value="256">256x256</option>
+            <option value="256" selected>256x256</option>
+            <option value="512">512x512</option>
+            <option value="1024">1024x1024</option>
+            <option value="2048">2048x2048</option>
+            <option value="4096">4096x4096</option>
         </select>
         <label style="display:flex;align-items:center;gap:6px;">
             <input id="popup-zernike-fit-checkbox" type="checkbox" />
@@ -4391,13 +4394,51 @@ export function setupAnalysisWindows() {
             const progressWrapper = document.getElementById('popup-opd-progress-wrapper');
             const progressBarEl = document.getElementById('popup-opd-progressbar');
             const progressTextEl = document.getElementById('popup-opd-progress-text');
+            const PROGRESS_UI_UPDATE_INTERVAL_MS = 120;
+            let lastProgressPercent = null;
+            let lastProgressText = null;
+            let progressVisible = false;
+            let lastProgressUiUpdateAt = 0;
+            let pendingProgressEvent = null;
+            let progressFlushTimer = null;
 
-            const setProgress = (value, text) => {
+            const setProgress = (value, text, force = false) => {
                 try {
-                    if (progressWrapper) progressWrapper.style.display = 'block';
-                    if (progressBarEl && Number.isFinite(value)) progressBarEl.value = Math.max(0, Math.min(100, value));
-                    if (progressTextEl && typeof text === 'string') progressTextEl.textContent = text;
+                    if (progressWrapper && !progressVisible) {
+                        progressWrapper.style.display = 'block';
+                        progressVisible = true;
+                    }
+
+                    if (progressBarEl && Number.isFinite(value)) {
+                        const nextValue = Math.max(0, Math.min(100, value));
+                        if (force || !Number.isFinite(lastProgressPercent) || Math.abs(nextValue - lastProgressPercent) >= 0.001) {
+                            progressBarEl.value = nextValue;
+                            lastProgressPercent = nextValue;
+                        }
+                    }
+
+                    if (progressTextEl && typeof text === 'string') {
+                        if (force || text !== lastProgressText) {
+                            progressTextEl.textContent = text;
+                            lastProgressText = text;
+                        }
+                    }
                 } catch (_) {}
+            };
+
+            const flushPendingProgress = (force = false) => {
+                if (progressFlushTimer) {
+                    clearTimeout(progressFlushTimer);
+                    progressFlushTimer = null;
+                }
+                const evt = pendingProgressEvent;
+                if (!evt) return;
+                pendingProgressEvent = null;
+                const p = Number(evt?.percent);
+                const msg = evt?.message || evt?.phase || 'Working...';
+                if (Number.isFinite(p)) setProgress(p, msg, force);
+                else setProgress(undefined, msg, force);
+                lastProgressUiUpdateAt = Date.now();
             };
 
             const popupObject = document.getElementById('popup-wavefront-object-select');
@@ -4414,7 +4455,7 @@ export function setupAnalysisWindows() {
                 return Number.isFinite(idx) && idx >= 0 ? idx : 0;
             })();
             const plotType = popupPlotType ? popupPlotType.value : 'surface';
-            const gridSize = popupGrid ? parseInt(popupGrid.value, 10) : 64;
+            const gridSize = popupGrid ? parseInt(popupGrid.value, 10) : 256;
             const opdDisplayMode = (popupRemovePtd && popupRemovePtd.checked)
                 ? 'pistonTiltDefocusRemoved'
                 : 'pistonTiltRemoved';
@@ -4465,10 +4506,21 @@ export function setupAnalysisWindows() {
                 // NOTE: Wavefront generator supports only options.onProgress (same as PSF)
                 const onProgress = (evt) => {
                     try {
-                        const p = Number(evt?.percent);
-                        const msg = evt?.message || evt?.phase || 'Working...';
-                        if (Number.isFinite(p)) setProgress(p, msg);
-                        else setProgress(undefined, msg);
+                        pendingProgressEvent = evt;
+                        const now = Date.now();
+                        const elapsed = now - lastProgressUiUpdateAt;
+                        if (elapsed >= PROGRESS_UI_UPDATE_INTERVAL_MS) {
+                            flushPendingProgress(false);
+                            return;
+                        }
+
+                        if (!progressFlushTimer) {
+                            const delay = Math.max(0, PROGRESS_UI_UPDATE_INTERVAL_MS - elapsed);
+                            progressFlushTimer = setTimeout(() => {
+                                progressFlushTimer = null;
+                                flushPendingProgress(false);
+                            }, delay);
+                        }
                     } catch (_) {}
                 };
                 
@@ -4476,7 +4528,7 @@ export function setupAnalysisWindows() {
                     if (!window.opener || typeof window.opener.showWavefrontDiagram !== 'function') {
                         throw new Error('showWavefrontDiagram is not available on opener');
                     }
-                    await window.opener.showWavefrontDiagram(plotType, 'opd', Number.isFinite(gridSize) ? gridSize : 64, Number.isFinite(objectIndex) ? objectIndex : 0, {
+                    await window.opener.showWavefrontDiagram(plotType, 'opd', Number.isFinite(gridSize) ? gridSize : 256, Number.isFinite(objectIndex) ? objectIndex : 0, {
                         containerElement: containerEl,
                         cancelToken: popupCancelToken,
                         onProgress,
@@ -4669,15 +4721,18 @@ export function setupAnalysisWindows() {
                     }
 
                     if (!shouldZernikeFit) setProgress(100, 'Done');
+                    flushPendingProgress(true);
                     resizePlot();
                 } catch (err) {
                     if (err?.message?.includes('Cancelled')) {
+                        flushPendingProgress(true);
                         setProgress(100, 'Cancelled');
                         console.log('🛑 OPD calculation cancelled by user');
                     } else {
                         throw err;
                     }
                 } finally {
+                    flushPendingProgress(true);
                     if (stopBtn) {
                         stopBtn.disabled = true;
                         stopBtn.textContent = 'Stop';
@@ -4686,6 +4741,7 @@ export function setupAnalysisWindows() {
                 }
             } catch (err) {
                 console.error(err);
+                flushPendingProgress(true);
                 setProgress(100, 'Failed');
                 if (containerEl) {
                     containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate OPD diagram. Check console.</div>';
@@ -4828,7 +4884,7 @@ export function setupAnalysisWindows() {
             <option value="32">32x32</option>
             <option value="64">64x64</option>
             <option value="128">128x128</option>
-            <option value="256">256x256</option>
+            <option value="256" selected>256x256</option>
             <option value="512">512x512</option>
             <option value="1024">1024x1024</option>
             <option value="2048">2048x2048</option>

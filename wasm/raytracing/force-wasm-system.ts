@@ -109,6 +109,9 @@ class ForceWASMSystem {
 
             this.isWASMReady = true;
 
+            // Optional global hooks for numerical kernels (fallback-safe if symbol missing)
+            this.installGlobalWasmHooks();
+
             
             // 動作テスト
             await this.testWASMFunctionality();
@@ -150,6 +153,57 @@ class ForceWASMSystem {
         } catch (error) {
             console.error('❌ WASM機能テスト失敗:', error.message);
             throw error;
+        }
+    }
+
+    installGlobalWasmHooks() {
+        const globalObj = globalThis;
+        globalObj.__cooptWasmSolveSymmetricSystem = this.solveSymmetricSystemWasm.bind(this);
+    }
+
+    solveSymmetricSystemWasm(matrix, rhs, size) {
+        if (!this.isWASMReady || !this.wasmModule) return null;
+        if (!Number.isInteger(size) || size <= 0) return null;
+        if (!Array.isArray(matrix) || !Array.isArray(rhs)) return null;
+        if (matrix.length !== size * size || rhs.length !== size) return null;
+
+        const solveFn = this.wasmModule._solve_spd_cholesky;
+        if (typeof solveFn !== 'function') return null;
+
+        const bytesA = matrix.length * 8;
+        const bytesB = rhs.length * 8;
+        const bytesX = rhs.length * 8;
+
+        let aPtr = 0;
+        let bPtr = 0;
+        let xPtr = 0;
+
+        try {
+            aPtr = this.wasmModule._malloc(bytesA);
+            bPtr = this.wasmModule._malloc(bytesB);
+            xPtr = this.wasmModule._malloc(bytesX);
+            if (!aPtr || !bPtr || !xPtr) return null;
+
+            const aHeap = new Float64Array(this.wasmModule.HEAPF64.buffer, aPtr, matrix.length);
+            const bHeap = new Float64Array(this.wasmModule.HEAPF64.buffer, bPtr, rhs.length);
+            aHeap.set(matrix);
+            bHeap.set(rhs);
+
+            const ok = solveFn(aPtr, bPtr, size, xPtr);
+            if (!ok) return null;
+
+            const out = new Float64Array(this.wasmModule.HEAPF64.buffer, xPtr, size);
+            const result = Array.from(out);
+            for (let i = 0; i < result.length; i++) {
+                if (!Number.isFinite(result[i])) return null;
+            }
+            return result;
+        } catch (_) {
+            return null;
+        } finally {
+            if (xPtr) this.wasmModule._free(xPtr);
+            if (bPtr) this.wasmModule._free(bPtr);
+            if (aPtr) this.wasmModule._free(aPtr);
         }
     }
 

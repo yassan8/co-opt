@@ -14,6 +14,53 @@ async function getPSFCalculatorSingleton() {
     return _psfCalculatorSingletonPromise;
 }
 
+type MtfPlotOptions = {
+    wavelengthMicrons?: number | string;
+    objectIndex?: number;
+    maxFrequencyLpmm?: number;
+    samplingSize?: number;
+    samplingPoints?: number;
+    containerElement?: HTMLElement | null;
+    onProgress?: (evt: { percent: number; message?: string }) => void;
+    opdDisplayMode?: string;
+    defocusShiftMm?: number;
+    skipPlot?: boolean;
+    showDiffractionLimit?: boolean;
+    zeroPadTo?: number;
+    legacyBaselineMode?: boolean;
+    plotPointCount?: number;
+};
+
+type ThroughFocusMtfOptions = {
+    wavelengthMicrons?: number | string;
+    objectIndex?: number;
+    targetFrequencyLpmm?: number;
+    defocusMinMm?: number;
+    defocusMaxMm?: number;
+    steps?: number;
+    samplingSize?: number;
+    samplingPoints?: number;
+    zeroPadTo?: number;
+    containerElement?: HTMLElement | null;
+    onProgress?: (evt: { percent: number; message?: string }) => void;
+    opdDisplayMode?: string;
+};
+
+type MtfComparisonOptions = {
+    wavelengthMicrons?: number | string;
+    objectIndex?: number;
+    maxFrequencyLpmm?: number;
+    samplingSize?: number;
+    samplingPoints?: number;
+    containerElement?: HTMLElement | null;
+    onProgress?: (evt: { percent: number; message?: string }) => void;
+    opdDisplayMode?: string;
+    defocusShiftMm?: number;
+    zeroPadTo?: number;
+    showDelta?: boolean;
+    timeoutMs?: number;
+};
+
 function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows, defocusShiftMm, isFiniteObject = false) {
     const shift = Number(defocusShiftMm);
     if (!Array.isArray(opticalSystemRows)) return [];
@@ -39,7 +86,7 @@ function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows, defocusShiftM
     return cloned;
 }
 
-async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot, showDiffractionLimit, zeroPadTo, legacyBaselineMode, plotPointCount } = {}) {
+async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot, showDiffractionLimit, zeroPadTo, legacyBaselineMode, plotPointCount }: MtfPlotOptions = {}) {
     const safeNumber = (v, fallback) => {
         const n = Number(v);
         return Number.isFinite(n) ? n : fallback;
@@ -371,7 +418,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             });
         };
 
-        const shouldRetryWithEntrance = (message) => /stop unreachable|center\/chief ray|基準光線の生成に失敗/i.test(String(message || ''));
+        const shouldRetryWithStop = (message) => /entrance.*fail|entrance pupil|entrance unreachable/i.test(String(message || ''));
 
         const runWavefrontAttempt = async (mode, customFieldSetting = fieldSetting, strictMode = true) => {
             const prevStrict = isRayTracingWasmStrict();
@@ -396,24 +443,24 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
         let wavefrontMap = null;
         const errors = [];
 
-        // 1) Prefer stop mode (stable scaling)
-        const stopAttempt = await runWavefrontAttempt('stop', fieldSetting, true);
-        if (stopAttempt.map) {
-            wavefrontMap = stopAttempt.map;
-            console.log(`✅ [TFMTF Pupil] Stop mode succeeded`);
+        // 1) 🔧 Prefer entrance mode (more robust for infinite systems)
+        const entranceAttempt = await runWavefrontAttempt('entrance', fieldSetting, true);
+        if (entranceAttempt.map) {
+            wavefrontMap = entranceAttempt.map;
+            console.log(`✅ [TFMTF Pupil] Entrance mode succeeded`);
         } else {
-            errors.push(`stop=${stopAttempt.error}`);
-            console.warn(`⚠️ [TFMTF Pupil] Stop mode failed: ${stopAttempt.error}`);
+            errors.push(`entrance=${entranceAttempt.error}`);
+            console.warn(`⚠️ [TFMTF Pupil] Entrance mode failed: ${entranceAttempt.error}`);
         }
 
-        // 2) Retry entrance mode for stop/chief failure patterns
-        if (!wavefrontMap && shouldRetryWithEntrance(stopAttempt.error)) {
-            reportProgress(localBase + localSpan * 0.10, `λ=${titleNmLocal} nm: Retrying with entrance pupil mode...`);
-            const entranceAttempt = await runWavefrontAttempt('entrance', fieldSetting, true);
-            if (entranceAttempt.map) {
-                wavefrontMap = entranceAttempt.map;
+        // 2) 🔧 Retry stop mode if entrance fails (stable scaling for some systems)
+        if (!wavefrontMap && shouldRetryWithStop(entranceAttempt.error)) {
+            reportProgress(localBase + localSpan * 0.10, `λ=${titleNmLocal} nm: Retrying with stop mode...`);
+            const stopAttempt = await runWavefrontAttempt('stop', fieldSetting, true);
+            if (stopAttempt.map) {
+                wavefrontMap = stopAttempt.map;
             } else {
-                errors.push(`entrance=${entranceAttempt.error}`);
+                errors.push(`stop=${stopAttempt.error}`);
             }
         }
 
@@ -434,16 +481,17 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
                     forceFinite: true
                 };
 
-                const finiteStopAttempt = await runWavefrontAttempt('stop', finiteFieldSetting, true);
-                if (finiteStopAttempt.map) {
-                    wavefrontMap = finiteStopAttempt.map;
+                // 🔧 Entrance優先でfinite-fieldも試行
+                const finiteEntranceAttempt = await runWavefrontAttempt('entrance', finiteFieldSetting, true);
+                if (finiteEntranceAttempt.map) {
+                    wavefrontMap = finiteEntranceAttempt.map;
                 } else {
-                    errors.push(`finite-stop=${finiteStopAttempt.error}`);
-                    const finiteEntranceAttempt = await runWavefrontAttempt('entrance', finiteFieldSetting, true);
-                    if (finiteEntranceAttempt.map) {
-                        wavefrontMap = finiteEntranceAttempt.map;
+                    errors.push(`finite-entrance=${finiteEntranceAttempt.error}`);
+                    const finiteStopAttempt = await runWavefrontAttempt('stop', finiteFieldSetting, true);
+                    if (finiteStopAttempt.map) {
+                        wavefrontMap = finiteStopAttempt.map;
                     } else {
-                        errors.push(`finite-entrance=${finiteEntranceAttempt.error}`);
+                        errors.push(`finite-stop=${finiteStopAttempt.error}`);
                     }
                 }
             }
@@ -456,16 +504,17 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, maxFrequencyLpmm
             const looksStrictSamplingCollapse = /No valid OPD samples|trace to eval failed/i.test(joinedErrors);
             if (looksStrictSamplingCollapse) {
                 reportProgress(localBase + localSpan * 0.18, `λ=${titleNmLocal} nm: Retrying with compatibility ray tracing...`);
-                const compatStop = await runWavefrontAttempt('stop', fieldSetting, false);
-                if (compatStop.map) {
-                    wavefrontMap = compatStop.map;
+                // 🔧 Entrance優先でcompatibility modeも試行
+                const compatEntrance = await runWavefrontAttempt('entrance', fieldSetting, false);
+                if (compatEntrance.map) {
+                    wavefrontMap = compatEntrance.map;
                 } else {
-                    errors.push(`compat-stop=${compatStop.error}`);
-                    const compatEntrance = await runWavefrontAttempt('entrance', fieldSetting, false);
-                    if (compatEntrance.map) {
-                        wavefrontMap = compatEntrance.map;
+                    errors.push(`compat-entrance=${compatEntrance.error}`);
+                    const compatStop = await runWavefrontAttempt('stop', fieldSetting, false);
+                    if (compatStop.map) {
+                        wavefrontMap = compatStop.map;
                     } else {
-                        errors.push(`compat-entrance=${compatEntrance.error}`);
+                        errors.push(`compat-stop=${compatStop.error}`);
                     }
                 }
             }
@@ -804,7 +853,7 @@ async function showThroughFocusMTFDiagram({
     containerElement,
     onProgress,
     opdDisplayMode
-} = {}) {
+}: ThroughFocusMtfOptions = {}) {
     const safeNumber = (v, fallback) => {
         const n = Number(v);
         return Number.isFinite(n) ? n : fallback;
@@ -944,7 +993,7 @@ async function showMTFComparisonDiagram({
     zeroPadTo,
     showDelta,
     timeoutMs
-} = {}) {
+}: MtfComparisonOptions = {}) {
     const safeNumber = (v, fallback) => {
         const n = Number(v);
         return Number.isFinite(n) ? n : fallback;
