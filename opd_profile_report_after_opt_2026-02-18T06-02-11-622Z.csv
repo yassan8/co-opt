@@ -1,0 +1,4 @@
+mode,totalMs,traceMs,intersectMs,surfaceNormalMs,casesCompleted,casesPlanned,errorCount,rustWasmReady,firstError
+js,4412.255,3911.554,0.000,0.000,12,12,0,,
+wasm-strict,4337.419,3858.740,0.000,0.000,12,12,0,,
+rust-wasm,4349.298,3856.026,0.000,0.000,12,12,0,true,

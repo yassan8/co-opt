@@ -95,6 +95,7 @@ import { calculateTransverseAberration, getFieldAnglesFromSource, getPrimaryWave
 import { plotTransverseAberrationDiagram, showTransverseAberrationInNewWindow } from './evaluation/aberrations/transverse-aberration-plot.ts';
 import { showWavefrontDiagram } from './evaluation/wavefront/wavefront-plot.ts';
 import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPDCalculator, createWavefrontAnalyzer } from './evaluation/wavefront/wavefront.ts';
+import { runOPDProfiling } from './evaluation/wavefront/opd-profiler.ts'; // ✅ OPD profiling functions
 import { PSFCalculator } from './evaluation/psf/psf-calculator.ts';
 import { PSFPlotter, PSFDisplayManager } from './evaluation/psf/psf-plot.ts';
 import { showMTFDiagram, showThroughFocusMTFDiagram, showMTFComparisonDiagram } from './evaluation/mtf-plot.ts';
@@ -449,6 +450,7 @@ async function initializeApplication() {
         };
         window['showIntegratedAberrationDiagram'] = showIntegratedAberrationDiagram;
         window['showWavefrontDiagram'] = showWavefrontDiagram;
+        window['runOPDProfiling'] = runOPDProfiling; // ✅ OPD performance profiling
         window['showMTFDiagram'] = showMTFDiagram;
         window['showMTFComparisonDiagram'] = showMTFComparisonDiagram;
         window['showThroughFocusSpotDiagram'] = showThroughFocusSpotDiagram;
@@ -487,6 +489,15 @@ async function initializeApplication() {
                     onProgress: null
                 });
                 const elapsedMs = now() - t0;
+                const rt = (g && typeof g.getRayTracingProfile === 'function')
+                    ? g.getRayTracingProfile({ reset: true })
+                    : null;
+                const traceCalls = Number(rt?.traceCalls) || 0;
+                const lockstepCalls = Number(rt?.traceBatchLockstepCalls) || 0;
+                const lockstepRays = Number(rt?.traceBatchLockstepRays) || 0;
+                const lockstepCallRatio = traceCalls > 0 ? (lockstepCalls / traceCalls) : 0;
+                const lockstepRaysPerCall = lockstepCalls > 0 ? (lockstepRays / lockstepCalls) : 0;
+                const traceCallsPerMs = elapsedMs > 0 ? (traceCalls / elapsedMs) : 0;
                 const result = {
                     elapsedMs,
                     samplingSize: Number.isFinite(Number(options.samplingSize)) ? Number(options.samplingSize) : 256,
@@ -494,6 +505,14 @@ async function initializeApplication() {
                     wavelengthMicrons: options.wavelengthMicrons ?? 'all',
                     maxFrequencyLpmm: Number.isFinite(Number(options.maxFrequencyLpmm)) ? Number(options.maxFrequencyLpmm) : 100,
                     objectIndex: Number.isFinite(Number(options.objectIndex)) ? Number(options.objectIndex) : 0,
+                    rayTracing: {
+                        traceCalls,
+                        traceCallsPerMs,
+                        lockstepCalls,
+                        lockstepRays,
+                        lockstepCallRatio,
+                        lockstepRaysPerCall
+                    },
                     note: 'See [OPD Profile] logs for wavefront/raytrace breakdown.'
                 };
                 console.log('📊 benchmarkMTFOnce result:', result);
@@ -511,6 +530,8 @@ async function initializeApplication() {
             const runs = Math.max(1, Math.floor(Number(options.runs) || 3));
             const warmup = Math.max(0, Math.floor(Number(options.warmup) || 1));
             const samples: number[] = [];
+            const lockstepCallRatios: number[] = [];
+            const lockstepRaysPerCallArr: number[] = [];
 
             for (let i = 0; i < warmup; i++) {
                 await (window as any).benchmarkMTFOnce(options);
@@ -519,12 +540,33 @@ async function initializeApplication() {
                 const r = await (window as any).benchmarkMTFOnce(options);
                 const ms = Number(r?.elapsedMs);
                 if (Number.isFinite(ms)) samples.push(ms);
+                const lockstepCallRatio = Number(r?.rayTracing?.lockstepCallRatio);
+                if (Number.isFinite(lockstepCallRatio)) lockstepCallRatios.push(lockstepCallRatio);
+                const lockstepRaysPerCall = Number(r?.rayTracing?.lockstepRaysPerCall);
+                if (Number.isFinite(lockstepRaysPerCall)) lockstepRaysPerCallArr.push(lockstepRaysPerCall);
             }
 
             const avg = samples.length > 0 ? samples.reduce((a, b) => a + b, 0) / samples.length : NaN;
             const min = samples.length > 0 ? Math.min(...samples) : NaN;
             const max = samples.length > 0 ? Math.max(...samples) : NaN;
-            const summary = { runs, warmup, samples, avgMs: avg, minMs: min, maxMs: max };
+            const avgLockstepCallRatio = lockstepCallRatios.length > 0
+                ? (lockstepCallRatios.reduce((a, b) => a + b, 0) / lockstepCallRatios.length)
+                : NaN;
+            const avgLockstepRaysPerCall = lockstepRaysPerCallArr.length > 0
+                ? (lockstepRaysPerCallArr.reduce((a, b) => a + b, 0) / lockstepRaysPerCallArr.length)
+                : NaN;
+            const summary = {
+                runs,
+                warmup,
+                samples,
+                avgMs: avg,
+                minMs: min,
+                maxMs: max,
+                lockstep: {
+                    avgCallRatio: avgLockstepCallRatio,
+                    avgRaysPerCall: avgLockstepRaysPerCall
+                }
+            };
             console.log('📈 benchmarkMTF summary:', summary);
             return summary;
         };
@@ -559,6 +601,11 @@ async function initializeApplication() {
             const avgImprovementPct = (Number.isFinite(beforeAvg) && beforeAvg > 0 && Number.isFinite(afterAvg))
                 ? ((beforeAvg - afterAvg) / beforeAvg) * 100
                 : NaN;
+            const beforeLockstepRatio = Number(before?.lockstep?.avgCallRatio);
+            const afterLockstepRatio = Number(after?.lockstep?.avgCallRatio);
+            const lockstepRatioDelta = (Number.isFinite(beforeLockstepRatio) && Number.isFinite(afterLockstepRatio))
+                ? (afterLockstepRatio - beforeLockstepRatio)
+                : NaN;
 
             const comparison = {
                 labels: { before: beforeLabel, after: afterLabel },
@@ -568,7 +615,8 @@ async function initializeApplication() {
                     avgMs: avgDeltaMs,
                     minMs: minDeltaMs,
                     maxMs: maxDeltaMs,
-                    avgImprovementPct
+                    avgImprovementPct,
+                    lockstepCallRatioDelta: lockstepRatioDelta
                 }
             };
             console.log('🧪 benchmarkMTFCompare result:', comparison);

@@ -10,11 +10,12 @@
  * このファイルは `eva-wavefront-plot.js` などの描画スクリプトから import して使用される。
  */
 
-import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../../raytracing/core/ray-tracing.ts';
+import { traceRay, traceRayHitPoint, traceRayHitPointBatch, traceRayEvalBatchSummary, calculateSurfaceOrigins } from '../../raytracing/core/ray-tracing.ts';
 import { getRefractiveIndex as getCatalogRefractiveIndex } from '../../raytracing/core/ray-paraxial.ts';
 import { findFiniteSystemChiefRayDirection } from '../../raytracing/generation/gen-ray-cross-finite.ts';
 import { findInfiniteSystemChiefRayOrigin } from '../../raytracing/generation/gen-ray-cross-infinite.ts';
 import { fitZernikeWeighted, reconstructOPD, jToNM, nmToJ, getZernikeName } from './zernike-fitting.ts';
+import { getGlobalWavefrontCache, WavefrontCache } from './wavefront-cache.ts';
 
 // Helper function to detect mirror surfaces
 function isMirrorRow(row) {
@@ -230,73 +231,38 @@ function brent(f, a, b, tol = 1e-8, maxIter = 100) {
  * @returns {Object|null} ヤコビアン行列 {J11, J12, J21, J22, det} または null
  */
 function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceIndex, opticalSystemRows, stepSize, wavelength) {
-    const isCoordTransRow = (row) => {
-        const st = String(row?.surfType ?? row?.['surf type'] ?? row?.type ?? '').trim().toLowerCase();
-        return st === 'coord break' || st === 'coordinate break' || st === 'cb';
-    };
-    const isObjectRow = (row) => {
-        const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
-        return t === 'object';
-    };
-        const isGapRow = (row) => {
-            return __wavefrontIsGapRow(row);
-        };
-    const getRayPathPointIndexForSurfaceIndex = (rows, surfaceIndex) => {
-        if (!Array.isArray(rows) || surfaceIndex === null || surfaceIndex === undefined) return null;
-        const sIdx = Math.max(0, Math.min(Number(surfaceIndex) || 0, rows.length - 1));
-        let count = 0;
-        for (let i = 0; i <= sIdx; i++) {
-            const row = rows[i];
-            if (isCoordTransRow(row)) continue;
-            if (isObjectRow(row)) continue;
-            if (isGapRow(row)) continue;
-            count++;
-        }
-        return count;
-    };
-
     // direction may be {x,y,z} or {i,j,k} format, support both
     const dirX = direction.x !== undefined ? direction.x : direction.i;
     const dirY = direction.y !== undefined ? direction.y : direction.j;
     const dirZ = direction.z !== undefined ? direction.z : direction.k;
-
-    const pIdx = getRayPathPointIndexForSurfaceIndex(opticalSystemRows, stopSurfaceIndex);
-    if (pIdx === null) return null;
     
-    // ベースライン
+    // ベースライン + 数値微分サンプルをまとめて計算（絞り面ヒット点のみ）
     const baseRay = {
         pos: origin,
         dir: { x: dirX, y: dirY, z: dirZ },
         wavelength: wavelength
     };
-    const basePath = traceRay(opticalSystemRows, baseRay, 1.0, null, stopSurfaceIndex + 1);
-    if (!basePath || !Array.isArray(basePath) || basePath.length <= pIdx) return null;
     
-    const basePos = basePath[pIdx];
-    if (!basePos || !Number.isFinite(basePos.x) || !Number.isFinite(basePos.y)) return null;
-    
-    // X方向偏微分
     const rayDx = {
         pos: { x: origin.x + stepSize, y: origin.y, z: origin.z },
         dir: { x: dirX, y: dirY, z: dirZ },
         wavelength: wavelength
     };
-    const pathDx = traceRay(opticalSystemRows, rayDx, 1.0, null, stopSurfaceIndex + 1);
-    if (!pathDx || !Array.isArray(pathDx) || pathDx.length <= pIdx) return null;
-    
-    const posDx = pathDx[pIdx];
-    if (!posDx || !Number.isFinite(posDx.x) || !Number.isFinite(posDx.y)) return null;
-    
-    // Y方向偏微分
     const rayDy = {
         pos: { x: origin.x, y: origin.y + stepSize, z: origin.z },
         dir: { x: dirX, y: dirY, z: dirZ },
         wavelength: wavelength
     };
-    const pathDy = traceRay(opticalSystemRows, rayDy, 1.0, null, stopSurfaceIndex + 1);
-    if (!pathDy || !Array.isArray(pathDy) || pathDy.length <= pIdx) return null;
-    
-    const posDy = pathDy[pIdx];
+
+    const [basePos, posDx, posDy] = traceRayHitPointBatch(
+        opticalSystemRows,
+        [baseRay, rayDx, rayDy],
+        1.0,
+        stopSurfaceIndex
+    );
+
+    if (!basePos || !Number.isFinite(basePos.x) || !Number.isFinite(basePos.y)) return null;
+    if (!posDx || !Number.isFinite(posDx.x) || !Number.isFinite(posDx.y)) return null;
     if (!posDy || !Number.isFinite(posDy.x) || !Number.isFinite(posDy.y)) return null;
     
     // ヤコビアン行列
@@ -325,33 +291,8 @@ function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceInd
  * @returns {Object} {success: boolean, origin?: {x,y,z}, actualStopPoint?: {x,y,z}, error?: number, iterations?: number}
  */
 function calculateApertureRayNewton(chiefRayOrigin, direction, targetStopPoint, stopSurfaceIndex, opticalSystemRows, maxIterations, tolerance, wavelength, debugMode) {
-    const isCoordTransRow = (row) => {
-        const st = String(row?.surfType ?? row?.['surf type'] ?? row?.type ?? '').trim().toLowerCase();
-        return st === 'coord break' || st === 'coordinate break' || st === 'cb';
-    };
-    const isObjectRow = (row) => {
-        const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
-        return t === 'object';
-    };
-        const isGapRow = (row) => {
-            return __wavefrontIsGapRow(row);
-        };
-    const getRayPathPointIndexForSurfaceIndex = (rows, surfaceIndex) => {
-        if (!Array.isArray(rows) || surfaceIndex === null || surfaceIndex === undefined) return null;
-        const sIdx = Math.max(0, Math.min(Number(surfaceIndex) || 0, rows.length - 1));
-        let count = 0;
-        for (let i = 0; i <= sIdx; i++) {
-            const row = rows[i];
-            if (isCoordTransRow(row)) continue;
-            if (isObjectRow(row)) continue;
-            if (isGapRow(row)) continue;
-            count++;
-        }
-        return count;
-    };
-
-    const pIdx = getRayPathPointIndexForSurfaceIndex(opticalSystemRows, stopSurfaceIndex);
-    if (pIdx === null) return { success: false };
+    const sIdx = Number(stopSurfaceIndex);
+    if (!Number.isFinite(sIdx) || sIdx < 0) return { success: false };
     const __prof = __getActiveWavefrontProfile();
     if (__prof) {
         __prof.newtonChiefCalls = (__prof.newtonChiefCalls || 0) + 1;
@@ -392,15 +333,13 @@ function calculateApertureRayNewton(chiefRayOrigin, direction, targetStopPoint, 
             dir: { x: direction.x !== undefined ? direction.x : direction.i, y: direction.y !== undefined ? direction.y : direction.j, z: direction.z !== undefined ? direction.z : direction.k },
             wavelength: wavelength
         };
-        
-        const rayPath = traceRay(opticalSystemRows, ray, 1.0, null, stopSurfaceIndex + 1);
-        
-        if (!rayPath || !Array.isArray(rayPath) || rayPath.length <= pIdx) {
-            if (debugMode) console.log(`⚠️ [Newton] 反復${iteration}: 光線追跡失敗 (length=${Array.isArray(rayPath) ? rayPath.length : 0})`);
+
+        const actualStopPoint = traceRayHitPoint(opticalSystemRows, ray, 1.0, sIdx);
+
+        if (!actualStopPoint) {
+            if (debugMode) console.log(`⚠️ [Newton] 反復${iteration}: 絞り面追跡失敗`);
             return { success: false };
         }
-        
-        const actualStopPoint = rayPath[pIdx];
         if (!actualStopPoint || !Number.isFinite(actualStopPoint.x) || !Number.isFinite(actualStopPoint.y)) {
             if (debugMode) console.log(`⚠️ [Newton] 反復${iteration}: 絞り面交点が無効`);
             return { success: false };
@@ -579,6 +518,8 @@ export class OpticalPathDifferenceCalculator {
     _opticalPathCacheKey: string | null;
     _opticalPathSegmentN: Float64Array | null;
     _opticalPathMaxSegMm: number;
+    _traceOptionsBySurfaceIndex: Map<number, any>;
+    _expectedPointCountBySurfaceIndex: Map<number, number>;
 
     constructor(opticalSystemRows, wavelength = 0.5876) {
         // 🆕 初期化時の詳細検証
@@ -689,6 +630,8 @@ export class OpticalPathDifferenceCalculator {
         this._opticalPathCacheKey = null;
         this._opticalPathSegmentN = null;
         this._opticalPathMaxSegMm = 0;
+        this._traceOptionsBySurfaceIndex = new Map();
+        this._expectedPointCountBySurfaceIndex = new Map();
 
         if (__cooptIsOPDDebugNow()) {
             console.log(`🔍 OPD Calculator 初期化: 波長=${wavelength}μm, 絞り面インデックス=${this.stopSurfaceIndex}`);
@@ -735,6 +678,60 @@ export class OpticalPathDifferenceCalculator {
         }
     }
 
+    getTraceOptionsForSurface(surfaceIndex, traceOptions = null) {
+        const idx = Number(surfaceIndex);
+        if (!Number.isFinite(idx) || idx < 0) return traceOptions;
+
+        const hasPrecomputed = !!(
+            traceOptions &&
+            Array.isArray((traceOptions as any).__effectiveSystemRows) &&
+            Array.isArray((traceOptions as any).__surfaceData)
+        );
+        if (hasPrecomputed) return traceOptions;
+
+        let precomputed = this._traceOptionsBySurfaceIndex.get(idx);
+        if (!precomputed) {
+            const effectiveSystemRows = this.opticalSystemRows.slice(0, idx + 1);
+            const baseSurfaceData = (Array.isArray(this._surfaceOrigins) && this._surfaceOrigins.length >= (idx + 1))
+                ? this._surfaceOrigins.slice(0, idx + 1)
+                : calculateSurfaceOrigins(effectiveSystemRows);
+            precomputed = {
+                __effectiveSystemRows: effectiveSystemRows,
+                __surfaceData: baseSurfaceData
+            };
+            this._traceOptionsBySurfaceIndex.set(idx, precomputed);
+        }
+
+        if (!traceOptions) return precomputed;
+        return {
+            ...(traceOptions as any),
+            __effectiveSystemRows: (traceOptions as any).__effectiveSystemRows || precomputed.__effectiveSystemRows,
+            __surfaceData: (traceOptions as any).__surfaceData || precomputed.__surfaceData
+        };
+    }
+
+    getExpectedPointCountForSurface(surfaceIndex) {
+        const idx = Number(surfaceIndex);
+        if (!Number.isFinite(idx) || idx < 0) return 1;
+
+        const cached = this._expectedPointCountBySurfaceIndex.get(idx);
+        if (Number.isFinite(cached)) return cached as number;
+
+        let nonCTCount = 0;
+        const rows = Array.isArray(this.opticalSystemRows) ? this.opticalSystemRows : [];
+        const upper = Math.min(rows.length - 1, idx);
+        for (let i = 0; i <= upper; i++) {
+            const row = rows[i];
+            if (this.isCoordTransRow(row)) continue;
+            if (this.isObjectRow(row)) continue;
+            if (this.isGapRow(row)) continue;
+            nonCTCount++;
+        }
+        const expected = nonCTCount + 1;
+        this._expectedPointCountBySurfaceIndex.set(idx, expected);
+        return expected;
+    }
+
     _getStopCenterOverrideKey(fieldSetting) {
         try {
             return this.getFieldCacheKey(fieldSetting);
@@ -777,7 +774,8 @@ export class OpticalPathDifferenceCalculator {
         const forced = this._getForcedInfinitePupilMode();
         if (forced) return forced;
         const key = this._getInfinitePupilModeKey(fieldSetting);
-        return this._infinitePupilModeCache?.get(key) || 'stop';
+        // 🔧 デフォルトをentranceに変更（entrance優先で試してからstopにフォールバック）
+        return this._infinitePupilModeCache?.get(key) || 'entrance';
     }
 
     _setInfinitePupilMode(fieldSetting, mode) {
@@ -1943,6 +1941,7 @@ export class OpticalPathDifferenceCalculator {
 
     traceRayToSurface(ray0, maxSurfaceIndex, n0 = 1.0, traceOptions = null) {
         const idx = (maxSurfaceIndex === undefined || maxSurfaceIndex === null) ? null : maxSurfaceIndex;
+        const preparedTraceOptions = (idx === null) ? traceOptions : this.getTraceOptionsForSurface(idx, traceOptions);
         const prof = this._wavefrontProfile;
         const enabled = !!(prof && prof.enabled);
         const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
@@ -1952,7 +1951,7 @@ export class OpticalPathDifferenceCalculator {
             if (g) g.__COOPT_SUPPRESS_RAY_ERRORS = true;
 
             if (!enabled) {
-                const result = traceRay(this.opticalSystemRows, ray0, n0, null, idx, traceOptions);
+                const result = traceRay(this.opticalSystemRows, ray0, n0, null, idx, preparedTraceOptions);
                 return Array.isArray(result) ? result : null;
             }
 
@@ -1961,7 +1960,7 @@ export class OpticalPathDifferenceCalculator {
                 : () => Date.now();
             const t0 = now();
             try {
-                const result = traceRay(this.opticalSystemRows, ray0, n0, null, idx, traceOptions);
+                const result = traceRay(this.opticalSystemRows, ray0, n0, null, idx, preparedTraceOptions);
                 return Array.isArray(result) ? result : null;
             } finally {
                 const dt = now() - t0;
@@ -1975,6 +1974,7 @@ export class OpticalPathDifferenceCalculator {
 
     traceRayHitPointToSurface(ray0, surfaceIndex, n0 = 1.0, traceOptions = null) {
         const idx = (surfaceIndex === undefined || surfaceIndex === null) ? null : surfaceIndex;
+        const preparedTraceOptions = (idx === null) ? traceOptions : this.getTraceOptionsForSurface(idx, traceOptions);
         const prof = this._wavefrontProfile;
         const enabled = !!(prof && prof.enabled);
         const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
@@ -1984,7 +1984,8 @@ export class OpticalPathDifferenceCalculator {
             if (g) g.__COOPT_SUPPRESS_RAY_ERRORS = true;
 
             if (!enabled) {
-                const result = traceRayHitPoint(this.opticalSystemRows, ray0, n0, idx, traceOptions);
+                const out = traceRayHitPointBatch(this.opticalSystemRows, [ray0], n0, idx, preparedTraceOptions);
+                const result = Array.isArray(out) ? out[0] : null;
                 return (result && !Array.isArray(result)) ? result : null;
             }
 
@@ -1993,12 +1994,50 @@ export class OpticalPathDifferenceCalculator {
                 : () => Date.now();
             const t0 = now();
             try {
-                const result = traceRayHitPoint(this.opticalSystemRows, ray0, n0, idx, traceOptions);
+                const out = traceRayHitPointBatch(this.opticalSystemRows, [ray0], n0, idx, preparedTraceOptions);
+                const result = Array.isArray(out) ? out[0] : null;
                 return (result && !Array.isArray(result)) ? result : null;
             } finally {
                 const dt = now() - t0;
                 prof.traceRayHitPointCount = (prof.traceRayHitPointCount || 0) + 1;
                 prof.traceRayHitPointMs = (prof.traceRayHitPointMs || 0) + (Number.isFinite(dt) ? dt : 0);
+            }
+        } finally {
+            if (g) g.__COOPT_SUPPRESS_RAY_ERRORS = prevSuppressRayErrors;
+        }
+    }
+
+    traceRayHitPointToSurfaceBatch(rays, surfaceIndex, n0 = 1.0, traceOptions = null) {
+        const idx = (surfaceIndex === undefined || surfaceIndex === null) ? null : surfaceIndex;
+        const list = Array.isArray(rays) ? rays : [];
+        if (!list.length) return [];
+        const preparedTraceOptions = (idx === null) ? traceOptions : this.getTraceOptionsForSurface(idx, traceOptions);
+
+        const prof = this._wavefrontProfile;
+        const enabled = !!(prof && prof.enabled);
+        const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+        const prevSuppressRayErrors = g ? g.__COOPT_SUPPRESS_RAY_ERRORS : undefined;
+
+        try {
+            if (g) g.__COOPT_SUPPRESS_RAY_ERRORS = true;
+
+            if (!enabled) {
+                const out = traceRayHitPointBatch(this.opticalSystemRows, list, n0, idx, preparedTraceOptions);
+                return out.map(result => (result && !Array.isArray(result)) ? result : null);
+            }
+
+            const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                ? () => performance.now()
+                : () => Date.now();
+            const t0 = now();
+            try {
+                const out = traceRayHitPointBatch(this.opticalSystemRows, list, n0, idx, preparedTraceOptions);
+                return out.map(result => (result && !Array.isArray(result)) ? result : null);
+            } finally {
+                const dt = now() - t0;
+                prof.traceRayHitPointBatchCount = (prof.traceRayHitPointBatchCount || 0) + 1;
+                prof.traceRayHitPointBatchRays = (prof.traceRayHitPointBatchRays || 0) + list.length;
+                prof.traceRayHitPointBatchMs = (prof.traceRayHitPointBatchMs || 0) + (Number.isFinite(dt) ? dt : 0);
             }
         } finally {
             if (g) g.__COOPT_SUPPRESS_RAY_ERRORS = prevSuppressRayErrors;
@@ -2013,22 +2052,10 @@ export class OpticalPathDifferenceCalculator {
         const maxIdx = Number.isFinite(this.traceMaxSurfaceIndex)
             ? this.traceMaxSurfaceIndex
             : this.evaluationSurfaceIndex;
+        const preparedTraceOptions = this.getTraceOptionsForSurface(maxIdx, traceOptions);
+        const expectedPointCount = this.getExpectedPointCountForSurface(maxIdx);
         
-        // Count recorded surfaces to get expected point count.
-        // Coord Trans and Object rows don't add points to the ray path.
-        let nonCTCount = 0;
-        if (Array.isArray(this.opticalSystemRows)) {
-            for (let i = 0; i <= maxIdx && i < this.opticalSystemRows.length; i++) {
-                const row = this.opticalSystemRows[i];
-                if (this.isCoordTransRow(row)) continue;
-                if (this.isObjectRow(row)) continue;
-                if (this.isGapRow(row)) continue;
-                nonCTCount++;
-            }
-        }
-        const expectedPointCount = nonCTCount + 1; // +1 for object point
-        
-        const result = traceRay(this.opticalSystemRows, ray0, n0, null, maxIdx, traceOptions);
+        const result = traceRay(this.opticalSystemRows, ray0, n0, null, maxIdx, preparedTraceOptions);
         
         // Check if ray reached evaluation surface (comparing with non-CT surface count)
         if (!result || !Array.isArray(result)) {
@@ -4213,6 +4240,10 @@ ${surfaceTypeList}
         if (isChiefRay) {
             console.log(`🔍 主光線（有限系）: pos(${objectPosition.x.toFixed(3)}, ${objectPosition.y.toFixed(3)}, ${objectPosition.z.toFixed(3)}), dir(${rayDirection.x.toFixed(3)}, ${rayDirection.y.toFixed(3)}, ${rayDirection.z.toFixed(3)})`);
         }
+
+        if (options && options.returnInitialRayOnly === true) {
+            return initialRay;
+        }
         
         let result = this.traceRayToEval(initialRay, 1.0);
 
@@ -4354,7 +4385,7 @@ ${surfaceTypeList}
         
         // Limit debug output to first 5 rays only
         const debugCallCount = (this._debugMarginalCallCount || 0);
-        if (debugCallCount < 5 && (isNearCenter || isEdge)) {
+        if (OPD_DEBUG && debugCallCount < 5 && (isNearCenter || isEdge)) {
             console.log(`🚀 [generateInfiniteMarginalRay] ENTRY: pupil(${pupilX.toFixed(3)}, ${pupilY.toFixed(3)}), radius=${inputPupilRadius.toFixed(3)}`);
             this._debugMarginalCallCount = debugCallCount + 1;
         }
@@ -4601,6 +4632,31 @@ ${surfaceTypeList}
             return { ok: true, errMag, errLX, errLY, actualLocalX, actualLocalY };
         };
 
+        const evalOriginStopErrorBatch = (origins) => {
+            const list = Array.isArray(origins) ? origins : [];
+            if (!list.length) return [];
+            const rays = list.map(origin => ({
+                pos: origin,
+                dir: direction,
+                wavelength: this.wavelength
+            }));
+            const stops = this.traceRayHitPointToSurfaceBatch(rays, this.stopSurfaceIndex, 1.0, options?.traceOptions || null);
+            return stops.map(actualStop => {
+                if (!actualStop) return { ok: false, errMag: Infinity };
+                const d = {
+                    x: actualStop.x - stopCenter.x,
+                    y: actualStop.y - stopCenter.y,
+                    z: actualStop.z - stopCenter.z
+                };
+                const actualLocalX = dot(d, axes.ex);
+                const actualLocalY = dot(d, axes.ey);
+                const errLX = actualLocalX - desiredLocalX;
+                const errLY = actualLocalY - desiredLocalY;
+                const errMag = Math.hypot(errLX, errLY);
+                return { ok: true, errMag, errLX, errLY, actualLocalX, actualLocalY };
+            });
+        };
+
         // まずは幾何学的に「絞り面の目標点」を狙う初期原点を作る（高速・連続）
         // NOTE: 無限系で backDistance が大きすぎると、原点が大きくオフ軸になり
         // 先頭面でクリップ→stop unreachable になりやすい。
@@ -4663,17 +4719,21 @@ ${surfaceTypeList}
 
                 let bestCand = null;
                 let bestErr = Infinity;
+                const candidateOrigins = [];
                 for (const d of deltaList) {
                     if (!d || !Number.isFinite(d.x) || !Number.isFinite(d.y) || !Number.isFinite(d.z)) continue;
-                    // Clamp absurd deltas (safety)
                     const magD = Math.hypot(d.x, d.y, d.z);
                     const clamp = (Number.isFinite(magD) && magD > 50) ? (50 / magD) : 1.0;
-                    const cand = {
+                    candidateOrigins.push({
                         x: geomOrigin.x + d.x * clamp,
                         y: geomOrigin.y + d.y * clamp,
                         z: geomOrigin.z + d.z * clamp
-                    };
-                    const e = evalOriginStopError(cand);
+                    });
+                }
+                const candidateEvals = evalOriginStopErrorBatch(candidateOrigins);
+                for (let ci = 0; ci < candidateOrigins.length; ci++) {
+                    const cand = candidateOrigins[ci];
+                    const e = candidateEvals[ci];
                     if (!e?.ok || !Number.isFinite(e.errMag)) continue;
                     if (e.errMag <= threshold && e.errMag < bestErr) {
                         bestErr = e.errMag;
@@ -4877,10 +4937,12 @@ ${surfaceTypeList}
                 const originEyP = { x: currentOrigin.x + axes.ey.x * delta, y: currentOrigin.y + axes.ey.y * delta, z: currentOrigin.z + axes.ey.z * delta };
                 const originEyM = { x: currentOrigin.x - axes.ey.x * delta, y: currentOrigin.y - axes.ey.y * delta, z: currentOrigin.z - axes.ey.z * delta };
 
-                const stopExP = this.traceRayHitPointToSurface({ pos: originExP, dir: direction, wavelength: this.wavelength }, this.stopSurfaceIndex, 1.0, options?.traceOptions || null);
-                const stopExM = this.traceRayHitPointToSurface({ pos: originExM, dir: direction, wavelength: this.wavelength }, this.stopSurfaceIndex, 1.0, options?.traceOptions || null);
-                const stopEyP = this.traceRayHitPointToSurface({ pos: originEyP, dir: direction, wavelength: this.wavelength }, this.stopSurfaceIndex, 1.0, options?.traceOptions || null);
-                const stopEyM = this.traceRayHitPointToSurface({ pos: originEyM, dir: direction, wavelength: this.wavelength }, this.stopSurfaceIndex, 1.0, options?.traceOptions || null);
+                const [stopExP, stopExM, stopEyP, stopEyM] = this.traceRayHitPointToSurfaceBatch([
+                    { pos: originExP, dir: direction, wavelength: this.wavelength },
+                    { pos: originExM, dir: direction, wavelength: this.wavelength },
+                    { pos: originEyP, dir: direction, wavelength: this.wavelength },
+                    { pos: originEyM, dir: direction, wavelength: this.wavelength }
+                ], this.stopSurfaceIndex, 1.0, options?.traceOptions || null);
 
                 const hasCentral = !!(stopExP && stopExM && stopEyP && stopEyM);
 
@@ -4936,14 +4998,13 @@ ${surfaceTypeList}
 
                         // Backtracking line search: accept any improvement (avoid stagnation near the threshold).
                         const scales = [1.0, 0.7, 0.5, 0.3, 0.15];
+                        const candOrigins = scales.map(s => applyOriginStep(currentOrigin, stepLocalX, stepLocalY, s));
+                        const candEval = evalOriginStopErrorBatch(candOrigins);
                         let chosenOrigin = null;
-                        let chosenErr = errMag;
-                        for (const s of scales) {
-                            const candOrigin = applyOriginStep(currentOrigin, stepLocalX, stepLocalY, s);
-                            const evalRes = evalOriginStopError(candOrigin);
-                            if (evalRes.ok && Number.isFinite(evalRes.errMag) && evalRes.errMag < chosenErr) {
-                                chosenErr = evalRes.errMag;
-                                chosenOrigin = candOrigin;
+                        for (let si = 0; si < candOrigins.length; si++) {
+                            const evalRes = candEval[si];
+                            if (evalRes?.ok && Number.isFinite(evalRes.errMag) && evalRes.errMag < errMag) {
+                                chosenOrigin = candOrigins[si];
                                 break;
                             }
                         }
@@ -5008,10 +5069,12 @@ ${surfaceTypeList}
                         const originEyP = { x: origin.x + axes.ey.x * delta, y: origin.y + axes.ey.y * delta, z: origin.z + axes.ey.z * delta };
                         const originEyM = { x: origin.x - axes.ey.x * delta, y: origin.y - axes.ey.y * delta, z: origin.z - axes.ey.z * delta };
 
-                        const stopExP = this.traceRayHitPointToSurface({ pos: originExP, dir: direction, wavelength: this.wavelength }, this.stopSurfaceIndex, 1.0, options?.traceOptions || null);
-                        const stopExM = this.traceRayHitPointToSurface({ pos: originExM, dir: direction, wavelength: this.wavelength }, this.stopSurfaceIndex, 1.0, options?.traceOptions || null);
-                        const stopEyP = this.traceRayHitPointToSurface({ pos: originEyP, dir: direction, wavelength: this.wavelength }, this.stopSurfaceIndex, 1.0, options?.traceOptions || null);
-                        const stopEyM = this.traceRayHitPointToSurface({ pos: originEyM, dir: direction, wavelength: this.wavelength }, this.stopSurfaceIndex, 1.0, options?.traceOptions || null);
+                        const [stopExP, stopExM, stopEyP, stopEyM] = this.traceRayHitPointToSurfaceBatch([
+                            { pos: originExP, dir: direction, wavelength: this.wavelength },
+                            { pos: originExM, dir: direction, wavelength: this.wavelength },
+                            { pos: originEyP, dir: direction, wavelength: this.wavelength },
+                            { pos: originEyM, dir: direction, wavelength: this.wavelength }
+                        ], this.stopSurfaceIndex, 1.0, options?.traceOptions || null);
 
                         if (!(stopExP && stopExM && stopEyP && stopEyM)) {
                             // If the neighborhood is non-smooth (vignetting/termination), shrink delta and fall back.
@@ -5056,14 +5119,15 @@ ${surfaceTypeList}
                         const stepLocalY = (b2 * m11 - b1 * m12) / det;
 
                         const scales = [1.0, 0.8, 0.6, 0.4, 0.25, 0.15, 0.08];
+                        const candOrigins = scales.map(s => applyOriginStep(origin, stepLocalX, stepLocalY, s));
+                        const candEval = evalOriginStopErrorBatch(candOrigins);
                         let chosen = null;
                         let chosenErr = r0.errMag;
-                        for (const s of scales) {
-                            const cand = applyOriginStep(origin, stepLocalX, stepLocalY, s);
-                            const rr = evalOriginStopError(cand);
+                        for (let si = 0; si < candOrigins.length; si++) {
+                            const rr = candEval[si];
                             if (rr?.ok && Number.isFinite(rr.errMag) && rr.errMag < chosenErr) {
                                 chosenErr = rr.errMag;
-                                chosen = cand;
+                                chosen = candOrigins[si];
                             }
                         }
 
@@ -5295,15 +5359,10 @@ ${surfaceTypeList}
                     pos: { x: currentX, y: currentY, z: currentZ },
                     dir: rayDirection
                 };
-                
-                const testPath = traceRay(this.opticalSystemRows, testRay);
-                if (!testPath || !Array.isArray(testPath) || testPath.length <= this.stopSurfaceIndex) {
-                    break; // 光線追跡失敗
-                }
 
-                const actualStop = this.getStopPointFromRayData(testPath);
+                const actualStop = this.traceRayHitPointToSurface(testRay, this.stopSurfaceIndex, 1.0);
                 if (!actualStop) {
-                    break;
+                    break; // 光線追跡失敗
                 }
                 const errorX = actualStop.x - targetStopX;
                 const errorY = actualStop.y - targetStopY;
@@ -6409,6 +6468,7 @@ export class WavefrontAberrationAnalyzer {
         const zernikeMaxNollOpt = Number.isFinite(options?.zernikeMaxNoll) ? Math.max(1, Math.floor(options.zernikeMaxNoll)) : 15;
         const renderFromZernike = !!options?.renderFromZernike;
         const skipZernikeFit = !!options?.skipZernikeFit; // Skip Zernike fitting if requested
+        const enableHeavyDiagnostics = !!(options?.enableHeavyDiagnostics || OPD_DEBUG);
 
         // NOTE: Historically we downsampled the ray-traced OPD grid for Zernike fitting to cap runtime.
         // The user may require the UI grid size to be reflected in the actual ray tracing, even when
@@ -6470,6 +6530,34 @@ export class WavefrontAberrationAnalyzer {
         emitProgress(0, 'init', 'Starting wavefront generation...');
 
         throwIfCancelled();
+
+        // 🚀 キャッシュチェック (10-100倍の高速化)
+        const useCache = options?.useCache !== false; // デフォルトで有効
+        if (useCache) {
+            const cache = getGlobalWavefrontCache();
+            const systemHash = WavefrontCache.generateSystemHash(this.opdCalculator.opticalSystemRows);
+            const cacheKey = {
+                fieldAngleX: fieldSetting.fieldAngle?.x || 0,
+                fieldAngleY: fieldSetting.fieldAngle?.y || 0,
+                wavelength: fieldSetting.wavelength || this.wavelength || 0.5876, // 🔧 undefined回避
+                gridSize,
+                opdMode,
+                systemHash
+            };
+
+            const cachedResult = cache.get(cacheKey);
+            if (cachedResult) {
+                if (OPD_DEBUG) {
+                    const stats = cache.getStats();
+                    console.log(`✅ [Cache HIT] Returning cached result (hit rate: ${stats.hitRate})`);
+                }
+                emitProgress(100, 'complete', 'Loaded from cache');
+                return cachedResult;
+            } else if (OPD_DEBUG) {
+                const stats = cache.getStats();
+                console.log(`❌ [Cache MISS] Computing wavefront (hit rate: ${stats.hitRate})`);
+            }
+        }
         
         const wavefrontMap: any = {
             fieldSetting: fieldSetting,
@@ -6499,8 +6587,10 @@ export class WavefrontAberrationAnalyzer {
             // Diagnostic: Check reference ray for on-axis fields
             const fieldAngleX = Math.abs(fieldSetting.fieldAngle?.x || 0);
             const fieldAngleY = Math.abs(fieldSetting.fieldAngle?.y || 0);
-            console.log(`🔍 [Debug] fieldAngleX=${fieldAngleX}, fieldAngleY=${fieldAngleY}, hasRefRay=${!!this.opdCalculator.referenceRay}`);
-            if (fieldAngleX < 0.01 && fieldAngleY < 0.01 && this.opdCalculator.referenceRay) {
+            if (enableHeavyDiagnostics) {
+                console.log(`🔍 [Debug] fieldAngleX=${fieldAngleX}, fieldAngleY=${fieldAngleY}, hasRefRay=${!!this.opdCalculator.referenceRay}`);
+            }
+            if (enableHeavyDiagnostics && fieldAngleX < 0.01 && fieldAngleY < 0.01 && this.opdCalculator.referenceRay) {
                 const refRay = this.opdCalculator.referenceRay;
                 console.log(`🔍 [Reference Ray] Field: (${fieldAngleX.toFixed(4)}°, ${fieldAngleY.toFixed(4)}°)`);
                 console.log(`🔍 [Debug] refRay type: ${Array.isArray(refRay) ? 'Array' : typeof refRay}, length=${refRay?.length}`);
@@ -6666,6 +6756,7 @@ export class WavefrontAberrationAnalyzer {
         // ✅ 四角形グリッドパターンでの光線生成（ヒートマップ対応）
         if (OPD_DEBUG) console.log(`🔍 四角形グリッドパターン生成: 範囲±${pupilRange.toFixed(3)}, サイズ${gridSize}×${gridSize}`);
         
+        const normalizedGridSize = Math.max(2, Math.floor(Number(gridSize)));
         let validPointCount = 0;
         let invalidPointCount = 0;
         let invalidReasonCounts = Object.create(null);
@@ -6674,7 +6765,7 @@ export class WavefrontAberrationAnalyzer {
         // Track which grid cells produced a valid ray/OPD.
         // This is critical for infinite systems with vignetting (eval unreachable):
         // we must not extrapolate the Zernike model into physically invalid pupil regions.
-        let validPupilMask = Array.from({ length: Math.max(2, Math.floor(Number(gridSize))) }, () => Array.from({ length: Math.max(2, Math.floor(Number(gridSize))) }, () => false));
+        let validPupilMask = Array.from({ length: normalizedGridSize }, () => Array.from({ length: normalizedGridSize }, () => false));
         
         // 絞り半径情報を取得して表示（エラーハンドリング追加）
         let stopRadius = 17.85; // デフォルト値
@@ -6717,7 +6808,7 @@ export class WavefrontAberrationAnalyzer {
         let isOnAxisField = (fieldAngleX_grid < 0.01 && fieldAngleY_grid < 0.01);
         
         // CBシフトによる実効的な軸外判定: Stop面のグローバル座標が原点から0.001mm以上ずれている場合は軸外扱い
-        if (isOnAxisField) {
+        if (enableHeavyDiagnostics && isOnAxisField) {
             try {
                 console.log(`🔍 [On-axis Check] stopSurfaceIndex=${this.opdCalculator.stopSurfaceIndex}`);
                 console.log(`🔍 [On-axis Check] _surfaceOrigins=`, this.opdCalculator._surfaceOrigins);
@@ -6754,7 +6845,7 @@ export class WavefrontAberrationAnalyzer {
             }
         }
         
-        if (typeof globalThis !== 'undefined') {
+        if (enableHeavyDiagnostics && typeof globalThis !== 'undefined') {
             globalThis.__REMOVE_ASYMMETRIC_ZERNIKE_FOR_ONAXIS = isOnAxisField;
         }
         
@@ -6776,7 +6867,7 @@ export class WavefrontAberrationAnalyzer {
                 const pupilRadius = Math.sqrt(pupilX * pupilX + pupilY * pupilY);
                 if (pupilRadius <= pupilRange) {
                     // 元グリッドへ確実に戻せるよう、整数インデックスも保持
-                    gridPoints.push({ x: pupilX, y: pupilY, ix: i, iy: j });
+                    gridPoints.push({ x: pupilX, y: pupilY, ix: i, iy: j, r: pupilRadius });
                     if (Math.abs(pupilX) < 1e-12 && Math.abs(pupilY) < 1e-12) {
                         hasExactCenterSample = true;
                     }
@@ -6796,16 +6887,20 @@ export class WavefrontAberrationAnalyzer {
             const mid = (gridSize - 1) / 2;
             const ix0 = Math.max(0, Math.min(gridSize - 1, Math.round(mid)));
             const iy0 = Math.max(0, Math.min(gridSize - 1, Math.round(mid)));
-            gridPoints.push({ x: 0, y: 0, ix: ix0, iy: iy0, isChief: true });
-            console.log(`✅ Added exact center sample at (0,0) for gridSize=${gridSize}`);
+            gridPoints.push({ x: 0, y: 0, ix: ix0, iy: iy0, r: 0, isChief: true });
+            if (enableHeavyDiagnostics) {
+                console.log(`✅ Added exact center sample at (0,0) for gridSize=${gridSize}`);
+            }
         }
         
         // 🔍 診断: 軸上視野でのサンプリング対称性チェック（常に実行）
         const fieldAngleX = Math.abs(fieldSetting?.fieldAngle?.x || 0);
         const fieldAngleY = Math.abs(fieldSetting?.fieldAngle?.y || 0);
-        console.log(`🔍 [Symmetry Check] Field angles: x=${fieldAngleX.toFixed(4)}°, y=${fieldAngleY.toFixed(4)}°`);
+        if (enableHeavyDiagnostics) {
+            console.log(`🔍 [Symmetry Check] Field angles: x=${fieldAngleX.toFixed(4)}°, y=${fieldAngleY.toFixed(4)}°`);
+        }
         
-        if (fieldAngleX < 0.01 && fieldAngleY < 0.01) {
+        if (enableHeavyDiagnostics && fieldAngleX < 0.01 && fieldAngleY < 0.01) {
             console.log(`🔍 [On-axis Symmetry] Checking ${gridPoints.length} sample points...`);
             const quadrants = [0, 0, 0, 0]; // +x+y, -x+y, -x-y, +x-y
             for (const p of gridPoints) {
@@ -6907,6 +7002,96 @@ export class WavefrontAberrationAnalyzer {
         gridPoints = ordered;
         if (prof) prof.marks.orderEnd = now();
 
+        // 🆕 高速判定用ヘルパー: 中心+外縁の代表点を選択
+        const selectQuickCheckPoints = (allPoints, maxCount = 64) => {
+            const selected = [];
+            // 中心点（主光線）
+            const center = allPoints.find(p => Math.abs(p.x) < 0.05 && Math.abs(p.y) < 0.05);
+            if (center) selected.push(center);
+            
+            // 外縁部（半径0.7-1.0）から均等サンプリング
+            const edgePoints = allPoints.filter(p => {
+                const r = Number.isFinite(p.r) ? p.r : Math.sqrt(p.x * p.x + p.y * p.y);
+                return r >= 0.7 && r <= 1.0;
+            });
+            
+            if (edgePoints.length > 0) {
+                const step = Math.max(1, Math.floor(edgePoints.length / Math.min(maxCount - 1, edgePoints.length)));
+                for (let i = 0; i < edgePoints.length && selected.length < maxCount; i += step) {
+                    selected.push(edgePoints[i]);
+                }
+            }
+            
+            return selected;
+        };
+
+        const enableFullBatchTrace = !!options?.fullBatchTraceExperimental;
+        let precomputedBatchByCell = null;
+        if (enableFullBatchTrace && !isInfiniteField) {
+            try {
+                emitProgress(9, 'batch', 'Preparing batch rays...');
+                const batchInputRays = [];
+                const batchInputCells = [];
+                const batchTraceOptions = {
+                    ...(traceOptionsPatch || {}),
+                    fastMarginalRay: true,
+                    returnInitialRayOnly: true
+                };
+
+                for (let bi = 0; bi < gridPoints.length; bi++) {
+                    const gp = gridPoints[bi];
+                    const ray0 = this.opdCalculator.generateFiniteMarginalRay(gp.x, gp.y, fieldSetting, batchTraceOptions);
+                    if (!ray0 || !ray0.pos || !ray0.dir) continue;
+                    batchInputRays.push(ray0);
+                    batchInputCells.push(gp);
+                }
+
+                if (batchInputRays.length > 0) {
+                    emitProgress(9.5, 'batch', `Tracing ${batchInputRays.length} rays in lockstep...`);
+                    const maxIdx = Number.isFinite(this.opdCalculator.traceMaxSurfaceIndex)
+                        ? this.opdCalculator.traceMaxSurfaceIndex
+                        : this.opdCalculator.evaluationSurfaceIndex;
+                    const nObj = this.opdCalculator.getObjectSpaceRefractiveIndex();
+                    const batchOut = traceRayEvalBatchSummary(
+                        this.opdCalculator.opticalSystemRows,
+                        batchInputRays,
+                        nObj,
+                        maxIdx,
+                        traceOptionsPatch ? { ...traceOptionsPatch } : null
+                    );
+
+                    precomputedBatchByCell = new Map();
+                    for (let bi = 0; bi < batchOut.length; bi++) {
+                        const gp = batchInputCells[bi];
+                        const keyCell = `${gp.ix}:${gp.iy}`;
+                        const rr = batchOut[bi];
+                        if (!rr || !rr.success || !Number.isFinite(rr.oplMicrons) || !Number.isFinite(this.opdCalculator.referenceOpticalPath)) {
+                            precomputedBatchByCell.set(keyCell, null);
+                            continue;
+                        }
+                        const opdMic = rr.oplMicrons - this.opdCalculator.referenceOpticalPath;
+                        if (!Number.isFinite(opdMic)) {
+                            precomputedBatchByCell.set(keyCell, null);
+                            continue;
+                        }
+                        const opdW = opdMic / this.opdCalculator.wavelength;
+                        if (!Number.isFinite(opdW)) {
+                            precomputedBatchByCell.set(keyCell, null);
+                            continue;
+                        }
+                        precomputedBatchByCell.set(keyCell, {
+                            opd: opdMic,
+                            opdInWavelengths: opdW,
+                            wavefrontAberration: opdW
+                        });
+                    }
+                    emitProgress(9.8, 'batch', 'Batch pretrace ready');
+                }
+            } catch (_) {
+                precomputedBatchByCell = null;
+            }
+        }
+
         // Store per-cell origin deltas for continuity seeding (infinite system only).
         // Delta = (finalOrigin - geomOrigin) is much safer to transfer than absolute origins.
         let originDeltaByCell = new Map();
@@ -6941,17 +7126,72 @@ export class WavefrontAberrationAnalyzer {
 
         for (let samplingPass = 0; samplingPass < maxSamplingPasses; samplingPass++) {
             throwIfCancelled();
+            
             // Reset accumulators for this pass.
             validPointCount = 0;
             invalidPointCount = 0;
             invalidReasonCounts = Object.create(null);
-            validPupilMask = Array.from({ length: Math.max(2, Math.floor(Number(gridSize))) }, () => Array.from({ length: Math.max(2, Math.floor(Number(gridSize))) }, () => false));
+            validPupilMask = Array.from({ length: normalizedGridSize }, () => Array.from({ length: normalizedGridSize }, () => false));
             originDeltaByCell = new Map();
             wavefrontMap.pupilCoordinates = [];
             wavefrontMap.wavefrontAberrations = [];
             wavefrontMap.opds = [];
             wavefrontMap.opdsInWavelengths = [];
             if (recordRays) wavefrontMap.rayData = [];
+
+            // 🆕 Pass 1 (entrance): 高速判定で適合性をチェック
+            if (!forcedInfinitePupilMode && isInfiniteField && samplingPass === 0 && gridPoints.length >= 100) {
+                const initialMode = this.opdCalculator._getInfinitePupilMode(fieldSetting);
+                if (initialMode === 'entrance') {
+                    try {
+                        emitProgress(9, 'fast-check', 'Quick entrance pupil check...');
+                        const checkPoints = selectQuickCheckPoints(gridPoints, 64);
+                        let fastCheckFailed = 0;
+                        let fastCheckSuccess = 0;
+                        
+                        if (prof) prof.marks.fastCheckStart = now();
+                        
+                        for (const p of checkPoints) {
+                            const entranceRadius = getEntranceRadiusMm?.() || stopRadius;
+                            const quickOPD = this.opdCalculator.calculateOPDReferenceSphere(
+                                p.x, p.y, fieldSetting, false,
+                                { fastMarginalRay: true, pupilScaleRadiusMm: entranceRadius }
+                            );
+                            if (Number.isFinite(quickOPD) && !isNaN(quickOPD)) {
+                                fastCheckSuccess++;
+                            } else {
+                                fastCheckFailed++;
+                            }
+                        }
+                        
+                        if (prof) {
+                            prof.marks.fastCheckEnd = now();
+                            prof.fastCheckStats = { total: checkPoints.length, success: fastCheckSuccess, failed: fastCheckFailed };
+                        }
+                        
+                        const failRate = checkPoints.length > 0 ? (fastCheckFailed / checkPoints.length) : 0;
+                        const switchThreshold = 0.5; // 失敗率50%以上でstopモードに切り替え
+                        
+                        if (failRate > switchThreshold) {
+                            console.warn(`🔍 [Fast Check] Entrance mode unsuitable (failed ${fastCheckFailed}/${checkPoints.length}, ${(failRate*100).toFixed(1)}%), switching to Stop mode`);
+                            this.opdCalculator._setInfinitePupilMode(fieldSetting, 'stop');
+                            // Pass 2でstopモードを実行させるため、reference rayをリセット
+                            try {
+                                this.opdCalculator.referenceOpticalPath = null;
+                                this.opdCalculator.setReferenceRay(fieldSetting);
+                            } catch (_) {}
+                            await this._yieldToUI();
+                            continue; // Pass 2へ
+                        } else {
+                            if (OPD_DEBUG || fastCheckSuccess < checkPoints.length) {
+                                console.log(`✅ [Fast Check] Entrance mode viable (success ${fastCheckSuccess}/${checkPoints.length}, ${(100-failRate*100).toFixed(1)}%), proceeding with full sampling`);
+                            }
+                        }
+                    } catch (err) {
+                        console.warn('⚠️ [Fast Check] Quick check failed, proceeding with full entrance sampling', err);
+                    }
+                }
+            }
 
             // Capture the mode at the *start* of this pass.
             let passMode = wavefrontMap.pupilSamplingMode;
@@ -7028,7 +7268,9 @@ export class WavefrontAberrationAnalyzer {
             const point = gridPoints[pointIndex];
             const pupilX = point.x;
             const pupilY = point.y;
-            const pupilRadius = Math.sqrt(pupilX * pupilX + pupilY * pupilY);
+            const pupilRadius = Number.isFinite(point?.r)
+                ? point.r
+                : Math.sqrt(pupilX * pupilX + pupilY * pupilY);
             
             // 🆕 ログ削減: 主光線と重要な点のみログ出力
             const isChiefRay = point.isChief || (Math.abs(pupilX) < 1e-6 && Math.abs(pupilY) < 1e-6);
@@ -7088,6 +7330,27 @@ export class WavefrontAberrationAnalyzer {
                 ? { originDeltaHints, pupilScaleRadiusMm, ...(traceOptionsPatch || {}) }
                 : (pupilScaleRadiusMm ? { pupilScaleRadiusMm, ...(traceOptionsPatch || {}) } : (traceOptionsPatch ? { ...traceOptionsPatch } : undefined));
 
+            let usedSolveOptions = preferFast ? solveOptionsFast : solveOptionsSlow;
+            let opd;
+
+            const batchCellKey = (Number.isInteger(point?.ix) && Number.isInteger(point?.iy))
+                ? `${point.ix}:${point.iy}`
+                : null;
+            const batchValue = (batchCellKey && precomputedBatchByCell)
+                ? precomputedBatchByCell.get(batchCellKey)
+                : undefined;
+
+            if (batchValue !== undefined) {
+                if (batchValue && Number.isFinite(batchValue.opd)) {
+                    opd = batchValue.opd;
+                } else {
+                    invalidPointCount++;
+                    const reason = 'batch-pretrace-failed';
+                    invalidReasonCounts[reason] = (invalidReasonCounts[reason] || 0) + 1;
+                    continue;
+                }
+            } else {
+
             const computeOPD = (opts) => {
                 if (prof) {
                     const t0 = now();
@@ -7104,8 +7367,7 @@ export class WavefrontAberrationAnalyzer {
                     : this.opdCalculator.calculateOPD(pupilX, pupilY, fieldSetting, opts);
             };
 
-            let usedSolveOptions = preferFast ? solveOptionsFast : solveOptionsSlow;
-            let opd = preferFast ? computeOPD(solveOptionsFast) : computeOPD(solveOptionsSlow);
+            opd = preferFast ? computeOPD(solveOptionsFast) : computeOPD(solveOptionsSlow);
 
             // Targeted retry: only for stop-miss/unreachable failures in fast mode.
             // IMPORTANT: In infinite stop-mode, edge samples are often physically vignetted.
@@ -7187,6 +7449,7 @@ export class WavefrontAberrationAnalyzer {
                 } catch (_) {
                     // ignore
                 }
+            }
             }
 
             // Detect mode switch caused by OPD engine and restart the whole pass to keep consistency.
@@ -7496,7 +7759,9 @@ export class WavefrontAberrationAnalyzer {
                     const finalMode = forcedInfinitePupilMode || this.opdCalculator._getInfinitePupilMode(fieldSetting);
                     if (finalMode && finalMode !== wavefrontMap.pupilSamplingMode) wavefrontMap.pupilSamplingMode = finalMode;
                     wavefrontMap.bestEffortVignettedPupil = (wavefrontMap.pupilSamplingMode === 'entrance');
-                    console.log(`🧿 [Wavefront] infinite pupilSamplingMode(final)=${wavefrontMap.pupilSamplingMode}`);
+                    if (OPD_DEBUG) {
+                        console.log(`🧿 [Wavefront] infinite pupilSamplingMode(final)=${wavefrontMap.pupilSamplingMode}`);
+                    }
                 } catch (_) {
                     // ignore
                 }
@@ -8239,10 +8504,14 @@ export class WavefrontAberrationAnalyzer {
             try {
                 const rt = (g && typeof g.getRayTracingProfile === 'function') ? g.getRayTracingProfile({ reset: false }) : null;
                 const traceCalls = Number(rt?.traceCalls) || 0;
+                const lockstepCalls = Number(rt?.traceBatchLockstepCalls) || 0;
+                const lockstepRays = Number(rt?.traceBatchLockstepRays) || 0;
                 const wasmAttempts = Number(rt?.wasmIntersectAttempts) || 0;
                 const wasmHits = Number(rt?.wasmIntersectHits) || 0;
                 const wasmUnavailable = Number(rt?.wasmIntersectUnavailable) || 0;
                 const wasmHitRate = (wasmAttempts > 0) ? (100 * wasmHits / wasmAttempts) : 0;
+                const lockstepCallRatio = (traceCalls > 0) ? (100 * lockstepCalls / traceCalls) : 0;
+                const lockstepRaysPerCall = (lockstepCalls > 0) ? (lockstepRays / lockstepCalls) : 0;
                 const newtonCalls = Number(prof.newtonChiefCalls) || 0;
                 const newtonIters = Number(prof.newtonChiefIterations) || 0;
                 const newtonAvg = (newtonCalls > 0) ? (newtonIters / newtonCalls) : 0;
@@ -8279,6 +8548,7 @@ export class WavefrontAberrationAnalyzer {
                     `marginalRay(finite=${finiteMarginal},inf=${infiniteMarginal})${mode ? ` mode=${mode}` : ''} ` +
                     `fastRetry(stop=${retryStopRelated} miss=${retryStopMiss} unreach=${retryStopUnreach},slow=${retrySlow} ok=${retrySlowOk} ng=${retrySlowNg},skip=${retrySkip}) ` +
                     `chiefNewton=${newtonCalls} calls ${newtonIters} iters (avg=${newtonAvg.toFixed(2)} ok=${newtonOk} ng=${newtonNg}) ` +
+                    `lockstep=${lockstepCallRatio.toFixed(1)}% (calls=${lockstepCalls}/${traceCalls}, rays/call=${lockstepRaysPerCall.toFixed(2)}) ` +
                     `wasmIntersectHit=${wasmHitRate.toFixed(1)}% (hit=${wasmHits}/att=${wasmAttempts}, unavail=${wasmUnavailable})`
                 );
             } catch (_) {
@@ -8516,6 +8786,26 @@ export class WavefrontAberrationAnalyzer {
                 }
             } catch (error) {
                 console.error(`❌ 中央点OPD計算エラー: ${error.message}`);
+            }
+        }
+
+        // 🚀 キャッシュに保存（次回以降の高速化）
+        if (useCache) {
+            const cache = getGlobalWavefrontCache();
+            const systemHash = WavefrontCache.generateSystemHash(this.opdCalculator.opticalSystemRows);
+            const cacheKey = {
+                fieldAngleX: fieldSetting.fieldAngle?.x || 0,
+                fieldAngleY: fieldSetting.fieldAngle?.y || 0,
+                wavelength: fieldSetting.wavelength || this.wavelength || 0.5876, // 🔧 undefined回避
+                gridSize,
+                opdMode,
+                systemHash
+            };
+            cache.set(cacheKey, wavefrontMap);
+            
+            if (OPD_DEBUG) {
+                const stats = cache.getStats();
+                console.log(`💾 [Cache SAVE] Result cached (entries: ${stats.entries}, size: ${stats.sizeMB}MB, hit rate: ${stats.hitRate})`);
             }
         }
 

@@ -204,6 +204,10 @@ export class WavefrontPlotter {
             console.log('🌊 OPD 3Dサーフェスプロット生成開始...');
             // Enable profiling automatically when progress UI is active.
             const profileEnabled = !!((typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_PROFILE === true) || options?.onProgress);
+            const wasmFastOnly = options?.wasmFastOnly !== undefined
+                ? !!options.wasmFastOnly
+                : !!(typeof globalThis !== 'undefined' && globalThis.__OPD_WASM_FAST_ONLY === true);
+            const enableHeavyDiagnostics = !!options?.enableHeavyDiagnostics;
 
             const { analyzer } = this._createWavefrontEngine(opticalSystemRows, wavelength);
 
@@ -229,6 +233,8 @@ export class WavefrontPlotter {
                 // OPD display mode for plots (piston/tilt or piston/tilt/defocus removal).
                 opdDisplayMode: displayMode,
                 profile: profileEnabled,
+                wasmFastOnly,
+                enableHeavyDiagnostics,
                 cancelToken: options?.cancelToken || null,
                 onProgress: options?.onProgress || null
             });
@@ -620,6 +626,10 @@ export class WavefrontPlotter {
         try {
             console.log('🌊 OPD ヒートマップ生成開始...');
             const profileEnabled = !!((typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_PROFILE === true) || options?.onProgress);
+            const wasmFastOnly = options?.wasmFastOnly !== undefined
+                ? !!options.wasmFastOnly
+                : !!(typeof globalThis !== 'undefined' && globalThis.__OPD_WASM_FAST_ONLY === true);
+            const enableHeavyDiagnostics = !!options?.enableHeavyDiagnostics;
             const { analyzer } = this._createWavefrontEngine(opticalSystemRows, wavelength);
             // 波面収差マップを生成（Zernike 37項で関数面を描画）
             const diagnoseDiscontinuities = (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_DIAG_DISCONTINUITIES === true);
@@ -640,7 +650,9 @@ export class WavefrontPlotter {
                 opdDisplayMode: displayMode,
                 cancelToken: options?.cancelToken || null,
                 onProgress: options?.onProgress || null,
-                profile: profileEnabled
+                profile: profileEnabled,
+                wasmFastOnly,
+                enableHeavyDiagnostics
             });
             this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
             // NOTE: wavefrontMap is large (arrays). Dumping it to console can freeze the UI.
@@ -1814,7 +1826,8 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                 fieldAngle,
                 xHeight,
                 yHeight,
-                objectIndex: index
+                objectIndex: index,
+                wavelength // 🔧 キャッシュキー生成に必要
             };
         };
 
@@ -1900,7 +1913,13 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
         switch (plotType) {
             case 'surface':
                 if (dataType === 'opd') {
-                    const wavefrontMap = await plotter.plotOPDSurface(opticalSystemRows, fieldSetting, wavelength, gridSize, { cancelToken, onProgress, opdDisplayMode });
+                    const wavefrontMap = await plotter.plotOPDSurface(opticalSystemRows, fieldSetting, wavelength, gridSize, {
+                        cancelToken,
+                        onProgress,
+                        opdDisplayMode,
+                        wasmFastOnly: options?.wasmFastOnly,
+                        enableHeavyDiagnostics: options?.enableHeavyDiagnostics
+                    });
                     storeLast(wavefrontMap);
                 } else {
                     const wavefrontMap = await plotter.plotWavefrontAberrationSurface(opticalSystemRows, fieldSetting, wavelength, gridSize);
@@ -1910,7 +1929,13 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                 
             case 'heatmap':
                 if (dataType === 'opd') {
-                    const wavefrontMap = await plotter.plotOPDHeatmap(opticalSystemRows, fieldSetting, wavelength, gridSize, { cancelToken, onProgress, opdDisplayMode });
+                    const wavefrontMap = await plotter.plotOPDHeatmap(opticalSystemRows, fieldSetting, wavelength, gridSize, {
+                        cancelToken,
+                        onProgress,
+                        opdDisplayMode,
+                        wasmFastOnly: options?.wasmFastOnly,
+                        enableHeavyDiagnostics: options?.enableHeavyDiagnostics
+                    });
                     storeLast(wavefrontMap);
                 } else {
                     const wavefrontMap = await plotter.plotWavefrontHeatmap(opticalSystemRows, fieldSetting, wavelength, gridSize);

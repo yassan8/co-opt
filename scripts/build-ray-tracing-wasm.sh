@@ -40,7 +40,7 @@ emcc "$SRC" \
   -s MODULARIZE=1 \
   -s EXPORT_NAME='RayTracingWASM' \
   -s ALLOW_MEMORY_GROWTH=1 \
-  -s EXPORTED_FUNCTIONS="['_aspheric_sag','_aspheric_sag10','_aspheric_sag_rt10','_intersect_aspheric_rt10','_intersect_aspheric_rt10_with_retry','_batch_aspheric_sag','_batch_aspheric_sag10','_vector_dot','_vector_cross','_vector_normalize','_ray_sphere_intersect','_batch_vector_normalize','_malloc','_free']" \
+  -s EXPORTED_FUNCTIONS="['_aspheric_sag','_aspheric_sag10','_aspheric_sag_rt10','_intersect_aspheric_rt10','_intersect_aspheric_rt10_with_retry','_batch_intersect_aspheric_rt10','_batch_aspheric_sag','_batch_aspheric_sag10','_batch_mat3_mul_vec3','_vector_dot','_vector_cross','_vector_normalize','_ray_sphere_intersect','_batch_vector_normalize','_solve_spd_cholesky','_trace_ray_batch_full','_malloc','_free']" \
   -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap']"
 
 echo "✅ [WASM] Build complete"
@@ -57,5 +57,6 @@ fi
 echo ""
 echo "📋 After reloading the app, verify in DevTools console:"
 echo "  window.getWASMSystem()?.wasmModule?._aspheric_sag_rt10"
+echo "  window.getWASMSystem()?.wasmModule?._solve_spd_cholesky"
 echo ""
 echo "If it prints a function, ray-tracing.js will automatically use it inside asphericSag()."

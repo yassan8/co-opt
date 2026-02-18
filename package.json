@@ -8,6 +8,11 @@
     "build": "vite build",
     "build:check": "vite build",
     "preview": "vite preview",
+    "diag:opd": "node --experimental-strip-types diagnostics/opd-benchmark.mjs",
+    "diag:opd-full-batch": "node --experimental-strip-types diagnostics/opd-full-batch-benchmark.mjs",
+    "diag:toric-lockstep": "node --experimental-strip-types diagnostics/toric-lockstep-benchmark.mjs",
+    "diag:zernike-fit": "node --experimental-strip-types diagnostics/zernike-fit-benchmark.mjs",
+    "diag:zernike-fit-ab": "node --experimental-strip-types diagnostics/zernike-fit-ab-benchmark.mjs",
     "state:inventory": "node tools/state-inventory.mjs",
     "pr:all": "bash ./scripts/pr-all.sh"
   },
@@ -17,6 +22,7 @@
     "three": "^0.182.0"
   },
   "devDependencies": {
+    "@types/node": "^25.2.3",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",

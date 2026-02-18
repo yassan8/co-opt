@@ -12,7 +12,7 @@
  * 作成日: 2025/07/23 (Brent法対応)
  */
 
-import { traceRay, calculateSurfaceOrigins, asphericSag } from '../core/ray-tracing.ts';
+import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, asphericSag } from '../core/ray-tracing.ts';
 
 function isCoordTransRow(row) {
     const st = String(row?.surfType ?? row?.['surf type'] ?? '').toLowerCase();
@@ -314,13 +314,8 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
             };
             
             try {
-                const rayPath = traceRay(opticalSystemRows, ray, 1.0, null, stopSurfaceIndex);
-                if (rayPath && rayPath.length > stopSurfaceIndex) {
-                    const actualStopPoint = getRayPointAtSurfaceIndex(rayPath, opticalSystemRows, stopSurfaceIndex);
-                    return actualStopPoint.x - stopCenter.x;
-                } else {
-                    return 1000;
-                }
+                const actualStopPoint = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
+                return actualStopPoint ? (actualStopPoint.x - stopCenter.x) : 1000;
             } catch (error) {
                 return 1000;
             }
@@ -344,13 +339,8 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
             };
             
             try {
-                const rayPath = traceRay(opticalSystemRows, ray, 1.0, null, stopSurfaceIndex);
-                if (rayPath && rayPath.length > stopSurfaceIndex) {
-                    const actualStopPoint = getRayPointAtSurfaceIndex(rayPath, opticalSystemRows, stopSurfaceIndex);
-                    return actualStopPoint.y - stopCenter.y;
-                } else {
-                    return 1000;
-                }
+                const actualStopPoint = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
+                return actualStopPoint ? (actualStopPoint.y - stopCenter.y) : 1000;
             } catch (error) {
                 return 1000;
             }
@@ -570,9 +560,9 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
             wavelength: wavelength
         };
         
-        const verificationPath = traceRay(opticalSystemRows, verificationRay, 1.0);
-        if (rayPathLength(verificationPath) > stopSurfaceIndex) {
-            const actualPoint = getRayPointAtSurfaceIndex(verificationPath, opticalSystemRows, stopSurfaceIndex);
+        const verificationPoint = traceRayHitPoint(opticalSystemRows, verificationRay, 1.0, stopSurfaceIndex);
+        if (verificationPoint) {
+            const actualPoint = verificationPoint;
             const errorX = actualPoint.x - stopCenter.x;
             const errorY = actualPoint.y - stopCenter.y;
             const totalError = Math.sqrt(errorX*errorX + errorY*errorY);
@@ -586,13 +576,12 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
         } else {
             // 主光線がStop面に到達しない場合 → グリッドサーチでフォールバック
             if (debugMode) {
-                console.warn(`⚠️ [Brent] 主光線がStop面に到達せず（パス長${rayPathLength(verificationPath)}） → グリッドサーチへ切替`);
+                console.warn(`⚠️ [Brent] 主光線がStop面に到達せず → グリッドサーチへ切替`);
             }
             
             // グリッドサーチ: Y方向を中心に広範囲探索
             let bestDir = null;
             let bestError = Infinity;
-            let bestPathLength = 0;
             
             const yStart = -0.20;
             const yEnd = 0.10;
@@ -612,15 +601,13 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                         wavelength: wavelength
                     };
                     
-                    const testPath = traceRay(opticalSystemRows, testRay, 1.0);
-                    if (rayPathLength(testPath) > stopSurfaceIndex) {
-                        const testPoint = getRayPointAtSurfaceIndex(testPath, opticalSystemRows, stopSurfaceIndex);
+                    const testPoint = traceRayHitPoint(opticalSystemRows, testRay, 1.0, stopSurfaceIndex);
+                    if (testPoint) {
                         const testErrorX = testPoint.x - stopCenter.x;
                         const testErrorY = testPoint.y - stopCenter.y;
                         const testError = Math.sqrt(testErrorX*testErrorX + testErrorY*testErrorY);
                         
-                        if (rayPathLength(testPath) > bestPathLength || (rayPathLength(testPath) === bestPathLength && testError < bestError)) {
-                            bestPathLength = rayPathLength(testPath);
+                        if (testError < bestError) {
                             bestError = testError;
                             bestDir = { i: xDir, j: yDir, k: zDir };
                         }
@@ -628,7 +615,7 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                 }
             }
             
-            if (bestDir && bestPathLength > stopSurfaceIndex) {
+            if (bestDir) {
                 if (debugMode) {
                     console.log(`✅ [Grid] グリッドサーチ成功: 方向(${bestDir.i.toFixed(6)}, ${bestDir.j.toFixed(6)}, ${bestDir.k.toFixed(6)}), 誤差${bestError.toFixed(3)}mm`);
                 }
@@ -718,13 +705,8 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
             };
             
             try {
-                const rayPath = traceRay(opticalSystemRows, ray, 1.0);
-                if (rayPath && rayPath.length > stopSurfaceIndex) {
-                    const actualStopPoint = getRayPointAtSurfaceIndex(rayPath, opticalSystemRows, stopSurfaceIndex);
-                    return actualStopPoint.x - targetPoint.x;
-                } else {
-                    return 1000;
-                }
+                const actualStopPoint = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
+                return actualStopPoint ? (actualStopPoint.x - targetPoint.x) : 1000;
             } catch (error) {
                 return 1000;
             }
@@ -748,13 +730,8 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
             };
             
             try {
-                const rayPath = traceRay(opticalSystemRows, ray, 1.0);
-                if (rayPath && rayPath.length > stopSurfaceIndex) {
-                    const actualStopPoint = getRayPointAtSurfaceIndex(rayPath, opticalSystemRows, stopSurfaceIndex);
-                    return actualStopPoint.y - targetPoint.y;
-                } else {
-                    return 1000;
-                }
+                const actualStopPoint = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
+                return actualStopPoint ? (actualStopPoint.y - targetPoint.y) : 1000;
             } catch (error) {
                 return 1000;
             }
@@ -873,9 +850,9 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
         };
         
         try {
-            const verificationPath = traceRay(opticalSystemRows, verificationRay, 1.0);
-            if (rayPathLength(verificationPath) > stopSurfaceIndex) {
-                const actualPoint = getRayPointAtSurfaceIndex(verificationPath, opticalSystemRows, stopSurfaceIndex);
+            const verificationPoint = traceRayHitPoint(opticalSystemRows, verificationRay, 1.0, stopSurfaceIndex);
+            if (verificationPoint) {
+                const actualPoint = verificationPoint;
                 const errorX = actualPoint.x - targetPoint.x;
                 const errorY = actualPoint.y - targetPoint.y;
                 const totalError = Math.sqrt(errorX*errorX + errorY*errorY);
@@ -909,7 +886,6 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                     
                     let bestDir = null;
                     let bestError = Infinity;
-                    let bestPathLength = 0;
                     
                     for (let dirJ = yStart; dirJ <= yEnd; dirJ += yStep) {
                         for (let dirI = xStart; dirI <= xEnd; dirI += xStep) {
@@ -926,17 +902,13 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                             };
                             
                             try {
-                                const testPath = traceRay(opticalSystemRows, testRay, 1.0);
-                                if (rayPathLength(testPath) <= stopSurfaceIndex) continue;
-                                
-                                const actualPoint = getRayPointAtSurfaceIndex(testPath, opticalSystemRows, stopSurfaceIndex);
+                                const actualPoint = traceRayHitPoint(opticalSystemRows, testRay, 1.0, stopSurfaceIndex);
+                                if (!actualPoint) continue;
                                 const errorX = actualPoint.x - targetPoint.x;
                                 const errorY = actualPoint.y - targetPoint.y;
                                 const totalError = Math.sqrt(errorX*errorX + errorY*errorY);
                                 
-                                if (rayPathLength(testPath) > bestPathLength || 
-                                    (rayPathLength(testPath) === bestPathLength && totalError < bestError)) {
-                                    bestPathLength = rayPathLength(testPath);
+                                if (totalError < bestError) {
                                     bestError = totalError;
                                     bestDir = { i: dirI, j: dirJ, k: dirK };
                                 }
@@ -946,7 +918,7 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                         }
                     }
                     
-                    if (bestDir && bestPathLength > stopSurfaceIndex) {
+                    if (bestDir) {
                         if (debugMode) {
                             console.log(`✅ [Marginal-Grid] グリッドサーチ成功: 方向(${bestDir.i.toFixed(6)}, ${bestDir.j.toFixed(6)}, ${bestDir.k.toFixed(6)}), 誤差${bestError.toFixed(3)}mm`);
                         }
@@ -972,9 +944,8 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                         }
                         const k2 = 1 - (refined.i*refined.i + refined.j*refined.j);
                         refined.k = k2 > 0 ? Math.sqrt(k2) : 1e-6;
-                        const testPath = traceRay(opticalSystemRows, { pos: objectPosition, dir: { x: refined.i, y: refined.j, z: refined.k } }, 1.0);
-                        if (rayPathLength(testPath) > stopSurfaceIndex) {
-                            const p = getRayPointAtSurfaceIndex(testPath, opticalSystemRows, stopSurfaceIndex);
+                        const p = traceRayHitPoint(opticalSystemRows, { pos: objectPosition, dir: { x: refined.i, y: refined.j, z: refined.k } }, 1.0, stopSurfaceIndex);
+                        if (p) {
                             const ex = p.x - targetPoint.x;
                             const ey = p.y - targetPoint.y;
                             const e = Math.sqrt(ex*ex + ey*ey);
@@ -998,7 +969,7 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                     try {
                         const RAYTRACE_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__RAYTRACE_DEBUG);
                         if (RAYTRACE_DEBUG) {
-                            console.warn(`⚠️ [Marginal-Brent] 周辺光線がStop面に到達せず（パス長${rayPathLength(verificationPath)}） → グリッドサーチへ切替`);
+                            console.warn(`⚠️ [Marginal-Brent] 周辺光線がStop面に到達せず → グリッドサーチへ切替`);
                         }
                     } catch (_) {}
                 }
@@ -1014,7 +985,6 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                 
                 let bestDir = null;
                 let bestError = Infinity;
-                let bestPathLength = 0;
                 
                 for (let dirJ = yStart; dirJ <= yEnd; dirJ += yStep) {
                     for (let dirI = xStart; dirI <= xEnd; dirI += xStep) {
@@ -1031,18 +1001,13 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                         };
                         
                         try {
-                            const testPath = traceRay(opticalSystemRows, testRay, 1.0);
-                            if (rayPathLength(testPath) <= stopSurfaceIndex) continue;
-                            
-                            const actualPoint = getRayPointAtSurfaceIndex(testPath, opticalSystemRows, stopSurfaceIndex);
+                            const actualPoint = traceRayHitPoint(opticalSystemRows, testRay, 1.0, stopSurfaceIndex);
+                            if (!actualPoint) continue;
                             const errorX = actualPoint.x - targetPoint.x;
                             const errorY = actualPoint.y - targetPoint.y;
                             const totalError = Math.sqrt(errorX*errorX + errorY*errorY);
                             
-                            // パス長優先、次に誤差
-                            if (rayPathLength(testPath) > bestPathLength || 
-                                (rayPathLength(testPath) === bestPathLength && totalError < bestError)) {
-                                bestPathLength = rayPathLength(testPath);
+                            if (totalError < bestError) {
                                 bestError = totalError;
                                 bestDir = { i: dirI, j: dirJ, k: dirK };
                             }
@@ -1052,7 +1017,7 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                     }
                 }
                 
-                if (bestDir && bestPathLength > stopSurfaceIndex) {
+                if (bestDir) {
                     if (debugMode) {
                         console.log(`✅ [Marginal-Grid] グリッドサーチ成功: 方向(${bestDir.i.toFixed(6)}, ${bestDir.j.toFixed(6)}, ${bestDir.k.toFixed(6)}), 誤差${bestError.toFixed(3)}mm`);
                     }
@@ -1098,7 +1063,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
     } = options;
 
     // デバッグモードの設定
-    const actualDebugMode = true;
+    const actualDebugMode = !!debugMode;
 
     try {
         const allResults = [];
