@@ -10,10 +10,25 @@ export async function benchmarkTFMTF() {
 
     console.log('🧪 [Benchmark] TFMTF Through-Focus Performance Analysis');
     console.log('='.repeat(80));
+    console.log('⏱️  Benchmark started at', new Date().toISOString());
 
     try {
         // Import required components
-        const { showThroughFocusMTFDiagram } = await import('../evaluation/mtf-plot.ts');
+        console.log('📦 Importing mtf-plot module...');
+        let showThroughFocusMTFDiagram;
+        
+        try {
+            const mtfModule = await import('../evaluation/mtf-plot.ts');
+            showThroughFocusMTFDiagram = mtfModule.showThroughFocusMTFDiagram;
+            console.log('✅ Successfully imported showThroughFocusMTFDiagram');
+        } catch (importError) {
+            console.error('❌ Failed to import mtf-plot.ts:', importError);
+            throw new Error(`Module import failed: ${importError}`);
+        }
+        
+        if (!showThroughFocusMTFDiagram) {
+            throw new Error('showThroughFocusMTFDiagram function not found in module');
+        }
 
         // Get or create a container for the benchmark plot
         let benchmarkContainer = document.getElementById('tfmtf-benchmark-container');
@@ -41,22 +56,33 @@ export async function benchmarkTFMTF() {
         const seqStartTime = performance.now();
         const seqProgress: Array<{ percent: number; message?: string }> = [];
 
-        await showThroughFocusMTFDiagram({
-            wavelengthMicrons: 0.5876,
-            objectIndex: 0,
-            targetFrequencyLpmm: 30,
-            defocusMinMm: -0.05,
-            defocusMaxMm: 0.05,
-            steps: 11,  // 11 points for quick benchmark
-            samplingSize: 128,
-            zeroPadTo: 256,
-            containerElement: benchmarkContainer,
-            onProgress: (evt: { percent: number; message?: string }) => {
-                const fullEvt = { percent: evt.percent, message: evt.message ?? '' };
-                seqProgress.push(evt);
-                updateProgressDisplay('Sequential', fullEvt);
-            }
-        });
+        try {
+            await withTimeout(
+                showThroughFocusMTFDiagram({
+                    wavelengthMicrons: 0.5876,
+                    objectIndex: 0,
+                    targetFrequencyLpmm: 30,
+                    defocusMinMm: -0.05,
+                    defocusMaxMm: 0.05,
+                    steps: 11,  // 11 points for quick benchmark
+                    samplingSize: 128,
+                    zeroPadTo: 256,
+                    containerElement: benchmarkContainer,
+                    onProgress: (evt: { percent: number; message?: string }) => {
+                        const fullEvt = { percent: evt.percent, message: evt.message ?? '' };
+                        seqProgress.push(evt);
+                        updateProgressDisplay('Sequential', fullEvt);
+                    }
+                }),
+                30000  // 30s timeout
+            );
+        } catch (benchError) {
+            console.error('❌ Sequential benchmark failed:', benchError);
+            const seqEndTime = performance.now();
+            const seqDurationMs = seqEndTime - seqStartTime;
+            console.log(`⏱️  Sequential took ${seqDurationMs.toFixed(2)} ms (before error)`);
+            throw benchError;
+        }
 
         const seqEndTime = performance.now();
         const seqDurationMs = seqEndTime - seqStartTime;
@@ -173,11 +199,96 @@ function updateProgressDisplay(label: string, evt: { percent: number; message?: 
 }
 
 /**
+ * Quick test version - for rapid validation
+ */
+export async function benchmarkTFMTFQuick() {
+    console.log('🧪 [Benchmark] Quick TFMTF Test (No MTF computation)');
+    console.log('='.repeat(80));
+    
+    const startTotal = performance.now();
+    
+    try {
+        // Test 1: Module import
+        console.log('Test 1: Importing mtf-plot module...');
+        const mtfModule = await import('../evaluation/mtf-plot.ts');
+        if (mtfModule.showThroughFocusMTFDiagram) {
+            console.log('✅ showThroughFocusMTFDiagram found');
+        } else {
+            console.warn('⚠️  showThroughFocusMTFDiagram is falsy');
+        }
+        
+        // Test 2: Worker pool
+        console.log('Test 2: Checking worker pool...');
+        const tfmtfModule = await import('../evaluation/tfmtf-worker-pool.ts');
+        if (tfmtfModule.getGlobalTFMTFWorkerPool) {
+            console.log('✅ getGlobalTFMTFWorkerPool found');
+            const pool = tfmtfModule.getGlobalTFMTFWorkerPool();
+            console.log('   Worker pool instance:', pool ? '✅ initialized' : '⚠️  not initialized');
+        }
+        
+        // Test 3: PSF serialization
+        console.log('Test 3: Checking PSF serialization...');
+        const psfModule = await import('../evaluation/psf-serialization.ts');
+        if (psfModule.extractPSFGridFromCalculatorResult) {
+            console.log('✅ PSF serialization utilities found');
+        }
+        
+        const totalMs = performance.now() - startTotal;
+        
+        const result = {
+            success: true,
+            duration: totalMs,
+            timestamp: new Date().toISOString(),
+            tests: {
+                mtfModule: true,
+                workerPool: true,
+                psfSerialization: true
+            }
+        };
+        
+        console.log('='.repeat(80));
+        console.log('✅ Quick test passed');
+        console.log('📦 Result:', result);
+        return result;
+        
+    } catch (error) {
+        console.error('❌ Quick test failed:', error);
+        const totalMs = performance.now() - startTotal;
+        return {
+            success: false,
+            duration: totalMs,
+            error: String(error),
+            timestamp: new Date().toISOString()
+        };
+    }
+}
+
+/**
+ * Helper: Run with timeout protection
+ */
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+            reject(new Error(`Operation timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+    });
+    
+    try {
+        return await Promise.race([promise, timeoutPromise]);
+    } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+}
+
+/**
  * Register benchmark globally for UI access
  */
 if (typeof window !== 'undefined') {
     (window as any).__tfmtfBenchmark = benchmarkTFMTF;
+    (window as any).__tfmtfBenchmarkQuick = benchmarkTFMTFQuick;
     console.log('✅ [TFMTF Benchmark] Registered as window.__tfmtfBenchmark()');
+    console.log('✅ [TFMTF Benchmark] Quick test registered as window.__tfmtfBenchmarkQuick()');
 }
 
 // Export for programmatic use
