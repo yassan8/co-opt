@@ -278,6 +278,7 @@ export async function benchmarkTFMTFQuick() {
         // Test 1: Module import
         console.log('Test 1: Importing mtf-plot module...');
         const mtfModule = await import('../evaluation/mtf-plot.ts');
+        console.log('✅ mtf-plot imported');
         if (mtfModule.showThroughFocusMTFDiagram) {
             console.log('✅ showThroughFocusMTFDiagram found');
         } else {
@@ -287,6 +288,7 @@ export async function benchmarkTFMTFQuick() {
         // Test 2: Worker pool
         console.log('Test 2: Checking worker pool...');
         const tfmtfModule = await import('../evaluation/tfmtf-worker-pool.ts');
+        console.log('✅ tfmtf-worker-pool imported');
         if (tfmtfModule.getGlobalTFMTFWorkerPool) {
             console.log('✅ getGlobalTFMTFWorkerPool found');
             const pool = tfmtfModule.getGlobalTFMTFWorkerPool();
@@ -296,6 +298,7 @@ export async function benchmarkTFMTFQuick() {
         // Test 3: PSF serialization
         console.log('Test 3: Checking PSF serialization...');
         const psfModule = await import('../evaluation/psf-serialization.ts');
+        console.log('✅ psf-serialization imported');
         if (psfModule.extractPSFGridFromCalculatorResult) {
             console.log('✅ PSF serialization utilities found');
         }
@@ -316,17 +319,20 @@ export async function benchmarkTFMTFQuick() {
         console.log('='.repeat(80));
         console.log('✅ Quick test passed');
         console.log('📦 Result:', result);
+        console.log('Returning:', JSON.stringify(result));
         return result;
         
     } catch (error) {
         console.error('❌ Quick test failed:', error);
         const totalMs = performance.now() - startTotal;
-        return {
+        const errorResult = {
             success: false,
             duration: totalMs,
             error: String(error),
             timestamp: new Date().toISOString()
         };
+        console.log('Returning error result:', JSON.stringify(errorResult));
+        return errorResult;
     }
 }
 
