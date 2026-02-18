@@ -72,7 +72,8 @@
   <script type="module" src="core/vector-math-service.ts"></script>
   
   <!-- WASM Module (V3 with memory management) -->
-  <script type="module" src="wasm/raytracing/ray-tracing-wasm-v3.js"></script>
+  <!-- Note: plain <script> (not module) so that var RayTracingWASM becomes a global -->
+  <script src="wasm/raytracing/ray-tracing-wasm-v3.js"></script>
 
   <script>
     // Warn (in English) when the user tries to leave via the browser Back button.
@@ -319,7 +320,8 @@
       };
     })();
   </script>
-  <script type="module" src="wasm/psf/psf-wasm.js"></script>
+  <!-- Note: plain <script> (not module) so that var PSFWasm becomes a global -->
+  <script src="wasm/psf/psf-wasm.js"></script>
 
   <!-- Core functionality scripts -->
   <script type="module" src="ui/ray-tracing-globals.ts"></script>
