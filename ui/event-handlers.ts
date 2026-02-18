@@ -6836,6 +6836,367 @@ export function setupAnalysisWindows() {
                 });
         }
 
+        // Field MTF popup window button
+        const openFieldMtfWindowBtn = document.getElementById('open-field-mtf-window-btn');
+        if (openFieldMtfWindowBtn) {
+                openFieldMtfWindowBtn.addEventListener('click', () => {
+                        if (w.__fieldMtfPopup && !w.__fieldMtfPopup.closed) {
+                                try { w.__fieldMtfPopup.focus(); } catch (_) {}
+                                return;
+                        }
+
+                        const popup = window.open('', 'Field MTF', 'width=900,height=650');
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__fieldMtfPopup = popup;
+
+                        popup.document.write(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Field MTF</title>
+    <style>
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: #f4f4f4;
+        }
+        .header {
+            padding: 10px 12px;
+            background: #f8f8f8;
+            color: #333;
+            border-bottom: 1px solid #ddd;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .controls {
+            padding: 10px 12px;
+            background: #f8f8f8;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 10px;
+            align-items: center;
+            flex: 0 0 auto;
+        }
+        .controls label { font-size: 12px; color: #333; white-space: nowrap; }
+        .controls select {
+            padding: 5px 8px;
+            font-size: 12px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            background: white;
+        }
+        .controls input {
+            padding: 5px 8px;
+            font-size: 12px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            background: white;
+            width: 110px;
+        }
+        .controls input[type="checkbox"] {
+            width: auto;
+            padding: 0;
+            border: none;
+            background: transparent;
+        }
+        .controls button {
+            padding: 6px 10px;
+            border: 1px solid #bbb;
+            background: #f8f8f8;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #333;
+        }
+        .controls button:hover { background: #e9e9e9; }
+        .note { padding: 8px 12px; font-size: 12px; color: #666; border-bottom: 1px solid #eee; background: #fff; }
+        .content {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: hidden;
+            background: white;
+            display: flex;
+            flex-direction: column;
+        }
+        #popup-field-mtf-container { flex: 1 1 auto; min-height: 0; }
+    </style>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body>
+    <div class="header">Field MTF</div>
+    <div class="controls">
+        <label for="popup-field-mtf-wavelength-select">Wavelength:</label>
+        <select id="popup-field-mtf-wavelength-select"></select>
+        <label for="popup-field-mtf-meridional-freq-input">Meridional Freq (lp/mm):</label>
+        <input id="popup-field-mtf-meridional-freq-input" type="number" min="0" step="1" value="10" />
+        <label for="popup-field-mtf-sagittal-freq-input">Sagittal Freq (lp/mm):</label>
+        <input id="popup-field-mtf-sagittal-freq-input" type="number" min="0" step="1" value="30" />
+        <label id="popup-field-mtf-axis-label" style="color:#888;">Object Angle (deg)</label>
+        <label for="popup-field-mtf-min-field-input">Field min:</label>
+        <input id="popup-field-mtf-min-field-input" type="number" step="0.001" value="0" />
+        <label for="popup-field-mtf-max-field-input">Field max:</label>
+        <input id="popup-field-mtf-max-field-input" type="number" step="0.001" value="10" />
+        <label for="popup-field-mtf-steps-input">Steps:</label>
+        <input id="popup-field-mtf-steps-input" type="number" min="3" max="201" step="1" value="21" />
+        <label for="popup-field-mtf-sampling-select">Sampling:</label>
+        <select id="popup-field-mtf-sampling-select">
+            <option value="32">32x32</option>
+            <option value="64">64x64</option>
+            <option value="128">128x128</option>
+            <option value="256" selected>256x256</option>
+            <option value="512">512x512</option>
+            <option value="1024">1024x1024</option>
+            <option value="2048">2048x2048</option>
+            <option value="4096">4096x4096</option>
+        </select>
+        <label for="popup-field-mtf-zeropad-select" title="Zero-padding increases FFT size without increasing OPD ray grid.">Zero pad:</label>
+        <select id="popup-field-mtf-zeropad-select">
+            <option value="none">None</option>
+            <option value="auto" selected>Auto</option>
+            <option value="512">512</option>
+            <option value="1024">1024</option>
+            <option value="2048">2048</option>
+            <option value="4096">4096</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:6px;">
+            <input id="popup-field-mtf-remove-ptd-checkbox" type="checkbox" />
+            Remove P/T/D
+        </label>
+        <button id="popup-show-field-mtf-btn" type="button">Show Field MTF</button>
+    </div>
+    <div class="note">
+        Note: X-axis is object angle/height (auto-detected from Object table). Y-axis is MTF at the specified meridional/sagittal spatial frequencies.
+    </div>
+    <div id="popup-field-mtf-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
+        <div id="popup-field-mtf-progress-text" style="margin-bottom: 6px;">Calculating Field MTF...</div>
+        <progress id="popup-field-mtf-progress" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
+    </div>
+    <div class="content">
+        <div id="popup-field-mtf-container"></div>
+    </div>
+
+    <script>
+        function safeCall(fn, fallback) {
+            try { return fn(); } catch (_) { return fallback; }
+        }
+
+        function getOpener() {
+            try { return window.opener || null; } catch (_) { return null; }
+        }
+
+        function getPrimaryWavelength() {
+            const opener = getOpener();
+            if (!opener) return null;
+            if (typeof opener.getPrimaryWavelength !== 'function') return null;
+            const v = Number(safeCall(() => opener.getPrimaryWavelength(), 0));
+            return Number.isFinite(v) && v > 0 ? v : null;
+        }
+
+        function buildWavelengthOptions() {
+            const opener = getOpener();
+            if (!opener) return [];
+            const getSourceRows = opener.getSourceRows;
+            const sources = (typeof getSourceRows === 'function')
+                ? safeCall(() => getSourceRows(opener.tableSource), [])
+                : [];
+            const primary = getPrimaryWavelength();
+            const out = [{ value: 'all', label: 'All' }];
+            if (Array.isArray(sources) && sources.length > 0) {
+                for (let i = 0; i < sources.length; i++) {
+                    const wl = Number(sources[i]?.wavelength);
+                    if (!Number.isFinite(wl) || wl <= 0) continue;
+                    const nm = wl * 1000;
+                    const label = Number.isFinite(primary) && Math.abs(wl - primary) < 1e-9
+                        ? (nm.toFixed(1) + ' nm (primary)')
+                        : (nm.toFixed(1) + ' nm');
+                    out.push({ value: String(wl), label });
+                }
+            }
+            if (out.length === 1) {
+                if (Number.isFinite(primary) && primary > 0) {
+                    out.push({ value: String(primary), label: ((primary * 1000).toFixed(1) + ' nm') });
+                }
+            }
+            return out;
+        }
+
+        function getAxisInfo() {
+            const opener = getOpener();
+            if (!opener) return { mode: 'angle', label: 'Object Angle (deg)', unit: 'deg', max: 10 };
+            const getObjectRows = opener.getObjectRows;
+            const objects = (typeof getObjectRows === 'function')
+                ? safeCall(() => getObjectRows(opener.tableObject), [])
+                : [];
+            const first = Array.isArray(objects) && objects.length > 0 ? objects[0] : null;
+            const posRaw = String(first?.position ?? first?.object ?? first?.objectType ?? 'Angle');
+            const isAngle = /\bangle\b/i.test(posRaw);
+            const unit = isAngle ? 'deg' : 'mm';
+            const label = isAngle ? 'Object Angle (deg)' : 'Object Height (mm)';
+            let maxVal = 10;
+            if (Array.isArray(objects) && objects.length > 0) {
+                const vals = objects.map(o => Number(o?.yHeightAngle)).filter(v => Number.isFinite(v));
+                if (vals.length > 0) {
+                    maxVal = Math.max(1e-6, Math.max.apply(null, vals.map(v => Math.abs(v))));
+                }
+            }
+            return { mode: isAngle ? 'angle' : 'height', label, unit, max: maxVal };
+        }
+
+        function populateSelect(selectEl, options) {
+            if (!selectEl) return;
+            const current = selectEl.value;
+            selectEl.innerHTML = '';
+            for (const opt of options) {
+                const o = document.createElement('option');
+                o.value = opt.value;
+                o.textContent = opt.label;
+                selectEl.appendChild(o);
+            }
+            if (current && Array.from(selectEl.options).some(o => o.value === current)) {
+                selectEl.value = current;
+            }
+        }
+
+        function syncAllOptions() {
+            const wlSel = document.getElementById('popup-field-mtf-wavelength-select');
+            const prevWl = wlSel ? wlSel.value : '';
+            populateSelect(wlSel, buildWavelengthOptions());
+            if (wlSel && (!prevWl || !Array.from(wlSel.options).some(o => o.value === prevWl))) {
+                const allOpt = Array.from(wlSel.options).find(o => o.value === 'all');
+                if (allOpt) wlSel.value = 'all';
+            }
+
+            const axisInfo = getAxisInfo();
+            const axisLabel = document.getElementById('popup-field-mtf-axis-label');
+            const maxEl = document.getElementById('popup-field-mtf-max-field-input');
+            if (axisLabel) {
+                axisLabel.textContent = axisInfo.label;
+                axisLabel.style.fontWeight = '600';
+                axisLabel.style.color = '#555';
+            }
+            if (maxEl && !maxEl.dataset.cooptInit) {
+                maxEl.dataset.cooptInit = '1';
+                maxEl.value = String(axisInfo.max || 10);
+            }
+        }
+
+        window['renderFieldMTF'] = async () => {
+            const containerEl = document.getElementById('popup-field-mtf-container');
+            if (containerEl) containerEl.innerHTML = '';
+
+            const progressWrapper = document.getElementById('popup-field-mtf-progress-wrapper');
+            const progressEl = document.getElementById('popup-field-mtf-progress');
+            const progressTextEl = document.getElementById('popup-field-mtf-progress-text');
+
+            const setProgress = (value, text) => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'block';
+                    if (progressEl && Number.isFinite(value)) progressEl.value = Math.max(0, Math.min(100, value));
+                    if (progressTextEl && typeof text === 'string') progressTextEl.textContent = text;
+                } catch (_) {}
+            };
+
+            const hideProgress = () => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'none';
+                } catch (_) {}
+            };
+
+            const wlSel = document.getElementById('popup-field-mtf-wavelength-select');
+            const minFieldEl = document.getElementById('popup-field-mtf-min-field-input');
+            const maxFieldEl = document.getElementById('popup-field-mtf-max-field-input');
+            const stepsEl = document.getElementById('popup-field-mtf-steps-input');
+            const meridionalEl = document.getElementById('popup-field-mtf-meridional-freq-input');
+            const sagittalEl = document.getElementById('popup-field-mtf-sagittal-freq-input');
+            const samplingEl = document.getElementById('popup-field-mtf-sampling-select');
+            const zeroPadEl = document.getElementById('popup-field-mtf-zeropad-select');
+            const removePtdEl = document.getElementById('popup-field-mtf-remove-ptd-checkbox');
+
+            const wlValue = wlSel ? String(wlSel.value) : '';
+            const primary = getPrimaryWavelength();
+            const wavelength = (wlValue === 'all') ? 'all' : Number(wlValue);
+            const fieldMin = minFieldEl ? Number(minFieldEl.value) : 0;
+            const fieldMax = maxFieldEl ? Number(maxFieldEl.value) : 10;
+            const steps = stepsEl ? Number(stepsEl.value) : 21;
+            const meridionalFreq = meridionalEl ? Number(meridionalEl.value) : 10;
+            const sagittalFreq = sagittalEl ? Number(sagittalEl.value) : 30;
+            const sampling = samplingEl ? Number(samplingEl.value) : 256;
+            const zeroPadRaw = zeroPadEl ? String(zeroPadEl.value || 'auto') : 'auto';
+            const opdDisplayMode = (removePtdEl && removePtdEl.checked)
+                ? 'pistonTiltDefocusRemoved'
+                : 'pistonTiltRemoved';
+            const zeroPadTo = (zeroPadRaw === 'none')
+                ? (Number.isFinite(sampling) ? sampling : 256)
+                : (zeroPadRaw === 'auto')
+                    ? 0
+                    : (Number.isFinite(parseInt(zeroPadRaw, 10)) ? parseInt(zeroPadRaw, 10) : 0);
+
+            const axisInfo = getAxisInfo();
+
+            try {
+                const opener = getOpener();
+                if (!opener || typeof opener.showFieldMTFDiagram !== 'function') {
+                    throw new Error('showFieldMTFDiagram is not available on opener');
+                }
+                setProgress(0, 'Starting...');
+                await new Promise(r => setTimeout(r, 0));
+                if (wavelength !== 'all' && !Number.isFinite(wavelength) && !(Number.isFinite(primary) && primary > 0)) {
+                    throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
+                }
+                await opener.showFieldMTFDiagram({
+                    wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : primary),
+                    meridionalFrequencyLpmm: Number.isFinite(meridionalFreq) ? meridionalFreq : 10,
+                    sagittalFrequencyLpmm: Number.isFinite(sagittalFreq) ? sagittalFreq : 30,
+                    fieldMin: Number.isFinite(fieldMin) ? fieldMin : 0,
+                    fieldMax: Number.isFinite(fieldMax) ? fieldMax : 10,
+                    steps: Number.isFinite(steps) ? steps : 21,
+                    samplingSize: Number.isFinite(sampling) ? sampling : 256,
+                    zeroPadTo,
+                    opdDisplayMode,
+                    fieldAxisMode: axisInfo.mode,
+                    onProgress: (evt) => {
+                        try {
+                            const p = Number(evt?.percent);
+                            const sub = evt?.subMessage;
+                            const msg = sub || evt?.message || evt?.phase || 'Working...';
+                            if (Number.isFinite(p)) setProgress(p, msg);
+                            else setProgress(undefined, msg);
+                        } catch (_) {}
+                    },
+                    containerElement: containerEl
+                });
+                setProgress(100, 'Done');
+                hideProgress();
+            } catch (err) {
+                console.error(err);
+                setProgress(100, 'Failed');
+                if (containerEl) {
+                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate Field MTF. Check console.</div>';
+                }
+            }
+        };
+
+        document.getElementById('popup-show-field-mtf-btn').addEventListener('click', () => window.renderFieldMTF());
+        window.addEventListener('focus', syncAllOptions);
+        window.addEventListener('load', () => syncAllOptions());
+    </script>
+</body>
+</html>
+                        `);
+
+                        try { popup.document.close(); } catch (_) {}
+                });
+        }
+
         // Transverse Aberration popup window button
         const openTransverseAberrationWindowBtn = document.getElementById('open-transverse-aberration-window-btn');
         if (openTransverseAberrationWindowBtn) {

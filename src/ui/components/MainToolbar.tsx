@@ -178,6 +178,7 @@ export default function MainToolbar() {
             <option value="mtf">Modulation Transfer Function</option>
             <option value="through-focus-spot">Through-Focus Spot</option>
             <option value="through-focus-mtf">Through-Focus MTF</option>
+            <option value="field-mtf">Field MTF</option>
           </select>
         </div>
       </div>
@@ -206,6 +207,12 @@ export default function MainToolbar() {
           title="Open Through-Focus MTF in popup window"
         >
           Through-Focus MTF
+        </button>
+        <button
+          id="open-field-mtf-window-btn"
+          title="Open Field MTF in popup window"
+        >
+          Field MTF
         </button>
         <button
           id="open-astigmatism-window-btn"
