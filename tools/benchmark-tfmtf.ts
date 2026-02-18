@@ -55,8 +55,8 @@ export async function benchmarkTFMTF() {
 
         console.log('📊 Running TFMTF benchmark with different worker configurations...\n');
 
-        // Benchmark 1: Sequential (worker pool size = 1)
-        console.log('📈 Configuration 1: Sequential Processing (1 worker)');
+        // Benchmark 1: Sequential (baseline, 5 steps at 128×128)
+        console.log('📈 Configuration 1: Baseline (128×128, 5 steps)');
         const seqStartTime = performance.now();
         const seqProgress: Array<{ percent: number; message?: string }> = [];
 
@@ -68,7 +68,7 @@ export async function benchmarkTFMTF() {
                     targetFrequencyLpmm: 30,
                     defocusMinMm: -0.05,
                     defocusMaxMm: 0.05,
-                    steps: 11,  // 11 points for quick benchmark
+                    steps: 5,
                     samplingSize: 128,
                     zeroPadTo: 256,
                     containerElement: benchmarkContainer,
@@ -78,7 +78,7 @@ export async function benchmarkTFMTF() {
                         updateProgressDisplay('Sequential', fullEvt);
                     }
                 }),
-                30000  // 30s timeout
+                60000  // 60s timeout
             );
         } catch (benchError) {
             console.error('❌ Sequential benchmark failed:', benchError);
@@ -100,13 +100,11 @@ export async function benchmarkTFMTF() {
 
         console.log(`✅ Sequential completed in ${seqDurationMs.toFixed(2)} ms\n`);
 
-        // Benchmark 2: Parallel (worker pool size = 4)
-        console.log('📈 Configuration 2: Parallel Processing (4 workers)');
+        // Benchmark 2: Second run (same params, measures caching/JIT effects)
+        console.log('📈 Configuration 2: Second run (128×128, 5 steps)');
         const parStartTime = performance.now();
         const parProgress: Array<{ percent: number; message?: string }> = [];
 
-        // Note: Current implementation initializes worker pool but benefits primarily from Phase 1 (Rust FFT)
-        // Full parallelization speedup will be realized in future refactoring of PSF calculation
         try {
             await withTimeout(
                 showThroughFocusMTFDiagram({
@@ -115,7 +113,7 @@ export async function benchmarkTFMTF() {
                     targetFrequencyLpmm: 30,
                     defocusMinMm: -0.05,
                     defocusMaxMm: 0.05,
-                    steps: 11,
+                    steps: 5,
                     samplingSize: 128,
                     zeroPadTo: 256,
                     containerElement: benchmarkContainer,
@@ -125,7 +123,7 @@ export async function benchmarkTFMTF() {
                         updateProgressDisplay('Parallel', fullEvt);
                     }
                 }),
-                30000  // 30s timeout
+                60000  // 60s timeout
             );
         } catch (benchError) {
             console.error('❌ Parallel benchmark failed:', benchError);
@@ -150,8 +148,8 @@ export async function benchmarkTFMTF() {
 
         console.log(`✅ Parallel completed in ${parDurationMs.toFixed(2)} ms\n`);
 
-        // Benchmark 3: Higher-resolution (for scaling comparison)
-        console.log('📈 Configuration 3: Higher-Resolution (256×256, 11 steps)');
+        // Benchmark 3: Higher-resolution scaling comparison (256×256, 5 steps)
+        console.log('📈 Configuration 3: Higher-Resolution (256×256, 5 steps)');
         const fullStartTime = performance.now();
 
         try {
@@ -162,7 +160,7 @@ export async function benchmarkTFMTF() {
                     targetFrequencyLpmm: 30,
                     defocusMinMm: -0.05,
                     defocusMaxMm: 0.05,
-                    steps: 11,
+                    steps: 5,
                     samplingSize: 256,
                     zeroPadTo: 256,
                     containerElement: benchmarkContainer,
@@ -222,9 +220,9 @@ export async function benchmarkTFMTF() {
         // Return results for programmatic use
         const results = {
             success: true,
-            config1: { duration: seqDurationMs, steps: 11, resolution: 128, zeroPadTo: 256 },
-            config2: { duration: parDurationMs, steps: 11, resolution: 128, zeroPadTo: 256 },
-            config3: { duration: fullDurationMs, steps: 11, resolution: 256, zeroPadTo: 256 },
+            config1: { duration: seqDurationMs, steps: 5, resolution: 128, zeroPadTo: 256 },
+            config2: { duration: parDurationMs, steps: 5, resolution: 128, zeroPadTo: 256 },
+            config3: { duration: fullDurationMs, steps: 5, resolution: 256, zeroPadTo: 256 },
             runVariance: speedupSeqVsPar,
             resolutionScaling: resolutionScaling,
             metadata: {
@@ -370,7 +368,8 @@ if (typeof window !== 'undefined') {
     // Directly assign functions to window.
     // NOTE: Safari DevTools shows `undefined` for `await fn()` on module-scoped async
     // functions - this is a Safari display bug. The functions work correctly.
-    // Use: fn().then(r => { window.__r = r }) then check window.__r
+    // Use: fn().then(r => { window.__r = r }).catch(e => { window.__e = String(e) })
+    // then check window.__r (result) or window.__e (error)
     (window as any).__tfmtfBenchmark = benchmarkTFMTFRef;
     console.log('✅ [1/3] window.__tfmtfBenchmark registered as:', typeof (window as any).__tfmtfBenchmark);
     
