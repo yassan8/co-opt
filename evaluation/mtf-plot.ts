@@ -962,6 +962,23 @@ async function showThroughFocusMTFDiagram({
 
     reportProgress(60, 'Extracting MTF values from PSF...', undefined, undefined);
 
+    // レイアウト定義（プロット初期化用）
+    const titleWl = (typeof wavelengthMicrons === 'string' && String(wavelengthMicrons).toLowerCase() === 'all')
+        ? 'All wavelengths'
+        : `${(safeNumber(wavelengthMicrons, 0.5876) * 1000).toFixed(1)} nm`;
+    const objIndex = Number.isFinite(Number(objectIndex)) ? Math.max(0, Math.floor(Number(objectIndex))) : 0;
+
+    const layout = {
+        title: `Through-Focus MTF (${targetFreq.toFixed(1)} lp/mm, ${titleWl}, Object ${objIndex})`,
+        xaxis: { title: 'Defocus shift (mm)', range: [Math.min(minMm, maxMm), Math.max(minMm, maxMm)] },
+        yaxis: { title: 'MTF', range: [0, 1.05] },
+        margin: { l: 60, r: 20, t: 50, b: 50 }
+    };
+
+    // 初回プロット作成（空の状態で準備）
+    reportProgress(62, 'Initializing plot...', undefined, undefined);
+    await plotly.newPlot(containerEl, [], layout, { responsive: true, displaylogo: false });
+
     // Process MTF traces from all defocus values
     // Since PSF calculation is the bottleneck (now with Rust FFT), and workers can't easily
     // calculate PSF, we process the traces sequentially but benefit from Phase 1 Rust FFT speedup
@@ -1023,6 +1040,18 @@ async function showThroughFocusMTFDiagram({
             agg.y.push(mtfVal);
         }
 
+        // 1プロット計算毎にグラフを更新
+        const currentTraces = Array.from(traceMap.values()).map(t => ({ ...t, x: [...t.x], y: [...t.y] }));
+        try {
+            // Plotlyの`react`を使用して効率的に更新
+            await plotly.react(containerEl, currentTraces, layout, { responsive: true, displaylogo: false });
+        } catch (_) {
+            // 互換性のため、reactが失敗した場合はnewPlotにフォールバック
+            try {
+                await plotly.newPlot(containerEl, currentTraces, layout, { responsive: true, displaylogo: false });
+            } catch (_) {}
+        }
+
         // 進捗ごとに現時点のtraceMapとサンプリング進捗テキストをonProgressで通知
         const pct = Math.floor(60 + ((i + 1) / psfResults.length) * 35);
         const tracesSnapshot = Array.from(traceMap.values()).map(t => ({ ...t, x: [...t.x], y: [...t.y] }));
@@ -1030,20 +1059,8 @@ async function showThroughFocusMTFDiagram({
     }
 
     const traces = Array.from(traceMap.values());
-    const titleWl = (typeof wavelengthMicrons === 'string' && String(wavelengthMicrons).toLowerCase() === 'all')
-        ? 'All wavelengths'
-        : `${(safeNumber(wavelengthMicrons, 0.5876) * 1000).toFixed(1)} nm`;
-    const objIndex = Number.isFinite(Number(objectIndex)) ? Math.max(0, Math.floor(Number(objectIndex))) : 0;
-
-    const layout = {
-        title: `Through-Focus MTF (${targetFreq.toFixed(1)} lp/mm, ${titleWl}, Object ${objIndex})`,
-        xaxis: { title: 'Defocus shift (mm)', range: [Math.min(minMm, maxMm), Math.max(minMm, maxMm)] },
-        yaxis: { title: 'MTF', range: [0, 1.05] },
-        margin: { l: 60, r: 20, t: 50, b: 50 }
-    };
-
-    reportProgress(98, 'Rendering plot...', undefined, undefined);
-    await plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
+    reportProgress(98, 'Finalizing plot...', undefined, undefined);
+    await plotly.react(containerEl, traces, layout, { responsive: true, displaylogo: false });
     reportProgress(100, 'Done', undefined, undefined);
     
     console.log(`✅ [TFMTF] Computed ${psfResults.length} through-focus points with ${nSteps} steps`);
