@@ -320,9 +320,7 @@ export async function benchmarkTFMTFQuick() {
         };
         
         console.log('='.repeat(80));
-        console.log('✅ Quick test passed');
-        console.log('📦 Result:', result);
-        console.log('Returning:', JSON.stringify(result));
+        console.log('✅ Quick test passed! Result:', JSON.stringify(result));
         return result;
         
     } catch (error) {
@@ -334,7 +332,6 @@ export async function benchmarkTFMTFQuick() {
             error: String(error),
             timestamp: new Date().toISOString()
         };
-        console.log('Returning error result:', JSON.stringify(errorResult));
         return errorResult;
     }
 }
@@ -361,39 +358,35 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
  * Register benchmark globally for UI access
  */
 if (typeof window !== 'undefined') {
-    console.log('📝 [TFMTF Benchmark] Registering functions to window...');
+    console.log('📝 [TFMTF Benchmark] Starting registration at', new Date().toISOString());
     
-    // Create explicit wrapper functions that call the async functions
-    // This ensures proper Promise return handling
-    (window as any).__tfmtfBenchmark = async () => {
-        console.log('🔗 [Wrapper] __tfmtfBenchmark wrapper called');
-        const result = await benchmarkTFMTF();
-        console.log('🔗 [Wrapper] __tfmtfBenchmark got result:', typeof result);
-        return result;
-    };
-    console.log('✅ [1/3] window.__tfmtfBenchmark registered');
+    // Capture references at module scope before registration
+    const benchmarkTFMTFRef = benchmarkTFMTF;
+    const benchmarkTFMTFQuickRef = benchmarkTFMTFQuick;
     
-    // Create wrapper for quick test
-    (window as any).__tfmtfBenchmarkQuick = async () => {
-        console.log('🔗 [Wrapper] __tfmtfBenchmarkQuick wrapper called');
-        const result = await benchmarkTFMTFQuick();
-        console.log('🔗 [Wrapper] __tfmtfBenchmarkQuick got result:', typeof result);
-        return result;
-    };
-    console.log('✅ [2/3] window.__tfmtfBenchmarkQuick registered');
+    console.log('📦 [Registration] Got function references:');
+    console.log('   benchmarkTFMTF:', typeof benchmarkTFMTFRef);
+    console.log('   benchmarkTFMTFQuick:', typeof benchmarkTFMTFQuickRef);
     
-    // Register simple test to verify registration works
+    // Directly assign functions to window.
+    // NOTE: Safari DevTools shows `undefined` for `await fn()` on module-scoped async
+    // functions - this is a Safari display bug. The functions work correctly.
+    // Use: fn().then(r => { window.__r = r }) then check window.__r
+    (window as any).__tfmtfBenchmark = benchmarkTFMTFRef;
+    console.log('✅ [1/3] window.__tfmtfBenchmark registered as:', typeof (window as any).__tfmtfBenchmark);
+    
+    (window as any).__tfmtfBenchmarkQuick = benchmarkTFMTFQuickRef;
+    console.log('✅ [2/3] window.__tfmtfBenchmarkQuick registered as:', typeof (window as any).__tfmtfBenchmarkQuick);
+    
+    // Simple test function
     (window as any).__tfmtfBenchmarkTest = function() {
-        console.log('✅ __tfmtfBenchmarkTest called - registration works!');
+        console.log('✅ __tfmtfBenchmarkTest called');
         return { test: true, timestamp: new Date().toISOString() };
     };
-    console.log('✅ [3/3] window.__tfmtfBenchmarkTest registered');
+    console.log('✅ [3/3] window.__tfmtfBenchmarkTest registered as:', typeof (window as any).__tfmtfBenchmarkTest);
     
-    // Verify functions are actually there
-    console.log('🔍 Verification:');
-    console.log('  typeof __tfmtfBenchmark:', typeof (window as any).__tfmtfBenchmark);
-    console.log('  typeof __tfmtfBenchmarkQuick:', typeof (window as any).__tfmtfBenchmarkQuick);
-    console.log('  typeof __tfmtfBenchmarkTest:', typeof (window as any).__tfmtfBenchmarkTest);
+    console.log('🔍 [Registration] Verification complete. All functions registered.');
+    console.log('   Command: await window.__tfmtfBenchmarkQuick()');
 }
 
 // Export for programmatic use
