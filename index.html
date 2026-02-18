@@ -322,68 +322,7 @@
   <script type="module" src="wasm/psf/psf-wasm.js"></script>
 
   <!-- Core functionality scripts -->
-  <script>
-    
-        // ray-tracing.jsの関数をグローバルに公開
-        // main.ts is now loaded synchronously before this script
-        (async () => {
-          try {
-            const rayTracing = await import('./raytracing/core/ray-tracing.ts');
-            
-            // getWASMSystemは既にmain.tsでグローバルに公開済み
-            
-            // グローバルに公開
-            window['rayTracingModule'] = rayTracing;
-            
-            // OptimalAsphericCalculator統合後のasphericSag実装を service 経由で差し替え
-            if (window.__cooptAsphericSagService?.setImplementation) {
-              window.__cooptAsphericSagService.setImplementation(async (r, params, mode = "even") => {
-                if (!window.optimalCalculator) {
-                  // フォールバック：従来のJavaScript実装
-                  return rayTracing.asphericSag(r, params, mode);
-                }
-
-                // 単一値の場合は配列に変換
-                const rArray = Array.isArray(r) ? r : [r];
-
-                // パラメータを変換
-                const k = params.conic || 0;
-                const coef = [params.coef1 || 0, params.coef2 || 0, params.coef3 || 0, params.coef4 || 0];
-
-                // OptimalAsphericCalculatorで最適化計算
-                const result = await window.optimalCalculator.calculateAsphericSag(rArray, k, coef, mode);
-
-                // 単一値の場合は最初の値のみ返す
-                return Array.isArray(r) ? result.values : result.values[0];
-              });
-            }
-            
-                window['intersectAsphericSurface'] = rayTracing.intersectAsphericSurface;
-            window['clearCache'] = rayTracing.clearCache;
-            window['disableCache'] = rayTracing.disableCache;
-            window['enableCache'] = rayTracing.enableCache;
-            window['enableFullCache'] = rayTracing.enableFullCache;
-            window['testCacheDebug'] = rayTracing.testCacheDebug;
-            window['enablePerformanceOptimization'] = rayTracing.enablePerformanceOptimization;
-            window['disablePerformanceOptimization'] = rayTracing.disablePerformanceOptimization;
-            
-            // Horner法+解析的微分最適化済みの関数をグローバルスコープに公開
-            // asphericSagは既にOptimalAsphericCalculator統合済み
-            
-            // asphericSagDerivative/surfaceNormal は ray-tracing 側で window.* に公開済み
-            
-            // 絞り周辺光線モジュールを読み込み
-            import('./raytracing/core/ray-marginal.ts').then(marginalRayModule => {
-              window['calculateMarginalRay'] = marginalRayModule.calculateMarginalRay;
-              window['calculateAllMarginalRays'] = marginalRayModule.calculateAllMarginalRays;
-            }).catch(error => {
-              console.error('❌ 絞り周辺光線モジュールの読み込みに失敗:', error);
-            });
-          } catch (error) {
-            console.error('❌ ray-tracing.js モジュールの読み込みに失敗:', error);
-          }
-        })();
-  </script>
+  <script type="module" src="ui/ray-tracing-globals.ts"></script>
 
   <!-- 絞り周辺光線計算スクリプト -->
   <script type="module" src="raytracing/core/ray-aperture-edge.ts"></script>
@@ -641,8 +580,12 @@
       if (!statusElement) return;
       
       try {
-        // PSFCalculatorを動的インポート
-        const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.ts');
+        const PSFCalculator = window['PSFCalculator'];
+        if (typeof PSFCalculator !== 'function') {
+          statusElement.textContent = 'WASM Status: PSF unavailable ⚠️';
+          statusElement.style.color = 'orange';
+          return;
+        }
         const psfCalculator = new PSFCalculator();
         
         // 初期化を待機
