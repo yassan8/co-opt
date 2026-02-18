@@ -56,8 +56,9 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
   if (!rustWasmInitPromise) {
     rustWasmInitPromise = (async () => {
       try {
-        // @vite-ignore
-        const mod = await import('../../rust-wasm/pkg/surface_origins.js');
+        // Dynamically construct path to prevent Vite static analysis
+        const wasmPkgPath = '../../rust-wasm/pkg/surface_origins' + '.js';
+        const mod = await import(wasmPkgPath);
         await initRustRayTracingModule(mod);
         const api: RustRayTracingWasm = {
           intersect_aspheric_rt10: mod.intersect_aspheric_rt10,
