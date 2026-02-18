@@ -52,8 +52,9 @@ export async function benchmarkTFMTF() {
             zeroPadTo: 256,
             containerElement: benchmarkContainer,
             onProgress: (evt: { percent: number; message?: string }) => {
+                const fullEvt = { percent: evt.percent, message: evt.message ?? '' };
                 seqProgress.push(evt);
-                updateProgressDisplay('Sequential', evt);
+                updateProgressDisplay('Sequential', fullEvt);
             }
         });
 
@@ -80,8 +81,9 @@ export async function benchmarkTFMTF() {
             zeroPadTo: 256,
             containerElement: benchmarkContainer,
             onProgress: (evt: { percent: number; message?: string }) => {
+                const fullEvt = { percent: evt.percent, message: evt.message ?? '' };
                 parProgress.push(evt);
-                updateProgressDisplay('Parallel', evt);
+                updateProgressDisplay('Parallel', fullEvt);
             }
         });
 
