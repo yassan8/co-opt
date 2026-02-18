@@ -364,11 +364,36 @@ if (typeof window !== 'undefined') {
         return { test: true, timestamp: new Date().toISOString() };
     };
     
+    // Diagnostic function to check implementation
+    (window as any).__tfmtfBenchmarkCheckQuick = async function() {
+        console.log('🔍 Checking benchmarkTFMTFQuick implementation...');
+        console.log('Function type:', typeof benchmarkTFMTFQuick);
+        console.log('Function callable:', benchmarkTFMTFQuick instanceof Function);
+        try {
+            console.log('Calling benchmarkTFMTFQuick directly...');
+            const result = benchmarkTFMTFQuick();
+            console.log('Result type:', typeof result);
+            console.log('Result instanceof Promise:', result instanceof Promise);
+            if (result instanceof Promise) {
+                console.log('Awaiting promise...');
+                const resolved = await result;
+                console.log('Promise resolved with:', resolved);
+                return { directCall: true, resolved };
+            } else {
+                console.log('Not a promise, returned:', result);
+                return { directCall: false, result };
+            }
+        } catch (e) {
+            console.error('Error calling function:', e);
+            return { error: String(e) };
+        }
+    };
+    
     (window as any).__tfmtfBenchmark = benchmarkTFMTF;
     (window as any).__tfmtfBenchmarkQuick = benchmarkTFMTFQuick;
     console.log('✅ [TFMTF Benchmark] Registered as window.__tfmtfBenchmark()');
     console.log('✅ [TFMTF Benchmark] Quick test registered as window.__tfmtfBenchmarkQuick()');
-    console.log('✅ [TFMTF Benchmark] Test function registered as window.__tfmtfBenchmarkTest()');
+    console.log('✅ [TFMTF Benchmark] Diagnostic registered as window.__tfmtfBenchmarkCheckQuick()');
 }
 
 // Export for programmatic use
