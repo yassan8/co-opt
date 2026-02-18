@@ -39,7 +39,7 @@ export async function benchmarkTFMTF() {
         // Benchmark 1: Sequential (worker pool size = 1)
         console.log('📈 Configuration 1: Sequential Processing (1 worker)');
         const seqStartTime = performance.now();
-        const seqProgress: Array<{ percent: number; message: string }> = [];
+        const seqProgress: Array<{ percent: number; message?: string }> = [];
 
         await showThroughFocusMTFDiagram({
             wavelengthMicrons: 0.5876,
@@ -66,7 +66,7 @@ export async function benchmarkTFMTF() {
         // Benchmark 2: Parallel (worker pool size = 4)
         console.log('📈 Configuration 2: Parallel Processing (4 workers)');
         const parStartTime = performance.now();
-        const parProgress: Array<{ percent: number; message: string }> = [];
+        const parProgress: Array<{ percent: number; message?: string }> = [];
 
         // Note: Current implementation initializes worker pool but benefits primarily from Phase 1 (Rust FFT)
         // Full parallelization speedup will be realized in future refactoring of PSF calculation
