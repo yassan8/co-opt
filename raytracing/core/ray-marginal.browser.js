@@ -1,1 +1,1 @@
-export * from "./ray-marginal.ts";
+export * from "./ray-marginal";
