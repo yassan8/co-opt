@@ -233,6 +233,8 @@ export async function benchmarkTFMTF() {
         };
         
         console.log('📦 Benchmark Results:', results);
+        // Save to window directly - Safari drops async function return values from .then()
+        if (typeof window !== 'undefined') (window as any).__benchmarkResult = results;
         return results;
     } catch (error) {
         console.error('❌ [Benchmark] Error during TFMTF benchmark:', error);
@@ -318,6 +320,8 @@ export async function benchmarkTFMTFQuick() {
         
         console.log('='.repeat(80));
         console.log('✅ Quick test passed! Result:', JSON.stringify(result));
+        // Save to window directly - Safari drops async function return values from .then()
+        if (typeof window !== 'undefined') (window as any).__benchmarkResult = result;
         return result;
         
     } catch (error) {
