@@ -81,7 +81,14 @@ export async function benchmarkTFMTF() {
             const seqEndTime = performance.now();
             const seqDurationMs = seqEndTime - seqStartTime;
             console.log(`⏱️  Sequential took ${seqDurationMs.toFixed(2)} ms (before error)`);
-            throw benchError;
+            // Return partial error result
+            return {
+                success: false,
+                error: `Sequential benchmark failed: ${benchError}`,
+                duration: performance.now() - startTotal,
+                partialResults: { sequential: { duration: seqDurationMs, state: 'failed' } },
+                timestamp: new Date().toISOString()
+            };
         }
 
         const seqEndTime = performance.now();
@@ -96,22 +103,43 @@ export async function benchmarkTFMTF() {
 
         // Note: Current implementation initializes worker pool but benefits primarily from Phase 1 (Rust FFT)
         // Full parallelization speedup will be realized in future refactoring of PSF calculation
-        await showThroughFocusMTFDiagram({
-            wavelengthMicrons: 0.5876,
-            objectIndex: 0,
-            targetFrequencyLpmm: 30,
-            defocusMinMm: -0.05,
-            defocusMaxMm: 0.05,
-            steps: 11,
-            samplingSize: 128,
-            zeroPadTo: 256,
-            containerElement: benchmarkContainer,
-            onProgress: (evt: { percent: number; message?: string }) => {
-                const fullEvt = { percent: evt.percent, message: evt.message ?? '' };
-                parProgress.push(evt);
-                updateProgressDisplay('Parallel', fullEvt);
-            }
-        });
+        try {
+            await withTimeout(
+                showThroughFocusMTFDiagram({
+                    wavelengthMicrons: 0.5876,
+                    objectIndex: 0,
+                    targetFrequencyLpmm: 30,
+                    defocusMinMm: -0.05,
+                    defocusMaxMm: 0.05,
+                    steps: 11,
+                    samplingSize: 128,
+                    zeroPadTo: 256,
+                    containerElement: benchmarkContainer,
+                    onProgress: (evt: { percent: number; message?: string }) => {
+                        const fullEvt = { percent: evt.percent, message: evt.message ?? '' };
+                        parProgress.push(evt);
+                        updateProgressDisplay('Parallel', fullEvt);
+                    }
+                }),
+                30000  // 30s timeout
+            );
+        } catch (benchError) {
+            console.error('❌ Parallel benchmark failed:', benchError);
+            const parEndTime = performance.now();
+            const parDurationMs = parEndTime - parStartTime;
+            console.log(`⏱️  Parallel took ${parDurationMs.toFixed(2)} ms (before error)`);
+            // Return partial error result
+            return {
+                success: false,
+                error: `Parallel benchmark failed: ${benchError}`,
+                duration: performance.now() - startTotal,
+                partialResults: { 
+                    sequential: { duration: seqDurationMs, state: 'success' },
+                    parallel: { duration: parDurationMs, state: 'failed' }
+                },
+                timestamp: new Date().toISOString()
+            };
+        }
 
         const parEndTime = performance.now();
         const parDurationMs = parEndTime - parStartTime;
@@ -122,23 +150,45 @@ export async function benchmarkTFMTF() {
         console.log('📈 Configuration 3: Full-Resolution (256×256, 21 steps)');
         const fullStartTime = performance.now();
 
-        await showThroughFocusMTFDiagram({
-            wavelengthMicrons: 0.5876,
-            objectIndex: 0,
-            targetFrequencyLpmm: 30,
-            defocusMinMm: -0.1,
-            defocusMaxMm: 0.1,
-            steps: 21,
-            samplingSize: 256,
-            zeroPadTo: 512,
-            containerElement: benchmarkContainer,
-            onProgress: (evt: { percent: number; message?: string }) => {
-                // Log only every 20% increment
-                if (evt.percent % 20 === 0 || evt.percent === 100) {
-                    console.log(`  ${evt.percent}%: ${evt.message}`);
-                }
-            }
-        });
+        try {
+            await withTimeout(
+                showThroughFocusMTFDiagram({
+                    wavelengthMicrons: 0.5876,
+                    objectIndex: 0,
+                    targetFrequencyLpmm: 30,
+                    defocusMinMm: -0.1,
+                    defocusMaxMm: 0.1,
+                    steps: 21,
+                    samplingSize: 256,
+                    zeroPadTo: 512,
+                    containerElement: benchmarkContainer,
+                    onProgress: (evt: { percent: number; message?: string }) => {
+                        // Log only every 20% increment
+                        if (evt.percent % 20 === 0 || evt.percent === 100) {
+                            console.log(`  ${evt.percent}%: ${evt.message}`);
+                        }
+                    }
+                }),
+                60000  // 60s timeout for full resolution
+            );
+        } catch (benchError) {
+            console.error('❌ Full-resolution benchmark failed:', benchError);
+            const fullEndTime = performance.now();
+            const fullDurationMs = fullEndTime - fullStartTime;
+            console.log(`⏱️  Full-resolution took ${fullDurationMs.toFixed(2)} ms (before error)`);
+            // Return partial error result
+            return {
+                success: false,
+                error: `Full-resolution benchmark failed: ${benchError}`,
+                duration: performance.now() - startTotal,
+                partialResults: { 
+                    sequential: { duration: seqDurationMs, state: 'success' },
+                    parallel: { duration: parDurationMs, state: 'success' },
+                    fullResolution: { duration: fullDurationMs, state: 'failed' }
+                },
+                timestamp: new Date().toISOString()
+            };
+        }
 
         const fullEndTime = performance.now();
         const fullDurationMs = fullEndTime - fullStartTime;
@@ -168,6 +218,7 @@ export async function benchmarkTFMTF() {
 
         // Return results for programmatic use
         const results = {
+            success: true,
             sequential: { duration: seqDurationMs, steps: 11, resolution: 128 },
             parallel: { duration: parDurationMs, steps: 11, resolution: 128 },
             fullResolution: { duration: fullDurationMs, steps: 21, resolution: 256 },
@@ -184,7 +235,21 @@ export async function benchmarkTFMTF() {
         return results;
     } catch (error) {
         console.error('❌ [Benchmark] Error during TFMTF benchmark:', error);
-        throw error;
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        const totalMs = performance.now() - startTotal;
+        
+        // Return error result instead of throwing
+        const errorResult = {
+            success: false,
+            error: errorMsg,
+            duration: totalMs,
+            timestamp: new Date().toISOString(),
+            platform: navigator.userAgent,
+            hardwareConcurrency: navigator.hardwareConcurrency || 'unknown'
+        };
+        
+        console.log('📦 Benchmark Error Result:', errorResult);
+        return errorResult;
     }
 }
 
