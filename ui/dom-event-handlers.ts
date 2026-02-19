@@ -4068,6 +4068,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                                    label === 'surf1SurfType' || label === 'surf2SurfType' || label === 'surf3SurfType';
                 const isMaterial = label.toLowerCase().includes('material') || paramType === 'material';
                 const isGapThicknessMode = (blockType === 'Gap' || blockType === 'AirGap') && label === 'thicknessMode';
+                const isObjectDistanceMode = (blockType === 'ObjectSurface' || blockType === 'ObjectPlane') && label === 'objectDistanceMode';
                 const isImageSemidiaMode = blockType === 'ImageSurface' && label === 'semidiaMode';
                 // Exclude nd, vd, abbe from slider display - they should be text input only
                 const isGlassProperty = label === 'nd' || label === 'vd' || label === 'abbe';
@@ -4196,6 +4197,53 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         if (newValue !== value) {
                             cooptApplyBlockValue(blockId, path, value, newValue);
                             applyThicknessFromMode(newValue);
+                        }
+                    });
+
+                    inputElement = select;
+                } else if (isObjectDistanceMode) {
+                    const select = document.createElement('select');
+                    select.style.fontSize = '12px';
+                    select.style.padding = '4px 6px';
+                    select.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
+                    select.style.background = isDarkMode ? '#111827' : '#fff';
+                    select.style.color = isDarkMode ? '#f9fafb' : '#111827';
+                    select.style.borderRadius = '4px';
+                    select.style.flex = '1';
+                    select.style.cursor = 'pointer';
+                    select.style.minWidth = '200px';
+                    select.style.height = '28px';
+                    select.style.boxSizing = 'border-box';
+
+                    const normalized = String(value ?? '').trim();
+                    const isInf = __coopt_isInfLike(normalized) || normalized.toUpperCase() === 'INFINITY';
+                    const currentValue = isInf ? 'INF' : 'Finite';
+                    const options = [
+                        { value: 'INF', label: 'Infinity' },
+                        { value: 'Finite', label: 'Finite' }
+                    ];
+
+                    options.forEach(({ value: optValue, label: optLabel }) => {
+                        const option = document.createElement('option');
+                        option.value = optValue;
+                        option.textContent = optLabel;
+                        if (optValue === currentValue) {
+                            option.selected = true;
+                        }
+                        select.appendChild(option);
+                    });
+
+                    select.addEventListener('change', () => {
+                        const newValue = select.value;
+                        if (newValue !== value) {
+                            cooptApplyBlockValue(blockId, path, value, newValue);
+                            if (newValue === 'Finite') {
+                                const currentDistance = (params as any)?.objectDistance;
+                                const distanceValue = Number(currentDistance);
+                                if (!Number.isFinite(distanceValue)) {
+                                    cooptApplyBlockValue(blockId, 'parameters.objectDistance', currentDistance, 10);
+                                }
+                            }
                         }
                     });
 

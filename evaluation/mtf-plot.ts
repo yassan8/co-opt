@@ -298,13 +298,45 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
     }
 
     const selectedObject = hasOverride ? objectOverride : objects[objIndex];
-    const objectX = (selectedObject.x ?? selectedObject.xHeightAngle ?? 0);
-    const objectY = (selectedObject.y ?? selectedObject.yHeightAngle ?? 0);
     const objectTypeRaw = String(selectedObject.position ?? selectedObject.object ?? selectedObject.Object ?? selectedObject.objectType ?? 'Point');
     const objectTypeLower = objectTypeRaw.toLowerCase();
-    const isFiniteObject = !/\bangle\b/.test(objectTypeLower);
+    const isAngleType = /\bangle\b/.test(objectTypeLower);
     
-    console.log(`🔍 [TFMTF Setup] Object ${objIndex}: type="${objectTypeRaw}", isFinite=${isFiniteObject}, defocusShift=${defocusShiftMm} mm`);
+    // Check ObjectSurface objectDistanceMode from optical system (priority)
+    let isFiniteObject = false;
+    try {
+        const firstSurf = baseOpticalSystemRows && baseOpticalSystemRows.length > 0 ? baseOpticalSystemRows[0] : null;
+        if (firstSurf) {
+            const thickness = firstSurf.thickness ?? firstSurf.Thickness;
+            const isInf = thickness === 'INF' || thickness === Infinity;
+            if (!isInf) {
+                const numThickness = parseFloat(thickness);
+                if (Number.isFinite(numThickness) && numThickness > 0) {
+                    isFiniteObject = true;
+                }
+            }
+        }
+    } catch (_) {}
+    
+    // Fallback: field type (Angle→infinite, Height/Rectangle→finite if system is finite)
+    if (!isFiniteObject && !isAngleType) {
+        // If field is Height/Rectangle but system is infinite, we still treat it as infinite
+        // (matches wavefront.ts isFiniteForField logic)
+        isFiniteObject = false;
+    } else if (isFiniteObject && isAngleType) {
+        // If ObjectSurface is finite, always finite regardless of field type
+        isFiniteObject = true;
+    }
+    
+    // Column priority: Angle→xHeightAngle/yHeightAngle, Height/Rectangle→x/y or xHeight/yHeight
+    const objectX = isAngleType
+        ? (selectedObject.xHeightAngle ?? selectedObject.x ?? 0)
+        : (selectedObject.x ?? selectedObject.xHeight ?? selectedObject.xHeightAngle ?? 0);
+    const objectY = isAngleType
+        ? (selectedObject.yHeightAngle ?? selectedObject.y ?? 0)
+        : (selectedObject.y ?? selectedObject.yHeight ?? selectedObject.yHeightAngle ?? 0);
+    
+    console.log(`🔍 [TFMTF Setup] Object ${objIndex}: type="${objectTypeRaw}", isAngleType=${isAngleType}, isFiniteObject=${isFiniteObject}, objectX=${objectX}, objectY=${objectY}, defocusShift=${defocusShiftMm} mm`);
 
     const opticalSystemRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, defocusShiftMm, isFiniteObject);
     if (!opticalSystemRows || opticalSystemRows.length === 0) {
@@ -1198,12 +1230,41 @@ async function showFieldMTFDiagram({
         } catch (_) {}
     };
 
+    const inferObjectFieldModeForMTF = (objects) => {
+        const rows = Array.isArray(objects) ? objects : [];
+        const pickTag = (o) => {
+            const raw = o?.position ?? o?.object ?? o?.objectType;
+            return (raw ?? '').toString().toLowerCase();
+        };
+        const tags = rows.map(pickTag).filter(Boolean);
+
+        // Explicit Rectangle/Height wins
+        const hasRect = tags.some(t => t.includes('rect') || t.includes('rectangle'));
+        const hasHeight = tags.some(t => t.includes('height'));
+        if (hasRect || hasHeight) return 'height';
+
+        // Explicit Angle
+        const hasAngle = tags.some(t => /\bangle\b/.test(t));
+        if (hasAngle) return 'angle';
+
+        // Fallback: check ObjectSurface objectDistanceMode from optical system
+        try {
+            const optRows = getOpticalSystemRows(window.tableOpticalSystem);
+            const first = Array.isArray(optRows) && optRows.length > 0 ? optRows[0] : null;
+            if (first) {
+                const thickness = first.thickness ?? first.Thickness;
+                const isInf = thickness === 'INF' || thickness === Infinity;
+                return isInf ? 'angle' : 'height';
+            }
+        } catch (_) {}
+
+        return 'angle'; // Default to angle when unclear
+    };
+
     const axisMode = (() => {
         if (fieldAxisMode === 'angle' || fieldAxisMode === 'height') return fieldAxisMode;
         const objects = getObjectRows(window.tableObject);
-        const first = Array.isArray(objects) && objects.length > 0 ? objects[0] : null;
-        const posRaw = String(first?.position ?? first?.object ?? first?.objectType ?? 'Angle');
-        return /\bangle\b/i.test(posRaw) ? 'angle' : 'height';
+        return inferObjectFieldModeForMTF(objects);
     })();
 
     const axisUnit = (axisMode === 'angle') ? 'deg' : 'mm';
@@ -1247,8 +1308,10 @@ async function showFieldMTFDiagram({
         };
 
         const objectOverride = (axisMode === 'angle')
-            ? { xHeightAngle: 0, yHeightAngle: fieldValue, position: 'Angle' }
-            : { xHeightAngle: 0, yHeightAngle: fieldValue, position: 'Rectangle' };
+            ? { x: 0, y: fieldValue, xHeightAngle: 0, yHeightAngle: fieldValue, position: 'Angle' }
+            : { x: 0, y: fieldValue, xHeight: 0, yHeight: fieldValue, position: 'Rectangle' };
+
+        console.log(`🔍 [Object MTF Step ${i + 1}/${fieldValues.length}] axisMode=${axisMode}, fieldValue=${fieldValue.toFixed(4)}${axisUnit}, override=`, objectOverride);
 
         try {
             const result = await showMTFDiagram({
