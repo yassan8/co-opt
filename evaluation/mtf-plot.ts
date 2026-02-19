@@ -97,12 +97,35 @@ function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows, defocusShiftM
     const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
     const newThickness = safeBaseThickness + shift;
     
-    console.log(`🔍 [TFMTF Defocus] Conjugate: ${isFiniteObject ? 'FINITE' : 'INFINITE'}, Shift: ${shift.toFixed(4)} mm, Target surface ${targetIdx}: ${safeBaseThickness.toFixed(4)} → ${newThickness.toFixed(4)} mm`);
+    ensureConsoleLog(`🔍 [TFMTF Defocus] Conjugate: ${isFiniteObject ? 'FINITE' : 'INFINITE'}, Shift: ${shift.toFixed(4)} mm, Target surface ${targetIdx}: ${safeBaseThickness.toFixed(4)} → ${newThickness.toFixed(4)} mm`);
     
     target.thickness = newThickness;
     cloned[targetIdx] = target;
 
     return cloned;
+}
+
+// Helper: Ensure console logs appear in both popup and parent window
+function ensureConsoleLog(...args) {
+    try {
+        console.log(...args);
+    } catch (_) {}
+    try {
+        if (typeof window !== 'undefined' && window.opener && window.opener.console) {
+            window.opener.console.log(...args);
+        }
+    } catch (_) {}
+}
+
+function ensureConsoleError(...args) {
+    try {
+        console.error(...args);
+    } catch (_) {}
+    try {
+        if (typeof window !== 'undefined' && window.opener && window.opener.console) {
+            window.opener.console.error(...args);
+        }
+    } catch (_) {}
 }
 
 async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, maxFrequencyLpmm, samplingSize, samplingPoints, containerElement, onProgress, opdDisplayMode, defocusShiftMm, skipPlot, showDiffractionLimit, zeroPadTo, legacyBaselineMode, plotPointCount }: MtfPlotOptions = {}) {
@@ -226,7 +249,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                 containerEl.style.borderRadius = '6px';
                 document.body.appendChild(containerEl);
             }
-            console.warn('⚠️ MTF container not found. Auto-created #mtf-container-auto for plotting.');
+            ensureConsoleLog('⚠️ MTF container not found. Auto-created #mtf-container-auto for plotting.');
         } catch (_) {
             throw new Error('MTF container element not found');
         }
@@ -302,7 +325,18 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
     const objectTypeLower = objectTypeRaw.toLowerCase();
     const isAngleType = /\bangle\b/.test(objectTypeLower);
     
-    // Check ObjectSurface objectDistanceMode from optical system (priority)
+    // 🔍 DEBUG: Log objectOverride being received to diagnose cache reuse
+    ensureConsoleLog(`📥 [MTF] showMTFDiagram called with objectOverride:`, {
+        hasOverride,
+        objectOverride: objectOverride ? { x: objectOverride.x, y: objectOverride.y, xHeightAngle: objectOverride.xHeightAngle, yHeightAngle: objectOverride.yHeightAngle, position: objectOverride.position } : null,
+        selectedObject: { position: selectedObject.position, x: selectedObject.x, y: selectedObject.y, xHeightAngle: selectedObject.xHeightAngle, yHeightAngle: selectedObject.yHeightAngle },
+        defocusShiftMm,
+        callStack: 'showMTFDiagram'
+    });
+    
+    // Determine finite/infinite based on ObjectSurface (Priority 1)
+    // If ObjectSurface is finite, always use finite solver regardless of field type
+    // If infinite, always stay infinite even with Height fields (cannot use finite solver without finite object surface)
     let isFiniteObject = false;
     try {
         const firstSurf = baseOpticalSystemRows && baseOpticalSystemRows.length > 0 ? baseOpticalSystemRows[0] : null;
@@ -318,16 +352,6 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         }
     } catch (_) {}
     
-    // Fallback: field type (Angle→infinite, Height/Rectangle→finite if system is finite)
-    if (!isFiniteObject && !isAngleType) {
-        // If field is Height/Rectangle but system is infinite, we still treat it as infinite
-        // (matches wavefront.ts isFiniteForField logic)
-        isFiniteObject = false;
-    } else if (isFiniteObject && isAngleType) {
-        // If ObjectSurface is finite, always finite regardless of field type
-        isFiniteObject = true;
-    }
-    
     // Column priority: Angle→xHeightAngle/yHeightAngle, Height/Rectangle→x/y or xHeight/yHeight
     const objectX = isAngleType
         ? (selectedObject.xHeightAngle ?? selectedObject.x ?? 0)
@@ -336,7 +360,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         ? (selectedObject.yHeightAngle ?? selectedObject.y ?? 0)
         : (selectedObject.y ?? selectedObject.yHeight ?? selectedObject.yHeightAngle ?? 0);
     
-    console.log(`🔍 [TFMTF Setup] Object ${objIndex}: type="${objectTypeRaw}", isAngleType=${isAngleType}, isFiniteObject=${isFiniteObject}, objectX=${objectX}, objectY=${objectY}, defocusShift=${defocusShiftMm} mm`);
+    ensureConsoleLog(`🔍 [TFMTF Setup] Object ${objIndex}: type="${objectTypeRaw}", isAngleType=${isAngleType}, isFiniteObject=${isFiniteObject}, objectX=${objectX.toFixed(4)}, objectY=${objectY.toFixed(4)}, defocusShift=${defocusShiftMm} mm`);
 
     const opticalSystemRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, defocusShiftMm, isFiniteObject);
     if (!opticalSystemRows || opticalSystemRows.length === 0) {
@@ -352,6 +376,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         xHeight = safeNumber(objectX, 0);
         yHeight = safeNumber(objectY, 0);
     }
+
+    ensureConsoleLog(`🔍 [TFMTF Field] fieldAngle={${fieldAngle.x}, ${fieldAngle.y}}, xHeight=${xHeight.toFixed(4)}, yHeight=${yHeight.toFixed(4)}`);
 
     // Meridional/Sagittal: without directional interpolation, choose the nearest principal axis
     // based on field direction (x-dominant => meridional=x, otherwise meridional=y).
@@ -431,7 +457,11 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             wavelength: wlLocal
         };
         
-        console.log(`🔍 [TFMTF Field] λ=${(wlLocal*1000).toFixed(1)}nm, type="${objectTypeRaw}", fieldAngle=(${fieldAngle.x}, ${fieldAngle.y}), height=(${xHeight}, ${yHeight})`);
+        ensureConsoleLog(`🔍 [MTF Field] CACHE KEY INPUTS for wavelength ${(wlLocal*1000).toFixed(1)}nm:`);
+        ensureConsoleLog(`   fieldAngle.x=${fieldSetting.fieldAngle.x.toFixed(4)}, fieldAngle.y=${fieldSetting.fieldAngle.y.toFixed(4)}`);
+        ensureConsoleLog(`   xHeight=${fieldSetting.xHeight.toFixed(4)},  yHeight=${fieldSetting.yHeight.toFixed(4)}`);
+        ensureConsoleLog(`   type="${fieldSetting.type}"`);
+
 
         const samplingSizeForPSF = gridSize;
 
@@ -455,7 +485,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
 
         const generateWavefrontMapForMode = async (mode, customFieldSetting = fieldSetting) => {
             return await withForcedInfinitePupilMode(mode, async () => {
-                return await analyzer.generateWavefrontMap(customFieldSetting, samplingSizeForPSF, 'circular', {
+                ensureConsoleLog(`🔍 [Wavefront] Calling generateWavefrontMap with customFieldSetting:`, customFieldSetting);
+                const result = await analyzer.generateWavefrontMap(customFieldSetting, samplingSizeForPSF, 'circular', {
                     recordRays: false,
                     progressEvery: 512,
                     profile: enableMtfProfileLog,
@@ -467,8 +498,23 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                     traceOptions: useWasmFastOnly ? { requireWasmRayTracing: true, allowNonStrict: false } : null,
                     opdMode: 'simple',
                     opdDisplayMode: effectiveOpdDisplayMode,
-                    onProgress: onWavefrontProgress
+                    onProgress: onWavefrontProgress,
+                    useCache: false  // ✅ Disable cache to force new OPD computation per field/defocus
                 });
+                // 🔍 Compute simple checksum of OPD grid to verify it's different for each field/defocus
+                if (result?.opdGrid) {
+                    const grid = result.opdGrid;
+                    let sum = 0;
+                    const stride = Math.max(1, Math.floor(grid.length / 100));  // Sample every Nth element
+                    for (let i = 0; i < grid.length; i += stride) {
+                        sum += Math.abs(grid[i] || 0);
+                    }
+                    const checksum = (sum % 10000).toFixed(0);
+                    ensureConsoleLog(`✅ [Wavefront] generateWavefrontMap completed: gridSize=${result?.gridSize}, OPD_CHECKSUM=${checksum}, fieldSetting.xHeight=${customFieldSetting.xHeight}, fieldSetting.yHeight=${customFieldSetting.yHeight}`);
+                } else {
+                    ensureConsoleLog(`✅ [Wavefront] generateWavefrontMap completed: no OPD grid`);
+                }
+                return result;
             });
         };
 
@@ -584,6 +630,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         const s = Math.max(16, Math.floor(Number(samplingSizeForPSF)));
         const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
         const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
+        
+        console.log(`🔍 [TFMTF OPD] Building ${s}x${s} OPD grid from wavefront map...`);
         const maskGrid = Array.from({ length: s }, () => Array(s).fill(false));
         const xCoords = new Float32Array(s);
         const yCoords = new Float32Array(s);
@@ -690,6 +738,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         if (N < 2 || psf2D[0].length !== N) {
             throw new Error('PSF grid must be NxN');
         }
+
+        console.log(`🔍 [TFMTF PSF] PSF grid: ${N}x${N}, pixelSize=${pixelSizeMicrons.toFixed(6)}µm`);
 
         const dfCyclesPerMicron = 1.0 / (N * pixelSizeMicrons);
         const dfLpmm = dfCyclesPerMicron * 1000.0;
@@ -832,6 +882,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         sag = densifyCurve(sag);
 
         const color = getColorForWavelength(wlLocal);
+        console.log(`🔍 [TFMTF MTF] λ=${titleNmLocal}nm: tan=${tan.freq.length}pts(${Math.min(...tan.mtfVals).toFixed(3)}-${Math.max(...tan.mtfVals).toFixed(3)}), sag=${sag.freq.length}pts(${Math.min(...sag.mtfVals).toFixed(3)}-${Math.max(...sag.mtfVals).toFixed(3)})`);
+        
         traces.push({
             x: tan.freq,
             y: tan.mtfVals,
@@ -888,7 +940,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         await plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
     }
     reportProgress(100, 'Done');
-    return { traces, layout, maxPlotLpmmGlobal };
+    console.log(`✅ [TFMTF COMPLETE] Returning ${traces.length} traces, maxPlotLpmm=${maxPlotLpmmGlobal.toFixed(1)}`);
+    return { traces, layout, maxPlotLpmmGlobal};
     } finally {
         setRayTracingWasmStrict(prevGlobalStrict);
     }
@@ -977,7 +1030,7 @@ async function showThroughFocusMTFDiagram({
         batches.push(batch);
     }
 
-    console.log(`🚀 [TFMTF] Starting PSF batch processing: ${defocusValues.length} defocus values in ${batches.length} batches (batch size: ${PARALLEL_DEFOCUS_BATCH_SIZE})`);
+    ensureConsoleLog(`🚀 [TFMTF] Starting PSF batch processing: ${defocusValues.length} defocus values in ${batches.length} batches (batch size: ${PARALLEL_DEFOCUS_BATCH_SIZE})`);
 
     // Process batches sequentially, but compute items within each batch in parallel
     for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
@@ -1001,6 +1054,7 @@ async function showThroughFocusMTFDiagram({
                 };
 
                 try {
+                    ensureConsoleLog(`   → TFMTF Batch ${batchNum}/${batchTotal} defocus ${shift.toFixed(4)}mm: Calling showMTFDiagram`);
                     const result = await showMTFDiagram({
                         wavelengthMicrons,
                         objectIndex,
@@ -1013,6 +1067,7 @@ async function showThroughFocusMTFDiagram({
                         onProgress: mtfSubProgress,
                         containerElement
                     });
+                    ensureConsoleLog(`   ← TFMTF completed`);
 
                     return {
                         shift,
@@ -1025,7 +1080,7 @@ async function showThroughFocusMTFDiagram({
                         success: true
                     };
                 } catch (error) {
-                    console.error(`❌ [TFMTF] PSF calculation failed for defocus ${shift}:`, error);
+                    ensureConsoleError(`❌ [TFMTF] PSF calculation failed for defocus ${shift}:`, error);
                     return {
                         shift,
                         index,
@@ -1079,10 +1134,11 @@ async function showThroughFocusMTFDiagram({
             }
         }
 
-        console.log(`✅ [TFMTF] Batch ${batchNum}/${batchTotal} completed: ${indexedResults.length}/${batch.length} items successful`);
+        ensureConsoleLog(`✅ [TFMTF] Batch ${batchNum}/${batchTotal} completed: ${indexedResults.length}/${batch.length} items successful`);
     }
 
     reportProgress(60, 'Extracting MTF values from PSF...', undefined, undefined);
+    ensureConsoleLog(`✅ [TFMTF] All PSF calculations completed. Results collected: ${psfResults.length}/${defocusValues.length}`);
 
     // レイアウト定義（プロット初期化用）
     const titleWl = (typeof wavelengthMicrons === 'string' && String(wavelengthMicrons).toLowerCase() === 'all')
@@ -1231,6 +1287,28 @@ async function showFieldMTFDiagram({
     };
 
     const inferObjectFieldModeForMTF = (objects) => {
+        // Priority 1: check optical system first surface thickness.
+        // If the first surface is at INF (infinite conjugate), object coordinates MUST be angles.
+        // This physical constraint overrides whatever the position column says.
+        try {
+            const optRows = getOpticalSystemRows(window.tableOpticalSystem);
+            const firstSurf = Array.isArray(optRows) && optRows.length > 0 ? optRows[0] : null;
+            if (firstSurf) {
+                const thickness = firstSurf.thickness ?? firstSurf.Thickness;
+                const isInf = thickness === 'INF' || thickness === Infinity || String(thickness).trim().toUpperCase() === 'INF';
+                if (isInf) {
+                    ensureConsoleLog(`[inferObjectFieldMode] first surface thickness=INF → angle mode`);
+                    return 'angle';
+                }
+                const numThick = parseFloat(String(thickness));
+                if (Number.isFinite(numThick) && numThick > 0) {
+                    // Finite conjugate: defer to position field below
+                    ensureConsoleLog(`[inferObjectFieldMode] first surface thickness=${numThick} (finite) → defer to position field`);
+                }
+            }
+        } catch (_) {}
+
+        // Priority 2: position field from object rows
         const rows = Array.isArray(objects) ? objects : [];
         const pickTag = (o) => {
             const raw = o?.position ?? o?.object ?? o?.objectType;
@@ -1238,7 +1316,7 @@ async function showFieldMTFDiagram({
         };
         const tags = rows.map(pickTag).filter(Boolean);
 
-        // Explicit Rectangle/Height wins
+        // Explicit Rectangle/Height
         const hasRect = tags.some(t => t.includes('rect') || t.includes('rectangle'));
         const hasHeight = tags.some(t => t.includes('height'));
         if (hasRect || hasHeight) return 'height';
@@ -1246,17 +1324,6 @@ async function showFieldMTFDiagram({
         // Explicit Angle
         const hasAngle = tags.some(t => /\bangle\b/.test(t));
         if (hasAngle) return 'angle';
-
-        // Fallback: check ObjectSurface objectDistanceMode from optical system
-        try {
-            const optRows = getOpticalSystemRows(window.tableOpticalSystem);
-            const first = Array.isArray(optRows) && optRows.length > 0 ? optRows[0] : null;
-            if (first) {
-                const thickness = first.thickness ?? first.Thickness;
-                const isInf = thickness === 'INF' || thickness === Infinity;
-                return isInf ? 'angle' : 'height';
-            }
-        } catch (_) {}
 
         return 'angle'; // Default to angle when unclear
     };
@@ -1269,6 +1336,10 @@ async function showFieldMTFDiagram({
 
     const axisUnit = (axisMode === 'angle') ? 'deg' : 'mm';
     const axisLabel = (axisMode === 'angle') ? 'Object Angle (deg)' : 'Object Height (mm)';
+
+    // 🔍 DEBUG: Log function entry
+    ensureConsoleLog(`========== 🔍 showFieldMTFDiagram EXECUTION START ==========`);
+    ensureConsoleLog(`📊 Input Parameters:`, { fieldMin, fieldMax, steps, axisMode, wavelengthMicrons, firstFrequencyLpmm, secondFrequencyLpmm });
 
     const minFieldRaw = safeNumber(fieldMin, 0);
     const maxFieldRaw = safeNumber(fieldMax, 10);
@@ -1288,48 +1359,126 @@ async function showFieldMTFDiagram({
         return minField + t * (maxField - minField);
     });
 
+    ensureConsoleLog(`📈 Field sweep: axisMode=${axisMode}, min=${minField}, max=${maxField}, nSteps=${nSteps}`);
+
     const results: Array<{ fieldValue: number; mfResult: any }> = [];
     const traceMap = new Map();
 
     reportProgress(10, 'Computing MTF for all field points...', undefined, undefined);
 
-    for (let i = 0; i < fieldValues.length; i++) {
-        const fieldValue = fieldValues[i];
-        const pct = Math.floor(10 + (i / Math.max(1, fieldValues.length)) * 50);
-        reportProgress(pct, `Computing MTF: Field ${fieldValue.toFixed(4)} ${axisUnit} (${i + 1}/${fieldValues.length})`, undefined, undefined);
-
-        let subMessage = '';
-        const mtfSubProgress = (evt: { percent?: number; message?: string }) => {
-            if (evt?.message) {
-                const fieldInfo = `Field ${fieldValue.toFixed(4)}${axisUnit}(${i + 1}/${fieldValues.length}) `;
-                subMessage = fieldInfo + evt.message;
-                reportProgress(pct, `Computing MTF: Field ${fieldValue.toFixed(4)} ${axisUnit} (${i + 1}/${fieldValues.length})`, undefined, subMessage);
-            }
-        };
-
-        const objectOverride = (axisMode === 'angle')
-            ? { x: 0, y: fieldValue, xHeightAngle: 0, yHeightAngle: fieldValue, position: 'Angle' }
-            : { x: 0, y: fieldValue, xHeight: 0, yHeight: fieldValue, position: 'Rectangle' };
-
-        console.log(`🔍 [Object MTF Step ${i + 1}/${fieldValues.length}] axisMode=${axisMode}, fieldValue=${fieldValue.toFixed(4)}${axisUnit}, override=`, objectOverride);
-
-        try {
-            const result = await showMTFDiagram({
-                wavelengthMicrons,
-                objectIndex: 0,
-                objectOverride,
-                maxFrequencyLpmm: Math.max(firstFreq, secondFreq) * 2,
-                samplingSize: sampling,
-                zeroPadTo,
-                opdDisplayMode,
-                skipPlot: true,
-                onProgress: mtfSubProgress,
-                containerElement
-            });
-            results.push({ fieldValue, mfResult: result });
-        } catch (error) {
-            console.error(`❌ [Object MTF] MTF calculation failed for field ${fieldValue}:`, error);
+    // Batch processing for Object MTF field sweep.
+    // NOTE: keep this sequential (batch size = 1) to avoid cross-call interference,
+    // because showMTFDiagram internally toggles global runtime flags during wavefront solve.
+    const PARALLEL_FIELD_BATCH_SIZE = 1;
+    
+    // Divide field values into batches
+    const batches: { fieldValue: number; index: number }[][] = [];
+    for (let i = 0; i < fieldValues.length; i += PARALLEL_FIELD_BATCH_SIZE) {
+        const batch: { fieldValue: number; index: number }[] = [];
+        for (let j = i; j < Math.min(i + PARALLEL_FIELD_BATCH_SIZE, fieldValues.length); j++) {
+            batch.push({ fieldValue: fieldValues[j], index: j });
         }
+        batches.push(batch);
+    }
+
+    ensureConsoleLog(`🚀 [Object MTF] Starting field batch processing: ${fieldValues.length} field values in ${batches.length} batches (batch size: ${PARALLEL_FIELD_BATCH_SIZE})`);
+
+    // Process batches sequentially, but compute items within each batch in parallel
+    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+        const batch = batches[batchIdx];
+        const batchNum = batchIdx + 1;
+        const batchTotal = batches.length;
+
+        reportProgress(10 + batchIdx * 2, `Computing MTF: Batch ${batchNum}/${batchTotal} (${batch.length} points)`, undefined, undefined);
+
+        // Create parallel computation tasks for this batch
+        const batchTasks = batch.map(({ fieldValue, index }) => {
+            return (async () => {
+                let subMessage = '';
+                const mtfSubProgress = (evt: { percent?: number; message?: string }) => {
+                    if (evt?.message) {
+                        const fieldInfo = `Field ${fieldValue.toFixed(4)}${axisUnit}(${index + 1}/${fieldValues.length}) `;
+                        subMessage = fieldInfo + evt.message;
+                        const pct = Math.floor(10 + (index / Math.max(1, fieldValues.length)) * 50);
+                        reportProgress(pct, `Computing MTF: Field ${fieldValue.toFixed(4)} ${axisUnit} (${index + 1}/${fieldValues.length})`, undefined, subMessage);
+                    }
+                };
+
+                const objectOverride = (axisMode === 'angle')
+                    ? { x: 0, y: fieldValue, xHeightAngle: 0, yHeightAngle: fieldValue, position: 'Angle' }
+                    : { x: 0, y: fieldValue, xHeight: 0, yHeight: fieldValue, position: 'Rectangle' };
+
+                ensureConsoleLog(`\n🔄 [Object MTF] ===== ITERATION START =====`);
+                ensureConsoleLog(`📍 Batch ${batchNum}/${batchTotal}, Step ${index + 1}/${fieldValues.length}`);
+                ensureConsoleLog(`   axisMode=${axisMode}, fieldValue=${fieldValue.toFixed(4)}${axisUnit}`);
+                ensureConsoleLog(`   objectOverride: x=${objectOverride.x}, y=${objectOverride.y}, xHeight=${objectOverride.xHeight}, yHeight=${objectOverride.yHeight}, position=${objectOverride.position}`);
+
+                try {
+                    ensureConsoleLog(`   → Calling showMTFDiagram with objectOverride, expecting NEW OPD calculation`);
+                    const result = await showMTFDiagram({
+                        wavelengthMicrons,
+                        objectIndex: 0,
+                        objectOverride,
+                        maxFrequencyLpmm: Math.max(firstFreq, secondFreq) * 2,
+                        samplingSize: sampling,
+                        zeroPadTo,
+                        opdDisplayMode,
+                        skipPlot: true,
+                        onProgress: mtfSubProgress,
+                        containerElement
+                    });
+                    ensureConsoleLog(`   ← showMTFDiagram completed`);
+
+                    return {
+                        fieldValue,
+                        index,
+                        mfResult: result,
+                        success: true
+                    };
+                } catch (error) {
+                    ensureConsoleError(`❌ [Object MTF] MTF calculation FAILED for field ${fieldValue.toFixed(4)}${axisUnit}:`, error);
+                    ensureConsoleError(`   Error details:`, { errorMessage: error?.message, errorStack: error?.stack });
+                    return {
+                        fieldValue,
+                        index,
+                        mfResult: null,
+                        success: false,
+                        error
+                    };
+                }
+            })();
+        });
+
+        // Wait for all tasks in this batch to complete
+        const batchResults = await Promise.allSettled(batchTasks);
+
+        // Extract successful results and store with original indices
+        const indexedResults: { index: number; data: any }[] = [];
+        for (let i = 0; i < batchResults.length; i++) {
+            const result = batchResults[i];
+            if (result.status === 'fulfilled') {
+                indexedResults.push({ index: result.value.index, data: result.value });
+            }
+        }
+
+        // Sort by original index to maintain order
+        indexedResults.sort((a, b) => a.index - b.index);
+
+        // Add to results
+        for (const { data } of indexedResults) {
+            if (data.success) {
+                if (!data.mfResult || !data.mfResult.traces || data.mfResult.traces.length === 0) {
+                    ensureConsoleLog(`⚠️ [Object MTF] No traces returned for field ${data.fieldValue.toFixed(4)}${axisUnit}`);
+                }
+                results.push({ fieldValue: data.fieldValue, mfResult: data.mfResult });
+                ensureConsoleLog(`✅ [Object MTF] Batch ${batchNum}/${batchTotal} Step ${data.index + 1}/${fieldValues.length} completed: field=${data.fieldValue.toFixed(4)}${axisUnit}, traces=${data.mfResult?.traces?.length || 0}`);
+            } else {
+                results.push({ fieldValue: data.fieldValue, mfResult: null });
+                ensureConsoleError(`❌ [Object MTF] Batch ${batchNum}/${batchTotal} Step ${data.index + 1}/${fieldValues.length} failed for field ${data.fieldValue.toFixed(4)}${axisUnit}`);
+            }
+        }
+
+        ensureConsoleLog(`✅ [Object MTF] Batch ${batchNum}/${batchTotal} completed: ${indexedResults.length}/${batch.length} items processed`);
     }
 
     const titleWl = (typeof wavelengthMicrons === 'string' && String(wavelengthMicrons).toLowerCase() === 'all')
@@ -1348,20 +1497,34 @@ async function showFieldMTFDiagram({
     reportProgress(62, 'Initializing plot...', undefined, undefined);
     plotly.newPlot(containerEl, [], layout, { responsive: true, displaylogo: false });
 
+    ensureConsoleLog(`✅ [Object MTF] All MTF calculations completed. Results collected: ${results.length}/${fieldValues.length}`);
+    ensureConsoleLog(`🔍 [Object MTF] Aggregating ${results.length} field points into traces...`);
+
     for (let i = 0; i < results.length; i++) {
         const { fieldValue, mfResult } = results[i];
         const traces = Array.isArray(mfResult?.traces) ? mfResult.traces : [];
+        
+        if (traces.length === 0) {
+            ensureConsoleLog(`⚠️ [Object MTF] No traces for field ${i}: fieldValue=${fieldValue.toFixed(4)}`);
+            continue;
+        }
 
         for (const tr of traces) {
             if (tr?.meta?.overlayType === 'diffractionLimit') continue;
             const rawName = String(tr?.name ?? 'MTF');
             const isTangential = /^Tangential\b/.test(rawName);
             const isSagittal = /^Sagittal\b/.test(rawName);
-            if (!isTangential && !isSagittal) continue;
+            if (!isTangential && !isSagittal) {
+                ensureConsoleLog(`⚠️ [Object MTF] Skipped trace with unmatched name: "${rawName}" at field ${fieldValue.toFixed(4)}`);
+                continue;
+            }
 
             const x = Array.isArray(tr?.x) ? tr.x : [];
             const y = Array.isArray(tr?.y) ? tr.y : [];
-            if (x.length === 0 || y.length === 0) continue;
+            if (x.length === 0 || y.length === 0) {
+                ensureConsoleLog(`⚠️ [Object MTF] Trace "${rawName}" has empty x/y at field ${fieldValue.toFixed(4)} (x.len=${x.length}, y.len=${y.length})`);
+                continue;
+            }
 
             const suffix = rawName.replace(/^(Tangential|Sagittal)\b/, '').trim();
             const axisName = isTangential ? 'Meridional' : 'Sagittal';
@@ -1427,15 +1590,25 @@ async function showFieldMTFDiagram({
 
         const pct = Math.floor(60 + ((i + 1) / results.length) * 35);
         const tracesSnapshot = Array.from(traceMap.values()).map(t => ({ ...t, x: [...t.x], y: [...t.y] }));
-        reportProgress(pct, `Extracting MTF: ${i + 1}/${results.length}`, tracesSnapshot, undefined);
+        reportProgress(pct, `Extracting MTF: ${i + 1}/${results.length} (${traceMap.size} traces)`, tracesSnapshot, undefined);
     }
 
     const finalTraces = Array.from(traceMap.values());
+    ensureConsoleLog(`========== ✅ [Object MTF] FINAL RESULTS ==========`);
+    ensureConsoleLog(`✅ Final trace count: ${finalTraces.length}`);
+    ensureConsoleLog(`✅ Field points per trace: ${finalTraces[0]?.x?.length || 0}`);
+    ensureConsoleLog(`✅ Trace names:`, finalTraces.map(t => t.name));
+    if (finalTraces.length > 0) {
+        ensureConsoleLog(`✅ First trace X-axis range: [${finalTraces[0].x?.[0]}, ${finalTraces[0].x?.[finalTraces[0].x.length - 1]}]`);
+        ensureConsoleLog(`✅ First trace Y-axis range: [${Math.min(...(finalTraces[0].y || []))}, ${Math.max(...(finalTraces[0].y || []))}]`);
+    }
+    ensureConsoleLog(`========== showFieldMTFDiagram COMPLETE ==========`);
+
     reportProgress(98, 'Finalizing plot...', undefined, undefined);
     plotly.newPlot(containerEl, finalTraces, layout, { responsive: true, displaylogo: false });
     reportProgress(100, 'Done', undefined, undefined);
 
-    console.log(`✅ [Object MTF] Computed ${results.length} field points with ${nSteps} steps`);
+    ensureConsoleLog(`✅ [Object MTF] Computed ${results.length} field points with ${nSteps} steps`);
 
     return { traces: finalTraces, layout };
 }

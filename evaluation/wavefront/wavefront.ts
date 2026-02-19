@@ -6539,6 +6539,8 @@ export class WavefrontAberrationAnalyzer {
             const cacheKey = {
                 fieldAngleX: fieldSetting.fieldAngle?.x || 0,
                 fieldAngleY: fieldSetting.fieldAngle?.y || 0,
+                xHeight: fieldSetting.xHeight || 0,
+                yHeight: fieldSetting.yHeight || 0,
                 wavelength: fieldSetting.wavelength || this.wavelength || 0.5876, // 🔧 undefined回避
                 gridSize,
                 opdMode,
@@ -6549,13 +6551,15 @@ export class WavefrontAberrationAnalyzer {
             if (cachedResult) {
                 if (OPD_DEBUG) {
                     const stats = cache.getStats();
-                    console.log(`✅ [Cache HIT] Returning cached result (hit rate: ${stats.hitRate})`);
+                    console.log(`✅ [CACHE HIT] Returning cached result (hit rate: ${stats.hitRate})`);
+                    console.log(`   Cache Key:`, cacheKey);
                 }
                 emitProgress(100, 'complete', 'Loaded from cache');
                 return cachedResult;
             } else if (OPD_DEBUG) {
                 const stats = cache.getStats();
-                console.log(`❌ [Cache MISS] Computing wavefront (hit rate: ${stats.hitRate})`);
+                console.log(`❌ [CACHE MISS] Computing wavefront (hit rate: ${stats.hitRate})`);
+                console.log(`   Cache Key:`, cacheKey);
             }
         }
         

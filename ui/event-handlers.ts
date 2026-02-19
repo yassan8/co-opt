@@ -5971,6 +5971,26 @@ export function setupAnalysisWindows() {
             try { return window.opener || null; } catch (_) { return null; }
         }
 
+        function popupLog(...args) {
+            try { console.log(...args); } catch (_) {}
+            try {
+                const op = getOpener();
+                if (op && op.console && typeof op.console.log === 'function') {
+                    op.console.log(...args);
+                }
+            } catch (_) {}
+        }
+
+        function popupError(...args) {
+            try { console.error(...args); } catch (_) {}
+            try {
+                const op = getOpener();
+                if (op && op.console && typeof op.console.error === 'function') {
+                    op.console.error(...args);
+                }
+            } catch (_) {}
+        }
+
         function getPrimaryWavelength() {
             const opener = getOpener();
             if (!opener) return null;
@@ -6642,6 +6662,26 @@ export function setupAnalysisWindows() {
             try { return window.opener || null; } catch (_) { return null; }
         }
 
+        function popupLog(...args) {
+            try { console.log(...args); } catch (_) {}
+            try {
+                const op = getOpener();
+                if (op && op.console && typeof op.console.log === 'function') {
+                    op.console.log(...args);
+                }
+            } catch (_) {}
+        }
+
+        function popupError(...args) {
+            try { console.error(...args); } catch (_) {}
+            try {
+                const op = getOpener();
+                if (op && op.console && typeof op.console.error === 'function') {
+                    op.console.error(...args);
+                }
+            } catch (_) {}
+        }
+
         function getPrimaryWavelength() {
             const opener = getOpener();
             if (!opener) return null;
@@ -6992,6 +7032,26 @@ export function setupAnalysisWindows() {
             try { return window.opener || null; } catch (_) { return null; }
         }
 
+        function popupLog(...args) {
+            try { console.log(...args); } catch (_) {}
+            try {
+                const op = getOpener();
+                if (op && op.console && typeof op.console.log === 'function') {
+                    op.console.log(...args);
+                }
+            } catch (_) {}
+        }
+
+        function popupError(...args) {
+            try { console.error(...args); } catch (_) {}
+            try {
+                const op = getOpener();
+                if (op && op.console && typeof op.console.error === 'function') {
+                    op.console.error(...args);
+                }
+            } catch (_) {}
+        }
+
         function getPrimaryWavelength() {
             const opener = getOpener();
             if (!opener) return null;
@@ -7031,13 +7091,45 @@ export function setupAnalysisWindows() {
         function getAxisInfo() {
             const opener = getOpener();
             if (!opener) return { mode: 'angle', label: 'Object Angle (deg)', unit: 'deg', max: 10 };
+
+            // Priority 1: check optical system first surface thickness.
+            // If INF (infinite conjugate), object coordinates MUST be angles.
+            let detectedMode = null;
+            try {
+                const getOpticalSystemRows = opener.getOpticalSystemRows;
+                if (typeof getOpticalSystemRows === 'function') {
+                    const optRows = safeCall(() => getOpticalSystemRows(opener.tableOpticalSystem), []);
+                    const firstSurf = Array.isArray(optRows) && optRows.length > 0 ? optRows[0] : null;
+                    if (firstSurf) {
+                        const thickness = firstSurf.thickness ?? firstSurf.Thickness;
+                        const isInf = thickness === 'INF' || thickness === Infinity || String(thickness).trim().toUpperCase() === 'INF';
+                        if (isInf) {
+                            detectedMode = 'angle';
+                        } else {
+                            const numThick = parseFloat(String(thickness));
+                            if (Number.isFinite(numThick) && numThick > 0) {
+                                detectedMode = 'finite'; // finite conjugate, defer to position field
+                            }
+                        }
+                    }
+                }
+            } catch (_) {}
+
+            // Priority 2: object rows position field (used when finite conjugate or inconclusive)
             const getObjectRows = opener.getObjectRows;
             const objects = (typeof getObjectRows === 'function')
                 ? safeCall(() => getObjectRows(opener.tableObject), [])
                 : [];
             const first = Array.isArray(objects) && objects.length > 0 ? objects[0] : null;
-            const posRaw = String(first?.position ?? first?.object ?? first?.objectType ?? 'Angle');
-            const isAngle = /\bangle\b/i.test(posRaw);
+
+            let isAngle;
+            if (detectedMode === 'angle') {
+                isAngle = true;
+            } else {
+                const posRaw = String(first?.position ?? first?.object ?? first?.objectType ?? 'Angle');
+                isAngle = /\bangle\b/i.test(posRaw);
+            }
+
             const unit = isAngle ? 'deg' : 'mm';
             const label = isAngle ? 'Object Angle (deg)' : 'Object Height (mm)';
             let maxVal = 10;
@@ -7145,7 +7237,7 @@ export function setupAnalysisWindows() {
                 if (wavelength !== 'all' && !Number.isFinite(wavelength) && !(Number.isFinite(primary) && primary > 0)) {
                     throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                 }
-                await opener.showFieldMTFDiagram({
+                const requestPayload = {
                     wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : primary),
                     firstFrequencyLpmm: Number.isFinite(meridionalFreq) ? meridionalFreq : 10,
                     secondFrequencyLpmm: Number.isFinite(sagittalFreq) ? sagittalFreq : 30,
@@ -7166,11 +7258,26 @@ export function setupAnalysisWindows() {
                         } catch (_) {}
                     },
                     containerElement: containerEl
+                };
+
+                popupLog('[Object MTF Popup] invoking opener.showFieldMTFDiagram', {
+                    axisMode: axisInfo.mode,
+                    fieldMin: requestPayload.fieldMin,
+                    fieldMax: requestPayload.fieldMax,
+                    steps: requestPayload.steps,
+                    samplingSize: requestPayload.samplingSize,
+                    firstFrequencyLpmm: requestPayload.firstFrequencyLpmm,
+                    secondFrequencyLpmm: requestPayload.secondFrequencyLpmm,
+                    wavelengthMicrons: requestPayload.wavelengthMicrons
                 });
+
+                await opener.showFieldMTFDiagram(requestPayload);
+
+                popupLog('[Object MTF Popup] opener.showFieldMTFDiagram completed');
                 setProgress(100, 'Done');
                 hideProgress();
             } catch (err) {
-                console.error(err);
+                popupError('[Object MTF Popup] renderFieldMTF failed', err);
                 setProgress(100, 'Failed');
                 if (containerEl) {
                     containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate Object MTF. Check console.</div>';
