@@ -710,6 +710,24 @@ let tabulatorOptions = {
         }
       }
     },
+    { 
+      title: "Optimize", 
+      field: "optimizeSemiDia", 
+      width: 100, 
+      headerSort: false,
+      editor: "select",
+      editorParams: {
+        values: { "": "(None)", "M": "Manual", "A": "Auto" }
+      },
+      visible: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          return rowData["object type"] === "Image" || rowData.object === "Image";
+        } catch (e) {
+          return false;
+        }
+      }
+    },
     { title: "Material", field: "material", editor: "input", width: 100, headerSort: false },
     { title: "Radius X", field: "radiusX", editor: "input", width: 100, headerSort: false,
       visible: function(cell) {
@@ -1694,9 +1712,9 @@ tableOpticalSystem.on("cellEdited", function(cell){
     
     console.log(`🔧 Cell edited: field=${field}, rowIndex=${rowIndex}, surfId=${rowData.id}, value=${value}`);
     
-    // optimizeSemiDia フィールドで "A" が入力された場合、主光線追跡を実行
-    if (field === "optimizeSemiDia" && (value === "A" || value === "a")) {
-      console.log(`🎯 optimizeSemiDia に "A" が入力されました (rowIndex=${rowIndex}, surfId=${rowData.id})`);
+    // optimizeSemiDia フィールドで Auto が選択された場合、主光線追跡を実行
+    if (field === "optimizeSemiDia" && (value === "A" || value === "a" || value === "Auto")) {
+      console.log(`🎯 optimizeSemiDia に Auto が選択されました (rowIndex=${rowIndex}, surfId=${rowData.id})`);
       
       setTimeout(async () => {
         try {
@@ -1707,7 +1725,7 @@ tableOpticalSystem.on("cellEdited", function(cell){
           );
           
           if (imageSurfaceIndex === -1 || imageSurfaceIndex !== rowIndex) {
-            alert('optimizeSemiDia の "A" はImage面でのみ使用できます。');
+            alert('optimizeSemiDia の Auto はImage面でのみ使用できます。');
             cell.setValue('');
             isUpdatingFromCellEdit = false;
             return;
