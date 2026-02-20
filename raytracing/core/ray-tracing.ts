@@ -6731,9 +6731,16 @@ export async function calculateAllSurfacesLocalCoordinates(opticalSystemRows, ta
           const chiefRayShiftModeX = String(row?.parameters?.chiefRayShiftX ?? row?.chiefRayShiftX ?? '').trim().toUpperCase();
           const chiefRayShiftModeY = String(row?.parameters?.chiefRayShiftY ?? row?.chiefRayShiftY ?? '').trim().toUpperCase();
           const chiefRayShiftModeZ = String(row?.parameters?.chiefRayShiftZ ?? row?.chiefRayShiftZ ?? '').trim().toUpperCase();
-          const useChiefRayShiftX = (chiefRayShiftModeX === 'A' || chiefRayShiftModeX === 'AUTO');
-          const useChiefRayShiftY = (chiefRayShiftModeY === 'A' || chiefRayShiftModeY === 'AUTO');
-          const useChiefRayShiftZ = (chiefRayShiftModeZ === 'A' || chiefRayShiftModeZ === 'AUTO');
+          let useChiefRayShiftX = (chiefRayShiftModeX === 'A' || chiefRayShiftModeX === 'AUTO');
+          let useChiefRayShiftY = (chiefRayShiftModeY === 'A' || chiefRayShiftModeY === 'AUTO');
+          let useChiefRayShiftZ = (chiefRayShiftModeZ === 'A' || chiefRayShiftModeZ === 'AUTO');
+          
+          // For XYZ mode, always enable Z calculation if either X or Y is enabled
+          // This ensures that when tilted surfaces are encountered, Z deltas are computed
+          if (useChiefRayShiftX || useChiefRayShiftY) {
+            useChiefRayShiftZ = true;
+            console.log(`[CoordTrans Surf ${row.id}] X or Y shift enabled: forcing useChiefRayShiftZ=true for consistency`);
+          }
 
           if (useChiefRayShiftX || useChiefRayShiftY || useChiefRayShiftZ) {
             const thickness = getSafeThickness(modifiedRows[i - 1]);
@@ -6822,118 +6829,160 @@ export async function calculateAllSurfacesLocalCoordinates(opticalSystemRows, ta
 
             // =========================================================================================
             // CALCULATION 2: Flat/Global Basis (For 'XYZ' mode return)
-            // Intersection with plane perpendicular to Global Z at the TARGET surface Z position.
-            // This gives the decenter needed to align chief ray with target surface in global coordinates.
+            // Accounts for tilted target surfaces by using the target surface's local coordinate frame.
+            // Computes intersection of chief ray with the target surface (at its local Z=0 plane),
+            // then transforms result back to global coordinates.
             // =========================================================================================
-            const planeNormalFlat = vec3(0, 0, 1);
-            const baseOriginFlat = vec3(prevOrigin.x, prevOrigin.y, targetGlobalZ); 
-            
             let intersectGlobalFlatBasis = null;
+            
             if (chiefRayPath && chiefRayPath.length >= 2) {
-                console.log(`  [CoordTrans Surf ${surfaceId}] Chief Ray Path has ${chiefRayPath.length} points, target Z=${targetGlobalZ.toFixed(4)}, prevOrigin Z=${prevOrigin.z.toFixed(4)}`);
-                // Log all points in chief ray path
-                for (let j = 0; j < chiefRayPath.length; j++) {
-                  const p = chiefRayPath[j];
-                  console.log(`    Point ${j}: (${p.x.toFixed(4)}, ${p.y.toFixed(4)}, ${p.z.toFixed(4)})`);
+              console.log(`  [CoordTrans Surf ${surfaceId}] Chief Ray Path has ${chiefRayPath.length} points, target Z=${targetGlobalZ.toFixed(4)}, prevOrigin Z=${prevOrigin.z.toFixed(4)}`);
+              // Log all points in chief ray path
+              for (let j = 0; j < chiefRayPath.length; j++) {
+                const p = chiefRayPath[j];
+                console.log(`    Point ${j}: (${p.x.toFixed(4)}, ${p.y.toFixed(4)}, ${p.z.toFixed(4)})`);
+              }
+              
+              // Get target surface's rotation matrix to handle tilted surfaces correctly
+              let targetRotMat = null;
+              if (targetIndexWithCoordTrans >= 0 && targetIndexWithCoordTrans < surfaceDataWithCoordTrans.length) {
+                targetRotMat = surfaceDataWithCoordTrans[targetIndexWithCoordTrans].rotationMatrix;
+                console.log(`  [CoordTrans Surf ${surfaceId}] Target surface rotation matrix available: ${targetRotMat ? 'yes' : 'no'}`);
+              }
+              
+              // Transform chief ray points to target surface's local coordinate frame
+              // and find intersection with local Z=0 plane (the actual surface)
+              let localIntersectPoint = null;
+              let globalRotMatInverse = null;
+              
+              if (targetRotMat) {
+                // Compute inverse of target rotation matrix (transpose since it's orthonormal)
+                globalRotMatInverse = [
+                  [targetRotMat[0][0], targetRotMat[1][0], targetRotMat[2][0]],
+                  [targetRotMat[0][1], targetRotMat[1][1], targetRotMat[2][1]],
+                  [targetRotMat[0][2], targetRotMat[1][2], targetRotMat[2][2]]
+                ];
+                
+                const targetOrigin = surfaceDataWithCoordTrans[targetIndexWithCoordTrans].origin;
+                console.log(`  [CoordTrans Surf ${surfaceId}] Target origin: (${targetOrigin.x.toFixed(4)}, ${targetOrigin.y.toFixed(4)}, ${targetOrigin.z.toFixed(4)})`);
+                
+                // Transform chief ray points to target's local frame
+                const chiefRayPathLocal = chiefRayPath.map(p => {
+                  // Translate to target's origin
+                  const dx = p.x - targetOrigin.x;
+                  const dy = p.y - targetOrigin.y;
+                  const dz = p.z - targetOrigin.z;
+                  // Rotate by inverse of target's rotation matrix
+                  const lx = globalRotMatInverse[0][0]*dx + globalRotMatInverse[0][1]*dy + globalRotMatInverse[0][2]*dz;
+                  const ly = globalRotMatInverse[1][0]*dx + globalRotMatInverse[1][1]*dy + globalRotMatInverse[1][2]*dz;
+                  const lz = globalRotMatInverse[2][0]*dx + globalRotMatInverse[2][1]*dy + globalRotMatInverse[2][2]*dz;
+                  return { x: lx, y: ly, z: lz };
+                });
+                
+                console.log(`  [CoordTrans Surf ${surfaceId}] Chief ray in local frame (first 3 points):`);
+                for (let j = 0; j < Math.min(3, chiefRayPathLocal.length); j++) {
+                  const p = chiefRayPathLocal[j];
+                  console.log(`    Local point ${j}: (${p.x.toFixed(4)}, ${p.y.toFixed(4)}, ${p.z.toFixed(4)})`);
                 }
                 
-                // First, check if there's a point exactly at target Z (within tolerance)
+                // Find intersection with local Z=0 plane (the actual surface)
                 const tolerance = 1e-6;
-                for (let j = 0; j < chiefRayPath.length; j++) {
-                  if (Math.abs(chiefRayPath[j].z - targetGlobalZ) < tolerance) {
-                    intersectGlobalFlatBasis = {
-                      x: chiefRayPath[j].x,
-                      y: chiefRayPath[j].y,
-                      z: chiefRayPath[j].z
+                
+                // First, check if there's a point exactly at local Z=0
+                for (let j = 0; j < chiefRayPathLocal.length; j++) {
+                  if (Math.abs(chiefRayPathLocal[j].z) < tolerance) {
+                    localIntersectPoint = {
+                      x: chiefRayPathLocal[j].x,
+                      y: chiefRayPathLocal[j].y,
+                      z: chiefRayPathLocal[j].z
                     };
-                    console.log(`  [CoordTrans Surf ${surfaceId}] Found exact point at target Z: Point ${j}, (${intersectGlobalFlatBasis.x.toFixed(4)}, ${intersectGlobalFlatBasis.y.toFixed(4)}, ${intersectGlobalFlatBasis.z.toFixed(4)})`);
+                    console.log(`  [CoordTrans Surf ${surfaceId}] Found exact point at local Z=0: Point ${j}, (${localIntersectPoint.x.toFixed(4)}, ${localIntersectPoint.y.toFixed(4)}, ${localIntersectPoint.z.toFixed(4)})`);
                     break;
                   }
                 }
                 
-                // If no exact point found, find the segment that crosses target Z
-                if (!intersectGlobalFlatBasis) {
-                  // Find the first point AFTER target Z (refracted position)
-                  let pointAfterTarget = null;
-                  let pointBeforeTarget = null;
-                  for (let j = 0; j < chiefRayPath.length; j++) {
-                    if (chiefRayPath[j].z <= targetGlobalZ) {
-                      pointBeforeTarget = chiefRayPath[j];
+                // If no exact point, find segment crossing local Z=0
+                if (!localIntersectPoint) {
+                  for (let j = 0; j < chiefRayPathLocal.length - 1; j++) {
+                    const p1 = chiefRayPathLocal[j];
+                    const p2 = chiefRayPathLocal[j + 1];
+                    
+                    // Check if segment crosses Z=0 plane
+                    if (p1.z * p2.z < 0 || Math.abs(p1.z) < tolerance) {
+                      const denom = p1.z - p2.z;
+                      if (Math.abs(denom) > eps) {
+                        const t = p1.z / denom;
+                        localIntersectPoint = {
+                          x: p1.x + t * (p2.x - p1.x),
+                          y: p1.y + t * (p2.y - p1.y),
+                          z: 0.0
+                        };
+                        console.log(`  [CoordTrans Surf ${surfaceId}] Found intersection at segment ${j}, local t=${t.toFixed(4)}: (${localIntersectPoint.x.toFixed(4)}, ${localIntersectPoint.y.toFixed(4)}, ${localIntersectPoint.z.toFixed(4)})`);
+                        break;
+                      }
                     }
-                    if (chiefRayPath[j].z > targetGlobalZ && !pointAfterTarget) {
-                      pointAfterTarget = chiefRayPath[j];
+                  }
+                }
+                
+                // If intersection found in local frame, transform back to global
+                if (localIntersectPoint) {
+                  // Rotate back to global frame using target's rotation matrix
+                  const gx = targetRotMat[0][0]*localIntersectPoint.x + targetRotMat[0][1]*localIntersectPoint.y + targetRotMat[0][2]*localIntersectPoint.z;
+                  const gy = targetRotMat[1][0]*localIntersectPoint.x + targetRotMat[1][1]*localIntersectPoint.y + targetRotMat[1][2]*localIntersectPoint.z;
+                  const gz = targetRotMat[2][0]*localIntersectPoint.x + targetRotMat[2][1]*localIntersectPoint.y + targetRotMat[2][2]*localIntersectPoint.z;
+                  
+                  // Translate back to global origin
+                  intersectGlobalFlatBasis = {
+                    x: gx + targetOrigin.x,
+                    y: gy + targetOrigin.y,
+                    z: gz + targetOrigin.z
+                  };
+                  console.log(`  [CoordTrans Surf ${surfaceId}] Back to global: (${intersectGlobalFlatBasis.x.toFixed(4)}, ${intersectGlobalFlatBasis.y.toFixed(4)}, ${intersectGlobalFlatBasis.z.toFixed(4)})`);
+                }
+              } else {
+                // Fallback to horizontal plane if target rotation matrix not available
+                console.log(`  [CoordTrans Surf ${surfaceId}] No target rotation matrix; using horizontal plane fallback`);
+                const planeNormalFlat = vec3(0, 0, 1);
+                const baseOriginFlat = vec3(prevOrigin.x, prevOrigin.y, targetGlobalZ);
+                
+                // Find segment crossing horizontal plane at targetGlobalZ
+                for (let j = 0; j < chiefRayPath.length - 1; j++) {
+                  const p1 = chiefRayPath[j], p2 = chiefRayPath[j + 1];
+                  const d1 = dot(planeNormalFlat, sub(p1, baseOriginFlat));
+                  const d2 = dot(planeNormalFlat, sub(p2, baseOriginFlat));
+                  if (d1 * d2 <= 0) {
+                    const denom = d1 - d2;
+                    if (Math.abs(denom) > eps) {
+                      const t = d1 / denom;
+                      intersectGlobalFlatBasis = {
+                        x: p1.x + t * (p2.x - p1.x),
+                        y: p1.y + t * (p2.y - p1.y),
+                        z: targetGlobalZ
+                      };
+                      console.log(`  [CoordTrans Surf ${surfaceId}] Fallback: intersection at segment ${j}, t=${t.toFixed(4)}: (${intersectGlobalFlatBasis.x.toFixed(4)}, ${intersectGlobalFlatBasis.y.toFixed(4)}, ${intersectGlobalFlatBasis.z.toFixed(4)})`);
                       break;
                     }
                   }
-                  
-                  // If we have a point after target, use it (refracted ray)
-                  // Use the refracted ray direction (from before to after) to back-project to target Z
-                  if (pointAfterTarget && pointBeforeTarget) {
-                    // Calculate ray direction from before to after refraction
-                    const dx = pointAfterTarget.x - pointBeforeTarget.x;
-                    const dy = pointAfterTarget.y - pointBeforeTarget.y;
-                    const dz = pointAfterTarget.z - pointBeforeTarget.z;
-                    const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
-                    if (len > eps && Math.abs(dz) > eps) {
-                      // Normalized direction
-                      const dirX = dx / len;
-                      const dirY = dy / len;
-                      const dirZ = dz / len;
-                      
-                      // Back-project from pointAfterTarget to target Z
-                      const t = (pointAfterTarget.z - targetGlobalZ) / dirZ;
-                      intersectGlobalFlatBasis = {
-                        x: pointAfterTarget.x - t * dirX,
-                        y: pointAfterTarget.y - t * dirY,
-                        z: targetGlobalZ
-                      };
-                      console.log(`  [CoordTrans Surf ${surfaceId}] Back-projecting from after-point: Z=${pointAfterTarget.z.toFixed(4)} → target Z=${targetGlobalZ.toFixed(4)}`);
-                      console.log(`  [CoordTrans Surf ${surfaceId}] Ray direction: (${dirX.toFixed(6)}, ${dirY.toFixed(6)}, ${dirZ.toFixed(6)}), t=${t.toFixed(4)}`);
-                      console.log(`  [CoordTrans Surf ${surfaceId}] Intersection: (${intersectGlobalFlatBasis.x.toFixed(4)}, ${intersectGlobalFlatBasis.y.toFixed(4)}, ${intersectGlobalFlatBasis.z.toFixed(4)})`);
-                    }
-                  } else {
-                    // Fallback to old method
-                    for (let j = 0; j < chiefRayPath.length - 1; j++) {
-                      const p1 = chiefRayPath[j], p2 = chiefRayPath[j + 1];
-                      const d1 = dot(planeNormalFlat, sub(p1, baseOriginFlat));
-                      const d2 = dot(planeNormalFlat, sub(p2, baseOriginFlat));
-                      if (Math.abs(d1) <= eps) { 
-                        intersectGlobalFlatBasis = { x: p1.x, y: p1.y, z: p1.z }; 
-                        console.log(`  [CoordTrans Surf ${surfaceId}] Found intersection at segment ${j} (point on plane): (${p1.x.toFixed(4)}, ${p1.y.toFixed(4)}, ${p1.z.toFixed(4)})`);
-                        break; 
-                      }
-                      if (d1 * d2 <= 0) {
-                        const denom = d1 - d2;
-                        if (Math.abs(denom) > eps) {
-                          const t = d1 / denom;
-                          intersectGlobalFlatBasis = { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y), z: p1.z + t * (p2.z - p1.z) };
-                          console.log(`  [CoordTrans Surf ${surfaceId}] Found intersection at segment ${j}, t=${t.toFixed(4)}: (${intersectGlobalFlatBasis.x.toFixed(4)}, ${intersectGlobalFlatBasis.y.toFixed(4)}, ${intersectGlobalFlatBasis.z.toFixed(4)})`);
-                          console.log(`    p1=(${p1.x.toFixed(4)}, ${p1.y.toFixed(4)}, ${p1.z.toFixed(4)}), p2=(${p2.x.toFixed(4)}, ${p2.y.toFixed(4)}, ${p2.z.toFixed(4)})`);
-                          break;
-                        }
-                      }
-                    }
-                  }
-                }
-                if (!intersectGlobalFlatBasis) {
-                  console.log(`  [CoordTrans Surf ${surfaceId}] WARNING: No intersection found with flat plane!`);
                 }
               }
+              
+              if (!intersectGlobalFlatBasis) {
+                console.log(`  [CoordTrans Surf ${surfaceId}] WARNING: No intersection found with target surface!`);
+              }
+            }
 
-              if (intersectGlobalFlatBasis) {
-                  // X, Y: offset from previous origin at target Z plane
-                  const dxf = intersectGlobalFlatBasis.x - prevOrigin.x;
-                  const dyf = intersectGlobalFlatBasis.y - prevOrigin.y;
-                  // Z: Global Z distance from previous origin to target
-                  const dzf = targetGlobalZ - prevOrigin.z;
-                  
-                  // Project onto Identity Basis (Global X,Y,Z)
-                  flatDecenterX = dxf;
-                  flatDecenterY = dyf;
-                  flatDecenterZ = dzf;
-                  
-                  console.log(`  [CoordTrans Surf ${surfaceId}] Flat/Global Shift: global=(${dxf.toFixed(4)}, ${dyf.toFixed(4)}, ${dzf.toFixed(4)})`);
-              }
+            if (intersectGlobalFlatBasis) {
+                // Compute deltas in global coordinates
+                const dxf = intersectGlobalFlatBasis.x - prevOrigin.x;
+                const dyf = intersectGlobalFlatBasis.y - prevOrigin.y;
+                const dzf = intersectGlobalFlatBasis.z - prevOrigin.z;
+                
+                flatDecenterX = dxf;
+                flatDecenterY = dyf;
+                flatDecenterZ = dzf;
+                
+                console.log(`  [CoordTrans Surf ${surfaceId}] Flat/Global Shift (accounting for tilt): global=(${dxf.toFixed(4)}, ${dyf.toFixed(4)}, ${dzf.toFixed(4)})`);
+            }
           }
         }
         

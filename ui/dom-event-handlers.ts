@@ -389,7 +389,7 @@ async function performCoordTransCalculation(blockId: string, panel: HTMLElement)
             : getValue('toSurf');
         const coordReturnValue = (blockParams && blockParams.coordReturn)
             ? String(blockParams.coordReturn)
-            : (getValue('coordReturn') || 'xy');
+            : (getValue('coordReturn') || 'none');
 
         // For AUTO mode, zero out existing decenters to ensure independent calculation
         if (blockParams) {
@@ -611,7 +611,7 @@ async function performCoordTransCalculation(blockId: string, panel: HTMLElement)
         }
 
         try {
-            if (coordReturnValue === 'xyz' || coordReturnValue === 'xy') {
+            if (coordReturnValue === 'xyz') {
                 console.log('[CoordTrans] Mode:', coordReturnValue, 'blockId:', blockId, 'targetIndex:', targetIndex);
                 console.log('[CoordTrans] blockParams:', blockParams);
                 console.log('[CoordTrans] surfData tilt:', {
@@ -651,33 +651,20 @@ async function performCoordTransCalculation(blockId: string, panel: HTMLElement)
             ? blockParams.chiefRayShiftZ
             : getValue('chiefRayShiftZ');
         const normShift = (v: any) => String(v ?? '').trim().toUpperCase();
-        const shouldAutoX = ['A', 'AUTO'].includes(normShift(chiefRayShiftX));
-        const shouldAutoY = ['A', 'AUTO'].includes(normShift(chiefRayShiftY));
-        const shouldAutoZ = ['A', 'AUTO'].includes(normShift(chiefRayShiftZ));
+        let shouldAutoX = ['A', 'AUTO'].includes(normShift(chiefRayShiftX));
+        let shouldAutoY = ['A', 'AUTO'].includes(normShift(chiefRayShiftY));
+        let shouldAutoZ = ['A', 'AUTO'].includes(normShift(chiefRayShiftZ));
+        
+        // Force Z-direction calculation to be enabled when XYZ mode is active
+        // This ensures decenterZ is calculated even if chiefRayShiftZ is not explicitly set to AUTO
+        if (coordReturnValue === 'xyz') {
+            shouldAutoZ = true;
+            console.log('[CoordTrans] XYZ mode detected: forcing shouldAutoZ=true');
+        }
 
         let updated: Record<string, boolean> = {};
         switch (coordReturnValue) {
             case 'none':
-                break;
-            case 'orientation':
-                updated = {
-                    decenterX: setComputedValue('decenterX', 0),
-                    decenterY: setComputedValue('decenterY', 0),
-                    decenterZ: setComputedValue('decenterZ', 0),
-                    tiltX: setComputedValue('tiltX', surfData.localTiltX),
-                    tiltY: setComputedValue('tiltY', surfData.localTiltY),
-                    tiltZ: setComputedValue('tiltZ', surfData.localTiltZ)
-                };
-                break;
-            case 'xy':
-                updated = {
-                    decenterX: shouldAutoX ? setComputedValue('decenterX', surfData.localDecenterX) : false,
-                    decenterY: shouldAutoY ? setComputedValue('decenterY', surfData.localDecenterY) : false,
-                    decenterZ: setComputedValue('decenterZ', 0),
-                    tiltX: setComputedValue('tiltX', surfData.localTiltX),
-                    tiltY: setComputedValue('tiltY', surfData.localTiltY),
-                    tiltZ: setComputedValue('tiltZ', surfData.localTiltZ)
-                };
                 break;
             case 'xyz':
                 {
@@ -714,21 +701,7 @@ async function performCoordTransCalculation(blockId: string, panel: HTMLElement)
                 (window as any).__coordTransApplyingResults = true;
 
                 const updates: Record<string, number> = {};
-                if (coordReturnValue === 'orientation') {
-                    updates.decenterX = 0;
-                    updates.decenterY = 0;
-                    updates.decenterZ = 0;
-                    updates.tiltX = surfData.localTiltX;
-                    updates.tiltY = surfData.localTiltY;
-                    updates.tiltZ = surfData.localTiltZ;
-                } else if (coordReturnValue === 'xy') {
-                    if (shouldAutoX) updates.decenterX = surfData.localDecenterX;
-                    if (shouldAutoY) updates.decenterY = surfData.localDecenterY;
-                    updates.decenterZ = 0;
-                    updates.tiltX = surfData.localTiltX;
-                    updates.tiltY = surfData.localTiltY;
-                    updates.tiltZ = surfData.localTiltZ;
-                } else if (coordReturnValue === 'xyz') {
+                if (coordReturnValue === 'xyz') {
                     let srcX = surfData.localDecenterX;
                     if (surfData.flatDecenterX !== undefined && Number.isFinite(surfData.flatDecenterX)) {
                         srcX = surfData.flatDecenterX;
@@ -743,10 +716,15 @@ async function performCoordTransCalculation(blockId: string, panel: HTMLElement)
                     if (surfData.flatDecenterZ !== undefined && Number.isFinite(surfData.flatDecenterZ)) {
                         srcZ = surfData.flatDecenterZ;
                     }
+                    
+                    console.log(`[CoordTrans XYZ] shouldAutoX=${shouldAutoX}, shouldAutoY=${shouldAutoY}, shouldAutoZ=${shouldAutoZ}`);
+                    console.log(`[CoordTrans XYZ] srcX=${srcX.toFixed(4)}, srcY=${srcY.toFixed(4)}, srcZ=${srcZ.toFixed(4)}`);
 
                     if (shouldAutoX) updates.decenterX = srcX;
                     if (shouldAutoY) updates.decenterY = srcY;
                     if (shouldAutoZ) updates.decenterZ = srcZ;
+                    console.log(`[CoordTrans XYZ] After assignment: updates.decenterX=${updates.decenterX}, updates.decenterY=${updates.decenterY}, updates.decenterZ=${updates.decenterZ}`);
+                    
                     updates.tiltX = surfData.localTiltX;
                     updates.tiltY = surfData.localTiltY;
                     updates.tiltZ = surfData.localTiltZ;
@@ -761,11 +739,14 @@ async function performCoordTransCalculation(blockId: string, panel: HTMLElement)
                     const block = activeCfg?.blocks?.find((b: any) => b && String(b.blockId ?? '') === String(blockId));
                     if (block) {
                         if (!block.parameters || typeof block.parameters !== 'object') block.parameters = {};
+                        console.log(`[CoordTrans] Before block update - blockId=${blockId}:`, {decenterX: (block.parameters as any).decenterX, decenterY: (block.parameters as any).decenterY, decenterZ: (block.parameters as any).decenterZ});
                         for (const [k, v] of Object.entries(updates)) {
                             if (typeof v === 'number' && Number.isFinite(v)) {
                                 (block.parameters as any)[k] = v;
+                                console.log(`[CoordTrans] Set block.parameters.${k} = ${v.toFixed(6)}`);
                             }
                         }
+                        console.log(`[CoordTrans] After block update - blockId=${blockId}:`, {decenterX: (block.parameters as any).decenterX, decenterY: (block.parameters as any).decenterY, decenterZ: (block.parameters as any).decenterZ});
                         if (activeCfg?.metadata && typeof activeCfg.metadata === 'object') {
                             activeCfg.metadata.modified = new Date().toISOString();
                         }
@@ -4874,9 +4855,10 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const isApertureShape = (blockType === 'Mirror' || blockType === 'SingleSurface') && label === 'apertureShape';
                 const isCoordReturn = blockType === 'CoordTrans' && label === 'coordReturn';
                 const isCoordOrder = blockType === 'CoordTrans' && label === 'order';
+                const isCoordToSurf = blockType === 'CoordTrans' && label === 'toSurf';
                 // Exclude nd, vd, abbe from slider display - they should be text input only
                 const isGlassProperty = label === 'nd' || label === 'vd' || label === 'abbe';
-                const isNumeric = !isMaterial && !isSurfType && !isGlassProperty && !isGapThicknessMode && !isObjectDistanceMode && !isImageSemidiaMode && !isApertureShape && !isCoordReturn && !isCoordOrder && !isNaN(parseFloat(String(value)));
+                const isNumeric = !isMaterial && !isSurfType && !isGlassProperty && !isGapThicknessMode && !isObjectDistanceMode && !isImageSemidiaMode && !isApertureShape && !isCoordReturn && !isCoordOrder && !isCoordToSurf && !isNaN(parseFloat(String(value)));
                 
                 // Determine if this parameter should show coef parameters based on surfType
                 const shouldHideCoef = (key: string, surfTypeValue: string) => {
@@ -5123,11 +5105,10 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     select.style.boxSizing = 'border-box';
 
                     const normalized = String(value ?? '').trim().toLowerCase();
-                    const currentValue = (normalized === 'xy' || normalized === 'xyz' || normalized === 'none') ? normalized : 'xy';
+                    const currentValue = (normalized === 'xyz' || normalized === 'none') ? normalized : 'none';
                     const options = [
-                        { value: 'xy', label: 'XY' },
-                        { value: 'xyz', label: 'XYZ' },
-                        { value: 'none', label: 'None' }
+                        { value: 'xyz', label: 'On' },
+                        { value: 'none', label: 'Off' }
                     ];
 
                     options.forEach(({ value: optValue, label: optLabel }) => {
@@ -5138,10 +5119,21 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         select.appendChild(option);
                     });
 
-                    select.addEventListener('change', () => {
+                    select.addEventListener('change', async () => {
                         const newValue = select.value;
                         if (newValue !== value) {
                             cooptApplyBlockValue(blockId, path, value, newValue);
+                            if (newValue === 'xyz') {
+                                const oldOrder = Number((params as any)?.order ?? 0);
+                                if (oldOrder !== 1) {
+                                    cooptApplyBlockValue(blockId, 'parameters.order', oldOrder, 1);
+                                }
+                                try {
+                                    await performCoordTransCalculation(blockId, panel);
+                                } catch (err) {
+                                    console.error('[CoordTrans] Auto calculation on ON failed:', err);
+                                }
+                            }
                         }
                     });
 
@@ -5182,6 +5174,93 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         const oldValue = Number(value ?? 1);
                         if (newValue !== oldValue) {
                             cooptApplyBlockValue(blockId, path, oldValue, newValue);
+                        }
+                    });
+
+                    inputElement = select;
+                } else if (isCoordToSurf) {
+                    const select = document.createElement('select');
+                    select.style.fontSize = '12px';
+                    select.style.padding = '4px 6px';
+                    select.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
+                    select.style.background = isDarkMode ? '#111827' : '#fff';
+                    select.style.color = isDarkMode ? '#f9fafb' : '#111827';
+                    select.style.borderRadius = '4px';
+                    select.style.flex = '1';
+                    select.style.cursor = 'pointer';
+                    select.style.minWidth = '200px';
+                    select.style.height = '28px';
+                    select.style.boxSizing = 'border-box';
+
+                    const options: Array<{ value: string; label: string }> = [];
+                    try {
+                        if (Array.isArray(blocksInOrder) && blocksInOrder.length > 0 && typeof expandBlocksToOpticalSystemRows === 'function') {
+                            const exp = expandBlocksToOpticalSystemRows(blocksInOrder as any);
+                            const rows = exp && Array.isArray(exp.rows) ? exp.rows : [];
+                            let surfaceOrdinal = 0;
+                            const surfaceIndexInBlock = new Map<string, number>();
+                            for (let idx = 0; idx < rows.length; idx++) {
+                                const r = rows[idx];
+                                const rowBlockType = String(r?._blockType ?? r?.type ?? '').trim();
+                                if (
+                                    rowBlockType === 'Gap' ||
+                                    rowBlockType === 'AirGap' ||
+                                    rowBlockType === 'CoordTrans' ||
+                                    rowBlockType === 'ObjectSurface' ||
+                                    rowBlockType === 'ObjectPlane' ||
+                                    rowBlockType === 'Object'
+                                ) {
+                                    continue;
+                                }
+
+                                surfaceOrdinal += 1;
+                                const rowBlockId = String(r?._blockId ?? '').trim();
+                                const perBlockIdx = (surfaceIndexInBlock.get(rowBlockId) || 0) + 1;
+                                surfaceIndexInBlock.set(rowBlockId, perBlockIdx);
+
+                                const blockDisplay = displayLabelByBlockId.get(rowBlockId) || rowBlockId || `Surface`;
+                                options.push({
+                                    value: String(surfaceOrdinal),
+                                    label: `${surfaceOrdinal}: ${blockDisplay} S${perBlockIdx}`
+                                });
+                            }
+                        }
+                    } catch (_) {}
+
+                    const rawCurrent = Number(value);
+                    const hasCurrent = Number.isFinite(rawCurrent) && options.some(o => Number(o.value) === rawCurrent);
+                    if (!hasCurrent && Number.isFinite(rawCurrent)) {
+                        options.unshift({ value: String(rawCurrent), label: `${rawCurrent}: (current)` });
+                    }
+                    if (options.length === 0) {
+                        options.push({ value: String(Number.isFinite(rawCurrent) ? rawCurrent : 1), label: '1: Surface 1' });
+                    }
+
+                    const currentValue = hasCurrent
+                        ? String(rawCurrent)
+                        : String(Number.isFinite(rawCurrent) ? rawCurrent : Number(options[0].value));
+
+                    options.forEach(({ value: optValue, label: optLabel }) => {
+                        const option = document.createElement('option');
+                        option.value = optValue;
+                        option.textContent = optLabel;
+                        if (optValue === currentValue) option.selected = true;
+                        select.appendChild(option);
+                    });
+
+                    select.addEventListener('change', async () => {
+                        const newValue = Number(select.value);
+                        const oldValue = Number(value);
+                        if (Number.isFinite(newValue) && newValue !== oldValue) {
+                            cooptApplyBlockValue(blockId, path, oldValue, newValue);
+                            const coordReturnMode = String((params as any)?.coordReturn ?? '').trim().toLowerCase();
+                            if (coordReturnMode === 'xyz') {
+                                try {
+                                    await performCoordTransCalculation(blockId, panel);
+                                } catch (err) {
+                                    console.error('[CoordTrans] Auto calculation on toSurf change failed:', err);
+                                }
+                            }
                         }
                     });
 
@@ -6018,58 +6097,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 panel.appendChild(empty);
             }
 
-            // CoordTrans: Auto Calculate ボタン
             const blockTypeCheck = String(realBlock.blockType || realBlock.type || 'unknown');
-            console.log(`%c[DEBUG] blockType check: value="${blockTypeCheck}", isCoordTrans=${blockTypeCheck === 'CoordTrans'}`, 'color: yellow; font-weight: bold;');
-            if (blockTypeCheck === 'CoordTrans') {
-                console.log(`%c[DEBUG] ✅ Creating CoordTrans button panel for blockId=${blockId}`, 'color: green; font-weight: bold;');
-                const btnRow = document.createElement('div');
-                btnRow.style.marginTop = '10px';
-                btnRow.style.display = 'flex';
-                btnRow.style.gap = '8px';
-
-                const calcBtn = document.createElement('button');
-                calcBtn.textContent = '⟳ Auto Calculate (Chief Ray)';
-                calcBtn.style.fontSize = '12px';
-                calcBtn.style.padding = '5px 12px';
-                calcBtn.style.border = isDarkMode ? '1px solid #4b5563' : '1px solid #d1d5db';
-                calcBtn.style.background = isDarkMode ? '#374151' : '#f3f4f6';
-                calcBtn.style.color = isDarkMode ? '#f9fafb' : '#111827';
-                calcBtn.style.borderRadius = '4px';
-                calcBtn.style.cursor = 'pointer';
-                calcBtn.style.flex = '1';
-                
-                // Add visual feedback
-                calcBtn.onmouseenter = () => {
-                    calcBtn.style.opacity = '0.8';
-                    console.log('%c[CoordTrans] Button hover detected', 'color: cyan;');
-                };
-                calcBtn.onmouseleave = () => {
-                    calcBtn.style.opacity = '1';
-                };
-                
-                calcBtn.addEventListener('click', async () => {
-                    console.log('%c[CoordTrans] ❌❌❌ Calculate button clicked: blockId=' + blockId, 'color: red; font-weight: bold; font-size: 14px;');
-                    coordTransDebugLog(`[CoordTrans] Calculate button clicked: blockId=${blockId}`);
-                    calcBtn.disabled = true;
-                    calcBtn.textContent = '⟳ Calculating...';
-                    try {
-                        console.log('%c[CoordTrans] Starting performCoordTransCalculation...', 'color: orange;');
-                        await performCoordTransCalculation(blockId, panel);
-                    } catch (err) {
-                        console.error('%c[CoordTrans] Calculation failed with error:', 'color: red;', err);
-                        coordTransDebugLog('[CoordTrans] Calculation failed:', err);
-                    } finally {
-                        calcBtn.disabled = false;
-                        calcBtn.textContent = '⟳ Auto Calculate (Chief Ray)';
-                    }
-                });
-
-                btnRow.appendChild(calcBtn);
-                panel.appendChild(btnRow);
-                console.log('%c[CoordTrans] Button appended to panel', 'color: green;');
-            }
-
             console.log(`[DEBUG] ✅ Panel completely built, appending to container for blockId=${blockId}, blockType=${blockTypeCheck}`);
             container.appendChild(panel);
         }
@@ -6377,7 +6405,7 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             tiltY: 0,
             tiltZ: 0,
             order: 0,
-            coordReturn: 'xy',
+            coordReturn: 'none',
             toSurf: 0
         };
         return base;
