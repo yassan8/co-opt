@@ -1264,13 +1264,13 @@ function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
                 aperture: b.aperture
             })));
 
-        try {
-            saveOpticalSystemTableData(tableRows as any);
-        } catch (_) {}
-
         if (Array.isArray(activeCfg.opticalSystem) && tbl && typeof tbl.setData === 'function') {
             tbl.setData(activeCfg.opticalSystem);
         }
+
+        try {
+            saveOpticalSystemTableData(activeCfg.opticalSystem as any);
+        } catch (_) {}
 
         try { refreshBlockInspector(); } catch (_) {}
         try { requestRefreshBlockInspector(); } catch (_) {}
