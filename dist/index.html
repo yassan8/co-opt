@@ -184,6 +184,7 @@
   <script>
     // Error-only console mode for the entire app.
     (() => {
+      if (!globalThis.__COOPT_ERROR_ONLY_CONSOLE) return;
       if (globalThis.__cooptErrorOnlyConsoleFilterInstalled) return;
       globalThis.__cooptErrorOnlyConsoleFilterInstalled = true;
 
@@ -232,10 +233,10 @@
       }
     }
   </script>
-  <script type="module" crossorigin src="/co-opt/assets/main-BachHYZz.js"></script>
-  <script type="module" crossorigin src="/co-opt/assets/app-B5HHYtF8.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/main-Bi4EAI5G.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-tK9iMOK3.js"></script>
   <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-BKW19xAK.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-BachHYZz.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-Bi4EAI5G.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/loaded-file-storage-DXFO8Z1Y.js">
   <link rel="stylesheet" crossorigin href="/co-opt/assets/app-DJQYMkTz.css">
 </head>
@@ -276,9 +277,10 @@
   <script>
     // Keep console quiet by default: suppress PSF WASM glue logs unless explicitly enabled.
     (() => {
+      if (!globalThis.__COOPT_PSF_CONSOLE_FILTER) return;
       if (globalThis.__JS_LensDraw_PSFConsoleFilterInstalled) return;
       globalThis.__JS_LensDraw_PSFConsoleFilterInstalled = true;
-
+      
       const isDebugEnabled = () => !!(globalThis.__PSF_DEBUG || globalThis.__OPD_DEBUG);
       const originalLog = console.log.bind(console);
 

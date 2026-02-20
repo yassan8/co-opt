@@ -22,24 +22,7 @@ import { getScene, getCamera, getRenderer, getControls, getTableOpticalSystem, g
          getIsGeneratingSpotDiagram, getIsGeneratingTransverseAberration,
          setIsGeneratingSpotDiagram, setIsGeneratingTransverseAberration } from '../core/app-config.ts';
 
-const console = new Proxy(globalThis.console, {
-    get(target, prop, receiver) {
-        if (
-            prop === 'log' ||
-            prop === 'warn' ||
-            prop === 'error' ||
-            prop === 'info' ||
-            prop === 'debug' ||
-            prop === 'table' ||
-            prop === 'group' ||
-            prop === 'groupCollapsed' ||
-            prop === 'groupEnd'
-        ) {
-            return () => {};
-        }
-        return Reflect.get(target, prop, receiver);
-    }
-}) as Console;
+const console = globalThis.console as Console;
 
 let spotDiagramRequestCounter = 0;
 let pendingSpotDiagramRequest: { requestId: number; options: any; requestedAt: number } | null = null;

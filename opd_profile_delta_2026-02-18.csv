@@ -1,4 +1,0 @@
-mode,totalMs,totalMsDelta,totalMsDeltaPct,traceMs,traceMsDelta,traceMsDeltaPct,intersectMs,intersectMsDelta,intersectMsDeltaPct,surfaceNormalMs,surfaceNormalMsDelta,surfaceNormalMsDeltaPct,casesCompleted,casesCompletedDelta,casesPlanned,casesPlannedDelta,errorCount,errorCountDelta,rustWasmReady,firstError
-js,4349.083,3800.158,692.29,3844.440,3371.625,713.10,0.000,0.000,,0.000,0.000,,12.000,8.000,12.000,8.000,0.000,0.000,,
-wasm-strict,4361.784,,,3872.777,,,0.000,,,0.000,,,12.000,,12.000,,0.000,,,
-rust-wasm,4385.211,3854.021,725.54,3881.887,3416.708,734.49,0.000,0.000,,0.000,0.000,,12.000,8.000,12.000,8.000,0.000,0.000,true,

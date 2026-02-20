@@ -64,6 +64,32 @@
 //     globalScope.__mtfOriginalConsole = originalConsole;
 // })();
 
+// Restore console methods if a wrapper muted logs (e.g., injected debug gate).
+(() => {
+    const globalScope = globalThis as any;
+    if (globalScope.__cooptConsoleRestoreApplied) return;
+    globalScope.__cooptConsoleRestoreApplied = true;
+
+    try {
+        if (typeof globalScope.isDebugEnabled === 'function') {
+            globalScope.isDebugEnabled = () => true;
+        }
+        const proto = Object.getPrototypeOf(console);
+        if (!proto) return;
+        const methods: Array<'log' | 'info' | 'warn' | 'debug'> = ['log', 'info', 'warn', 'debug'];
+        for (const method of methods) {
+            const current = console[method];
+            const nativeFn = proto[method];
+            if (typeof nativeFn !== 'function') continue;
+            const source = Function.prototype.toString.call(current);
+            if (source.includes('isDebugEnabled')) {
+                console[method] = nativeFn.bind(console);
+            }
+        }
+    } catch {
+    }
+})();
+
 // =============================================================================
 // IMPORTS
 // =============================================================================
@@ -408,6 +434,9 @@ async function initializeApplication() {
         // debugSceneContents global export removed (debug-utils.ts deleted)
         // legacy debug camera helper export removed (debug-utils.ts deleted)
         // showSceneBoundingBox global export removed (debug-utils.ts deleted)
+        window['refreshBlockInspector'] = refreshBlockInspector;
+        window['loadSystemConfigurations'] = loadSystemConfigurations;
+        window['saveSystemConfigurations'] = saveSystemConfigurations;
         window['fitCameraToScene'] = fitCameraToScene;
         window['clearAllDrawing'] = clearAllDrawing;
         window['showSpotDiagram'] = showSpotDiagram;
