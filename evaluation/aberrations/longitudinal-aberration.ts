@@ -777,10 +777,9 @@ export function calculateLongitudinalAberration(
     const mirrorSign = (mirrorCount % 2 === 1) ? -1 : 1;
 
     const silent = !!(options && typeof options === 'object' && options.silent === true);
-    const prevLog = console.log;
-    if (silent) {
-        console.log = () => {};
-    }
+    const console = (silent
+        ? ({ ...globalThis.console, log: () => {} } as Console)
+        : globalThis.console);
     const debugSA = !silent && (
         (options && typeof options === 'object' && options.debugSA === true) ||
         (typeof globalThis !== 'undefined' && globalThis && globalThis.__COOPT_DEBUG_SA)
@@ -1731,9 +1730,7 @@ export function calculateLongitudinalAberration(
     console.log('✅ 球面収差計算完了');
     return result;
     } finally {
-        if (silent) {
-            console.log = prevLog;
-        }
+        // No global console mutation; nothing to restore.
     }
 }
 

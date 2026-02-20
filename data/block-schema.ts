@@ -2682,11 +2682,15 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
  * @returns {{ expandedOpticalSystem: any[]|null, issues: LoadIssue[] }}
  */
 export function expandBlocksIntoConfiguration(config: any): { expandedOpticalSystem: any[] | null; issues: LoadIssue[] } | undefined {
-  if (!configurationHasBlocks(config)) return { expandedOpticalSystem: null, issues: [] };
+  if (!configurationHasBlocks(config)) {
+    return { expandedOpticalSystem: null, issues: [] };
+  }
 
   const issues = [];
   issues.push(...validateBlocksConfiguration(config));
-  if (issues.some(i => i.severity === 'fatal')) return { expandedOpticalSystem: null, issues };
+  if (issues.some(i => i.severity === 'fatal')) {
+    return { expandedOpticalSystem: null, issues };
+  }
 
   // Preserve per-surface semidia (aperture) from existing opticalSystem rows when available.
   // Blocks only model Stop.semiDiameter; other semidia values are surface-table details.

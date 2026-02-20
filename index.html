@@ -197,6 +197,7 @@
   <script>
     // Error-only console mode for the entire app.
     (() => {
+      if (!globalThis.__COOPT_ERROR_ONLY_CONSOLE) return;
       if (globalThis.__cooptErrorOnlyConsoleFilterInstalled) return;
       globalThis.__cooptErrorOnlyConsoleFilterInstalled = true;
 
@@ -294,9 +295,10 @@
   <script>
     // Keep console quiet by default: suppress PSF WASM glue logs unless explicitly enabled.
     (() => {
+      if (!globalThis.__COOPT_PSF_CONSOLE_FILTER) return;
       if (globalThis.__JS_LensDraw_PSFConsoleFilterInstalled) return;
       globalThis.__JS_LensDraw_PSFConsoleFilterInstalled = true;
-
+      
       const isDebugEnabled = () => !!(globalThis.__PSF_DEBUG || globalThis.__OPD_DEBUG);
       const originalLog = console.log.bind(console);
 

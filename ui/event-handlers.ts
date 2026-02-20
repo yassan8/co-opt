@@ -7838,6 +7838,47 @@ export function setupTransformationControls(): void {
     const hideProgress = (): void => {
         if (progressWrapper) progressWrapper.style.display = 'none';
     };
+
+    const isCoordTransRowForPath = (row: any): boolean => {
+        const surfType = String(row?.surfType ?? row?.['surf type'] ?? row?.type ?? '')
+            .toLowerCase()
+            .replace(/\s+/g, '');
+        return (
+            surfType === 'coordbreak' ||
+            surfType === 'coordinatebreak' ||
+            surfType === 'cb' ||
+            surfType === 'coordtrans' ||
+            surfType === 'coordinatetransform' ||
+            surfType === 'ct'
+        );
+    };
+
+    const isObjectRowForPath = (row: any): boolean => {
+        const objectType = row?.['object type'] ?? row?.object ?? row?.Object;
+        return String(objectType ?? '').toLowerCase() === 'object';
+    };
+
+    const isGapRowForPath = (row: any): boolean => {
+        const surfType = String(row?.surfType ?? row?.['surf type'] ?? row?.type ?? '').toLowerCase();
+        return surfType === 'gap';
+    };
+
+    const resolveSurfaceIndexFromOrdinal = (opticalSystemRows: any[], ordinal: number): number | null => {
+        if (!Array.isArray(opticalSystemRows)) return null;
+        if (!Number.isFinite(ordinal)) return null;
+        const target = Math.floor(ordinal);
+        if (target <= 0) return null;
+        let count = 0;
+        for (let i = 0; i < opticalSystemRows.length; i++) {
+            const row = opticalSystemRows[i];
+            if (isCoordTransRowForPath(row)) continue;
+            if (isObjectRowForPath(row)) continue;
+            if (isGapRowForPath(row)) continue;
+            count++;
+            if (count === target) return i;
+        }
+        return null;
+    };
     
     // Show Local Coords button
     if (showLocalCoordsBtn) {
@@ -7845,8 +7886,8 @@ export function setupTransformationControls(): void {
             hideError();
             
             try {
-                const surfaceIndex = parseInt(transformSurfaceSelect?.value || '');
-                if (!surfaceIndex && surfaceIndex !== 0) {
+                const surfaceOrdinal = parseInt(transformSurfaceSelect?.value || '', 10);
+                if (!Number.isFinite(surfaceOrdinal)) {
                     showError('Please select a surface first.');
                     return;
                 }
@@ -7861,6 +7902,12 @@ export function setupTransformationControls(): void {
                 const opticalSystemRows = getOpticalSystemRows();
                 if (!opticalSystemRows || opticalSystemRows.length === 0) {
                     showError('No optical system data. Please load or create an optical system.');
+                    return;
+                }
+
+                const surfaceIndex = resolveSurfaceIndexFromOrdinal(opticalSystemRows, surfaceOrdinal);
+                if (surfaceIndex === null) {
+                    showError('Selected surface could not be resolved.');
                     return;
                 }
                 
@@ -8009,6 +8056,7 @@ export function updateTransformSurfaceSelect(): void {
         transformSurfaceSelect.innerHTML = '<option value="">Select surface...</option>';
         
         // Add surface options (skip Object and CoordTrans surfaces)
+        let surfaceNumber = 0;
         opticalSystemRows.forEach((row: any, index: number) => {
             // Skip Object surfaces
             const objectType = String(row?.['object type'] ?? row?.object ?? '').toLowerCase();
@@ -8020,13 +8068,15 @@ export function updateTransformSurfaceSelect(): void {
                 surfType === 'coord trans' || surfType === 'coordinate break') {
                 return;
             }
+
+            surfaceNumber += 1;
             
             // Create option
             const option = document.createElement('option');
-            option.value = String(index);
+            option.value = String(surfaceNumber);
             
             // Create label
-            let label = `Surf ${index}`;
+            let label = `Surf ${surfaceNumber}`;
             if (row.comment) label += `: ${row.comment}`;
             else if (row.material && row.material !== 'AIR') label += `: ${row.material}`;
             
