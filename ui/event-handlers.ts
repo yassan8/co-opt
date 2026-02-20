@@ -453,6 +453,40 @@ function ensurePopupMessageHandler(): void {
         return;
     }
     w.popupMessageHandlerRegistered = true;
+
+    const syncPopupOrthoBoundsToRendererAspect = (popupWindow: any): void => {
+        try {
+            const cameraRef = w.popupCamera || popupWindow?.camera;
+            const rendererRef = w.popupRenderer || popupWindow?.renderer;
+            if (!cameraRef?.isOrthographicCamera || !rendererRef || typeof rendererRef.getSize !== 'function') {
+                return;
+            }
+
+            const THREERef = popupWindow?.THREE || w.THREE;
+            if (!THREERef?.Vector2) {
+                return;
+            }
+
+            const size = rendererRef.getSize(new THREERef.Vector2());
+            const width = Number(size?.x) || 0;
+            const height = Number(size?.y) || 0;
+            if (!Number.isFinite(width) || !Number.isFinite(height) || width < 2 || height < 2) {
+                return;
+            }
+
+            const aspect = width / height;
+            const currentHeight = (cameraRef.top - cameraRef.bottom) || 1;
+            const centerX = (cameraRef.left + cameraRef.right) / 2;
+            const centerY = (cameraRef.top + cameraRef.bottom) / 2;
+            const nextWidth = currentHeight * aspect;
+
+            cameraRef.left = centerX - nextWidth / 2;
+            cameraRef.right = centerX + nextWidth / 2;
+            cameraRef.top = centerY + currentHeight / 2;
+            cameraRef.bottom = centerY - currentHeight / 2;
+            cameraRef.updateProjectionMatrix();
+        } catch (_) {}
+    };
     
     window.addEventListener('message', async (event: MessageEvent) => {
         const popup = w.popup3DWindow;
@@ -518,6 +552,15 @@ function ensurePopupMessageHandler(): void {
                     w.setCameraForXZCrossSection(cameraOptions);
                 } else if (viewAxis === 'YZ' && typeof w.setCameraForYZCrossSection === 'function') {
                     w.setCameraForYZCrossSection(cameraOptions);
+                }
+
+                syncPopupOrthoBoundsToRendererAspect(popupWindow);
+
+                const popupRenderer = w.popupRenderer || popupWindow?.renderer;
+                const popupScene = w.popupScene || popupWindow?.scene;
+                const popupCamera = w.popupCamera || popupWindow?.camera;
+                if (popupRenderer && popupScene && popupCamera) {
+                    popupRenderer.render(popupScene, popupCamera);
                 }
             } catch (error) {
                 console.error('❌ Popup resize handling error:', error);
@@ -822,6 +865,14 @@ function ensurePopupMessageHandler(): void {
                             popupRenderer.render(popupScene, popupCamera);
                         }
                         console.warn(`⚠️ setCameraFor${viewAxis}CrossSection not available`);
+                    }
+
+                    syncPopupOrthoBoundsToRendererAspect(popupWindow);
+
+                    const popupRendererAfterCamera = w.popupRenderer || popupWindow?.renderer;
+                    const popupCameraAfterCamera = w.popupCamera || popupWindow?.camera;
+                    if (popupRendererAfterCamera && popupScene && popupCameraAfterCamera) {
+                        popupRendererAfterCamera.render(popupScene, popupCameraAfterCamera);
                     }
 
                     w.popup3DWindow.postMessage({ status: 'Drawing complete' }, '*');
