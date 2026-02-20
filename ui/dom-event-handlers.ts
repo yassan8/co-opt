@@ -5614,6 +5614,13 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                                         if (newValue !== value) {
                                             cooptApplyBlockValue(blockId, path, value, newValue);
                                         }
+
+                                        const abbeFieldPath = path.replace(/material/i, 'abbe');
+                                        if (abbeFieldPath !== path && Number.isFinite(glass.vd)) {
+                                            try {
+                                                cooptApplyBlockValue(blockId, abbeFieldPath, undefined, String(glass.vd));
+                                            } catch (_) {}
+                                        }
                                         return true;
                                     }
                                     return false;
@@ -5659,17 +5666,30 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
                             return null;
                         };
+
+                        const parseStrictNumericMaterialNd = (material: string): number | null => {
+                            const value = String(material || '').trim();
+                            if (!value) return null;
+                            if (!/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(value)) return null;
+                            const nd = Number(value);
+                            if (!Number.isFinite(nd) || nd <= 0 || nd >= 4) return null;
+                            return nd;
+                        };
                         
                         let similarGlasses: any[] = [];
                         let isNumericSearch = false;
                         
                         // Check if current material is a numeric value
-                        const numericValue = parseFloat(currentMaterial);
-                        if (currentMaterial && !isNaN(numericValue) && numericValue > 0 && numericValue < 4) {
-                            // Search by nd plus sibling abbe/vd (fallback to 50)
+                        const numericValue = parseStrictNumericMaterialNd(currentMaterial);
+                        if (numericValue !== null) {
+                            // Search by nd plus sibling abbe/vd
                             isNumericSearch = true;
                             try {
-                                const targetVd = resolveTargetVdFromParameters() ?? 50;
+                                const targetVd = resolveTargetVdFromParameters();
+                                if (targetVd === null) {
+                                    alert('Abbe (Vd) value is required for numeric material search.');
+                                    return;
+                                }
                                 similarGlasses = findSimilarGlassesByNdVd(numericValue, targetVd, 20);
                                 console.log('✅ Found', similarGlasses.length, 'glasses with similar nd/vd to', numericValue, targetVd);
                             } catch (err) {
@@ -5677,7 +5697,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                             }
                         } else {
                             // Search by nd and vd for glass names
-                            let targetNd = 1.5168, targetVd = 64.2; // Default BK7 values
+                            let targetNd: number | null = null;
+                            let targetVd: number | null = null;
                             
                             // Try to get current glass properties
                             if (currentMaterial) {
@@ -5689,20 +5710,29 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                                         targetVd = glassData.vd;
                                         console.log('✅ Found glass properties - nd:', targetNd, 'vd:', targetVd);
                                     } else {
-                                        console.warn('⚠️ Glass not found, using default BK7 values');
+                                        alert('Current material does not have valid nd/vd in the glass database.');
+                                        return;
                                     }
                                 } catch (err) {
                                     console.warn('❌ Failed to get glass data:', err);
+                                    alert('Failed to resolve nd/vd from current material.');
+                                    return;
                                 }
                             } else {
-                                console.log('ℹ️ No current material, using default BK7 values');
+                                alert('Enter a material name or numeric nd value first.');
+                                return;
+                            }
+
+                            if (!Number.isFinite(targetNd) || !Number.isFinite(targetVd)) {
+                                alert('Valid nd/vd values are required to search similar glasses.');
+                                return;
                             }
                             
                             console.log('🔍 Searching for glasses similar to nd:', targetNd, 'vd:', targetVd);
                             
                             // Find similar glasses using imported function
                             try {
-                                similarGlasses = findSimilarGlassesByNdVd(targetNd, targetVd, 20);
+                                similarGlasses = findSimilarGlassesByNdVd(targetNd as number, targetVd as number, 20);
                                 console.log('✅ Found', similarGlasses.length, 'similar glasses');
                             } catch (err) {
                                 console.error('❌ Failed to find similar glasses:', err);
@@ -5755,7 +5785,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                             item.style.borderRadius = '4px';
                             item.style.background = isDark ? '#374151' : '#f3f4f6';
                             item.style.transition = 'background 0.15s';
-                            item.textContent = `${idx + 1}. ${glass.name} (nd=${glass.nd.toFixed(4)}, vd=${glass.vd.toFixed(1)})`;
+                            item.textContent = `${idx + 1}. ${glass.name} [${glass.manufacturer}] (nd=${glass.nd.toFixed(4)}, vd=${glass.vd.toFixed(1)})`;
                             item.style.fontSize = '13px';
                             item.style.color = isDark ? '#f9fafb' : '#111827';
                             
@@ -5771,6 +5801,16 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                                 if (newValue !== value) {
                                     cooptApplyBlockValue(blockId, path, value, newValue);
                                 }
+                                
+                                // Set abbe field to the glass's Vd value when glass is selected
+                                const abbeFieldPath = path.replace(/material/i, 'abbe');
+                                if (abbeFieldPath !== path && glass.vd !== undefined) {
+                                    try {
+                                        // Set abbe to the Vd value of the selected glass
+                                        cooptApplyBlockValue(blockId, abbeFieldPath, undefined, String(glass.vd));
+                                    } catch (_) {}
+                                }
+                                
                                 document.body.removeChild(overlay);
                             };
                             
@@ -5807,6 +5847,58 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                             cooptApplyBlockValue(blockId, path, value, newValue);
                         }
                     });
+
+                    // Control abbe field enable/disable based on material numeric/name state
+                    const parseStrictNumericMaterial = (material: string): boolean => {
+                        const val = String(material || '').trim();
+                        if (!val) return false;
+                        return /^[+-]?(?:\d+\.?\d*|\d*\.\d+)$/.test(val);
+                    };
+
+                    const updateAbbeFieldState = () => {
+                        const abbeFieldPath = path.replace(/material/i, 'abbe');
+                        if (abbeFieldPath === path) return; // No abbe field
+                        
+                        const isNumeric = parseStrictNumericMaterial(input.value);
+                        
+                        // Find abbe input by searching for rows with abbe label near this material input
+                        const allRows = Array.from(panel.querySelectorAll('div[style*="display: flex"]'));
+                        
+                        // Find the row containing this material input
+                        let materialRowIdx = -1;
+                        for (let i = 0; i < allRows.length; i++) {
+                            if (allRows[i].contains(input)) {
+                                materialRowIdx = i;
+                                break;
+                            }
+                        }
+                        
+                        // Look for abbe input in the next few rows
+                        if (materialRowIdx >= 0) {
+                            for (let i = materialRowIdx + 1; i < allRows.length && i < materialRowIdx + 3; i++) {
+                                const row = allRows[i];
+                                const spans = Array.from(row.querySelectorAll('span'));
+                                const hasAbbeLabel = spans.some(s => String(s.textContent || '').toLowerCase().includes('abbe'));
+                                
+                                if (hasAbbeLabel) {
+                                    const abbeInputs = Array.from(row.querySelectorAll('input[type="text"]')) as HTMLInputElement[];
+                                    for (const abbeInput of abbeInputs) {
+                                        abbeInput.disabled = !isNumeric;
+                                        abbeInput.style.opacity = isNumeric ? '1' : '0.5';
+                                        abbeInput.style.pointerEvents = isNumeric ? 'auto' : 'none';
+                                    }
+                                    console.log(`📝 [Abbe Control] Material=${isNumeric ? 'numeric' : 'glass name'} → Abbe ${isNumeric ? 'enabled' : 'disabled'}`);
+                                    return;
+                                }
+                            }
+                        }
+                    };
+
+                    input.addEventListener('input', updateAbbeFieldState);
+                    input.addEventListener('change', updateAbbeFieldState);
+                    
+                    // Initial state (deferred to allow DOM to settle)
+                    setTimeout(updateAbbeFieldState, 200);
 
                     container.appendChild(input);
                     container.appendChild(glassBtn);
@@ -5942,9 +6034,12 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     paramRow.appendChild(innerRow);
                     panel.appendChild(paramRow);
                     
-                    // If this is a material parameter and has a glass name, show nd/vd below
+                    // nd/vd display is no longer shown here -- abbe field already holds vd,
+                    // and nd can be looked up via the glass search button.
+                    // Previously showed ↳ nd: / ↳ vd: below material, now removed per user request.
                     const isMaterialParam = key === 'material' || key === 'material1' || key === 'material2' || key === 'material3';
-                    if (isMaterialParam && value && typeof value === 'string' && value.trim() !== '' && value.trim().toUpperCase() !== 'AIR') {
+                    if (false && isMaterialParam) {
+                        // intentionally disabled
                         try {
                             const glassData = getGlassDataWithSellmeier(String(value).trim());
                             if (glassData && glassData.nd !== undefined && glassData.vd !== undefined) {

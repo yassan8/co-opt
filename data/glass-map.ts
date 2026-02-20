@@ -22,6 +22,8 @@ interface GlassSelection {
   name: string;
   manufacturer: string;
   price: number | null;
+  nd: number | null;
+  vd: number | null;
 }
 
 function isFiniteNumber(value: any): value is number {
@@ -351,7 +353,13 @@ export function openGlassMapWindow(
               visible: initialVisible,
               x: pricedLocal.map(p => p.vd),
               y: pricedLocal.map(p => p.nd),
-              customdata: pricedLocal.map(p => [p.name, p.manufacturer, Number.isFinite(p.price) ? p.price : null]),
+              customdata: pricedLocal.map(p => [
+                p.name,
+                p.manufacturer,
+                Number.isFinite(p.price) ? p.price : null,
+                p.nd,
+                p.vd,
+              ]),
               text: pricedLocal.map(makeHover),
               hoverinfo: 'text',
               marker: {
@@ -377,7 +385,13 @@ export function openGlassMapWindow(
               visible: initialVisible,
               x: missingLocal.map(p => p.vd),
               y: missingLocal.map(p => p.nd),
-              customdata: missingLocal.map(p => [p.name, p.manufacturer, null]),
+              customdata: missingLocal.map(p => [
+                p.name,
+                p.manufacturer,
+                null,
+                p.nd,
+                p.vd,
+              ]),
               text: missingLocal.map(makeHover),
               hoverinfo: 'text',
               marker: {
@@ -429,11 +443,13 @@ export function openGlassMapWindow(
             try {
               const pt = ev && ev.points && ev.points[0] ? ev.points[0] : null;
               const cd = pt && pt.customdata ? pt.customdata : null;
-              if (!cd || cd.length < 2) return;
+              if (!cd || cd.length < 4) return;
 
               const name = String(cd[0] ?? '').trim();
               const manufacturer = String(cd[1] ?? 'Unknown').trim() || 'Unknown';
               const price = Number.isFinite(cd[2]) ? Number(cd[2]) : null;
+              const nd = Number.isFinite(cd[3]) ? Number(cd[3]) : null;
+              const vd = Number.isFinite(cd[4]) ? Number(cd[4]) : null;
               if (!name) return;
 
               const now = Date.now();
@@ -444,7 +460,7 @@ export function openGlassMapWindow(
               if (!isDouble) return;
 
               if (typeof window.__COOPT_ON_GLASS_SELECTED__ === 'function') {
-                const shouldClose = window.__COOPT_ON_GLASS_SELECTED__({ name, manufacturer, price });
+                const shouldClose = window.__COOPT_ON_GLASS_SELECTED__({ name, manufacturer, price, nd, vd });
                 if (shouldClose !== false) window.close();
               }
             } catch (_) {

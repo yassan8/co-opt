@@ -13871,7 +13871,7 @@ function __applyPriceIndexToGlassDb() {
 __applyPriceIndexToGlassDb();
 
 /**
- * Find similar glasses by nd/vd (Abbe) using a simple weighted distance.
+ * Find similar glasses by nd/vd (Abbe) using normalized equal-weight distance.
  * Returns an array sorted by closest first.
  *
  * @param {number} targetNd
@@ -13885,6 +13885,28 @@ export function findSimilarGlassesByNdVd(targetNd, targetVd, maxResults = 20) {
   if (targetVd <= 0) return [];
 
   const dbs = getAllGlassDatabases();
+  let minNd = Infinity;
+  let maxNd = -Infinity;
+  let minVd = Infinity;
+  let maxVd = -Infinity;
+
+  for (const db of dbs) {
+    if (!Array.isArray(db)) continue;
+    for (const glass of db) {
+      if (!glass) continue;
+      const nd = glass.nd;
+      const vd = glass.vd;
+      if (!Number.isFinite(nd) || !Number.isFinite(vd)) continue;
+      if (nd < minNd) minNd = nd;
+      if (nd > maxNd) maxNd = nd;
+      if (vd < minVd) minVd = vd;
+      if (vd > maxVd) maxVd = vd;
+    }
+  }
+
+  const ndRange = Number.isFinite(maxNd - minNd) && maxNd > minNd ? (maxNd - minNd) : 1;
+  const vdRange = Number.isFinite(maxVd - minVd) && maxVd > minVd ? (maxVd - minVd) : 1;
+
   /** @type {Array<{name:string, nd:number, vd:number, manufacturer:string, price:(number|null), ndDiff:number, vdDiff:number, totalDiff:number}>} */
   const out = [];
 
@@ -13895,10 +13917,11 @@ export function findSimilarGlassesByNdVd(targetNd, targetVd, maxResults = 20) {
       const nd = glass.nd;
       const vd = glass.vd;
       if (!Number.isFinite(nd) || !Number.isFinite(vd)) continue;
-      // Match legacy UI behavior: nd is far more sensitive than vd.
       const ndDiff = nd - targetNd;
       const vdDiff = vd - targetVd;
-      const totalDiff = Math.abs(ndDiff) * 10 + Math.abs(vdDiff);
+      const normalizedNdDiff = Math.abs(ndDiff) / ndRange;
+      const normalizedVdDiff = Math.abs(vdDiff) / vdRange;
+      const totalDiff = normalizedNdDiff + normalizedVdDiff;
       out.push({
         name: String(glass.name),
         nd,
@@ -13912,7 +13935,18 @@ export function findSimilarGlassesByNdVd(targetNd, targetVd, maxResults = 20) {
     }
   }
 
-  out.sort((a, b) => a.totalDiff - b.totalDiff);
+  out.sort((a, b) => {
+    const scoreDiff = a.totalDiff - b.totalDiff;
+    if (scoreDiff !== 0) return scoreDiff;
+
+    const ndAbsDiff = Math.abs(a.ndDiff) - Math.abs(b.ndDiff);
+    if (ndAbsDiff !== 0) return ndAbsDiff;
+
+    const vdAbsDiff = Math.abs(a.vdDiff) - Math.abs(b.vdDiff);
+    if (vdAbsDiff !== 0) return vdAbsDiff;
+
+    return a.name.localeCompare(b.name);
+  });
   const n = Number(maxResults);
   const limit = Number.isFinite(n) && n > 0 ? Math.floor(n) : 20;
   return out.slice(0, limit);

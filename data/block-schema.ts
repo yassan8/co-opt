@@ -2434,6 +2434,20 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
         continue;
       }
 
+      // CRITICAL FIX: Ensure we have exactly the number of materials we need
+      // In case materials with same name were deduplicated, add additional elements
+      // We need to check how many unique materials were found by counting the chain length
+      const expectedElementCount = Math.max(2, endIndex !== null ? chain.length - 1 : glasses.length);
+      while (glasses.length < expectedElementCount && glasses.length < 3) {
+        const nextIdx = glasses.length;
+        if (nextIdx < chain.length) {
+          const mmaterial = __normalizeLegacyMaterialForBlocks(chain[nextIdx], i + nextIdx, issues);
+          glasses.push(mmaterial);
+        } else {
+          break;
+        }
+      }
+
       const elementCount = glasses.length;
       const surfaceCount = elementCount + 1;
       if (chain.length < surfaceCount) {
@@ -2447,6 +2461,9 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
       if (elementCount === 2) {
         doubletCount++;
         const id = `Doublet-${doubletCount}`;
+        // Preserve Abbe/Vd from Zemax ___BLANK import for each element
+        const abbe1 = String(chain[0]?.abbe ?? '').trim();
+        const abbe2 = String(chain[1]?.abbe ?? '').trim();
         const params = {
           radius1: radii[0],
           radius2: radii[1],
@@ -2455,6 +2472,8 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
           thickness2: thicknesses[1],
           material1: glasses[0],
           material2: glasses[1],
+          ...(abbe1 !== '' ? { abbe1 } : {}),
+          ...(abbe2 !== '' ? { abbe2 } : {}),
           ...readSurfaceAsphere(chain[0], 1),
           ...readSurfaceAsphere(chain[1], 2),
           ...readSurfaceAsphere(chain[2], 3),
@@ -2501,6 +2520,10 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
       if (elementCount === 3) {
         tripletCount++;
         const id = `Triplet-${tripletCount}`;
+        // Preserve Abbe/Vd from Zemax ___BLANK import for each element
+        const abbe1 = String(chain[0]?.abbe ?? '').trim();
+        const abbe2 = String(chain[1]?.abbe ?? '').trim();
+        const abbe3 = String(chain[2]?.abbe ?? '').trim();
         const params = {
           radius1: radii[0],
           radius2: radii[1],
@@ -2512,6 +2535,9 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
           material1: glasses[0],
           material2: glasses[1],
           material3: glasses[2],
+          ...(abbe1 !== '' ? { abbe1 } : {}),
+          ...(abbe2 !== '' ? { abbe2 } : {}),
+          ...(abbe3 !== '' ? { abbe3 } : {}),
           ...readSurfaceAsphere(chain[0], 1),
           ...readSurfaceAsphere(chain[1], 2),
           ...readSurfaceAsphere(chain[2], 3),
@@ -2595,6 +2621,9 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
     const frontSurfType = inferLegacySurfType(r, frontConic, frontCoefs);
     const backSurfType = inferLegacySurfType(back, backConic, backCoefs);
 
+    // Preserve Abbe/Vd from Zemax ___BLANK import (stored in row.abbe by zemax-import.ts)
+    const legacyAbbe = String(r?.abbe ?? '').trim() || String(back?.abbe ?? '').trim();
+
     const lensVariables: any = {};
     if (legacyHasV(r, 'optimizeR')) lensVariables.frontRadius = legacyVarV(frontRadius);
     if (legacyHasV(r, 'optimizeT')) lensVariables.centerThickness = legacyVarV(centerThickness);
@@ -2619,6 +2648,7 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
         backRadius,
         centerThickness,
         material,
+        ...(legacyAbbe !== '' ? { abbe: legacyAbbe } : {}),
 
         frontSurfType,
         frontConic,
