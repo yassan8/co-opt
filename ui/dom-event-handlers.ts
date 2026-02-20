@@ -1129,7 +1129,9 @@ function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], optio
             rows.slice(0, 5).map((r: any) => ({
                 surf: r?.surf,
                 type: r?.type,
-                semidia: r?.semidia
+                semidia: r?.semidia,
+                _blockId: r?._blockId,
+                _surfaceRole: r?._surfaceRole
             })));
 
         try {
@@ -1192,7 +1194,7 @@ function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
             || systemConfig.configurations[0];
         if (!activeCfg || !Array.isArray(activeCfg.blocks) || activeCfg.blocks.length === 0) return;
 
-        activeCfg.opticalSystem = tableRows.map((row: any) => ({ ...(row || {}) }));
+        console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] Active config has', activeCfg.blocks.length, 'blocks');
 
         const blockById = new Map<string, any>();
         for (const b of activeCfg.blocks) {
@@ -1244,17 +1246,28 @@ function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
         }
         console.log(`[__zmxSyncDesignIntentApertureFromOpticalRows] Fallback updates: ${fallbackUpdateCount}`);
 
+        let expandSuccess = false;
         try {
             if (typeof expandBlocksIntoConfiguration === 'function') {
-                expandBlocksIntoConfiguration(activeCfg);
+                const result = expandBlocksIntoConfiguration(activeCfg);
+                expandSuccess = result && Array.isArray(result.expandedOpticalSystem);
+                console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] expandBlocksIntoConfiguration result:', 
+                    expandSuccess ? 'SUCCESS' : 'FAILED', 
+                    result ? `(rows: ${result.expandedOpticalSystem?.length || 0}, issues: ${result.issues?.length || 0})` : '');
             } else if (typeof w.expandBlocksIntoConfiguration === 'function') {
-                w.expandBlocksIntoConfiguration(activeCfg);
+                const result = w.expandBlocksIntoConfiguration(activeCfg);
+                expandSuccess = result && Array.isArray(result.expandedOpticalSystem);
+                console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] expandBlocksIntoConfiguration result:', 
+                    expandSuccess ? 'SUCCESS' : 'FAILED',
+                    result ? `(rows: ${result.expandedOpticalSystem?.length || 0}, issues: ${result.issues?.length || 0})` : '');
             }
-        } catch (_) {}
+        } catch (err) {
+            console.error('[__zmxSyncDesignIntentApertureFromOpticalRows] expandBlocksIntoConfiguration ERROR:', err);
+        }
 
         if (typeof saveSystemConfigurations === 'function') {
             saveSystemConfigurations(systemConfig);
-            console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] ✅ Saved system configurations');
+            console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] ✅ Saved system configurations', expandSuccess ? '(with expanded blocks)' : '(WARNING: expand may have failed)');
         }
 
         console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] Final block apertures:', 
@@ -1264,13 +1277,30 @@ function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
                 aperture: b.aperture
             })));
 
-        if (Array.isArray(activeCfg.opticalSystem) && tbl && typeof tbl.setData === 'function') {
-            tbl.setData(activeCfg.opticalSystem);
-        }
+        if (expandSuccess && Array.isArray(activeCfg.opticalSystem)) {
+            console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] Expanded opticalSystem sample (first 3):', 
+                activeCfg.opticalSystem.slice(0, 3).map((r: any) => ({
+                    surf: r?.surf,
+                    type: r?.type,
+                    semidia: r?.semidia,
+                    _blockId: r?._blockId,
+                    _surfaceRole: r?._surfaceRole
+                })));
 
-        try {
-            saveOpticalSystemTableData(activeCfg.opticalSystem as any);
-        } catch (_) {}
+            if (tbl && typeof tbl.setData === 'function') {
+                tbl.setData(activeCfg.opticalSystem);
+                console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] ✅ Updated table with expanded rows');
+            }
+
+            try {
+                saveOpticalSystemTableData(activeCfg.opticalSystem as any);
+                console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] ✅ Saved expanded rows to localStorage');
+            } catch (err) {
+                console.error('[__zmxSyncDesignIntentApertureFromOpticalRows] ❌ Failed to save to localStorage:', err);
+            }
+        } else {
+            console.warn('[__zmxSyncDesignIntentApertureFromOpticalRows] ⚠️ Skipping table/storage update due to expand failure');
+        }
 
         try { refreshBlockInspector(); } catch (_) {}
         try { requestRefreshBlockInspector(); } catch (_) {}
