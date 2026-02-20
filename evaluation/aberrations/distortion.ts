@@ -334,27 +334,35 @@ export async function calculateGridDistortion(opticalSystemRows, gridSize = 20, 
   const maxFieldAngle = deriveMaxFieldAngleLocal();
   console.log(`📐 Grid distortion: max field angle = ${maxFieldAngle}° (auto-detected from Object table)`);
 
-  // Create grid points in angle space
+  // Create grid points with equal spacing in image plane (not angle space)
   const idealGrid = { x: [], y: [] }; // ideal image positions
   const realGrid = { x: [], y: [] };  // real traced image positions
 
-  // Generate grid lines (from -maxFieldAngle to +maxFieldAngle)
-  const step = (2 * maxFieldAngle) / (gridSize - 1);
+  // Generate grid lines with equal spacing in image plane coordinates
+  // Max image height for display (corresponds to maxFieldAngle)
+  const maxImageHeight = fPrime * Math.tan((maxFieldAngle * Math.PI) / 180);
+  const step = (2 * maxImageHeight) / (gridSize - 1);
 
   const totalPoints = gridSize * gridSize;
   let completedPoints = 0;
 
   for (let i = 0; i < gridSize; i++) {
-    const thetaY = -maxFieldAngle + i * step;
-    const thetaYRad = thetaY * Math.PI / 180;
+    // Grid points at equal intervals in image plane (Y-direction)
+    const hImageY = -maxImageHeight + i * step;
+    // Convert back to angle for tracing
+    const thetaYRad = Math.atan(hImageY / fPrime);
+    const thetaY = (thetaYRad * 180) / Math.PI;
 
     for (let j = 0; j < gridSize; j++) {
-      const thetaX = -maxFieldAngle + j * step;
-      const thetaXRad = thetaX * Math.PI / 180;
+      // Grid points at equal intervals in image plane (X-direction)
+      const hImageX = -maxImageHeight + j * step;
+      // Convert back to angle for tracing
+      const thetaXRad = Math.atan(hImageX / fPrime);
+      const thetaX = (thetaXRad * 180) / Math.PI;
 
-      // Ideal image position (paraxial)
-      const hIdealX = fPrime * Math.tan(thetaXRad);
-      const hIdealY = fPrime * Math.tan(thetaYRad);
+      // Ideal image position (paraxial) - already linear in image plane
+      const hIdealX = hImageX;
+      const hIdealY = hImageY;
       idealGrid.x.push(hIdealX);
       idealGrid.y.push(hIdealY);
 

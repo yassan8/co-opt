@@ -342,7 +342,7 @@ export function plotGridDistortion(data, targetDivId = 'distortion-grid') {
     });
   }
 
-  // Create vectors from ideal to real positions (disabled - now showing points only)
+  // Collect real positions (points only)
   let validPointCount = 0;
   const realX = [];
   const realY = [];
@@ -361,19 +361,6 @@ export function plotGridDistortion(data, targetDivId = 'distortion-grid') {
       
       realX.push(x);
       realY.push(y);
-      
-      // Add line from ideal to real position
-      traces.push({
-        x: [idealX, x],
-        y: [idealY, y],
-        mode: 'lines',
-        line: { 
-          color: getWavelengthColor(meta.wavelength),
-          width: 1
-        },
-        showlegend: false,
-        hoverinfo: 'skip'
-      });
       
       validPointCount++;
     }
@@ -396,15 +383,21 @@ export function plotGridDistortion(data, targetDivId = 'distortion-grid') {
     hovertemplate: 'Real: (%{x:.3f}, %{y:.3f}) mm<extra></extra>'
   });
 
+  const maxAbsIdealX = idealGrid.x.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
+  const maxAbsIdealY = idealGrid.y.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
+  const equalRangeHalf = Math.max(maxAbsIdealX, maxAbsIdealY, 1e-9);
+
   const layout = {
     title: `Grid Distortion (${gridSize}×${gridSize}, λ=${meta.wavelength.toFixed(4)} μm)`,
     xaxis: { 
       title: 'Image Height X (mm)',
       scaleanchor: 'y',
-      scaleratio: 1
+      scaleratio: 1,
+      range: [-equalRangeHalf, equalRangeHalf]
     },
     yaxis: { 
-      title: 'Image Height Y (mm)'
+      title: 'Image Height Y (mm)',
+      range: [-equalRangeHalf, equalRangeHalf]
     },
     width: 800,
     height: 800,
