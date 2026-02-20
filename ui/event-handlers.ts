@@ -3735,11 +3735,6 @@ export function setupAnalysisWindows() {
                 openDistortionWindowBtn.addEventListener('click', () => {
                         if (w.__distortionPopup && !w.__distortionPopup.closed) {
                                 try { w.__distortionPopup.focus(); } catch (_) {}
-                                try {
-                                        if (typeof w.__distortionPopup.renderDistortion === 'function') {
-                                                w.__distortionPopup.renderDistortion();
-                                        }
-                                } catch (_) {}
                                 return;
                         }
 
@@ -3934,7 +3929,11 @@ export function setupAnalysisWindows() {
         };
 
         window['renderGridDistortion'] = async () => {
+            if (window.__gridDistortionRenderInFlight) return;
+            window.__gridDistortionRenderInFlight = true;
             const gridEl = document.getElementById('popup-distortion-grid');
+            const gridBtn = document.getElementById('popup-show-distortion-grid-btn');
+            if (gridBtn) gridBtn.disabled = true;
             if (gridEl) gridEl.innerHTML = '';
             // Split view when grid is requested
             setGridVisible(true);
@@ -3978,6 +3977,9 @@ export function setupAnalysisWindows() {
                 if (gridEl) {
                     gridEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate grid distortion. Check console.</div>';
                 }
+            } finally {
+                window.__gridDistortionRenderInFlight = false;
+                if (gridBtn) gridBtn.disabled = false;
             }
         };
 

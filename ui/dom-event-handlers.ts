@@ -3657,6 +3657,8 @@ function setupTransverseAberrationButton(): void {
 function setupDistortionButton(): void {
     const btn = document.getElementById('show-distortion-diagram-btn');
     if (!btn) return;
+    if ((btn as any).__cooptDistortionBound) return;
+    (btn as any).__cooptDistortionBound = true;
     btn.addEventListener('click', () => {
         if (typeof w.showDistortion === 'function') {
             w.showDistortion();
