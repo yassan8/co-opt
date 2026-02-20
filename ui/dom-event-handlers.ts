@@ -2006,10 +2006,12 @@ function setupImportZemaxButton(): void {
 
                 // Explicitly load active configuration to tables before semidia calculation
                 // (__loadAllDataObjectIntoApp uses setTimeout, so table may not be loaded yet)
+                // IMPORTANT: Must use the async version from table-configuration.ts with applyToUI: true
                 try {
-                    if (typeof loadActiveConfigurationToTables === 'function') {
-                        loadActiveConfigurationToTables();
-                        console.log('[Zemax Import] ✅ Loaded active configuration to tables');
+                    const { loadActiveConfigurationToTables: loadConfigToTables } = await import('../data/table-configuration.ts');
+                    if (typeof loadConfigToTables === 'function') {
+                        await loadConfigToTables({ applyToUI: true });
+                        console.log('[Zemax Import] ✅ Loaded active configuration to tables (UI updated)');
                     }
                 } catch (err) {
                     console.error('[Zemax Import] ❌ Failed to load configuration to tables:', err);
