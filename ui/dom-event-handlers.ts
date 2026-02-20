@@ -1096,6 +1096,7 @@ function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], optio
         console.warn('[autoCalculateMissingSemidia] Invalid rows:', rows);
         return;
     }
+    console.log('[autoCalculateMissingSemidia] Table loaded with', rows.length, 'rows');
     console.log('[autoCalculateMissingSemidia] Initial rows (first 5):', 
         rows.slice(0, 5).map((r: any) => ({
             surf: r?.surf,
@@ -1182,7 +1183,8 @@ function __zmxSyncDesignIntentApertureFromOpticalRows(): void {
             console.warn('[__zmxSyncDesignIntentApertureFromOpticalRows] No table rows found');
             return;
         }
-        console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] Table rows count:', tableRows.length);
+        const physicalRows = tableRows.filter((r: any) => __zmxIsPhysicalOpticalRow(r));
+        console.log('[__zmxSyncDesignIntentApertureFromOpticalRows] Table rows count:', tableRows.length, '(physical:', physicalRows.length + ')');
 
         const systemConfig = (typeof loadSystemConfigurations === 'function')
             ? loadSystemConfigurations()
@@ -2000,6 +2002,17 @@ function setupImportZemaxButton(): void {
                 const loaded = await __loadAllDataObjectIntoApp(payload, { filename: file.name });
                 if (!loaded) {
                     throw new Error('Zemax import parsed, but app load step returned false.');
+                }
+
+                // Explicitly load active configuration to tables before semidia calculation
+                // (__loadAllDataObjectIntoApp uses setTimeout, so table may not be loaded yet)
+                try {
+                    if (typeof loadActiveConfigurationToTables === 'function') {
+                        loadActiveConfigurationToTables();
+                        console.log('[Zemax Import] ✅ Loaded active configuration to tables');
+                    }
+                } catch (err) {
+                    console.error('[Zemax Import] ❌ Failed to load configuration to tables:', err);
                 }
 
                 try {
