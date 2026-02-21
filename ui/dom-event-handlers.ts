@@ -4386,29 +4386,6 @@ function cooptSetNestedValue(obj: any, path: string, value: any): void {
     current[lastKey] = value;
 }
 
-function cooptGetNestedValue(obj: any, path: string): any {
-    if (!obj || typeof obj !== 'object') return undefined;
-    const parts = String(path || '').split('.').filter(Boolean);
-    if (parts.length === 0) return undefined;
-    let current = obj;
-    for (let i = 0; i < parts.length; i++) {
-        if (!current || typeof current !== 'object') return undefined;
-        current = current[parts[i]];
-    }
-    return current;
-}
-
-function cooptGetBlockValue(blockId: string, path: string): any {
-    const systemConfig = loadSystemConfigurations();
-    const activeConfig = systemConfig?.configurations?.find((c: any) => c.id === systemConfig?.activeConfigId)
-        || systemConfig?.configurations?.[0];
-    if (!activeConfig) return undefined;
-    const blocks = Array.isArray(activeConfig.blocks) ? activeConfig.blocks : [];
-    const block = blocks.find((b: any) => b && String(b.blockId ?? '') === String(blockId));
-    if (!block) return undefined;
-    return cooptGetNestedValue(block, path);
-}
-
 function cooptNormalizeInputValue(raw: string, original: any): any {
     const trimmed = String(raw ?? '').trim();
     if (trimmed === '') return '';
@@ -4438,92 +4415,6 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     }
 
     cooptSetNestedValue(block, path, newValue);
-
-    // Re-expand Design Intent blocks into opticalSystem rows so rendering/ray-tracing sees latest values.
-    try {
-        const expanded = expandBlocksToOpticalSystemRows(blocks as any);
-        if (expanded && Array.isArray(expanded.rows)) {
-            activeConfig.opticalSystem = expanded.rows;
-            try { saveOpticalSystemTableData(expanded.rows as any); } catch (_) {}
-            try { if (typeof w.saveLensTableData === 'function') w.saveLensTableData(expanded.rows); } catch (_) {}
-
-            try {
-                const tableOptical = w.tableOpticalSystem || w.opticalSystemTabulator;
-                if (tableOptical && typeof tableOptical.replaceData === 'function') {
-                    tableOptical.replaceData(expanded.rows);
-                } else if (tableOptical && typeof tableOptical.setData === 'function') {
-                    tableOptical.setData(expanded.rows);
-                }
-            } catch (_) {}
-        }
-    } catch (_) {}
-
-    try {
-        if (activeConfig.metadata) activeConfig.metadata.modified = new Date().toISOString();
-    } catch (_) {}
-    try { saveSystemConfigurations(systemConfig); } catch (_) {}
-    try { refreshBlockInspector(); } catch (_) {}
-    try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
-
-    // Request render refresh (especially for popup 3D view)
-    try {
-        const popup = w.popup3DWindow;
-        if (popup && !popup.closed && typeof popup.postMessage === 'function') {
-            popup.postMessage({ action: 'request-redraw' }, '*');
-        }
-    } catch (_) {}
-}
-
-function cooptApplyBlockValues(
-    blockId: string,
-    updates: Array<{ path: string; newValue: any }>,
-    description: string
-): void {
-    const systemConfig = loadSystemConfigurations();
-    const activeConfig = systemConfig?.configurations?.find((c: any) => c.id === systemConfig?.activeConfigId)
-        || systemConfig?.configurations?.[0];
-    if (!activeConfig) return;
-    const blocks = Array.isArray(activeConfig.blocks) ? activeConfig.blocks : [];
-    const block = blocks.find((b: any) => b && String(b.blockId ?? '') === String(blockId));
-    if (!block) return;
-
-    const commands: any[] = [];
-    let hasChange = false;
-
-    for (const update of updates) {
-        const oldValue = cooptGetNestedValue(block, update.path);
-        if (oldValue !== update.newValue) {
-            hasChange = true;
-            try {
-                if (w.undoHistory && w.SetBlockParameterCommand && !w.undoHistory.isExecuting) {
-                    const cmd = new w.SetBlockParameterCommand(
-                        activeConfig.name,
-                        String(blockId),
-                        String(update.path),
-                        oldValue,
-                        update.newValue
-                    );
-                    commands.push(cmd);
-                }
-            } catch (_) {}
-        }
-
-        cooptSetNestedValue(block, update.path, update.newValue);
-    }
-
-    if (hasChange && commands.length > 0) {
-        try {
-            if (w.undoHistory && !w.undoHistory.isExecuting) {
-                if (commands.length === 1) {
-                    w.undoHistory.record(commands[0]);
-                } else if (w.CompoundCommand) {
-                    const compound = new w.CompoundCommand(description || 'Update block parameters');
-                    for (const cmd of commands) compound.addCommand(cmd);
-                    w.undoHistory.record(compound);
-                }
-            }
-        } catch (_) {}
-    }
 
     // Re-expand Design Intent blocks into opticalSystem rows so rendering/ray-tracing sees latest values.
     try {
@@ -5720,14 +5611,16 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                                     if (glass && glass.name) {
                                         input.value = glass.name;
                                         const newValue = cooptNormalizeInputValue(glass.name, value);
-                                        const abbeFieldPath = path.replace(/material/i, 'abbe');
-                                        const updates: Array<{ path: string; newValue: any }> = [
-                                            { path, newValue }
-                                        ];
-                                        if (abbeFieldPath !== path && Number.isFinite(glass.vd)) {
-                                            updates.push({ path: abbeFieldPath, newValue: String(glass.vd) });
+                                        if (newValue !== value) {
+                                            cooptApplyBlockValue(blockId, path, value, newValue);
                                         }
-                                        cooptApplyBlockValues(blockId, updates, 'Select glass (map)');
+
+                                        const abbeFieldPath = path.replace(/material/i, 'abbe');
+                                        if (abbeFieldPath !== path && Number.isFinite(glass.vd)) {
+                                            try {
+                                                cooptApplyBlockValue(blockId, abbeFieldPath, undefined, String(glass.vd));
+                                            } catch (_) {}
+                                        }
                                         return true;
                                     }
                                     return false;
@@ -5905,15 +5798,18 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                             item.onclick = () => {
                                 input.value = glass.name;
                                 const newValue = cooptNormalizeInputValue(glass.name, value);
-                                // Apply material + abbe together so Undo restores both
-                                const abbeFieldPath = path.replace(/material/i, 'abbe');
-                                const updates: Array<{ path: string; newValue: any }> = [
-                                    { path, newValue }
-                                ];
-                                if (abbeFieldPath !== path && glass.vd !== undefined) {
-                                    updates.push({ path: abbeFieldPath, newValue: String(glass.vd) });
+                                if (newValue !== value) {
+                                    cooptApplyBlockValue(blockId, path, value, newValue);
                                 }
-                                cooptApplyBlockValues(blockId, updates, 'Select glass');
+                                
+                                // Set abbe field to the glass's Vd value when glass is selected
+                                const abbeFieldPath = path.replace(/material/i, 'abbe');
+                                if (abbeFieldPath !== path && glass.vd !== undefined) {
+                                    try {
+                                        // Set abbe to the Vd value of the selected glass
+                                        cooptApplyBlockValue(blockId, abbeFieldPath, undefined, String(glass.vd));
+                                    } catch (_) {}
+                                }
                                 
                                 document.body.removeChild(overlay);
                             };
