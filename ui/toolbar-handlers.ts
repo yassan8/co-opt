@@ -556,6 +556,46 @@ export function handleImportZemax(): void {
         }
       } catch (_) {}
 
+      try {
+        if (typeof (window as any).calculateImageSemiDiaFromChiefRays === 'function') {
+          const tryAutoImageSemidia = (triesLeft: number) => {
+            setTimeout(() => {
+              try {
+                Promise.resolve((window as any).calculateImageSemiDiaFromChiefRays())
+                  .then((ok: any) => {
+                    if (ok === true) {
+                      try {
+                        if (typeof (window as any).refreshBlockInspector === 'function') {
+                          (window as any).refreshBlockInspector();
+                        }
+                      } catch (_) {}
+                      try {
+                        if (typeof (window as any).refreshAllUI === 'function') {
+                          (window as any).refreshAllUI();
+                        }
+                      } catch (_) {}
+                      return;
+                    }
+                    if (triesLeft > 0) {
+                      tryAutoImageSemidia(triesLeft - 1);
+                    }
+                  })
+                  .catch(() => {
+                    if (triesLeft > 0) {
+                      tryAutoImageSemidia(triesLeft - 1);
+                    }
+                  });
+              } catch (_) {
+                if (triesLeft > 0) {
+                  tryAutoImageSemidia(triesLeft - 1);
+                }
+              }
+            }, 200);
+          };
+          tryAutoImageSemidia(4);
+        }
+      } catch (_) {}
+
       if (Array.isArray(parsed?.issues)) {
         const fatal = parsed.issues.filter((it: any) => it?.severity === 'fatal');
         if (fatal.length > 0) {
