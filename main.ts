@@ -171,7 +171,7 @@ import './optimization/suggest-design-intent.ts';
 import './tools/benchmark-tfmtf.ts';
 
 // Analysis modules
-import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene } from './analysis/optical-analysis.ts';
+import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, showMagnificationChromaticAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene } from './analysis/optical-analysis.ts';
 
 // Performance monitoring (削除されたファイルなのでコメントアウト)
 // import { performanceMonitor } from './performance-monitor.ts';
@@ -442,6 +442,7 @@ async function initializeApplication() {
         window['showSpotDiagram'] = showSpotDiagram;
         window['showTransverseAberrationDiagram'] = showTransverseAberrationDiagram;
         window['showLongitudinalAberrationDiagram'] = showLongitudinalAberrationDiagram;
+        window['showMagnificationChromaticAberrationDiagram'] = showMagnificationChromaticAberrationDiagram;
         window['showAstigmatismDiagram'] = showAstigmatismDiagram;
         window['showAstigmatism'] = async () => {
             const progressWrapper = document.getElementById('astigmatism-progress-wrapper');
@@ -2554,6 +2555,7 @@ if (analysisSelect) {
             'spherical-aberration': 'open-spherical-aberration-window-btn',
             'astigmatism': 'open-astigmatism-window-btn',
             'distortion': 'open-distortion-window-btn',
+            'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
             'integrated-aberration': 'open-integrated-aberration-window-btn',
             'transverse-aberration': 'open-transverse-aberration-window-btn',
             'opd': 'open-opd-window-btn',

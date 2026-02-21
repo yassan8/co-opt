@@ -318,7 +318,8 @@ function __coopt_buildFallbackBlocksFromRows(rows: any[]): any[] {
 
     if (isStop) {
       stopCount++;
-      const sdNum = Number(row?.semidia);
+      const stopSemidiaRaw = row?.semidia ?? row?.semiDiameter ?? row?.semiDia ?? row?.['semi diameter'] ?? row?.['Semi Diameter'];
+      const sdNum = Number(stopSemidiaRaw);
       blocks.push({
         blockId: `Stop-${stopCount}`,
         blockType: 'Stop',
@@ -480,6 +481,20 @@ export function handleImportZemax(): void {
       const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
       const sourceRows = Array.isArray(parsed?.sourceRows) ? parsed.sourceRows : [];
       const objectRows = Array.isArray(parsed?.objectRows) ? parsed.objectRows : [];
+      const parsedStopIndex = rows.findIndex((r: any) => {
+        const ot = String(r?.['object type'] ?? r?.object ?? '').trim().toLowerCase();
+        return ot === 'stop';
+      });
+      const stopSemidiaWasMissing = (() => {
+        if (parsedStopIndex < 0) return false;
+        const stopRow = rows[parsedStopIndex] || {};
+        const raw = stopRow?.semidia ?? stopRow?.semiDiameter ?? stopRow?.semiDia ?? stopRow?.['semi diameter'] ?? stopRow?.['Semi Diameter'];
+        if (raw === null || raw === undefined) return true;
+        const s = String(raw).trim();
+        if (s === '') return true;
+        const n = Number(s);
+        return !(Number.isFinite(n) && n > 0);
+      })();
 
       let blocks: any[] = [];
       try {
@@ -534,7 +549,10 @@ export function handleImportZemax(): void {
 
       try {
         if (typeof (window as any).autoCalculateMissingSemidia === 'function') {
-          (window as any).autoCalculateMissingSemidia(sourceRows, objectRows);
+          (window as any).autoCalculateMissingSemidia(sourceRows, objectRows, {
+            entrancePupilDiameterMm: Number(parsed?.entrancePupilDiameterMm),
+            stopSemidiaWasMissing
+          });
         }
       } catch (_) {}
 
@@ -723,6 +741,7 @@ export function handleAnalysisSelect(selectedValue: string): void {
     'spherical-aberration': 'open-spherical-aberration-window-btn',
     'astigmatism': 'open-astigmatism-window-btn',
     'distortion': 'open-distortion-window-btn',
+    'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
     'integrated-aberration': 'open-integrated-aberration-window-btn',
     'transverse-aberration': 'open-transverse-aberration-window-btn',
     'opd': 'open-opd-window-btn',

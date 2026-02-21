@@ -263,6 +263,30 @@ export default function LegacyPanels() {
             <div id="distortion-grid"></div>
           </div>
 
+          <div className="magnification-chromatic-aberration-section" style={{ display: "none" }}>
+            <h2>Lateral Chromatic Aberration</h2>
+            <div className="magnification-chromatic-aberration-help">
+              <strong>Note:</strong> Lateral displacement is plotted relative to d-line at each object value.
+            </div>
+            <div className="magnification-chromatic-aberration-controls">
+              <label htmlFor="mca-xmin-input">Lateral displacement:</label>
+              <input type="number" id="mca-xmin-input" defaultValue={-0.05} step={0.01} />
+              <span>to</span>
+              <input type="number" id="mca-xmax-input" defaultValue={0.05} step={0.01} />
+              <span className="note">(mm)</span>
+              <label htmlFor="mca-point-count-input" style={{ marginLeft: 10 }}>Points:</label>
+              <input type="number" id="mca-point-count-input" defaultValue={21} min={2} max={201} step={1} />
+              <button id="show-magnification-chromatic-aberration-btn">Show lateral chromatic aberration</button>
+            </div>
+            <div id="mca-progress-wrapper" style={{ display: "none", margin: "8px 0" }}>
+              <div id="mca-progress-text" style={{ marginBottom: 6, fontSize: 12, color: "#333" }}>
+                Calculating lateral chromatic aberration...
+              </div>
+              <progress id="mca-progressbar" max={100} value={0} style={{ width: "100%" }}></progress>
+            </div>
+            <div id="magnification-chromatic-aberration-container"></div>
+          </div>
+
           <section className="diagram-section" style={{ display: "none" }}>
             <h2>Integrated Aberration Diagram</h2>
             <div className="distortion-help">

@@ -1756,6 +1756,173 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
     }
 }
 
+/**
+ * Show lateral chromatic aberration diagram (倍率色収差図)
+ */
+export async function showMagnificationChromaticAberrationDiagram(options: any = {}): Promise<void> {
+     console.log('📊 Starting lateral chromatic aberration calculation...');
+
+    const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
+        ? options.onProgress
+        : null;
+
+    let containerTarget: any = 'magnification-chromatic-aberration-container';
+    if (options && typeof options === 'object') {
+        if (options.containerElement) {
+            containerTarget = options.containerElement;
+        } else if (typeof options.containerId === 'string' && options.containerId.trim() !== '') {
+            containerTarget = options.containerId;
+        }
+    }
+
+    try {
+        try { onProgress?.({ percent: 0, message: 'Preparing lateral chromatic aberration...' }); } catch (_) {}
+
+        const xMinInput = document.getElementById('mca-xmin-input') as HTMLInputElement | null;
+        const xMaxInput = document.getElementById('mca-xmax-input') as HTMLInputElement | null;
+        const optXMin = (options && typeof options === 'object') ? Number((options as any).xMin) : NaN;
+        const optXMax = (options && typeof options === 'object') ? Number((options as any).xMax) : NaN;
+        let xMin = Number.isFinite(optXMin) ? optXMin : Number(xMinInput?.value);
+        let xMax = Number.isFinite(optXMax) ? optXMax : Number(xMaxInput?.value);
+        if (!Number.isFinite(xMin)) xMin = -0.05;
+        if (!Number.isFinite(xMax)) xMax = 0.05;
+        if (xMin >= xMax) {
+            xMin = -0.05;
+            xMax = 0.05;
+        }
+
+        const tableOpticalSystem = getTableOpticalSystem();
+        const tableObject = getTableObject();
+        const tableSource = getTableSource();
+        const opticalSystemRows = getOpticalSystemRows(tableOpticalSystem);
+        const objectRows = getObjectRows(tableObject);
+        const sourceRows = getSourceRows(tableSource);
+
+        if (!opticalSystemRows || opticalSystemRows.length === 0) {
+            throw new Error('光学系データが見つかりません');
+        }
+
+        const inferObjectFieldMode = (objects: any) => {
+            const rows = Array.isArray(objects) ? objects : [];
+            const pickTag = (o: any) => {
+                const raw = o?.position ?? o?.fieldType ?? o?.field_type ?? o?.field ?? o?.type;
+                return (raw ?? '').toString().toLowerCase();
+            };
+            const tags = rows.map(pickTag).filter(Boolean);
+            const hasRect = tags.some(t => t.includes('rect') || t.includes('rectangle'));
+            const hasHeight = tags.some(t => t.includes('height'));
+            if (hasRect || hasHeight) return { mode: 'height' };
+            const hasAngle = tags.some(t => t.includes('angle'));
+            if (hasAngle) return { mode: 'angle' };
+
+            const heightCandidates = rows
+                .map((o: any) => parseFloat(o?.yHeight ?? o?.y ?? NaN))
+                .filter(v => Number.isFinite(v));
+            if (heightCandidates.length > 0) return { mode: 'height' };
+            return { mode: 'angle' };
+        };
+
+        const fieldMode = inferObjectFieldMode(objectRows);
+        const heightMode = fieldMode.mode === 'height';
+
+        const rawFieldValues = (objectRows || [])
+            .map((o: any) => {
+                if (heightMode) {
+                    return parseFloat(o?.yHeight ?? o?.y ?? o?.yHeightAngle ?? NaN);
+                }
+                return parseFloat(o?.yHeightAngle ?? o?.yFieldAngle ?? o?.yAngle ?? o?.fieldAngle ?? o?.y ?? NaN);
+            })
+            .filter(v => Number.isFinite(v))
+            .map(v => Math.abs(v));
+
+        if (rawFieldValues.length === 0) {
+            throw new Error('Objectテーブルに有効な値がありません');
+        }
+
+        const maxFieldValue = Math.max(...rawFieldValues.map(v => Number(v)));
+        if (!Number.isFinite(maxFieldValue) || maxFieldValue <= 0) {
+            throw new Error('Objectテーブルに有効な最大値がありません');
+        }
+
+        const pointCountInput = document.getElementById('mca-point-count-input') as HTMLInputElement | null;
+        const optPointCount = (options && typeof options === 'object') ? Number((options as any).pointCount) : NaN;
+        let pointCount = Number.isFinite(optPointCount) ? Math.round(optPointCount) : Number(pointCountInput?.value);
+        if (!Number.isFinite(pointCount) || pointCount < 2) pointCount = 11;
+
+        const fieldValues: number[] = [];
+        if (pointCount <= 1) {
+            fieldValues.push(maxFieldValue);
+        } else {
+            for (let i = 0; i < pointCount; i++) {
+                const v = (maxFieldValue * i) / (pointCount - 1);
+                fieldValues.push(Number(v.toFixed(6)));
+            }
+        }
+
+        const normalizeUm = (raw: any) => {
+            const n = Number(raw);
+            if (!Number.isFinite(n) || n <= 0) return null;
+            return n > 10 ? (n / 1000) : n;
+        };
+        const fallbackWavelengths = [0.4358, 0.5876, 0.6563];
+        const wavelengths = (() => {
+            const rows = Array.isArray(sourceRows) ? sourceRows : [];
+            const unique: number[] = [];
+            for (const row of rows) {
+                const wl = normalizeUm(row?.wavelength ?? row?.Wavelength);
+                if (wl === null) continue;
+                if (!unique.some(w => Math.abs(w - wl) < 1e-12)) unique.push(wl);
+                if (unique.length >= 6) break;
+            }
+            return unique.length > 0 ? unique : fallbackWavelengths.slice();
+        })();
+
+        const referenceWavelength = 0.5876;
+        if (!wavelengths.some(w => Math.abs(w - referenceWavelength) < 1e-6)) {
+            wavelengths.push(referenceWavelength);
+            wavelengths.sort((a, b) => a - b);
+        }
+
+        const { calculateMagnificationChromaticAberrationData } = await import('../evaluation/aberrations/magnification-chromatic-aberration.js');
+        const { plotMagnificationChromaticAberration } = await import('../evaluation/aberrations/magnification-chromatic-aberration-plot.js');
+
+        const data = await calculateMagnificationChromaticAberrationData(
+            opticalSystemRows,
+            fieldValues,
+            wavelengths,
+            { referenceWavelength, heightMode, onProgress } as any
+        );
+
+        if (!data) {
+            throw new Error('倍率色収差の計算に失敗しました');
+        }
+
+        try { onProgress?.({ percent: 95, message: 'Rendering...' }); } catch (_) {}
+
+        plotMagnificationChromaticAberration(
+            data,
+            containerTarget,
+            { xMin, xMax }
+        );
+
+        try { onProgress?.({ percent: 100, message: 'Done' }); } catch (_) {}
+        console.log('✅ Lateral chromatic aberration diagram generated successfully');
+    } catch (error) {
+        console.error('❌ Lateral chromatic aberration diagram error:', error);
+        const container = typeof containerTarget === 'string'
+            ? document.getElementById(containerTarget)
+            : containerTarget;
+        if (container) {
+            container.innerHTML = `<div style="padding: 20px; color: red; font-family: Arial;">
+                <strong>Lateral chromatic aberration error:</strong><br>
+                ${(error as any).message}<br>
+                <small style="color: #888;">Check console for details</small>
+            </div>`;
+        }
+        alert(`Lateral chromatic aberration error: ${(error as any).message}`);
+    }
+}
+
 export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
     console.log('📊 Starting astigmatism calculation...');
 
@@ -2420,8 +2587,8 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
         }
         
         // デフォルト設定
-        // Integrated Aberration Diagram の球面収差は固定で 20 本（Normalized Pupil を粗く分割して高速化）
-        const rayCountSpherical = 20;
+        // Integrated Aberration Diagram の球面収差は 100 本
+        const rayCountSpherical = 100;
         const rayCountAstigmatism = 31;  // 非点収差用の光線数（計算時間を考慮）
 
         // Wavelengths:
@@ -2567,8 +2734,33 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
         if (distortionDataByWavelength.length === 0) {
             throw new Error('Failed to calculate distortion for any wavelength');
         }
+
+        // 4. Lateral Chromatic Aberration (LCA) データを計算
+        console.log('📊 Calculating lateral chromatic aberration...');
+        const { calculateMagnificationChromaticAberrationData } = await import('../evaluation/aberrations/magnification-chromatic-aberration.js');
+
+        const lcaMaxField = heightMode
+            ? Math.max(...heightCandidates)
+            : Math.max(...fieldValues.map(v => Math.abs(v)));
+        const lcaPointCount = 21;
+        const lcaFieldValues: number[] = [];
+        if (Number.isFinite(lcaMaxField) && lcaMaxField > 0) {
+            for (let i = 0; i < lcaPointCount; i++) {
+                const v = (lcaMaxField * i) / (lcaPointCount - 1);
+                lcaFieldValues.push(Number(v.toFixed(6)));
+            }
+        }
+
+        const lcaData = lcaFieldValues.length > 0
+            ? await calculateMagnificationChromaticAberrationData(
+                opticalSystemRows,
+                lcaFieldValues,
+                wavelengths,
+                { referenceWavelength: 0.5876, heightMode, onProgress: mapProgress(70, 15, 'LCA') } as any
+            )
+            : null;
         
-        // 4. 統合収差図を表示
+        // 5. 統合収差図を表示
         console.log('📊 Plotting integrated aberration diagram...');
         const { plotIntegratedAberrationDiagram } = await import('../evaluation/aberrations/integrated-aberration-plot.js');
 
@@ -2579,7 +2771,7 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
         const activeConfig = systemConfig?.configurations?.find((c: any) => c && String(c.id) === String(systemConfig.activeConfigId));
         const configName = activeConfig ? activeConfig.name : 'Default';
         
-        plotIntegratedAberrationDiagram(longitudinalData, astigmatismData, distortionDataByWavelength, {
+        plotIntegratedAberrationDiagram(longitudinalData, astigmatismData, distortionDataByWavelength, lcaData, {
             width: 1440,
             height: 600,
             mainTitle: `Integrated Aberration Diagram - ${configName}`,

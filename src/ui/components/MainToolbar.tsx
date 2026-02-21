@@ -171,6 +171,7 @@ export default function MainToolbar() {
             <option value="spherical-aberration">Spherical Aberration</option>
             <option value="astigmatism">Astigmatism</option>
             <option value="distortion">Distortion</option>
+            <option value="magnification-chromatic-aberration">Lateral Chromatic Aberration</option>
             <option value="integrated-aberration">Integrated Aberration</option>
             <option value="transverse-aberration">Transverse Aberration</option>
             <option value="opd">Optical Path Difference</option>
@@ -225,6 +226,12 @@ export default function MainToolbar() {
           title="Open Distortion in popup window"
         >
           Distortion
+        </button>
+        <button
+          id="open-magnification-chromatic-aberration-window-btn"
+          title="Open Lateral Chromatic Aberration in popup window"
+        >
+          Lateral Chromatic Aberration
         </button>
         <button
           id="open-integrated-aberration-window-btn"

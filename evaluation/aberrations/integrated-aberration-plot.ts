@@ -53,7 +53,7 @@ function inferObjectFieldMode(objects) {
  * @param {Object} distortionData - 歪曲収差データ
  * @param {Object} options - 表示オプション
  */
-export function plotIntegratedAberrationDiagram(longitudinalData, astigmatismData, distortionData, options = {}) {
+export function plotIntegratedAberrationDiagram(longitudinalData, astigmatismData, distortionData, lcaData, options = {}) {
     console.log('📊 統合収差図作成開始');
 
     const containerElement = options?.containerElement || null;
@@ -84,7 +84,7 @@ export function plotIntegratedAberrationDiagram(longitudinalData, astigmatismDat
             plotly,
             containerElement,
             infoElement
-        }, longitudinalData, astigmatismData, distortionData, plotOptions);
+        }, longitudinalData, astigmatismData, distortionData, lcaData, plotOptions);
         return;
     }
 
@@ -165,7 +165,7 @@ export function plotIntegratedAberrationDiagram(longitudinalData, astigmatismDat
                 plotly: newWindow.Plotly,
                 containerElement: newWindow.document.getElementById('plot-container'),
                 infoElement: newWindow.document.getElementById('info-panel')
-            }, longitudinalData, astigmatismData, distortionData, plotOptions);
+            }, longitudinalData, astigmatismData, distortionData, lcaData, plotOptions);
         }
     }, 100);
 }
@@ -173,7 +173,7 @@ export function plotIntegratedAberrationDiagram(longitudinalData, astigmatismDat
 /**
  * 統合プロットを作成
  */
-function createIntegratedPlot(target, longitudinalData, astigmatismData, distortionData, options) {
+function createIntegratedPlot(target, longitudinalData, astigmatismData, distortionData, lcaData, options) {
     const targetWindow = target?.targetWindow || window;
     const plotly = target?.plotly || targetWindow?.Plotly;
     const containerElement = target?.containerElement || targetWindow?.document?.getElementById?.('plot-container');
@@ -217,11 +217,10 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
             traces.push({
                 x: xValues,
                 y: yValues,
-                mode: 'lines+markers',
+                mode: 'lines',
                 type: 'scatter',
                 name: `SA ${wavelengthNm}nm`,
                 line: { color: color, width: 2 },
-                marker: { size: 4, color: color },
                 xaxis: 'x',
                 yaxis: 'y',
                 legendgroup: `spherical-${wavelengthNm}`,
@@ -243,11 +242,10 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
                 traces.push({
                     x: xValues,
                     y: yValues,
-                    mode: 'lines+markers',
+                    mode: 'lines',
                     type: 'scatter',
                     name: `${wavelengthNm}nm (S)`,
                     line: { color: color, width: 2, dash: 'dash' },
-                    marker: { size: 4, color: color, symbol: 'square' },
                     xaxis: 'x',
                     yaxis: 'y',
                     legendgroup: `spherical-${wavelengthNm}`,
@@ -288,11 +286,10 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
                 traces.push({
                     x: meridionalX,
                     y: meridionalY,
-                    mode: 'lines+markers',
+                    mode: 'lines',
                     type: 'scatter',
                     name: `AS ${wavelengthNm}nm M:solid, S:dashed`,
                     line: { color: color, width: 2 },
-                    marker: { size: 4, color: color },
                     xaxis: 'x2',
                     yaxis: 'y2',
                     legendgroup: `astigmatism-${wavelengthNm}`,
@@ -308,11 +305,10 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
                 traces.push({
                     x: sagittalX,
                     y: sagittalY,
-                    mode: 'lines+markers',
+                    mode: 'lines',
                     type: 'scatter',
                     name: `${wavelengthNm}nm (S)`,
                     line: { color: color, width: 2, dash: 'dash' },
-                    marker: { size: 4, color: color, symbol: 'square' },
                     xaxis: 'x2',
                     yaxis: 'y2',
                     legendgroup: `astigmatism-${wavelengthNm}`,
@@ -341,11 +337,10 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
                     traces.push({
                         x: xValues,
                         y: yValues,
-                        mode: 'lines+markers',
+                        mode: 'lines',
                         type: 'scatter',
                         name: `DIST ${wavelengthNm}nm`,
                         line: { color: color, width: 2 },
-                        marker: { size: 6, color: color },
                         xaxis: 'x3',
                         yaxis: 'y3',
                         legendgroup: `distortion-${wavelengthNm}`,
@@ -353,6 +348,39 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
                     });
                 }
             }
+        });
+    }
+
+    // ===========================================
+    // 4. Lateral Chromatic Aberration（右端：subplot 4）
+    // ===========================================
+    if (lcaData && Array.isArray(lcaData.dataByWavelength)) {
+        const fieldValues = Array.isArray(lcaData.fieldValues) ? lcaData.fieldValues : [];
+        const referenceWavelength = Number.isFinite(Number(lcaData.referenceWavelength))
+            ? Number(lcaData.referenceWavelength)
+            : 0.5876;
+
+        lcaData.dataByWavelength.forEach((entry) => {
+            const wavelength = Number(entry?.wavelength);
+            if (!Number.isFinite(wavelength)) return;
+            if (Math.abs(wavelength - referenceWavelength) < 1e-6) return;
+            const displacements = Array.isArray(entry?.displacements) ? entry.displacements : [];
+            if (displacements.length === 0) return;
+
+            const wavelengthNm = (wavelength * 1000).toFixed(1);
+            const color = getColorForWavelength(wavelength);
+            traces.push({
+                x: displacements,
+                y: fieldValues,
+                mode: 'lines',
+                type: 'scatter',
+                name: `LCA ${wavelengthNm}nm`,
+                line: { color: color, width: 2 },
+                xaxis: 'x4',
+                yaxis: 'y4',
+                legendgroup: `lca-${wavelengthNm}`,
+                showlegend: true
+            });
         });
     }
     
@@ -368,7 +396,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
         // 球面収差軸（左側）
         xaxis: {
             title: { text: 'Longitudinal Aberration (mm)', font: { size: 12 } },
-            domain: [0, 0.28],
+            domain: [0, 0.22],
             range: [-0.5, 0.5],
             dtick: 0.1,
             ticklabelstandoff: 10,
@@ -392,7 +420,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
         // 非点収差軸（中央）
         xaxis2: {
             title: { text: 'Image Position (mm)', font: { size: 12 } },
-            domain: [0.36, 0.64],
+            domain: [0.26, 0.48],
             anchor: 'y2',
             range: [-0.5, 0.5],
             dtick: 0.1,
@@ -417,7 +445,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
         // 歪曲収差軸（右側）
         xaxis3: {
             title: { text: 'Distortion (%)', font: { size: 12 } },
-            domain: [0.72, 1],
+            domain: [0.52, 0.74],
             anchor: 'y3',
             range: [-5, 5],
             dtick: 1,
@@ -430,6 +458,31 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
         yaxis3: {
             title: { text: heightMode ? 'Object Height (mm)' : 'Object Angle θ (deg)', font: { size: 12 } },
             anchor: 'x3',
+            domain: [0, 1],
+            rangemode: 'tozero',
+            autorange: true,
+            gridcolor: '#E0E0E0',
+            zeroline: true,
+            zerolinecolor: '#000000',
+            zerolinewidth: 1
+        },
+
+        // LCA軸（右端）
+        xaxis4: {
+            title: { text: 'Lateral Displacement (mm)', font: { size: 12 } },
+            domain: [0.78, 1],
+            anchor: 'y4',
+            range: [-0.05, 0.05],
+            dtick: 0.01,
+            ticklabelstandoff: 10,
+            zeroline: true,
+            zerolinecolor: '#000000',
+            zerolinewidth: 2,
+            gridcolor: '#E0E0E0'
+        },
+        yaxis4: {
+            title: { text: heightMode ? 'Object Height (mm)' : 'Object Angle θ (deg)', font: { size: 12 } },
+            anchor: 'x4',
             domain: [0, 1],
             rangemode: 'tozero',
             autorange: true,
@@ -454,8 +507,8 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
         // サブプロットのタイトル
         annotations: [
             {
-                text: 'Spherical Aberration',
-                x: 0.14,
+                text: 'Spherical',
+                x: 0.11,
                 y: 1.05,
                 xref: 'paper',
                 yref: 'paper',
@@ -465,8 +518,8 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
                 font: { size: 14, color: '#333', weight: 'bold' }
             },
             {
-                text: 'Astigmatic Field Curves',
-                x: 0.5,
+                text: 'Astigmatic',
+                x: 0.37,
                 y: 1.05,
                 xref: 'paper',
                 yref: 'paper',
@@ -477,7 +530,18 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
             },
             {
                 text: 'Distortion',
-                x: 0.86,
+                x: 0.63,
+                y: 1.05,
+                xref: 'paper',
+                yref: 'paper',
+                xanchor: 'center',
+                yanchor: 'bottom',
+                showarrow: false,
+                font: { size: 14, color: '#333', weight: 'bold' }
+            },
+            {
+                text: 'Laterac Chromatic',
+                x: 0.89,
                 y: 1.05,
                 xref: 'paper',
                 yref: 'paper',
@@ -510,7 +574,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
 
     // 情報パネルの更新（任意）
     if (infoElement) {
-        updateInfoPanel({ infoElement }, longitudinalData, astigmatismData, distortionData, heightMode);
+        updateInfoPanel({ infoElement }, longitudinalData, astigmatismData, distortionData, lcaData, heightMode);
     }
     
     console.log('✅ 統合収差図作成完了');
@@ -519,7 +583,7 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
 /**
  * 情報パネルを更新
  */
-function updateInfoPanel(target, longitudinalData, astigmatismData, distortionData, heightMode = false) {
+function updateInfoPanel(target, longitudinalData, astigmatismData, distortionData, lcaData, heightMode = false) {
     const infoPanel = target?.infoElement || null;
     if (!infoPanel) return;
     
@@ -554,6 +618,17 @@ function updateInfoPanel(target, longitudinalData, astigmatismData, distortionDa
             }
         });
         html += `<li><strong>Distortion:</strong> Maximum ${maxDistortion.toFixed(2)}%</li>`;
+    }
+
+    if (lcaData && Array.isArray(lcaData.dataByWavelength)) {
+        const ref = Number.isFinite(Number(lcaData.referenceWavelength)) ? Number(lcaData.referenceWavelength) : 0.5876;
+        const wavelengths = lcaData.dataByWavelength
+            .map((d: any) => Number(d?.wavelength))
+            .filter((w: number) => Number.isFinite(w) && Math.abs(w - ref) >= 1e-6)
+            .map((w: number) => `${(w * 1000).toFixed(1)}nm`);
+        if (wavelengths.length > 0) {
+            html += `<li><strong>LCA:</strong> Wavelengths ${wavelengths.join(', ')}</li>`;
+        }
     }
     
     html += '</ul>';
