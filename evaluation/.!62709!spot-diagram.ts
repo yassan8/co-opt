@@ -1,1 +1,0 @@
-// Spot Diagram Evaluation Module

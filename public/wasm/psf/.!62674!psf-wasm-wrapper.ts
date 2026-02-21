@@ -1,2 +1,0 @@
-/**
- * PSF Calculator WebAssembly Wrapper
