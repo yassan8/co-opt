@@ -4071,6 +4071,202 @@ export function setupAnalysisWindows() {
                 });
         }
 
+        // Magnification Chromatic Aberration popup window button
+        const openMagnificationChromaticAberrationWindowBtn = document.getElementById('open-magnification-chromatic-aberration-window-btn');
+        if (openMagnificationChromaticAberrationWindowBtn) {
+                openMagnificationChromaticAberrationWindowBtn.addEventListener('click', () => {
+                        if (w.__magnificationChromaticAberrationPopup && !w.__magnificationChromaticAberrationPopup.closed) {
+                                try { w.__magnificationChromaticAberrationPopup.focus(); } catch (_) {}
+                                try {
+                                        if (typeof w.__magnificationChromaticAberrationPopup.renderMagnificationChromaticAberration === 'function') {
+                                                w.__magnificationChromaticAberrationPopup.renderMagnificationChromaticAberration();
+                                        }
+                                } catch (_) {}
+                                return;
+                        }
+
+                        const popup = window.open('', 'Lateral Chromatic Aberration', 'width=800,height=600');
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__magnificationChromaticAberrationPopup = popup;
+
+                        popup.document.write(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Lateral Chromatic Aberration</title>
+    <style>
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: #f4f4f4;
+        }
+        .header {
+            padding: 10px 12px;
+            background: #f8f8f8;
+            color: #333;
+            border-bottom: 1px solid #ddd;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .controls {
+            padding: 10px 12px;
+            background: #f8f8f8;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 10px;
+            align-items: center;
+            flex: 0 0 auto;
+        }
+        .controls label { font-size: 12px; color: #333; white-space: nowrap; }
+        .controls input {
+            padding: 5px 8px;
+            font-size: 12px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            width: 90px;
+        }
+        .controls button {
+            padding: 6px 10px;
+            border: 1px solid #bbb;
+            background: #f8f8f8;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #333;
+        }
+        .controls button:hover { background: #e9e9e9; }
+        .content {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: hidden;
+            background: white;
+            display: flex;
+            flex-direction: column;
+        }
+        #popup-mca-container { flex: 1 1 auto; min-height: 0; }
+        .note { padding: 6px 12px; font-size: 12px; color: #666; background: #fff; border-bottom: 1px solid #eee; }
+    </style>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body>
+    <div class="header">Lateral Chromatic Aberration</div>
+    <div class="controls">
+        <label for="popup-mca-xmin">Lateral displacement:</label>
+        <input type="number" id="popup-mca-xmin" value="-0.05" step="0.01" />
+        <span style="font-size:12px;color:#333;">to</span>
+        <input type="number" id="popup-mca-xmax" value="0.05" step="0.01" />
+        <span style="font-size:12px;color:#666;">(mm)</span>
+        <label for="popup-mca-points" style="margin-left:6px;">Points:</label>
+        <input type="number" id="popup-mca-points" value="21" min="2" max="201" step="1" />
+        <button id="popup-show-mca-btn" type="button">Show lateral chromatic aberration</button>
+    </div>
+    <div id="popup-mca-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
+        <div id="popup-mca-progress-text" style="margin-bottom: 6px;">Calculating lateral chromatic aberration...</div>
+        <progress id="popup-mca-progressbar" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
+    </div>
+    <div class="note">Note: Lateral displacement is plotted relative to d-line at each object value.</div>
+    <div class="content">
+        <div id="popup-mca-container"></div>
+    </div>
+
+    <script>
+        function getOpenerEl(id) {
+            try {
+                return window.opener && window.opener.document ? window.opener.document.getElementById(id) : null;
+            } catch (_) {
+                return null;
+            }
+        }
+
+        function syncFromOpener() {
+            const openerMin = getOpenerEl('mca-xmin-input');
+            const openerMax = getOpenerEl('mca-xmax-input');
+            const openerPoints = getOpenerEl('mca-point-count-input');
+            const popupMin = document.getElementById('popup-mca-xmin');
+            const popupMax = document.getElementById('popup-mca-xmax');
+            const popupPoints = document.getElementById('popup-mca-points');
+            if (openerMin && popupMin && openerMin.value !== '') popupMin.value = openerMin.value;
+            if (openerMax && popupMax && openerMax.value !== '') popupMax.value = openerMax.value;
+            if (openerPoints && popupPoints && openerPoints.value !== '') popupPoints.value = openerPoints.value;
+        }
+
+        window['renderMagnificationChromaticAberration'] = async () => {
+            const containerEl = document.getElementById('popup-mca-container');
+            if (containerEl) containerEl.innerHTML = '';
+
+            const progressWrapper = document.getElementById('popup-mca-progress-wrapper');
+            const progressBarEl = document.getElementById('popup-mca-progressbar');
+            const progressTextEl = document.getElementById('popup-mca-progress-text');
+
+            const setProgress = (value, text) => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'block';
+                    if (progressBarEl && Number.isFinite(value)) progressBarEl.value = Math.max(0, Math.min(100, value));
+                    if (progressTextEl && typeof text === 'string') progressTextEl.textContent = text;
+                } catch (_) {}
+            };
+
+            const xMinEl = document.getElementById('popup-mca-xmin');
+            const xMaxEl = document.getElementById('popup-mca-xmax');
+            const pointEl = document.getElementById('popup-mca-points');
+            const xMin = xMinEl ? parseFloat(xMinEl.value) : -0.5;
+            const xMax = xMaxEl ? parseFloat(xMaxEl.value) : 0.5;
+            const pointCount = pointEl ? parseInt(pointEl.value, 10) : 11;
+
+            try {
+                if (!window.opener || typeof window.opener.showMagnificationChromaticAberrationDiagram !== 'function') {
+                    throw new Error('showMagnificationChromaticAberrationDiagram is not available on opener');
+                }
+                setProgress(0, 'Starting...');
+                const onProgress = (evt) => {
+                    try {
+                        const p = Number(evt?.percent);
+                        const msg = evt?.message || evt?.phase || 'Working...';
+                        if (Number.isFinite(p)) setProgress(p, msg);
+                        else setProgress(undefined, msg);
+                    } catch (_) {}
+                };
+                await window.opener.showMagnificationChromaticAberrationDiagram({
+                    containerElement: containerEl,
+                    xMin,
+                    xMax,
+                    pointCount,
+                    onProgress
+                });
+                setProgress(100, 'Done');
+            } catch (err) {
+                console.error(err);
+                setProgress(100, 'Failed');
+                if (containerEl) {
+                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate magnification chromatic aberration. Check console.</div>';
+                }
+            }
+        };
+
+        document.getElementById('popup-show-mca-btn').addEventListener('click', () => window.renderMagnificationChromaticAberration());
+        window.addEventListener('focus', syncFromOpener);
+        window.addEventListener('load', () => {
+            syncFromOpener();
+            try { window.renderMagnificationChromaticAberration(); } catch (_) {}
+        });
+    </script>
+</body>
+</html>
+                        `);
+
+                        try { popup.document.close(); } catch (_) {}
+                });
+        }
+
         // Integrated Aberration popup window button
         const openIntegratedAberrationWindowBtn = document.getElementById('open-integrated-aberration-window-btn');
         if (openIntegratedAberrationWindowBtn) {
@@ -8091,6 +8287,7 @@ export function setupTransformationControls(): void {
                 'spherical-aberration': 'open-spherical-aberration-window-btn',
                 'astigmatism': 'open-astigmatism-window-btn',
                 'distortion': 'open-distortion-window-btn',
+                'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
                 'integrated-aberration': 'open-integrated-aberration-window-btn',
                 'transverse-aberration': 'open-transverse-aberration-window-btn',
                 'opd': 'open-opd-window-btn',

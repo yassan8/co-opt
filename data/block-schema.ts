@@ -202,7 +202,7 @@ function __captureSemidiaOverridesFromRows(rows, existingOverrides) {
     const row = rows[i];
     if (!row || typeof row !== 'object') continue;
     const t = __rowTypeLower(row);
-    if (t === 'stop' || t === 'image' || __isCoordTransRow(row)) continue;
+    if (t === 'image' || __isCoordTransRow(row)) continue;
     const v = __getRowSemidia(row);
     if (!__semidiaHasValue(v)) continue;
     const pk = __provenanceKey(row);
@@ -224,7 +224,7 @@ function __applySemidiaOverridesToRows(rows, overrides) {
     const row = rows[i];
     if (!row || typeof row !== 'object') continue;
     const t = __rowTypeLower(row);
-    if (t === 'stop' || t === 'image' || __isCoordTransRow(row)) continue;
+    if (t === 'image' || __isCoordTransRow(row)) continue;
     const pk = __provenanceKey(row);
     let v = null;
     if (pk && __semidiaHasValue(overrides[pk])) v = overrides[pk];
@@ -248,15 +248,27 @@ function __captureBlockApertureFromLegacyRows(blocks, legacyRows) {
   for (const row of legacyRows) {
     if (!row || typeof row !== 'object') continue;
     const t = __rowTypeLower(row);
-    if (t === 'stop' || t === 'image' || __isCoordTransRow(row)) continue;
+    if (t === 'image' || __isCoordTransRow(row)) continue;
     const blockId = String(row._blockId ?? '').trim();
     const role = String(row._surfaceRole ?? '').trim();
-    if (!blockId || !role) continue;
+    if (!blockId) continue;
     const v = __getRowSemidia(row);
     if (!__semidiaHasValue(v)) continue;
 
     const block = byId.get(blockId);
     if (!block || typeof block !== 'object') continue;
+
+    if (t === 'stop') {
+      const s = String(v).trim();
+      const n = isNumericString(s) ? Number(s) : (typeof v === 'number' ? v : NaN);
+      if (Number.isFinite(n) && n > 0) {
+        if (!isPlainObject(block.parameters)) block.parameters = {};
+        block.parameters.semiDiameter = n;
+      }
+      continue;
+    }
+
+    if (!role) continue;
     if (!isPlainObject(block.aperture)) block.aperture = {};
 
     const incoming = String(v).trim();
@@ -2280,7 +2292,7 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
     if (isStopRow(r) && !stopRowHasGlass) {
       stopCount++;
       const blockId = `Stop-${stopCount}`;
-      const sd = parseSemiDiameterNumber(r.semidia);
+      const sd = parseSemiDiameterNumber(getLegacySemidiaRaw(r));
       const params: any = {};
       if (Number.isFinite(sd) && sd > 0) params.semiDiameter = sd;
 
@@ -2747,7 +2759,7 @@ export function expandBlocksIntoConfiguration(config: any): { expandedOpticalSys
       for (const lr of legacyRows) {
         if (!lr || typeof lr !== 'object') continue;
         const t = __rowTypeLower(lr);
-        if (t === 'stop' || t === 'image' || __isCoordTransRow(lr)) continue;
+        if (t === 'image' || __isCoordTransRow(lr)) continue;
         const pk = __provenanceKey(lr);
         if (!pk) continue;
         const v = __getRowSemidia(lr);
@@ -2758,7 +2770,7 @@ export function expandBlocksIntoConfiguration(config: any): { expandedOpticalSys
       for (const er of expanded.rows) {
         if (!er || typeof er !== 'object') continue;
         const t = __rowTypeLower(er);
-        if (t === 'stop' || t === 'image' || __isCoordTransRow(er)) continue;
+        if (t === 'image' || __isCoordTransRow(er)) continue;
         const pk = __provenanceKey(er);
         if (!pk) continue;
         if (legacyByProv.has(pk)) er.semidia = legacyByProv.get(pk);

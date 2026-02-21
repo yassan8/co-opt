@@ -864,6 +864,117 @@ function __zmxGetStopRadiusMmFromRows(rows: any[]): number | null {
     return null;
 }
 
+function __zmxGetStopSurfaceIndex(rows: any[]): number {
+    if (!Array.isArray(rows)) return -1;
+    for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const ot = String(r?.['object type'] ?? r?.object ?? '').trim().toLowerCase();
+        if (ot === 'stop') return i;
+    }
+    return -1;
+}
+
+function __zmxEvaluateEntrancePupilForStopSemidia(rows: any[], stopIndex: number, wavelengthMicrons: number, stopSemidiaMm: number): number | null {
+    if (!Array.isArray(rows) || stopIndex < 0 || stopIndex >= rows.length) return null;
+    if (!(Number.isFinite(stopSemidiaMm) && stopSemidiaMm > 0)) return null;
+
+    try {
+        const cloned = rows.map((r: any) => ({ ...(r || {}) }));
+        cloned[stopIndex].semidia = stopSemidiaMm;
+        const paraxial = calculateParaxialData(cloned, wavelengthMicrons);
+        const enpd = Number(paraxial?.entrancePupilDiameter);
+        return Number.isFinite(enpd) && enpd > 0 ? enpd : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function __zmxBacksolveStopSemidiaFromEnpd(rows: any[], wavelengthMicrons: number, targetEnpdMm: number): number | null {
+    const target = Number(targetEnpdMm);
+    if (!(Number.isFinite(target) && target > 0)) return null;
+
+    const stopIndex = __zmxGetStopSurfaceIndex(rows);
+    if (stopIndex < 0) return null;
+
+    const minSd = 1e-4;
+    let loSd = Math.max(minSd, target * 0.02);
+    let hiSd = Math.max(1, target * 1.5);
+
+    let loEnpd = __zmxEvaluateEntrancePupilForStopSemidia(rows, stopIndex, wavelengthMicrons, loSd);
+    let hiEnpd = __zmxEvaluateEntrancePupilForStopSemidia(rows, stopIndex, wavelengthMicrons, hiSd);
+
+    for (let i = 0; i < 24 && (!Number.isFinite(hiEnpd as number) || (hiEnpd as number) < target); i++) {
+        hiSd *= 1.8;
+        hiEnpd = __zmxEvaluateEntrancePupilForStopSemidia(rows, stopIndex, wavelengthMicrons, hiSd);
+        if (hiSd > 1e6) break;
+    }
+    for (let i = 0; i < 24 && Number.isFinite(loEnpd as number) && (loEnpd as number) > target && loSd > minSd; i++) {
+        loSd = Math.max(minSd, loSd / 1.8);
+        loEnpd = __zmxEvaluateEntrancePupilForStopSemidia(rows, stopIndex, wavelengthMicrons, loSd);
+        if (loSd <= minSd) break;
+    }
+
+    let bestSd: number | null = null;
+    let bestErr = Infinity;
+
+    const consider = (sd: number, enpd: number | null) => {
+        if (!(Number.isFinite(sd) && sd > 0)) return;
+        if (!(Number.isFinite(enpd as number) && (enpd as number) > 0)) return;
+        const err = Math.abs((enpd as number) - target);
+        if (err < bestErr) {
+            bestErr = err;
+            bestSd = sd;
+        }
+    };
+
+    consider(loSd, loEnpd);
+    consider(hiSd, hiEnpd);
+
+    const hasBracket = Number.isFinite(loEnpd as number)
+        && Number.isFinite(hiEnpd as number)
+        && (((loEnpd as number) - target) * ((hiEnpd as number) - target) <= 0);
+
+    if (hasBracket) {
+        let leftSd = loSd;
+        let rightSd = hiSd;
+        let leftEnpd = loEnpd as number;
+        let rightEnpd = hiEnpd as number;
+
+        for (let i = 0; i < 36; i++) {
+            const midSd = (leftSd + rightSd) / 2;
+            const midEnpdRaw = __zmxEvaluateEntrancePupilForStopSemidia(rows, stopIndex, wavelengthMicrons, midSd);
+            if (!Number.isFinite(midEnpdRaw as number) || (midEnpdRaw as number) <= 0) break;
+            const midEnpd = midEnpdRaw as number;
+            consider(midSd, midEnpd);
+
+            if (Math.abs(midEnpd - target) <= 1e-4) break;
+
+            if ((leftEnpd - target) * (midEnpd - target) <= 0) {
+                rightSd = midSd;
+                rightEnpd = midEnpd;
+            } else {
+                leftSd = midSd;
+                leftEnpd = midEnpd;
+            }
+
+            if (Math.abs(rightSd - leftSd) <= 1e-8 * Math.max(1, midSd)) break;
+        }
+    } else {
+        const low = Math.max(minSd, target * 0.005);
+        const high = Math.max(hiSd, target * 20);
+        const span = Math.log(high / low);
+        const samples = 40;
+        for (let i = 0; i <= samples; i++) {
+            const t = i / samples;
+            const sd = low * Math.exp(span * t);
+            const enpd = __zmxEvaluateEntrancePupilForStopSemidia(rows, stopIndex, wavelengthMicrons, sd);
+            consider(sd, enpd);
+        }
+    }
+
+    return (Number.isFinite(bestSd as number) && (bestSd as number) > 0) ? (bestSd as number) : null;
+}
+
 function __zmxResolveSearchRadiusMm(rows: any[], entrancePupilDiameterMm?: number): number {
     const stopRad = __zmxGetStopRadiusMmFromRows(rows);
     if (Number.isFinite(stopRad) && (stopRad as number) > 0) return stopRad as number;
@@ -1088,7 +1199,7 @@ function __zmxApplySemidiaOverridesFromMarginalRays(rows: any[], wavelengthMicro
     }
 }
 
-function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], options: { entrancePupilDiameterMm?: number } = {}): void {
+function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], options: { entrancePupilDiameterMm?: number; stopSemidiaWasMissing?: boolean } = {}): void {
     console.log('[autoCalculateMissingSemidia] START');
     const tbl = w.tableOpticalSystem || w.tableOpticalSystem;
     const rows = (tbl && typeof tbl.getData === 'function') ? tbl.getData() : null;
@@ -1120,6 +1231,19 @@ function autoCalculateMissingSemidia(sourceRows: any[], objectRows: any[], optio
         if (!Number.isFinite(primaryWavelength) || primaryWavelength <= 0) return;
 
         const enpd = Number(options?.entrancePupilDiameterMm);
+        const stopIndex = __zmxGetStopSurfaceIndex(rows);
+        const stopSemidiaWasMissingAtImport = !!options?.stopSemidiaWasMissing;
+        const shouldBacksolveStop = Number.isFinite(enpd) && enpd > 0 && stopIndex >= 0
+            && (stopSemidiaWasMissingAtImport || __zmxIsMissingSemidia(rows[stopIndex]));
+        if (shouldBacksolveStop) {
+            const solvedStopSemidia = __zmxBacksolveStopSemidiaFromEnpd(rows, primaryWavelength, enpd);
+            if (Number.isFinite(solvedStopSemidia) && solvedStopSemidia > 0) {
+                rows[stopIndex].semidia = solvedStopSemidia;
+                console.warn(`[autoCalculateMissingSemidia] Stop semidia backsolved from ENPD=${enpd}: ${solvedStopSemidia}`);
+            } else {
+                console.warn(`[autoCalculateMissingSemidia] Stop semidia backsolve failed (ENPD=${enpd}, stopIndex=${stopIndex})`);
+            }
+        }
         if (Number.isFinite(enpd) && enpd > 0) {
             (rows as any).__zmxEntrancePupilDiameterMm = enpd;
         }
@@ -1673,6 +1797,7 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
 if (typeof window !== 'undefined') {
     try {
         w.__loadAllDataObjectIntoApp = __loadAllDataObjectIntoApp;
+        w.autoCalculateMissingSemidia = autoCalculateMissingSemidia;
     } catch (_) {}
 }
 
@@ -2018,10 +2143,29 @@ function setupImportZemaxButton(): void {
                 }
 
                 try {
+                    const parsedRows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+                    const parsedStopIndex = parsedRows.findIndex((r: any) => {
+                        const ot = String(r?.['object type'] ?? r?.object ?? '').trim().toLowerCase();
+                        return ot === 'stop';
+                    });
+                    const stopSemidiaWasMissing = (() => {
+                        if (parsedStopIndex < 0) return false;
+                        const stopRow = parsedRows[parsedStopIndex] || {};
+                        const raw = stopRow?.semidia ?? stopRow?.semiDiameter ?? stopRow?.semiDia ?? stopRow?.['semi diameter'] ?? stopRow?.['Semi Diameter'];
+                        if (raw === null || raw === undefined) return true;
+                        const s = String(raw).trim();
+                        if (s === '') return true;
+                        const n = Number(s);
+                        return !(Number.isFinite(n) && n > 0);
+                    })();
+
                     autoCalculateMissingSemidia(
                         Array.isArray(parsed?.sourceRows) ? parsed.sourceRows : [],
                         Array.isArray(parsed?.objectRows) ? parsed.objectRows : [],
-                        { entrancePupilDiameterMm: Number(parsed?.entrancePupilDiameterMm) }
+                        {
+                            entrancePupilDiameterMm: Number(parsed?.entrancePupilDiameterMm),
+                            stopSemidiaWasMissing
+                        }
                     );
                 } catch (_) {}
 
@@ -3677,6 +3821,44 @@ function setupTransverseAberrationButton(): void {
         if (typeof w.showTransverseAberration === 'function') {
             w.showTransverseAberration();
         }
+    });
+}
+
+function setupMagnificationChromaticAberrationButton(): void {
+    const btn = document.getElementById('show-magnification-chromatic-aberration-btn');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+        if (typeof w.showMagnificationChromaticAberrationDiagram !== 'function') return;
+
+        const progressWrapper = document.getElementById('mca-progress-wrapper');
+        const progressBarRaw = document.getElementById('mca-progressbar');
+        const progressBarEl = progressBarRaw instanceof HTMLProgressElement ? progressBarRaw : null;
+        const progressTextEl = document.getElementById('mca-progress-text');
+
+        const setProgress = (value?: number, text?: string) => {
+            try {
+                if (progressWrapper) progressWrapper.style.display = 'block';
+                if (progressBarEl && Number.isFinite(value)) {
+                    progressBarEl.value = Math.max(0, Math.min(100, value as number));
+                }
+                if (progressTextEl && typeof text === 'string') {
+                    progressTextEl.textContent = text;
+                }
+            } catch (_) {}
+        };
+
+        setProgress(0, 'Starting...');
+
+        const onProgress = (evt: any) => {
+            try {
+                const p = Number(evt?.percent);
+                const msg = evt?.message || evt?.phase || 'Working...';
+                if (Number.isFinite(p)) setProgress(p, msg);
+                else setProgress(undefined, msg);
+            } catch (_) {}
+        };
+
+        w.showMagnificationChromaticAberrationDiagram({ onProgress });
     });
 }
 
@@ -6844,6 +7026,7 @@ export function setupDOMEventHandlers(): void {
         setupSpotDiagramButton();
         setupLongitudinalAberrationButton();
         setupTransverseAberrationButton();
+        setupMagnificationChromaticAberrationButton();
         setupDistortionButton();
         setupIntegratedAberrationButton();
         setupAstigmatismButton();
