@@ -2017,10 +2017,12 @@ export async function showLongitudinalAberrationDiagram(options: any = {}): Prom
         
         // Get selected parameters with fallback defaults
         const rayCountInput = document.getElementById('longitudinal-ray-count-input') as HTMLInputElement | null;
+        const referenceFocusModeInput = document.getElementById('longitudinal-reference-focus-mode') as HTMLSelectElement | null;
         
         // Use defaults if form elements not found
         let surfaceIndex = 0;  // Default to image surface
         let rayCount = 51;     // Default ray count for spherical aberration
+        let referenceFocusMode = 'current-paraxial';
         
         // Get wavelengths from Source table for spherical aberration diagram.
         // Normalize nm→μm (e.g. 587.6nm → 0.5876μm) and drop invalid/≤0 entries.
@@ -2062,6 +2064,13 @@ export async function showLongitudinalAberrationDiagram(options: any = {}): Prom
             rayCount = parseInt(rayCountInput.value) || 51;
         } else {
             console.warn('⚠️ Ray count input not found, using default (51)');
+        }
+
+        const providedReferenceMode = typeof options?.referenceFocusMode === 'string' ? options.referenceFocusMode : null;
+        if (providedReferenceMode) {
+            referenceFocusMode = providedReferenceMode;
+        } else if (referenceFocusModeInput && referenceFocusModeInput.value) {
+            referenceFocusMode = referenceFocusModeInput.value;
         }
         
         if (isNaN(surfaceIndex) || surfaceIndex < 0) {
@@ -2106,7 +2115,7 @@ export async function showLongitudinalAberrationDiagram(options: any = {}): Prom
             surfaceIndex,
             wavelengths as any, // Array of wavelengths from Source table
             rayCount,
-            { onProgress, debugSA: Boolean(w.__COOPT_DEBUG_SA) } as any
+            { onProgress, debugSA: Boolean(w.__COOPT_DEBUG_SA), referenceFocusMode } as any
         );
         
         if (!aberrationData) {
@@ -2454,7 +2463,7 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
             surfaceIndex,
             wavelengths as any,
             rayCountSpherical,
-            { onProgress: mapProgress(5, 30, 'Spherical') } as any
+            { onProgress: mapProgress(5, 30, 'Spherical'), referenceFocusMode: 'current-paraxial' } as any
         );
         
         if (!longitudinalData) {

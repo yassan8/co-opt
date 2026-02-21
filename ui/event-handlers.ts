@@ -3504,8 +3504,14 @@ export function setupAnalysisWindows() {
     <div class="header">Spherical Aberration</div>
     <div class="controls">
         <label for="popup-longitudinal-ray-count-input">Ray number:</label>
-        <input type="number" id="popup-longitudinal-ray-count-input" value="20" min="1" max="1001" step="1" />
+        <input type="number" id="popup-longitudinal-ray-count-input" value="100" min="1" max="1001" step="1" />
         <span class="note-inline" style="font-size:12px;color:#666;">(Always normalized by stop diameter)</span>
+        <label for="popup-longitudinal-reference-focus-mode" style="margin-left:6px;">Reference focus:</label>
+        <select id="popup-longitudinal-reference-focus-mode" style="font-size:12px;">
+            <option value="primary-paraxial">Primary paraxial</option>
+            <option value="current-paraxial" selected>Current paraxial</option>
+            <option value="chief-ray">Chief ray</option>
+        </select>
         <button id="popup-show-spherical-aberration-btn" type="button">Show spherical aberration diagram</button>
     </div>
     <div id="popup-spherical-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
@@ -3534,6 +3540,11 @@ export function setupAnalysisWindows() {
             if (openerRay && popupRay) {
                 popupRay.value = openerRay.value;
             }
+            const openerMode = getOpenerEl('longitudinal-reference-focus-mode');
+            const popupMode = document.getElementById('popup-longitudinal-reference-focus-mode');
+            if (openerMode && popupMode && openerMode.value) {
+                popupMode.value = openerMode.value;
+            }
         }
 
         window['renderSphericalAberration'] = async () => {
@@ -3555,6 +3566,12 @@ export function setupAnalysisWindows() {
             if (openerRay && Number.isFinite(rayCount)) {
                 openerRay.value = String(rayCount);
             }
+            const popupMode = document.getElementById('popup-longitudinal-reference-focus-mode');
+            const referenceFocusMode = popupMode && popupMode.value ? String(popupMode.value) : 'current-paraxial';
+            const openerMode = getOpenerEl('longitudinal-reference-focus-mode');
+            if (openerMode && referenceFocusMode) {
+                openerMode.value = referenceFocusMode;
+            }
 
             const containerEl = document.getElementById('popup-longitudinal-aberration-container');
             if (containerEl) containerEl.innerHTML = '';
@@ -3575,7 +3592,8 @@ export function setupAnalysisWindows() {
                 await window.opener.showLongitudinalAberrationDiagram({
                     rayCount: Number.isFinite(rayCount) ? rayCount : 51,
                     containerElement: containerEl,
-                    onProgress
+                    onProgress,
+                    referenceFocusMode
                 });
                 setProgress(100, 'Done');
             } catch (err) {
