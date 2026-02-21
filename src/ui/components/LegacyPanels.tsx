@@ -182,8 +182,14 @@ export default function LegacyPanels() {
             </div>
             <div className="longitudinal-aberration-controls">
               <label htmlFor="longitudinal-ray-count-input">Ray number:</label>
-              <input type="number" id="longitudinal-ray-count-input" defaultValue={20} min={1} max={1001} step={1} />
+              <input type="number" id="longitudinal-ray-count-input" defaultValue={100} min={1} max={1001} step={1} />
               <span className="note">(Always normalized by stop diameter)</span>
+              <label htmlFor="longitudinal-reference-focus-mode" style={{ marginLeft: 10 }}>Reference focus:</label>
+              <select id="longitudinal-reference-focus-mode" defaultValue="current-paraxial">
+                <option value="primary-paraxial">Primary paraxial</option>
+                <option value="current-paraxial">Current paraxial</option>
+                <option value="chief-ray">Chief ray</option>
+              </select>
               <button id="show-longitudinal-aberration-diagram-btn">Show spherical aberration diagram</button>
             </div>
             <div id="longitudinal-aberration-container"></div>

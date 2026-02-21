@@ -67,8 +67,12 @@ function insertCBBetween(opticalRows, insertAfterSurfaceNumber1Based, decenterY 
 
 function countValidPoints(result) {
     if (!result || !result.meridionalData || result.meridionalData.length === 0) return 0;
-    // Count successful rays in the first field (assuming 1 field for diagnose)
-    return result.meridionalData[0].points.filter(p => p.isFullSuccess).length;
+  const points = result.meridionalData[0]?.points;
+  if (!Array.isArray(points)) return 0;
+  return points.filter(p =>
+    Number.isFinite(p?.pupilCoordinate) &&
+    Number.isFinite(p?.longitudinalAberration)
+  ).length;
 }
 
 function runOneSA(label, opticalRows, objectRow, surfaceIndex) {
@@ -116,9 +120,9 @@ function runOneSA(label, opticalRows, objectRow, surfaceIndex) {
         if (result && result.meridionalData && result.meridionalData[0]) {
             const pts = result.meridionalData[0].points.slice(0, 5);
             console.log(`  First 5 points:`, pts.map(p => ({
-                pupilCoord: p.pupilCoord?.toFixed(3),
+              pupilCoordinate: p.pupilCoordinate?.toFixed(3),
                 longitudinalAberration: p.longitudinalAberration?.toFixed(6),
-                success: p.isFullSuccess
+              valid: Number.isFinite(p?.pupilCoordinate) && Number.isFinite(p?.longitudinalAberration)
             })));
         }
         

@@ -7,13 +7,15 @@
  * Y軸: 正規化瞳座標（Normalized Pupil Coordinate）
  */
 
+declare const Plotly: any;
+
 /**
  * 球面収差図をプロット
  * @param {string} containerId - 表示先コンテナID
  * @param {Object} aberrationData - 縦収差データ
  * @param {Object} options - プロットオプション
  */
-export function plotLongitudinalAberration(containerId, aberrationData, options = {}) {
+export function plotLongitudinalAberration(containerId: string, aberrationData: any, options: any = {}) {
     const {
         title = 'Spherical Aberration Diagram',
         width = 800,
@@ -86,7 +88,7 @@ export function plotLongitudinalAberration(containerId, aberrationData, options 
         traces.push({
             x: xValues,
             y: yValues,
-            mode: 'lines+markers',
+            mode: 'lines',
             type: 'scatter',
             name: `${wavelengthNm}nm`,
             legendgroup: legendGroup,
@@ -95,10 +97,6 @@ export function plotLongitudinalAberration(containerId, aberrationData, options 
             line: {
                 color: color,
                 width: 2
-            },
-            marker: {
-                size: 4,
-                color: color
             }
         });
     });
@@ -120,7 +118,7 @@ export function plotLongitudinalAberration(containerId, aberrationData, options 
         traces.push({
             x: xValues,
             y: yValues,
-            mode: 'lines+markers',
+            mode: 'lines',
             type: 'scatter',
             name: `${wavelengthNm}nm`,
             legendgroup: legendGroup,
@@ -130,11 +128,6 @@ export function plotLongitudinalAberration(containerId, aberrationData, options 
                 color: color,
                 width: 2,
                 dash: 'dash'
-            },
-            marker: {
-                size: 4,
-                color: color,
-                symbol: 'square'
             }
         });
     });
@@ -316,8 +309,8 @@ export function plotLongitudinalAberration(containerId, aberrationData, options 
 
     if (fitToContainer && plotly.Plots && typeof plotly.Plots.resize === 'function') {
         const win = doc.defaultView || window;
-        if (win && !container.__plotlyResizeHandlerAttached) {
-            container.__plotlyResizeHandlerAttached = true;
+        if (win && !(container as any).__plotlyResizeHandlerAttached) {
+            (container as any).__plotlyResizeHandlerAttached = true;
             win.addEventListener('resize', () => {
                 try { plotly.Plots.resize(container); } catch (_) {}
             });
@@ -348,7 +341,7 @@ export function plotLongitudinalAberrationDiagram(aberrationData, containerId = 
  * @param {Object} aberrationData - 縦収差データ（sineConditionViolationを含む）
  * @param {Object} options - プロットオプション
  */
-export function plotSineConditionViolation(containerId, aberrationData, options = {}) {
+export function plotSineConditionViolation(containerId: string, aberrationData: any, options: any = {}) {
     const {
         title = '正弦条件違反量 (Sine Condition Violation)',
         width = 800,
@@ -371,6 +364,7 @@ export function plotSineConditionViolation(containerId, aberrationData, options 
     
     // Plotlyトレースを作成
     const traces = [];
+    let allXValues = [];  // X軸範囲計算用
     
     // 波長に応じた色を取得する関数（可視光スペクトルに基づく）
     const getColorForWavelength = (wavelength) => {
@@ -416,19 +410,17 @@ export function plotSineConditionViolation(containerId, aberrationData, options 
         const xValues = sortedPoints.map(p => p.sineConditionViolation * scMultiplier);
         const yValues = sortedPoints.map(p => p.pupilCoordinate);
         
+        allXValues = allXValues.concat(xValues);  // X軸範囲計算用に収集
+        
         traces.push({
             x: xValues,
             y: yValues,
-            mode: 'lines+markers',
+            mode: 'lines',
             type: 'scatter',
             name: displayName,
             line: {
                 color: color,
                 width: 2
-            },
-            marker: {
-                size: 4,
-                color: color
             }
         });
     });
