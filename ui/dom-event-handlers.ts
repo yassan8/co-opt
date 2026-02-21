@@ -2170,6 +2170,38 @@ function setupImportZemaxButton(): void {
                 } catch (_) {}
 
                 try {
+                    if (typeof w.calculateImageSemiDiaFromChiefRays === 'function') {
+                        const tryAutoImageSemidia = (triesLeft: number) => {
+                            setTimeout(() => {
+                                try {
+                                    Promise.resolve(w.calculateImageSemiDiaFromChiefRays())
+                                        .then((ok: any) => {
+                                            if (ok === true) {
+                                                try { refreshBlockInspector(); } catch (_) {}
+                                                try { if (typeof w.refreshAllUI === 'function') w.refreshAllUI(); } catch (_) {}
+                                                return;
+                                            }
+                                            if (triesLeft > 0) {
+                                                tryAutoImageSemidia(triesLeft - 1);
+                                            }
+                                        })
+                                        .catch(() => {
+                                            if (triesLeft > 0) {
+                                                tryAutoImageSemidia(triesLeft - 1);
+                                            }
+                                        });
+                                } catch (_) {
+                                    if (triesLeft > 0) {
+                                        tryAutoImageSemidia(triesLeft - 1);
+                                    }
+                                }
+                            }, 200);
+                        };
+                        tryAutoImageSemidia(4);
+                    }
+                } catch (_) {}
+
+                try {
                     __zmxSyncDesignIntentApertureFromOpticalRows();
                 } catch (_) {}
 
