@@ -31,6 +31,8 @@
     "node_modules",
     "dist",
     "public",
+    "**/.!*",
+    "**/.!*.ts",
     "*.config.ts",
     "vite.config.ts",
     "tsconfig.node.json"
