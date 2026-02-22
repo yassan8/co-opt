@@ -1197,11 +1197,31 @@ function calculateExitPupilByNewSpecInternal(opticalSystemRows, stopIndex, stopR
  */
 function calculateEntrancePupilByNewSpecInternal(opticalSystemRows, stopIndex, stopRadius, wavelength) {
   try {
+    // Filter out CoordTrans surfaces from optical system for paraxial calculations
+    const filteredRows = [];
+    let adjustedStopIndex = stopIndex;
+    for (let idx = 0; idx < opticalSystemRows.length; idx++) {
+      const surface = opticalSystemRows[idx];
+      if (!isCoordTransSurface(surface)) {
+        if (idx < stopIndex) {
+          // Count non-CoordTrans surfaces before stopIndex
+          adjustedStopIndex = filteredRows.length;
+        } else if (idx === stopIndex) {
+          adjustedStopIndex = filteredRows.length;
+        }
+        filteredRows.push(surface);
+      } else if (idx === stopIndex) {
+        // If stopIndex itself is a CoordTrans, skip but keep adjusted index same
+        filteredRows.push(surface); // Keep it to preserve index
+      }
+    }
+    const workingRows = filteredRows.length > 0 ? filteredRows : opticalSystemRows;
+    const workingStopIndex = adjustedStopIndex > 0 ? adjustedStopIndex : stopIndex;
     
     // **新仕様**: STOP面が最初面(Object面+1)の場合の特別処理
     const firstOpticalSurfaceIndex = 1; // Object面の次の面（最初の光学面）
     
-    if (stopIndex === firstOpticalSurfaceIndex) {
+    if (workingStopIndex === firstOpticalSurfaceIndex) {
       
       const entrancePupilPosition = 0; // 最初の面からの相対位置なので0
       const entrancePupilDiameter = stopRadius * 2; // Semi Dia × 2
@@ -1221,13 +1241,13 @@ function calculateEntrancePupilByNewSpecInternal(opticalSystemRows, stopIndex, s
     }
     
     // **新仕様**: STOP面が最終面(Image面-1)の場合の特別処理
-    const imageIndex = opticalSystemRows.length - 1; // Image面のインデックス
+    const imageIndex = workingRows.length - 1; // Image面のインデックス
     const lastOpticalSurfaceIndex = imageIndex - 1;  // 最終光学面のインデックス
     
-    if (stopIndex === lastOpticalSurfaceIndex) {
+    if (workingStopIndex === lastOpticalSurfaceIndex) {
       
       // STOP面のパラメータを面シフトした反転システムを作成
-      const reversedSystemForLastStop = createReversedOpticalSystemForLastStopInternal(opticalSystemRows, stopIndex, wavelength);
+      const reversedSystemForLastStop = createReversedOpticalSystemForLastStopInternal(workingRows, workingStopIndex, wavelength);
       if (!reversedSystemForLastStop || reversedSystemForLastStop.length === 0) {
         console.error('STOP面が最終面の反転システム作成に失敗');
         return null;
@@ -1290,7 +1310,7 @@ function calculateEntrancePupilByNewSpecInternal(opticalSystemRows, stopIndex, s
     
     
     // 通常の光線追跡による計算
-    const reversedSystem = createReversedOpticalSystemInternal(opticalSystemRows, stopIndex);
+    const reversedSystem = createReversedOpticalSystemInternal(workingRows, workingStopIndex);
     
     // 反転系での絞り面インデックス（最初の面）
     const reversedStopIndex = 0;
@@ -1340,6 +1360,12 @@ function createReversedOpticalSystemInternal(opticalSystemRows, stopIndex) {
   // 絞り面から物体面まで（逆順）の部分システムを作成
   for (let i = stopIndex; i >= 0; i--) {
     const surface = opticalSystemRows[i];
+    
+    // Skip CoordTrans surfaces for paraxial calculations (they have no optical effect)
+    if (isCoordTransSurface(surface)) {
+      continue;
+    }
+    
     const reversedSurface = { ...surface };
     
     // 曲率半径の符号を反転
@@ -1381,6 +1407,12 @@ function createReversedOpticalSystemForLastStopInternal(opticalSystemRows, stopI
     // STOP面から物体面へ逆順で処理
     for (let i = stopIndex; i >= 0; i--) {
       const originalSurface = opticalSystemRows[i];
+      
+      // Skip CoordTrans surfaces for paraxial calculations (they have no optical effect)
+      if (isCoordTransSurface(originalSurface)) {
+        continue;
+      }
+      
       const reversedSurface = { ...originalSurface };
       
       // 曲率半径の符号反転
