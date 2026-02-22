@@ -2367,7 +2367,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
                         line.userData = { 
                             type: 'connectionLine', 
                             direction: direction,
-                          surfaceIndex: i, 
+                            surfaceIndex: i + 1, 
                             isOpticalElement: true 
                         };
                         scene.add(line);
@@ -2481,7 +2481,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             });
             const yzLine = new THREE.Line(yzGeometry, yzMaterial);
             yzLine.renderOrder = 1000;
-            yzLine.userData = { type: 'surfaceProfile', profileType: 'YZ', surfaceIndex: i, isOpticalElement: true };
+            yzLine.userData = { type: 'surfaceProfile', profileType: 'YZ', surfaceIndex: i + 1, isOpticalElement: true };
             scene.add(yzLine);
             yzProfileCount++;
         } else {
@@ -2540,7 +2540,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             });
             const xzLine = new THREE.Line(xzGeometry, xzMaterial);
             xzLine.renderOrder = 1000;
-            xzLine.userData = { type: 'surfaceProfile', profileType: 'XZ', surfaceIndex: i, isOpticalElement: true };
+            xzLine.userData = { type: 'surfaceProfile', profileType: 'XZ', surfaceIndex: i + 1, isOpticalElement: true };
             scene.add(xzLine);
             xzProfileCount++;
         } else {
