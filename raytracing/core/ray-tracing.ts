@@ -2555,14 +2555,41 @@ function getCorrectRefractiveIndex(surface, wavelength = 0.5875618) {
 function __getCorrectRefractiveIndex_impl(surface, wavelength = 0.5875618) {
   if (!surface) return 1.0;
 
+  // For CoordTrans rows, use preserved gap material (the medium AFTER the CoordTrans)
+  // or actual material from previous surface
+  const effectiveMaterial = surface.__cooptGapMaterial ?? surface.__cooptActualMaterial ?? surface.material;
+  const effectiveRindex = surface.__cooptActualRindex ?? surface.rindex;
+  const effectiveAbbe = surface.__cooptActualAbbe ?? surface.abbe;
+
+  // Check if effectiveMaterial is a numeric string (e.g., "1.336")
+  // If so, treat it as a direct refractive index value
+  if (effectiveMaterial && effectiveMaterial !== '') {
+    const materialAsNumber = parseFloat(String(effectiveMaterial));
+    if (!isNaN(materialAsNumber) && materialAsNumber > 1.0) {
+      // Material field contains a numeric refractive index value
+      return materialAsNumber;
+    }
+  }
+
+  // Create a temporary object with the effective values for refraction lookup
+  const effectiveSurface = {
+    ...surface,
+    material: effectiveMaterial,
+    rindex: effectiveRindex,
+    abbe: effectiveAbbe,
+    'Ref Index': surface['Ref Index'],
+    refIndex: surface.refIndex,
+    'ref index': surface['ref index']
+  };
+
   // Memoize per-surface + wavelength + material/index signature.
   // This avoids repeated linear searches in glass catalogs during Spot/OPD/PSF.
   try {
     const cache = __getRefractiveIndexCacheForSurface(surface);
     if (cache) {
       const wlKey = Math.round(Number(wavelength) * 1e9) | 0;
-      const matKey = String(surface.material ?? '');
-      const manualKey = String(surface.rindex ?? surface['Ref Index'] ?? surface.refIndex ?? surface['ref index'] ?? '');
+      const matKey = String(effectiveMaterial ?? '');
+      const manualKey = String(effectiveRindex ?? '');
       const key = `${wlKey}|${matKey}|${manualKey}`;
       if (cache.has(key)) return cache.get(key);
 
@@ -2570,9 +2597,9 @@ function __getCorrectRefractiveIndex_impl(surface, wavelength = 0.5875618) {
       let computed;
       // まずray-paraxial.jsのgetRefractiveIndex関数を使用（ガラスカタログ優先）
       try {
-        const catalogRefIndex = getRefractiveIndex(surface, wavelength);
+        const catalogRefIndex = getRefractiveIndex(effectiveSurface, wavelength);
         // ガラスカタログから取得できた場合（空気の1.0でない場合）
-        if (catalogRefIndex !== 1.0 || (surface.material && surface.material !== '' && surface.material !== 'Air' && surface.material !== 'AIR')) {
+        if (catalogRefIndex !== 1.0 || (effectiveMaterial && effectiveMaterial !== '' && effectiveMaterial !== 'Air' && effectiveMaterial !== 'AIR')) {
           computed = catalogRefIndex;
         }
       } catch (error) {
@@ -2581,7 +2608,7 @@ function __getCorrectRefractiveIndex_impl(surface, wavelength = 0.5875618) {
 
       if (computed === undefined) {
         // ガラスカタログにない場合のみ手動設定の屈折率を使用
-        const manualIndex = surface.rindex || surface['Ref Index'] || surface.refIndex;
+        const manualIndex = effectiveRindex || surface['Ref Index'] || surface.refIndex;
         if (manualIndex !== undefined && manualIndex !== null && manualIndex !== '') {
           const numValue = parseFloat(manualIndex);
           if (!isNaN(numValue) && numValue > 0) {
@@ -2602,9 +2629,9 @@ function __getCorrectRefractiveIndex_impl(surface, wavelength = 0.5875618) {
   
   // まずray-paraxial.jsのgetRefractiveIndex関数を使用（ガラスカタログ優先）
   try {
-    const catalogRefIndex = getRefractiveIndex(surface, wavelength);
+    const catalogRefIndex = getRefractiveIndex(effectiveSurface, wavelength);
     // ガラスカタログから取得できた場合（空気の1.0でない場合）
-    if (catalogRefIndex !== 1.0 || (surface.material && surface.material !== '' && surface.material !== 'Air' && surface.material !== 'AIR')) {
+    if (catalogRefIndex !== 1.0 || (effectiveMaterial && effectiveMaterial !== '' && effectiveMaterial !== 'Air' && effectiveMaterial !== 'AIR')) {
       return catalogRefIndex;
     }
   } catch (error) {
@@ -2612,7 +2639,7 @@ function __getCorrectRefractiveIndex_impl(surface, wavelength = 0.5875618) {
   }
   
   // ガラスカタログにない場合のみ手動設定の屈折率を使用
-  const manualIndex = surface.rindex || surface['Ref Index'] || surface.refIndex;
+  const manualIndex = effectiveRindex || surface['Ref Index'] || surface.refIndex;
   if (manualIndex !== undefined && manualIndex !== null && manualIndex !== '') {
     const numValue = parseFloat(manualIndex);
     if (!isNaN(numValue) && numValue > 0) {
@@ -3234,6 +3261,8 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
 
     const radius = Number(row.radius);
     const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
+    const rowObjectTypeNorm = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+    const rowIsStopSurface = rowObjectTypeNorm === 'stop' || rowObjectTypeNorm === 'sto';
     const surfType = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
     const isToricSurface = surfType === 'toric';
     const asphereMode = surfType.includes('odd') ? 'odd' : 'even';
@@ -3625,7 +3654,7 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
     const isMirror = String(row?.material ?? '').trim().toUpperCase() === 'MIRROR';
     let rustRefractOut = null;
     let rustRefractN2 = null;
-    if (!isMirror && useRustWasm && pendingNormalRows.length) {
+    if (!isMirror && !rowIsStopSurface && useRustWasm && pendingNormalRows.length) {
       const buffers = __ensureRustRefractBuffers(pendingNormalRows.length);
       if (buffers) {
         for (let p = 0; p < pendingNormalRows.length; p++) {
@@ -3718,6 +3747,8 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
             s.dir = reflectRay(s.dir, globalNormal);
           }
         }
+      } else if (rowIsStopSurface) {
+        // Stop面は開口制限のみ。屈折計算も媒質更新も行わない。
       } else {
         if (rustRefractOut) {
           const j = p * 3;
@@ -4447,6 +4478,8 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
 
     const radius = Number(row.radius);
     const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
+    const rowObjectTypeNorm = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+    const rowIsStopSurface = rowObjectTypeNorm === 'stop' || rowObjectTypeNorm === 'sto';
     const surfType = String(row.surfType ?? row.type ?? '').trim().toLowerCase();
     const isToricSurface = surfType === 'toric';
     const asphereMode = surfType.includes('odd') ? 'odd' : 'even';
@@ -4848,7 +4881,7 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
     const isMirror = String(row?.material ?? '').trim().toUpperCase() === 'MIRROR';
     let rustRefractOut = null;
     let rustRefractN2 = null;
-    if (!isMirror && useRustWasm && pendingNormalRows.length) {
+    if (!isMirror && !rowIsStopSurface && useRustWasm && pendingNormalRows.length) {
       const buffers = __ensureRustRefractBuffers(pendingNormalRows.length);
       if (buffers) {
         for (let p = 0; p < pendingNormalRows.length; p++) {
@@ -4938,6 +4971,8 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
             s.dir = reflectRay(s.dir, globalNormal);
           }
         }
+      } else if (rowIsStopSurface) {
+        // Stop面は開口制限のみ。屈折計算も媒質更新も行わない。
       } else {
         if (rustRefractOut) {
           const j = p * 3;
@@ -5182,6 +5217,8 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
 
     // マテリアルタイプの判定（通常面では純粋にマテリアル判定のみ、CB面では座標変換パラメータとして使用）
     const materialType = (typeof row.material === 'string' && row.material === "MIRROR") ? "MIRROR" : "REFRACTIVE";
+    const rowObjectTypeNorm = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+    const rowIsStopSurface = rowObjectTypeNorm === 'stop' || rowObjectTypeNorm === 'sto';
 
     // 各面の詳細デバッグ情報を出力
     if (isDetailedDebug && i >= 0) { // 第1面から出力するように変更
@@ -5863,6 +5900,11 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
           debugLog.push(`Mirror transmission (back surface): dot=${dotProduct.toFixed(6)}, no reflection`);
         }
         // 光線方向はそのまま維持（透過）
+      }
+    } else if (rowIsStopSurface) {
+      // Stop面は開口制限のみ。媒質は変化させない。
+      if (isDetailedDebug) {
+        debugLog.push(`Stop surface: keep refractive index n=${n.toFixed(6)} (no medium transition)`);
       }
     } else {
       const oldN = n;

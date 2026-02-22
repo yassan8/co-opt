@@ -1,7 +1,7 @@
 // Zemax OpticStudio ZMX import (minimal subset)
 // - Accepts UTF-16LE/BE (BOM) and UTF-8
-// - Supports: STANDARD-like, EVENASPH (TYPE EVENASPH + CONI + PARM)
-// - Detects unsupported: Aspheric odd, Coord Break
+// - Supports: STANDARD-like, EVENASPH (TYPE EVENASPH + CONI + PARM), COORDBRK
+// - Detects unsupported: Aspheric odd
 
 function isBlank(v) {
   return v === null || v === undefined || String(v).trim() === '';
@@ -55,6 +55,15 @@ function normalizeImportedMaterialName(material) {
   }
 
   return s;
+}
+
+function normalizeCoordReturnMode(rawValue) {
+  const s = String(rawValue ?? '').trim().toLowerCase();
+  if (s === '' || s === '0' || s === 'none' || s === 'off') return 'none';
+  if (s === '1' || s === 'orientation' || s === 'orientationonly' || s === 'orient') return 'orientation';
+  if (s === '2' || s === 'orientationxy' || s === 'xy') return 'xy';
+  if (s === '3' || s === 'orientationxyz' || s === 'xyz' || s === 'on') return 'xyz';
+  return 'none';
 }
 
 function decodeZmxArrayBuffer(arrayBuffer) {
@@ -426,6 +435,11 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       } else {
         row.thickness = disz;
       }
+
+      if (String(row.surfType ?? '').trim().toLowerCase() === 'coord trans') {
+        const dz = (row.thickness === 'INF') ? 0 : parseNumberOrNull(row.thickness);
+        row.decenterZ = (dz !== null && Number.isFinite(dz)) ? dz : 0;
+      }
       continue;
     }
 
@@ -473,9 +487,18 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
         // Zemax TORICS uses PARM 1=radiusX curvature, PARM 2=radiusY curvature, PARM 3=axis
         // Will be handled in PARM section below
       } else if (typeName === 'COORDBRK' || typeName === 'COORD' || typeName === 'COORDINATEBREAK') {
-        const err: any = new Error(`Zemax import: Coord Break surfaces are not supported yet (surface ${currentSurf}).`);
-        err.code = 'ZMX_UNSUPPORTED_COORDBRK';
-        throw err;
+        row.surfType = 'Coord Trans';
+        row['object type'] = 'CT';
+        row.radius = 'INF';
+        row.decenterX = 0;
+        row.decenterY = 0;
+        row.decenterZ = 0;
+        row.tiltX = 0;
+        row.tiltY = 0;
+        row.tiltZ = 0;
+        row.order = 0;
+        row.coordReturn = 'none';
+        row.toSurf = 0;
       } else if (typeName.includes('ODD')) {
         const err: any = new Error(`Zemax import: Aspheric odd surfaces are not supported yet (surface ${currentSurf}).`);
         err.code = 'ZMX_UNSUPPORTED_ODD';
@@ -515,6 +538,33 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
           row.axis = val;
         }
         // Other PARM values for TORICS may exist but are not used in spherical toric
+      } else if (String(row.surfType ?? '').trim().toLowerCase() === 'coord trans') {
+        if (j === 1) {
+          row.decenterX = val;
+          row.semidia = val;
+        } else if (j === 2) {
+          row.decenterY = val;
+          row.material = String(val);
+        } else if (j === 3) {
+          row.tiltX = val;
+          row.rindex = val;
+        } else if (j === 4) {
+          row.tiltY = val;
+          row.abbe = val;
+        } else if (j === 5) {
+          row.tiltZ = val;
+          row.conic = val;
+        } else if (j === 6) {
+          const order = (val === 0 || val === 1) ? val : (val > 0 ? 1 : 0);
+          row.order = order;
+          row.coef1 = order;
+        } else if (j === 7) {
+          row.coordReturn = normalizeCoordReturnMode(val);
+        } else if (j === 8) {
+          row.toSurf = Math.max(0, Math.trunc(val));
+        } else {
+          addIssue('warning', `Coord Break PARM index out of range (1..8) at surface ${currentSurf}: ${j}`);
+        }
       } else {
         // Zemax PARM mapping for aspheric: PARM 1=unused, PARM 2=A4, PARM 3=A6, ...
         // co-opt mapping: coef1=A4, coef2=A6, coef3=A8, ...
@@ -538,11 +588,22 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
       continue;
     }
 
-    // Soft-detect unsupported surface types even without TYPE.
+    // Soft-detect Coord Break records even without TYPE and initialize CoordTrans row.
     if (key === 'COORDBRK' || key === 'COORD' || key === 'COORDINATEBREAK') {
-      const err: any = new Error(`Zemax import: Coord Break surfaces are not supported yet (surface ${currentSurf}).`);
-      err.code = 'ZMX_UNSUPPORTED_COORDBRK';
-      throw err;
+      const row = ensureRow(rows, currentSurf);
+      row.surfType = 'Coord Trans';
+      row['object type'] = 'CT';
+      row.radius = 'INF';
+      if (row.decenterX === undefined) row.decenterX = 0;
+      if (row.decenterY === undefined) row.decenterY = 0;
+      if (row.decenterZ === undefined) row.decenterZ = 0;
+      if (row.tiltX === undefined) row.tiltX = 0;
+      if (row.tiltY === undefined) row.tiltY = 0;
+      if (row.tiltZ === undefined) row.tiltZ = 0;
+      if (row.order === undefined) row.order = 0;
+      if (row.coordReturn === undefined) row.coordReturn = 'none';
+      if (row.toSurf === undefined) row.toSurf = 0;
+      continue;
     }
   }
 
@@ -636,6 +697,42 @@ export function parseZMXTextToOpticalSystemRows(zmxText, options = {}) {
         position: fieldPosition,
         angle: 0
       });
+    }
+  }
+
+  // Post-process: Update surfType for surfaces with non-zero conic or aspheric coefficients
+  // This handles STANDARD surfaces in ZMX that have CONI values but no explicit TYPE EVENASPH
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || typeof row !== 'object') continue;
+    
+    // Skip if already marked as aspheric or non-standard type
+    const currentSurfType = String(row.surfType ?? '').trim();
+    if (currentSurfType === 'Aspheric even' || currentSurfType === 'Toric' || currentSurfType === 'Coord Trans') {
+      continue;
+    }
+    
+    // Check if conic or any aspheric coefficient is non-zero
+    const conic = Number(row.conic) || 0;
+    const hasNonZeroConic = conic !== 0;
+    const hasAsphericCoef = [
+      Number(row.coef1) || 0,
+      Number(row.coef2) || 0,
+      Number(row.coef3) || 0,
+      Number(row.coef4) || 0,
+      Number(row.coef5) || 0,
+      Number(row.coef6) || 0,
+      Number(row.coef7) || 0,
+      Number(row.coef8) || 0,
+      Number(row.coef9) || 0,
+      Number(row.coef10) || 0
+    ].some(c => c !== 0);
+    
+    if (hasNonZeroConic || hasAsphericCoef) {
+      row.surfType = 'Aspheric even';
+      if (hasNonZeroConic && !hasAsphericCoef) {
+        addIssue('info', `Surface ${i}: Auto-detected conic surface (conic=${conic.toFixed(4)}), set surfType='Aspheric even'`);
+      }
     }
   }
 

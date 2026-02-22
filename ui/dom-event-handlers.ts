@@ -4561,11 +4561,34 @@ function formatBlockPreview(block: any): string {
         const th = pick('thickness');
         const mat = pick('material');
         const surfType = pick('surfType');
+        const apertureShape = pick('apertureShape');
+        const apertureWidth = pick('apertureWidth');
+        const apertureHeight = pick('apertureHeight');
         const parts = [];
         if (String(radius) !== '') parts.push(`R=${String(radius)}`);
         if (String(th) !== '') parts.push(`T=${String(th)}`);
         if (String(mat) !== '') parts.push(`M=${String(mat)}`);
         if (isAsphereType(surfType)) parts.push('Asphere');
+        if (String(apertureShape) !== '' && String(apertureShape) !== 'Circular') parts.push(`Aperture=${String(apertureShape)}`);
+        if (String(apertureWidth) !== '') parts.push(`AW=${String(apertureWidth)}`);
+        if (String(apertureHeight) !== '') parts.push(`AH=${String(apertureHeight)}`);
+        return parts.join(' ');
+    }
+
+    if (type === 'ImageSurface') {
+        const radius = pick('radius');
+        const th = pick('thickness');
+        const surfType = pick('surfType');
+        const apertureShape = pick('apertureShape');
+        const apertureWidth = pick('apertureWidth');
+        const apertureHeight = pick('apertureHeight');
+        const parts = [];
+        if (String(radius) !== '') parts.push(`R=${String(radius)}`);
+        if (String(th) !== '') parts.push(`T=${String(th)}`);
+        if (isAsphereType(surfType)) parts.push('Asphere');
+        if (String(apertureShape) !== '' && String(apertureShape) !== 'Circular') parts.push(`Aperture=${String(apertureShape)}`);
+        if (String(apertureWidth) !== '') parts.push(`AW=${String(apertureWidth)}`);
+        if (String(apertureHeight) !== '') parts.push(`AH=${String(apertureHeight)}`);
         return parts.join(' ');
     }
 
@@ -5038,8 +5061,30 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             if ((blockType === 'Gap' || blockType === 'AirGap') && !allParamKeys.includes('thicknessMode')) {
                 allParamKeys.push('thicknessMode');
             }
-            if (blockType === 'ImageSurface' && !allParamKeys.includes('semidiaMode')) {
-                allParamKeys.push('semidiaMode');
+            if (blockType === 'ImageSurface') {
+                if (!allParamKeys.includes('semidiaMode')) allParamKeys.push('semidiaMode');
+                if (!allParamKeys.includes('apertureShape')) allParamKeys.push('apertureShape');
+                if (!allParamKeys.includes('apertureWidth')) allParamKeys.push('apertureWidth');
+                if (!allParamKeys.includes('apertureHeight')) allParamKeys.push('apertureHeight');
+                if (!allParamKeys.includes('radius')) allParamKeys.push('radius');
+                if (!allParamKeys.includes('thickness')) allParamKeys.push('thickness');
+                if (!allParamKeys.includes('surfType')) allParamKeys.push('surfType');
+                if (!allParamKeys.includes('conic')) allParamKeys.push('conic');
+                for (let i = 1; i <= 10; i++) {
+                    const coefKey = `coef${i}`;
+                    if (!allParamKeys.includes(coefKey)) allParamKeys.push(coefKey);
+                }
+            }
+            // For Lens and other blocks with front/back surfaces, ensure coefficient fields are present
+            if (blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'SingleSurface' || blockType === 'Mirror') {
+                if (!allParamKeys.includes('frontSurfType')) allParamKeys.push('frontSurfType');
+                if (!allParamKeys.includes('backSurfType')) allParamKeys.push('backSurfType');
+                for (let i = 1; i <= 10; i++) {
+                    const frontCoefKey = `frontCoef${i}`;
+                    const backCoefKey = `backCoef${i}`;
+                    if (!allParamKeys.includes(frontCoefKey)) allParamKeys.push(frontCoefKey);
+                    if (!allParamKeys.includes(backCoefKey)) allParamKeys.push(backCoefKey);
+                }
             }
             const paramKeys = sortParameterKeys(allParamKeys);
             const varKeys = Object.keys(vars || {}).sort();
@@ -5111,7 +5156,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const isGapThicknessMode = (blockType === 'Gap' || blockType === 'AirGap') && label === 'thicknessMode';
                 const isObjectDistanceMode = (blockType === 'ObjectSurface' || blockType === 'ObjectPlane') && label === 'objectDistanceMode';
                 const isImageSemidiaMode = blockType === 'ImageSurface' && label === 'semidiaMode';
-                const isApertureShape = (blockType === 'Mirror' || blockType === 'SingleSurface') && label === 'apertureShape';
+                const isApertureShape = (blockType === 'Mirror' || blockType === 'SingleSurface' || blockType === 'ImageSurface') && label === 'apertureShape';
                 const isCoordReturn = blockType === 'CoordTrans' && label === 'coordReturn';
                 const isCoordOrder = blockType === 'CoordTrans' && label === 'order';
                 const isCoordToSurf = blockType === 'CoordTrans' && label === 'toSurf';
@@ -6164,6 +6209,10 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     if (blockType === 'ImageSurface' && key === 'optimizeSemiDia') {
                         continue;
                     }
+                    // Skip thickness field for ImageSurface (image plane doesn't need thickness)
+                    if (blockType === 'ImageSurface' && key === 'thickness') {
+                        continue;
+                    }
                     // Skip coef* parameters when surfType is "Spherical"
                     if (/^coef\d+$/.test(key) && params.surfType === 'Spherical') {
                         continue;
@@ -6679,7 +6728,16 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             frontRadius: 'INF',
             backRadius: 'INF',
             centerThickness: 1,
-            material: 'N-BK7'
+            material: 'N-BK7',
+            abbe: '',
+            frontSurfType: 'Spherical',
+            backSurfType: 'Spherical',
+            frontConic: 0,
+            backConic: 0
+        };
+        base.aperture = {
+            front: 10,
+            back: 10
         };
         return base;
     }
@@ -6691,7 +6749,20 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             thickness1: 1,
             thickness2: 1,
             material1: 'N-BK7',
-            material2: 'N-F2'
+            material2: 'N-F2',
+            abbe1: '',
+            abbe2: '',
+            surf1SurfType: 'Spherical',
+            surf2SurfType: 'Spherical',
+            surf3SurfType: 'Spherical',
+            surf1Conic: 0,
+            surf2Conic: 0,
+            surf3Conic: 0
+        };
+        base.aperture = {
+            s1: 10,
+            s2: 10,
+            s3: 10
         };
         return base;
     }
@@ -6706,13 +6777,30 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
             thickness3: 1,
             material1: 'N-BK7',
             material2: 'N-F2',
-            material3: 'N-BK7'
+            material3: 'N-BK7',
+            abbe1: '',
+            abbe2: '',
+            abbe3: '',
+            surf1SurfType: 'Spherical',
+            surf2SurfType: 'Spherical',
+            surf3SurfType: 'Spherical',
+            surf4SurfType: 'Spherical',
+            surf1Conic: 0,
+            surf2Conic: 0,
+            surf3Conic: 0,
+            surf4Conic: 0
+        };
+        base.aperture = {
+            s1: 10,
+            s2: 10,
+            s3: 10,
+            s4: 10
         };
         return base;
     }
     if (type === 'Gap') {
         base.blockType = 'Gap';
-        base.parameters = { thickness: 1, material: 'AIR', thicknessMode: '' };
+        base.parameters = { thickness: 1, material: 'AIR', abbe: '', thicknessMode: '' };
         return base;
     }
     if (type === 'ObjectSurface') {
@@ -6830,6 +6918,34 @@ function __blocks_addBlockToActiveConfig(blockType: string, insertAfterBlockId: 
             return bt === 'ObjectSurface' || bt === 'ObjectPlane';
         });
         if (already) return { ok: false, reason: 'ObjectSurface/ObjectPlane already exists (only one is supported).' };
+    }
+
+    // Gap requires a preceding surface (Lens/Stop/etc.) to attach to.
+    if (type === 'Gap' || type === 'AirGap') {
+        const afterId = String(insertAfterBlockId ?? '').trim();
+        let checkIdx = -1;
+        if (afterId) {
+            checkIdx = blocks.findIndex(b => b && String(b.blockId ?? '').trim() === afterId);
+        } else {
+            // Find last non-ImageSurface block
+            for (let i = blocks.length - 1; i >= 0; i--) {
+                const bt = String(blocks[i]?.blockType ?? '').trim();
+                if (bt !== 'ImageSurface') {
+                    checkIdx = i;
+                    break;
+                }
+            }
+        }
+
+        if (checkIdx < 0) {
+            return { ok: false, reason: 'Gap requires a preceding block (e.g., Lens or Stop). Add a Lens/Stop first.' };
+        }
+
+        const prevBlock = blocks[checkIdx];
+        const prevType = String(prevBlock?.blockType ?? '').trim();
+        if (prevType === 'ObjectSurface' || prevType === 'ObjectPlane') {
+            return { ok: false, reason: 'Gap cannot be placed directly after ObjectSurface. Add a Lens or Stop first.' };
+        }
     }
 
     const newId = __blocks_generateUniqueBlockId(blocks, type);

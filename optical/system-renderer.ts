@@ -167,6 +167,30 @@ function __coopt_isGapSurface(surface) {
     return false;
 }
 
+function __coopt_isStopSurface(surface) {
+    if (!surface || typeof surface !== 'object') return false;
+
+    const candidates = [
+        surface.type,
+        surface.surfType,
+        surface['object type'],
+        surface.object,
+        surface.objectType,
+    ];
+
+    for (const value of candidates) {
+        const normalized = String(value ?? '')
+            .trim()
+            .toLowerCase()
+            .replace(/[\s_-]+/g, '');
+        if (normalized === 'stop' || normalized === 'sto' || normalized === 'aperturestop') {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function __coopt_drawApertureOutline(scene, surface, semidia, origin, rotationMatrix, color) {
     const shape = __coopt_getRenderApertureShape(surface);
     const { width, height } = __coopt_getRenderApertureDims(surface);
@@ -322,6 +346,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
     if (!crossSectionOnly) {
         for (let i = 0; i < opticalSystemData.length; i++) {
             const surface = opticalSystemData[i];
+            const isStopSurface = __coopt_isStopSurface(surface);
 
             // Gap/AirGap rows are spacing-only and should never be rendered as physical surfaces.
             if (__coopt_isGapSurface(surface)) {
@@ -373,12 +398,66 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                                 }
                             }
                         }
+                        // 球面メッシュがある場合、radius から semidia を推定
+                        if (planeSemidia === null && surface.radius !== undefined && surface.radius !== null && 
+                            surface.radius !== 'INF' && surface.radius !== Infinity && 
+                            !isNaN(Number(surface.radius))) {
+                            const radius = Math.abs(Number(surface.radius));
+                            if (radius > 0) {
+                                // 球面 radius から semidia を推定（sag が radius の 20% 程度まで）
+                                planeSemidia = Math.sqrt(radius * radius / 5);
+                            }
+                        }
                         if (planeSemidia === null) planeSemidia = 20;
                         
                         // Object面は通常、座標変換が不要なため、単純な座標で描画
                         const objOrigin = { x: 0, y: 0, z: 0 };
                         const objRotMat = null; // Object面には回転を適用しない
                         
+                        // Object面が球面メッシュを指定しているか確認
+                        const hasObjectSphere = (
+                            (surface.radius !== undefined && surface.radius !== null && 
+                             surface.radius !== 'INF' && surface.radius !== Infinity && 
+                             !isNaN(Number(surface.radius)) && Number(surface.radius) !== 0)
+                        );
+                        
+                        if (hasObjectSphere) {
+                            // 球面メッシュを描画
+                            try {
+                                const radius = Number(surface.radius);
+                                const conic = Number(surface.conic) || 0;
+                                const params = {
+                                    radius: radius,
+                                    conic: conic,
+                                    coef1: Number(surface.coef1) || 0,
+                                    coef2: Number(surface.coef2) || 0,
+                                    coef3: Number(surface.coef3) || 0,
+                                    coef4: Number(surface.coef4) || 0,
+                                    coef5: Number(surface.coef5) || 0,
+                                    coef6: Number(surface.coef6) || 0,
+                                    coef7: Number(surface.coef7) || 0,
+                                    coef8: Number(surface.coef8) || 0,
+                                    coef9: Number(surface.coef9) || 0,
+                                    coef10: Number(surface.coef10) || 0
+                                };
+                                
+                                // Object 面の球面メッシュを描画
+                                drawLensSurfaceWithOrigin(
+                                    scene,
+                                    params,
+                                    objOrigin,
+                                    objRotMat,
+                                    'even',
+                                    60,
+                                    0x00ccff,
+                                    0.3,
+                                    'Spherical'
+                                );
+                                console.log(`✅ OBJECT Surface ${i}: 球面メッシュを描画`, { radius, conic });
+                            } catch (error) {
+                                console.error(`❌ OBJECT Surface ${i}: 球面メッシュ描画エラー:`, error);
+                            }
+                        }
                         
                         // リング描画
                         __coopt_drawApertureOutline(
@@ -422,6 +501,23 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             if (toricParams) {
                                 z = toricSurfaceZ(0, y, toricParams);
                                 if (!isFinite(z)) z = 0;
+                            } else if (hasObjectSphere) {
+                                // 球面の Z 座標を計算
+                                const radius = Number(surface.radius);
+                                const conic = Number(surface.conic) || 0;
+                                const asphericParams = {
+                                    radius: radius,
+                                    conic: conic,
+                                    coef1: Number(surface.coef1) || 0,
+                                    coef2: Number(surface.coef2) || 0,
+                                    coef3: Number(surface.coef3) || 0,
+                                    coef4: Number(surface.coef4) || 0,
+                                    coef5: Number(surface.coef5) || 0,
+                                    coef6: Number(surface.coef6) || 0,
+                                    coef7: Number(surface.coef7) || 0
+                                };
+                                z = asphericSurfaceZ(Math.abs(y), asphericParams, 'even');
+                                if (!isFinite(z)) z = 0;
                             }
                             const point = new THREE.Vector3(0, y, z);
                             pointsVertical.push(point);
@@ -447,6 +543,23 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             let z = 0;
                             if (toricParams) {
                                 z = toricSurfaceZ(x, 0, toricParams);
+                                if (!isFinite(z)) z = 0;
+                            } else if (hasObjectSphere) {
+                                // 球面の Z 座標を計算
+                                const radius = Number(surface.radius);
+                                const conic = Number(surface.conic) || 0;
+                                const asphericParams = {
+                                    radius: radius,
+                                    conic: conic,
+                                    coef1: Number(surface.coef1) || 0,
+                                    coef2: Number(surface.coef2) || 0,
+                                    coef3: Number(surface.coef3) || 0,
+                                    coef4: Number(surface.coef4) || 0,
+                                    coef5: Number(surface.coef5) || 0,
+                                    coef6: Number(surface.coef6) || 0,
+                                    coef7: Number(surface.coef7) || 0
+                                };
+                                z = asphericSurfaceZ(Math.abs(x), asphericParams, 'even');
                                 if (!isFinite(z)) z = 0;
                             }
                             const point = new THREE.Vector3(x, 0, z);
@@ -493,6 +606,16 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                                 }
                             }
                         }
+                        // 球面メッシュがある場合、radius から semidia を推定
+                        if (planeSemidia === null && surface.radius !== undefined && surface.radius !== null && 
+                            surface.radius !== 'INF' && surface.radius !== Infinity && 
+                            !isNaN(Number(surface.radius))) {
+                            const radius = Math.abs(Number(surface.radius));
+                            if (radius > 0) {
+                                // 球面 radius から semidia を推定（sag が radius の 20% 程度までを想定）
+                                planeSemidia = Math.sqrt(radius * radius / 5);
+                            }
+                        }
                         if (planeSemidia === null) planeSemidia = 20;
                         
                         // Image面の位置を計算（surfaceOriginsから取得）
@@ -503,6 +626,51 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             imgOrigin = surfaceOrigins[i].origin || imgOrigin;
                             imgRotMat = surfaceOrigins[i].rotationMatrix || null;
                         } else {
+                        }
+                        
+                        // Image面が球面メッシュを指定しているか確認
+                        const hasSphereRadius = (
+                            (surface.radius !== undefined && surface.radius !== null && 
+                             surface.radius !== 'INF' && surface.radius !== Infinity && 
+                             !isNaN(Number(surface.radius)) && Number(surface.radius) !== 0)
+                        );
+                        
+                        if (hasSphereRadius) {
+                            // 球面メッシュを描画
+                            try {
+                                const radius = Number(surface.radius);
+                                const conic = Number(surface.conic) || 0;
+                                const params = {
+                                    radius: radius,
+                                    conic: conic,
+                                    coef1: Number(surface.coef1) || 0,
+                                    coef2: Number(surface.coef2) || 0,
+                                    coef3: Number(surface.coef3) || 0,
+                                    coef4: Number(surface.coef4) || 0,
+                                    coef5: Number(surface.coef5) || 0,
+                                    coef6: Number(surface.coef6) || 0,
+                                    coef7: Number(surface.coef7) || 0,
+                                    coef8: Number(surface.coef8) || 0,
+                                    coef9: Number(surface.coef9) || 0,
+                                    coef10: Number(surface.coef10) || 0
+                                };
+                                
+                                // Image 面の球面メッシュを描画
+                                drawLensSurfaceWithOrigin(
+                                    scene,
+                                    params,
+                                    imgOrigin,
+                                    imgRotMat,
+                                    'even',
+                                    60,
+                                    0x00ccff,
+                                    0.3,
+                                    'Spherical'
+                                );
+                                console.log(`✅ IMAGE Surface ${i}: 球面メッシュを描画`, { radius, conic });
+                            } catch (error) {
+                                console.error(`❌ IMAGE Surface ${i}: 球面メッシュ描画エラー:`, error);
+                            }
                         }
                         
                         // アパーチャ枠描画
@@ -547,6 +715,23 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             if (toricParams) {
                                 z = toricSurfaceZ(0, y, toricParams);
                                 if (!isFinite(z)) z = 0;
+                            } else if (hasSphereRadius) {
+                                // 球面の Z 座標を計算
+                                const radius = Number(surface.radius);
+                                const conic = Number(surface.conic) || 0;
+                                const asphericParams = {
+                                    radius: radius,
+                                    conic: conic,
+                                    coef1: Number(surface.coef1) || 0,
+                                    coef2: Number(surface.coef2) || 0,
+                                    coef3: Number(surface.coef3) || 0,
+                                    coef4: Number(surface.coef4) || 0,
+                                    coef5: Number(surface.coef5) || 0,
+                                    coef6: Number(surface.coef6) || 0,
+                                    coef7: Number(surface.coef7) || 0
+                                };
+                                z = asphericSurfaceZ(Math.abs(y), asphericParams, 'even');
+                                if (!isFinite(z)) z = 0;
                             }
                             let point = new THREE.Vector3(0, y, z);
                             if (imgRotMat && Array.isArray(imgRotMat) && imgRotMat.length >= 3) {
@@ -582,6 +767,23 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             let z = 0;
                             if (toricParams) {
                                 z = toricSurfaceZ(x, 0, toricParams);
+                                if (!isFinite(z)) z = 0;
+                            } else if (hasSphereRadius) {
+                                // 球面の Z 座標を計算
+                                const radius = Number(surface.radius);
+                                const conic = Number(surface.conic) || 0;
+                                const asphericParams = {
+                                    radius: radius,
+                                    conic: conic,
+                                    coef1: Number(surface.coef1) || 0,
+                                    coef2: Number(surface.coef2) || 0,
+                                    coef3: Number(surface.coef3) || 0,
+                                    coef4: Number(surface.coef4) || 0,
+                                    coef5: Number(surface.coef5) || 0,
+                                    coef6: Number(surface.coef6) || 0,
+                                    coef7: Number(surface.coef7) || 0
+                                };
+                                z = asphericSurfaceZ(Math.abs(x), asphericParams, 'even');
                                 if (!isFinite(z)) z = 0;
                             }
                             let point = new THREE.Vector3(x, 0, z);
@@ -630,8 +832,8 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
             }
             
             try {
-                if (surface.type === 'Stop' || surface['object type'] === 'Stop') {
-                    // Stop面の場合は特別な処理
+                if (isStopSurface) {
+                    // Stop面の場合は特別な処理 - アパーチャ枠のみ描画、十字線なし
                     if (showSemidiaRing) {
                         try {
                             const ringSemidia = __coopt_getRenderSemidiaMm(surface);
@@ -650,6 +852,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             console.error(`❌ Error drawing Stop ring for surface ${i}:`, stopRingError);
                         }
                     }
+                    continue; // Stop面の処理終了、十字線描画をスキップ
                 } else if (surface.type === 'Mirror' || surface.material === 'MIRROR') {
                     // Mirror面の処理
                     const mirrorDefaultColor = 0xc0c0c0;
@@ -725,8 +928,8 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                     scene.add(marker);
                 }
                 
-                // Semidia ring表示（Coord Trans面は除外）
-                if (showSemidiaRing && surface.type !== 'Stop' && surface['object type'] !== 'Stop' && !isCB) {
+                // Semidia ring表示（Stop面、Coord Trans面は除外）
+                if (showSemidiaRing && !isStopSurface && !isCB) {
                     
                     try {
                         const ringSemidia = __coopt_getRenderSemidiaMm(surface);
@@ -745,6 +948,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                         console.error(`❌ Error drawing semidia ring for surface ${i}:`, ringError);
                     }
                 }
+                
             } catch (error) {
                 console.error(`❌ Error drawing surface ${i}:`, error);
             }

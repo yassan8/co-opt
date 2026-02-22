@@ -1554,6 +1554,21 @@ export function drawLensCrossSection(scene, surfaces, coordinateTransforms = [],
       continue;
     }
     
+    // Gap面の処理
+    const blockType = String(s._blockType || s.blockType || '').trim().toLowerCase();
+    const surfRole = String(s._surfaceRole || '').trim().toLowerCase();
+    const isGap = (
+      blockType === 'gap' || blockType === 'airgap' ||
+      surfRole === 'gap' || surfRole === 'airgap'
+    );
+    if (isGap) {
+      // Gap面は描画しない（プロファイルは作らない）
+      profilesYZ.push(null);
+      profilesXZ.push(null);
+      zOffsets.push(s.zOffset);
+      continue;
+    }
+    
     const mat = String(s.material ?? "").trim().toUpperCase();
     const pointsYZ = [];
     const pointsXZ = [];
@@ -2035,6 +2050,68 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
     // レンズ区間接続線描画
     let connectionLineCount = 0;
     
+    const __coopt_isStopSurface = (surf) => {
+      const surfType = String(surf?.surfType ?? surf?.type ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+      const objType = String(surf?.['object type'] ?? surf?.object ?? surf?.objectType ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+      return (
+        surfType === 'stop' || surfType === 'sto' || surfType === 'aperturestop' ||
+        objType === 'stop' || objType === 'sto' || objType === 'aperturestop'
+      );
+    };
+
+    const __coopt_calculateSurfaceSag = (surf, x, y) => {
+      if (!surf) return 0;
+
+      const surfTypeNorm = String(surf?.surfType ?? surf?.type ?? '').trim().toLowerCase();
+      if (surfTypeNorm === 'toric') {
+        const radiusXRaw = surf.radiusX;
+        const radiusYRaw = surf.radiusY ?? surf.radius;
+        const radiusXInf = String(radiusXRaw ?? '').trim().toLowerCase() === 'inf' || String(radiusXRaw ?? '').trim().toLowerCase() === 'infinity';
+        const radiusYInf = String(radiusYRaw ?? '').trim().toLowerCase() === 'inf' || String(radiusYRaw ?? '').trim().toLowerCase() === 'infinity';
+
+        const radiusX = radiusXInf ? Infinity : Number(radiusXRaw);
+        const radiusY = radiusYInf ? Infinity : Number(radiusYRaw);
+
+        if ((Number.isFinite(radiusX) || radiusX === Infinity) && (Number.isFinite(radiusY) || radiusY === Infinity)) {
+          const toricParams = {
+            radiusX,
+            radiusY,
+            conic: Number(surf.conic) || 0,
+            axis: Number(surf.axis) || 0
+          };
+          const z = toricSurfaceZ(x, y, toricParams);
+          return Number.isFinite(z) ? z : 0;
+        }
+        return 0;
+      }
+
+      const radiusRaw = surf.radius;
+      const radiusNorm = String(radiusRaw ?? '').trim().toLowerCase();
+      if (!radiusNorm || radiusNorm === 'inf' || radiusNorm === 'infinity') return 0;
+
+      const radius = Number(radiusRaw);
+      if (!Number.isFinite(radius) || Math.abs(radius) < 0.001) return 0;
+
+      const asphericParams = {
+        radius,
+        conic: Number(surf.conic) || 0,
+        coef1: Number(surf.coef1) || 0,
+        coef2: Number(surf.coef2) || 0,
+        coef3: Number(surf.coef3) || 0,
+        coef4: Number(surf.coef4) || 0,
+        coef5: Number(surf.coef5) || 0,
+        coef6: Number(surf.coef6) || 0,
+        coef7: Number(surf.coef7) || 0,
+        coef8: Number(surf.coef8) || 0,
+        coef9: Number(surf.coef9) || 0,
+        coef10: Number(surf.coef10) || 0
+      };
+
+      const r = Math.sqrt(x * x + y * y);
+      const z = asphericSurfaceZ(r, asphericParams, "even");
+      return Number.isFinite(z) ? z : 0;
+    };
+
     // 接続線描画ロジック
     for (let i = 0; i < rows.length - 1; i++) {
         const currentSurf = rows[i];
@@ -2044,6 +2121,11 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         const currentObjectType = currentSurf["object type"] || "";
         if (currentObjectType === "Object") {
             continue;
+        }
+
+        // Stop面は接続線描画の対象外
+        if (__coopt_isStopSurface(currentSurf) || __coopt_isStopSurface(nextSurf)) {
+          continue;
         }
         
         // CB面はスキップ（Coord Trans / Coord Break / CT の全バリエーションに対応）
@@ -2085,7 +2167,15 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
                       currentSurf.material !== '0' &&
                       currentSurf.material !== 'MIRROR';
         
-        if (isLens) {
+        // Gap面はスキップ
+        const blockType = String(currentSurf._blockType || currentSurf.blockType || '').trim().toLowerCase();
+        const surfRole = String(currentSurf._surfaceRole || '').trim().toLowerCase();
+        const isGap = (
+            blockType === 'gap' || blockType === 'airgap' ||
+            surfRole === 'gap' || surfRole === 'airgap'
+        );
+        
+        if (isLens && !isGap) {
             const surfaceIndex = i;
             const nextSurfaceIndex = i + 1;
             
@@ -2277,7 +2367,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
                         line.userData = { 
                             type: 'connectionLine', 
                             direction: direction,
-                            surfaceIndex: i + 1, 
+                          surfaceIndex: i, 
                             isOpticalElement: true 
                         };
                         scene.add(line);
@@ -2311,7 +2401,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         if (objectType === "Object") {
           continue;
         }
-        
+
         // CB面はスキップ（Coord Trans / Coord Break / CT の全バリエーションに対応）
         const surfType = String(surf.surfType || surf.type || '').trim().toLowerCase();
         const objType = String(surf['object type'] || '').trim().toLowerCase();
@@ -2341,48 +2431,10 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         // Y-Z断面プロファイル（緑色）
         const yzPoints = [];
         const yzSteps = 40; // より細かい分割
-        const isToricYZ = surf.surfType === 'Toric';
         
         for (let i = 0; i <= yzSteps; i++) {
           const y = -profileHalfY + (2 * profileHalfY * i / yzSteps); // 均等分割
-            let z = 0;
-            
-            if (isToricYZ) {
-                // Toric surface: use toricSurfaceZ(0, y)
-                const radiusX = (surf.radiusX === "INF" || surf.radiusX === Infinity) ? Infinity : parseFloat(surf.radiusX);
-                const radiusY = (surf.radiusY === "INF" || surf.radiusY === Infinity || surf.radius === "INF" || surf.radius === Infinity) 
-                                 ? Infinity 
-                                 : parseFloat(surf.radiusY || surf.radius);
-                
-                if ((isFinite(radiusX) || radiusX === Infinity) && (isFinite(radiusY) || radiusY === Infinity)) {
-                    const toricParams = {
-                        radiusX: radiusX,
-                        radiusY: radiusY,
-                        conic: Number(surf.conic) || 0,
-                        axis: Number(surf.axis) || 0
-                    };
-                    z = toricSurfaceZ(0, y, toricParams);
-                    if (!isFinite(z)) z = 0;
-                }
-            } else if (surf.radius && surf.radius !== "INF") {
-                // Rotationally symmetric surface: use radial distance
-                const r = Math.abs(y);
-                const asphericParams = {
-                    radius: parseFloat(surf.radius),
-                    conic: Number(surf.conic) || 0,
-                    coef1: Number(surf.coef1) || 0,
-                    coef2: Number(surf.coef2) || 0,
-                    coef3: Number(surf.coef3) || 0,
-                    coef4: Number(surf.coef4) || 0,
-                    coef5: Number(surf.coef5) || 0,
-                    coef6: Number(surf.coef6) || 0,
-                    coef7: Number(surf.coef7) || 0,
-                    coef8: Number(surf.coef8) || 0,
-                    coef9: Number(surf.coef9) || 0,
-                    coef10: Number(surf.coef10) || 0
-                };
-                z = asphericSurfaceZ(r, asphericParams, "even") || 0;
-            }
+          const z = __coopt_calculateSurfaceSag(surf, 0, y);
             
             // Local座標
             let localPoint = new THREE.Vector3(0, y, z);
@@ -2429,7 +2481,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             });
             const yzLine = new THREE.Line(yzGeometry, yzMaterial);
             yzLine.renderOrder = 1000;
-            yzLine.userData = { type: 'surfaceProfile', profileType: 'YZ', surfaceIndex: i + 1, isOpticalElement: true };
+            yzLine.userData = { type: 'surfaceProfile', profileType: 'YZ', surfaceIndex: i, isOpticalElement: true };
             scene.add(yzLine);
             yzProfileCount++;
         } else {
@@ -2438,48 +2490,10 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         // X-Z断面プロファイル（赤色）
         const xzPoints = [];
         const xzSteps = 40; // より細かい分割
-        const isToricXZ = surf.surfType === 'Toric';
         
         for (let i = 0; i <= xzSteps; i++) {
           const x = -profileHalfX + (2 * profileHalfX * i / xzSteps); // 均等分割
-            let z = 0;
-            
-            if (isToricXZ) {
-                // Toric surface: use toricSurfaceZ(x, 0)
-                const radiusX = (surf.radiusX === "INF" || surf.radiusX === Infinity) ? Infinity : parseFloat(surf.radiusX);
-                const radiusY = (surf.radiusY === "INF" || surf.radiusY === Infinity || surf.radius === "INF" || surf.radius === Infinity) 
-                                 ? Infinity 
-                                 : parseFloat(surf.radiusY || surf.radius);
-                
-                if ((isFinite(radiusX) || radiusX === Infinity) && (isFinite(radiusY) || radiusY === Infinity)) {
-                    const toricParams = {
-                        radiusX: radiusX,
-                        radiusY: radiusY,
-                        conic: Number(surf.conic) || 0,
-                        axis: Number(surf.axis) || 0
-                    };
-                    z = toricSurfaceZ(x, 0, toricParams);
-                    if (!isFinite(z)) z = 0;
-                }
-            } else if (surf.radius && surf.radius !== "INF") {
-                // Rotationally symmetric surface: use radial distance
-                const r = Math.abs(x);
-                const asphericParams = {
-                    radius: parseFloat(surf.radius),
-                    conic: Number(surf.conic) || 0,
-                    coef1: Number(surf.coef1) || 0,
-                    coef2: Number(surf.coef2) || 0,
-                    coef3: Number(surf.coef3) || 0,
-                    coef4: Number(surf.coef4) || 0,
-                    coef5: Number(surf.coef5) || 0,
-                    coef6: Number(surf.coef6) || 0,
-                    coef7: Number(surf.coef7) || 0,
-                    coef8: Number(surf.coef8) || 0,
-                    coef9: Number(surf.coef9) || 0,
-                    coef10: Number(surf.coef10) || 0
-                };
-                z = asphericSurfaceZ(r, asphericParams, "even") || 0;
-            }
+          const z = __coopt_calculateSurfaceSag(surf, x, 0);
             
             // Local座標
             let localPoint = new THREE.Vector3(x, 0, z);
@@ -2526,7 +2540,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             });
             const xzLine = new THREE.Line(xzGeometry, xzMaterial);
             xzLine.renderOrder = 1000;
-            xzLine.userData = { type: 'surfaceProfile', profileType: 'XZ', surfaceIndex: i + 1, isOpticalElement: true };
+            xzLine.userData = { type: 'surfaceProfile', profileType: 'XZ', surfaceIndex: i, isOpticalElement: true };
             scene.add(xzLine);
             xzProfileCount++;
         } else {

@@ -45,7 +45,7 @@ function normalizeSurfTypeValue(value: any): string {
   // Zemax/CodeV style
   // IMPORTANT:
   // - '' means "unspecified/default" and may be inferred from non-zero asphere params.
-  // - 'Spherical' is an explicit choice and MUST override any leftover conic/coefs.
+  // - 'Spherical' is an explicit choice for polynomial terms (coef*), but conic is still valid.
   if (key === 'standard' || key === 'std') return '';
   if (key === 'spherical' || key === 'sphere' || key === 'sph') return 'Spherical';
   if (key === 'asphericaleven' || key === 'asphericeven' || key === 'evenasphere' || key === 'evenaspheric') return 'Aspheric even';
@@ -643,7 +643,7 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
       if (centerThickness === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.centerThickness is required.', blockId: block.blockId });
 
       if (typeof material !== 'string' || material.trim() === '') {
-        issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.material (glass name) is required.', blockId: block.blockId });
+        issues.push({ severity: 'warning', phase: 'validate', message: 'Lens.material is empty; will default to N-BK7 in expansion.', blockId: block.blockId });
       } else if (__isNumericMaterialName(material)) {
         issues.push({
           severity: 'warning',
@@ -764,14 +764,14 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
       if (thickness2 === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Doublet.thickness2 is required.', blockId: block.blockId });
 
       if (typeof material1 !== 'string' || material1.trim() === '') {
-        issues.push({ severity: 'fatal', phase: 'validate', message: 'Doublet.material1 (glass name) is required.', blockId: block.blockId });
+        issues.push({ severity: 'warning', phase: 'validate', message: 'Doublet.material1 is empty; will default to N-BK7 in expansion.', blockId: block.blockId });
       } else if (__isNumericMaterialName(material1)) {
         issues.push({ severity: 'warning', phase: 'validate', message: `Doublet.material1 is numeric (${material1}). Treated as synthetic glass; dispersion may be inaccurate.`, blockId: block.blockId });
       } else if (!isKnownGlassNameOnly(material1)) {
         issues.push({ severity: 'warning', phase: 'validate', message: `Unknown glass name (allowed for imported/legacy designs): ${material1}`, blockId: block.blockId });
       }
       if (typeof material2 !== 'string' || material2.trim() === '') {
-        issues.push({ severity: 'fatal', phase: 'validate', message: 'Doublet.material2 (glass name) is required.', blockId: block.blockId });
+        issues.push({ severity: 'warning', phase: 'validate', message: 'Doublet.material2 is empty; will default to N-SF5 in expansion.', blockId: block.blockId });
       } else if (__isNumericMaterialName(material2)) {
         issues.push({ severity: 'warning', phase: 'validate', message: `Doublet.material2 is numeric (${material2}). Treated as synthetic glass; dispersion may be inaccurate.`, blockId: block.blockId });
       } else if (!isKnownGlassNameOnly(material2)) {
@@ -807,21 +807,21 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
       if (thickness3 === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Triplet.thickness3 is required.', blockId: block.blockId });
 
       if (typeof material1 !== 'string' || material1.trim() === '') {
-        issues.push({ severity: 'fatal', phase: 'validate', message: 'Triplet.material1 (glass name) is required.', blockId: block.blockId });
+        issues.push({ severity: 'warning', phase: 'validate', message: 'Triplet.material1 is empty; will default to N-BK7 in expansion.', blockId: block.blockId });
       } else if (__isNumericMaterialName(material1)) {
         issues.push({ severity: 'warning', phase: 'validate', message: `Triplet.material1 is numeric (${material1}). Treated as synthetic glass; dispersion may be inaccurate.`, blockId: block.blockId });
       } else if (!isKnownGlassNameOnly(material1)) {
         issues.push({ severity: 'warning', phase: 'validate', message: `Unknown glass name (allowed for imported/legacy designs): ${material1}`, blockId: block.blockId });
       }
       if (typeof material2 !== 'string' || material2.trim() === '') {
-        issues.push({ severity: 'fatal', phase: 'validate', message: 'Triplet.material2 (glass name) is required.', blockId: block.blockId });
+        issues.push({ severity: 'warning', phase: 'validate', message: 'Triplet.material2 is empty; will default to N-SF5 in expansion.', blockId: block.blockId });
       } else if (__isNumericMaterialName(material2)) {
         issues.push({ severity: 'warning', phase: 'validate', message: `Triplet.material2 is numeric (${material2}). Treated as synthetic glass; dispersion may be inaccurate.`, blockId: block.blockId });
       } else if (!isKnownGlassNameOnly(material2)) {
         issues.push({ severity: 'warning', phase: 'validate', message: `Unknown glass name (allowed for imported/legacy designs): ${material2}`, blockId: block.blockId });
       }
       if (typeof material3 !== 'string' || material3.trim() === '') {
-        issues.push({ severity: 'fatal', phase: 'validate', message: 'Triplet.material3 (glass name) is required.', blockId: block.blockId });
+        issues.push({ severity: 'warning', phase: 'validate', message: 'Triplet.material3 is empty; will default to N-BK7 in expansion.', blockId: block.blockId });
       } else if (__isNumericMaterialName(material3)) {
         issues.push({ severity: 'warning', phase: 'validate', message: `Triplet.material3 is numeric (${material3}). Treated as synthetic glass; dispersion may be inaccurate.`, blockId: block.blockId });
       } else if (!isKnownGlassNameOnly(material3)) {
@@ -891,6 +891,8 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
       const tiltY = getParamOrVarValue(parameters, variables, 'tiltY');
       const tiltZ = getParamOrVarValue(parameters, variables, 'tiltZ');
       const orderRaw = getParamOrVarValue(parameters, variables, 'order');
+      const coordReturnRaw = getParamOrVarValue(parameters, variables, 'coordReturn');
+      const toSurfRaw = getParamOrVarValue(parameters, variables, 'toSurf');
 
       // All numeric fields are optional; blank means 0.
       // When provided, must be parseable as a number.
@@ -919,6 +921,23 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
           }
         }
       } catch (_) {}
+
+      try {
+        const s = String(coordReturnRaw ?? '').trim().toLowerCase();
+        if (s !== '' && s !== 'none' && s !== 'orientation' && s !== 'xy' && s !== 'xyz') {
+          issues.push({ severity: 'warning', phase: 'validate', message: `CoordTrans.coordReturn should be one of none/orientation/xy/xyz (got: ${String(coordReturnRaw)}).`, blockId: block.blockId });
+        }
+      } catch (_) {}
+
+      try {
+        const s = String(toSurfRaw ?? '').trim();
+        if (s !== '') {
+          const n = (typeof toSurfRaw === 'number') ? toSurfRaw : (isNumericString(s) ? Number(s) : NaN);
+          if (!Number.isFinite(n) || n < 0) {
+            issues.push({ severity: 'warning', phase: 'validate', message: `CoordTrans.toSurf should be a non-negative integer when provided (got: ${String(toSurfRaw)}).`, blockId: block.blockId });
+          }
+        }
+      } catch (_) {}
     }
 
     if (blockType === 'Stop') {
@@ -934,18 +953,64 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
     }
 
     if (blockType === 'ImageSurface') {
-      // Optional parameters supported:
-      // - semidia: numeric (image semi diameter)
-      // - semidiaMode: 'Manual' | 'Auto'
-      // - optimizeSemiDia: 'A' to auto-update semidia by chief ray tracing (UI-triggered)
-      const semidiaRaw = parameters?.semidia;
-      if (semidiaRaw !== undefined && semidiaRaw !== null && String(semidiaRaw).trim() !== '') {
-        const n = (typeof semidiaRaw === 'number') ? semidiaRaw : (isNumericString(String(semidiaRaw)) ? Number(semidiaRaw) : NaN);
-        if (!Number.isFinite(n) || n <= 0) {
-          issues.push({ severity: 'fatal', phase: 'validate', message: `ImageSurface.parameters.semidia must be a positive number when provided (got: ${String(semidiaRaw)})`, blockId: block.blockId });
+      // ImageSurface now supports SingleSurface parameters (except material and abbe)
+      const surfType = normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, 'surfType'));
+
+      if (surfType && !ALLOWED_SURF_TYPES.has(surfType)) {
+        issues.push({ severity: 'fatal', phase: 'validate', message: `ImageSurface.surfType must be one of: Spherical, Aspheric even, Aspheric odd, Toric. Got: ${surfType}`, blockId: block.blockId });
+      }
+
+      // Toric surfaces require radiusX and radiusY instead of radius
+      if (surfType === 'Toric') {
+        const radiusX = getParamOrVarValue(parameters, variables, 'radiusX');
+        const radiusY = getParamOrVarValue(parameters, variables, 'radiusY');
+        if (radiusX === undefined) {
+          issues.push({ severity: 'warning', phase: 'validate', message: 'ImageSurface with Toric surfType should have radiusX defined.', blockId: block.blockId });
+        }
+        if (radiusY === undefined) {
+          issues.push({ severity: 'warning', phase: 'validate', message: 'ImageSurface with Toric surfType should have radiusY defined.', blockId: block.blockId });
         }
       }
 
+      // Aperture shape validation (same as SingleSurface)
+      const normalizeShape = (v) => {
+        const s = String(v ?? '').trim();
+        if (!s) return 'Circular';
+        const key = s.replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+        if (key === 'circle' || key === 'circular') return 'Circular';
+        if (key === 'square' || key === 'sq') return 'Square';
+        if (key === 'rect' || key === 'rectangle' || key === 'rectangular') return 'Rectangular';
+        return s;
+      };
+
+      const shape = normalizeShape(getParamOrVarValue(parameters, variables, 'apertureShape'));
+      if (shape !== 'Circular' && shape !== 'Square' && shape !== 'Rectangular') {
+        issues.push({ severity: 'warning', phase: 'validate', message: `ImageSurface.apertureShape is unknown (${shape}).`, blockId: block.blockId });
+      }
+
+      const semidiaRaw = getParamOrVarValue(parameters, variables, 'semidia');
+      const widthRaw = getParamOrVarValue(parameters, variables, 'apertureWidth');
+      const heightRaw = getParamOrVarValue(parameters, variables, 'apertureHeight');
+      const semidiaVal = Number(String(semidiaRaw ?? '').trim());
+      const widthVal = Number(String(widthRaw ?? '').trim());
+      const heightVal = Number(String(heightRaw ?? '').trim());
+
+      if (shape === 'Circular') {
+        if (semidiaRaw !== undefined && (!Number.isFinite(semidiaVal) || semidiaVal <= 0)) {
+          issues.push({ severity: 'warning', phase: 'validate', message: `ImageSurface.semidia should be positive for Circular aperture (${String(semidiaRaw)}).`, blockId: block.blockId });
+        }
+      } else if (shape === 'Square') {
+        const side = Number.isFinite(widthVal) ? widthVal : heightVal;
+        if (!Number.isFinite(side) || side <= 0) {
+          issues.push({ severity: 'warning', phase: 'validate', message: `ImageSurface.apertureWidth should be positive for Square aperture (${String(widthRaw ?? heightRaw)}).`, blockId: block.blockId });
+        }
+      } else if (shape === 'Rectangular') {
+        if (!Number.isFinite(widthVal) || widthVal <= 0 || !Number.isFinite(heightVal) || heightVal <= 0) {
+          issues.push({ severity: 'warning', phase: 'validate', message: `ImageSurface.apertureWidth/Height should be positive for Rectangular aperture (w=${String(widthRaw)}, h=${String(heightRaw)}).`, blockId: block.blockId });
+        }
+      }
+
+      // Legacy semidia mode validation
       const modeRaw = parameters?.semidiaMode;
       if (modeRaw !== undefined && modeRaw !== null && String(modeRaw).trim() !== '') {
         const m = String(modeRaw).trim().toLowerCase();
@@ -1025,44 +1090,53 @@ function createDefaultObjectRow(): any {
 
 function createDefaultImageRow(id: number, overrides: any = null): any {
   const ov = (overrides && typeof overrides === 'object') ? overrides : null;
+  const getOvValue = (key, defaultVal = '') => 
+    ov && Object.prototype.hasOwnProperty.call(ov, key) ? ov[key] : defaultVal;
+  
   return {
     id,
     'object type': 'Image',
-    surfType: 'Spherical',
+    surfType: getOvValue('surfType', 'Spherical'),
     comment: '',
-    radius: 'INF',
+    radius: getOvValue('radius', 'INF'),
+    radiusX: getOvValue('radiusX', ''),
+    radiusY: getOvValue('radiusY', ''),
+    axis: getOvValue('axis', ''),
     optimizeR: '',
-    thickness: '',
+    thickness: getOvValue('thickness', ''),
     optimizeT: '',
-    semidia: ov && Object.prototype.hasOwnProperty.call(ov, 'semidia') ? ov.semidia : '',
-    optimizeSemiDia: ov && Object.prototype.hasOwnProperty.call(ov, 'optimizeSemiDia') ? ov.optimizeSemiDia : '',
+    semidia: getOvValue('semidia', ''),
+    optimizeSemiDia: getOvValue('optimizeSemiDia', ''),
+    apertureShape: getOvValue('apertureShape', 'Circular'),
+    apertureWidth: getOvValue('apertureWidth', ''),
+    apertureHeight: getOvValue('apertureHeight', ''),
     material: '',
     optimizeMaterial: '',
     rindex: '',
     optimizeRI: '',
     abbe: '',
     optimizeAbbe: '',
-    conic: '',
+    conic: getOvValue('conic', ''),
     optimizeConic: '',
-    coef1: '',
+    coef1: getOvValue('coef1', ''),
     optimizeCoef1: '',
-    coef2: '',
+    coef2: getOvValue('coef2', ''),
     optimizeCoef2: '',
-    coef3: '',
+    coef3: getOvValue('coef3', ''),
     optimizeCoef3: '',
-    coef4: '',
+    coef4: getOvValue('coef4', ''),
     optimizeCoef4: '',
-    coef5: '',
+    coef5: getOvValue('coef5', ''),
     optimizeCoef5: '',
-    coef6: '',
+    coef6: getOvValue('coef6', ''),
     optimizeCoef6: '',
-    coef7: '',
+    coef7: getOvValue('coef7', ''),
     optimizeCoef7: '',
-    coef8: '',
+    coef8: getOvValue('coef8', ''),
     optimizeCoef8: '',
-    coef9: '',
+    coef9: getOvValue('coef9', ''),
     optimizeCoef9: '',
-    coef10: '',
+    coef10: getOvValue('coef10', ''),
     optimizeCoef10: ''
   };
 }
@@ -1188,7 +1262,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
   // Coord Trans rows reuse thickness/material for decenter parameters, so we store gap spacing separately.
   const getLastNonCoordTransRow = () => {
     for (let i = rows.length - 1; i >= 0; i--) {
-      if (!isCoordTransRow(rows[i])) return rows[i];
+      // Stop rows don't have refractive material, so skip them like CoordTrans rows
+      if (!isStopRow(rows[i]) && !isCoordTransRow(rows[i])) return rows[i];
     }
     return rows[0];
   };
@@ -1196,6 +1271,7 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
   let sawImageSurface = false;
   let imagePlaneBlockId = null;
   let imagePlaneOverrides = null;
+  let imagePlaneVariables = null;
   let currentZSign = 1;
 
   const applySignedThickness = (value) => {
@@ -1235,16 +1311,30 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
     if (type === 'ImageSurface') {
       sawImageSurface = true;
       imagePlaneBlockId = blockId || null;
+      imagePlaneVariables = isPlainObject(vars) ? vars : null;
 
-      // Optional ImageSurface row overrides (applied to the appended Image row).
+      // Apply SingleSurface parameters to ImageSurface row overrides (except material and abbe)
       try {
         const p = isPlainObject(params) ? params : {};
         const ov: any = {};
 
-        if (Object.prototype.hasOwnProperty.call(p, 'semidia')) {
-          const s = String(p.semidia ?? '').trim();
-          if (s !== '') ov.semidia = p.semidia;
+        // Copy SingleSurface parameters (except material and abbe)
+        const paramsToCopy = [
+          'surfType', 'radius', 'radiusX', 'radiusY', 'axis', 'thickness',
+          'conic', 'coef1', 'coef2', 'coef3', 'coef4', 'coef5',
+          'coef6', 'coef7', 'coef8', 'coef9', 'coef10',
+          'apertureShape', 'semidia', 'apertureWidth', 'apertureHeight'
+        ];
+
+        for (const paramName of paramsToCopy) {
+          if (Object.prototype.hasOwnProperty.call(p, paramName)) {
+            const val = p[paramName];
+            const s = String(val ?? '').trim();
+            if (s !== '') ov[paramName] = val;
+          }
         }
+
+        // Handle legacy semidia modes
         if (Object.prototype.hasOwnProperty.call(p, 'optimizeSemiDia')) {
           const s = String(p.optimizeSemiDia ?? '').trim();
           if (s !== '') ov.optimizeSemiDia = p.optimizeSemiDia;
@@ -1319,7 +1409,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
         // Toric surfaces don't use aspheric coefficients in initial implementation
         for (let i = 0; i < 10; i++) row[`coef${i + 1}`] = '';
       } else if (row.surfType === 'Spherical') {
-        row.conic = '';
+        // Keep conic for spherical surfaces (k-only conic section is valid).
+        row.conic = normalizeOptionalNumberToRowValue(conicRaw);
         for (let i = 0; i < 10; i++) row[`coef${i + 1}`] = '';
       } else {
         row.conic = normalizeOptionalNumberToRowValue(conicRaw);
@@ -1392,14 +1483,31 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
 
       front.radius = normalizeRadiusToRowValue(frontRadius);
       front.thickness = applySignedThickness(normalizeThicknessToRowValue(centerThickness));
-      front.material = String(material ?? '').trim();
       
-      // Apply directly-specified rindex/abbe (synthetic glass) if provided
-      if (rindex !== undefined && rindex !== null && String(rindex).trim() !== '') {
-        front.rindex = String(rindex);
+      // If material is missing or empty, use default N-BK7 (for legacy/imported data)
+      const materialStr = String(material ?? '').trim();
+      const usedDefaultMaterial = !materialStr;
+      if (usedDefaultMaterial) {
+        front.material = 'N-BK7';
+        issues.push({
+          severity: 'warning',
+          phase: 'expand',
+          message: 'Lens.material was empty; defaulting to N-BK7.',
+          blockId
+        });
+      } else {
+        front.material = materialStr;
       }
-      if (abbe !== undefined && abbe !== null && String(abbe).trim() !== '') {
-        front.abbe = String(abbe);
+      
+      // Apply directly-specified rindex/abbe (synthetic glass) only if material was user-specified
+      // If default material was used, let applyDerivedGlassDisplay fetch from glass catalog
+      if (!usedDefaultMaterial) {
+        if (rindex !== undefined && rindex !== null && String(rindex).trim() !== '') {
+          front.rindex = String(rindex);
+        }
+        if (abbe !== undefined && abbe !== null && String(abbe).trim() !== '') {
+          front.abbe = String(abbe);
+        }
       }
 
       applyDerivedGlassDisplay(front);
@@ -1564,6 +1672,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       const tiltY = getParamOrVarValue(params, vars, 'tiltY');
       const tiltZ = getParamOrVarValue(params, vars, 'tiltZ');
       const order = getParamOrVarValue(params, vars, 'order');
+      const coordReturn = getParamOrVarValue(params, vars, 'coordReturn');
+      const toSurf = getParamOrVarValue(params, vars, 'toSurf');
 
       // Also store explicit CoordTrans params to avoid collisions with reused table fields.
       // (Rendering / ray-tracing prefer these when present.)
@@ -1578,6 +1688,18 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
         if (s === '') return 1;
         const n = (typeof order === 'number') ? order : (isNumericString(s) ? Number(s) : NaN);
         return (n === 0 || n === 1) ? n : 1;
+      })();
+      cb.coordReturn = (() => {
+        const s = String(coordReturn ?? '').trim().toLowerCase();
+        if (s === 'orientation' || s === 'xy' || s === 'xyz') return s;
+        return 'none';
+      })();
+      cb.toSurf = (() => {
+        const s = String(toSurf ?? '').trim();
+        if (s === '') return 0;
+        const n = (typeof toSurf === 'number') ? toSurf : (isNumericString(s) ? Number(s) : NaN);
+        if (!Number.isFinite(n) || n < 0) return 0;
+        return Math.trunc(n);
       })();
 
       // Coord Trans field reuse (see specification/ray-tracing.md)
@@ -1599,10 +1721,32 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       // MUST NOT vignette subsequent rays. Propagate the last non-CT/non-Stop semidia
       // so rendering/ray-tracing can use it for clearance checks after the CT.
       // Store it in a dedicated field so it doesn't overwrite decenterX.
+      // ALSO: Preserve the previous surface's material and rindex so that ray tracing
+      // knows what medium the ray is in when crossing the CoordTrans (ray-tracing.md spec).
       try {
         const prev = getLastNonCoordTransRow();
-        if (prev && prev.semidia !== undefined && prev.semidia !== null && String(prev.semidia).trim() !== '') {
-          cb.__cooptActualSemidia = prev.semidia;
+        if (prev) {
+          // Preserve semidia for clearance checking after CT
+          if (prev.semidia !== undefined && prev.semidia !== null && String(prev.semidia).trim() !== '') {
+            cb.__cooptActualSemidia = prev.semidia;
+          }
+          // Preserve material and rindex from previous surface for ray tracing
+          // (these are clobbered by CoordTrans parameter mapping, so store in dedicated fields)
+          if (prev.material !== undefined && prev.material !== null && String(prev.material).trim() !== '') {
+            cb.__cooptActualMaterial = prev.material;
+          }
+          if (prev.rindex !== undefined && prev.rindex !== null) {
+            const rindexVal = String(prev.rindex).trim();
+            if (rindexVal !== '') {
+              cb.__cooptActualRindex = prev.rindex;
+            }
+          }
+          if (prev.abbe !== undefined && prev.abbe !== null) {
+            const abbeVal = String(prev.abbe).trim();
+            if (abbeVal !== '') {
+              cb.__cooptActualAbbe = prev.abbe;
+            }
+          }
         }
       } catch (_) {}
 
@@ -1660,23 +1804,59 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
 
       s1.radius = normalizeRadiusToRowValue(radius1);
       s1.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness1));
-      s1.material = String(material1 ?? '').trim();
-      if (rindex1 !== undefined && rindex1 !== null && String(rindex1).trim() !== '') {
-        s1.rindex = String(rindex1);
+      
+      // If material is missing or empty, use default N-BK7 (for legacy/imported data)
+      const material1Str = String(material1 ?? '').trim();
+      const usedDefaultMaterial1 = !material1Str;
+      if (usedDefaultMaterial1) {
+        s1.material = 'N-BK7';
+        issues.push({
+          severity: 'warning',
+          phase: 'expand',
+          message: 'Doublet.material1 was empty; defaulting to N-BK7.',
+          blockId
+        });
+      } else {
+        s1.material = material1Str;
       }
-      if (abbe1 !== undefined && abbe1 !== null && String(abbe1).trim() !== '') {
-        s1.abbe = String(abbe1);
+      
+      // Apply rindex/abbe only if material was user-specified
+      if (!usedDefaultMaterial1) {
+        if (rindex1 !== undefined && rindex1 !== null && String(rindex1).trim() !== '') {
+          s1.rindex = String(rindex1);
+        }
+        if (abbe1 !== undefined && abbe1 !== null && String(abbe1).trim() !== '') {
+          s1.abbe = String(abbe1);
+        }
       }
       applyDerivedGlassDisplay(s1);
 
       s2.radius = normalizeRadiusToRowValue(radius2);
       s2.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness2));
-      s2.material = String(material2 ?? '').trim();
-      if (rindex2 !== undefined && rindex2 !== null && String(rindex2).trim() !== '') {
-        s2.rindex = String(rindex2);
+      
+      // If material is missing or empty, use default N-SF5 (for legacy/imported data)
+      const material2Str = String(material2 ?? '').trim();
+      const usedDefaultMaterial2 = !material2Str;
+      if (usedDefaultMaterial2) {
+        s2.material = 'N-SF5';
+        issues.push({
+          severity: 'warning',
+          phase: 'expand',
+          message: 'Doublet.material2 was empty; defaulting to N-SF5.',
+          blockId
+        });
+      } else {
+        s2.material = material2Str;
       }
-      if (abbe2 !== undefined && abbe2 !== null && String(abbe2).trim() !== '') {
-        s2.abbe = String(abbe2);
+      
+      // Apply rindex/abbe only if material was user-specified
+      if (!usedDefaultMaterial2) {
+        if (rindex2 !== undefined && rindex2 !== null && String(rindex2).trim() !== '') {
+          s2.rindex = String(rindex2);
+        }
+        if (abbe2 !== undefined && abbe2 !== null && String(abbe2).trim() !== '') {
+          s2.abbe = String(abbe2);
+        }
       }
       applyDerivedGlassDisplay(s2);
 
@@ -1806,34 +1986,88 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
 
       s1.radius = normalizeRadiusToRowValue(radius1);
       s1.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness1));
-      s1.material = String(material1 ?? '').trim();
-      if (rindex1 !== undefined && rindex1 !== null && String(rindex1).trim() !== '') {
-        s1.rindex = String(rindex1);
+      
+      // If material is missing or empty, use default N-BK7 (for legacy/imported data)
+      const material1Str = String(material1 ?? '').trim();
+      const usedDefaultMaterial1 = !material1Str;
+      if (usedDefaultMaterial1) {
+        s1.material = 'N-BK7';
+        issues.push({
+          severity: 'warning',
+          phase: 'expand',
+          message: 'Triplet.material1 was empty; defaulting to N-BK7.',
+          blockId
+        });
+      } else {
+        s1.material = material1Str;
       }
-      if (abbe1 !== undefined && abbe1 !== null && String(abbe1).trim() !== '') {
-        s1.abbe = String(abbe1);
+      
+      // Apply rindex/abbe only if material was user-specified
+      if (!usedDefaultMaterial1) {
+        if (rindex1 !== undefined && rindex1 !== null && String(rindex1).trim() !== '') {
+          s1.rindex = String(rindex1);
+        }
+        if (abbe1 !== undefined && abbe1 !== null && String(abbe1).trim() !== '') {
+          s1.abbe = String(abbe1);
+        }
       }
       applyDerivedGlassDisplay(s1);
 
       s2.radius = normalizeRadiusToRowValue(radius2);
       s2.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness2));
-      s2.material = String(material2 ?? '').trim();
-      if (rindex2 !== undefined && rindex2 !== null && String(rindex2).trim() !== '') {
-        s2.rindex = String(rindex2);
+      
+      // If material is missing or empty, use default N-SF5 (for legacy/imported data)
+      const material2Str = String(material2 ?? '').trim();
+      const usedDefaultMaterial2 = !material2Str;
+      if (usedDefaultMaterial2) {
+        s2.material = 'N-SF5';
+        issues.push({
+          severity: 'warning',
+          phase: 'expand',
+          message: 'Triplet.material2 was empty; defaulting to N-SF5.',
+          blockId
+        });
+      } else {
+        s2.material = material2Str;
       }
-      if (abbe2 !== undefined && abbe2 !== null && String(abbe2).trim() !== '') {
-        s2.abbe = String(abbe2);
+      
+      // Apply rindex/abbe only if material was user-specified
+      if (!usedDefaultMaterial2) {
+        if (rindex2 !== undefined && rindex2 !== null && String(rindex2).trim() !== '') {
+          s2.rindex = String(rindex2);
+        }
+        if (abbe2 !== undefined && abbe2 !== null && String(abbe2).trim() !== '') {
+          s2.abbe = String(abbe2);
+        }
       }
       applyDerivedGlassDisplay(s2);
 
       s3.radius = normalizeRadiusToRowValue(radius3);
       s3.thickness = applySignedThickness(normalizeThicknessToRowValue(thickness3));
-      s3.material = String(material3 ?? '').trim();
-      if (rindex3 !== undefined && rindex3 !== null && String(rindex3).trim() !== '') {
-        s3.rindex = String(rindex3);
+      
+      // If material is missing or empty, use default N-BK7 (for legacy/imported data)
+      const material3Str = String(material3 ?? '').trim();
+      const usedDefaultMaterial3 = !material3Str;
+      if (usedDefaultMaterial3) {
+        s3.material = 'N-BK7';
+        issues.push({
+          severity: 'warning',
+          phase: 'expand',
+          message: 'Triplet.material3 was empty; defaulting to N-BK7.',
+          blockId
+        });
+      } else {
+        s3.material = material3Str;
       }
-      if (abbe3 !== undefined && abbe3 !== null && String(abbe3).trim() !== '') {
-        s3.abbe = String(abbe3);
+      
+      // Apply rindex/abbe only if material was user-specified
+      if (!usedDefaultMaterial3) {
+        if (rindex3 !== undefined && rindex3 !== null && String(rindex3).trim() !== '') {
+          s3.rindex = String(rindex3);
+        }
+        if (abbe3 !== undefined && abbe3 !== null && String(abbe3).trim() !== '') {
+          s3.abbe = String(abbe3);
+        }
       }
       applyDerivedGlassDisplay(s3);
 
@@ -2050,6 +2284,9 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       const matKey = mat.replace(/\s+/g, '').toUpperCase();
       const gapMaterial = (mat === '' || matKey === 'AIR') ? 'AIR' : mat;
 
+      const abbeRaw = getParamOrVarValue(params, vars, 'abbe');
+      const abbeStr = String(abbeRaw ?? '').trim();
+
       if (prev && isCoordTransRow(prev)) {
         // Coord Trans rows reuse thickness/material for decenter parameters;
         // store gap spacing separately to avoid clobbering CT fields.
@@ -2065,7 +2302,20 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       } else {
         prev.thickness = signedThickness;
         prev.material = gapMaterial;
-        applyDerivedGlassDisplay(prev);
+        
+        // Handle abbe number: manual for numeric materials, auto-fetch for glass names
+        const isNumericMaterial = __isNumericMaterialName(gapMaterial);
+        if (isNumericMaterial && abbeStr !== '') {
+          // Numeric material (synthetic glass) with manual abbe value
+          prev.abbe = abbeStr;
+        } else if (!isNumericMaterial && gapMaterial.toUpperCase() !== 'AIR') {
+          // Glass name: fetch abbe from catalog
+          applyDerivedGlassDisplay(prev);
+        } else {
+          // AIR or no material: leave abbe empty
+          prev.abbe = '';
+        }
+        
         prev.__cooptGapApplied = true;
 
         if (vars && Object.prototype.hasOwnProperty.call(vars, 'thickness') && shouldMarkV(vars.thickness)) {
@@ -2073,6 +2323,9 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
         }
         if (vars && Object.prototype.hasOwnProperty.call(vars, 'material') && shouldMarkV(vars.material)) {
           applyVFlag(prev, 'optimizeMaterial');
+        }
+        if (vars && Object.prototype.hasOwnProperty.call(vars, 'abbe') && shouldMarkV(vars.abbe)) {
+          applyVFlag(prev, 'optimizeAbbe');
         }
       }
       continue;
@@ -2151,10 +2404,7 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
     return { blocks, issues };
   }
 
-  const legacyRows = rows.filter(r => !__isCoordTransRow(r));
-  if (legacyRows.length !== rows.length) {
-    issues.push({ severity: 'warning', phase: 'validate', message: 'Coord Trans rows are excluded from legacy-to-blocks conversion.' });
-  }
+  const legacyRows = rows;
   if (legacyRows.length < 2) {
     issues.push({ severity: 'fatal', phase: 'validate', message: 'opticalSystem rows must contain at least Object and Image rows after filtering.' });
     return { blocks, issues };
@@ -2278,6 +2528,63 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
     }
 
     const surfType = normalizeSurfTypeValue(r.surfType);
+
+    if (__isCoordTransRow(r)) {
+      const readCoordNumber = (preferred, fallback, defaultValue = 0) => {
+        const p = preferred;
+        if (typeof p === 'number' && Number.isFinite(p)) return p;
+        const ps = String(p ?? '').trim();
+        if (ps !== '' && isNumericString(ps)) return Number(ps);
+
+        const f = fallback;
+        if (typeof f === 'number' && Number.isFinite(f)) return f;
+        const fs = String(f ?? '').trim();
+        if (fs !== '' && isNumericString(fs)) return Number(fs);
+        return defaultValue;
+      };
+
+      const decenterX = readCoordNumber((r as any).decenterX, r.semidia, 0);
+      const decenterY = readCoordNumber((r as any).decenterY, r.material, 0);
+      const decenterZ = readCoordNumber((r as any).decenterZ, r.thickness, 0);
+      const tiltX = readCoordNumber((r as any).tiltX, (r as any).rindex, 0);
+      const tiltY = readCoordNumber((r as any).tiltY, (r as any).abbe, 0);
+      const tiltZ = readCoordNumber((r as any).tiltZ, r.conic, 0);
+      const orderRaw = readCoordNumber((r as any).order, (r as any).coef1, 0);
+      const order = (orderRaw === 0 || orderRaw === 1) ? orderRaw : (orderRaw > 0 ? 1 : 0);
+
+      const coordReturnRaw = String((r as any).coordReturn ?? '').trim().toLowerCase();
+      const coordReturn = (coordReturnRaw === 'orientation' || coordReturnRaw === 'xy' || coordReturnRaw === 'xyz')
+        ? coordReturnRaw
+        : 'none';
+
+      const toSurfRaw = (r as any).toSurf;
+      const toSurfNum = (typeof toSurfRaw === 'number')
+        ? toSurfRaw
+        : (isNumericString(String(toSurfRaw ?? '').trim()) ? Number(toSurfRaw) : 0);
+      const toSurf = Number.isFinite(toSurfNum) ? Math.max(0, Math.trunc(toSurfNum)) : 0;
+
+      blocks.push({
+        blockId: `CoordTrans-${i}`,
+        blockType: 'CoordTrans',
+        role: null,
+        constraints: {},
+        parameters: {
+          decenterX,
+          decenterY,
+          decenterZ,
+          tiltX,
+          tiltY,
+          tiltZ,
+          order,
+          coordReturn,
+          toSurf
+        },
+        variables: {},
+        metadata: { source: 'legacy-opticalSystem' }
+      });
+      continue;
+    }
+
     // normalizeSurfTypeValue() only returns allowed values; keep this check defensive.
     if (surfType && !ALLOWED_SURF_TYPES.has(surfType)) {
       issues.push({

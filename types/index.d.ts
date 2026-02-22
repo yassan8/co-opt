@@ -127,6 +127,17 @@ export interface CoordTransBlock extends BaseBlock {
 export interface ImageSurfaceBlock extends BaseBlock {
   blockType: 'ImageSurface';
   thickness?: number;
+  radius?: number;
+  radiusX?: number;
+  radiusY?: number;
+  axis?: number;
+  surfType?: SurfaceType;
+  conic?: number;
+  asphericCoeffs?: number[];
+  apertureShape?: string;
+  semidia?: number;
+  apertureWidth?: number;
+  apertureHeight?: number;
 }
 
 export type Block =
