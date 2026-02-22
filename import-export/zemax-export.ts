@@ -1,7 +1,7 @@
 // Zemax OpticStudio ZMX export (minimal subset)
 // - Outputs UTF-16LE (with BOM) for compatibility
-// - Supports: STANDARD, EVENASPH (via TYPE EVENASPH + CONI + PARM)
-// - Detects unsupported: Aspheric odd, Coord Break (aborts)
+// - Supports: STANDARD, EVENASPH (via TYPE EVENASPH + CONI + PARM), COORDBRK
+// - Detects unsupported: Aspheric odd
 
 function isBlank(v) {
   return v === null || v === undefined || String(v).trim() === '';
@@ -42,16 +42,29 @@ function encodeUtf16LeWithBom(str) {
 
 function inferUnsupportedSurfaceTypes(rows) {
   const odd = [];
-  const coord = [];
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i] ?? {};
     const surfType = String(r.surfType ?? '').trim();
     if (surfType === 'Aspheric odd') odd.push(i + 1);
-    if (surfType === 'Coord Break' || surfType === 'Coordinate Break' || surfType === 'CB') coord.push(i + 1);
   }
 
-  return { odd, coord };
+  return { odd };
+}
+
+function isCoordTransSurface(row) {
+  const st = String(row?.surfType ?? row?.['surface type'] ?? row?.surfaceType ?? '').trim().toLowerCase();
+  const ot = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+  return st === 'coord trans' || st === 'coordinate transform' || st === 'ct' || st === 'coordtrans' || st === 'coordinatetransform'
+    || ot === 'coord trans' || ot === 'coordinate transform' || ot === 'ct' || ot === 'coordtrans' || ot === 'coordinatetransform';
+}
+
+function normalizeCoordReturnToCode(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  if (s === 'orientation') return 1;
+  if (s === 'xy') return 2;
+  if (s === 'xyz') return 3;
+  return 0;
 }
 
 function formatFloat(v) {
@@ -79,19 +92,12 @@ function inferPrimaryWavelengthIndexOneBased(sourceRows) {
 export function generateZMXText(opticalSystemRows, options: any = {}) {
   const rows = Array.isArray(opticalSystemRows) ? opticalSystemRows : [];
 
-  const { odd, coord } = inferUnsupportedSurfaceTypes(rows);
+  const { odd } = inferUnsupportedSurfaceTypes(rows);
   if (odd.length > 0) {
     const list = odd.slice(0, 20).join(', ');
     const more = odd.length > 20 ? ` (+${odd.length - 20} more)` : '';
     const err: any = new Error(`Zemax export: Aspheric odd surfaces are not supported yet. Surface(s): ${list}${more}`);
     err.code = 'ZMX_UNSUPPORTED_ODD';
-    throw err;
-  }
-  if (coord.length > 0) {
-    const list = coord.slice(0, 20).join(', ');
-    const more = coord.length > 20 ? ` (+${coord.length - 20} more)` : '';
-    const err: any = new Error(`Zemax export: Coord Break surfaces are not supported yet. Surface(s): ${list}${more}`);
-    err.code = 'ZMX_UNSUPPORTED_COORDBRK';
     throw err;
   }
 
@@ -164,6 +170,83 @@ export function generateZMXText(opticalSystemRows, options: any = {}) {
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i] ?? {};
     lines.push(`SURF ${i}`);
+
+    if (isCoordTransSurface(row)) {
+      lines.push('TYPE COORDBRK');
+      lines.push('CURV 0');
+
+      const dz = (() => {
+        const explicit = parseNumberOrNull(row.decenterZ);
+        if (explicit !== null && Number.isFinite(explicit)) return explicit;
+        const legacy = parseNumberOrNull(row.thickness);
+        if (legacy !== null && Number.isFinite(legacy)) return legacy;
+        return 0;
+      })();
+      lines.push(`DISZ ${formatFloat(dz)}`);
+
+      const dx = (() => {
+        const explicit = parseNumberOrNull(row.decenterX);
+        if (explicit !== null && Number.isFinite(explicit)) return explicit;
+        const legacy = parseNumberOrNull(row.semidia);
+        if (legacy !== null && Number.isFinite(legacy)) return legacy;
+        return 0;
+      })();
+      const dy = (() => {
+        const explicit = parseNumberOrNull(row.decenterY);
+        if (explicit !== null && Number.isFinite(explicit)) return explicit;
+        const legacy = parseNumberOrNull(row.material);
+        if (legacy !== null && Number.isFinite(legacy)) return legacy;
+        return 0;
+      })();
+      const tx = (() => {
+        const explicit = parseNumberOrNull(row.tiltX);
+        if (explicit !== null && Number.isFinite(explicit)) return explicit;
+        const legacy = parseNumberOrNull(row.rindex);
+        if (legacy !== null && Number.isFinite(legacy)) return legacy;
+        return 0;
+      })();
+      const ty = (() => {
+        const explicit = parseNumberOrNull(row.tiltY);
+        if (explicit !== null && Number.isFinite(explicit)) return explicit;
+        const legacy = parseNumberOrNull(row.abbe);
+        if (legacy !== null && Number.isFinite(legacy)) return legacy;
+        return 0;
+      })();
+      const tz = (() => {
+        const explicit = parseNumberOrNull(row.tiltZ);
+        if (explicit !== null && Number.isFinite(explicit)) return explicit;
+        const legacy = parseNumberOrNull(row.conic);
+        if (legacy !== null && Number.isFinite(legacy)) return legacy;
+        return 0;
+      })();
+      const ord = (() => {
+        const explicit = parseNumberOrNull(row.order);
+        const legacy = parseNumberOrNull(row.coef1);
+        const raw = (explicit !== null && Number.isFinite(explicit)) ? explicit : ((legacy !== null && Number.isFinite(legacy)) ? legacy : 0);
+        return (raw === 1) ? 1 : 0;
+      })();
+
+      lines.push(`PARM 1 ${formatFloat(dx)}`);
+      lines.push(`PARM 2 ${formatFloat(dy)}`);
+      lines.push(`PARM 3 ${formatFloat(tx)}`);
+      lines.push(`PARM 4 ${formatFloat(ty)}`);
+      lines.push(`PARM 5 ${formatFloat(tz)}`);
+      lines.push(`PARM 6 ${formatFloat(ord)}`);
+
+      const returnCode = normalizeCoordReturnToCode(row.coordReturn);
+      if (returnCode !== 0) {
+        lines.push(`PARM 7 ${formatFloat(returnCode)}`);
+        const toSurfRaw = parseNumberOrNull(row.toSurf);
+        const toSurf = (toSurfRaw !== null && Number.isFinite(toSurfRaw) && toSurfRaw >= 0) ? Math.trunc(toSurfRaw) : 0;
+        lines.push(`PARM 8 ${formatFloat(toSurf)}`);
+      }
+
+      const comment = String(row.comment ?? '').trim();
+      if (comment) {
+        lines.push(`COMM "${comment.replace(/\"/g, "'")}"`);
+      }
+      continue;
+    }
 
     const objectType = String(row['object type'] ?? '').trim();
     if (objectType === 'Stop') {

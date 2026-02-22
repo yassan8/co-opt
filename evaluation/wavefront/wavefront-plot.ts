@@ -227,8 +227,8 @@ export class WavefrontPlotter {
                 // OPD is fixed to simple (no reference-sphere correction) semantics.
                 opdMode: 'simple',
                 zernikeMaxNoll: 37,
-                // OPD is fixed to raw-grid computation (no Zernike fit).
-                skipZernikeFit: true,
+                // Enable Zernike fit for System Data reporting
+                skipZernikeFit: false,
                 renderFromZernike: false,
                 // OPD display mode for plots (piston/tilt or piston/tilt/defocus removal).
                 opdDisplayMode: displayMode,
@@ -273,11 +273,8 @@ export class WavefrontPlotter {
                 return wavefrontMap;
             }
 
-            // Do not write System Data by default for OPD.
-            // (OPD popup has an explicit checkbox that pushes Zernike report.)
-            if (options?.updateSystemData === true) {
-                this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
-            }
+            // Update System Data with Zernike coefficients
+            this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
 
             // Debug: report effective pupil coverage.
             try {
@@ -644,8 +641,8 @@ export class WavefrontPlotter {
                 opdMode: 'simple',
                 zernikeMaxNoll: 37,
                 renderFromZernike: false,
-                // OPD is fixed to raw-grid computation (no Zernike fit).
-                skipZernikeFit: true,
+                // Enable Zernike fit for System Data reporting
+                skipZernikeFit: false,
                 // OPD display mode for plots (piston/tilt or piston/tilt/defocus removal).
                 opdDisplayMode: displayMode,
                 cancelToken: options?.cancelToken || null,
@@ -1126,11 +1123,23 @@ export class WavefrontPlotter {
         console.log(`📊 グリッドセル: 有効=${validCells}, null=${nullCells}, 合計=${validCells + nullCells}`);
         
         // データの統計情報を出力
-        const zValues = zGrid.flat().filter(v => v !== null);
-        if (zValues.length > 0) {
-            const min = Math.min(...zValues);
-            const max = Math.max(...zValues);
-            console.log(`📊 Z値範囲: ${min.toFixed(3)} ~ ${max.toFixed(3)}`);
+        // NOTE: Avoid spread on large arrays (e.g. 1024x1024) to prevent call stack overflow.
+        let zMin = Infinity;
+        let zMax = -Infinity;
+        let zFiniteCount = 0;
+        for (let rowIndex = 0; rowIndex < zGrid.length; rowIndex++) {
+            const row = zGrid[rowIndex];
+            if (!Array.isArray(row)) continue;
+            for (let colIndex = 0; colIndex < row.length; colIndex++) {
+                const value = row[colIndex];
+                if (value === null || !Number.isFinite(value)) continue;
+                zFiniteCount++;
+                if (value < zMin) zMin = value;
+                if (value > zMax) zMax = value;
+            }
+        }
+        if (zFiniteCount > 0) {
+            console.log(`📊 Z値範囲: ${zMin.toFixed(3)} ~ ${zMax.toFixed(3)}`);
         }
         
         const out = {
@@ -1184,12 +1193,24 @@ export class WavefrontPlotter {
         }
         
         // 有効値の確認
-        const validValues = data.z.flat().filter(v => v !== null && isFinite(v));
-        if (validValues.length === 0) {
+        // NOTE: Avoid data.z.flat() for very large grids to reduce memory/stack pressure.
+        let validValueCount = 0;
+        let totalCellCount = 0;
+        for (let rowIndex = 0; rowIndex < data.z.length; rowIndex++) {
+            const row = data.z[rowIndex];
+            if (!Array.isArray(row)) continue;
+            totalCellCount += row.length;
+            for (let colIndex = 0; colIndex < row.length; colIndex++) {
+                const value = row[colIndex];
+                if (value !== null && Number.isFinite(value)) validValueCount++;
+            }
+        }
+
+        if (validValueCount === 0) {
             throw new Error('有効なZ値がありません');
         }
         
-        console.log(`✅ データ検証完了: ${validValues.length}/${data.z.flat().length} 有効値`);
+        console.log(`✅ データ検証完了: ${validValueCount}/${totalCellCount} 有効値`);
     }
 
     _transposeZForPlotly(data) {

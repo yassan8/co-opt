@@ -6531,37 +6531,18 @@ export class WavefrontAberrationAnalyzer {
 
         throwIfCancelled();
 
-        // 🚀 キャッシュチェック (10-100倍の高速化)
-        const useCache = options?.useCache !== false; // デフォルトで有効
-        if (useCache) {
-            const cache = getGlobalWavefrontCache();
-            const systemHash = WavefrontCache.generateSystemHash(this.opdCalculator.opticalSystemRows);
-            const cacheKey = {
-                fieldAngleX: fieldSetting.fieldAngle?.x || 0,
-                fieldAngleY: fieldSetting.fieldAngle?.y || 0,
-                xHeight: fieldSetting.xHeight || 0,
-                yHeight: fieldSetting.yHeight || 0,
-                wavelength: fieldSetting.wavelength || this.wavelength || 0.5876, // 🔧 undefined回避
-                gridSize,
-                opdMode,
-                systemHash
-            };
-
-            const cachedResult = cache.get(cacheKey);
-            if (cachedResult) {
-                if (OPD_DEBUG) {
-                    const stats = cache.getStats();
-                    console.log(`✅ [CACHE HIT] Returning cached result (hit rate: ${stats.hitRate})`);
-                    console.log(`   Cache Key:`, cacheKey);
-                }
-                emitProgress(100, 'complete', 'Loaded from cache');
-                return cachedResult;
-            } else if (OPD_DEBUG) {
-                const stats = cache.getStats();
-                console.log(`❌ [CACHE MISS] Computing wavefront (hit rate: ${stats.hitRate})`);
-                console.log(`   Cache Key:`, cacheKey);
-            }
-        }
+        // 🚀 キャッシュ無効化 - ユーザー要望によりOPD/MTF計算でキャッシュを使用しない
+        // キャッシュの読み取りをスキップし、毎回新規の計算を実行する
+        const useCache = false; // Always disabled per user request: "OPD/MTF計算でキャッシュしない、使わないようにしてください"
+        
+        // Cache read disabled - always compute fresh wavefront
+        // if (useCache) {
+        //   const cache = getGlobalWavefrontCache();
+        //   const systemHash = WavefrontCache.generateSystemHash(this.opdCalculator.opticalSystemRows);
+        //   const cacheKey = { ... };
+        //   const cachedResult = cache.get(cacheKey);
+        //   if (cachedResult) { return cachedResult; }
+        // }
         
         const wavefrontMap: any = {
             fieldSetting: fieldSetting,
@@ -8793,25 +8774,13 @@ export class WavefrontAberrationAnalyzer {
             }
         }
 
-        // 🚀 キャッシュに保存（次回以降の高速化）
-        if (useCache) {
-            const cache = getGlobalWavefrontCache();
-            const systemHash = WavefrontCache.generateSystemHash(this.opdCalculator.opticalSystemRows);
-            const cacheKey = {
-                fieldAngleX: fieldSetting.fieldAngle?.x || 0,
-                fieldAngleY: fieldSetting.fieldAngle?.y || 0,
-                wavelength: fieldSetting.wavelength || this.wavelength || 0.5876, // 🔧 undefined回避
-                gridSize,
-                opdMode,
-                systemHash
-            };
-            cache.set(cacheKey, wavefrontMap);
-            
-            if (OPD_DEBUG) {
-                const stats = cache.getStats();
-                console.log(`💾 [Cache SAVE] Result cached (entries: ${stats.entries}, size: ${stats.sizeMB}MB, hit rate: ${stats.hitRate})`);
-            }
-        }
+        // Cache write disabled - never save to cache
+        // if (useCache) {
+        //   const cache = getGlobalWavefrontCache();
+        //   const systemHash = WavefrontCache.generateSystemHash(this.opdCalculator.opticalSystemRows);
+        //   const cacheKey = { ... };
+        //   cache.set(cacheKey, wavefrontMap);
+        // }
 
         return wavefrontMap;
     }
@@ -9228,10 +9197,16 @@ export class WavefrontAberrationAnalyzer {
         }
 
         // OPD範囲を計算してスケールファクターを決定
-        const opdValues = validPoints.map(pt => pt.opd);
-        const opdMin = Math.min(...opdValues);
-        const opdMax = Math.max(...opdValues);
-        const opdRange = opdMax - opdMin;
+        // NOTE: Avoid Math.min(...arr)/Math.max(...arr) for large arrays (e.g. 1024x1024 grids).
+        let opdMin = Infinity;
+        let opdMax = -Infinity;
+        for (let i = 0; i < validPoints.length; i++) {
+            const value = Number(validPoints[i]?.opd);
+            if (!Number.isFinite(value)) continue;
+            if (value < opdMin) opdMin = value;
+            if (value > opdMax) opdMax = value;
+        }
+        const opdRange = (Number.isFinite(opdMin) && Number.isFinite(opdMax)) ? (opdMax - opdMin) : 0;
         
         // スケールファクター: OPD範囲をO(1)にスケーリング（条件数改善のため）
         // 参考文献: Golub & Van Loan "Matrix Computations" (2013), Sec. 2.7, 5.3
@@ -9545,8 +9520,17 @@ export class WavefrontAberrationAnalyzer {
                 const mean = valid.reduce((s, v) => s + v, 0) / count;
                 const variance = valid.reduce((s, v) => s + (v - mean) * (v - mean), 0) / count;
                 const rms = Math.sqrt(variance);
-                const min = Math.min(...valid);
-                const max = Math.max(...valid);
+                let min = Infinity;
+                let max = -Infinity;
+                for (let i = 0; i < valid.length; i++) {
+                    const v = valid[i];
+                    if (!Number.isFinite(v)) continue;
+                    if (v < min) min = v;
+                    if (v > max) max = v;
+                }
+                if (!Number.isFinite(min) || !Number.isFinite(max)) {
+                    return { count: 0, mean: NaN, rms: NaN, peakToPeak: NaN, min: NaN, max: NaN };
+                }
                 const peakToPeak = max - min;
                 return { count, mean, rms, peakToPeak, min, max };
             };
@@ -9581,8 +9565,18 @@ export class WavefrontAberrationAnalyzer {
             if (coords.length > 0) {
                 const yValues = coords.filter(p => Number.isFinite(p?.y)).map(p => p.y);
                 if (yValues.length > 0) {
-                    const yMin = Math.min(...yValues);
-                    const yMax = Math.max(...yValues);
+                    let yMin = Infinity;
+                    let yMax = -Infinity;
+                    for (let i = 0; i < yValues.length; i++) {
+                        const yv = yValues[i];
+                        if (!Number.isFinite(yv)) continue;
+                        if (yv < yMin) yMin = yv;
+                        if (yv > yMax) yMax = yv;
+                    }
+                    if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) {
+                        yMin = NaN;
+                        yMax = NaN;
+                    }
                     const yRange = yMax - yMin;
                     const yCenter = (yMax + yMin) / 2;
                     const asymmetry = Math.abs(yCenter) / (yRange || 1);

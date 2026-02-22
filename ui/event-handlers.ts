@@ -280,8 +280,9 @@ function __coopt_applyPopupCrossSectionLensFill(options: {
                 return;
             }
 
+            // Always show both YZ and XZ profiles (crosshair lines)
+            child.visible = true;
             const isActive = ud.profileType === viewAxis;
-            child.visible = isActive;
             if (isActive) {
                 if (Number.isFinite(si)) {
                     activeProfileMap.set(si, child);
@@ -298,8 +299,9 @@ function __coopt_applyPopupCrossSectionLensFill(options: {
                 return;
             }
 
+            // Always show both YZ and XZ connection lines
+            child.visible = true;
             const isActive = ud.direction === viewAxis;
-            child.visible = isActive;
             if (isActive) {
                 if (Number.isFinite(si)) {
                     if (!activeConnectionMap.has(si)) activeConnectionMap.set(si, []);

@@ -473,6 +473,7 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
       
       const radius = getSafeRadius(surface, meridian);
       const thickness = getSafeThickness(surface);
+      const isStopSurface = String(surface?.['object type'] ?? surface?.object ?? '').trim().toLowerCase() === 'stop';
       
       // Mirror面の検出
       const isMirror = (surface.material === 'MIRROR' || surface.material === 'Mirror');
@@ -486,6 +487,9 @@ export function calculateFullSystemParaxialTrace(opticalSystemRows, wavelength =
         // 屈折力: φ = (n' - n) / R = (-n - n) / R = -2n/R
         nextN = -prevN;
         // ミラー通過後のαを記録（屈折計算後に更新される）
+      } else if (isStopSurface) {
+        // Stop面は開口制限のみを行う面。媒質は変化させない。
+        nextN = prevN;
       } else {
         // 手動設定のRef Indexまたは材料名がある場合
         const hasManualRefIndex = surface.rindex || surface['ref index'] || surface.refIndex || surface['Ref Index'];
@@ -1632,15 +1636,30 @@ function estimateRefractiveIndexFromNdVd(nd, vd, wavelength) {
 export function getRefractiveIndex(surface, wavelength = 0.5875618) {
   if (!surface) return 1.0;
   
+  // For CoordTrans rows, use preserved gap material (the medium AFTER the CoordTrans)
+  // or actual material from previous surface
+  const effectiveMaterial = surface.__cooptGapMaterial ?? surface.__cooptActualMaterial ?? surface.material;
+  const effectiveRindex = surface.__cooptActualRindex ?? surface.rindex;
+  const effectiveAbbe = surface.__cooptActualAbbe ?? surface.abbe;
+  
+  // Check if effectiveMaterial is a numeric string (e.g., "1.336")
+  // If so, treat it as a direct refractive index value
+  if (effectiveMaterial && effectiveMaterial !== '') {
+    const materialAsNumber = parseFloat(String(effectiveMaterial));
+    if (!isNaN(materialAsNumber) && materialAsNumber > 1.0) {
+      return materialAsNumber;
+    }
+  }
+  
   // ガラスカタログから屈折率を取得（Materialが設定されている場合を優先）
-  if (surface.material && surface.material !== '' && surface.material !== 'Air' && surface.material !== 'AIR' && surface.material !== 'empty') {
+  if (effectiveMaterial && effectiveMaterial !== '' && effectiveMaterial !== 'Air' && effectiveMaterial !== 'AIR' && effectiveMaterial !== 'empty') {
     try {
-      const glassData = getGlassData(surface.material);
+      const glassData = getGlassData(effectiveMaterial);
       if (glassData) {
         // 指定波長での屈折率を計算
         if (glassData.sellmeier) {
           const refractiveIndex = calculateRefractiveIndex(glassData.sellmeier, wavelength);
-          // console.log(`🔍 ${surface.material}: λ=${wavelength.toFixed(4)}μm → n=${refractiveIndex.toFixed(6)}`);
+          // console.log(`🔍 ${effectiveMaterial}: λ=${wavelength.toFixed(4)}μm → n=${refractiveIndex.toFixed(6)}`);
           return refractiveIndex;
         } else if (glassData.nd && glassData.vd) {
           // Sellmeierデータがないが nd/vd がある場合、近似分散式を使用
@@ -1652,14 +1671,14 @@ export function getRefractiveIndex(surface, wavelength = 0.5875618) {
         }
       }
     } catch (error) {
-      console.warn(`⚠️ ガラスデータ取得エラー: ${surface.material}, ${error.message} - 手動Ref Indexにフォールバック`);
+      console.warn(`⚠️ ガラスデータ取得エラー: ${effectiveMaterial}, ${error.message} - 手動Ref Indexにフォールバック`);
     }
   }
   
   // 手動設定のRef Indexをチェック（Materialが空の場合のみ）
   // ただし、Abbeが設定されている場合は近似分散式を使用
-  const manualRefIndex = surface.rindex || surface['ref index'] || surface.refIndex || surface['Ref Index'];
-  const manualAbbe = surface.abbe || surface.Abbe || surface.vd || surface.Vd;
+  const manualRefIndex = effectiveRindex || surface['ref index'] || surface.refIndex || surface['Ref Index'];
+  const manualAbbe = effectiveAbbe || surface.Abbe || surface.vd || surface.Vd;
   
   if (manualRefIndex) {
     const nd = parseFloat(manualRefIndex);
@@ -1673,15 +1692,15 @@ export function getRefractiveIndex(surface, wavelength = 0.5875618) {
         return n_approx;
       } else {
         // Abbe数がない場合は手動設定値をそのまま返す
-        // console.log(`🔧 手動設定Ref Index使用: ${nd} (Material: "${surface.material || 'empty'}")`);
+        // console.log(`🔧 手動設定Ref Index使用: ${nd} (Material: "${effectiveMaterial || 'empty'}")`);
         return nd;
       }
     }
   }
   
   // デバッグ：Material空白の場合の処理状況
-  if (!surface.material || surface.material === '' || surface.material === 'empty') {
-    const availableRefIndex = surface.rindex || surface['ref index'] || surface.refIndex || 'none';
+  if (!effectiveMaterial || effectiveMaterial === '' || effectiveMaterial === 'empty') {
+    const availableRefIndex = effectiveRindex || surface['ref index'] || surface.refIndex || 'none';
     if (availableRefIndex !== 'none') {
       // console.log(`ℹ️ Material空白面（手動屈折率設定あり）: ref index=${availableRefIndex}`);
     } else {
@@ -1689,21 +1708,21 @@ export function getRefractiveIndex(surface, wavelength = 0.5875618) {
     }
   }
   
-  // 数値で直接指定されている場合
-  if (typeof surface.material === 'number') {
-    return surface.material;
+  // 数値で直接指定されている場合 (already handled above, but keep for legacy)
+  if (typeof effectiveMaterial === 'number') {
+    return effectiveMaterial;
   }
   
-  // 文字列で数値が指定されている場合
-  if (typeof surface.material === 'string') {
-    const numValue = parseFloat(surface.material);
+  // 文字列で数値が指定されている場合 (already handled above, but keep for legacy)
+  if (typeof effectiveMaterial === 'string') {
+    const numValue = parseFloat(effectiveMaterial);
     if (!isNaN(numValue)) {
       return numValue;
     }
   }
   
   // 最終的にAirまたは空の場合
-  debugWarn(1, `未知の材質: ${surface.material}、屈折率1.0を使用`);
+  debugWarn(1, `未知の材質: ${effectiveMaterial}、屈折率1.0を使用`);
   return 1.0;
 }
 

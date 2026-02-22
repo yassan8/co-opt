@@ -245,7 +245,10 @@ const initialTableData = [
     coef7: "",
     coef8: "",
     coef9: "",
-    coef10: ""
+    coef10: "",
+    apertureShape: "",
+    apertureWidth: "",
+    apertureHeight: ""
   },
   {
     id: 1,
@@ -268,7 +271,10 @@ const initialTableData = [
     coef7: "",
     coef8: "",
     coef9: "",
-    coef10: ""
+    coef10: "",
+    apertureShape: "",
+    apertureWidth: "",
+    apertureHeight: ""
   },
   {
     id: 2,
@@ -291,7 +297,10 @@ const initialTableData = [
     coef7: "",
     coef8: "",
     coef9: "",
-    coef10: ""
+    coef10: "",
+    apertureShape: "",
+    apertureWidth: "",
+    apertureHeight: ""
   },
   {
     id: 3,
@@ -314,7 +323,10 @@ const initialTableData = [
     coef7: "",
     coef8: "",
     coef9: "",
-    coef10: ""
+    coef10: "",
+    apertureShape: "",
+    apertureWidth: "",
+    apertureHeight: ""
   }
 ];
 
@@ -430,6 +442,9 @@ const DEFAULT_COLUMN_TITLES = Object.freeze({
   coef8: 'Coef8',
   coef9: 'Coef9',
   coef10: 'Coef10',
+  apertureShape: 'Aperture Shape',
+  apertureWidth: 'Aperture Width',
+  apertureHeight: 'Aperture Height',
 });
 
 const COORDTRANS_COLUMN_TITLES = Object.freeze({
@@ -979,7 +994,63 @@ let tabulatorOptions = {
           console.warn("Mutator error for coef10:", e);
           return value;
         }
-      }}
+      }},
+    { title: "Aperture Shape", field: "apertureShape", editor: "list", width: 120, headerSort: false,
+      editorParams: {
+        values: [
+          {value: "", label: "(None)"},
+          {value: "Circular", label: "Circular"},
+          {value: "Square", label: "Square"},
+          {value: "Rectangular", label: "Rectangular"}
+        ]
+      },
+      visible: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          return rowData["object type"] === "Image" || rowData.object === "Image";
+        } catch (e) {
+          return false;
+        }
+      }
+    },
+    { title: "Aperture Width", field: "apertureWidth", editor: "input", width: 110, headerSort: false,
+      visible: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          return rowData["object type"] === "Image" || rowData.object === "Image";
+        } catch (e) {
+          return false;
+        }
+      },
+      mutator: function(value) {
+        try {
+          if (value === "" || value === null || value === undefined) return "";
+          const num = Number(value);
+          return !isNaN(num) ? num : value;
+        } catch (e) {
+          return value;
+        }
+      }
+    },
+    { title: "Aperture Height", field: "apertureHeight", editor: "input", width: 110, headerSort: false,
+      visible: function(cell) {
+        try {
+          const rowData = cell.getRow().getData();
+          return rowData["object type"] === "Image" || rowData.object === "Image";
+        } catch (e) {
+          return false;
+        }
+      },
+      mutator: function(value) {
+        try {
+          if (value === "" || value === null || value === undefined) return "";
+          const num = Number(value);
+          return !isNaN(num) ? num : value;
+        } catch (e) {
+          return value;
+        }
+      }
+    }
     ]
   }; // ←columns配列の直後はオプションオブジェクトの終端
 
