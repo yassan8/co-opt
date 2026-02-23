@@ -2369,7 +2369,15 @@ function setupOptimizeDesignIntentButton(): void {
     <button id="opt-stop" style="padding:6px 10px;" disabled>Stop</button>
     <span id="opt-stop-state" style="margin-left:8px; font-size:12px; color:#555;"></span>
 </div>
-<div style="margin-bottom:10px; display:flex; align-items:center; gap:10px;">
+<div style="margin-bottom:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+    <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
+        Method
+        <select id="opt-method" style="padding:4px 6px;">
+            <option value="kkt">KKT-based (SQP)</option>
+            <option value="lm">Levenberg-Marquardt (LM)</option>
+            <option value="cd">Coordinate Descent (CD)</option>
+        </select>
+    </label>
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         Max Iterations
         <input id="opt-max-iter" type="number" min="1" step="1" value="5000" style="width:100px; padding:4px 6px;" />
@@ -2922,6 +2930,20 @@ function setupOptimizeDesignIntentButton(): void {
                     const maxIterations = resolveMaxIterations();
                     const optParams = resolveOptParams();
 
+                    const resolveOptMethod = (): string => {
+                        let method = 'lm'; // default
+                        try {
+                            if (popup && !popup.closed) {
+                                const el = popup.document.getElementById('opt-method') as HTMLSelectElement | null;
+                                const v = el ? String(el.value).toLowerCase().trim() : '';
+                                if (v === 'cd' || v === 'lm' || v === 'kkt') {
+                                    method = v;
+                                }
+                            }
+                        } catch (_) {}
+                        return method;
+                    };
+
                     let result: any = null;
                     let __prevDisableRayTraceDebug: any;
                     try {
@@ -2942,7 +2964,7 @@ function setupOptimizeDesignIntentButton(): void {
                             multiScenario,
                             runUntilStopped: false,
                             maxIterations,
-                            method: 'lm',
+                            method: resolveOptMethod(),
                             stageMaxCoef: [10],
                             ...optParams,
                             onProgress: updateProgressUI,

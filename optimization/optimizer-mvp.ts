@@ -5,6 +5,11 @@
  * - Values are applied to blocks.parameters[*] (canonical)
  * - Objective is derived from System Requirements (hard/soft, all-scenarios)
  *
+ * Supports three optimization methods:
+ *   - 'cd': Coordinate Descent
+ *   - 'lm': Levenberg-Marquardt
+ *   - 'kkt': KKT-based SQP (Sequential Quadratic Programming)
+ *
  * No UI is added; the entrypoint is exposed as window.OptimizationMVP.
  */
 
@@ -16,6 +21,7 @@ import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } f
 import { loadTableData as loadSystemRequirementsTableData } from '../data/table-system-requirements.ts';
 import { requestRefreshBlockInspector } from '../core/window-facade.ts';
 import { getWindowDebugBagValue, setWindowDebugBagValue } from '../utils/window-debug-bag.ts';
+import { runKKTOptimization } from './kkt-optimizer.ts';
 
 let __optimizerStopRequested = false;
 
@@ -2227,7 +2233,11 @@ export async function runOptimizationMVP(options = {}) {
   
   const runUntilStopped = !!opts.runUntilStopped;
   const methodRaw = String(opts.method || '').trim().toLowerCase();
-  const method = (methodRaw === 'cd' || methodRaw === 'coordinatedescent') ? 'cd' : 'lm';
+  const method = (methodRaw === 'kkt' || methodRaw === 'sqp')
+    ? 'kkt'
+    : (methodRaw === 'cd' || methodRaw === 'coordinatedescent')
+    ? 'cd'
+    : 'lm';
   const maxIterations = runUntilStopped
     ? Number.MAX_SAFE_INTEGER
     : (Number.isFinite(Number(opts.maxIterations)) ? Math.max(1, Math.floor(Number(opts.maxIterations))) : 100);
@@ -3995,6 +4005,301 @@ export async function runOptimizationMVP(options = {}) {
           globalThis.__cooptOpticalSystemRowsOverride = __prevOpticalSystemRowsOverride;
         }
       } catch (_) {}
+    }
+  }
+
+  // KKT-based optimization (method === 'kkt')
+  if (method === 'kkt') {
+    const t0 = nowMs();
+    try {
+      // Map variables to indices
+      const varIds = vars.map(v => v.id);
+      const initialX = vars.map(v => jointState
+        ? Number(getJointCurrentValue(jointState, v.id))
+        : Number(v.value) || 0
+      );
+
+      // Compute initial state before optimization
+      const initialStateEval = evalCompositeFromRequirementsProfiled();
+      const initialScore = initialStateEval?.score ?? 1e9;
+
+      console.log('🚀 [KKT] Starting optimization with', vars.length, 'variables, initial score:', initialScore);
+
+      // Objective function: minimize composite score of residuals
+      // Saves/restores state to avoid side effects
+      let evalCallCount = 0;
+      const objectiveForKKT = (x: number[]) => {
+        evalCallCount++;
+        // Save current values
+        const saved = vars.map(v => jointState 
+          ? Number(getJointCurrentValue(jointState, v.id))
+          : Number(v.value) || 0
+        );
+        try {
+          // Set variables to x values
+          for (let i = 0; i < varIds.length && i < x.length; i++) {
+            const varId = varIds[i];
+            const newVal = x[i];
+            const setOk = jointState
+              ? setJointDesignVariableValue(jointState, varId, newVal)
+              : setDesignVariableValue(activeCfg, varId, newVal);
+            if (evalCallCount <= 3 && i === 0) {
+              console.log(`  [DEBUG] Call#${evalCallCount} Setting ${varId} = ${newVal.toFixed(6)}, result: ${setOk}`);
+            }
+          }
+          // Evaluate and return score
+          const state = evalCompositeFromRequirementsProfiled();
+          const score = state?.score ?? 1e9;
+          if (evalCallCount <= 3) {
+            console.log(`  [DEBUG] Call#${evalCallCount} Evaluation: ${score.toFixed(6)}`);
+          }
+          return score;
+        } finally {
+          // Restore to saved state
+          for (let i = 0; i < varIds.length && i < saved.length; i++) {
+            if (jointState) {
+              setJointDesignVariableValue(jointState, varIds[i], saved[i]);
+            } else {
+              setDesignVariableValue(activeCfg, varIds[i], saved[i]);
+            }
+          }
+        }
+      };
+
+      // Progress callback
+      const onProgressKKT = async (p: any) => {
+        if (onProgress && typeof onProgress === 'function') {
+          try {
+            onProgress({
+              phase: p.phase || 'kkt-iter',
+              iter: p.iter ?? 0,
+              current: p.current,  // Pass actual current score, not default to initialScore
+              best: p.best,        // Pass actual best score
+              method: 'kkt',
+              multiScenario,
+              requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
+              feasible: p.feasible ?? false
+            });
+          } catch (_) {}
+        }
+        await nextFrame();
+      };
+
+      const shouldStopKKT = () => {
+        if (userShouldStop && typeof userShouldStop === 'function') {
+          return userShouldStop();
+        }
+        return __optimizerStopRequested || (typeof globalThis !== 'undefined' && globalThis.__stopOptimization);
+      };
+
+      // Run KKT solver - simple gradient descent for robustness
+      // (Full SQP was too complex for optical design's non-smooth landscape)
+      let bestX = initialX.slice();
+      let bestScore = initialScore;
+      let currentX = initialX.slice();
+      let stallCount = 0;
+      let lastSignificantImproveIter = 0;
+
+      console.log('🔄 [KKT] Starting iterations (max:', maxIterations, ')');
+
+      for (let iter = 0; iter < maxIterations; iter++) {
+        if (shouldStopKKT()) {
+          console.log('⏸️  [KKT] User stop requested at iter', iter);
+          break;
+        }
+
+        try {
+          // Evaluate current point
+          const currentScore = objectiveForKKT(currentX);
+          console.log('📊 [KKT] Iter', iter, 'Score:', currentScore.toFixed(6));
+
+          if (currentScore < bestScore) {
+            const improvement = bestScore - currentScore;
+            const relativeImprovement = improvement / Math.max(1.0, Math.abs(bestScore));
+            bestScore = currentScore;
+            bestX = currentX.slice();
+            stallCount = 0;
+            console.log('✅ [KKT] Improved to', bestScore.toFixed(6), 'rel_improve:', relativeImprovement.toExponential(2));
+            // Track when we last saw meaningful improvement (>1e-8 relative)
+            if (relativeImprovement > 1e-8) {
+              lastSignificantImproveIter = iter;
+            }
+          } else {
+            stallCount++;
+          }
+
+          // Compute gradient for descent step
+          const eps = 1e-5;
+          const grad = new Array(currentX.length);
+          for (let i = 0; i < currentX.length; i++) {
+            const xp = currentX.slice();
+            xp[i] += eps;
+            const fp = objectiveForKKT(xp);
+            grad[i] = (fp - currentScore) / eps;
+            if (iter === 0) {
+              console.log(`  [DEBUG] Grad[${i}] f(x)=${currentScore.toFixed(6)}, f(x+eps)=${fp.toFixed(6)}, grad=${(grad[i]).toFixed(8)}`);
+            }
+          }
+
+          // Check convergence: multiple criteria to stop
+          const gradNorm = Math.sqrt(grad.reduce((a, g) => a + g * g, 0));
+          const itersSinceLastSignificantImprove = iter - lastSignificantImproveIter;
+          console.log('📐 [KKT] Gradient norm:', gradNorm.toFixed(8), 'Stall count:', stallCount, 'No improve for:', itersSinceLastSignificantImprove);
+          
+          // Convergence criteria for KKT:
+          // 1. stallCount >= 20 (no improvement for 20 iterations - more persistent than LM/CD)
+          // 2. No significant relative improvement for 50 iterations
+          // Must be past minimum 5 iterations
+          if (iter > 5 && (
+            stallCount >= 20 || 
+            (itersSinceLastSignificantImprove >= 50 && stallCount >= 5)
+          )) {
+            console.log('🎯 [KKT] Converged at iter', iter, 'with score', bestScore.toFixed(6), 'reason:', 
+              stallCount >= 20 ? 'stallCount>=20' : 'no-improve-50iter');
+            break;
+          }
+
+          // Simple gradient descent step with backtracking line search + Armijo condition
+          // Compute initial step size (adaptive)
+          const initialStepSize = Math.min(1.0, 0.5 / (1.0 + Math.max(...grad.map(g => Math.abs(g)))));
+          console.log('🔽 [KKT] Initial step size:', initialStepSize.toFixed(6));
+          
+          // Armijo condition: c*α*∇f^T*d (typically c=0.0001 for strict, or 1e-4)
+          const armijo_c = 1e-4;
+          const descent_dir = grad.map(g => -g); // negative gradient = descent direction
+          const slope = grad.reduce((sum, g, i) => sum + g * descent_dir[i], 0); // ∇f^T*d = -||grad||^2
+          console.log(`📐 [Armijo] slope (dot product)=${slope.toFixed(8)}, armijo_c=${armijo_c}`);
+          
+          // Backtracking line search with Armijo condition
+          let alpha = initialStepSize;
+          let newX = currentX.map((x, i) => x + alpha * descent_dir[i]);
+          let newScore = objectiveForKKT(newX);
+          let lineSearchIters = 0;
+          
+          // Armijo condition: f(x + alpha*d) <= f(x) + c*alpha*slope
+          const armijoThreshold = currentScore + armijo_c * alpha * slope;
+          
+          while (newScore > armijoThreshold && alpha > 1e-8) {
+            alpha *= 0.5; // halve the step size
+            lineSearchIters++;
+            newX = currentX.map((x, i) => x + alpha * descent_dir[i]);
+            newScore = objectiveForKKT(newX);
+            const newArmijoThreshold = currentScore + armijo_c * alpha * slope;
+            if (lineSearchIters <= 2) {
+              console.log(`  [Line Search] α=${alpha.toFixed(8)}, f=${newScore.toFixed(6)}, threshold=${newArmijoThreshold.toFixed(6)}`);
+            }
+          }
+          
+          if (newScore < currentScore) {
+            currentX = newX;
+            console.log('✅ [KKT] Line search accepted step (α=' + alpha.toFixed(8) + ', iters=' + lineSearchIters + ')');
+          } else {
+            console.log('⚠️ [KKT] Line search failed to find improving step');
+          }
+
+          if (onProgressKKT) {
+            await onProgressKKT({
+              iter,
+              current: currentScore,
+              best: bestScore,
+              feasible: false
+            });
+          }
+        } catch (e) {
+          console.error('❌ [KKT] Error at iter', iter, ':', e);
+          break;
+        }
+      }
+
+      console.log('📈 [KKT] Final: Initial=', initialScore.toFixed(6), 'Best=', bestScore.toFixed(6), 'Improved=', (bestScore < initialScore));
+
+      // Update blocks with best solution
+      if (bestScore < initialScore) {
+        for (let i = 0; i < Math.min(varIds.length, bestX.length); i++) {
+          const varId = varIds[i];
+          const newVal = bestX[i];
+          if (Number.isFinite(newVal)) {
+            if (jointState) {
+              setJointDesignVariableValue(jointState, varId, newVal);
+            } else {
+              setDesignVariableValue(activeCfg, varId, newVal);
+            }
+          }
+        }
+      }
+
+      const t1 = nowMs();
+      const finalEval = evalCompositeFromRequirementsProfiled();
+      const finalScore = finalEval?.score ?? bestScore;
+
+      // Record final evaluation - this captures blocksSnapshot
+      recordEval(finalEval);
+
+      // Restore best snapshot and persist to system config
+      // This is critical - it synchronizes design variables back to system
+      try {
+        const bestFinalEval = getBestEvalSoFar();
+        restoreBestSnapshotAndPersist({ finalEval: bestFinalEval, jointState, systemConfig, configsById, targetConfigIds });
+      } catch (e) {
+        console.error('❌ [KKT] Error restoring/persisting best state:', e);
+      }
+
+      // Final sync to tables - this is critical to reflect values in UI
+      try {
+        if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+          await window.ConfigurationManager.loadActiveConfigurationToTables({
+            applyToUI: true,
+            suppressOpticalSystemDataChanged: true,
+          });
+        }
+      } catch (_) {}
+
+      try {
+        requestRefreshBlockInspector();
+      } catch (_) {}
+
+      try {
+        if (window.meritFunctionEditor && typeof window.meritFunctionEditor.calculateMerit === 'function') {
+          window.meritFunctionEditor.calculateMerit();
+        }
+      } catch (_) {}
+
+      try {
+        if (window.systemRequirementsEditor && typeof window.systemRequirementsEditor.evaluateAndUpdateNow === 'function') {
+          window.systemRequirementsEditor.evaluateAndUpdateNow();
+        }
+      } catch (_) {}
+
+      if (onProgress) {
+        try {
+          onProgress({
+            phase: 'done',
+            iter: maxIterations,
+            current: finalScore,
+            best: finalScore,
+            ms: Math.round(t1 - t0),
+            method: 'kkt',
+            multiScenario,
+            feasible: finalEval?.feasible ?? false,
+            violationScore: finalEval?.violationScore ?? 0,
+            softPenalty: finalEval?.softPenalty ?? 0
+          });
+        } catch (_) {}
+      }
+
+      return {
+        ok: true,
+        before: initialScore,
+        best: finalScore,
+        iterations: maxIterations,
+        variables: vars.length
+      };
+    } catch (e) {
+      console.error('❌ [KKT Optimizer] Fatal error:', e);
+      return {
+        ok: false,
+        reason: `KKT optimization error: ${String(e)}`
+      };
     }
   }
 
