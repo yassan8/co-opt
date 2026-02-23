@@ -7222,7 +7222,7 @@ export async function loadFromCompressedDataHashIfPresent(): Promise<{ ok: boole
 // Auto-initialize on module load
 if (typeof window !== 'undefined') {
     // Listen for React mount event to setup ALL handlers after React renders
-    document.addEventListener('coopt:react-mounted', () => {
+    window.addEventListener('coopt:react-mounted', () => {
         // Wait a bit for React to finish rendering all components
         setTimeout(() => {
             setupDOMEventHandlers();
