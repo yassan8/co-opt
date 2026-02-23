@@ -670,19 +670,8 @@ export function handleExportZemax(): void {
 // Note: Optimize button handler is very complex and should remain in dom-event-handlers.ts
 // We'll trigger it through a window function
 export function handleOptimize(): void {
-  // The optimize function is complex and uses window globals
-  // Just trigger the button click from the legacy handler
-
-  // Check if optimization is available
   if (!(window as any).OptimizationMVP) {
     alert('OptimizationMVP が利用できません。');
-    return;
-  }
-  
-  // Trigger the optimization - this will be handled by the legacy setupOptimizeDesignIntentButton
-  const btn = document.getElementById('optimize-design-intent-btn');
-  if (btn) {
-    btn.click();
   }
 }
 
