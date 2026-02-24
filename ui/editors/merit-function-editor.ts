@@ -1065,23 +1065,6 @@ class MeritFunctionEditor {
 
         const rmsUm = rmsL * 1000;
 
-        try {
-            if (typeof globalThis !== 'undefined') {
-                const g = globalThis as any;
-                if (!g.__cooptLARmsDebugCount) g.__cooptLARmsDebugCount = 0;
-                g.__cooptLARmsDebugCount++;
-                if (g.__cooptLARmsDebugCount <= 3 || g.__cooptLARmsDebugCount % 50 === 0) {
-                    console.log(`📊 LA_RMS_UM (#${g.__cooptLARmsDebugCount}):`, {
-                        wavelength,
-                        N,
-                        meanL: meanL.toFixed(6),
-                        rmsL: rmsL.toFixed(6),
-                        rmsUm: rmsUm.toFixed(6)
-                    });
-                }
-            }
-        } catch (_) {}
-
         return rmsUm;
     }
 

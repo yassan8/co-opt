@@ -5,9 +5,6 @@
  * Accessible via: await window.__tfmtfBenchmark()
  */
 
-// Immediate module load verification
-console.log('💾 [Module] benchmark-tfmtf.ts is being loaded...');
-
 export async function benchmarkTFMTF() {
     console.log('🧪 [benchmarkTFMTF] Function called at', new Date().toISOString());
     const startTotal = performance.now();
@@ -359,15 +356,9 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
  * Register benchmark globally for UI access
  */
 if (typeof window !== 'undefined') {
-    console.log('📝 [TFMTF Benchmark] Starting registration at', new Date().toISOString());
-    
     // Capture references at module scope before registration
     const benchmarkTFMTFRef = benchmarkTFMTF;
     const benchmarkTFMTFQuickRef = benchmarkTFMTFQuick;
-    
-    console.log('📦 [Registration] Got function references:');
-    console.log('   benchmarkTFMTF:', typeof benchmarkTFMTFRef);
-    console.log('   benchmarkTFMTFQuick:', typeof benchmarkTFMTFQuickRef);
     
     // Directly assign functions to window.
     // NOTE: Safari DevTools shows `undefined` for `await fn()` on module-scoped async
@@ -375,20 +366,14 @@ if (typeof window !== 'undefined') {
     // Use: fn().then(r => { window.__r = r }).catch(e => { window.__e = String(e) })
     // then check window.__r (result) or window.__e (error)
     (window as any).__tfmtfBenchmark = benchmarkTFMTFRef;
-    console.log('✅ [1/3] window.__tfmtfBenchmark registered as:', typeof (window as any).__tfmtfBenchmark);
     
     (window as any).__tfmtfBenchmarkQuick = benchmarkTFMTFQuickRef;
-    console.log('✅ [2/3] window.__tfmtfBenchmarkQuick registered as:', typeof (window as any).__tfmtfBenchmarkQuick);
     
     // Simple test function
     (window as any).__tfmtfBenchmarkTest = function() {
         console.log('✅ __tfmtfBenchmarkTest called');
         return { test: true, timestamp: new Date().toISOString() };
     };
-    console.log('✅ [3/3] window.__tfmtfBenchmarkTest registered as:', typeof (window as any).__tfmtfBenchmarkTest);
-    
-    console.log('🔍 [Registration] Verification complete. All functions registered.');
-    console.log('   Command: await window.__tfmtfBenchmarkQuick()');
 }
 
 // Export for programmatic use

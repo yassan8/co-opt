@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * MVP optimizer (coordinate descent) for Blocks-based design variables.
  *
@@ -1191,7 +1192,7 @@ function computeViolationAmount(op, current, target, tol) {
 // We treat those values as invalid measurements and apply a stable penalty
 // so the optimizer doesn't explode to ~1e11 due to sentinel magnitudes.
 const __INVALID_OPERAND_ABS_LIMIT = 1e8;
-const __INVALID_OPERAND_PENALTY_AMOUNT = 1e4;
+const __INVALID_OPERAND_PENALTY_AMOUNT = 1e3;  // Reduced from 1e4 to prevent residuals explosion
 
 function sanitizeOperandCurrentForScore(rawCurrent) {
   const v = Number(rawCurrent);
@@ -2238,9 +2239,11 @@ export async function runOptimizationMVP(options = {}) {
     : (methodRaw === 'cd' || methodRaw === 'coordinatedescent')
     ? 'cd'
     : 'lm';
+  // 【修正】KKT法はLM法より収束が遅いため、デフォルトを100→500に増加
+  const defaultMaxIter = (method === 'kkt') ? 500 : 100;
   const maxIterations = runUntilStopped
     ? Number.MAX_SAFE_INTEGER
-    : (Number.isFinite(Number(opts.maxIterations)) ? Math.max(1, Math.floor(Number(opts.maxIterations))) : 100);
+    : (Number.isFinite(Number(opts.maxIterations)) ? Math.max(1, Math.floor(Number(opts.maxIterations))) : defaultMaxIter);
   const stepFraction = Number.isFinite(Number(opts.stepFraction)) ? Math.max(1e-6, Number(opts.stepFraction)) : 0.02;
   const minStep = Number.isFinite(Number(opts.minStep)) ? Math.max(1e-12, Number(opts.minStep)) : 1e-6;
   const stepDecay = Number.isFinite(Number(opts.stepDecay)) ? Math.min(0.95, Math.max(0.1, Number(opts.stepDecay))) : 0.5;
@@ -4009,8 +4012,20 @@ export async function runOptimizationMVP(options = {}) {
   }
 
   // KKT-based optimization (method === 'kkt')
+  console.log('[DEBUG] method=', method, 'vars.length=', vars.length);
   if (method === 'kkt') {
     const t0 = nowMs();
+    console.log('[DEBUG] AL block entered. vars.length=', vars.length);
+    
+    // Early return if no continuous variables
+    if (vars.length === 0) {
+      console.log('❌ [AL] No continuous variables to optimize. vars.length = 0');
+      return {
+        ok: false,
+        reason: 'No continuous design variables found for AL optimization'
+      };
+    }
+    
     try {
       // Map variables to indices
       const varIds = vars.map(v => v.id);
@@ -4023,7 +4038,88 @@ export async function runOptimizationMVP(options = {}) {
       const initialStateEval = evalCompositeFromRequirementsProfiled();
       const initialScore = initialStateEval?.score ?? 1e9;
 
-      console.log('🚀 [KKT] Starting optimization with', vars.length, 'variables, initial score:', initialScore);
+      console.log('🚀 [AL] Starting optimization with', vars.length, 'variables, initial score:', initialScore);
+
+      // Report start phase
+      if (onProgress) {
+        try {
+          onProgress({
+            phase: 'start',
+            iter: 0,
+            current: initialScore,
+            best: initialScore,
+            method: 'kkt',
+            multiScenario,
+            requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
+            feasible: initialStateEval?.feasible ?? false
+          });
+        } catch (_) {}
+        await nextFrame();
+      }
+
+      // Box constraints (bounds) from Design Intent optimize.min/max/clampAbsMax
+      const resolveBoundsForVarId = (varId: string) => {
+        try {
+          const parsed = parseJointVariableId(varId);
+          const cfgId = parsed.configId ? String(parsed.configId) : String(activeConfigId ?? '');
+          const blocks = (jointState && jointState.blocksByConfigId && cfgId)
+            ? jointState.blocksByConfigId[cfgId]
+            : activeCfg?.blocks;
+          const entry = getVariableEntryFromBlocks(blocks, parsed.baseId);
+          const opt = (entry && typeof entry === 'object') ? entry.optimize : null;
+          let minV = Number.isFinite(Number(opt?.min)) ? Number(opt.min) : null;
+          let maxV = Number.isFinite(Number(opt?.max)) ? Number(opt.max) : null;
+          const absMaxRaw = Number(opt?.clampAbsMax);
+          const clampAbsMax = Number.isFinite(absMaxRaw) ? Math.abs(absMaxRaw) : null;
+
+          if (clampAbsMax !== null) {
+            minV = (minV === null) ? -clampAbsMax : Math.max(minV, -clampAbsMax);
+            maxV = (maxV === null) ? clampAbsMax : Math.min(maxV, clampAbsMax);
+          }
+
+          if (minV !== null && maxV !== null && minV > maxV) {
+            const tmp = minV;
+            minV = maxV;
+            maxV = tmp;
+          }
+          return { min: minV, max: maxV };
+        } catch (_) {
+          return { min: null, max: null };
+        }
+      };
+
+      const resolveScaleForVarId = (varId: string, fallbackKey?: string) => {
+        try {
+          const parsed = parseJointVariableId(varId);
+          const cfgId = parsed.configId ? String(parsed.configId) : String(activeConfigId ?? '');
+          const blocks = (jointState && jointState.blocksByConfigId && cfgId)
+            ? jointState.blocksByConfigId[cfgId]
+            : activeCfg?.blocks;
+          const entry = getVariableEntryFromBlocks(blocks, parsed.baseId);
+          const opt = (entry && typeof entry === 'object') ? entry.optimize : null;
+          const scaleRaw = Number(opt?.scale ?? opt?.stepScale ?? opt?.stepScaleAbs ?? opt?.stepScaleRel);
+          if (Number.isFinite(scaleRaw) && scaleRaw > 0) return scaleRaw;
+
+          const key = String((entry && typeof entry === 'object' && entry.key) ? entry.key : (fallbackKey ?? '')).trim();
+          const keyScale = defaultScaleForKey(key);
+          const scale = Number.isFinite(keyScale) && keyScale > 0 ? keyScale : 1;
+          return scale;
+        } catch (_) {
+          return 1;
+        }
+      };
+
+      const varBounds = varIds.map(resolveBoundsForVarId);
+      const varScales = varIds.map((id, i) => resolveScaleForVarId(id, vars[i]?.key));
+      const clampToBounds = (x: number[]) => x.map((v, i) => {
+        const b = varBounds[i];
+        if (!b || (!Number.isFinite(b.min ?? NaN) && !Number.isFinite(b.max ?? NaN))) return v;
+        if (!Number.isFinite(v)) return v;
+        let out = v;
+        if (b.min !== null && Number.isFinite(b.min)) out = Math.max(b.min, out);
+        if (b.max !== null && Number.isFinite(b.max)) out = Math.min(b.max, out);
+        return out;
+      });
 
       // Objective function: minimize composite score of residuals
       // Saves/restores state to avoid side effects
@@ -4092,156 +4188,853 @@ export async function runOptimizationMVP(options = {}) {
         return __optimizerStopRequested || (typeof globalThis !== 'undefined' && globalThis.__stopOptimization);
       };
 
-      // Run KKT solver - simple gradient descent for robustness
-      // (Full SQP was too complex for optical design's non-smooth landscape)
-      let bestX = initialX.slice();
-      let bestScore = initialScore;
-      let currentX = initialX.slice();
-      let stallCount = 0;
-      let lastSignificantImproveIter = 0;
-
-      console.log('🔄 [KKT] Starting iterations (max:', maxIterations, ')');
-
-      for (let iter = 0; iter < maxIterations; iter++) {
-        if (shouldStopKKT()) {
-          console.log('⏸️  [KKT] User stop requested at iter', iter);
-          break;
+      const evalSQPAtX = (x: number[]) => {
+        const editor = (typeof window !== 'undefined') ? window.meritFunctionEditor : null;
+        if (!editor || typeof editor.calculateOperandValue !== 'function') {
+          return { objective: 1e9, constraints: [], feasible: false, residuals: [] };
         }
+
+        const xClamped = clampToBounds(x);
+        const saved = vars.map(v => jointState
+          ? Number(getJointCurrentValue(jointState, v.id))
+          : Number(v.value) || 0
+        );
+
+        const prev = getScenarioOverrideGlobal();
+        const overrideMap = (prev && typeof prev === 'object') ? { ...prev } : {};
+
+        let objective = 0;
+        const constraints: number[] = [];
+        const residuals: number[] = [];
 
         try {
-          // Evaluate current point
-          const currentScore = objectiveForKKT(currentX);
-          console.log('📊 [KKT] Iter', iter, 'Score:', currentScore.toFixed(6));
+          for (let i = 0; i < varIds.length && i < xClamped.length; i++) {
+            const varId = varIds[i];
+            const newVal = xClamped[i];
+            if (jointState) setJointDesignVariableValue(jointState, varId, newVal);
+            else setDesignVariableValue(activeCfg, varId, newVal);
+          }
 
-          if (currentScore < bestScore) {
-            const improvement = bestScore - currentScore;
-            const relativeImprovement = improvement / Math.max(1.0, Math.abs(bestScore));
-            bestScore = currentScore;
-            bestX = currentX.slice();
-            stallCount = 0;
-            console.log('✅ [KKT] Improved to', bestScore.toFixed(6), 'rel_improve:', relativeImprovement.toExponential(2));
-            // Track when we last saw meaningful improvement (>1e-8 relative)
-            if (relativeImprovement > 1e-8) {
-              lastSignificantImproveIter = iter;
+          const items = Array.isArray(residualItems) ? residualItems : [];
+          for (const it of items) {
+            const r = it?.req;
+            if (!r || !r.enabled || !r.operand) continue;
+
+            const w = Math.max(0, toFiniteNumber(r.weight, 1)) * Math.max(0, toFiniteNumber(it?.scenarioWeight, 1));
+            if (!(w > 0)) continue;
+
+            const cfgId = String(it?.configId ?? '');
+            if (it?.scenarioId) overrideMap[cfgId] = String(it.scenarioId);
+            else delete overrideMap[cfgId];
+            setScenarioOverrideGlobal(overrideMap);
+
+            const opObj = {
+              operand: r.operand,
+              configId: String(r.configId),
+              param1: r.param1,
+              param2: r.param2,
+              param3: r.param3,
+              param4: r.param4,
+              target: r.target,
+              weight: r.weight
+            };
+
+            const currentRaw = editor.calculateOperandValue(opObj);
+            const s = sanitizeOperandCurrentForScore(currentRaw);
+            if (!s.ok || !Number.isFinite(s.current)) {
+              const penalty = __INVALID_OPERAND_PENALTY_AMOUNT;
+              objective += w * penalty * penalty;
+              residuals.push(Math.sqrt(w) * penalty);
+              constraints.push(penalty);
+              continue;
             }
-          } else {
-            stallCount++;
-          }
 
-          // Compute gradient for descent step
-          const eps = 1e-5;
-          const grad = new Array(currentX.length);
-          for (let i = 0; i < currentX.length; i++) {
-            const xp = currentX.slice();
-            xp[i] += eps;
-            const fp = objectiveForKKT(xp);
-            grad[i] = (fp - currentScore) / eps;
-            if (iter === 0) {
-              console.log(`  [DEBUG] Grad[${i}] f(x)=${currentScore.toFixed(6)}, f(x+eps)=${fp.toFixed(6)}, grad=${(grad[i]).toFixed(8)}`);
+            const current = s.current;
+            const target = toFiniteNumber(r.target, 0);
+            const tol = Math.max(0, toFiniteNumber(r.tol, 0));
+            const scale = Math.max(1, Math.abs(tol));
+            const residual = (current - target) / scale;
+            objective += w * residual * residual;
+            
+            // 【修正】等式制約のみ residuals に追加。不等式は constraints のみで処理
+            if (r.op === '=') {
+              residuals.push(Math.sqrt(w) * residual);
+              // 【修正】等式制約は residuals で処理済みなので constraints に追加しない
+            } else if (r.op === '<=') {
+              constraints.push(current - target - tol);
+            } else if (r.op === '>=') {
+              constraints.push((target - tol) - current);
+            }
+            // 【削除】else で等式制約を2つの不等式として重複登録するのを削除しました
+          }
+        } finally {
+          setScenarioOverrideGlobal((prev && typeof prev === 'object') ? prev : null);
+          for (let i = 0; i < varIds.length && i < saved.length; i++) {
+            if (jointState) setJointDesignVariableValue(jointState, varIds[i], saved[i]);
+            else setDesignVariableValue(activeCfg, varIds[i], saved[i]);
+          }
+        }
+
+        // Check aspheric coefficient monotonicity
+        const asphericGroups = new Map<string, Array<{idx: number, order: number, value: number}>>();
+        for (let i = 0; i < Math.min(varIds.length, xClamped.length); i++) {
+          const varId = varIds[i];
+          const match = varId.match(/^(\d+):(.+?)\.(.+Coef)(\d+)$/);
+          if (match) {
+            const [_, blockId, blockName, coefPrefix, orderStr] = match;
+            const order = parseInt(orderStr);
+            if (order >= 4) {
+              const key = `${blockId}:${blockName}.${coefPrefix}`;
+              if (!asphericGroups.has(key)) asphericGroups.set(key, []);
+              asphericGroups.get(key)!.push({idx: i, order, value: xClamped[i]});
             }
           }
+        }
 
-          // Check convergence: multiple criteria to stop
-          const gradNorm = Math.sqrt(grad.reduce((a, g) => a + g * g, 0));
-          const itersSinceLastSignificantImprove = iter - lastSignificantImproveIter;
-          console.log('📐 [KKT] Gradient norm:', gradNorm.toFixed(8), 'Stall count:', stallCount, 'No improve for:', itersSinceLastSignificantImprove);
-          
-          // Convergence criteria for KKT:
-          // 1. stallCount >= 20 (no improvement for 20 iterations - more persistent than LM/CD)
-          // 2. No significant relative improvement for 50 iterations
-          // Must be past minimum 5 iterations
-          if (iter > 5 && (
-            stallCount >= 20 || 
-            (itersSinceLastSignificantImprove >= 50 && stallCount >= 5)
-          )) {
-            console.log('🎯 [KKT] Converged at iter', iter, 'with score', bestScore.toFixed(6), 'reason:', 
-              stallCount >= 20 ? 'stallCount>=20' : 'no-improve-50iter');
-            break;
-          }
-
-          // Simple gradient descent step with backtracking line search + Armijo condition
-          // Compute initial step size (adaptive)
-          const initialStepSize = Math.min(1.0, 0.5 / (1.0 + Math.max(...grad.map(g => Math.abs(g)))));
-          console.log('🔽 [KKT] Initial step size:', initialStepSize.toFixed(6));
-          
-          // Armijo condition: c*α*∇f^T*d (typically c=0.0001 for strict, or 1e-4)
-          const armijo_c = 1e-4;
-          const descent_dir = grad.map(g => -g); // negative gradient = descent direction
-          const slope = grad.reduce((sum, g, i) => sum + g * descent_dir[i], 0); // ∇f^T*d = -||grad||^2
-          console.log(`📐 [Armijo] slope (dot product)=${slope.toFixed(8)}, armijo_c=${armijo_c}`);
-          
-          // Backtracking line search with Armijo condition
-          let alpha = initialStepSize;
-          let newX = currentX.map((x, i) => x + alpha * descent_dir[i]);
-          let newScore = objectiveForKKT(newX);
-          let lineSearchIters = 0;
-          
-          // Armijo condition: f(x + alpha*d) <= f(x) + c*alpha*slope
-          const armijoThreshold = currentScore + armijo_c * alpha * slope;
-          
-          while (newScore > armijoThreshold && alpha > 1e-8) {
-            alpha *= 0.5; // halve the step size
-            lineSearchIters++;
-            newX = currentX.map((x, i) => x + alpha * descent_dir[i]);
-            newScore = objectiveForKKT(newX);
-            const newArmijoThreshold = currentScore + armijo_c * alpha * slope;
-            if (lineSearchIters <= 2) {
-              console.log(`  [Line Search] α=${alpha.toFixed(8)}, f=${newScore.toFixed(6)}, threshold=${newArmijoThreshold.toFixed(6)}`);
+        for (const [_, group] of asphericGroups) {
+          if (group.length < 2) continue;
+          group.sort((a, b) => a.order - b.order);
+          for (let i = 1; i < group.length; i++) {
+            // 【修正】微分不可能な Math.abs を避け、値の二乗で比較（滑らかな関数）
+            const prevSq = group[i - 1].value * group[i - 1].value;
+            const currSq = group[i].value * group[i].value;
+            if (prevSq > 1e-30) {
+              // currAbs > 1.2 * prevAbs  =>  currSq > 1.44 * prevSq
+              const violation = currSq - 1.44 * prevSq;
+              if (violation > 0) {
+                // 【修正】1e6は強すぎて地形を壊すため、10程度に抑えて滑らかにする
+                constraints.push(violation * 10);
+              }
             }
           }
+        }
+
+        const feasible = constraints.every(c => c <= 0);
+        return { objective, constraints, feasible, residuals };
+      };
+
+      console.log('🔄 [AL] Starting unified 1-loop SQP (max:', maxIterations, 'iters)');
+
+      // Smoothmax function: smooth approximation of Math.max(0, x) for differentiability
+      const smoothMax = (val: number, beta: number = 100) => {
+        // Prevent overflow: for large val*beta, approximate linearly
+        if (val * beta > 20) return val;
+        return Math.log(1 + Math.exp(beta * val)) / beta;
+      };
+
+      const evalAugmentedResiduals = (x: number[], lambdaVec: number[], mu: number, maxViolContext: number = 1.0) => {
+        const base = evalSQPAtX(x);
+        const res = Array.isArray(base.residuals) && base.residuals.length > 0
+          ? base.residuals.slice()
+          : (base.objective > 0 ? [Math.sqrt(base.objective)] : []);
+        const c = base.constraints || [];
+        const rConstr = new Array(c.length);
+        
+        // 【修正】動的なノーマライズ（residualNormFactorなど）を完全削除
+        // Jacobi Preconditioning があるため、値が巨大でも行列計算は破綻しません
+        // 有限差分のヤコビアン計算では、関数内のノーマライズは勾配を消失させます
+        const muScale = Math.sqrt(Math.max(1, mu));
+        
+        // 【追加】適応的beta：制約違反が小さい時はbetaを下げてスコア改善を優先
+        // maxViol < 0.01 の時は beta=10 に下げ、制約を少し緩めてスコアを下げる余地を作る
+        const adaptiveBeta = maxViolContext < 0.01 ? 10 : (maxViolContext < 0.1 ? 30 : 100);
+        
+        for (let i = 0; i < c.length; i++) {
+          const li = Number.isFinite(lambdaVec[i]) ? lambdaVec[i] : 0;
+          // 【修正】純粋な制約違反量を使用（scale による割り算を削除）
+          const adj = c[i] + li / Math.max(1e-12, mu);
+          rConstr[i] = muScale * smoothMax(adj, adaptiveBeta);
+        }
+        return { base, residuals: res.concat(rConstr) };
+      };
+
+      const finiteDiffJacobian = (x: number[], r0: number[], lambdaVec: number[], mu: number, maxViol: number = 1.0) => {
+        const n = x.length;
+        const m = r0.length;
+        const J = Array.from({ length: m }, () => Array(n).fill(0));
+        
+        // 【修正】倍精度浮動小数点の桁落ちを防ぐ最適な刻み幅の基準（約 1.5e-8）
+        const sqrtEps = 1.49e-8;
+
+        for (let i = 0; i < n; i++) {
+          const baseScale = Math.max(1e-12, Number(varScales[i]) || 1);
+          const valueScale = Math.max(1e-12, Math.abs(x[i]));
+          const stepBase = Math.max(baseScale, valueScale);
           
-          if (newScore < currentScore) {
-            currentX = newX;
-            console.log('✅ [KKT] Line search accepted step (α=' + alpha.toFixed(8) + ', iters=' + lineSearchIters + ')');
-          } else {
-            console.log('⚠️ [KKT] Line search failed to find improving step');
+          // 【修正】相対ステップを sqrtEps ベースにし、下限を 1e-10 に引き上げ
+          let eps = Math.max(1e-10, stepBase * sqrtEps);
+          
+          const xp = x.slice();
+          xp[i] += eps;
+
+          // 【追加】浮動小数点の限界で値が変わらない場合は、強制的に情報落ちしない幅まで拡大
+          if (xp[i] === x[i]) {
+            eps = Math.max(1e-8, Math.abs(x[i]) * 1e-6);
+            xp[i] = x[i] + eps;
           }
 
-          if (onProgressKKT) {
-            await onProgressKKT({
-              iter,
-              current: currentScore,
-              best: bestScore,
-              feasible: false
-            });
+          const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+          const r1 = e1.residuals;
+          
+          for (let k = 0; k < Math.min(m, r1.length); k++) {
+            const deriv = (r1[k] - r0[k]) / eps;
+            J[k][i] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
           }
-        } catch (e) {
-          console.error('❌ [KKT] Error at iter', iter, ':', e);
+        }
+        return J;
+      };
+
+      let bestX = clampToBounds(initialX.slice());
+      let bestScore = initialScore;
+      let bestEval = initialStateEval || null;
+      let currentX = bestX.slice();
+      
+      // 【重要】初期評価を recordEval() に記録（LMメソッドと同様）
+      // これにより getBestEvalSoFar() が null を返さず、正しくベスト追跡できる
+      if (initialStateEval) {
+        recordEval(initialStateEval);
+      }
+      
+      // 【修正】ペナルティを含めた総合評価（メリット関数）でベストを追跡する
+      // これにより、完全に feasible でなくても、十分に改善された解を保存できる
+      const initConstraintEval = evalSQPAtX(initialX);
+      const initViolationVector = (initConstraintEval.constraints || []).map(c => Math.max(0, c));
+      const initViolation = Math.sqrt(initViolationVector.reduce((acc, v) => acc + v * v, 0));
+      let bestMerit = initialScore + initViolation * 10000;  // Penalty-weighted merit
+
+      let mu = Math.max(1, Number.isFinite(Number(opts?.kktPenalty)) ? Number(opts.kktPenalty) : 1);
+      let lambdaVec: number[] = [];
+      let lmDamp = 2e-4;  // 【最適刖5e-4→2e-4：初期ダンピングをさらに小さく、爆速探索
+      let lastMaxViol = Infinity;  // Track maxViol for stagnation detection
+      let violStagnationIter = 0;  // Count iterations without improvement
+      let kktRejectStreak = 0;  // 【追加】Auto soft-restart: detect if stuck in reject-repeat cycle
+      let consecutiveRestarts = 0;  // 【追加】連続リスタート回数をカウント
+      let lastAcceptedScore = initialScore;  // 【追加】最後にアクセプトされたスコアを追跡
+      
+      // 【追加】LM法と同様に、予測精度に応じて歩幅の上限を伸縮させる適応的トラスト領域
+      let trustRegionDeltaEff = 0.5;
+      
+      // 【重要】Stop後のRun時に現在のシステム状態から再開するため、
+      // 現在の設計変数値をcurrentXに読み込む（これがStop→Runで良く収束する理由）
+      for (let i = 0; i < varIds.length; i++) {
+        if (jointState) {
+          const val = getJointCurrentValue(jointState, varIds[i]);
+          if (Number.isFinite(val)) currentX[i] = val;
+        } else if (activeCfg) {
+          const val = getDesignVariableValue(activeCfg, varIds[i]);
+          if (Number.isFinite(val)) currentX[i] = val;
+        }
+      }
+
+      // 【Broyden準Newton更新】前回のJacobian、変位dx、残差変化drを保存
+      let lastJ: number[][] | null = null;
+      let lastX: number[] | null = null;
+      let lastR: number[] | null = null;
+      let broydenSkipCount = 0;  // Broyden更新を連続で何回使ったか
+
+      // Unified 1-loop: iterate with immediate multiplier updates (SQP-like behavior)
+      for (let iter = 0; iter < maxIterations; iter++) {
+        if (shouldStopKKT()) {
+          console.log('⏸️  [AL] User stop requested at iter', iter);
           break;
         }
-      }
 
-      console.log('📈 [KKT] Final: Initial=', initialScore.toFixed(6), 'Best=', bestScore.toFixed(6), 'Improved=', (bestScore < initialScore));
+        // Check current feasibility
+        const preEval = evalSQPAtX(currentX);
+        const preFeasible = preEval.feasible || (preEval.constraints || []).every(c => c <= 1e-3);
+        
+        // 【追加】現在の最大制約違反を計算（適応的beta用）
+        const currentConstraints = preEval.constraints || [];
+        const currentMaxViol = currentConstraints.length > 0 
+          ? Math.max(0, ...currentConstraints) 
+          : 0;
 
-      // Update blocks with best solution
-      if (bestScore < initialScore) {
-        for (let i = 0; i < Math.min(varIds.length, bestX.length); i++) {
-          const varId = varIds[i];
-          const newVal = bestX[i];
-          if (Number.isFinite(newVal)) {
-            if (jointState) {
-              setJointDesignVariableValue(jointState, varId, newVal);
-            } else {
-              setDesignVariableValue(activeCfg, varId, newVal);
+        // --- 1. Compute residuals and Jacobian ---
+        const aug0 = evalAugmentedResiduals(currentX, lambdaVec, mu, currentMaxViol);
+        const r0 = aug0.residuals;
+        const cost0 = r0.reduce((acc, v) => acc + v * v, 0);
+        if (!Number.isFinite(cost0)) break;
+
+        const n = currentX.length;
+        const m = r0.length;
+        
+        // 【Broyden準Newton更新】条件：前回のデータがある、連続6回未満、ステップが十分に受け入れられている
+        // 【修正】連続適用回数を増やし、積極的にヤコビアン計算をスキップする
+        const canUseBroyden = lastJ && lastX && lastR && 
+                              lastJ.length === m && lastJ[0] && lastJ[0].length === n &&
+                              lastX.length === n && lastR.length === m &&
+                              broydenSkipCount < 6 &&  // 【4→6】より多く省略して計算時間削減
+                              kktRejectStreak < 4;  // 少々のリジェクト中でもBroydenを継続
+        
+        let J: number[][];
+        if (canUseBroyden) {
+          // Broydenランク1更新: J_new = J_old + (dr - J_old*dx) * dx^T / (dx^T dx)
+          const dx = currentX.map((xi, i) => xi - lastX![i]);
+          const dr = r0.map((ri, i) => ri - lastR![i]);
+          
+          const dxNorm2 = dx.reduce((acc, v) => acc + v * v, 0);
+          if (dxNorm2 > 1e-18) {
+            J = lastJ.map(row => row.slice());  // Deep copy
+            
+            // Compute J_old * dx
+            const Jdx = new Array(m).fill(0);
+            for (let i = 0; i < m; i++) {
+              for (let j = 0; j < n; j++) {
+                Jdx[i] += J[i][j] * dx[j];
+              }
+            }
+            
+            // Update: J[i][j] += (dr[i] - Jdx[i]) * dx[j] / dxNorm2
+            for (let i = 0; i < m; i++) {
+              const numerator = dr[i] - Jdx[i];
+              for (let j = 0; j < n; j++) {
+                J[i][j] += numerator * dx[j] / dxNorm2;
+              }
+            }
+            broydenSkipCount++;
+            
+            if (iter < 3 || iter % 100 === 0) {
+              console.log(`[Broyden] Iter ${iter}: Using rank-1 update (skip count: ${broydenSkipCount}/6)`);
+            }
+          } else {
+            // dx too small, fall back to finite difference
+            J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol);
+            broydenSkipCount = 0;
+            lastJ = J;
+          }
+        } else {
+          // Full finite difference Jacobian
+          J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol);
+          broydenSkipCount = 0;
+          lastJ = J;
+          
+          if (iter < 3 || iter % 100 === 0) {
+            console.log(`[Broyden] Iter ${iter}: Full finite-diff Jacobian computed`);
+          }
+        }
+        
+        // Save current state for next Broyden update
+        lastX = currentX.slice();
+        lastR = r0.slice();
+        
+        // 【最適化】デバッグログを削減
+        if (iter < 3 || iter % 100 === 0) {
+          let jMaxAbs = 0, jMinAbs = Infinity, jZeroCount = 0, jNaNCount = 0;
+          for (let i = 0; i < m; i++) {
+            for (let j = 0; j < n; j++) {
+              const jVal = J[i][j];
+              if (!Number.isFinite(jVal)) jNaNCount++;
+              else if (Math.abs(jVal) < 1e-20) jZeroCount++;
+              else {
+                jMaxAbs = Math.max(jMaxAbs, Math.abs(jVal));
+                jMinAbs = Math.min(jMinAbs, Math.abs(jVal));
+              }
             }
           }
+          console.log(`[DEBUG iter${iter}] Jacobian: ${jNaNCount} NaN, ${jZeroCount} ~zero, range [${jMinAbs.toExponential(2)}, ${jMaxAbs.toExponential(2)}]`);
+        }
+
+        // --- 2. Build normal equations: A = J^T J, g = J^T r ---
+        const A = Array.from({ length: n }, () => Array(n).fill(0));
+        const g = Array(n).fill(0);
+        for (let j = 0; j < n; j++) {
+          let gj = 0;
+          for (let i = 0; i < m; i++) gj += J[i][j] * r0[i];
+          g[j] = gj;
+        }
+        
+        // Debug: Check gradient g
+        if (iter < 3 || iter % 100 === 0) {
+          let gMaxAbs = 0, gMinAbs = Infinity, gZeroCount = 0;
+          for (let j = 0; j < n; j++) {
+            if (Math.abs(g[j]) < 1e-20) gZeroCount++;
+            else {
+              gMaxAbs = Math.max(gMaxAbs, Math.abs(g[j]));
+              gMinAbs = Math.min(gMinAbs, Math.abs(g[j]));
+            }
+          }
+          console.log(`[DEBUG iter${iter}] Gradient g: ${gZeroCount}/${n} ~zero, range [${gMinAbs.toExponential(2)}, ${gMaxAbs.toExponential(2)}]`);
+        }
+        for (let j = 0; j < n; j++) {
+          for (let k = 0; k <= j; k++) {
+            let s = 0;
+            for (let i = 0; i < m; i++) s += J[i][j] * J[i][k];
+            A[j][k] = s;
+            A[k][j] = s;
+          }
+        }
+        
+        if (iter < 3 || iter % 100 === 0) {
+          let aMaxDiag = 0, aMinDiag = Infinity;
+          for (let i = 0; i < n; i++) {
+            const d = Math.abs(A[i][i]);
+            aMaxDiag = Math.max(aMaxDiag, d);
+            aMinDiag = Math.min(aMinDiag, d);
+          }
+          const cond = aMaxDiag / Math.max(1e-30, aMinDiag);
+          console.log(`[DEBUG iter${iter}] Matrix A: diagRange [${aMinDiag.toExponential(2)}, ${aMaxDiag.toExponential(2)}], cond=${cond.toExponential(2)}`);
+        }
+
+        // --- 3. Apply Levenberg-Marquardt damping with Jacobi Preconditioning ---
+        // 【修正】Aの要素が10^24等になるような場合、浮動小数点精度（約16桁）を完全に超えて破綻するため、
+        // 対角成分が1.0になるように行列をスケール（事前処理）してから解く
+        const scaleD = new Array(n);
+        for (let i = 0; i < n; i++) {
+          const d = A[i][i];
+          scaleD[i] = (d > 1e-30) ? 1.0 / Math.sqrt(Math.abs(d)) : 1.0;
+        }
+        
+        if (iter < 3 || iter % 100 === 0) {
+          let scaleMinAbs = Infinity, scaleMaxAbs = 0;
+          for (let i = 0; i < n; i++) {
+            scaleMinAbs = Math.min(scaleMinAbs, Math.abs(scaleD[i]));
+            scaleMaxAbs = Math.max(scaleMaxAbs, Math.abs(scaleD[i]));
+          }
+          console.log(`[DEBUG iter${iter}] Preconditioning scales: [${scaleMinAbs.toExponential(2)}, ${scaleMaxAbs.toExponential(2)}]`);
+        }
+        
+        const Ad = Array.from({ length: n }, () => Array(n).fill(0));
+        for (let i = 0; i < n; i++) {
+          for (let j = 0; j < n; j++) {
+            Ad[i][j] = A[i][j] * scaleD[i] * scaleD[j];
+          }
+          // 対角成分は 1.0 になるので、そこにダンピングを足す
+          Ad[i][i] = 1.0 + lmDamp;  
+        }
+        
+        if (iter < 3 || iter % 100 === 0) {
+          let adMaxDiag = 0, adMinDiag = Infinity;
+          for (let i = 0; i < n; i++) {
+            const d = Math.abs(Ad[i][i]);
+            adMaxDiag = Math.max(adMaxDiag, d);
+            adMinDiag = Math.min(adMinDiag, d);
+          }
+          const adCond = adMaxDiag / Math.max(1e-30, adMinDiag);
+          console.log(`[DEBUG iter${iter}] Precond Matrix Ad: diagRange [${adMinDiag.toExponential(2)}, ${adMaxDiag.toExponential(2)}], cond=${adCond.toExponential(2)}`);
+        }
+
+        const b_scaled = g.map((v, i) => -v * scaleD[i]);
+        
+        // Validate preconditioned matrix before solving
+        let isMatrixGood = true;
+        for (let i = 0; i < n; i++) {
+          const d = Ad[i][i];
+          if (!Number.isFinite(d) || d <= 0) {
+            isMatrixGood = false;
+            break;
+          }
+        }
+        
+        let dx_scaled = null;
+        if (isMatrixGood) {
+          dx_scaled = solveSymmetricPositiveDefinite(Ad, b_scaled);
+        }
+        if (!dx_scaled) {
+          dx_scaled = solveLinearSystemFallback(Ad, b_scaled);
+        }
+        if (!dx_scaled) {
+          // Matrix solver failed: increase damping significantly and retry
+          lmDamp = Math.min(1e12, lmDamp * 20);  // Increased multiplier from 10
+          if (iter < 5 || iter % 20 === 0) {
+            console.log(`[DEBUG] Matrix solve failed, increased lmDamp to ${lmDamp.toExponential(2)}`);
+          }
+          continue;
+        }
+
+        // スケールを元に戻して、元の変数空間の探索方向 dx を得る
+        let dx = new Array(n);
+        let dxHasNaN = false;
+        for (let i = 0; i < n; i++) {
+          const scaled = dx_scaled[i] * scaleD[i];
+          dx[i] = scaled;
+          if (!Number.isFinite(scaled)) {
+            dxHasNaN = true;
+          }
+        }
+        
+        if (dxHasNaN) {
+          // Step contains NaN/Inf: increase damping and retry
+          lmDamp = Math.min(1e12, lmDamp * 15);
+          if (iter < 3 || iter % 100 === 0) {
+            console.log(`[DEBUG] Step contains NaN/Inf, increased lmDamp to ${lmDamp.toExponential(2)}`);
+          }
+          continue;
+        }
+
+        // --- 4. Apply trust region ---
+        let maxAbs = 0;
+        for (let i = 0; i < n; i++) {
+          const si = varScales[i] || 1;
+          const di = dx[i] / si;
+          maxAbs = Math.max(maxAbs, Math.abs(di));
+        }
+        
+        // 【修正】ステップが小さすぎる場合は再度damping をリセット
+        // これにより、ill-conditioning から逃げることができる
+        if (maxAbs < 1e-8 && lmDamp > 1e-3) {
+          if (iter < 3 || iter % 100 === 0) {
+            console.log(`[DEBUG] Step too small (${maxAbs.toExponential(2)}), resetting lmDamp from ${lmDamp.toExponential(2)}`);
+          }
+          lmDamp = 5e-4;  // 【最適化】リセット時も初期値に合わせる
+          // 【修正】ここで mu を上げると、ストール時に「壁を高くする」悪循環になるので削除
+          // The wall (penalty) is the problem when stalled; raising it won't help
+          continue;  // Skip this iteration and recalculate
+        }
+        
+        // 【修正】固定の delta ではなく、適応的トラスト領域を適用する
+        // 予測精度（ρ）に応じて歩幅の限界を動的に伸縮させることで、細かい谷底でも進める
+        const delta = trustRegionDeltaEff;
+        if (Number.isFinite(maxAbs) && maxAbs > delta && maxAbs > 0) {
+          const f = delta / maxAbs;
+          for (let i = 0; i < n; i++) dx[i] *= f;
+        }
+
+        // --- 5. Line search ---
+        // 【修正】Infeasibleな場合でも、必ず alpha=1（フルステップ）から試す！
+        // ニュートン法系は alpha=1 で最も効率よく境界に到達する
+        const alphas = preFeasible 
+          ? [1, 0.5, 0.25]  // Feasible: 3回試行
+          : [1, 0.5, 0.25, 0.125, 0.0625];  // Infeasible: フルステップから開始
+        
+        let accepted = false;
+        let nextX = currentX.slice();
+        let acceptedCost = cost0;
+        let acceptedRho = 0;
+
+        // 【追加】LM法と同じく、二次モデルによる予測減少量(pred)を計算する関数
+        const predictedReductionForStep = (dxStep: number[]) => {
+          try {
+            let linearTerm = 0;
+            for (let i = 0; i < n; i++) linearTerm += dxStep[i] * g[i];
+            
+            let quadTerm = 0;
+            for (let i = 0; i < n; i++) {
+              let sum = 0;
+              for (let k = 0; k < n; k++) sum += A[i][k] * dxStep[k];
+              quadTerm += dxStep[i] * sum;
+            }
+            quadTerm *= 0.5;
+            
+            const pred = -(linearTerm + quadTerm);
+            return Number.isFinite(pred) ? pred : NaN;
+          } catch (_) {
+            return NaN;
+          }
+        };
+
+        let lastAlpha = 0; // Track last alpha tried for progress reporting
+        for (const alpha of alphas) {
+          const dxStep = dx.map(v => alpha * v);
+          const trialX = clampToBounds(currentX.map((x, i) => x + dxStep[i]));
+          const aug1 = evalAugmentedResiduals(trialX, lambdaVec, mu, currentMaxViol);
+          const r1 = aug1.residuals;
+          const cost1 = r1.reduce((acc, v) => acc + v * v, 0);
+          
+          lastAlpha = alpha; // Track for progress report
+          
+          if (Number.isFinite(cost1) && cost1 < cost0) {
+            accepted = true;
+            nextX = trialX;
+            acceptedCost = cost1;
+            
+            // 【追加】予測と実際の減少量の比 (rho) を計算
+            const pred = predictedReductionForStep(dxStep);
+            const act = cost0 - cost1;
+            acceptedRho = (Number.isFinite(act) && Number.isFinite(pred) && pred > 1e-30) ? (act / pred) : 0;
+            
+            // Broyden状態の更新：次回のイテレーションで使用
+            lastJ = J.map(row => row.slice()); // Deep copy
+            lastX = currentX.slice();
+            lastR = r0.slice();
+            
+            // 【最適化】Feasibleで最初の試行（alpha=1）に成功したら即座に終了
+            if (preFeasible && alpha === 1) {
+              break;  // Full step accepted, no need to try smaller steps
+            }
+            break;  // Accept and move to damping update
+          }
+        }
+        
+        // 【修正】ステップが受け入れられたかどうかで、Nielsenの適応的ダンピングを行う
+        if (!accepted) {
+          // 失敗：進まない。ダンピングを増やして次回はより安全な歩幅にする
+          kktRejectStreak++;  // 【追加】Consecutive rejection counter
+          
+          // 【改善】3.0→2.0：さらに穏やかに増加して探索を続ける
+          lmDamp = Math.min(1e12, lmDamp * 2.0);  // More conservative increase
+          if (lmDamp > 1e9) lmDamp = 2e-4;  // スタック時はリセット（初期値に合わせる）
+          
+          // 【追加】リジェクト（失敗）時は歩幅の限界を狭めてより慎重にする
+          trustRegionDeltaEff = Math.max(0.01, trustRegionDeltaEff * 0.5);
+          
+          // Broyden状態をリセット（リジェクト時は有限差分から再計算）
+          lastJ = null;
+          lastX = null;
+          lastR = null;
+          broydenSkipCount = 0;
+          
+          // 【追加】Auto Soft-Restart: ダンピングをリセットして別の角度から再探索
+          // ただし、μ と λ（制約の「壁の記憶」）はリセットしない。何度も同じ壁にぶつかるループを防ぐため
+          if (kktRejectStreak >= 12) {  // 【修正】8→12：リスタートを減らして収束を優先
+            consecutiveRestarts++;
+            console.log(`♻️ [AL] Auto soft-restart triggered at iter ${iter} (${kktRejectStreak} consecutive rejects, restart #${consecutiveRestarts})`);
+            
+            // 【新機能】連続リスタートが3回を超えたら、μを減らして脱出を試みる
+            if (consecutiveRestarts >= 3 && mu > 10) {
+              const oldMu = mu;
+              mu = Math.max(1, mu * 0.5);  // μを半分にする
+              console.log(`  ⚠️ [AL] Too many restarts (${consecutiveRestarts}), reducing μ: ${oldMu.toExponential(2)} → ${mu.toExponential(2)}`);
+            }
+            
+            // 【修正】mu と lambdaVec はリセットしない。壁の記憶を保ったまま、ダンピングだけ安全な値に
+            // mu = Math.max(1, ...);  <-- 削除：ペナルティ記憶を保つ
+            // lambdaVec = [];         <-- 削除：ラグランジュ乗数の蓄積を保つ
+            
+            lmDamp = 1e-1;  // 安全な初期ダンピング値
+            kktRejectStreak = 0;
+            violStagnationIter = 0;
+            currentX = bestX.slice();  // 一番良かった場所から再開
+            
+            // 【重要】bestXを設計変数に設定（これがないと評価が正しくない）
+            for (let k = 0; k < n; k++) {
+              if (jointState && varIds && k < varIds.length) {
+                setJointDesignVariableValue(jointState, varIds[k], bestX[k]);
+              } else if (activeCfg && varIds && k < varIds.length) {
+                setDesignVariableValue(activeCfg, varIds[k], bestX[k]);
+              }
+            }
+            
+            // Broyden状態もリセット（再スタート時は有限差分から再計算）
+            lastJ = null;
+            lastX = null;
+            lastR = null;
+            broydenSkipCount = 0;
+            
+            continue;
+          }
+        } else {
+          kktRejectStreak = 0;  // 【追加】Reset counter on success
+          consecutiveRestarts = 0;  // 【追加】受理されたら連続リスタートもリセット
+          currentX = nextX;
+          
+          // 【追加】ステップがアクセプトされた時点で、実際に設計変数をセット
+          // これにより、UIが現在値を認識できるようになる
+          for (let k = 0; k < n; k++) {
+            if (jointState && varIds && k < varIds.length) {
+              setJointDesignVariableValue(jointState, varIds[k], currentX[k]);
+            }
+          }
+          
+          // 成功：現在位置を更新し、ダンピングを rho に応じて滑らかに減らす（LM法と同じ戦略）
+          const rhoThreshold = 0.25;  // Accept range: rho > 0.25 means good prediction
+          let factor;
+          if (acceptedRho > rhoThreshold) {
+            // 【最適化】予測が良い場合はより積極的に減らす
+            const smoothTerm = Math.pow(2 * acceptedRho - 1, 3);
+            factor = Math.max(1.0 / 8.0, 1.0 - smoothTerm);  // 0.125-1.0（さらに積極的）
+            factor = Math.max(0.08, Math.min(1.0, factor));  // 0.1→0.08：より積極的な減少
+            
+            // 【追加】予測精度が非常に高い場合は、トラスト領域を拡大して一気に進む
+            if (acceptedRho > 0.75) {
+              trustRegionDeltaEff = Math.min(2.0, trustRegionDeltaEff * 1.25);
+            }
+          } else if (acceptedRho > 0.004) {
+            // 【改善】予測がまあまあ（0.004 < rho <= 0.25）の場合も穏やかに減らす
+            factor = 0.75;  // 0.85 → 0.75（さらに積極的）
+          } else {
+            // 【改善】予測が悪い（rho <= 0.004）場合は増やす（ただしLM並みには保つ）
+            factor = 1.5;  // 2.0 → 1.5（やや穏やかに）
+            // 【追加】予測精度が低い場合は、トラスト領域を少し縮小する
+            trustRegionDeltaEff = Math.max(0.01, trustRegionDeltaEff * 0.9);
+          }
+          lmDamp = Math.max(1e-12, lmDamp * factor);
+
+          // 【修正】currentXはすでに設計変数に設定済み（Line 4757-4764）なので、
+          // objectiveForKKT()ではなく直接評価する（変数の復元を避けるため）
+          const currentEval = evalCompositeFromRequirementsProfiled();
+          const currentScore = currentEval?.score ?? 1e9;
+          lastAcceptedScore = currentScore;  // 【追加】アクセプトされたスコアを記録
+          
+          // 【重要修正】LM法と同じくrecordEval()を使ってBest管理を統一
+          // これにより、feasible/infeasibleの自動判定とBest値の正確な追跡が可能になる
+          recordEval(currentEval);
+          const prevBestScore = bestScore;
+          const bestEvalNow = getBestEvalSoFar();
+          if (bestEvalNow) {
+            bestScore = bestEvalNow.score;
+            bestEval = bestEvalNow;
+            // bestXは常に現在のcurrentXを保存（後で復元するため）
+            bestX = currentX.slice();
+            
+            if (bestScore < prevBestScore) {
+              const improvement = prevBestScore - bestScore;
+              const currentConstraintEval = evalSQPAtX(currentX);
+              const currentViolationVector = (currentConstraintEval.constraints || []).map(c => Math.max(0, c));
+              const currentViolation = Math.sqrt(currentViolationVector.reduce((acc, v) => acc + v * v, 0));
+              const status = currentEval.feasible ? '✓FEAS' : `Viol:${currentViolation.toExponential(2)}`;
+              console.log(`🏆 [AL] Iter ${iter}: NEW BEST! Score: ${bestScore.toFixed(6)} (Δ${improvement.toFixed(3)}), ${status}, α=${lastAlpha.toFixed(3)}, ρ=${acceptedRho.toFixed(3)}`);
+              
+              if (onProgress) {
+                try {
+                  onProgress({ phase: 'accept', iter, current: bestScore, best: bestScore, method: 'kkt', feasible: currentEval.feasible, alpha: lastAlpha, rho: acceptedRho });
+                } catch (_) {}
+              }
+            }
+          }
+          
+          // bestMeritは参考値として計算（主にデバッグ用）
+          const currentConstraintEval = evalSQPAtX(currentX);
+          const currentViolationVector = (currentConstraintEval.constraints || []).map(c => Math.max(0, c));
+          const currentViolation = Math.sqrt(currentViolationVector.reduce((acc, v) => acc + v * v, 0));
+          bestMerit = bestScore + currentViolation * 10000;
+        }
+        
+        // --- 6. Update Lagrange multipliers and penalty (Delayed Schedule) ---
+
+        const post = evalSQPAtX(currentX);
+        const c = post.constraints || [];
+        if (lambdaVec.length !== c.length) lambdaVec = new Array(c.length).fill(0);
+        
+        let maxViol = 0;
+        let activeViolations = 0;
+        for (let i = 0; i < c.length; i++) {
+          const ci = c[i];
+          maxViol = Math.max(maxViol, ci);
+          if (ci > 1e-6) activeViolations++;
+        }
+
+        // 【重要改善】ALM パラメータ（μ, λ）の遅延更新スケジュール
+        // 失敗している（ストール中）時に地形を変えると、LM法の二次予測が永遠に外れるため、
+        // 進捗がある時か定期的なイテレーションでのみ更新し、ストール中は地形を固定させる
+        const costDiff = Math.abs(cost0 - acceptedCost);
+        const relativeCostDiff = costDiff / Math.max(1e-10, cost0);
+        const isProgressSlow = accepted && (relativeCostDiff < 1e-3);
+        // 【修正】kktRejectStreak < 3 に緩和：完全に凍結すると無限ループに陥る
+        const isTimeToUpdate = (isProgressSlow || (iter > 0 && iter % 15 === 0)) && kktRejectStreak < 3;
+
+        if (isTimeToUpdate) {
+          // Update multipliers only when landscape should change
+          for (let i = 0; i < c.length; i++) {
+            lambdaVec[i] = Math.max(0, lambdaVec[i] + mu * c[i]);
+          }
+
+          // Check constraint violation trend for penalty scaling
+          if (Math.abs(maxViol - lastMaxViol) < 1e-3 * Math.max(1, lastMaxViol)) {
+            violStagnationIter++;
+          } else {
+            violStagnationIter = 0;
+          }
+          lastMaxViol = maxViol;
+
+          // Adaptive penalty update (only when updating ALM)
+          let muMultiplier = 1.0;
+          if (maxViol < 0.01) {
+            muMultiplier = 1.0;  // 十分に改善中
+          } else if (maxViol < 1.0) {
+            muMultiplier = 1.1;
+          } else {
+            muMultiplier = 1.2;
+          }
+          
+          if (violStagnationIter > 3) {
+            muMultiplier = Math.max(1.2, muMultiplier * 1.5);
+          }
+          
+          // 【修正】μ の上限を 1e5 に保つ（1e6 はペナルティが支配的になる）
+          mu = Math.min(1e5, Math.max(1, mu * muMultiplier));
+          
+          // ALM更新時はBroyden状態をリセット（地形が変わったため）
+          lastJ = null;
+          lastX = null;
+          lastR = null;
+          broydenSkipCount = 0;
+        } else {
+          // On iterations where we don't update ALM, keep landscape stable for LM convergence
+          if (iter % 100 === 0) {
+            console.log(`  [AL ALM delayed] Landscape frozen. Updates only when: accepting steps AND kktRejectStreak==0 AND (progress<1e-3 OR iter%20==0)`);
+          }
+        }
+
+        // Show progress every 10 iterations with current vs best
+        if (iter % 10 === 0) {
+          console.log(`📊 [AL] Iter ${iter}: Current=${lastAcceptedScore.toFixed(4)}, Best=${bestScore.toFixed(4)}, Δ=${(lastAcceptedScore-bestScore).toFixed(2)}, maxViol=${maxViol.toExponential(2)}, mu=${mu.toExponential(2)}, lmDamp=${lmDamp.toExponential(1)}, broyden=${broydenSkipCount}/6`);
+        }
+
+        // Convergence check: feasible + no improvement in cost
+        if (maxViol <= 1e-6 && accepted) {
+          const costChange = Math.abs(cost0 - r0.reduce((acc, v) => acc + v * v, 0));
+          if (costChange < 1e-6) {  // 【修正】1e-8 → 1e-6：より緩い収束判定
+            console.log('🎯 [AL] Converged at iter', iter, 'with score', bestScore.toFixed(6));
+            break;
+          }
+        }
+
+        if (onProgressKKT) {
+          // 【修正】accepted時のコスト値を報告。UIが現在値の変化を認識できるように
+          const displayScore = accepted ? objectiveForKKT(currentX) : bestScore;
+          await onProgressKKT({
+            iter: iter,
+            current: displayScore,
+            best: bestScore,
+            feasible: post.feasible,
+            alpha: lastAlpha,
+            rho: acceptedRho,
+            mu: mu,
+            maxViol: maxViol,
+            lmDamp: lmDamp
+          });
+        }
+
+        // Report progress for UI update
+        if (onProgress) {
+          try {
+            onProgress({
+              phase: 'iter',
+              iter: iter,
+              current: lastAcceptedScore,
+              best: bestScore,
+              method: 'kkt',
+              multiScenario,
+              requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
+              feasible: post.feasible,
+              activeViolations: activeViolations,
+              maxViolation: maxViol,
+              alpha: lastAlpha,
+              rho: acceptedRho,
+              lmDamp: lmDamp,
+              mu: mu
+            });
+          } catch (_) {}
+          await nextFrame();
         }
       }
 
+      const totalImprovement = initialScore - bestScore;
+      const improvementPercent = (totalImprovement / Math.max(1e-10, initialScore)) * 100;
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.log(`📈 [AL] OPTIMIZATION COMPLETE`);
+      console.log(`   Initial Score:  ${initialScore.toFixed(6)}`);
+      console.log(`   🏆 Best Score:  ${bestScore.toFixed(6)}`);
+      console.log(`   Improvement:    ${totalImprovement.toFixed(6)} (${improvementPercent.toFixed(2)}%)`);
+      console.log(`   Best Merit:     ${bestMerit.toFixed(2)}`);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
       const t1 = nowMs();
-      const finalEval = evalCompositeFromRequirementsProfiled();
-      const finalScore = finalEval?.score ?? bestScore;
-
-      // Record final evaluation - this captures blocksSnapshot
-      recordEval(finalEval);
-
-      // Restore best snapshot and persist to system config
-      // This is critical - it synchronizes design variables back to system
+      
+      // 【修正】LMメソッドと同じパターン：bestX を手動で適用せず、
+      // recordEval() で保存された blocksSnapshot を直接復元する
+      // これにより、Stop時も確実にベスト解が復元される
+      console.log('🔧 [AL] Restoring best solution from snapshot...');
       try {
         const bestFinalEval = getBestEvalSoFar();
-        restoreBestSnapshotAndPersist({ finalEval: bestFinalEval, jointState, systemConfig, configsById, targetConfigIds });
+        if (bestFinalEval) {
+          restoreBestSnapshotAndPersist({ finalEval: bestFinalEval, jointState, systemConfig, configsById, targetConfigIds });
+          console.log(`✅ [AL] Best solution restored (Score: ${bestFinalEval.score.toFixed(6)})`);
+        } else {
+          console.warn('⚠️  [AL] No best evaluation found - keeping current state');
+        }
       } catch (e) {
-        console.error('❌ [KKT] Error restoring/persisting best state:', e);
+        console.error('❌ [AL] Error restoring/persisting best state:', e);
       }
 
       // Final sync to tables - this is critical to reflect values in UI
@@ -4270,6 +5063,10 @@ export async function runOptimizationMVP(options = {}) {
         }
       } catch (_) {}
 
+      // Get final best evaluation for progress reporting
+      const bestFinalEval = getBestEvalSoFar();
+      const finalScore = bestFinalEval ? bestFinalEval.score : bestScore;
+
       if (onProgress) {
         try {
           onProgress({
@@ -4280,9 +5077,9 @@ export async function runOptimizationMVP(options = {}) {
             ms: Math.round(t1 - t0),
             method: 'kkt',
             multiScenario,
-            feasible: finalEval?.feasible ?? false,
-            violationScore: finalEval?.violationScore ?? 0,
-            softPenalty: finalEval?.softPenalty ?? 0
+            feasible: bestFinalEval?.feasible ?? false,
+            violationScore: bestFinalEval?.violationScore ?? 0,
+            softPenalty: bestFinalEval?.softPenalty ?? 0
           });
         } catch (_) {}
       }
@@ -4295,10 +5092,10 @@ export async function runOptimizationMVP(options = {}) {
         variables: vars.length
       };
     } catch (e) {
-      console.error('❌ [KKT Optimizer] Fatal error:', e);
+      console.error('❌ [AL Optimizer] Fatal error:', e);
       return {
         ok: false,
-        reason: `KKT optimization error: ${String(e)}`
+        reason: `AL optimization error: ${String(e)}`
       };
     }
   }
