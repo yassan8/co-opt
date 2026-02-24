@@ -454,6 +454,14 @@ function getActiveConfigRef(systemConfig) {
 function updateExpandedOpticalSystemInConfig(config) {
   if (!config || !Array.isArray(config.blocks)) return;
 
+  const disablePersistedTableFallback = (() => {
+    try {
+      return !!(typeof globalThis !== 'undefined' && (globalThis as any).__cooptDisablePersistedTableFallback);
+    } catch (_) {
+      return false;
+    }
+  })();
+
   const blocksHaveObjectSurface = (() => {
     try { return config.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface'); } catch (_) { return false; }
   })();
@@ -463,6 +471,8 @@ function updateExpandedOpticalSystemInConfig(config) {
     try {
       if (Array.isArray(config?.opticalSystem) && config.opticalSystem.length > 0) return config.opticalSystem;
     } catch (_) {}
+
+    if (disablePersistedTableFallback) return null;
 
     // Fallback: preserve from the currently displayed table data (localStorage)
     try {
@@ -488,6 +498,8 @@ function updateExpandedOpticalSystemInConfig(config) {
         if (Number.isFinite(n)) return n;
       }
     } catch (_) {}
+
+    if (disablePersistedTableFallback) return null;
 
     // Fallback: preserve from the currently displayed table data (localStorage)
     try {
@@ -2534,12 +2546,14 @@ export async function runOptimizationMVP(options = {}) {
   let __prevMeritFastMode;
   let __prevOptimizerProfileContext;
   let __prevDisableRayTraceDebug;
+  let __prevDisablePersistedTableFallback;
   try { __prevBlocksOverride = (typeof window !== 'undefined') ? window.__cooptBlocksOverride : undefined; } catch (_) { __prevBlocksOverride = undefined; }
   try { __prevOpticalRowsOverride = (typeof globalThis !== 'undefined') ? globalThis.__cooptOpticalSystemRowsOverride : undefined; } catch (_) { __prevOpticalRowsOverride = undefined; }
   try { __prevScenarioOverride = (typeof window !== 'undefined') ? window.__cooptScenarioOverride : undefined; } catch (_) { __prevScenarioOverride = undefined; }
   try { __prevMeritFastMode = (typeof globalThis !== 'undefined') ? globalThis.__cooptMeritFastMode : undefined; } catch (_) { __prevMeritFastMode = undefined; }
   try { __prevOptimizerProfileContext = (typeof globalThis !== 'undefined') ? globalThis.__cooptOptimizerProfileContext : undefined; } catch (_) { __prevOptimizerProfileContext = undefined; }
   try { __prevDisableRayTraceDebug = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG : undefined; } catch (_) { __prevDisableRayTraceDebug = undefined; }
+  try { __prevDisablePersistedTableFallback = (typeof globalThis !== 'undefined') ? (globalThis as any).__cooptDisablePersistedTableFallback : undefined; } catch (_) { __prevDisablePersistedTableFallback = undefined; }
 
   try {
     setBlocksOverrideGlobal(blocksByConfigId);
@@ -2606,6 +2620,12 @@ export async function runOptimizationMVP(options = {}) {
   // This prevents the WASM intersection fast-path from being bypassed due to debugLog being non-null.
   try {
     if (typeof globalThis !== 'undefined') globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG = true;
+  } catch (_) {}
+
+  // Avoid using persisted table-data fallback during optimization runs.
+  // This prevents stale cross-file localStorage values from contaminating current design state.
+  try {
+    if (typeof globalThis !== 'undefined') (globalThis as any).__cooptDisablePersistedTableFallback = true;
   } catch (_) {}
 
   // Ensure the active-config evaluator sees Blocks, not stale live UI tables.
@@ -5586,6 +5606,16 @@ export async function runOptimizationMVP(options = {}) {
         if (__prevOptimizerProfileContext !== undefined) globalThis.__cooptOptimizerProfileContext = __prevOptimizerProfileContext;
         else {
           try { delete globalThis.__cooptOptimizerProfileContext; } catch (_) {}
+        }
+      }
+    } catch (_) {}
+
+    // Restore persisted fallback toggle.
+    try {
+      if (typeof globalThis !== 'undefined') {
+        if (__prevDisablePersistedTableFallback !== undefined) (globalThis as any).__cooptDisablePersistedTableFallback = __prevDisablePersistedTableFallback;
+        else {
+          try { delete (globalThis as any).__cooptDisablePersistedTableFallback; } catch (_) {}
         }
       }
     } catch (_) {}
