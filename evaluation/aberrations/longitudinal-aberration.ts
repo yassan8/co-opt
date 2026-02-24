@@ -480,7 +480,6 @@ function getPrimaryWavelength() {
             const primaryRow = sourceRows.find(row => row.primary === 'Primary Wavelength' || row.primary === 'primary');
             if (primaryRow && primaryRow.wavelength) {
                 const wavelength = parseFloat(primaryRow.wavelength);
-                console.log(`  主波長: ${wavelength.toFixed(4)} μm`);
                 return wavelength;
             }
         }
@@ -489,7 +488,6 @@ function getPrimaryWavelength() {
     }
     
     // デフォルト波長（d線）
-    console.log('  主波長が設定されていないため、d線（0.5876 μm）を使用');
     return 0.5876;
 }
 
@@ -827,11 +825,8 @@ export function calculateLongitudinalAberration(
     const lastSurfaceOriginZ = surfaceOrigins?.[targetSurfaceIndex]?.origin?.z;
     const lastSurfaceZ = Number.isFinite(lastSurfaceOriginZ) ? lastSurfaceOriginZ : imagePlaneZ;
     
-    console.log(`📊 像面Z座標（近似）: ${imagePlaneZ.toFixed(3)} mm`);
-    
     // 主波長を取得
     const primaryWavelength = getPrimaryWavelength();
-    console.log(`📊 主波長: ${primaryWavelength.toFixed(4)} μm`);
     
     const resolveBflScalar = (value) => {
         if (Number.isFinite(value)) return value;
@@ -845,9 +840,7 @@ export function calculateLongitudinalAberration(
     const primaryBFLRaw = calculateBackFocalLength(opticalSystemRows, primaryWavelength);
     const primaryBFL = resolveBflScalar(primaryBFLRaw);
     const primaryImageZ = Number.isFinite(primaryBFL) ? (lastSurfaceZ + primaryBFL) : lastSurfaceZ;
-    if (Number.isFinite(primaryBFL)) {
-        console.log(`📊 主波長の近軸像点位置: ${primaryImageZ.toFixed(6)} mm (BFL: ${primaryBFL.toFixed(6)} mm)`);
-    } else {
+    if (!Number.isFinite(primaryBFL)) {
         console.warn('⚠️ 主波長BFLが不正のため、像点位置は最終面基準で処理します');
     }
     

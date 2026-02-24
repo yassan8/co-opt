@@ -2374,7 +2374,7 @@ function setupOptimizeDesignIntentButton(): void {
         Method
         <select id="opt-method" style="padding:4px 6px;">
             <option value="lm">Levenberg-Marquardt (LM)</option>
-            <option value="kkt">KKT-based (SQP)</option>
+            <option value="kkt">Augmented Lagrangian (AL)</option>
             <option value="cd">Coordinate Descent (CD)</option>
         </select>
     </label>
@@ -2606,6 +2606,7 @@ function setupOptimizeDesignIntentButton(): void {
                     const aText = Number.isFinite(a) ? a.toFixed(6) : '-';
                     const rText = Number.isFinite(r) ? r.toFixed(6) : '-';
                     lastDecisionText = `ACCEPT (α=${aText}, ρ=${rText})`;
+                    lastRhoText = rText;  // 【追加】ρを保存して後で表示
 
                     try {
                         if (popup && !popup.closed) {
@@ -4736,7 +4737,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
     } catch (_) {}
 
     const list = Array.isArray(summary) ? summary : [];
-    console.log(`[DEBUG] renderBlockInspector: summary list length = ${list.length}`);
     if (list.length === 0) {
         const empty = document.createElement('div');
         empty.style.padding = '8px';
@@ -4830,8 +4830,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
     for (const b of list) {
         const blockId = String(b.blockId ?? '').trim();
-        console.log(`[DEBUG] renderBlockInspector loop: rendering blockId=${blockId}, blockType=${b.blockType}`);
-
         const row = document.createElement('div');
         row.className = 'block-inspector-row';
         if (blockId && __blockInspectorExpandedBlockId === blockId) row.classList.add('selected');
@@ -4885,9 +4883,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         container.appendChild(row);
 
         const realBlock = blockById && typeof blockById.get === 'function' ? blockById.get(blockId) : null;
-        console.log(`[DEBUG] Block row: blockId=${blockId}, realBlock=${!!realBlock}, expanded=${__blockInspectorExpandedBlockId === blockId}`);
         if (realBlock && __blockInspectorExpandedBlockId === blockId) {
-            console.log(`[DEBUG] Expanding panel for blockId=${blockId}, blockType=${realBlock.blockType || realBlock.type}`);
             const panel = document.createElement('div');
             panel.style.padding = '6px 8px 10px 8px';
             const isDarkMode = document.body.classList.contains('dark-mode');
@@ -6522,15 +6518,12 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 panel.appendChild(empty);
             }
 
-            const blockTypeCheck = String(realBlock.blockType || realBlock.type || 'unknown');
-            console.log(`[DEBUG] ✅ Panel completely built, appending to container for blockId=${blockId}, blockType=${blockTypeCheck}`);
             container.appendChild(panel);
         }
     }
 }
 
 export function refreshBlockInspector(): void {
-    console.log(`[DEBUG] 🔴 refreshBlockInspector called`);
     const banner = document.getElementById('import-analyze-mode-banner');
     const setBannerVisible = (isVisible: boolean) => {
         if (!banner) return;
