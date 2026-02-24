@@ -30,6 +30,7 @@ import { generateSpotDiagram, generateSurfaceOptions } from '../../evaluation/sp
 import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../../evaluation/wavefront/wavefront.ts';
 import { expandBlocksToOpticalSystemRows } from '../../data/block-schema.ts';
 import { generateRayStartPointsForObject, setRayEmissionPattern, getRayEmissionPattern } from '../../optical/ray-renderer.ts';
+import { asphericSurfaceZ, toricSurfaceZ } from '../../optical/surface-math.ts';
 import { calculateLongitudinalAberration } from '../../evaluation/aberrations/longitudinal-aberration.ts';
 import { getTableOpticalSystem, getTableObject, getTableSource } from '../../core/app-config.ts';
 import { loadSystemConfigurations } from '../../data/table-configuration.ts';
@@ -857,6 +858,257 @@ class MeritFunctionEditor {
 
             case 'LA_RMS_UM':
                 return this.calculateLongitudinalAberrationRmsUm(operand, opticalSystemData);
+
+            case 'CTCT': {
+                // Center Thickness: Evaluate thickness of specified surface
+                const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+                console.log('[CTCT] DEBUG: param1Raw=', param1Raw);
+                
+                if (!param1Raw) {
+                    console.log('[CTCT] FAIL: param1Raw is empty');
+                    return 1e9;
+                }
+                
+                const surfaceIndex1 = Math.floor(Number(param1Raw));
+                console.log('[CTCT] DEBUG: surfaceIndex1=', surfaceIndex1, 'opticalSystemData.length=', Array.isArray(opticalSystemData) ? opticalSystemData.length : 'NOT ARRAY');
+                
+                if (!Number.isFinite(surfaceIndex1) || surfaceIndex1 < 1) {
+                    console.log('[CTCT] FAIL: surfaceIndex1 not finite or < 1');
+                    return 1e9;
+                }
+                
+                const surfaceIndex0 = surfaceIndex1 - 1;
+                if (!Array.isArray(opticalSystemData) || surfaceIndex0 >= opticalSystemData.length) {
+                    console.log('[CTCT] FAIL: array validation');
+                    return 1e9;
+                }
+                
+                const surface = opticalSystemData[surfaceIndex0];
+                if (!surface) {
+                    console.log('[CTCT] FAIL: surface is null/undefined');
+                    return 1e9;
+                }
+                
+                const thickness = Number(surface.thickness);
+                console.log('[CTCT] DEBUG: surface.thickness=', surface.thickness, 'parsed=', thickness);
+                if (!Number.isFinite(thickness)) {
+                    console.log('[CTCT] FAIL: thickness not finite');
+                    return 1e9;
+                }
+                
+                console.log('[CTCT] SUCCESS: thickness=', thickness);
+                return thickness;
+            }
+
+            case 'EDGE': {
+                // Edge Thickness: thickness - sag1 - sag2 at specified height
+                const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+                const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+                const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim().toUpperCase() : '';
+                
+                if (!param1Raw) {
+                    return 1e9;
+                }
+                
+                const surfaceIndex1 = Math.floor(Number(param1Raw));
+                let height = Number(param2Raw);
+                
+                // If height is not provided, assume full diameter (100%)
+                if (!Number.isFinite(height) || height <= 0) {
+                    // Try to get semidia from the surface as default
+                    if (!Array.isArray(opticalSystemData)) {
+                        return 1e9;
+                    }
+                    
+                    const surfaceIndex0Temp = surfaceIndex1 - 1;
+                    if (surfaceIndex0Temp < opticalSystemData.length) {
+                        const surfTemp = opticalSystemData[surfaceIndex0Temp];
+                        if (surfTemp) {
+                            const semidiaVal = Number(surfTemp.semidia);
+                            if (Number.isFinite(semidiaVal) && semidiaVal > 0) {
+                                height = semidiaVal;
+                            } else {
+                                height = 10; // hardcoded fallback
+                            }
+                        }
+                    }
+                }
+                
+                if (!Number.isFinite(surfaceIndex1) || surfaceIndex1 < 1) {
+                    return 1e9;
+                }
+                if (!Number.isFinite(height) || height <= 0) {
+                    return 1e9;
+                }
+                
+                if (!Array.isArray(opticalSystemData)) {
+                    return 1e9;
+                }
+                
+                const surfaceIndex0 = surfaceIndex1 - 1;
+                if (surfaceIndex0 >= opticalSystemData.length) {
+                    return 1e9;
+                }
+                
+                const surface = opticalSystemData[surfaceIndex0];
+                if (!surface) {
+                    return 1e9;
+                }
+                
+                const thickness = Number(surface.thickness);
+                if (!Number.isFinite(thickness)) {
+                    return 1e9;
+                }
+                
+                // Determine surface type
+                const surfType = String(surface.surfType || surface.type || '').trim().toLowerCase();
+                const isToric = surfType === 'toric';
+                
+                let sag = 0;
+                
+                // Check if next surface is part of the same lens (for lens pairs)
+                let sag2 = 0;
+                const nextSurfaceIdx = surfaceIndex0 + 1;
+                
+                if (isToric) {
+                    // Toric surface: respect direction parameter
+                    const radiusXRaw = surface.radiusX;
+                    const radiusYRaw = surface.radiusY || surface.radius;
+                    
+                    const radiusXInf = String(radiusXRaw ?? '').trim().toUpperCase() === 'INF' || radiusXRaw === Infinity;
+                    const radiusYInf = String(radiusYRaw ?? '').trim().toUpperCase() === 'INF' || radiusYRaw === Infinity;
+                    
+                    const radiusX = radiusXInf ? Infinity : Number(radiusXRaw);
+                    const radiusY = radiusYInf ? Infinity : Number(radiusYRaw);
+                    
+
+                    
+                    if ((Number.isFinite(radiusX) || radiusX === Infinity) && (Number.isFinite(radiusY) || radiusY === Infinity)) {
+                        const toricParams = {
+                            radiusX,
+                            radiusY,
+                            conic: Number(surface.conic) || 0,
+                            axis: Number(surface.axis) || 0
+                        };
+                        
+                        // Direction: X, Y, or blank (radial)
+                        if (param3Raw === 'X') {
+                            sag = toricSurfaceZ(height, 0, toricParams);
+                        } else if (param3Raw === 'Y') {
+                            sag = toricSurfaceZ(0, height, toricParams);
+                        } else {
+                            // Radial: calculate average or use primary meridian
+                            const sagX = toricSurfaceZ(height, 0, toricParams);
+                            const sagY = toricSurfaceZ(0, height, toricParams);
+                            sag = Number.isFinite(sagX) && Number.isFinite(sagY) ? (sagX + sagY) / 2 : 0;
+                        }
+                    }
+                } else {
+                    // Spherical or aspheric surface: use radial calculation
+                    const radiusRaw = surface.radius;
+                    const radiusInf = String(radiusRaw ?? '').trim().toUpperCase() === 'INF' || radiusRaw === Infinity || radiusRaw === 0;
+                    const radius = radiusInf ? Infinity : Number(radiusRaw);
+                    
+
+                    
+                    if (Number.isFinite(radius) || radius === Infinity) {
+                        const asphericParams = {
+                            radius,
+                            conic: Number(surface.conic) || 0,
+                            coef1: Number(surface.coef1) || 0,
+                            coef2: Number(surface.coef2) || 0,
+                            coef3: Number(surface.coef3) || 0,
+                            coef4: Number(surface.coef4) || 0,
+                            coef5: Number(surface.coef5) || 0,
+                            coef6: Number(surface.coef6) || 0,
+                            coef7: Number(surface.coef7) || 0,
+                            coef8: Number(surface.coef8) || 0,
+                            coef9: Number(surface.coef9) || 0,
+                            coef10: Number(surface.coef10) || 0
+                        };
+                        
+                        const mode = surfType.includes('odd') ? 'odd' : 'even';
+                        sag = asphericSurfaceZ(height, asphericParams, mode);
+                    }
+                }
+                
+                if (!Number.isFinite(sag)) sag = 0;
+                
+                // Calculate sag2 from the next surface if it's the back side of the same lens
+                if (nextSurfaceIdx < opticalSystemData.length) {
+                    const nextSurface = opticalSystemData[nextSurfaceIdx];
+                    if (nextSurface) {
+                        const nextMaterial = String(nextSurface.material || '').trim().toLowerCase();
+                        
+                        // If next surface is AIR, it's the back surface of the current lens
+                        const isNextSurfaceBackSide = nextMaterial === 'air';
+                        
+                        if (isNextSurfaceBackSide) {
+                            // Calculate sag2 from the back surface (nextSurface)
+                            const nextSurfType = String(nextSurface.surfType || nextSurface.type || '').trim().toLowerCase();
+                            const nextIsToric = nextSurfType === 'toric';
+                            
+                            if (nextIsToric) {
+                                const radiusXRaw2 = nextSurface.radiusX;
+                                const radiusYRaw2 = nextSurface.radiusY || nextSurface.radius;
+                                const radiusXInf2 = String(radiusXRaw2 ?? '').trim().toUpperCase() === 'INF' || radiusXRaw2 === Infinity;
+                                const radiusYInf2 = String(radiusYRaw2 ?? '').trim().toUpperCase() === 'INF' || radiusYRaw2 === Infinity;
+                                const radiusX2 = radiusXInf2 ? Infinity : Number(radiusXRaw2);
+                                const radiusY2 = radiusYInf2 ? Infinity : Number(radiusYRaw2);
+                                
+                                if ((Number.isFinite(radiusX2) || radiusX2 === Infinity) && (Number.isFinite(radiusY2) || radiusY2 === Infinity)) {
+                                    const toricParams2 = {
+                                        radiusX: radiusX2,
+                                        radiusY: radiusY2,
+                                        conic: Number(nextSurface.conic) || 0,
+                                        axis: Number(nextSurface.axis) || 0
+                                    };
+                                    
+                                    if (param3Raw === 'X') {
+                                        sag2 = toricSurfaceZ(height, 0, toricParams2);
+                                    } else if (param3Raw === 'Y') {
+                                        sag2 = toricSurfaceZ(0, height, toricParams2);
+                                    } else {
+                                        const sagX2 = toricSurfaceZ(height, 0, toricParams2);
+                                        const sagY2 = toricSurfaceZ(0, height, toricParams2);
+                                        sag2 = Number.isFinite(sagX2) && Number.isFinite(sagY2) ? (sagX2 + sagY2) / 2 : 0;
+                                    }
+                                }
+                            } else {
+                                const radiusRaw2 = nextSurface.radius;
+                                const radiusInf2 = String(radiusRaw2 ?? '').trim().toUpperCase() === 'INF' || radiusRaw2 === Infinity || radiusRaw2 === 0;
+                                const radius2 = radiusInf2 ? Infinity : Number(radiusRaw2);
+                                
+                                if (Number.isFinite(radius2) || radius2 === Infinity) {
+                                    const asphericParams2 = {
+                                        radius: radius2,
+                                        conic: Number(nextSurface.conic) || 0,
+                                        coef1: Number(nextSurface.coef1) || 0,
+                                        coef2: Number(nextSurface.coef2) || 0,
+                                        coef3: Number(nextSurface.coef3) || 0,
+                                        coef4: Number(nextSurface.coef4) || 0,
+                                        coef5: Number(nextSurface.coef5) || 0,
+                                        coef6: Number(nextSurface.coef6) || 0,
+                                        coef7: Number(nextSurface.coef7) || 0,
+                                        coef8: Number(nextSurface.coef8) || 0,
+                                        coef9: Number(nextSurface.coef9) || 0,
+                                        coef10: Number(nextSurface.coef10) || 0
+                                    };
+                                    
+                                    const mode2 = nextSurfType.includes('odd') ? 'odd' : 'even';
+                                    sag2 = asphericSurfaceZ(height, asphericParams2, mode2);
+                                    console.log('[EDGE] DEBUG: Calculated sag2 (aspheric)=', sag2);
+                                }
+                            }
+
+                        }
+                    }
+                }
+                
+                // Edge thickness = center thickness - sag1 + sag2 (preserving sign)
+                const edgeThickness = thickness - sag + sag2;
+                return Number.isFinite(edgeThickness) ? edgeThickness : 1e9;
+            }
 
             case 'ZERN_COEFF': {
                 const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);

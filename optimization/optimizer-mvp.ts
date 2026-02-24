@@ -1300,6 +1300,7 @@ function evaluateRequirementsAllScenarios({
         param2: r.param2,
         param3: r.param3,
         param4: r.param4,
+        param5: r.param5,
         target: r.target,
         weight: r.weight
       };
@@ -1444,6 +1445,7 @@ function evaluateRequirementsAllConfigsAllScenarios({
         param2: r.param2,
         param3: r.param3,
         param4: r.param4,
+        param5: r.param5,
         target: r.target,
         weight: r.weight
       };
@@ -2193,8 +2195,13 @@ export async function runOptimizationMVP(options = {}) {
     } catch (_) {}
   };
 
-  // Reset global stop flag at the start of each run.
+  // Reset global stop flags at the start of each run.
   __optimizerStopRequested = false;
+  try {
+    if (typeof globalThis !== 'undefined') {
+      globalThis.__stopOptimization = false;
+    }
+  } catch (_) {}
   
   // Reset MeritFunctionEditor debug counters to ensure clean state
   try {
@@ -2342,6 +2349,7 @@ export async function runOptimizationMVP(options = {}) {
         }
       };
   const userShouldStop = (typeof opts.shouldStop === 'function') ? opts.shouldStop : null;
+  let __stopReasonLogged = false;
 
   // Fast path for expensive operands (notably Spot RMS/diameter).
   // Optimizer can tolerate approximate evaluation to gain speed.
@@ -2353,9 +2361,35 @@ export async function runOptimizationMVP(options = {}) {
   const spotAnnularRingCountFast = Number.isFinite(Number(opts.spotAnnularRingCountFast))
     ? Math.max(1, Math.min(50, Math.floor(Number(opts.spotAnnularRingCountFast))))
     : 6;
-  const shouldStop = () => {
-    if (__optimizerStopRequested) return true;
-    try { return userShouldStop ? !!userShouldStop() : false; } catch (_) { return false; }
+  const shouldStop = (context: string = '') => {
+    const internalStop = !!__optimizerStopRequested;
+    const legacyStop = (() => {
+      try { return !!(typeof globalThis !== 'undefined' && globalThis.__stopOptimization); } catch (_) { return false; }
+    })();
+
+    let userStop = false;
+    let userStopError: any = null;
+    try {
+      userStop = userShouldStop ? !!userShouldStop() : false;
+    } catch (e) {
+      userStopError = e;
+      userStop = false;
+    }
+
+    const stop = internalStop || userStop;
+    if (stop && !__stopReasonLogged) {
+      __stopReasonLogged = true;
+      try {
+        console.warn('🛑 [OptimizerMVP] Stop requested', {
+          context: context || 'generic',
+          internalStop,
+          userStop,
+          legacyStop,
+          userStopError: userStopError ? String(userStopError) : null
+        });
+      } catch (_) {}
+    }
+    return stop;
   };
 
   const waitForMeritEditorReady = async (): Promise<any | null> => {
@@ -4182,12 +4216,7 @@ export async function runOptimizationMVP(options = {}) {
         await nextFrame();
       };
 
-      const shouldStopKKT = () => {
-        if (userShouldStop && typeof userShouldStop === 'function') {
-          return userShouldStop();
-        }
-        return __optimizerStopRequested || (typeof globalThis !== 'undefined' && globalThis.__stopOptimization);
-      };
+      const shouldStopKKT = () => shouldStop('AL');
 
       const evalSQPAtX = (x: number[]) => {
         const editor = (typeof window !== 'undefined') ? window.meritFunctionEditor : null;
@@ -4405,6 +4434,8 @@ export async function runOptimizationMVP(options = {}) {
       let kktRejectStreak = 0;  // 【追加】Auto soft-restart: detect if stuck in reject-repeat cycle
       let consecutiveRestarts = 0;  // 【追加】連続リスタート回数をカウント
       let lastAcceptedScore = initialScore;  // 【追加】最後にアクセプトされたスコアを追跡
+      let prevConvCost = Number.POSITIVE_INFINITY;
+      let feasibleConvStreak = 0;
       
       // 【追加】LM法と同様に、予測精度に応じて歩幅の上限を伸縮させる適応的トラスト領域
       let trustRegionDeltaEff = 0.5;
@@ -4965,13 +4996,26 @@ export async function runOptimizationMVP(options = {}) {
           console.log(`📊 [AL] Iter ${iter}: Current=${lastAcceptedScore.toFixed(4)}, Best=${bestScore.toFixed(4)}, Δ=${(lastAcceptedScore-bestScore).toFixed(2)}, maxViol=${maxViol.toExponential(2)}, mu=${mu.toExponential(2)}, lmDamp=${lmDamp.toExponential(1)}, broyden=${broydenSkipCount}/6`);
         }
 
-        // Convergence check: feasible + no improvement in cost
-        if (maxViol <= 1e-6 && accepted) {
-          const costChange = Math.abs(cost0 - r0.reduce((acc, v) => acc + v * v, 0));
-          if (costChange < 1e-6) {  // 【修正】1e-8 → 1e-6：より緩い収束判定
-            console.log('🎯 [AL] Converged at iter', iter, 'with score', bestScore.toFixed(6));
+        // Convergence check: feasible + stable for multiple iterations
+        const currentConvCost = r0.reduce((acc, v) => acc + v * v, 0);
+        const costChange = Number.isFinite(prevConvCost)
+          ? Math.abs(prevConvCost - currentConvCost)
+          : Number.POSITIVE_INFINITY;
+        prevConvCost = currentConvCost;
+
+        if (maxViol <= 1e-6 && accepted && iter >= 5) {
+          if (costChange < 1e-6) {
+            feasibleConvStreak++;
+          } else {
+            feasibleConvStreak = 0;
+          }
+
+          if (feasibleConvStreak >= 3) {
+            console.log('🎯 [AL] Converged at iter', iter, 'with score', bestScore.toFixed(6), `(stable=${feasibleConvStreak}, Δcost=${costChange.toExponential(2)})`);
             break;
           }
+        } else {
+          feasibleConvStreak = 0;
         }
 
         if (onProgressKKT) {
@@ -5560,6 +5604,13 @@ export async function runOptimizationMVP(options = {}) {
 if (typeof window !== 'undefined') {
   window['OptimizationMVP'] = {
     run: runOptimizationMVP,
-    stop: () => { __optimizerStopRequested = true; }
+    stop: () => {
+      __optimizerStopRequested = true;
+      try {
+        if (typeof globalThis !== 'undefined') {
+          globalThis.__stopOptimization = true;
+        }
+      } catch (_) {}
+    }
   };
 }
