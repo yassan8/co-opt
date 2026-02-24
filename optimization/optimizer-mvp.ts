@@ -2675,6 +2675,49 @@ export async function runOptimizationMVP(options = {}) {
     return { ok: false, reason: formatNoVariableReason(activeCfg) };
   }
 
+  // Helper functions used by both LM and AL methods
+  const getScaleForVar = (v) => {
+    try {
+      const entry = getJointVariableEntry(jointState, v.id);
+      const scaleFromEntry = entry?.optimize && Number.isFinite(Number(entry.optimize.scale)) ? Number(entry.optimize.scale) : null;
+      const base = scaleFromEntry !== null ? Math.max(1e-30, scaleFromEntry) : defaultScaleForKey(v.key);
+      const mag = Math.abs(Number(v.value));
+      const s = Math.max(base, Number.isFinite(mag) ? mag : 0);
+      return Number.isFinite(s) && s > 0 ? s : base;
+    } catch (_) {
+      const base = defaultScaleForKey(v?.key);
+      const mag = Math.abs(Number(v?.value));
+      const s = Math.max(base, Number.isFinite(mag) ? mag : 0);
+      return Number.isFinite(s) && s > 0 ? s : base;
+    }
+  };
+
+  const finiteDifferenceStepForVar = (v) => {
+    const x = Number(v.value);
+    const absx = Math.abs(x);
+    const scale = getScaleForVar(v);
+
+    // Prefer a scaled step so tiny coef vars get a meaningful derivative.
+    // Keep relative step too so large radii still use a reasonable perturbation.
+    const rel = absx * fdStepFraction;
+    const scaled = scale * fdScaledStep;
+
+    // Allow per-variable overrides via optimize.fdStepAbs / optimize.fdStepRel if present.
+    try {
+      const entry = getJointVariableEntry(jointState, v.id);
+      const o = entry?.optimize;
+      const absOverride = o && Number.isFinite(Number(o.fdStepAbs)) ? Math.max(0, Number(o.fdStepAbs)) : null;
+      const relOverride = o && Number.isFinite(Number(o.fdStepRel)) ? Math.max(0, Number(o.fdStepRel)) : null;
+      const rel2 = relOverride !== null ? absx * relOverride : rel;
+      const h0 = Math.max(rel2, scaled);
+      const h = absOverride !== null ? Math.max(absOverride, h0) : Math.max(fdMinStep, h0);
+      return Number.isFinite(h) && h > 0 ? h : Math.max(fdMinStep, 1e-18);
+    } catch (_) {
+      const h = Math.max(fdMinStep, rel, scaled);
+      return Number.isFinite(h) && h > 0 ? h : Math.max(fdMinStep, 1e-18);
+    }
+  };
+
   // DLS/LM mode
   if (method === 'lm') {
     const t0 = nowMs();
@@ -2966,48 +3009,6 @@ export async function runOptimizationMVP(options = {}) {
       const dot = id.indexOf('.');
       if (dot <= 0) return { blockId: '', key: '' };
       return { blockId: id.slice(0, dot), key: id.slice(dot + 1) };
-    };
-
-    const getScaleForVar = (v) => {
-      try {
-        const entry = getJointVariableEntry(jointState, v.id);
-        const scaleFromEntry = entry?.optimize && Number.isFinite(Number(entry.optimize.scale)) ? Number(entry.optimize.scale) : null;
-        const base = scaleFromEntry !== null ? Math.max(1e-30, scaleFromEntry) : defaultScaleForKey(v.key);
-        const mag = Math.abs(Number(v.value));
-        const s = Math.max(base, Number.isFinite(mag) ? mag : 0);
-        return Number.isFinite(s) && s > 0 ? s : base;
-      } catch (_) {
-        const base = defaultScaleForKey(v?.key);
-        const mag = Math.abs(Number(v?.value));
-        const s = Math.max(base, Number.isFinite(mag) ? mag : 0);
-        return Number.isFinite(s) && s > 0 ? s : base;
-      }
-    };
-
-    const finiteDifferenceStepForVar = (v) => {
-      const x = Number(v.value);
-      const absx = Math.abs(x);
-      const scale = getScaleForVar(v);
-
-      // Prefer a scaled step so tiny coef vars get a meaningful derivative.
-      // Keep relative step too so large radii still use a reasonable perturbation.
-      const rel = absx * fdStepFraction;
-      const scaled = scale * fdScaledStep;
-
-      // Allow per-variable overrides via optimize.fdStepAbs / optimize.fdStepRel if present.
-      try {
-        const entry = getJointVariableEntry(jointState, v.id);
-        const o = entry?.optimize;
-        const absOverride = o && Number.isFinite(Number(o.fdStepAbs)) ? Math.max(0, Number(o.fdStepAbs)) : null;
-        const relOverride = o && Number.isFinite(Number(o.fdStepRel)) ? Math.max(0, Number(o.fdStepRel)) : null;
-        const rel2 = relOverride !== null ? absx * relOverride : rel;
-        const h0 = Math.max(rel2, scaled);
-        const h = absOverride !== null ? Math.max(absOverride, h0) : Math.max(fdMinStep, h0);
-        return Number.isFinite(h) && h > 0 ? h : Math.max(fdMinStep, 1e-18);
-      } catch (_) {
-        const h = Math.max(fdMinStep, rel, scaled);
-        return Number.isFinite(h) && h > 0 ? h : Math.max(fdMinStep, 1e-18);
-      }
     };
 
     const maybeSave = (_why) => {
@@ -4352,17 +4353,11 @@ export async function runOptimizationMVP(options = {}) {
         const n = x.length;
         const m = r0.length;
         const J = Array.from({ length: m }, () => Array(n).fill(0));
-        
-        // 【修正】倍精度浮動小数点の桁落ちを防ぐ最適な刻み幅の基準（約 1.5e-8）
-        const sqrtEps = 1.49e-8;
 
         for (let i = 0; i < n; i++) {
-          const baseScale = Math.max(1e-12, Number(varScales[i]) || 1);
-          const valueScale = Math.max(1e-12, Math.abs(x[i]));
-          const stepBase = Math.max(baseScale, valueScale);
-          
-          // 【修正】相対ステップを sqrtEps ベースにし、下限を 1e-10 に引き上げ
-          let eps = Math.max(1e-10, stepBase * sqrtEps);
+          // 【修正】LM法と共通化：finiteDifferenceStepForVar を使用してノイズに強いステップを計算
+          const vObj = { id: varIds[i], key: vars[i]?.key, value: x[i] };
+          let eps = finiteDifferenceStepForVar(vObj);
           
           const xp = x.slice();
           xp[i] += eps;
@@ -4561,6 +4556,16 @@ export async function runOptimizationMVP(options = {}) {
             for (let i = 0; i < m; i++) s += J[i][j] * J[i][k];
             A[j][k] = s;
             A[k][j] = s;
+          }
+        }
+        
+        // 【追加】LM法と同様に、非球面係数の暴走を防ぐティコノフ正則化を導入
+        // これにより、高次非球面がノイズに過剰反応してストールするのを防ぎます
+        if (asphericRegularization > 0) {
+          for (let i = 0; i < n; i++) {
+            if (isAsphereCoefKey(vars[i]?.key)) {
+              A[i][i] += asphericRegularization;
+            }
           }
         }
         
