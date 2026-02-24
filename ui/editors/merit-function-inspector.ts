@@ -442,12 +442,19 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     name: "EDGE",
     description: "Edge Thickness",
     parameters: [
-      { key: "param1", label: "Surface" },
+      { key: "param1", label: "Element" },
       { key: "param2", label: "Height" },
-      { key: "param3", label: "Reserved" },
-      { key: "param4", label: "Reserved" }
+      { key: "param3", label: "Direction", description: "X/Y/blank=Radial" }
     ],
-    notes: "Controls edge thickness at specified height. Prevents lens manufacturing issues."
+    notes: "Controls edge thickness at specified height. Select lens element (Lens, Doublet, Triplet). Supports toric surfaces with X/Y direction. For spherical/aspheric, leave Direction blank for radial calculation. Unit: mm."
+  },
+  "CTCT": {
+    name: "CTCT",
+    description: "Center Thickness",
+    parameters: [
+      { key: "param1", label: "Element/Gap" }
+    ],
+    notes: "Evaluates center thickness of the specified lens element or gap. Select from Lens, Doublet, Triplet, or Gap. Unit: mm."
   },
   "CTGT": {
     name: "CTGT",
@@ -476,7 +483,8 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'TOT_LCA', 'TOT_TCA',
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
   'LA_RMS_UM',
-  'ZERN_COEFF'
+  'ZERN_COEFF',
+  'EDGE', 'CTCT'
 ]);
 
 /**

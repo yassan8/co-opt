@@ -532,7 +532,7 @@ class SystemRequirementsEditor {
       for (const key of this._operandKeys) {
         const opt = document.createElement('option');
         opt.value = key;
-        opt.textContent = OPERAND_DEFINITIONS[key]?.name || key;
+        opt.textContent = OPERAND_DEFINITIONS[key]?.description || key;
         operandSel.appendChild(opt);
       }
       operandSel.value = String(row.operand || '').trim();
@@ -676,6 +676,12 @@ class SystemRequirementsEditor {
         // SPOT_SIZE param5: Surface selection (1-based, empty=image)
         const isSpotSizeSurfaceParam = field === 'param5' && String(row?.operand ?? '').startsWith('SPOT_SIZE');
         
+        // EDGE param2: Height selection (based on semidia)
+        const isEdgeHeightParam = field === 'param2' && String(row?.operand ?? '').trim() === 'EDGE';
+        
+        // EDGE param3: Direction selection (X/Y/blank=Radial)
+        const isEdgeDirectionParam = field === 'param3' && String(row?.operand ?? '').trim() === 'EDGE';
+        
         if (isSpotSizeSurfaceParam) {
           // SPOT_SIZE param5: Surface selection dropdown (1-based surface numbers, empty=image)
           control = document.createElement('select');
@@ -708,6 +714,246 @@ class SystemRequirementsEditor {
             }
           } catch (err) {
             console.warn('Failed to populate SPOT_SIZE param5 dropdown:', err);
+          }
+          
+          control.value = String(row[field] || '');
+        } else if (isEdgeDirectionParam) {
+          // EDGE param5: Direction dropdown (Radial/X/Y)
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          
+          const options = [
+            { value: '', label: '(Radial)' },
+            { value: 'X', label: 'X' },
+            { value: 'Y', label: 'Y' }
+          ];
+          for (const opt of options) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+          control.value = String(row[field] || '');
+        } else if (isEdgeHeightParam) {
+          // EDGE param2: Height dropdown (based on semidia of selected surface)
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          
+          // Get semidia from param1 (surface ID)
+          const selectedSurfaceId = row.param1;
+          let semidia = 10; // default fallback
+          
+          try {
+            const opticalRows = (getOpticalSystemRows as any)(null);
+            if (Array.isArray(opticalRows) && selectedSurfaceId) {
+              const selectedSurf = opticalRows.find((s: any) => 
+                s && String(s.id) === String(selectedSurfaceId)
+              );
+              
+              if (selectedSurf && selectedSurf.semidia) {
+                const semidiaVal = Number(selectedSurf.semidia);
+                if (Number.isFinite(semidiaVal) && semidiaVal > 0) {
+                  semidia = semidiaVal;
+                }
+              }
+            }
+          } catch (err) {
+            console.warn('Failed to get semidia for EDGE Height:', err);
+          }
+          
+          // Generate height options as percentages of semidia
+          const heightOptions = [
+            { percent: 100, label: `${semidia.toFixed(2)} mm (100%)` },
+            { percent: 95, label: `${(semidia * 0.95).toFixed(2)} mm (95%)` },
+            { percent: 90, label: `${(semidia * 0.90).toFixed(2)} mm (90%)` },
+            { percent: 85, label: `${(semidia * 0.85).toFixed(2)} mm (85%)` },
+            { percent: 80, label: `${(semidia * 0.80).toFixed(2)} mm (80%)` },
+            { percent: 70, label: `${(semidia * 0.70).toFixed(2)} mm (70%)` }
+          ];
+          
+          for (const opt of heightOptions) {
+            const el = document.createElement('option');
+            el.value = String(semidia * opt.percent / 100);
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+          
+          control.value = String(row[field] || semidia);
+        } else if (field === 'param1' && String(row?.operand ?? '').trim() === 'CTCT') {
+          // CTCT param1: Element/Gap selection (Lens, Doublet, Triplet, Gap)
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          
+          // Get optical system rows from Design Intent
+          try {
+            const opticalRows = (getOpticalSystemRows as any)(null);
+            if (Array.isArray(opticalRows)) {
+              let lensCount = 0;
+              let doubletCount = 0;
+              let tripletCount = 0;
+              let gapCount = 0;
+              
+              for (let i = 0; i < opticalRows.length; i++) {
+                const surfRow = opticalRows[i];
+                if (!surfRow) continue;
+                
+                const objType = String(surfRow['object type'] || surfRow.object || surfRow.surfType || '').trim().toLowerCase();
+                const material = String(surfRow.material || '').trim().toLowerCase();
+                const thickness = Number(surfRow.thickness);
+                
+                const isObject = objType === 'object';
+                const isImage = objType === 'image';
+                const isCT = objType === 'ct' || objType.includes('coordinate') || objType.includes('coordtrans');
+                const isStop = objType === 'stop' || objType === 'sto' || objType === 'aperturestop';
+                const isGlass = material && material !== 'air' && material !== '';
+                
+                if (isObject || isImage || isCT || isStop) continue;
+                
+                if (!isGlass && Number.isFinite(thickness) && thickness > 0) {
+                  // Air gap
+                  gapCount++;
+                  const opt = document.createElement('option');
+                  // Store 1-based surface index from getOpticalSystemRows
+                  opt.value = String(i + 1);
+                  opt.textContent = `Gap ${gapCount}`;
+                  control.appendChild(opt);
+                } else if (isGlass) {
+                  // Check if this is part of doublet/triplet by looking at next surface
+                  let elementType = 'Lens';
+                  let elementCount = 1;
+                  
+                  // Simple heuristic: if next surface also has glass material (no air gap), it's a doublet/triplet
+                  let consecutiveGlass = 1;
+                  for (let j = i + 1; j < opticalRows.length; j++) {
+                    const nextSurf = opticalRows[j];
+                    if (!nextSurf) break;
+                    const nextMaterial = String(nextSurf.material || '').trim().toLowerCase();
+                    const nextObjType = String(nextSurf['object type'] || nextSurf.object || nextSurf.surfType || '').trim().toLowerCase();
+                    
+                    if (nextObjType === 'image' || nextObjType === 'stop' || nextObjType === 'sto') break;
+                    
+                    if (nextMaterial && nextMaterial !== 'air' && nextMaterial !== '') {
+                      consecutiveGlass++;
+                    } else {
+                      break;
+                    }
+                  }
+                  
+                  if (consecutiveGlass >= 3) {
+                    tripletCount++;
+                    elementType = `Triplet ${tripletCount}`;
+                  } else if (consecutiveGlass >= 2) {
+                    doubletCount++;
+                    elementType = `Doublet ${doubletCount}`;
+                  } else {
+                    lensCount++;
+                    elementType = `Lens ${lensCount}`;
+                  }
+                  
+                  const opt = document.createElement('option');
+                  // Store 1-based surface index from getOpticalSystemRows
+                  opt.value = String(i + 1);
+                  opt.textContent = elementType;
+                  control.appendChild(opt);
+                }
+              }
+            }
+          } catch (err) {
+            console.warn('Failed to populate CTCT param1 dropdown:', err);
+          }
+          
+          control.value = String(row[field] || '');
+        } else if (field === 'param1' && String(row?.operand ?? '').trim() === 'EDGE') {
+          // EDGE param1: Element selection (Lens, Doublet, Triplet - no Gap)
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          
+          // Get optical system rows from Design Intent
+          try {
+            const opticalRows = (getOpticalSystemRows as any)(null);
+            if (Array.isArray(opticalRows)) {
+              let lensCount = 0;
+              let doubletCount = 0;
+              let tripletCount = 0;
+              
+              for (let i = 0; i < opticalRows.length; i++) {
+                const surfRow = opticalRows[i];
+                if (!surfRow) continue;
+                
+                const objType = String(surfRow['object type'] || surfRow.object || surfRow.surfType || '').trim().toLowerCase();
+                const material = String(surfRow.material || '').trim().toLowerCase();
+                
+                const isObject = objType === 'object';
+                const isImage = objType === 'image';
+                const isCT = objType === 'ct' || objType.includes('coordinate') || objType.includes('coordtrans');
+                const isStop = objType === 'stop' || objType === 'sto' || objType === 'aperturestop';
+                const isGlass = material && material !== 'air' && material !== '';
+                
+                if (isObject || isImage || isCT || isStop) continue;
+                
+                // Only glass elements (no air gaps for EDGE)
+                if (isGlass) {
+                  // Check if this is part of doublet/triplet by looking at next surface
+                  let elementType = 'Lens';
+                  
+                  // Simple heuristic: if next surface also has glass material (no air gap), it's a doublet/triplet
+                  let consecutiveGlass = 1;
+                  for (let j = i + 1; j < opticalRows.length; j++) {
+                    const nextSurf = opticalRows[j];
+                    if (!nextSurf) break;
+                    const nextMaterial = String(nextSurf.material || '').trim().toLowerCase();
+                    const nextObjType = String(nextSurf['object type'] || nextSurf.object || nextSurf.surfType || '').trim().toLowerCase();
+                    
+                    if (nextObjType === 'image' || nextObjType === 'stop' || nextObjType === 'sto') break;
+                    
+                    if (nextMaterial && nextMaterial !== 'air' && nextMaterial !== '') {
+                      consecutiveGlass++;
+                    } else {
+                      break;
+                    }
+                  }
+                  
+                  if (consecutiveGlass >= 3) {
+                    tripletCount++;
+                    elementType = `Triplet ${tripletCount}`;
+                  } else if (consecutiveGlass >= 2) {
+                    doubletCount++;
+                    elementType = `Doublet ${doubletCount}`;
+                  } else {
+                    lensCount++;
+                    elementType = `Lens ${lensCount}`;
+                  }
+                  
+                  const opt = document.createElement('option');
+                  // Store 1-based surface index from getOpticalSystemRows
+                  opt.value = String(i + 1);
+                  opt.textContent = elementType;
+                  control.appendChild(opt);
+                }
+              }
+            }
+          } catch (err) {
+            console.warn('Failed to populate EDGE param1 dropdown:', err);
           }
           
           control.value = String(row[field] || '');
@@ -944,6 +1190,13 @@ class SystemRequirementsEditor {
             }
             
             this.saveToStorage();
+            
+            // Re-render table if EDGE param1 changes (to update Height dropdown based on new semidia)
+            if (field === 'param1' && String(row?.operand ?? '').trim() === 'EDGE') {
+              this.render();
+              return;
+            }
+            
             this.scheduleEvaluateAndUpdate();
           });
           control.addEventListener('blur', onCellBlur);
