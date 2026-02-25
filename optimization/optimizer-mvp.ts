@@ -103,6 +103,22 @@ function setLastOptimizeProfile(value) {
   setWindowDebugBagValue('optimizerMvp', 'lastOptimizeProfile', value && typeof value === 'object' ? value : null);
 }
 
+function bumpOptimizerProfileCount(name, delta = 1) {
+  try {
+    const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+    const p = g ? g.__cooptOptimizerProfileContext : null;
+    const counts = p && typeof p === 'object' ? p.counts : null;
+    if (!counts || typeof counts !== 'object') return;
+    const key = String(name || '').trim();
+    if (!key) return;
+    const d = Number(delta);
+    const add = Number.isFinite(d) ? d : 1;
+    counts[key] = (Number(counts[key]) || 0) + add;
+  } catch (_) {
+    // ignore
+  }
+}
+
 function nextFrame() {
   const prof = (() => {
     try {
@@ -1501,6 +1517,7 @@ function evaluateRequirementsAllConfigsAllScenarios({
   const items = Array.isArray(residualItems) ? residualItems : buildResidualItemsForConfigs(rows, {}, !!multiScenario);
   const prev = getScenarioOverrideGlobal();
   const overrideMap = (prev && typeof prev === 'object') ? { ...prev } : {};
+  const operandValueCache = new Map();
 
   let feasible = true;
   let violationScore = 0;
@@ -1536,7 +1553,28 @@ function evaluateRequirementsAllConfigsAllScenarios({
         weight: r.weight
       };
 
-      const evaluated = computeAmountOrPenalty(r.op, editor.calculateOperandValue(opObj), r.target, r.tol);
+      const opCacheKey = [
+        String(cfgId),
+        String(it.scenarioId ?? ''),
+        String(r.operand ?? ''),
+        String(r.param1 ?? ''),
+        String(r.param2 ?? ''),
+        String(r.param3 ?? ''),
+        String(r.param4 ?? ''),
+        String(r.param5 ?? '')
+      ].join('|');
+
+      let rawValue;
+      if (operandValueCache.has(opCacheKey)) {
+        bumpOptimizerProfileCount('operandValueCacheHits', 1);
+        rawValue = operandValueCache.get(opCacheKey);
+      } else {
+        bumpOptimizerProfileCount('operandValueCacheMisses', 1);
+        rawValue = editor.calculateOperandValue(opObj);
+        operandValueCache.set(opCacheKey, rawValue);
+      }
+
+      const evaluated = computeAmountOrPenalty(r.op, rawValue, r.target, r.tol);
       const current = evaluated.current;
       const amount = evaluated.amount;
       if (!Number.isFinite(amount) || amount <= 0) continue;
@@ -2073,6 +2111,9 @@ export async function runOptimizationMVP(options = {}) {
     counts: {
       calculateOperandValueCalls: 0,
       calculateOperandValueMs: 0,
+      operandValueCacheHits: 0,
+      operandValueCacheMisses: 0,
+      meritRuntimeCacheEnabled: 0,
       evalResidualsNowCalls: 0,
       evalResidualsNowMs: 0,
       evalCompositeCalls: 0,
@@ -2117,6 +2158,14 @@ export async function runOptimizationMVP(options = {}) {
       if (__profile.counts && typeof __profile.counts === 'object') {
         __profile.calculateOperandValueCalls = Number(__profile.counts.calculateOperandValueCalls) || 0;
         __profile.calculateOperandValueMs = Number(__profile.counts.calculateOperandValueMs) || 0;
+        __profile.operandValueCacheHits = Number(__profile.counts.operandValueCacheHits) || 0;
+        __profile.operandValueCacheMisses = Number(__profile.counts.operandValueCacheMisses) || 0;
+        __profile.operandValueCacheHitRate = (
+          (__profile.operandValueCacheHits + __profile.operandValueCacheMisses) > 0
+            ? (__profile.operandValueCacheHits / (__profile.operandValueCacheHits + __profile.operandValueCacheMisses))
+            : 0
+        );
+        __profile.meritRuntimeCacheEnabled = Number(__profile.counts.meritRuntimeCacheEnabled) || 0;
         __profile.evalResidualsNowCalls = Number(__profile.counts.evalResidualsNowCalls) || 0;
         __profile.evalResidualsNowMs = Number(__profile.counts.evalResidualsNowMs) || 0;
         __profile.evalCompositeCalls = Number(__profile.counts.evalCompositeCalls) || 0;
@@ -2277,6 +2326,19 @@ export async function runOptimizationMVP(options = {}) {
           calls: top.calls
         });
       }
+
+      try {
+        const cacheHits = Number(__profile.counts.operandValueCacheHits) || 0;
+        const cacheMisses = Number(__profile.counts.operandValueCacheMisses) || 0;
+        const cacheTotal = cacheHits + cacheMisses;
+        const hitRate = cacheTotal > 0 ? (100 * cacheHits / cacheTotal) : 0;
+        console.log('[OptimizerMVP] cache stats', {
+          operandValueCacheHits: cacheHits,
+          operandValueCacheMisses: cacheMisses,
+          operandValueCacheHitRatePct: Math.round(hitRate * 10) / 10,
+          meritRuntimeCacheEnabled: Number(__profile.counts.meritRuntimeCacheEnabled) || 0
+        });
+      } catch (_) {}
       console.groupEnd();
     } catch (_) {}
   };
@@ -2876,6 +2938,7 @@ export async function runOptimizationMVP(options = {}) {
     const evalResidualsNow = () => {
       /** @type {number[]} */
       const residuals = [];
+      const operandValueCache = new Map();
 
       // Also compute the linear composite score (same semantics as evalCompositeFromRequirements)
       // without re-evaluating operands.
@@ -2898,9 +2961,20 @@ export async function runOptimizationMVP(options = {}) {
 
       const prev = getScenarioOverrideGlobal();
       const overrideMap = (prev && typeof prev === 'object') ? { ...prev } : {};
+      let __prevRuntimeCache = null;
 
       const itemsArr = Array.isArray(residualItemsForLM) ? residualItemsForLM : [];
       try {
+        try {
+          __prevRuntimeCache = (editor && editor._runtimeCache !== undefined) ? editor._runtimeCache : null;
+          if (editor) {
+            editor._runtimeCache = new Map();
+            if (__profile) __profile.counts.meritRuntimeCacheEnabled = (Number(__profile.counts.meritRuntimeCacheEnabled) || 0) + 1;
+          }
+        } catch (_) {
+          __prevRuntimeCache = null;
+        }
+
         try {
           __prevOptRows = (typeof globalThis !== 'undefined') ? globalThis.__cooptOpticalSystemRowsOverride : undefined;
         } catch (_) {
@@ -2963,7 +3037,28 @@ export async function runOptimizationMVP(options = {}) {
           weight: r?.weight
         };
 
-        const evaluated = computeAmountOrPenalty(r?.op, editor.calculateOperandValue(opObj), r?.target, r?.tol);
+        const opCacheKey = [
+          String(cfgId),
+          String(sid ?? ''),
+          String(r?.operand ?? ''),
+          String(r?.param1 ?? ''),
+          String(r?.param2 ?? ''),
+          String(r?.param3 ?? ''),
+          String(r?.param4 ?? ''),
+          String(r?.param5 ?? '')
+        ].join('|');
+
+        let rawValue;
+        if (operandValueCache.has(opCacheKey)) {
+          if (__profile) __profile.counts.operandValueCacheHits = (Number(__profile.counts.operandValueCacheHits) || 0) + 1;
+          rawValue = operandValueCache.get(opCacheKey);
+        } else {
+          if (__profile) __profile.counts.operandValueCacheMisses = (Number(__profile.counts.operandValueCacheMisses) || 0) + 1;
+          rawValue = editor.calculateOperandValue(opObj);
+          operandValueCache.set(opCacheKey, rawValue);
+        }
+
+        const evaluated = computeAmountOrPenalty(r?.op, rawValue, r?.target, r?.tol);
         const current = evaluated.current;
         let residualVal = 0;
         const amount = evaluated.amount;
@@ -3031,6 +3126,9 @@ export async function runOptimizationMVP(options = {}) {
           if (typeof globalThis !== 'undefined') {
             globalThis.__cooptOpticalSystemRowsOverride = __prevOptRows;
           }
+        } catch (_) {}
+        try {
+          if (editor) editor._runtimeCache = __prevRuntimeCache;
         } catch (_) {}
       }
 
