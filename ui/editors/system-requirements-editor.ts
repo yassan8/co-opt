@@ -105,6 +105,7 @@ class SystemRequirementsEditor {
   _renderRow: any;
   _paramsExpanded: boolean;
   _paramToggleBtn: HTMLButtonElement | null;
+  _progressThrottleState: { label: string; value: number; max: number; at: number } | null;
 
   constructor() {
     this.requirements = [];
@@ -124,6 +125,7 @@ class SystemRequirementsEditor {
     this._progressEls = null;
     this._paramsExpanded = true;
     this._paramToggleBtn = null;
+    this._progressThrottleState = null;
     this.inspector = new InspectorManager('requirement-inspector', 'requirement-inspector-content');
 
     this.loadFromStorage();
@@ -222,6 +224,52 @@ class SystemRequirementsEditor {
       return String(n);
     };
 
+    const getCtctElementLabelBySurfaceValue = (surfaceValue: any): string => {
+      const raw = String(surfaceValue ?? '').trim();
+      if (!raw) return '';
+      try {
+        const opticalRows = (getOpticalSystemRows as any)(null);
+        if (!Array.isArray(opticalRows)) return raw;
+
+        let lensCount = 0;
+        let gapCount = 0;
+
+        for (let i = 0; i < opticalRows.length; i++) {
+          const surfRow = opticalRows[i];
+          if (!surfRow) continue;
+
+          const objType = String(surfRow['object type'] || surfRow.object || surfRow.surfType || '').trim().toLowerCase();
+          const material = String(surfRow.material || '').trim().toLowerCase();
+          const thickness = Number(surfRow.thickness);
+
+          const isObject = objType === 'object';
+          const isImage = objType === 'image';
+          const isCT = objType === 'ct' || objType.includes('coordinate') || objType.includes('coordtrans');
+          const isStop = objType === 'stop' || objType === 'sto' || objType === 'aperturestop';
+          const isGlass = material && material !== 'air' && material !== '';
+          const isGapType = objType === 'gap' || objType.includes('gap');
+          const hasFiniteThickness = Number.isFinite(thickness);
+          const isGapLike = isGapType || isStop || (!isGlass && hasFiniteThickness);
+
+          if (isObject || isCT || isImage) continue;
+
+          const valueKey = String((surfRow.id !== undefined && surfRow.id !== null) ? surfRow.id : (i + 1));
+          let label = '';
+
+          if (isGapLike) {
+            gapCount++;
+            label = `Gap ${gapCount}`;
+          } else if (isGlass) {
+            lensCount++;
+            label = `Lens ${lensCount}`;
+          }
+
+          if (valueKey === raw) return label || raw;
+        }
+      } catch (_) {}
+      return raw;
+    };
+
     const makeSpecSummary = (row: any): string => {
       const op = String(row?.op || '=').trim();
       const targetS = formatNumberShort(row?.target ?? 0);
@@ -270,14 +318,12 @@ class SystemRequirementsEditor {
 
     const ensureEflBlocksDatalist = (blocks: any[]): string | null => {
       try {
-        console.log('[EFL Datalist] Creating datalist for blocks:', blocks?.length || 0);
         const id = 'coopt-efl-blocks-datalist';
         let dl = document.getElementById(id) as HTMLDataListElement | null;
         if (!dl) {
           dl = document.createElement('datalist');
           dl.id = id;
           document.body.appendChild(dl);
-          console.log('[EFL Datalist] Created new datalist element');
         }
         dl.innerHTML = '';
         const displayLabelById = getEflDisplayLabelByBlockId(blocks || []);
@@ -285,7 +331,6 @@ class SystemRequirementsEditor {
           const o = document.createElement('option');
           o.value = value;
           dl!.appendChild(o);
-          console.log(`[EFL Datalist] Added option: ${value}`);
         };
         addOpt('ALL');
         for (const b of blocks || []) {
@@ -294,7 +339,6 @@ class SystemRequirementsEditor {
           const label = displayLabelById.get(bid) || bid;
           addOpt(label);
         }
-        console.log(`[EFL Datalist] Total options: ${dl.children.length}`);
         return id;
       } catch (_) {
         return null;
@@ -385,8 +429,9 @@ class SystemRequirementsEditor {
     
     // Parameters column with toggle button (support up to 5 params)
     const thParams = mkTh('Parameters', widths.param * 5 + widths.param2, null);
+    const paramsExpanded = !!this._paramsExpanded;
     const toggleBtn = document.createElement('button');
-    toggleBtn.textContent = '▼';
+    toggleBtn.textContent = paramsExpanded ? '▼' : '▶';
     toggleBtn.style.marginLeft = '8px';
     toggleBtn.style.fontSize = '10px';
     toggleBtn.style.padding = '2px 6px';
@@ -394,12 +439,11 @@ class SystemRequirementsEditor {
     toggleBtn.style.border = '1px solid #ccc';
     toggleBtn.style.borderRadius = '3px';
     toggleBtn.style.background = '#f5f5f5';
-    toggleBtn.setAttribute('aria-expanded', 'true');
+    toggleBtn.setAttribute('aria-expanded', paramsExpanded ? 'true' : 'false');
     toggleBtn.title = 'Toggle parameter visibility';
     thParams.appendChild(toggleBtn);
     headRow.appendChild(thParams);
-    
-    this._paramsExpanded = true;
+
     this._paramToggleBtn = toggleBtn;
     
     headRow.appendChild(mkTh('Op', widths.op, null));
@@ -529,16 +573,42 @@ class SystemRequirementsEditor {
       operandSel.style.fontSize = '12px';
       operandSel.addEventListener('focus', onCellFocus);
       operandSel.addEventListener('blur', onCellBlur);
+      const formatOperandLabel = (key: string): string => {
+        const labelOverrides: Record<string, string> = {
+          EDGE: 'Edge Thickness',
+          CTCT: 'Center Thickness'
+        };
+        if (labelOverrides[key]) {
+          return labelOverrides[key];
+        }
+        const def: any = OPERAND_DEFINITIONS[key] || {};
+        const source = String(def.name || def.description || key);
+        const withoutSystemData = source
+          .replace(/\s*\((?:System\s*data|System\s*Data)\)\s*/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        const maxLen = 34;
+        if (withoutSystemData.length <= maxLen) return withoutSystemData;
+        return `${withoutSystemData.slice(0, maxLen - 1)}…`;
+      };
       for (const key of this._operandKeys) {
         const opt = document.createElement('option');
         opt.value = key;
-        opt.textContent = OPERAND_DEFINITIONS[key]?.description || key;
+        opt.textContent = formatOperandLabel(key);
         operandSel.appendChild(opt);
       }
       operandSel.value = String(row.operand || '').trim();
       operandSel.addEventListener('change', () => {
         const oldValue = row.operand;
         row.operand = operandSel.value;
+
+        // Initialize default params for specific operands
+        if (row.operand === 'TA_RMS_UM') {
+          row.param1 = '';   // Source: Primary wavelength
+          row.param2 = '1';  // Object: first row
+          row.param3 = '';   // Component: total
+          row.param4 = '';   // Raynum: default(51)
+        }
         
         // Record undo command
         if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== row.operand) {
@@ -667,6 +737,8 @@ class SystemRequirementsEditor {
         const isWavelengthParam = paramLabel.includes('λ') || paramDesc.toLowerCase().includes('source row');
         const isObjectParam = paramLabel.includes('Field idx') || paramLabel.includes('Object idx');
         const isMetricParam = paramLabel === 'Metric';
+        const isComponentParam = paramLabel === 'Component';
+        const isRaynumParam = paramLabel === 'Raynum';
         const isUnitParam = paramLabel === 'Unit';
         const isModeParam = paramLabel === 'Mode' || paramDesc.includes('0=Imaging, 1=Afocal');
         const isNollParam = paramLabel === 'n (Noll)';
@@ -790,7 +862,7 @@ class SystemRequirementsEditor {
           
           control.value = String(row[field] || semidia);
         } else if (field === 'param1' && String(row?.operand ?? '').trim() === 'CTCT') {
-          // CTCT param1: Element/Gap selection (Lens, Doublet, Triplet, Gap)
+          // CTCT param1: Element/Gap selection (Lens, Gap) in Design Intent order
           control = document.createElement('select');
           control.style.width = '100%';
           control.style.fontSize = '12px';
@@ -804,8 +876,6 @@ class SystemRequirementsEditor {
             const opticalRows = (getOpticalSystemRows as any)(null);
             if (Array.isArray(opticalRows)) {
               let lensCount = 0;
-              let doubletCount = 0;
-              let tripletCount = 0;
               let gapCount = 0;
               
               for (let i = 0; i < opticalRows.length; i++) {
@@ -821,54 +891,23 @@ class SystemRequirementsEditor {
                 const isCT = objType === 'ct' || objType.includes('coordinate') || objType.includes('coordtrans');
                 const isStop = objType === 'stop' || objType === 'sto' || objType === 'aperturestop';
                 const isGlass = material && material !== 'air' && material !== '';
+                const isGapType = objType === 'gap' || objType.includes('gap');
+                const hasFiniteThickness = Number.isFinite(thickness);
+                const isGapLike = isGapType || isStop || (!isGlass && hasFiniteThickness);
                 
-                if (isObject || isImage || isCT || isStop) continue;
+                if (isObject || isCT || isImage) continue;
                 
-                if (!isGlass && Number.isFinite(thickness) && thickness > 0) {
-                  // Air gap
+                if (isGapLike) {
                   gapCount++;
                   const opt = document.createElement('option');
-                  // Store 1-based surface index from getOpticalSystemRows
-                  opt.value = String(i + 1);
+                  opt.value = String((surfRow.id !== undefined && surfRow.id !== null) ? surfRow.id : (i + 1));
                   opt.textContent = `Gap ${gapCount}`;
                   control.appendChild(opt);
                 } else if (isGlass) {
-                  // Check if this is part of doublet/triplet by looking at next surface
-                  let elementType = 'Lens';
-                  let elementCount = 1;
-                  
-                  // Simple heuristic: if next surface also has glass material (no air gap), it's a doublet/triplet
-                  let consecutiveGlass = 1;
-                  for (let j = i + 1; j < opticalRows.length; j++) {
-                    const nextSurf = opticalRows[j];
-                    if (!nextSurf) break;
-                    const nextMaterial = String(nextSurf.material || '').trim().toLowerCase();
-                    const nextObjType = String(nextSurf['object type'] || nextSurf.object || nextSurf.surfType || '').trim().toLowerCase();
-                    
-                    if (nextObjType === 'image' || nextObjType === 'stop' || nextObjType === 'sto') break;
-                    
-                    if (nextMaterial && nextMaterial !== 'air' && nextMaterial !== '') {
-                      consecutiveGlass++;
-                    } else {
-                      break;
-                    }
-                  }
-                  
-                  if (consecutiveGlass >= 3) {
-                    tripletCount++;
-                    elementType = `Triplet ${tripletCount}`;
-                  } else if (consecutiveGlass >= 2) {
-                    doubletCount++;
-                    elementType = `Doublet ${doubletCount}`;
-                  } else {
-                    lensCount++;
-                    elementType = `Lens ${lensCount}`;
-                  }
-                  
+                  lensCount++;
                   const opt = document.createElement('option');
-                  // Store 1-based surface index from getOpticalSystemRows
-                  opt.value = String(i + 1);
-                  opt.textContent = elementType;
+                  opt.value = String((surfRow.id !== undefined && surfRow.id !== null) ? surfRow.id : (i + 1));
+                  opt.textContent = `Lens ${lensCount}`;
                   control.appendChild(opt);
                 }
               }
@@ -1086,6 +1125,51 @@ class SystemRequirementsEditor {
             control.appendChild(el);
           }
           control.value = String(row[field] || '');
+        } else if (isComponentParam) {
+          // Component dropdown: total / meridional / sagittal
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          const options = [
+            { value: '', label: '(default total)' },
+            { value: 'total', label: 'Total' },
+            { value: 'meridional', label: 'Meridional' },
+            { value: 'sagittal', label: 'Sagittal' }
+          ];
+          for (const opt of options) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+          control.value = String(row[field] || '');
+        } else if (isRaynumParam) {
+          // Raynum dropdown: fixed ray counts for transverse aberration RMS
+          control = document.createElement('select');
+          control.style.width = '100%';
+          control.style.fontSize = '12px';
+          control.style.height = '24px';
+          control.style.lineHeight = '24px';
+          control.style.padding = '2px 4px';
+          control.style.boxSizing = 'border-box';
+          const options = [
+            { value: '11', label: '11' },
+            { value: '21', label: '21' },
+            { value: '51', label: '51' },
+            { value: '101', label: '101' },
+            { value: '501', label: '501' }
+          ];
+          for (const opt of options) {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            control.appendChild(el);
+          }
+          control.value = String(row[field] || '51');
         } else if (isUnitParam) {
           // Unit dropdown: waves or um
           control = document.createElement('select');
@@ -1269,7 +1353,7 @@ class SystemRequirementsEditor {
       // Collapsed view: summary
       const paramsSummary = document.createElement('div');
       paramsSummary.className = 'params-summary';
-      paramsSummary.style.display = 'none';
+      paramsSummary.style.display = this._paramsExpanded ? 'none' : 'block';
       paramsSummary.style.fontSize = '11px';
       paramsSummary.style.color = '#666';
       paramsSummary.style.cursor = 'pointer';
@@ -1277,12 +1361,17 @@ class SystemRequirementsEditor {
       
       const updateSummary = (): void => {
         const values = [];
+        const operandName = String(row?.operand ?? '').trim();
         for (let i = 1; i <= paramCount; i++) {
           const val = row[`param${i}`];
           if (val !== undefined && val !== null && String(val).trim() !== '') {
             const paramDef = paramDefs[i - 1];
             const label = paramDef?.label || `P${i}`;
-            values.push(`${label}=${val}`);
+            let displayVal = String(val);
+            if (operandName === 'CTCT' && i === 1) {
+              displayVal = getCtctElementLabelBySurfaceValue(val);
+            }
+            values.push(`${label}=${displayVal}`);
           }
         }
         paramsSummary.textContent = values.length > 0 ? values.join(', ') : `${paramCount} param${paramCount !== 1 ? 's' : ''}`;
@@ -1292,7 +1381,7 @@ class SystemRequirementsEditor {
       // Expanded view: individual inputs
       const paramsExpanded = document.createElement('div');
       paramsExpanded.className = 'params-expanded';
-      paramsExpanded.style.display = 'flex';
+      paramsExpanded.style.display = this._paramsExpanded ? 'flex' : 'none';
       paramsExpanded.style.gap = '4px';
       
       const paramInputs = [];
@@ -1674,19 +1763,19 @@ class SystemRequirementsEditor {
 
       const wrap = document.createElement('div');
       wrap.id = 'requirements-progress-wrap';
+      wrap.className = 'requirements-progress-wrap';
       wrap.style.display = 'none';
-      wrap.style.marginTop = '6px';
 
       const label = document.createElement('div');
       label.id = 'requirements-progress-label';
-      label.className = 'merit-function-help';
+      label.className = 'merit-function-help requirements-progress-label';
       label.textContent = '';
 
       const prog = document.createElement('progress');
       prog.id = 'requirements-progress';
+      prog.className = 'requirements-progress-bar';
       prog.max = 1;
       prog.value = 0;
-      prog.style.width = '320px';
 
       wrap.appendChild(label);
       wrap.appendChild(prog);
@@ -1720,13 +1809,28 @@ class SystemRequirementsEditor {
         console.error('[Requirements] ❌ No progress elements in _setProgress');
         return;
       }
+      const nextLabel = String(labelText ?? '');
+      const nextMax = Number(max);
+      const normalizedMax = (Number.isFinite(nextMax) && nextMax > 0) ? nextMax : 1;
+      const nextValueRaw = Number(value);
+      const normalizedValue = (Number.isFinite(nextValueRaw) && nextValueRaw >= 0) ? nextValueRaw : 0;
+      const now = Date.now();
+      const prev = this._progressThrottleState;
+      if (prev) {
+        const sameLabel = prev.label === nextLabel;
+        const sameMax = prev.max === normalizedMax;
+        const sameValue = prev.value === normalizedValue;
+        const progressRateLimited = sameLabel && sameMax && !sameValue && (now - prev.at) < 120;
+        if ((sameLabel && sameMax && sameValue) || progressRateLimited) {
+          return;
+        }
+      }
       if (els.label) els.label.textContent = String(labelText ?? '');
       if (els.prog) {
-        const m = Number(max);
-        els.prog.max = (Number.isFinite(m) && m > 0) ? m : 1;
-        const v = Number(value);
-        els.prog.value = (Number.isFinite(v) && v >= 0) ? v : 0;
+        els.prog.max = normalizedMax;
+        els.prog.value = normalizedValue;
       }
+      this._progressThrottleState = { label: nextLabel, value: normalizedValue, max: normalizedMax, at: now };
     } catch (err) {
       console.error('[Requirements] Error in _setProgress:', err);
     }
@@ -1787,10 +1891,6 @@ class SystemRequirementsEditor {
           sid++;
           if (isImageRow(r)) {
             foundImageAt = i;
-            try {
-              console.log(`🎯 Image面検出: rowIndex=${i}, surfaceId=${sid}, config=${cfgKey}`);
-              console.log(`   surfType=${r?.surfType}, object type=${ot}`);
-            } catch (_) {}
             return sid;
           }
         }
@@ -1810,13 +1910,6 @@ class SystemRequirementsEditor {
           if (resolvedSurfaceId !== imageIdx) {
             resolvedSurfaceId = imageIdx;
           }
-        }
-      } catch (_) {}
-
-      try {
-        const dbg = (typeof globalThis !== 'undefined') ? (globalThis as any).__COOPT_DEBUG_REQUIREMENTS : false;
-        if (dbg) {
-          console.log(`🧪 [ReqDebug] surfaceIdRaw=${imageSurfaceIdRaw} resolvedSurfaceId=${resolvedSurfaceId} imageIdx=${imageIdx} cfg=${cfgKey}`);
         }
       } catch (_) {}
 
@@ -1878,14 +1971,6 @@ class SystemRequirementsEditor {
           existing.surfaceIndex !== null &&
           Number(existing.surfaceIndex) !== imageIdx
         );
-        if (needsIdUpdate) {
-          try {
-            console.log(`🔧 Updating Spot Diagram settings for config ${cfgKey}:`);
-            console.log(`   surfaceId: ${existing.surfaceId} → ${resolvedSurfaceId}`);
-            console.log(`   surfaceIndex: ${existing.surfaceIndex} → ${imageIdx}`);
-            console.log(`   Image row found at index ${imageIdx} with surfaceId ${resolvedSurfaceId}`);
-          } catch (_) {}
-        }
         if (needsIdUpdate || needsIndexUpdate || existing.surfaceIndex === undefined || existing.surfaceIndex === null) {
           existing.surfaceIndex = imageIdx;
         }
@@ -1979,7 +2064,7 @@ class SystemRequirementsEditor {
           this._setProgressVisible(true);
           this._setProgress('Updating config snapshots…', 0, Math.max(1, configs.length));
         } catch (_) {}
-      }, 0); // Changed from 150ms to 0ms for immediate display
+      }, 180);
     } catch (_) {}
 
     try {
@@ -2088,13 +2173,6 @@ class SystemRequirementsEditor {
         );
 
         try {
-          const debugFlag = (typeof globalThis !== 'undefined') ? (globalThis as any).__COOPT_DEBUG_REQUIREMENTS : false;
-          if (debugFlag) {
-            console.log(`🧪 [ReqDebug] cfg=${cfgId} active=${isActiveCfg} rowsForSpot=${Array.isArray(rowsForSpotSettings) ? rowsForSpotSettings.length : 'null'}`);
-          }
-        } catch (_) {}
-
-        try {
           this._setProgress('Updating config snapshots…', i + 1, Math.max(1, configs.length));
         } catch (_) {}
 
@@ -2110,18 +2188,10 @@ class SystemRequirementsEditor {
         if (activeId) {
           const map = loadSpotDiagramSettingsByConfigId();
           const activeCfgSettings = map[activeId];
-          
-          try {
-            console.log(`🔍 Checking active config (${activeId}) settings:`, activeCfgSettings);
-          } catch (_) {}
-          
+
           if (activeCfgSettings && typeof activeCfgSettings === 'object' && activeCfgSettings.surfaceId) {
             const activeImageSurfaceId = activeCfgSettings.surfaceId;
-            
-            try {
-              console.log(`🎯 Active config Image surfaceId: ${activeImageSurfaceId}`);
-            } catch (_) {}
-            
+
             for (const cfg of configs) {
               const cfgId = (cfg && cfg.id !== undefined && cfg.id !== null) ? String(cfg.id) : '';
               if (!cfgId || cfgId === activeId) continue;
@@ -2129,9 +2199,6 @@ class SystemRequirementsEditor {
               let existing = map[cfgId];
               // If settings don't exist for this config, create them.
               if (!existing || typeof existing !== 'object') {
-                try {
-                  console.log(`✨ Creating Spot Diagram settings for config ${cfgId} (synced from active)`);
-                } catch (_) {}
                 existing = {
                   surfaceIndex: activeCfgSettings.surfaceIndex,
                   surfaceId: activeImageSurfaceId,
@@ -2221,33 +2288,13 @@ class SystemRequirementsEditor {
     const newRow = this.createDefaultRequirementRow();
     newRow.id = insertIndex + 1; // Temporary ID based on position
     
-    console.log('[DEBUG addRequirement] Before command:', {
-      hasUndoHistory: !!w.undoHistory,
-      hasAddRowCommand: !!w.AddRowCommand,
-      isExecuting: w.undoHistory?.isExecuting,
-      insertIndex,
-      newRowId: newRow.id
-    });
-    
     // Create command and execute, then record for undo
     try {
       if (w.undoHistory && w.AddRowCommand && !w.undoHistory.isExecuting) {
         const cmd = new w.AddRowCommand('requirement', JSON.parse(JSON.stringify(newRow)), insertIndex, false);
         cmd.execute(); // Execute first (this will update localStorage and refresh UI)
-        console.log('[DEBUG addRequirement] After execute, before record:', {
-          isExecuting: w.undoHistory.isExecuting,
-          undoStackLength: w.undoHistory.undoStack?.length || 0
-        });
         w.undoHistory.record(cmd); // Then record for undo
-        console.log('[DEBUG addRequirement] After record:', {
-          undoStackLength: w.undoHistory.undoStack?.length || 0
-        });
       } else {
-        console.warn('[DEBUG addRequirement] Fallback path taken:', {
-          hasUndoHistory: !!w.undoHistory,
-          hasAddRowCommand: !!w.AddRowCommand,
-          isExecuting: w.undoHistory?.isExecuting
-        });
         // Fallback if undo system is not available
         storageData.splice(insertIndex, 0, JSON.parse(JSON.stringify(newRow)));
         saveSystemRequirementsTableData(storageData);
@@ -2282,37 +2329,17 @@ class SystemRequirementsEditor {
     const deletedRow = JSON.parse(JSON.stringify(storageData[idx])); // Use storage data, not this.requirements
     this._selectedId = null;
 
-    console.log('[DEBUG deleteRequirement] Before command:', {
-      hasUndoHistory: !!w.undoHistory,
-      hasDeleteRowCommand: !!w.DeleteRowCommand,
-      isExecuting: w.undoHistory?.isExecuting,
-      idx,
-      deletedRowId: deletedRow.id
-    });
-
     // Create command and execute, then record for undo
     try {
       if (w.undoHistory && w.DeleteRowCommand && !w.undoHistory.isExecuting) {
         const cmd = new w.DeleteRowCommand('requirement', deletedRow, idx, false);
         cmd.execute(); // Execute first (this will update localStorage and refresh UI)
-        console.log('[DEBUG deleteRequirement] After execute, before record:', {
-          isExecuting: w.undoHistory.isExecuting,
-          undoStackLength: w.undoHistory.undoStack?.length || 0
-        });
         w.undoHistory.record(cmd); // Then record for undo
-        console.log('[DEBUG deleteRequirement] After record:', {
-          undoStackLength: w.undoHistory.undoStack?.length || 0
-        });
         
         try {
           if (this.inspector && typeof this.inspector.hide === 'function') this.inspector.hide();
         } catch (_) {}
       } else {
-        console.warn('[DEBUG deleteRequirement] Fallback path taken:', {
-          hasUndoHistory: !!w.undoHistory,
-          hasDeleteRowCommand: !!w.DeleteRowCommand,
-          isExecuting: w.undoHistory?.isExecuting
-        });
         // Fallback if undo system is not available
         storageData.splice(idx, 1);
         saveSystemRequirementsTableData(storageData);
@@ -2414,17 +2441,29 @@ class SystemRequirementsEditor {
     const live = this._getLiveRequirementsData();
     this.requirements = live;
 
+    const isOptimizerRunning = (() => {
+      try {
+        return !!(typeof globalThis !== 'undefined' && (globalThis as any).__cooptOptimizerIsRunning);
+      } catch (_) {
+        return false;
+      }
+    })();
+    const yieldEvery = isOptimizerRunning ? 32 : 2;
+    const enableProgressUI = !isOptimizerRunning;
+
     // Progress bar (only show if evaluation takes noticeable time)
     let showTimer: any = null;
     let progressVisible = false;
     try {
-      showTimer = setTimeout(() => {
-        try {
-          progressVisible = true;
-          this._setProgressVisible(true);
-          this._setProgress('Evaluating requirements…', 0, Math.max(1, live.length));
-        } catch (_) {}
-      }, 0); // Changed from 150ms to 0ms for immediate display
+      if (enableProgressUI) {
+        showTimer = setTimeout(() => {
+          try {
+            progressVisible = true;
+            this._setProgressVisible(true);
+            this._setProgress('Evaluating requirements…', 0, Math.max(1, live.length));
+          } catch (_) {}
+        }, 180);
+      }
     } catch (_) {}
 
     // Requirements are a pass/fail spec. They should reflect the same semantics as the UI analyses
@@ -2539,12 +2578,12 @@ class SystemRequirementsEditor {
       // _violation/_contribution are available for debugging/consistency checks.
       updates.push({ id: row.id, current, status, _violation: sanitized.ok ? amount : null, _contribution: sanitized.ok ? contribution : null });
 
-      if (progressVisible) {
+      if (enableProgressUI && progressVisible) {
         try {
           this._setProgress('Evaluating requirements…', i + 1, Math.max(1, live.length));
         } catch (_) {}
       }
-      if (i % 2 === 0) await this._yieldToUI();
+      if (yieldEvery > 0 && i % yieldEvery === 0) await this._yieldToUI();
     }
     } finally {
       try {
@@ -2553,7 +2592,9 @@ class SystemRequirementsEditor {
       } catch (_) {}
 
       try { if (showTimer) clearTimeout(showTimer); } catch (_) {}
-      try { this._setProgressVisible(false); } catch (_) {}
+      if (enableProgressUI) {
+        try { this._setProgressVisible(false); } catch (_) {}
+      }
     }
 
     try {

@@ -74,23 +74,14 @@ function isFiniteSystem(opticalSystemRows) {
  * @returns {Object} 横収差データ
  */
 export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIndex, fieldSettings = null, wavelength = 0.5876, rayCount = 51) {
-    // CACHE BUSTER v2.0 - Force reload check
-    console.log('🔥 TRANSVERSE ABERRATION v2.0 - CT/MIRROR SUPPORT LOADED');
-    
     // デバッグモードの設定（デフォルトは静か）
     const debugMode = TRANSVERSE_DEBUG;
-    
-    if (debugMode) {
-        console.log('🎯 横収差計算開始（十字光線版）');
-    }
     
     // フィールド設定を取得
     if (!fieldSettings) {
         fieldSettings = getFieldSettingsFromObject();
     }
     
-    // fieldSettings の詳細ログ
-    if (debugMode) console.log('🔍 [DEBUG] fieldSettings詳細:', fieldSettings);
     const safeNumber = (value) => {
         const num = Number(value);
         return Number.isFinite(num) ? num : 0;
@@ -120,10 +111,6 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
         return true;
     });
     
-    // 基本設定ログ（簡潔版）
-    if (debugMode) {
-        console.log(`📊 横収差計算: 評価面=Surface ${targetSurfaceIndex + 1}, フィールド=${fieldSettings.length}点`);
-    }
     
     // 絞り面を見つける
     const stopSurfaceIndex = findStopSurfaceIndex(opticalSystemRows);
@@ -136,16 +123,11 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
         ? opticalSystemRows.filter(isMirrorRow).length
         : 0;
     const mirrorSign = (mirrorCount % 2 === 1) ? -1 : 1;
-    console.log(`🔍 Transverse: Detected ${mirrorCount} mirror(s), mirrorSign=${mirrorSign}`);
     
     // Calculate surface origins (for coordinate transformation support)
     const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
     const targetSurfaceInfo = surfaceOrigins?.[targetSurfaceIndex] || null;
     const stopSurfaceInfo = surfaceOrigins?.[stopSurfaceIndex] || null;
-    console.log(`🔍 Transverse: targetSurfaceInfo=${targetSurfaceInfo ? 'exists' : 'null'}, stopSurfaceInfo=${stopSurfaceInfo ? 'exists' : 'null'}`);
-    if (targetSurfaceInfo?.rotationMatrix) {
-        console.log(`🔍 Transverse: Target surface has rotation matrix (CT detected)`);
-    }
     
     // 有限系・無限系の判定
     const isFinite = isFiniteSystem(opticalSystemRows);
@@ -154,7 +136,6 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
     const stopSurface = opticalSystemRows[stopSurfaceIndex];
     // 🔧 FIX: semidiaフィールドを優先的に使用（aperture/Apertureはundefinedの場合が多い）
     const apertureValue = Math.abs(parseFloat(stopSurface.semidia || stopSurface.aperture || stopSurface.Aperture || 10));
-    if (debugMode) console.log(`🔍 [DEBUG] 絞り面半径取得: semidia=${stopSurface.semidia}, aperture=${stopSurface.aperture}, 使用値=${apertureValue}mm (Surface ${stopSurfaceIndex + 1})`);
     
     // 🔧 FIX: semidia/aperture値は既に半径として保存されている（直径ではない）
     const stopRadius = apertureValue;  // 半径をそのまま使用
@@ -163,12 +144,7 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
     // 光線は絞り面を基準に生成されているため、絞り半径で正規化すれば軸上で±1になる
     const entrancePupilRadius = stopRadius;  // 絞り面半径 = 瞳半径として使用
     
-    if (debugMode) {
-        console.log(`🔍 光学系: ${isFinite ? '有限系' : '無限系'}, 絞り面=Surface ${stopSurfaceIndex + 1}`);
-        console.log(`🔍 絞り半径=${stopRadius}mm (正規化基準)`);
-        console.log(`🔍 正規化基準: 瞳半径=${entrancePupilRadius.toFixed(2)}mm (絞り面半径と同じ)`);
-    }
-    
+
     const aberrationData = {
         fieldSettings: fieldSettings,
         wavelength: wavelength,
@@ -189,18 +165,10 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
     // 各フィールド設定について計算
     for (let i = 0; i < fieldSettings.length; i++) {
         const fieldSetting = fieldSettings[i];
-        if (debugMode) console.log(`\n📍 [DEBUG] フィールド ${i + 1}/${fieldSettings.length}: ${fieldSetting.displayName}`);
-        if (debugMode) console.log(`🔍 [DEBUG] fieldSetting詳細:`, fieldSetting);
-        
-        if (debugMode) {
-            console.log(`\n📍 フィールド ${i + 1}/${fieldSettings.length}: ${fieldSetting.displayName}`);
-        }
-        
+
         try {
             // 十字光線を生成（絞り面インデックスと評価面インデックスも渡す）
-            if (debugMode) console.log(`🎯 [DEBUG] 十字光線生成開始 for field ${i}`);
-    const crossBeamData = generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, rayCount, wavelength, stopSurfaceIndex, targetSurfaceIndex);
-            if (debugMode) console.log(`🎯 [DEBUG] 十字光線生成結果:`, crossBeamData ? 'success' : 'failed');
+            const crossBeamData = generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, rayCount, wavelength, stopSurfaceIndex, targetSurfaceIndex);
             
             if (crossBeamData) {
                 // メリジオナル・サジタル光線を分離して横収差を計算（絞り半径と入射瞳半径を別々に渡す）
@@ -215,9 +183,6 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
                 aberrationData.meridionalData.push(meridionalResult);
                 aberrationData.sagittalData.push(sagittalResult);
                 
-                if (debugMode) {
-                    console.log(`✅ フィールド計算完了: M=${meridionalResult.points.length}点, S=${sagittalResult.points.length}点`);
-                }
             } else {
                 if (debugMode) console.warn(`⚠️ フィールド ${fieldSetting.displayName} の十字光線生成に失敗`);
             }
@@ -226,9 +191,6 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
         }
     }
     
-    if (debugMode) {
-        console.log('✅ 横収差計算完了');
-    }
     return aberrationData;
 }
 
@@ -242,7 +204,6 @@ export async function calculateTransverseAberrationAsync(
     rayCount = 51,
     options = null
 ) {
-    console.log('🔥🔥 ASYNC VERSION v2.0 - CALLED', { targetSurfaceIndex, fieldSettings, wavelength, rayCount });
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
@@ -271,7 +232,6 @@ export async function calculateTransverseAberrationAsync(
         const name = fs?.displayName ? String(fs.displayName) : `Field ${i + 1}`;
         safeProgress(Math.min(95, Math.max(0, pct)), `Calculating ${name} (${i + 1}/${totalFields})...`);
 
-        console.log(`🎯 ASYNC calling SYNC version for field ${i + 1}/${totalFields}: ${name}`);
         const partial = calculateTransverseAberration(
             opticalSystemRows,
             targetSurfaceIndex,
@@ -279,7 +239,6 @@ export async function calculateTransverseAberrationAsync(
             wavelength,
             rayCount
         );
-        console.log(`✅ ASYNC received result from SYNC for field ${i + 1}`);
 
         if (partial && typeof partial === 'object') {
             if (!baseMeta) baseMeta = partial;
@@ -329,13 +288,6 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
         targetSurfaceIndex: targetSurfaceIndex // 評価面インデックスを追加
     };
     
-    if (debugMode) {
-        console.log('🎯 十字光線生成オプション:', JSON.stringify(options, null, 2));
-        console.log('🎯 フィールド設定:', JSON.stringify(fieldSetting, null, 2));
-        console.log('🎯 光学系タイプ:', isFinite ? '有限系' : '無限系');
-        console.log(`🎯 評価面: Surface ${targetSurfaceIndex + 1} (index: ${targetSurfaceIndex})`);
-    }
-    
     try {
         let rawCrossBeamData = null;
         
@@ -344,10 +296,6 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
         const isAngleField = positionType.includes('angle') && !positionType.includes('rectangle');
         const forceInfiniteByAngle = isAngleField;  // angle指定は無限系として強制
         const forceFiniteByRectangle = positionType.includes('rectangle') || positionType.includes('height');
-
-        if (debugMode) {
-            console.log(`🔍 Field type determination: position="${positionType}", isAngleField=${isAngleField}, forceInfinite=${forceInfiniteByAngle}, forceFinite=${forceFiniteByRectangle}`);
-        }
 
         if ((isFinite || forceFiniteByRectangle) && !forceInfiniteByAngle) {
             // 有限系: Object位置を使用（Rectangle/Heightを使用）
@@ -372,10 +320,6 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
 
             const objectPositions = [objectPosition];
             
-            if (debugMode) {
-                console.log(`🎯 有限系十字光線生成: Object${fieldSetting.objectIndex} (${objectPositions[0].x}, ${objectPositions[0].y})`);
-                console.log(`🎯 objectPositions詳細:`, objectPositions);
-            }
             rawCrossBeamData = generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions, options);
             
         } else {
@@ -399,88 +343,24 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
                 yFieldAngle = parseFloat(fieldSetting.y) || 0;
             }
             
-            if (debugMode) {
-                console.log(`🎯 無限系角度取得: position="${positionType}", x=${xFieldAngle}°, y=${yFieldAngle}°`);
-            }
-            
             const objectAngles = [{
                 x: xFieldAngle,
                 y: yFieldAngle,
                 comment: fieldSetting.displayName
             }];
-            
-            if (debugMode) {
-                console.log(`🎯 無限系十字光線生成: (${xFieldAngle}°, ${yFieldAngle}°)`);
-            }
+
             rawCrossBeamData = generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, options);
         }        if (!rawCrossBeamData || !rawCrossBeamData.success) {
             console.warn('⚠️ 十字光線生成に失敗');
             return null;
         }
         
-        if (debugMode) {
-            console.log(`✅ 十字光線生成: Object=${rawCrossBeamData.objectResults ? rawCrossBeamData.objectResults.length : 0}群, 光線=${rawCrossBeamData.objectResults && rawCrossBeamData.objectResults.length > 0 ? rawCrossBeamData.objectResults[0].tracedRays.length : 0}本`);
-        }
-        
-        // 光線タイプの初期分布を確認
-        if (rawCrossBeamData.objectResults && rawCrossBeamData.objectResults[0]) {
-            const typeDistribution = {};
-            const coordCheck = {
-                horizontal_cross: { xCoords: [], yCoords: [] },
-                vertical_cross: { xCoords: [], yCoords: [] }
-            };
-            
-            rawCrossBeamData.objectResults[0].tracedRays.forEach(ray => {
-                if (ray.originalRay && ray.originalRay.type) {
-                    const type = ray.originalRay.type;
-                    typeDistribution[type] = (typeDistribution[type] || 0) + 1;
-                    
-                    // 十字光線の座標をチェック
-                    if (type === 'horizontal_cross' || type === 'vertical_cross') {
-                        if (ray.rayPath && ray.rayPath.length > 0) {
-                            const firstPoint = ray.rayPath[0];
-                            const lastPoint = ray.rayPath[ray.rayPath.length - 1];
-                            
-                            if (type === 'horizontal_cross') {
-                                coordCheck.horizontal_cross.xCoords.push(firstPoint.x);
-                                coordCheck.horizontal_cross.yCoords.push(firstPoint.y);
-                            } else {
-                                coordCheck.vertical_cross.xCoords.push(firstPoint.x);
-                                coordCheck.vertical_cross.yCoords.push(firstPoint.y);
-                            }
-                        }
-                    }
-                }
-            });
-            
-            // console.log('🔍 生成された光線タイプ分布:', typeDistribution);
-            
-            // 十字光線の座標分布をチェック
-            // console.log('🔍 水平十字光線座標範囲:');
-            if (coordCheck.horizontal_cross.xCoords.length > 0) {
-                const xMin = Math.min(...coordCheck.horizontal_cross.xCoords);
-                const xMax = Math.max(...coordCheck.horizontal_cross.xCoords);
-                const yMin = Math.min(...coordCheck.horizontal_cross.yCoords);
-                const yMax = Math.max(...coordCheck.horizontal_cross.yCoords);
-                // console.log(`  X範囲: ${xMin.toFixed(3)} 〜 ${xMax.toFixed(3)}`);
-                // console.log(`  Y範囲: ${yMin.toFixed(3)} 〜 ${yMax.toFixed(3)}`);
-            }
-            
-            // console.log('🔍 垂直十字光線座標範囲:');
-            if (coordCheck.vertical_cross.xCoords.length > 0) {
-                const xMin = Math.min(...coordCheck.vertical_cross.xCoords);
-                const xMax = Math.max(...coordCheck.vertical_cross.xCoords);
-                const yMin = Math.min(...coordCheck.vertical_cross.yCoords);
-                const yMax = Math.max(...coordCheck.vertical_cross.yCoords);
-                // console.log(`  X範囲: ${xMin.toFixed(3)} 〜 ${xMax.toFixed(3)}`);
-                // console.log(`  Y範囲: ${yMin.toFixed(3)} 〜 ${yMax.toFixed(3)}`);
-            }
-        }
-        
         // 横収差計算用のrayGroups形式に変換（絞り面インデックスを渡す）
         // NOTE: ray.path は Object/Coord Break 行を交点として記録しないため、
         // 以降の分類/評価で表面インデックス→rayPath点インデックス変換が必要。
-        return convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSystemRows);
+        const convertedData = convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSystemRows);
+        
+        return convertedData;
         
     } catch (error) {
         console.error('❌ 十字光線生成エラー:', error);
@@ -592,10 +472,6 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
                 // 十字光線の詳細分類を行う
                 classifyCrossBeamRays(rays, stopSurfaceIndex, opticalSystemRows);
                 
-                if (failureCount > 0 || partialCount > 0) {
-                    console.log(`📊 Object ${objectIndex}: 成功=${successCount}, 部分=${partialCount}, 失敗=${failureCount}`);
-                }
-                
                 rayGroups.push({
                     objectIndex: objectIndex,
                     rays: rays
@@ -693,18 +569,12 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
                 // 十字光線の詳細分類を行う
                 classifyCrossBeamRays(rays, stopSurfaceIndex, opticalSystemRows);
                 
-                if (failureCount > 0 || partialCount > 0) {
-                    console.log(`📊 Angle ${angleIndex}: 成功=${successCount}, 部分=${partialCount}, 失敗=${failureCount}`);
-                }
-                
                 rayGroups.push({
                     angleIndex: angleIndex,
                     rays: rays
                 });
             });
         }
-        
-        console.log(`🔄 rayGroups変換完了: ${rayGroups.length}グループ, 総光線数=${rayGroups.reduce((sum, group) => sum + group.rays.length, 0)}`);
         
         // 光線タイプの分布を確認（詳細版）
         const rayTypeCounts = {};
@@ -717,18 +587,6 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
             });
         });
         
-        console.log('📊 光線タイプ分布（変換後）:', rayTypeCounts);
-        console.log('📊 光線タイプ分布（元）:', originalTypeCounts);
-        
-        // 詳細な光線タイプ分析
-        console.log('🔍 詳細光線タイプ分析:');
-        Object.keys(originalTypeCounts).forEach(type => {
-            console.log(`  元タイプ "${type}": ${originalTypeCounts[type]}本`);
-        });
-        
-        Object.keys(rayTypeCounts).forEach(type => {
-            console.log(`  変換後タイプ "${type}": ${rayTypeCounts[type]}本`);
-        });
         
         // 主要な光線タイプのみ報告
         const importantTypes = ['chief', 'left_marginal', 'right_marginal', 'upper_marginal', 'lower_marginal'];
@@ -738,8 +596,6 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
                 importantCounts[type] = rayTypeCounts[type];
             }
         });
-        
-        console.log('📊 主要光線タイプ:', importantCounts);
         
         return {
             rayGroups: rayGroups,
@@ -795,9 +651,9 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
         
         if (ray.rayType === 'chief') {
             chiefRay = ray;
-        } else if (ray.rayType === 'upper_marginal' || ray.rayType === 'lower_marginal' || 
-                   ray.rayType === 'aperture_up' || ray.rayType === 'aperture_down' ||
-                   ray.rayType === 'vertical_cross') {  // vertical_crossも明示的に含める
+        } else if (ray.rayType === 'vertical_cross' ||  // ✅ vertical_cross rays for meridional
+                   ray.rayType === 'upper_marginal' || ray.rayType === 'lower_marginal' || 
+                   ray.rayType === 'aperture_up' || ray.rayType === 'aperture_down') {
             meridionalRays.push(ray);
         }
     });
@@ -808,7 +664,6 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     meridionalTypes.forEach(type => {
         meridionalTypeCounts[type] = (meridionalTypeCounts[type] || 0) + 1;
     });
-    // console.log(`🔍 メリジオナル抽出光線:`, meridionalTypeCounts);
     
     if (!chiefRay) {
         console.warn('⚠️ 主光線が見つかりません');
@@ -830,7 +685,6 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
         };
     }
     
-    console.log(`🎯 主光線評価面座標: (${chiefIntersection.x.toFixed(4)}, ${chiefIntersection.y.toFixed(4)})`);
     
     const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
     const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
@@ -852,7 +706,6 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
         const minX = Math.min(...stopXCoordinates);
         const maxX = Math.max(...stopXCoordinates);
         xOffset = (minX + maxX) / 2;
-        console.log(`🎯 メリディオナル絞り面X座標: min=${minX.toFixed(3)}, max=${maxX.toFixed(3)}, Xオフセット=${xOffset.toFixed(3)}`);
     }
     
     // Y座標のオフセット補正値を計算
@@ -861,23 +714,17 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
         const minY = Math.min(...stopYCoordinates);
         const maxY = Math.max(...stopYCoordinates);
         yOffset = (minY + maxY) / 2;
-        console.log(`🎯 メリディオナル絞り面Y座標: min=${minY.toFixed(3)}, max=${maxY.toFixed(3)}, Yオフセット=${yOffset.toFixed(3)}`);
     }
     
     // 🔧 FIX: 絞り面半径で正規化（全Objectで統一基準）
     // 光線は絞り面を通るように生成されているため、絞り半径で正規化すれば軸上で±1になる
     const maxAbsY = entrancePupilRadius;  // = stopRadius
-    console.log(`🎯 メリディオナル正規化基準: 瞳半径=${maxAbsY.toFixed(3)}mm (絞り面半径)`);
     
     // 🔧 FIX: 部分的光線処理用も同じ瞳半径を使用
     const maxCorrectedY = entrancePupilRadius;  // = stopRadius
-    console.log(`🎯 メリディオナル補正後正規化基準: 瞳半径=${maxCorrectedY.toFixed(3)}mm (絞り面半径)`);
     
-    // 主光線の絞り面座標も取得（参考用）
-    const chiefStopIntersection = getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
-    if (chiefStopIntersection) {
-        console.log(`🎯 主光線絞り面: X=${chiefStopIntersection.x.toFixed(3)} (補正後=${(chiefStopIntersection.x - xOffset).toFixed(3)}), Y=${chiefStopIntersection.y.toFixed(3)}`);
-    }
+    // 主光線の絞り面座標を取得（必要時に使用）
+    getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
     
     // メリジオナル光線の横収差を計算（座標分布に基づく正規化）
     meridionalRays.forEach((ray, index) => {
@@ -893,10 +740,6 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                 const normalizedPupilCoord = maxAbsY > 0 ? stopY / maxAbsY : 0;
                 
                 const transverseAberration = intersection.y - chiefIntersection.y; // Y方向の収差
-                
-                if (index < 3) {
-                    console.log(`🔥 M-Ray ${index}: intersection.y=${intersection.y.toFixed(6)}, chief.y=${chiefIntersection.y.toFixed(6)}, aberration=${transverseAberration.toFixed(6)}, pupilCoord=${normalizedPupilCoord.toFixed(4)}`);
-                }
                 
                 // 規格化座標が±1以内の光線を含める
                 if (Math.abs(normalizedPupilCoord) <= 1.0) {
@@ -979,10 +822,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                     if (estimatedIntersection) {
                         const transverseAberration = estimatedIntersection.y - chiefIntersection.y;
                         
-                        if (index < 2) {
-                            console.log(`🔍 M光線 ${index} (外挿): Y=${stopIntersection.y.toFixed(3)}→${correctedStopY.toFixed(3)}, 最大補正Y=${maxCorrectedY.toFixed(3)}, 瞳座標=${normalizedPupilCoord.toFixed(3)}, Y収差=${transverseAberration.toFixed(4)}`);
-                        }
-                        
+
                         points.push({
                             pupilCoordinate: normalizedPupilCoord, // 座標分布に基づく正規化座標
                             transverseAberration: transverseAberration,
@@ -1014,6 +854,9 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
         }
     });
     
+    // 主光線の絞り面座標を取得
+    const chiefStopIntersection = getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
+
     // 🔧 FIX: 主光線を明示的に追加（Ray number偶数時に瞳座標=0が含まれない問題を回避）
     const chiefStopY = chiefStopIntersection ? chiefStopIntersection.y : 0;
     const chiefNormalizedPupilCoordMeridional = maxAbsY > 0 ? chiefStopY / maxAbsY : 0;
@@ -1044,25 +887,16 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                 normalizedY: chiefNormalizedPupilCoordMeridional
             }
         });
-        console.log(`✅ [メリディオナル] 主光線を明示的に追加: 瞳座標=${chiefNormalizedPupilCoordMeridional.toFixed(6)}`);
     }
     
     // 瞳座標でソート
     points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
     
-    // � ケラレ統計を出力
-    console.log(`� [メリディオナル ${fieldSetting.displayName}] 光線統計: 成功=${successCount}, 部分的だが絞り到達=${partialButReachedStop}, ケラレ=${vignetteCount}, 合計=${meridionalRays.length}`);
-    if (vignetteCount > 0) {
-        const vignettePercent = ((vignetteCount / meridionalRays.length) * 100).toFixed(1);
-        console.log(`⚠️ [メリディオナル ${fieldSetting.displayName}] ケラレ率: ${vignettePercent}% (${vignetteCount}/${meridionalRays.length}本)`);
-    }
+    // ケラレ統計は内部で保持のみ（ログ出力なし）
     
     // 横収差0位置を求める
     let zeroAberrationPosition = null;
     let offsetMethod = 'none';
-    
-    // 🔍 デバッグ: 光線数と範囲の確認（簡潔に）
-    console.log(`🔍 [メリディオナル] データ点数: ${points.length}点`);
     
     if (points.length >= 3) {
         // 新しい統一手法：最小絶対値点とその前後3点による直線近似
@@ -1070,9 +904,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
         if (minAbsZero !== null) {
             zeroAberrationPosition = minAbsZero;
             offsetMethod = 'min_abs_3points';
-            console.log(`📊 [メリディオナル] 最小絶対値3点法: 横収差0位置 = ${minAbsZero.toFixed(6)}`);
         } else {
-            console.warn('⚠️ [メリディオナル] 最小絶対値3点法が失敗しました');
         }
     } else if (points.length === 2) {
         // 2点の場合は線形補間で横収差0位置を求める（フォールバック）
@@ -1089,34 +921,19 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                 const t = -p1.transverseAberration / deltaY;
                 zeroAberrationPosition = p1.pupilCoordinate + t * deltaX;
                 offsetMethod = 'linear_2points';
-                console.log(`📊 [メリディオナル] 線形補間（2点）: 横収差0位置 = ${zeroAberrationPosition.toFixed(6)}`);
                 
                 // 有効範囲内かチェック
                 if (Math.abs(zeroAberrationPosition) > 1.5) {
-                    console.warn('⚠️ [メリディオナル] 線形補間: 解が範囲外、フォールバック');
                     zeroAberrationPosition = null;
                     offsetMethod = 'none';
                 }
-            } else {
-                console.warn('⚠️ [メリディオナル] 2点の収差値がほぼ同じため、0点を求められません');
             }
-        } else {
-            console.warn('⚠️ [メリディオナル] 2点の収差値の符号が同じため、0点は範囲外です');
         }
-    } else {
-        console.warn('⚠️ [メリディオナル] データ点数が不足しています（最低2点必要）');
     }
     
     // 横収差0位置でのオフセット適用
     if (zeroAberrationPosition !== null && Math.abs(zeroAberrationPosition) > 1e-6) {
-        console.log(`🎯 [メリディオナル] プロットオフセット適用: ${zeroAberrationPosition.toFixed(6)} → 0 (手法: ${offsetMethod})`);
-        
-        // 284点以上の場合の特別ログ
-        if (points.length >= 284) {
-            console.log(`⚠️ [メリディオナル] 大量データ(${points.length}点)でのオフセット適用 - 精度チェック開始`);
-            const beforeRange = `${Math.min(...points.map(p => p.pupilCoordinate)).toFixed(6)} 〜 ${Math.max(...points.map(p => p.pupilCoordinate)).toFixed(6)}`;
-            console.log(`🔍 [メリディオナル] オフセット前範囲: ${beforeRange}`);
-        }
+        // 284点以上の場合も同じ処理を適用
         
         // 全点の瞳座標をオフセット
         points.forEach(point => {
@@ -1127,33 +944,9 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
         // オフセット後に再ソート
         points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
         
-        console.log(`📊 [メリディオナル] オフセット後の瞳座標範囲: ${points[0].pupilCoordinate.toFixed(6)} 〜 ${points[points.length-1].pupilCoordinate.toFixed(6)}`);
-        
-        // 284点以上の場合の精度確認
-        if (points.length >= 284) {
-            const zeroNearPoints = points.filter(p => Math.abs(p.pupilCoordinate) < 0.01);
-            console.log(`🔍 [メリディオナル] 0近傍点数(±0.01): ${zeroNearPoints.length}点`);
-            if (zeroNearPoints.length > 0) {
-                const zeroPointAberration = zeroNearPoints.find(p => Math.abs(p.pupilCoordinate) < 0.001);
-                if (zeroPointAberration) {
-                    console.log(`✅ [メリディオナル] 0点近似確認: 瞳座標=${zeroPointAberration.pupilCoordinate.toFixed(6)}, 横収差=${zeroPointAberration.transverseAberration.toFixed(6)}`);
-                }
-            }
-        }
-    } else {
-        if (points.length >= 284) {
-            console.log(`⚠️ [メリディオナル] 大量データ(${points.length}点)でオフセット未適用: zeroPosition=${zeroAberrationPosition}, method=${offsetMethod}`);
-        }
     }
     
-    // メリジオナル統計情報（簡潔版）
-    if (points.length > 0) {
-        const aberrations = points.map(p => p.transverseAberration);
-        const maxAberration = Math.max(...aberrations.map(Math.abs));
-        console.log(`📊 メリジオナル: ${points.length}点, 最大収差=${maxAberration.toFixed(4)}mm, オフセット=${offsetMethod}`);
-    }
-    
-    console.log(`📊 メリジオナル点数: ${points.length}`);
+    // メリジオナル統計情報（必要時に利用）
     
     const result = {
         fieldSetting: fieldSetting,
@@ -1209,15 +1002,12 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
         
         if (ray.rayType === 'chief') {
             chiefRay = ray;
-        } else if (ray.rayType === 'left_marginal' || ray.rayType === 'right_marginal' || 
-                   ray.rayType === 'aperture_left' || ray.rayType === 'aperture_right' ||
-                   ray.rayType === 'horizontal_cross') {  // horizontal_crossも明示的に含める
+        } else if (ray.rayType === 'horizontal_cross' ||  // ✅ horizontal_cross rays for sagittal
+                   ray.rayType === 'left_marginal' || ray.rayType === 'right_marginal' || 
+                   ray.rayType === 'aperture_left' || ray.rayType === 'aperture_right') {
             sagittalRays.push(ray);
         }
     });
-    
-    // console.log(`🔍 サジタル光線タイプ分布:`, rayTypeCount);
-    // console.log(`🔍 サジタル: 主光線=${chiefRay ? 'あり' : 'なし'}, 光線=${sagittalRays.length}本`);
     
     // サジタル光線の詳細を確認
     const sagittalTypes = sagittalRays.map(ray => ray.rayType);
@@ -1225,7 +1015,6 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     sagittalTypes.forEach(type => {
         sagittalTypeCounts[type] = (sagittalTypeCounts[type] || 0) + 1;
     });
-    // console.log(`🔍 サジタル抽出光線:`, sagittalTypeCounts);
     
     if (!chiefRay) {
         console.warn('⚠️ 主光線が見つかりません');
@@ -1267,19 +1056,14 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
         const minX = Math.min(...stopXCoordinates);
         const maxX = Math.max(...stopXCoordinates);
         xOffset = (minX + maxX) / 2; // デバッグ用のみ
-        console.log(`🎯 サジタル絞り面X座標: min=${minX.toFixed(3)}, max=${maxX.toFixed(3)}, オフセット=${xOffset.toFixed(3)}`);
     }
     
     // 🔧 FIX: 絞り面半径で正規化（全Objectで統一基準）
     // 光線は絞り面を通るように生成されているため、絞り半径で正規化すれば軸上で±1になる
     const maxCorrectedX = entrancePupilRadius;  // = stopRadius
-    console.log(`🎯 サジタル正規化基準: 瞳半径=${maxCorrectedX.toFixed(3)}mm (絞り面半径)`);
     
     // 主光線の絞り面X座標も取得（参考用）
     const chiefStopIntersection = getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
-    if (chiefStopIntersection) {
-        console.log(`🎯 主光線絞り面X=${chiefStopIntersection.x.toFixed(3)}`);
-    }
     
     // サジタル光線の横収差を計算（座標分布に基づく正規化）
     sagittalRays.forEach((ray, index) => {
@@ -1377,10 +1161,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                     if (estimatedIntersection) {
                         const transverseAberration = estimatedIntersection.x - chiefIntersection.x; // X方向の収差
                         
-                        if (index < 2) {
-                            console.log(`🔍 S光線 ${index} (外挿): X=${stopIntersection.x.toFixed(3)}→${correctedStopX.toFixed(3)}, 瞳座標=${normalizedPupilCoord.toFixed(3)}, X収差=${transverseAberration.toFixed(4)}`);
-                        }
-                        
+
                         points.push({
                             pupilCoordinate: normalizedPupilCoord, // 座標分布に基づく正規化座標
                             transverseAberration: transverseAberration,
@@ -1442,25 +1223,16 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                 normalizedX: chiefNormalizedPupilCoordSagittal
             }
         });
-        console.log(`✅ [サジタル] 主光線を明示的に追加: 瞳座標=${chiefNormalizedPupilCoordSagittal.toFixed(6)}`);
     }
     
     // 瞳座標でソート
     points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
     
-    // 🔧 ケラレ統計を出力
-    console.log(`📊 [サジタル ${fieldSetting.displayName}] 光線統計: 成功=${successCount}, 部分的だが絞り到達=${partialButReachedStop}, ケラレ=${vignetteCount}, 合計=${sagittalRays.length}`);
-    if (vignetteCount > 0) {
-        const vignettePercent = ((vignetteCount / sagittalRays.length) * 100).toFixed(1);
-        console.log(`⚠️ [サジタル ${fieldSetting.displayName}] ケラレ率: ${vignettePercent}% (${vignetteCount}/${sagittalRays.length}本)`);
-    }
+    // ケラレ統計は内部で保持のみ（ログ出力なし）
     
     // 横収差0位置を求める
     let zeroAberrationPosition = null;
     let offsetMethod = 'none';
-    
-    // 🔍 デバッグ: 光線数と範囲の確認（簡潔に）
-    console.log(`🔍 [サジタル] データ点数: ${points.length}点`);
     
     if (points.length >= 3) {
         // 新しい統一手法：最小絶対値点とその前後3点による直線近似
@@ -1468,9 +1240,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
         if (minAbsZero !== null) {
             zeroAberrationPosition = minAbsZero;
             offsetMethod = 'min_abs_3points';
-            console.log(`📊 [サジタル] 最小絶対値3点法: 横収差0位置 = ${minAbsZero.toFixed(6)}`);
         } else {
-            console.warn('⚠️ [サジタル] 最小絶対値3点法が失敗しました');
         }
     } else if (points.length === 2) {
         // 2点の場合は線形補間で横収差0位置を求める（フォールバック）
@@ -1487,34 +1257,19 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                 const t = -p1.transverseAberration / deltaY;
                 zeroAberrationPosition = p1.pupilCoordinate + t * deltaX;
                 offsetMethod = 'linear_2points';
-                console.log(`📊 [サジタル] 線形補間（2点）: 横収差0位置 = ${zeroAberrationPosition.toFixed(6)}`);
                 
                 // 有効範囲内かチェック
                 if (Math.abs(zeroAberrationPosition) > 1.5) {
-                    console.warn('⚠️ [サジタル] 線形補間: 解が範囲外、フォールバック');
                     zeroAberrationPosition = null;
                     offsetMethod = 'none';
                 }
-            } else {
-                console.warn('⚠️ [サジタル] 2点の収差値がほぼ同じため、0点を求められません');
             }
-        } else {
-            console.warn('⚠️ [サジタル] 2点の収差値の符号が同じため、0点は範囲外です');
         }
-    } else {
-        console.warn('⚠️ [サジタル] データ点数が不足しています（最低2点必要）');
     }
     
     // 横収差0位置でのオフセット適用
     if (zeroAberrationPosition !== null && Math.abs(zeroAberrationPosition) > 1e-6) {
-        console.log(`🎯 [サジタル] プロットオフセット適用: ${zeroAberrationPosition.toFixed(6)} → 0 (手法: ${offsetMethod})`);
-        
-        // 284点以上の場合の特別ログ
-        if (points.length >= 284) {
-            console.log(`⚠️ [サジタル] 大量データ(${points.length}点)でのオフセット適用 - 精度チェック開始`);
-            const beforeRange = `${Math.min(...points.map(p => p.pupilCoordinate)).toFixed(6)} 〜 ${Math.max(...points.map(p => p.pupilCoordinate)).toFixed(6)}`;
-            console.log(`🔍 [サジタル] オフセット前範囲: ${beforeRange}`);
-        }
+        // 284点以上の場合も同じ処理を適用
         
         // 全点の瞳座標をオフセット
         points.forEach(point => {
@@ -1525,33 +1280,9 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
         // オフセット後に再ソート
         points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
         
-        console.log(`📊 [サジタル] オフセット後の瞳座標範囲: ${points[0].pupilCoordinate.toFixed(6)} 〜 ${points[points.length-1].pupilCoordinate.toFixed(6)}`);
-        
-        // 284点以上の場合の精度確認
-        if (points.length >= 284) {
-            const zeroNearPoints = points.filter(p => Math.abs(p.pupilCoordinate) < 0.01);
-            console.log(`🔍 [サジタル] 0近傍点数(±0.01): ${zeroNearPoints.length}点`);
-            if (zeroNearPoints.length > 0) {
-                const zeroPointAberration = zeroNearPoints.find(p => Math.abs(p.pupilCoordinate) < 0.001);
-                if (zeroPointAberration) {
-                    console.log(`✅ [サジタル] 0点近似確認: 瞳座標=${zeroPointAberration.pupilCoordinate.toFixed(6)}, 横収差=${zeroPointAberration.transverseAberration.toFixed(6)}`);
-                }
-            }
-        }
-    } else {
-        if (points.length >= 284) {
-            console.log(`⚠️ [サジタル] 大量データ(${points.length}点)でオフセット未適用: zeroPosition=${zeroAberrationPosition}, method=${offsetMethod}`);
-        }
     }
     
-    // サジタル統計情報（簡潔版）
-    if (points.length > 0) {
-        const aberrations = points.map(p => p.transverseAberration);
-        const maxAberration = Math.max(...aberrations.map(Math.abs));
-        console.log(`📊 サジタル: ${points.length}点, 最大収差=${maxAberration.toFixed(4)}mm, オフセット=${offsetMethod}`);
-    }
-    
-    console.log(`📊 サジタル点数: ${points.length}`);
+    // サジタル統計情報（必要時に利用）
     
     const result = {
         fieldSetting: fieldSetting,
@@ -1618,8 +1349,6 @@ function surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex) {
 
 function getIntersectionAtSurface(ray, surfaceIndex, opticalSystemRows, surfaceInfo = null, mirrorSign = 1) {
     try {
-        console.log(`🔧🔧 getIntersection ENTRY: surfIdx=${surfaceIndex}, hasInfo=${!!surfaceInfo}, hasMatrix=${!!(surfaceInfo?.rotationMatrix)}`);
-        
         // 横収差計算用の評価面までのパスを優先使用
         const targetPath = ray.rayPathToTarget || ray.path;
         
@@ -1660,8 +1389,6 @@ function getIntersectionAtSurface(ray, surfaceIndex, opticalSystemRows, surfaceI
                 y: intersection.y * mirrorSign,
                 z: intersection.z || 0
             };
-            
-            console.log(`🎯 getIntersection: surfIdx=${surfaceIndex}, mirrorSign=${mirrorSign}, global=(${intersectionGlobal.x.toFixed(4)}, ${intersectionGlobal.y.toFixed(4)}), local=(${intersection.x.toFixed(4)}, ${intersection.y.toFixed(4)}), result=(${result.x.toFixed(4)}, ${result.y.toFixed(4)})`);
             return result;
         }
         
@@ -1679,8 +1406,6 @@ function getIntersectionAtSurface(ray, surfaceIndex, opticalSystemRows, surfaceI
  */
 export function findStopSurfaceIndex(opticalSystemRows) {
     const debugMode = TRANSVERSE_DEBUG;
-
-    if (debugMode) console.log('🔍 絞り面を検索中...');
     
     if (!opticalSystemRows || !Array.isArray(opticalSystemRows)) {
         if (debugMode) console.warn('⚠️ 無効な光学系データです');
@@ -1691,9 +1416,7 @@ export function findStopSurfaceIndex(opticalSystemRows) {
     for (let i = 0; i < opticalSystemRows.length; i++) {
         const surface = opticalSystemRows[i];
         const objectType = surface.object || surface.Object || surface['object type'] || surface['Object Type'] || '';
-        if (debugMode) console.log(`   Surface ${i + 1}: object type="${objectType}" (${typeof objectType})`);
         if (objectType && objectType.toString().toLowerCase().includes('stop')) {
-            if (debugMode) console.log(`✅ 絞り面発見 (Object): Surface ${i + 1} - "${objectType}" [配列インデックス: ${i}]`);
             return i;
         }
     }
@@ -1703,7 +1426,6 @@ export function findStopSurfaceIndex(opticalSystemRows) {
         const surface = opticalSystemRows[i];
         const comment = (surface.comment || surface.Comment || '').toLowerCase();
         if (comment.includes('stop') || comment.includes('aperture') || comment.includes('絞り')) {
-            if (debugMode) console.log(`✅ 絞り面発見 (Comment): Surface ${i + 1} - ${comment}`);
             return i;
         }
     }
@@ -1712,21 +1434,17 @@ export function findStopSurfaceIndex(opticalSystemRows) {
     for (let i = 0; i < opticalSystemRows.length; i++) {
         const surface = opticalSystemRows[i];
         const type = surface.type || surface.Type || surface['surf type'] || surface['surfType'] || '';
-        if (debugMode) console.log(`   Surface ${i + 1}: type="${type}" (${typeof type})`);
         if (type && type.toString().toLowerCase().includes('stop')) {
-            if (debugMode) console.log(`✅ 絞り面発見 (Type): Surface ${i + 1} - "${type}" [配列インデックス: ${i}]`);
             return i;
         }
     }
     
     // パターン4: aperture が "INF" または無限大の面を絞りとする（物理的な絞り穴）
-    if (debugMode) console.log('🔍 INF aperture面をチェック中...');
     for (let i = 0; i < opticalSystemRows.length; i++) {
         const surface = opticalSystemRows[i];
         const apertureRaw = (surface.aperture || surface.Aperture || '').toString().toUpperCase();
         
         if (apertureRaw === 'INF' || apertureRaw === 'INFINITY' || apertureRaw === '∞') {
-            if (debugMode) console.log(`✅ 絞り面発見 (INF aperture): Surface ${i + 1} - aperture=${apertureRaw}`);
             return i;
         }
     }
@@ -1735,36 +1453,25 @@ export function findStopSurfaceIndex(opticalSystemRows) {
     let minAperture = Infinity;
     let stopIndex = -1;
     
-    if (debugMode) console.log('🔍 全面のaperture値をチェック中...');
-    
+
     for (let i = 0; i < opticalSystemRows.length; i++) {
         const surface = opticalSystemRows[i];
         const apertureRaw = surface.aperture || surface.Aperture || surface.semidia || surface.SemiDia;
         const aperture = Math.abs(parseFloat(apertureRaw || Infinity));
         
-        // より詳細なデバッグ情報
-        if (debugMode) console.log(`   Surface ${i + 1}:`);
-        if (debugMode) console.log(`     aperture="${surface.aperture}", Aperture="${surface.Aperture}"`);
-        if (debugMode) console.log(`     semidia="${surface.semidia}", SemiDia="${surface.SemiDia}"`);
-        if (debugMode) console.log(`     → 使用値="${apertureRaw}" → 数値=${aperture} (有限:${isFinite(aperture)}, >0:${aperture > 0})`);
-        
         if (isFinite(aperture) && aperture > 0 && aperture < minAperture) {
             minAperture = aperture;
             stopIndex = i;
-            if (debugMode) console.log(`   → 新しい最小aperture面: Surface ${i + 1} (${aperture}) [配列インデックス: ${i}]`);
         }
     }
     
     if (stopIndex !== -1) {
-        if (debugMode) console.log(`✅ 絞り面推定 (最小aperture): Surface ${stopIndex + 1} - aperture=${minAperture}`);
-        if (debugMode) console.log(`   → 配列インデックス=${stopIndex}, 表示用Surface番号=${stopIndex + 1}`);
         return stopIndex;
     }
     
     // フォールバック: 光学系の中央付近の面を絞りとする
     if (opticalSystemRows.length > 2) {
         const middleIndex = Math.floor(opticalSystemRows.length / 2);
-        if (debugMode) console.log(`⚠️ 絞り面が見つからないため、中央の面を使用: Surface ${middleIndex + 1}`);
         return middleIndex;
     }
     
@@ -1778,33 +1485,12 @@ export function findStopSurfaceIndex(opticalSystemRows) {
  */
 function getFieldSettingsFromObject() {
     const fieldSettings = [];
-    const debugMode = TRANSVERSE_DEBUG;
     
     try {
         if (window.tableObject && typeof window.tableObject.getData === 'function') {
             const objectData = window.tableObject.getData();
             
-            if (debugMode) console.log('🔍 [DEBUG] Object テーブルデータ取得:', objectData);
-            
             objectData.forEach((row, index) => {
-                if (debugMode) console.log(`🔍 [DEBUG] Object ${index + 1} 行データ:`, row);
-                if (debugMode) console.log(`🔍 [DEBUG] Object ${index + 1} フィールド一覧:`, Object.keys(row));
-                
-                // position フィールドの詳細チェック
-                if (debugMode) console.log(`🔍 [DEBUG] Object ${index + 1} position関連:`, {
-                    position: row.position,
-                    Position: row.Position,
-                    positionType: typeof row.position,
-                    PositionType: typeof row.Position
-                });
-                
-                // 座標フィールドの詳細チェック
-                if (debugMode) console.log(`🔍 [DEBUG] Object ${index + 1} 座標関連:`, {
-                    x: row.x, X: row.X, xHeightAngle: row.xHeightAngle,
-                    y: row.y, Y: row.Y, yHeightAngle: row.yHeightAngle,
-                    height: row.height, Height: row.Height,
-                    angle: row.angle, Angle: row.Angle
-                });
                 
                 // displayName の構築を改善
                 let displayName = `Object ${index + 1}`;
@@ -1816,8 +1502,6 @@ function getFieldSettingsFromObject() {
                 const positionType = (row.position || row.Position || '').toLowerCase();
                 const isRectangle = positionType.includes('rectangle') || positionType.includes('rect') || positionType.includes('height') || positionType.includes('座標');
                 const isAngle = !isRectangle && (positionType.includes('angle') || positionType.includes('角度'));
-                
-                if (debugMode) console.log(`🔍 [DEBUG] Object ${index + 1} 位置タイプ判定: positionType="${positionType}", isRectangle=${isRectangle}, isAngle=${isAngle}`);
                 
                 if (isRectangle) {
                     // より多くのフィールド名パターンを試行
@@ -1831,8 +1515,6 @@ function getFieldSettingsFromObject() {
                         row.yHeightAngle || row.YHeightAngle || 
                         row.height_y || row.Height_Y || 0
                     );
-                    
-                    if (debugMode) console.log(`🔍 [DEBUG] Object ${index + 1} Rectangle: x=${xValue}, y=${yValue}`);
                     
                     displayName += ` (${xValue}, ${yValue})`;
                     
@@ -1858,10 +1540,6 @@ function getFieldSettingsFromObject() {
                         row.angle_y || row.Angle_Y || 0
                     );
                     
-                    console.log(`🔍 [DEBUG] Object ${index + 1} Angle: xAngle=${xAngle}°, yAngle=${yAngle}°`);
-                    console.log(`🔍 [DEBUG] Object ${index + 1} 原データ: xHeightAngle=${row.xHeightAngle}, x=${row.x}, X=${row.X}`);
-                    console.log(`🔍 [DEBUG] Object ${index + 1} 原データ: yHeightAngle=${row.yHeightAngle}, y=${row.y}, Y=${row.Y}`);
-                    
                     displayName += ` (${xAngle}°, ${yAngle}°)`;
                     
                     fieldSettings.push({
@@ -1874,8 +1552,7 @@ function getFieldSettingsFromObject() {
                     });
                 } else {
                     // position が設定されていない場合のフォールバック
-                    console.log(`🔍 [DEBUG] Object ${index + 1} position未設定 - 座標として試行`);
-                    
+
                     const xValue = parseFloat(
                         row.x || row.X || row.xHeight || row.XHeight || 
                         row.xHeightAngle || row.XHeightAngle || 0
@@ -1884,8 +1561,6 @@ function getFieldSettingsFromObject() {
                         row.y || row.Y || row.yHeight || row.YHeight || 
                         row.yHeightAngle || row.YHeightAngle || 0
                     );
-                    
-                    console.log(`🔍 [DEBUG] Object ${index + 1} フォールバック座標: x=${xValue}, y=${yValue}`);
                     
                     displayName += ` (${xValue}, ${yValue})`;
                     
@@ -1926,7 +1601,6 @@ function getFieldSettingsFromObject() {
         });
     }
     
-    console.log('🔍 [DEBUG] 最終fieldSettings:', fieldSettings);
     return fieldSettings;
 }
 
@@ -2015,8 +1689,6 @@ function findZeroAberrationByMinAbsThreePoints(points) {
         // 瞳座標でソート
         validPoints.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
         
-        console.log(`🔧 [MinAbs3Points] ${validPoints.length}点から最小絶対値点を検索`);
-        
         // 横収差の絶対値が最小の点を見つける
         let minAbsIndex = 0;
         let minAbsValue = Math.abs(validPoints[0].transverseAberration);
@@ -2030,7 +1702,6 @@ function findZeroAberrationByMinAbsThreePoints(points) {
         }
         
         const minAbsPoint = validPoints[minAbsIndex];
-        console.log(`🎯 [MinAbs3Points] 最小絶対値点: index=${minAbsIndex}, 瞳座標=${minAbsPoint.pupilCoordinate.toFixed(6)}, 横収差=${minAbsPoint.transverseAberration.toFixed(6)}`);
         
         // 最小絶対値点とその前後の点を取得（合計3点）
         let selectedPoints = [];
@@ -2038,11 +1709,9 @@ function findZeroAberrationByMinAbsThreePoints(points) {
         if (minAbsIndex === 0) {
             // 最初の点が最小の場合：最初の3点を使用
             selectedPoints = validPoints.slice(0, 3);
-            console.log(`🔧 [MinAbs3Points] 最初の点が最小：最初の3点を使用`);
         } else if (minAbsIndex === validPoints.length - 1) {
             // 最後の点が最小の場合：最後の3点を使用
             selectedPoints = validPoints.slice(-3);
-            console.log(`🔧 [MinAbs3Points] 最後の点が最小：最後の3点を使用`);
         } else {
             // 中間の点が最小の場合：前の点、最小点、後の点の3点を使用
             selectedPoints = [
@@ -2050,14 +1719,7 @@ function findZeroAberrationByMinAbsThreePoints(points) {
                 validPoints[minAbsIndex],
                 validPoints[minAbsIndex + 1]
             ];
-            console.log(`🔧 [MinAbs3Points] 中間点が最小：前後3点を使用 (${minAbsIndex-1}, ${minAbsIndex}, ${minAbsIndex+1})`);
         }
-        
-        // 選択された3点の詳細ログ
-        console.log(`🔍 [MinAbs3Points] 選択された3点:`);
-        selectedPoints.forEach((point, index) => {
-            console.log(`   点${index + 1}: 瞳座標=${point.pupilCoordinate.toFixed(6)}, 横収差=${point.transverseAberration.toFixed(6)}`);
-        });
         
         // 3点を使って直線近似 (最小二乗法)
         const n = selectedPoints.length;
@@ -2076,53 +1738,38 @@ function findZeroAberrationByMinAbsThreePoints(points) {
         // 最小二乗法による係数計算
         const denominator = n * sumX2 - sumX * sumX;
         if (Math.abs(denominator) < 1e-12) {
-            console.warn('⚠️ [MinAbs3Points] 直線近似失敗：分母が0に近い');
+            console.warn('⚠️ 直線近似失敗：分母が0に近い');
             return null;
         }
         
         const a = (n * sumXY - sumX * sumY) / denominator; // 傾き
         const b = (sumY - a * sumX) / n; // 切片
         
-        console.log(`📊 [MinAbs3Points] 直線近似: y = ${a.toFixed(6)} * x + ${b.toFixed(6)}`);
-        
         // y = 0となるx座標を計算: 0 = a*x + b → x = -b/a
         if (Math.abs(a) < 1e-12) {
-            console.warn('⚠️ [MinAbs3Points] 傾きが0に近いため、0交点を計算できません');
+            console.warn('⚠️ 傾きが0に近いため、0交点を計算できません');
             // 傾きが0の場合は最小絶対値点のx座標を返す
-            console.log(`🔧 [MinAbs3Points] フォールバック：最小絶対値点のx座標を採用`);
             return minAbsPoint.pupilCoordinate;
         }
         
         const zeroX = -b / a;
         
-        console.log(`✅ [MinAbs3Points] 直線近似結果: 横収差0位置 = ${zeroX.toFixed(6)}`);
-        
         // 結果の妥当性チェック
         if (!isFinite(zeroX)) {
-            console.warn('⚠️ [MinAbs3Points] 計算結果が無限値です');
+            console.warn('⚠️ 計算結果が無限値です');
             return minAbsPoint.pupilCoordinate;
         }
         
         // 有効範囲チェック（±1.5程度まで許容）
         if (Math.abs(zeroX) > 1.5) {
-            console.warn(`⚠️ [MinAbs3Points] 結果が範囲外: ${zeroX.toFixed(6)}, 最小絶対値点を採用`);
+            console.warn(`⚠️ 結果が範囲外: ${zeroX.toFixed(6)}, 最小絶対値点を採用`);
             return minAbsPoint.pupilCoordinate;
         }
-        
-        // 近似の品質チェック
-        const approximationErrors = selectedPoints.map(point => {
-            const predictedY = a * point.pupilCoordinate + b;
-            return Math.abs(predictedY - point.transverseAberration);
-        });
-        const maxError = Math.max(...approximationErrors);
-        const avgError = approximationErrors.reduce((sum, err) => sum + err, 0) / approximationErrors.length;
-        
-        console.log(`📊 [MinAbs3Points] 近似品質: 最大誤差=${maxError.toFixed(6)}, 平均誤差=${avgError.toFixed(6)}`);
         
         return zeroX;
         
     } catch (error) {
-        console.error('❌ [MinAbs3Points] エラー:', error);
+        console.error('❌ 最小絶対値3点法エラー:', error);
         return null;
     }
 }
@@ -2132,24 +1779,8 @@ function findZeroAberrationByMinAbsThreePoints(points) {
  * @param {Object} aberrationData - 横収差データ
  */
 export function validateAberrationData(aberrationData) {
-    console.log('🔍 横収差データ検証:');
-    console.log(`- 光学系タイプ: ${aberrationData.isFiniteSystem ? '有限系' : '無限系'}`);
-    console.log(`- フィールド数: ${aberrationData.fieldSettings.length}`);
-    console.log(`- 波長: ${aberrationData.wavelength} μm`);
-    console.log(`- 評価面: ${aberrationData.targetSurface + 1}`);
-    console.log(`- 絞り面: ${aberrationData.stopSurface + 1}`);
-    
-    aberrationData.meridionalData.forEach((data, index) => {
-        const validPoints = data.points.filter(p => !isNaN(p.transverseAberration)).length;
-        const maxAberration = validPoints > 0 ? Math.max(...data.points.map(p => Math.abs(p.transverseAberration))) : 0;
-        console.log(`- ${data.fieldSetting.displayName} (M): ${validPoints}点, 最大収差 ${maxAberration.toFixed(4)}mm`);
-    });
-    
-    aberrationData.sagittalData.forEach((data, index) => {
-        const validPoints = data.points.filter(p => !isNaN(p.transverseAberration)).length;
-        const maxAberration = validPoints > 0 ? Math.max(...data.points.map(p => Math.abs(p.transverseAberration))) : 0;
-        console.log(`- ${data.fieldSetting.displayName} (S): ${validPoints}点, 最大収差 ${maxAberration.toFixed(4)}mm`);
-    });
+    if (!TRANSVERSE_DEBUG) return;
+    void aberrationData;
 }
 
 /**
@@ -2182,8 +1813,6 @@ function findZeroAberrationByPolynomialFitting(points) {
         // 大量データ（284点以上）の場合は代表点を選択して数値安定性を向上
         let fittingPoints = validPoints;
         if (validPoints.length >= 284) {
-            console.log(`🔧 大量データ検出（${validPoints.length}点）: 代表点サンプリングを実行`);
-            
             // 3段階サンプリング戦略
             // 1) 重要な領域（0近傍、±1近傍）は密に保持
             // 2) 中間領域は適度にサンプリング
@@ -2200,7 +1829,6 @@ function findZeroAberrationByPolynomialFitting(points) {
             
             // 0近傍は全て保持
             fittingPoints.push(...zeroNearPoints);
-            console.log(`🔧 0近傍保持: ${zeroNearPoints.length}点`);
             
             // エッジ近傍も全て保持
             edgeNearPoints.forEach(point => {
@@ -2211,7 +1839,6 @@ function findZeroAberrationByPolynomialFitting(points) {
                     fittingPoints.push(point);
                 }
             });
-            console.log(`🔧 エッジ近傍追加後: ${fittingPoints.length}点`);
             
             // 中間領域は等間隔サンプリング
             if (middlePoints.length > 0) {
@@ -2230,12 +1857,6 @@ function findZeroAberrationByPolynomialFitting(points) {
             
             // 再ソート
             fittingPoints.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
-            console.log(`🔧 最終サンプリング完了: ${fittingPoints.length}点を選択（元: ${validPoints.length}点）`);
-            
-            // サンプリングが適切か確認
-            const sampledRange = fittingPoints.length > 0 ? 
-                `${fittingPoints[0].pupilCoordinate.toFixed(3)} 〜 ${fittingPoints[fittingPoints.length-1].pupilCoordinate.toFixed(3)}` : '不明';
-            console.log(`🔧 サンプリング範囲: ${sampledRange}`);
         }
         
         // 3次多項式フィッティング: y = a*x³ + b*x² + c*x + d
@@ -2265,7 +1886,6 @@ function findZeroAberrationByPolynomialFitting(points) {
         }
         
         const [a, b, c, d] = coeffs;
-        console.log(`📊 3次多項式係数: a=${a.toFixed(6)}, b=${b.toFixed(6)}, c=${c.toFixed(6)}, d=${d.toFixed(6)}`);
         
         // 3次方程式 a*x³ + b*x² + c*x + d = 0 の解を求める
         const roots = solveCubicEquation(a, b, c, d);
@@ -2293,12 +1913,10 @@ function findZeroAberrationByPolynomialFitting(points) {
             Math.abs(curr) < Math.abs(prev) ? curr : prev
         );
         
-        console.log(`✅ フィッティング結果: 横収差0位置 = ${bestRoot.toFixed(6)}`);
         return bestRoot;
         
     } catch (error) {
         console.error('❌ 多項式フィッティングエラー:', error);
-        console.log('🔧 大量データ用区分的線形補間にフォールバック');
         
         // 大量データ用の区分的線形補間
         if (points && points.length >= 284) {
@@ -2350,7 +1968,6 @@ function findZeroAberrationByNewtonMethod(points) {
                     const zeroX = p1.pupilCoordinate + t * deltaX;
                     
                     if (Math.abs(zeroX) <= 1.0) {
-                        console.log(`✅ ニュートン法（2点線形）: 横収差0位置 = ${zeroX.toFixed(6)}`);
                         return zeroX;
                     }
                 }
@@ -2411,8 +2028,6 @@ function findZeroAberrationByNewtonMethod(points) {
             
             // 収束判定
             if (Math.abs(dx) < tolerance) {
-                console.log(`✅ ニュートン法収束: ${iter + 1}回反復, 横収差0位置 = ${x.toFixed(6)}`);
-                
                 // 解が有効範囲内かチェック
                 if (Math.abs(x) <= 1.0) {
                     return x;
@@ -2713,7 +2328,6 @@ function findZeroAberrationByLinearInterpolation(points) {
                     
                     // 結果が有効範囲内かチェック
                     if (Math.abs(zeroX) <= 1.0) {
-                        console.log(`✅ 線形補間収束: 点${i}と点${i+1}の間, 横収差0位置 = ${zeroX.toFixed(6)}`);
                         return zeroX;
                     }
                 }
@@ -2724,8 +2338,7 @@ function findZeroAberrationByLinearInterpolation(points) {
         const minAbsPoint = validPoints.reduce((prev, curr) => 
             Math.abs(curr.transverseAberration) < Math.abs(prev.transverseAberration) ? curr : prev
         );
-        
-        console.log(`⚠️ 線形補間: 0交点なし、最小収差点を使用 = ${minAbsPoint.pupilCoordinate.toFixed(6)}`);
+
         return minAbsPoint.pupilCoordinate;
         
     } catch (error) {
@@ -2761,8 +2374,7 @@ function findZeroAberrationByPiecewiseLinear(points) {
         // 瞳座標でソート
         validPoints.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
         
-        console.log(`🔧 区分的線形補間開始: ${validPoints.length}点を使用`);
-        
+
         // 区間に分割して各区間で線形補間を行う
         const segments = Math.min(20, Math.floor(validPoints.length / 15)); // 最大20区間
         const segmentSize = Math.floor(validPoints.length / segments);
@@ -2808,20 +2420,13 @@ function findZeroAberrationByPiecewiseLinear(points) {
             const minAbsPoint = validPoints.reduce((prev, curr) => 
                 Math.abs(curr.transverseAberration) < Math.abs(prev.transverseAberration) ? curr : prev
             );
-            console.log(`🔧 最小絶対値点を採用: 瞳座標=${minAbsPoint.pupilCoordinate.toFixed(6)}, 横収差=${minAbsPoint.transverseAberration.toFixed(6)}`);
             return minAbsPoint.pupilCoordinate;
         }
         
         // 信頼性の高い候補を選択
         candidates.sort((a, b) => b.confidence - a.confidence);
         const bestCandidate = candidates[0];
-        
-        console.log(`✅ 区分的線形補間結果: 横収差0位置 = ${bestCandidate.position.toFixed(6)} (区間${bestCandidate.segment}, 信頼度${bestCandidate.confidence.toFixed(3)})`);
-        
-        // 複数候補がある場合の警告
-        if (candidates.length > 1) {
-            console.log(`🔍 他の候補: ${candidates.slice(1, 3).map(c => c.position.toFixed(6)).join(', ')}`);
-        }
+
         
         return bestCandidate.position;
         
@@ -2914,8 +2519,7 @@ export function getEstimatedEntrancePupilDiameter(opticalSystemRows, wavelength 
  * @returns {Object} 主光線データ
  */
 export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelength = 0.5876, rayType = 'unified', options = {}) {
-    console.log('🔄 calculateChiefRayNewton: クロスビーム版への変換');
-    
+
     try {
         // フィールド設定の正規化
         if (fieldSetting && fieldSetting.position && !fieldSetting.fieldType) {
@@ -2946,8 +2550,7 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
         const isAngleField = positionType.includes('angle') && !positionType.includes('rectangle');
         const isFinite = isAngleField ? false : isFiniteSystem(opticalSystemRows);
         
-        console.log(`🔍 [calculateChiefRayNewton] Field type: position="${positionType}", isAngleField=${isAngleField}, isFinite=${isFinite}`);
-        
+
         // クロスビーム生成でオブジェクト点数を1に設定
         // options.rayCountが指定されていればそれを使用、なければデフォルト51
         const crossBeamOptions = {
@@ -2968,9 +2571,7 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
                 y: yVal,
                 comment: fieldSetting.displayName
             }];
-            
-            console.log(`🔍 [calculateChiefRayNewton] 有限系: Object位置 x=${xVal}mm, y=${yVal}mm`);
-            
+
             // 有限系の十字光線生成は raw 形式なので、rayGroups 形式へ変換する
             const rawCrossBeamData = generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions, crossBeamOptions);
             crossBeamData = convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex);
@@ -2989,9 +2590,7 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
             } else if (fieldSetting.y !== undefined) {
                 yFieldAngle = parseFloat(fieldSetting.y) || 0;
             }
-            
-            console.log(`🔍 [calculateChiefRayNewton] 無限系: Object角度 x=${xFieldAngle}°, y=${yFieldAngle}°`);
-            
+
             const objectAngles = [{
                 x: xFieldAngle,
                 y: yFieldAngle,
@@ -3018,7 +2617,6 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
         const chiefRayDefinition = (typeof (options as any)?.chiefRayDefinition === 'string')
             ? (options as any).chiefRayDefinition
             : 'stop-center';
-        const logChiefRayDefinition = (options as any)?.logChiefRayDefinition === true;
         const fallbackTargetSurfaceIndex = Array.isArray(opticalSystemRows) ? (opticalSystemRows.length - 1) : null;
         const targetSurfaceIndex = Number.isInteger((options as any)?.targetSurfaceIndex)
             ? (options as any).targetSurfaceIndex
@@ -3111,13 +2709,6 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
             }
         }
 
-        if (logChiefRayDefinition) {
-            let label = 'stop center';
-            if (chiefRayDefinition === 'beam-midpoint') label = 'beam midpoint (stop plane)';
-            if (chiefRayDefinition === 'beam-centroid') label = 'beam centroid (stop plane)';
-            console.log(`Chief ray definition: ${label}`);
-        }
-        
         if (!chiefRay) {
             console.warn('⚠️ 主光線が見つかりません');
             return { 
@@ -3184,9 +2775,6 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
  * @param {number} stopSurfaceIndex - 絞り面インデックス
  */
 function classifyCrossBeamRays(rays, stopSurfaceIndex, opticalSystemRows = null) {
-    console.log(`🔄 classifyCrossBeamRays開始: ${rays.length}本の光線を分析`);
-    console.log(`🔄 使用絞り面インデックス: ${stopSurfaceIndex}`);
-    
     let verticalCount = 0;
     let horizontalCount = 0;
     let otherCount = 0;
@@ -3198,6 +2786,11 @@ function classifyCrossBeamRays(rays, stopSurfaceIndex, opticalSystemRows = null)
     };
     
     rays.forEach((ray, index) => {
+        // PRESERVE original cross-beam type BEFORE reclassification
+        if (ray.rayType === 'vertical_cross' || ray.rayType === 'horizontal_cross') {
+            ray.originalCrossBeamType = ray.rayType;  // ✅ SAVE the original type
+        }
+        
         if (ray.rayType === 'vertical_cross') {
             verticalCount++;
         } else if (ray.rayType === 'horizontal_cross') {
@@ -3237,65 +2830,26 @@ function classifyCrossBeamRays(rays, stopSurfaceIndex, opticalSystemRows = null)
                         coordStats.vertical_cross.y.push(stopCoord.y);
                     }
                     
-                    // 最初の数本の光線で詳細ログを出力
-                    if (index < 5 || (originalType === 'horizontal_cross' && index < verticalCount + 5)) {
-                        console.log(`🔍 光線 ${index}: ${originalType} → 座標(${stopCoord.x.toFixed(4)}, ${stopCoord.y.toFixed(4)})`);
-                    }
-                    
-                    if (originalType === 'vertical_cross') {
-                        // 垂直十字光線：Y座標で上下を判定
-                        if (Math.abs(stopCoord.y) > 0.01) {  // 閾値を小さく設定
-                            ray.rayType = stopCoord.y > 0 ? 'upper_marginal' : 'lower_marginal';
-                        } else {
-                            // Y座標がゼロに近い場合、光線経路を詳しく調べる
-                            const pathY = ray.path.map(p => p.y).filter(y => Math.abs(y) > 0.01);
-                            if (pathY.length > 0) {
-                                const avgY = pathY.reduce((sum, y) => sum + y, 0) / pathY.length;
-                                ray.rayType = avgY > 0 ? 'upper_marginal' : 'lower_marginal';
-                            } else {
-                                ray.rayType = 'upper_marginal';  // デフォルト
-                            }
-                        }
-                    } else if (originalType === 'horizontal_cross') {
-                        // 水平十字光線：X座標で左右を判定
-                        if (Math.abs(stopCoord.x) > 0.01) {  // 閾値を小さく設定
-                            ray.rayType = stopCoord.x > 0 ? 'right_marginal' : 'left_marginal';
-                        } else {
-                            // X座標がゼロに近い場合、光線経路を詳しく調べる
-                            const pathX = ray.path.map(p => p.x).filter(x => Math.abs(x) > 0.01);
-                            if (pathX.length > 0) {
-                                const avgX = pathX.reduce((sum, x) => sum + x, 0) / pathX.length;
-                                ray.rayType = avgX > 0 ? 'right_marginal' : 'left_marginal';
-                            } else {
-                                ray.rayType = 'left_marginal';  // デフォルト
-                            }
-                        }
-                    }
-                    
-                    // 個別の光線分類ログは頻度を下げる
-                    if (index < 3 || index % 50 === 0) {
-                        console.log(`🔄 光線分類: ${originalType} → ${ray.rayType} (座標: ${stopCoord.x.toFixed(3)}, ${stopCoord.y.toFixed(3)})`);
-                    }
+                    // 🔧 FIX: DO NOT RECLASSIFY cross-beam rays!
+                    // Keep vertical_cross and horizontal_cross as-is.
+                    // These types are fundamental for meridional/sagittal separation.
+                    // Reclassifying them destroys the meridional/sagittal distinction.
+                    // Just keep the original type:
+                    // ray.rayType already = vertical_cross or horizontal_cross (no change needed)
                 }
             }
         }
     });
     
-    // 座標統計を出力
-    console.log('📊 座標統計:');
     if (coordStats.horizontal_cross.x.length > 0) {
         const xMin = Math.min(...coordStats.horizontal_cross.x);
         const xMax = Math.max(...coordStats.horizontal_cross.x);
         const xAvg = coordStats.horizontal_cross.x.reduce((sum, x) => sum + x, 0) / coordStats.horizontal_cross.x.length;
-        console.log(`  水平十字光線X座標: 範囲[${xMin.toFixed(3)}, ${xMax.toFixed(3)}], 平均=${xAvg.toFixed(3)}`);
     }
     
     if (coordStats.vertical_cross.y.length > 0) {
         const yMin = Math.min(...coordStats.vertical_cross.y);
         const yMax = Math.max(...coordStats.vertical_cross.y);
         const yAvg = coordStats.vertical_cross.y.reduce((sum, y) => sum + y, 0) / coordStats.vertical_cross.y.length;
-        console.log(`  垂直十字光線Y座標: 範囲[${yMin.toFixed(3)}, ${yMax.toFixed(3)}], 平均=${yAvg.toFixed(3)}`);
     }
-    
-    console.log(`📊 十字光線分類完了: vertical=${verticalCount}, horizontal=${horizontalCount}, other=${otherCount}`);
 }
