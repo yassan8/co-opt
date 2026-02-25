@@ -41,8 +41,36 @@ async function preloadOptimizerDirectWasmModule(): Promise<OptimizerWasmApi | nu
   if (!optimizerDirectInitPromise) {
     optimizerDirectInitPromise = (async () => {
       try {
-        const wasmPkgPath = '../../rust-wasm/pkg/surface_origins' + '.js';
-        const mod = await import(wasmPkgPath);
+        let mod: any = null;
+        const importErrors: string[] = [];
+
+        try {
+          mod = await import('../../rust-wasm/pkg/surface_origins.js');
+        } catch (e) {
+          importErrors.push(`static:${String((e as any)?.message || e || 'failed')}`);
+        }
+
+        if (!mod) {
+          try {
+            const byUrl = new URL('../../rust-wasm/pkg/surface_origins.js', import.meta.url).href;
+            mod = await import(/* @vite-ignore */ byUrl);
+          } catch (e) {
+            importErrors.push(`url:${String((e as any)?.message || e || 'failed')}`);
+          }
+        }
+
+        if (!mod && typeof window !== 'undefined') {
+          try {
+            mod = await import(/* @vite-ignore */ '/rust-wasm/pkg/surface_origins.js');
+          } catch (e) {
+            importErrors.push(`root:${String((e as any)?.message || e || 'failed')}`);
+          }
+        }
+
+        if (!mod) {
+          throw new Error(`surface_origins module import failed (${importErrors.join(' | ')})`);
+        }
+
         if (typeof mod?.default === 'function') {
           await mod.default();
         }
