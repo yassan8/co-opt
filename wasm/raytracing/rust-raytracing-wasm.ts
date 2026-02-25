@@ -44,7 +44,8 @@ async function importSurfaceOriginsModule(): Promise<any> {
 
   if (typeof window !== 'undefined') {
     try {
-      return await import(/* @vite-ignore */ '/rust-wasm/pkg/surface_origins.js');
+      const rootPath = '/rust-wasm/pkg/' + 'surface_origins.js';
+      return await import(/* @vite-ignore */ rootPath);
     } catch (e) {
       errors.push(`root:${String((e as any)?.message || e || 'failed')}`);
     }
