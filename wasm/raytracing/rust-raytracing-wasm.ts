@@ -29,27 +29,22 @@ const isNodeRuntime = typeof process !== 'undefined' && !!(process as any)?.vers
 async function importSurfaceOriginsModule(): Promise<any> {
   const errors: string[] = [];
 
-  try {
-    const relPath = '../../rust-wasm/pkg/' + 'surface_origins.js';
-    return await import(/* @vite-ignore */ relPath);
-  } catch (e) {
-    errors.push(`relative:${String((e as any)?.message || e || 'failed')}`);
-  }
-
-  try {
-    const byUrl = new URL('../../rust-wasm/pkg/surface_origins.js', import.meta.url).href;
-    return await import(/* @vite-ignore */ byUrl);
-  } catch (e) {
-    errors.push(`url:${String((e as any)?.message || e || 'failed')}`);
-  }
-
-  if (typeof window !== 'undefined') {
+  const baseUrl = (() => {
     try {
-      const rootPath = '/rust-wasm/pkg/' + 'surface_origins.js';
-      return await import(/* @vite-ignore */ rootPath);
-    } catch (e) {
-      errors.push(`root:${String((e as any)?.message || e || 'failed')}`);
+      const raw = (import.meta as any)?.env?.BASE_URL;
+      const s = typeof raw === 'string' && raw.length > 0 ? raw : '/';
+      return s.endsWith('/') ? s : `${s}/`;
+    } catch {
+      return '/';
     }
+  })();
+
+  const publicPath = `${baseUrl}rust-wasm/pkg/surface_origins.js`;
+
+  try {
+    return await import(/* @vite-ignore */ publicPath);
+  } catch (e) {
+    errors.push(`public:${String((e as any)?.message || e || 'failed')}`);
   }
 
   throw new Error(`surface_origins module import failed (${errors.join(' | ')})`);
