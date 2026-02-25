@@ -13,6 +13,9 @@ type RustRayTracingWasm = {
   trace_ray_batch_with_system_json: (rayArrayPtr: number, systemMetaJSON: string, rowCount: number, nStart: number) => any;
   fft_2d_forward: (realPtr: number, imagPtr: number, rows: number, cols: number, realOutPtr: number, imagOutPtr: number) => any;
   fft_2d_inverse: (realPtr: number, imagPtr: number, rows: number, cols: number, realOutPtr: number, imagOutPtr: number) => any;
+  solve_spd_linear_system?: (aFlat: Float64Array, n: number, b: Float64Array) => Float64Array;
+  solve_linear_system?: (aFlat: Float64Array, n: number, b: Float64Array) => Float64Array;
+  build_normal_equations?: (jFlat: Float64Array, m: number, n: number, r: Float64Array) => Float64Array;
   malloc: (size: number) => number;
   free: (ptr: number) => void;
   memory: { buffer: ArrayBuffer };
@@ -80,6 +83,9 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           trace_ray_batch_with_system_json: mod.trace_ray_batch_with_system_json,
           fft_2d_forward: mod.fft_2d_forward,
           fft_2d_inverse: mod.fft_2d_inverse,
+          solve_spd_linear_system: mod.solve_spd_linear_system,
+          solve_linear_system: mod.solve_linear_system,
+          build_normal_equations: mod.build_normal_equations,
           malloc: mod.malloc,
           free: mod.free,
           memory: mod.memory

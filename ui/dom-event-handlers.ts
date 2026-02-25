@@ -27,6 +27,7 @@ import {
     encodeAllDataToCompressedString,
     buildShareUrlFromCompressedString
 } from '../utils/url-share.ts';
+import { getWindowDebugBagValue } from '../utils/window-debug-bag.ts';
 import { setupOpticalSystemChangeListeners, setupAnalysisWindows } from './event-handlers.ts';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.ts';
 import { listDesignVariablesFromBlocks } from '../optimization/design-variables.ts';
@@ -2386,6 +2387,14 @@ function setupOptimizeDesignIntentButton(): void {
         <input id="opt-auto-render" type="checkbox" style="width:16px; height:16px;" />
         Auto-render on Accept
     </label>
+    <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
+        <input id="opt-use-wasm-linear-solve" type="checkbox" checked style="width:16px; height:16px;" />
+        WASM linear solve
+    </label>
+    <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
+        <input id="opt-profile" type="checkbox" checked style="width:16px; height:16px;" />
+        Profile
+    </label>
 </div>
 <div style="display:flex; gap:10px; flex-direction:column;">
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Phase</span><span id="opt-phase" style="margin-left:8px;">-</span></div>
@@ -2513,6 +2522,7 @@ function setupOptimizeDesignIntentButton(): void {
                         if (stopBtn) {
                             stopBtn.addEventListener('click', () => {
                                 stopFlag.stop = true;
+                                try { (globalThis as any).__cooptLastUiStopReason = 'popup-stop-button'; } catch (_) {}
                                 try {
                                     const _opt = w.OptimizationMVP;
                                     if (_opt && typeof _opt.stop === 'function') _opt.stop();
@@ -2559,6 +2569,7 @@ function setupOptimizeDesignIntentButton(): void {
                             if (_gThis.__cooptOptimizerIsRunning) {
                                 alert('⚠️ Warning: Optimize Progress window was closed while optimization was running.\nThis may cause instability. Use the Stop button before closing the window.');
                                 stopFlag.stop = true;
+                                try { (globalThis as any).__cooptLastUiStopReason = 'popup-closed-watchdog'; } catch (_) {}
                                 try {
                                     const _opt = w.OptimizationMVP;
                                     if (_opt && typeof _opt.stop === 'function') _opt.stop();
@@ -2591,6 +2602,68 @@ function setupOptimizeDesignIntentButton(): void {
             let rejectCount = 0;
             let __lastReqRefreshAt = 0;
             const __reqRefreshThrottleMs = 500;
+
+            const refreshPreRunScore = async () => {
+                let score = NaN;
+                let reqCount = NaN;
+                try {
+                    const sre = w.systemRequirementsEditor;
+                    if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
+                        const r = sre.evaluateAndUpdateNow({ reason: 'optimize-progress-prerun' });
+                        if (r && typeof (r as any).then === 'function') {
+                            await r;
+                        }
+                    }
+
+                    const rows = (() => {
+                        try {
+                            if (sre && typeof sre.getData === 'function') {
+                                const d = sre.getData();
+                                if (Array.isArray(d)) return d;
+                            }
+                        } catch (_) {}
+                        try {
+                            if (sre && Array.isArray((sre as any).requirements)) {
+                                return (sre as any).requirements;
+                            }
+                        } catch (_) {}
+                        return [];
+                    })();
+
+                    reqCount = Array.isArray(rows) ? rows.length : NaN;
+                    if (Array.isArray(rows) && rows.length > 0) {
+                        let s = 0;
+                        for (const row of rows) {
+                            const c = Number(row?._contribution);
+                            if (Number.isFinite(c) && c > 0) s += c;
+                        }
+                        if (Number.isFinite(s)) score = s;
+                    }
+                } catch (_) {}
+
+                if (!Number.isFinite(score)) {
+                    score = NaN;
+                }
+
+                if (!popup || popup.closed) return;
+                try {
+                    const doc = popup.document;
+                    const curEl = doc.getElementById('opt-cur');
+                    const bestEl = doc.getElementById('opt-best');
+                    const reqEl = doc.getElementById('opt-req');
+                    const vioEl = doc.getElementById('opt-vio');
+                    const softEl = doc.getElementById('opt-soft');
+                    const phaseEl = doc.getElementById('opt-phase');
+                    if (curEl) curEl.textContent = Number.isFinite(score) ? score.toFixed(6) : '-';
+                    if (bestEl) bestEl.textContent = Number.isFinite(score) ? score.toFixed(6) : '-';
+                    if (reqEl && Number.isFinite(reqCount)) reqEl.textContent = String(Math.max(0, Math.floor(reqCount)));
+                    if (vioEl) vioEl.textContent = Number.isFinite(score) ? score.toFixed(6) : '-';
+                    if (softEl) softEl.textContent = Number.isFinite(score) ? '0.000000' : '-';
+                    if (phaseEl && String(phaseEl.textContent || '').trim() === '-') {
+                        phaseEl.textContent = 'ready';
+                    }
+                } catch (_) {}
+            };
 
             const updateProgressUI = (p: any) => {
                 const phaseStr = String(p?.phase ?? '');
@@ -2800,6 +2873,7 @@ function setupOptimizeDesignIntentButton(): void {
                     } catch (_) {}
 
                     stopFlag.stop = false;
+                    try { (globalThis as any).__cooptLastUiStopReason = null; } catch (_) {}
                     acceptCount = 0;
                     rejectCount = 0;
                     lastIssueText = '-';
@@ -2924,7 +2998,9 @@ function setupOptimizeDesignIntentButton(): void {
                             restartMaxCount: Math.max(0, Math.floor(readNum('opt-restart-max-count', 2))),
                             restartJitterScaled: Math.max(0, readNum('opt-restart-jitter-scaled', 0.035)),
                             lmExploreWhenFlat: readBool('opt-lm-explore-when-flat', false),
-                            lmExploreTries: Math.max(1, Math.floor(readNum('opt-lm-explore-tries', 3)))
+                            lmExploreTries: Math.max(1, Math.floor(readNum('opt-lm-explore-tries', 3))),
+                            useWasmLinearSolve: readBool('opt-use-wasm-linear-solve', true),
+                            profile: readBool('opt-profile', true)
                         };
                     };
 
@@ -3065,6 +3141,43 @@ function setupOptimizeDesignIntentButton(): void {
                             }
                         } catch (_) {}
                         alert(reason);
+                    } else if (result && result.ok !== false) {
+                        try {
+                            const prof = getWindowDebugBagValue('optimizerMvp', 'lastOptimizeProfile', null) as any;
+                            const calls = Number(prof?.wasmLinearSolveCalls ?? prof?.counts?.wasmLinearSolveCalls) || 0;
+                            const hits = Number(prof?.wasmLinearSolveHits ?? prof?.counts?.wasmLinearSolveHits) || 0;
+                            const fallbacks = Number(prof?.wasmLinearSolveFallbacks ?? prof?.counts?.wasmLinearSolveFallbacks) || 0;
+                            const hitRate = calls > 0 ? (hits / calls) : NaN;
+                            const neCalls = Number(prof?.wasmNormalEqCalls ?? prof?.counts?.wasmNormalEqCalls) || 0;
+                            const neHits = Number(prof?.wasmNormalEqHits ?? prof?.counts?.wasmNormalEqHits) || 0;
+                            const neFallbacks = Number(prof?.wasmNormalEqFallbacks ?? prof?.counts?.wasmNormalEqFallbacks) || 0;
+                            const neHitRate = neCalls > 0 ? (neHits / neCalls) : NaN;
+                            const wasmBridgeDebug = (prof && typeof prof === 'object' && prof.wasmBridgeDebug && typeof prof.wasmBridgeDebug === 'object')
+                                ? prof.wasmBridgeDebug
+                                : null;
+                            const solveReason = wasmBridgeDebug ? String(wasmBridgeDebug.lastSolveReason || '').trim() : '';
+                            const normalEqReason = wasmBridgeDebug ? String(wasmBridgeDebug.lastNormalEqReason || '').trim() : '';
+                            const bridgeSource = wasmBridgeDebug ? String(wasmBridgeDebug.initSource || '').trim() : '';
+                            const bridgeError = wasmBridgeDebug ? String(wasmBridgeDebug.initError || '').trim() : '';
+                            const bridgeInitTag = (bridgeSource || bridgeError)
+                                ? `, init=${bridgeSource || '-'}${bridgeError ? `, err=${bridgeError}` : ''}`
+                                : '';
+                            const wasmText = calls > 0
+                                ? `WASM solve: ${hits}/${calls} (${(hitRate * 100).toFixed(1)}%), fb=${fallbacks}${(hits === 0 && solveReason) ? `, why=${solveReason}` : ''}${(hits === 0) ? bridgeInitTag : ''}`
+                                : 'WASM solve: 0 calls';
+                            const wasmNeText = neCalls > 0
+                                ? `WASM normal-eq: ${neHits}/${neCalls} (${(neHitRate * 100).toFixed(1)}%), fb=${neFallbacks}${(neHits === 0 && normalEqReason) ? `, why=${normalEqReason}` : ''}${(neHits === 0) ? bridgeInitTag : ''}`
+                                : 'WASM normal-eq: 0 calls';
+
+                            if (popup && !popup.closed) {
+                                const issueEl = popup.document.getElementById('opt-issue');
+                                if (issueEl) {
+                                    const prev = String(issueEl.textContent || '-').trim();
+                                    const statsText = `${wasmText} | ${wasmNeText}`;
+                                    issueEl.textContent = (prev && prev !== '-') ? `${prev} | ${statsText}` : statsText;
+                                }
+                            }
+                        } catch (_) {}
                     }
                 } catch (outerError) {
                     console.warn('⚠️ [Optimize] Outer error:', outerError);
@@ -3076,6 +3189,10 @@ function setupOptimizeDesignIntentButton(): void {
             // Expose the starter for the popup
             try {
                 w.__cooptStartOptimizationFromPopup = startRun;
+            } catch (_) {}
+
+            try {
+                await refreshPreRunScore();
             } catch (_) {}
 
         } catch (e) {

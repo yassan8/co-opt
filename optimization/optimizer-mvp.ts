@@ -24,6 +24,7 @@ import { requestRefreshBlockInspector } from '../core/window-facade.ts';
 import { getWindowDebugBagValue, setWindowDebugBagValue } from '../utils/window-debug-bag.ts';
 import { runKKTOptimization } from './kkt-optimizer.ts';
 import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
+import { preloadOptimizerWasmBridge, solveLinearSystemWithOptimizerWasm, buildNormalEquationsWithOptimizerWasm, getOptimizerWasmBridgeDebugInfo } from '../wasm/optimization/optimizer-wasm-bridge.ts';
 
 let __optimizerStopRequested = false;
 
@@ -2114,6 +2115,21 @@ export async function runOptimizationMVP(options = {}) {
       operandValueCacheHits: 0,
       operandValueCacheMisses: 0,
       meritRuntimeCacheEnabled: 0,
+      wasmLinearSolveCalls: 0,
+      wasmLinearSolveHits: 0,
+      wasmLinearSolveFallbacks: 0,
+      wasmNormalEqCalls: 0,
+      wasmNormalEqHits: 0,
+      wasmNormalEqFallbacks: 0,
+      kktFiniteDiffJacobianCalls: 0,
+      kktFiniteDiffJacobianMs: 0,
+      kktFiniteDiffColumns: 0,
+      kktFiniteDiffResidualEvals: 0,
+      kktJacobianFullCalls: 0,
+      kktJacobianPartialCalls: 0,
+      kktJacobianReuseCalls: 0,
+      kktIterCount: 0,
+      kktIterMs: 0,
       evalResidualsNowCalls: 0,
       evalResidualsNowMs: 0,
       evalCompositeCalls: 0,
@@ -2166,6 +2182,22 @@ export async function runOptimizationMVP(options = {}) {
             : 0
         );
         __profile.meritRuntimeCacheEnabled = Number(__profile.counts.meritRuntimeCacheEnabled) || 0;
+        __profile.wasmLinearSolveCalls = Number(__profile.counts.wasmLinearSolveCalls) || 0;
+        __profile.wasmLinearSolveHits = Number(__profile.counts.wasmLinearSolveHits) || 0;
+        __profile.wasmLinearSolveFallbacks = Number(__profile.counts.wasmLinearSolveFallbacks) || 0;
+        __profile.wasmNormalEqCalls = Number(__profile.counts.wasmNormalEqCalls) || 0;
+        __profile.wasmNormalEqHits = Number(__profile.counts.wasmNormalEqHits) || 0;
+        __profile.wasmNormalEqFallbacks = Number(__profile.counts.wasmNormalEqFallbacks) || 0;
+        __profile.kktFiniteDiffJacobianCalls = Number(__profile.counts.kktFiniteDiffJacobianCalls) || 0;
+        __profile.kktFiniteDiffJacobianMs = Number(__profile.counts.kktFiniteDiffJacobianMs) || 0;
+        __profile.kktFiniteDiffColumns = Number(__profile.counts.kktFiniteDiffColumns) || 0;
+        __profile.kktFiniteDiffResidualEvals = Number(__profile.counts.kktFiniteDiffResidualEvals) || 0;
+        __profile.kktJacobianFullCalls = Number(__profile.counts.kktJacobianFullCalls) || 0;
+        __profile.kktJacobianPartialCalls = Number(__profile.counts.kktJacobianPartialCalls) || 0;
+        __profile.kktJacobianReuseCalls = Number(__profile.counts.kktJacobianReuseCalls) || 0;
+        __profile.kktIterCount = Number(__profile.counts.kktIterCount) || 0;
+        __profile.kktIterMs = Number(__profile.counts.kktIterMs) || 0;
+        __profile.wasmBridgeDebug = getOptimizerWasmBridgeDebugInfo();
         __profile.evalResidualsNowCalls = Number(__profile.counts.evalResidualsNowCalls) || 0;
         __profile.evalResidualsNowMs = Number(__profile.counts.evalResidualsNowMs) || 0;
         __profile.evalCompositeCalls = Number(__profile.counts.evalCompositeCalls) || 0;
@@ -2336,7 +2368,27 @@ export async function runOptimizationMVP(options = {}) {
           operandValueCacheHits: cacheHits,
           operandValueCacheMisses: cacheMisses,
           operandValueCacheHitRatePct: Math.round(hitRate * 10) / 10,
-          meritRuntimeCacheEnabled: Number(__profile.counts.meritRuntimeCacheEnabled) || 0
+          meritRuntimeCacheEnabled: Number(__profile.counts.meritRuntimeCacheEnabled) || 0,
+          wasmLinearSolveCalls: Number(__profile.counts.wasmLinearSolveCalls) || 0,
+          wasmLinearSolveHits: Number(__profile.counts.wasmLinearSolveHits) || 0,
+          wasmLinearSolveFallbacks: Number(__profile.counts.wasmLinearSolveFallbacks) || 0,
+          wasmNormalEqCalls: Number(__profile.counts.wasmNormalEqCalls) || 0,
+          wasmNormalEqHits: Number(__profile.counts.wasmNormalEqHits) || 0,
+          wasmNormalEqFallbacks: Number(__profile.counts.wasmNormalEqFallbacks) || 0,
+          kktFiniteDiffJacobianCalls: Number(__profile.counts.kktFiniteDiffJacobianCalls) || 0,
+          kktFiniteDiffJacobianMs: Number(__profile.counts.kktFiniteDiffJacobianMs) || 0,
+          kktFiniteDiffColumns: Number(__profile.counts.kktFiniteDiffColumns) || 0,
+          kktFiniteDiffResidualEvals: Number(__profile.counts.kktFiniteDiffResidualEvals) || 0,
+          kktJacobianFullCalls: Number(__profile.counts.kktJacobianFullCalls) || 0,
+          kktJacobianPartialCalls: Number(__profile.counts.kktJacobianPartialCalls) || 0,
+          kktJacobianReuseCalls: Number(__profile.counts.kktJacobianReuseCalls) || 0,
+          kktIterCount: Number(__profile.counts.kktIterCount) || 0,
+          kktIterMs: Number(__profile.counts.kktIterMs) || 0,
+          kktIterAvgMs: (() => {
+            const c = Number(__profile.counts.kktIterCount) || 0;
+            const ms = Number(__profile.counts.kktIterMs) || 0;
+            return c > 0 ? ms / c : 0;
+          })()
         });
       } catch (_) {}
       console.groupEnd();
@@ -2472,6 +2524,13 @@ export async function runOptimizationMVP(options = {}) {
   // Default OFF: user requested no perturbation after rho=0.
   const lmExploreWhenFlat = (opts.lmExploreWhenFlat === undefined) ? false : !!opts.lmExploreWhenFlat;
   const lmExploreTries = Number.isFinite(Number(opts.lmExploreTries)) ? Math.max(1, Math.floor(Number(opts.lmExploreTries))) : 3;
+  const useWasmLinearSolve = !!opts.useWasmLinearSolve || !!opts.kktUseWasmLinearSolve || !!opts.lmUseWasmLinearSolve;
+
+  if (useWasmLinearSolve) {
+    try {
+      await preloadOptimizerWasmBridge();
+    } catch (_) {}
+  }
 
   // Persistence control: for correctness, we default to saving in inner loops.
   // If you want speed and your evaluator reads from the live activeCfg object,
@@ -2528,11 +2587,19 @@ export async function runOptimizationMVP(options = {}) {
     if (stop && !__stopReasonLogged) {
       __stopReasonLogged = true;
       try {
+        const uiStopReason = (() => {
+          try {
+            return (typeof globalThis !== 'undefined') ? ((globalThis as any).__cooptLastUiStopReason ?? null) : null;
+          } catch (_) {
+            return null;
+          }
+        })();
         console.warn('🛑 [OptimizerMVP] Stop requested', {
           context: context || 'generic',
           internalStop,
           userStop,
           legacyStop,
+          uiStopReason,
           userStopError: userStopError ? String(userStopError) : null
         });
       } catch (_) {}
@@ -2906,6 +2973,71 @@ export async function runOptimizationMVP(options = {}) {
       const h = Math.max(fdMinStep, rel, scaled);
       return Number.isFinite(h) && h > 0 ? h : Math.max(fdMinStep, 1e-18);
     }
+  };
+
+  const solveLinearSystemWithOptionalWasm = (matrix, rhs, preferSpd = true) => {
+    if (__profile && __profile.counts) {
+      __profile.counts.wasmLinearSolveCalls = (Number(__profile.counts.wasmLinearSolveCalls) || 0) + 1;
+    }
+
+    if (useWasmLinearSolve) {
+      const wasmSolved = solveLinearSystemWithOptimizerWasm(matrix, rhs, preferSpd);
+      if (Array.isArray(wasmSolved) && wasmSolved.length === rhs.length) {
+        if (__profile && __profile.counts) {
+          __profile.counts.wasmLinearSolveHits = (Number(__profile.counts.wasmLinearSolveHits) || 0) + 1;
+        }
+        return wasmSolved;
+      }
+    }
+
+    if (__profile && __profile.counts) {
+      __profile.counts.wasmLinearSolveFallbacks = (Number(__profile.counts.wasmLinearSolveFallbacks) || 0) + 1;
+    }
+
+    let solved = solveSymmetricPositiveDefinite(matrix, rhs);
+    if (!solved) solved = solveLinearSystemFallback(matrix, rhs);
+    return solved;
+  };
+
+  const buildNormalEquationsWithOptionalWasm = (J, r, m, n) => {
+    if (__profile && __profile.counts) {
+      __profile.counts.wasmNormalEqCalls = (Number(__profile.counts.wasmNormalEqCalls) || 0) + 1;
+    }
+
+    if (useWasmLinearSolve) {
+      const wasmBuilt = buildNormalEquationsWithOptimizerWasm(J, r, m, n);
+      if (wasmBuilt && Array.isArray(wasmBuilt.A) && Array.isArray(wasmBuilt.g)) {
+        if (__profile && __profile.counts) {
+          __profile.counts.wasmNormalEqHits = (Number(__profile.counts.wasmNormalEqHits) || 0) + 1;
+        }
+        return wasmBuilt;
+      }
+    }
+
+    if (__profile && __profile.counts) {
+      __profile.counts.wasmNormalEqFallbacks = (Number(__profile.counts.wasmNormalEqFallbacks) || 0) + 1;
+    }
+
+    const A = Array.from({ length: n }, () => Array(n).fill(0));
+    const g = Array(n).fill(0);
+    for (let j = 0; j < n; j++) {
+      let gj = 0;
+      for (let i = 0; i < m; i++) {
+        gj += J[i][j] * r[i];
+      }
+      g[j] = gj;
+    }
+    for (let j = 0; j < n; j++) {
+      for (let k = 0; k <= j; k++) {
+        let s = 0;
+        for (let i = 0; i < m; i++) {
+          s += J[i][j] * J[i][k];
+        }
+        A[j][k] = s;
+        A[k][j] = s;
+      }
+    }
+    return { A, g };
   };
 
   // DLS/LM mode
@@ -3687,28 +3819,9 @@ export async function runOptimizationMVP(options = {}) {
       if (shouldStop && shouldStop()) break;
 
       // Compute normal equations: A = J^T J, g = J^T r
-      /** @type {number[][]} */
-      const A = Array.from({ length: n }, () => Array(n).fill(0));
-      const g = Array(n).fill(0);
-
-      for (let j = 0; j < n; j++) {
-        let gj = 0;
-        for (let i = 0; i < m; i++) {
-          gj += J[i][j] * r0[i];
-        }
-        g[j] = gj;
-      }
-
-      for (let j = 0; j < n; j++) {
-        for (let k = 0; k <= j; k++) {
-          let s = 0;
-          for (let i = 0; i < m; i++) {
-            s += J[i][j] * J[i][k];
-          }
-          A[j][k] = s;
-          A[k][j] = s;
-        }
-      }
+      const ne = buildNormalEquationsWithOptionalWasm(J, r0, m, n);
+      const A = ne.A;
+      const g = ne.g;
 
       // Nielsen adaptive initialization: lambda_0 = tau * max(diag(A))
       if (!lambdaInitialized) {
@@ -3761,8 +3874,7 @@ export async function runOptimizationMVP(options = {}) {
         await nextFrame();
       }
 
-      let dx = solveSymmetricPositiveDefinite(Ad, b);
-      if (!dx) dx = solveLinearSystemFallback(Ad, b);
+      let dx = solveLinearSystemWithOptionalWasm(Ad, b, true);
       if (!dx) {
         // Stability tuning: linear solver failed, increase damping
         lambda *= lmLambdaUp;
@@ -4348,6 +4460,34 @@ export async function runOptimizationMVP(options = {}) {
         return out;
       });
 
+      const kktEvalCacheMax = Number.isFinite(Number(opts?.kktEvalCacheMax))
+        ? Math.max(64, Math.floor(Number(opts.kktEvalCacheMax)))
+        : 512;
+      const kktEvalCache = new Map<string, any>();
+      const kktCachePrecision = Number.isFinite(Number(opts?.kktEvalCachePrecision))
+        ? Math.max(6, Math.min(16, Math.floor(Number(opts.kktEvalCachePrecision))))
+        : 12;
+
+      const buildKktXKey = (x: number[]) => {
+        const clamped = clampToBounds(x);
+        const parts = new Array(clamped.length);
+        for (let i = 0; i < clamped.length; i++) {
+          const v = Number(clamped[i]);
+          parts[i] = Number.isFinite(v) ? v.toExponential(kktCachePrecision) : String(v);
+        }
+        return parts.join('|');
+      };
+
+      const cloneKktEval = (src: any) => {
+        const out = src && typeof src === 'object' ? src : {};
+        return {
+          objective: Number(out.objective),
+          constraints: Array.isArray(out.constraints) ? out.constraints.slice() : [],
+          feasible: !!out.feasible,
+          residuals: Array.isArray(out.residuals) ? out.residuals.slice() : []
+        };
+      };
+
       // Objective function: minimize composite score of residuals
       // Saves/restores state to avoid side effects
       let evalCallCount = 0;
@@ -4410,7 +4550,7 @@ export async function runOptimizationMVP(options = {}) {
 
       const shouldStopKKT = () => shouldStop('AL');
 
-      const evalSQPAtX = (x: number[]) => {
+      const evalSQPAtXUncached = (x: number[]) => {
         const editor = (typeof window !== 'undefined') ? window.meritFunctionEditor : null;
         if (!editor || typeof editor.calculateOperandValue !== 'function') {
           return { objective: 1e9, constraints: [], feasible: false, residuals: [] };
@@ -4424,12 +4564,28 @@ export async function runOptimizationMVP(options = {}) {
 
         const prev = getScenarioOverrideGlobal();
         const overrideMap = (prev && typeof prev === 'object') ? { ...prev } : {};
+        let __prevRuntimeCache = null;
+        const useKktRuntimeCache = opts?.kktRuntimeCache !== false;
 
         let objective = 0;
         const constraints: number[] = [];
         const residuals: number[] = [];
 
         try {
+          if (useKktRuntimeCache) {
+            try {
+              __prevRuntimeCache = (editor && editor._runtimeCache !== undefined) ? editor._runtimeCache : null;
+              if (editor) {
+                editor._runtimeCache = new Map();
+                if (__profile && __profile.counts) {
+                  __profile.counts.meritRuntimeCacheEnabled = (Number(__profile.counts.meritRuntimeCacheEnabled) || 0) + 1;
+                }
+              }
+            } catch (_) {
+              __prevRuntimeCache = null;
+            }
+          }
+
           for (let i = 0; i < varIds.length && i < xClamped.length; i++) {
             const varId = varIds[i];
             const newVal = xClamped[i];
@@ -4490,6 +4646,11 @@ export async function runOptimizationMVP(options = {}) {
             // 【削除】else で等式制約を2つの不等式として重複登録するのを削除しました
           }
         } finally {
+          if (useKktRuntimeCache) {
+            try {
+              if (editor) editor._runtimeCache = __prevRuntimeCache;
+            } catch (_) {}
+          }
           setScenarioOverrideGlobal((prev && typeof prev === 'object') ? prev : null);
           for (let i = 0; i < varIds.length && i < saved.length; i++) {
             if (jointState) setJointDesignVariableValue(jointState, varIds[i], saved[i]);
@@ -4535,6 +4696,28 @@ export async function runOptimizationMVP(options = {}) {
         return { objective, constraints, feasible, residuals };
       };
 
+      const evalSQPAtX = (x: number[]) => {
+        const key = buildKktXKey(x);
+        if (kktEvalCache.has(key)) {
+          if (__profile && __profile.counts) {
+            __profile.counts.kktEvalCacheHits = (Number(__profile.counts.kktEvalCacheHits) || 0) + 1;
+          }
+          return cloneKktEval(kktEvalCache.get(key));
+        }
+
+        if (__profile && __profile.counts) {
+          __profile.counts.kktEvalCacheMisses = (Number(__profile.counts.kktEvalCacheMisses) || 0) + 1;
+        }
+        const value = evalSQPAtXUncached(x);
+        const storable = cloneKktEval(value);
+        if (kktEvalCache.size >= kktEvalCacheMax) {
+          const oldest = kktEvalCache.keys().next();
+          if (oldest && !oldest.done) kktEvalCache.delete(oldest.value);
+        }
+        kktEvalCache.set(key, storable);
+        return cloneKktEval(storable);
+      };
+
       console.log('🔄 [AL] Starting unified 1-loop SQP (max:', maxIterations, 'iters)');
 
       // Smoothmax function: smooth approximation of Math.max(0, x) for differentiability
@@ -4571,6 +4754,7 @@ export async function runOptimizationMVP(options = {}) {
       };
 
       const finiteDiffJacobian = (x: number[], r0: number[], lambdaVec: number[], mu: number, maxViol: number = 1.0) => {
+        const __fdT0 = nowMs();
         const n = x.length;
         const m = r0.length;
         const J = Array.from({ length: m }, () => Array(n).fill(0));
@@ -4596,6 +4780,94 @@ export async function runOptimizationMVP(options = {}) {
             const deriv = (r1[k] - r0[k]) / eps;
             J[k][i] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
           }
+        }
+        if (__profile && __profile.counts) {
+          __profile.counts.kktFiniteDiffJacobianCalls = (Number(__profile.counts.kktFiniteDiffJacobianCalls) || 0) + 1;
+          __profile.counts.kktFiniteDiffColumns = (Number(__profile.counts.kktFiniteDiffColumns) || 0) + n;
+          __profile.counts.kktFiniteDiffResidualEvals = (Number(__profile.counts.kktFiniteDiffResidualEvals) || 0) + n;
+          __profile.counts.kktFiniteDiffJacobianMs = (Number(__profile.counts.kktFiniteDiffJacobianMs) || 0) + (nowMs() - __fdT0);
+          __profile.counts.kktJacobianFullCalls = (Number(__profile.counts.kktJacobianFullCalls) || 0) + 1;
+        }
+        return J;
+      };
+
+      const pickJacobianRefreshColumns = (xNow: number[], xPrev: number[] | null, maxColsRaw: number): number[] => {
+        const nn = xNow.length;
+        const maxCols = Math.max(1, Math.min(nn, Math.floor(Number(maxColsRaw) || nn)));
+        if (maxCols >= nn) {
+          return Array.from({ length: nn }, (_, i) => i);
+        }
+        if (!xPrev || xPrev.length !== nn) {
+          if (maxCols === 1) return [0];
+          const picked = new Set<number>();
+          for (let k = 0; k < maxCols; k++) {
+            const idx = Math.round((k * (nn - 1)) / (maxCols - 1));
+            picked.add(Math.max(0, Math.min(nn - 1, idx)));
+          }
+          return Array.from(picked).sort((a, b) => a - b);
+        }
+        const scored: Array<{ idx: number; score: number }> = new Array(nn);
+        for (let i = 0; i < nn; i++) {
+          const s = Number.isFinite(varScales[i]) && Math.abs(varScales[i]) > 1e-18 ? Math.abs(varScales[i]) : 1;
+          const d = Math.abs(Number(xNow[i]) - Number(xPrev[i]));
+          scored[i] = { idx: i, score: d / s };
+        }
+        scored.sort((a, b) => b.score - a.score);
+        return scored.slice(0, maxCols).map(v => v.idx).sort((a, b) => a - b);
+      };
+
+      const finiteDiffJacobianPartial = (
+        x: number[],
+        r0: number[],
+        lambdaVec: number[],
+        mu: number,
+        maxViol: number,
+        baseJ: number[][],
+        refreshCols: number[]
+      ) => {
+        const __fdT0 = nowMs();
+        const n = x.length;
+        const m = r0.length;
+        const J = Array.from({ length: m }, () => Array(n).fill(0));
+        if (Array.isArray(baseJ) && baseJ.length > 0) {
+          const copyRows = Math.min(m, baseJ.length);
+          for (let rowIndex = 0; rowIndex < copyRows; rowIndex++) {
+            const srcRow = Array.isArray(baseJ[rowIndex]) ? baseJ[rowIndex] : null;
+            if (!srcRow) continue;
+            for (let colIndex = 0; colIndex < n; colIndex++) {
+              const value = Number(srcRow[colIndex]);
+              J[rowIndex][colIndex] = Number.isFinite(value) ? value : 0;
+            }
+          }
+        }
+
+        for (const col of refreshCols) {
+          if (!(col >= 0 && col < n)) continue;
+          const vObj = { id: varIds[col], key: vars[col]?.key, value: x[col] };
+          let eps = finiteDifferenceStepForVar(vObj);
+
+          const xp = x.slice();
+          xp[col] += eps;
+          if (xp[col] === x[col]) {
+            eps = Math.max(1e-8, Math.abs(x[col]) * 1e-6);
+            xp[col] = x[col] + eps;
+          }
+
+          const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+          const r1 = e1.residuals;
+
+          for (let k = 0; k < Math.min(m, r1.length); k++) {
+            const deriv = (r1[k] - r0[k]) / eps;
+            J[k][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+          }
+        }
+
+        if (__profile && __profile.counts) {
+          __profile.counts.kktFiniteDiffJacobianCalls = (Number(__profile.counts.kktFiniteDiffJacobianCalls) || 0) + 1;
+          __profile.counts.kktFiniteDiffColumns = (Number(__profile.counts.kktFiniteDiffColumns) || 0) + refreshCols.length;
+          __profile.counts.kktFiniteDiffResidualEvals = (Number(__profile.counts.kktFiniteDiffResidualEvals) || 0) + refreshCols.length;
+          __profile.counts.kktFiniteDiffJacobianMs = (Number(__profile.counts.kktFiniteDiffJacobianMs) || 0) + (nowMs() - __fdT0);
+          __profile.counts.kktJacobianPartialCalls = (Number(__profile.counts.kktJacobianPartialCalls) || 0) + 1;
         }
         return J;
       };
@@ -4628,6 +4900,155 @@ export async function runOptimizationMVP(options = {}) {
       let lastAcceptedScore = initialScore;  // 【追加】最後にアクセプトされたスコアを追跡
       let prevConvCost = Number.POSITIVE_INFINITY;
       let feasibleConvStreak = 0;
+      let stagnationIter = 0;
+      const stagnationIterLimit = Number.isFinite(Number(opts?.kktStagnationIterLimit))
+        ? Math.max(20, Math.floor(Number(opts.kktStagnationIterLimit)))
+        : 80;
+      const stagnationImproveEps = Number.isFinite(Number(opts?.kktStagnationImproveEps))
+        ? Math.max(1e-10, Number(opts.kktStagnationImproveEps))
+        : 1e-6;
+      const kktPlateauStopMinIter = Number.isFinite(Number(opts?.kktPlateauStopMinIter))
+        ? Math.max(5, Math.floor(Number(opts.kktPlateauStopMinIter)))
+        : 30;
+      const kktPlateauStopWindow = Number.isFinite(Number(opts?.kktPlateauStopWindow))
+        ? Math.max(5, Math.floor(Number(opts.kktPlateauStopWindow)))
+        : 30;
+      const kktPlateauBestRelImproveEps = Number.isFinite(Number(opts?.kktPlateauBestRelImproveEps))
+        ? Math.max(0, Number(opts.kktPlateauBestRelImproveEps))
+        : 5e-4;
+      const kktPlateauMaxViol = Number.isFinite(Number(opts?.kktPlateauMaxViol))
+        ? Math.max(0, Number(opts.kktPlateauMaxViol))
+        : 5e-3;
+      const kktPlateauViolImproveEps = Number.isFinite(Number(opts?.kktPlateauViolImproveEps))
+        ? Math.max(0, Number(opts.kktPlateauViolImproveEps))
+        : 1e-3;
+      const kktPlateauRelaxedMaxViol = Number.isFinite(Number(opts?.kktPlateauRelaxedMaxViol))
+        ? Math.max(0, Number(opts.kktPlateauRelaxedMaxViol))
+        : 2e-1;
+      const kktPlateauRelaxedMinIter = Number.isFinite(Number(opts?.kktPlateauRelaxedMinIter))
+        ? Math.max(kktPlateauStopMinIter, Math.floor(Number(opts.kktPlateauRelaxedMinIter)))
+        : Math.max(kktPlateauStopMinIter, 35);
+      const kktTailStopMinIter = Number.isFinite(Number(opts?.kktTailStopMinIter))
+        ? Math.max(20, Math.floor(Number(opts.kktTailStopMinIter)))
+        : 80;
+      const kktTailStopWindow = Number.isFinite(Number(opts?.kktTailStopWindow))
+        ? Math.max(10, Math.floor(Number(opts.kktTailStopWindow)))
+        : 40;
+      const kktTailStopBestRelImproveEps = Number.isFinite(Number(opts?.kktTailStopBestRelImproveEps))
+        ? Math.max(0, Number(opts.kktTailStopBestRelImproveEps))
+        : 3e-4;
+      const kktWindowTailStopMinIter = Number.isFinite(Number(opts?.kktWindowTailStopMinIter))
+        ? Math.max(20, Math.floor(Number(opts.kktWindowTailStopMinIter)))
+        : 60;
+      const kktWindowTailStopWindow = Number.isFinite(Number(opts?.kktWindowTailStopWindow))
+        ? Math.max(10, Math.floor(Number(opts.kktWindowTailStopWindow)))
+        : 20;
+      const kktWindowTailStopRelImproveEps = Number.isFinite(Number(opts?.kktWindowTailStopRelImproveEps))
+        ? Math.max(0, Number(opts.kktWindowTailStopRelImproveEps))
+        : 8e-4;
+      const kktWindowTailStopMaxViol = Number.isFinite(Number(opts?.kktWindowTailStopMaxViol))
+        ? Math.max(0, Number(opts.kktWindowTailStopMaxViol))
+        : 1.0;
+      const kktWindowNoGainMinIter = Number.isFinite(Number(opts?.kktWindowNoGainMinIter))
+        ? Math.max(20, Math.floor(Number(opts.kktWindowNoGainMinIter)))
+        : 70;
+      const kktWindowNoGainWindow = Number.isFinite(Number(opts?.kktWindowNoGainWindow))
+        ? Math.max(10, Math.floor(Number(opts.kktWindowNoGainWindow)))
+        : 30;
+      const kktWindowNoGainRelImproveEps = Number.isFinite(Number(opts?.kktWindowNoGainRelImproveEps))
+        ? Math.max(0, Number(opts.kktWindowNoGainRelImproveEps))
+        : 2e-3;
+      const kktWindowNoGainMaxViol = Number.isFinite(Number(opts?.kktWindowNoGainMaxViol))
+        ? Math.max(0, Number(opts.kktWindowNoGainMaxViol))
+        : 1.0;
+      const kktGoodEnoughStopMinIter = Number.isFinite(Number(opts?.kktGoodEnoughStopMinIter))
+        ? Math.max(20, Math.floor(Number(opts.kktGoodEnoughStopMinIter)))
+        : 55;
+      const kktGoodEnoughStopWindow = Number.isFinite(Number(opts?.kktGoodEnoughStopWindow))
+        ? Math.max(10, Math.floor(Number(opts.kktGoodEnoughStopWindow)))
+        : 20;
+      const kktGoodEnoughStopRecentRelImproveEps = Number.isFinite(Number(opts?.kktGoodEnoughStopRecentRelImproveEps))
+        ? Math.max(0, Number(opts.kktGoodEnoughStopRecentRelImproveEps))
+        : 5e-3;
+      const kktGoodEnoughStopMaxViol = Number.isFinite(Number(opts?.kktGoodEnoughStopMaxViol))
+        ? Math.max(0, Number(opts.kktGoodEnoughStopMaxViol))
+        : 2e-1;
+      const kktTailStopMaxViol = Number.isFinite(Number(opts?.kktTailStopMaxViol))
+        ? Math.max(0, Number(opts.kktTailStopMaxViol))
+        : 1.0;
+      const kktHighViolThreshold = Number.isFinite(Number(opts?.kktHighViolThreshold))
+        ? Math.max(0, Number(opts.kktHighViolThreshold))
+        : 20;
+      const kktHighViolImproveRatio = Number.isFinite(Number(opts?.kktHighViolImproveRatio))
+        ? Math.max(0.5, Math.min(0.999, Number(opts.kktHighViolImproveRatio)))
+        : 0.95;
+      const kktHighViolStallWindow = Number.isFinite(Number(opts?.kktHighViolStallWindow))
+        ? Math.max(5, Math.floor(Number(opts.kktHighViolStallWindow)))
+        : 20;
+      const kktHardIterCap = Number.isFinite(Number(opts?.kktHardIterCap))
+        ? Math.max(20, Math.floor(Number(opts.kktHardIterCap)))
+        : 180;
+      const kktMaxWallMs = Number.isFinite(Number(opts?.kktMaxWallMs))
+        ? Math.max(1000, Math.floor(Number(opts.kktMaxWallMs)))
+        : 120000;
+      const kktNoBestImproveMinIter = Number.isFinite(Number(opts?.kktNoBestImproveMinIter))
+        ? Math.max(20, Math.floor(Number(opts.kktNoBestImproveMinIter)))
+        : 120;
+      const kktNoBestImproveWindow = Number.isFinite(Number(opts?.kktNoBestImproveWindow))
+        ? Math.max(10, Math.floor(Number(opts.kktNoBestImproveWindow)))
+        : 80;
+      const kktNoBestImproveRelEps = Number.isFinite(Number(opts?.kktNoBestImproveRelEps))
+        ? Math.max(0, Number(opts.kktNoBestImproveRelEps))
+        : 2e-4;
+      const kktNoBestImproveMaxViol = Number.isFinite(Number(opts?.kktNoBestImproveMaxViol))
+        ? Math.max(0, Number(opts.kktNoBestImproveMaxViol))
+        : 20;
+      const kktPostBestDivergenceMinIter = Number.isFinite(Number(opts?.kktPostBestDivergenceMinIter))
+        ? Math.max(20, Math.floor(Number(opts.kktPostBestDivergenceMinIter)))
+        : 45;
+      const kktPostBestNoImproveWindow = Number.isFinite(Number(opts?.kktPostBestNoImproveWindow))
+        ? Math.max(5, Math.floor(Number(opts.kktPostBestNoImproveWindow)))
+        : 10;
+      const kktPostBestDivergenceRatio = Number.isFinite(Number(opts?.kktPostBestDivergenceRatio))
+        ? Math.max(2, Number(opts.kktPostBestDivergenceRatio))
+        : 1.6;
+      const kktPostBestDivergenceMaxViol = Number.isFinite(Number(opts?.kktPostBestDivergenceMaxViol))
+        ? Math.max(0, Number(opts.kktPostBestDivergenceMaxViol))
+        : 25;
+      const kktPostBestPatienceMinIter = Number.isFinite(Number(opts?.kktPostBestPatienceMinIter))
+        ? Math.max(20, Math.floor(Number(opts.kktPostBestPatienceMinIter)))
+        : 38;
+      const kktPostBestPatienceWindow = Number.isFinite(Number(opts?.kktPostBestPatienceWindow))
+        ? Math.max(5, Math.floor(Number(opts.kktPostBestPatienceWindow)))
+        : 10;
+      const kktPostBestPatienceMaxViol = Number.isFinite(Number(opts?.kktPostBestPatienceMaxViol))
+        ? Math.max(0, Number(opts.kktPostBestPatienceMaxViol))
+        : 25;
+      const kktPostBestRequiredImprovePct = Number.isFinite(Number(opts?.kktPostBestRequiredImprovePct))
+        ? Math.max(0, Number(opts.kktPostBestRequiredImprovePct))
+        : 95;
+      const kktSoftRestartRejectStreak = Number.isFinite(Number(opts?.kktSoftRestartRejectStreak))
+        ? Math.max(4, Math.floor(Number(opts.kktSoftRestartRejectStreak)))
+        : 12;
+      const kktSoftRestartRejectStreakHighViol = Number.isFinite(Number(opts?.kktSoftRestartRejectStreakHighViol))
+        ? Math.max(4, Math.floor(Number(opts.kktSoftRestartRejectStreakHighViol)))
+        : 8;
+      const kktSoftRestartHighViolThreshold = Number.isFinite(Number(opts?.kktSoftRestartHighViolThreshold))
+        ? Math.max(0, Number(opts.kktSoftRestartHighViolThreshold))
+        : 40;
+      let plateauNoImproveIters = 0;
+      let plateauBestRef = bestScore;
+      let plateauViolRef = Number.POSITIVE_INFINITY;
+      let tailNoImproveIters = 0;
+      let tailBestRef = bestScore;
+      let windowTailRefIter = 0;
+      let windowTailRefBest = bestScore;
+      let noBestImproveRef = bestScore;
+      let noBestImproveIters = 0;
+      let lastBestIter = 0;
+      let highViolRef = Number.POSITIVE_INFINITY;
+      let highViolStallIters = 0;
+      const bestScoreHistory: number[] = [];
       
       // 【追加】LM法と同様に、予測精度に応じて歩幅の上限を伸縮させる適応的トラスト領域
       let trustRegionDeltaEff = 0.5;
@@ -4644,6 +5065,82 @@ export async function runOptimizationMVP(options = {}) {
         }
       }
 
+      // 初期値が悪いケース向け: AL開始前に軽量な近傍探索で開始点を補正
+      const kktInitProbeEnabled = opts?.kktInitProbe !== false;
+      if (kktInitProbeEnabled && currentX.length > 0) {
+        const kktInitProbeMaxVars = Number.isFinite(Number(opts?.kktInitProbeMaxVars))
+          ? Math.max(1, Math.floor(Number(opts.kktInitProbeMaxVars)))
+          : Math.min(16, currentX.length);
+        const kktInitProbeStepScale = Number.isFinite(Number(opts?.kktInitProbeStepScale))
+          ? Math.max(0.5, Number(opts.kktInitProbeStepScale))
+          : 3.0;
+        const kktInitProbePenalty = Number.isFinite(Number(opts?.kktInitProbePenalty))
+          ? Math.max(100, Number(opts.kktInitProbePenalty))
+          : 10000;
+
+        const evalInitProbeMerit = (xProbe: number[]) => {
+          const s = evalSQPAtX(xProbe);
+          const vv = (s.constraints || []).map(c => Math.max(0, c));
+          const viol = Math.sqrt(vv.reduce((acc, v) => acc + v * v, 0));
+          const merit = Number(s.objective) + viol * kktInitProbePenalty;
+          return {
+            merit: Number.isFinite(merit) ? merit : Number.POSITIVE_INFINITY,
+            objective: Number(s.objective),
+            violation: viol
+          };
+        };
+
+        const candidateOrder = Array.from({ length: currentX.length }, (_, idx) => ({
+          idx,
+          scale: Number.isFinite(Number(varScales[idx])) ? Math.abs(Number(varScales[idx])) : 1
+        }))
+          .sort((a, b) => b.scale - a.scale)
+          .slice(0, Math.min(currentX.length, kktInitProbeMaxVars));
+
+        let probeBestX = currentX.slice();
+        let probeBest = evalInitProbeMerit(probeBestX);
+
+        for (const item of candidateOrder) {
+          const col = item.idx;
+          const vObj = { id: varIds[col], key: vars[col]?.key, value: probeBestX[col] };
+          let eps = finiteDifferenceStepForVar(vObj) * kktInitProbeStepScale;
+          if (!Number.isFinite(eps) || eps <= 0) {
+            eps = Math.max(1e-6, Math.abs(probeBestX[col]) * 1e-4);
+          }
+
+          for (const dir of [1, -1]) {
+            const trial = probeBestX.slice();
+            trial[col] = clampToBounds([trial[col] + dir * eps])[0];
+            if (!Number.isFinite(trial[col]) || trial[col] === probeBestX[col]) continue;
+            const trialEval = evalInitProbeMerit(trial);
+            if (trialEval.merit + 1e-12 < probeBest.merit) {
+              probeBest = trialEval;
+              probeBestX = trial;
+            }
+          }
+        }
+
+        if (probeBest.merit + 1e-12 < bestMerit) {
+          currentX = probeBestX.slice();
+          bestX = probeBestX.slice();
+          bestMerit = probeBest.merit;
+          try {
+            const seededEval = evalCompositeFromRequirementsProfiled();
+            if (seededEval) {
+              bestEval = seededEval;
+              bestScore = Number.isFinite(Number(seededEval.score)) ? Number(seededEval.score) : bestScore;
+              recordEval(seededEval);
+            }
+          } catch (_) {}
+          console.log('[AL] init-probe selected a better starting point', {
+            merit: probeBest.merit,
+            objective: probeBest.objective,
+            violation: probeBest.violation,
+            testedVars: candidateOrder.length
+          });
+        }
+      }
+
       // 【Broyden準Newton更新】前回のJacobian、変位dx、残差変化drを保存
       let lastJ: number[][] | null = null;
       let lastX: number[] | null = null;
@@ -4651,11 +5148,57 @@ export async function runOptimizationMVP(options = {}) {
       let broydenSkipCount = 0;  // Broyden更新を連続で何回使ったか
 
       // Unified 1-loop: iterate with immediate multiplier updates (SQP-like behavior)
+      const kktBroydenMaxSkips = Number.isFinite(Number(opts?.kktBroydenMaxSkips))
+        ? Math.max(2, Math.floor(Number(opts.kktBroydenMaxSkips)))
+        : 16;
+      const kktBroydenMaxRejectStreak = Number.isFinite(Number(opts?.kktBroydenMaxRejectStreak))
+        ? Math.max(1, Math.floor(Number(opts.kktBroydenMaxRejectStreak)))
+        : 8;
+      const kktJacobianRefreshInterval = Number.isFinite(Number(opts?.kktJacobianRefreshInterval))
+        ? Math.max(2, Math.floor(Number(opts.kktJacobianRefreshInterval)))
+        : 8;
+      const kktJacobianMaxReuseWithoutRefresh = Number.isFinite(Number(opts?.kktJacobianMaxReuseWithoutRefresh))
+        ? Math.max(1, Math.floor(Number(opts.kktJacobianMaxReuseWithoutRefresh)))
+        : 12;
+      const kktJacobianRejectRefreshInterval = Number.isFinite(Number(opts?.kktJacobianRejectRefreshInterval))
+        ? Math.max(2, Math.floor(Number(opts.kktJacobianRejectRefreshInterval)))
+        : 4;
+      const kktForceRefreshOnRejectStreak = Number.isFinite(Number(opts?.kktForceRefreshOnRejectStreak))
+        ? Math.max(2, Math.floor(Number(opts.kktForceRefreshOnRejectStreak)))
+        : 4;
+      const kktJacobianFullRefreshInterval = Number.isFinite(Number(opts?.kktJacobianFullRefreshInterval))
+        ? Math.max(8, Math.floor(Number(opts.kktJacobianFullRefreshInterval)))
+        : 24;
+      const kktJacobianPoorModelRho = Number.isFinite(Number(opts?.kktJacobianPoorModelRho))
+        ? Math.max(0, Number(opts.kktJacobianPoorModelRho))
+        : 0.02;
+      const kktJacobianPoorModelRelImprove = Number.isFinite(Number(opts?.kktJacobianPoorModelRelImprove))
+        ? Math.max(0, Number(opts.kktJacobianPoorModelRelImprove))
+        : 2e-4;
+      const kktJacobianPoorModelStreakForRefresh = Number.isFinite(Number(opts?.kktJacobianPoorModelStreakForRefresh))
+        ? Math.max(1, Math.floor(Number(opts.kktJacobianPoorModelStreakForRefresh)))
+        : 2;
+      let jacobianReuseSinceRefresh = 0;
+      let forceJacobianRefreshNextIter = false;
+      let poorModelStreak = 0;
+
       for (let iter = 0; iter < maxIterations; iter++) {
-        if (shouldStopKKT()) {
-          console.log('⏸️  [AL] User stop requested at iter', iter);
-          break;
-        }
+        const __iterT0 = nowMs();
+        let postEvalCached: any = null;
+        try {
+          if (shouldStopKKT()) {
+            console.log('⏸️  [AL] User stop requested at iter', iter);
+            break;
+          }
+          if (iter >= kktHardIterCap) {
+            console.log('🛑 [AL] Hard iter cap reached', { iter, kktHardIterCap, bestScore });
+            break;
+          }
+          const elapsedMs = nowMs() - t0;
+          if (elapsedMs >= kktMaxWallMs) {
+            console.log('🛑 [AL] Max wall time reached', { iter, elapsedMs: Math.round(elapsedMs), kktMaxWallMs, bestScore });
+            break;
+          }
 
         // Check current feasibility
         const preEval = evalSQPAtX(currentX);
@@ -4678,11 +5221,20 @@ export async function runOptimizationMVP(options = {}) {
         
         // 【Broyden準Newton更新】条件：前回のデータがある、連続6回未満、ステップが十分に受け入れられている
         // 【修正】連続適用回数を増やし、積極的にヤコビアン計算をスキップする
-        const canUseBroyden = lastJ && lastX && lastR && 
-                              lastJ.length === m && lastJ[0] && lastJ[0].length === n &&
+        const hasReusableJacobian = !!(lastJ && lastJ[0] && lastJ[0].length === n);
+        const canUseBroyden = hasReusableJacobian && lastX && lastR && 
                               lastX.length === n && lastR.length === m &&
-                              broydenSkipCount < 6 &&  // 【4→6】より多く省略して計算時間削減
-                              kktRejectStreak < 4;  // 少々のリジェクト中でもBroydenを継続
+                              broydenSkipCount < kktBroydenMaxSkips &&
+                              kktRejectStreak < kktBroydenMaxRejectStreak;
+
+        const jacobianRefreshMaxCols = Number.isFinite(Number(opts?.kktJacobianRefreshMaxCols))
+          ? Math.max(1, Math.floor(Number(opts.kktJacobianRefreshMaxCols)))
+          : Math.max(4, Math.floor(n / 3));
+        const jacobianPeriodicRefreshDue = (iter % kktJacobianRefreshInterval) === 0;
+        const jacobianRefreshDueToReuseCap = jacobianReuseSinceRefresh >= kktJacobianMaxReuseWithoutRefresh;
+        const jacobianRejectRefreshDue = kktRejectStreak > 0 && (kktRejectStreak % kktJacobianRejectRefreshInterval) === 0;
+        const shouldRunFiniteDiffRefresh = forceJacobianRefreshNextIter || jacobianPeriodicRefreshDue || jacobianRefreshDueToReuseCap || jacobianRejectRefreshDue;
+        const shouldRunFullJacobianRefresh = hasReusableJacobian && iter > 0 && (iter % kktJacobianFullRefreshInterval) === 0;
         
         let J: number[][];
         if (canUseBroyden) {
@@ -4712,21 +5264,73 @@ export async function runOptimizationMVP(options = {}) {
             broydenSkipCount++;
             
             if (iter < 3 || iter % 100 === 0) {
-              console.log(`[Broyden] Iter ${iter}: Using rank-1 update (skip count: ${broydenSkipCount}/6)`);
+              console.log(`[Broyden] Iter ${iter}: Using rank-1 update (skip count: ${broydenSkipCount}/${kktBroydenMaxSkips})`);
             }
           } else {
             // dx too small, fall back to finite difference
-            J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol);
+            if (hasReusableJacobian) {
+              if (shouldRunFiniteDiffRefresh) {
+                if (shouldRunFullJacobianRefresh) {
+                  J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol);
+                  if (iter < 3 || iter % 100 === 0) {
+                    console.log(`[Broyden] Iter ${iter}: Periodic full finite-diff Jacobian refresh`);
+                  }
+                } else {
+                  const refreshCols = pickJacobianRefreshColumns(currentX, lastX || null, jacobianRefreshMaxCols);
+                  J = finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, lastJ!, refreshCols);
+                  if (iter < 3 || iter % 100 === 0) {
+                    console.log(`[Broyden] Iter ${iter}: Partial finite-diff refresh (${refreshCols.length}/${n} cols)`);
+                  }
+                }
+                jacobianReuseSinceRefresh = 0;
+                forceJacobianRefreshNextIter = false;
+              } else {
+                J = lastJ!.map(row => row.slice());
+                jacobianReuseSinceRefresh++;
+                if (__profile && __profile.counts) {
+                  __profile.counts.kktJacobianReuseCalls = (Number(__profile.counts.kktJacobianReuseCalls) || 0) + 1;
+                }
+              }
+            } else {
+              J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol);
+              jacobianReuseSinceRefresh = 0;
+            }
             broydenSkipCount = 0;
             lastJ = J;
           }
         } else {
           // Full finite difference Jacobian
-          J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol);
+          if (hasReusableJacobian) {
+            if (shouldRunFiniteDiffRefresh) {
+              if (shouldRunFullJacobianRefresh) {
+                J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol);
+                if (iter < 3 || iter % 100 === 0) {
+                  console.log(`[Broyden] Iter ${iter}: Periodic full finite-diff Jacobian refresh`);
+                }
+              } else {
+                const refreshCols = pickJacobianRefreshColumns(currentX, lastX || null, jacobianRefreshMaxCols);
+                J = finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, lastJ!, refreshCols);
+                if (iter < 3 || iter % 100 === 0) {
+                  console.log(`[Broyden] Iter ${iter}: Partial finite-diff refresh (${refreshCols.length}/${n} cols)`);
+                }
+              }
+              jacobianReuseSinceRefresh = 0;
+              forceJacobianRefreshNextIter = false;
+            } else {
+              J = lastJ!.map(row => row.slice());
+              jacobianReuseSinceRefresh++;
+              if (__profile && __profile.counts) {
+                __profile.counts.kktJacobianReuseCalls = (Number(__profile.counts.kktJacobianReuseCalls) || 0) + 1;
+              }
+            }
+          } else {
+            J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol);
+            jacobianReuseSinceRefresh = 0;
+          }
           broydenSkipCount = 0;
           lastJ = J;
-          
-          if (iter < 3 || iter % 100 === 0) {
+
+          if (!hasReusableJacobian && (iter < 3 || iter % 100 === 0)) {
             console.log(`[Broyden] Iter ${iter}: Full finite-diff Jacobian computed`);
           }
         }
@@ -4753,13 +5357,9 @@ export async function runOptimizationMVP(options = {}) {
         }
 
         // --- 2. Build normal equations: A = J^T J, g = J^T r ---
-        const A = Array.from({ length: n }, () => Array(n).fill(0));
-        const g = Array(n).fill(0);
-        for (let j = 0; j < n; j++) {
-          let gj = 0;
-          for (let i = 0; i < m; i++) gj += J[i][j] * r0[i];
-          g[j] = gj;
-        }
+        const ne = buildNormalEquationsWithOptionalWasm(J, r0, m, n);
+        const A = ne.A;
+        const g = ne.g;
         
         // Debug: Check gradient g
         if (iter < 3 || iter % 100 === 0) {
@@ -4773,15 +5373,6 @@ export async function runOptimizationMVP(options = {}) {
           }
           console.log(`[DEBUG iter${iter}] Gradient g: ${gZeroCount}/${n} ~zero, range [${gMinAbs.toExponential(2)}, ${gMaxAbs.toExponential(2)}]`);
         }
-        for (let j = 0; j < n; j++) {
-          for (let k = 0; k <= j; k++) {
-            let s = 0;
-            for (let i = 0; i < m; i++) s += J[i][j] * J[i][k];
-            A[j][k] = s;
-            A[k][j] = s;
-          }
-        }
-        
         // 【追加】LM法と同様に、非球面係数の暴走を防ぐティコノフ正則化を導入
         // これにより、高次非球面がノイズに過剰反応してストールするのを防ぎます
         if (asphericRegularization > 0) {
@@ -4855,10 +5446,7 @@ export async function runOptimizationMVP(options = {}) {
         
         let dx_scaled = null;
         if (isMatrixGood) {
-          dx_scaled = solveSymmetricPositiveDefinite(Ad, b_scaled);
-        }
-        if (!dx_scaled) {
-          dx_scaled = solveLinearSystemFallback(Ad, b_scaled);
+          dx_scaled = solveLinearSystemWithOptionalWasm(Ad, b_scaled, true);
         }
         if (!dx_scaled) {
           // Matrix solver failed: increase damping significantly and retry
@@ -4987,6 +5575,9 @@ export async function runOptimizationMVP(options = {}) {
         if (!accepted) {
           // 失敗：進まない。ダンピングを増やして次回はより安全な歩幅にする
           kktRejectStreak++;  // 【追加】Consecutive rejection counter
+          if (kktRejectStreak >= kktForceRefreshOnRejectStreak && jacobianReuseSinceRefresh >= 2) {
+            forceJacobianRefreshNextIter = true;
+          }
           
           // 【改善】3.0→2.0：さらに穏やかに増加して探索を続ける
           lmDamp = Math.min(1e12, lmDamp * 2.0);  // More conservative increase
@@ -4996,16 +5587,19 @@ export async function runOptimizationMVP(options = {}) {
           trustRegionDeltaEff = Math.max(0.01, trustRegionDeltaEff * 0.5);
           
           // Broyden状態をリセット（リジェクト時は有限差分から再計算）
-          lastJ = null;
+          // lastJ is kept so next iteration can do partial finite-diff refresh.
           lastX = null;
           lastR = null;
           broydenSkipCount = 0;
           
           // 【追加】Auto Soft-Restart: ダンピングをリセットして別の角度から再探索
           // ただし、μ と λ（制約の「壁の記憶」）はリセットしない。何度も同じ壁にぶつかるループを防ぐため
-          if (kktRejectStreak >= 12) {  // 【修正】8→12：リスタートを減らして収束を優先
+          const restartRejectThreshold = (currentMaxViol >= kktSoftRestartHighViolThreshold)
+            ? Math.min(kktSoftRestartRejectStreak, kktSoftRestartRejectStreakHighViol)
+            : kktSoftRestartRejectStreak;
+          if (kktRejectStreak >= restartRejectThreshold) {
             consecutiveRestarts++;
-            console.log(`♻️ [AL] Auto soft-restart triggered at iter ${iter} (${kktRejectStreak} consecutive rejects, restart #${consecutiveRestarts})`);
+            console.log(`♻️ [AL] Auto soft-restart triggered at iter ${iter} (${kktRejectStreak} consecutive rejects, threshold=${restartRejectThreshold}, maxViol=${currentMaxViol.toExponential(2)}, restart #${consecutiveRestarts})`);
             
             // 【新機能】連続リスタートが3回を超えたら、μを減らして脱出を試みる
             if (consecutiveRestarts >= 3 && mu > 10) {
@@ -5033,7 +5627,7 @@ export async function runOptimizationMVP(options = {}) {
             }
             
             // Broyden状態もリセット（再スタート時は有限差分から再計算）
-            lastJ = null;
+            // Keep lastJ so next iter can partial-refresh instead of full rebuild.
             lastX = null;
             lastR = null;
             broydenSkipCount = 0;
@@ -5044,6 +5638,20 @@ export async function runOptimizationMVP(options = {}) {
           kktRejectStreak = 0;  // 【追加】Reset counter on success
           consecutiveRestarts = 0;  // 【追加】受理されたら連続リスタートもリセット
           currentX = nextX;
+
+          const acceptedRelCostDrop = Math.abs(cost0 - acceptedCost) / Math.max(1, Math.abs(cost0));
+          const poorModel = (!Number.isFinite(acceptedRho) || acceptedRho < kktJacobianPoorModelRho)
+            && acceptedRelCostDrop < kktJacobianPoorModelRelImprove;
+          if (poorModel) {
+            poorModelStreak++;
+          } else {
+            poorModelStreak = 0;
+          }
+          if (poorModelStreak >= kktJacobianPoorModelStreakForRefresh) {
+            forceJacobianRefreshNextIter = true;
+          } else {
+            forceJacobianRefreshNextIter = false;
+          }
           
           // 【追加】ステップがアクセプトされた時点で、実際に設計変数をセット
           // これにより、UIが現在値を認識できるようになる
@@ -5095,6 +5703,7 @@ export async function runOptimizationMVP(options = {}) {
             bestX = currentX.slice();
             
             if (bestScore < prevBestScore) {
+              lastBestIter = iter;
               const improvement = prevBestScore - bestScore;
               const currentConstraintEval = evalSQPAtX(currentX);
               const currentViolationVector = (currentConstraintEval.constraints || []).map(c => Math.max(0, c));
@@ -5112,14 +5721,81 @@ export async function runOptimizationMVP(options = {}) {
           
           // bestMeritは参考値として計算（主にデバッグ用）
           const currentConstraintEval = evalSQPAtX(currentX);
+          postEvalCached = currentConstraintEval;
           const currentViolationVector = (currentConstraintEval.constraints || []).map(c => Math.max(0, c));
           const currentViolation = Math.sqrt(currentViolationVector.reduce((acc, v) => acc + v * v, 0));
           bestMerit = bestScore + currentViolation * 10000;
         }
+
+        // --- 5.5. Stagnation watchdog (auto soft-restart) ---
+        // Manual Stop->Run often helps because AL state (damping / local linearization) gets reset.
+        // Reproduce that behavior automatically when progress stalls for too long.
+        if (accepted && Number.isFinite(lastAcceptedScore) && Number.isFinite(bestScore)) {
+          const gap = Math.abs(lastAcceptedScore - bestScore);
+          if (gap <= stagnationImproveEps) stagnationIter++;
+          else stagnationIter = 0;
+        } else {
+          stagnationIter++;
+        }
+
+        if (stagnationIter >= stagnationIterLimit) {
+          const jitterScale = Number.isFinite(Number(opts?.kktStagnationJitterScaled))
+            ? Math.max(0, Math.min(0.2, Number(opts.kktStagnationJitterScaled)))
+            : 0.02;
+          const restartBase = bestX.slice();
+          const restartX = restartBase.map((v, i) => {
+            const scale = Number.isFinite(varScales[i]) && varScales[i] > 0 ? varScales[i] : 1;
+            const sign = ((iter + i) % 2 === 0) ? 1 : -1;
+            return v + sign * jitterScale * scale;
+          });
+
+          currentX = clampToBounds(restartX);
+          for (let k = 0; k < n; k++) {
+            if (jointState && varIds && k < varIds.length) {
+              setJointDesignVariableValue(jointState, varIds[k], currentX[k]);
+            } else if (activeCfg && varIds && k < varIds.length) {
+              setDesignVariableValue(activeCfg, varIds[k], currentX[k]);
+            }
+          }
+
+          lmDamp = 2e-4;
+          trustRegionDeltaEff = 0.5;
+          kktRejectStreak = 0;
+          // Keep lastJ so next iter can partial-refresh instead of full rebuild.
+          lastX = null;
+          lastR = null;
+          broydenSkipCount = 0;
+          stagnationIter = 0;
+
+          if (onProgress) {
+            try {
+              onProgress({
+                phase: 'restart',
+                iter,
+                current: lastAcceptedScore,
+                best: bestScore,
+                method: 'kkt',
+                multiScenario,
+                requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
+                reason: 'stagnation-auto-restart'
+              });
+            } catch (_) {}
+            await nextFrame();
+          }
+
+          if (iter < 3 || iter % 25 === 0) {
+            console.log(`♻️ [AL] Auto restart by stagnation at iter ${iter} (limit=${stagnationIterLimit}, jitter=${jitterScale})`);
+          }
+
+          if (__profile && __profile.counts) {
+            __profile.counts.kktIterCount = (Number(__profile.counts.kktIterCount) || 0) + 1;
+            __profile.counts.kktIterMs = (Number(__profile.counts.kktIterMs) || 0) + (nowMs() - __iterT0);
+          }
+        }
         
         // --- 6. Update Lagrange multipliers and penalty (Delayed Schedule) ---
 
-        const post = evalSQPAtX(currentX);
+        const post = postEvalCached || evalSQPAtX(currentX);
         const c = post.constraints || [];
         if (lambdaVec.length !== c.length) lambdaVec = new Array(c.length).fill(0);
         
@@ -5137,8 +5813,19 @@ export async function runOptimizationMVP(options = {}) {
         const costDiff = Math.abs(cost0 - acceptedCost);
         const relativeCostDiff = costDiff / Math.max(1e-10, cost0);
         const isProgressSlow = accepted && (relativeCostDiff < 1e-3);
+        const kktAggressiveViolUpdateThreshold = Number.isFinite(Number(opts?.kktAggressiveViolUpdateThreshold))
+          ? Math.max(0, Number(opts.kktAggressiveViolUpdateThreshold))
+          : 30;
+        const kktAggressiveViolUpdateInterval = Number.isFinite(Number(opts?.kktAggressiveViolUpdateInterval))
+          ? Math.max(2, Math.floor(Number(opts.kktAggressiveViolUpdateInterval)))
+          : 10;
+        const severeViolation = maxViol > kktAggressiveViolUpdateThreshold;
         // 【修正】kktRejectStreak < 3 に緩和：完全に凍結すると無限ループに陥る
-        const isTimeToUpdate = (isProgressSlow || (iter > 0 && iter % 15 === 0)) && kktRejectStreak < 3;
+        const isTimeToUpdate = (
+          isProgressSlow
+          || (iter > 0 && iter % 15 === 0)
+          || (severeViolation && iter > 0 && iter % kktAggressiveViolUpdateInterval === 0)
+        ) && kktRejectStreak < 3;
 
         if (isTimeToUpdate) {
           // Update multipliers only when landscape should change
@@ -5158,6 +5845,12 @@ export async function runOptimizationMVP(options = {}) {
           let muMultiplier = 1.0;
           if (maxViol < 0.01) {
             muMultiplier = 1.0;  // 十分に改善中
+          } else if (maxViol > 100) {
+            muMultiplier = 1.2;
+          } else if (maxViol > 20) {
+            muMultiplier = 1.12;
+          } else if (maxViol > 5) {
+            muMultiplier = 1.08;
           } else if (maxViol < 1.0) {
             muMultiplier = 1.1;
           } else {
@@ -5165,14 +5858,14 @@ export async function runOptimizationMVP(options = {}) {
           }
           
           if (violStagnationIter > 3) {
-            muMultiplier = Math.max(1.2, muMultiplier * 1.5);
+            muMultiplier = Math.max(1.1, muMultiplier * 1.2);
           }
           
-          // 【修正】μ の上限を 1e5 に保つ（1e6 はペナルティが支配的になる）
+          // 高違反時は μ をより積極的に増やして feasibility へ寄せる
           mu = Math.min(1e5, Math.max(1, mu * muMultiplier));
           
           // ALM更新時はBroyden状態をリセット（地形が変わったため）
-          lastJ = null;
+          // Keep lastJ for partial refresh, but disable rank-1 Broyden update across ALM changes.
           lastX = null;
           lastR = null;
           broydenSkipCount = 0;
@@ -5180,6 +5873,78 @@ export async function runOptimizationMVP(options = {}) {
           // On iterations where we don't update ALM, keep landscape stable for LM convergence
           if (iter % 100 === 0) {
             console.log(`  [AL ALM delayed] Landscape frozen. Updates only when: accepting steps AND kktRejectStreak==0 AND (progress<1e-3 OR iter%20==0)`);
+          }
+        }
+
+        if (maxViol > kktHighViolThreshold) {
+          if (!Number.isFinite(highViolRef) || maxViol < highViolRef * kktHighViolImproveRatio) {
+            highViolRef = maxViol;
+            highViolStallIters = 0;
+          } else {
+            highViolStallIters++;
+          }
+
+          if (highViolStallIters >= kktHighViolStallWindow) {
+            const restartBase = bestX.slice();
+            const restartX = restartBase.map((v, i) => {
+              const scale = Number.isFinite(varScales[i]) && varScales[i] > 0 ? varScales[i] : 1;
+              const sign = ((iter + i) % 2 === 0) ? 1 : -1;
+              return v + sign * 0.03 * scale;
+            });
+            currentX = clampToBounds(restartX);
+            for (let k = 0; k < n; k++) {
+              if (jointState && varIds && k < varIds.length) {
+                setJointDesignVariableValue(jointState, varIds[k], currentX[k]);
+              } else if (activeCfg && varIds && k < varIds.length) {
+                setDesignVariableValue(activeCfg, varIds[k], currentX[k]);
+              }
+            }
+            lmDamp = Math.max(1e-3, lmDamp);
+            mu = Math.max(1, mu * 0.5);
+            forceJacobianRefreshNextIter = true;
+            lastX = null;
+            lastR = null;
+            broydenSkipCount = 0;
+            highViolRef = maxViol;
+            highViolStallIters = 0;
+            if (iter < 3 || iter % 25 === 0) {
+              console.log(`♻️ [AL] High-violation stall restart at iter ${iter} (maxViol=${maxViol.toExponential(2)})`);
+            }
+          }
+        } else {
+          highViolRef = maxViol;
+          highViolStallIters = 0;
+        }
+
+        const divergenceScoreRatio = Number.isFinite(bestScore) && Math.abs(bestScore) > 1e-12
+          ? (Math.max(0, lastAcceptedScore) / Math.max(1e-12, Math.abs(bestScore)))
+          : 1;
+        const shouldRollbackToBest = Number.isFinite(divergenceScoreRatio)
+          && divergenceScoreRatio > 50
+          && maxViol > 20
+          && iter > 20;
+        if (shouldRollbackToBest) {
+          currentX = bestX.slice();
+          for (let k = 0; k < n; k++) {
+            if (jointState && varIds && k < varIds.length) {
+              setJointDesignVariableValue(jointState, varIds[k], currentX[k]);
+            } else if (activeCfg && varIds && k < varIds.length) {
+              setDesignVariableValue(activeCfg, varIds[k], currentX[k]);
+            }
+          }
+          mu = Math.max(1, mu * 0.3);
+          lmDamp = Math.max(1e-3, lmDamp);
+          forceJacobianRefreshNextIter = true;
+          lastX = null;
+          lastR = null;
+          broydenSkipCount = 0;
+          if (iter < 3 || iter % 25 === 0) {
+            console.log('♻️ [AL] Divergence rollback to best', {
+              iter,
+              divergenceScoreRatio,
+              maxViol,
+              mu
+            });
           }
         }
 
@@ -5210,9 +5975,152 @@ export async function runOptimizationMVP(options = {}) {
           feasibleConvStreak = 0;
         }
 
+        if (Number.isFinite(bestScore)) {
+          bestScoreHistory.push(bestScore);
+
+          const noBestRelImprove = (noBestImproveRef - bestScore) / Math.max(1, Math.abs(noBestImproveRef));
+          if (noBestRelImprove > kktNoBestImproveRelEps) {
+            noBestImproveRef = bestScore;
+            noBestImproveIters = 0;
+          } else {
+            noBestImproveIters++;
+          }
+
+          const tailRelImprove = (tailBestRef - bestScore) / Math.max(1, Math.abs(tailBestRef));
+          if (tailRelImprove > kktTailStopBestRelImproveEps) {
+            tailBestRef = bestScore;
+            tailNoImproveIters = 0;
+          } else {
+            tailNoImproveIters++;
+          }
+
+          const relImprove = (plateauBestRef - bestScore) / Math.max(1, Math.abs(plateauBestRef));
+          const violImprove = (Number.isFinite(plateauViolRef) ? (plateauViolRef - maxViol) : Number.POSITIVE_INFINITY);
+          if (relImprove > kktPlateauBestRelImproveEps || violImprove > kktPlateauViolImproveEps) {
+            plateauBestRef = bestScore;
+            plateauViolRef = maxViol;
+            plateauNoImproveIters = 0;
+          } else {
+            plateauNoImproveIters++;
+          }
+
+          const strictPlateauStop = (iter >= kktPlateauStopMinIter
+            && plateauNoImproveIters >= kktPlateauStopWindow
+            && maxViol <= kktPlateauMaxViol);
+          const relaxedPlateauStop = (iter >= kktPlateauRelaxedMinIter
+            && plateauNoImproveIters >= kktPlateauStopWindow
+            && maxViol <= kktPlateauRelaxedMaxViol);
+          const tailStop = (iter >= kktTailStopMinIter
+            && tailNoImproveIters >= kktTailStopWindow
+            && maxViol <= kktTailStopMaxViol);
+          let windowTailStop = false;
+          let windowTailRelImprove = Number.POSITIVE_INFINITY;
+          if ((iter - windowTailRefIter) >= kktWindowTailStopWindow) {
+            windowTailRelImprove = (windowTailRefBest - bestScore) / Math.max(1, Math.abs(windowTailRefBest));
+            if (iter >= kktWindowTailStopMinIter
+              && windowTailRelImprove < kktWindowTailStopRelImproveEps
+              && maxViol <= kktWindowTailStopMaxViol) {
+              windowTailStop = true;
+            }
+            windowTailRefIter = iter;
+            windowTailRefBest = bestScore;
+          }
+
+          let windowNoGainStop = false;
+          let windowNoGainRelImprove = Number.POSITIVE_INFINITY;
+          if (iter >= kktWindowNoGainMinIter && bestScoreHistory.length > kktWindowNoGainWindow) {
+            const pastBest = Number(bestScoreHistory[bestScoreHistory.length - 1 - kktWindowNoGainWindow]);
+            if (Number.isFinite(pastBest)) {
+              windowNoGainRelImprove = (pastBest - bestScore) / Math.max(1, Math.abs(pastBest));
+              if (windowNoGainRelImprove < kktWindowNoGainRelImproveEps && maxViol <= kktWindowNoGainMaxViol) {
+                windowNoGainStop = true;
+              }
+            }
+          }
+
+          let goodEnoughStop = false;
+          let goodEnoughRecentRelImprove = Number.POSITIVE_INFINITY;
+          if (iter >= kktGoodEnoughStopMinIter && bestScoreHistory.length > kktGoodEnoughStopWindow) {
+            const pastBest = Number(bestScoreHistory[bestScoreHistory.length - 1 - kktGoodEnoughStopWindow]);
+            if (Number.isFinite(pastBest)) {
+              goodEnoughRecentRelImprove = (pastBest - bestScore) / Math.max(1, Math.abs(pastBest));
+              if (goodEnoughRecentRelImprove < kktGoodEnoughStopRecentRelImproveEps && maxViol <= kktGoodEnoughStopMaxViol) {
+                goodEnoughStop = true;
+              }
+            }
+          }
+
+          const noBestImproveStop = (
+            iter >= kktNoBestImproveMinIter
+            && noBestImproveIters >= kktNoBestImproveWindow
+            && maxViol <= kktNoBestImproveMaxViol
+          );
+          const postBestDivergenceStop = (
+            iter >= kktPostBestDivergenceMinIter
+            && noBestImproveIters >= kktPostBestNoImproveWindow
+            && divergenceScoreRatio >= kktPostBestDivergenceRatio
+            && maxViol >= kktPostBestDivergenceMaxViol
+          );
+          const postBestPatienceStop = (
+            iter >= kktPostBestPatienceMinIter
+            && (iter - lastBestIter) >= kktPostBestPatienceWindow
+            && noBestImproveIters >= kktPostBestPatienceWindow
+            && ((initialScore - bestScore) / Math.max(1e-12, Math.abs(initialScore)) * 100) >= kktPostBestRequiredImprovePct
+            && maxViol <= kktPostBestPatienceMaxViol
+          );
+
+          if (strictPlateauStop || relaxedPlateauStop || tailStop || windowTailStop || windowNoGainStop || goodEnoughStop || noBestImproveStop || postBestDivergenceStop || postBestPatienceStop) {
+            console.log('🛑 [AL] Plateau stop at iter', iter, {
+              bestScore,
+              maxViol,
+              noImproveIters: plateauNoImproveIters,
+              relImproveEps: kktPlateauBestRelImproveEps,
+              violImproveEps: kktPlateauViolImproveEps,
+              tailNoImproveIters,
+              tailRelImproveEps: kktTailStopBestRelImproveEps,
+              tailStopMaxViol: kktTailStopMaxViol,
+              windowTailRelImprove,
+              windowTailRelImproveEps: kktWindowTailStopRelImproveEps,
+              windowTailStopMaxViol: kktWindowTailStopMaxViol,
+              windowNoGainRelImprove,
+              windowNoGainRelImproveEps: kktWindowNoGainRelImproveEps,
+              windowNoGainMaxViol: kktWindowNoGainMaxViol,
+              goodEnoughRecentRelImprove,
+              goodEnoughRecentRelImproveEps: kktGoodEnoughStopRecentRelImproveEps,
+              goodEnoughMaxViol: kktGoodEnoughStopMaxViol,
+              noBestImproveIters,
+              noBestImproveRelEps: kktNoBestImproveRelEps,
+              noBestImproveMaxViol: kktNoBestImproveMaxViol,
+              postBestDivergenceRatio: kktPostBestDivergenceRatio,
+              postBestNoImproveWindow: kktPostBestNoImproveWindow,
+              postBestDivergenceMaxViol: kktPostBestDivergenceMaxViol,
+              postBestPatienceWindow: kktPostBestPatienceWindow,
+              postBestPatienceMaxViol: kktPostBestPatienceMaxViol,
+              postBestRequiredImprovePct: kktPostBestRequiredImprovePct,
+              lastBestIter,
+              divergenceScoreRatio,
+              mode: strictPlateauStop
+                ? 'strict'
+                : (relaxedPlateauStop
+                  ? 'relaxed'
+                  : (tailStop
+                    ? 'tail'
+                    : (windowTailStop
+                      ? 'window-tail'
+                      : (windowNoGainStop
+                        ? 'window-nogain'
+                        : (goodEnoughStop
+                          ? 'good-enough'
+                          : (noBestImproveStop
+                            ? 'no-best-improve'
+                            : (postBestDivergenceStop ? 'post-best-divergence' : 'post-best-patience')))))))
+            });
+            break;
+          }
+        }
+
         if (onProgressKKT) {
-          // 【修正】accepted時のコスト値を報告。UIが現在値の変化を認識できるように
-          const displayScore = accepted ? objectiveForKKT(currentX) : bestScore;
+          const displayScore = accepted ? lastAcceptedScore : bestScore;
           await onProgressKKT({
             iter: iter,
             current: displayScore,
@@ -5248,10 +6156,25 @@ export async function runOptimizationMVP(options = {}) {
           } catch (_) {}
           await nextFrame();
         }
+        } finally {
+          if (__profile && __profile.counts) {
+            __profile.counts.kktIterCount = (Number(__profile.counts.kktIterCount) || 0) + 1;
+            __profile.counts.kktIterMs = (Number(__profile.counts.kktIterMs) || 0) + (nowMs() - __iterT0);
+          }
+        }
       }
 
       const totalImprovement = initialScore - bestScore;
       const improvementPercent = (totalImprovement / Math.max(1e-10, initialScore)) * 100;
+      try {
+        const cacheHits = __profile && __profile.counts ? (Number(__profile.counts.kktEvalCacheHits) || 0) : 0;
+        const cacheMisses = __profile && __profile.counts ? (Number(__profile.counts.kktEvalCacheMisses) || 0) : 0;
+        const cacheTotal = cacheHits + cacheMisses;
+        if (cacheTotal > 0) {
+          const hitRate = 100 * cacheHits / cacheTotal;
+          console.log(`🧠 [AL] eval cache: hits=${cacheHits}, misses=${cacheMisses}, hitRate=${hitRate.toFixed(1)}%`);
+        }
+      } catch (_) {}
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       console.log(`📈 [AL] OPTIMIZATION COMPLETE`);
       console.log(`   Initial Score:  ${initialScore.toFixed(6)}`);

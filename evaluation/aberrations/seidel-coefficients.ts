@@ -27,7 +27,10 @@ import {
 } from '../../raytracing/core/ray-paraxial.ts';
 import { tableSource, loadTableData as loadSourceTableData } from '../../data/table-source.ts';
 
-const console = globalThis.console as Console;
+const console: Console = {
+    ...globalThis.console,
+    log: (..._args: any[]) => {}
+} as Console;
 
 function getSourceRowsSafe() {
     try {
