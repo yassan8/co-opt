@@ -1465,18 +1465,43 @@ class MeritFunctionEditor {
 
         // SELECT VALUES BASED ON COMPONENT PARAMETER
         let valuesMm: number[] = [];
+        let effectiveComponent = component;
         if (component === 'meridional') {
             valuesMm = meridionalValues;
+            if (valuesMm.length === 0 && sagittalValues.length > 0) {
+                valuesMm = sagittalValues;
+                effectiveComponent = 'sagittal-fallback';
+            }
         } else if (component === 'sagittal') {
             valuesMm = sagittalValues;
+            if (valuesMm.length === 0 && meridionalValues.length > 0) {
+                valuesMm = meridionalValues;
+                effectiveComponent = 'meridional-fallback';
+            }
         } else {
             // 'total' or default: combine both
             valuesMm = [...meridionalValues, ...sagittalValues];
         }
 
         if (!Array.isArray(valuesMm) || valuesMm.length === 0) {
-            console.warn('⚠️ TA_RMS_UM: no transverse aberration data points');
-            return 0;
+            console.warn('⚠️ TA_RMS_UM: no transverse aberration data points', {
+                component,
+                meridionalCount: meridionalValues.length,
+                sagittalCount: sagittalValues.length
+            });
+            // Return NaN so optimizer can treat it as invalid-current penalty,
+            // instead of a misleading constant zero landscape.
+            return Number.NaN;
+        }
+
+        if (effectiveComponent !== component) {
+            console.warn('⚠️ TA_RMS_UM: requested component had no data, using fallback', {
+                requested: component,
+                used: effectiveComponent,
+                rayCount,
+                wavelength,
+                objectIndex0
+            });
         }
 
         let sumSq = 0;

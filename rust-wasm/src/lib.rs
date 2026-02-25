@@ -1325,3 +1325,188 @@ pub fn fft_2d_inverse(
     }))
     .map_err(|err| JsValue::from_str(&format!("serialize error: {}", err)))
 }
+
+fn solve_linear_system_internal(a_flat: &[f64], n: usize, b: &[f64]) -> Option<Vec<f64>> {
+    if n == 0 {
+        return Some(Vec::new());
+    }
+    if a_flat.len() != n * n || b.len() != n {
+        return None;
+    }
+
+    let mut a = a_flat.to_vec();
+    let mut rhs = b.to_vec();
+
+    for col in 0..n {
+        let mut pivot_row = col;
+        let mut pivot_abs = a[col * n + col].abs();
+        for row in (col + 1)..n {
+            let v = a[row * n + col].abs();
+            if v > pivot_abs {
+                pivot_abs = v;
+                pivot_row = row;
+            }
+        }
+
+        if !pivot_abs.is_finite() || pivot_abs < 1e-18 {
+            return None;
+        }
+
+        if pivot_row != col {
+            for j in col..n {
+                a.swap(col * n + j, pivot_row * n + j);
+            }
+            rhs.swap(col, pivot_row);
+        }
+
+        let pivot = a[col * n + col];
+        for row in (col + 1)..n {
+            let factor = a[row * n + col] / pivot;
+            a[row * n + col] = 0.0;
+            for j in (col + 1)..n {
+                a[row * n + j] -= factor * a[col * n + j];
+            }
+            rhs[row] -= factor * rhs[col];
+        }
+    }
+
+    let mut x = vec![0.0_f64; n];
+    for i in (0..n).rev() {
+        let mut sum = rhs[i];
+        for j in (i + 1)..n {
+            sum -= a[i * n + j] * x[j];
+        }
+        let diag = a[i * n + i];
+        if !diag.is_finite() || diag.abs() < 1e-18 {
+            return None;
+        }
+        x[i] = sum / diag;
+        if !x[i].is_finite() {
+            return None;
+        }
+    }
+
+    Some(x)
+}
+
+fn solve_spd_linear_system_internal(a_flat: &[f64], n: usize, b: &[f64]) -> Option<Vec<f64>> {
+    if n == 0 {
+        return Some(Vec::new());
+    }
+    if a_flat.len() != n * n || b.len() != n {
+        return None;
+    }
+
+    // Lower-triangular Cholesky factor L such that A = L L^T
+    let mut l = vec![0.0_f64; n * n];
+
+    for i in 0..n {
+        for j in 0..=i {
+            let mut sum = a_flat[i * n + j];
+            for k in 0..j {
+                sum -= l[i * n + k] * l[j * n + k];
+            }
+
+            if i == j {
+                if !sum.is_finite() || sum <= 1e-20 {
+                    return None;
+                }
+                l[i * n + j] = sum.sqrt();
+            } else {
+                let diag = l[j * n + j];
+                if !diag.is_finite() || diag <= 1e-20 {
+                    return None;
+                }
+                l[i * n + j] = sum / diag;
+            }
+        }
+    }
+
+    // Forward solve: L y = b
+    let mut y = vec![0.0_f64; n];
+    for i in 0..n {
+        let mut sum = b[i];
+        for k in 0..i {
+            sum -= l[i * n + k] * y[k];
+        }
+        let diag = l[i * n + i];
+        if !diag.is_finite() || diag <= 1e-20 {
+            return None;
+        }
+        y[i] = sum / diag;
+    }
+
+    // Backward solve: L^T x = y
+    let mut x = vec![0.0_f64; n];
+    for i in (0..n).rev() {
+        let mut sum = y[i];
+        for k in (i + 1)..n {
+            sum -= l[k * n + i] * x[k];
+        }
+        let diag = l[i * n + i];
+        if !diag.is_finite() || diag <= 1e-20 {
+            return None;
+        }
+        x[i] = sum / diag;
+        if !x[i].is_finite() {
+            return None;
+        }
+    }
+
+    Some(x)
+}
+
+#[wasm_bindgen]
+pub fn solve_linear_system(a_flat: &[f64], n: usize, b: &[f64]) -> Vec<f64> {
+    match solve_linear_system_internal(a_flat, n, b) {
+        Some(sol) => sol,
+        None => vec![f64::NAN; n],
+    }
+}
+
+#[wasm_bindgen]
+pub fn solve_spd_linear_system(a_flat: &[f64], n: usize, b: &[f64]) -> Vec<f64> {
+    match solve_spd_linear_system_internal(a_flat, n, b) {
+        Some(sol) => sol,
+        None => match solve_linear_system_internal(a_flat, n, b) {
+            Some(fallback) => fallback,
+            None => vec![f64::NAN; n],
+        },
+    }
+}
+
+#[wasm_bindgen]
+pub fn build_normal_equations(j_flat: &[f64], m: usize, n: usize, r: &[f64]) -> Vec<f64> {
+    if m == 0 || n == 0 {
+        return vec![];
+    }
+    if j_flat.len() != m * n || r.len() != m {
+        return vec![f64::NAN; n * n + n];
+    }
+
+    let mut out = vec![0.0_f64; n * n + n];
+    let (a_flat, g) = out.split_at_mut(n * n);
+
+    // g = J^T r
+    for j in 0..n {
+        let mut gj = 0.0_f64;
+        for i in 0..m {
+            gj += j_flat[i * n + j] * r[i];
+        }
+        g[j] = gj;
+    }
+
+    // A = J^T J (symmetric)
+    for j in 0..n {
+        for k in 0..=j {
+            let mut s = 0.0_f64;
+            for i in 0..m {
+                s += j_flat[i * n + j] * j_flat[i * n + k];
+            }
+            a_flat[j * n + k] = s;
+            a_flat[k * n + j] = s;
+        }
+    }
+
+    out
+}
