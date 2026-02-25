@@ -26,6 +26,35 @@ let rustWasmInitPromise: Promise<RustRayTracingWasm | null> | null = null;
 let rustWasmInitError: string | null = null;
 const isNodeRuntime = typeof process !== 'undefined' && !!(process as any)?.versions?.node;
 
+async function importSurfaceOriginsModule(): Promise<any> {
+  const errors: string[] = [];
+
+  try {
+    const relPath = '../../rust-wasm/pkg/' + 'surface_origins.js';
+    return await import(/* @vite-ignore */ relPath);
+  } catch (e) {
+    errors.push(`relative:${String((e as any)?.message || e || 'failed')}`);
+  }
+
+  try {
+    const byUrl = new URL('../../rust-wasm/pkg/surface_origins.js', import.meta.url).href;
+    return await import(/* @vite-ignore */ byUrl);
+  } catch (e) {
+    errors.push(`url:${String((e as any)?.message || e || 'failed')}`);
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const rootPath = '/rust-wasm/pkg/' + 'surface_origins.js';
+      return await import(/* @vite-ignore */ rootPath);
+    } catch (e) {
+      errors.push(`root:${String((e as any)?.message || e || 'failed')}`);
+    }
+  }
+
+  throw new Error(`surface_origins module import failed (${errors.join(' | ')})`);
+}
+
 async function initRustRayTracingModule(mod: any): Promise<void> {
   if (typeof mod?.default !== 'function') return;
   if (!isNodeRuntime) {
@@ -64,9 +93,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
   if (!rustWasmInitPromise) {
     rustWasmInitPromise = (async () => {
       try {
-        // Dynamically construct path to prevent Vite static analysis
-        const wasmPkgPath = '../../rust-wasm/pkg/surface_origins' + '.js';
-        const mod = await import(wasmPkgPath);
+        const mod = await importSurfaceOriginsModule();
         await initRustRayTracingModule(mod);
         const api: RustRayTracingWasm = {
           intersect_aspheric_rt10: mod.intersect_aspheric_rt10,
