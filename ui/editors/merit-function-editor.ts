@@ -1412,15 +1412,34 @@ class MeritFunctionEditor {
         const isInfiniteSystem = isInfiniteSystemFromRows(opticalSystemData);
         const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, isInfiniteSystem);
 
-        let results: any;
+        const cfgKey = (operand?.configId !== undefined && operand?.configId !== null)
+            ? String(operand.configId)
+            : 'active';
+        const taCacheKey = [
+            'ta-rms',
+            cfgKey,
+            String(wavelength),
+            String(objectIndex0),
+            String(imageSurfaceIndex),
+            String(rayCount),
+            String(opticalSystemData.length)
+        ].join('|');
+
+        let results: any = null;
         try {
-            results = calculateTransverseAberration(
-                opticalSystemData,
-                imageSurfaceIndex,
-                [fieldSetting],
-                wavelength,
-                rayCount
-            ) as any;
+            const cached = this._runtimeCache ? this._runtimeCache.get(taCacheKey) : null;
+            if (cached) {
+                results = cached;
+            } else {
+                results = calculateTransverseAberration(
+                    opticalSystemData,
+                    imageSurfaceIndex,
+                    [fieldSetting],
+                    wavelength,
+                    rayCount
+                ) as any;
+                if (this._runtimeCache) this._runtimeCache.set(taCacheKey, results);
+            }
         } catch (err) {
             console.warn('⚠️ TA_RMS_UM: transverse aberration calculation failed', err);
             return 0;

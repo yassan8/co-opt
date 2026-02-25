@@ -2373,8 +2373,8 @@ function setupOptimizeDesignIntentButton(): void {
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         Method
         <select id="opt-method" style="padding:4px 6px;">
-            <option value="lm">Levenberg-Marquardt (LM)</option>
             <option value="kkt">Augmented Lagrangian (AL)</option>
+            <option value="lm" selected>Levenberg-Marquardt (LM)</option>
             <option value="cd">Coordinate Descent (CD)</option>
         </select>
     </label>
