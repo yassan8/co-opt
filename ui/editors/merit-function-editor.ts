@@ -32,6 +32,7 @@ import { expandBlocksToOpticalSystemRows } from '../../data/block-schema.ts';
 import { generateRayStartPointsForObject, setRayEmissionPattern, getRayEmissionPattern } from '../../optical/ray-renderer.ts';
 import { asphericSurfaceZ, toricSurfaceZ } from '../../optical/surface-math.ts';
 import { calculateLongitudinalAberration } from '../../evaluation/aberrations/longitudinal-aberration.ts';
+import { calculateTransverseAberration } from '../../evaluation/aberrations/transverse-aberration.ts';
 import { getTableOpticalSystem, getTableObject, getTableSource } from '../../core/app-config.ts';
 import { loadSystemConfigurations } from '../../data/table-configuration.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../../data/table-optical-system.ts';
@@ -96,15 +97,64 @@ function isInfiniteSystemFromRows(opticalSystemRows: any[]): boolean {
 }
 
 function toFieldSettingFromObjectRow(objRow: any, index0: number, isInfiniteSystem: boolean): any {
-    if (!objRow || typeof objRow !== 'object') return { angleX: 0, angleY: 0 };
-    const Hx = toFiniteNumber(objRow.Hx, 0);
-    const Hy = toFiniteNumber(objRow.Hy, 0);
+    if (!objRow || typeof objRow !== 'object') return { x: 0, y: 0, objectIndex: index0 + 1 };
+    const pickFirstFinite = (values: any[], fallback = 0): number => {
+        for (const value of values) {
+            const n = toFiniteNumber(value, NaN);
+            if (Number.isFinite(n)) return n;
+        }
+        return fallback;
+    };
+
+    const fieldX = pickFirstFinite([
+        objRow.xHeightAngle,
+        objRow.xFieldAngle,
+        objRow.xHeight,
+        objRow.x,
+        objRow.angleX,
+        objRow.Hx
+    ], 0);
+
+    const fieldY = pickFirstFinite([
+        objRow.yHeightAngle,
+        objRow.yFieldAngle,
+        objRow.fieldAngle,
+        objRow.yHeight,
+        objRow.y,
+        objRow.angleY,
+        objRow.Hy
+    ], 0);
+
+    const objectIndex1 = index0 + 1;
+    const displayName = String(objRow.comment || objRow.name || `Object ${objectIndex1}`);
 
     if (isInfiniteSystem) {
-        return { angleX: Hx, angleY: Hy, objectIndex: index0 };
-    } else {
-        return { fieldX: Hx, fieldY: Hy, objectIndex: index0 };
+        return {
+            position: 'Angle',
+            objectIndex: objectIndex1,
+            displayName,
+            x: fieldX,
+            y: fieldY,
+            xFieldAngle: fieldX,
+            yFieldAngle: fieldY,
+            xHeightAngle: fieldX,
+            yHeightAngle: fieldY,
+            angleX: fieldX,
+            angleY: fieldY
+        };
     }
+
+    return {
+        position: 'Rectangle',
+        objectIndex: objectIndex1,
+        displayName,
+        x: fieldX,
+        y: fieldY,
+        xHeight: fieldX,
+        yHeight: fieldY,
+        fieldX: fieldX,
+        fieldY: fieldY
+    };
 }
 
 function sampleUnitDiskPoints({ rings = 4, spokes = 12 }: { rings?: number; spokes?: number } = {}): any[] {
@@ -859,44 +909,45 @@ class MeritFunctionEditor {
             case 'LA_RMS_UM':
                 return this.calculateLongitudinalAberrationRmsUm(operand, opticalSystemData);
 
+            case 'TA_RMS_UM':
+                return this.calculateTransverseAberrationRmsUm(operand, opticalSystemData);
+
             case 'CTCT': {
                 // Center Thickness: Evaluate thickness of specified surface
                 const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
-                console.log('[CTCT] DEBUG: param1Raw=', param1Raw);
-                
                 if (!param1Raw) {
-                    console.log('[CTCT] FAIL: param1Raw is empty');
                     return 1e9;
                 }
-                
-                const surfaceIndex1 = Math.floor(Number(param1Raw));
-                console.log('[CTCT] DEBUG: surfaceIndex1=', surfaceIndex1, 'opticalSystemData.length=', Array.isArray(opticalSystemData) ? opticalSystemData.length : 'NOT ARRAY');
-                
-                if (!Number.isFinite(surfaceIndex1) || surfaceIndex1 < 1) {
-                    console.log('[CTCT] FAIL: surfaceIndex1 not finite or < 1');
+
+                if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) {
                     return 1e9;
                 }
-                
-                const surfaceIndex0 = surfaceIndex1 - 1;
-                if (!Array.isArray(opticalSystemData) || surfaceIndex0 >= opticalSystemData.length) {
-                    console.log('[CTCT] FAIL: array validation');
-                    return 1e9;
+
+                const surfaceNum = Math.floor(Number(param1Raw));
+                let surface = null;
+
+                // Prefer matching by surface id (stable across filtered/reordered views)
+                if (Number.isFinite(surfaceNum)) {
+                    surface = opticalSystemData.find((row: any) => Number(row?.id) === surfaceNum) || null;
                 }
-                
-                const surface = opticalSystemData[surfaceIndex0];
+
+                // Backward compatibility: treat value as 1-based array index if id match is not found
+                if (!surface && Number.isFinite(surfaceNum) && surfaceNum >= 1) {
+                    const surfaceIndex0 = surfaceNum - 1;
+                    if (surfaceIndex0 >= 0 && surfaceIndex0 < opticalSystemData.length) {
+                        surface = opticalSystemData[surfaceIndex0];
+                    }
+                }
+
                 if (!surface) {
-                    console.log('[CTCT] FAIL: surface is null/undefined');
                     return 1e9;
                 }
-                
+
                 const thickness = Number(surface.thickness);
-                console.log('[CTCT] DEBUG: surface.thickness=', surface.thickness, 'parsed=', thickness);
                 if (!Number.isFinite(thickness)) {
-                    console.log('[CTCT] FAIL: thickness not finite');
                     return 1e9;
                 }
-                
-                console.log('[CTCT] SUCCESS: thickness=', thickness);
+
                 return thickness;
             }
 
@@ -1097,7 +1148,6 @@ class MeritFunctionEditor {
                                     
                                     const mode2 = nextSurfType.includes('odd') ? 'odd' : 'even';
                                     sag2 = asphericSurfaceZ(height, asphericParams2, mode2);
-                                    console.log('[EDGE] DEBUG: Calculated sag2 (aspheric)=', sag2);
                                 }
                             }
 
@@ -1318,6 +1368,104 @@ class MeritFunctionEditor {
         const rmsUm = rmsL * 1000;
 
         return rmsUm;
+    }
+
+    calculateTransverseAberrationRmsUm(operand: any, opticalSystemData: any[]): number {
+        if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 0;
+
+        const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId);
+
+        const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+        const wavelength = (param1Raw === '')
+            ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+            : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+
+        const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+        const objectIndex1 = (param2Raw === '') ? 1 : Math.max(1, Math.floor(Number(param2Raw)));
+        const objectIndex0 = objectIndex1 - 1;
+        const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim().toLowerCase() : '';
+        const component = (param3Raw === 'meridional' || param3Raw === 'sagittal' || param3Raw === 'total')
+            ? param3Raw
+            : 'total';
+        const param4Raw = (operand.param4 !== undefined && operand.param4 !== null) ? String(operand.param4).trim() : '';
+        let rayCount = (param4Raw === '') ? 51 : Math.floor(Number(param4Raw));
+        if (!Number.isFinite(rayCount) || rayCount < 3) rayCount = 51;
+        if (rayCount > 5000) rayCount = 5000;
+
+        const objRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
+        if (!objRow || typeof objRow !== 'object') {
+            console.warn('⚠️ TA_RMS_UM: object row not found');
+            return 0;
+        }
+
+        const imageSurfaceIndex = (() => {
+            for (let i = opticalSystemData.length - 1; i >= 0; i--) {
+                const row = opticalSystemData[i];
+                if (row && typeof row === 'object') {
+                    const ot = String(row['object type'] || row.objectType || row.object || '').trim().toLowerCase();
+                    if (ot === 'image') return i;
+                }
+            }
+            return Math.max(0, opticalSystemData.length - 1);
+        })();
+
+        const isInfiniteSystem = isInfiniteSystemFromRows(opticalSystemData);
+        const fieldSetting = toFieldSettingFromObjectRow(objRow, objectIndex0, isInfiniteSystem);
+
+        let results: any;
+        try {
+            results = calculateTransverseAberration(
+                opticalSystemData,
+                imageSurfaceIndex,
+                [fieldSetting],
+                wavelength,
+                rayCount
+            ) as any;
+        } catch (err) {
+            console.warn('⚠️ TA_RMS_UM: transverse aberration calculation failed', err);
+            return 0;
+        }
+
+        const collectValues = (series: any[]): number[] => {
+            if (!Array.isArray(series)) return [];
+            const values: number[] = [];
+            for (let i = 0; i < series.length; i++) {
+                const item = series[i];
+                const pts = item?.points;
+                if (!Array.isArray(pts)) continue;
+                for (const p of pts) {
+                    const t = toFiniteNumber(p?.transverseAberration, NaN);
+                    if (Number.isFinite(t)) values.push(t);
+                }
+            }
+            return values;
+        };
+
+        const meridionalValues = collectValues(results?.meridionalData);
+        const sagittalValues = collectValues(results?.sagittalData);
+
+        // SELECT VALUES BASED ON COMPONENT PARAMETER
+        let valuesMm: number[] = [];
+        if (component === 'meridional') {
+            valuesMm = meridionalValues;
+        } else if (component === 'sagittal') {
+            valuesMm = sagittalValues;
+        } else {
+            // 'total' or default: combine both
+            valuesMm = [...meridionalValues, ...sagittalValues];
+        }
+
+        if (!Array.isArray(valuesMm) || valuesMm.length === 0) {
+            console.warn('⚠️ TA_RMS_UM: no transverse aberration data points');
+            return 0;
+        }
+
+        let sumSq = 0;
+        for (const v of valuesMm) sumSq += v * v;
+
+        const rmsMm = Math.sqrt(sumSq / valuesMm.length);
+        const resultUm = rmsMm * 1000;
+        return resultUm;
     }
 
     calculateSpotSizeUm(operand: any, opticalSystemData: any[], options: any = {}): number {

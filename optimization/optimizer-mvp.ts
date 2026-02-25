@@ -23,6 +23,7 @@ import { loadTableData as loadSystemRequirementsTableData } from '../data/table-
 import { requestRefreshBlockInspector } from '../core/window-facade.ts';
 import { getWindowDebugBagValue, setWindowDebugBagValue } from '../utils/window-debug-bag.ts';
 import { runKKTOptimization } from './kkt-optimizer.ts';
+import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 
 let __optimizerStopRequested = false;
 
@@ -451,6 +452,79 @@ function getActiveConfigRef(systemConfig) {
   return systemConfig.configurations.find(c => c && c.id === activeId) || systemConfig.configurations[0] || null;
 }
 
+function getPrimaryWavelengthForOptimization() {
+  try {
+    if (typeof window !== 'undefined' && typeof window.getPrimaryWavelength === 'function') {
+      const wl = Number(window.getPrimaryWavelength());
+      if (Number.isFinite(wl) && wl > 0) return wl;
+    }
+  } catch (_) {}
+  return 0.5875618;
+}
+
+function resolveParaxialScalar(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (value && typeof value === 'object') {
+    const t = Number(value.tangential);
+    if (Number.isFinite(t)) return t;
+    const s = Number(value.sagittal);
+    if (Number.isFinite(s)) return s;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function normalizeGapThicknessMode(raw) {
+  const mode = String(raw ?? '').trim().replace(/\s+/g, '').toUpperCase();
+  if (mode === 'IMD' || mode === 'BFL') return mode;
+  return '';
+}
+
+function applyGapThicknessModesToBlocks(blocks) {
+  if (!Array.isArray(blocks) || blocks.length === 0) return;
+  const primaryWavelength = getPrimaryWavelengthForOptimization();
+  if (!(Number.isFinite(primaryWavelength) && primaryWavelength > 0)) return;
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (!block || typeof block !== 'object') continue;
+
+    const blockType = String(block.blockType ?? '').trim();
+    if (blockType !== 'Gap' && blockType !== 'AirGap') continue;
+
+    const params = (block.parameters && typeof block.parameters === 'object') ? block.parameters : null;
+    if (!params) continue;
+
+    const mode = normalizeGapThicknessMode(params.thicknessMode);
+    if (!mode) continue;
+
+    let target = NaN;
+    try {
+      const expanded = expandBlocksToOpticalSystemRows(blocks);
+      const rows = (expanded && Array.isArray(expanded.rows)) ? expanded.rows : null;
+      if (!rows || rows.length === 0) continue;
+      const paraxial = calculateParaxialData(rows, primaryWavelength);
+      target = resolveParaxialScalar(mode === 'IMD' ? paraxial?.imageDistance : paraxial?.backFocalLength);
+    } catch (_) {
+      target = NaN;
+    }
+
+    if (!Number.isFinite(target)) continue;
+    params.thickness = target;
+    try {
+      if (block.variables && typeof block.variables === 'object' && block.variables.thickness && typeof block.variables.thickness === 'object') {
+        block.variables.thickness.value = target;
+      }
+    } catch (_) {}
+  }
+}
+
+function expandBlocksForOptimization(blocks) {
+  if (!Array.isArray(blocks)) return null;
+  applyGapThicknessModesToBlocks(blocks);
+  return expandBlocksToOpticalSystemRows(blocks);
+}
+
 function updateExpandedOpticalSystemInConfig(config) {
   if (!config || !Array.isArray(config.blocks)) return;
 
@@ -520,7 +594,7 @@ function updateExpandedOpticalSystemInConfig(config) {
 
   const preservedObjectThickness = pickPreservedObjectThickness();
   const preservedSemidiaRows = pickPreservedSemidiaRows();
-  const expanded = expandBlocksToOpticalSystemRows(config.blocks);
+  const expanded = expandBlocksForOptimization(config.blocks);
   if (expanded && Array.isArray(expanded.rows)) {
     if (preservedObjectThickness !== null && expanded.rows[0] && typeof expanded.rows[0] === 'object') {
       expanded.rows[0].thickness = preservedObjectThickness;
@@ -786,7 +860,7 @@ function getCurrentDesignValueByVariableId(config, variableId) {
 
 function getMaterialIssueForBlock(activeCfg, blockId) {
   try {
-    const expanded = expandBlocksToOpticalSystemRows(activeCfg?.blocks);
+    const expanded = expandBlocksForOptimization(activeCfg?.blocks);
     const issues = Array.isArray(expanded?.issues) ? expanded.issues : [];
     const bid = String(blockId ?? '').trim();
     if (!bid) return null;
@@ -980,7 +1054,7 @@ function enumerateJointVariables({
 
 function updateActiveOpticalSystemOverrideFromBlocks(activeBlocks) {
   try {
-    const expanded = expandBlocksToOpticalSystemRows(activeBlocks);
+    const expanded = expandBlocksForOptimization(activeBlocks);
     const rows = (expanded && Array.isArray(expanded.rows)) ? expanded.rows : null;
     if (typeof globalThis !== 'undefined') {
       globalThis.__cooptOpticalSystemRowsOverride = rows;
@@ -2869,7 +2943,7 @@ export async function runOptimizationMVP(options = {}) {
               const blocks = (blocksByConfigId && cfgId) ? blocksByConfigId[cfgId] : null;
               let rows = null;
               if (Array.isArray(blocks)) {
-                const expanded = expandBlocksToOpticalSystemRows(blocks);
+                const expanded = expandBlocksForOptimization(blocks);
                 rows = (expanded && Array.isArray(expanded.rows)) ? expanded.rows : null;
               }
               __rowsByCfg.set(cfgId, rows);

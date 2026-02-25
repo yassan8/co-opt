@@ -292,6 +292,17 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     ],
     notes: "球面収差図（Spherical Aberration Diagram）のメリジオナル光線データから縦収差を集約してRMSを返します。\n\n定義（Option B）:\n- 縦収差 L(r) は図のX軸と同じ（最終面からの焦点位置までの距離, mm）\n- pupil coordinate r は正規化瞳座標（0..1）\n- 面積重み 2r dr で平均 L̄ を計算し、RMS = sqrt(E[(L-L̄)^2])\n- 返り値は µm（= mm * 1000）\n\nパラメータ: λ idx のみ（Sourceテーブル行番号, 1始まり）。空欄/0はPrimary Wavelength。\n\n注: 現状は meridional のみ（片側）で評価します。"
   },
+  "TA_RMS_UM": {
+    name: "Transevers Aberration RMS (µm)",
+    description: "Transevers Aberration RMS",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row (1-based, blank=Primary)" },
+      { key: "param2", label: "Object idx", description: "Object row (1-based, default 1)" },
+      { key: "param3", label: "Component", description: "total | meridional | sagittal (default total)" },
+      { key: "param4", label: "Raynum", description: "Ray count (default 51, odd recommended)" }
+    ],
+    notes: "横収差図（Transverse Aberration）を内部計算し、指定 Source/Object の評価で RMS を返します。\n\n定義:\n- 評価面: Image面\n- Component=total: meridional + sagittal の transverseAberration を合算して RMS = sqrt(mean(T^2))\n- Component=meridional: メリジオナルのみで RMS\n- Component=sagittal: サジタルのみで RMS\n- 単位: µm（計算値 mm を ×1000）"
+  },
   "ZERN_COEFF": {
     name: "Zernike Coefficient (Noll)",
     description: "Nth Zernike coefficient (Noll index) for the current system (live). n=0 returns RMS over coefficients.",
@@ -482,7 +493,7 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'TOT3_SPH', 'TOT3_COMA', 'TOT3_ASTI', 'TOT3_FCUR', 'TOT3_DIST',
   'TOT_LCA', 'TOT_TCA',
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
-  'LA_RMS_UM',
+  'LA_RMS_UM', 'TA_RMS_UM',
   'ZERN_COEFF',
   'EDGE', 'CTCT'
 ]);
