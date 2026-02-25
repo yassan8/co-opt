@@ -30,9 +30,10 @@ async function importSurfaceOriginsModule(): Promise<any> {
   const errors: string[] = [];
 
   try {
-    return await import('../../rust-wasm/pkg/surface_origins.js');
+    const relPath = '../../rust-wasm/pkg/' + 'surface_origins.js';
+    return await import(/* @vite-ignore */ relPath);
   } catch (e) {
-    errors.push(`static:${String((e as any)?.message || e || 'failed')}`);
+    errors.push(`relative:${String((e as any)?.message || e || 'failed')}`);
   }
 
   try {

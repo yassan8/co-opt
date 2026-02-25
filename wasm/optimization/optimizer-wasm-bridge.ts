@@ -45,9 +45,10 @@ async function preloadOptimizerDirectWasmModule(): Promise<OptimizerWasmApi | nu
         const importErrors: string[] = [];
 
         try {
-          mod = await import('../../rust-wasm/pkg/surface_origins.js');
+          const relPath = '../../rust-wasm/pkg/' + 'surface_origins.js';
+          mod = await import(/* @vite-ignore */ relPath);
         } catch (e) {
-          importErrors.push(`static:${String((e as any)?.message || e || 'failed')}`);
+          importErrors.push(`relative:${String((e as any)?.message || e || 'failed')}`);
         }
 
         if (!mod) {
