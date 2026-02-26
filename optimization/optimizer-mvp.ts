@@ -4909,10 +4909,10 @@ export async function runOptimizationMVP(options = {}) {
         : 1e-6;
       const kktPlateauStopMinIter = Number.isFinite(Number(opts?.kktPlateauStopMinIter))
         ? Math.max(5, Math.floor(Number(opts.kktPlateauStopMinIter)))
-        : 30;
+        : 45;
       const kktPlateauStopWindow = Number.isFinite(Number(opts?.kktPlateauStopWindow))
         ? Math.max(5, Math.floor(Number(opts.kktPlateauStopWindow)))
-        : 30;
+        : 45;
       const kktPlateauBestRelImproveEps = Number.isFinite(Number(opts?.kktPlateauBestRelImproveEps))
         ? Math.max(0, Number(opts.kktPlateauBestRelImproveEps))
         : 5e-4;
@@ -4930,10 +4930,10 @@ export async function runOptimizationMVP(options = {}) {
         : Math.max(kktPlateauStopMinIter, 35);
       const kktTailStopMinIter = Number.isFinite(Number(opts?.kktTailStopMinIter))
         ? Math.max(20, Math.floor(Number(opts.kktTailStopMinIter)))
-        : 80;
+        : 120;
       const kktTailStopWindow = Number.isFinite(Number(opts?.kktTailStopWindow))
         ? Math.max(10, Math.floor(Number(opts.kktTailStopWindow)))
-        : 40;
+        : 60;
       const kktTailStopBestRelImproveEps = Number.isFinite(Number(opts?.kktTailStopBestRelImproveEps))
         ? Math.max(0, Number(opts.kktTailStopBestRelImproveEps))
         : 3e-4;
@@ -4951,10 +4951,10 @@ export async function runOptimizationMVP(options = {}) {
         : 1.0;
       const kktWindowNoGainMinIter = Number.isFinite(Number(opts?.kktWindowNoGainMinIter))
         ? Math.max(20, Math.floor(Number(opts.kktWindowNoGainMinIter)))
-        : 70;
+        : 110;
       const kktWindowNoGainWindow = Number.isFinite(Number(opts?.kktWindowNoGainWindow))
         ? Math.max(10, Math.floor(Number(opts.kktWindowNoGainWindow)))
-        : 30;
+        : 50;
       const kktWindowNoGainRelImproveEps = Number.isFinite(Number(opts?.kktWindowNoGainRelImproveEps))
         ? Math.max(0, Number(opts.kktWindowNoGainRelImproveEps))
         : 2e-3;
@@ -4963,10 +4963,10 @@ export async function runOptimizationMVP(options = {}) {
         : 1.0;
       const kktGoodEnoughStopMinIter = Number.isFinite(Number(opts?.kktGoodEnoughStopMinIter))
         ? Math.max(20, Math.floor(Number(opts.kktGoodEnoughStopMinIter)))
-        : 55;
+        : 90;
       const kktGoodEnoughStopWindow = Number.isFinite(Number(opts?.kktGoodEnoughStopWindow))
         ? Math.max(10, Math.floor(Number(opts.kktGoodEnoughStopWindow)))
-        : 20;
+        : 35;
       const kktGoodEnoughStopRecentRelImproveEps = Number.isFinite(Number(opts?.kktGoodEnoughStopRecentRelImproveEps))
         ? Math.max(0, Number(opts.kktGoodEnoughStopRecentRelImproveEps))
         : 5e-3;
@@ -4987,16 +4987,16 @@ export async function runOptimizationMVP(options = {}) {
         : 20;
       const kktHardIterCap = Number.isFinite(Number(opts?.kktHardIterCap))
         ? Math.max(20, Math.floor(Number(opts.kktHardIterCap)))
-        : 180;
+        : 320;
       const kktMaxWallMs = Number.isFinite(Number(opts?.kktMaxWallMs))
         ? Math.max(1000, Math.floor(Number(opts.kktMaxWallMs)))
-        : 120000;
+        : 240000;
       const kktNoBestImproveMinIter = Number.isFinite(Number(opts?.kktNoBestImproveMinIter))
         ? Math.max(20, Math.floor(Number(opts.kktNoBestImproveMinIter)))
-        : 120;
+        : 180;
       const kktNoBestImproveWindow = Number.isFinite(Number(opts?.kktNoBestImproveWindow))
         ? Math.max(10, Math.floor(Number(opts.kktNoBestImproveWindow)))
-        : 80;
+        : 120;
       const kktNoBestImproveRelEps = Number.isFinite(Number(opts?.kktNoBestImproveRelEps))
         ? Math.max(0, Number(opts.kktNoBestImproveRelEps))
         : 2e-4;
@@ -5008,7 +5008,7 @@ export async function runOptimizationMVP(options = {}) {
         : 45;
       const kktPostBestNoImproveWindow = Number.isFinite(Number(opts?.kktPostBestNoImproveWindow))
         ? Math.max(5, Math.floor(Number(opts.kktPostBestNoImproveWindow)))
-        : 10;
+        : 16;
       const kktPostBestDivergenceRatio = Number.isFinite(Number(opts?.kktPostBestDivergenceRatio))
         ? Math.max(2, Number(opts.kktPostBestDivergenceRatio))
         : 1.6;
@@ -5020,7 +5020,7 @@ export async function runOptimizationMVP(options = {}) {
         : 38;
       const kktPostBestPatienceWindow = Number.isFinite(Number(opts?.kktPostBestPatienceWindow))
         ? Math.max(5, Math.floor(Number(opts.kktPostBestPatienceWindow)))
-        : 10;
+        : 16;
       const kktPostBestPatienceMaxViol = Number.isFinite(Number(opts?.kktPostBestPatienceMaxViol))
         ? Math.max(0, Number(opts.kktPostBestPatienceMaxViol))
         : 25;
