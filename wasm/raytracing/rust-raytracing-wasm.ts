@@ -24,6 +24,8 @@ type RustRayTracingWasm = {
 let rustWasmApi: RustRayTracingWasm | null = null;
 let rustWasmInitPromise: Promise<RustRayTracingWasm | null> | null = null;
 let rustWasmInitError: string | null = null;
+let rustWasmLastInitAttemptMs = 0;
+const RUST_WASM_RETRY_COOLDOWN_MS = 15000;
 const isNodeRuntime = typeof process !== 'undefined' && !!(process as any)?.versions?.node;
 
 async function importSurfaceOriginsModule(): Promise<any> {
@@ -39,12 +41,49 @@ async function importSurfaceOriginsModule(): Promise<any> {
     }
   })();
 
-  const publicPath = `${baseUrl}rust-wasm/pkg/surface_origins.js`;
+  const candidates = (() => {
+    const out: string[] = [];
+    const add = (s: string) => {
+      const v = String(s || '').trim();
+      if (!v) return;
+      if (!out.includes(v)) out.push(v);
+    };
+    const fromPathname = (() => {
+      try {
+        if (typeof window === 'undefined') return '';
+        const path = String(window.location?.pathname || '/');
+        const seg = path.split('/').filter(Boolean)[0] || '';
+        return seg ? `/${seg}/` : '/';
+      } catch {
+        return '/';
+      }
+    })();
+    add(`${baseUrl}rust-wasm/pkg/surface_origins.js`);
+    add(`${baseUrl}core/rust-wsm/pkg/surface_origins.js`);
+    add(`${baseUrl}core/rust-wasm/pkg/surface_origins.js`);
+    add(`${fromPathname}rust-wasm/pkg/surface_origins.js`);
+    add(`${fromPathname}core/rust-wsm/pkg/surface_origins.js`);
+    add(`${fromPathname}core/rust-wasm/pkg/surface_origins.js`);
+    add('/co-opt/rust-wasm/pkg/surface_origins.js');
+    add('/co-opt/core/rust-wsm/pkg/surface_origins.js');
+    add('/co-opt/core/rust-wasm/pkg/surface_origins.js');
+    add('/rust-wasm/pkg/surface_origins.js');
+    add('/core/rust-wsm/pkg/surface_origins.js');
+    add('/core/rust-wasm/pkg/surface_origins.js');
+    add('./rust-wasm/pkg/surface_origins.js');
+    return out;
+  })();
 
-  try {
-    return await import(/* @vite-ignore */ publicPath);
-  } catch (e) {
-    errors.push(`public:${String((e as any)?.message || e || 'failed')}`);
+  const attempts = candidates.map((publicPath) =>
+    import(/* @vite-ignore */ publicPath)
+      .then((mod) => ({ ok: true as const, mod, publicPath }))
+      .catch((e) => ({ ok: false as const, publicPath, err: e }))
+  );
+  const settled = await Promise.all(attempts);
+  for (const result of settled) {
+    if (result.ok) return result.mod;
+    const errVal = ('err' in result) ? result.err : 'failed';
+    errors.push(`${result.publicPath}:${String((errVal as any)?.message || errVal || 'failed')}`);
   }
 
   throw new Error(`surface_origins module import failed (${errors.join(' | ')})`);
@@ -85,9 +124,17 @@ export function getRustRayTracingWasmInitError(): string | null {
 
 export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | null> {
   if (rustWasmApi) return rustWasmApi;
+  const now = Date.now();
+  if (
+    rustWasmInitError
+    && (now - rustWasmLastInitAttemptMs) < RUST_WASM_RETRY_COOLDOWN_MS
+  ) {
+    return null;
+  }
   if (!rustWasmInitPromise) {
     rustWasmInitPromise = (async () => {
       try {
+        rustWasmLastInitAttemptMs = Date.now();
         const mod = await importSurfaceOriginsModule();
         await initRustRayTracingModule(mod);
         const api: RustRayTracingWasm = {

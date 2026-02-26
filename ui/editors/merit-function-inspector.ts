@@ -292,6 +292,14 @@ export const OPERAND_DEFINITIONS: Record<string, any> = {
     ],
     notes: "球面収差図（Spherical Aberration Diagram）のメリジオナル光線データから縦収差を集約してRMSを返します。\n\n定義（Option B）:\n- 縦収差 L(r) は図のX軸と同じ（最終面からの焦点位置までの距離, mm）\n- pupil coordinate r は正規化瞳座標（0..1）\n- 面積重み 2r dr で平均 L̄ を計算し、RMS = sqrt(E[(L-L̄)^2])\n- 返り値は µm（= mm * 1000）\n\nパラメータ: λ idx のみ（Sourceテーブル行番号, 1始まり）。空欄/0はPrimary Wavelength。\n\n注: 現状は meridional のみ（片側）で評価します。"
   },
+  "SA": {
+    name: "Spherical Aberration (LSA, µm)",
+    description: "Longitudinal spherical aberration from real rays (meridional), independent from 3rd-order Seidel SA.",
+    parameters: [
+      { key: "param1", label: "λ idx", description: "Source row (1-based) or wavelength in µm (blank=Primary)" }
+    ],
+    notes: "実光線ベースの縦球面収差（LSA）を返します。\n\n定義:\n- 球面収差図（meridional）の縦収差データを使用\n- paraxial 側（最小 pupil coordinate）と marginal 側（最大 pupil coordinate）の差分 |L_marginal - L_paraxial|\n- 単位は µm（mm × 1000）\n\nこれは Seidel 3次係数（TOT3_SPH）とは別の評価量です。"
+  },
   "TA_RMS_UM": {
     name: "Transevers Aberration RMS (µm)",
     description: "Transevers Aberration RMS",
@@ -493,7 +501,7 @@ const VISIBLE_OPERANDS_IN_UI = new Set([
   'TOT3_SPH', 'TOT3_COMA', 'TOT3_ASTI', 'TOT3_FCUR', 'TOT3_DIST',
   'TOT_LCA', 'TOT_TCA',
   'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_RECT',
-  'LA_RMS_UM', 'TA_RMS_UM',
+  'LA_RMS_UM', 'SA', 'TA_RMS_UM',
   'ZERN_COEFF',
   'EDGE', 'CTCT'
 ]);

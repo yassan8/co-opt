@@ -1,4 +1,4 @@
-import { getRustRayTracingWasmSync, preloadRustRayTracingWasm } from '../raytracing/rust-raytracing-wasm.ts';
+import { getRustRayTracingWasmSync, preloadRustRayTracingWasm, getRustRayTracingWasmInitError } from '../raytracing/rust-raytracing-wasm.ts';
 
 type OptimizerWasmApi = {
   solve_spd_linear_system?: (aFlat: Float64Array, n: number, b: Float64Array) => Float64Array;
@@ -52,12 +52,47 @@ async function preloadOptimizerDirectWasmModule(): Promise<OptimizerWasmApi | nu
             return '/';
           }
         })();
-        const publicPath = `${baseUrl}rust-wasm/pkg/surface_origins.js`;
 
-        try {
-          mod = await import(/* @vite-ignore */ publicPath);
-        } catch (e) {
-          importErrors.push(`public:${String((e as any)?.message || e || 'failed')}`);
+        const candidates = (() => {
+          const out: string[] = [];
+          const add = (s: string) => {
+            const v = String(s || '').trim();
+            if (!v) return;
+            if (!out.includes(v)) out.push(v);
+          };
+          const fromPathname = (() => {
+            try {
+              if (typeof window === 'undefined') return '';
+              const path = String(window.location?.pathname || '/');
+              const seg = path.split('/').filter(Boolean)[0] || '';
+              return seg ? `/${seg}/` : '/';
+            } catch {
+              return '/';
+            }
+          })();
+          add(`${baseUrl}rust-wasm/pkg/surface_origins.js`);
+          add(`${baseUrl}core/rust-wsm/pkg/surface_origins.js`);
+          add(`${baseUrl}core/rust-wasm/pkg/surface_origins.js`);
+          add(`${fromPathname}rust-wasm/pkg/surface_origins.js`);
+          add(`${fromPathname}core/rust-wsm/pkg/surface_origins.js`);
+          add(`${fromPathname}core/rust-wasm/pkg/surface_origins.js`);
+          add('/co-opt/rust-wasm/pkg/surface_origins.js');
+          add('/co-opt/core/rust-wsm/pkg/surface_origins.js');
+          add('/co-opt/core/rust-wasm/pkg/surface_origins.js');
+          add('/rust-wasm/pkg/surface_origins.js');
+          add('/core/rust-wsm/pkg/surface_origins.js');
+          add('/core/rust-wasm/pkg/surface_origins.js');
+          add('./rust-wasm/pkg/surface_origins.js');
+          return out;
+        })();
+
+        for (const publicPath of candidates) {
+          if (mod) break;
+          try {
+            mod = await import(/* @vite-ignore */ publicPath);
+          } catch (e) {
+            importErrors.push(`${publicPath}:${String((e as any)?.message || e || 'failed')}`);
+          }
         }
 
         if (!mod) {
@@ -157,9 +192,15 @@ export async function preloadOptimizerWasmBridge(): Promise<boolean> {
   }
 
   let api = getOptimizerApiSync();
-  if (!api) {
+  const sharedInitError = getRustRayTracingWasmInitError();
+  const sharedImportFailed = typeof sharedInitError === 'string'
+    && sharedInitError.includes('surface_origins module import failed');
+  if (!api && !sharedImportFailed) {
     await preloadOptimizerDirectWasmModule();
     api = getOptimizerApiSync();
+  }
+  if (!api && sharedImportFailed) {
+    optimizerWasmBridgeDebugState.initError = sharedInitError;
   }
 
   optimizerWasmBridgeDebugState.hasSolveSpd = !!(api && typeof api.solve_spd_linear_system === 'function');
