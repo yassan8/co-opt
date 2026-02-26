@@ -909,6 +909,9 @@ class MeritFunctionEditor {
             case 'LA_RMS_UM':
                 return this.calculateLongitudinalAberrationRmsUm(operand, opticalSystemData);
 
+            case 'SA':
+                return this.calculateSphericalAberrationUm(operand, opticalSystemData);
+
             case 'TA_RMS_UM':
                 return this.calculateTransverseAberrationRmsUm(operand, opticalSystemData);
 
@@ -1368,6 +1371,65 @@ class MeritFunctionEditor {
         const rmsUm = rmsL * 1000;
 
         return rmsUm;
+    }
+
+    calculateSphericalAberrationUm(operand: any, opticalSystemData: any[]): number {
+        if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 0;
+
+        const { source: sourceRows } = this.getConfigTablesByConfigId(operand.configId);
+
+        const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+        const wavelength = (param1Raw === '')
+            ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+            : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+
+        const imageSurfaceIndex = (() => {
+            for (let i = opticalSystemData.length - 1; i >= 0; i--) {
+                const row = opticalSystemData[i];
+                if (row && typeof row === 'object') {
+                    const ot = String(row['object type'] || row.objectType || row.object || '').trim().toLowerCase();
+                    if (ot === 'image') return i;
+                }
+            }
+            return Math.max(0, opticalSystemData.length - 1);
+        })();
+
+        const results = calculateLongitudinalAberration(
+            opticalSystemData,
+            imageSurfaceIndex,
+            [wavelength],
+            51,
+            { silent: true }
+        ) as any;
+
+        const meridional = (() => {
+            const list = results?.meridionalData;
+            if (!Array.isArray(list) || list.length === 0) return null;
+            const target = list.find((d: any) => Math.abs(Number(d?.wavelength) - wavelength) < 1e-9);
+            return target || list[0];
+        })();
+
+        const rawData = meridional?.points;
+        if (!Array.isArray(rawData) || rawData.length === 0) {
+            console.warn('⚠️ SA: longitudinal aberration calculation failed');
+            return 0;
+        }
+
+        const data = rawData
+            .map((d: any) => ({
+                pupilCoordinate: toFiniteNumber(d?.pupilCoordinate, NaN),
+                longitudinalAberration: toFiniteNumber(d?.longitudinalAberration, NaN)
+            }))
+            .filter((d: any) => Number.isFinite(d.pupilCoordinate) && Number.isFinite(d.longitudinalAberration))
+            .sort((a: any, b: any) => a.pupilCoordinate - b.pupilCoordinate);
+
+        if (data.length === 0) return 0;
+
+        const paraxial = data[0].longitudinalAberration;
+        const marginal = data[data.length - 1].longitudinalAberration;
+        const lsaMm = Math.abs(marginal - paraxial);
+
+        return lsaMm * 1000;
     }
 
     calculateTransverseAberrationRmsUm(operand: any, opticalSystemData: any[]): number {

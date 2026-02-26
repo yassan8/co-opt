@@ -2384,7 +2384,7 @@ function setupOptimizeDesignIntentButton(): void {
         <input id="opt-max-iter" type="number" min="1" step="1" value="5000" style="width:100px; padding:4px 6px;" />
     </label>
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
-        <input id="opt-auto-render" type="checkbox" style="width:16px; height:16px;" />
+        <input id="opt-auto-render" type="checkbox" checked style="width:16px; height:16px;" />
         Auto-render on Accept
     </label>
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
@@ -2602,6 +2602,45 @@ function setupOptimizeDesignIntentButton(): void {
             let rejectCount = 0;
             let __lastReqRefreshAt = 0;
             const __reqRefreshThrottleMs = 500;
+            let optimizerWasmWarmupPromise: Promise<void> | null = null;
+            let runClickAtMs = 0;
+            let startupLatencyReported = false;
+
+            const warmupOptimizerStartup = (forceWasm = false) => {
+                try {
+                    if (typeof w.__cooptInitMeritFunctionEditor === 'function') {
+                        w.__cooptInitMeritFunctionEditor();
+                    }
+                } catch (_) {}
+
+                const shouldWarmWasm = (() => {
+                    if (forceWasm) return true;
+                    try {
+                        if (popup && !popup.closed) {
+                            const cb = popup.document.getElementById('opt-use-wasm-linear-solve') as HTMLInputElement | null;
+                            return !!(cb && cb.checked);
+                        }
+                    } catch (_) {}
+                    return true;
+                })();
+
+                if (!shouldWarmWasm) return;
+                if (optimizerWasmWarmupPromise) return;
+
+                optimizerWasmWarmupPromise = import('../wasm/optimization/optimizer-wasm-bridge.ts')
+                    .then((mod: any) => {
+                        if (mod && typeof mod.preloadOptimizerWasmBridge === 'function') {
+                            return mod.preloadOptimizerWasmBridge();
+                        }
+                        return null;
+                    })
+                    .then(() => undefined)
+                    .catch(() => undefined);
+            };
+
+            try {
+                window.setTimeout(() => warmupOptimizerStartup(false), 0);
+            } catch (_) {}
 
             const refreshPreRunScore = async () => {
                 let score = NaN;
@@ -2665,8 +2704,56 @@ function setupOptimizeDesignIntentButton(): void {
                 } catch (_) {}
             };
 
+            const ensureRenderPopupAndDraw = () => {
+                try {
+                    const renderPopup = w.popup3DWindow;
+                    const hasOpenRenderPopup = !!(renderPopup && !renderPopup.closed);
+
+                    if (!hasOpenRenderPopup) {
+                        if (typeof w.handleRender3D === 'function') {
+                            w.handleRender3D();
+                        } else if (typeof w.__open3DWindowLegacy === 'function') {
+                            w.__open3DWindowLegacy();
+                        }
+                    }
+
+                    const drawNow = () => {
+                        try {
+                            const popup3D = w.popup3DWindow;
+                            if (popup3D && !popup3D.closed) {
+                                const drawBtn = popup3D.document?.getElementById('draw-btn');
+                                if (drawBtn) drawBtn.click();
+                            }
+                        } catch (_) {}
+                    };
+
+                    drawNow();
+                    window.setTimeout(drawNow, 120);
+                } catch (_) {}
+            };
+
             const updateProgressUI = (p: any) => {
                 const phaseStr = String(p?.phase ?? '');
+
+                if (!startupLatencyReported && runClickAtMs > 0) {
+                    if (phaseStr === 'start' || phaseStr === 'iter' || phaseStr === 'candidate' || phaseStr === 'accept' || phaseStr === 'reject') {
+                        startupLatencyReported = true;
+                        const startupMs = Math.max(0, Date.now() - runClickAtMs);
+                        const startupText = `startup=${startupMs}ms`;
+                        try {
+                            const currentIssue = String(lastIssueText || '').trim();
+                            if (!currentIssue || currentIssue === '-') {
+                                lastIssueText = startupText;
+                            } else if (!currentIssue.includes('startup=')) {
+                                lastIssueText = `${currentIssue} | ${startupText}`;
+                            }
+                        } catch (_) {}
+                        try {
+                            console.log(`⏱️ [Optimize] Run→first progress: ${startupMs} ms`);
+                        } catch (_) {}
+                    }
+                }
+
                 if (phaseStr === 'stopped' || phaseStr === 'done' || phaseStr === 'error') {
                     try { optimizeBtn.disabled = false; } catch (_) {}
                     isRunning = false;
@@ -2685,10 +2772,7 @@ function setupOptimizeDesignIntentButton(): void {
                         if (popup && !popup.closed) {
                             const autoRenderCheckbox = popup.document.getElementById('opt-auto-render') as HTMLInputElement | null;
                             if (autoRenderCheckbox && autoRenderCheckbox.checked) {
-                                if (w.popup3DWindow && !w.popup3DWindow.closed) {
-                                    const drawBtn = w.popup3DWindow.document.getElementById('draw-btn');
-                                    if (drawBtn) drawBtn.click();
-                                }
+                                ensureRenderPopupAndDraw();
                             }
                         }
                     } catch (_) {}
@@ -2863,6 +2947,8 @@ function setupOptimizeDesignIntentButton(): void {
             const startRun = async () => {
                 isRunning = true;
                 _gThis.__cooptOptimizerIsRunning = true;
+                runClickAtMs = Date.now();
+                startupLatencyReported = false;
 
                 try {
                     // Save state before optimization for undo
@@ -2928,9 +3014,13 @@ function setupOptimizeDesignIntentButton(): void {
                             const stopBtn = doc.getElementById('opt-stop') as HTMLButtonElement | null;
                             const runBtn = doc.getElementById('opt-run') as HTMLButtonElement | null;
                             const stopState = doc.getElementById('opt-stop-state');
+                            const phaseEl = doc.getElementById('opt-phase');
                             if (stopBtn) stopBtn.disabled = false;
                             if (runBtn) runBtn.disabled = true;
                             if (stopState) stopState.textContent = 'Running...';
+                            if (phaseEl && String(phaseEl.textContent || '').trim() === '-') {
+                                phaseEl.textContent = 'starting';
+                            }
                         }
                     } catch (_) {}
 
@@ -3006,6 +3096,10 @@ function setupOptimizeDesignIntentButton(): void {
 
                     const maxIterations = resolveMaxIterations();
                     const optParams = resolveOptParams();
+
+                    if (optParams.useWasmLinearSolve) {
+                        warmupOptimizerStartup(true);
+                    }
 
                     const resolveOptMethod = (): string => {
                         let method = 'kkt'; // default (AL)
@@ -3192,7 +3286,19 @@ function setupOptimizeDesignIntentButton(): void {
             } catch (_) {}
 
             try {
-                await refreshPreRunScore();
+                const runBackgroundPreRunRefresh = () => {
+                    if (isRunning) return;
+                    Promise.resolve()
+                        .then(() => refreshPreRunScore())
+                        .catch(() => {});
+                };
+
+                const g: any = (typeof globalThis !== 'undefined') ? globalThis : null;
+                if (g && typeof g.requestIdleCallback === 'function') {
+                    g.requestIdleCallback(() => runBackgroundPreRunRefresh(), { timeout: 1500 });
+                } else {
+                    window.setTimeout(() => runBackgroundPreRunRefresh(), 600);
+                }
             } catch (_) {}
 
         } catch (e) {
@@ -3423,7 +3529,7 @@ function setupSuggestOptimizeButtons(): void {
             </div>
             <div class="param-row">
                 <label class="param-label">
-                    <input type="checkbox" id="auto-render"> Auto-render on Accept
+                    <input type="checkbox" id="auto-render" checked> Auto-render on Accept
                 </label>
             </div>
         </div>
