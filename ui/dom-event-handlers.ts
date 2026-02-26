@@ -2614,6 +2614,7 @@ function setupOptimizeDesignIntentButton(): void {
             let optimizerWasmWarmupPromise: Promise<void> | null = null;
             let runClickAtMs = 0;
             let startupLatencyReported = false;
+            let finalAutoRenderRequested = false;
 
             const warmupOptimizerStartup = (forceWasm = false) => {
                 try {
@@ -2766,6 +2767,19 @@ function setupOptimizeDesignIntentButton(): void {
                 if (phaseStr === 'stopped' || phaseStr === 'done' || phaseStr === 'error') {
                     try { optimizeBtn.disabled = false; } catch (_) {}
                     isRunning = false;
+                }
+
+                if (phaseStr === 'done' && !finalAutoRenderRequested) {
+                    try {
+                        if (popup && !popup.closed) {
+                            const autoRenderCheckbox = popup.document.getElementById('opt-auto-render') as HTMLInputElement | null;
+                            if (autoRenderCheckbox && autoRenderCheckbox.checked) {
+                                finalAutoRenderRequested = true;
+                                window.setTimeout(() => ensureRenderPopupAndDraw(), 80);
+                                window.setTimeout(() => ensureRenderPopupAndDraw(), 260);
+                            }
+                        }
+                    } catch (_) {}
                 }
 
                 if (phaseStr === 'accept') {
@@ -2958,6 +2972,7 @@ function setupOptimizeDesignIntentButton(): void {
                 _gThis.__cooptOptimizerIsRunning = true;
                 runClickAtMs = Date.now();
                 startupLatencyReported = false;
+                finalAutoRenderRequested = false;
 
                 try {
                     // Save state before optimization for undo
