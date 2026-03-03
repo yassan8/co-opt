@@ -49,7 +49,7 @@ const isGoldenBaseFile = (name) => {
 
 const runNode = (scriptRel, args = []) => {
   const scriptAbs = path.resolve(projectRoot, scriptRel);
-  const r = spawnSync(process.execPath, [scriptAbs, ...args], {
+  const r = spawnSync(process.execPath, ['--import', 'tsx', scriptAbs, ...args], {
     cwd: projectRoot,
     stdio: 'inherit'
   });

@@ -52,7 +52,7 @@ const analyzeArgs = [
   ...forwardIfPresent('min-wasm-feasible-rate')
 ];
 
-await runCommand('node', ['diagnostics/kkt-e2e-benchmark.mjs', ...benchmarkArgs]);
-await runCommand('node', ['diagnostics/kkt-e2e-analyze.mjs', ...analyzeArgs]);
+await runCommand(process.execPath, ['--import', 'tsx', 'diagnostics/kkt-e2e-benchmark.mjs', ...benchmarkArgs]);
+await runCommand(process.execPath, ['--import', 'tsx', 'diagnostics/kkt-e2e-analyze.mjs', ...analyzeArgs]);
 
 console.log('✅ KKT E2E auto pipeline complete');
