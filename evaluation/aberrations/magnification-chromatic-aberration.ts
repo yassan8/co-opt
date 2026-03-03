@@ -28,28 +28,216 @@ function findImageSurfaceIndex(opticalSystemRows) {
     return opticalSystemRows.length - 1;
 }
 
-function traceChiefRayImageHeight(opticalSystemRows, fieldSetting, wavelength, imageSurfaceInfo, mirrorSign) {
-    try {
-        const chief = calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelength, 'unified', { rayCount: 11 });
-        if (!chief?.success || !chief?.ray?.path?.length) return null;
+function normalizeRowTag(value) {
+    return (value ?? '').toString().trim().toLowerCase();
+}
 
-        const lastPointGlobal = chief.ray.path[chief.ray.path.length - 1];
-        let lastPoint = lastPointGlobal;
+function compactRowTag(value) {
+    return normalizeRowTag(value).replace(/[^a-z0-9]/g, '');
+}
+
+function isObjectRow(row) {
+    if (!row) return false;
+    const surfType = normalizeRowTag(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surface_type ?? '');
+    const surfTypeCompact = compactRowTag(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surface_type ?? '');
+    const blockType = normalizeRowTag(row?._blockType ?? row?.blockType ?? '');
+    const blockTypeCompact = compactRowTag(row?._blockType ?? row?.blockType ?? '');
+    const kind = normalizeRowTag(row?.kind ?? '');
+    return (
+        surfType === 'object' || surfTypeCompact === 'object' ||
+        blockType === 'object' || blockTypeCompact === 'object' ||
+        kind === 'object'
+    );
+}
+
+function isCoordTransRow(row) {
+    if (!row) return false;
+    const surfType = normalizeRowTag(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surface_type ?? '');
+    const surfTypeCompact = compactRowTag(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surface_type ?? '');
+    const blockType = normalizeRowTag(row?._blockType ?? row?.blockType ?? '');
+    const blockTypeCompact = compactRowTag(row?._blockType ?? row?.blockType ?? '');
+    return (
+        surfType === 'coordtrans' || surfType === 'coordinate break' || surfType === 'coordinatebreak' ||
+        surfTypeCompact === 'coordtrans' || surfTypeCompact === 'coordinatebreak' ||
+        blockType === 'coordtrans' || blockType === 'coordinate break' || blockType === 'coordinatebreak' ||
+        blockTypeCompact === 'coordtrans' || blockTypeCompact === 'coordinatebreak'
+    );
+}
+
+function isGapRow(row) {
+    if (!row) return false;
+    const surfType = normalizeRowTag(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surface_type ?? '');
+    const surfTypeCompact = compactRowTag(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surface_type ?? '');
+    const blockType = normalizeRowTag(row?._blockType ?? row?.blockType ?? '');
+    const blockTypeCompact = compactRowTag(row?._blockType ?? row?.blockType ?? '');
+    const kind = normalizeRowTag(row?.kind ?? '');
+    const kindCompact = compactRowTag(row?.kind ?? '');
+    return (
+        surfType === 'gap' || surfType === 'air gap' || surfTypeCompact === 'gap' || surfTypeCompact === 'airgap' ||
+        blockType === 'gap' || blockType === 'air gap' || blockTypeCompact === 'gap' || blockTypeCompact === 'airgap' ||
+        kind === 'gap' || kind === 'air gap' || kindCompact === 'gap' || kindCompact === 'airgap'
+    );
+}
+
+function surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex) {
+    if (!Array.isArray(opticalSystemRows) || surfaceIndex === null || surfaceIndex === undefined) return null;
+    const sIdx = Math.max(0, Math.min(surfaceIndex, opticalSystemRows.length - 1));
+    let count = 0;
+    for (let i = 0; i <= sIdx; i++) {
+        const row = opticalSystemRows[i];
+        if (isCoordTransRow(row)) continue;
+        if (isObjectRow(row)) continue;
+        if (isGapRow(row)) continue;
+        count++;
+    }
+    return count > 0 ? count : null;
+}
+
+function traceChiefRayImageHeight(opticalSystemRows, fieldSetting, wavelength, imageSurfaceInfo, imageSurfaceIndex, mirrorSign) {
+    try {
+        const chief = calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelength, 'unified', {
+            rayCount: 101,
+            chiefRayDefinition: 'stop-center',
+            targetSurfaceIndex: imageSurfaceIndex
+        });
+        const rayPath = chief?.ray?.rayPathToTarget || chief?.ray?.path;
+        if (!chief?.success || !Array.isArray(rayPath) || rayPath.length === 0) return null;
+
+        const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, imageSurfaceIndex);
+        if (!(targetPointIndex !== null && targetPointIndex >= 0 && targetPointIndex < rayPath.length)) {
+            return null;
+        }
+        const pointIndex = targetPointIndex;
+
+        const pointGlobal = rayPath[pointIndex];
+        if (!pointGlobal || !Number.isFinite(pointGlobal.x) || !Number.isFinite(pointGlobal.y) || !Number.isFinite(pointGlobal.z)) {
+            return null;
+        }
+
+        let pointLocal = pointGlobal;
         if (imageSurfaceInfo?.rotationMatrix) {
             const origin = imageSurfaceInfo.origin || { x: 0, y: 0, z: 0 };
             const relative = {
-                x: lastPointGlobal.x - origin.x,
-                y: lastPointGlobal.y - origin.y,
-                z: lastPointGlobal.z - origin.z
+                x: pointGlobal.x - origin.x,
+                y: pointGlobal.y - origin.y,
+                z: pointGlobal.z - origin.z
             };
-            lastPoint = applyRotationMatrixToVector(imageSurfaceInfo.rotationMatrix, relative);
+            pointLocal = applyRotationMatrixToVector(imageSurfaceInfo.rotationMatrix, relative);
         }
 
-        return lastPoint.y * mirrorSign;
+        return pointLocal.y * mirrorSign;
     } catch (error) {
         console.warn('⚠️ Failed to trace chief ray for lateral color:', error);
         return null;
     }
+}
+
+function buildNaturalCubicSpline(xs, ys) {
+    const n = xs.length;
+    if (n < 2) return null;
+
+    const h = new Array(n - 1);
+    for (let i = 0; i < n - 1; i++) {
+        h[i] = xs[i + 1] - xs[i];
+        if (!(h[i] > 0)) return null;
+    }
+
+    const alpha = new Array(n).fill(0);
+    for (let i = 1; i < n - 1; i++) {
+        alpha[i] = (3 / h[i]) * (ys[i + 1] - ys[i]) - (3 / h[i - 1]) * (ys[i] - ys[i - 1]);
+    }
+
+    const l = new Array(n).fill(0);
+    const mu = new Array(n).fill(0);
+    const z = new Array(n).fill(0);
+    const c = new Array(n).fill(0);
+    const b = new Array(n - 1).fill(0);
+    const d = new Array(n - 1).fill(0);
+
+    l[0] = 1;
+    for (let i = 1; i < n - 1; i++) {
+        l[i] = 2 * (xs[i + 1] - xs[i - 1]) - h[i - 1] * mu[i - 1];
+        if (Math.abs(l[i]) < 1e-15) return null;
+        mu[i] = h[i] / l[i];
+        z[i] = (alpha[i] - h[i - 1] * z[i - 1]) / l[i];
+    }
+    l[n - 1] = 1;
+
+    for (let j = n - 2; j >= 0; j--) {
+        c[j] = z[j] - mu[j] * c[j + 1];
+        b[j] = (ys[j + 1] - ys[j]) / h[j] - (h[j] * (c[j + 1] + 2 * c[j])) / 3;
+        d[j] = (c[j + 1] - c[j]) / (3 * h[j]);
+    }
+
+    const evaluate = (xq) => {
+        if (!Number.isFinite(xq)) return null;
+        if (xq < xs[0] || xq > xs[n - 1]) return null;
+
+        let i = n - 2;
+        for (let k = 0; k < n - 1; k++) {
+            if (xq >= xs[k] && xq <= xs[k + 1]) {
+                i = k;
+                break;
+            }
+        }
+
+        const dx = xq - xs[i];
+        return ys[i] + b[i] * dx + c[i] * dx * dx + d[i] * dx * dx * dx;
+    };
+
+    return { evaluate };
+}
+
+function fillMissingWithSpline(fieldValues, displacements) {
+    const y = Array.isArray(fieldValues) ? fieldValues : [];
+    const x = Array.isArray(displacements) ? displacements.slice() : [];
+    if (y.length === 0 || x.length !== y.length) return x;
+
+    const knownIndices = [];
+    for (let i = 0; i < x.length; i++) {
+        if (Number.isFinite(Number(x[i])) && Number.isFinite(Number(y[i]))) knownIndices.push(i);
+    }
+    if (knownIndices.length < 2) return x;
+
+    const firstKnown = knownIndices[0];
+    const lastKnown = knownIndices[knownIndices.length - 1];
+
+    const xs = [];
+    const ys = [];
+    let lastXVal = null;
+    for (const idx of knownIndices) {
+        const xv = Number(y[idx]);
+        const yv = Number(x[idx]);
+        if (!Number.isFinite(xv) || !Number.isFinite(yv)) continue;
+        if (lastXVal !== null && Math.abs(xv - lastXVal) < 1e-12) continue;
+        xs.push(xv);
+        ys.push(yv);
+        lastXVal = xv;
+    }
+
+    if (xs.length < 2) return x;
+
+    let evalAt = null;
+    if (xs.length === 2) {
+        const dx = xs[1] - xs[0];
+        if (!(Math.abs(dx) > 1e-15)) return x;
+        const m = (ys[1] - ys[0]) / dx;
+        evalAt = (xq) => ys[0] + m * (xq - xs[0]);
+    } else {
+        const spline = buildNaturalCubicSpline(xs, ys);
+        if (!spline) return x;
+        evalAt = spline.evaluate;
+    }
+
+    for (let i = firstKnown; i <= lastKnown; i++) {
+        if (Number.isFinite(Number(x[i]))) continue;
+        const yi = Number(y[i]);
+        if (!Number.isFinite(yi)) continue;
+        const interpolated = evalAt(yi);
+        if (Number.isFinite(interpolated)) x[i] = interpolated;
+    }
+
+    return x;
 }
 
 export async function calculateMagnificationChromaticAberrationData(
@@ -115,6 +303,7 @@ export async function calculateMagnificationChromaticAberrationData(
             fieldSetting,
             referenceWavelength,
             imageSurfaceInfo,
+            imageSurfaceIndex,
             mirrorSign
         );
         referenceHeights.push(height);
@@ -142,6 +331,7 @@ export async function calculateMagnificationChromaticAberrationData(
                 fieldSetting,
                 wavelength,
                 imageSurfaceInfo,
+                imageSurfaceIndex,
                 mirrorSign
             );
             const refHeight = referenceHeights[i];
@@ -164,11 +354,16 @@ export async function calculateMagnificationChromaticAberrationData(
         await maybeYield();
     }
 
+    const interpolatedDataByWavelength = dataByWavelength.map((entry) => ({
+        ...entry,
+        displacements: fillMissingWithSpline(sortedFieldValues, entry?.displacements)
+    }));
+
     return {
         fieldValues: sortedFieldValues,
         heightMode,
         referenceWavelength,
         imageSurfaceIndex,
-        dataByWavelength
+        dataByWavelength: interpolatedDataByWavelength
     };
 }

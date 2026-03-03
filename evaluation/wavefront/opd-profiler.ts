@@ -6,7 +6,7 @@
 
 import { enableRayTracingProfiler, getRayTracingProfile } from '../../raytracing/core/ray-tracing.ts';
 import { OpticalPathDifferenceCalculator } from './wavefront.ts';
-import { preloadRustRayTracingWasm } from '../../wasm/raytracing/rust-raytracing-wasm.ts';
+import { preloadRustRayTracingWasm } from '../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 import { getOpticalSystemRows } from '../../utils/data-utils.ts';
 
 function now() {

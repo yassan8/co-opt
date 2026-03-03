@@ -1,5 +1,6 @@
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
+use js_sys::{Float64Array, Function};
 
 const EPS_R: f64 = 1e-10;
 
@@ -363,7 +364,6 @@ fn intersect_aspheric_internal(
 
     let (semidia_raw, radius, conic, coefs) = parse_params(params);
     let semidia = if semidia_raw.is_finite() && semidia_raw > 0.0 { semidia_raw } else { f64::INFINITY };
-
     let mut guesses: Vec<f64> = Vec::new();
     if radius.is_finite() && radius != 0.0 {
         let cz = radius;
@@ -1118,6 +1118,568 @@ pub fn trace_ray_batch_with_system_json(
     .map_err(|err| JsValue::from_str(&format!("serialize error: {}", err)))
 }
 
+#[wasm_bindgen]
+pub fn trace_single_ray_hit_point_with_meta(
+    ray: &[f64],
+    target_surface_index: usize,
+    n_start: f64,
+    row_meta: &[i32],
+    row_params: &[f64],
+    row_origins: &[f64],
+    row_inv_rots: &[f64],
+    row_rots: &[f64],
+    row_count: usize,
+) -> Vec<f64> {
+    trace_single_ray_hit_point_with_meta_core(
+        ray,
+        target_surface_index,
+        n_start,
+        row_meta,
+        row_params,
+        row_origins,
+        row_inv_rots,
+        row_rots,
+        row_count,
+    )
+    .to_vec()
+}
+
+fn trace_single_ray_hit_point_with_meta_core(
+    ray: &[f64],
+    target_surface_index: usize,
+    n_start: f64,
+    row_meta: &[i32],
+    row_params: &[f64],
+    row_origins: &[f64],
+    row_inv_rots: &[f64],
+    row_rots: &[f64],
+    row_count: usize,
+) -> [f64; 5] {
+    let mut out = [0.0_f64; 5]; // [status, opl, x, y, z]
+    if ray.len() < 6 || row_count == 0 || target_surface_index >= row_count {
+        out[0] = 2.0; // invalid input
+        return out;
+    }
+    if row_meta.len() < row_count * 4
+        || row_params.len() < row_count * 24
+        || row_origins.len() < row_count * 3
+        || row_inv_rots.len() < row_count * 9
+        || row_rots.len() < row_count * 9
+    {
+        out[0] = 2.0;
+        return out;
+    }
+
+    let mut px = ray[0];
+    let mut py = ray[1];
+    let mut pz = ray[2];
+    let mut dx = ray[3];
+    let mut dy = ray[4];
+    let mut dz = ray[5];
+    if !px.is_finite() || !py.is_finite() || !pz.is_finite() || !dx.is_finite() || !dy.is_finite() || !dz.is_finite() {
+        out[0] = 2.0;
+        return out;
+    }
+
+    let dn = normalize3(dx, dy, dz);
+    dx = dn[0];
+    dy = dn[1];
+    dz = dn[2];
+
+    let mut n_cur = if n_start.is_finite() && n_start > 0.0 { n_start } else { 1.0 };
+    let mut opl = 0.0_f64;
+
+    for i in 0..=target_surface_index {
+        let m = i * 4;
+        let kind = row_meta[m + 0];
+        let flags = row_meta[m + 1];
+        let is_mirror = (flags & 1) != 0;
+        let is_plane = (flags & 2) != 0;
+        let is_toric = (flags & 4) != 0;
+        let is_rect_ap = (flags & 16) != 0;
+        let is_odd_asphere = (flags & 32) != 0;
+
+        let p = i * 24;
+        let radius = row_params[p + 0];
+        let conic = row_params[p + 1];
+        let coefs = [
+            row_params[p + 2], row_params[p + 3], row_params[p + 4], row_params[p + 5], row_params[p + 6],
+            row_params[p + 7], row_params[p + 8], row_params[p + 9], row_params[p + 10], row_params[p + 11],
+        ];
+        let semidia = row_params[p + 12];
+        let thickness = row_params[p + 16];
+        let aperture_limit = row_params[p + 17];
+        let rect_half_w = row_params[p + 18];
+        let rect_half_h = row_params[p + 19];
+        let n2 = row_params[p + 20];
+
+        // Object / Gap rows: no physical intersection but may advance by thickness.
+        if kind == 1 || kind == 2 {
+            if thickness.is_finite() && thickness != 0.0 {
+                px += dx * thickness;
+                py += dy * thickness;
+                pz += dz * thickness;
+                opl += thickness.abs() * 1000.0 * n_cur;
+            }
+            continue;
+        }
+
+        // CoordTrans row: medium update only (no physical advancement).
+        if kind == 3 {
+            if n2.is_finite() && n2 > 0.0 {
+                n_cur = n2;
+            }
+            continue;
+        }
+
+        let o = i * 3;
+        let ox = row_origins[o + 0];
+        let oy = row_origins[o + 1];
+        let oz = row_origins[o + 2];
+
+        let ir = i * 9;
+        let im00 = row_inv_rots[ir + 0];
+        let im01 = row_inv_rots[ir + 1];
+        let im02 = row_inv_rots[ir + 2];
+        let im10 = row_inv_rots[ir + 3];
+        let im11 = row_inv_rots[ir + 4];
+        let im12 = row_inv_rots[ir + 5];
+        let im20 = row_inv_rots[ir + 6];
+        let im21 = row_inv_rots[ir + 7];
+        let im22 = row_inv_rots[ir + 8];
+
+        let relx = px - ox;
+        let rely = py - oy;
+        let relz = pz - oz;
+
+        let lpx = im00 * relx + im01 * rely + im02 * relz;
+        let lpy = im10 * relx + im11 * rely + im12 * relz;
+        let lpz = im20 * relx + im21 * rely + im22 * relz;
+
+        let ldx = im00 * dx + im01 * dy + im02 * dz;
+        let ldy = im10 * dx + im11 * dy + im12 * dz;
+        let ldz = im20 * dx + im21 * dy + im22 * dz;
+
+        let t = if is_toric {
+            f64::NAN
+        } else if is_plane {
+            if ldz.abs() < EPS_R { f64::NAN } else { -lpz / ldz }
+        } else {
+            let mut ip = vec![0.0_f64; 13];
+            ip[0] = semidia;
+            ip[1] = radius;
+            ip[2] = conic;
+            for k in 0..10 {
+                ip[3 + k] = coefs[k];
+            }
+            intersect_aspheric_internal(&[lpx, lpy, lpz, ldx, ldy, ldz], &ip, is_odd_asphere, 20, 1e-7)
+        };
+
+        if !t.is_finite() {
+            out[0] = 3.0; // no intersection
+            out[1] = opl;
+            return out;
+        }
+
+        let hx = lpx + ldx * t;
+        let hy = lpy + ldy * t;
+        let hz = lpz + ldz * t;
+
+        // JS lockstep semantics: OPL includes traveled segment up to this intersection
+        // even when this surface subsequently rejects by aperture.
+        opl += t.abs() * 1000.0 * n_cur;
+
+        // Aperture checks
+        if is_rect_ap && rect_half_w.is_finite() && rect_half_h.is_finite() {
+            if hx.abs() > rect_half_w || hy.abs() > rect_half_h {
+                out[0] = 4.0; // aperture block
+                out[1] = opl;
+                return out;
+            }
+        } else if aperture_limit.is_finite() {
+            let hr = (hx * hx + hy * hy).sqrt();
+            if hr > aperture_limit {
+                out[0] = 4.0;
+                out[1] = opl;
+                return out;
+            }
+        }
+
+        // Transform hit to global
+        let rr = i * 9;
+        let rm00 = row_rots[rr + 0];
+        let rm01 = row_rots[rr + 1];
+        let rm02 = row_rots[rr + 2];
+        let rm10 = row_rots[rr + 3];
+        let rm11 = row_rots[rr + 4];
+        let rm12 = row_rots[rr + 5];
+        let rm20 = row_rots[rr + 6];
+        let rm21 = row_rots[rr + 7];
+        let rm22 = row_rots[rr + 8];
+
+        let ghx = rm00 * hx + rm01 * hy + rm02 * hz + ox;
+        let ghy = rm10 * hx + rm11 * hy + rm12 * hz + oy;
+        let ghz = rm20 * hx + rm21 * hy + rm22 * hz + oz;
+
+        if i == target_surface_index {
+            out[0] = 1.0;
+            out[1] = opl;
+            out[2] = ghx;
+            out[3] = ghy;
+            out[4] = ghz;
+            return out;
+        }
+
+        // Compute local normal
+        let (mut nx, mut ny, mut nz) = if is_plane {
+            if ldz > 0.0 { (0.0, 0.0, -1.0) } else { (0.0, 0.0, 1.0) }
+        } else {
+            let mut np = vec![0.0_f64; 13];
+            np[0] = semidia;
+            np[1] = radius;
+            np[2] = conic;
+            for k in 0..10 {
+                np[3 + k] = coefs[k];
+            }
+            let nvec = surface_normal_aspheric_rt10(&[hx, hy, hz], &np, 0);
+            if nvec.len() >= 3 { (nvec[0], nvec[1], nvec[2]) } else { (0.0, 0.0, 1.0) }
+        };
+
+        let d_dot_n = ldx * nx + ldy * ny + ldz * nz;
+        if d_dot_n > 0.0 {
+            nx = -nx;
+            ny = -ny;
+            nz = -nz;
+        }
+
+        let (ndx, ndy, ndz, n_next) = if is_mirror {
+            let dotn = ldx * nx + ldy * ny + ldz * nz;
+            let rx = ldx - 2.0 * dotn * nx;
+            let ry = ldy - 2.0 * dotn * ny;
+            let rz = ldz - 2.0 * dotn * nz;
+            let nn = normalize3(rx, ry, rz);
+            (nn[0], nn[1], nn[2], n_cur)
+        } else if n2.is_finite() && n2 > 0.0 && (n_cur - n2).abs() > EPS_R {
+            let cos_i = -(nx * ldx + ny * ldy + nz * ldz);
+            let eta = n_cur / n2;
+            let k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+            if k < 0.0 {
+                out[0] = 5.0; // TIR
+                out[1] = opl;
+                return out;
+            }
+            let sqrt_k = k.sqrt();
+            let rx = eta * ldx + (eta * cos_i - sqrt_k) * nx;
+            let ry = eta * ldy + (eta * cos_i - sqrt_k) * ny;
+            let rz = eta * ldz + (eta * cos_i - sqrt_k) * nz;
+            let nn = normalize3(rx, ry, rz);
+            (nn[0], nn[1], nn[2], n2)
+        } else {
+            (ldx, ldy, ldz, n_cur)
+        };
+
+        // Transform direction back to global
+        let gdx = rm00 * ndx + rm01 * ndy + rm02 * ndz;
+        let gdy = rm10 * ndx + rm11 * ndy + rm12 * ndz;
+        let gdz = rm20 * ndx + rm21 * ndy + rm22 * ndz;
+        let gnorm = normalize3(gdx, gdy, gdz);
+
+        px = ghx;
+        py = ghy;
+        pz = ghz;
+        dx = gnorm[0];
+        dy = gnorm[1];
+        dz = gnorm[2];
+        n_cur = n_next;
+
+        if thickness.is_finite() && thickness != 0.0 {
+            px += dx * thickness;
+            py += dy * thickness;
+            pz += dz * thickness;
+            opl += thickness.abs() * 1000.0 * n_cur;
+        }
+    }
+
+    out[0] = 6.0; // not reached
+    out[1] = opl;
+    out
+}
+
+#[wasm_bindgen]
+pub fn trace_ray_batch_hit_point_with_meta(
+    rays: &[f64],
+    ray_count: usize,
+    target_surface_index: usize,
+    n_start: f64,
+    row_meta: &[i32],
+    row_params: &[f64],
+    row_origins: &[f64],
+    row_inv_rots: &[f64],
+    row_rots: &[f64],
+    row_count: usize,
+) -> Vec<f64> {
+    let mut out = vec![0.0_f64; ray_count.saturating_mul(6)]; // [status, opl, x, y, z, reserved] * ray_count
+    if ray_count == 0 {
+        return out;
+    }
+
+    let has_global_invalid = row_count == 0
+        || target_surface_index >= row_count
+        || row_meta.len() < row_count * 4
+        || row_params.len() < row_count * 24
+        || row_origins.len() < row_count * 3
+        || row_inv_rots.len() < row_count * 9
+        || row_rots.len() < row_count * 9
+        || rays.len() < ray_count * 6;
+
+    if has_global_invalid {
+        for i in 0..ray_count {
+            out[i * 6] = 2.0;
+        }
+        return out;
+    }
+
+    for i in 0..ray_count {
+        let rbase = i * 6;
+        let ray = &rays[rbase..(rbase + 6)];
+        let r = trace_single_ray_hit_point_with_meta_core(
+            ray,
+            target_surface_index,
+            n_start,
+            row_meta,
+            row_params,
+            row_origins,
+            row_inv_rots,
+            row_rots,
+            row_count,
+        );
+        let obase = i * 6;
+        out[obase] = r[0];
+        out[obase + 1] = r[1];
+        out[obase + 2] = r[2];
+        out[obase + 3] = r[3];
+        out[obase + 4] = r[4];
+        out[obase + 5] = 0.0;
+    }
+
+    out
+}
+
+#[wasm_bindgen]
+pub fn solve_ray_origins_to_stop_points_with_meta_batch(
+    initial_origins: &[f64],
+    dirs: &[f64],
+    stop_targets: &[f64],
+    ray_count: usize,
+    stop_surface_index: usize,
+    wavelength_um: f64,
+    n_start: f64,
+    row_meta: &[i32],
+    row_params: &[f64],
+    row_origins: &[f64],
+    row_inv_rots: &[f64],
+    row_rots: &[f64],
+    row_count: usize,
+    max_iter: usize,
+    tol_mm: f64,
+    eps: f64,
+    max_step: f64,
+) -> Vec<f64> {
+    let mut out = vec![0.0_f64; ray_count.saturating_mul(4)]; // [x, y, z, status]
+    if ray_count == 0 {
+        return out;
+    }
+
+    let invalid = stop_surface_index >= row_count
+        || initial_origins.len() < ray_count * 3
+        || dirs.len() < ray_count * 3
+        || stop_targets.len() < ray_count * 3
+        || row_count == 0
+        || row_meta.len() < row_count * 4
+        || row_params.len() < row_count * 24
+        || row_origins.len() < row_count * 3
+        || row_inv_rots.len() < row_count * 9
+        || row_rots.len() < row_count * 9;
+
+    if invalid {
+        for i in 0..ray_count {
+            out[i * 4 + 3] = 2.0; // invalid input
+        }
+        return out;
+    }
+
+    let mut origins = vec![0.0_f64; ray_count * 3];
+    let mut dirs_n = vec![0.0_f64; ray_count * 3];
+    let mut targets = vec![0.0_f64; ray_count * 3];
+    let mut best_origins = vec![0.0_f64; ray_count * 3];
+    let mut best_errs = vec![f64::INFINITY; ray_count];
+    let mut solved = vec![false; ray_count];
+
+    for i in 0..ray_count {
+        let b = i * 3;
+        origins[b] = initial_origins[b];
+        origins[b + 1] = initial_origins[b + 1];
+        origins[b + 2] = initial_origins[b + 2];
+
+        let dn = normalize3(dirs[b], dirs[b + 1], dirs[b + 2]);
+        dirs_n[b] = dn[0];
+        dirs_n[b + 1] = dn[1];
+        dirs_n[b + 2] = dn[2];
+
+        targets[b] = stop_targets[b];
+        targets[b + 1] = stop_targets[b + 1];
+        targets[b + 2] = stop_targets[b + 2];
+
+        best_origins[b] = origins[b];
+        best_origins[b + 1] = origins[b + 1];
+        best_origins[b + 2] = origins[b + 2];
+    }
+
+    let iter_max = max_iter.clamp(1, 64);
+    let eps_local = if eps.is_finite() && eps > 0.0 { eps } else { 1e-3 };
+    let tol_local = if tol_mm.is_finite() && tol_mm > 0.0 { tol_mm } else { 1e-3 };
+    let max_step_local = if max_step.is_finite() && max_step > 0.0 { max_step } else { 10.0 };
+
+    for _iter in 0..iter_max {
+        if solved.iter().all(|v| *v) {
+            break;
+        }
+
+        for i in 0..ray_count {
+            if solved[i] {
+                continue;
+            }
+            let b = i * 3;
+
+            let ox = origins[b];
+            let oy = origins[b + 1];
+            let oz = origins[b + 2];
+            let dx = dirs_n[b];
+            let dy = dirs_n[b + 1];
+            let dz = dirs_n[b + 2];
+            let tx = targets[b];
+            let ty = targets[b + 1];
+
+            let ray0 = [ox, oy, oz, dx, dy, dz];
+            let r0 = trace_single_ray_hit_point_with_meta_core(
+                &ray0,
+                stop_surface_index,
+                n_start,
+                row_meta,
+                row_params,
+                row_origins,
+                row_inv_rots,
+                row_rots,
+                row_count,
+            );
+
+            if r0[0] == 1.0 && r0[2].is_finite() && r0[3].is_finite() {
+                let ex = r0[2] - tx;
+                let ey = r0[3] - ty;
+                let err = (ex * ex + ey * ey).sqrt();
+
+                if err < best_errs[i] {
+                    best_errs[i] = err;
+                    best_origins[b] = ox;
+                    best_origins[b + 1] = oy;
+                    best_origins[b + 2] = oz;
+                }
+
+                if err < tol_local {
+                    solved[i] = true;
+                    continue;
+                }
+
+                let ray_x = [ox + eps_local, oy, oz, dx, dy, dz];
+                let ray_y = [ox, oy + eps_local, oz, dx, dy, dz];
+
+                let rx = trace_single_ray_hit_point_with_meta_core(
+                    &ray_x,
+                    stop_surface_index,
+                    n_start,
+                    row_meta,
+                    row_params,
+                    row_origins,
+                    row_inv_rots,
+                    row_rots,
+                    row_count,
+                );
+                let ry = trace_single_ray_hit_point_with_meta_core(
+                    &ray_y,
+                    stop_surface_index,
+                    n_start,
+                    row_meta,
+                    row_params,
+                    row_origins,
+                    row_inv_rots,
+                    row_rots,
+                    row_count,
+                );
+
+                if rx[0] == 1.0 && ry[0] == 1.0 && rx[2].is_finite() && rx[3].is_finite() && ry[2].is_finite() && ry[3].is_finite() {
+                    let j11 = (rx[2] - r0[2]) / eps_local;
+                    let j21 = (rx[3] - r0[3]) / eps_local;
+                    let j12 = (ry[2] - r0[2]) / eps_local;
+                    let j22 = (ry[3] - r0[3]) / eps_local;
+                    let det = j11 * j22 - j12 * j21;
+
+                    if det.is_finite() && det.abs() >= 1e-14 {
+                        let mut sx = (-j22 * ex + j12 * ey) / det;
+                        let mut sy = (j21 * ex - j11 * ey) / det;
+                        let sn = (sx * sx + sy * sy).sqrt();
+                        if sn > max_step_local {
+                            let s = max_step_local / sn;
+                            sx *= s;
+                            sy *= s;
+                        }
+                        origins[b] = ox + sx;
+                        origins[b + 1] = oy + sy;
+                        origins[b + 2] = oz;
+                    } else {
+                        origins[b] = ox - 0.2 * ex;
+                        origins[b + 1] = oy - 0.2 * ey;
+                        origins[b + 2] = oz;
+                    }
+                } else {
+                    let mut sx = -0.3 * ex;
+                    let mut sy = -0.3 * ey;
+                    let sn = (sx * sx + sy * sy).sqrt();
+                    if sn > max_step_local {
+                        let s = max_step_local / sn;
+                        sx *= s;
+                        sy *= s;
+                    }
+                    origins[b] = ox + sx;
+                    origins[b + 1] = oy + sy;
+                    origins[b + 2] = oz;
+                }
+            } else {
+                origins[b] = 0.5 * (ox + best_origins[b]);
+                origins[b + 1] = 0.5 * (oy + best_origins[b + 1]);
+                origins[b + 2] = oz;
+            }
+        }
+    }
+
+    for i in 0..ray_count {
+        let b = i * 3;
+        let o = i * 4;
+        if best_errs[i].is_finite() {
+            out[o] = best_origins[b];
+            out[o + 1] = best_origins[b + 1];
+            out[o + 2] = best_origins[b + 2];
+            out[o + 3] = if solved[i] { 1.0 } else { 0.0 };
+        } else {
+            out[o] = origins[b];
+            out[o + 1] = origins[b + 1];
+            out[o + 2] = origins[b + 2];
+            out[o + 3] = 3.0;
+        }
+    }
+
+    out
+}
+
 /**
  * High-performance 2D FFT for PSF calculation
  * Input: real[rows*cols], imag[rows*cols] (WASM memory pointers)
@@ -1141,7 +1703,7 @@ pub fn fft_2d_forward(
     let cols = cols as usize;
     let size = rows * cols;
     
-    let start = std::time::Instant::now();
+    let start_ms = js_sys::Date::now();
     
     // Read input from WASM memory
     let real_data: Vec<f64> = (0..size)
@@ -1199,7 +1761,7 @@ pub fn fft_2d_forward(
     }
     data = transposed;
     
-    let elapsed = start.elapsed();
+    let elapsed_ms = (js_sys::Date::now() - start_ms).max(0.0);
     
     // Write output to WASM memory
     unsafe {
@@ -1217,7 +1779,7 @@ pub fn fft_2d_forward(
         "status": "fft_complete",
         "rows": rows,
         "cols": cols,
-        "timeMs": elapsed.as_secs_f64() * 1000.0,
+        "timeMs": elapsed_ms,
         "method": "rustfft"
     }))
     .map_err(|err| JsValue::from_str(&format!("serialize error: {}", err)))
@@ -1244,7 +1806,7 @@ pub fn fft_2d_inverse(
     let size = rows * cols;
     let norm = 1.0 / (size as f64);
     
-    let start = std::time::Instant::now();
+    let start_ms = js_sys::Date::now();
     
     // Read input from WASM memory
     let real_data: Vec<f64> = (0..size)
@@ -1302,7 +1864,7 @@ pub fn fft_2d_inverse(
     }
     data = transposed;
     
-    let elapsed = start.elapsed();
+    let elapsed_ms = (js_sys::Date::now() - start_ms).max(0.0);
     
     // Write output to WASM memory (conjugate back)
     unsafe {
@@ -1320,7 +1882,7 @@ pub fn fft_2d_inverse(
         "status": "ifft_complete",
         "rows": rows,
         "cols": cols,
-        "timeMs": elapsed.as_secs_f64() * 1000.0,
+        "timeMs": elapsed_ms,
         "method": "rustfft"
     }))
     .map_err(|err| JsValue::from_str(&format!("serialize error: {}", err)))
@@ -1509,4 +2071,925 @@ pub fn build_normal_equations(j_flat: &[f64], m: usize, n: usize, r: &[f64]) -> 
     }
 
     out
+}
+
+#[wasm_bindgen]
+pub fn generate_fd_perturbation_points(x: &[f64], steps: &[f64], n: usize) -> Vec<f64> {
+    if n == 0 {
+        return vec![];
+    }
+    if x.len() != n || steps.len() != n {
+        return vec![f64::NAN; n * n];
+    }
+
+    let mut out = vec![0.0_f64; n * n];
+    for col in 0..n {
+        let step = steps[col];
+        if !step.is_finite() {
+            return vec![f64::NAN; n * n];
+        }
+
+        let row_start = col * n;
+        let row_end = row_start + n;
+        out[row_start..row_end].copy_from_slice(x);
+
+        let base = out[row_start + col];
+        let perturbed = base + step;
+        if !perturbed.is_finite() {
+            return vec![f64::NAN; n * n];
+        }
+        out[row_start + col] = perturbed;
+    }
+
+    out
+}
+
+#[wasm_bindgen]
+pub fn assemble_fd_jacobian(
+    r0: &[f64],
+    r_batches: &[f64],
+    m: usize,
+    n: usize,
+    steps: &[f64],
+) -> Vec<f64> {
+    if m == 0 || n == 0 {
+        return vec![];
+    }
+    if r0.len() != m || r_batches.len() != m * n || steps.len() != n {
+        return vec![f64::NAN; m * n];
+    }
+
+    let mut jac = vec![0.0_f64; m * n];
+
+    for col in 0..n {
+        let h = steps[col];
+        if !h.is_finite() || h.abs() < 1e-30 {
+            for row in 0..m {
+                jac[row * n + col] = 0.0;
+            }
+            continue;
+        }
+
+        let base = col * m;
+        for row in 0..m {
+            let r1 = r_batches[base + row];
+            let r_base = r0[row];
+            let deriv = (r1 - r_base) / h;
+            jac[row * n + col] = if deriv.is_finite() {
+                deriv.max(-1e12).min(1e12)
+            } else {
+                0.0
+            };
+        }
+    }
+
+    jac
+}
+
+#[wasm_bindgen]
+pub fn optimize_system_in_wasm(payload_json: String) -> Result<String, JsValue> {
+    let payload: Value = serde_json::from_str(&payload_json)
+        .map_err(|e| JsValue::from_str(&format!("Invalid payload JSON: {e}")))?;
+
+    let x_vals = payload
+        .get("x")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| JsValue::from_str("payload.x must be an array"))?;
+    let n = x_vals.len();
+    if n == 0 {
+        return Err(JsValue::from_str("payload.x must not be empty"));
+    }
+
+    let mut x = vec![0.0_f64; n];
+    for i in 0..n {
+        let v = value_to_f64(&x_vals[i]).ok_or_else(|| JsValue::from_str("payload.x contains non-finite values"))?;
+        if !v.is_finite() {
+            return Err(JsValue::from_str("payload.x contains non-finite values"));
+        }
+        x[i] = v;
+    }
+
+    let steps_vals = payload
+        .get("steps")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| JsValue::from_str("payload.steps must be an array"))?;
+    if steps_vals.len() != n {
+        return Err(JsValue::from_str("payload.steps length must match payload.x length"));
+    }
+    let mut steps = vec![0.0_f64; n];
+    for i in 0..n {
+        let h = value_to_f64(&steps_vals[i]).ok_or_else(|| JsValue::from_str("payload.steps contains invalid values"))?;
+        if !h.is_finite() || h == 0.0 {
+            return Err(JsValue::from_str("payload.steps contains zero/non-finite values"));
+        }
+        steps[i] = h;
+    }
+
+    let r0_vals = payload
+        .get("residual0")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| JsValue::from_str("payload.residual0 must be an array"))?;
+    let m = r0_vals.len();
+    if m == 0 {
+        return Err(JsValue::from_str("payload.residual0 must not be empty"));
+    }
+
+    let mut r0 = vec![0.0_f64; m];
+    for i in 0..m {
+        let v = value_to_f64(&r0_vals[i]).ok_or_else(|| JsValue::from_str("payload.residual0 contains invalid values"))?;
+        if !v.is_finite() {
+            return Err(JsValue::from_str("payload.residual0 contains non-finite values"));
+        }
+        r0[i] = v;
+    }
+
+    let r1_cols = payload
+        .get("residualsPerturbed")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| JsValue::from_str("payload.residualsPerturbed must be an array of arrays"))?;
+    if r1_cols.len() != n {
+        return Err(JsValue::from_str("payload.residualsPerturbed column count must match variable count"));
+    }
+
+    let mut r_batches = vec![0.0_f64; m * n];
+    for col in 0..n {
+        let col_arr = r1_cols[col]
+            .as_array()
+            .ok_or_else(|| JsValue::from_str("payload.residualsPerturbed contains a non-array column"))?;
+        if col_arr.len() < m {
+            return Err(JsValue::from_str("payload.residualsPerturbed column length is smaller than residual0 length"));
+        }
+        let base = col * m;
+        for row in 0..m {
+            let v = value_to_f64(&col_arr[row]).ok_or_else(|| JsValue::from_str("payload.residualsPerturbed contains invalid values"))?;
+            if !v.is_finite() {
+                return Err(JsValue::from_str("payload.residualsPerturbed contains non-finite values"));
+            }
+            r_batches[base + row] = v;
+        }
+    }
+
+    let damping = payload
+        .get("damping")
+        .and_then(value_to_f64)
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .unwrap_or(1e-6);
+
+    let trust_radius = payload
+        .get("trustRegionRadius")
+        .and_then(value_to_f64)
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(1.0);
+
+    let mut var_scales = vec![1.0_f64; n];
+    if let Some(scales_arr) = payload.get("varScales").and_then(|v| v.as_array()) {
+        if scales_arr.len() == n {
+            for i in 0..n {
+                let s = value_to_f64(&scales_arr[i]).unwrap_or(1.0).abs();
+                var_scales[i] = if s.is_finite() && s > 1e-18 { s } else { 1.0 };
+            }
+        }
+    }
+
+    let j_flat = assemble_fd_jacobian(&r0, &r_batches, m, n, &steps);
+    if j_flat.len() != m * n || j_flat.iter().any(|v| !v.is_finite()) {
+        return Err(JsValue::from_str("failed to build Jacobian from perturbed residuals"));
+    }
+
+    let packed_ne = build_normal_equations(&j_flat, m, n, &r0);
+    if packed_ne.len() != n * n + n || packed_ne.iter().any(|v| !v.is_finite()) {
+        return Err(JsValue::from_str("failed to build normal equations"));
+    }
+
+    let mut a = packed_ne[0..(n * n)].to_vec();
+    let g = &packed_ne[(n * n)..];
+    for i in 0..n {
+        a[i * n + i] += damping;
+    }
+    let rhs: Vec<f64> = g.iter().map(|v| -(*v)).collect();
+
+    let dx = solve_spd_linear_system_internal(&a, n, &rhs)
+        .or_else(|| solve_linear_system_internal(&a, n, &rhs))
+        .ok_or_else(|| JsValue::from_str("failed to solve damped normal equations"))?;
+
+    let mut dx_limited = dx;
+    let mut max_scaled = 0.0_f64;
+    for i in 0..n {
+        let s = var_scales[i];
+        let scaled = dx_limited[i] / s;
+        let abs_scaled = scaled.abs();
+        if abs_scaled.is_finite() && abs_scaled > max_scaled {
+            max_scaled = abs_scaled;
+        }
+    }
+    if max_scaled.is_finite() && max_scaled > trust_radius && max_scaled > 0.0 {
+        let f = trust_radius / max_scaled;
+        for i in 0..n {
+            dx_limited[i] *= f;
+        }
+    }
+
+    let mut x_next = vec![0.0_f64; n];
+    for i in 0..n {
+        x_next[i] = x[i] + dx_limited[i];
+    }
+
+    let mut g_dot_dx = 0.0_f64;
+    for i in 0..n {
+        g_dot_dx += g[i] * dx_limited[i];
+    }
+    let mut dx_a_dx = 0.0_f64;
+    for i in 0..n {
+        let mut adx_i = 0.0_f64;
+        for j in 0..n {
+            adx_i += a[i * n + j] * dx_limited[j];
+        }
+        dx_a_dx += dx_limited[i] * adx_i;
+    }
+    let predicted_reduction = -(g_dot_dx + 0.5 * dx_a_dx);
+
+    Ok(serde_json::to_string(&serde_json::json!({
+        "ok": true,
+        "status": "pilot-one-iteration",
+        "xNext": x_next,
+        "dx": dx_limited,
+        "predictedReduction": if predicted_reduction.is_finite() { predicted_reduction } else { 0.0 },
+        "jacobianShape": [m, n],
+        "usedDamping": damping,
+        "usedTrustRegionRadius": trust_radius
+    }))
+    .map_err(|err| JsValue::from_str(&format!("serialize error: {}", err)))?)
+}
+
+/// Phase 2: Solve unconstrained QP subproblem for SQP
+///   min 0.5 * dx^T * H * dx + g^T * dx
+/// by solving linear system:
+///   H * dx = -g
+///
+/// Returns packed vector of length (n + 1):
+///   [dx_0, ..., dx_{n-1}, predicted_reduction]
+/// On failure returns [NaN; n + 1].
+#[wasm_bindgen]
+pub fn solve_qp_subproblem_unconstrained(
+    h_flat: &[f64],
+    n: usize,
+    g: &[f64],
+    damping: f64,
+) -> Vec<f64> {
+    if n == 0 || h_flat.len() != n * n || g.len() != n {
+        return vec![f64::NAN; n.saturating_add(1)];
+    }
+
+    let mut rhs = vec![0.0_f64; n];
+    for i in 0..n {
+        let gi = g[i];
+        if !gi.is_finite() {
+            return vec![f64::NAN; n + 1];
+        }
+        rhs[i] = -gi;
+    }
+
+    let base_damping = if damping.is_finite() && damping > 0.0 { damping } else { 1e-10 };
+
+    // Try regularized solves with increasing diagonal damping.
+    let mut sol: Option<Vec<f64>> = None;
+    for k in 0..6 {
+        let reg = base_damping * 10_f64.powi(k);
+        let mut h_reg = h_flat.to_vec();
+        for i in 0..n {
+            h_reg[i * n + i] += reg;
+        }
+
+        sol = solve_spd_linear_system_internal(&h_reg, n, &rhs)
+            .or_else(|| solve_linear_system_internal(&h_reg, n, &rhs));
+        if sol.is_some() {
+            break;
+        }
+    }
+
+    let dx = match sol {
+        Some(v) => v,
+        None => return vec![f64::NAN; n + 1],
+    };
+
+    // Predicted reduction for quadratic model:
+    // m(0) - m(dx) = -(g^T dx + 0.5 dx^T H dx)
+    let mut g_dot_dx = 0.0_f64;
+    for i in 0..n {
+        g_dot_dx += g[i] * dx[i];
+    }
+
+    let mut dx_h_dx = 0.0_f64;
+    for i in 0..n {
+        let mut hdx_i = 0.0_f64;
+        for j in 0..n {
+            hdx_i += h_flat[i * n + j] * dx[j];
+        }
+        dx_h_dx += dx[i] * hdx_i;
+    }
+    let predicted_reduction = -(g_dot_dx + 0.5 * dx_h_dx);
+
+    let mut out = Vec::with_capacity(n + 1);
+    out.extend(dx);
+    out.push(if predicted_reduction.is_finite() { predicted_reduction } else { f64::NAN });
+    out
+}
+
+/// Phase 2: Solve equality-constrained QP subproblem for SQP
+///   min 0.5 * dx^T * H * dx + g^T * dx
+///   s.t. A * dx + c = 0
+///
+/// KKT system:
+///   [H  A^T][dx] = [-g]
+///   [A   0 ][ν ]   [-c]
+///
+/// Returns packed vector of length (n + 1):
+///   [dx_0, ..., dx_{n-1}, predicted_reduction]
+/// On failure returns [NaN; n + 1].
+#[wasm_bindgen]
+pub fn solve_qp_subproblem_kkt_equality(
+    h_flat: &[f64],
+    n: usize,
+    g: &[f64],
+    a_flat: &[f64],
+    m: usize,
+    c: &[f64],
+    damping: f64,
+) -> Vec<f64> {
+    if n == 0 || h_flat.len() != n * n || g.len() != n {
+        return vec![f64::NAN; n.saturating_add(1)];
+    }
+    if m == 0 || a_flat.len() != m * n || c.len() != m {
+        return solve_qp_subproblem_unconstrained(h_flat, n, g, damping);
+    }
+
+    let total = n + m;
+    let mut rhs = vec![0.0_f64; total];
+    for i in 0..n {
+        let gi = g[i];
+        if !gi.is_finite() {
+            return vec![f64::NAN; n + 1];
+        }
+        rhs[i] = -gi;
+    }
+    for i in 0..m {
+        let ci = c[i];
+        if !ci.is_finite() {
+            return vec![f64::NAN; n + 1];
+        }
+        rhs[n + i] = -ci;
+    }
+
+    let base_damping = if damping.is_finite() && damping > 0.0 { damping } else { 1e-10 };
+    let mut sol: Option<Vec<f64>> = None;
+
+    for k in 0..6 {
+        let reg = base_damping * 10_f64.powi(k);
+        let mut kkt = vec![0.0_f64; total * total];
+
+        // Top-left: H + reg I
+        for i in 0..n {
+            for j in 0..n {
+                kkt[i * total + j] = h_flat[i * n + j];
+            }
+            kkt[i * total + i] += reg;
+        }
+
+        // Top-right: A^T
+        for i in 0..n {
+            for j in 0..m {
+                kkt[i * total + (n + j)] = a_flat[j * n + i];
+            }
+        }
+
+        // Bottom-left: A
+        for i in 0..m {
+            for j in 0..n {
+                kkt[(n + i) * total + j] = a_flat[i * n + j];
+            }
+        }
+
+        // Bottom-right kept zero (standard KKT).
+        sol = solve_linear_system_internal(&kkt, total, &rhs);
+        if sol.is_some() {
+            break;
+        }
+    }
+
+    let packed = match sol {
+        Some(v) => v,
+        None => return vec![f64::NAN; n + 1],
+    };
+
+    let dx = &packed[..n];
+
+    // Predicted reduction (quadratic model only)
+    let mut g_dot_dx = 0.0_f64;
+    for i in 0..n {
+        g_dot_dx += g[i] * dx[i];
+    }
+
+    let mut dx_h_dx = 0.0_f64;
+    for i in 0..n {
+        let mut hdx_i = 0.0_f64;
+        for j in 0..n {
+            hdx_i += h_flat[i * n + j] * dx[j];
+        }
+        dx_h_dx += dx[i] * hdx_i;
+    }
+    let predicted_reduction = -(g_dot_dx + 0.5 * dx_h_dx);
+
+    let mut out = Vec::with_capacity(n + 1);
+    out.extend_from_slice(dx);
+    out.push(if predicted_reduction.is_finite() { predicted_reduction } else { f64::NAN });
+    out
+}
+
+/// Phase 3: Armijo backtracking line search with JS merit callback
+///
+/// Finds alpha in {alpha_init, alpha_init*rho, ...} satisfying:
+///   f(x + alpha * p) <= f0 + c1 * alpha * (grad0^T p)
+///
+/// Returns accepted alpha, or 0.0 on failure.
+#[wasm_bindgen]
+pub fn backtracking_line_search_armijo(
+    x: &[f64],
+    p: &[f64],
+    f0: f64,
+    grad0: &[f64],
+    alpha_init: f64,
+    rho: f64,
+    c1: f64,
+    max_iter: usize,
+    merit_eval_callback: &Function,
+) -> f64 {
+    let n = x.len();
+    if n == 0 || p.len() != n || grad0.len() != n {
+        return 0.0;
+    }
+    if !f0.is_finite() {
+        return 0.0;
+    }
+
+    let mut alpha = if alpha_init.is_finite() && alpha_init > 0.0 { alpha_init } else { 1.0 };
+    let rho_eff = if rho.is_finite() && rho > 0.0 && rho < 1.0 { rho } else { 0.5 };
+    let c1_eff = if c1.is_finite() && c1 > 0.0 && c1 < 1.0 { c1 } else { 1e-4 };
+    let iter_cap = if max_iter == 0 { 20 } else { max_iter.min(128) };
+
+    let mut directional_derivative = 0.0_f64;
+    for i in 0..n {
+        directional_derivative += grad0[i] * p[i];
+    }
+    if !directional_derivative.is_finite() {
+        return 0.0;
+    }
+
+    let mut x_trial = vec![0.0_f64; n];
+    for _ in 0..iter_cap {
+        for i in 0..n {
+            x_trial[i] = x[i] + alpha * p[i];
+        }
+
+        let trial_arr = Float64Array::from(x_trial.as_slice());
+        let merit_val = match merit_eval_callback.call1(&JsValue::NULL, &trial_arr.into()) {
+            Ok(v) => v.as_f64().unwrap_or(f64::NAN),
+            Err(_) => return 0.0,
+        };
+
+        if merit_val.is_finite() {
+            let rhs = f0 + c1_eff * alpha * directional_derivative;
+            if merit_val <= rhs {
+                return alpha;
+            }
+        }
+
+        alpha *= rho_eff;
+        if !alpha.is_finite() || alpha < 1e-16 {
+            return 0.0;
+        }
+    }
+
+    0.0
+}
+
+/// Phase 3: Trust-region radius update helper
+///
+/// ratio = actual_reduction / predicted_reduction
+/// - ratio < eta1: shrink radius by gamma_dec
+/// - ratio > eta2: expand radius by gamma_inc
+/// - otherwise keep radius
+#[wasm_bindgen]
+pub fn update_trust_region_radius(
+    predicted_reduction: f64,
+    actual_reduction: f64,
+    current_radius: f64,
+    eta1: f64,
+    eta2: f64,
+    gamma_dec: f64,
+    gamma_inc: f64,
+    min_radius: f64,
+    max_radius: f64,
+) -> f64 {
+    let cur = if current_radius.is_finite() && current_radius > 0.0 { current_radius } else { 1.0 };
+    let min_r = if min_radius.is_finite() && min_radius > 0.0 { min_radius } else { 1e-8 };
+    let max_r = if max_radius.is_finite() && max_radius >= min_r { max_radius } else { 1e8 };
+    let e1 = if eta1.is_finite() { eta1 } else { 0.25 };
+    let e2 = if eta2.is_finite() { eta2 } else { 0.75 };
+    let g_dec = if gamma_dec.is_finite() && gamma_dec > 0.0 && gamma_dec < 1.0 { gamma_dec } else { 0.5 };
+    let g_inc = if gamma_inc.is_finite() && gamma_inc > 1.0 { gamma_inc } else { 2.0 };
+
+    let mut next = cur;
+    if predicted_reduction.is_finite() && predicted_reduction.abs() > 1e-18 && actual_reduction.is_finite() {
+        let ratio = actual_reduction / predicted_reduction;
+        if ratio < e1 {
+            next = cur * g_dec;
+        } else if ratio > e2 {
+            next = cur * g_inc;
+        }
+    }
+
+    if !next.is_finite() {
+        return cur.clamp(min_r, max_r);
+    }
+    next.clamp(min_r, max_r)
+}
+
+#[wasm_bindgen]
+pub fn generate_annular_offsets_flat(ray_count: usize, max_radius: f64, ring_count: usize) -> Vec<f64> {
+    let mut out = Vec::<f64>::new();
+    if ray_count == 0 {
+        return out;
+    }
+
+    let safe_ring_count = ring_count.max(1);
+    let rings = safe_ring_count.min(ray_count);
+
+    let center_rays = ray_count.min(1);
+    let mut remaining_rays = ray_count.saturating_sub(center_rays);
+
+    if center_rays == 1 {
+        out.push(0.0);
+        out.push(0.0);
+    }
+
+    if remaining_rays == 0 {
+        return out;
+    }
+
+    let step = if rings > 0 {
+        max_radius / (rings as f64)
+    } else {
+        max_radius
+    };
+
+    for idx in 0..rings {
+        if remaining_rays == 0 {
+            break;
+        }
+        let radius = step * ((idx + 1) as f64);
+        let rings_remaining = rings - idx;
+        let rays_for_this_ring = ((remaining_rays / rings_remaining).max(4)) as usize;
+        let angles = rays_for_this_ring;
+        let angle_step = (2.0 * std::f64::consts::PI) / (angles as f64);
+        let start_angle = if (idx % 2) == 0 { 0.0 } else { angle_step * 0.5 };
+
+        for i in 0..angles {
+            if remaining_rays == 0 {
+                break;
+            }
+            let angle = start_angle + (i as f64) * angle_step;
+            out.push(radius * angle.cos());
+            out.push(radius * angle.sin());
+            remaining_rays -= 1;
+        }
+    }
+
+    out
+}
+
+#[wasm_bindgen]
+pub fn generate_centered_grid_offsets_flat(ray_count: usize, half_extent: f64) -> Vec<f64> {
+    let mut out = Vec::<f64>::new();
+    if ray_count == 0 {
+        return out;
+    }
+
+    let mut grid_size = (ray_count as f64).sqrt().ceil() as usize;
+    if grid_size == 0 {
+        grid_size = 1;
+    }
+    if (grid_size % 2) == 0 {
+        grid_size += 1;
+    }
+
+    let spacing = if grid_size > 1 {
+        (2.0 * half_extent) / ((grid_size - 1) as f64)
+    } else {
+        0.0
+    };
+    let center = ((grid_size - 1) as f64) * 0.5;
+
+    let mut selected = 0usize;
+    let max_layer = grid_size / 2;
+    for layer in 0..=max_layer {
+        if selected >= ray_count {
+            break;
+        }
+
+        let mut layer_points: Vec<(f64, f64)> = Vec::new();
+        for i in 0..grid_size {
+            for j in 0..grid_size {
+                let li = ((i as f64) - center).abs() as usize;
+                let lj = ((j as f64) - center).abs() as usize;
+                if li.max(lj) != layer {
+                    continue;
+                }
+                let u = if grid_size > 1 { ((i as f64) - center) * spacing } else { 0.0 };
+                let v = if grid_size > 1 { ((j as f64) - center) * spacing } else { 0.0 };
+                layer_points.push((u, v));
+            }
+        }
+
+        layer_points.sort_by(|a, b| {
+            let au = a.0.abs();
+            let av = a.1.abs();
+            let bu = b.0.abs();
+            let bv = b.1.abs();
+            au.partial_cmp(&bu)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(av.partial_cmp(&bv).unwrap_or(std::cmp::Ordering::Equal))
+                .then(a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+                .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        });
+
+        for (u, v) in layer_points {
+            if selected >= ray_count {
+                break;
+            }
+            out.push(u);
+            out.push(v);
+            selected += 1;
+        }
+    }
+
+    out
+}
+
+#[wasm_bindgen]
+pub fn generate_parallel_start_points_flat(
+    origin: &[f64],
+    u_axis: &[f64],
+    v_axis: &[f64],
+    offsets: &[f64],
+    count: usize,
+) -> Vec<f64> {
+    let mut out = Vec::<f64>::new();
+    if origin.len() < 3 || u_axis.len() < 3 || v_axis.len() < 3 {
+        return out;
+    }
+    if offsets.len() < count * 2 {
+        return out;
+    }
+
+    out.reserve(count * 5);
+    let ox = origin[0];
+    let oy = origin[1];
+    let oz = origin[2];
+    let ux = u_axis[0];
+    let uy = u_axis[1];
+    let uz = u_axis[2];
+    let vx = v_axis[0];
+    let vy = v_axis[1];
+    let vz = v_axis[2];
+
+    for i in 0..count {
+        let base = i * 2;
+        let ou = offsets[base];
+        let ov = offsets[base + 1];
+        out.push(ox + ou * ux + ov * vx);
+        out.push(oy + ou * uy + ov * vy);
+        out.push(oz + ou * uz + ov * vz);
+        out.push(ou);
+        out.push(ov);
+    }
+
+    out
+}
+
+// ============================================================================
+// Phase 1: Linear Algebra Kernel Expansion for Optimization
+// ============================================================================
+
+/// Vector addition with scaling: result = x + alpha * y
+#[wasm_bindgen]
+pub fn vector_add_scaled(x: &[f64], y: &[f64], alpha: f64) -> Vec<f64> {
+    if x.len() != y.len() {
+        return vec![f64::NAN; x.len()];
+    }
+    x.iter()
+        .zip(y.iter())
+        .map(|(xi, yi)| xi + alpha * yi)
+        .collect()
+}
+
+/// Vector dot product: result = x · y
+#[wasm_bindgen]
+pub fn vector_dot(x: &[f64], y: &[f64]) -> f64 {
+    if x.len() != y.len() {
+        return f64::NAN;
+    }
+    x.iter().zip(y.iter()).map(|(xi, yi)| xi * yi).sum()
+}
+
+/// Vector L2 norm: result = ||x||₂
+#[wasm_bindgen]
+pub fn vector_norm(x: &[f64]) -> f64 {
+    let sum_sq: f64 = x.iter().map(|xi| xi * xi).sum();
+    sum_sq.sqrt()
+}
+
+/// Matrix-vector multiplication: result = A * x
+/// A is stored in row-major order (flat array)
+#[wasm_bindgen]
+pub fn matrix_vector_multiply(a_flat: &[f64], x: &[f64], rows: usize, cols: usize) -> Vec<f64> {
+    if a_flat.len() != rows * cols || x.len() != cols {
+        return vec![f64::NAN; rows];
+    }
+    
+    let mut result = vec![0.0; rows];
+    for i in 0..rows {
+        let mut sum = 0.0;
+        for j in 0..cols {
+            sum += a_flat[i * cols + j] * x[j];
+        }
+        result[i] = sum;
+    }
+    result
+}
+
+/// Cholesky factorization: A = L * L^T
+/// Returns lower triangular matrix L in row-major flat format
+/// Returns empty vector on failure (not positive definite)
+#[wasm_bindgen]
+pub fn cholesky_factorization(a_flat: &[f64], n: usize) -> Vec<f64> {
+    if a_flat.len() != n * n {
+        return Vec::new();
+    }
+    
+    let mut l = vec![0.0_f64; n * n];
+    
+    for i in 0..n {
+        for j in 0..=i {
+            let mut sum = a_flat[i * n + j];
+            for k in 0..j {
+                sum -= l[i * n + k] * l[j * n + k];
+            }
+            
+            if i == j {
+                if !sum.is_finite() || sum <= 1e-20 {
+                    return Vec::new(); // Not positive definite
+                }
+                l[i * n + j] = sum.sqrt();
+            } else {
+                let diag = l[j * n + j];
+                if !diag.is_finite() || diag <= 1e-20 {
+                    return Vec::new();
+                }
+                l[i * n + j] = sum / diag;
+            }
+        }
+    }
+    
+    l
+}
+
+/// BFGS Hessian approximation update
+/// Updates H in-place using: H_new = H + (y*y^T)/(y^T*s) - (H*s*(H*s)^T)/(s^T*H*s)
+/// where s = step, y = gradient_difference
+/// H is stored in row-major flat format
+#[wasm_bindgen]
+pub fn bfgs_update(h_flat: &mut [f64], s: &[f64], y: &[f64], n: usize) -> bool {
+    if h_flat.len() != n * n || s.len() != n || y.len() != n {
+        return false;
+    }
+    
+    // Compute y^T * s
+    let mut y_dot_s = 0.0;
+    for i in 0..n {
+        y_dot_s += y[i] * s[i];
+    }
+    
+    // Check curvature condition
+    if y_dot_s <= 1e-12 {
+        return false; // Skip update if curvature condition not satisfied
+    }
+    
+    // Compute H * s
+    let mut hs = vec![0.0; n];
+    for i in 0..n {
+        let mut sum = 0.0;
+        for j in 0..n {
+            sum += h_flat[i * n + j] * s[j];
+        }
+        hs[i] = sum;
+    }
+    
+    // Compute s^T * H * s
+    let mut s_dot_hs = 0.0;
+    for i in 0..n {
+        s_dot_hs += s[i] * hs[i];
+    }
+    
+    if s_dot_hs <= 1e-20 {
+        return false;
+    }
+    
+    // Update H: H = H + (y*y^T)/(y^T*s) - (H*s*(H*s)^T)/(s^T*H*s)
+    let rho = 1.0 / y_dot_s;
+    let gamma = 1.0 / s_dot_hs;
+    
+    for i in 0..n {
+        for j in 0..n {
+            let idx = i * n + j;
+            h_flat[idx] = h_flat[idx] + rho * y[i] * y[j] - gamma * hs[i] * hs[j];
+        }
+    }
+    
+    true
+}
+
+/// QR factorization using Householder reflections
+/// Returns (Q, R) where Q is orthogonal and R is upper triangular
+/// Both stored in row-major flat format
+/// Returns empty vectors on failure
+#[wasm_bindgen]
+pub fn qr_factorization(a_flat: &[f64], rows: usize, cols: usize) -> Vec<f64> {
+    if a_flat.len() != rows * cols || rows < cols {
+        return Vec::new();
+    }
+    
+    let mut r = a_flat.to_vec();
+    let mut q = vec![0.0; rows * rows];
+    
+    // Initialize Q as identity
+    for i in 0..rows {
+        q[i * rows + i] = 1.0;
+    }
+    
+    for k in 0..cols.min(rows - 1) {
+        // Extract column k from row k onwards
+        let mut x = vec![0.0; rows - k];
+        for i in k..rows {
+            x[i - k] = r[i * cols + k];
+        }
+        
+        // Compute norm
+        let norm_x: f64 = x.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if norm_x < 1e-14 {
+            continue; // Column is already zero
+        }
+        
+        // Compute Householder vector
+        let s = if x[0] < 0.0 { 1.0 } else { -1.0 };
+        let u1 = x[0] - s * norm_x;
+        let mut w = vec![0.0; rows - k];
+        w[0] = 1.0;
+        for i in 1..rows - k {
+            w[i] = x[i] / u1;
+        }
+        
+        let tau = -s * u1 / norm_x;
+        
+        // Apply Householder reflection to R
+        for j in k..cols {
+            let mut sum = 0.0;
+            for i in 0..(rows - k) {
+                sum += w[i] * r[(k + i) * cols + j];
+            }
+            for i in 0..(rows - k) {
+                r[(k + i) * cols + j] -= tau * w[i] * sum;
+            }
+        }
+        
+        // Apply Householder reflection to Q
+        for j in 0..rows {
+            let mut sum = 0.0;
+            for i in 0..(rows - k) {
+                sum += w[i] * q[(k + i) * rows + j];
+            }
+            for i in 0..(rows - k) {
+                q[(k + i) * rows + j] -= tau * w[i] * sum;
+            }
+        }
+    }
+    
+    // Concatenate Q and R into single output vector
+    // Format: [n_rows, n_cols, Q_data..., R_data...]
+    let mut result = Vec::with_capacity(2 + rows * rows + rows * cols);
+    result.push(rows as f64);
+    result.push(cols as f64);
+    result.extend(q);
+    result.extend(r);
+    
+    result
 }

@@ -12,6 +12,7 @@ import { loadTableData as loadObjectTableData } from '../../data/table-object.ts
 import { loadTableData as loadSystemRequirementsTableData, saveTableData as saveSystemRequirementsTableData } from '../../data/table-system-requirements.ts';
 import { loadSpotDiagramSettingsByConfigId, saveSpotDiagramSettingsByConfigId } from '../spot-diagram-settings-storage.ts';
 import { generateSurfaceOptions } from '../../evaluation/spot-diagram.ts';
+import { calculateChiefRayNewton } from '../../evaluation/aberrations/transverse-aberration.ts';
 
 // Extend Window interface for global properties
 declare global {
@@ -2521,7 +2522,11 @@ class SystemRequirementsEditor {
 
       let current: any = null;
       try {
-        current = editor.calculateOperandValue(opObj);
+        if (editor && typeof editor.calculateOperandValueAsync === 'function') {
+          current = await editor.calculateOperandValueAsync(opObj);
+        } else {
+          current = editor.calculateOperandValue(opObj);
+        }
 
         // If this is a Spot Size operand, capture its debug snapshot keyed by requirement row id.
         // This prevents "last debug wins" confusion when multiple configs/rows are evaluated.
@@ -2924,6 +2929,456 @@ const __cooptInitSystemRequirementsEditor = (): boolean => {
 try {
   if (typeof window !== 'undefined') {
     (window as any).__cooptInitSystemRequirementsEditor = __cooptInitSystemRequirementsEditor;
+
+    (window as any).__cooptRecheckRustFirstRequirements = async (options: any = null) => {
+      const ed = (window as any).systemRequirementsEditor;
+      if (!ed || typeof ed.evaluateAndUpdateNow !== 'function') {
+        const out = { ok: false, reason: 'systemRequirementsEditor is not ready' };
+        try { (window as any).__cooptLastRustFirstRequirementRecheck = out; } catch (_) {}
+        return out;
+      }
+
+      const modeRaw = String((options && options.mode) || 'rust-first').trim().toLowerCase();
+      const mode = (modeRaw === 'js-only') ? 'js-only' : 'rust-first';
+      const useRustFirst = mode !== 'js-only';
+      const includeSpotCurrent = !!(options && options.includeSpotCurrent === true);
+      const targets = includeSpotCurrent
+        ? new Set(['SPOT_SIZE_RECT', 'SPOT_SIZE_ANNULAR', 'SPOT_SIZE_CURRENT', 'TA_RMS_UM'])
+        : new Set(['SPOT_SIZE_RECT', 'SPOT_SIZE_ANNULAR', 'TA_RMS_UM']);
+
+      let prevDisableRustFirst: any = undefined;
+      try {
+        prevDisableRustFirst = (window as any).__cooptDisableRequirementRustFirst;
+        (window as any).__cooptDisableRequirementRustFirst = !useRustFirst;
+      } catch (_) {}
+
+      try {
+        await ed.evaluateAndUpdateNow({ reason: 'manual-rust-first-recheck' });
+      } catch (_) {}
+      finally {
+        try {
+          if (prevDisableRustFirst === undefined) {
+            delete (window as any).__cooptDisableRequirementRustFirst;
+          } else {
+            (window as any).__cooptDisableRequirementRustFirst = prevDisableRustFirst;
+          }
+        } catch (_) {}
+      }
+
+      const rows = (typeof ed.getData === 'function') ? ed.getData() : (Array.isArray(ed.requirements) ? ed.requirements : []);
+      const filtered = (Array.isArray(rows) ? rows : [])
+        .filter((r: any) => r && targets.has(String(r.operand || '').trim()))
+        .map((r: any) => ({
+          id: r.id,
+          enabled: (r.enabled === undefined || r.enabled === null) ? true : !!r.enabled,
+          operand: r.operand,
+          configId: r.configId,
+          param1: r.param1,
+          param2: r.param2,
+          param3: r.param3,
+          param4: r.param4,
+          param5: r.param5,
+          status: r.status,
+          current: r.current,
+          target: r.target,
+          tol: r.tol,
+          op: r.op,
+          weight: r.weight
+        }));
+
+      const enabledRows = filtered.filter((r: any) => r.enabled !== false);
+      const failRows = enabledRows.filter((r: any) => String(r.status || '').trim().toUpperCase() === 'NG');
+
+      const report = {
+        ok: true,
+        mode,
+        checkedOperands: Array.from(targets),
+        totalMatchedRows: filtered.length,
+        enabledMatchedRows: enabledRows.length,
+        failedCount: failRows.length,
+        passed: failRows.length === 0,
+        rows: filtered
+      };
+
+      try {
+        if (typeof console !== 'undefined' && typeof console.table === 'function') {
+          console.table(filtered);
+        }
+      } catch (_) {}
+
+      try { (window as any).__cooptLastRustFirstRequirementRecheck = report; } catch (_) {}
+      return report;
+    };
+
+    (window as any).__cooptDiagnoseFailedRequirements = async (options: any = null) => {
+      const ed = (window as any).systemRequirementsEditor;
+      const merit = (window as any).meritFunctionEditor;
+      if (!ed || typeof ed.evaluateAndUpdateNow !== 'function' || !merit || typeof merit.calculateOperandValue !== 'function') {
+        const out = { ok: false, reason: 'editors are not ready' };
+        try { (window as any).__cooptLastFailedRequirementDiagnostics = out; } catch (_) {}
+        return out;
+      }
+
+      const includeSpotCurrent = !!(options && options.includeSpotCurrent === true);
+      const recheck = await (window as any).__cooptRecheckRustFirstRequirements({ includeSpotCurrent, mode: 'rust-first' });
+      const failedRows = Array.isArray(recheck?.rows)
+        ? recheck.rows.filter((r: any) => r && r.enabled !== false && String(r.status || '').trim().toUpperCase() === 'NG')
+        : [];
+
+      const diagnostics: any[] = [];
+      const prevCapture = (window as any).__COOPT_CAPTURE_RAYTRACE_FAILURE;
+
+      try {
+        (window as any).__COOPT_CAPTURE_RAYTRACE_FAILURE = true;
+
+        for (const row of failedRows) {
+          try {
+            delete (window as any).__cooptLastRayTraceFailure;
+            delete (window as any).__cooptLastSpotSizeDebug;
+          } catch (_) {}
+
+          const opObj = {
+            operand: row.operand,
+            configId: row.configId,
+            param1: row.param1,
+            param2: row.param2,
+            param3: row.param3,
+            param4: row.param4,
+            param5: row.param5,
+            target: row.target,
+            weight: row.weight,
+            __reqRowId: row.id
+          };
+
+          let value: any = null;
+          let error: any = null;
+          try {
+            value = merit.calculateOperandValue(opObj, getOpticalSystemRows(null));
+          } catch (e: any) {
+            error = String(e?.message || e);
+          }
+
+          diagnostics.push({
+            id: row.id,
+            operand: row.operand,
+            configId: row.configId,
+            params: {
+              param1: row.param1,
+              param2: row.param2,
+              param3: row.param3,
+              param4: row.param4,
+              param5: row.param5
+            },
+            evaluatedValue: value,
+            target: row.target,
+            status: row.status,
+            error,
+            lastRayTraceFailure: (window as any).__cooptLastRayTraceFailure || null,
+            lastSpotSizeDebug: (window as any).__cooptLastSpotSizeDebug || null
+          });
+        }
+      } finally {
+        try {
+          if (prevCapture === undefined) {
+            delete (window as any).__COOPT_CAPTURE_RAYTRACE_FAILURE;
+          } else {
+            (window as any).__COOPT_CAPTURE_RAYTRACE_FAILURE = prevCapture;
+          }
+        } catch (_) {}
+      }
+
+      const out = {
+        ok: true,
+        failedCount: failedRows.length,
+        diagnostics
+      };
+
+      try {
+        if (typeof console !== 'undefined' && typeof console.table === 'function') {
+          console.table(diagnostics.map((d: any) => ({
+            id: d.id,
+            operand: d.operand,
+            configId: d.configId,
+            value: d.evaluatedValue,
+            target: d.target,
+            status: d.status,
+            rayFailKind: d.lastRayTraceFailure?.kind || ''
+          })));
+        }
+      } catch (_) {}
+
+      try { (window as any).__cooptLastFailedRequirementDiagnostics = out; } catch (_) {}
+      return out;
+    };
+
+    (window as any).__cooptCompareTaChiefRaySearch = async (options: any = null) => {
+      const ed = (window as any).systemRequirementsEditor;
+      const merit = (window as any).meritFunctionEditor;
+      if (!ed || !merit || typeof merit.getConfigTablesByConfigId !== 'function') {
+        const out = { ok: false, reason: 'required editors/methods are not ready' };
+        try { (window as any).__cooptLastTaChiefRayCompare = out; } catch (_) {}
+        return out;
+      }
+
+      try { await ed.evaluateAndUpdateNow({ reason: 'chief-ray-compare' }); } catch (_) {}
+
+      const rows = (typeof ed.getData === 'function') ? ed.getData() : (Array.isArray(ed.requirements) ? ed.requirements : []);
+      const taRows = (Array.isArray(rows) ? rows : [])
+        .filter((r: any) => r && (r.enabled === undefined || r.enabled === null || !!r.enabled) && String(r.operand || '').trim() === 'TA_RMS_UM');
+
+      const opticalSystemRows = getOpticalSystemRows(null);
+      const isInfiniteSystem = (() => {
+        const t = opticalSystemRows?.[0]?.thickness;
+        if (t === Infinity) return true;
+        const s = (t === undefined || t === null) ? '' : String(t).trim().toUpperCase();
+        return (s === 'INF' || s === 'INFINITY');
+      })();
+
+      const pickFirstFinite = (values: any[], fallback = 0): number => {
+        for (const value of values) {
+          const n = Number(value);
+          if (Number.isFinite(n)) return n;
+        }
+        return fallback;
+      };
+
+      const buildFieldSetting = (objRow: any, objectIndex0: number) => {
+        const fieldX = pickFirstFinite([
+          objRow?.xHeightAngle,
+          objRow?.xFieldAngle,
+          objRow?.xHeight,
+          objRow?.x,
+          objRow?.angleX,
+          objRow?.Hx
+        ], 0);
+        const fieldY = pickFirstFinite([
+          objRow?.yHeightAngle,
+          objRow?.yFieldAngle,
+          objRow?.fieldAngle,
+          objRow?.yHeight,
+          objRow?.y,
+          objRow?.angleY,
+          objRow?.Hy
+        ], 0);
+
+        const objectIndex1 = objectIndex0 + 1;
+        const displayName = String(objRow?.comment || objRow?.name || `Object ${objectIndex1}`);
+        if (isInfiniteSystem) {
+          return {
+            position: 'Angle',
+            fieldType: 'Angle',
+            objectIndex: objectIndex1,
+            displayName,
+            x: fieldX,
+            y: fieldY,
+            xFieldAngle: fieldX,
+            yFieldAngle: fieldY,
+            xHeightAngle: fieldX,
+            yHeightAngle: fieldY
+          };
+        }
+        return {
+          position: 'Rectangle',
+          fieldType: 'Rectangle',
+          objectIndex: objectIndex1,
+          displayName,
+          x: fieldX,
+          y: fieldY,
+          xHeight: fieldX,
+          yHeight: fieldY
+        };
+      };
+
+      const setMode = (mode: 'rust' | 'js') => {
+        if (mode === 'rust') {
+          (window as any).__cooptTraceOptionsOverride = {
+            useRustWasm: true,
+            requireRustWasm: false,
+            requireForwardHit: true
+          };
+        } else {
+          delete (window as any).__cooptTraceOptionsOverride;
+        }
+      };
+
+      const prevOverride = (window as any).__cooptTraceOptionsOverride;
+      const details: any[] = [];
+
+      try {
+        for (const row of taRows) {
+          const configId = row?.configId;
+          const tables = merit.getConfigTablesByConfigId(configId, { preferConfigTables: true }) || {};
+          const sourceRows = Array.isArray(tables.source) ? tables.source : [];
+          const objectRows = Array.isArray(tables.object) ? tables.object : [];
+
+          const objectIndex1 = Math.max(1, Math.floor(Number(row?.param2 || 1)));
+          const objectIndex0 = objectIndex1 - 1;
+          const objRow = objectRows[objectIndex0] || null;
+          if (!objRow) {
+            details.push({
+              id: row?.id,
+              configId,
+              objectIndex1,
+              error: 'object-row-not-found'
+            });
+            continue;
+          }
+
+          let wavelength = 0.5876;
+          try {
+            const param1Raw = (row?.param1 !== undefined && row?.param1 !== null) ? String(row.param1).trim() : '';
+            wavelength = (param1Raw === '')
+              ? merit.getPrimaryWavelengthFromSourceRows(sourceRows)
+              : merit.getSystemWavelengthFromOperandOrPrimary(row, sourceRows);
+          } catch (_) {}
+
+          let rayCount = 51;
+          try {
+            const raw = (row?.param4 !== undefined && row?.param4 !== null) ? String(row.param4).trim() : '';
+            const parsed = Math.floor(Number(raw));
+            if (Number.isFinite(parsed) && parsed >= 3) rayCount = Math.min(5000, parsed);
+          } catch (_) {}
+
+          const fieldSetting = buildFieldSetting(objRow, objectIndex0);
+
+          let rustRes: any = null;
+          let jsRes: any = null;
+          let rustError: any = null;
+          let jsError: any = null;
+
+          try {
+            setMode('rust');
+            rustRes = calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelength, 'unified', { rayCount });
+          } catch (e: any) {
+            rustError = String(e?.message || e);
+          }
+
+          try {
+            setMode('js');
+            jsRes = calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelength, 'unified', { rayCount });
+          } catch (e: any) {
+            jsError = String(e?.message || e);
+          }
+
+          const summarize = (res: any, err: any) => ({
+            success: !!(res && (res.success === true || res.convergence === true)),
+            error: err || res?.finalError || null,
+            pathLen: Array.isArray(res?.rayData?.segments) ? res.rayData.segments.length : (Array.isArray(res?.ray?.path) ? res.ray.path.length : null),
+            rayGroups: Array.isArray(res?.rayGroups) ? res.rayGroups.length : null
+          });
+
+          const rust = summarize(rustRes, rustError);
+          const js = summarize(jsRes, jsError);
+          details.push({
+            id: row?.id,
+            configId,
+            objectIndex1,
+            wavelength,
+            rayCount,
+            fieldSetting,
+            rust,
+            js,
+            changed: JSON.stringify(rust) !== JSON.stringify(js)
+          });
+        }
+      } finally {
+        try {
+          if (prevOverride === undefined) {
+            delete (window as any).__cooptTraceOptionsOverride;
+          } else {
+            (window as any).__cooptTraceOptionsOverride = prevOverride;
+          }
+        } catch (_) {}
+      }
+
+      const changedRows = details.filter((d: any) => d?.changed);
+      const out = {
+        ok: true,
+        total: details.length,
+        changedCount: changedRows.length,
+        changedRows,
+        details
+      };
+
+      try {
+        if (typeof console !== 'undefined' && typeof console.table === 'function') {
+          console.table(details.map((d: any) => ({
+            id: d.id,
+            cfg: d.configId,
+            obj: d.objectIndex1,
+            wl: d.wavelength,
+            rayCount: d.rayCount,
+            rustSuccess: d.rust?.success,
+            jsSuccess: d.js?.success,
+            rustErr: d.rust?.error || '',
+            jsErr: d.js?.error || ''
+          })));
+        }
+      } catch (_) {}
+
+      try { (window as any).__cooptLastTaChiefRayCompare = out; } catch (_) {}
+      return out;
+    };
+
+    (window as any).__cooptCompareRustVsJsRequirements = async (options: any = null) => {
+      const baseOptions = { ...(options || {}) };
+      const rust = await (window as any).__cooptRecheckRustFirstRequirements({ ...baseOptions, mode: 'rust-first' });
+      const js = await (window as any).__cooptRecheckRustFirstRequirements({ ...baseOptions, mode: 'js-only' });
+
+      const indexByKey = (rows: any[]) => {
+        const m = new Map<string, any>();
+        for (const r of (Array.isArray(rows) ? rows : [])) {
+          const key = [String(r?.id ?? ''), String(r?.operand ?? ''), String(r?.configId ?? '')].join('|');
+          m.set(key, r);
+        }
+        return m;
+      };
+
+      const rm = indexByKey(rust?.rows || []);
+      const jm = indexByKey(js?.rows || []);
+      const keys = new Set<string>([...rm.keys(), ...jm.keys()]);
+      const diffRows: any[] = [];
+
+      for (const k of keys) {
+        const rr = rm.get(k) || null;
+        const jr = jm.get(k) || null;
+        const statusRust = String(rr?.status ?? '');
+        const statusJs = String(jr?.status ?? '');
+        const currentRust = rr?.current;
+        const currentJs = jr?.current;
+        const changed = (statusRust !== statusJs) || (String(currentRust) !== String(currentJs));
+        if (!changed) continue;
+
+        diffRows.push({
+          id: rr?.id ?? jr?.id ?? null,
+          operand: rr?.operand ?? jr?.operand ?? null,
+          configId: rr?.configId ?? jr?.configId ?? null,
+          rustStatus: statusRust,
+          jsStatus: statusJs,
+          rustCurrent: currentRust,
+          jsCurrent: currentJs
+        });
+      }
+
+      const out = {
+        ok: true,
+        rustFailedCount: Number(rust?.failedCount) || 0,
+        jsFailedCount: Number(js?.failedCount) || 0,
+        changedRowCount: diffRows.length,
+        changedRows: diffRows,
+        rust,
+        js
+      };
+
+      try {
+        if (typeof console !== 'undefined' && typeof console.table === 'function' && diffRows.length > 0) {
+          console.table(diffRows);
+        }
+      } catch (_) {}
+
+      try { (window as any).__cooptLastRustVsJsRequirementCompare = out; } catch (_) {}
+      return out;
+    };
   }
 } catch (_) {}
 

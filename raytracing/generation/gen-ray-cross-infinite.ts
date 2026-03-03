@@ -12,7 +12,44 @@
  */
 
 import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../core/ray-tracing.ts';
+import { getRustRayTracingWasmSync } from '../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 import { setWindowDebugBagValue } from '../../utils/window-debug-bag.ts';
+
+const RENDER_TS_TRACE_OPTIONS = {
+    allowNonStrict: true,
+    requireWasmRayTracing: false,
+    useRustWasm: false,
+    requireRustWasm: false,
+    disableWasmRayTracing: true,
+    __renderRayTracingTsOnly: true
+};
+
+function traceRayForRenderTs(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, maxSurfaceIndex = null) {
+    return traceRay(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, RENDER_TS_TRACE_OPTIONS);
+}
+
+function traceRayHitPointForRenderTs(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null) {
+    return traceRayHitPoint(opticalSystemRows, ray0, n0, targetSurfaceIndex, RENDER_TS_TRACE_OPTIONS);
+}
+
+const CHIEF_RUST_TRACE_OPTIONS = {
+    allowNonStrict: true,
+    useRustWasm: true,
+    requireRustWasm: false
+};
+
+function traceRayHitPointForChiefSearch(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null) {
+    try {
+        const disabled = !!(typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_DISABLE_RUST_CHIEF_SEARCH === true);
+        if (!disabled) {
+            const rust = getRustRayTracingWasmSync();
+            if (rust) {
+                return traceRayHitPoint(opticalSystemRows, ray0, n0, targetSurfaceIndex, CHIEF_RUST_TRACE_OPTIONS as any);
+            }
+        }
+    } catch (_) {}
+    return traceRayHitPointForRenderTs(opticalSystemRows, ray0, n0, targetSurfaceIndex);
+}
 
 // Runtime build stamp (for cache/stale-module diagnostics)
 const GEN_RAY_CROSS_INFINITE_BUILD = '2025-12-31a';
@@ -99,6 +136,35 @@ function fnv1a32(str) {
         hash = Math.imul(hash, 0x01000193);
     }
     return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+const chiefRayOriginSearchCache = new Map<string, { x: number; y: number; z: number } | null>();
+
+function buildChiefRayOriginSearchCacheKey(direction, stopCenter, stopSurfaceIndex, targetSurfaceIndex, opticalSystemRows, wavelength) {
+    try {
+        const rowsSig = fnv1a32(JSON.stringify((opticalSystemRows || []).map((row) => ({
+            t: row?.surfType ?? row?.['object type'] ?? row?.object ?? row?.type,
+            r: row?.radius,
+            th: row?.thickness,
+            k: row?.conic,
+            s: row?.semidia,
+            od: row?.objectRenderDistance
+        }))));
+        return [
+            rowsSig,
+            Number(direction?.i || 0).toFixed(10),
+            Number(direction?.j || 0).toFixed(10),
+            Number(direction?.k || 0).toFixed(10),
+            Number(stopCenter?.x || 0).toFixed(10),
+            Number(stopCenter?.y || 0).toFixed(10),
+            Number(stopCenter?.z || 0).toFixed(10),
+            Number(stopSurfaceIndex || 0),
+            Number(targetSurfaceIndex || 0),
+            Number(wavelength || 0).toFixed(10)
+        ].join('#');
+    } catch (_) {
+        return null;
+    }
 }
 
 function cooptParseNumberOrInfinity(value: any, fallback: number): number {
@@ -468,7 +534,7 @@ function canTraceToFinalSurface(origin, direction, opticalSystemRows, wavelength
         const effectiveTargetPointIndex = getRayPathPointIndexForSurfaceIndex(opticalSystemRows, effectiveTargetIndex);
         if (effectiveTargetPointIndex === null) return false;
 
-        const rayPath = traceRay(
+        const rayPath = traceRayForRenderTs(
             opticalSystemRows,
             { pos: origin, dir: direction, wavelength: wavelength },
             1.0,
@@ -669,7 +735,7 @@ function estimateEffectiveEntrancePupilExtents(opticalSystemRows, centerOrigin, 
         }
 
         const traceOk = (origin) => {
-            const rayPathToTarget = traceRay(systemRowsForTrace, {
+            const rayPathToTarget = traceRayForRenderTs(systemRowsForTrace, {
                 pos: origin,
                 dir: directionXYZ,
                 wavelength
@@ -704,7 +770,7 @@ function estimateEffectiveEntrancePupilExtents(opticalSystemRows, centerOrigin, 
             if (hasFallbackTarget) {
                 const fallbackPointIndex = getRayPathPointIndexForSurfaceIndex(systemRowsForTrace, fallbackSurfaceIndex);
                 if (fallbackPointIndex !== null) {
-                    const fallbackPath = traceRay(systemRowsForTrace, {
+                    const fallbackPath = traceRayForRenderTs(systemRowsForTrace, {
                         pos: centerOrigin,
                         dir: directionXYZ,
                         wavelength
@@ -723,7 +789,7 @@ function estimateEffectiveEntrancePupilExtents(opticalSystemRows, centerOrigin, 
         if (!centerTraceAfterFallback) {
             // Try to get actual ray path for debugging with detailed logging
             const debugLog = [];
-            const debugPath = traceRay(systemRowsForTrace, {
+            const debugPath = traceRayForRenderTs(systemRowsForTrace, {
                 pos: centerOrigin,
                 dir: directionXYZ,
                 wavelength
@@ -1134,7 +1200,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                         const prevSuppressFlag = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_SUPPRESS_RAY_ERRORS : undefined;
                         try {
                             if (typeof globalThis !== 'undefined') globalThis.__COOPT_SUPPRESS_RAY_ERRORS = true;
-                            const testPath = traceRay(opticalSystemRows, testRay, 1.0, null, resolvedTargetSurfaceIndex);
+                            const testPath = traceRayForRenderTs(opticalSystemRows, testRay, 1.0, null, resolvedTargetSurfaceIndex);
                             if (!testPath || testPath.length === 0) {
                                 console.error(`❌ [Fallback Test] Ray tracing returned empty path - optical system may have invalid surfaces`);
                                 console.error(`❌ [Fallback Test] Check for: zero radius, negative thickness, invalid glass indices, TIR, vignetting`);
@@ -1408,7 +1474,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                 dir: { x: direction.i, y: direction.j, z: direction.k },
                 wavelength
             };
-            traceRay(Array.isArray(opticalSystemRows) ? opticalSystemRows.slice() : opticalSystemRows, ray0, 1.0, dbg);
+            traceRayForRenderTs(Array.isArray(opticalSystemRows) ? opticalSystemRows.slice() : opticalSystemRows, ray0, 1.0, dbg);
             const block = _extractFirstApertureBlockFromDebugLog(dbg);
             if (block) {
                 console.warn(`🚫 [DrawCrossDiag] Object${objectIndex}: PHYSICAL_APERTURE_BLOCK at Surface ${block.surfaceNumber ?? '?'} (hitRadius=${block.hitRadiusMm ?? '?'}mm > limit=${block.apertureLimitMm ?? '?'}mm)`);
@@ -1588,6 +1654,12 @@ function calculateInfiniteSystemDirection(objectAngle) {
  * @returns {Object|null} 射出座標 {x, y, z}
  */
 export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurfaceIndex, opticalSystemRows, debugMode, targetSurfaceIndex, wavelength) {
+    const cacheKey = buildChiefRayOriginSearchCacheKey(direction, stopCenter, stopSurfaceIndex, targetSurfaceIndex, opticalSystemRows, wavelength);
+    if (cacheKey && chiefRayOriginSearchCache.has(cacheKey)) {
+        const cached = chiefRayOriginSearchCache.get(cacheKey);
+        return cached ? { ...cached } : null;
+    }
+
     // Use objectRenderDistance from Object row for INF objects (positive value converted to negative Z)
     const objectRow = opticalSystemRows && opticalSystemRows[0];
     const renderDist = (objectRow && typeof objectRow.objectRenderDistance === 'number') ? objectRow.objectRenderDistance : 0;
@@ -1671,6 +1743,8 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
     }
     
     try {
+        const highPrecisionSearch = !!(typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_HIGH_PRECISION_CHIEF_SEARCH === true);
+        const useUltraPrecision = !!debugMode || highPrecisionSearch;
         const evaluateRayToStop = (x, y) => {
             const ray = {
                 pos: { x: x, y: y, z: initialZ },
@@ -1684,7 +1758,7 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
                 let actualStopPoint = null;
                 try {
                     if (typeof globalThis !== 'undefined') globalThis.__COOPT_SUPPRESS_RAY_ERRORS = true;
-                    actualStopPoint = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
+                    actualStopPoint = traceRayHitPointForChiefSearch(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
                 } finally {
                     if (typeof globalThis !== 'undefined') globalThis.__COOPT_SUPPRESS_RAY_ERRORS = prevSuppressFlag;
                 }
@@ -1727,7 +1801,7 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
         
         // Grid探索の設定（中密度グリッド - バランス設定）
         const gridRange = dynamicHalfRange;
-        const gridSize = 51; // 51x51グリッド（2601評価点）- バランス設定
+        const gridSize = useUltraPrecision ? 51 : 29;
         const gridStep = (2 * gridRange) / (gridSize - 1);
         
         let bestX = 0, bestY = 0, bestError = Infinity;
@@ -1782,110 +1856,113 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
         
         optimalX = bestX;
         optimalY = bestY;
-        
-        // X方向の目的関数（Y座標を現在の最良値に固定）
-        const objectiveFunctionX_fixed = (x) => objectiveFunction2D(x, optimalY);
-        
-        // X方向の精密最適化（厳しい収束条件）
-        try {
-            // Grid探索結果を中心とした狭い範囲でBrent法を実行
-            const brentRange = Math.max(gridStep * 2, 0.5); // 最低0.5mm範囲を確保
-            let aX = bestX - brentRange;
-            let bX = bestX + brentRange;
+
+        if (useUltraPrecision) {
+            // X方向の目的関数（Y座標を現在の最良値に固定）
+            const objectiveFunctionX_fixed = (x) => objectiveFunction2D(x, optimalY);
             
-            // 差分関数を使用してBrent法の符号変化条件を満たす
-            const baseFunctionX = objectiveFunctionX_fixed(bestX);
-            const diffFunctionX = (x) => objectiveFunctionX_fixed(x) - baseFunctionX;
-            
-            let faX = diffFunctionX(aX);
-            let fbX = diffFunctionX(bX);
-            
-            if (faX * fbX >= 0) {
-                // 符号変化がない場合、範囲を段階的に拡大
-                for (let mult = 2; mult <= 10 && faX * fbX >= 0; mult++) {
-                    aX = bestX - mult * brentRange;
-                    bX = bestX + mult * brentRange;
-                    faX = diffFunctionX(aX);
-                    fbX = diffFunctionX(bX);
-                }
-            }
-            
-            if (faX * fbX < 0) {
-                // 収束条件を緩和（高速化）: 1e-12 → 1e-8
-                const deltaX = brent(diffFunctionX, aX, bX, 1e-8, 100);
-                optimalX = bestX + deltaX;
+            // X方向の精密最適化（厳しい収束条件）
+            try {
+                // Grid探索結果を中心とした狭い範囲でBrent法を実行
+                const brentRange = Math.max(gridStep * 2, 0.5); // 最低0.5mm範囲を確保
+                let aX = bestX - brentRange;
+                let bX = bestX + brentRange;
                 
-                if (debugMode) {
-                    console.log(`✅ [Phase2] X方向高精度最適化完了: ${bestX.toFixed(8)} → ${optimalX.toFixed(8)}mm`);
-                }
-            } else {
-                if (debugMode) {
-                    console.log(`⚠️ [Phase2] X方向Brent法：符号変化区間なし、Grid結果を使用`);
-                }
-            }
-        } catch (errorX) {
-            if (debugMode) {
-                console.warn(`⚠️ [Phase2] X方向精密最適化失敗: ${errorX.message}`);
-            }
-        }
-        
-        // Y方向の目的関数（X座標を最適化済み値に固定）
-        const objectiveFunctionY_fixed = (y) => objectiveFunction2D(optimalX, y);
-        
-        // Y方向の精密最適化（厳しい収束条件）
-        try {
-            const brentRange = Math.max(gridStep * 2, 0.5); // 最低0.5mm範囲を確保
-            let aY = bestY - brentRange;
-            let bY = bestY + brentRange;
-            
-            const baseFunctionY = objectiveFunctionY_fixed(bestY);
-            const diffFunctionY = (y) => objectiveFunctionY_fixed(y) - baseFunctionY;
-            
-            let faY = diffFunctionY(aY);
-            let fbY = diffFunctionY(bY);
-            
-            if (faY * fbY >= 0) {
-                // 符号変化がない場合、範囲を段階的に拡大
-                for (let mult = 2; mult <= 10 && faY * fbY >= 0; mult++) {
-                    aY = bestY - mult * brentRange;
-                    bY = bestY + mult * brentRange;
-                    faY = diffFunctionY(aY);
-                    fbY = diffFunctionY(bY);
-                }
-            }
-            
-            if (faY * fbY < 0) {
-                // 収束条件を緩和（高速化）: 1e-12 → 1e-8
-                const deltaY = brent(diffFunctionY, aY, bY, 1e-8, 100);
-                optimalY = bestY + deltaY;
+                // 差分関数を使用してBrent法の符号変化条件を満たす
+                const baseFunctionX = objectiveFunctionX_fixed(bestX);
+                const diffFunctionX = (x) => objectiveFunctionX_fixed(x) - baseFunctionX;
                 
-                if (debugMode) {
-                    console.log(`✅ [Phase2] Y方向高精度最適化完了: ${bestY.toFixed(8)} → ${optimalY.toFixed(8)}mm`);
+                let faX = diffFunctionX(aX);
+                let fbX = diffFunctionX(bX);
+                
+                if (faX * fbX >= 0) {
+                    // 符号変化がない場合、範囲を段階的に拡大
+                    for (let mult = 2; mult <= 10 && faX * fbX >= 0; mult++) {
+                        aX = bestX - mult * brentRange;
+                        bX = bestX + mult * brentRange;
+                        faX = diffFunctionX(aX);
+                        fbX = diffFunctionX(bX);
+                    }
                 }
-            } else {
+                
+                if (faX * fbX < 0) {
+                    // 収束条件を緩和（高速化）: 1e-12 → 1e-8
+                    const deltaX = brent(diffFunctionX, aX, bX, 1e-8, 100);
+                    optimalX = bestX + deltaX;
+                    
+                    if (debugMode) {
+                        console.log(`✅ [Phase2] X方向高精度最適化完了: ${bestX.toFixed(8)} → ${optimalX.toFixed(8)}mm`);
+                    }
+                } else {
+                    if (debugMode) {
+                        console.log(`⚠️ [Phase2] X方向Brent法：符号変化区間なし、Grid結果を使用`);
+                    }
+                }
+            } catch (errorX) {
                 if (debugMode) {
-                    console.log(`⚠️ [Phase2] Y方向Brent法：符号変化区間なし、Grid結果を使用`);
+                    console.warn(`⚠️ [Phase2] X方向精密最適化失敗: ${errorX.message}`);
                 }
             }
-        } catch (errorY) {
-            if (debugMode) {
-                console.warn(`⚠️ [Phase2] Y方向精密最適化失敗: ${errorY.message}`);
+            
+            // Y方向の目的関数（X座標を最適化済み値に固定）
+            const objectiveFunctionY_fixed = (y) => objectiveFunction2D(optimalX, y);
+            
+            // Y方向の精密最適化（厳しい収束条件）
+            try {
+                const brentRange = Math.max(gridStep * 2, 0.5); // 最低0.5mm範囲を確保
+                let aY = bestY - brentRange;
+                let bY = bestY + brentRange;
+                
+                const baseFunctionY = objectiveFunctionY_fixed(bestY);
+                const diffFunctionY = (y) => objectiveFunctionY_fixed(y) - baseFunctionY;
+                
+                let faY = diffFunctionY(aY);
+                let fbY = diffFunctionY(bY);
+                
+                if (faY * fbY >= 0) {
+                    // 符号変化がない場合、範囲を段階的に拡大
+                    for (let mult = 2; mult <= 10 && faY * fbY >= 0; mult++) {
+                        aY = bestY - mult * brentRange;
+                        bY = bestY + mult * brentRange;
+                        faY = diffFunctionY(aY);
+                        fbY = diffFunctionY(bY);
+                    }
+                }
+                
+                if (faY * fbY < 0) {
+                    // 収束条件を緩和（高速化）: 1e-12 → 1e-8
+                    const deltaY = brent(diffFunctionY, aY, bY, 1e-8, 100);
+                    optimalY = bestY + deltaY;
+                    
+                    if (debugMode) {
+                        console.log(`✅ [Phase2] Y方向高精度最適化完了: ${bestY.toFixed(8)} → ${optimalY.toFixed(8)}mm`);
+                    }
+                } else {
+                    if (debugMode) {
+                        console.log(`⚠️ [Phase2] Y方向Brent法：符号変化区間なし、Grid結果を使用`);
+                    }
+                }
+            } catch (errorY) {
+                if (debugMode) {
+                    console.warn(`⚠️ [Phase2] Y方向精密最適化失敗: ${errorY.message}`);
+                }
             }
         }
 
         // Phase 3: 超高精度反復最適化（優秀レベル対応）
-        if (debugMode) {
-            console.log(`🔍 [Phase3] 超高精度反復最適化開始（優秀レベル対応）`);
-        }
-        
-        // 現在の誤差を確認
-        const currentError = objectiveFunction2D(optimalX, optimalY);
-        if (debugMode) {
-            console.log(`   Phase2後の誤差: ${currentError.toFixed(8)}mm`);
-        }
-        
-        // 反復最適化（最大100回、究極の精度向上）
-        for (let iter = 0; iter < 100; iter++) {
+        if (useUltraPrecision) {
+            if (debugMode) {
+                console.log(`🔍 [Phase3] 超高精度反復最適化開始（優秀レベル対応）`);
+            }
+            
+            // 現在の誤差を確認
+            const currentError = objectiveFunction2D(optimalX, optimalY);
+            if (debugMode) {
+                console.log(`   Phase2後の誤差: ${currentError.toFixed(8)}mm`);
+            }
+            
+            // 反復最適化（最大100回、究極の精度向上）
+            for (let iter = 0; iter < 100; iter++) {
             const prevX = optimalX;
             const prevY = optimalY;
             const prevError = objectiveFunction2D(optimalX, optimalY);
@@ -1998,6 +2075,7 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
                 }
                 break;
             }
+            }
         }
         
         const result = {
@@ -2013,7 +2091,7 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             wavelength: wavelength
         };
         
-        const actualPoint = traceRayHitPoint(opticalSystemRows, verificationRay, 1.0, stopSurfaceIndex);
+        const actualPoint = traceRayHitPointForChiefSearch(opticalSystemRows, verificationRay, 1.0, stopSurfaceIndex);
         if (actualPoint) {
             const errorX = actualPoint.x - stopX;
             const errorY = actualPoint.y - stopY;
@@ -2039,6 +2117,13 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
             }
         }
         
+        if (cacheKey) {
+            chiefRayOriginSearchCache.set(cacheKey, { ...result });
+            if (chiefRayOriginSearchCache.size > 256) {
+                const firstKey = chiefRayOriginSearchCache.keys().next().value;
+                if (firstKey !== undefined) chiefRayOriginSearchCache.delete(firstKey);
+            }
+        }
         return result;
         
     } catch (error) {
@@ -2053,6 +2138,9 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
 
         // NOTE: traceRay が null を返すケース（遮光など）を「成功」に見せないため、
         // 幾何学フォールバックではなく null を返す。
+        if (cacheKey) {
+            chiefRayOriginSearchCache.set(cacheKey, null);
+        }
         return null;
     }
 }
@@ -2180,7 +2268,7 @@ function calculateApertureRayNewton(chiefRayOrigin, direction, perpendicularPlan
             wavelength: wavelength
         };
         
-        const rayPath = traceRay(opticalSystemRows, ray, 1.0, null, stopSurfaceIndex + 1);
+        const rayPath = traceRayForRenderTs(opticalSystemRows, ray, 1.0, null, stopSurfaceIndex + 1);
         if (!rayPath || rayPath.length <= stopSurfaceIndex) {
             if (debugMode) console.log(`⚠️ [Newton] 反復${iteration}: 光線追跡失敗`);
             return { success: false };
@@ -2248,7 +2336,7 @@ function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceInd
         dir: { x: direction.i, y: direction.j, z: direction.k },
         wavelength: wavelength
     };
-    const basePath = traceRay(opticalSystemRows, baseRay, 1.0, null, stopSurfaceIndex + 1);
+    const basePath = traceRayForRenderTs(opticalSystemRows, baseRay, 1.0, null, stopSurfaceIndex + 1);
     if (!basePath || basePath.length <= stopSurfaceIndex) return null;
     const basePos = getRayPointAtSurfaceIndex(basePath, opticalSystemRows, stopSurfaceIndex);
     
@@ -2258,7 +2346,7 @@ function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceInd
         dir: { x: direction.i, y: direction.j, z: direction.k },
         wavelength: wavelength
     };
-    const pathDx = traceRay(opticalSystemRows, rayDx, 1.0, null, stopSurfaceIndex + 1);
+    const pathDx = traceRayForRenderTs(opticalSystemRows, rayDx, 1.0, null, stopSurfaceIndex + 1);
     if (!pathDx || pathDx.length <= stopSurfaceIndex) return null;
     const posDx = getRayPointAtSurfaceIndex(pathDx, opticalSystemRows, stopSurfaceIndex);
     
@@ -2268,7 +2356,7 @@ function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceInd
         dir: { x: direction.i, y: direction.j, z: direction.k },
         wavelength: wavelength
     };
-    const pathDy = traceRay(opticalSystemRows, rayDy, 1.0, null, stopSurfaceIndex + 1);
+    const pathDy = traceRayForRenderTs(opticalSystemRows, rayDy, 1.0, null, stopSurfaceIndex + 1);
     if (!pathDy || pathDy.length <= stopSurfaceIndex) return null;
     const posDy = getRayPointAtSurfaceIndex(pathDy, opticalSystemRows, stopSurfaceIndex);
     
@@ -2341,7 +2429,7 @@ function calculateApertureRayBrent(chiefRayOrigin, direction, perpendicularPlane
             wavelength: wavelength
         };
         
-        const testPath = traceRay(opticalSystemRows, testRay, 1.0, null, stopSurfaceIndex + 1);
+        const testPath = traceRayForRenderTs(opticalSystemRows, testRay, 1.0, null, stopSurfaceIndex + 1);
         if (testPath && testPath.length > stopSurfaceIndex) {
             const actualPoint = getRayPointAtSurfaceIndex(testPath, opticalSystemRows, stopSurfaceIndex);
             const errorX = actualPoint.x - targetStopPoint.x;
@@ -2404,7 +2492,7 @@ function findInfiniteSystemApertureRays(chiefRayOrigin, direction, perpendicular
     // --- 新方式: Stop面上の線と円の交点から2点ずつ（垂直/水平）を得る ---
     const traceToStop = (startOrigin) => {
         const ray = { pos: startOrigin, dir: { x: direction.i, y: direction.j, z: direction.k }, wavelength: wavelength };
-        const path = traceRay(opticalSystemRows, ray, 1.0, null, stopSurfaceIndex + 1);
+        const path = traceRayForRenderTs(opticalSystemRows, ray, 1.0, null, stopSurfaceIndex + 1);
         const p = getRayPointAtSurfaceIndex(path, opticalSystemRows, stopSurfaceIndex);
         if (p) return p;
         return null;
@@ -3378,14 +3466,14 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
             }
             
             // 全面まで追跡（光線描画用）
-            const rayPathFull = traceRay(systemRowsForTrace, {
+            const rayPathFull = traceRayForRenderTs(systemRowsForTrace, {
                 pos: rayPosition,
                 dir: rayDirection,
                 wavelength: wavelength  // 波長を追加
             }, 1.0);  // 全面追跡
             
             // 評価面まで追跡（横収差計算用）
-            const rayPathToTarget = targetSurfaceIndex !== null ? traceRay(systemRowsForTrace, {
+            const rayPathToTarget = targetSurfaceIndex !== null ? traceRayForRenderTs(systemRowsForTrace, {
                 pos: rayPosition,
                 dir: rayDirection,
                 wavelength: wavelength  // 波長を追加

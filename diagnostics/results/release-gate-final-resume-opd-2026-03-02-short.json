@@ -1,0 +1,51 @@
+{
+  "timestamp": "2026-03-02T02:22:48.721Z",
+  "startedAt": "2026-03-02T02:22:48.720Z",
+  "thresholds": {
+    "raytraceMaxMismatchRate": 0,
+    "raytraceMaxSuccessMismatchRate": 0,
+    "raytraceMaxMeanOplUm": 0,
+    "raytraceMaxOplUm": 0,
+    "opdMinSpeedup": 1.05,
+    "opdMaxValidDiff": 0,
+    "kktMinTotalSpeedup": 1,
+    "kktMinSolverSpeedup": 1,
+    "kktMinWasmOkRate": 1,
+    "kktMinWasmFeasibleRate": 1
+  },
+  "kktConfig": {
+    "rounds": 1,
+    "n": 12,
+    "meq": 3,
+    "mineq": 3,
+    "maxIter": 10
+  },
+  "controls": {
+    "startFrom": "opd",
+    "output": "diagnostics/results/release-gate-final-resume-opd-2026-03-02-short.json",
+    "checkpoint": "diagnostics/results/release-gate-final-resume-opd-2026-03-02-short.checkpoint.json"
+  },
+  "steps": {
+    "raytrace": {
+      "passed": false,
+      "skipped": true,
+      "golden": null,
+      "analysis": null
+    },
+    "opd": {
+      "passed": false,
+      "skipped": false,
+      "result": null,
+      "analysis": null
+    },
+    "kkt": {
+      "passed": false,
+      "skipped": false,
+      "result": null,
+      "analysis": null
+    }
+  },
+  "passed": false,
+  "failedStep": null,
+  "error": null
+}

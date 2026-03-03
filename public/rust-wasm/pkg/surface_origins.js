@@ -19,6 +19,56 @@ export function advance_ray_batch(pos, dirs, thickness, count) {
 }
 
 /**
+ * @param {Float64Array} r0
+ * @param {Float64Array} r_batches
+ * @param {number} m
+ * @param {number} n
+ * @param {Float64Array} steps
+ * @returns {Float64Array}
+ */
+export function assemble_fd_jacobian(r0, r_batches, m, n, steps) {
+    const ptr0 = passArrayF64ToWasm0(r0, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(r_batches, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(steps, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.assemble_fd_jacobian(ptr0, len0, ptr1, len1, m, n, ptr2, len2);
+    var v4 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v4;
+}
+
+/**
+ * Phase 3: Armijo backtracking line search with JS merit callback
+ *
+ * Finds alpha in {alpha_init, alpha_init*rho, ...} satisfying:
+ *   f(x + alpha * p) <= f0 + c1 * alpha * (grad0^T p)
+ *
+ * Returns accepted alpha, or 0.0 on failure.
+ * @param {Float64Array} x
+ * @param {Float64Array} p
+ * @param {number} f0
+ * @param {Float64Array} grad0
+ * @param {number} alpha_init
+ * @param {number} rho
+ * @param {number} c1
+ * @param {number} max_iter
+ * @param {Function} merit_eval_callback
+ * @returns {number}
+ */
+export function backtracking_line_search_armijo(x, p, f0, grad0, alpha_init, rho, c1, max_iter, merit_eval_callback) {
+    const ptr0 = passArrayF64ToWasm0(x, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(p, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(grad0, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.backtracking_line_search_armijo(ptr0, len0, ptr1, len1, f0, ptr2, len2, alpha_init, rho, c1, max_iter, merit_eval_callback);
+    return ret;
+}
+
+/**
  * @param {Float64Array} mat
  * @param {Float64Array} vecs
  * @param {number} count
@@ -33,6 +83,28 @@ export function batch_mat3_mul_vec3(mat, vecs, count) {
     var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v3;
+}
+
+/**
+ * BFGS Hessian approximation update
+ * Updates H in-place using: H_new = H + (y*y^T)/(y^T*s) - (H*s*(H*s)^T)/(s^T*H*s)
+ * where s = step, y = gradient_difference
+ * H is stored in row-major flat format
+ * @param {Float64Array} h_flat
+ * @param {Float64Array} s
+ * @param {Float64Array} y
+ * @param {number} n
+ * @returns {boolean}
+ */
+export function bfgs_update(h_flat, s, y, n) {
+    var ptr0 = passArrayF64ToWasm0(h_flat, wasm.__wbindgen_malloc);
+    var len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(s, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(y, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.bfgs_update(ptr0, len0, h_flat, ptr1, len1, ptr2, len2, n);
+    return ret !== 0;
 }
 
 /**
@@ -65,6 +137,23 @@ export function calculate_surface_origins(optical_system_rows) {
         throw takeFromExternrefTable0(ret[1]);
     }
     return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Cholesky factorization: A = L * L^T
+ * Returns lower triangular matrix L in row-major flat format
+ * Returns empty vector on failure (not positive definite)
+ * @param {Float64Array} a_flat
+ * @param {number} n
+ * @returns {Float64Array}
+ */
+export function cholesky_factorization(a_flat, n) {
+    const ptr0 = passArrayF64ToWasm0(a_flat, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.cholesky_factorization(ptr0, len0, n);
+    var v2 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v2;
 }
 
 /**
@@ -111,6 +200,71 @@ export function fft_2d_inverse(real_ptr, imag_ptr, rows, cols, real_out_ptr, ima
 }
 
 /**
+ * @param {number} ray_count
+ * @param {number} max_radius
+ * @param {number} ring_count
+ * @returns {Float64Array}
+ */
+export function generate_annular_offsets_flat(ray_count, max_radius, ring_count) {
+    const ret = wasm.generate_annular_offsets_flat(ray_count, max_radius, ring_count);
+    var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v1;
+}
+
+/**
+ * @param {number} ray_count
+ * @param {number} half_extent
+ * @returns {Float64Array}
+ */
+export function generate_centered_grid_offsets_flat(ray_count, half_extent) {
+    const ret = wasm.generate_centered_grid_offsets_flat(ray_count, half_extent);
+    var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v1;
+}
+
+/**
+ * @param {Float64Array} x
+ * @param {Float64Array} steps
+ * @param {number} n
+ * @returns {Float64Array}
+ */
+export function generate_fd_perturbation_points(x, steps, n) {
+    const ptr0 = passArrayF64ToWasm0(x, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(steps, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.generate_fd_perturbation_points(ptr0, len0, ptr1, len1, n);
+    var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v3;
+}
+
+/**
+ * @param {Float64Array} origin
+ * @param {Float64Array} u_axis
+ * @param {Float64Array} v_axis
+ * @param {Float64Array} offsets
+ * @param {number} count
+ * @returns {Float64Array}
+ */
+export function generate_parallel_start_points_flat(origin, u_axis, v_axis, offsets, count) {
+    const ptr0 = passArrayF64ToWasm0(origin, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(u_axis, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(v_axis, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF64ToWasm0(offsets, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.generate_parallel_start_points_flat(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, count);
+    var v5 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v5;
+}
+
+/**
  * @param {Float64Array} ray
  * @param {Float64Array} params
  * @param {number} mode_odd
@@ -145,6 +299,70 @@ export function intersect_aspheric_rt10_batch(rays, ray_count, params, mode_odd,
     var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v3;
+}
+
+/**
+ * Matrix-vector multiplication: result = A * x
+ * A is stored in row-major order (flat array)
+ * @param {Float64Array} a_flat
+ * @param {Float64Array} x
+ * @param {number} rows
+ * @param {number} cols
+ * @returns {Float64Array}
+ */
+export function matrix_vector_multiply(a_flat, x, rows, cols) {
+    const ptr0 = passArrayF64ToWasm0(a_flat, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(x, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.matrix_vector_multiply(ptr0, len0, ptr1, len1, rows, cols);
+    var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v3;
+}
+
+/**
+ * @param {string} payload_json
+ * @returns {string}
+ */
+export function optimize_system_in_wasm(payload_json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(payload_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.optimize_system_in_wasm(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * QR factorization using Householder reflections
+ * Returns (Q, R) where Q is orthogonal and R is upper triangular
+ * Both stored in row-major flat format
+ * Returns empty vectors on failure
+ * @param {Float64Array} a_flat
+ * @param {number} rows
+ * @param {number} cols
+ * @returns {Float64Array}
+ */
+export function qr_factorization(a_flat, rows, cols) {
+    const ptr0 = passArrayF64ToWasm0(a_flat, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.qr_factorization(ptr0, len0, rows, cols);
+    var v2 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v2;
 }
 
 /**
@@ -205,6 +423,111 @@ export function solve_linear_system(a_flat, n, b) {
 }
 
 /**
+ * Phase 2: Solve equality-constrained QP subproblem for SQP
+ *   min 0.5 * dx^T * H * dx + g^T * dx
+ *   s.t. A * dx + c = 0
+ *
+ * KKT system:
+ *   [H  A^T][dx] = [-g]
+ *   [A   0 ][ν ]   [-c]
+ *
+ * Returns packed vector of length (n + 1):
+ *   [dx_0, ..., dx_{n-1}, predicted_reduction]
+ * On failure returns [NaN; n + 1].
+ * @param {Float64Array} h_flat
+ * @param {number} n
+ * @param {Float64Array} g
+ * @param {Float64Array} a_flat
+ * @param {number} m
+ * @param {Float64Array} c
+ * @param {number} damping
+ * @returns {Float64Array}
+ */
+export function solve_qp_subproblem_kkt_equality(h_flat, n, g, a_flat, m, c, damping) {
+    const ptr0 = passArrayF64ToWasm0(h_flat, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(g, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(a_flat, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF64ToWasm0(c, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.solve_qp_subproblem_kkt_equality(ptr0, len0, n, ptr1, len1, ptr2, len2, m, ptr3, len3, damping);
+    var v5 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v5;
+}
+
+/**
+ * Phase 2: Solve unconstrained QP subproblem for SQP
+ *   min 0.5 * dx^T * H * dx + g^T * dx
+ * by solving linear system:
+ *   H * dx = -g
+ *
+ * Returns packed vector of length (n + 1):
+ *   [dx_0, ..., dx_{n-1}, predicted_reduction]
+ * On failure returns [NaN; n + 1].
+ * @param {Float64Array} h_flat
+ * @param {number} n
+ * @param {Float64Array} g
+ * @param {number} damping
+ * @returns {Float64Array}
+ */
+export function solve_qp_subproblem_unconstrained(h_flat, n, g, damping) {
+    const ptr0 = passArrayF64ToWasm0(h_flat, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(g, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.solve_qp_subproblem_unconstrained(ptr0, len0, n, ptr1, len1, damping);
+    var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v3;
+}
+
+/**
+ * @param {Float64Array} initial_origins
+ * @param {Float64Array} dirs
+ * @param {Float64Array} stop_targets
+ * @param {number} ray_count
+ * @param {number} stop_surface_index
+ * @param {number} wavelength_um
+ * @param {number} n_start
+ * @param {Int32Array} row_meta
+ * @param {Float64Array} row_params
+ * @param {Float64Array} row_origins
+ * @param {Float64Array} row_inv_rots
+ * @param {Float64Array} row_rots
+ * @param {number} row_count
+ * @param {number} max_iter
+ * @param {number} tol_mm
+ * @param {number} eps
+ * @param {number} max_step
+ * @returns {Float64Array}
+ */
+export function solve_ray_origins_to_stop_points_with_meta_batch(initial_origins, dirs, stop_targets, ray_count, stop_surface_index, wavelength_um, n_start, row_meta, row_params, row_origins, row_inv_rots, row_rots, row_count, max_iter, tol_mm, eps, max_step) {
+    const ptr0 = passArrayF64ToWasm0(initial_origins, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(dirs, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(stop_targets, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray32ToWasm0(row_meta, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArrayF64ToWasm0(row_params, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passArrayF64ToWasm0(row_origins, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ptr6 = passArrayF64ToWasm0(row_inv_rots, wasm.__wbindgen_malloc);
+    const len6 = WASM_VECTOR_LEN;
+    const ptr7 = passArrayF64ToWasm0(row_rots, wasm.__wbindgen_malloc);
+    const len7 = WASM_VECTOR_LEN;
+    const ret = wasm.solve_ray_origins_to_stop_points_with_meta_batch(ptr0, len0, ptr1, len1, ptr2, len2, ray_count, stop_surface_index, wavelength_um, n_start, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, row_count, max_iter, tol_mm, eps, max_step);
+    var v9 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v9;
+}
+
+/**
  * @param {Float64Array} a_flat
  * @param {number} n
  * @param {Float64Array} b
@@ -257,6 +580,38 @@ export function surface_normal_aspheric_rt10_batch(points, count, params, mode_o
 }
 
 /**
+ * @param {Float64Array} rays
+ * @param {number} ray_count
+ * @param {number} target_surface_index
+ * @param {number} n_start
+ * @param {Int32Array} row_meta
+ * @param {Float64Array} row_params
+ * @param {Float64Array} row_origins
+ * @param {Float64Array} row_inv_rots
+ * @param {Float64Array} row_rots
+ * @param {number} row_count
+ * @returns {Float64Array}
+ */
+export function trace_ray_batch_hit_point_with_meta(rays, ray_count, target_surface_index, n_start, row_meta, row_params, row_origins, row_inv_rots, row_rots, row_count) {
+    const ptr0 = passArrayF64ToWasm0(rays, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray32ToWasm0(row_meta, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(row_params, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF64ToWasm0(row_origins, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArrayF64ToWasm0(row_inv_rots, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passArrayF64ToWasm0(row_rots, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ret = wasm.trace_ray_batch_hit_point_with_meta(ptr0, len0, ray_count, target_surface_index, n_start, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, row_count);
+    var v7 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v7;
+}
+
+/**
  * Phase 3: High-performance batch tracing with system metadata embedded in JSON
  * Full ray-tracing loop implemented in Rust with direct WASM memory access
  * Input: rayArrayPtr (pointer to rays in WASM heap), systemMetaJSON (metadata as JSON), rowCount, nStart
@@ -275,6 +630,37 @@ export function trace_ray_batch_with_system_json(ray_array_ptr, system_meta_json
         throw takeFromExternrefTable0(ret[1]);
     }
     return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * @param {Float64Array} ray
+ * @param {number} target_surface_index
+ * @param {number} n_start
+ * @param {Int32Array} row_meta
+ * @param {Float64Array} row_params
+ * @param {Float64Array} row_origins
+ * @param {Float64Array} row_inv_rots
+ * @param {Float64Array} row_rots
+ * @param {number} row_count
+ * @returns {Float64Array}
+ */
+export function trace_single_ray_hit_point_with_meta(ray, target_surface_index, n_start, row_meta, row_params, row_origins, row_inv_rots, row_rots, row_count) {
+    const ptr0 = passArrayF64ToWasm0(ray, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray32ToWasm0(row_meta, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(row_params, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF64ToWasm0(row_origins, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArrayF64ToWasm0(row_inv_rots, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passArrayF64ToWasm0(row_rots, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ret = wasm.trace_single_ray_hit_point_with_meta(ptr0, len0, target_surface_index, n_start, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, row_count);
+    var v7 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v7;
 }
 
 /**
@@ -320,6 +706,74 @@ export function transform_ray_to_local_batch(pos, dir, origin, inv_mat, count) {
     return v5;
 }
 
+/**
+ * Phase 3: Trust-region radius update helper
+ *
+ * ratio = actual_reduction / predicted_reduction
+ * - ratio < eta1: shrink radius by gamma_dec
+ * - ratio > eta2: expand radius by gamma_inc
+ * - otherwise keep radius
+ * @param {number} predicted_reduction
+ * @param {number} actual_reduction
+ * @param {number} current_radius
+ * @param {number} eta1
+ * @param {number} eta2
+ * @param {number} gamma_dec
+ * @param {number} gamma_inc
+ * @param {number} min_radius
+ * @param {number} max_radius
+ * @returns {number}
+ */
+export function update_trust_region_radius(predicted_reduction, actual_reduction, current_radius, eta1, eta2, gamma_dec, gamma_inc, min_radius, max_radius) {
+    const ret = wasm.update_trust_region_radius(predicted_reduction, actual_reduction, current_radius, eta1, eta2, gamma_dec, gamma_inc, min_radius, max_radius);
+    return ret;
+}
+
+/**
+ * Vector addition with scaling: result = x + alpha * y
+ * @param {Float64Array} x
+ * @param {Float64Array} y
+ * @param {number} alpha
+ * @returns {Float64Array}
+ */
+export function vector_add_scaled(x, y, alpha) {
+    const ptr0 = passArrayF64ToWasm0(x, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(y, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.vector_add_scaled(ptr0, len0, ptr1, len1, alpha);
+    var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v3;
+}
+
+/**
+ * Vector dot product: result = x · y
+ * @param {Float64Array} x
+ * @param {Float64Array} y
+ * @returns {number}
+ */
+export function vector_dot(x, y) {
+    const ptr0 = passArrayF64ToWasm0(x, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(y, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.vector_dot(ptr0, len0, ptr1, len1);
+    return ret;
+}
+
+/**
+ * Vector L2 norm: result = ||x||₂
+ * @param {Float64Array} x
+ * @returns {number}
+ */
+export function vector_norm(x) {
+    const ptr0 = passArrayF64ToWasm0(x, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.vector_norm(ptr0, len0);
+    return ret;
+}
+
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -344,6 +798,9 @@ function __wbg_get_imports() {
             const v = arg0;
             const ret = typeof(v) === 'boolean' ? v : undefined;
             return isLikeNone(ret) ? 0xFFFFFF : ret ? 1 : 0;
+        },
+        __wbg___wbindgen_copy_to_typed_array_fc0809a4dec43528: function(arg0, arg1, arg2) {
+            new Uint8Array(arg2.buffer, arg2.byteOffset, arg2.byteLength).set(getArrayU8FromWasm0(arg0, arg1));
         },
         __wbg___wbindgen_debug_string_0bc8482c6e3508ae: function(arg0, arg1) {
             const ret = debugString(arg1);
@@ -400,6 +857,10 @@ function __wbg_get_imports() {
         },
         __wbg_call_389efe28435a9388: function() { return handleError(function (arg0, arg1) {
             const ret = arg0.call(arg1);
+            return ret;
+        }, arguments); },
+        __wbg_call_4708e0c13bdc8e95: function() { return handleError(function (arg0, arg1, arg2) {
+            const ret = arg0.call(arg1, arg2);
             return ret;
         }, arguments); },
         __wbg_done_57b39ecd9addfe81: function(arg0) {
@@ -474,12 +935,20 @@ function __wbg_get_imports() {
             const ret = new Uint8Array(arg0);
             return ret;
         },
+        __wbg_new_from_slice_38c66b2d6c31f4b7: function(arg0, arg1) {
+            const ret = new Float64Array(getArrayF64FromWasm0(arg0, arg1));
+            return ret;
+        },
         __wbg_next_3482f54c49e8af19: function() { return handleError(function (arg0) {
             const ret = arg0.next();
             return ret;
         }, arguments); },
         __wbg_next_418f80d8f5303233: function(arg0) {
             const ret = arg0.next;
+            return ret;
+        },
+        __wbg_now_a3af9a2f4bbaa4d1: function() {
+            const ret = Date.now();
             return ret;
         },
         __wbg_prototypesetcall_bdcdcc5842e4d77d: function(arg0, arg1, arg2) {
@@ -637,6 +1106,14 @@ function getStringFromWasm0(ptr, len) {
     return decodeText(ptr, len);
 }
 
+let cachedUint32ArrayMemory0 = null;
+function getUint32ArrayMemory0() {
+    if (cachedUint32ArrayMemory0 === null || cachedUint32ArrayMemory0.byteLength === 0) {
+        cachedUint32ArrayMemory0 = new Uint32Array(wasm.memory.buffer);
+    }
+    return cachedUint32ArrayMemory0;
+}
+
 let cachedUint8ArrayMemory0 = null;
 function getUint8ArrayMemory0() {
     if (cachedUint8ArrayMemory0 === null || cachedUint8ArrayMemory0.byteLength === 0) {
@@ -656,6 +1133,13 @@ function handleError(f, args) {
 
 function isLikeNone(x) {
     return x === undefined || x === null;
+}
+
+function passArray32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getUint32ArrayMemory0().set(arg, ptr / 4);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 function passArrayF64ToWasm0(arg, malloc) {
@@ -753,6 +1237,7 @@ function __wbg_finalize_init(instance, module) {
     wasmModule = module;
     cachedDataViewMemory0 = null;
     cachedFloat64ArrayMemory0 = null;
+    cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;

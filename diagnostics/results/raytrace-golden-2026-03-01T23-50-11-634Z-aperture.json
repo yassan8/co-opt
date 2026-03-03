@@ -1,0 +1,189 @@
+{
+  "timestamp": "2026-03-01T23:50:11.879Z",
+  "inputPath": "diagnostics/results/raytrace-golden-2026-03-01T23-50-11-634Z.json",
+  "settings": {
+    "marginNearMm": 0.05
+  },
+  "totals": {
+    "apertureBlockCount": 264,
+    "distinctSurfaces": 3
+  },
+  "bySurface": [
+    {
+      "surfaceIndex": 11,
+      "surfaceNumber": 12,
+      "surfType": "Spherical",
+      "count": 240,
+      "marginMm": {
+        "min": 0.01228073,
+        "p50": 3.637621186,
+        "p90": 6.248482045,
+        "max": 7.55311217,
+        "mean": 3.471874584
+      },
+      "hitRadiusMm": {
+        "min": 12.01228073,
+        "max": 19.55311217
+      },
+      "apertureLimitMm": {
+        "min": 12,
+        "max": 12
+      }
+    },
+    {
+      "surfaceIndex": 6,
+      "surfaceNumber": 7,
+      "surfType": "Spherical",
+      "count": 12,
+      "marginMm": {
+        "min": 0.254801947,
+        "p50": 0.254801947,
+        "p90": 0.883364558,
+        "max": 0.883364558,
+        "mean": 0.464322818
+      },
+      "hitRadiusMm": {
+        "min": 12.254801947,
+        "max": 12.883364558
+      },
+      "apertureLimitMm": {
+        "min": 12,
+        "max": 12
+      }
+    },
+    {
+      "surfaceIndex": 9,
+      "surfaceNumber": 10,
+      "surfType": "Spherical",
+      "count": 12,
+      "marginMm": {
+        "min": 0.167814378,
+        "p50": 0.244790709,
+        "p90": 0.244790709,
+        "max": 0.244790709,
+        "mean": 0.219131932
+      },
+      "hitRadiusMm": {
+        "min": 12.167814378,
+        "max": 12.244790709
+      },
+      "apertureLimitMm": {
+        "min": 12,
+        "max": 12
+      }
+    }
+  ],
+  "nearEdge": [
+    {
+      "index": 70,
+      "surfaceIndex": 11,
+      "surfaceNumber": 12,
+      "marginMm": 0.01228073,
+      "hitRadiusMm": 12.01228073,
+      "apertureLimitMm": 12,
+      "localHit": {
+        "x": -4.7318691996387745,
+        "y": -11.041028132490476,
+        "z": 0.6676227238897507
+      }
+    },
+    {
+      "index": 76,
+      "surfaceIndex": 11,
+      "surfaceNumber": 12,
+      "marginMm": 0.01228073,
+      "hitRadiusMm": 12.01228073,
+      "apertureLimitMm": 12,
+      "localHit": {
+        "x": 4.7318691996387745,
+        "y": -11.041028132490476,
+        "z": 0.6676227238897507
+      }
+    },
+    {
+      "index": 150,
+      "surfaceIndex": 11,
+      "surfaceNumber": 12,
+      "marginMm": 0.01228073,
+      "hitRadiusMm": 12.01228073,
+      "apertureLimitMm": 12,
+      "localHit": {
+        "x": -11.041028132490476,
+        "y": -4.7318691996387745,
+        "z": 0.6676227238897507
+      }
+    },
+    {
+      "index": 164,
+      "surfaceIndex": 11,
+      "surfaceNumber": 12,
+      "marginMm": 0.01228073,
+      "hitRadiusMm": 12.01228073,
+      "apertureLimitMm": 12,
+      "localHit": {
+        "x": 11.041028132490476,
+        "y": -4.7318691996387745,
+        "z": 0.6676227238897507
+      }
+    },
+    {
+      "index": 276,
+      "surfaceIndex": 11,
+      "surfaceNumber": 12,
+      "marginMm": 0.01228073,
+      "hitRadiusMm": 12.01228073,
+      "apertureLimitMm": 12,
+      "localHit": {
+        "x": -11.041028132490476,
+        "y": 4.7318691996387745,
+        "z": 0.6676227238897507
+      }
+    },
+    {
+      "index": 290,
+      "surfaceIndex": 11,
+      "surfaceNumber": 12,
+      "marginMm": 0.01228073,
+      "hitRadiusMm": 12.01228073,
+      "apertureLimitMm": 12,
+      "localHit": {
+        "x": 11.041028132490476,
+        "y": 4.7318691996387745,
+        "z": 0.6676227238897507
+      }
+    },
+    {
+      "index": 364,
+      "surfaceIndex": 11,
+      "surfaceNumber": 12,
+      "marginMm": 0.01228073,
+      "hitRadiusMm": 12.01228073,
+      "apertureLimitMm": 12,
+      "localHit": {
+        "x": -4.7318691996387745,
+        "y": 11.041028132490476,
+        "z": 0.6676227238897507
+      }
+    },
+    {
+      "index": 370,
+      "surfaceIndex": 11,
+      "surfaceNumber": 12,
+      "marginMm": 0.01228073,
+      "hitRadiusMm": 12.01228073,
+      "apertureLimitMm": 12,
+      "localHit": {
+        "x": 4.7318691996387745,
+        "y": 11.041028132490476,
+        "z": 0.6676227238897507
+      }
+    }
+  ],
+  "crossChecks": {
+    "rustSingleHitMetaStatus": {
+      "aperture_block": 264,
+      "ok": 177
+    },
+    "rustCapturedFailure": 0
+  }
+}

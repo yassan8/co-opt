@@ -90,6 +90,17 @@
     }
 })();
 
+(() => {
+    try {
+        const globalScope = globalThis as any;
+        if (typeof globalScope.__COOPT_FORCE_RUST_WASM_OPD === 'undefined') {
+            globalScope.__COOPT_FORCE_RUST_WASM_OPD = true;
+        }
+    } catch {
+        // ignore
+    }
+})();
+
 // =============================================================================
 // IMPORTS
 // =============================================================================
@@ -157,6 +168,7 @@ import { getActiveConfiguration } from './data/table-configuration.ts';
 import { expandBlocksToOpticalSystemRows } from './data/block-schema.ts';
 import { exposeWindowValue, installCooptWindowFacadeMarker, requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from './core/window-facade.ts';
 import { setRenderingContext } from './core/rendering-context.ts';
+import { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } from './rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 
 // Editor modules (must be imported to initialize)
 import './ui/editors/system-requirements-editor.ts';
@@ -175,26 +187,6 @@ import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTran
 
 // Performance monitoring (削除されたファイルなのでコメントアウト)
 // import { performanceMonitor } from './performance-monitor.ts';
-
-// WASM acceleration system
-let __forceWasmSystemClassPromise: Promise<any> | null = null;
-async function loadForceWASMSystemClass() {
-    const w = (typeof window !== 'undefined') ? (window as any) : null;
-    if (w && typeof w.ForceWASMSystem === 'function') {
-        return w.ForceWASMSystem;
-    }
-
-    if (!__forceWasmSystemClassPromise) {
-        __forceWasmSystemClassPromise = import('./wasm/raytracing/force-wasm-system.ts')
-            .then(mod => mod?.ForceWASMSystem || null)
-            .catch((error) => {
-                console.warn('⚠️ [Init] Failed to load ForceWASMSystem module:', error);
-                return null;
-            });
-    }
-
-    return __forceWasmSystemClassPromise;
-}
 
 // THREE.js and OrbitControls imports
 import * as THREE from 'three';
@@ -219,8 +211,6 @@ interface CameraOptions {
 window['THREE'] = THREE;
 window['OrbitControls'] = OrbitControls;
 
-// ForceWASMSystem globals are owned by wasm/raytracing/force-wasm-system.ts (legacy) or a dedicated service module.
-
 // Global WASM system instance
 let wasmSystem = null;
 
@@ -239,30 +229,29 @@ async function initializeApplication() {
         // Initialize WASM system (non-blocking - run in background)
         const wasmInitPromise = (async () => {
             try {
-                const ForceWASMSystemClass = await loadForceWASMSystemClass();
-                if (!ForceWASMSystemClass) {
+                const rustApi = await preloadRustRayTracingWasm();
+                if (!rustApi) {
+                    const initError = getRustRayTracingWasmInitError?.();
+                    if (initError) {
+                        console.warn('⚠️ [Init] Rust-WASM preload failed:', initError);
+                    }
                     return;
                 }
 
-                wasmSystem = new ForceWASMSystemClass();
-                console.log('🔧 [Init] ForceWASMSystem インスタンスを作成しました');
+                wasmSystem = {
+                    backend: 'rust-wasm',
+                    isWASMReady: true,
+                    api: rustApi
+                };
+                console.log('🔧 [Init] Rust-WASM backend is ready');
                 
                 // Update the global reference immediately
                 if (typeof window !== 'undefined' && typeof window._setWASMSystem === 'function') {
                     window._setWASMSystem(wasmSystem);
                     console.log('🔧 [Init] window._setWASMSystemでインスタンスを更新しました');
                 }
-                
-                // Shorter timeout for WASM initialization
-                const initTimeout = new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('WASM initialization timeout')), 3000)
-                );
-                
-                await Promise.race([
-                    wasmSystem.forceInitializeWASM(),
-                    initTimeout
-                ]);
-                console.log('✅ [Init] WASM初期化が完了しました');
+
+                console.log('✅ [Init] Rust-WASM初期化が完了しました');
             } catch (error) {
                 console.warn('⚠️ WASM initialization failed:', error);
                 // Set a flag to indicate WASM is not available
@@ -947,7 +936,14 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                     );
 
                     // window.traceRayと同じ呼び出し方法
-                    const rayPath = window.traceRay ? window.traceRay(opticalSystemRows, ray, 1.0) : null;
+                    const rayPath = window.traceRay ? window.traceRay(opticalSystemRows, ray, 1.0, null, null, {
+                        allowNonStrict: true,
+                        requireWasmRayTracing: false,
+                        useRustWasm: false,
+                        requireRustWasm: false,
+                        disableWasmRayTracing: true,
+                        __renderRayTracingTsOnly: true
+                    }) : null;
 
                     if (rayPath && rayPath.length > 1) {
                         console.log(`   開始位置確認: (${rayPath[0].x.toFixed(3)}, ${rayPath[0].y.toFixed(3)}, ${rayPath[0].z.toFixed(3)})`);

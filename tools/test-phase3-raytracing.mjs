@@ -4,7 +4,7 @@
  * Validates that Rust-side ray tracing processes rays correctly
  */
 
-import { preloadRustRayTracingWasm, getRustRayTracingWasmSync } from '../wasm/raytracing/rust-raytracing-wasm.ts';
+import { preloadRustRayTracingWasm, getRustRayTracingWasmSync } from '../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 
 async function testPhase3() {
   console.log('=== Phase 3 Full Ray-Tracing Test ===\n');

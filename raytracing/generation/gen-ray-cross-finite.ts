@@ -14,6 +14,23 @@
 
 import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, asphericSag } from '../core/ray-tracing.ts';
 
+const RENDER_TS_TRACE_OPTIONS = {
+    allowNonStrict: true,
+    requireWasmRayTracing: false,
+    useRustWasm: false,
+    requireRustWasm: false,
+    disableWasmRayTracing: true,
+    __renderRayTracingTsOnly: true
+};
+
+function traceRayForRenderTs(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, maxSurfaceIndex = null) {
+    return traceRay(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, RENDER_TS_TRACE_OPTIONS);
+}
+
+function traceRayHitPointForRenderTs(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null) {
+    return traceRayHitPoint(opticalSystemRows, ray0, n0, targetSurfaceIndex, RENDER_TS_TRACE_OPTIONS);
+}
+
 function isCoordTransRow(row) {
     const st = String(row?.surfType ?? row?.['surf type'] ?? '').toLowerCase();
     return st === 'coord trans' || st === 'coordinate transform' || st === 'ct' || st === 'coordtrans' || st === 'coordinatetransform';
@@ -314,7 +331,7 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
             };
             
             try {
-                const actualStopPoint = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
+                const actualStopPoint = traceRayHitPointForRenderTs(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
                 return actualStopPoint ? (actualStopPoint.x - stopCenter.x) : 1000;
             } catch (error) {
                 return 1000;
@@ -339,7 +356,7 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
             };
             
             try {
-                const actualStopPoint = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
+                const actualStopPoint = traceRayHitPointForRenderTs(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
                 return actualStopPoint ? (actualStopPoint.y - stopCenter.y) : 1000;
             } catch (error) {
                 return 1000;
@@ -560,7 +577,7 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
             wavelength: wavelength
         };
         
-        const verificationPoint = traceRayHitPoint(opticalSystemRows, verificationRay, 1.0, stopSurfaceIndex);
+        const verificationPoint = traceRayHitPointForRenderTs(opticalSystemRows, verificationRay, 1.0, stopSurfaceIndex);
         if (verificationPoint) {
             const actualPoint = verificationPoint;
             const errorX = actualPoint.x - stopCenter.x;
@@ -601,7 +618,7 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                         wavelength: wavelength
                     };
                     
-                    const testPoint = traceRayHitPoint(opticalSystemRows, testRay, 1.0, stopSurfaceIndex);
+                    const testPoint = traceRayHitPointForRenderTs(opticalSystemRows, testRay, 1.0, stopSurfaceIndex);
                     if (testPoint) {
                         const testErrorX = testPoint.x - stopCenter.x;
                         const testErrorY = testPoint.y - stopCenter.y;
@@ -705,7 +722,7 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
             };
             
             try {
-                const actualStopPoint = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
+                const actualStopPoint = traceRayHitPointForRenderTs(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
                 return actualStopPoint ? (actualStopPoint.x - targetPoint.x) : 1000;
             } catch (error) {
                 return 1000;
@@ -730,7 +747,7 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
             };
             
             try {
-                const actualStopPoint = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
+                const actualStopPoint = traceRayHitPointForRenderTs(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
                 return actualStopPoint ? (actualStopPoint.y - targetPoint.y) : 1000;
             } catch (error) {
                 return 1000;
@@ -850,7 +867,7 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
         };
         
         try {
-            const verificationPoint = traceRayHitPoint(opticalSystemRows, verificationRay, 1.0, stopSurfaceIndex);
+            const verificationPoint = traceRayHitPointForRenderTs(opticalSystemRows, verificationRay, 1.0, stopSurfaceIndex);
             if (verificationPoint) {
                 const actualPoint = verificationPoint;
                 const errorX = actualPoint.x - targetPoint.x;
@@ -902,7 +919,7 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                             };
                             
                             try {
-                                const actualPoint = traceRayHitPoint(opticalSystemRows, testRay, 1.0, stopSurfaceIndex);
+                                const actualPoint = traceRayHitPointForRenderTs(opticalSystemRows, testRay, 1.0, stopSurfaceIndex);
                                 if (!actualPoint) continue;
                                 const errorX = actualPoint.x - targetPoint.x;
                                 const errorY = actualPoint.y - targetPoint.y;
@@ -944,7 +961,7 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                         }
                         const k2 = 1 - (refined.i*refined.i + refined.j*refined.j);
                         refined.k = k2 > 0 ? Math.sqrt(k2) : 1e-6;
-                        const p = traceRayHitPoint(opticalSystemRows, { pos: objectPosition, dir: { x: refined.i, y: refined.j, z: refined.k } }, 1.0, stopSurfaceIndex);
+                        const p = traceRayHitPointForRenderTs(opticalSystemRows, { pos: objectPosition, dir: { x: refined.i, y: refined.j, z: refined.k } }, 1.0, stopSurfaceIndex);
                         if (p) {
                             const ex = p.x - targetPoint.x;
                             const ey = p.y - targetPoint.y;
@@ -1001,7 +1018,7 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                         };
                         
                         try {
-                            const actualPoint = traceRayHitPoint(opticalSystemRows, testRay, 1.0, stopSurfaceIndex);
+                            const actualPoint = traceRayHitPointForRenderTs(opticalSystemRows, testRay, 1.0, stopSurfaceIndex);
                             if (!actualPoint) continue;
                             const errorX = actualPoint.x - targetPoint.x;
                             const errorY = actualPoint.y - targetPoint.y;
@@ -1136,7 +1153,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                     pos: { x: 0, y: 0, z: 0 },
                     dir: { x: 0, y: 0, z: 1 }
                 };
-                const testPath = traceRay(opticalSystemRows, testRay, 1.0);
+                const testPath = traceRayForRenderTs(opticalSystemRows, testRay, 1.0);
                 console.log(`   テスト光線（光軸沿い）: ${rayPathLength(testPath)}点`);
                 if (Array.isArray(testPath) && testPath.length > 1) {
                     console.log(`   テスト光線成功: 開始(${testPath[0].x.toFixed(3)}, ${testPath[0].y.toFixed(3)}, ${testPath[0].z.toFixed(3)}) → 終了(${testPath[testPath.length-1].x.toFixed(3)}, ${testPath[testPath.length-1].y.toFixed(3)}, ${testPath[testPath.length-1].z.toFixed(3)})`);
@@ -1230,7 +1247,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                         pos: fixedObjectPos,
                         dir: { x: 0, y: 0, z: 1 } // まっすぐ前方
                     };
-                    const simpleTestPath = traceRay(opticalSystemRows, simpleTestRay, 1.0);
+                    const simpleTestPath = traceRayForRenderTs(opticalSystemRows, simpleTestRay, 1.0);
                     console.log(`   Object${actualObjectIndex + 1}基本テスト: パス長${rayPathLength(simpleTestPath)}`);
                     
                     if (rayPathLength(simpleTestPath) <= 1) {
@@ -1307,7 +1324,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                         pos: fixedObjectPos,
                         dir: { x: chiefRayDirection.i, y: chiefRayDirection.j, z: chiefRayDirection.k }
                     };
-                    const chiefTestPath = traceRay(opticalSystemRows, chiefTestRay, 1.0);
+                    const chiefTestPath = traceRayForRenderTs(opticalSystemRows, chiefTestRay, 1.0);
                     console.log(`   主光線テスト: パス長${rayPathLength(chiefTestPath)}`);
                     
                     if (rayPathLength(chiefTestPath) > stopSurfaceIndex) {
@@ -1407,7 +1424,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
 
             // 主光線が絞り面で実際に通過する位置を取得
             const chiefTestRay = { pos: fixedObjectPos, dir: { x: chiefRayDirection.i, y: chiefRayDirection.j, z: chiefRayDirection.k } };
-            const chiefRayPath = traceRay(opticalSystemRows, chiefTestRay, 1.0);
+            const chiefRayPath = traceRayForRenderTs(opticalSystemRows, chiefTestRay, 1.0);
             let chiefStopX = 0, chiefStopY = 0;
             if (rayPathLength(chiefRayPath) > stopSurfaceIndex) {
                 const stopPoint = getRayPointAtSurfaceIndex(chiefRayPath, opticalSystemRows, stopSurfaceIndex);
@@ -1728,7 +1745,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                         console.log(`🔬 [RayTrace] 光線${ray.rayIndex}(${ray.type}): 位置(${ray.position.x.toFixed(3)}, ${ray.position.y.toFixed(3)}, ${ray.position.z.toFixed(3)}), 方向(${ray.direction.x.toFixed(6)}, ${ray.direction.y.toFixed(6)}, ${ray.direction.z.toFixed(6)})`);
                     }
                     
-                    const rayPath = traceRay(opticalSystemRows, {
+                    const rayPath = traceRayForRenderTs(opticalSystemRows, {
                         pos: ray.position,
                         dir: ray.direction,
                         wavelength: wavelength

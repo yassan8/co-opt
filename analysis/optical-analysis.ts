@@ -26,6 +26,100 @@ const console = globalThis.console as Console;
 
 let spotDiagramRequestCounter = 0;
 let pendingSpotDiagramRequest: { requestId: number; options: any; requestedAt: number } | null = null;
+let analysisRustTraceOptionsCache: { options: any; at: number } | null = null;
+let analysisRustTraceOptionsPromise: Promise<any | null> | null = null;
+
+async function resolveAnalysisRustTraceOptions(): Promise<any | null> {
+    const now = Date.now();
+    if (analysisRustTraceOptionsCache && (now - analysisRustTraceOptionsCache.at) < 3000) {
+        return analysisRustTraceOptionsCache.options;
+    }
+
+    if (analysisRustTraceOptionsPromise) {
+        return analysisRustTraceOptionsPromise;
+    }
+
+    analysisRustTraceOptionsPromise = (async () => {
+        const preferRustWasm = (() => {
+            try {
+                return !(typeof window !== 'undefined' && (window as any).__COOPT_DISABLE_RUST_WASM_ANALYSIS === true);
+            } catch (_) {
+                return true;
+            }
+        })();
+        const requireRustWasm = (() => {
+            try {
+                return typeof window !== 'undefined' && (window as any).__COOPT_REQUIRE_RUST_WASM_ANALYSIS === true;
+            } catch (_) {
+                return false;
+            }
+        })();
+
+        if (!preferRustWasm) {
+            analysisRustTraceOptionsCache = { options: null, at: Date.now() };
+            return null;
+        }
+
+        try {
+            const rustWasm = await import('../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts');
+            const api = rustWasm.getRustRayTracingWasmSync?.() || await rustWasm.preloadRustRayTracingWasm?.();
+            if (api) {
+                const options = {
+                    useRustWasm: true,
+                    requireRustWasm,
+                    allowNonStrict: !requireRustWasm
+                };
+                try {
+                    (window as any).__COOPT_LAST_ANALYSIS_BACKEND = {
+                        kind: 'rust-wasm',
+                        at: Date.now()
+                    };
+                    console.warn('🧭 [Analysis Backend] Rust-WASM');
+                } catch (_) {}
+                analysisRustTraceOptionsCache = { options, at: Date.now() };
+                return options;
+            }
+
+            const errorDetail = (typeof rustWasm.getRustRayTracingWasmInitError === 'function')
+                ? rustWasm.getRustRayTracingWasmInitError()
+                : null;
+            if (requireRustWasm) {
+                throw new Error(`Rust WASM is unavailable${errorDetail ? ` (${errorDetail})` : ''}`);
+            }
+            try {
+                (window as any).__COOPT_LAST_ANALYSIS_BACKEND = {
+                    kind: 'js',
+                    detail: errorDetail || 'Rust WASM unavailable',
+                    at: Date.now()
+                };
+                console.warn(`🧭 [Analysis Backend] JavaScript fallback${errorDetail ? ` (${errorDetail})` : ''}`);
+            } catch (_) {}
+            analysisRustTraceOptionsCache = { options: null, at: Date.now() };
+            return null;
+        } catch (error: any) {
+            if (requireRustWasm) {
+                throw error;
+            }
+            try {
+                const detail = String(error?.message || error || 'Rust WASM init failed');
+                (window as any).__COOPT_LAST_ANALYSIS_BACKEND = {
+                    kind: 'js',
+                    detail,
+                    at: Date.now()
+                };
+                console.warn(`🧭 [Analysis Backend] JavaScript fallback (${detail})`);
+            } catch (_) {}
+            analysisRustTraceOptionsCache = { options: null, at: Date.now() };
+            return null;
+        }
+    })();
+
+    try {
+        return await analysisRustTraceOptionsPromise;
+    } finally {
+        analysisRustTraceOptionsPromise = null;
+    }
+}
 
 function cloneOpticalSystemRowsWithDefocusShift(opticalSystemRows: any[], defocusShiftMm: number, isFiniteObject: boolean = false): any[] {
     const shift = Number(defocusShiftMm);
@@ -134,7 +228,32 @@ export function clearAllDrawing(): void {
 export async function showSpotDiagram(options: any = {}): Promise<void> {
     console.log('🎯 Starting spot diagram generation...');
 
+    const nowMs = () => {
+        try {
+            if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+                return performance.now();
+            }
+        } catch (_) {}
+        return Date.now();
+    };
+    const profileStartMs = nowMs();
+
     const requestId = ++spotDiagramRequestCounter;
+    const spotProfile: any = {
+        requestId,
+        startedAt: Date.now(),
+        backend: null,
+        input: null,
+        result: null,
+        timingsMs: {
+            resolveBackend: 0,
+            generateData: 0,
+            render: 0,
+            total: 0
+        },
+        status: 'running',
+        error: null
+    };
 
     // If a configuration switch is in progress, the Tabulator tables can be mid-update.
     // Defer this request so we don't mix old object rows with the new optical system.
@@ -1071,6 +1190,30 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
         }
         
         const surfaceNumber = surfaceIndex + 1;
+        const backendResolveStartMs = nowMs();
+        const analysisTraceOptions = await resolveAnalysisRustTraceOptions();
+        spotProfile.timingsMs.resolveBackend = Math.max(0, nowMs() - backendResolveStartMs);
+        spotProfile.backend = (() => {
+            try {
+                const b = (typeof window !== 'undefined') ? (w as any).__COOPT_LAST_ANALYSIS_BACKEND : null;
+                if (b && typeof b === 'object') return b;
+            } catch (_) {}
+            return {
+                kind: (analysisTraceOptions && analysisTraceOptions.useRustWasm === true) ? 'rust-wasm' : 'js',
+                at: Date.now()
+            };
+        })();
+        spotProfile.input = {
+            surfaceId,
+            surfaceIndex,
+            surfaceNumber,
+            rayCount,
+            ringCount,
+            wavelengthNm: wavelength,
+            pattern: patternFromUi,
+            objectCount: Array.isArray(objectRows) ? objectRows.length : 0,
+            opticalSurfaceCount: Array.isArray(opticalSystemRows) ? opticalSystemRows.length : 0
+        };
         console.log(`🎯 Final surface resolution: surfaceId(input)=${surfaceId} → rowIndex=${surfaceIndex} → surfaceNumber=${surfaceNumber}`);
         console.log(`🎯 Target surface:`, opticalSystemRows[surfaceIndex]);
         
@@ -1095,7 +1238,7 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             
             // Import functions and use default object data
             const { generateSpotDiagramAsync, drawSpotDiagram } = await import('../evaluation/spot-diagram.js');
-            
+            const generateStartMs = nowMs();
             const spotDiagramData = await generateSpotDiagramAsync(
                 opticalSystemRows,
                 effectiveSourceRowsForSpot,
@@ -1103,27 +1246,48 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 surfaceNumber,
                 rayCount,
                 ringCount,
-                { onProgress, physicalVignetting: true, displaySurfaceNumber: surfaceId, pattern: patternFromUi }
+                {
+                    onProgress,
+                    physicalVignetting: true,
+                    displaySurfaceNumber: surfaceId,
+                    pattern: patternFromUi,
+                    traceOptions: analysisTraceOptions
+                }
             );
+            spotProfile.timingsMs.generateData += Math.max(0, nowMs() - generateStartMs);
             
             if (!spotDiagramData) {
                 throw new Error('Failed to generate spot diagram data');
             }
+            spotProfile.result = {
+                objectCount: Array.isArray(spotDiagramData?.spotData) ? spotDiagramData.spotData.length : 0,
+                totalRays: Array.isArray(spotDiagramData?.spotData)
+                    ? spotDiagramData.spotData.reduce((sum: number, o: any) => sum + (Number(o?.totalRays) || 0), 0)
+                    : 0,
+                successfulRays: Array.isArray(spotDiagramData?.spotData)
+                    ? spotDiagramData.spotData.reduce((sum: number, o: any) => sum + (Number(o?.successfulRays) || 0), 0)
+                    : 0,
+                generationProfile: (spotDiagramData && typeof spotDiagramData === 'object' && spotDiagramData.profile)
+                    ? spotDiagramData.profile
+                    : null
+            };
             
             // Draw spot diagram with proper parameters
             try { onProgress?.({ percent: 90, message: 'Rendering...' }); } catch (_) {}
+            const renderStartMs = nowMs();
             await drawSpotDiagram(
                 spotDiagramData, 
                 surfaceNumber,
                 containerTarget,
                 (wavelength / 1000) as any // convert nm to μm
             );
+            spotProfile.timingsMs.render += Math.max(0, nowMs() - renderStartMs);
             try { onProgress?.({ percent: 100, message: 'Done' }); } catch (_) {}
             
         } else {
             // Generate spot diagram with existing object data
             const { generateSpotDiagramAsync, drawSpotDiagram } = await import('../evaluation/spot-diagram.js');
-            
+            const generateStartMs = nowMs();
             const spotDiagramData = await generateSpotDiagramAsync(
                 opticalSystemRows,
                 effectiveSourceRowsForSpot,
@@ -1131,12 +1295,31 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
                 surfaceNumber,
                 rayCount,
                 ringCount,
-                { onProgress, physicalVignetting: true, displaySurfaceNumber: surfaceId, pattern: patternFromUi }
+                {
+                    onProgress,
+                    physicalVignetting: true,
+                    displaySurfaceNumber: surfaceId,
+                    pattern: patternFromUi,
+                    traceOptions: analysisTraceOptions
+                }
             );
+            spotProfile.timingsMs.generateData += Math.max(0, nowMs() - generateStartMs);
             
             if (!spotDiagramData) {
                 throw new Error('Failed to generate spot diagram data');
             }
+            spotProfile.result = {
+                objectCount: Array.isArray(spotDiagramData?.spotData) ? spotDiagramData.spotData.length : 0,
+                totalRays: Array.isArray(spotDiagramData?.spotData)
+                    ? spotDiagramData.spotData.reduce((sum: number, o: any) => sum + (Number(o?.totalRays) || 0), 0)
+                    : 0,
+                successfulRays: Array.isArray(spotDiagramData?.spotData)
+                    ? spotDiagramData.spotData.reduce((sum: number, o: any) => sum + (Number(o?.successfulRays) || 0), 0)
+                    : 0,
+                generationProfile: (spotDiagramData && typeof spotDiagramData === 'object' && spotDiagramData.profile)
+                    ? spotDiagramData.profile
+                    : null
+            };
             
             console.log('📋 [SPOT DIAGRAM] About to call drawSpotDiagram with:', {
                 spotDataType: typeof spotDiagramData,
@@ -1149,21 +1332,67 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             
             // Draw spot diagram with proper parameters
             try { onProgress?.({ percent: 90, message: 'Rendering...' }); } catch (_) {}
+            const renderStartMs = nowMs();
             await drawSpotDiagram(
                 spotDiagramData, 
                 surfaceNumber,
                 containerTarget,
                 wavelength / 1000 as any // convert nm to μm
             );
+            spotProfile.timingsMs.render += Math.max(0, nowMs() - renderStartMs);
 
             try { onProgress?.({ percent: 100, message: 'Done' }); } catch (_) {}
             
             console.log('✅ [SPOT DIAGRAM] drawSpotDiagram call completed');
         }
+
+        spotProfile.timingsMs.total = Math.max(0, nowMs() - profileStartMs);
+        spotProfile.status = 'ok';
+        try {
+            if (typeof window !== 'undefined') {
+                (w as any).__cooptLastSpotDiagramProfile = spotProfile;
+                const prev = Array.isArray((w as any).__cooptSpotDiagramProfileHistory)
+                    ? (w as any).__cooptSpotDiagramProfileHistory
+                    : [];
+                const next = prev.concat([spotProfile]);
+                (w as any).__cooptSpotDiagramProfileHistory = next.slice(Math.max(0, next.length - 20));
+            }
+        } catch (_) {}
+        console.warn('⏱️ [SPOT PROFILE]', {
+            backend: spotProfile?.backend?.kind || 'unknown',
+            totalMs: Number(spotProfile?.timingsMs?.total || 0).toFixed(1),
+            resolveBackendMs: Number(spotProfile?.timingsMs?.resolveBackend || 0).toFixed(1),
+            generateDataMs: Number(spotProfile?.timingsMs?.generateData || 0).toFixed(1),
+            generateCloneRowsMs: Number(spotProfile?.result?.generationProfile?.timingsMs?.cloneRows || 0).toFixed(1),
+            generateStartsMs: Number(spotProfile?.result?.generationProfile?.timingsMs?.generateStarts || 0).toFixed(1),
+            generateTraceRayMs: Number(spotProfile?.result?.generationProfile?.timingsMs?.traceRay || 0).toFixed(1),
+            generateNonTraceMs: Number(spotProfile?.result?.generationProfile?.timingsMs?.nonTrace || 0).toFixed(1),
+            renderMs: Number(spotProfile?.timingsMs?.render || 0).toFixed(1),
+            traceRayCalls: Number(spotProfile?.result?.generationProfile?.counters?.traceRayCalls || 0),
+            pupilAttempts: Number(spotProfile?.result?.generationProfile?.counters?.pupilAttempts || 0),
+            startGenerationCacheHits: Number(spotProfile?.result?.generationProfile?.counters?.startGenerationCacheHits || 0),
+            startGenerationCacheMisses: Number(spotProfile?.result?.generationProfile?.counters?.startGenerationCacheMisses || 0),
+            raysTried: Number(spotProfile?.result?.generationProfile?.counters?.raysTried || 0),
+            objects: Number(spotProfile?.result?.objectCount || 0),
+            rays: Number(spotProfile?.result?.successfulRays || 0) + '/' + Number(spotProfile?.result?.totalRays || 0)
+        });
         
         console.log('✅ Spot diagram generated successfully');
         
     } catch (error) {
+        spotProfile.timingsMs.total = Math.max(0, nowMs() - profileStartMs);
+        spotProfile.status = 'error';
+        spotProfile.error = String((error as any)?.message || error || 'unknown error');
+        try {
+            if (typeof window !== 'undefined') {
+                (w as any).__cooptLastSpotDiagramProfile = spotProfile;
+                const prev = Array.isArray((w as any).__cooptSpotDiagramProfileHistory)
+                    ? (w as any).__cooptSpotDiagramProfileHistory
+                    : [];
+                const next = prev.concat([spotProfile]);
+                (w as any).__cooptSpotDiagramProfileHistory = next.slice(Math.max(0, next.length - 20));
+            }
+        } catch (_) {}
         console.error('❌ Error generating spot diagram:', error);
         console.error('Error details:', (error as any).stack);
         const container = typeof containerTarget === 'string'
@@ -1392,6 +1621,7 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
         const pattern = (patternFromOption === 'grid' || patternFromOption === 'annular')
             ? patternFromOption
             : getSpotDiagramPattern();
+        const analysisTraceOptions = await resolveAnalysisRustTraceOptions();
 
         for (let i = 0; i < defocusValues.length; i++) {
             const shift = defocusValues[i];
@@ -1433,7 +1663,8 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
                             conjugateType: isFiniteObject ? 'finite' : 'infinite',
                             // For Through-Focus with infinite conjugate, disable origin solving
                             // since defocus shifts can confuse the chief ray calculation
-                            allowStopBasedOriginSolve: false
+                            allowStopBasedOriginSolve: false,
+                            traceOptions: analysisTraceOptions
                         }
                     );
 
@@ -2558,6 +2789,12 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
+    const useActiveConfigSnapshot = (options && typeof options === 'object')
+        ? options.useActiveConfigSnapshot === true
+        : false;
+    const configId = (options && typeof options === 'object')
+        ? options.configId
+        : null;
 
     const mapProgress = (base: number, span: number, prefix?: string) => {
         if (!onProgress) return null;
@@ -2573,13 +2810,67 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
     
     try {
         try { onProgress?.({ percent: 0, message: 'Starting...' }); } catch (_) {}
+        const normalizeObjectRows = (rows: any) => {
+            if (!Array.isArray(rows)) return [];
+            return rows.map((r: any) => {
+                if (!r || typeof r !== 'object') return r;
+                const out = { ...r } as any;
+                if (out.xHeightAngle == null && out['object x'] != null) out.xHeightAngle = out['object x'];
+                if (out.yHeightAngle == null && out['object y'] != null) out.yHeightAngle = out['object y'];
+                if (out.xHeightAngle == null && out.x != null) out.xHeightAngle = out.x;
+                if (out.yHeightAngle == null && out.y != null) out.yHeightAngle = out.y;
+                if (out.position == null && out.objectType != null) out.position = out.objectType;
+                return out;
+            });
+        };
+        const loadConfigSnapshot = () => {
+            try {
+                if (typeof localStorage === 'undefined') return null;
+                const sys = loadSystemConfigurations();
+                if (!sys || !Array.isArray(sys.configurations)) return null;
+                const activeId = (sys.activeConfigId !== undefined && sys.activeConfigId !== null)
+                    ? String(sys.activeConfigId)
+                    : '';
+                const targetId = (configId !== null && configId !== undefined)
+                    ? String(configId)
+                    : activeId;
+                if (!targetId) return null;
+                const cfg = sys.configurations.find((c: any) => String(c?.id) === targetId);
+                if (!cfg) return null;
+                const snapshotSourceRows = (() => {
+                    try {
+                        const rows = loadSourceTableData();
+                        return Array.isArray(rows) ? rows : [];
+                    } catch (_) {
+                        return [];
+                    }
+                })();
+                return {
+                    opticalSystemRows: Array.isArray(cfg.opticalSystem) ? cfg.opticalSystem : [],
+                    objectRows: normalizeObjectRows(Array.isArray(cfg.object) ? cfg.object : []),
+                    sourceRows: snapshotSourceRows
+                };
+            } catch (e) {
+                console.warn('⚠️ Failed to load config snapshot for integrated aberration:', e);
+                return null;
+            }
+        };
+
         // 光学系データを取得
         const tableOpticalSystem = getTableOpticalSystem();
         const tableObject = getTableObject();
         const tableSource = getTableSource();
-        const opticalSystemRows = getOpticalSystemRows(tableOpticalSystem);
-        const objectRows = getObjectRows(tableObject);
-        const sourceRows = getSourceRows(tableSource);
+        let opticalSystemRows = getOpticalSystemRows(tableOpticalSystem);
+        let objectRows = normalizeObjectRows(getObjectRows(tableObject));
+        let sourceRows = getSourceRows(tableSource);
+        if (useActiveConfigSnapshot || (configId !== null && configId !== undefined)) {
+            const snapshot = loadConfigSnapshot();
+            if (snapshot?.opticalSystemRows?.length) {
+                opticalSystemRows = snapshot.opticalSystemRows;
+                objectRows = snapshot.objectRows;
+                sourceRows = snapshot.sourceRows;
+            }
+        }
         
         if (!opticalSystemRows || opticalSystemRows.length === 0) {
             alert('光学系データがありません。');

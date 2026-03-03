@@ -24,7 +24,15 @@ import { requestRefreshBlockInspector } from '../core/window-facade.ts';
 import { getWindowDebugBagValue, setWindowDebugBagValue } from '../utils/window-debug-bag.ts';
 import { runKKTOptimization } from './kkt-optimizer.ts';
 import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
-import { preloadOptimizerWasmBridge, solveLinearSystemWithOptimizerWasm, buildNormalEquationsWithOptimizerWasm, getOptimizerWasmBridgeDebugInfo } from '../wasm/optimization/optimizer-wasm-bridge.ts';
+import {
+  preloadOptimizerWasmBridge,
+  solveLinearSystemWithOptimizerWasm,
+  buildNormalEquationsWithOptimizerWasm,
+  getOptimizerWasmBridgeDebugInfo,
+  generateFiniteDifferencePerturbationPointsWasm,
+  assembleFiniteDifferenceJacobianWasm,
+  optimizeSystemOneIterationWasm
+} from '../rust-wasm/ts/optimization/optimizer-wasm-bridge.ts';
 
 let __optimizerStopRequested = false;
 
@@ -102,6 +110,328 @@ function setLastOptimizerResidualDebug(value) {
 
 function setLastOptimizeProfile(value) {
   setWindowDebugBagValue('optimizerMvp', 'lastOptimizeProfile', value && typeof value === 'object' ? value : null);
+}
+
+function getLastOptimizeProfile() {
+  const p = getWindowDebugBagValue('optimizerMvp', 'lastOptimizeProfile', null);
+  return (p && typeof p === 'object') ? p : null;
+}
+
+function pickTimingMetricsFromProfile(profile) {
+  const objectiveMs = Number(profile?.time_objective_eval) || 0;
+  const wasmMs = Number(profile?.time_wasm_call) || 0;
+  const jsMs = Number(profile?.time_js_overhead) || 0;
+  const totalMeasured = Math.max(1e-9, objectiveMs + wasmMs + jsMs);
+  const pilotCalls = Number(profile?.kktWasmPilotCalls ?? profile?.counts?.kktWasmPilotCalls) || 0;
+  const pilotHits = Number(profile?.kktWasmPilotHits ?? profile?.counts?.kktWasmPilotHits) || 0;
+  const pilotFallbacks = Number(profile?.kktWasmPilotFallbacks ?? profile?.counts?.kktWasmPilotFallbacks) || 0;
+
+  return {
+    objectiveMs,
+    wasmMs,
+    jsMs,
+    totalMeasured,
+    objectivePct: (objectiveMs / totalMeasured) * 100,
+    wasmPct: (wasmMs / totalMeasured) * 100,
+    jsPct: (jsMs / totalMeasured) * 100,
+    wasmToObjectiveRatio: objectiveMs > 0 ? (wasmMs / objectiveMs) : null,
+    objectiveToWasmRatio: wasmMs > 0 ? (objectiveMs / wasmMs) : null,
+    pilotCalls,
+    pilotHits,
+    pilotFallbacks,
+    pilotHitRatePct: pilotCalls > 0 ? (100 * pilotHits / pilotCalls) : 0
+  };
+}
+
+export async function compareWasmPilotBenchmark(baseOptions = {}) {
+  const source = isPlainObject(baseOptions) ? baseOptions : {};
+  const common = { ...source };
+  const repeatRaw = Number(source.repeat ?? source.benchmarkRepeat ?? 1);
+  const repeat = Number.isFinite(repeatRaw) ? Math.max(1, Math.floor(repeatRaw)) : 1;
+  const warmupDiscardRaw = Number(source.warmupDiscard ?? source.discardWarmup ?? (repeat > 1 ? 1 : 0));
+  const warmupDiscard = Number.isFinite(warmupDiscardRaw) ? Math.max(0, Math.floor(warmupDiscardRaw)) : 0;
+  const useOutlierFilter = source.filterOutliers !== false;
+  try { delete common.kktUseWasmPilotOptimizer; } catch (_) {}
+  try { delete common.repeat; } catch (_) {}
+  try { delete common.benchmarkRepeat; } catch (_) {}
+  try { delete common.warmupDiscard; } catch (_) {}
+  try { delete common.discardWarmup; } catch (_) {}
+  try { delete common.filterOutliers; } catch (_) {}
+
+  const runOne = async (usePilot) => {
+    const options = {
+      ...common,
+      profile: true,
+      kktUseWasmPilotOptimizer: !!usePilot
+    };
+    const t0 = nowMs();
+    const result = await runOptimizationMVP(options);
+    const elapsedMs = nowMs() - t0;
+    const profile = getLastOptimizeProfile();
+    const metrics = pickTimingMetricsFromProfile(profile);
+    return { usePilot: !!usePilot, options, result, elapsedMs, profile, metrics };
+  };
+
+  const summarizeRuns = (runs) => {
+    const pick = (path, fallback = 0) => {
+      const values = runs.map((run) => {
+        try {
+          const parts = path.split('.');
+          let cur = run;
+          for (const p of parts) cur = cur?.[p];
+          const n = Number(cur);
+          return Number.isFinite(n) ? n : fallback;
+        } catch (_) {
+          return fallback;
+        }
+      });
+      const sum = values.reduce((acc, v) => acc + v, 0);
+      const avg = values.length > 0 ? (sum / values.length) : fallback;
+      const min = values.length > 0 ? Math.min(...values) : fallback;
+      const max = values.length > 0 ? Math.max(...values) : fallback;
+      return { avg, min, max };
+    };
+
+    const elapsed = pick('elapsedMs');
+    const objectiveMs = pick('metrics.objectiveMs');
+    const wasmMs = pick('metrics.wasmMs');
+    const jsMs = pick('metrics.jsMs');
+    const objectivePct = pick('metrics.objectivePct');
+    const wasmPct = pick('metrics.wasmPct');
+    const jsPct = pick('metrics.jsPct');
+    const pilotHitRatePct = pick('metrics.pilotHitRatePct');
+    const okRatePct = pick('result.ok');
+
+    return {
+      repeat: runs.length,
+      elapsed,
+      objectiveMs,
+      wasmMs,
+      jsMs,
+      objectivePct,
+      wasmPct,
+      jsPct,
+      pilotHitRatePct,
+      okRatePct: okRatePct.avg * 100
+    };
+  };
+
+  const medianOf = (arr) => {
+    const nums = (Array.isArray(arr) ? arr : [])
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v))
+      .sort((a, b) => a - b);
+    const n = nums.length;
+    if (n === 0) return null;
+    const mid = Math.floor(n / 2);
+    return (n % 2 === 1) ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+  };
+
+  const robustFilterRuns = (runs) => {
+    const afterWarmup = Array.isArray(runs) ? runs.slice(Math.min(warmupDiscard, runs.length)) : [];
+    if (!useOutlierFilter || afterWarmup.length < 5) {
+      return { filtered: afterWarmup, droppedWarmup: Math.min(warmupDiscard, runs.length), droppedOutliers: 0 };
+    }
+
+    const elapsed = afterWarmup.map((r) => Number(r?.elapsedMs) || 0);
+    const med = medianOf(elapsed);
+    if (!(Number.isFinite(med))) {
+      return { filtered: afterWarmup, droppedWarmup: Math.min(warmupDiscard, runs.length), droppedOutliers: 0 };
+    }
+
+    const absDev = elapsed.map((v) => Math.abs(v - med));
+    const mad = medianOf(absDev);
+    if (!(Number.isFinite(mad)) || mad <= 0) {
+      return { filtered: afterWarmup, droppedWarmup: Math.min(warmupDiscard, runs.length), droppedOutliers: 0 };
+    }
+
+    const threshold = med + 6 * mad;
+    const filtered = afterWarmup.filter((r) => (Number(r?.elapsedMs) || 0) <= threshold);
+    const droppedOutliers = Math.max(0, afterWarmup.length - filtered.length);
+    return { filtered: (filtered.length > 0 ? filtered : afterWarmup), droppedWarmup: Math.min(warmupDiscard, runs.length), droppedOutliers };
+  };
+
+  const baselineRuns = [];
+  const pilotRuns = [];
+  for (let i = 0; i < repeat; i++) {
+    baselineRuns.push(await runOne(false));
+    pilotRuns.push(await runOne(true));
+  }
+
+  const baselineFiltered = robustFilterRuns(baselineRuns);
+  const pilotFiltered = robustFilterRuns(pilotRuns);
+
+  const baseline = summarizeRuns(baselineFiltered.filtered);
+  const pilot = summarizeRuns(pilotFiltered.filtered);
+
+  const delta = {
+    elapsedMs: pilot.elapsed.avg - baseline.elapsed.avg,
+    objectiveMs: pilot.objectiveMs.avg - baseline.objectiveMs.avg,
+    wasmMs: pilot.wasmMs.avg - baseline.wasmMs.avg,
+    jsMs: pilot.jsMs.avg - baseline.jsMs.avg,
+    objectivePct: pilot.objectivePct.avg - baseline.objectivePct.avg,
+    wasmPct: pilot.wasmPct.avg - baseline.wasmPct.avg,
+    jsPct: pilot.jsPct.avg - baseline.jsPct.avg,
+    pilotHitRatePct: pilot.pilotHitRatePct.avg - baseline.pilotHitRatePct.avg
+  };
+
+  try {
+    console.groupCollapsed('[OptimizerMVP] WASM pilot benchmark');
+    console.log('baseline(kktUseWasmPilotOptimizer=false)', {
+      repeat,
+      droppedWarmup: baselineFiltered.droppedWarmup,
+      droppedOutliers: baselineFiltered.droppedOutliers,
+      usedRuns: baseline.repeat,
+      elapsedAvgMs: Math.round(baseline.elapsed.avg),
+      elapsedMinMs: Math.round(baseline.elapsed.min),
+      elapsedMaxMs: Math.round(baseline.elapsed.max),
+      objectiveAvgMs: Math.round(baseline.objectiveMs.avg),
+      wasmAvgMs: Math.round(baseline.wasmMs.avg),
+      jsAvgMs: Math.round(baseline.jsMs.avg),
+      objectivePctAvg: Math.round(baseline.objectivePct.avg * 10) / 10,
+      wasmPctAvg: Math.round(baseline.wasmPct.avg * 10) / 10,
+      jsPctAvg: Math.round(baseline.jsPct.avg * 10) / 10,
+      okRatePct: Math.round(baseline.okRatePct * 10) / 10
+    });
+    console.log('pilot(kktUseWasmPilotOptimizer=true)', {
+      repeat,
+      droppedWarmup: pilotFiltered.droppedWarmup,
+      droppedOutliers: pilotFiltered.droppedOutliers,
+      usedRuns: pilot.repeat,
+      elapsedAvgMs: Math.round(pilot.elapsed.avg),
+      elapsedMinMs: Math.round(pilot.elapsed.min),
+      elapsedMaxMs: Math.round(pilot.elapsed.max),
+      objectiveAvgMs: Math.round(pilot.objectiveMs.avg),
+      wasmAvgMs: Math.round(pilot.wasmMs.avg),
+      jsAvgMs: Math.round(pilot.jsMs.avg),
+      objectivePctAvg: Math.round(pilot.objectivePct.avg * 10) / 10,
+      wasmPctAvg: Math.round(pilot.wasmPct.avg * 10) / 10,
+      jsPctAvg: Math.round(pilot.jsPct.avg * 10) / 10,
+      pilotHitRatePctAvg: Math.round(pilot.pilotHitRatePct.avg * 10) / 10,
+      okRatePct: Math.round(pilot.okRatePct * 10) / 10
+    });
+    console.log('delta(pilot - baseline)', {
+      elapsedMs: Math.round(delta.elapsedMs),
+      objectiveMs: Math.round(delta.objectiveMs),
+      wasmMs: Math.round(delta.wasmMs),
+      jsMs: Math.round(delta.jsMs),
+      objectivePct: Math.round(delta.objectivePct * 10) / 10,
+      wasmPct: Math.round(delta.wasmPct * 10) / 10,
+      jsPct: Math.round(delta.jsPct * 10) / 10,
+      pilotHitRatePct: Math.round(delta.pilotHitRatePct * 10) / 10
+    });
+    console.groupEnd();
+  } catch (_) {}
+
+  return {
+    baseline,
+    pilot,
+    delta,
+    filtering: {
+      warmupDiscard,
+      filterOutliers: useOutlierFilter,
+      baselineDroppedWarmup: baselineFiltered.droppedWarmup,
+      baselineDroppedOutliers: baselineFiltered.droppedOutliers,
+      pilotDroppedWarmup: pilotFiltered.droppedWarmup,
+      pilotDroppedOutliers: pilotFiltered.droppedOutliers
+    },
+    baselineRuns,
+    pilotRuns,
+    baselineRunsUsed: baselineFiltered.filtered,
+    pilotRunsUsed: pilotFiltered.filtered
+  };
+}
+
+export async function exportWasmPilotBenchmarkCsv(options = {}) {
+  const source = isPlainObject(options) ? options : {};
+  const benchmark = source.benchmarkResult && typeof source.benchmarkResult === 'object'
+    ? source.benchmarkResult
+    : await compareWasmPilotBenchmark(source);
+
+  const baselineRuns = Array.isArray(benchmark?.baselineRuns) ? benchmark.baselineRuns : [];
+  const pilotRuns = Array.isArray(benchmark?.pilotRuns) ? benchmark.pilotRuns : [];
+
+  const csvEscape = (value) => {
+    const s = String(value ?? '');
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  };
+
+  const rows = [];
+  rows.push([
+    'mode',
+    'runIndex',
+    'elapsedMs',
+    'objectiveMs',
+    'wasmMs',
+    'jsMs',
+    'objectivePct',
+    'wasmPct',
+    'jsPct',
+    'pilotCalls',
+    'pilotHits',
+    'pilotFallbacks',
+    'pilotHitRatePct',
+    'ok',
+    'best'
+  ]);
+
+  const pushRuns = (mode, runs) => {
+    for (let i = 0; i < runs.length; i++) {
+      const run = runs[i] || {};
+      const metrics = run.metrics || {};
+      const result = run.result || {};
+      rows.push([
+        mode,
+        i + 1,
+        Number(run.elapsedMs) || 0,
+        Number(metrics.objectiveMs) || 0,
+        Number(metrics.wasmMs) || 0,
+        Number(metrics.jsMs) || 0,
+        Number(metrics.objectivePct) || 0,
+        Number(metrics.wasmPct) || 0,
+        Number(metrics.jsPct) || 0,
+        Number(metrics.pilotCalls) || 0,
+        Number(metrics.pilotHits) || 0,
+        Number(metrics.pilotFallbacks) || 0,
+        Number(metrics.pilotHitRatePct) || 0,
+        !!result.ok,
+        Number(result.best)
+      ]);
+    }
+  };
+
+  pushRuns('baseline', baselineRuns);
+  pushRuns('pilot', pilotRuns);
+
+  const csv = rows
+    .map((row) => row.map(csvEscape).join(','))
+    .join('\n');
+
+  const shouldDownload = source.download !== false;
+  if (shouldDownload && typeof window !== 'undefined' && typeof document !== 'undefined') {
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = String(source.fileName || `wasm-pilot-benchmark-${stamp}.csv`);
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (_) {}
+  }
+
+  return {
+    csv,
+    benchmark
+  };
 }
 
 function bumpOptimizerProfileCount(name, delta = 1) {
@@ -2105,6 +2435,11 @@ export async function runOptimizationMVP(options = {}) {
     t0: nowMs(),
     startedAt: Date.now(),
     totalMs: 0,
+    timingBuckets: {
+      time_objective_eval: 0,
+      time_wasm_call: 0,
+      time_js_overhead: 0
+    },
     sectionsMs: /** @type {Record<string, number>} */ ({}),
     operandMs: /** @type {Record<string, { ms:number, calls:number }>} */ ({}),
     operandCfgMs: /** @type {Record<string, { ms:number, calls:number }>} */ ({}),
@@ -2137,7 +2472,14 @@ export async function runOptimizationMVP(options = {}) {
       onProgressCalls: 0,
       onProgressMs: 0,
       nextFrameCalls: 0,
-      nextFrameMs: 0
+      nextFrameMs: 0,
+      timeObjectiveEvalCalls: 0,
+      timeWasmCallCalls: 0,
+      timeJsOverheadCalls: 0,
+      kktWasmPilotCalls: 0,
+      kktWasmPilotHits: 0,
+      kktWasmPilotFallbacks: 0,
+      kktWasmPilotLastReason: 'not-run'
     }
   } : null;
 
@@ -2158,6 +2500,32 @@ export async function runOptimizationMVP(options = {}) {
       return fn();
     } finally {
       __profAdd(name, nowMs() - t);
+    }
+  };
+
+  const __profileBucketWrap = (bucket, fn) => {
+    if (!__profile) return fn();
+    const t = nowMs();
+    try {
+      return fn();
+    } finally {
+      const dt = Math.max(0, nowMs() - t);
+      if (!Number.isFinite(dt)) return;
+      const buckets = __profile.timingBuckets || (__profile.timingBuckets = {
+        time_objective_eval: 0,
+        time_wasm_call: 0,
+        time_js_overhead: 0
+      });
+      if (bucket === 'time_objective_eval') {
+        buckets.time_objective_eval = (Number(buckets.time_objective_eval) || 0) + dt;
+        __profile.counts.timeObjectiveEvalCalls = (Number(__profile.counts.timeObjectiveEvalCalls) || 0) + 1;
+      } else if (bucket === 'time_wasm_call') {
+        buckets.time_wasm_call = (Number(buckets.time_wasm_call) || 0) + dt;
+        __profile.counts.timeWasmCallCalls = (Number(__profile.counts.timeWasmCallCalls) || 0) + 1;
+      } else if (bucket === 'time_js_overhead') {
+        buckets.time_js_overhead = (Number(buckets.time_js_overhead) || 0) + dt;
+        __profile.counts.timeJsOverheadCalls = (Number(__profile.counts.timeJsOverheadCalls) || 0) + 1;
+      }
     }
   };
 
@@ -2206,6 +2574,15 @@ export async function runOptimizationMVP(options = {}) {
         __profile.onProgressMs = Number(__profile.counts.onProgressMs) || 0;
         __profile.nextFrameCalls = Number(__profile.counts.nextFrameCalls) || 0;
         __profile.nextFrameMs = Number(__profile.counts.nextFrameMs) || 0;
+        __profile.time_objective_eval = Number(__profile.timingBuckets?.time_objective_eval) || 0;
+        __profile.time_wasm_call = Number(__profile.timingBuckets?.time_wasm_call) || 0;
+        const measuredJsOverhead = Number(__profile.timingBuckets?.time_js_overhead) || 0;
+        const inferredJsOverhead = Math.max(0, (Number(__profile.totalMs) || 0) - __profile.time_objective_eval - __profile.time_wasm_call);
+        __profile.time_js_overhead = Math.max(measuredJsOverhead, inferredJsOverhead);
+        __profile.kktWasmPilotCalls = Number(__profile.counts.kktWasmPilotCalls) || 0;
+        __profile.kktWasmPilotHits = Number(__profile.counts.kktWasmPilotHits) || 0;
+        __profile.kktWasmPilotFallbacks = Number(__profile.counts.kktWasmPilotFallbacks) || 0;
+        __profile.kktWasmPilotLastReason = String(__profile.counts.kktWasmPilotLastReason || 'not-run');
       }
     } catch (_) {}
 
@@ -2236,6 +2613,9 @@ export async function runOptimizationMVP(options = {}) {
       addRow('calculateOperandValue', __profile.counts.calculateOperandValueMs, __profile.counts.calculateOperandValueCalls);
       addRow('evalResidualsNow', __profile.counts.evalResidualsNowMs, __profile.counts.evalResidualsNowCalls);
       addRow('evalCompositeFromRequirements', __profile.counts.evalCompositeMs, __profile.counts.evalCompositeCalls);
+      addRow('time_objective_eval', __profile.time_objective_eval, __profile.counts.timeObjectiveEvalCalls);
+      addRow('time_wasm_call', __profile.time_wasm_call, __profile.counts.timeWasmCallCalls);
+      addRow('time_js_overhead', __profile.time_js_overhead, __profile.counts.timeJsOverheadCalls);
       addRow('onProgress', __profile.counts.onProgressMs, __profile.counts.onProgressCalls);
       addRow('nextFrame', __profile.counts.nextFrameMs, __profile.counts.nextFrameCalls);
 
@@ -2364,6 +2744,15 @@ export async function runOptimizationMVP(options = {}) {
         const cacheMisses = Number(__profile.counts.operandValueCacheMisses) || 0;
         const cacheTotal = cacheHits + cacheMisses;
         const hitRate = cacheTotal > 0 ? (100 * cacheHits / cacheTotal) : 0;
+        const objectiveMs = Number(__profile.time_objective_eval) || 0;
+        const wasmMs = Number(__profile.time_wasm_call) || 0;
+        const jsMs = Number(__profile.time_js_overhead) || 0;
+        const totalMeasured = Math.max(1e-9, objectiveMs + wasmMs + jsMs);
+        const pilotCalls = Number(__profile.counts.kktWasmPilotCalls) || 0;
+        const pilotHits = Number(__profile.counts.kktWasmPilotHits) || 0;
+        const pilotFallbacks = Number(__profile.counts.kktWasmPilotFallbacks) || 0;
+        const pilotLastReason = String(__profile.counts.kktWasmPilotLastReason || 'not-run');
+        const pilotHitRatePct = pilotCalls > 0 ? (100 * pilotHits / pilotCalls) : 0;
         console.log('[OptimizerMVP] cache stats', {
           operandValueCacheHits: cacheHits,
           operandValueCacheMisses: cacheMisses,
@@ -2388,7 +2777,25 @@ export async function runOptimizationMVP(options = {}) {
             const c = Number(__profile.counts.kktIterCount) || 0;
             const ms = Number(__profile.counts.kktIterMs) || 0;
             return c > 0 ? ms / c : 0;
-          })()
+          })(),
+          time_objective_eval: objectiveMs,
+          time_wasm_call: wasmMs,
+          time_js_overhead: jsMs,
+          kktWasmPilotCalls: pilotCalls,
+          kktWasmPilotHits: pilotHits,
+          kktWasmPilotFallbacks: pilotFallbacks,
+          kktWasmPilotLastReason: pilotLastReason
+        });
+
+        console.log('[OptimizerMVP] timing comparison', {
+          objectivePctOfMeasured: Math.round((objectiveMs / totalMeasured) * 1000) / 10,
+          wasmPctOfMeasured: Math.round((wasmMs / totalMeasured) * 1000) / 10,
+          jsOverheadPctOfMeasured: Math.round((jsMs / totalMeasured) * 1000) / 10,
+          wasmToObjectiveRatio: objectiveMs > 0 ? Math.round((wasmMs / objectiveMs) * 1000) / 1000 : null,
+          objectiveToWasmRatio: wasmMs > 0 ? Math.round((objectiveMs / wasmMs) * 1000) / 1000 : null,
+          kktWasmPilotEnabled: opts?.kktUseWasmPilotOptimizer === true,
+          kktWasmPilotHitRatePct: Math.round(pilotHitRatePct * 10) / 10,
+          kktWasmPilotLastReason: pilotLastReason
         });
       } catch (_) {}
       console.groupEnd();
@@ -2524,7 +2931,7 @@ export async function runOptimizationMVP(options = {}) {
   // Default OFF: user requested no perturbation after rho=0.
   const lmExploreWhenFlat = (opts.lmExploreWhenFlat === undefined) ? false : !!opts.lmExploreWhenFlat;
   const lmExploreTries = Number.isFinite(Number(opts.lmExploreTries)) ? Math.max(1, Math.floor(Number(opts.lmExploreTries))) : 3;
-  const useWasmLinearSolve = !!opts.useWasmLinearSolve || !!opts.kktUseWasmLinearSolve || !!opts.lmUseWasmLinearSolve;
+  const useWasmLinearSolve = true;
 
   if (useWasmLinearSolve) {
     try {
@@ -2906,15 +3313,17 @@ export async function runOptimizationMVP(options = {}) {
 
   const evalCompositeFromRequirementsProfiled = __profile
     ? () => {
-      const t = nowMs();
-      try {
-        __profile.counts.evalCompositeCalls++;
-        return evalCompositeFromRequirements();
-      } finally {
-        const dt = nowMs() - t;
-        __profile.counts.evalCompositeMs += dt;
-        __profAdd('evalCompositeFromRequirements', dt);
-      }
+      return __profileBucketWrap('time_objective_eval', () => {
+        const t = nowMs();
+        try {
+          __profile.counts.evalCompositeCalls++;
+          return evalCompositeFromRequirements();
+        } finally {
+          const dt = nowMs() - t;
+          __profile.counts.evalCompositeMs += dt;
+          __profAdd('evalCompositeFromRequirements', dt);
+        }
+      });
     }
     : evalCompositeFromRequirements;
 
@@ -2981,7 +3390,7 @@ export async function runOptimizationMVP(options = {}) {
     }
 
     if (useWasmLinearSolve) {
-      const wasmSolved = solveLinearSystemWithOptimizerWasm(matrix, rhs, preferSpd);
+      const wasmSolved = __profileBucketWrap('time_wasm_call', () => solveLinearSystemWithOptimizerWasm(matrix, rhs, preferSpd));
       if (Array.isArray(wasmSolved) && wasmSolved.length === rhs.length) {
         if (__profile && __profile.counts) {
           __profile.counts.wasmLinearSolveHits = (Number(__profile.counts.wasmLinearSolveHits) || 0) + 1;
@@ -2994,8 +3403,8 @@ export async function runOptimizationMVP(options = {}) {
       __profile.counts.wasmLinearSolveFallbacks = (Number(__profile.counts.wasmLinearSolveFallbacks) || 0) + 1;
     }
 
-    let solved = solveSymmetricPositiveDefinite(matrix, rhs);
-    if (!solved) solved = solveLinearSystemFallback(matrix, rhs);
+    let solved = __profileBucketWrap('time_js_overhead', () => solveSymmetricPositiveDefinite(matrix, rhs));
+    if (!solved) solved = __profileBucketWrap('time_js_overhead', () => solveLinearSystemFallback(matrix, rhs));
     return solved;
   };
 
@@ -3005,7 +3414,7 @@ export async function runOptimizationMVP(options = {}) {
     }
 
     if (useWasmLinearSolve) {
-      const wasmBuilt = buildNormalEquationsWithOptimizerWasm(J, r, m, n);
+      const wasmBuilt = __profileBucketWrap('time_wasm_call', () => buildNormalEquationsWithOptimizerWasm(J, r, m, n));
       if (wasmBuilt && Array.isArray(wasmBuilt.A) && Array.isArray(wasmBuilt.g)) {
         if (__profile && __profile.counts) {
           __profile.counts.wasmNormalEqHits = (Number(__profile.counts.wasmNormalEqHits) || 0) + 1;
@@ -3018,26 +3427,28 @@ export async function runOptimizationMVP(options = {}) {
       __profile.counts.wasmNormalEqFallbacks = (Number(__profile.counts.wasmNormalEqFallbacks) || 0) + 1;
     }
 
-    const A = Array.from({ length: n }, () => Array(n).fill(0));
-    const g = Array(n).fill(0);
-    for (let j = 0; j < n; j++) {
-      let gj = 0;
-      for (let i = 0; i < m; i++) {
-        gj += J[i][j] * r[i];
-      }
-      g[j] = gj;
-    }
-    for (let j = 0; j < n; j++) {
-      for (let k = 0; k <= j; k++) {
-        let s = 0;
+    return __profileBucketWrap('time_js_overhead', () => {
+      const A = Array.from({ length: n }, () => Array(n).fill(0));
+      const g = Array(n).fill(0);
+      for (let j = 0; j < n; j++) {
+        let gj = 0;
         for (let i = 0; i < m; i++) {
-          s += J[i][j] * J[i][k];
+          gj += J[i][j] * r[i];
         }
-        A[j][k] = s;
-        A[k][j] = s;
+        g[j] = gj;
       }
-    }
-    return { A, g };
+      for (let j = 0; j < n; j++) {
+        for (let k = 0; k <= j; k++) {
+          let s = 0;
+          for (let i = 0; i < m; i++) {
+            s += J[i][j] * J[i][k];
+          }
+          A[j][k] = s;
+          A[k][j] = s;
+        }
+      }
+      return { A, g };
+    });
   };
 
   // DLS/LM mode
@@ -3337,15 +3748,17 @@ export async function runOptimizationMVP(options = {}) {
 
     const evalResidualsNowProfiled = __profile
       ? () => {
-        const t = nowMs();
-        try {
-          __profile.counts.evalResidualsNowCalls++;
-          return evalResidualsNow();
-        } finally {
-          const dt = nowMs() - t;
-          __profile.counts.evalResidualsNowMs += dt;
-          __profAdd('evalResidualsNow', dt);
-        }
+        return __profileBucketWrap('time_objective_eval', () => {
+          const t = nowMs();
+          try {
+            __profile.counts.evalResidualsNowCalls++;
+            return evalResidualsNow();
+          } finally {
+            const dt = nowMs() - t;
+            __profile.counts.evalResidualsNowMs += dt;
+            __profAdd('evalResidualsNow', dt);
+          }
+        });
       }
       : evalResidualsNow;
 
@@ -4708,7 +5121,7 @@ export async function runOptimizationMVP(options = {}) {
         if (__profile && __profile.counts) {
           __profile.counts.kktEvalCacheMisses = (Number(__profile.counts.kktEvalCacheMisses) || 0) + 1;
         }
-        const value = evalSQPAtXUncached(x);
+        const value = __profileBucketWrap('time_objective_eval', () => evalSQPAtXUncached(x));
         const storable = cloneKktEval(value);
         if (kktEvalCache.size >= kktEvalCacheMax) {
           const oldest = kktEvalCache.keys().next();
@@ -4758,29 +5171,65 @@ export async function runOptimizationMVP(options = {}) {
         const n = x.length;
         const m = r0.length;
         const J = Array.from({ length: m }, () => Array(n).fill(0));
+        const useWasmBatchFd = opts?.kktUseWasmBatchFd !== false;
+        const fdSteps = new Array(n).fill(0);
+        const perturbedResidualsByColumn: number[][] = new Array(n);
 
         for (let i = 0; i < n; i++) {
-          // 【修正】LM法と共通化：finiteDifferenceStepForVar を使用してノイズに強いステップを計算
           const vObj = { id: varIds[i], key: vars[i]?.key, value: x[i] };
           let eps = finiteDifferenceStepForVar(vObj);
-          
-          const xp = x.slice();
-          xp[i] += eps;
+          const xi = Number(x[i]);
+          if (!Number.isFinite(eps) || eps === 0) {
+            eps = Math.max(1e-8, Math.abs(xi) * 1e-6);
+          }
+          if (xi + eps === xi) {
+            eps = Math.max(1e-8, Math.abs(xi) * 1e-6);
+          }
+          fdSteps[i] = eps;
+        }
 
-          // 【追加】浮動小数点の限界で値が変わらない場合は、強制的に情報落ちしない幅まで拡大
+        const batchPoints = useWasmBatchFd
+          ? __profileBucketWrap('time_wasm_call', () => generateFiniteDifferencePerturbationPointsWasm(x, fdSteps))
+          : null;
+
+        for (let i = 0; i < n; i++) {
+          let xp = Array.isArray(batchPoints) && Array.isArray(batchPoints[i])
+            ? batchPoints[i].slice()
+            : x.slice();
           if (xp[i] === x[i]) {
-            eps = Math.max(1e-8, Math.abs(x[i]) * 1e-6);
-            xp[i] = x[i] + eps;
+            xp[i] = x[i] + fdSteps[i];
           }
 
           const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
           const r1 = e1.residuals;
-          
-          for (let k = 0; k < Math.min(m, r1.length); k++) {
-            const deriv = (r1[k] - r0[k]) / eps;
-            J[k][i] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+          perturbedResidualsByColumn[i] = Array.isArray(r1) ? r1.slice(0, m) : [];
+        }
+
+        const Jw = useWasmBatchFd
+          ? __profileBucketWrap('time_wasm_call', () => assembleFiniteDifferenceJacobianWasm(r0, perturbedResidualsByColumn, fdSteps))
+          : null;
+
+        if (Array.isArray(Jw) && Jw.length === m) {
+          for (let rowIndex = 0; rowIndex < m; rowIndex++) {
+            const row = Jw[rowIndex];
+            if (!Array.isArray(row)) continue;
+            for (let colIndex = 0; colIndex < Math.min(n, row.length); colIndex++) {
+              const v = Number(row[colIndex]);
+              J[rowIndex][colIndex] = Number.isFinite(v) ? v : 0;
+            }
+          }
+        } else {
+          for (let i = 0; i < n; i++) {
+            const r1 = perturbedResidualsByColumn[i];
+            const eps = fdSteps[i];
+            if (!Array.isArray(r1) || !Number.isFinite(eps) || eps === 0) continue;
+            for (let k = 0; k < Math.min(m, r1.length); k++) {
+              const deriv = (r1[k] - r0[k]) / eps;
+              J[k][i] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+            }
           }
         }
+
         if (__profile && __profile.counts) {
           __profile.counts.kktFiniteDiffJacobianCalls = (Number(__profile.counts.kktFiniteDiffJacobianCalls) || 0) + 1;
           __profile.counts.kktFiniteDiffColumns = (Number(__profile.counts.kktFiniteDiffColumns) || 0) + n;
@@ -5356,13 +5805,85 @@ export async function runOptimizationMVP(options = {}) {
           console.log(`[DEBUG iter${iter}] Jacobian: ${jNaNCount} NaN, ${jZeroCount} ~zero, range [${jMinAbs.toExponential(2)}, ${jMaxAbs.toExponential(2)}]`);
         }
 
+        const useWasmPilotOptimizer = opts?.kktUseWasmPilotOptimizer === true;
+        let dx: number[] | null = null;
+        let predictedReductionPilot = Number.NaN;
+
+        if (useWasmPilotOptimizer) {
+          if (__profile && __profile.counts) {
+            __profile.counts.kktWasmPilotCalls = (Number(__profile.counts.kktWasmPilotCalls) || 0) + 1;
+          }
+          try {
+            const fdSteps = new Array(n).fill(0).map((_, col) => {
+              const vObj = { id: varIds[col], key: vars[col]?.key, value: currentX[col] };
+              let h = finiteDifferenceStepForVar(vObj);
+              const xcol = Number(currentX[col]);
+              if (!Number.isFinite(h) || h === 0 || xcol + h === xcol) {
+                h = Math.max(1e-8, Math.abs(xcol) * 1e-6);
+              }
+              return h;
+            });
+
+            const residualsPerturbed = Array.from({ length: n }, (_, col) => {
+              const h = fdSteps[col];
+              const out = new Array(m).fill(0);
+              for (let row = 0; row < m; row++) {
+                out[row] = r0[row] + J[row][col] * h;
+              }
+              return out;
+            });
+
+            const pilotResult = __profileBucketWrap('time_wasm_call', () => optimizeSystemOneIterationWasm({
+              x: currentX,
+              steps: fdSteps,
+              residual0: r0,
+              residualsPerturbed,
+              damping: lmDamp,
+              trustRegionRadius: Math.max(1e-4, trustRegionDeltaEff),
+              varScales: varScales
+            }));
+
+            if (pilotResult && pilotResult.ok && Array.isArray(pilotResult.dx) && pilotResult.dx.length === n) {
+              dx = pilotResult.dx.slice();
+              predictedReductionPilot = Number(pilotResult.predictedReduction);
+              if (__profile && __profile.counts) {
+                __profile.counts.kktWasmPilotHits = (Number(__profile.counts.kktWasmPilotHits) || 0) + 1;
+              }
+              if (iter < 3 || iter % 100 === 0) {
+                console.log(`[WASM-PILOT] Iter ${iter}: step accepted from optimizeSystemOneIterationWasm`, {
+                  predictedReduction: predictedReductionPilot,
+                  damping: pilotResult.usedDamping,
+                  trustRegionRadius: pilotResult.usedTrustRegionRadius,
+                  jacobianShape: pilotResult.jacobianShape
+                });
+              }
+            }
+          } catch (_) {}
+        }
+
+        if (useWasmPilotOptimizer && !dx && __profile && __profile.counts) {
+          __profile.counts.kktWasmPilotFallbacks = (Number(__profile.counts.kktWasmPilotFallbacks) || 0) + 1;
+          try {
+            const dbg = getOptimizerWasmBridgeDebugInfo();
+            const reason = String(dbg?.lastPilotReason || 'unknown');
+            const detail = dbg?.lastPilotErrorDetail;
+            __profile.counts.kktWasmPilotLastReason = detail ? `${reason}: ${String(detail)}` : reason;
+          } catch (_) {
+            __profile.counts.kktWasmPilotLastReason = 'reason-read-failed';
+          }
+        }
+
         // --- 2. Build normal equations: A = J^T J, g = J^T r ---
-        const ne = buildNormalEquationsWithOptionalWasm(J, r0, m, n);
-        const A = ne.A;
-        const g = ne.g;
+        let A: number[][] | null = null;
+        let g: number[] | null = null;
+        if (!dx) {
+          const ne = buildNormalEquationsWithOptionalWasm(J, r0, m, n);
+          A = ne.A;
+          g = ne.g;
+        }
         
         // Debug: Check gradient g
-        if (iter < 3 || iter % 100 === 0) {
+        if (g && (iter < 3 || iter % 100 === 0)) {
           let gMaxAbs = 0, gMinAbs = Infinity, gZeroCount = 0;
           for (let j = 0; j < n; j++) {
             if (Math.abs(g[j]) < 1e-20) gZeroCount++;
@@ -5375,7 +5896,7 @@ export async function runOptimizationMVP(options = {}) {
         }
         // 【追加】LM法と同様に、非球面係数の暴走を防ぐティコノフ正則化を導入
         // これにより、高次非球面がノイズに過剰反応してストールするのを防ぎます
-        if (asphericRegularization > 0) {
+        if (!dx && A && asphericRegularization > 0) {
           for (let i = 0; i < n; i++) {
             if (isAsphereCoefKey(vars[i]?.key)) {
               A[i][i] += asphericRegularization;
@@ -5383,7 +5904,7 @@ export async function runOptimizationMVP(options = {}) {
           }
         }
         
-        if (iter < 3 || iter % 100 === 0) {
+        if (!dx && A && (iter < 3 || iter % 100 === 0)) {
           let aMaxDiag = 0, aMinDiag = Infinity;
           for (let i = 0; i < n; i++) {
             const d = Math.abs(A[i][i]);
@@ -5397,83 +5918,90 @@ export async function runOptimizationMVP(options = {}) {
         // --- 3. Apply Levenberg-Marquardt damping with Jacobi Preconditioning ---
         // 【修正】Aの要素が10^24等になるような場合、浮動小数点精度（約16桁）を完全に超えて破綻するため、
         // 対角成分が1.0になるように行列をスケール（事前処理）してから解く
-        const scaleD = new Array(n);
-        for (let i = 0; i < n; i++) {
-          const d = A[i][i];
-          scaleD[i] = (d > 1e-30) ? 1.0 / Math.sqrt(Math.abs(d)) : 1.0;
-        }
-        
-        if (iter < 3 || iter % 100 === 0) {
-          let scaleMinAbs = Infinity, scaleMaxAbs = 0;
+        if (!dx) {
+          const scaleD = new Array(n);
           for (let i = 0; i < n; i++) {
-            scaleMinAbs = Math.min(scaleMinAbs, Math.abs(scaleD[i]));
-            scaleMaxAbs = Math.max(scaleMaxAbs, Math.abs(scaleD[i]));
+            const d = A![i][i];
+            scaleD[i] = (d > 1e-30) ? 1.0 / Math.sqrt(Math.abs(d)) : 1.0;
           }
-          console.log(`[DEBUG iter${iter}] Preconditioning scales: [${scaleMinAbs.toExponential(2)}, ${scaleMaxAbs.toExponential(2)}]`);
-        }
         
-        const Ad = Array.from({ length: n }, () => Array(n).fill(0));
-        for (let i = 0; i < n; i++) {
-          for (let j = 0; j < n; j++) {
-            Ad[i][j] = A[i][j] * scaleD[i] * scaleD[j];
-          }
-          // 対角成分は 1.0 になるので、そこにダンピングを足す
-          Ad[i][i] = 1.0 + lmDamp;  
-        }
-        
-        if (iter < 3 || iter % 100 === 0) {
-          let adMaxDiag = 0, adMinDiag = Infinity;
-          for (let i = 0; i < n; i++) {
-            const d = Math.abs(Ad[i][i]);
-            adMaxDiag = Math.max(adMaxDiag, d);
-            adMinDiag = Math.min(adMinDiag, d);
-          }
-          const adCond = adMaxDiag / Math.max(1e-30, adMinDiag);
-          console.log(`[DEBUG iter${iter}] Precond Matrix Ad: diagRange [${adMinDiag.toExponential(2)}, ${adMaxDiag.toExponential(2)}], cond=${adCond.toExponential(2)}`);
-        }
-
-        const b_scaled = g.map((v, i) => -v * scaleD[i]);
-        
-        // Validate preconditioned matrix before solving
-        let isMatrixGood = true;
-        for (let i = 0; i < n; i++) {
-          const d = Ad[i][i];
-          if (!Number.isFinite(d) || d <= 0) {
-            isMatrixGood = false;
-            break;
-          }
-        }
-        
-        let dx_scaled = null;
-        if (isMatrixGood) {
-          dx_scaled = solveLinearSystemWithOptionalWasm(Ad, b_scaled, true);
-        }
-        if (!dx_scaled) {
-          // Matrix solver failed: increase damping significantly and retry
-          lmDamp = Math.min(1e12, lmDamp * 20);  // Increased multiplier from 10
-          if (iter < 5 || iter % 20 === 0) {
-            console.log(`[DEBUG] Matrix solve failed, increased lmDamp to ${lmDamp.toExponential(2)}`);
-          }
-          continue;
-        }
-
-        // スケールを元に戻して、元の変数空間の探索方向 dx を得る
-        let dx = new Array(n);
-        let dxHasNaN = false;
-        for (let i = 0; i < n; i++) {
-          const scaled = dx_scaled[i] * scaleD[i];
-          dx[i] = scaled;
-          if (!Number.isFinite(scaled)) {
-            dxHasNaN = true;
-          }
-        }
-        
-        if (dxHasNaN) {
-          // Step contains NaN/Inf: increase damping and retry
-          lmDamp = Math.min(1e12, lmDamp * 15);
           if (iter < 3 || iter % 100 === 0) {
-            console.log(`[DEBUG] Step contains NaN/Inf, increased lmDamp to ${lmDamp.toExponential(2)}`);
+            let scaleMinAbs = Infinity, scaleMaxAbs = 0;
+            for (let i = 0; i < n; i++) {
+              scaleMinAbs = Math.min(scaleMinAbs, Math.abs(scaleD[i]));
+              scaleMaxAbs = Math.max(scaleMaxAbs, Math.abs(scaleD[i]));
+            }
+            console.log(`[DEBUG iter${iter}] Preconditioning scales: [${scaleMinAbs.toExponential(2)}, ${scaleMaxAbs.toExponential(2)}]`);
           }
+        
+          const Ad = Array.from({ length: n }, () => Array(n).fill(0));
+          for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+              Ad[i][j] = A![i][j] * scaleD[i] * scaleD[j];
+            }
+            // 対角成分は 1.0 になるので、そこにダンピングを足す
+            Ad[i][i] = 1.0 + lmDamp;  
+          }
+        
+          if (iter < 3 || iter % 100 === 0) {
+            let adMaxDiag = 0, adMinDiag = Infinity;
+            for (let i = 0; i < n; i++) {
+              const d = Math.abs(Ad[i][i]);
+              adMaxDiag = Math.max(adMaxDiag, d);
+              adMinDiag = Math.min(adMinDiag, d);
+            }
+            const adCond = adMaxDiag / Math.max(1e-30, adMinDiag);
+            console.log(`[DEBUG iter${iter}] Precond Matrix Ad: diagRange [${adMinDiag.toExponential(2)}, ${adMaxDiag.toExponential(2)}], cond=${adCond.toExponential(2)}`);
+          }
+
+          const b_scaled = g!.map((v, i) => -v * scaleD[i]);
+        
+          // Validate preconditioned matrix before solving
+          let isMatrixGood = true;
+          for (let i = 0; i < n; i++) {
+            const d = Ad[i][i];
+            if (!Number.isFinite(d) || d <= 0) {
+              isMatrixGood = false;
+              break;
+            }
+          }
+        
+          let dx_scaled = null;
+          if (isMatrixGood) {
+            dx_scaled = solveLinearSystemWithOptionalWasm(Ad, b_scaled, true);
+          }
+          if (!dx_scaled) {
+            // Matrix solver failed: increase damping significantly and retry
+            lmDamp = Math.min(1e12, lmDamp * 20);  // Increased multiplier from 10
+            if (iter < 5 || iter % 20 === 0) {
+              console.log(`[DEBUG] Matrix solve failed, increased lmDamp to ${lmDamp.toExponential(2)}`);
+            }
+            continue;
+          }
+
+          // スケールを元に戻して、元の変数空間の探索方向 dx を得る
+          dx = new Array(n);
+          let dxHasNaN = false;
+          for (let i = 0; i < n; i++) {
+            const scaled = dx_scaled[i] * scaleD[i];
+            dx[i] = scaled;
+            if (!Number.isFinite(scaled)) {
+              dxHasNaN = true;
+            }
+          }
+          
+          if (dxHasNaN) {
+            // Step contains NaN/Inf: increase damping and retry
+            lmDamp = Math.min(1e12, lmDamp * 15);
+            if (iter < 3 || iter % 100 === 0) {
+              console.log(`[DEBUG] Step contains NaN/Inf, increased lmDamp to ${lmDamp.toExponential(2)}`);
+            }
+            continue;
+          }
+        }
+
+        if (!dx || dx.length !== n) {
+          lmDamp = Math.min(1e12, lmDamp * 5);
           continue;
         }
 
@@ -5520,6 +6048,15 @@ export async function runOptimizationMVP(options = {}) {
         // 【追加】LM法と同じく、二次モデルによる予測減少量(pred)を計算する関数
         const predictedReductionForStep = (dxStep: number[]) => {
           try {
+            if (Number.isFinite(predictedReductionPilot)) {
+              const baseNorm = Math.sqrt(dx.reduce((acc, v) => acc + v * v, 0));
+              const stepNorm = Math.sqrt(dxStep.reduce((acc, v) => acc + v * v, 0));
+              if (Number.isFinite(baseNorm) && baseNorm > 1e-20 && Number.isFinite(stepNorm)) {
+                return predictedReductionPilot * (stepNorm / baseNorm);
+              }
+              return predictedReductionPilot;
+            }
+            if (!A || !g) return NaN;
             let linearTerm = 0;
             for (let i = 0; i < n; i++) linearTerm += dxStep[i] * g[i];
             
@@ -6729,6 +7266,8 @@ export async function runOptimizationMVP(options = {}) {
 if (typeof window !== 'undefined') {
   window['OptimizationMVP'] = {
     run: runOptimizationMVP,
+    compareWasmPilot: compareWasmPilotBenchmark,
+    exportBenchmarkCsv: exportWasmPilotBenchmarkCsv,
     stop: () => {
       __optimizerStopRequested = true;
       try {

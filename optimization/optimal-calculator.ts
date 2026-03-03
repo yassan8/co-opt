@@ -31,9 +31,8 @@ class OptimalAsphericCalculator {
         
         // WASM system initialization
         try {
-            if (typeof ForceWASMSystem !== 'undefined') {
-                this.wasmSystem = new ForceWASMSystem();
-                await this.wasmSystem.forceInitializeWASM();
+            if (typeof window !== 'undefined' && typeof (window as any).getWASMSystem === 'function') {
+                this.wasmSystem = (window as any).getWASMSystem();
                 console.log('✅ Hybrid calculator: WASM system ready');
             } else {
                 console.log('⚠️ Hybrid calculator: WASM not available, using JavaScript only');

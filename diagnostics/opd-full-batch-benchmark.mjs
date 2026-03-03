@@ -10,6 +10,24 @@ if (!globalThis.localStorage || typeof globalThis.localStorage.getItem !== 'func
   };
 }
 
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const projectRoot = path.resolve(__dirname, '..');
+
+const args = process.argv.slice(2);
+const getArg = (name, fallback = null) => {
+  const key = `--${name}`;
+  const idx = args.indexOf(key);
+  if (idx < 0) return fallback;
+  const val = args[idx + 1];
+  if (val === undefined || String(val).startsWith('--')) return 'true';
+  return val;
+};
+
 const { createOPDCalculator, createWavefrontAnalyzer } = await import('../evaluation/wavefront/wavefront.ts');
 const { getOpticalSystemRows } = await import('../utils/data-utils.ts');
 
@@ -18,8 +36,10 @@ const fieldX = Number.isFinite(Number(process.env.OPD_FIELD_X)) ? Number(process
 const wavelength = Number.isFinite(Number(process.env.OPD_WAVELENGTH)) ? Number(process.env.OPD_WAVELENGTH) : 0.5876;
 const runs = Number.isFinite(Number(process.env.OPD_RUNS)) ? Number(process.env.OPD_RUNS) : 4;
 const opdMode = (process.env.OPD_MODE || 'referenceSphere').trim();
+const forceFinite = String(process.env.OPD_FORCE_FINITE || '1').trim().toLowerCase() !== '0';
+const outputPath = path.resolve(projectRoot, getArg('out', `diagnostics/results/opd-full-batch-${new Date().toISOString().replace(/[:.]/g, '-')}.json`));
 
-const fieldSetting = { fieldAngle: { x: fieldX, y: 0 } };
+const fieldSetting = { fieldAngle: { x: fieldX, y: 0 }, forceFinite };
 const opticalSystemRows = getOpticalSystemRows();
 const calc = createOPDCalculator(opticalSystemRows, wavelength);
 const analyzer = createWavefrontAnalyzer(calc);
@@ -60,7 +80,7 @@ function summarize(samples) {
   };
 }
 
-console.log('▶ OPD full-batch A/B benchmark start', { gridSize, fieldX, wavelength, runs, opdMode });
+console.log('▶ OPD full-batch A/B benchmark start', { gridSize, fieldX, wavelength, runs, opdMode, forceFinite });
 
 await analyzer.generateWavefrontMap(fieldSetting, gridSize, 'circular', {
   recordRays: false,
@@ -88,12 +108,14 @@ const off = summarize(offSamples);
 const on = summarize(onSamples);
 const speedup = off.avgMs > 0 ? off.avgMs / on.avgMs : NaN;
 
-console.log('✅ OPD full-batch A/B benchmark summary');
-console.log(JSON.stringify({
+const report = {
+  timestamp: new Date().toISOString(),
   gridSize,
   fieldX,
   wavelength,
   runs,
+  opdMode,
+  forceFinite,
   off: {
     avgMs: off.avgMs,
     minMs: off.minMs,
@@ -109,4 +131,13 @@ console.log(JSON.stringify({
   speedup,
   speedupPercent: Number.isFinite(speedup) ? (speedup - 1) * 100 : null,
   samples: { off: off.samples, on: on.samples }
+};
+
+await fs.mkdir(path.dirname(outputPath), { recursive: true });
+await fs.writeFile(outputPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+
+console.log('✅ OPD full-batch A/B benchmark summary');
+console.log(JSON.stringify({
+  ...report,
+  output: path.relative(projectRoot, outputPath)
 }, null, 2));
