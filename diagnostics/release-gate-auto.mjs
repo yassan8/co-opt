@@ -35,7 +35,7 @@ const listLatest = async (pattern, excludePattern = null) => {
 
 const runNode = (scriptRel, args = [], envPatch = null) => {
   const scriptAbs = path.resolve(projectRoot, scriptRel);
-  const r = spawnSync(process.execPath, ['--experimental-strip-types', scriptAbs, ...args], {
+  const r = spawnSync(process.execPath, [scriptAbs, ...args], {
     cwd: projectRoot,
     stdio: 'pipe',
     encoding: 'utf8',
