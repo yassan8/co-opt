@@ -20,7 +20,7 @@
     "diag:kkt-e2e-auto:strict": "node --experimental-strip-types diagnostics/kkt-e2e-auto.mjs --min-total-speedup 1.5 --min-solver-speedup 1.0 --min-wasm-ok-rate 1.0 --min-wasm-feasible-rate 1.0",
     "diag:kkt-qp": "node --experimental-strip-types diagnostics/kkt-qp-benchmark.mjs",
     "diag:release-gate": "node --experimental-strip-types diagnostics/release-gate-auto.mjs",
-    "diag:release-gate:strict": "node --experimental-strip-types diagnostics/release-gate-auto.mjs --ray-max-mismatch-rate 0 --ray-max-success-mismatch-rate 0 --ray-max-mean-opl-um 0 --ray-max-opl-um 0 --opd-min-speedup 1.05 --opd-max-valid-diff 0 --kkt-min-total-speedup 1.5 --kkt-min-solver-speedup 1.0 --kkt-min-wasm-ok-rate 1.0 --kkt-min-wasm-feasible-rate 1.0 --kkt-rounds 6 --kkt-n 24 --kkt-meq 6 --kkt-mineq 6 --kkt-maxIter 20",
+    "diag:release-gate:strict": "node diagnostics/release-gate-auto.mjs --ray-max-mismatch-rate 0 --ray-max-success-mismatch-rate 0 --ray-max-mean-opl-um 0 --ray-max-opl-um 0 --opd-min-speedup 1.05 --opd-max-valid-diff 0 --kkt-min-total-speedup 1.5 --kkt-min-solver-speedup 1.0 --kkt-min-wasm-ok-rate 1.0 --kkt-min-wasm-feasible-rate 1.0 --kkt-rounds 6 --kkt-n 24 --kkt-meq 6 --kkt-mineq 6 --kkt-maxIter 20",
     "diag:raytrace-golden": "node --experimental-strip-types diagnostics/raytrace-golden-capture.mjs",
     "diag:raytrace-golden:both": "node --experimental-strip-types diagnostics/raytrace-golden-capture.mjs --engine both",
     "diag:raytrace-golden:both:quick": "node --experimental-strip-types diagnostics/raytrace-golden-capture.mjs --engine both --rays 25",
