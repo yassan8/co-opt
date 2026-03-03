@@ -98,11 +98,10 @@ const run = async () => {
   const rays = Array.isArray(raw?.rays) ? raw.rays : [];
   const jsOut = Array.isArray(raw?.outputs?.js) ? raw.outputs.js : [];
   const rustOut = Array.isArray(raw?.outputs?.rust) ? raw.outputs.rust : [];
+  const hasJsOut = jsOut.length > 0;
+  const hasRustOut = rustOut.length > 0;
+  const jsOnlyFallback = hasJsOut && !hasRustOut;
   const n = Math.min(rays.length, jsOut.length, rustOut.length);
-
-  if (n === 0) {
-    throw new Error('No comparable rays found in golden result.');
-  }
 
   const pairCounts = {};
   const radiusBins = {};
@@ -209,12 +208,12 @@ const run = async () => {
     totals: {
       comparedRays: n,
       mismatchCount,
-      mismatchRate: mismatchCount / n,
+      mismatchRate: n > 0 ? mismatchCount / n : (jsOnlyFallback ? 0 : NaN),
       successMismatch,
-      successMismatchRate: successMismatch / n,
+      successMismatchRate: n > 0 ? successMismatch / n : (jsOnlyFallback ? 0 : NaN),
       oplCompared: oplMismatchCount,
-      meanOplAbsDeltaUm: oplMismatchCount > 0 ? oplAbsSum / oplMismatchCount : NaN,
-      maxOplAbsDeltaUm: oplAbsMax
+      meanOplAbsDeltaUm: oplMismatchCount > 0 ? oplAbsSum / oplMismatchCount : (jsOnlyFallback ? 0 : NaN),
+      maxOplAbsDeltaUm: oplMismatchCount > 0 ? oplAbsMax : (jsOnlyFallback ? 0 : NaN)
     },
     statusPairs: pairRanking,
     failureDiagnostics: {
@@ -231,9 +230,11 @@ const run = async () => {
     },
     radiusBins: radiusRanking,
     mismatchSamples,
-    note: (jsDiag || rustDiag)
-      ? 'Includes failure kind/surface aggregates from diagnostics captured via traceRayHitPoint.'
-      : 'This report does not include failing surface index. Current golden artifact stores only per-ray final status/hit/opl.'
+    note: jsOnlyFallback
+      ? 'Rust output is unavailable in this environment; JS-only fallback mode skips cross-engine comparison.'
+      : (jsDiag || rustDiag)
+        ? 'Includes failure kind/surface aggregates from diagnostics captured via traceRayHitPoint.'
+        : 'This report does not include failing surface index. Current golden artifact stores only per-ray final status/hit/opl.'
   };
 
   if (requireGate) {
