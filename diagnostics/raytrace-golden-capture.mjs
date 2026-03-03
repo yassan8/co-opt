@@ -497,7 +497,7 @@ const run = async () => {
     const outRel = path.relative(projectRoot, outPath);
     const proc = spawnSync(
       process.execPath,
-      ['--experimental-strip-types', analyzeScript, '--input', inputRel, '--out', outRel],
+      [analyzeScript, '--input', inputRel, '--out', outRel],
       { cwd: projectRoot, encoding: 'utf8' }
     );
     if (proc.status === 0) {
