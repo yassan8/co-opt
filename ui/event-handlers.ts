@@ -1669,6 +1669,17 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             border-bottom: 1px solid #ddd;
             font-size: 14px;
             font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .header #status {
+            font-size: 12px;
+            font-weight: 400;
+            color: #666;
+            margin-left: auto;
+            white-space: nowrap;
         }
         .controls {
             padding: 10px 12px;
@@ -1695,11 +1706,6 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
             padding: 5px 8px;
             font-size: 12px;
             width: 80px;
-        }
-        .controls #status {
-            margin-left: auto;
-            font-size: 12px;
-            color: #666;
         }
         #main {
             flex: 1 1 auto;
@@ -1800,7 +1806,10 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
     </style>
 </head>
 <body>
-    <div class="header">Render Optical System</div>
+    <div class="header">
+        <span>Render Optical System</span>
+        <span id="status"></span>
+    </div>
     <div class="controls">
         <button id="draw-btn" type="button">Render</button>
         <button id="view-xz-btn" type="button">X-Z View</button>
@@ -1811,7 +1820,6 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
         <label>Ray colors by:</label>
         <button id="object-color-btn" type="button" class="active">Object</button>
         <button id="segment-color-btn" type="button">Segment</button>
-        <span id="status"></span>
     </div>
     <div id="main">
         <div id="threejs-container"></div>
@@ -4397,7 +4405,11 @@ export function setupAnalysisWindows() {
                         else setProgress(undefined, msg);
                     } catch (_) {}
                 };
-                await window.opener.showIntegratedAberrationDiagram({ containerElement: containerEl, onProgress });
+                await window.opener.showIntegratedAberrationDiagram({
+                    containerElement: containerEl,
+                    onProgress,
+                    useActiveConfigSnapshot: true
+                });
                 setProgress(100, 'Done');
                 resizePlot();
             } catch (err) {
@@ -5747,15 +5759,9 @@ export function setupAnalysisWindows() {
                         throw new Error('WavefrontAberrationAnalyzer is not available');
                     }
                     
-                    // CRITICAL: Force stop mode to match render behavior
-                    // PSF calculation should use same pupil sampling as render, not entrance pupil
-                    try {
-                        if (fieldSetting.type === 'Angle' || !fieldSetting.height) {
-                            opdCalculator._setInfinitePupilMode(fieldSetting, 'stop');
-                            if (PSF_DEBUG) console.log('🔑 [PSF Popup] Forced stop mode for infinite field');
-                        }
-                    } catch (e) {
-                    }
+                    // NOTE:
+                    // Keep infinite-field pupil mode adaptive (or globally forced by user setting).
+                    // Hard-forcing stop mode here can make valid pupil samples collapse for off-axis fields.
                     
                     onProgress({ percent: 0, phase: 'opd', message: 'OPD...' });
                     const wavefrontGridSize = Number.isFinite(zernikeSampling)
@@ -5840,9 +5846,25 @@ export function setupAnalysisWindows() {
                         ampGrid[iy][ix] = 1.0;
                     }
 
+                    const rayData = [];
+                    for (let k = 0; k < n; k++) {
+                        const c = coords[k];
+                        const x = Number(c?.x);
+                        const y = Number(c?.y);
+                        const vMicrons = Number(opdMicrons[k]);
+                        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(vMicrons)) continue;
+                        rayData.push({
+                            pupilX: x,
+                            pupilY: y,
+                            opd: vMicrons,
+                            isVignetted: false
+                        });
+                    }
+
                     const opdData = {
                         gridSize: s,
                         wavelength: wavelength,
+                        rayData,
                         gridData: {
                             opd: opdGrid,
                             amplitude: ampGrid,

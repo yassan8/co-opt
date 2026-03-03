@@ -6441,11 +6441,57 @@ export class WavefrontAberrationAnalyzer {
         const recordRays = options?.recordRays !== undefined ? !!options.recordRays : true;
         const progressEvery = Number.isFinite(options?.progressEvery) ? Math.max(0, Math.floor(options.progressEvery)) : 0;
         const onProgress = (options && typeof options.onProgress === 'function') ? options.onProgress : null;
+        const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+        const forceRustWasmOPD = !!(options?.forceRustWasm || (g && (g as any).__COOPT_FORCE_RUST_WASM_OPD === true));
         const wasmFastOnly = !!options?.wasmFastOnly;
-        const forceWasmTraceOptions = wasmFastOnly
-            ? { requireWasmRayTracing: true, allowNonStrict: false }
+        const callerTraceOptions = (options?.traceOptions && typeof options.traceOptions === 'object')
+            ? { ...(options.traceOptions as any) }
             : null;
+        const forceWasmTraceOptions = forceRustWasmOPD
+            ? {
+                ...(callerTraceOptions || {}),
+                requireWasmRayTracing: true,
+                allowNonStrict: false,
+                useRustWasm: true,
+                requireRustWasm: true,
+                __forceRustWasmOpd: true
+            }
+            : (wasmFastOnly
+                ? {
+                    ...(callerTraceOptions || {}),
+                    requireWasmRayTracing: true,
+                    allowNonStrict: false
+                }
+                : callerTraceOptions);
         const traceOptionsPatch = forceWasmTraceOptions ? { traceOptions: forceWasmTraceOptions } : null;
+
+        if (forceRustWasmOPD) {
+            try {
+                const { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } = await import('../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts');
+                const rustApi = await preloadRustRayTracingWasm();
+                if (!rustApi) {
+                    const reason = getRustRayTracingWasmInitError?.() || 'unknown reason';
+                    throw new Error(`Forced Rust-WASM OPD mode: Rust WASM unavailable (${reason})`);
+                }
+                try {
+                    const gg = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+                    if (gg) {
+                        gg.__COOPT_LAST_OPD_BACKEND = {
+                            kind: 'rustWasm',
+                            detail: 'generateWavefrontMap preload',
+                            at: Date.now()
+                        };
+                    }
+                    console.warn('🧭 [OPD Backend] Rust-WASM (generateWavefrontMap preload)');
+                } catch (_) {
+                    // ignore
+                }
+            } catch (e: any) {
+                const msg = e?.message || String(e);
+                throw new Error(`Forced Rust-WASM OPD mode failed during preload (${msg})`);
+            }
+        }
+
         const emitProgress = (percent, phase, message) => {
             if (!onProgress) return;
             try {
@@ -6482,8 +6528,6 @@ export class WavefrontAberrationAnalyzer {
             gridSize = fitGridSizeMax;
             console.log(`⚡ Zernike描画: フィット用グリッドを ${gridSize} に縮小（要求=${requestedGridSize}、上限=${fitGridSizeMax}）`);
         }
-
-        const g = (typeof globalThis !== 'undefined') ? globalThis : null;
         const profileEnabled = !!(options?.profile || (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_PROFILE === true));
         const suppressReferenceRayError = !!options?.suppressReferenceRayError;
         const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')

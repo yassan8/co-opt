@@ -26,7 +26,7 @@ import {
 } from '../../compat/data-utils.ts';
 import { calculateSeidelCoefficients } from '../../compat/seidel-coefficients.ts';
 import { calculateAfocalSeidelCoefficientsIntegrated } from '../../evaluation/aberrations/seidel-coefficients-afocal.ts';
-import { generateSpotDiagram, generateSurfaceOptions } from '../../evaluation/spot-diagram.ts';
+import { generateSpotDiagram, generateSpotDiagramAsync, generateSurfaceOptions } from '../../evaluation/spot-diagram.ts';
 import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../../evaluation/wavefront/wavefront.ts';
 import { expandBlocksToOpticalSystemRows } from '../../data/block-schema.ts';
 import { generateRayStartPointsForObject, setRayEmissionPattern, getRayEmissionPattern } from '../../optical/ray-renderer.ts';
@@ -170,6 +170,57 @@ function sampleUnitDiskPoints({ rings = 4, spokes = 12 }: { rings?: number; spok
     }
     return pts;
 }
+
+function withRequirementRustRayTracing<T>(callback: () => T, traceOverride?: Record<string, any>): T;
+function withRequirementRustRayTracing<T>(callback: () => Promise<T>, traceOverride?: Record<string, any>): Promise<T>;
+function withRequirementRustRayTracing<T>(callback: () => T | Promise<T>, traceOverride?: Record<string, any>): T | Promise<T> {
+    const g: any = (typeof globalThis !== 'undefined') ? globalThis : null;
+    if (!g) return callback();
+
+    const key = '__cooptTraceOptionsOverride';
+    const prev = g[key];
+    const prevObj = (prev && typeof prev === 'object' && !Array.isArray(prev)) ? prev : null;
+
+    const defaultOverride = {
+        useRustWasm: true,
+        requireRustWasm: true,
+        requireForwardHit: true
+    };
+    g[key] = {
+        ...(prevObj || {}),
+        ...(defaultOverride || {}),
+        ...((traceOverride && typeof traceOverride === 'object') ? traceOverride : {})
+    };
+
+    const restore = () => {
+        if (prev === undefined) {
+            delete g[key];
+        } else {
+            g[key] = prev;
+        }
+    };
+
+    try {
+        const result = callback();
+        if (result && typeof (result as any).then === 'function') {
+            return (result as Promise<T>).finally(() => {
+                try { restore(); } catch (_) {}
+            });
+        }
+        restore();
+        return result as T;
+    } catch (error) {
+        restore();
+        throw error;
+    }
+}
+
+const REQUIREMENT_SPOT_TRACE_OVERRIDE = {
+    useRustWasm: true,
+    requireRustWasm: false,
+    allowNonStrict: true,
+    requireForwardHit: false
+};
 
 function computeZernikeFitLive({
     opticalSystemData,
@@ -900,11 +951,11 @@ class MeritFunctionEditor {
                 return this.calculateClearanceVsSemidia(operand, opticalSystemData);
 
             case 'SPOT_SIZE_ANNULAR':
-                return this.calculateSpotSizeUm(operand, opticalSystemData, { pattern: 'annular', useUiDefaults: false });
+                return withRequirementRustRayTracing(() => this.calculateSpotSizeUm(operand, opticalSystemData, { pattern: 'annular', useUiDefaults: false }));
             case 'SPOT_SIZE_RECT':
-                return this.calculateSpotSizeUm(operand, opticalSystemData, { pattern: 'grid', useUiDefaults: false });
+                return withRequirementRustRayTracing(() => this.calculateSpotSizeUm(operand, opticalSystemData, { pattern: 'grid', useUiDefaults: false }));
             case 'SPOT_SIZE_CURRENT':
-                return this.calculateSpotSizeUm(operand, opticalSystemData, { pattern: 'annular', useUiDefaults: false });
+                return withRequirementRustRayTracing(() => this.calculateSpotSizeUm(operand, opticalSystemData, { pattern: 'annular', useUiDefaults: false }));
 
             case 'LA_RMS_UM':
                 return this.calculateLongitudinalAberrationRmsUm(operand, opticalSystemData);
@@ -913,7 +964,7 @@ class MeritFunctionEditor {
                 return this.calculateSphericalAberrationUm(operand, opticalSystemData);
 
             case 'TA_RMS_UM':
-                return this.calculateTransverseAberrationRmsUm(operand, opticalSystemData);
+                return withRequirementRustRayTracing(() => this.calculateTransverseAberrationRmsUm(operand, opticalSystemData));
 
             case 'CTCT': {
                 // Center Thickness: Evaluate thickness of specified surface
@@ -1295,6 +1346,163 @@ class MeritFunctionEditor {
             default:
                 console.warn('⚠️ 未対応のオペランド:', operand.operand);
                 return 0;
+        }
+    }
+
+    async calculateOperandValueAsync(operand: any): Promise<number> {
+        if (!operand || !operand.operand) return 0;
+
+        const opticalSystemData = this.getOpticalSystemDataByConfigId(operand.configId);
+        const runSpotWithFallback = async (pattern: 'annular' | 'grid'): Promise<number> => {
+            const asyncVal = await withRequirementRustRayTracing(
+                () => this.calculateSpotSizeUmAsync(operand, opticalSystemData, { pattern, useUiDefaults: false }),
+                REQUIREMENT_SPOT_TRACE_OVERRIDE
+            );
+            const asyncNum = Number(asyncVal);
+            if (Number.isFinite(asyncNum) && Math.abs(asyncNum) < 1e8) {
+                return asyncNum;
+            }
+            const syncVal = withRequirementRustRayTracing(
+                () => this.calculateSpotSizeUm(operand, opticalSystemData, { pattern, useUiDefaults: false }),
+                REQUIREMENT_SPOT_TRACE_OVERRIDE
+            );
+            const syncNum = Number(syncVal);
+            return Number.isFinite(syncNum) ? syncNum : 1e9;
+        };
+        switch (operand.operand) {
+            case 'SPOT_SIZE_ANNULAR':
+                return runSpotWithFallback('annular');
+            case 'SPOT_SIZE_RECT':
+                return runSpotWithFallback('grid');
+            case 'SPOT_SIZE_CURRENT':
+                return runSpotWithFallback('annular');
+            default:
+                return this.calculateOperandValue(operand);
+        }
+    }
+
+    async calculateSpotSizeUmAsync(operand: any, opticalSystemData: any[], options: any = {}): Promise<number> {
+        try {
+            if (!Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return 1e9;
+
+            const useUiDefaults = (options.useUiDefaults !== undefined) ? options.useUiDefaults : true;
+            const { source: sourceRows, object: objectRows } = this.getConfigTablesByConfigId(operand.configId, {
+                preferConfigTables: !useUiDefaults
+            });
+
+            const param1Raw = (operand.param1 !== undefined && operand.param1 !== null) ? String(operand.param1).trim() : '';
+            const wavelength = (param1Raw === '')
+                ? this.getPrimaryWavelengthFromSourceRows(sourceRows)
+                : this.getSystemWavelengthFromOperandOrPrimary(operand, sourceRows);
+
+            const param2Raw = (operand.param2 !== undefined && operand.param2 !== null) ? String(operand.param2).trim() : '';
+            const objectIndex1 = (param2Raw === '') ? 1 : Math.max(1, Math.floor(Number(param2Raw)));
+            const objectIndex0 = objectIndex1 - 1;
+
+            const param3Raw = (operand.param3 !== undefined && operand.param3 !== null) ? String(operand.param3).trim().toLowerCase() : '';
+            const metric = (param3Raw === 'diameter' || param3Raw === 'dia') ? 'diameter' : 'rms';
+
+            const param4Raw = (operand.param4 !== undefined && operand.param4 !== null) ? String(operand.param4).trim() : '';
+            let rayCount = (param4Raw === '') ? 501 : Math.floor(Number(param4Raw));
+            if (!Number.isFinite(rayCount) || rayCount < 1) rayCount = 501;
+            if (rayCount > 5000) rayCount = 5000;
+
+            const param5Raw = (operand.param5 !== undefined && operand.param5 !== null) ? String(operand.param5).trim() : '';
+            let targetSurfaceNumber1: number | null = null;
+            if (param5Raw !== '') {
+                const parsed = Math.floor(Number(param5Raw));
+                if (Number.isFinite(parsed) && parsed > 0) targetSurfaceNumber1 = parsed;
+            }
+
+            const objectRow = Array.isArray(objectRows) ? objectRows[objectIndex0] : null;
+            if (!objectRow || typeof objectRow !== 'object') return 1e9;
+
+            const imageSurfaceIndex = (() => {
+                for (let i = opticalSystemData.length - 1; i >= 0; i--) {
+                    const row = opticalSystemData[i];
+                    const ot = String(row?.['object type'] || row?.objectType || row?.object || '').trim().toLowerCase();
+                    if (ot === 'image') return i;
+                }
+                return opticalSystemData.length - 1;
+            })();
+
+            const targetSurfaceIndex = (() => {
+                if (targetSurfaceNumber1 === null) return imageSurfaceIndex;
+                try {
+                    const opts = generateSurfaceOptions(opticalSystemData);
+                    const hit = Array.isArray(opts)
+                        ? opts.find((o: any) => Number(o?.value) === targetSurfaceNumber1 || Number(o?.surfaceId) === targetSurfaceNumber1)
+                        : null;
+                    if (hit && Number.isInteger(hit.rowIndex) && hit.rowIndex >= 0 && hit.rowIndex < opticalSystemData.length) {
+                        return hit.rowIndex;
+                    }
+                } catch (_) {}
+                const idx = targetSurfaceNumber1 - 1;
+                return (idx >= 0 && idx < opticalSystemData.length) ? idx : imageSurfaceIndex;
+            })();
+
+            const surfaceNumber1 = targetSurfaceIndex + 1;
+            const pattern = (options.pattern === 'grid' || options.pattern === 'annular') ? options.pattern : 'annular';
+            const ringCount = (options.annularRingCount !== undefined && options.annularRingCount !== null)
+                ? Math.max(1, Math.floor(Number(options.annularRingCount)))
+                : 10;
+
+            try {
+                if (typeof window !== 'undefined' && w.__cooptLastSpotSizeDebug && typeof w.__cooptLastSpotSizeDebug === 'object') {
+                    w.__cooptLastSpotSizeDebug.spotDiagramPath = 'async';
+                    w.__cooptLastSpotSizeDebug.pattern = pattern;
+                    w.__cooptLastSpotSizeDebug.targetSurfaceIndex = targetSurfaceIndex;
+                    w.__cooptLastSpotSizeDebug.wavelength = wavelength;
+                    w.__cooptLastSpotSizeDebug.rayCountRequested = rayCount;
+                }
+            } catch (_) {}
+
+            const spotResult = await generateSpotDiagramAsync(
+                opticalSystemData,
+                sourceRows,
+                [objectRow],
+                surfaceNumber1,
+                rayCount,
+                ringCount,
+                {
+                    physicalVignetting: true,
+                    pattern,
+                    traceOptions: { ...REQUIREMENT_SPOT_TRACE_OVERRIDE }
+                }
+            );
+
+            const hits = (spotResult && Array.isArray(spotResult.spotData) && spotResult.spotData.length > 0)
+                ? (spotResult.spotData[0]?.spotPoints || [])
+                : [];
+            if (!Array.isArray(hits) || hits.length <= 0) return 1e9;
+
+            let chief = hits.find((h: any) => h && h.isChiefRay) || null;
+            if (!chief) chief = hits[0];
+            if (!chief) return 1e9;
+
+            let maxRUm = 0;
+            let sumX2 = 0;
+            let sumY2 = 0;
+            let n = 0;
+            for (const h of hits) {
+                const dxUm = (Number(h?.x) - Number(chief?.x)) * 1000;
+                const dyUm = (Number(h?.y) - Number(chief?.y)) * 1000;
+                if (!Number.isFinite(dxUm) || !Number.isFinite(dyUm)) continue;
+                const rUm = Math.hypot(dxUm, dyUm);
+                if (rUm > maxRUm) maxRUm = rUm;
+                sumX2 += dxUm * dxUm;
+                sumY2 += dyUm * dyUm;
+                n += 1;
+            }
+            if (n <= 0) return 1e9;
+
+            const rmsX = Math.sqrt(sumX2 / n);
+            const rmsY = Math.sqrt(sumY2 / n);
+            const rmsTotal = Math.sqrt(rmsX * rmsX + rmsY * rmsY);
+            const diameter = 2 * maxRUm;
+            return (metric === 'diameter') ? diameter : rmsTotal;
+        } catch {
+            return 1e9;
         }
     }
 
@@ -1982,8 +2190,9 @@ class MeritFunctionEditor {
                     return Math.max(1, Math.floor(Number(options.annularRingCount)));
                 }
 
-                // Only read from UI if useUiDefaults is true
-                if (!useUiDefaults) return 3;
+                // Requirements default: annular uses 10 rings (matches inspector/spec note).
+                // Rectangle/grid ignores ring count, so this mainly affects annular operands.
+                if (!useUiDefaults) return 10;
 
                 const ringCount = Number(lastSpotSettings.ringCount);
                 if (Number.isFinite(ringCount) && ringCount > 0) return Math.floor(ringCount);
@@ -2000,73 +2209,107 @@ class MeritFunctionEditor {
             const surfaceNumber1 = targetSurfaceIndex + 1;
 
             try {
-                const spotResult = generateSpotDiagram(
-                    spotOpticalRows,
-                    spotSourceRowsForOperand,
-                    [obj2],
-                    surfaceNumber1,
-                    rayCount,
-                    effectiveAnnularRingCount,
-                    { 
-                        physicalVignetting: true,
-                        pattern: pattern
-                    }
-                );
+                const attemptPatterns = (() => {
+                    const primary = (pattern === 'grid' || pattern === 'annular') ? pattern : 'annular';
+                    const alternate = primary === 'annular' ? 'grid' : 'annular';
+                    return [primary, alternate];
+                })();
 
-                if (!spotResult || !Array.isArray(spotResult.spotData) || spotResult.spotData.length === 0) {
-                    stampSpotDebug({ ok: false, reason: 'spot-diagram-no-rays', hits: 0, resultUm: 1e9 });
-                    return 1e9;
-                }
-
-                const hits = spotResult.spotData[0]?.spotPoints || [];
-
-                // Fix: spot-diagram.ts saves as 'isChiefRay', not 'isChief'
-                let chief = hits.find((h: any) => h.isChiefRay) || null;
-                if (!chief) {
-                    const cx = hits.reduce((sum: number, h: any) => sum + h.x, 0) / hits.length;
-                    const cy = hits.reduce((sum: number, h: any) => sum + h.y, 0) / hits.length;
-                    let bestIdx = 0;
-                    let bestDist = Infinity;
-                    for (let i = 0; i < hits.length; i++) {
-                        const h = hits[i];
-                        const d = Math.hypot(h.x - cx, h.y - cy);
-                        if (d < bestDist) {
-                            bestDist = d;
-                            bestIdx = i;
+                for (let attemptIndex = 0; attemptIndex < attemptPatterns.length; attemptIndex++) {
+                    const patternAttempt = attemptPatterns[attemptIndex];
+                    const spotResult = generateSpotDiagram(
+                        spotOpticalRows,
+                        spotSourceRowsForOperand,
+                        [obj2],
+                        surfaceNumber1,
+                        rayCount,
+                        effectiveAnnularRingCount,
+                        {
+                            physicalVignetting: true,
+                            pattern: patternAttempt
                         }
+                    );
+
+                    const hits = (spotResult && Array.isArray(spotResult.spotData) && spotResult.spotData.length > 0)
+                        ? (spotResult.spotData[0]?.spotPoints || [])
+                        : [];
+                    if (!Array.isArray(hits) || hits.length <= 0) {
+                        stampSpotDebug({
+                            ok: false,
+                            reason: attemptIndex === 0 ? 'spot-diagram-no-rays' : 'spot-diagram-no-rays-after-retry',
+                            hits: 0,
+                            resultUm: 1e9,
+                            patternAttempt,
+                            attemptIndex
+                        });
+                        continue;
                     }
-                    chief = hits[bestIdx] || hits[0];
+
+                    // Fix: spot-diagram.ts saves as 'isChiefRay', not 'isChief'
+                    let chief = hits.find((h: any) => h.isChiefRay) || null;
+                    if (!chief) {
+                        const cx = hits.reduce((sum: number, h: any) => sum + h.x, 0) / hits.length;
+                        const cy = hits.reduce((sum: number, h: any) => sum + h.y, 0) / hits.length;
+                        let bestIdx = 0;
+                        let bestDist = Infinity;
+                        for (let i = 0; i < hits.length; i++) {
+                            const h = hits[i];
+                            const d = Math.hypot(h.x - cx, h.y - cy);
+                            if (d < bestDist) {
+                                bestDist = d;
+                                bestIdx = i;
+                            }
+                        }
+                        chief = hits[bestIdx] || hits[0];
+                    }
+
+                    let maxRUm = 0;
+                    let sumX2 = 0;
+                    let sumY2 = 0;
+                    let n = 0;
+                    for (const h of hits) {
+                        const dxUm = (h.x - chief.x) * 1000;
+                        const dyUm = (h.y - chief.y) * 1000;
+                        const rUm = Math.hypot(dxUm, dyUm);
+                        if (rUm > maxRUm) maxRUm = rUm;
+                        sumX2 += dxUm * dxUm;
+                        sumY2 += dyUm * dyUm;
+                        n++;
+                    }
+
+                    if (n <= 0) {
+                        stampSpotDebug({
+                            ok: false,
+                            reason: attemptIndex === 0 ? 'no-valid-hits' : 'no-valid-hits-after-retry',
+                            hits: 0,
+                            resultUm: 1e9,
+                            patternAttempt,
+                            attemptIndex
+                        });
+                        continue;
+                    }
+
+                    const rmsX = Math.sqrt(sumX2 / n);
+                    const rmsY = Math.sqrt(sumY2 / n);
+                    const rmsTotal = Math.sqrt(rmsX * rmsX + rmsY * rmsY);
+                    const diameter = 2 * maxRUm;
+
+                    const valueUm = (metric === 'diameter') ? diameter : rmsTotal;
+
+                    stampSpotDebug({
+                        ok: true,
+                        reason: (attemptIndex === 0) ? 'ok' : 'ok-after-pattern-retry',
+                        hits: hits.length,
+                        resultUm: valueUm,
+                        patternAttempt,
+                        attemptIndex
+                    });
+
+                    return valueUm;
                 }
 
-                let maxRUm = 0;
-                let sumX2 = 0;
-                let sumY2 = 0;
-                let n = 0;
-                for (const h of hits) {
-                    const dxUm = (h.x - chief.x) * 1000;
-                    const dyUm = (h.y - chief.y) * 1000;
-                    const rUm = Math.hypot(dxUm, dyUm);
-                    if (rUm > maxRUm) maxRUm = rUm;
-                    sumX2 += dxUm * dxUm;
-                    sumY2 += dyUm * dyUm;
-                    n++;
-                }
-
-                if (n <= 0) {
-                    stampSpotDebug({ ok: false, reason: 'no-valid-hits', hits: 0, resultUm: 1e9 });
-                    return 1e9;
-                }
-
-                const rmsX = Math.sqrt(sumX2 / n);
-                const rmsY = Math.sqrt(sumY2 / n);
-                const rmsTotal = Math.sqrt(rmsX * rmsX + rmsY * rmsY);
-                const diameter = 2 * maxRUm;
-
-                const valueUm = (metric === 'diameter') ? diameter : rmsTotal;
-
-                stampSpotDebug({ ok: true, reason: 'ok', hits: hits.length, resultUm: valueUm });
-
-                return valueUm;
+                stampSpotDebug({ ok: false, reason: 'spot-diagram-no-rays-all-patterns', hits: 0, resultUm: 1e9 });
+                return 1e9;
             } catch (err) {
                 stampSpotDebug({
                     ok: false,

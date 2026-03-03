@@ -21,12 +21,37 @@ let PSFCalculatorAuto = null;
 
 // WASM版PSF計算器のインポート
 let WasmCalculatorClass = null;
+let __lastFftWasmFallbackWarnAt = 0;
+const __fftWasmFallbackWarnIntervalMs = 5000;
+let __fftWasmPrewarmDone = false;
+
+function isForceWasmFftEnabled(options: any): boolean {
+    try {
+        if (options && options.forceWasmFFT === true) return true;
+        return !!(globalThis as any).__COOPT_FORCE_WASM_FFT;
+    } catch (_) {
+        return false;
+    }
+}
+
+async function prewarmFftWasmIfNeeded() {
+    if (__fftWasmPrewarmDone) return;
+    try {
+        const { ensureFFTWasmReady } = await import('../../rust-wasm/ts/raytracing/fft-wasm-wrapper.ts');
+        const init = await ensureFFTWasmReady();
+        if (init?.success) {
+            __fftWasmPrewarmDone = true;
+        }
+    } catch (_) {
+        // ignore; runtime fallback remains available
+    }
+}
 
 // WASM版PSF計算器の直接ロード
 async function loadWasmCalculatorDirect() {
     if (!WasmCalculatorClass) {
         try {
-            const wasmModule = await import('../../wasm/psf/psf-wasm-wrapper.js');
+            const wasmModule = await import('../../rust-wasm/ts/psf/psf-wasm-wrapper.ts');
             WasmCalculatorClass = wasmModule.PSFCalculatorWasm;
             // console.log('📦 [PSF] WASM calculator module loaded directly');
             return WasmCalculatorClass;
@@ -406,9 +431,7 @@ export class PSFCalculator {
 
         // 可能なら先にWASM初期化を待ってから実装方法を決定する。
         // ここで待たないと、初回計算が常にJSへ落ちてしまう。
-        const wantsWasm =
-            forceImplementation === 'wasm' ||
-            (forceImplementation !== 'javascript' && this.performanceMode !== 'javascript' && samplingSize >= 64);
+        const wantsWasm = false;
 
         if (wantsWasm) {
             if (!this._wasmInitPromise) {
@@ -530,7 +553,10 @@ export class PSFCalculator {
 
         // console.log('📱 [PSF] Using JavaScript implementation');
         const jsStartTime = performance.now();
-        const result = await this.calculatePSFJavaScript(opdData, options);
+        const result = await this.calculatePSFJavaScript(opdData, {
+            ...options,
+            forceWasmFFT: options?.forceWasmFFT !== false
+        });
         const jsEndTime = performance.now();
         
         // console.log(`✅ [PSF] JavaScript calculation completed in ${(jsEndTime - jsStartTime).toFixed(1)}ms`);
@@ -546,16 +572,7 @@ export class PSFCalculator {
      * @returns {boolean} WASM使用するかどうか
      */
     shouldUseWasm(samplingSize, forceImplementation) {
-        if (forceImplementation === 'javascript') return false;
-        if (forceImplementation === 'wasm') return true;
-        
-        // 自動判定：大きなサンプリングサイズではWASMを優先
-        if (!this.wasmCalculator) return false;
-        if (this.performanceMode === 'javascript') return false;
-        if (this.performanceMode === 'wasm') return true;
-        
-        // auto mode: サンプリングサイズが64以上でWASMを使用
-        return samplingSize >= 64;
+        return false;
     }
 
     /**
@@ -664,6 +681,9 @@ export class PSFCalculator {
         if (!opdData || (!opdData.rayData && !opdData.gridData)) {
             throw new Error('有効なOPDデータが必要です');
         }
+
+        // Proactively initialize FFT WASM so first FFT call is less likely to fall back.
+        await prewarmFftWasmIfNeeded();
 
         emitProgress(0, 'psf', `PSF start (${samplingSize}x${samplingSize})`);
 
@@ -959,12 +979,33 @@ export class PSFCalculator {
                     for (let j = 0; j < samplingSize; j++) grid.yCoords[j] = (j / (samplingSize - 1 || 1)) * 2 - 1;
                 }
 
-                // NOTE: gridData が与えられた場合は、そのまま使用する（追加の安定化/外れ値除去は行わない）
-
-                if (logOutlierFilter) {
-                    console.log('ℹ️ [PSF] convertOPDToGrid: gridData provided; skipping rayData outlier filter');
+                // If provided grid is too sparse, prefer rayData interpolation when available.
+                // Sparse masks can collapse pupil to ~1 pixel and produce artificially flat PSF.
+                let activeMaskCount = 0;
+                let finiteOpdCount = 0;
+                for (let iy = 0; iy < samplingSize; iy++) {
+                    const maskRow = grid.pupilMask[iy];
+                    const opdRow = grid.opd[iy];
+                    for (let ix = 0; ix < samplingSize; ix++) {
+                        if (!maskRow[ix]) continue;
+                        activeMaskCount++;
+                        if (Number.isFinite(opdRow[ix])) finiteOpdCount++;
+                    }
                 }
-                return grid;
+
+                const total = samplingSize * samplingSize;
+                const sparseByRatio = activeMaskCount < Math.max(16, Math.floor(total * 0.01));
+                const sparseByCount = activeMaskCount < 4;
+                const hasRayData = Array.isArray(opdData?.rayData) && opdData.rayData.length >= 10;
+                if ((sparseByRatio || sparseByCount || finiteOpdCount === 0) && hasRayData) {
+                    console.warn(`⚠️ [PSF] gridData too sparse (mask=${activeMaskCount}/${total}, finiteOPD=${finiteOpdCount}); falling back to rayData interpolation`);
+                } else {
+                    // NOTE: gridData が与えられた場合は、そのまま使用する（追加の安定化/外れ値除去は行わない）
+                    if (logOutlierFilter) {
+                        console.log('ℹ️ [PSF] convertOPDToGrid: gridData provided; skipping rayData outlier filter');
+                    }
+                    return grid;
+                }
             }
         }
 
@@ -1461,16 +1502,27 @@ export class PSFCalculator {
     async performFFTAsync(complexAmplitude, options = {}) {
         const realIn = Array.from({ length: complexAmplitude.real.length }, (_, i) => Array.from(complexAmplitude.real[i]));
         const imagIn = Array.from({ length: complexAmplitude.imag.length }, (_, i) => Array.from(complexAmplitude.imag[i]));
+        const forceWasmFFT = isForceWasmFftEnabled(options);
 
         const onProgress = (options && typeof options.onProgress === 'function') ? options.onProgress : null;
 
         // Try WASM FFT first, fall back to JS if unavailable
         let fftResult;
         try {
-            const { fft2D_WASM } = await import('../../wasm/raytracing/fft-wasm-wrapper.ts');
-            fftResult = await fft2D_WASM(realIn, imagIn, { fallbackToJS: true });
+            const { fft2D_WASM } = await import('../../rust-wasm/ts/raytracing/fft-wasm-wrapper.ts');
+            // Keep JS fallback in this function to avoid duplicate warnings from wrapper.
+            fftResult = await fft2D_WASM(realIn, imagIn, { fallbackToJS: false });
         } catch (error) {
-            console.warn('⚠️ [PSF] WASM FFT failed, using JavaScript:', error);
+            if (forceWasmFFT) {
+                const msg = (error && (error as any).message) ? (error as any).message : String(error);
+                throw new Error(`Forced WASM FFT mode enabled; fallback is disabled (${msg})`);
+            }
+            const now = Date.now();
+            if ((now - __lastFftWasmFallbackWarnAt) > __fftWasmFallbackWarnIntervalMs) {
+                const msg = (error && (error as any).message) ? (error as any).message : String(error);
+                console.warn('⚠️ [PSF] WASM FFT unavailable, using JavaScript fallback:', msg);
+                __lastFftWasmFallbackWarnAt = now;
+            }
             const yieldEvery = (options && Number.isFinite(options.yieldEvery)) ? options.yieldEvery : undefined;
             fftResult = await SimpleFFT.fft2DAsync(realIn, imagIn, { onProgress, yieldEvery });
         }

@@ -1,3 +1,9 @@
+import {
+  getRustRayTracingWasmSync,
+  getRustRayTracingWasmInitError,
+  preloadRustRayTracingWasm
+} from '../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
+
 type WasmSystemInstance = any;
 
 let wasmSystemInstance: WasmSystemInstance | null = null;
@@ -5,11 +11,11 @@ let requireRayTracingWasmStrict = false;
 let rayTracingWasmInitPromise: Promise<ReturnType<typeof getRayTracingWasmReadiness>> | null = null;
 let lastRayTracingBootstrapError: string | null = null;
 
-const REQUIRED_RAYTRACE_WASM_FUNCTIONS = [
-  '_intersect_aspheric_rt10',
-  '_aspheric_sag_rt10',
-  '_vector_dot',
-  '_vector_normalize'
+const REQUIRED_RUST_WASM_FUNCTIONS = [
+  'intersect_aspheric_rt10',
+  'intersect_aspheric_rt10_batch',
+  'surface_normal_aspheric_rt10',
+  'batch_mat3_mul_vec3'
 ];
 
 export function getWASMSystem(): WasmSystemInstance | null {
@@ -35,12 +41,12 @@ export function getRayTracingWasmReadiness(): {
   isWASMReady: boolean;
   missingFunctions: string[];
 } {
-  const system = wasmSystemInstance;
-  const hasSystem = !!system;
-  const hasModule = !!system?.wasmModule;
-  const isWASMReady = !!system?.isWASMReady;
-  const missingFunctions = REQUIRED_RAYTRACE_WASM_FUNCTIONS.filter((name) => {
-    const fn = system?.wasmModule?.[name];
+  const rustApi = getRustRayTracingWasmSync();
+  const hasSystem = !!rustApi;
+  const hasModule = !!rustApi;
+  const isWASMReady = !!rustApi;
+  const missingFunctions = REQUIRED_RUST_WASM_FUNCTIONS.filter((name) => {
+    const fn = (rustApi as any)?.[name];
     return typeof fn !== 'function';
   });
 
@@ -66,102 +72,22 @@ export function assertRayTracingWasmReady(context = 'Ray tracing WASM is require
   }
 }
 
-async function initializeDirectRayTracingWasmSystem(): Promise<boolean> {
-  const w = (typeof window !== 'undefined') ? (window as any) : null;
-  if (!w) return false;
-
-  const waitUntil = Date.now() + 5000;
-  while (typeof w.RayTracingWASM !== 'function' && Date.now() < waitUntil) {
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-
-  if (typeof w.RayTracingWASM !== 'function') {
-    return false;
-  }
-
-  let wasmModule: any = null;
-  try {
-    wasmModule = await w.RayTracingWASM();
-  } catch (error) {
-    lastRayTracingBootstrapError = String((error as any)?.message || error || 'RayTracingWASM init failed');
-    return false;
-  }
-
-  if (!wasmModule) {
-    return false;
-  }
-
-  const missingFunctions = REQUIRED_RAYTRACE_WASM_FUNCTIONS.filter((name) => typeof wasmModule?.[name] !== 'function');
-  if (missingFunctions.length > 0) {
-    lastRayTracingBootstrapError = `Direct RayTracingWASM missing functions: [${missingFunctions.join(',')}]`;
-    return false;
-  }
-
-  const system: WasmSystemInstance = {
-    wasmModule,
-    isWASMReady: true,
-    async forceInitializeWASM() {
-      return true;
-    }
-  };
-
-  setWASMSystem(system);
-  if (typeof w._setWASMSystem === 'function') {
-    w._setWASMSystem(system);
-  }
-  return true;
-}
-
 async function bootstrapRayTracingWasm(): Promise<ReturnType<typeof getRayTracingWasmReadiness>> {
   const current = getRayTracingWasmReadiness();
   if (current.ready) return current;
 
   if (!rayTracingWasmInitPromise) {
     rayTracingWasmInitPromise = (async () => {
-      let SystemClass: any = null;
-      const w = (typeof window !== 'undefined') ? (window as any) : null;
-
-      if (w && typeof w.ForceWASMSystem === 'function') {
-        SystemClass = w.ForceWASMSystem;
-      }
-
-      if (!SystemClass) {
-        try {
-          const mod = await import('../wasm/raytracing/force-wasm-system.ts');
-          SystemClass = mod?.ForceWASMSystem ?? null;
-        } catch (error) {
-          lastRayTracingBootstrapError = String((error as any)?.message || error || 'Failed to import ForceWASMSystem');
-          SystemClass = null;
-        }
-      }
-
-      if (!SystemClass) {
-        const ok = await initializeDirectRayTracingWasmSystem();
-        if (ok) {
-          lastRayTracingBootstrapError = null;
-        }
-        return getRayTracingWasmReadiness();
-      }
-
-      let system = getWASMSystem();
-      const hasInitMethod = typeof system?.forceInitializeWASM === 'function';
-      if (!system || !hasInitMethod) {
-        try {
-          system = new SystemClass();
-          setWASMSystem(system);
-          if (w && typeof w._setWASMSystem === 'function') {
-            w._setWASMSystem(system);
-          }
-        } catch (_) {
+      try {
+        const api = getRustRayTracingWasmSync() || await preloadRustRayTracingWasm();
+        if (!api) {
+          lastRayTracingBootstrapError = getRustRayTracingWasmInitError() || 'Rust ray tracing WASM init failed';
           return getRayTracingWasmReadiness();
         }
-      }
-
-      try {
-        await system.forceInitializeWASM();
+        setWASMSystem({ backend: 'rust-wasm', isWASMReady: true });
         lastRayTracingBootstrapError = null;
-      } catch (_) {
-        // readiness check below will report failure details
+      } catch (error) {
+        lastRayTracingBootstrapError = String((error as any)?.message || error || 'Rust ray tracing WASM init failed');
       }
 
       return getRayTracingWasmReadiness();
@@ -191,7 +117,7 @@ export async function ensureMtfWasmReady(): Promise<{
   let psfReady = false;
 
   try {
-    const mod = await import('../wasm/psf/psf-wasm-wrapper.ts');
+    const mod = await import('../rust-wasm/ts/psf/psf-wasm-wrapper.ts');
     const W = mod?.PSFCalculatorWasm;
     if (typeof W !== 'function') {
       console.warn('⚠️ PSF WASM wrapper is unavailable; continuing with fallback path.');

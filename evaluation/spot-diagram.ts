@@ -2,7 +2,7 @@
 // 仕様書に基づくスポットダイアグラム機能
 
 // @ts-nocheck
-import { traceRay, calculateSurfaceOrigins, transformPointToLocal } from '../raytracing/core/ray-tracing.ts';
+import { traceRay, traceRayHitPointBatch, calculateSurfaceOrigins, transformPointToLocal } from '../raytracing/core/ray-tracing.ts';
 import { findStopSurfaceIndex, calculateFocalLength, calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 import { generateRayStartPointsForObject } from '../optical/ray-renderer.ts';
 import { detectConjugateType, ConjugateType } from '../utils/conjugate-detection.ts';
@@ -10,6 +10,7 @@ import { detectConjugateType, ConjugateType } from '../utils/conjugate-detection
 function derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthMicrons, preferEntrancePupil) {
     let pupilDiameterMm = 10.0;
     let focalLengthMm = 100.0;
+    let hasValidParaxialPupil = false;
 
     // Prefer paraxial pupils (EnPD/ExPD). Fallback to Stop.semidia/aperture.
     try {
@@ -21,8 +22,10 @@ function derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthMi
         const alternate = preferEntrancePupil ? expd : enpd;
         if (Number.isFinite(preferred) && preferred > 0) {
             pupilDiameterMm = Math.abs(preferred);
+            hasValidParaxialPupil = true;
         } else if (Number.isFinite(alternate) && alternate > 0) {
             pupilDiameterMm = Math.abs(alternate);
+            hasValidParaxialPupil = true;
         }
 
         const fl = Number(paraxial?.focalLength);
@@ -33,16 +36,19 @@ function derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthMi
         // ignore; fallback below
     }
 
-    // Stop-based fallback for pupil diameter
+    // Stop-based fallback for pupil diameter.
+    // Keep paraxial EnPD/ExPD when valid; use stop only as fallback.
     try {
-        const stopIndex = findStopSurfaceIndex(opticalSystemRows);
-        const stopRow = (stopIndex >= 0) ? opticalSystemRows?.[stopIndex] : null;
-        const sd = Math.abs(parseFloat(stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.['Semi Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? NaN));
-        if (Number.isFinite(sd) && sd > 0) {
-            const isApertureField = stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined);
-            const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
-            if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
-                pupilDiameterMm = stopRadiusMm * 2;
+        if (!hasValidParaxialPupil) {
+            const stopIndex = findStopSurfaceIndex(opticalSystemRows);
+            const stopRow = (stopIndex >= 0) ? opticalSystemRows?.[stopIndex] : null;
+            const sd = Math.abs(parseFloat(stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.['Semi Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? NaN));
+            if (Number.isFinite(sd) && sd > 0) {
+                const isApertureField = stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined);
+                const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
+                if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
+                    pupilDiameterMm = stopRadiusMm * 2;
+                }
             }
         }
     } catch (_) {
@@ -118,6 +124,77 @@ function createPerpendicularBasis(direction) {
     return { dir, u, v };
 }
 
+function __spot_estimateStartStopAlignmentMm(opticalSystemRows, starts, wavelengthUm, traceOptions = null, sampleCount = 24) {
+    try {
+        if (!Array.isArray(starts) || starts.length === 0) return null;
+        const basis = starts?.emissionBasis;
+        const stopIndex = Number(basis?.stopIndex);
+        const stopZ = Number(basis?.stopZ);
+        const stopCenterX = Number(basis?.stopCenter?.x);
+        const stopCenterY = Number(basis?.stopCenter?.y);
+        if (!Number.isInteger(stopIndex) || stopIndex < 0) return null;
+        if (![stopZ, stopCenterX, stopCenterY].every(Number.isFinite)) return null;
+
+        const stopPlaneU = normalizeVectorSafe(
+            (basis?.stopPlaneU && typeof basis.stopPlaneU === 'object')
+                ? { x: Number(basis.stopPlaneU.x), y: Number(basis.stopPlaneU.y), z: Number(basis.stopPlaneU.z) }
+                : { x: 1, y: 0, z: 0 },
+            { x: 1, y: 0, z: 0 }
+        );
+        const stopPlaneV = normalizeVectorSafe(
+            (basis?.stopPlaneV && typeof basis.stopPlaneV === 'object')
+                ? { x: Number(basis.stopPlaneV.x), y: Number(basis.stopPlaneV.y), z: Number(basis.stopPlaneV.z) }
+                : { x: 0, y: 1, z: 0 },
+            { x: 0, y: 1, z: 0 }
+        );
+
+        const step = Math.max(1, Math.floor(starts.length / Math.max(1, Number(sampleCount) || 1)));
+        const rays = [];
+        const expected = [];
+        for (let i = 0; i < starts.length; i += step) {
+            const ray = starts[i];
+            const plane = ray?.planeCoords;
+            if (!ray?.startP || !ray?.dir || !plane) continue;
+            const u = Number(plane.u);
+            const v = Number(plane.v);
+            if (!Number.isFinite(u) || !Number.isFinite(v)) continue;
+            rays.push({
+                wavelength: Number(wavelengthUm) || 0.5876,
+                pos: { x: Number(ray.startP.x), y: Number(ray.startP.y), z: Number(ray.startP.z) },
+                dir: { x: Number(ray.dir.x), y: Number(ray.dir.y), z: Number(ray.dir.z) }
+            });
+            expected.push({
+                x: stopCenterX + u * stopPlaneU.x + v * stopPlaneV.x,
+                y: stopCenterY + u * stopPlaneU.y + v * stopPlaneV.y
+            });
+            if (rays.length >= sampleCount) break;
+        }
+        if (rays.length === 0) return null;
+
+        const hits = traceRayHitPointBatch(opticalSystemRows, rays, 1.0, stopIndex, traceOptions || undefined);
+        if (!Array.isArray(hits) || hits.length !== rays.length) return null;
+
+        let sumErr = 0;
+        let maxErr = 0;
+        let valid = 0;
+        for (let i = 0; i < hits.length; i++) {
+            const hit = hits[i];
+            const hx = Number(hit?.x);
+            const hy = Number(hit?.y);
+            if (!Number.isFinite(hx) || !Number.isFinite(hy)) continue;
+            const err = Math.hypot(hx - expected[i].x, hy - expected[i].y);
+            if (!Number.isFinite(err)) continue;
+            sumErr += err;
+            if (err > maxErr) maxErr = err;
+            valid += 1;
+        }
+        if (valid <= 0) return null;
+        return { meanErrMm: sumErr / valid, maxErrMm: maxErr, samples: valid };
+    } catch (_) {
+        return null;
+    }
+}
+
 function __spot_cloneRowsPreserveSpecialNumbers(rows) {
     if (!Array.isArray(rows)) return rows;
     try {
@@ -145,6 +222,54 @@ function __spot_cloneRowsPreserveSpecialNumbers(rows) {
     } catch (_) {
         // Last-resort: shallow clone rows.
         return rows.map((row) => (row && typeof row === 'object' ? { ...row } : row));
+    }
+}
+
+function __spot_reorderPupilScalesForObject(baseScales, obj, conjugateType, physicalVignetting) {
+    if (!Array.isArray(baseScales) || baseScales.length <= 1) return baseScales;
+    if (!(physicalVignetting && conjugateType === 'infinite')) return baseScales;
+
+    const ox = Number(obj?.xHeightAngle ?? obj?.xAngle ?? obj?.x ?? obj?.X ?? 0);
+    const oy = Number(obj?.yHeightAngle ?? obj?.yAngle ?? obj?.y ?? obj?.Y ?? 0);
+    const fieldNorm = Math.hypot(Number.isFinite(ox) ? ox : 0, Number.isFinite(oy) ? oy : 0);
+    if (!(Number.isFinite(fieldNorm) && fieldNorm > 1e-9)) return baseScales;
+
+    const preferred = [0.7, 0.5, 1.0];
+    const ordered = [];
+    for (const p of preferred) {
+        if (baseScales.includes(p) && !ordered.includes(p)) ordered.push(p);
+    }
+    for (const s of baseScales) {
+        if (!ordered.includes(s)) ordered.push(s);
+    }
+    return ordered;
+}
+
+function __spot_calculateSurfaceOriginsPreferRust(opticalSystemRows, traceOptions) {
+    const shouldPreferRust = !!(traceOptions && typeof traceOptions === 'object' && traceOptions.useRustWasm === true);
+    if (!shouldPreferRust) {
+        return calculateSurfaceOrigins(opticalSystemRows);
+    }
+
+    let previousFlag;
+    let hadPreviousFlag = false;
+    try {
+        if (typeof globalThis !== 'undefined') {
+            hadPreviousFlag = Object.prototype.hasOwnProperty.call(globalThis, '__COOPT_USE_RUST_SURFACE_ORIGINS');
+            previousFlag = globalThis.__COOPT_USE_RUST_SURFACE_ORIGINS;
+            globalThis.__COOPT_USE_RUST_SURFACE_ORIGINS = true;
+        }
+        return calculateSurfaceOrigins(opticalSystemRows);
+    } finally {
+        try {
+            if (typeof globalThis !== 'undefined') {
+                if (hadPreviousFlag) {
+                    globalThis.__COOPT_USE_RUST_SURFACE_ORIGINS = previousFlag;
+                } else {
+                    delete globalThis.__COOPT_USE_RUST_SURFACE_ORIGINS;
+                }
+            }
+        } catch (_) {}
     }
 }
 
@@ -256,7 +381,24 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
     
     // 光学系の構造とCB面を分析
     const opticalSystemStructure = analyzeOpticalSystemStructure(opticalSystemRows);
-    const surfaceInfoList = calculateSurfaceOrigins(opticalSystemRows);
+    const traceOptions = (options && typeof options === 'object' && options.traceOptions && typeof options.traceOptions === 'object')
+        ? options.traceOptions
+        : null;
+    const forceTsSpotOriginSolve = (() => {
+        try {
+            if (options && typeof options === 'object' && options.forceTsSpotOriginSolve === true) return true;
+        } catch (_) {}
+        try {
+            if (typeof globalThis !== 'undefined' && globalThis.__cooptForceTsSpotOriginSolve === true) return true;
+        } catch (_) {}
+        return false;
+    })();
+    const preferRustSpotOriginSolve = !!(
+        (traceOptions && typeof traceOptions === 'object' && traceOptions.useRustWasm === true)
+        || (options && typeof options === 'object' && options.useRustWasm === true)
+    );
+    const originSolveTraceBackend = (!forceTsSpotOriginSolve && preferRustSpotOriginSolve) ? 'rust' : 'ts';
+    const surfaceInfoList = __spot_calculateSurfaceOriginsPreferRust(opticalSystemRows, traceOptions);
 
     // Source tableから波長情報を取得（引数で渡されたsourceRowsを使用）
     const wavelengthData = getWavelengthsFromSource(sourceRows);
@@ -342,9 +484,14 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
 
         // physicalVignetting: allow shrinking the effective pupil to find rays that pass through
         // the physical apertures (matches OPD/spot behavior and avoids "0 rays reached" for angled fields).
-        const pupilScalesToTry = physicalVignetting
-            ? [1, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12, 0.085, 0.06, 0.04, 0.03, 0.02, 0.015, 0.01]
-            : [1];
+        const pupilScalesToTry = __spot_reorderPupilScalesForObject(
+            physicalVignetting
+                ? [1, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12, 0.085, 0.06, 0.04, 0.03, 0.02, 0.015, 0.01]
+                : [1],
+            obj,
+            conjugateType,
+            physicalVignetting
+        );
         let rayStartPoints = null;
         let annularRingsUsed = 0;
         let selectedRingOverride = Number(ringCount ?? 0);
@@ -353,11 +500,14 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         let diagnostics = null;
         let pupilScaleUsed = null;
 
-        const traceOnceWithScale = (scale, aimThroughStop, disableAngleObjectPositionOptimization, allowStopBasedOriginSolveOverride) => {
+        const traceOnceWithScale = (scale, aimThroughStop, disableAngleObjectPositionOptimization, allowStopBasedOriginSolveOverride, forceTsBackendRequested = false) => {
             const allowStopBasedOriginSolve = (typeof allowStopBasedOriginSolveOverride === 'boolean')
                 ? allowStopBasedOriginSolveOverride
                 : (opdCompatibleAngle && !!aimThroughStop);
-            const starts = generateRayStartPointsForSpot(
+            let attemptOriginSolveTraceBackend = forceTsBackendRequested
+                ? 'ts'
+                : originSolveTraceBackend;
+            let starts = generateRayStartPointsForSpot(
                 obj,
                 opticalSystemRows,
                 rayNumber,
@@ -365,6 +515,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                 {
                     annularRingCount: ringCount,
                     targetSurfaceIndex,
+                    precomputedSurfaceOrigins: surfaceInfoList,
                     useChiefRayAnalysis: !!aimThroughStop,
                     chiefRaySolveMode: (aimThroughStop ? 'fast' : 'legacy'),
                     aimThroughStop: !!aimThroughStop,
@@ -375,6 +526,8 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                     // Spot-diagram should be based on the physical stop/pupil, not on any temporary
                     // Draw-Cross-ray extent cached on window.
                     disableCrossExtent: true,
+                    // Keep origin solve always-on; select backend based on active trace backend.
+                    originSolveTraceBackend: attemptOriginSolveTraceBackend,
                     // When evaluating physical vignetting, keep the Angle object's emission origin stable.
                     // (optimizeAngleObjectPosition can otherwise shift the field and destroy angle↔chief correlation.)
                     // However, CB systems often require this optimization to avoid 0-hit rays.
@@ -384,7 +537,47 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
 
             if (!starts || !Array.isArray(starts) || starts.length === 0) {
                 console.warn(`⚠️ [SPOT DIAGRAM] Object ${objectId}: Failed to generate ray starts (scale=${scale}, aimThroughStop=${aimThroughStop})`);
-                return { starts, ok: 0, spotPoints: [], diagnostics: null };
+                return { starts, ok: 0, spotPoints: [], diagnostics: null, originSolveTraceBackend: attemptOriginSolveTraceBackend };
+            }
+
+            if (attemptOriginSolveTraceBackend === 'rust') {
+                const alignment = __spot_estimateStartStopAlignmentMm(
+                    opticalSystemRows,
+                    starts,
+                    Number(primaryWavelength?.wavelength) || 0.5876,
+                    traceOptions,
+                    24
+                );
+                const shouldFallbackToTsStarts = !!(
+                    alignment
+                    && Number.isFinite(alignment.meanErrMm)
+                    && Number.isFinite(alignment.maxErrMm)
+                    && (alignment.meanErrMm > 0.02 || alignment.maxErrMm > 0.05)
+                );
+                if (shouldFallbackToTsStarts) {
+                    starts = generateRayStartPointsForSpot(
+                        obj,
+                        opticalSystemRows,
+                        rayNumber,
+                        null,
+                        {
+                            annularRingCount: ringCount,
+                            targetSurfaceIndex,
+                            precomputedSurfaceOrigins: surfaceInfoList,
+                            useChiefRayAnalysis: !!aimThroughStop,
+                            chiefRaySolveMode: (aimThroughStop ? 'fast' : 'legacy'),
+                            aimThroughStop: !!aimThroughStop,
+                            allowStopBasedOriginSolve,
+                            wavelengthUm: Number(primaryWavelength?.wavelength) || 0.5876,
+                            pupilScale: scale,
+                            pattern: options.pattern,
+                            disableCrossExtent: true,
+                            originSolveTraceBackend: 'ts',
+                            disableAngleObjectPositionOptimization: !!disableAngleObjectPositionOptimization
+                        }
+                    );
+                    attemptOriginSolveTraceBackend = 'ts';
+                }
             }
 
             const diag = {
@@ -438,7 +631,13 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                         dir: rayStart.dir,
                         wavelength: Number(primaryWavelength?.wavelength) || 0.5876
                     };
-                    const traced = __spot_withRayTraceFailureCapture(() => traceRay(opticalRowsCopy, ray0, 1.0, debugLog, targetSurfaceIndex));
+                    const traceOptions = (options && typeof options === 'object' && options.traceOptions && typeof options.traceOptions === 'object')
+                        ? options.traceOptions
+                        : null;
+                    const traceDebugLog = (options && typeof options === 'object' && options.enableSpotTraceDebugLog === true)
+                        ? []
+                        : null;
+                    const traced = __spot_withRayTraceFailureCapture(() => traceRay(opticalRowsCopy, ray0, 1.0, traceDebugLog, targetSurfaceIndex, traceOptions));
                     const rayPath = traced.result;
                     
                     if (rayPath && Array.isArray(rayPath) && targetPointIndex !== null && rayPath.length > targetPointIndex && targetSurfaceIndex >= 0) {
@@ -447,9 +646,6 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                         const hitPointLocal = surfaceInfo ? transformPointToLocal(hitPointGlobal, surfaceInfo) : hitPointGlobal;
                         
                         if (hitPointLocal && typeof hitPointLocal.x === 'number' && typeof hitPointLocal.y === 'number') {
-                            const startPointClone = rayStart?.startP && typeof rayStart.startP === 'object'
-                                ? { x: rayStart.startP.x, y: rayStart.startP.y, z: rayStart.startP.z }
-                                : null;
                             const isChief = rayStart.isChief === true || (rayStart.isChief === undefined && i === 0);
                             
                             // For spot diagram, use global coordinates at the target surface.
@@ -483,7 +679,7 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                     __spot_recordTraceFailure(diag, null, 'EXCEPTION', opticalSystemRows, null);
                 }
             }
-            return { starts, ok, spotPoints: pts, diagnostics: diag };
+            return { starts, ok, spotPoints: pts, diagnostics: diag, originSolveTraceBackend: attemptOriginSolveTraceBackend };
         };
 
         // Try progressively smaller pupils when CB/tilt causes aggressive vignetting.
@@ -504,9 +700,15 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         })();
 
         const tryPupilScales = (aim) => {
+            const isInfiniteAnglePhysical = opdCompatibleAngle && conjugateType === 'infinite';
             for (const disableAngleOpt of angleOptDisableToggles) {
+                if (isInfiniteAnglePhysical && disableAngleOpt !== false) continue;
                 for (const s of pupilScalesToTry) {
                     const allowOriginSolveToggles = (() => {
+                        if (isInfiniteAnglePhysical) {
+                            // Performance-safe fixed combo for infinite-angle physical-vignetting spot.
+                            return [true];
+                        }
                         if (!aim) return [false];
                         if (isAngleObject) {
                             // For Angle objects, aiming-through-stop without origin solving is often ineffective:
@@ -522,7 +724,20 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                     })();
 
                     for (const allowOriginSolve of allowOriginSolveToggles) {
-                        const r = traceOnceWithScale(s, aim, disableAngleOpt, allowOriginSolve);
+                        let r = traceOnceWithScale(s, aim, disableAngleOpt, allowOriginSolve);
+                        const shouldAttemptTsRecovery = (
+                            r?.originSolveTraceBackend === 'rust'
+                            && Array.isArray(r?.starts)
+                            && r.starts.length > 0
+                            && Number.isFinite(r?.ok)
+                            && (r.ok / r.starts.length) < 0.75
+                        );
+                        if (shouldAttemptTsRecovery) {
+                            const recovered = traceOnceWithScale(s, aim, disableAngleOpt, allowOriginSolve, true);
+                            if (Number(recovered?.ok) > Number(r?.ok)) {
+                                r = recovered;
+                            }
+                        }
                         const rr = (r && r.diagnostics && r.diagnostics.retry) ? r.diagnostics.retry : null;
                         const topKind = (() => {
                             try {
@@ -621,6 +836,12 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
         if (opdCompatibleAngle) {
             if (!tryPupilScales(true)) {
                 tryPupilScales(false);
+            }
+        } else if (conjugateType === 'infinite') {
+            // Infinite conjugate non-angle object: keep a single mode to avoid duplicate spot traces.
+            // Recovery path: if no starts are generated at all, try the alternate mode once.
+            if (!tryPupilScales(false) && (!Array.isArray(rayStartPoints) || rayStartPoints.length === 0)) {
+                tryPupilScales(true);
             }
         } else {
             if (!tryPupilScales(false)) {
@@ -1267,6 +1488,38 @@ export async function generateSpotDiagramAsync(
     ringCount = 3,
     options = {}
 ) {
+    const nowMs = () => {
+        try {
+            if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+                return performance.now();
+            }
+        } catch (_) {}
+        return Date.now();
+    };
+    const profileStartMs = nowMs();
+    const asyncProfile = {
+        startedAt: Date.now(),
+        status: 'running',
+        error: null,
+        counters: {
+            objects: 0,
+            raysRequested: 0,
+            raysGenerated: 0,
+            raysTried: 0,
+            traceRayCalls: 0,
+            traceRaySuccesses: 0,
+            pupilAttempts: 0,
+            startGenerationCacheHits: 0,
+            startGenerationCacheMisses: 0
+        },
+        timingsMs: {
+            generateStarts: 0,
+            cloneRows: 0,
+            traceRay: 0,
+            total: 0,
+            nonTrace: 0
+        }
+    } as any;
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
@@ -1292,6 +1545,51 @@ export async function generateSpotDiagramAsync(
         aimThroughStop: conjugateType === 'infinite' ? true : false,
         allowStopBasedOriginSolve: conjugateType === 'infinite' ? true : false
     };
+    const traceOptions = (enhancedOptions && typeof enhancedOptions === 'object' && enhancedOptions.traceOptions && typeof enhancedOptions.traceOptions === 'object')
+        ? enhancedOptions.traceOptions
+        : null;
+    const forceTsSpotOriginSolve = (() => {
+        try {
+            if (enhancedOptions && typeof enhancedOptions === 'object' && enhancedOptions.forceTsSpotOriginSolve === true) return true;
+        } catch (_) {}
+        try {
+            if (typeof globalThis !== 'undefined' && globalThis.__cooptForceTsSpotOriginSolve === true) return true;
+        } catch (_) {}
+        return false;
+    })();
+    const preferRustSpotOriginSolve = !!(
+        (traceOptions && typeof traceOptions === 'object' && traceOptions.useRustWasm === true)
+        || (enhancedOptions && typeof enhancedOptions === 'object' && enhancedOptions.useRustWasm === true)
+    );
+    const originSolveTraceBackend = (!forceTsSpotOriginSolve && preferRustSpotOriginSolve) ? 'rust' : 'ts';
+    const enableSpotFailureDiagnostics = (() => {
+        try {
+            if (enhancedOptions && typeof enhancedOptions === 'object' && enhancedOptions.enableSpotFailureDiagnostics === true) {
+                return true;
+            }
+            if (typeof globalThis !== 'undefined' && globalThis.__cooptEnableSpotFailureDiagnostics === true) {
+                return true;
+            }
+        } catch (_) {}
+        return false;
+    })();
+    const enableSpotRetryDiagnostics = (() => {
+        try {
+            if (enhancedOptions && typeof enhancedOptions === 'object' && enhancedOptions.enableSpotRetryDiagnostics === true) {
+                return true;
+            }
+            if (typeof globalThis !== 'undefined' && globalThis.__cooptEnableSpotRetryDiagnostics === true) {
+                return true;
+            }
+        } catch (_) {}
+        return false;
+    })();
+    const collectTraceFailureDetails = (enableSpotFailureDiagnostics || enableSpotRetryDiagnostics) === true;
+    const collectRetryAttemptDetails = enableSpotRetryDiagnostics === true;
+    asyncProfile.flags = {
+        failureDiagnostics: enableSpotFailureDiagnostics,
+        retryDiagnostics: enableSpotRetryDiagnostics
+    };
     
     // Input validation (match sync behavior)
     if (!opticalSystemRows || !Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
@@ -1315,7 +1613,7 @@ export async function generateSpotDiagramAsync(
 
     // Prepare system structure
     analyzeOpticalSystemStructure(opticalSystemRows);
-    const surfaceInfoList = calculateSurfaceOrigins(opticalSystemRows);
+    const surfaceInfoList = __spot_calculateSurfaceOriginsPreferRust(opticalSystemRows, traceOptions);
 
     // Wavelengths
     const wavelengthData = getWavelengthsFromSource(sourceRows);
@@ -1342,6 +1640,8 @@ export async function generateSpotDiagramAsync(
 
     const spotData = [];
     const totalObjects = objectRows.length;
+    asyncProfile.counters.objects = totalObjects;
+    asyncProfile.counters.raysRequested = Math.max(0, totalObjects * Math.max(0, Number(rayNumber) || 0));
     let completedWork = 0;
     const estimatedTotalWork = Math.max(1, totalObjects * Math.max(1, rayNumber));
 
@@ -1352,7 +1652,24 @@ export async function generateSpotDiagramAsync(
         const objectType = obj.position || obj.object || obj.Object || obj.objectType || 'Unknown';
         const objectTypeNorm = String(objectType ?? '').trim().toLowerCase();
         const objectId = obj.id || 'Unknown';
-        const opdCompatibleAngle = physicalVignetting && objectTypeNorm.includes('angle');
+        const isAngleObject = objectTypeNorm.includes('angle');
+        const opdCompatibleAngle = physicalVignetting && isAngleObject;
+        const hasCoordinateBreak = (() => {
+            try {
+                const norm = (v) => String(v ?? '').trim().toLowerCase();
+                const compact = (v) => norm(v).replace(/\s+/g, '');
+                return (opticalSystemRows || []).some((row) => {
+                    const t = row && typeof row === 'object'
+                        ? (row.surfType ?? row['surf type'] ?? row.type ?? row.objectType ?? row['object type'] ?? '')
+                        : '';
+                    const n = norm(t);
+                    const c = compact(t);
+                    return n === 'ct' || n === 'coord trans' || n === 'coordinate break' || c === 'coordtrans' || c === 'coordinatebreak';
+                });
+            } catch (_) {
+                return false;
+            }
+        })();
 
         safeProgress(
             Math.min(90, 5 + (85 * (objectIndex / Math.max(1, totalObjects)))),
@@ -1366,9 +1683,14 @@ export async function generateSpotDiagramAsync(
         // NOTE: Even in physical-vignetting mode, we may shrink pupilScale to avoid 0-hit results.
         // This mirrors the synchronous spot-diagram/requirements pathway and prevents Angle+CB cases
         // from failing with PHYSICAL_APERTURE_BLOCK×N.
-        const pupilScalesToTry = physicalVignetting
-            ? [1, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12, 0.08, 0.06, 0.04, 0.03, 0.02, 0.015, 0.01]
-            : [1];
+        const pupilScalesToTry = __spot_reorderPupilScalesForObject(
+            physicalVignetting
+                ? [1, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12, 0.08, 0.06, 0.04, 0.03, 0.02, 0.015, 0.01]
+                : [1],
+            obj,
+            conjugateType,
+            physicalVignetting
+        );
 
         let rayStartPoints = null;
         let annularRingsUsed = 0;
@@ -1378,6 +1700,12 @@ export async function generateSpotDiagramAsync(
         let diagnostics = null;
         let pupilScaleUsed = null;
         const attempts = [];
+        const startGenerationCache = new Map();
+        const pruneSameScaleRetryCombos = !(
+            enhancedOptions
+            && typeof enhancedOptions === 'object'
+            && enhancedOptions.disableSpotSameScaleRetryPruning === true
+        );
 
         const resolvePattern = () => {
             const raw = (options && typeof options === 'object' && typeof options.pattern === 'string')
@@ -1388,90 +1716,220 @@ export async function generateSpotDiagramAsync(
             const p = String(raw || '').trim().toLowerCase();
             return (p === 'grid' || p === 'annular') ? p : 'annular';
         };
+        const resolvedPattern = resolvePattern();
+
+        const getStartGenerationCacheKey = (scale, aimThroughStop, disableAngleObjectPositionOptimizationRequested, allowStopBasedOriginSolveRequested, forceTsBackendRequested) => {
+            return [
+                objectIndex,
+                Number(primaryWavelength?.wavelength) || 0.5876,
+                targetSurfaceIndex,
+                Number(rayNumber) || 0,
+                Number(ringCount) || 0,
+                Number(scale),
+                aimThroughStop ? 1 : 0,
+                disableAngleObjectPositionOptimizationRequested ? 1 : 0,
+                allowStopBasedOriginSolveRequested ? 1 : 0,
+                forceTsBackendRequested ? 1 : 0,
+                resolvedPattern,
+                conjugateType || ''
+            ].join('|');
+        };
+
         const traceOnceWithScale = async (scale, aimThroughStop, opts) => {
+            asyncProfile.counters.pupilAttempts += 1;
             const disableAngleObjectPositionOptimizationRequested = !!opts?.disableAngleObjectPositionOptimizationRequested;
             const allowStopBasedOriginSolveRequested = !!opts?.allowStopBasedOriginSolveRequested;
-            const starts = generateRayStartPointsForSpot(
-                obj,
-                opticalSystemRows,
-                rayNumber,
-                null,
-                {
-                    conjugateType,
-                    annularRingCount: ringCount,
-                    targetSurfaceIndex,
-                    useChiefRayAnalysis: !!aimThroughStop,
-                    chiefRaySolveMode: (aimThroughStop ? 'fast' : 'legacy'),
-                    aimThroughStop: !!aimThroughStop,
-                    allowStopBasedOriginSolve: !!aimThroughStop && allowStopBasedOriginSolveRequested,
-                    wavelengthUm: Number(primaryWavelength?.wavelength) || 0.5876,
-                    pupilScale: scale,
-                    pattern: resolvePattern(),
-                    // Spot-diagram should be based on the physical stop/pupil, not on any temporary
-                    // Draw-Cross-ray extent cached on window.
-                    disableCrossExtent: true,
-                    // When evaluating physical vignetting, keep the Angle object's emission origin stable.
-                    // (optimizeAngleObjectPosition can otherwise shift the field and destroy angle↔chief correlation.)
-                    disableAngleObjectPositionOptimization: physicalVignetting && disableAngleObjectPositionOptimizationRequested
-                }
+            const forceTsBackendRequested = !!opts?.forceTsBackendRequested;
+            let attemptOriginSolveTraceBackend = forceTsBackendRequested
+                ? 'ts'
+                : originSolveTraceBackend;
+            const startsCacheKey = getStartGenerationCacheKey(
+                scale,
+                !!aimThroughStop,
+                disableAngleObjectPositionOptimizationRequested,
+                allowStopBasedOriginSolveRequested,
+                forceTsBackendRequested
             );
+            let starts = null;
+            if (startGenerationCache.has(startsCacheKey)) {
+                starts = startGenerationCache.get(startsCacheKey);
+                asyncProfile.counters.startGenerationCacheHits += 1;
+            } else {
+                asyncProfile.counters.startGenerationCacheMisses += 1;
+                const startsGenStartMs = nowMs();
+                starts = generateRayStartPointsForSpot(
+                    obj,
+                    opticalSystemRows,
+                    rayNumber,
+                    null,
+                    {
+                        conjugateType,
+                        annularRingCount: ringCount,
+                        targetSurfaceIndex,
+                        precomputedSurfaceOrigins: surfaceInfoList,
+                        useChiefRayAnalysis: !!aimThroughStop,
+                        chiefRaySolveMode: (aimThroughStop ? 'fast' : 'legacy'),
+                        aimThroughStop: !!aimThroughStop,
+                        allowStopBasedOriginSolve: !!aimThroughStop && allowStopBasedOriginSolveRequested,
+                        wavelengthUm: Number(primaryWavelength?.wavelength) || 0.5876,
+                        pupilScale: scale,
+                        pattern: resolvedPattern,
+                        // Spot-diagram should be based on the physical stop/pupil, not on any temporary
+                        // Draw-Cross-ray extent cached on window.
+                        disableCrossExtent: true,
+                        // Keep origin solve always-on; select backend based on active trace backend.
+                        originSolveTraceBackend: attemptOriginSolveTraceBackend,
+                        // When evaluating physical vignetting, keep the Angle object's emission origin stable.
+                        // (optimizeAngleObjectPosition can otherwise shift the field and destroy angle↔chief correlation.)
+                        disableAngleObjectPositionOptimization: physicalVignetting && disableAngleObjectPositionOptimizationRequested
+                    }
+                );
+                asyncProfile.timingsMs.generateStarts += Math.max(0, nowMs() - startsGenStartMs);
+                startGenerationCache.set(startsCacheKey, starts);
+            }
             if (!starts || !Array.isArray(starts) || starts.length === 0) {
-                return { starts, ok: 0, spotPoints: [], diagnostics: null };
+                return { starts, ok: 0, spotPoints: [], diagnostics: null, originSolveTraceBackend: attemptOriginSolveTraceBackend };
             }
 
-            const diag = {
-                objectId,
-                objectType,
-                targetSurfaceNumber: surfaceNumber,
-                rayCountRequested: rayNumber,
-                rayCountGenerated: starts.length,
-                kindCounts: {},
-                surfaceCounts: {},
-                examples: [],
-                maxExamples: 6,
-                retry: {
-                    pupilScaleRequested: scale,
-                    aimThroughStopRequested: !!aimThroughStop,
-                    allowStopBasedOriginSolveRequested: opdCompatibleAngle && !!aimThroughStop ? !!allowStopBasedOriginSolveRequested : null,
-                    disableAngleObjectPositionOptimizationRequested: physicalVignetting ? !!disableAngleObjectPositionOptimizationRequested : null,
-                    firstRayStartP: (starts?.[0]?.startP && typeof starts[0].startP === 'object')
-                        ? { x: Number(starts[0].startP.x), y: Number(starts[0].startP.y), z: Number(starts[0].startP.z) }
-                        : null,
-                    firstRayDir: (starts?.[0]?.dir && typeof starts[0].dir === 'object')
-                        ? { x: Number(starts[0].dir.x), y: Number(starts[0].dir.y), z: Number(starts[0].dir.z) }
-                        : null,
-                    emissionBasis: (starts?.emissionBasis && typeof starts.emissionBasis === 'object')
-                        ? {
-                            origin: (starts.emissionBasis.origin && typeof starts.emissionBasis.origin === 'object')
-                                ? { x: Number(starts.emissionBasis.origin.x), y: Number(starts.emissionBasis.origin.y), z: Number(starts.emissionBasis.origin.z) }
-                                : null,
-                            stopRadius: Number.isFinite(Number(starts.emissionBasis.stopRadius)) ? Number(starts.emissionBasis.stopRadius) : null,
-                            stopIndex: Number.isFinite(Number(starts.emissionBasis.stopIndex)) ? Number(starts.emissionBasis.stopIndex) : null,
-                            stopZ: Number.isFinite(Number(starts.emissionBasis.stopZ)) ? Number(starts.emissionBasis.stopZ) : null,
-                            stopCenter: (starts.emissionBasis.stopCenter && typeof starts.emissionBasis.stopCenter === 'object')
-                                ? { x: Number(starts.emissionBasis.stopCenter.x), y: Number(starts.emissionBasis.stopCenter.y) }
-                                : null,
-                        }
-                        : null
+            if (attemptOriginSolveTraceBackend === 'rust') {
+                const alignment = __spot_estimateStartStopAlignmentMm(
+                    opticalSystemRows,
+                    starts,
+                    Number(primaryWavelength?.wavelength) || 0.5876,
+                    traceOptions,
+                    24
+                );
+                const shouldFallbackToTsStarts = !!(
+                    alignment
+                    && Number.isFinite(alignment.meanErrMm)
+                    && Number.isFinite(alignment.maxErrMm)
+                    && (alignment.meanErrMm > 0.02 || alignment.maxErrMm > 0.05)
+                );
+                if (shouldFallbackToTsStarts) {
+                    const tsStartsCacheKey = getStartGenerationCacheKey(
+                        scale,
+                        !!aimThroughStop,
+                        disableAngleObjectPositionOptimizationRequested,
+                        allowStopBasedOriginSolveRequested,
+                        true
+                    );
+                    let tsStarts = null;
+                    if (startGenerationCache.has(tsStartsCacheKey)) {
+                        tsStarts = startGenerationCache.get(tsStartsCacheKey);
+                        asyncProfile.counters.startGenerationCacheHits += 1;
+                    } else {
+                        asyncProfile.counters.startGenerationCacheMisses += 1;
+                        const tsStartsGenStartMs = nowMs();
+                        tsStarts = generateRayStartPointsForSpot(
+                            obj,
+                            opticalSystemRows,
+                            rayNumber,
+                            null,
+                            {
+                                conjugateType,
+                                annularRingCount: ringCount,
+                                targetSurfaceIndex,
+                                precomputedSurfaceOrigins: surfaceInfoList,
+                                useChiefRayAnalysis: !!aimThroughStop,
+                                chiefRaySolveMode: (aimThroughStop ? 'fast' : 'legacy'),
+                                aimThroughStop: !!aimThroughStop,
+                                allowStopBasedOriginSolve: !!aimThroughStop && allowStopBasedOriginSolveRequested,
+                                wavelengthUm: Number(primaryWavelength?.wavelength) || 0.5876,
+                                pupilScale: scale,
+                                pattern: resolvedPattern,
+                                disableCrossExtent: true,
+                                originSolveTraceBackend: 'ts',
+                                disableAngleObjectPositionOptimization: physicalVignetting && disableAngleObjectPositionOptimizationRequested
+                            }
+                        );
+                        asyncProfile.timingsMs.generateStarts += Math.max(0, nowMs() - tsStartsGenStartMs);
+                        startGenerationCache.set(tsStartsCacheKey, tsStarts);
+                    }
+                    if (tsStarts && Array.isArray(tsStarts) && tsStarts.length > 0) {
+                        starts = tsStarts;
+                        attemptOriginSolveTraceBackend = 'ts';
+                    }
                 }
-            };
+            }
+            asyncProfile.counters.raysGenerated += starts.length;
+
+            const diag = collectTraceFailureDetails
+                ? {
+                    objectId,
+                    objectType,
+                    targetSurfaceNumber: surfaceNumber,
+                    rayCountRequested: rayNumber,
+                    rayCountGenerated: starts.length,
+                    kindCounts: {},
+                    surfaceCounts: {},
+                    examples: [],
+                    maxExamples: 6,
+                    retry: {
+                        pupilScaleRequested: scale,
+                        aimThroughStopRequested: !!aimThroughStop,
+                        allowStopBasedOriginSolveRequested: opdCompatibleAngle && !!aimThroughStop ? !!allowStopBasedOriginSolveRequested : null,
+                        disableAngleObjectPositionOptimizationRequested: physicalVignetting ? !!disableAngleObjectPositionOptimizationRequested : null,
+                        firstRayStartP: collectRetryAttemptDetails && (starts?.[0]?.startP && typeof starts[0].startP === 'object')
+                            ? { x: Number(starts[0].startP.x), y: Number(starts[0].startP.y), z: Number(starts[0].startP.z) }
+                            : null,
+                        firstRayDir: collectRetryAttemptDetails && (starts?.[0]?.dir && typeof starts[0].dir === 'object')
+                            ? { x: Number(starts[0].dir.x), y: Number(starts[0].dir.y), z: Number(starts[0].dir.z) }
+                            : null,
+                        emissionBasis: collectRetryAttemptDetails && (starts?.emissionBasis && typeof starts.emissionBasis === 'object')
+                            ? {
+                                origin: (starts.emissionBasis.origin && typeof starts.emissionBasis.origin === 'object')
+                                    ? { x: Number(starts.emissionBasis.origin.x), y: Number(starts.emissionBasis.origin.y), z: Number(starts.emissionBasis.origin.z) }
+                                    : null,
+                                stopRadius: Number.isFinite(Number(starts.emissionBasis.stopRadius)) ? Number(starts.emissionBasis.stopRadius) : null,
+                                stopIndex: Number.isFinite(Number(starts.emissionBasis.stopIndex)) ? Number(starts.emissionBasis.stopIndex) : null,
+                                stopZ: Number.isFinite(Number(starts.emissionBasis.stopZ)) ? Number(starts.emissionBasis.stopZ) : null,
+                                stopCenter: (starts.emissionBasis.stopCenter && typeof starts.emissionBasis.stopCenter === 'object')
+                                    ? { x: Number(starts.emissionBasis.stopCenter.x), y: Number(starts.emissionBasis.stopCenter.y) }
+                                    : null,
+                            }
+                            : null
+                    }
+                }
+                : null;
             const pts = [];
             let ok = 0;
             const maxRaysThisObject = Math.min(starts.length, rayNumber);
+            const disableRowReuse = !!(enhancedOptions && typeof enhancedOptions === 'object' && enhancedOptions.disableSpotTraceRowReuse === true);
+            const sharedOpticalRows = (() => {
+                if (disableRowReuse) return null;
+                const cloneStartMs = nowMs();
+                const rows = __spot_cloneRowsPreserveSpecialNumbers(opticalSystemRows);
+                asyncProfile.timingsMs.cloneRows += Math.max(0, nowMs() - cloneStartMs);
+                return rows;
+            })();
 
             for (let i = 0; i < maxRaysThisObject; i++) {
                 const rayStart = starts[i];
                 if (!rayStart || !rayStart.startP || !rayStart.dir) continue;
+                asyncProfile.counters.raysTried += 1;
 
                 try {
-                    const opticalRowsCopy = __spot_cloneRowsPreserveSpecialNumbers(opticalSystemRows);
+                    const opticalRowsCopy = (() => {
+                        if (sharedOpticalRows) return sharedOpticalRows;
+                        const cloneStartMs = nowMs();
+                        const rows = __spot_cloneRowsPreserveSpecialNumbers(opticalSystemRows);
+                        asyncProfile.timingsMs.cloneRows += Math.max(0, nowMs() - cloneStartMs);
+                        return rows;
+                    })();
                     const ray0 = {
                         pos: rayStart.startP,
                         dir: rayStart.dir,
                         wavelength: Number(primaryWavelength?.wavelength) || 0.5876
                     };
-                    const debugLog = [];
-                    const traced = __spot_withRayTraceFailureCapture(() => traceRay(opticalRowsCopy, ray0, 1.0, debugLog, targetSurfaceIndex));
+                    const traceDebugLog = (enhancedOptions && typeof enhancedOptions === 'object' && enhancedOptions.enableSpotTraceDebugLog === true)
+                        ? []
+                        : null;
+                    const traceStartMs = nowMs();
+                    const traced = enableSpotFailureDiagnostics
+                        ? __spot_withRayTraceFailureCapture(() => traceRay(opticalRowsCopy, ray0, 1.0, traceDebugLog, targetSurfaceIndex, traceOptions))
+                        : { result: traceRay(opticalRowsCopy, ray0, 1.0, traceDebugLog, targetSurfaceIndex, traceOptions), failure: null };
+                    asyncProfile.timingsMs.traceRay += Math.max(0, nowMs() - traceStartMs);
+                    asyncProfile.counters.traceRayCalls += 1;
                     const rayPath = traced.result;
 
                     if (rayPath && Array.isArray(rayPath) && targetPointIndex !== null && rayPath.length > targetPointIndex && targetSurfaceIndex >= 0) {
@@ -1500,24 +1958,22 @@ export async function generateSpotDiagramAsync(
                                 isPrimary: true,
                                 objectId: obj.id,
                                 rayIndex: i,
-                                isChiefRay: isChief,
-                                startPoint: startPointClone,
-                                initialDir: rayStart && rayStart.dir ? { ...rayStart.dir } : undefined
+                                isChiefRay: isChief
                             };
                             
                             pts.push(spotPoint);
                             ok++;
-                            if (rayStart && rayStart.dir) {
-                                pts[pts.length - 1].initialDir = { ...rayStart.dir };
-                            }
-                        } else {
+                            asyncProfile.counters.traceRaySuccesses += 1;
+                        } else if (diag) {
                             __spot_recordTraceFailure(diag, traced.failure, 'INVALID_HIT_POINT', opticalSystemRows, rayPath);
                         }
-                    } else {
+                    } else if (diag) {
                         __spot_recordTraceFailure(diag, traced.failure, 'NOT_REACHED_TARGET', opticalSystemRows, rayPath);
                     }
                 } catch (_) {
-                    __spot_recordTraceFailure(diag, null, 'EXCEPTION', opticalSystemRows, null);
+                    if (diag) {
+                        __spot_recordTraceFailure(diag, null, 'EXCEPTION', opticalSystemRows, null);
+                    }
                 }
 
                 completedWork++;
@@ -1530,101 +1986,142 @@ export async function generateSpotDiagramAsync(
                 }
             }
 
-            return { starts, ok, spotPoints: pts, diagnostics: diag };
+            return { starts, ok, spotPoints: pts, diagnostics: diag, originSolveTraceBackend: attemptOriginSolveTraceBackend };
         };
 
         let aimThroughStopUsed = null;
         const tryPupilScales = async (aim) => {
+            const isInfiniteAnglePhysical = opdCompatibleAngle && conjugateType === 'infinite';
             for (const s of pupilScalesToTry) {
-                // For Angle objects under physical vignetting, we sometimes need to try multiple
-                // origin-solve strategies and/or disable the Angle emission optimization.
-                const disableAngleObjectPositionOptimizationModes = (opdCompatibleAngle && physicalVignetting)
-                    ? [true, false]
-                    : [true];
-                const allowStopBasedOriginSolveModes = !!aim
-                    ? [false, true]
-                    : [false];
+                const baseDisableAngleOpt = physicalVignetting && !hasCoordinateBreak;
+                const disableAngleObjectPositionOptimizationModes = (() => {
+                    const list = [baseDisableAngleOpt];
+                    if (isAngleObject && physicalVignetting) {
+                        const other = !baseDisableAngleOpt;
+                        if (!list.includes(other)) list.push(other);
+                    }
+                    return list;
+                })();
+                const allowStopBasedOriginSolveModes = (() => {
+                    if (isInfiniteAnglePhysical) return [true];
+                    if (!aim) return [false];
+                    if (isAngleObject) return [true, false];
+                    if (!physicalVignetting) return [false];
+                    return [false, true];
+                })();
 
                 let r = null;
                 let succeeded = false;
+                let shouldSkipRemainingCombosAtThisScale = false;
 
                 for (const disableAngleObjectPositionOptimizationRequested of disableAngleObjectPositionOptimizationModes) {
+                    if (isInfiniteAnglePhysical && disableAngleObjectPositionOptimizationRequested !== false) continue;
                     for (const allowStopBasedOriginSolveRequested of allowStopBasedOriginSolveModes) {
+                        if (isInfiniteAnglePhysical && allowStopBasedOriginSolveRequested !== true) continue;
                         r = await traceOnceWithScale(s, aim, {
                             disableAngleObjectPositionOptimizationRequested,
                             allowStopBasedOriginSolveRequested
                         });
 
-                        const rr = (r && r.diagnostics && r.diagnostics.retry) ? r.diagnostics.retry : null;
-                        const topKind = (() => {
-                            try {
-                                const kc = r?.diagnostics?.kindCounts;
-                                if (!kc || typeof kc !== 'object') return null;
-                                let bestK = null;
-                                let bestV = -1;
-                                for (const [k, v] of Object.entries(kc)) {
-                                    const vv = Number(v);
-                                    if (Number.isFinite(vv) && vv > bestV) {
-                                        bestV = vv;
-                                        bestK = k;
-                                    }
-                                }
-                                return bestK;
-                            } catch (_) {
-                                return null;
+                        const shouldAttemptTsRecovery = (
+                            r?.originSolveTraceBackend === 'rust'
+                            && Array.isArray(r?.starts)
+                            && r.starts.length > 0
+                            && Number.isFinite(r?.ok)
+                            && (r.ok / r.starts.length) < 0.75
+                        );
+                        if (shouldAttemptTsRecovery) {
+                            const recovered = await traceOnceWithScale(s, aim, {
+                                disableAngleObjectPositionOptimizationRequested,
+                                allowStopBasedOriginSolveRequested,
+                                forceTsBackendRequested: true
+                            });
+                            if (Number(recovered?.ok) > Number(r?.ok)) {
+                                r = recovered;
                             }
-                        })();
-                        const topSurface = (() => {
-                            try {
-                                const sc = r?.diagnostics?.surfaceCounts;
-                                if (!sc || typeof sc !== 'object') return null;
-                                let bestK = null;
-                                let bestV = -1;
-                                for (const [k, v] of Object.entries(sc)) {
-                                    const vv = Number(v);
-                                    if (Number.isFinite(vv) && vv > bestV) {
-                                        bestV = vv;
-                                        bestK = k;
-                                    }
-                                }
-                                return bestK;
-                            } catch (_) {
-                                return null;
-                            }
-                        })();
-                        const ex = (() => {
-                            try {
-                                const examples = r?.diagnostics?.examples;
-                                if (!Array.isArray(examples) || examples.length === 0) return null;
-                                const pick = examples.find(e => e && e.kind === 'PHYSICAL_APERTURE_BLOCK') || examples[0];
-                                if (!pick || typeof pick !== 'object') return null;
-                                return {
-                                    kind: pick.kind ?? null,
-                                    surfaceIndex: (pick.surfaceIndex ?? pick.surface ?? pick.surfaceNumber ?? null),
-                                    note: pick.note ?? null
-                                };
-                            } catch (_) {
-                                return null;
-                            }
-                        })();
+                        }
 
-                        attempts.push({
-                            pupilScale: s,
-                            aimThroughStop: !!aim,
-                            allowStopBasedOriginSolveRequested: rr?.allowStopBasedOriginSolveRequested ?? null,
-                            disableAngleObjectPositionOptimizationRequested: rr?.disableAngleObjectPositionOptimizationRequested ?? null,
-                            ok: r.ok,
-                            raysGenerated: Array.isArray(r.starts) ? r.starts.length : 0,
-                            topKind,
-                            topSurface,
-                            example: ex,
-                            firstRayStartP: rr?.firstRayStartP ?? null,
-                            firstRayDir: rr?.firstRayDir ?? null,
-                            emissionOrigin: rr?.emissionBasis?.origin ?? null,
-                            stopIndex: rr?.emissionBasis?.stopIndex ?? null,
-                            stopZ: rr?.emissionBasis?.stopZ ?? null,
-                            stopRadius: rr?.emissionBasis?.stopRadius ?? null,
-                        });
+                        const rr = (r && r.diagnostics && r.diagnostics.retry) ? r.diagnostics.retry : null;
+                        if (collectRetryAttemptDetails) {
+                            const topKind = (() => {
+                                try {
+                                    const kc = r?.diagnostics?.kindCounts;
+                                    if (!kc || typeof kc !== 'object') return null;
+                                    let bestK = null;
+                                    let bestV = -1;
+                                    for (const [k, v] of Object.entries(kc)) {
+                                        const vv = Number(v);
+                                        if (Number.isFinite(vv) && vv > bestV) {
+                                            bestV = vv;
+                                            bestK = k;
+                                        }
+                                    }
+                                    return bestK;
+                                } catch (_) {
+                                    return null;
+                                }
+                            })();
+                            const topSurface = (() => {
+                                try {
+                                    const sc = r?.diagnostics?.surfaceCounts;
+                                    if (!sc || typeof sc !== 'object') return null;
+                                    let bestK = null;
+                                    let bestV = -1;
+                                    for (const [k, v] of Object.entries(sc)) {
+                                        const vv = Number(v);
+                                        if (Number.isFinite(vv) && vv > bestV) {
+                                            bestV = vv;
+                                            bestK = k;
+                                        }
+                                    }
+                                    return bestK;
+                                } catch (_) {
+                                    return null;
+                                }
+                            })();
+                            const ex = (() => {
+                                try {
+                                    const examples = r?.diagnostics?.examples;
+                                    if (!Array.isArray(examples) || examples.length === 0) return null;
+                                    const pick = examples.find(e => e && e.kind === 'PHYSICAL_APERTURE_BLOCK') || examples[0];
+                                    if (!pick || typeof pick !== 'object') return null;
+                                    return {
+                                        kind: pick.kind ?? null,
+                                        surfaceIndex: (pick.surfaceIndex ?? pick.surface ?? pick.surfaceNumber ?? null),
+                                        note: pick.note ?? null
+                                    };
+                                } catch (_) {
+                                    return null;
+                                }
+                            })();
+
+                            attempts.push({
+                                pupilScale: s,
+                                aimThroughStop: !!aim,
+                                allowStopBasedOriginSolveRequested: rr?.allowStopBasedOriginSolveRequested ?? null,
+                                disableAngleObjectPositionOptimizationRequested: rr?.disableAngleObjectPositionOptimizationRequested ?? null,
+                                ok: r.ok,
+                                raysGenerated: Array.isArray(r.starts) ? r.starts.length : 0,
+                                topKind,
+                                topSurface,
+                                example: ex,
+                                firstRayStartP: rr?.firstRayStartP ?? null,
+                                firstRayDir: rr?.firstRayDir ?? null,
+                                emissionOrigin: rr?.emissionBasis?.origin ?? null,
+                                stopIndex: rr?.emissionBasis?.stopIndex ?? null,
+                                stopZ: rr?.emissionBasis?.stopZ ?? null,
+                                stopRadius: rr?.emissionBasis?.stopRadius ?? null,
+                            });
+                        } else {
+                            attempts.push({
+                                pupilScale: s,
+                                aimThroughStop: !!aim,
+                                allowStopBasedOriginSolveRequested,
+                                disableAngleObjectPositionOptimizationRequested,
+                                ok: r.ok,
+                                raysGenerated: Array.isArray(r.starts) ? r.starts.length : 0,
+                            });
+                        }
 
                         diagnostics = r.diagnostics || diagnostics;
                         rayStartPoints = r.starts || rayStartPoints;
@@ -1637,8 +2134,20 @@ export async function generateSpotDiagramAsync(
                             succeeded = true;
                             break;
                         }
+
+                        if (
+                            pruneSameScaleRetryCombos
+                            && physicalVignetting
+                            && opdCompatibleAngle
+                            && Array.isArray(r.starts)
+                            && r.starts.length > 0
+                            && r.ok === 0
+                        ) {
+                            shouldSkipRemainingCombosAtThisScale = true;
+                            break;
+                        }
                     }
-                    if (succeeded) break;
+                    if (succeeded || shouldSkipRemainingCombosAtThisScale) break;
                 }
 
                 if (succeeded) {
@@ -1658,6 +2167,12 @@ export async function generateSpotDiagramAsync(
             const ok = await tryPupilScales(useAimThroughStop);
             if (!ok) {
                 await tryPupilScales(!useAimThroughStop);
+            }
+        } else if (conjugateType === 'infinite') {
+            // Infinite conjugate non-angle object: keep a single mode to avoid duplicate spot traces.
+            // Recovery path: if no starts are generated at all, try the alternate mode once.
+            if (!(await tryPupilScales(false)) && (!Array.isArray(rayStartPoints) || rayStartPoints.length === 0)) {
+                await tryPupilScales(true);
             }
         } else if (!(await tryPupilScales(false))) {
             await tryPupilScales(true);
@@ -1680,8 +2195,16 @@ export async function generateSpotDiagramAsync(
 
         // Rays were traced inside traceOnceWithScale(); keep rayStartPoints for emission-pattern diagnostics.
 
-        const chiefStartPoint = spotPoints.find(p => p.isChiefRay && p.startPoint)?.startPoint
-            || (rayStartPoints[0]?.startP ? { x: rayStartPoints[0].startP.x, y: rayStartPoints[0].startP.y, z: rayStartPoints[0].startP.z } : null);
+        const chiefRayIndexFromSpot = (() => {
+            const chief = spotPoints.find(p => p && p.isChiefRay === true && Number.isInteger(p.rayIndex));
+            if (chief && Number.isInteger(chief.rayIndex) && chief.rayIndex >= 0) return chief.rayIndex;
+            return 0;
+        })();
+        const chiefStartPoint = (() => {
+            const sp = rayStartPoints?.[chiefRayIndexFromSpot]?.startP || rayStartPoints?.[0]?.startP;
+            if (!sp || typeof sp !== 'object') return null;
+            return { x: Number(sp.x), y: Number(sp.y), z: Number(sp.z) };
+        })();
         const chiefStartDir = rayStartPoints[0]?.dir;
         const basisFromGenerator = rayStartPoints.emissionBasis;
         const emissionBasis = (() => {
@@ -1730,10 +2253,13 @@ export async function generateSpotDiagramAsync(
 
         if (emissionBasis) {
             spotPoints.forEach(point => {
-                if (!point.startPoint) return;
-                const deltaX = point.startPoint.x - emissionBasis.origin.x;
-                const deltaY = point.startPoint.y - emissionBasis.origin.y;
-                const deltaZ = point.startPoint.z - emissionBasis.origin.z;
+                const idx = Number(point?.rayIndex);
+                if (!Number.isInteger(idx) || idx < 0) return;
+                const sp = rayStartPoints?.[idx]?.startP;
+                if (!sp || typeof sp !== 'object') return;
+                const deltaX = Number(sp.x) - emissionBasis.origin.x;
+                const deltaY = Number(sp.y) - emissionBasis.origin.y;
+                const deltaZ = Number(sp.z) - emissionBasis.origin.z;
                 point.emissionU = deltaX * emissionBasis.u.x + deltaY * emissionBasis.u.y + deltaZ * emissionBasis.u.z;
                 point.emissionV = deltaX * emissionBasis.v.x + deltaY * emissionBasis.v.y + deltaZ * emissionBasis.v.z;
             });
@@ -2020,6 +2546,15 @@ export async function generateSpotDiagramAsync(
                 errorMessage += `\n`;
             });
         } catch (_) {}
+        asyncProfile.timingsMs.total = Math.max(0, nowMs() - profileStartMs);
+        asyncProfile.timingsMs.nonTrace = Math.max(0, asyncProfile.timingsMs.total - asyncProfile.timingsMs.traceRay);
+        asyncProfile.status = 'error';
+        asyncProfile.error = errorMessage;
+        try {
+            if (typeof globalThis !== 'undefined') {
+                globalThis.__cooptLastSpotDiagramAsyncProfile = asyncProfile;
+            }
+        } catch (_) {}
         throw new Error(errorMessage);
     }
 
@@ -2055,6 +2590,15 @@ export async function generateSpotDiagramAsync(
         }
     } catch (_) {}
 
+    asyncProfile.timingsMs.total = Math.max(0, nowMs() - profileStartMs);
+    asyncProfile.timingsMs.nonTrace = Math.max(0, asyncProfile.timingsMs.total - asyncProfile.timingsMs.traceRay);
+    asyncProfile.status = 'ok';
+    try {
+        if (typeof globalThis !== 'undefined') {
+            globalThis.__cooptLastSpotDiagramAsyncProfile = asyncProfile;
+        }
+    } catch (_) {}
+
     const displaySurfaceNumber = Number(options?.displaySurfaceNumber);
     return {
         spotData: spotData,
@@ -2063,7 +2607,8 @@ export async function generateSpotDiagramAsync(
         airy: airy,
         selectedRingCount: ringCount,
         surfaceInfoList: surfaceInfoList,
-        displaySurfaceNumber: Number.isFinite(displaySurfaceNumber) ? displaySurfaceNumber : null
+        displaySurfaceNumber: Number.isFinite(displaySurfaceNumber) ? displaySurfaceNumber : null,
+        profile: asyncProfile
     };
 }
 

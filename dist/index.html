@@ -58,10 +58,6 @@
 
   <!-- Early vector math service globals (window.dotProduct/crossProduct/normalize) -->
   
-  <!-- WASM Module (V3 with memory management) -->
-  <!-- Note: plain <script> (not module) so that var RayTracingWASM becomes a global -->
-  <script src="wasm/raytracing/ray-tracing-wasm-v3.js"></script>
-
   <script>
     // Warn (in English) when the user tries to leave via the browser Back button.
     // Install early (in <head>) so it works even if heavy scripts delay initialization.
@@ -233,12 +229,12 @@
       }
     }
   </script>
-  <script type="module" crossorigin src="/co-opt/assets/main-2btdeB_i.js"></script>
-  <script type="module" crossorigin src="/co-opt/assets/app-C5jja5wu.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/main-3-HBb0Dy.js"></script>
+  <script type="module" crossorigin src="/co-opt/assets/app-CTzyN2td.js"></script>
   <link rel="modulepreload" crossorigin href="/co-opt/assets/table-configuration-COXkPZjJ.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-2btdeB_i.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/main-3-HBb0Dy.js">
   <link rel="modulepreload" crossorigin href="/co-opt/assets/loaded-file-storage-DOWeZLOM.js">
-  <link rel="modulepreload" crossorigin href="/co-opt/assets/optimizer-wasm-bridge-HDCfsEcx.js">
+  <link rel="modulepreload" crossorigin href="/co-opt/assets/optimizer-wasm-bridge-BkND7Wxp.js">
   <link rel="stylesheet" crossorigin href="/co-opt/assets/app-BgwOqDxH.css">
 </head>
 <body>
@@ -305,23 +301,16 @@
       };
     })();
   </script>
-  <!-- Note: plain <script> (not module) so that var PSFWasm becomes a global -->
-  <script src="wasm/psf/psf-wasm.js"></script>
-
   <!-- Core functionality scripts -->
 
   <!-- 絞り周辺光線計算スクリプト -->
 
   <!-- WASM最適化モジュール -->
-  <!-- force-wasm-system is now imported in main.ts instead of loaded as a script tag -->
-    <!-- NOTE: Do not load legacy ray-tracing-wasm.js here.
-      It overwrites the global RayTracingWASM symbol and can hide newer exports
-      (e.g. _aspheric_sag_rt10) provided by ray-tracing-wasm-v3.js. -->
 
   <script>
-    // ForceWASMSystemの確実な初期化確認
+    // Ray tracing WASMサービス初期化確認
     document.addEventListener('DOMContentLoaded', function() {
-      // Force WASM システムの確認（ポーリング方式）
+      // WASM サービスの確認（ポーリング方式）
       let checkCount = 0;
       const maxChecks = 50; // 最大5秒待機（100ms x 50）
       
@@ -423,41 +412,27 @@
           console.log('   verifyIntegration() - 統合状態確認');
           console.log('   testOptimalCalculator() - 最適化テスト実行');
           
-          // ForceWASMSystemの確実な利用を可能にする関数
+          // WASMサービスデバッグ補助関数
           window['createWASMSystem'] = () => {
-            if (typeof ForceWASMSystem !== 'undefined') {
-              return new ForceWASMSystem();
+            if (typeof window.getWASMSystem === 'function') {
+              return window.getWASMSystem();
             } else {
-              console.error('❌ ForceWASMSystem が利用できません');
+              console.error('❌ getWASMSystem が利用できません');
               return null;
             }
           };
           
           window['testWASMSystemDirect'] = async () => {
-            console.log('🧪 WASM システム直接テスト開始...');
-            
-            if (typeof ForceWASMSystem === 'undefined') {
-              console.error('❌ ForceWASMSystem クラスが見つかりません');
-              console.log('💡 修復方法: ページを再読み込みしてください');
+            console.log('🧪 WASM サービス直接テスト開始...');
+            const system = (typeof window.getWASMSystem === 'function')
+              ? window.getWASMSystem()
+              : null;
+            if (!system) {
+              console.error('❌ WASM サービスが初期化されていません');
               return null;
             }
-            
-            try {
-              const wasmSystem = new ForceWASMSystem();
-              await wasmSystem.forceInitializeWASM();
-              
-              console.log('✅ WASM システム初期化成功');
-              console.log('📊 システム状態:', wasmSystem.getSystemStatus());
-              
-              // 簡単なテスト実行
-              const testResult = wasmSystem.forceAsphericSag(2.5, 0.1, -0.8, 0.01, 0.02, 0.03, 0.04);
-              console.log('🧮 テスト計算結果:', testResult);
-              
-              return wasmSystem;
-            } catch (error) {
-              console.error('❌ WASM システムテスト失敗:', error);
-              return null;
-            }
+            console.log('✅ WASM サービス状態:', system);
+            return system;
           };
           
           console.log('🔧 WASM直接テスト関数が追加されました:');

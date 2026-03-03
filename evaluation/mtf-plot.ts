@@ -420,6 +420,66 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
 
     const traces = [];
     let maxPlotLpmmGlobal = 0;
+    const frequencyLimitNotes = new Set<string>();
+
+    const interpolateCurveY = (xVals: number[], yVals: any[], x: number) => {
+        if (!Array.isArray(xVals) || !Array.isArray(yVals) || xVals.length === 0 || yVals.length !== xVals.length) return null;
+        if (!Number.isFinite(x)) return null;
+        const last = xVals.length - 1;
+        const x0 = Number(xVals[0]);
+        const xLast = Number(xVals[last]);
+        if (!Number.isFinite(x0) || !Number.isFinite(xLast)) return null;
+        if (x <= x0) {
+            const y = Number(yVals[0]);
+            return Number.isFinite(y) ? y : null;
+        }
+        if (x >= xLast) {
+            const y = Number(yVals[last]);
+            return Number.isFinite(y) ? y : null;
+        }
+        for (let i = 1; i < xVals.length; i++) {
+            const xa = Number(xVals[i - 1]);
+            const xb = Number(xVals[i]);
+            if (!Number.isFinite(xa) || !Number.isFinite(xb) || xb <= xa) continue;
+            if (x <= xb) {
+                const ya = Number(yVals[i - 1]);
+                const yb = Number(yVals[i]);
+                if (!Number.isFinite(ya) || !Number.isFinite(yb)) return null;
+                const t = (x - xa) / (xb - xa);
+                return ya + t * (yb - ya);
+            }
+        }
+        return null;
+    };
+
+    const resampleCurveToRange = (curve, axisMaxLpmm: number, pointCount: number) => {
+        if (!curve || !Array.isArray(curve.freq) || !Array.isArray(curve.mtfVals)) return curve;
+        const srcX = curve.freq.map((v: any) => Number(v));
+        const srcY = curve.mtfVals;
+        if (srcX.length === 0 || srcY.length !== srcX.length) return curve;
+        const targetMax = Number(axisMaxLpmm);
+        if (!Number.isFinite(targetMax) || targetMax <= 0) return curve;
+
+        const count = Math.max(2, Math.floor(Number(pointCount) || 2));
+        const outX: number[] = [];
+        const outY: any[] = [];
+        const srcMax = Number(srcX[srcX.length - 1]);
+
+        for (let i = 0; i < count; i++) {
+            const t = (count <= 1) ? 0 : (i / (count - 1));
+            const x = targetMax * t;
+            outX.push(x);
+            if (Number.isFinite(srcMax) && x > srcMax + 1e-12) {
+                outY.push(0);
+            } else {
+                const y = interpolateCurveY(srcX, srcY, x);
+                outY.push(Number.isFinite(Number(y)) ? Number(y) : null);
+            }
+        }
+
+        if (outY.length > 0) outY[0] = 1.0;
+        return { freq: outX, mtfVals: outY };
+    };
 
     const computeCircularApertureDiffractionMtf = (freqLpmm, wavelengthMicron, fNumber) => {
         const f = Number(freqLpmm);
@@ -664,9 +724,25 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             ampGrid[iy][ix] = 1.0;
         }
 
+        const rayData = [];
+        for (let k = 0; k < n; k++) {
+            const c = coords[k];
+            const x = Number(c?.x);
+            const y = Number(c?.y);
+            const vMicrons = Number(opdMicrons[k]);
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(vMicrons)) continue;
+            rayData.push({
+                pupilX: x,
+                pupilY: y,
+                opd: vMicrons,
+                isVignetted: false
+            });
+        }
+
         const opdData = {
             gridSize: s,
             wavelength: wlLocal,
+            rayData,
             gridData: {
                 opd: opdGrid,
                 amplitude: ampGrid,
@@ -676,13 +752,15 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             }
         };
 
-        // IMPORTANT: For MTF vs spatial frequency (lp/mm), keep pixelSize independent of FFT grid.
+        // Base image-plane pitch from paraxial scale (used as fallback/debug only).
+        // Final pitch for MTF axis must include pupil-grid -> FFT-size scaling (Npupil/Nfft),
+        // which is handled inside PSFCalculator when pixelSize is not forced.
         const preferEntrancePupilForMTF = /\bangle\b/.test(objectTypeLower);
         const derivedMTFScale = derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wlLocal, preferEntrancePupilForMTF);
         const pupilDiameterMm = derivedMTFScale.pupilDiameterMm;
         const focalLengthMm = derivedMTFScale.focalLengthMm;
 
-        const pixelSizeMicronsForMTF = (pupilDiameterMm > 0)
+        const basePixelSizeMicronsForMTF = (pupilDiameterMm > 0)
             ? (wlLocal * focalLengthMm / pupilDiameterMm)
             : 1.0;
         const fNumberForDiffraction = (pupilDiameterMm > 0)
@@ -715,7 +793,9 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             zeroPadTo: effectiveZeroPadTo,
             pupilDiameter: pupilDiameterMm,
             focalLength: focalLengthMm,
-            pixelSize: pixelSizeMicronsForMTF,
+            // Do not force pixelSize: PSFCalculator must apply Npupil/Nfft scaling
+            // to keep lp/mm axis physically consistent across sampling/zero-padding.
+            pixelSize: null,
             forceImplementation: useLegacyBaselineMode ? null : 'javascript',
             // OPD grid is already piston+tilt removed by opdDisplayMode.
             removeTilt: false
@@ -729,8 +809,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
 
         const psf2D = psfResult?.psfData || psfResult?.psf || psfResult?.intensity || null;
         const pixelSizeMicrons = useLegacyBaselineMode
-            ? safeNumber(pixelSizeMicronsForMTF, safeNumber(psfResult?.options?.pixelSize, 1.0))
-            : safeNumber(psfResult?.options?.pixelSize, safeNumber(pixelSizeMicronsForMTF, 1.0));
+            ? safeNumber(psfResult?.options?.pixelSize, safeNumber(basePixelSizeMicronsForMTF, 1.0))
+            : safeNumber(psfResult?.options?.pixelSize, safeNumber(basePixelSizeMicronsForMTF, 1.0));
         if (!psf2D || !Array.isArray(psf2D) || !Array.isArray(psf2D[0])) {
             throw new Error('PSF data missing for MTF');
         }
@@ -744,13 +824,18 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         const dfCyclesPerMicron = 1.0 / (N * pixelSizeMicrons);
         const dfLpmm = dfCyclesPerMicron * 1000.0;
         const nyquistLpmm = 0.5 / pixelSizeMicrons * 1000.0;
-        const maxPlotLpmm = (maxLpmm > 0) ? Math.min(maxLpmm, nyquistLpmm) : nyquistLpmm;
-        maxPlotLpmmGlobal = Math.max(maxPlotLpmmGlobal, maxPlotLpmm);
+        const requestedPlotLpmm = (maxLpmm > 0) ? maxLpmm : nyquistLpmm;
+        maxPlotLpmmGlobal = Math.max(maxPlotLpmmGlobal, requestedPlotLpmm);
 
         const maxBin = Math.floor(N / 2);
-        const kMax = Math.max(0, Math.min(maxBin, Math.floor(maxPlotLpmm / (dfLpmm || 1e-9))));
+        const kDataMax = Math.max(0, Math.min(maxBin, Math.floor(nyquistLpmm / (dfLpmm || 1e-9))));
+        const freqData = Array.from({ length: kDataMax + 1 }, (_, k) => k * dfLpmm);
 
-        const freq = Array.from({ length: kMax + 1 }, (_, k) => k * dfLpmm);
+        if (maxLpmm > 0 && requestedPlotLpmm > nyquistLpmm + 1e-9) {
+            const note = `Requested Max(lp/mm)=${requestedPlotLpmm.toFixed(2)} exceeds Nyquist=${nyquistLpmm.toFixed(2)} at λ=${titleNmLocal}nm. Data beyond Nyquist is zero-filled.`;
+            frequencyLimitNotes.add(note);
+            console.warn(`⚠️ [MTF] ${note}`);
+        }
 
         const psfFlat = new Float64Array(N * N);
         for (let y = 0; y < N; y++) {
@@ -767,16 +852,16 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
 
         if (typeof wasmMTFFn === 'function') {
             try {
-                const axes = wasmMTFFn.call(psfCalculator.wasmCalculator, psfFlat, N, kMax);
+                const axes = wasmMTFFn.call(psfCalculator.wasmCalculator, psfFlat, N, kDataMax);
                 if (axes?.xAxis && axes?.yAxis) {
                     const tanVals = (tanAxis === 'x') ? axes.xAxis : axes.yAxis;
                     const sagVals = (sagAxis === 'x') ? axes.xAxis : axes.yAxis;
                     tan = {
-                        freq,
+                        freq: freqData,
                         mtfVals: Array.from(tanVals, (v: number) => Number.isFinite(v) ? v : null)
                     };
                     sag = {
-                        freq,
+                        freq: freqData,
                         mtfVals: Array.from(sagVals, (v: number) => Number.isFinite(v) ? v : null)
                     };
                     if (tan.mtfVals.length > 0) tan.mtfVals[0] = 1.0;
@@ -802,7 +887,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             const sample1DAxis = (axis) => {
             const freqAxis = [];
             const mtfVals = [];
-            for (let k = 0; k <= kMax; k++) {
+            for (let k = 0; k <= kDataMax; k++) {
                 const f = k * dfLpmm;
                 let re = 0;
                 let im = 0;
@@ -824,62 +909,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             sag = sample1DAxis(sagAxis);
         }
 
-        const densifyCurve = (curve) => {
-            if (!curve || !Array.isArray(curve.freq) || !Array.isArray(curve.mtfVals)) return curve;
-            const srcX = curve.freq;
-            const srcY = curve.mtfVals;
-            if (srcX.length < 2 || srcY.length !== srcX.length) return curve;
-
-            const targetCount = Math.max(srcX.length, resolvedPlotPointCount);
-            if (targetCount <= srcX.length) return curve;
-
-            const xStart = Number(srcX[0]);
-            const xEnd = Number(srcX[srcX.length - 1]);
-            if (!Number.isFinite(xStart) || !Number.isFinite(xEnd) || xEnd <= xStart) return curve;
-
-            const outX: number[] = [];
-            const outY: any[] = [];
-
-            const interpY = (x: number) => {
-                if (!Number.isFinite(x)) return null;
-                if (x <= Number(srcX[0])) {
-                    const y0 = Number(srcY[0]);
-                    return Number.isFinite(y0) ? y0 : null;
-                }
-                const last = srcX.length - 1;
-                if (x >= Number(srcX[last])) {
-                    const yl = Number(srcY[last]);
-                    return Number.isFinite(yl) ? yl : null;
-                }
-
-                for (let i = 1; i < srcX.length; i++) {
-                    const x0 = Number(srcX[i - 1]);
-                    const x1 = Number(srcX[i]);
-                    if (!Number.isFinite(x0) || !Number.isFinite(x1) || x1 === x0) continue;
-                    if (x <= x1) {
-                        const y0 = Number(srcY[i - 1]);
-                        const y1 = Number(srcY[i]);
-                        if (!Number.isFinite(y0) || !Number.isFinite(y1)) return null;
-                        const t = (x - x0) / (x1 - x0);
-                        return y0 + t * (y1 - y0);
-                    }
-                }
-                return null;
-            };
-
-            for (let i = 0; i < targetCount; i++) {
-                const t = (targetCount <= 1) ? 0 : (i / (targetCount - 1));
-                const x = xStart + (xEnd - xStart) * t;
-                outX.push(x);
-                outY.push(interpY(x));
-            }
-
-            if (outY.length > 0) outY[0] = 1.0;
-            return { freq: outX, mtfVals: outY };
-        };
-
-        tan = densifyCurve(tan);
-        sag = densifyCurve(sag);
+        tan = resampleCurveToRange(tan, requestedPlotLpmm, resolvedPlotPointCount);
+        sag = resampleCurveToRange(sag, requestedPlotLpmm, resolvedPlotPointCount);
 
         const color = getColorForWavelength(wlLocal);
         console.log(`🔍 [TFMTF MTF] λ=${titleNmLocal}nm: tan=${tan.freq.length}pts(${Math.min(...tan.mtfVals).toFixed(3)}-${Math.max(...tan.mtfVals).toFixed(3)}), sag=${sag.freq.length}pts(${Math.min(...sag.mtfVals).toFixed(3)}-${Math.max(...sag.mtfVals).toFixed(3)})`);
@@ -904,7 +935,114 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         });
 
         if (showDiffractionLimitEnabled) {
-            const diffVals = tan.freq.map((f) => computeCircularApertureDiffractionMtf(f, wlLocal, fNumberForDiffraction));
+            let diffVals = null;
+
+            try {
+                const idealOpdGrid = Array.from({ length: s }, () => new Float32Array(s));
+                const idealOpdData = {
+                    gridSize: s,
+                    wavelength: wlLocal,
+                    gridData: {
+                        opd: idealOpdGrid,
+                        amplitude: ampGrid,
+                        pupilMask: maskGrid,
+                        xCoords,
+                        yCoords
+                    }
+                };
+
+                const idealPsfResult = await psfCalculator.calculatePSF(idealOpdData, {
+                    samplingSize: s,
+                    zeroPadTo: effectiveZeroPadTo,
+                    pupilDiameter: pupilDiameterMm,
+                    focalLength: focalLengthMm,
+                    pixelSize: null,
+                    forceImplementation: useLegacyBaselineMode ? null : 'javascript',
+                    removeTilt: false
+                });
+
+                const idealPsf2D = idealPsfResult?.psfData || idealPsfResult?.psf || idealPsfResult?.intensity || null;
+                if (idealPsf2D && Array.isArray(idealPsf2D) && Array.isArray(idealPsf2D[0])) {
+                    const Nideal = idealPsf2D.length;
+                    if (Nideal >= 2 && idealPsf2D[0].length === Nideal) {
+                        const idealPixelSizeMicrons = safeNumber(
+                            idealPsfResult?.options?.pixelSize,
+                            safeNumber(pixelSizeMicrons, basePixelSizeMicronsForMTF)
+                        );
+                        const idealDfLpmm = (1.0 / (Nideal * idealPixelSizeMicrons)) * 1000.0;
+                        const idealNyquistLpmm = (0.5 / idealPixelSizeMicrons) * 1000.0;
+                        const idealMaxBin = Math.floor(Nideal / 2);
+                        const idealKDataMax = Math.max(0, Math.min(idealMaxBin, Math.floor(idealNyquistLpmm / (idealDfLpmm || 1e-9))));
+                        const idealFreqData = Array.from({ length: idealKDataMax + 1 }, (_, k) => k * idealDfLpmm);
+
+                        const idealPsfFlat = new Float64Array(Nideal * Nideal);
+                        for (let y = 0; y < Nideal; y++) {
+                            for (let x = 0; x < Nideal; x++) {
+                                idealPsfFlat[y * Nideal + x] = safeNumber(idealPsf2D[y]?.[x], 0);
+                            }
+                        }
+
+                        let idealTan = null;
+                        if (typeof wasmMTFFn === 'function') {
+                            try {
+                                const idealAxes = wasmMTFFn.call(psfCalculator.wasmCalculator, idealPsfFlat, Nideal, idealKDataMax);
+                                if (idealAxes?.xAxis && idealAxes?.yAxis) {
+                                    const idealTanVals = (tanAxis === 'x') ? idealAxes.xAxis : idealAxes.yAxis;
+                                    idealTan = {
+                                        freq: idealFreqData,
+                                        mtfVals: Array.from(idealTanVals, (v: number) => Number.isFinite(v) ? v : null)
+                                    };
+                                    if (idealTan.mtfVals.length > 0) idealTan.mtfVals[0] = 1.0;
+                                }
+                            } catch (_) {
+                                idealTan = null;
+                            }
+                        }
+
+                        if (!idealTan) {
+                            const realIdeal = Array.from({ length: Nideal }, (_, y) => Array.from({ length: Nideal }, (_, x) => idealPsfFlat[y * Nideal + x]));
+                            const imagIdeal = Array.from({ length: Nideal }, () => Array.from({ length: Nideal }, () => 0));
+                            const idealOtf = SimpleFFT.fft2D(realIdeal, imagIdeal);
+                            const dcReIdeal = safeNumber(idealOtf?.real?.[0]?.[0], 0);
+                            const dcImIdeal = safeNumber(idealOtf?.imag?.[0]?.[0], 0);
+                            const dcMagIdeal = Math.hypot(dcReIdeal, dcImIdeal);
+
+                            if (Number.isFinite(dcMagIdeal) && dcMagIdeal > 0) {
+                                const idealMtfVals = [];
+                                for (let k = 0; k <= idealKDataMax; k++) {
+                                    let re = 0;
+                                    let im = 0;
+                                    if (tanAxis === 'x') {
+                                        re = safeNumber(idealOtf.real?.[0]?.[k], 0);
+                                        im = safeNumber(idealOtf.imag?.[0]?.[k], 0);
+                                    } else {
+                                        re = safeNumber(idealOtf.real?.[k]?.[0], 0);
+                                        im = safeNumber(idealOtf.imag?.[k]?.[0], 0);
+                                    }
+                                    const mtf = Math.hypot(re, im) / dcMagIdeal;
+                                    idealMtfVals.push(Number.isFinite(mtf) ? mtf : null);
+                                }
+                                if (idealMtfVals.length > 0) idealMtfVals[0] = 1.0;
+                                idealTan = { freq: idealFreqData, mtfVals: idealMtfVals };
+                            }
+                        }
+
+                        if (idealTan) {
+                            const idealResampled = resampleCurveToRange(idealTan, requestedPlotLpmm, resolvedPlotPointCount);
+                            if (idealResampled?.mtfVals && idealResampled.mtfVals.length === tan.freq.length) {
+                                diffVals = idealResampled.mtfVals;
+                            }
+                        }
+                    }
+                }
+            } catch (_) {
+                diffVals = null;
+            }
+
+            if (!diffVals) {
+                diffVals = tan.freq.map((f) => computeCircularApertureDiffractionMtf(f, wlLocal, fNumberForDiffraction));
+            }
+
             traces.push({
                 x: tan.freq,
                 y: diffVals,
@@ -934,6 +1072,24 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         yaxis: { title: 'MTF', range: [0, 1.05] },
         margin: { l: 60, r: 20, t: 50, b: 50 }
     };
+
+    if (frequencyLimitNotes.size > 0) {
+        const warningText = Array.from(frequencyLimitNotes).join('<br>');
+        (layout as any).annotations = [
+            {
+                xref: 'paper',
+                yref: 'paper',
+                x: 0,
+                y: 1.08,
+                xanchor: 'left',
+                yanchor: 'bottom',
+                align: 'left',
+                showarrow: false,
+                font: { size: 11, color: '#b45309' },
+                text: `Calculation limit: ${warningText}`
+            }
+        ];
+    }
 
     if (shouldRenderPlot) {
         reportProgress(95, 'Rendering plot...');

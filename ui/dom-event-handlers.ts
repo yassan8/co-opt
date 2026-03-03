@@ -2370,6 +2370,12 @@ function setupOptimizeDesignIntentButton(): void {
     <button id="opt-stop" style="padding:6px 10px;" disabled>Stop</button>
     <span id="opt-stop-state" style="margin-left:8px; font-size:12px; color:#555;"></span>
 </div>
+<div id="opt-startup-progress-wrap" style="margin:-2px 0 10px 0;">
+    <div style="height:6px; background:#eceef2; border-radius:999px; overflow:hidden;">
+        <div id="opt-startup-progress-bar" style="width:0%; height:100%; background:#4f8cff; transition:width 120ms linear;"></div>
+    </div>
+    <div id="opt-startup-progress-label" style="font-size:11px; color:#666; margin-top:4px;">Idle</div>
+</div>
 <div style="margin-bottom:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         Method
@@ -2394,14 +2400,6 @@ function setupOptimizeDesignIntentButton(): void {
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
         <input id="opt-auto-render" type="checkbox" checked style="width:16px; height:16px;" />
         Auto-render on Accept
-    </label>
-    <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
-        <input id="opt-use-wasm-linear-solve" type="checkbox" checked style="width:16px; height:16px;" />
-        WASM linear solve
-    </label>
-    <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">
-        <input id="opt-profile" type="checkbox" checked style="width:16px; height:16px;" />
-        Profile
     </label>
 </div>
 <div style="display:flex; gap:10px; flex-direction:column;">
@@ -2543,8 +2541,29 @@ function setupOptimizeDesignIntentButton(): void {
                         if (runBtn) {
                             runBtn.addEventListener('click', () => {
                                 try {
+                                    if (stopState) stopState.textContent = 'Running...';
+                                    const phaseEl = popup?.document?.getElementById('opt-phase');
+                                    if (phaseEl && String(phaseEl.textContent || '').trim() === '-') {
+                                        phaseEl.textContent = 'starting';
+                                    }
+                                    const startupWrap = popup?.document?.getElementById('opt-startup-progress-wrap') as HTMLElement | null;
+                                    const startupBar = popup?.document?.getElementById('opt-startup-progress-bar') as HTMLElement | null;
+                                    const startupLabel = popup?.document?.getElementById('opt-startup-progress-label') as HTMLElement | null;
+                                    if (startupWrap) startupWrap.style.display = 'block';
+                                    if (startupBar) startupBar.style.width = '5%';
+                                    if (startupLabel) startupLabel.textContent = 'Run clicked. Preparing...';
+                                    if (runBtn) runBtn.disabled = true;
+                                    if (stopBtn) stopBtn.disabled = false;
+                                } catch (_) {}
+                                try {
                                     const fn = w.__cooptStartOptimizationFromPopup;
-                                    if (typeof fn === 'function') fn();
+                                    if (typeof fn === 'function') {
+                                        window.requestAnimationFrame(() => {
+                                            window.setTimeout(() => {
+                                                try { fn(); } catch (_) {}
+                                            }, 0);
+                                        });
+                                    }
                                 } catch (_) {}
                             });
                         }
@@ -2622,22 +2641,10 @@ function setupOptimizeDesignIntentButton(): void {
                         w.__cooptInitMeritFunctionEditor();
                     }
                 } catch (_) {}
-
-                const shouldWarmWasm = (() => {
-                    if (forceWasm) return true;
-                    try {
-                        if (popup && !popup.closed) {
-                            const cb = popup.document.getElementById('opt-use-wasm-linear-solve') as HTMLInputElement | null;
-                            return !!(cb && cb.checked);
-                        }
-                    } catch (_) {}
-                    return true;
-                })();
-
-                if (!shouldWarmWasm) return;
+                void forceWasm;
                 if (optimizerWasmWarmupPromise) return;
 
-                optimizerWasmWarmupPromise = import('../wasm/optimization/optimizer-wasm-bridge.ts')
+                optimizerWasmWarmupPromise = import('../rust-wasm/ts/optimization/optimizer-wasm-bridge.ts')
                     .then((mod: any) => {
                         if (mod && typeof mod.preloadOptimizerWasmBridge === 'function') {
                             return mod.preloadOptimizerWasmBridge();
@@ -2744,6 +2751,31 @@ function setupOptimizeDesignIntentButton(): void {
 
             const updateProgressUI = (p: any) => {
                 const phaseStr = String(p?.phase ?? '');
+
+                const setStartupProgress = (percent: number, label?: string, done?: boolean) => {
+                    try {
+                        if (!popup || popup.closed) return;
+                        const wrap = popup.document.getElementById('opt-startup-progress-wrap') as HTMLElement | null;
+                        const bar = popup.document.getElementById('opt-startup-progress-bar') as HTMLElement | null;
+                        const text = popup.document.getElementById('opt-startup-progress-label') as HTMLElement | null;
+                        if (wrap) wrap.style.display = 'block';
+                        if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(percent) || 0))}%`;
+                        if (text && label !== undefined) text.textContent = label;
+                        if (done) {
+                            window.setTimeout(() => {
+                                try {
+                                    if (!popup || popup.closed) return;
+                                    const w2 = popup.document.getElementById('opt-startup-progress-wrap') as HTMLElement | null;
+                                    if (w2) w2.style.display = 'none';
+                                } catch (_) {}
+                            }, 350);
+                        }
+                    } catch (_) {}
+                };
+
+                if (phaseStr === 'start') setStartupProgress(92, 'Optimization started. Waiting first iteration...');
+                else if (phaseStr === 'iter' || phaseStr === 'candidate' || phaseStr === 'accept' || phaseStr === 'reject') setStartupProgress(100, 'First iteration reached', true);
+                else if (phaseStr === 'done' || phaseStr === 'stopped' || phaseStr === 'error') setStartupProgress(100, 'Finished', true);
 
                 if (!startupLatencyReported && runClickAtMs > 0) {
                     if (phaseStr === 'start' || phaseStr === 'iter' || phaseStr === 'candidate' || phaseStr === 'accept' || phaseStr === 'reject') {
@@ -2974,6 +3006,30 @@ function setupOptimizeDesignIntentButton(): void {
                 startupLatencyReported = false;
                 finalAutoRenderRequested = false;
 
+                const setPreRunProgress = (phase: string, issue?: string, iter?: string) => {
+                    try {
+                        if (!popup || popup.closed) return;
+                        const doc = popup.document;
+                        const phaseEl = doc.getElementById('opt-phase');
+                        const issueEl = doc.getElementById('opt-issue');
+                        const iterEl = doc.getElementById('opt-iter');
+                        const startupWrap = doc.getElementById('opt-startup-progress-wrap') as HTMLElement | null;
+                        const startupBar = doc.getElementById('opt-startup-progress-bar') as HTMLElement | null;
+                        const startupLabel = doc.getElementById('opt-startup-progress-label') as HTMLElement | null;
+                        if (phaseEl) phaseEl.textContent = String(phase || '-');
+                        if (issueEl && issue !== undefined) issueEl.textContent = String(issue || '-');
+                        if (iterEl && iter !== undefined) iterEl.textContent = String(iter || '-');
+                        if (startupWrap) startupWrap.style.display = 'block';
+                        const phaseKey = String(phase || '').toLowerCase();
+                        let pct = 10;
+                        if (phaseKey === 'prepare') pct = 35;
+                        else if (phaseKey === 'warmup') pct = 70;
+                        else if (phaseKey === 'start') pct = 88;
+                        if (startupBar) startupBar.style.width = `${pct}%`;
+                        if (startupLabel && issue !== undefined) startupLabel.textContent = String(issue || '');
+                    } catch (_) {}
+                };
+
                 try {
                     // Save state before optimization for undo
                     let beforeOptimizationState: any = null;
@@ -2993,6 +3049,7 @@ function setupOptimizeDesignIntentButton(): void {
                     lastVioText = '-';
                     lastSoftText = '-';
                     lastDecisionText = '-';
+                    setPreRunProgress('prepare', 'Loading active configuration...');
 
                     // Re-read config for each Run
                     try {
@@ -3031,6 +3088,8 @@ function setupOptimizeDesignIntentButton(): void {
                             } catch (_) {}
                         }
                     } catch (_) {}
+
+                    setPreRunProgress('prepare', `Configuration loaded (vars=${variableCount}, num=${numericVarCount}, cat=${categoricalVarCount})`);
 
                     try {
                         if (popup && !popup.closed) {
@@ -3182,14 +3241,15 @@ function setupOptimizeDesignIntentButton(): void {
                             lmExploreTries: Math.max(1, Math.floor(readNum('opt-lm-explore-tries', 3))),
                             convergenceProfile,
                             ...kktPreset,
-                            useWasmLinearSolve: readBool('opt-use-wasm-linear-solve', true),
-                            profile: readBool('opt-profile', true)
+                            useWasmLinearSolve: true,
+                            profile: false
                         };
                     };
 
                     const maxIterations = resolveMaxIterations();
                     const optParams = resolveOptParams();
                     currentConvergenceProfile = String(optParams?.convergenceProfile || 'balanced').toLowerCase();
+                    setPreRunProgress('prepare', `Options resolved (conv=${currentConvergenceProfile}, maxIter=${maxIterations})`);
 
                     try {
                         const convText = `conv=${currentConvergenceProfile}`;
@@ -3197,8 +3257,15 @@ function setupOptimizeDesignIntentButton(): void {
                         lastIssueText = (!issue || issue === '-') ? convText : `${issue} | ${convText}`;
                     } catch (_) {}
 
-                    if (optParams.useWasmLinearSolve) {
-                        warmupOptimizerStartup(true);
+                    setPreRunProgress('warmup', 'Initializing WASM bridge...');
+                    warmupOptimizerStartup(true);
+                    try {
+                        if (optimizerWasmWarmupPromise) {
+                            await optimizerWasmWarmupPromise;
+                        }
+                        setPreRunProgress('warmup', 'WASM bridge ready');
+                    } catch (_) {
+                        setPreRunProgress('warmup', 'WASM warmup skipped (fallback available)');
                     }
 
                     const resolveOptMethod = (): string => {
@@ -3230,6 +3297,8 @@ function setupOptimizeDesignIntentButton(): void {
                         try {
                             _gThis.__COOPT_DISABLE_RAYTRACE_DEBUG = true;
                         } catch (_) {}
+
+                        setPreRunProgress('start', 'Starting optimization and computing initial residuals...', '0');
 
                         result = await opt.run({
                             multiScenario,
@@ -3335,44 +3404,6 @@ function setupOptimizeDesignIntentButton(): void {
                             }
                         } catch (_) {}
                         alert(reason);
-                    } else if (result && result.ok !== false) {
-                        try {
-                            const prof = getWindowDebugBagValue('optimizerMvp', 'lastOptimizeProfile', null) as any;
-                            const calls = Number(prof?.wasmLinearSolveCalls ?? prof?.counts?.wasmLinearSolveCalls) || 0;
-                            const hits = Number(prof?.wasmLinearSolveHits ?? prof?.counts?.wasmLinearSolveHits) || 0;
-                            const fallbacks = Number(prof?.wasmLinearSolveFallbacks ?? prof?.counts?.wasmLinearSolveFallbacks) || 0;
-                            const hitRate = calls > 0 ? (hits / calls) : NaN;
-                            const neCalls = Number(prof?.wasmNormalEqCalls ?? prof?.counts?.wasmNormalEqCalls) || 0;
-                            const neHits = Number(prof?.wasmNormalEqHits ?? prof?.counts?.wasmNormalEqHits) || 0;
-                            const neFallbacks = Number(prof?.wasmNormalEqFallbacks ?? prof?.counts?.wasmNormalEqFallbacks) || 0;
-                            const neHitRate = neCalls > 0 ? (neHits / neCalls) : NaN;
-                            const wasmBridgeDebug = (prof && typeof prof === 'object' && prof.wasmBridgeDebug && typeof prof.wasmBridgeDebug === 'object')
-                                ? prof.wasmBridgeDebug
-                                : null;
-                            const solveReason = wasmBridgeDebug ? String(wasmBridgeDebug.lastSolveReason || '').trim() : '';
-                            const normalEqReason = wasmBridgeDebug ? String(wasmBridgeDebug.lastNormalEqReason || '').trim() : '';
-                            const bridgeSource = wasmBridgeDebug ? String(wasmBridgeDebug.initSource || '').trim() : '';
-                            const bridgeError = wasmBridgeDebug ? String(wasmBridgeDebug.initError || '').trim() : '';
-                            const bridgeInitTag = (bridgeSource || bridgeError)
-                                ? `, init=${bridgeSource || '-'}${bridgeError ? `, err=${bridgeError}` : ''}`
-                                : '';
-                            const wasmText = calls > 0
-                                ? `WASM solve: ${hits}/${calls} (${(hitRate * 100).toFixed(1)}%), fb=${fallbacks}${(hits === 0 && solveReason) ? `, why=${solveReason}` : ''}${(hits === 0) ? bridgeInitTag : ''}`
-                                : 'WASM solve: 0 calls';
-                            const wasmNeText = neCalls > 0
-                                ? `WASM normal-eq: ${neHits}/${neCalls} (${(neHitRate * 100).toFixed(1)}%), fb=${neFallbacks}${(neHits === 0 && normalEqReason) ? `, why=${normalEqReason}` : ''}${(neHits === 0) ? bridgeInitTag : ''}`
-                                : 'WASM normal-eq: 0 calls';
-
-                            if (popup && !popup.closed) {
-                                const issueEl = popup.document.getElementById('opt-issue');
-                                if (issueEl) {
-                                    const prev = String(issueEl.textContent || '-').trim();
-                                    const convText = `conv=${String(currentConvergenceProfile || 'balanced').toLowerCase()}`;
-                                    const statsText = `${convText} | ${wasmText} | ${wasmNeText}`;
-                                    issueEl.textContent = (prev && prev !== '-') ? `${prev} | ${statsText}` : statsText;
-                                }
-                            }
-                        } catch (_) {}
                     }
                 } catch (outerError) {
                     console.warn('⚠️ [Optimize] Outer error:', outerError);

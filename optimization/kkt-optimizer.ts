@@ -10,6 +10,12 @@
  * This is a general-purpose constrained optimizer suitable for optical design.
  */
 
+import {
+  backtrackingLineSearchArmijoWasm,
+  solveQpSubproblemKktEqualityWasm,
+  solveQpSubproblemUnconstrainedWasm
+} from '../rust-wasm/ts/optimization/optimizer-wasm-bridge.ts';
+
 export interface KKTOptimizerOptions {
   /**
    * Equality constraints: g(x) = 0
@@ -62,6 +68,18 @@ export interface KKTOptimizerOptions {
    * Line search efficiency parameter (0 < c < 1)
    */
   lineSearchRho?: number;
+
+  /**
+   * Use Rust/WASM QP kernels in SQP step (Phase 2)
+   * Default: true
+   */
+  useWasmQp?: boolean;
+
+  /**
+   * Use Rust/WASM Armijo line search helper (Phase 3)
+   * Default: true
+   */
+  useWasmLineSearch?: boolean;
 }
 
 export interface KKTOptimizerState {
@@ -178,6 +196,54 @@ function approximateHessian(
   }
 
   return H;
+}
+
+function buildEqualityLinearization(
+  x: number[],
+  constraints: KKTOptimizerOptions,
+  eps: number = 1e-8
+): { Aeq: number[][]; ceq: number[] } {
+  const eqConstraints = constraints.equalityConstraints || [];
+  const ineqConstraints = constraints.inequalityConstraints || [];
+  const n = x.length;
+
+  const evaluateGradient = (fn: (xx: number[]) => number): number[] | null => {
+    const f0 = fn(x);
+    if (!Number.isFinite(f0)) return null;
+    const grad = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      const xp = x.slice();
+      xp[i] += eps;
+      const fp = fn(xp);
+      if (!Number.isFinite(fp)) return null;
+      grad[i] = (fp - f0) / eps;
+    }
+    return grad;
+  };
+
+  const Aeq: number[][] = [];
+  const ceq: number[] = [];
+
+  for (const c of eqConstraints) {
+    const value = c.evaluate(x);
+    if (!Number.isFinite(value)) continue;
+    const jac = evaluateGradient(c.evaluate);
+    if (!jac) continue;
+    Aeq.push(jac);
+    ceq.push(value);
+  }
+
+  // Active inequalities (h(x) > 0) are linearized as temporary equalities.
+  for (const c of ineqConstraints) {
+    const value = c.evaluate(x);
+    if (!Number.isFinite(value) || value <= 0) continue;
+    const jac = evaluateGradient(c.evaluate);
+    if (!jac) continue;
+    Aeq.push(jac);
+    ceq.push(value);
+  }
+
+  return { Aeq, ceq };
 }
 
 /**
@@ -299,15 +365,38 @@ export function computeSQPStep(
   state: KKTOptimizerState
 ): KKTStepResult {
   try {
-    const n = x.length;
     const grad = computeGradient(x, objective, constraints, state);
     const H = approximateHessian(x, objective, constraints, state);
+    const { Aeq, ceq } = buildEqualityLinearization(x, constraints);
+    const useWasmQp = constraints.useWasmQp !== false;
 
-    // For simplicity, solve unconstrained QP: H * Δx = -g
-    // (In a full implementation, would enforce linear constraint approximations)
-    const dx = solveLU(H, grad.map((g) => -g));
+    // Phase 2: Rust/WASM constrained KKT QP solver path
+    // Fallback order: constrained KKT -> unconstrained QP -> TS LU
+    let dx: number[] | null = null;
+    let predictedRed = 0;
+
+    if (useWasmQp && Aeq.length > 0) {
+      const constrained = solveQpSubproblemKktEqualityWasm(H, grad, Aeq, ceq, 1e-10);
+      if (constrained && constrained.dx.length === x.length) {
+        dx = constrained.dx;
+        predictedRed = constrained.predictedReduction;
+      }
+    }
+
+    if (!dx && useWasmQp) {
+      const wasmResult = solveQpSubproblemUnconstrainedWasm(H, grad, 1e-10);
+      if (wasmResult && wasmResult.dx.length === x.length) {
+        dx = wasmResult.dx;
+        predictedRed = wasmResult.predictedReduction;
+      }
+    }
+
     if (!dx) {
-      return { ok: false, reason: 'QP solver failed (singular Hessian)' };
+      dx = solveLU(H, grad.map((g) => -g));
+      if (!dx) {
+        return { ok: false, reason: 'QP solver failed (singular Hessian)' };
+      }
+      predictedRed = -0.5 * dx.reduce((sum, dxi, i) => sum + dxi * grad[i], 0);
     }
 
     // Compute norms and predicted reduction
@@ -316,7 +405,9 @@ export function computeSQPStep(
       return { ok: false, reason: 'SQP step is zero (convergence)' };
     }
 
-    const predictedRed = -0.5 * dx.reduce((sum, dxi, i) => sum + dxi * grad[i], 0);
+    if (!Number.isFinite(predictedRed)) {
+      predictedRed = -0.5 * dx.reduce((sum, dxi, i) => sum + dxi * grad[i], 0);
+    }
 
     return { ok: true, dx, stepSize: 1.0, predictedReduction: predictedRed };
   } catch (e) {
@@ -339,10 +430,43 @@ export function lineSearch(
 ): { stepSize: number; accepted: boolean } {
   let alpha = 1.0;
   const x_new = x.slice();
+  const useWasmLineSearch = constraints.useWasmLineSearch !== false;
 
   // Initial function values
   const merit0 = evaluateAugmentedLagrangian(x, objective, constraints, state);
   const viol0 = state.violationScore;
+
+  // Phase 3: try Rust/WASM Armijo line search first (for merit decrease)
+  if (useWasmLineSearch && Number.isFinite(merit0)) {
+    const grad0 = computeGradient(x, objective, constraints, state);
+    const alphaWasm = backtrackingLineSearchArmijoWasm(
+      x,
+      dx,
+      merit0,
+      grad0,
+      1.0,
+      rho,
+      c,
+      20,
+      (trialX) => evaluateAugmentedLagrangian(trialX, objective, constraints, state)
+    );
+
+    if (Number.isFinite(alphaWasm) && (alphaWasm as number) > 0) {
+      alpha = alphaWasm as number;
+      for (let i = 0; i < x.length; i++) {
+        x_new[i] = x[i] + alpha * dx[i];
+      }
+      updateConstraintViolations(x_new, constraints, state);
+      const merit_new = evaluateAugmentedLagrangian(x_new, objective, constraints, state);
+      const viol_new = state.violationScore;
+      if (
+        merit_new < merit0 - c * alpha * Math.abs(predictedReduction) ||
+        viol_new < (1 - c) * viol0
+      ) {
+        return { stepSize: alpha, accepted: true };
+      }
+    }
+  }
 
   // Backtracking
   for (let k = 0; k < 20; k++) {

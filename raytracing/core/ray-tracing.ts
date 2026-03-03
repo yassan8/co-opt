@@ -11,7 +11,7 @@ import * as rayParaxial from './ray-paraxial.ts';
 import { asphericSagDerivative, toricSurfaceZ, toricSagDerivatives } from '../../optical/surface-math.ts';
 import { getWASMSystem as getWASMSystemService, isRayTracingWasmStrict } from '../../core/wasm-service.ts';
 import { setAsphericSagImplementation } from '../../core/aspheric-sag-service.ts';
-import { getRustRayTracingWasmSync } from '../../wasm/raytracing/rust-raytracing-wasm.ts';
+import { getRustRayTracingWasmSync } from '../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 const getSafeThickness = rayParaxial.getSafeThickness;
 const getRefractiveIndex = rayParaxial.getRefractiveIndex;
 const isCoordTransSurface = rayParaxial.isCoordTransSurface;
@@ -89,6 +89,45 @@ let __rustBatchPointBuffer = null;
 let __rustBatchPointCapacity = 0;
 
 const __rustAsphericParamsCache = new WeakMap();
+const __opdBackendLogOnce = {
+  rustWasm: false,
+  cWasm: false,
+  js: false
+};
+
+function __logOpdBackendOnce(kind: 'rustWasm' | 'cWasm' | 'js', detail = '') {
+  try {
+    const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+    const suppressJsIntersectFallback =
+      kind === 'js'
+      && detail === 'intersectAsphericSurface fallback'
+      && __opdBackendLogOnce.rustWasm
+      && !(g && g.__COOPT_LOG_OPD_JS_INTERSECT_FALLBACK === true);
+    if (suppressJsIntersectFallback) return;
+
+    if (__opdBackendLogOnce[kind]) return;
+    __opdBackendLogOnce[kind] = true;
+    const suffix = detail ? ` (${detail})` : '';
+    if (g) {
+      g.__COOPT_LAST_OPD_BACKEND = {
+        kind,
+        detail,
+        at: Date.now()
+      };
+    }
+    if (kind === 'rustWasm') {
+      console.warn(`🧭 [OPD Backend] Rust-WASM${suffix}`);
+      return;
+    }
+    if (kind === 'cWasm') {
+      console.warn(`🧭 [OPD Backend] C-WASM${suffix}`);
+      return;
+    }
+    console.warn(`🧭 [OPD Backend] JavaScript${suffix}`);
+  } catch (_) {
+    // ignore
+  }
+}
 
 function __nowMs() {
   try {
@@ -1077,6 +1116,27 @@ export function intersectAsphericSurface(ray, params, mode = "even", maxIter = 2
   return __intersectAsphericSurface_impl(ray, params, mode, maxIter, tol, debugLog, strictOptions);
 }
 
+function __resolveForwardHitMinTForRay(ray, params, mode, requireForwardHit) {
+  if (!requireForwardHit) return -1e-10;
+
+  let minT = -1e-10;
+  const ox0 = Number(ray?.pos?.x);
+  const oy0 = Number(ray?.pos?.y);
+  const oz0 = Number(ray?.pos?.z);
+  if (Number.isFinite(ox0) && Number.isFinite(oy0) && Number.isFinite(oz0)) {
+    const r0 = Math.hypot(ox0, oy0);
+    const sag0 = asphericSag(r0, params || {}, mode);
+    if (Number.isFinite(sag0)) {
+      const surfaceResidual = oz0 - sag0;
+      if (Math.abs(surfaceResidual) <= 1e-8) {
+        minT = -1e-8;
+      }
+    }
+  }
+
+  return minT;
+}
+
 export function intersectAsphericSurfaceBatch(rays, params, mode = "even", maxIter = 20, tol = 1e-7, strictOptions = null) {
   const list = Array.isArray(rays) ? rays : [];
   if (!list.length) return [];
@@ -1096,11 +1156,18 @@ export function intersectAsphericSurfaceBatch(rays, params, mode = "even", maxIt
   const coef9 = Number(safeParams.coef9 !== undefined ? safeParams.coef9 : 0) || 0;
   const coef10 = Number(safeParams.coef10 !== undefined ? safeParams.coef10 : 0) || 0;
   const modeOdd = (String(mode || '').toLowerCase() === 'odd') ? 1 : 0;
+  const forceRustWasm = !!(strictOptions && (strictOptions as any).__forceRustWasmOpd === true);
+  const disableWasmRayTracing = !!(strictOptions && strictOptions.disableWasmRayTracing === true);
   const allowNonStrict = !!(strictOptions && strictOptions.allowNonStrict === true);
-  const requireWasmRayTracing = !!(strictOptions && strictOptions.requireWasmRayTracing)
-    || (isRayTracingWasmStrict() && !allowNonStrict);
-  const useRustWasm = !!(strictOptions && strictOptions.useRustWasm === true);
-  const requireRustWasm = !!(strictOptions && strictOptions.requireRustWasm === true);
+  const requireWasmRayTracing = !disableWasmRayTracing && (
+    !!(strictOptions && strictOptions.requireWasmRayTracing)
+    || (isRayTracingWasmStrict() && !allowNonStrict)
+    || forceRustWasm
+  );
+  const useRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(strictOptions && strictOptions.useRustWasm === true));
+  const requireRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(strictOptions && strictOptions.requireRustWasm === true));
+  const requireForwardHit = !!(strictOptions && strictOptions.requireForwardHit === true);
+  const forwardHitMinT = -1e-10;
   const rustMaxIter = Number.isFinite(Number(strictOptions?.rustMaxIter)) ? Number(strictOptions.rustMaxIter) : null;
   const rustTol = Number.isFinite(Number(strictOptions?.rustTol)) ? Number(strictOptions.rustTol) : null;
 
@@ -1140,7 +1207,11 @@ export function intersectAsphericSurfaceBatch(rays, params, mode = "even", maxIt
           const out = new Array(list.length);
           for (let i = 0; i < list.length; i++) {
             const tHit = tHits[i];
-            if (Number.isFinite(tHit) && tHit > 0) {
+            const minT = __resolveForwardHitMinTForRay(list[i], safeParams, mode, requireForwardHit);
+            const isForwardHit = requireForwardHit
+              ? (Number.isFinite(tHit) && tHit >= minT)
+              : Number.isFinite(tHit);
+            if (isForwardHit) {
               const ray = list[i];
               out[i] = add(ray.pos, scale(ray.dir, tHit));
             } else {
@@ -1153,8 +1224,8 @@ export function intersectAsphericSurfaceBatch(rays, params, mode = "even", maxIt
       }
     }
 
-    const wasmBatch = __getWasmBatchIntersectRt10Fn();
-    const wasmModule = __getWasmModuleCached();
+    const wasmBatch = disableWasmRayTracing ? null : __getWasmBatchIntersectRt10Fn();
+    const wasmModule = disableWasmRayTracing ? null : __getWasmModuleCached();
     if (wasmBatch && wasmModule?.HEAPF64) {
       const mem = __ensureWasmBatchIntersectBuffers(wasmModule, list.length);
       if (mem?.raysPtr && mem?.outPtr) {
@@ -1204,7 +1275,11 @@ export function intersectAsphericSurfaceBatch(rays, params, mode = "even", maxIt
         const out = new Array(list.length);
         for (let i = 0; i < list.length; i++) {
           const tHit = heap[outBase + i];
-          if (Number.isFinite(tHit) && tHit > 0) {
+          const minT = __resolveForwardHitMinTForRay(list[i], safeParams, mode, requireForwardHit);
+          const isForwardHit = requireForwardHit
+            ? (Number.isFinite(tHit) && tHit >= minT)
+            : Number.isFinite(tHit);
+          if (isForwardHit) {
             const ray = list[i];
             out[i] = add(ray.pos, scale(ray.dir, tHit));
           } else {
@@ -1257,11 +1332,18 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
   const coef8 = safeParams.coef8 !== undefined ? safeParams.coef8 : 0;
   const coef9 = safeParams.coef9 !== undefined ? safeParams.coef9 : 0;
   const coef10 = safeParams.coef10 !== undefined ? safeParams.coef10 : 0;
+  const forceRustWasm = !!(strictOptions && (strictOptions as any).__forceRustWasmOpd === true);
+  const disableWasmRayTracing = !!(strictOptions && strictOptions.disableWasmRayTracing === true);
   const allowNonStrict = !!(strictOptions && strictOptions.allowNonStrict === true);
-  const requireWasmRayTracing = !!(strictOptions && strictOptions.requireWasmRayTracing)
-    || (isRayTracingWasmStrict() && !allowNonStrict);
-  const useRustWasm = !!(strictOptions && strictOptions.useRustWasm === true);
-  const requireRustWasm = !!(strictOptions && strictOptions.requireRustWasm === true);
+  const requireWasmRayTracing = !disableWasmRayTracing && (
+    !!(strictOptions && strictOptions.requireWasmRayTracing)
+    || (isRayTracingWasmStrict() && !allowNonStrict)
+    || forceRustWasm
+  );
+  const useRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(strictOptions && strictOptions.useRustWasm === true));
+  const requireRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(strictOptions && strictOptions.requireRustWasm === true));
+  const requireForwardHit = !!(strictOptions && strictOptions.requireForwardHit === true);
+  const forwardHitMinT = __resolveForwardHitMinTForRay(ray, safeParams, mode, requireForwardHit);
 
   if (requireWasmRayTracing && debugLog) {
     debugLog = null;
@@ -1287,7 +1369,11 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
             maxIter | 0,
             Number(tol) || 1e-7
           );
-          if (Number.isFinite(tHit) && tHit > 0) {
+          const isForwardHit = requireForwardHit
+            ? (Number.isFinite(tHit) && tHit >= forwardHitMinT)
+            : Number.isFinite(tHit);
+          if (isForwardHit) {
+            __logOpdBackendOnce('rustWasm', 'intersect_aspheric_rt10');
             const pt = add(ray.pos, scale(ray.dir, tHit));
             if (pt && isFinite(pt.x) && isFinite(pt.y) && isFinite(pt.z)) return pt;
           }
@@ -1295,8 +1381,8 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
         }
       }
 
-      const wasmIntersect = __getWasmIntersectRt10Fn();
-      const wasmIntersectWithRetry = __getWasmIntersectRt10WithRetryFn();
+      const wasmIntersect = disableWasmRayTracing ? null : __getWasmIntersectRt10Fn();
+      const wasmIntersectWithRetry = disableWasmRayTracing ? null : __getWasmIntersectRt10WithRetryFn();
       if (RT_PROF.enabled) RT_PROF.stats.wasmIntersectAttempts++;
       if (requireWasmRayTracing && typeof wasmIntersect !== 'function') {
         throw new Error('WASM strict mode: _intersect_aspheric_rt10 is unavailable');
@@ -1362,7 +1448,10 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
             );
 
             // Strict mode fallback path when unified retry export is unavailable.
-            if (requireWasmRayTracing && !(Number.isFinite(tHit) && tHit > 0)) {
+            const isStrictAcceptableHit = requireForwardHit
+              ? (Number.isFinite(tHit) && tHit >= forwardHitMinT)
+              : Number.isFinite(tHit);
+            if (requireWasmRayTracing && !isStrictAcceptableHit) {
               tHit = wasmIntersect(
                 ox, oy, oz,
                 dx, dy, dz,
@@ -1385,8 +1474,12 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
             }
           }
 
-          if (Number.isFinite(tHit) && tHit > 0) {
+          const isForwardHit = requireForwardHit
+            ? (Number.isFinite(tHit) && tHit >= forwardHitMinT)
+            : Number.isFinite(tHit);
+          if (isForwardHit) {
             if (RT_PROF.enabled) RT_PROF.stats.wasmIntersectHits++;
+            __logOpdBackendOnce('cWasm', 'intersect_aspheric_rt10');
             const pt = add(ray.pos, scale(ray.dir, tHit));
             if (pt && isFinite(pt.x) && isFinite(pt.y) && isFinite(pt.z)) return pt;
           }
@@ -1425,6 +1518,8 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
     debugLog.push(`   Ray pos: (${ray.pos.x.toFixed(3)}, ${ray.pos.y.toFixed(3)}, ${ray.pos.z.toFixed(3)})`);
     debugLog.push(`   Ray dir: (${ray.dir.x.toFixed(3)}, ${ray.dir.y.toFixed(3)}, ${ray.dir.z.toFixed(3)})`);
   }
+
+  __logOpdBackendOnce('js', 'intersectAsphericSurface fallback');
   
   // 複数の初期推定値を試行
   const initialGuesses = [];
@@ -1538,7 +1633,11 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
         if (debugLog) debugLog.push(`     ✅ Converged in ${i} iterations, F=${F.toFixed(9)}`);
   converged = true;
   if (RT_PROF.enabled) RT_PROF.stats.__lastIterCount = __iterCount;
-  return pt;
+  if (!requireForwardHit || t >= forwardHitMinT) {
+    return pt;
+  }
+  if (debugLog) debugLog.push(`     ⚠️ Rejecting converged backward intersection: t=${t.toFixed(9)}`);
+  break;
       }
       
       // 微分計算とNewtonステップ
@@ -1623,16 +1722,25 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
       
       // 最終誤差が許容範囲内かつ有効領域内なら受容
       if (Math.abs(finalF) < tol * 10 && finalR <= semidia * 1.1) {
-        if (debugLog) debugLog.push(`     ✅ Accepting final result for guess ${guessIndex + 1}: F=${finalF.toFixed(9)}`);
-  if (RT_PROF.enabled) RT_PROF.stats.__lastIterCount = maxIter; 
-  return finalPt;
+        if (!requireForwardHit || t >= forwardHitMinT) {
+          if (debugLog) debugLog.push(`     ✅ Accepting final result for guess ${guessIndex + 1}: F=${finalF.toFixed(9)}`);
+          if (RT_PROF.enabled) RT_PROF.stats.__lastIterCount = maxIter; 
+          return finalPt;
+        }
+        if (debugLog) debugLog.push(`     ⚠️ Rejecting final backward intersection for guess ${guessIndex + 1}: t=${t.toFixed(9)}`);
       }
       
       // lastValidPtがある場合、それを評価
       if (lastValidPt && Math.abs(lastValidF) < tol * 50) {
-        if (debugLog) debugLog.push(`     ✅ Accepting best valid result for guess ${guessIndex + 1}: F=${lastValidF.toFixed(9)}`);
-    if (RT_PROF.enabled) RT_PROF.stats.__lastIterCount = maxIter; 
-    return lastValidPt;
+        const lastValidT = (Math.abs(ray.dir.z) > 1e-12)
+          ? ((lastValidPt.z - ray.pos.z) / ray.dir.z)
+          : NaN;
+        if (!requireForwardHit || (Number.isFinite(lastValidT) && lastValidT >= forwardHitMinT)) {
+          if (debugLog) debugLog.push(`     ✅ Accepting best valid result for guess ${guessIndex + 1}: F=${lastValidF.toFixed(9)}`);
+          if (RT_PROF.enabled) RT_PROF.stats.__lastIterCount = maxIter; 
+          return lastValidPt;
+        }
+        if (debugLog) debugLog.push(`     ⚠️ Rejecting best-valid backward intersection for guess ${guessIndex + 1}: t=${Number.isFinite(lastValidT) ? lastValidT.toFixed(9) : 'NaN'}`);
       }
     }
   }
@@ -2735,6 +2843,7 @@ function __getCachedSurfaceData(opticalSystemRows, maxSurfaceIndex, effectiveSys
 }
 
 const __hitPointPrecomputedCache = new WeakMap<any, Map<number, { rowsLength: number; signature: number; effectiveSystemRows: any[]; surfaceData: any[] }>>();
+const __rustStopSolverMetaCache = new WeakMap<any, Map<string, any>>();
 
 function __getHitPointPrecomputed(opticalSystemRows, targetSurfaceIndex) {
   try {
@@ -2768,6 +2877,222 @@ function __getHitPointPrecomputed(opticalSystemRows, targetSurfaceIndex) {
     return { effectiveSystemRows, surfaceData };
   } catch (_) {
     return { effectiveSystemRows: null, surfaceData: null };
+  }
+}
+
+function __buildRustStopSolverPackedMeta(effectiveSystemRows, surfaceData, stopSurfaceIndex, wavelengthRef) {
+  try {
+    if (!Array.isArray(effectiveSystemRows) || !Array.isArray(surfaceData)) return null;
+    const rowCount = effectiveSystemRows.length;
+    if (!(rowCount > 0) || !Number.isInteger(stopSurfaceIndex) || stopSurfaceIndex < 0 || stopSurfaceIndex >= rowCount) return null;
+
+    const rowMeta = new Int32Array(rowCount * 4);
+    const rowParams = new Float64Array(rowCount * 24);
+    const rowOrigins = new Float64Array(rowCount * 3);
+    const rowRots = new Float64Array(rowCount * 9);
+    const rowInvRots = new Float64Array(rowCount * 9);
+
+    for (let i = 0; i < rowCount; i++) {
+      const row = effectiveSystemRows[i] || {};
+      const sInfo = surfaceData[i] || {};
+
+      let kind = 0;
+      if (isObjectRow(row)) kind = 1;
+      else if (__rtIsGapRow(row)) kind = 2;
+      else if (__rtIsCoordTransRow(row)) kind = 3;
+
+      const surfType = String(row?.surfType ?? row?.type ?? '').trim().toLowerCase();
+      const radius = Number(row?.radius);
+      const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
+      const isToricSurface = surfType === 'toric';
+      if (isToricSurface) return null;
+      const isOddAsphere = !isToricSurface && surfType.includes('odd');
+      const isMirror = String(row?.material ?? '').trim().toUpperCase() === 'MIRROR';
+      const imageTypeRaw = row['object type'] ?? row.object ?? row.Object ?? row.type ?? '';
+      const imageTypeNorm = String(imageTypeRaw).trim().toLowerCase().replace(/[\s_-]+/g, '');
+      const isImageSurface = imageTypeNorm === 'image' || imageTypeNorm.startsWith('image');
+
+      const apertureShapeRaw = row._apertureShape ?? row.apertureShape ?? row.ApertureShape;
+      const shapeKey = String(apertureShapeRaw ?? '').trim().replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+      const isSquareShape = shapeKey === 'square' || shapeKey === 'sq';
+      const isRectShape = isSquareShape || shapeKey === 'rect' || shapeKey === 'rectangle' || shapeKey === 'rectangular';
+
+      let rectHalfW = NaN;
+      let rectHalfH = NaN;
+      if (isRectShape) {
+        const wRaw = row._apertureWidth ?? row.apertureWidth ?? row.apertureX ?? row.apertureWidthMm;
+        const hRaw = row._apertureHeight ?? row.apertureHeight ?? row.apertureY ?? row.apertureHeightMm;
+        const wNum = Number(wRaw);
+        const hNum = Number(hRaw);
+        if (isSquareShape) {
+          const side = Number.isFinite(wNum) ? wNum : (Number.isFinite(hNum) ? hNum : NaN);
+          if (Number.isFinite(side) && side > 0) {
+            rectHalfW = side / 2;
+            rectHalfH = side / 2;
+          }
+        } else {
+          if (Number.isFinite(wNum) && wNum > 0) rectHalfW = wNum / 2;
+          if (Number.isFinite(hNum) && hNum > 0) rectHalfH = hNum / 2;
+        }
+      }
+
+      let apertureLimit = Infinity;
+      const apertureNum = Number(row.aperture);
+      if (Number.isFinite(apertureNum) && apertureNum > 0) apertureLimit = apertureNum / 2;
+      const semiDiaValue = row.__cooptActualSemidia ?? row.semidia;
+      const semiDiaNum = Number(semiDiaValue);
+      const semiDia = (semiDiaValue === 'Auto' || semiDiaValue === '' || !Number.isFinite(semiDiaNum) || semiDiaNum <= 0)
+        ? Infinity
+        : semiDiaNum;
+      if (Number.isFinite(semiDia)) apertureLimit = Math.min(apertureLimit, semiDia);
+      if (i === stopSurfaceIndex || isImageSurface) apertureLimit = Infinity;
+
+      let flags = 0;
+      if (isMirror) flags |= 1;
+      if (isPlaneSurface) flags |= 2;
+      if (isToricSurface) flags |= 4;
+      if (isImageSurface) flags |= 8;
+      if (Number.isFinite(rectHalfW) && Number.isFinite(rectHalfH)) flags |= 16;
+      if (isOddAsphere) flags |= 32;
+
+      let n2 = 0;
+      if (kind === 0) {
+        if (!isMirror) {
+          const n = getCorrectRefractiveIndex(row, wavelengthRef);
+          n2 = (Number.isFinite(n) && n > 0) ? n : 0;
+        }
+      } else if (kind === 2) {
+        const material = String(row?.material ?? '').trim();
+        if (material) {
+          if (material.replace(/\s+/g, '').toUpperCase() === 'AIR') n2 = 1.0;
+          else {
+            const n = getCorrectRefractiveIndex({ material }, wavelengthRef);
+            n2 = (Number.isFinite(n) && n > 0) ? n : 0;
+          }
+        }
+      } else if (kind === 3) {
+        const material = String(row?.__cooptGapMaterial ?? '').trim();
+        if (material) {
+          if (material.replace(/\s+/g, '').toUpperCase() === 'AIR') n2 = 1.0;
+          else {
+            const n = getCorrectRefractiveIndex({ material }, wavelengthRef);
+            n2 = (Number.isFinite(n) && n > 0) ? n : 0;
+          }
+        }
+      }
+
+      const origin = sInfo?.origin ?? { x: 0, y: 0, z: 0 };
+      const rot = sInfo?.rotationMatrix ?? [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+      const invRot = __getInverseRotationMatrix(sInfo) ?? [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+
+      const m = i * 4;
+      rowMeta[m + 0] = kind;
+      rowMeta[m + 1] = flags;
+      rowMeta[m + 2] = 0;
+      rowMeta[m + 3] = 0;
+
+      const p = i * 24;
+      rowParams[p + 0] = Number(row?.radius);
+      rowParams[p + 1] = Number(row?.conic) || 0;
+      rowParams[p + 2] = Number(row?.coef1) || 0;
+      rowParams[p + 3] = Number(row?.coef2) || 0;
+      rowParams[p + 4] = Number(row?.coef3) || 0;
+      rowParams[p + 5] = Number(row?.coef4) || 0;
+      rowParams[p + 6] = Number(row?.coef5) || 0;
+      rowParams[p + 7] = Number(row?.coef6) || 0;
+      rowParams[p + 8] = Number(row?.coef7) || 0;
+      rowParams[p + 9] = Number(row?.coef8) || 0;
+      rowParams[p + 10] = Number(row?.coef9) || 0;
+      rowParams[p + 11] = Number(row?.coef10) || 0;
+      rowParams[p + 12] = semiDia;
+      rowParams[p + 13] = Number(row?.radiusX);
+      rowParams[p + 14] = Number(row?.radiusY);
+      rowParams[p + 15] = Number(row?.axis) || 0;
+      rowParams[p + 16] = Number(row?.thickness) || 0;
+      rowParams[p + 17] = apertureLimit;
+      rowParams[p + 18] = rectHalfW;
+      rowParams[p + 19] = rectHalfH;
+      rowParams[p + 20] = n2;
+      rowParams[p + 21] = 0;
+      rowParams[p + 22] = 0;
+      rowParams[p + 23] = 0;
+
+      const o = i * 3;
+      rowOrigins[o + 0] = Number(origin?.x) || 0;
+      rowOrigins[o + 1] = Number(origin?.y) || 0;
+      rowOrigins[o + 2] = Number(origin?.z) || 0;
+
+      const r = i * 9;
+      rowRots[r + 0] = Number(rot?.[0]?.[0]) || 0;
+      rowRots[r + 1] = Number(rot?.[0]?.[1]) || 0;
+      rowRots[r + 2] = Number(rot?.[0]?.[2]) || 0;
+      rowRots[r + 3] = Number(rot?.[1]?.[0]) || 0;
+      rowRots[r + 4] = Number(rot?.[1]?.[1]) || 0;
+      rowRots[r + 5] = Number(rot?.[1]?.[2]) || 0;
+      rowRots[r + 6] = Number(rot?.[2]?.[0]) || 0;
+      rowRots[r + 7] = Number(rot?.[2]?.[1]) || 0;
+      rowRots[r + 8] = Number(rot?.[2]?.[2]) || 0;
+
+      rowInvRots[r + 0] = Number(invRot?.[0]?.[0]) || 0;
+      rowInvRots[r + 1] = Number(invRot?.[0]?.[1]) || 0;
+      rowInvRots[r + 2] = Number(invRot?.[0]?.[2]) || 0;
+      rowInvRots[r + 3] = Number(invRot?.[1]?.[0]) || 0;
+      rowInvRots[r + 4] = Number(invRot?.[1]?.[1]) || 0;
+      rowInvRots[r + 5] = Number(invRot?.[1]?.[2]) || 0;
+      rowInvRots[r + 6] = Number(invRot?.[2]?.[0]) || 0;
+      rowInvRots[r + 7] = Number(invRot?.[2]?.[1]) || 0;
+      rowInvRots[r + 8] = Number(invRot?.[2]?.[2]) || 0;
+    }
+
+    return {
+      rowCount,
+      rowMeta,
+      rowParams,
+      rowOrigins,
+      rowInvRots,
+      rowRots
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function __getCachedRustStopSolverPackedMeta(opticalSystemRows, stopSurfaceIndex, effectiveSystemRows, surfaceData, wavelengthRef) {
+  try {
+    if (!Array.isArray(opticalSystemRows) || !Array.isArray(effectiveSystemRows) || !Array.isArray(surfaceData)) return null;
+    const idx = Number(stopSurfaceIndex);
+    if (!Number.isInteger(idx) || idx < 0) return null;
+
+    let perSystem = __rustStopSolverMetaCache.get(opticalSystemRows);
+    if (!perSystem) {
+      perSystem = new Map();
+      __rustStopSolverMetaCache.set(opticalSystemRows, perSystem);
+    }
+
+    const signature = __computeSurfaceOriginsSignature(effectiveSystemRows);
+    const wavelengthKey = Math.round((Number(wavelengthRef) || 0.5876) * 1e6);
+    const cacheKey = `${idx}|${wavelengthKey}`;
+    const cached = perSystem.get(cacheKey);
+    if (
+      cached
+      && cached.rowsLength === effectiveSystemRows.length
+      && cached.signature === signature
+      && cached.packed
+    ) {
+      return cached.packed;
+    }
+
+    const packed = __buildRustStopSolverPackedMeta(effectiveSystemRows, surfaceData, idx, wavelengthRef);
+    if (!packed) return null;
+
+    perSystem.set(cacheKey, {
+      rowsLength: effectiveSystemRows.length,
+      signature,
+      packed
+    });
+    return packed;
+  } catch (_) {
+    return null;
   }
 }
 
@@ -2976,6 +3301,20 @@ export function traceRayEvalBatchSummary(opticalSystemRows, rays, n0 = 1.0, maxS
     __surfaceData: surfaceData
   } as any;
 
+  const canTryRustBatchMetaFastPath = !!(
+    baseOptions &&
+    baseOptions.useRustWasm === true &&
+    baseOptions.disableWasmRayTracing !== true &&
+    baseOptions.__disableRustBatchMetaFastPath !== true
+  );
+
+  if (canTryRustBatchMetaFastPath) {
+    const rustMetaOut = __traceRayEvalBatch_rustMeta(opticalSystemRows, list, n0, idx, baseOptions);
+    if (Array.isArray(rustMetaOut) && rustMetaOut.length === list.length) {
+      return rustMetaOut;
+    }
+  }
+
   if (RT_PROF.enabled) {
     RT_PROF.stats.traceCalls += list.length;
     const t0 = now();
@@ -3150,11 +3489,20 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
     alive[r] = 1;
   }
 
+  const forceRustWasm = !!(options && (options as any).__forceRustWasmOpd === true);
+  const disableWasmRayTracing = !!(options && options.disableWasmRayTracing === true);
   const allowNonStrict = !!(options && options.allowNonStrict === true);
-  const requireWasmRayTracing = !!(options && options.requireWasmRayTracing)
-    || (isRayTracingWasmStrict() && !allowNonStrict);
-  const useRustWasm = !!(options && options.useRustWasm === true);
-  const requireRustWasm = !!(options && options.requireRustWasm === true);
+  const requireWasmRayTracing = !disableWasmRayTracing && (
+    !!(options && options.requireWasmRayTracing)
+    || (isRayTracingWasmStrict() && !allowNonStrict)
+    || forceRustWasm
+  );
+  const useRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(options && options.useRustWasm === true));
+  const requireRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(options && options.requireRustWasm === true));
+  const requireForwardHit = !!(options && options.requireForwardHit === true);
+  if (useRustWasm) {
+    __logOpdBackendOnce('rustWasm', 'traceRayHitPointBatch lockstep');
+  }
 
   const uniformWavelength = (() => {
     let ref = NaN;
@@ -3461,7 +3809,7 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
         asphereMode,
         20,
         1e-7,
-        { requireWasmRayTracing, allowNonStrict, useRustWasm, requireRustWasm }
+        { requireWasmRayTracing, allowNonStrict, useRustWasm, requireRustWasm, requireForwardHit, disableWasmRayTracing }
       );
     })();
 
@@ -3826,6 +4174,121 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
   }
 
   return out;
+}
+
+export function solveRayOriginsToStopPointsWithRustMeta(
+  opticalSystemRows,
+  initialOrigins,
+  dirVectors,
+  stopTargets,
+  stopSurfaceIndex,
+  wavelengthUm = 0.5876,
+  options = null
+) {
+  try {
+    const count = Math.min(
+      Array.isArray(initialOrigins) ? initialOrigins.length : 0,
+      Array.isArray(dirVectors) ? dirVectors.length : 0,
+      Array.isArray(stopTargets) ? stopTargets.length : 0
+    );
+    if (count <= 0) return null;
+    if (!Number.isInteger(stopSurfaceIndex) || stopSurfaceIndex < 0) return null;
+
+    const rust = getRustRayTracingWasmSync();
+    const fn = rust?.solve_ray_origins_to_stop_points_with_meta_batch;
+    if (typeof fn !== 'function') return null;
+
+    const effectiveSystemRows = (options && Array.isArray(options.__effectiveSystemRows))
+      ? options.__effectiveSystemRows
+      : opticalSystemRows.slice(0, stopSurfaceIndex + 1);
+    const surfaceData = (options && Array.isArray(options.__surfaceData))
+      ? options.__surfaceData
+      : __getCachedSurfaceData(opticalSystemRows, stopSurfaceIndex, effectiveSystemRows);
+    if (!Array.isArray(effectiveSystemRows) || !Array.isArray(surfaceData)) return null;
+
+    const wavelengthRef = Number(wavelengthUm) || 0.5876;
+    const packedMeta = __getCachedRustStopSolverPackedMeta(
+      opticalSystemRows,
+      stopSurfaceIndex,
+      effectiveSystemRows,
+      surfaceData,
+      wavelengthRef
+    );
+    if (!packedMeta) return null;
+    const {
+      rowCount,
+      rowMeta,
+      rowParams,
+      rowOrigins,
+      rowInvRots,
+      rowRots
+    } = packedMeta;
+
+    const flatOrigins = new Float64Array(count * 3);
+    const flatDirs = new Float64Array(count * 3);
+    const flatTargets = new Float64Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      const b = i * 3;
+      const o = initialOrigins[i] || {};
+      const d = dirVectors[i] || {};
+      const t = stopTargets[i] || {};
+      flatOrigins[b] = Number(o.x) || 0;
+      flatOrigins[b + 1] = Number(o.y) || 0;
+      flatOrigins[b + 2] = Number(o.z) || 0;
+      flatDirs[b] = Number(d.x) || 0;
+      flatDirs[b + 1] = Number(d.y) || 0;
+      flatDirs[b + 2] = Number(d.z) || 1;
+      flatTargets[b] = Number(t.x) || 0;
+      flatTargets[b + 1] = Number(t.y) || 0;
+      flatTargets[b + 2] = Number(t.z) || 0;
+    }
+
+    const maxIter = Number.isFinite(Number(options?.maxIter)) ? Number(options.maxIter) : 20;
+    const tolMm = Number.isFinite(Number(options?.tolMm)) ? Number(options.tolMm) : 1e-3;
+    const eps = Number.isFinite(Number(options?.eps)) ? Number(options.eps) : 1e-3;
+    const maxStep = Number.isFinite(Number(options?.maxStep)) ? Number(options.maxStep) : 10.0;
+    const nStart = Number.isFinite(Number(options?.nStart)) && Number(options?.nStart) > 0
+      ? Number(options.nStart)
+      : 1.0;
+
+    const raw = fn(
+      flatOrigins,
+      flatDirs,
+      flatTargets,
+      count,
+      stopSurfaceIndex,
+      wavelengthRef,
+      nStart,
+      rowMeta,
+      rowParams,
+      rowOrigins,
+      rowInvRots,
+      rowRots,
+      rowCount,
+      maxIter,
+      tolMm,
+      eps,
+      maxStep
+    );
+
+    if (!raw || typeof (raw as any).length !== 'number' || (raw as any).length < count * 4) return null;
+    const result = new Array(count);
+    for (let i = 0; i < count; i++) {
+      const b = i * 4;
+      const x = Number((raw as any)[b]);
+      const y = Number((raw as any)[b + 1]);
+      const z = Number((raw as any)[b + 2]);
+      const status = Number((raw as any)[b + 3]);
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+        result[i] = { x, y, z, __status: Number.isFinite(status) ? status : NaN };
+      } else {
+        result[i] = initialOrigins[i] || null;
+      }
+    }
+    return result;
+  } catch (_) {
+    return null;
+  }
 }
 
 function __traceRayEvalBatch_wasmFull(opticalSystemRows, rays, n0, targetSurfaceIndex, options) {
@@ -4310,6 +4773,469 @@ function __traceRayEvalBatch_rustJsonMeta(opticalSystemRows, rays, n0, targetSur
   }
 }
 
+function __traceSingleRayHitPoint_rustMeta(opticalSystemRows, ray0, n0, targetSurfaceIndex, options) {
+  try {
+    const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+    const captureRustSingleMeta = !!(g && g.__COOPT_CAPTURE_RUST_SINGLE_HIT_META);
+    const rust = getRustRayTracingWasmSync();
+    const fn = rust?.trace_single_ray_hit_point_with_meta;
+    if (typeof fn !== 'function') return null;
+    if (!Array.isArray(opticalSystemRows) || !ray0) return null;
+    if (!Number.isInteger(targetSurfaceIndex) || targetSurfaceIndex < 0) return null;
+
+    const effectiveSystemRows = (options && Array.isArray(options.__effectiveSystemRows))
+      ? options.__effectiveSystemRows
+      : opticalSystemRows.slice(0, targetSurfaceIndex + 1);
+    const surfaceData = (options && Array.isArray(options.__surfaceData))
+      ? options.__surfaceData
+      : __getCachedSurfaceData(opticalSystemRows, targetSurfaceIndex, effectiveSystemRows);
+    if (!Array.isArray(effectiveSystemRows) || !Array.isArray(surfaceData)) return null;
+    const rowCount = effectiveSystemRows.length;
+    if (!(rowCount > 0) || targetSurfaceIndex >= rowCount) return null;
+
+    const rowMeta = new Int32Array(rowCount * 4);
+    const rowParams = new Float64Array(rowCount * 24);
+    const rowOrigins = new Float64Array(rowCount * 3);
+    const rowRots = new Float64Array(rowCount * 9);
+    const rowInvRots = new Float64Array(rowCount * 9);
+
+    const wavelengthRef = Number(ray0?.wavelength) || 0.55;
+    for (let i = 0; i < rowCount; i++) {
+      const row = effectiveSystemRows[i] || {};
+      const sInfo = surfaceData[i] || {};
+
+      let kind = 0;
+      if (isObjectRow(row)) kind = 1;
+      else if (__rtIsGapRow(row)) kind = 2;
+      else if (__rtIsCoordTransRow(row)) kind = 3;
+
+      const surfType = String(row?.surfType ?? row?.type ?? '').trim().toLowerCase();
+      const radius = Number(row?.radius);
+      const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
+      const isToricSurface = surfType === 'toric';
+      const isOddAsphere = !isToricSurface && surfType.includes('odd');
+      const isMirror = String(row?.material ?? '').trim().toUpperCase() === 'MIRROR';
+      const imageTypeRaw = row['object type'] ?? row.object ?? row.Object ?? row.type ?? '';
+      const imageTypeNorm = String(imageTypeRaw).trim().toLowerCase().replace(/[\s_-]+/g, '');
+      const isImageSurface = imageTypeNorm === 'image' || imageTypeNorm.startsWith('image');
+
+      const apertureShapeRaw = row._apertureShape ?? row.apertureShape ?? row.ApertureShape;
+      const shapeKey = String(apertureShapeRaw ?? '').trim().replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+      const isSquareShape = shapeKey === 'square' || shapeKey === 'sq';
+      const isRectShape = isSquareShape || shapeKey === 'rect' || shapeKey === 'rectangle' || shapeKey === 'rectangular';
+
+      let rectHalfW = NaN;
+      let rectHalfH = NaN;
+      if (isRectShape) {
+        const wRaw = row._apertureWidth ?? row.apertureWidth ?? row.apertureX ?? row.apertureWidthMm;
+        const hRaw = row._apertureHeight ?? row.apertureHeight ?? row.apertureY ?? row.apertureHeightMm;
+        const wNum = Number(wRaw);
+        const hNum = Number(hRaw);
+        if (isSquareShape) {
+          const side = Number.isFinite(wNum) ? wNum : (Number.isFinite(hNum) ? hNum : NaN);
+          if (Number.isFinite(side) && side > 0) {
+            rectHalfW = side / 2;
+            rectHalfH = side / 2;
+          }
+        } else {
+          if (Number.isFinite(wNum) && wNum > 0) rectHalfW = wNum / 2;
+          if (Number.isFinite(hNum) && hNum > 0) rectHalfH = hNum / 2;
+        }
+      }
+
+      let apertureLimit = Infinity;
+      const apertureNum = Number(row.aperture);
+      if (Number.isFinite(apertureNum) && apertureNum > 0) apertureLimit = apertureNum / 2;
+      const semiDiaValue = row.__cooptActualSemidia ?? row.semidia;
+      const semiDiaNum = Number(semiDiaValue);
+      const semiDia = (semiDiaValue === 'Auto' || semiDiaValue === '' || !Number.isFinite(semiDiaNum) || semiDiaNum <= 0)
+        ? Infinity
+        : semiDiaNum;
+      if (Number.isFinite(semiDia)) apertureLimit = Math.min(apertureLimit, semiDia);
+      if (i === targetSurfaceIndex || isImageSurface) apertureLimit = Infinity;
+
+      let flags = 0;
+      if (isMirror) flags |= 1;
+      if (isPlaneSurface) flags |= 2;
+      if (isToricSurface) flags |= 4;
+      if (isImageSurface) flags |= 8;
+      if (Number.isFinite(rectHalfW) && Number.isFinite(rectHalfH)) flags |= 16;
+      if (isOddAsphere) flags |= 32;
+
+      let n2 = 0;
+      if (kind === 0) {
+        if (!isMirror) {
+          const n = getCorrectRefractiveIndex(row, wavelengthRef);
+          n2 = (Number.isFinite(n) && n > 0) ? n : 0;
+        }
+      } else if (kind === 2) {
+        const material = String(row?.material ?? '').trim();
+        if (material) {
+          if (material.replace(/\s+/g, '').toUpperCase() === 'AIR') n2 = 1.0;
+          else {
+            const n = getCorrectRefractiveIndex({ material }, wavelengthRef);
+            n2 = (Number.isFinite(n) && n > 0) ? n : 0;
+          }
+        }
+      } else if (kind === 3) {
+        const material = String(row?.__cooptGapMaterial ?? '').trim();
+        if (material) {
+          if (material.replace(/\s+/g, '').toUpperCase() === 'AIR') n2 = 1.0;
+          else {
+            const n = getCorrectRefractiveIndex({ material }, wavelengthRef);
+            n2 = (Number.isFinite(n) && n > 0) ? n : 0;
+          }
+        }
+      }
+
+      const origin = sInfo?.origin ?? { x: 0, y: 0, z: 0 };
+      const rot = sInfo?.rotationMatrix ?? [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+      const invRot = __getInverseRotationMatrix(sInfo) ?? [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+
+      const m = i * 4;
+      rowMeta[m + 0] = kind;
+      rowMeta[m + 1] = flags;
+      rowMeta[m + 2] = 0;
+      rowMeta[m + 3] = 0;
+
+      const p = i * 24;
+      rowParams[p + 0] = Number(row?.radius);
+      rowParams[p + 1] = Number(row?.conic) || 0;
+      rowParams[p + 2] = Number(row?.coef1) || 0;
+      rowParams[p + 3] = Number(row?.coef2) || 0;
+      rowParams[p + 4] = Number(row?.coef3) || 0;
+      rowParams[p + 5] = Number(row?.coef4) || 0;
+      rowParams[p + 6] = Number(row?.coef5) || 0;
+      rowParams[p + 7] = Number(row?.coef6) || 0;
+      rowParams[p + 8] = Number(row?.coef7) || 0;
+      rowParams[p + 9] = Number(row?.coef8) || 0;
+      rowParams[p + 10] = Number(row?.coef9) || 0;
+      rowParams[p + 11] = Number(row?.coef10) || 0;
+      rowParams[p + 12] = semiDia;
+      rowParams[p + 13] = Number(row?.radiusX);
+      rowParams[p + 14] = Number(row?.radiusY);
+      rowParams[p + 15] = Number(row?.axis) || 0;
+      rowParams[p + 16] = Number(row?.thickness) || 0;
+      rowParams[p + 17] = apertureLimit;
+      rowParams[p + 18] = rectHalfW;
+      rowParams[p + 19] = rectHalfH;
+      rowParams[p + 20] = n2;
+      rowParams[p + 21] = 0;
+      rowParams[p + 22] = 0;
+      rowParams[p + 23] = 0;
+
+      const o = i * 3;
+      rowOrigins[o + 0] = Number(origin?.x) || 0;
+      rowOrigins[o + 1] = Number(origin?.y) || 0;
+      rowOrigins[o + 2] = Number(origin?.z) || 0;
+
+      const r = i * 9;
+      rowRots[r + 0] = Number(rot?.[0]?.[0]) || 0;
+      rowRots[r + 1] = Number(rot?.[0]?.[1]) || 0;
+      rowRots[r + 2] = Number(rot?.[0]?.[2]) || 0;
+      rowRots[r + 3] = Number(rot?.[1]?.[0]) || 0;
+      rowRots[r + 4] = Number(rot?.[1]?.[1]) || 0;
+      rowRots[r + 5] = Number(rot?.[1]?.[2]) || 0;
+      rowRots[r + 6] = Number(rot?.[2]?.[0]) || 0;
+      rowRots[r + 7] = Number(rot?.[2]?.[1]) || 0;
+      rowRots[r + 8] = Number(rot?.[2]?.[2]) || 0;
+
+      rowInvRots[r + 0] = Number(invRot?.[0]?.[0]) || 0;
+      rowInvRots[r + 1] = Number(invRot?.[0]?.[1]) || 0;
+      rowInvRots[r + 2] = Number(invRot?.[0]?.[2]) || 0;
+      rowInvRots[r + 3] = Number(invRot?.[1]?.[0]) || 0;
+      rowInvRots[r + 4] = Number(invRot?.[1]?.[1]) || 0;
+      rowInvRots[r + 5] = Number(invRot?.[1]?.[2]) || 0;
+      rowInvRots[r + 6] = Number(invRot?.[2]?.[0]) || 0;
+      rowInvRots[r + 7] = Number(invRot?.[2]?.[1]) || 0;
+      rowInvRots[r + 8] = Number(invRot?.[2]?.[2]) || 0;
+    }
+
+    const ray = new Float64Array([
+      Number(ray0?.pos?.x), Number(ray0?.pos?.y), Number(ray0?.pos?.z),
+      Number(ray0?.dir?.x), Number(ray0?.dir?.y), Number(ray0?.dir?.z)
+    ]);
+    const nStart = Number.isFinite(Number(n0)) && Number(n0) > 0 ? Number(n0) : 1.0;
+    const raw = fn(ray, targetSurfaceIndex, nStart, rowMeta, rowParams, rowOrigins, rowInvRots, rowRots, rowCount);
+    if (!raw || typeof (raw as any).length !== 'number' || (raw as any).length < 5) return null;
+
+    const status = Number((raw as any)[0]);
+    const hx = Number((raw as any)[2]);
+    const hy = Number((raw as any)[3]);
+    const hz = Number((raw as any)[4]);
+    if (captureRustSingleMeta && g) {
+      const statusLabel = (
+        status === 1 ? 'ok' :
+        status === 2 ? 'invalid_input' :
+        status === 3 ? 'no_intersection' :
+        status === 4 ? 'aperture_block' :
+        status === 5 ? 'tir' :
+        status === 6 ? 'not_reached' :
+        'unknown'
+      );
+      g.__cooptLastRustSingleHitMeta = {
+        at: Date.now(),
+        status,
+        statusLabel,
+        targetSurfaceIndex,
+        rowCount,
+        hitPoint: (status === 1 && Number.isFinite(hx) && Number.isFinite(hy) && Number.isFinite(hz))
+          ? { x: hx, y: hy, z: hz }
+          : null
+      };
+    }
+    if (status === 1 && Number.isFinite(hx) && Number.isFinite(hy) && Number.isFinite(hz)) {
+      return { x: hx, y: hy, z: hz };
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function __traceRayEvalBatch_rustMeta(opticalSystemRows, rays, n0, targetSurfaceIndex, options) {
+  try {
+    const list = Array.isArray(rays) ? rays : [];
+    if (!list.length) return null;
+    if (!Number.isInteger(targetSurfaceIndex) || targetSurfaceIndex < 0) return null;
+
+    const rust = getRustRayTracingWasmSync();
+    const fn = rust?.trace_ray_batch_hit_point_with_meta;
+    if (typeof fn !== 'function') return null;
+
+    const effectiveSystemRows = (options && Array.isArray(options.__effectiveSystemRows))
+      ? options.__effectiveSystemRows
+      : opticalSystemRows.slice(0, targetSurfaceIndex + 1);
+    const surfaceData = (options && Array.isArray(options.__surfaceData))
+      ? options.__surfaceData
+      : __getCachedSurfaceData(opticalSystemRows, targetSurfaceIndex, effectiveSystemRows);
+    if (!Array.isArray(effectiveSystemRows) || !Array.isArray(surfaceData)) return null;
+
+    const rowCount = effectiveSystemRows.length;
+    const rayCount = list.length;
+    if (!(rowCount > 0) || targetSurfaceIndex >= rowCount) return null;
+
+    const rowMeta = new Int32Array(rowCount * 4);
+    const rowParams = new Float64Array(rowCount * 24);
+    const rowOrigins = new Float64Array(rowCount * 3);
+    const rowRots = new Float64Array(rowCount * 9);
+    const rowInvRots = new Float64Array(rowCount * 9);
+
+    const wavelengthRef = Number(list[0]?.wavelength) || 0.55;
+
+    for (let i = 0; i < rowCount; i++) {
+      const row = effectiveSystemRows[i] || {};
+      const sInfo = surfaceData[i] || {};
+
+      let kind = 0;
+      if (isObjectRow(row)) kind = 1;
+      else if (__rtIsGapRow(row)) kind = 2;
+      else if (__rtIsCoordTransRow(row)) kind = 3;
+
+      const surfType = String(row?.surfType ?? row?.type ?? '').trim().toLowerCase();
+      const radius = Number(row?.radius);
+      const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
+      const isToricSurface = surfType === 'toric';
+      const isOddAsphere = !isToricSurface && surfType.includes('odd');
+      if (isToricSurface) {
+        return null;
+      }
+      const isMirror = String(row?.material ?? '').trim().toUpperCase() === 'MIRROR';
+      const imageTypeRaw = row['object type'] ?? row.object ?? row.Object ?? row.type ?? '';
+      const imageTypeNorm = String(imageTypeRaw).trim().toLowerCase().replace(/[\s_-]+/g, '');
+      const isImageSurface = imageTypeNorm === 'image' || imageTypeNorm.startsWith('image');
+
+      const apertureShapeRaw = row._apertureShape ?? row.apertureShape ?? row.ApertureShape;
+      const shapeKey = String(apertureShapeRaw ?? '').trim().replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
+      const isSquareShape = shapeKey === 'square' || shapeKey === 'sq';
+      const isRectShape = isSquareShape || shapeKey === 'rect' || shapeKey === 'rectangle' || shapeKey === 'rectangular';
+
+      let rectHalfW = NaN;
+      let rectHalfH = NaN;
+      if (isRectShape) {
+        const wRaw = row._apertureWidth ?? row.apertureWidth ?? row.apertureX ?? row.apertureWidthMm;
+        const hRaw = row._apertureHeight ?? row.apertureHeight ?? row.apertureY ?? row.apertureHeightMm;
+        const wNum = Number(wRaw);
+        const hNum = Number(hRaw);
+        if (isSquareShape) {
+          const side = Number.isFinite(wNum) ? wNum : (Number.isFinite(hNum) ? hNum : NaN);
+          if (Number.isFinite(side) && side > 0) {
+            rectHalfW = side / 2;
+            rectHalfH = side / 2;
+          }
+        } else {
+          if (Number.isFinite(wNum) && wNum > 0) rectHalfW = wNum / 2;
+          if (Number.isFinite(hNum) && hNum > 0) rectHalfH = hNum / 2;
+        }
+      }
+
+      let apertureLimit = Infinity;
+      const apertureNum = Number(row.aperture);
+      if (Number.isFinite(apertureNum) && apertureNum > 0) apertureLimit = apertureNum / 2;
+      const semiDiaValue = row.__cooptActualSemidia ?? row.semidia;
+      const semiDiaNum = Number(semiDiaValue);
+      const semiDia = (semiDiaValue === 'Auto' || semiDiaValue === '' || !Number.isFinite(semiDiaNum) || semiDiaNum <= 0)
+        ? Infinity
+        : semiDiaNum;
+      if (Number.isFinite(semiDia)) apertureLimit = Math.min(apertureLimit, semiDia);
+      if (i === targetSurfaceIndex || isImageSurface) apertureLimit = Infinity;
+
+      let flags = 0;
+      if (isMirror) flags |= 1;
+      if (isPlaneSurface) flags |= 2;
+      if (isToricSurface) flags |= 4;
+      if (isImageSurface) flags |= 8;
+      if (Number.isFinite(rectHalfW) && Number.isFinite(rectHalfH)) flags |= 16;
+      if (isOddAsphere) flags |= 32;
+
+      let n2 = 0;
+      if (kind === 0) {
+        if (!isMirror) {
+          const n = getCorrectRefractiveIndex(row, wavelengthRef);
+          n2 = (Number.isFinite(n) && n > 0) ? n : 0;
+        }
+      } else if (kind === 2) {
+        const material = String(row?.material ?? '').trim();
+        if (material) {
+          if (material.replace(/\s+/g, '').toUpperCase() === 'AIR') n2 = 1.0;
+          else {
+            const n = getCorrectRefractiveIndex({ material }, wavelengthRef);
+            n2 = (Number.isFinite(n) && n > 0) ? n : 0;
+          }
+        }
+      } else if (kind === 3) {
+        const material = String(row?.__cooptGapMaterial ?? '').trim();
+        if (material) {
+          if (material.replace(/\s+/g, '').toUpperCase() === 'AIR') n2 = 1.0;
+          else {
+            const n = getCorrectRefractiveIndex({ material }, wavelengthRef);
+            n2 = (Number.isFinite(n) && n > 0) ? n : 0;
+          }
+        }
+      }
+
+      const origin = sInfo?.origin ?? { x: 0, y: 0, z: 0 };
+      const rot = sInfo?.rotationMatrix ?? [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+      const invRot = __getInverseRotationMatrix(sInfo) ?? [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+
+      const m = i * 4;
+      rowMeta[m + 0] = kind;
+      rowMeta[m + 1] = flags;
+      rowMeta[m + 2] = 0;
+      rowMeta[m + 3] = 0;
+
+      const p = i * 24;
+      rowParams[p + 0] = Number(row?.radius);
+      rowParams[p + 1] = Number(row?.conic) || 0;
+      rowParams[p + 2] = Number(row?.coef1) || 0;
+      rowParams[p + 3] = Number(row?.coef2) || 0;
+      rowParams[p + 4] = Number(row?.coef3) || 0;
+      rowParams[p + 5] = Number(row?.coef4) || 0;
+      rowParams[p + 6] = Number(row?.coef5) || 0;
+      rowParams[p + 7] = Number(row?.coef6) || 0;
+      rowParams[p + 8] = Number(row?.coef7) || 0;
+      rowParams[p + 9] = Number(row?.coef8) || 0;
+      rowParams[p + 10] = Number(row?.coef9) || 0;
+      rowParams[p + 11] = Number(row?.coef10) || 0;
+      rowParams[p + 12] = semiDia;
+      rowParams[p + 13] = Number(row?.radiusX);
+      rowParams[p + 14] = Number(row?.radiusY);
+      rowParams[p + 15] = Number(row?.axis) || 0;
+      rowParams[p + 16] = Number(row?.thickness) || 0;
+      rowParams[p + 17] = apertureLimit;
+      rowParams[p + 18] = rectHalfW;
+      rowParams[p + 19] = rectHalfH;
+      rowParams[p + 20] = n2;
+      rowParams[p + 21] = 0;
+      rowParams[p + 22] = 0;
+      rowParams[p + 23] = 0;
+
+      const o = i * 3;
+      rowOrigins[o + 0] = Number(origin?.x) || 0;
+      rowOrigins[o + 1] = Number(origin?.y) || 0;
+      rowOrigins[o + 2] = Number(origin?.z) || 0;
+
+      const r = i * 9;
+      rowRots[r + 0] = Number(rot?.[0]?.[0]) || 0;
+      rowRots[r + 1] = Number(rot?.[0]?.[1]) || 0;
+      rowRots[r + 2] = Number(rot?.[0]?.[2]) || 0;
+      rowRots[r + 3] = Number(rot?.[1]?.[0]) || 0;
+      rowRots[r + 4] = Number(rot?.[1]?.[1]) || 0;
+      rowRots[r + 5] = Number(rot?.[1]?.[2]) || 0;
+      rowRots[r + 6] = Number(rot?.[2]?.[0]) || 0;
+      rowRots[r + 7] = Number(rot?.[2]?.[1]) || 0;
+      rowRots[r + 8] = Number(rot?.[2]?.[2]) || 0;
+
+      rowInvRots[r + 0] = Number(invRot?.[0]?.[0]) || 0;
+      rowInvRots[r + 1] = Number(invRot?.[0]?.[1]) || 0;
+      rowInvRots[r + 2] = Number(invRot?.[0]?.[2]) || 0;
+      rowInvRots[r + 3] = Number(invRot?.[1]?.[0]) || 0;
+      rowInvRots[r + 4] = Number(invRot?.[1]?.[1]) || 0;
+      rowInvRots[r + 5] = Number(invRot?.[1]?.[2]) || 0;
+      rowInvRots[r + 6] = Number(invRot?.[2]?.[0]) || 0;
+      rowInvRots[r + 7] = Number(invRot?.[2]?.[1]) || 0;
+      rowInvRots[r + 8] = Number(invRot?.[2]?.[2]) || 0;
+    }
+
+    const raysFlat = new Float64Array(rayCount * 6);
+    for (let i = 0; i < rayCount; i++) {
+      const ray = list[i] || {};
+      const b = i * 6;
+      raysFlat[b + 0] = Number(ray?.pos?.x);
+      raysFlat[b + 1] = Number(ray?.pos?.y);
+      raysFlat[b + 2] = Number(ray?.pos?.z);
+      raysFlat[b + 3] = Number(ray?.dir?.x);
+      raysFlat[b + 4] = Number(ray?.dir?.y);
+      raysFlat[b + 5] = Number(ray?.dir?.z);
+    }
+
+    const nStart = Number.isFinite(Number(n0)) && Number(n0) > 0 ? Number(n0) : 1.0;
+    const raw = fn(
+      raysFlat,
+      rayCount,
+      targetSurfaceIndex,
+      nStart,
+      rowMeta,
+      rowParams,
+      rowOrigins,
+      rowInvRots,
+      rowRots,
+      rowCount
+    );
+
+    if (!raw || typeof (raw as any).length !== 'number' || (raw as any).length < rayCount * 6) return null;
+
+    const out = new Array(rayCount);
+    for (let i = 0; i < rayCount; i++) {
+      const b = i * 6;
+      const code = Number((raw as any)[b + 0]);
+      const opl = Number((raw as any)[b + 1]);
+      const hx = Number((raw as any)[b + 2]);
+      const hy = Number((raw as any)[b + 3]);
+      const hz = Number((raw as any)[b + 4]);
+      const status = (() => {
+        if (code === 1) return 'ok';
+        if (code === 2) return 'invalid_input';
+        if (code === 3) return 'no_intersection';
+        if (code === 4) return 'aperture_block';
+        if (code === 5) return 'tir';
+        if (code === 6) return 'not_reached';
+        return 'failed';
+      })();
+      const success = code === 1 && Number.isFinite(hx) && Number.isFinite(hy) && Number.isFinite(hz);
+      out[i] = {
+        success,
+        status,
+        hitPoint: success ? { x: hx, y: hy, z: hz } : null,
+        oplMicrons: Number.isFinite(opl) ? opl : NaN
+      };
+    }
+    return out;
+  } catch (_) {
+    return null;
+  }
+}
+
 function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurfaceIndex, options) {
   const list = Array.isArray(rays) ? rays : [];
   if (!list.length) return [];
@@ -4359,11 +5285,20 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
     alive[r] = 1;
   }
 
+  const forceRustWasm = !!(options && (options as any).__forceRustWasmOpd === true);
+  const disableWasmRayTracing = !!(options && options.disableWasmRayTracing === true);
   const allowNonStrict = !!(options && options.allowNonStrict === true);
-  const requireWasmRayTracing = !!(options && options.requireWasmRayTracing)
-    || (isRayTracingWasmStrict() && !allowNonStrict);
-  const useRustWasm = !!(options && options.useRustWasm === true);
-  const requireRustWasm = !!(options && options.requireRustWasm === true);
+  const requireWasmRayTracing = !disableWasmRayTracing && (
+    !!(options && options.requireWasmRayTracing)
+    || (isRayTracingWasmStrict() && !allowNonStrict)
+    || forceRustWasm
+  );
+  const useRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(options && options.useRustWasm === true));
+  const requireRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(options && options.requireRustWasm === true));
+  const requireForwardHit = !!(options && options.requireForwardHit === true);
+  if (useRustWasm) {
+    __logOpdBackendOnce('rustWasm', 'traceRayEvalBatchSummary lockstep');
+  }
 
   const uniformWavelength = (() => {
     let ref = NaN;
@@ -4680,7 +5615,7 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
         asphereMode,
         20,
         1e-7,
-        { requireWasmRayTracing, allowNonStrict, useRustWasm, requireRustWasm }
+        { requireWasmRayTracing, allowNonStrict, useRustWasm, requireRustWasm, requireForwardHit, disableWasmRayTracing }
       );
     })();
 
@@ -5073,11 +6008,78 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
 function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, maxSurfaceIndex = null, options = null) {
   const __traceSetupT0 = RT_PROF.enabled ? now() : 0;
   const returnHitPointOnly = !!(options && typeof options === 'object' && options.returnHitPointOnly);
+  const disableWasmRayTracing = !!(options && typeof options === 'object' && options.disableWasmRayTracing === true);
   const allowNonStrict = !!(options && typeof options === 'object' && options.allowNonStrict === true);
-  const requireWasmRayTracing = !!(options && typeof options === 'object' && options.requireWasmRayTracing)
-    || (isRayTracingWasmStrict() && !allowNonStrict);
-  const useRustWasm = !!(options && typeof options === 'object' && options.useRustWasm === true);
-  const requireRustWasm = !!(options && typeof options === 'object' && options.requireRustWasm === true);
+  const requireWasmRayTracing = !disableWasmRayTracing && (
+    !!(options && typeof options === 'object' && options.requireWasmRayTracing)
+    || (isRayTracingWasmStrict() && !allowNonStrict)
+  );
+  const useRustWasm = !disableWasmRayTracing && !!(options && typeof options === 'object' && options.useRustWasm === true);
+  const requireRustWasm = !disableWasmRayTracing && !!(options && typeof options === 'object' && options.requireRustWasm === true);
+  const requireForwardHit = !!(options && typeof options === 'object' && options.requireForwardHit === true);
+
+  // Phase 1 (safe): for hit-point-only single-ray tracing, prefer the Rust-backed
+  // batch summary path first, then fall back to the legacy scalar implementation.
+  // This keeps public behavior while reducing JS-side work in hot evaluation paths.
+  const canTryRustSingleHitFastPath = (
+    returnHitPointOnly &&
+    useRustWasm &&
+    debugLog === null &&
+    maxSurfaceIndex !== null &&
+    maxSurfaceIndex !== undefined &&
+    Number.isFinite(Number(maxSurfaceIndex)) &&
+    Number(maxSurfaceIndex) >= 0 &&
+    !(options && typeof options === 'object' && options.__disableRustSingleHitFastPath === true)
+  );
+  if (canTryRustSingleHitFastPath) {
+    try {
+      const targetSurfaceIndex = Number(maxSurfaceIndex);
+      const rustHit = __traceSingleRayHitPoint_rustMeta(
+        opticalSystemRows,
+        ray0,
+        n0,
+        targetSurfaceIndex,
+        options
+      );
+      if (rustHit && Number.isFinite(Number(rustHit.x)) && Number.isFinite(Number(rustHit.y)) && Number.isFinite(Number(rustHit.z))) {
+        return { x: Number(rustHit.x), y: Number(rustHit.y), z: Number(rustHit.z) };
+      }
+
+      const singleSummary = traceRayEvalBatchSummary(
+        opticalSystemRows,
+        [ray0],
+        n0,
+        targetSurfaceIndex,
+        {
+          ...(options && typeof options === 'object' ? options : null),
+          lockstepSelfCheck: false,
+          __forceRustWasmOpd: true,
+          useRustWasm: true,
+          requireRustWasm: true,
+          allowNonStrict: true
+        }
+      );
+      const first = Array.isArray(singleSummary) ? singleSummary[0] : null;
+      if (first && first.success === true && first.hitPoint &&
+          Number.isFinite(Number(first.hitPoint.x)) &&
+          Number.isFinite(Number(first.hitPoint.y)) &&
+          Number.isFinite(Number(first.hitPoint.z))) {
+        return {
+          x: Number(first.hitPoint.x),
+          y: Number(first.hitPoint.y),
+          z: Number(first.hitPoint.z)
+        };
+      }
+
+      if (requireRustWasm) {
+        return null;
+      }
+    } catch (_) {
+      if (requireRustWasm) {
+        return null;
+      }
+    }
+  }
 
   // Same rule as traceRay(): never do detailed debug logging during optimization.
   try {
@@ -5107,6 +6109,29 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
           dir: { x: Number(ray0?.dir?.x), y: Number(ray0?.dir?.y), z: Number(ray0?.dir?.z) },
           wavelength: Number(ray0?.wavelength)
         },
+        details: (details && typeof details === 'object') ? details : { message: String(details ?? '') }
+      };
+    } catch (_) {
+      // ignore
+    }
+  };
+
+  const __captureSurfaceProbe = (surfaceIndex, details) => {
+    try {
+      const g = (typeof globalThis !== 'undefined') ? globalThis : null;
+      if (!g) return;
+      const cfg = g.__COOPT_CAPTURE_SURFACE_PROBE;
+      if (!cfg || typeof cfg !== 'object') return;
+      const target = Number(cfg.surfaceIndex);
+      if (!Number.isFinite(target) || Number(target) !== Number(surfaceIndex)) return;
+      if (g.__cooptLastSurfaceProbe) return;
+      g.__cooptLastSurfaceProbe = {
+        at: Date.now(),
+        surfaceIndex,
+        surfaceNumber: Number(surfaceIndex) + 1,
+        useRustWasm,
+        requireRustWasm,
+        requireWasmRayTracing,
         details: (details && typeof details === 'object') ? details : { message: String(details ?? '') }
       };
     } catch (_) {
@@ -5619,6 +6644,7 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       // Toric surface intersection
       const surfTypeStr = String(row.surfType ?? row.type ?? '').trim();
       
+      let intersectionParamsForDiagnostics: any = null;
       if (surfTypeStr === 'Toric') {
         // Parse radiusX: handle "INF" string and Infinity
         let radiusX_val = Infinity;
@@ -5658,13 +6684,77 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
           axis: Number(row.axis) || 0,
           semidia: surfaceParams.semidia
         };
+        intersectionParamsForDiagnostics = {
+          model: 'toric',
+          params: {
+            radiusX: toricParams.radiusX,
+            radiusY: toricParams.radiusY,
+            conic: toricParams.conic,
+            axis: toricParams.axis,
+            semidia: toricParams.semidia
+          }
+        };
         
         if (isDetailedDebug) {
           debugLog.push(`Toric params: radiusX=${radiusX_val}, radiusY=${radiusY_val}, conic=${toricParams.conic}, axis=${toricParams.axis}`);
         }
+
+        __captureSurfaceProbe(i, {
+          surfaceType: row["object type"] || row.object || '',
+          surfType: row.surfType || '',
+          localRayAtSurface: {
+            pos: {
+              x: Number.isFinite(Number(localRay?.pos?.x)) ? Number(localRay.pos.x) : null,
+              y: Number.isFinite(Number(localRay?.pos?.y)) ? Number(localRay.pos.y) : null,
+              z: Number.isFinite(Number(localRay?.pos?.z)) ? Number(localRay.pos.z) : null,
+            },
+            dir: {
+              x: Number.isFinite(Number(localRay?.dir?.x)) ? Number(localRay.dir.x) : null,
+              y: Number.isFinite(Number(localRay?.dir?.y)) ? Number(localRay.dir.y) : null,
+              z: Number.isFinite(Number(localRay?.dir?.z)) ? Number(localRay.dir.z) : null,
+            }
+          },
+          intersectionInput: intersectionParamsForDiagnostics
+        });
         
         hitPoint = intersectToricSurface(localRay, toricParams, 50, 1e-10, isDetailedDebug ? debugLog : null);
       } else {
+        intersectionParamsForDiagnostics = {
+          model: 'aspheric',
+          mode: asphereMode,
+          params: {
+            radius: Number(surfaceParams.radius),
+            conic: Number(surfaceParams.conic),
+            semidia: Number(surfaceParams.semidia),
+            coef1: Number(surfaceParams.coef1),
+            coef2: Number(surfaceParams.coef2),
+            coef3: Number(surfaceParams.coef3),
+            coef4: Number(surfaceParams.coef4),
+            coef5: Number(surfaceParams.coef5),
+            coef6: Number(surfaceParams.coef6),
+            coef7: Number(surfaceParams.coef7),
+            coef8: Number(surfaceParams.coef8),
+            coef9: Number(surfaceParams.coef9),
+            coef10: Number(surfaceParams.coef10)
+          }
+        };
+        __captureSurfaceProbe(i, {
+          surfaceType: row["object type"] || row.object || '',
+          surfType: row.surfType || '',
+          localRayAtSurface: {
+            pos: {
+              x: Number.isFinite(Number(localRay?.pos?.x)) ? Number(localRay.pos.x) : null,
+              y: Number.isFinite(Number(localRay?.pos?.y)) ? Number(localRay.pos.y) : null,
+              z: Number.isFinite(Number(localRay?.pos?.z)) ? Number(localRay.pos.z) : null,
+            },
+            dir: {
+              x: Number.isFinite(Number(localRay?.dir?.x)) ? Number(localRay.dir.x) : null,
+              y: Number.isFinite(Number(localRay?.dir?.y)) ? Number(localRay.dir.y) : null,
+              z: Number.isFinite(Number(localRay?.dir?.z)) ? Number(localRay.dir.z) : null,
+            }
+          },
+          intersectionInput: intersectionParamsForDiagnostics
+        });
         // 非球面交点計算（球面も同様に処理）
         hitPoint = intersectAsphericSurface(
           localRay,
@@ -5673,7 +6763,7 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
           20,
           1e-7,
           isDetailedDebug ? debugLog : null,
-          { requireWasmRayTracing, allowNonStrict, useRustWasm, requireRustWasm }
+          { requireWasmRayTracing, allowNonStrict, useRustWasm, requireRustWasm, requireForwardHit, disableWasmRayTracing }
         );
       }
       
@@ -5693,7 +6783,23 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
           surfaceType: row["object type"] || row.object || '',
           surfType: row.surfType || '',
           radius: row.radius,
-          semidia: row.semidia
+          semidia: row.semidia,
+          useRustWasm,
+          requireRustWasm,
+          requireWasmRayTracing,
+          localRayAtSurface: {
+            pos: {
+              x: Number.isFinite(Number(localRay?.pos?.x)) ? Number(localRay.pos.x) : null,
+              y: Number.isFinite(Number(localRay?.pos?.y)) ? Number(localRay.pos.y) : null,
+              z: Number.isFinite(Number(localRay?.pos?.z)) ? Number(localRay.pos.z) : null,
+            },
+            dir: {
+              x: Number.isFinite(Number(localRay?.dir?.x)) ? Number(localRay.dir.x) : null,
+              y: Number.isFinite(Number(localRay?.dir?.y)) ? Number(localRay.dir.y) : null,
+              z: Number.isFinite(Number(localRay?.dir?.z)) ? Number(localRay.dir.z) : null,
+            }
+          },
+          intersectionInput: intersectionParamsForDiagnostics
         });
         break;
       }

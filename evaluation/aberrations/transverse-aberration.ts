@@ -666,7 +666,10 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     });
     
     if (!chiefRay) {
-        console.warn('⚠️ 主光線が見つかりません');
+        const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+        if (!(g && g.__cooptRequirementRustProbe === true)) {
+            console.warn('⚠️ 主光線が見つかりません');
+        }
         return {
             fieldSetting: fieldSetting,
             rayType: 'meridional',
@@ -1017,7 +1020,10 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     });
     
     if (!chiefRay) {
-        console.warn('⚠️ 主光線が見つかりません');
+        const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+        if (!(g && g.__cooptRequirementRustProbe === true)) {
+            console.warn('⚠️ 主光線が見つかりません');
+        }
         return {
             fieldSetting: fieldSetting,
             rayType: 'sagittal',
@@ -2553,10 +2559,15 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
 
         // クロスビーム生成でオブジェクト点数を1に設定
         // options.rayCountが指定されていればそれを使用、なければデフォルト51
+        const targetSurfaceIndexOption = Number.isInteger((options as any)?.targetSurfaceIndex)
+            ? Math.max(0, Math.min((options as any).targetSurfaceIndex, Math.max(0, opticalSystemRows.length - 1)))
+            : null;
+
         const crossBeamOptions = {
             rayCount: (options as any).rayCount || 51, // ユーザー指定の光線数または非点収差計算用のデフォルト値
             wavelength: wavelength,
-            colorMode: 'segment'
+            colorMode: 'segment',
+            targetSurfaceIndex: targetSurfaceIndexOption
         };
         
         let crossBeamData = null;
@@ -2622,7 +2633,46 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
             ? (options as any).targetSurfaceIndex
             : fallbackTargetSurfaceIndex;
 
-        let chiefRay = rayGroup.rays.find(ray => ray.rayType === 'chief');
+        let chiefRay = null;
+        if (Array.isArray(rayGroup.rays)) {
+            const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
+
+            const selectClosestToStopCenter = (rays: any[]) => {
+                let bestRay = null;
+                let bestDist2 = Infinity;
+                for (const ray of rays) {
+                    const path = ray?.rayPathToTarget || ray?.path;
+                    if (!Array.isArray(path) || path.length === 0) continue;
+                    const idx = (stopPointIndex !== null && stopPointIndex >= 0 && stopPointIndex < path.length)
+                        ? stopPointIndex
+                        : null;
+                    if (idx === null) continue;
+                    const p = path[idx];
+                    const x = Number(p?.x);
+                    const y = Number(p?.y);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                    const d2 = x * x + y * y;
+                    if (d2 < bestDist2) {
+                        bestDist2 = d2;
+                        bestRay = ray;
+                    }
+                }
+                return bestRay;
+            };
+
+            if (chiefRayDefinition === 'stop-center') {
+                chiefRay = selectClosestToStopCenter(rayGroup.rays);
+            }
+
+            if (!chiefRay) {
+                const chiefCandidates = rayGroup.rays.filter(ray => ray?.rayType === 'chief');
+                if (chiefCandidates.length === 1) {
+                    chiefRay = chiefCandidates[0];
+                } else if (chiefCandidates.length > 1) {
+                    chiefRay = selectClosestToStopCenter(chiefCandidates);
+                }
+            }
+        }
 
         if (chiefRayDefinition !== 'stop-center' && Array.isArray(rayGroup.rays)) {
             // Evaluate at stop surface instead of image surface
@@ -2710,7 +2760,42 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
         }
 
         if (!chiefRay) {
-            console.warn('⚠️ 主光線が見つかりません');
+            const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+            const alreadyRetried = !!((options as any)?.__chiefRayJsRetry);
+            const rustOverrideActive = !!(g && g.__cooptTraceOptionsOverride && g.__cooptTraceOptionsOverride.useRustWasm === true);
+            if (rustOverrideActive && !alreadyRetried) {
+                const prevOverride = g.__cooptTraceOptionsOverride;
+                try {
+                    g.__cooptTraceOptionsOverride = {
+                        ...(prevOverride && typeof prevOverride === 'object' ? prevOverride : {}),
+                        useRustWasm: false,
+                        requireRustWasm: false
+                    };
+                    const retry = calculateChiefRayNewton(
+                        opticalSystemRows,
+                        fieldSetting,
+                        wavelength,
+                        rayType,
+                        {
+                            ...(options && typeof options === 'object' ? options : {}),
+                            __chiefRayJsRetry: true
+                        }
+                    );
+                    if (retry && (retry.success === true || retry.convergence === true)) {
+                        return {
+                            ...retry,
+                            chiefRayFallback: 'js-retry-from-rust'
+                        };
+                    }
+                } catch (_) {
+                    // ignore retry errors and continue original error path
+                } finally {
+                    g.__cooptTraceOptionsOverride = prevOverride;
+                }
+            }
+            if (!(g && g.__cooptRequirementRustProbe === true)) {
+                console.warn('⚠️ 主光線が見つかりません');
+            }
             return { 
                 success: false,
                 convergence: false, 
