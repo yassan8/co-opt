@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-03-03T09:21:47.022Z",
-  "startedAt": "2026-03-03T09:21:46.662Z",
+  "timestamp": "2026-03-03T09:13:58.842Z",
+  "startedAt": "2026-03-03T09:13:58.650Z",
   "thresholds": {
     "raytraceMaxMismatchRate": 0,
     "raytraceMaxSuccessMismatchRate": 0,
@@ -22,15 +22,15 @@
   },
   "controls": {
     "startFrom": "raytrace",
-    "output": "diagnostics/results/release-gate-2026-03-03T09-21-46-663Z.json",
+    "output": "diagnostics/results/release-gate-2026-03-03T09-13-58-651Z.json",
     "checkpoint": "diagnostics/results/release-gate-checkpoint.json"
   },
   "steps": {
     "raytrace": {
       "passed": true,
       "skipped": false,
-      "golden": "diagnostics/results/raytrace-golden-2026-03-03T09-21-46-801Z-aperture.json",
-      "analysis": "diagnostics/results/raytrace-golden-analysis-2026-03-03T09-21-47-010Z.json"
+      "golden": "diagnostics/results/raytrace-golden-2026-03-03T09-13-58-688Z-aperture.json",
+      "analysis": "diagnostics/results/raytrace-golden-analysis-2026-03-03T09-13-58-831Z.json"
     },
     "opd": {
       "passed": false,

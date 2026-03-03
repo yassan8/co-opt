@@ -1,0 +1,80 @@
+{
+  "timestamp": "2026-03-03T09:29:29.347Z",
+  "inputPath": "diagnostics/results/raytrace-golden-ci-jsonly-test.json",
+  "normalization": {
+    "oplEpsilonUm": 0.001
+  },
+  "totals": {
+    "comparedRays": 0,
+    "mismatchCount": 0,
+    "mismatchRate": 0,
+    "successMismatch": 0,
+    "successMismatchRate": 0,
+    "oplCompared": 0,
+    "meanOplAbsDeltaUm": 0,
+    "maxOplAbsDeltaUm": 0
+  },
+  "statusPairs": [],
+  "failureDiagnostics": {
+    "js": {
+      "capturedFailure": 4,
+      "topKinds": [
+        {
+          "kind": "PHYSICAL_APERTURE_BLOCK",
+          "count": 4
+        }
+      ],
+      "topSurfaces": [
+        {
+          "surfaceIndex": "11",
+          "count": 2
+        },
+        {
+          "surfaceIndex": "6",
+          "count": 2
+        }
+      ]
+    },
+    "rust": null
+  },
+  "radiusBins": [],
+  "mismatchSamples": [],
+  "note": "Rust output is unavailable in this environment; JS-only fallback mode skips cross-engine comparison.",
+  "requirementGate": {
+    "enabled": true,
+    "passed": true,
+    "thresholds": {
+      "maxMismatchRate": 0,
+      "maxSuccessMismatchRate": 0,
+      "maxMeanOplAbsDeltaUm": 0,
+      "maxOplAbsDeltaUm": 0
+    },
+    "checks": [
+      {
+        "name": "mismatchRate",
+        "actual": 0,
+        "limit": 0,
+        "pass": true
+      },
+      {
+        "name": "successMismatchRate",
+        "actual": 0,
+        "limit": 0,
+        "pass": true
+      },
+      {
+        "name": "meanOplAbsDeltaUm",
+        "actual": 0,
+        "limit": 0,
+        "pass": true
+      },
+      {
+        "name": "maxOplAbsDeltaUm",
+        "actual": 0,
+        "limit": 0,
+        "pass": true
+      }
+    ],
+    "failedChecks": []
+  }
+}
