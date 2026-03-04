@@ -20,6 +20,7 @@ export const intersect_aspheric_rt10: (a: number, b: number, c: number, d: numbe
 export const intersect_aspheric_rt10_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
 export const malloc: (a: number) => number;
 export const matrix_vector_multiply: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+export const normal_eq_matvec: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
 export const optimize_one_iter_from_buffers: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
 export const optimize_system_in_wasm: (a: number, b: number) => [number, number, number, number];
 export const qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];

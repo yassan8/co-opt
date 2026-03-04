@@ -330,6 +330,28 @@ function fieldSettingCacheKey(fieldSetting: any): string {
     }
 }
 
+const __taFastCrossEvalCacheMax = 512;
+const __taFastCrossEvalCache = new Map<string, any>();
+
+function getTaFastCrossEvalCache(key: string): any {
+    if (!key || !__taFastCrossEvalCache.has(key)) return null;
+    const value = __taFastCrossEvalCache.get(key);
+    __taFastCrossEvalCache.delete(key);
+    __taFastCrossEvalCache.set(key, value);
+    return value;
+}
+
+function setTaFastCrossEvalCache(key: string, value: any): void {
+    if (!key) return;
+    if (__taFastCrossEvalCache.has(key)) __taFastCrossEvalCache.delete(key);
+    while (__taFastCrossEvalCache.size >= __taFastCrossEvalCacheMax) {
+        const oldest = __taFastCrossEvalCache.keys().next();
+        if (!oldest || oldest.done) break;
+        __taFastCrossEvalCache.delete(oldest.value);
+    }
+    __taFastCrossEvalCache.set(key, value);
+}
+
 function parseOverrideKey(variableId: any): { blockId: string | null; key: string | null } {
     if (typeof variableId !== 'string') return { blockId: null, key: null };
     const parts = variableId.split('.');
@@ -1659,6 +1681,29 @@ class MeritFunctionEditor {
             : 'total';
         const param4Raw = (operand.param4 !== undefined && operand.param4 !== null) ? String(operand.param4).trim() : '';
         let rayCount = (param4Raw === '') ? 51 : Math.floor(Number(param4Raw));
+        let taCrossEvalCacheKey = '';
+        let taCrossEvalCacheEnabled = false;
+        let taCrossEvalCacheEvalXKeyApprox = '';
+        let taCrossEvalCacheRunId = '';
+
+        if (param4Raw === '') {
+            try {
+                const meritFast = (typeof globalThis !== 'undefined' && (globalThis as any).__cooptMeritFastMode)
+                    ? (globalThis as any).__cooptMeritFastMode
+                    : null;
+                const fastTaRayCount = Number(meritFast?.taRayCount);
+                if (Number.isFinite(fastTaRayCount) && fastTaRayCount >= 3) {
+                    rayCount = Math.floor(fastTaRayCount);
+                }
+
+                taCrossEvalCacheEnabled = meritFast?.enabled === true && meritFast?.taCrossEvalCache !== false;
+                taCrossEvalCacheEvalXKeyApprox = String((globalThis as any).__cooptEvalXKeyApproxTa || '').trim();
+                taCrossEvalCacheRunId = String((globalThis as any).__cooptTaEvalRunId || '').trim();
+            } catch (_) {
+                // ignore and keep default rayCount
+            }
+        }
+
         if (!Number.isFinite(rayCount) || rayCount < 3) rayCount = 51;
         if (rayCount > 5000) rayCount = 5000;
 
@@ -1685,6 +1730,20 @@ class MeritFunctionEditor {
         const cfgKey = (operand?.configId !== undefined && operand?.configId !== null)
             ? String(operand.configId)
             : 'active';
+
+        if (taCrossEvalCacheEnabled && taCrossEvalCacheEvalXKeyApprox && taCrossEvalCacheRunId) {
+            taCrossEvalCacheKey = [
+                'ta-fast-cross',
+                taCrossEvalCacheRunId,
+                cfgKey,
+                String(wavelength),
+                String(objectIndex0),
+                String(imageSurfaceIndex),
+                String(rayCount),
+                taCrossEvalCacheEvalXKeyApprox
+            ].join('|');
+        }
+
         const taCacheKey = [
             'ta-rms',
             cfgKey,
@@ -1697,10 +1756,17 @@ class MeritFunctionEditor {
 
         let results: any = null;
         try {
+            if (taCrossEvalCacheKey) {
+                const crossCached = getTaFastCrossEvalCache(taCrossEvalCacheKey);
+                if (crossCached) {
+                    results = crossCached;
+                }
+            }
+
             const cached = this._runtimeCache ? this._runtimeCache.get(taCacheKey) : null;
-            if (cached) {
+            if (!results && cached) {
                 results = cached;
-            } else {
+            } else if (!results) {
                 results = calculateTransverseAberration(
                     opticalSystemData,
                     imageSurfaceIndex,
@@ -1710,6 +1776,7 @@ class MeritFunctionEditor {
                     { lightweight: true }
                 ) as any;
                 if (this._runtimeCache) this._runtimeCache.set(taCacheKey, results);
+                if (taCrossEvalCacheKey) setTaFastCrossEvalCache(taCrossEvalCacheKey, results);
             }
         } catch (err) {
             console.warn('⚠️ TA_RMS_UM: transverse aberration calculation failed', err);

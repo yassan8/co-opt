@@ -4,6 +4,7 @@ type OptimizerWasmApi = {
   solve_spd_linear_system?: (aFlat: Float64Array, n: number, b: Float64Array) => Float64Array;
   solve_linear_system?: (aFlat: Float64Array, n: number, b: Float64Array) => Float64Array;
   build_normal_equations?: (jFlat: Float64Array, m: number, n: number, r: Float64Array) => Float64Array;
+  normal_eq_matvec?: (jFlat: Float64Array, m: number, n: number, v: Float64Array, damping: number) => Float64Array;
   generate_fd_perturbation_points?: (x: Float64Array, steps: Float64Array, n: number) => Float64Array;
   assemble_fd_jacobian?: (r0: Float64Array, rBatches: Float64Array, m: number, n: number, steps: Float64Array) => Float64Array;
   optimize_system_in_wasm?: (payloadJson: string) => any;
@@ -333,6 +334,7 @@ async function preloadOptimizerDirectWasmModule(): Promise<OptimizerWasmApi | nu
           solve_spd_linear_system: (typeof mod.solve_spd_linear_system === 'function') ? mod.solve_spd_linear_system : undefined,
           solve_linear_system: (typeof mod.solve_linear_system === 'function') ? mod.solve_linear_system : undefined,
           build_normal_equations: (typeof mod.build_normal_equations === 'function') ? mod.build_normal_equations : undefined,
+          normal_eq_matvec: (typeof mod.normal_eq_matvec === 'function') ? mod.normal_eq_matvec : undefined,
           generate_fd_perturbation_points: (typeof mod.generate_fd_perturbation_points === 'function') ? mod.generate_fd_perturbation_points : undefined,
           assemble_fd_jacobian: (typeof mod.assemble_fd_jacobian === 'function') ? mod.assemble_fd_jacobian : undefined,
           optimize_system_in_wasm: (typeof mod.optimize_system_in_wasm === 'function') ? mod.optimize_system_in_wasm : undefined,
@@ -1019,6 +1021,74 @@ export function matrixVectorMultiplyWasm(matrix: number[][], x: number[]): numbe
     if (out.length !== rows) return null;
     for (const v of out) {
       if (!Number.isFinite(v)) return null;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Matrix-free normal equation matvec: result = (J^T J + damping * I) * v
+ */
+export function normalEqMatvecWasm(jacobian: number[][], v: number[], damping: number): number[] | null {
+  const m = jacobian.length;
+  if (m <= 0) return null;
+  const n = Array.isArray(jacobian[0]) ? jacobian[0].length : 0;
+  if (n <= 0 || v.length !== n) return null;
+
+  const jFlat = flattenRectMatrix(jacobian, m, n);
+  if (!jFlat) return null;
+
+  return normalEqMatvecFlatWasm(jFlat, m, n, v, damping);
+}
+
+/**
+ * Matrix-free normal equation matvec: result = (J^T J + damping * I) * v
+ * Accepts pre-flattened row-major Jacobian to avoid repeated flatten overhead.
+ */
+export function normalEqMatvecFlatWasm(
+  jFlatInput: Float64Array | number[],
+  m: number,
+  n: number,
+  v: number[],
+  damping: number
+): number[] | null {
+  const api = getOptimizerApiSync();
+  if (!api || typeof api.normal_eq_matvec !== 'function') {
+    return null;
+  }
+
+  const mm = Math.max(0, Math.floor(Number(m)));
+  const nn = Math.max(0, Math.floor(Number(n)));
+  if (mm <= 0 || nn <= 0 || !Array.isArray(v) || v.length !== nn) return null;
+
+  let jFlat: Float64Array | null = null;
+  if (jFlatInput instanceof Float64Array) {
+    if (jFlatInput.length !== mm * nn) return null;
+    jFlat = jFlatInput;
+  } else if (Array.isArray(jFlatInput)) {
+    if (jFlatInput.length !== mm * nn) return null;
+    jFlat = toFloat64Vector(jFlatInput, mm * nn);
+  }
+  if (!jFlat) return null;
+
+  for (let i = 0; i < jFlat.length; i++) {
+    if (!Number.isFinite(Number(jFlat[i]))) return null;
+  }
+
+  const vVec = toFloat64Vector(v, nn);
+  if (!vVec) return null;
+
+  const lambda = Number(damping);
+  if (!Number.isFinite(lambda)) return null;
+
+  try {
+    const result = api.normal_eq_matvec(jFlat, mm, nn, vVec, lambda);
+    const out = Array.from(result).map((value) => Number(value));
+    if (out.length !== nn) return null;
+    for (const value of out) {
+      if (!Number.isFinite(value)) return null;
     }
     return out;
   } catch {

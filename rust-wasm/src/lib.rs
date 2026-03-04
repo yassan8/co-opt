@@ -2081,6 +2081,71 @@ pub fn build_normal_equations(j_flat: &[f64], m: usize, n: usize, r: &[f64]) -> 
 }
 
 #[wasm_bindgen]
+pub fn normal_eq_matvec(j_flat: &[f64], m: usize, n: usize, v: &[f64], damping: f64) -> Vec<f64> {
+    if n == 0 {
+        return vec![];
+    }
+    if m == 0 || j_flat.len() != m * n || v.len() != n || !damping.is_finite() {
+        return vec![f64::NAN; n];
+    }
+    if j_flat.iter().any(|x| !x.is_finite()) || v.iter().any(|x| !x.is_finite()) {
+        return vec![f64::NAN; n];
+    }
+
+    let mut jv = vec![0.0_f64; m];
+    for i in 0..m {
+        let row_base = i * n;
+        let row = &j_flat[row_base..(row_base + n)];
+        let mut s = 0.0_f64;
+        let mut j = 0usize;
+        while j + 3 < n {
+            s += row[j] * v[j]
+                + row[j + 1] * v[j + 1]
+                + row[j + 2] * v[j + 2]
+                + row[j + 3] * v[j + 3];
+            j += 4;
+        }
+        while j < n {
+            s += row[j] * v[j];
+            j += 1;
+        }
+        if !s.is_finite() {
+            return vec![f64::NAN; n];
+        }
+        jv[i] = s;
+    }
+
+    let mut out = vec![0.0_f64; n];
+    for i in 0..m {
+        let ji = jv[i];
+        let row_base = i * n;
+        let row = &j_flat[row_base..(row_base + n)];
+        let mut j = 0usize;
+        while j + 3 < n {
+            out[j] += row[j] * ji;
+            out[j + 1] += row[j + 1] * ji;
+            out[j + 2] += row[j + 2] * ji;
+            out[j + 3] += row[j + 3] * ji;
+            j += 4;
+        }
+        while j < n {
+            out[j] += row[j] * ji;
+            j += 1;
+        }
+    }
+
+    for j in 0..n {
+        let value = out[j] + damping * v[j];
+        if !value.is_finite() {
+            return vec![f64::NAN; n];
+        }
+        out[j] = value;
+    }
+
+    out
+}
+
+#[wasm_bindgen]
 pub fn generate_fd_perturbation_points(x: &[f64], steps: &[f64], n: usize) -> Vec<f64> {
     if n == 0 {
         return vec![];
@@ -2980,9 +3045,20 @@ pub fn matrix_vector_multiply(a_flat: &[f64], x: &[f64], rows: usize, cols: usiz
     
     let mut result = vec![0.0; rows];
     for i in 0..rows {
+        let row_base = i * cols;
+        let row = &a_flat[row_base..(row_base + cols)];
         let mut sum = 0.0;
-        for j in 0..cols {
-            sum += a_flat[i * cols + j] * x[j];
+        let mut j = 0usize;
+        while j + 3 < cols {
+            sum += row[j] * x[j]
+                + row[j + 1] * x[j + 1]
+                + row[j + 2] * x[j + 2]
+                + row[j + 3] * x[j + 3];
+            j += 4;
+        }
+        while j < cols {
+            sum += row[j] * x[j];
+            j += 1;
         }
         result[i] = sum;
     }

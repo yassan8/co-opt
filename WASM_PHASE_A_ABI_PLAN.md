@@ -272,6 +272,8 @@ Phase A完了後:
 - Phase Bで **疎FD/解析微分導入**（評価回数削減）
 - Phase Cで **行列フリー反復法 + SIMD**（計算核強化）
 
+詳細計画: `WASM_PHASE_C_PLAN.md`
+
 この順序により、
 - Phase A: データ経路最適化（固定コスト削減）
 - Phase B/C: 計算量そのものを削減
