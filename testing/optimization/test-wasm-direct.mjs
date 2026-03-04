@@ -2,7 +2,7 @@
  * Quick test to verify WASM exports are available
  */
 
-const mod = await import('../../public/rust-wasm/pkg/surface_origins.js');
+const mod = await import('../../rust-wasm/pkg/surface_origins.js');
 
 console.log('WASM Module loaded');
 console.log('Has vector_add_scaled?', typeof mod.vector_add_scaled);

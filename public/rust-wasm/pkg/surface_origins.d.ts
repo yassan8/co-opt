@@ -53,6 +53,8 @@ export function fft_2d_forward(real_ptr: number, imag_ptr: number, rows: number,
  */
 export function fft_2d_inverse(real_ptr: number, imag_ptr: number, rows: number, cols: number, real_out_ptr: number, imag_out_ptr: number): any;
 
+export function free(ptr: number, size: number): void;
+
 export function generate_annular_offsets_flat(ray_count: number, max_radius: number, ring_count: number): Float64Array;
 
 export function generate_centered_grid_offsets_flat(ray_count: number, half_extent: number): Float64Array;
@@ -65,11 +67,15 @@ export function intersect_aspheric_rt10(ray: Float64Array, params: Float64Array,
 
 export function intersect_aspheric_rt10_batch(rays: Float64Array, ray_count: number, params: Float64Array, mode_odd: number, max_iter: number, tol: number): Float64Array;
 
+export function malloc(size: number): number;
+
 /**
  * Matrix-vector multiplication: result = A * x
  * A is stored in row-major order (flat array)
  */
 export function matrix_vector_multiply(a_flat: Float64Array, x: Float64Array, rows: number, cols: number): Float64Array;
+
+export function optimize_one_iter_from_buffers(x_ptr: number, steps_ptr: number, r0_ptr: number, r_batches_ptr: number, var_scales_ptr: number, out_dx_ptr: number, out_x_next_ptr: number, out_meta_ptr: number, n: number, m: number, damping: number, trust_radius: number): number;
 
 export function optimize_system_in_wasm(payload_json: string): string;
 
@@ -177,13 +183,16 @@ export interface InitOutput {
     readonly cholesky_factorization: (a: number, b: number, c: number) => [number, number];
     readonly fft_2d_forward: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly fft_2d_inverse: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly free: (a: number, b: number) => void;
     readonly generate_annular_offsets_flat: (a: number, b: number, c: number) => [number, number];
     readonly generate_centered_grid_offsets_flat: (a: number, b: number) => [number, number];
     readonly generate_fd_perturbation_points: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly generate_parallel_start_points_flat: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
     readonly intersect_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly intersect_aspheric_rt10_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+    readonly malloc: (a: number) => number;
     readonly matrix_vector_multiply: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly optimize_one_iter_from_buffers: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly optimize_system_in_wasm: (a: number, b: number) => [number, number, number, number];
     readonly qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];
     readonly reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];

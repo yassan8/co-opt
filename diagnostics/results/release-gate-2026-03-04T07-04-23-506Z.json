@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-03-04T07:10:14.414Z",
-  "startedAt": "2026-03-04T07:10:14.107Z",
+  "timestamp": "2026-03-04T07:05:06.889Z",
+  "startedAt": "2026-03-04T07:04:23.505Z",
   "thresholds": {
     "raytraceMaxMismatchRate": 0,
     "raytraceMaxSuccessMismatchRate": 0,
@@ -26,37 +26,37 @@
     "maxIter": 20
   },
   "controls": {
-    "startFrom": "raytrace",
-    "output": "diagnostics/results/release-gate-2026-03-04T07-10-14-107Z.json",
+    "startFrom": "ta",
+    "output": "diagnostics/results/release-gate-2026-03-04T07-04-23-506Z.json",
     "checkpoint": "diagnostics/results/release-gate-checkpoint.json"
   },
   "steps": {
     "raytrace": {
-      "passed": true,
-      "skipped": false,
-      "golden": "diagnostics/results/raytrace-golden-2026-03-04T07-10-14-239Z-aperture.json",
-      "analysis": "diagnostics/results/raytrace-golden-analysis-2026-03-04T07-10-14-402Z.json"
+      "passed": false,
+      "skipped": true,
+      "golden": null,
+      "analysis": null
     },
     "opd": {
       "passed": false,
-      "skipped": false,
+      "skipped": true,
       "result": null,
       "analysis": null
     },
     "ta": {
       "passed": false,
       "skipped": false,
-      "result": null,
-      "analysis": null
+      "result": "diagnostics/results/ta-rms-lightweight-vs-statsonly-sweep-r11.json",
+      "analysis": "diagnostics/results/ta-rms-lightweight-vs-statsonly-analysis-2026-03-04T07-05-06-881Z.json"
     },
     "kkt": {
       "passed": false,
       "skipped": false,
-      "result": null,
-      "analysis": null
+      "result": "diagnostics/results/kkt-e2e-after-ta-fastpath.json",
+      "analysis": "diagnostics/results/kkt-e2e-analysis-final-short-2026-03-02.json"
     }
   },
   "passed": false,
-  "failedStep": null,
-  "error": null
+  "failedStep": "ta",
+  "error": "diagnostics/ta-rms-lightweight-mode-auto.mjs failed with code 2"
 }

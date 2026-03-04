@@ -3,6 +3,13 @@ use wasm_bindgen::prelude::*;
 use js_sys::{Float64Array, Function};
 
 const EPS_R: f64 = 1e-10;
+const OPT_STATUS_OK: u32 = 0;
+const OPT_STATUS_INVALID_INPUT: u32 = 1;
+const OPT_STATUS_NON_FINITE_INPUT: u32 = 2;
+const OPT_STATUS_JACOBIAN_FAILURE: u32 = 3;
+const OPT_STATUS_NORMAL_EQ_FAILURE: u32 = 4;
+const OPT_STATUS_LINEAR_SOLVE_FAILURE: u32 = 5;
+const OPT_STATUS_INTERNAL_ERROR: u32 = 6;
 
 fn get_param(params: &[f64], idx: usize, default: f64) -> f64 {
     if idx < params.len() {
@@ -2146,6 +2153,113 @@ pub fn assemble_fd_jacobian(
     jac
 }
 
+fn optimize_one_iteration_core(
+    x: &[f64],
+    steps: &[f64],
+    r0: &[f64],
+    r_batches: &[f64],
+    damping_in: f64,
+    trust_radius_in: f64,
+    var_scales_in: Option<&[f64]>,
+) -> Result<(Vec<f64>, Vec<f64>, f64, f64, f64, usize, usize), &'static str> {
+    let n = x.len();
+    let m = r0.len();
+
+    if n == 0 || m == 0 {
+        return Err("invalid-input");
+    }
+    if steps.len() != n || r_batches.len() != m * n {
+        return Err("invalid-input");
+    }
+    if x.iter().any(|v| !v.is_finite())
+        || steps.iter().any(|v| !v.is_finite() || *v == 0.0)
+        || r0.iter().any(|v| !v.is_finite())
+        || r_batches.iter().any(|v| !v.is_finite())
+    {
+        return Err("non-finite-input");
+    }
+
+    let damping = if damping_in.is_finite() && damping_in >= 0.0 { damping_in } else { 1e-6 };
+    let trust_radius = if trust_radius_in.is_finite() && trust_radius_in > 0.0 { trust_radius_in } else { 1.0 };
+
+    let mut var_scales = vec![1.0_f64; n];
+    if let Some(scales) = var_scales_in {
+        if scales.len() == n {
+            for i in 0..n {
+                let s = scales[i].abs();
+                var_scales[i] = if s.is_finite() && s > 1e-18 { s } else { 1.0 };
+            }
+        }
+    }
+
+    let j_flat = assemble_fd_jacobian(r0, r_batches, m, n, steps);
+    if j_flat.len() != m * n || j_flat.iter().any(|v| !v.is_finite()) {
+        return Err("jacobian-failure");
+    }
+
+    let packed_ne = build_normal_equations(&j_flat, m, n, r0);
+    if packed_ne.len() != n * n + n || packed_ne.iter().any(|v| !v.is_finite()) {
+        return Err("normal-eq-failure");
+    }
+
+    let mut a = packed_ne[0..(n * n)].to_vec();
+    let g = &packed_ne[(n * n)..];
+    for i in 0..n {
+        a[i * n + i] += damping;
+    }
+    let rhs: Vec<f64> = g.iter().map(|v| -(*v)).collect();
+
+    let dx = solve_spd_linear_system_internal(&a, n, &rhs)
+        .or_else(|| solve_linear_system_internal(&a, n, &rhs))
+        .ok_or("linear-solve-failure")?;
+
+    let mut dx_limited = dx;
+    let mut max_scaled = 0.0_f64;
+    for i in 0..n {
+        let s = var_scales[i];
+        let scaled = dx_limited[i] / s;
+        let abs_scaled = scaled.abs();
+        if abs_scaled.is_finite() && abs_scaled > max_scaled {
+            max_scaled = abs_scaled;
+        }
+    }
+    if max_scaled.is_finite() && max_scaled > trust_radius && max_scaled > 0.0 {
+        let f = trust_radius / max_scaled;
+        for i in 0..n {
+            dx_limited[i] *= f;
+        }
+    }
+
+    let mut x_next = vec![0.0_f64; n];
+    for i in 0..n {
+        x_next[i] = x[i] + dx_limited[i];
+    }
+
+    let mut g_dot_dx = 0.0_f64;
+    for i in 0..n {
+        g_dot_dx += g[i] * dx_limited[i];
+    }
+    let mut dx_a_dx = 0.0_f64;
+    for i in 0..n {
+        let mut adx_i = 0.0_f64;
+        for j in 0..n {
+            adx_i += a[i * n + j] * dx_limited[j];
+        }
+        dx_a_dx += dx_limited[i] * adx_i;
+    }
+    let predicted_reduction = -(g_dot_dx + 0.5 * dx_a_dx);
+
+    Ok((
+        dx_limited,
+        x_next,
+        if predicted_reduction.is_finite() { predicted_reduction } else { 0.0 },
+        damping,
+        trust_radius,
+        m,
+        n,
+    ))
+}
+
 #[wasm_bindgen]
 pub fn optimize_system_in_wasm(payload_json: String) -> Result<String, JsValue> {
     let payload: Value = serde_json::from_str(&payload_json)
@@ -2250,75 +2364,123 @@ pub fn optimize_system_in_wasm(payload_json: String) -> Result<String, JsValue> 
             }
         }
     }
-
-    let j_flat = assemble_fd_jacobian(&r0, &r_batches, m, n, &steps);
-    if j_flat.len() != m * n || j_flat.iter().any(|v| !v.is_finite()) {
-        return Err(JsValue::from_str("failed to build Jacobian from perturbed residuals"));
-    }
-
-    let packed_ne = build_normal_equations(&j_flat, m, n, &r0);
-    if packed_ne.len() != n * n + n || packed_ne.iter().any(|v| !v.is_finite()) {
-        return Err(JsValue::from_str("failed to build normal equations"));
-    }
-
-    let mut a = packed_ne[0..(n * n)].to_vec();
-    let g = &packed_ne[(n * n)..];
-    for i in 0..n {
-        a[i * n + i] += damping;
-    }
-    let rhs: Vec<f64> = g.iter().map(|v| -(*v)).collect();
-
-    let dx = solve_spd_linear_system_internal(&a, n, &rhs)
-        .or_else(|| solve_linear_system_internal(&a, n, &rhs))
-        .ok_or_else(|| JsValue::from_str("failed to solve damped normal equations"))?;
-
-    let mut dx_limited = dx;
-    let mut max_scaled = 0.0_f64;
-    for i in 0..n {
-        let s = var_scales[i];
-        let scaled = dx_limited[i] / s;
-        let abs_scaled = scaled.abs();
-        if abs_scaled.is_finite() && abs_scaled > max_scaled {
-            max_scaled = abs_scaled;
-        }
-    }
-    if max_scaled.is_finite() && max_scaled > trust_radius && max_scaled > 0.0 {
-        let f = trust_radius / max_scaled;
-        for i in 0..n {
-            dx_limited[i] *= f;
-        }
-    }
-
-    let mut x_next = vec![0.0_f64; n];
-    for i in 0..n {
-        x_next[i] = x[i] + dx_limited[i];
-    }
-
-    let mut g_dot_dx = 0.0_f64;
-    for i in 0..n {
-        g_dot_dx += g[i] * dx_limited[i];
-    }
-    let mut dx_a_dx = 0.0_f64;
-    for i in 0..n {
-        let mut adx_i = 0.0_f64;
-        for j in 0..n {
-            adx_i += a[i * n + j] * dx_limited[j];
-        }
-        dx_a_dx += dx_limited[i] * adx_i;
-    }
-    let predicted_reduction = -(g_dot_dx + 0.5 * dx_a_dx);
+    let (dx_limited, x_next, predicted_reduction, _, _, m_shape, n_shape) =
+        optimize_one_iteration_core(&x, &steps, &r0, &r_batches, damping, trust_radius, Some(&var_scales))
+            .map_err(|err| JsValue::from_str(err))?;
 
     Ok(serde_json::to_string(&serde_json::json!({
         "ok": true,
         "status": "pilot-one-iteration",
         "xNext": x_next,
         "dx": dx_limited,
-        "predictedReduction": if predicted_reduction.is_finite() { predicted_reduction } else { 0.0 },
-        "jacobianShape": [m, n],
+        "predictedReduction": predicted_reduction,
+        "jacobianShape": [m_shape, n_shape],
         "usedDamping": damping,
         "usedTrustRegionRadius": trust_radius
     }))
     .map_err(|err| JsValue::from_str(&format!("serialize error: {}", err)))?)
+}
+
+#[wasm_bindgen]
+pub fn optimize_one_iter_from_buffers(
+    x_ptr: u32,
+    steps_ptr: u32,
+    r0_ptr: u32,
+    r_batches_ptr: u32,
+    var_scales_ptr: u32,
+    out_dx_ptr: u32,
+    out_x_next_ptr: u32,
+    out_meta_ptr: u32,
+    n: u32,
+    m: u32,
+    damping: f64,
+    trust_radius: f64,
+) -> u32 {
+    let n_usize = n as usize;
+    let m_usize = m as usize;
+    if n_usize == 0 || m_usize == 0 {
+        return OPT_STATUS_INVALID_INPUT;
+    }
+
+    let batch_len = match n_usize.checked_mul(m_usize) {
+        Some(v) => v,
+        None => return OPT_STATUS_INVALID_INPUT,
+    };
+
+    if x_ptr == 0
+        || steps_ptr == 0
+        || r0_ptr == 0
+        || r_batches_ptr == 0
+        || out_dx_ptr == 0
+        || out_x_next_ptr == 0
+        || out_meta_ptr == 0
+    {
+        return OPT_STATUS_INVALID_INPUT;
+    }
+
+    let result = std::panic::catch_unwind(|| {
+        unsafe {
+            let x = std::slice::from_raw_parts(x_ptr as *const f64, n_usize);
+            let steps = std::slice::from_raw_parts(steps_ptr as *const f64, n_usize);
+            let r0 = std::slice::from_raw_parts(r0_ptr as *const f64, m_usize);
+            let r_batches = std::slice::from_raw_parts(r_batches_ptr as *const f64, batch_len);
+            let scales_opt = if var_scales_ptr == 0 {
+                None
+            } else {
+                Some(std::slice::from_raw_parts(var_scales_ptr as *const f64, n_usize))
+            };
+
+            let (dx, x_next, predicted_reduction, used_damping, used_trust_radius, jac_m, jac_n) =
+                optimize_one_iteration_core(x, steps, r0, r_batches, damping, trust_radius, scales_opt)?;
+
+            let out_dx = std::slice::from_raw_parts_mut(out_dx_ptr as *mut f64, n_usize);
+            let out_x_next = std::slice::from_raw_parts_mut(out_x_next_ptr as *mut f64, n_usize);
+            let out_meta = std::slice::from_raw_parts_mut(out_meta_ptr as *mut f64, 8);
+
+            out_dx.copy_from_slice(&dx);
+            out_x_next.copy_from_slice(&x_next);
+
+            out_meta[0] = predicted_reduction;
+            out_meta[1] = used_damping;
+            out_meta[2] = used_trust_radius;
+            out_meta[3] = jac_m as f64;
+            out_meta[4] = jac_n as f64;
+            out_meta[5] = 0.0;
+            out_meta[6] = 0.0;
+            out_meta[7] = 0.0;
+
+            Ok::<(), &'static str>(())
+        }
+    });
+
+    match result {
+        Ok(Ok(())) => OPT_STATUS_OK,
+        Ok(Err("invalid-input")) => OPT_STATUS_INVALID_INPUT,
+        Ok(Err("non-finite-input")) => OPT_STATUS_NON_FINITE_INPUT,
+        Ok(Err("jacobian-failure")) => OPT_STATUS_JACOBIAN_FAILURE,
+        Ok(Err("normal-eq-failure")) => OPT_STATUS_NORMAL_EQ_FAILURE,
+        Ok(Err("linear-solve-failure")) => OPT_STATUS_LINEAR_SOLVE_FAILURE,
+        Ok(Err(_)) => OPT_STATUS_INTERNAL_ERROR,
+        Err(_) => OPT_STATUS_INTERNAL_ERROR,
+    }
+}
+
+#[wasm_bindgen]
+pub fn malloc(size: usize) -> usize {
+    let mut buffer = Vec::<u8>::with_capacity(size);
+    let ptr = buffer.as_mut_ptr();
+    std::mem::forget(buffer);
+    ptr as usize
+}
+
+#[wasm_bindgen]
+pub fn free(ptr: usize, size: usize) {
+    if ptr == 0 || size == 0 {
+        return;
+    }
+    unsafe {
+        let _ = Vec::<u8>::from_raw_parts(ptr as *mut u8, 0, size);
+    }
 }
 
 /// Phase 2: Solve unconstrained QP subproblem for SQP
