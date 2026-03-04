@@ -91,6 +91,7 @@ type RustRayTracingWasm = {
   vector_dot?: (x: Float64Array, y: Float64Array) => number;
   vector_norm?: (x: Float64Array) => number;
   matrix_vector_multiply?: (aFlat: Float64Array, x: Float64Array, rows: number, cols: number) => Float64Array;
+  normal_eq_matvec?: (jFlat: Float64Array, m: number, n: number, v: Float64Array, damping: number) => Float64Array;
   cholesky_factorization?: (aFlat: Float64Array, n: number) => Float64Array;
   bfgs_update?: (hFlat: Float64Array, s: Float64Array, y: Float64Array, n: number) => boolean;
   qr_factorization?: (aFlat: Float64Array, rows: number, cols: number) => Float64Array;
@@ -285,6 +286,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           vector_dot: mod.vector_dot,
           vector_norm: mod.vector_norm,
           matrix_vector_multiply: mod.matrix_vector_multiply,
+          normal_eq_matvec: mod.normal_eq_matvec,
           cholesky_factorization: mod.cholesky_factorization,
           bfgs_update: mod.bfgs_update,
           qr_factorization: mod.qr_factorization,

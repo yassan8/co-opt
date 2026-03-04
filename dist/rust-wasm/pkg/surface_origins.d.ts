@@ -3,6 +3,8 @@
 
 export function advance_ray_batch(pos: Float64Array, dirs: Float64Array, thickness: number, count: number): Float64Array;
 
+export function assemble_fd_jacobian(r0: Float64Array, r_batches: Float64Array, m: number, n: number, steps: Float64Array): Float64Array;
+
 /**
  * Phase 3: Armijo backtracking line search with JS merit callback
  *
@@ -51,15 +53,37 @@ export function fft_2d_forward(real_ptr: number, imag_ptr: number, rows: number,
  */
 export function fft_2d_inverse(real_ptr: number, imag_ptr: number, rows: number, cols: number, real_out_ptr: number, imag_out_ptr: number): any;
 
+export function free(ptr: number, size: number): void;
+
+export function generate_annular_offsets_flat(ray_count: number, max_radius: number, ring_count: number): Float64Array;
+
+export function generate_centered_grid_offsets_flat(ray_count: number, half_extent: number): Float64Array;
+
+export function generate_fd_perturbation_points(x: Float64Array, steps: Float64Array, n: number): Float64Array;
+
+export function generate_parallel_start_points_flat(origin: Float64Array, u_axis: Float64Array, v_axis: Float64Array, offsets: Float64Array, count: number): Float64Array;
+
 export function intersect_aspheric_rt10(ray: Float64Array, params: Float64Array, mode_odd: number, max_iter: number, tol: number): number;
 
 export function intersect_aspheric_rt10_batch(rays: Float64Array, ray_count: number, params: Float64Array, mode_odd: number, max_iter: number, tol: number): Float64Array;
+
+export function malloc(size: number): number;
 
 /**
  * Matrix-vector multiplication: result = A * x
  * A is stored in row-major order (flat array)
  */
 export function matrix_vector_multiply(a_flat: Float64Array, x: Float64Array, rows: number, cols: number): Float64Array;
+
+/**
+ * Matrix-free normal equation matvec: result = (J^T J + damping * I) * v
+ * J is stored in row-major order (flat array)
+ */
+export function normal_eq_matvec(j_flat: Float64Array, m: number, n: number, v: Float64Array, damping: number): Float64Array;
+
+export function optimize_one_iter_from_buffers(x_ptr: number, steps_ptr: number, r0_ptr: number, r_batches_ptr: number, var_scales_ptr: number, out_dx_ptr: number, out_x_next_ptr: number, out_meta_ptr: number, n: number, m: number, damping: number, trust_radius: number): number;
+
+export function optimize_system_in_wasm(payload_json: string): string;
 
 /**
  * QR factorization using Householder reflections
@@ -102,11 +126,15 @@ export function solve_qp_subproblem_kkt_equality(h_flat: Float64Array, n: number
  */
 export function solve_qp_subproblem_unconstrained(h_flat: Float64Array, n: number, g: Float64Array, damping: number): Float64Array;
 
+export function solve_ray_origins_to_stop_points_with_meta_batch(initial_origins: Float64Array, dirs: Float64Array, stop_targets: Float64Array, ray_count: number, stop_surface_index: number, wavelength_um: number, n_start: number, row_meta: Int32Array, row_params: Float64Array, row_origins: Float64Array, row_inv_rots: Float64Array, row_rots: Float64Array, row_count: number, max_iter: number, tol_mm: number, eps: number, max_step: number): Float64Array;
+
 export function solve_spd_linear_system(a_flat: Float64Array, n: number, b: Float64Array): Float64Array;
 
 export function surface_normal_aspheric_rt10(pt: Float64Array, params: Float64Array, mode_odd: number): Float64Array;
 
 export function surface_normal_aspheric_rt10_batch(points: Float64Array, count: number, params: Float64Array, mode_odd: number): Float64Array;
+
+export function trace_ray_batch_hit_point_with_meta(rays: Float64Array, ray_count: number, target_surface_index: number, n_start: number, row_meta: Int32Array, row_params: Float64Array, row_origins: Float64Array, row_inv_rots: Float64Array, row_rots: Float64Array, row_count: number): Float64Array;
 
 /**
  * Phase 3: High-performance batch tracing with system metadata embedded in JSON
@@ -115,6 +143,8 @@ export function surface_normal_aspheric_rt10_batch(points: Float64Array, count: 
  * Output: JsValue containing result metadata with traced ray count
  */
 export function trace_ray_batch_with_system_json(ray_array_ptr: number, system_meta_json: string, row_count: number, n_start: number): any;
+
+export function trace_single_ray_hit_point_with_meta(ray: Float64Array, target_surface_index: number, n_start: number, row_meta: Int32Array, row_params: Float64Array, row_origins: Float64Array, row_inv_rots: Float64Array, row_rots: Float64Array, row_count: number): Float64Array;
 
 export function transform_point_to_global_batch(points: Float64Array, origin: Float64Array, rot_mat: Float64Array, count: number): Float64Array;
 
@@ -150,6 +180,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly advance_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly assemble_fd_jacobian: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly backtracking_line_search_armijo: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: any) => number;
     readonly batch_mat3_mul_vec3: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly bfgs_update: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number) => number;
@@ -158,19 +189,31 @@ export interface InitOutput {
     readonly cholesky_factorization: (a: number, b: number, c: number) => [number, number];
     readonly fft_2d_forward: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly fft_2d_inverse: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly free: (a: number, b: number) => void;
+    readonly generate_annular_offsets_flat: (a: number, b: number, c: number) => [number, number];
+    readonly generate_centered_grid_offsets_flat: (a: number, b: number) => [number, number];
+    readonly generate_fd_perturbation_points: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly generate_parallel_start_points_flat: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
     readonly intersect_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly intersect_aspheric_rt10_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+    readonly malloc: (a: number) => number;
     readonly matrix_vector_multiply: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly normal_eq_matvec: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+    readonly optimize_one_iter_from_buffers: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
+    readonly optimize_system_in_wasm: (a: number, b: number) => [number, number, number, number];
     readonly qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];
     readonly reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
     readonly solve_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly solve_qp_subproblem_kkt_equality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
     readonly solve_qp_subproblem_unconstrained: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly solve_ray_origins_to_stop_points_with_meta_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number) => [number, number];
     readonly solve_spd_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly surface_normal_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly surface_normal_aspheric_rt10_batch: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly trace_ray_batch_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => [number, number];
     readonly trace_ray_batch_with_system_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+    readonly trace_single_ray_hit_point_with_meta: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number];
     readonly transform_point_to_global_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly transform_ray_to_local_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
     readonly update_trust_region_radius: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;

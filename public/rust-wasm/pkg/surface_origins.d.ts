@@ -75,6 +75,12 @@ export function malloc(size: number): number;
  */
 export function matrix_vector_multiply(a_flat: Float64Array, x: Float64Array, rows: number, cols: number): Float64Array;
 
+/**
+ * Matrix-free normal equation matvec: result = (J^T J + damping * I) * v
+ * J is stored in row-major order (flat array)
+ */
+export function normal_eq_matvec(j_flat: Float64Array, m: number, n: number, v: Float64Array, damping: number): Float64Array;
+
 export function optimize_one_iter_from_buffers(x_ptr: number, steps_ptr: number, r0_ptr: number, r_batches_ptr: number, var_scales_ptr: number, out_dx_ptr: number, out_x_next_ptr: number, out_meta_ptr: number, n: number, m: number, damping: number, trust_radius: number): number;
 
 export function optimize_system_in_wasm(payload_json: string): string;
@@ -192,6 +198,7 @@ export interface InitOutput {
     readonly intersect_aspheric_rt10_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly malloc: (a: number) => number;
     readonly matrix_vector_multiply: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly normal_eq_matvec: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly optimize_one_iter_from_buffers: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => number;
     readonly optimize_system_in_wasm: (a: number, b: number) => [number, number, number, number];
     readonly qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];

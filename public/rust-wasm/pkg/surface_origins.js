@@ -339,6 +339,27 @@ export function matrix_vector_multiply(a_flat, x, rows, cols) {
 }
 
 /**
+ * Matrix-free normal equation matvec: result = (J^T J + damping * I) * v
+ * J is stored in row-major order (flat array)
+ * @param {Float64Array} j_flat
+ * @param {number} m
+ * @param {number} n
+ * @param {Float64Array} v
+ * @param {number} damping
+ * @returns {Float64Array}
+ */
+export function normal_eq_matvec(j_flat, m, n, v, damping) {
+    const ptr0 = passArrayF64ToWasm0(j_flat, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(v, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.normal_eq_matvec(ptr0, len0, m, n, ptr1, len1, damping);
+    var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v3;
+}
+
+/**
  * @param {number} x_ptr
  * @param {number} steps_ptr
  * @param {number} r0_ptr

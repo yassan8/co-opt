@@ -28,6 +28,8 @@ import {
   preloadOptimizerWasmBridge,
   solveLinearSystemWithOptimizerWasm,
   buildNormalEquationsWithOptimizerWasm,
+  normalEqMatvecFlatWasm,
+  normalEqMatvecWasm,
   getOptimizerWasmBridgeDebugInfo,
   generateFiniteDifferencePerturbationPointsWasm,
   assembleFiniteDifferenceJacobianWasm,
@@ -128,6 +130,10 @@ function pickTimingMetricsFromProfile(profile) {
   const bufferCalls = Number(profile?.kktWasmBufferCalls ?? profile?.counts?.kktWasmBufferCalls) || 0;
   const bufferHits = Number(profile?.kktWasmBufferHits ?? profile?.counts?.kktWasmBufferHits) || 0;
   const bufferFallbacks = Number(profile?.kktWasmBufferFallbacks ?? profile?.counts?.kktWasmBufferFallbacks) || 0;
+  const matrixFreeCalls = Number(profile?.kktMatrixFreeCalls ?? profile?.counts?.kktMatrixFreeCalls) || 0;
+  const matrixFreeHits = Number(profile?.kktMatrixFreeHits ?? profile?.counts?.kktMatrixFreeHits) || 0;
+  const matrixFreeFallbacks = Number(profile?.kktMatrixFreeFallbacks ?? profile?.counts?.kktMatrixFreeFallbacks) || 0;
+  const matrixFreeCgIters = Number(profile?.kktMatrixFreeCgIters ?? profile?.counts?.kktMatrixFreeCgIters) || 0;
 
   return {
     objectiveMs,
@@ -146,7 +152,12 @@ function pickTimingMetricsFromProfile(profile) {
     bufferCalls,
     bufferHits,
     bufferFallbacks,
-    bufferHitRatePct: bufferCalls > 0 ? (100 * bufferHits / bufferCalls) : 0
+    bufferHitRatePct: bufferCalls > 0 ? (100 * bufferHits / bufferCalls) : 0,
+    matrixFreeCalls,
+    matrixFreeHits,
+    matrixFreeFallbacks,
+    matrixFreeHitRatePct: matrixFreeCalls > 0 ? (100 * matrixFreeHits / matrixFreeCalls) : 0,
+    matrixFreeCgIters
   };
 }
 
@@ -607,6 +618,296 @@ export async function compareWasmPilotBenchmark(baseOptions = {}) {
   };
 }
 
+export async function compareMatrixFreeBenchmark(baseOptions = {}) {
+  const source = isPlainObject(baseOptions) ? baseOptions : {};
+  const common = { ...source };
+  const taRayCountFastRaw = Number(source.taRayCountFast);
+  const taRayCountFast = Number.isFinite(taRayCountFastRaw)
+    ? Math.max(9, Math.min(201, Math.floor(taRayCountFastRaw)))
+    : 13;
+  const matchBaselineBestStop = source.matchBaselineBestStop !== false;
+  const matchBaselineBestRelTolRaw = Number(source.matchBaselineBestRelTol ?? 0);
+  const matchBaselineBestRelTol = Number.isFinite(matchBaselineBestRelTolRaw)
+    ? Math.max(0, matchBaselineBestRelTolRaw)
+    : 0;
+  const matchBaselineBestAbsTolRaw = Number(source.matchBaselineBestAbsTol ?? 0);
+  const matchBaselineBestAbsTol = Number.isFinite(matchBaselineBestAbsTolRaw)
+    ? Math.max(0, matchBaselineBestAbsTolRaw)
+    : 0;
+  const matchBaselineBestMinIterRaw = Number(source.matchBaselineBestMinIter ?? 8);
+  const matchBaselineBestMinIter = Number.isFinite(matchBaselineBestMinIterRaw)
+    ? Math.max(0, Math.floor(matchBaselineBestMinIterRaw))
+    : 8;
+  const repeatRaw = Number(source.repeat ?? source.benchmarkRepeat ?? 1);
+  const repeat = Number.isFinite(repeatRaw) ? Math.max(1, Math.floor(repeatRaw)) : 1;
+  const warmupDiscardRaw = Number(source.warmupDiscard ?? source.discardWarmup ?? (repeat > 1 ? 1 : 0));
+  const warmupDiscard = Number.isFinite(warmupDiscardRaw) ? Math.max(0, Math.floor(warmupDiscardRaw)) : 0;
+  const useOutlierFilter = source.filterOutliers !== false;
+  try { delete common.kktUseMatrixFreeCore; } catch (_) {}
+  try { delete common.repeat; } catch (_) {}
+  try { delete common.benchmarkRepeat; } catch (_) {}
+  try { delete common.warmupDiscard; } catch (_) {}
+  try { delete common.discardWarmup; } catch (_) {}
+  try { delete common.filterOutliers; } catch (_) {}
+  try { delete common.matchBaselineBestStop; } catch (_) {}
+  try { delete common.matchBaselineBestRelTol; } catch (_) {}
+  try { delete common.matchBaselineBestAbsTol; } catch (_) {}
+  try { delete common.matchBaselineBestMinIter; } catch (_) {}
+
+  const deepClone = (v) => {
+    try {
+      return JSON.parse(JSON.stringify(v));
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const originalSystemConfig = loadSystemConfigurationsRaw();
+  const baselineSystemConfig = deepClone(originalSystemConfig);
+
+  const restoreBaselineConfig = () => {
+    if (!baselineSystemConfig) return;
+    try {
+      saveSystemConfigurationsRaw(deepClone(baselineSystemConfig));
+    } catch (_) {}
+  };
+
+  const runOne = async (useMatrixFree, stopBestTarget = null) => {
+    restoreBaselineConfig();
+    const targetBestRaw = Number(stopBestTarget);
+    const hasTargetBest = Number.isFinite(targetBestRaw);
+    const targetBestTol = hasTargetBest
+      ? Math.max(matchBaselineBestAbsTol, Math.abs(targetBestRaw) * matchBaselineBestRelTol)
+      : 0;
+    const options = {
+      ...common,
+      profile: true,
+      method: 'kkt',
+      kktUseMatrixFreeCore: !!useMatrixFree,
+      taRayCountFast
+    };
+    if (useMatrixFree && hasTargetBest) {
+      options.kktStopWhenBestLeq = targetBestRaw + targetBestTol;
+      options.kktStopWhenBestLeqMinIter = matchBaselineBestMinIter;
+    }
+    const t0 = nowMs();
+    const result = await runOptimizationMVP(options);
+    const elapsedMs = nowMs() - t0;
+    const profile = getLastOptimizeProfile();
+    const metrics = pickTimingMetricsFromProfile(profile);
+    return { useMatrixFree: !!useMatrixFree, options, result, elapsedMs, profile, metrics };
+  };
+
+  const summarizeRuns = (runs) => {
+    const pick = (path, fallback = 0) => {
+      const values = runs.map((run) => {
+        try {
+          const parts = path.split('.');
+          let cur = run;
+          for (const p of parts) cur = cur?.[p];
+          const n = Number(cur);
+          return Number.isFinite(n) ? n : fallback;
+        } catch (_) {
+          return fallback;
+        }
+      });
+      const sum = values.reduce((acc, v) => acc + v, 0);
+      const avg = values.length > 0 ? (sum / values.length) : fallback;
+      const min = values.length > 0 ? Math.min(...values) : fallback;
+      const max = values.length > 0 ? Math.max(...values) : fallback;
+      return { avg, min, max };
+    };
+
+    const elapsed = pick('elapsedMs');
+    const objectiveMs = pick('metrics.objectiveMs');
+    const wasmMs = pick('metrics.wasmMs');
+    const jsMs = pick('metrics.jsMs');
+    const objectivePct = pick('metrics.objectivePct');
+    const wasmPct = pick('metrics.wasmPct');
+    const jsPct = pick('metrics.jsPct');
+    const matrixFreeHitRatePct = pick('metrics.matrixFreeHitRatePct');
+    const matrixFreeCalls = pick('metrics.matrixFreeCalls');
+    const matrixFreeCgIters = pick('metrics.matrixFreeCgIters');
+    const okRatePct = pick('result.ok');
+
+    return {
+      repeat: runs.length,
+      elapsed,
+      objectiveMs,
+      wasmMs,
+      jsMs,
+      objectivePct,
+      wasmPct,
+      jsPct,
+      matrixFreeHitRatePct,
+      matrixFreeCalls,
+      matrixFreeCgIters,
+      okRatePct: okRatePct.avg * 100
+    };
+  };
+
+  const medianOf = (arr) => {
+    const nums = (Array.isArray(arr) ? arr : [])
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v))
+      .sort((a, b) => a - b);
+    const n = nums.length;
+    if (n === 0) return null;
+    const mid = Math.floor(n / 2);
+    return (n % 2 === 1) ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+  };
+
+  const robustFilterRuns = (runs) => {
+    const afterWarmup = Array.isArray(runs) ? runs.slice(Math.min(warmupDiscard, runs.length)) : [];
+    if (!useOutlierFilter || afterWarmup.length < 5) {
+      return { filtered: afterWarmup, droppedWarmup: Math.min(warmupDiscard, runs.length), droppedOutliers: 0 };
+    }
+
+    const elapsed = afterWarmup.map((r) => Number(r?.elapsedMs) || 0);
+    const med = medianOf(elapsed);
+    if (!(Number.isFinite(med))) {
+      return { filtered: afterWarmup, droppedWarmup: Math.min(warmupDiscard, runs.length), droppedOutliers: 0 };
+    }
+
+    const absDev = elapsed.map((v) => Math.abs(v - med));
+    const mad = medianOf(absDev);
+    if (!(Number.isFinite(mad)) || mad <= 0) {
+      return { filtered: afterWarmup, droppedWarmup: Math.min(warmupDiscard, runs.length), droppedOutliers: 0 };
+    }
+
+    const threshold = med + 6 * mad;
+    const filtered = afterWarmup.filter((r) => (Number(r?.elapsedMs) || 0) <= threshold);
+    const droppedOutliers = Math.max(0, afterWarmup.length - filtered.length);
+    return { filtered: (filtered.length > 0 ? filtered : afterWarmup), droppedWarmup: Math.min(warmupDiscard, runs.length), droppedOutliers };
+  };
+
+  const baselineRuns = [];
+  const matrixFreeRuns = [];
+  try {
+    for (let i = 0; i < repeat; i++) {
+      const baselineRun = await runOne(false);
+      baselineRuns.push(baselineRun);
+
+      let matrixFreeStopBestTarget = null;
+      if (matchBaselineBestStop) {
+        const baselineBest = Number(baselineRun?.result?.best);
+        if (Number.isFinite(baselineBest)) matrixFreeStopBestTarget = baselineBest;
+      }
+      matrixFreeRuns.push(await runOne(true, matrixFreeStopBestTarget));
+    }
+  } finally {
+    try {
+      if (originalSystemConfig) saveSystemConfigurationsRaw(originalSystemConfig);
+    } catch (_) {}
+  }
+
+  const baselineFiltered = robustFilterRuns(baselineRuns);
+  const matrixFreeFiltered = robustFilterRuns(matrixFreeRuns);
+
+  const baseline = summarizeRuns(baselineFiltered.filtered);
+  const matrixFree = summarizeRuns(matrixFreeFiltered.filtered);
+
+  const delta = {
+    elapsedMs: matrixFree.elapsed.avg - baseline.elapsed.avg,
+    objectiveMs: matrixFree.objectiveMs.avg - baseline.objectiveMs.avg,
+    wasmMs: matrixFree.wasmMs.avg - baseline.wasmMs.avg,
+    jsMs: matrixFree.jsMs.avg - baseline.jsMs.avg,
+    objectivePct: matrixFree.objectivePct.avg - baseline.objectivePct.avg,
+    wasmPct: matrixFree.wasmPct.avg - baseline.wasmPct.avg,
+    jsPct: matrixFree.jsPct.avg - baseline.jsPct.avg,
+    matrixFreeHitRatePct: matrixFree.matrixFreeHitRatePct.avg - baseline.matrixFreeHitRatePct.avg,
+    matrixFreeCalls: matrixFree.matrixFreeCalls.avg - baseline.matrixFreeCalls.avg,
+    matrixFreeCgIters: matrixFree.matrixFreeCgIters.avg - baseline.matrixFreeCgIters.avg
+  };
+
+  try {
+    console.groupCollapsed('[OptimizerMVP] Matrix-free benchmark');
+    console.log('benchmark options', {
+      repeat,
+      warmupDiscard,
+      filterOutliers: useOutlierFilter,
+      taRayCountFast,
+      matchBaselineBestStop,
+      matchBaselineBestRelTol,
+      matchBaselineBestAbsTol,
+      matchBaselineBestMinIter
+    });
+    console.log('baseline(kktUseMatrixFreeCore=false)', {
+      repeat,
+      droppedWarmup: baselineFiltered.droppedWarmup,
+      droppedOutliers: baselineFiltered.droppedOutliers,
+      usedRuns: baseline.repeat,
+      elapsedAvgMs: Math.round(baseline.elapsed.avg),
+      elapsedMinMs: Math.round(baseline.elapsed.min),
+      elapsedMaxMs: Math.round(baseline.elapsed.max),
+      objectiveAvgMs: Math.round(baseline.objectiveMs.avg),
+      wasmAvgMs: Math.round(baseline.wasmMs.avg),
+      jsAvgMs: Math.round(baseline.jsMs.avg),
+      objectivePctAvg: Math.round(baseline.objectivePct.avg * 10) / 10,
+      wasmPctAvg: Math.round(baseline.wasmPct.avg * 10) / 10,
+      jsPctAvg: Math.round(baseline.jsPct.avg * 10) / 10,
+      matrixFreeHitRatePctAvg: Math.round(baseline.matrixFreeHitRatePct.avg * 10) / 10,
+      matrixFreeCallsAvg: Math.round(baseline.matrixFreeCalls.avg * 10) / 10,
+      matrixFreeCgItersAvg: Math.round(baseline.matrixFreeCgIters.avg * 10) / 10,
+      okRatePct: Math.round(baseline.okRatePct * 10) / 10
+    });
+    console.log('matrixFree(kktUseMatrixFreeCore=true)', {
+      repeat,
+      droppedWarmup: matrixFreeFiltered.droppedWarmup,
+      droppedOutliers: matrixFreeFiltered.droppedOutliers,
+      usedRuns: matrixFree.repeat,
+      elapsedAvgMs: Math.round(matrixFree.elapsed.avg),
+      elapsedMinMs: Math.round(matrixFree.elapsed.min),
+      elapsedMaxMs: Math.round(matrixFree.elapsed.max),
+      objectiveAvgMs: Math.round(matrixFree.objectiveMs.avg),
+      wasmAvgMs: Math.round(matrixFree.wasmMs.avg),
+      jsAvgMs: Math.round(matrixFree.jsMs.avg),
+      objectivePctAvg: Math.round(matrixFree.objectivePct.avg * 10) / 10,
+      wasmPctAvg: Math.round(matrixFree.wasmPct.avg * 10) / 10,
+      jsPctAvg: Math.round(matrixFree.jsPct.avg * 10) / 10,
+      matrixFreeHitRatePctAvg: Math.round(matrixFree.matrixFreeHitRatePct.avg * 10) / 10,
+      matrixFreeCallsAvg: Math.round(matrixFree.matrixFreeCalls.avg * 10) / 10,
+      matrixFreeCgItersAvg: Math.round(matrixFree.matrixFreeCgIters.avg * 10) / 10,
+      okRatePct: Math.round(matrixFree.okRatePct * 10) / 10
+    });
+    console.log('delta(matrixFree - baseline)', {
+      elapsedMs: Math.round(delta.elapsedMs),
+      objectiveMs: Math.round(delta.objectiveMs),
+      wasmMs: Math.round(delta.wasmMs),
+      jsMs: Math.round(delta.jsMs),
+      objectivePct: Math.round(delta.objectivePct * 10) / 10,
+      wasmPct: Math.round(delta.wasmPct * 10) / 10,
+      jsPct: Math.round(delta.jsPct * 10) / 10,
+      matrixFreeHitRatePct: Math.round(delta.matrixFreeHitRatePct * 10) / 10,
+      matrixFreeCalls: Math.round(delta.matrixFreeCalls * 10) / 10,
+      matrixFreeCgIters: Math.round(delta.matrixFreeCgIters * 10) / 10
+    });
+    console.groupEnd();
+  } catch (_) {}
+
+  return {
+    baseline,
+    matrixFree,
+    delta,
+    filtering: {
+      warmupDiscard,
+      filterOutliers: useOutlierFilter,
+      matchBaselineBestStop,
+      matchBaselineBestRelTol,
+      matchBaselineBestAbsTol,
+      matchBaselineBestMinIter,
+      baselineDroppedWarmup: baselineFiltered.droppedWarmup,
+      baselineDroppedOutliers: baselineFiltered.droppedOutliers,
+      matrixFreeDroppedWarmup: matrixFreeFiltered.droppedWarmup,
+      matrixFreeDroppedOutliers: matrixFreeFiltered.droppedOutliers
+    },
+    baselineRuns,
+    matrixFreeRuns,
+    baselineRunsUsed: baselineFiltered.filtered,
+    matrixFreeRunsUsed: matrixFreeFiltered.filtered
+  };
+}
+
 export async function exportWasmPilotBenchmarkCsv(options = {}) {
   const source = isPlainObject(options) ? options : {};
   const benchmark = source.benchmarkResult && typeof source.benchmarkResult === 'object'
@@ -688,6 +989,100 @@ export async function exportWasmPilotBenchmarkCsv(options = {}) {
     try {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const fileName = String(source.fileName || `wasm-pilot-benchmark-${stamp}.csv`);
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (_) {}
+  }
+
+  return {
+    csv,
+    benchmark
+  };
+}
+
+export async function exportMatrixFreeBenchmarkCsv(options = {}) {
+  const source = isPlainObject(options) ? options : {};
+  const benchmark = source.benchmarkResult && typeof source.benchmarkResult === 'object'
+    ? source.benchmarkResult
+    : await compareMatrixFreeBenchmark(source);
+
+  const baselineRuns = Array.isArray(benchmark?.baselineRuns) ? benchmark.baselineRuns : [];
+  const matrixFreeRuns = Array.isArray(benchmark?.matrixFreeRuns) ? benchmark.matrixFreeRuns : [];
+
+  const csvEscape = (value) => {
+    const s = String(value ?? '');
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  };
+
+  const rows = [];
+  rows.push([
+    'mode',
+    'runIndex',
+    'elapsedMs',
+    'objectiveMs',
+    'wasmMs',
+    'jsMs',
+    'objectivePct',
+    'wasmPct',
+    'jsPct',
+    'matrixFreeCalls',
+    'matrixFreeHits',
+    'matrixFreeFallbacks',
+    'matrixFreeHitRatePct',
+    'matrixFreeCgIters',
+    'ok',
+    'best'
+  ]);
+
+  const pushRuns = (mode, runs) => {
+    for (let i = 0; i < runs.length; i++) {
+      const run = runs[i] || {};
+      const metrics = run.metrics || {};
+      const result = run.result || {};
+      rows.push([
+        mode,
+        i + 1,
+        Number(run.elapsedMs) || 0,
+        Number(metrics.objectiveMs) || 0,
+        Number(metrics.wasmMs) || 0,
+        Number(metrics.jsMs) || 0,
+        Number(metrics.objectivePct) || 0,
+        Number(metrics.wasmPct) || 0,
+        Number(metrics.jsPct) || 0,
+        Number(metrics.matrixFreeCalls) || 0,
+        Number(metrics.matrixFreeHits) || 0,
+        Number(metrics.matrixFreeFallbacks) || 0,
+        Number(metrics.matrixFreeHitRatePct) || 0,
+        Number(metrics.matrixFreeCgIters) || 0,
+        !!result.ok,
+        Number(result.best)
+      ]);
+    }
+  };
+
+  pushRuns('baseline', baselineRuns);
+  pushRuns('matrixFree', matrixFreeRuns);
+
+  const csv = rows
+    .map((row) => row.map(csvEscape).join(','))
+    .join('\n');
+
+  const shouldDownload = source.download !== false;
+  if (shouldDownload && typeof window !== 'undefined' && typeof document !== 'undefined') {
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = String(source.fileName || `matrix-free-benchmark-${stamp}.csv`);
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -2763,7 +3158,11 @@ export async function runOptimizationMVP(options = {}) {
       kktWasmBufferCalls: 0,
       kktWasmBufferHits: 0,
       kktWasmBufferFallbacks: 0,
-      kktWasmBufferStatusHistogram: {}
+      kktWasmBufferStatusHistogram: {},
+      kktMatrixFreeCalls: 0,
+      kktMatrixFreeHits: 0,
+      kktMatrixFreeFallbacks: 0,
+      kktMatrixFreeCgIters: 0
     }
   } : null;
 
@@ -3116,7 +3515,11 @@ export async function runOptimizationMVP(options = {}) {
           kktWasmBufferHits: bufferHits,
           kktWasmBufferFallbacks: bufferFallbacks,
           kktWasmBufferHitRatePct: Math.round(bufferHitRatePct * 10) / 10,
-          kktWasmBufferStatusHistogram: bufferStatusHistogram
+          kktWasmBufferStatusHistogram: bufferStatusHistogram,
+          kktMatrixFreeCalls: Number(__profile.counts.kktMatrixFreeCalls) || 0,
+          kktMatrixFreeHits: Number(__profile.counts.kktMatrixFreeHits) || 0,
+          kktMatrixFreeFallbacks: Number(__profile.counts.kktMatrixFreeFallbacks) || 0,
+          kktMatrixFreeCgIters: Number(__profile.counts.kktMatrixFreeCgIters) || 0
         });
 
         console.log('[OptimizerMVP] timing comparison', {
@@ -3126,6 +3529,7 @@ export async function runOptimizationMVP(options = {}) {
           wasmToObjectiveRatio: objectiveMs > 0 ? Math.round((wasmMs / objectiveMs) * 1000) / 1000 : null,
           objectiveToWasmRatio: wasmMs > 0 ? Math.round((objectiveMs / wasmMs) * 1000) / 1000 : null,
           kktWasmPilotEnabled: opts?.kktUseWasmPilotOptimizer === true,
+          kktMatrixFreeEnabled: opts?.kktUseMatrixFreeCore === true,
           kktWasmPilotHitRatePct: Math.round(pilotHitRatePct * 10) / 10,
           kktWasmPilotLastReason: pilotLastReason,
           kktWasmBufferHitRatePct: Math.round(bufferHitRatePct * 10) / 10
@@ -3265,6 +3669,7 @@ export async function runOptimizationMVP(options = {}) {
   const lmExploreWhenFlat = (opts.lmExploreWhenFlat === undefined) ? false : !!opts.lmExploreWhenFlat;
   const lmExploreTries = Number.isFinite(Number(opts.lmExploreTries)) ? Math.max(1, Math.floor(Number(opts.lmExploreTries))) : 3;
   const useWasmLinearSolve = true;
+  const kktUseMatrixFreeCore = opts?.kktUseMatrixFreeCore === true;
 
   if (useWasmLinearSolve) {
     try {
@@ -3490,6 +3895,7 @@ export async function runOptimizationMVP(options = {}) {
   let __prevOptimizerProfileContext;
   let __prevDisableRayTraceDebug;
   let __prevDisablePersistedTableFallback;
+  let __prevTaEvalRunId;
   try { __prevBlocksOverride = (typeof window !== 'undefined') ? window.__cooptBlocksOverride : undefined; } catch (_) { __prevBlocksOverride = undefined; }
   try { __prevOpticalRowsOverride = (typeof globalThis !== 'undefined') ? globalThis.__cooptOpticalSystemRowsOverride : undefined; } catch (_) { __prevOpticalRowsOverride = undefined; }
   try { __prevScenarioOverride = (typeof window !== 'undefined') ? window.__cooptScenarioOverride : undefined; } catch (_) { __prevScenarioOverride = undefined; }
@@ -3497,6 +3903,7 @@ export async function runOptimizationMVP(options = {}) {
   try { __prevOptimizerProfileContext = (typeof globalThis !== 'undefined') ? globalThis.__cooptOptimizerProfileContext : undefined; } catch (_) { __prevOptimizerProfileContext = undefined; }
   try { __prevDisableRayTraceDebug = (typeof globalThis !== 'undefined') ? globalThis.__COOPT_DISABLE_RAYTRACE_DEBUG : undefined; } catch (_) { __prevDisableRayTraceDebug = undefined; }
   try { __prevDisablePersistedTableFallback = (typeof globalThis !== 'undefined') ? (globalThis as any).__cooptDisablePersistedTableFallback : undefined; } catch (_) { __prevDisablePersistedTableFallback = undefined; }
+  try { __prevTaEvalRunId = (typeof globalThis !== 'undefined') ? (globalThis as any).__cooptTaEvalRunId : undefined; } catch (_) { __prevTaEvalRunId = undefined; }
 
   try {
     setBlocksOverrideGlobal(blocksByConfigId);
@@ -3535,11 +3942,15 @@ export async function runOptimizationMVP(options = {}) {
       const spotEarlyAbortStreakMaxHits = Number.isFinite(Number(opts.spotEarlyAbortStreakMaxHits))
         ? Math.max(0, Math.floor(Number(opts.spotEarlyAbortStreakMaxHits)))
         : 12;
+      const taRayCountFast = Number.isFinite(Number(opts.taRayCountFast))
+        ? Math.max(9, Math.min(201, Math.floor(Number(opts.taRayCountFast))))
+        : 21;
 
       globalThis.__cooptMeritFastMode = {
         enabled: true,
         spotRayCount: spotRayCountFast,
         spotAnnularRingCount: spotAnnularRingCountFast,
+        taRayCount: taRayCountFast,
         // Keep semantics aligned with Requirements/Spot Diagram (surfaceIndex, primary wavelength, etc.)
         // while still avoiding reading live UI tables for non-active configs.
         spotUseUiDefaults: true,
@@ -3576,6 +3987,14 @@ export async function runOptimizationMVP(options = {}) {
     if (activeConfigId !== null && activeConfigId !== undefined) {
       const ab = blocksByConfigId[String(activeConfigId)];
       if (Array.isArray(ab)) updateActiveOpticalSystemOverrideFromBlocks(ab);
+    }
+  } catch (_) {}
+
+  // Run-scoped ID for TA cross-eval cache keys (prevents leakage across benchmark runs).
+  try {
+    if (typeof globalThis !== 'undefined') {
+      const rid = `run-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+      (globalThis as any).__cooptTaEvalRunId = rid;
     }
   } catch (_) {}
 
@@ -3782,6 +4201,148 @@ export async function runOptimizationMVP(options = {}) {
       }
       return { A, g };
     });
+  };
+
+  const solveNormalEqMatrixFreeWithOptionalWasm = (J, r, damping, n) => {
+    if (!kktUseMatrixFreeCore) return null;
+    if (!Array.isArray(J) || !Array.isArray(r) || n <= 0) return null;
+
+    const m = J.length;
+    if (m <= 0 || r.length !== m) return null;
+
+    const jFlat = new Float64Array(m * n);
+    for (let i = 0; i < m; i++) {
+      if (!Array.isArray(J[i]) || J[i].length < n) return null;
+      const rowBase = i * n;
+      for (let j = 0; j < n; j++) {
+        const value = Number(J[i][j]);
+        if (!Number.isFinite(value)) return null;
+        jFlat[rowBase + j] = value;
+      }
+    }
+
+    if (__profile && __profile.counts) {
+      __profile.counts.kktMatrixFreeCalls = (Number(__profile.counts.kktMatrixFreeCalls) || 0) + 1;
+    }
+
+    const g = new Array(n).fill(0);
+    for (let j = 0; j < n; j++) {
+      let gj = 0;
+      for (let i = 0; i < m; i++) {
+        gj += J[i][j] * r[i];
+      }
+      g[j] = gj;
+    }
+    const b = g.map((v) => -v);
+
+    const lambda = Number.isFinite(Number(damping)) ? Math.max(0, Number(damping)) : 0;
+    const matvec = (v) => {
+      if (!Array.isArray(v) || v.length !== n) return null;
+      let out = __profileBucketWrap('time_wasm_call', () => normalEqMatvecFlatWasm(jFlat, m, n, v, lambda));
+      if (Array.isArray(out) && out.length === n) {
+        return out;
+      }
+      return __profileBucketWrap('time_js_overhead', () => {
+        const tmp = new Array(m).fill(0);
+        for (let i = 0; i < m; i++) {
+          let s = 0;
+          const rowBase = i * n;
+          for (let j = 0; j < n; j++) s += jFlat[rowBase + j] * v[j];
+          tmp[i] = s;
+        }
+        const y = new Array(n).fill(0);
+        for (let j = 0; j < n; j++) {
+          let s = 0;
+          for (let i = 0; i < m; i++) s += jFlat[i * n + j] * tmp[i];
+          y[j] = s + lambda * v[j];
+        }
+        return y;
+      });
+    };
+
+    const maxIter = Number.isFinite(Number(opts?.kktMatrixFreeCgMaxIter))
+      ? Math.max(4, Math.floor(Number(opts.kktMatrixFreeCgMaxIter)))
+      : Math.max(12, Math.min(6 * n, 192));
+    const tolRel = Number.isFinite(Number(opts?.kktMatrixFreeCgTolRel))
+      ? Math.max(1e-12, Number(opts.kktMatrixFreeCgTolRel))
+      : 1e-8;
+    const tolAbsOpt = Number.isFinite(Number(opts?.kktMatrixFreeCgTolAbs))
+      ? Math.max(1e-15, Number(opts.kktMatrixFreeCgTolAbs))
+      : null;
+
+    const diagA = new Array(n).fill(0);
+    for (let j = 0; j < n; j++) {
+      let sumSq = 0;
+      for (let i = 0; i < m; i++) {
+        const v = jFlat[i * n + j];
+        sumSq += v * v;
+      }
+      const d = sumSq + lambda;
+      diagA[j] = Number.isFinite(d) && d > 1e-12 ? d : 1e-12;
+    }
+
+    const x = new Array(n).fill(0);
+    let residual = b.slice();
+    const z = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) z[i] = residual[i] / diagA[i];
+    let p = z.slice();
+
+    let rz = dot(residual, z);
+    if (!Number.isFinite(rz) || rz <= 0) return null;
+
+    const bNorm = Math.sqrt(Math.max(0, dot(b, b)));
+    const tolAbs = tolAbsOpt !== null ? tolAbsOpt : Math.max(1e-12, bNorm * tolRel);
+
+    let cgIters = 0;
+    for (let k = 0; k < maxIter; k++) {
+      cgIters = k + 1;
+      const Ap = matvec(p);
+      if (!Array.isArray(Ap) || Ap.length !== n) return null;
+
+      const pAp = dot(p, Ap);
+      if (!Number.isFinite(pAp) || Math.abs(pAp) <= 1e-30) return null;
+      const alpha = rz / pAp;
+      if (!Number.isFinite(alpha)) return null;
+
+      for (let i = 0; i < n; i++) {
+        x[i] += alpha * p[i];
+        residual[i] -= alpha * Ap[i];
+      }
+
+      const rNorm = Math.sqrt(Math.max(0, dot(residual, residual)));
+      if (!Number.isFinite(rNorm)) return null;
+      if (rNorm <= tolAbs) {
+        break;
+      }
+
+      for (let i = 0; i < n; i++) z[i] = residual[i] / diagA[i];
+      const rzNext = dot(residual, z);
+      if (!Number.isFinite(rzNext) || rzNext <= 0) return null;
+
+      const beta = rzNext / Math.max(1e-30, rz);
+      if (!Number.isFinite(beta)) return null;
+      for (let i = 0; i < n; i++) {
+        p[i] = z[i] + beta * p[i];
+      }
+      rz = rzNext;
+    }
+
+    const Adx = matvec(x);
+    if (!Array.isArray(Adx) || Adx.length !== n) return null;
+    const linear = dot(g, x);
+    const quad = 0.5 * dot(x, Adx);
+    const predictedReduction = -(linear + quad);
+
+    if (__profile && __profile.counts) {
+      __profile.counts.kktMatrixFreeHits = (Number(__profile.counts.kktMatrixFreeHits) || 0) + 1;
+      __profile.counts.kktMatrixFreeCgIters = (Number(__profile.counts.kktMatrixFreeCgIters) || 0) + cgIters;
+    }
+
+    if (!x.every((v) => Number.isFinite(v))) return null;
+    return {
+      dx: x,
+      predictedReduction: Number.isFinite(predictedReduction) ? predictedReduction : Number.NaN
+    };
   };
 
   // DLS/LM mode
@@ -5212,7 +5773,10 @@ export async function runOptimizationMVP(options = {}) {
       const kktEvalCache = new Map<string, any>();
       const kktCachePrecision = Number.isFinite(Number(opts?.kktEvalCachePrecision))
         ? Math.max(6, Math.min(16, Math.floor(Number(opts.kktEvalCachePrecision))))
-        : 12;
+        : ((spotFastMode || kktUseMatrixFreeCore) ? 9 : 12);
+      const kktTaCachePrecision = Number.isFinite(Number(opts?.kktTaCachePrecision))
+        ? Math.max(3, Math.min(12, Math.floor(Number(opts.kktTaCachePrecision))))
+        : ((spotFastMode || kktUseMatrixFreeCore) ? 4 : 6);
 
       const buildKktXKey = (x: number[]) => {
         const clamped = clampToBounds(x);
@@ -5307,6 +5871,8 @@ export async function runOptimizationMVP(options = {}) {
           ? Number(getJointCurrentValue(jointState, v.id))
           : Number(v.value) || 0
         );
+        let __prevTaEvalXKey: any = null;
+        let __prevTaEvalXKeyApprox: any = null;
 
         const prev = getScenarioOverrideGlobal();
         const overrideMap = (prev && typeof prev === 'object') ? { ...prev } : {};
@@ -5318,6 +5884,21 @@ export async function runOptimizationMVP(options = {}) {
         const residuals: number[] = [];
 
         try {
+          try {
+            if (typeof globalThis !== 'undefined') {
+              __prevTaEvalXKey = (globalThis as any).__cooptEvalXKey;
+              __prevTaEvalXKeyApprox = (globalThis as any).__cooptEvalXKeyApproxTa;
+              (globalThis as any).__cooptEvalXKey = buildKktXKey(xClamped);
+
+              const approxParts = new Array(xClamped.length);
+              for (let i = 0; i < xClamped.length; i++) {
+                const v = Number(xClamped[i]);
+                approxParts[i] = Number.isFinite(v) ? v.toExponential(kktTaCachePrecision) : String(v);
+              }
+              (globalThis as any).__cooptEvalXKeyApproxTa = approxParts.join('|');
+            }
+          } catch (_) {}
+
           if (useKktRuntimeCache) {
             try {
               __prevRuntimeCache = (editor && editor._runtimeCache !== undefined) ? editor._runtimeCache : null;
@@ -5392,6 +5973,15 @@ export async function runOptimizationMVP(options = {}) {
             // 【削除】else で等式制約を2つの不等式として重複登録するのを削除しました
           }
         } finally {
+          try {
+            if (typeof globalThis !== 'undefined') {
+              if (__prevTaEvalXKey !== undefined) (globalThis as any).__cooptEvalXKey = __prevTaEvalXKey;
+              else delete (globalThis as any).__cooptEvalXKey;
+              if (__prevTaEvalXKeyApprox !== undefined) (globalThis as any).__cooptEvalXKeyApproxTa = __prevTaEvalXKeyApprox;
+              else delete (globalThis as any).__cooptEvalXKeyApproxTa;
+            }
+          } catch (_) {}
+
           if (useKktRuntimeCache) {
             try {
               if (editor) editor._runtimeCache = __prevRuntimeCache;
@@ -6154,6 +6744,13 @@ export async function runOptimizationMVP(options = {}) {
       const kktTailStopMaxViol = Number.isFinite(Number(opts?.kktTailStopMaxViol))
         ? Math.max(0, Number(opts.kktTailStopMaxViol))
         : 1.0;
+      const kktStopWhenBestLeqRaw = Number(opts?.kktStopWhenBestLeq);
+      const kktStopWhenBestLeq = Number.isFinite(kktStopWhenBestLeqRaw)
+        ? kktStopWhenBestLeqRaw
+        : null;
+      const kktStopWhenBestLeqMinIter = Number.isFinite(Number(opts?.kktStopWhenBestLeqMinIter))
+        ? Math.max(0, Math.floor(Number(opts.kktStopWhenBestLeqMinIter)))
+        : 0;
       const kktHighViolThreshold = Number.isFinite(Number(opts?.kktHighViolThreshold))
         ? Math.max(0, Number(opts.kktHighViolThreshold))
         : 20;
@@ -6627,6 +7224,28 @@ export async function runOptimizationMVP(options = {}) {
             __profile.counts.kktWasmPilotLastReason = detail ? `${reason}: ${String(detail)}` : reason;
           } catch (_) {
             __profile.counts.kktWasmPilotLastReason = 'reason-read-failed';
+          }
+        }
+
+        if (!dx && kktUseMatrixFreeCore) {
+          try {
+            const matrixFree = solveNormalEqMatrixFreeWithOptionalWasm(J, r0, lmDamp, n);
+            if (matrixFree && Array.isArray(matrixFree.dx) && matrixFree.dx.length === n) {
+              dx = matrixFree.dx.slice();
+              predictedReductionPilot = Number(matrixFree.predictedReduction);
+              if (iter < 3 || iter % 100 === 0) {
+                console.log(`[MATRIX-FREE] Iter ${iter}: step accepted from kktUseMatrixFreeCore`, {
+                  predictedReduction: predictedReductionPilot,
+                  damping: lmDamp
+                });
+              }
+            } else if (__profile && __profile.counts) {
+              __profile.counts.kktMatrixFreeFallbacks = (Number(__profile.counts.kktMatrixFreeFallbacks) || 0) + 1;
+            }
+          } catch (_) {
+            if (__profile && __profile.counts) {
+              __profile.counts.kktMatrixFreeFallbacks = (Number(__profile.counts.kktMatrixFreeFallbacks) || 0) + 1;
+            }
           }
         }
 
@@ -7267,6 +7886,19 @@ export async function runOptimizationMVP(options = {}) {
           }
         } else {
           feasibleConvStreak = 0;
+        }
+
+        if (kktStopWhenBestLeq !== null
+          && iter >= kktStopWhenBestLeqMinIter
+          && Number.isFinite(bestScore)
+          && bestScore <= kktStopWhenBestLeq) {
+          console.log('🛑 [AL] Target-best stop at iter', iter, {
+            bestScore,
+            targetBestScore: kktStopWhenBestLeq,
+            minIter: kktStopWhenBestLeqMinIter,
+            maxViol
+          });
+          break;
         }
 
         if (Number.isFinite(bestScore)) {
@@ -8006,6 +8638,14 @@ export async function runOptimizationMVP(options = {}) {
         else {
           try { delete (globalThis as any).__cooptDisablePersistedTableFallback; } catch (_) {}
         }
+
+        if (__prevTaEvalRunId !== undefined) (globalThis as any).__cooptTaEvalRunId = __prevTaEvalRunId;
+        else {
+          try { delete (globalThis as any).__cooptTaEvalRunId; } catch (_) {}
+        }
+
+        try { delete (globalThis as any).__cooptEvalXKey; } catch (_) {}
+        try { delete (globalThis as any).__cooptEvalXKeyApproxTa; } catch (_) {}
       }
     } catch (_) {}
 
@@ -8024,8 +8664,10 @@ if (typeof window !== 'undefined') {
   window['OptimizationMVP'] = {
     run: runOptimizationMVP,
     compareWasmPilot: compareWasmPilotBenchmark,
+    compareMatrixFree: compareMatrixFreeBenchmark,
     compareKktAnalyticEq: compareKktAnalyticEqBenchmark,
     exportBenchmarkCsv: exportWasmPilotBenchmarkCsv,
+    exportMatrixFreeCsv: exportMatrixFreeBenchmarkCsv,
     pickAnalyticCandidates: pickAnalyticDerivativeCandidates,
     stop: () => {
       __optimizerStopRequested = true;

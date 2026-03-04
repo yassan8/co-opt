@@ -2363,18 +2363,20 @@ function setupOptimizeDesignIntentButton(): void {
   <link rel="icon" type="image/svg+xml" href="${faviconHref}" />
 </head>
 <body style="font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 12px;">
-<div style="font-size:14px; font-weight:600; margin-bottom:8px;">Optimize Progress</div>
-<div style="font-size:12px; color:#555; margin-bottom:10px;">Updates per candidate evaluation (±step)</div>
+<div style="display:flex; align-items:center; gap:10px; flex-wrap:nowrap; white-space:nowrap; margin-bottom:8px;">
+    <div style="font-size:14px; font-weight:600; flex:0 0 auto;">Optimize Progress</div>
+    <div id="opt-startup-progress-wrap" style="display:flex; align-items:center; gap:8px; flex:1 1 auto; min-width:0; margin:0;">
+        <div style="height:6px; background:#eceef2; border-radius:999px; overflow:hidden; flex:1 1 auto; min-width:120px;">
+            <div id="opt-startup-progress-bar" style="width:0%; height:100%; background:#4f8cff; transition:width 120ms linear;"></div>
+        </div>
+        <div id="opt-startup-progress-label" style="font-size:11px; color:#666; flex:0 0 auto;">Idle</div>
+    </div>
+</div>
+<div style="font-size:12px; color:#555; margin-bottom:10px; white-space:nowrap;">Updates per candidate evaluation (±step)</div>
 <div style="margin-bottom:10px; display:flex; align-items:center; gap:6px;">
     <button id="opt-run" style="padding:6px 10px;">Run</button>
     <button id="opt-stop" style="padding:6px 10px;" disabled>Stop</button>
     <span id="opt-stop-state" style="margin-left:8px; font-size:12px; color:#555;"></span>
-</div>
-<div id="opt-startup-progress-wrap" style="margin:-2px 0 10px 0;">
-    <div style="height:6px; background:#eceef2; border-radius:999px; overflow:hidden;">
-        <div id="opt-startup-progress-bar" style="width:0%; height:100%; background:#4f8cff; transition:width 120ms linear;"></div>
-    </div>
-    <div id="opt-startup-progress-label" style="font-size:11px; color:#666; margin-top:4px;">Idle</div>
 </div>
 <div style="margin-bottom:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
     <label style="font-size:12px; color:#555; display:flex; align-items:center; gap:6px;">

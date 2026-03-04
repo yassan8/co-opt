@@ -19,6 +19,27 @@ export function advance_ray_batch(pos, dirs, thickness, count) {
 }
 
 /**
+ * @param {Float64Array} r0
+ * @param {Float64Array} r_batches
+ * @param {number} m
+ * @param {number} n
+ * @param {Float64Array} steps
+ * @returns {Float64Array}
+ */
+export function assemble_fd_jacobian(r0, r_batches, m, n, steps) {
+    const ptr0 = passArrayF64ToWasm0(r0, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(r_batches, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(steps, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.assemble_fd_jacobian(ptr0, len0, ptr1, len1, m, n, ptr2, len2);
+    var v4 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v4;
+}
+
+/**
  * Phase 3: Armijo backtracking line search with JS merit callback
  *
  * Finds alpha in {alpha_init, alpha_init*rho, ...} satisfying:
@@ -179,6 +200,14 @@ export function fft_2d_inverse(real_ptr, imag_ptr, rows, cols, real_out_ptr, ima
 }
 
 /**
+ * @param {number} ptr
+ * @param {number} size
+ */
+export function free(ptr, size) {
+    wasm.free(ptr, size);
+}
+
+/**
  * @param {number} ray_count
  * @param {number} max_radius
  * @param {number} ring_count
@@ -201,6 +230,23 @@ export function generate_centered_grid_offsets_flat(ray_count, half_extent) {
     var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v1;
+}
+
+/**
+ * @param {Float64Array} x
+ * @param {Float64Array} steps
+ * @param {number} n
+ * @returns {Float64Array}
+ */
+export function generate_fd_perturbation_points(x, steps, n) {
+    const ptr0 = passArrayF64ToWasm0(x, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(steps, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.generate_fd_perturbation_points(ptr0, len0, ptr1, len1, n);
+    var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v3;
 }
 
 /**
@@ -264,6 +310,15 @@ export function intersect_aspheric_rt10_batch(rays, ray_count, params, mode_odd,
 }
 
 /**
+ * @param {number} size
+ * @returns {number}
+ */
+export function malloc(size) {
+    const ret = wasm.malloc(size);
+    return ret >>> 0;
+}
+
+/**
  * Matrix-vector multiplication: result = A * x
  * A is stored in row-major order (flat array)
  * @param {Float64Array} a_flat
@@ -281,6 +336,51 @@ export function matrix_vector_multiply(a_flat, x, rows, cols) {
     var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v3;
+}
+
+/**
+ * @param {number} x_ptr
+ * @param {number} steps_ptr
+ * @param {number} r0_ptr
+ * @param {number} r_batches_ptr
+ * @param {number} var_scales_ptr
+ * @param {number} out_dx_ptr
+ * @param {number} out_x_next_ptr
+ * @param {number} out_meta_ptr
+ * @param {number} n
+ * @param {number} m
+ * @param {number} damping
+ * @param {number} trust_radius
+ * @returns {number}
+ */
+export function optimize_one_iter_from_buffers(x_ptr, steps_ptr, r0_ptr, r_batches_ptr, var_scales_ptr, out_dx_ptr, out_x_next_ptr, out_meta_ptr, n, m, damping, trust_radius) {
+    const ret = wasm.optimize_one_iter_from_buffers(x_ptr, steps_ptr, r0_ptr, r_batches_ptr, var_scales_ptr, out_dx_ptr, out_x_next_ptr, out_meta_ptr, n, m, damping, trust_radius);
+    return ret >>> 0;
+}
+
+/**
+ * @param {string} payload_json
+ * @returns {string}
+ */
+export function optimize_system_in_wasm(payload_json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(payload_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.optimize_system_in_wasm(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
 }
 
 /**
