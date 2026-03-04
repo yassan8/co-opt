@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-03-04T06:46:53.478Z",
+  "loops": 20,
+  "repeat": 15,
+  "statsOnly": false,
+  "rayCount": 101,
+  "targetSurfaceIndex": 23,
+  "base": {
+    "ms": 331.94129100000004,
+    "perCall": 16.597064550000002,
+    "pointsAvg": 102
+  },
+  "lightweight": {
+    "ms": 313.28487499999994,
+    "perCall": 15.664243749999997,
+    "pointsAvg": 102
+  },
+  "speedup": 1.0595509630013262
+}

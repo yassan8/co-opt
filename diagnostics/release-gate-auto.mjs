@@ -75,11 +75,12 @@ const normalizeStartStep = (v) => {
   const s = String(v ?? 'raytrace').trim().toLowerCase();
   if (s === 'raytrace' || s === 'ray' || s === '1') return 'raytrace';
   if (s === 'opd' || s === '2') return 'opd';
-  if (s === 'kkt' || s === '3') return 'kkt';
+  if (s === 'ta' || s === 'ta-mode' || s === 'tamode' || s === '3') return 'ta';
+  if (s === 'kkt' || s === '4') return 'kkt';
   return 'raytrace';
 };
 
-const stepOrder = ['raytrace', 'opd', 'kkt'];
+const stepOrder = ['raytrace', 'opd', 'ta', 'kkt'];
 
 const run = async () => {
   const startedAt = new Date().toISOString();
@@ -107,6 +108,11 @@ const run = async () => {
     raytraceMaxOplUm: toNumArg('ray-max-opl-um', 0),
     opdMinSpeedup: toNumArg('opd-min-speedup', 1.05),
     opdMaxValidDiff: toNumArg('opd-max-valid-diff', 0),
+    taMinMedianOfMedianSpeedup: toNumArg('ta-min-median-of-median-speedup', 0.99),
+    taMinPerRaycountSpeedup: toNumArg('ta-min-per-raycount-speedup', 0.97),
+    taRayCounts: toStrArg('ta-rayCounts', '21,31,51,81,101,151'),
+    taLoops: toNumArg('ta-loops', 20),
+    taRepeat: toNumArg('ta-repeat', 11),
     kktMinTotalSpeedup: toNumArg('kkt-min-total-speedup', 1.5),
     kktMinSolverSpeedup: toNumArg('kkt-min-solver-speedup', 1.0),
     kktMinWasmOkRate: toNumArg('kkt-min-wasm-ok-rate', 1.0),
@@ -138,6 +144,7 @@ const run = async () => {
     steps: {
       raytrace: { passed: false, skipped: false, golden: null, analysis: null },
       opd: { passed: false, skipped: false, result: null, analysis: null },
+      ta: { passed: false, skipped: false, result: null, analysis: null },
       kkt: { passed: false, skipped: false, result: null, analysis: null }
     },
     passed: false,
@@ -207,6 +214,28 @@ const run = async () => {
     }
     await persistSummary(summary);
 
+    if (shouldRunStep('ta')) {
+      runNode('diagnostics/ta-rms-lightweight-mode-auto.mjs', [
+        '--rayCounts', String(thresholds.taRayCounts),
+        '--loops', String(thresholds.taLoops),
+        '--repeat', String(thresholds.taRepeat),
+        '--min-median-of-median-speedup', String(thresholds.taMinMedianOfMedianSpeedup),
+        '--min-per-raycount-speedup', String(thresholds.taMinPerRaycountSpeedup)
+      ]);
+
+      const taResult = await listLatest(/^ta-rms-lightweight-vs-statsonly-.*\.json$/i, /^ta-rms-lightweight-vs-statsonly-analysis-.*\.json$/i);
+      const taAnalysis = await listLatest(/^ta-rms-lightweight-vs-statsonly-analysis-.*\.json$/i);
+      summary.steps.ta = {
+        passed: !!(taResult && taAnalysis),
+        skipped: false,
+        result: taResult ? path.relative(projectRoot, taResult) : null,
+        analysis: taAnalysis ? path.relative(projectRoot, taAnalysis) : null
+      };
+    } else {
+      summary.steps.ta = { ...summary.steps.ta, skipped: true };
+    }
+    await persistSummary(summary);
+
     if (shouldRunStep('kkt')) {
       runNode('diagnostics/kkt-e2e-auto.mjs', [
         '--min-total-speedup', String(thresholds.kktMinTotalSpeedup),
@@ -233,7 +262,7 @@ const run = async () => {
     }
     await persistSummary(summary);
 
-    summary.passed = ['raytrace', 'opd', 'kkt'].every((step) => {
+    summary.passed = ['raytrace', 'opd', 'ta', 'kkt'].every((step) => {
       const s = summary.steps[step];
       return s.skipped || s.passed;
     });
@@ -242,6 +271,7 @@ const run = async () => {
     summary.error = msg;
     if (msg.includes('raytrace-golden-auto')) summary.failedStep = 'raytrace';
     else if (msg.includes('opd-full-batch-benchmark') || msg.includes('opd-full-batch-analyze') || msg.includes('opd-full-batch-auto')) summary.failedStep = 'opd';
+    else if (msg.includes('ta-rms-lightweight-mode-auto') || msg.includes('ta-rms-lightweight-mode-analyze') || msg.includes('ta-rms-micro-benchmark')) summary.failedStep = 'ta';
     else if (msg.includes('kkt-e2e-auto')) summary.failedStep = 'kkt';
     else if (msg.includes('failed with signal')) summary.failedStep = 'interrupted';
     else summary.failedStep = 'unknown';
@@ -269,6 +299,19 @@ const run = async () => {
           skipped: false,
           result: opdResult ? path.relative(projectRoot, opdResult) : null,
           analysis: opdAnalysis ? path.relative(projectRoot, opdAnalysis) : null
+        };
+      }
+    }
+
+    if (shouldRunStep('ta')) {
+      const taResult = await listLatest(/^ta-rms-lightweight-vs-statsonly-.*\.json$/i, /^ta-rms-lightweight-vs-statsonly-analysis-.*\.json$/i);
+      const taAnalysis = await listLatest(/^ta-rms-lightweight-vs-statsonly-analysis-.*\.json$/i);
+      if (taResult || taAnalysis) {
+        summary.steps.ta = {
+          passed: false,
+          skipped: false,
+          result: taResult ? path.relative(projectRoot, taResult) : null,
+          analysis: taAnalysis ? path.relative(projectRoot, taAnalysis) : null
         };
       }
     }

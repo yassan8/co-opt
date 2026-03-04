@@ -1,0 +1,71 @@
+{
+  "timestamp": "2026-03-04T07:09:12.106Z",
+  "inputPath": "diagnostics/results/ta-rms-lightweight-vs-statsonly-sweep-r11.json",
+  "metrics": {
+    "rayCountCount": 6,
+    "medianOfMedianStatsOnlySpeedup": 1.0006369838648643,
+    "minPerRayCountSpeedup": 0.9804172117974317,
+    "maxPerRayCountSpeedup": 1.012093717380105,
+    "rows": [
+      {
+        "rayCount": 21,
+        "medianLightweightPerCallMs": 6.575227100000006,
+        "medianStatsOnlyPerCallMs": 6.496658350000007,
+        "medianStatsOnlySpeedup": 1.012093717380105
+      },
+      {
+        "rayCount": 31,
+        "medianLightweightPerCallMs": 7.7491750000000135,
+        "medianStatsOnlyPerCallMs": 7.735595850000027,
+        "medianStatsOnlySpeedup": 1.0017554109939684
+      },
+      {
+        "rayCount": 51,
+        "medianLightweightPerCallMs": 10.055708349999986,
+        "medianStatsOnlyPerCallMs": 10.256560400000035,
+        "medianStatsOnlySpeedup": 0.9804172117974317
+      },
+      {
+        "rayCount": 81,
+        "medianLightweightPerCallMs": 13.71704580000005,
+        "medianStatsOnlyPerCallMs": 13.710558300000049,
+        "medianStatsOnlySpeedup": 1.0004731754796594
+      },
+      {
+        "rayCount": 101,
+        "medianLightweightPerCallMs": 15.947677100000146,
+        "medianStatsOnlyPerCallMs": 15.990168749999976,
+        "medianStatsOnlySpeedup": 0.9973426390512714
+      },
+      {
+        "rayCount": 151,
+        "medianLightweightPerCallMs": 21.96983959999998,
+        "medianStatsOnlyPerCallMs": 21.95226040000016,
+        "medianStatsOnlySpeedup": 1.000800792250069
+      }
+    ]
+  },
+  "requirementGate": {
+    "enabled": true,
+    "thresholds": {
+      "minMedianOfMedianSpeedup": 0.99,
+      "minPerRayCountSpeedup": 0.97
+    },
+    "checks": [
+      {
+        "name": "medianOfMedianStatsOnlySpeedup",
+        "actual": 1.0006369838648643,
+        "limit": 0.99,
+        "pass": true
+      },
+      {
+        "name": "minPerRayCountSpeedup",
+        "actual": 0.9804172117974317,
+        "limit": 0.97,
+        "pass": true
+      }
+    ],
+    "failedChecks": [],
+    "passed": true
+  }
+}

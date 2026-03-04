@@ -72,6 +72,20 @@ type RustRayTracingWasm = {
   generate_fd_perturbation_points?: (x: Float64Array, steps: Float64Array, n: number) => Float64Array;
   assemble_fd_jacobian?: (r0: Float64Array, rBatches: Float64Array, m: number, n: number, steps: Float64Array) => Float64Array;
   optimize_system_in_wasm?: (payloadJson: string) => any;
+  optimize_one_iter_from_buffers?: (
+    xPtr: number,
+    stepsPtr: number,
+    r0Ptr: number,
+    rBatchesPtr: number,
+    varScalesPtr: number,
+    outDxPtr: number,
+    outXNextPtr: number,
+    outMetaPtr: number,
+    n: number,
+    m: number,
+    damping: number,
+    trustRadius: number
+  ) => number;
   // Phase 1: Linear Algebra Kernels
   vector_add_scaled?: (x: Float64Array, y: Float64Array, alpha: number) => Float64Array;
   vector_dot?: (x: Float64Array, y: Float64Array) => number;
@@ -142,7 +156,6 @@ function normalizeBaseUrl(): string {
 function buildBrowserModuleCandidates(): string[] {
   const baseUrl = normalizeBaseUrl();
   const candidates = [
-    `${baseUrl}public/rust-wasm/pkg/surface_origins.js`,
     `${baseUrl}rust-wasm/pkg/surface_origins.js`
   ];
   return Array.from(new Set(candidates));
@@ -192,11 +205,11 @@ async function importSurfaceOriginsModule(): Promise<any> {
   }
 }
 
-async function initRustRayTracingModule(mod: any): Promise<void> {
-  if (typeof mod?.default !== 'function') return;
+async function initRustRayTracingModule(mod: any): Promise<any> {
+  if (typeof mod?.default !== 'function') return null;
   if (!isNodeRuntime) {
-    await mod.default();
-    return;
+    const exportsObj = await mod.default();
+    return exportsObj || null;
   }
 
   // Node.js only - load WASM from filesystem
@@ -207,9 +220,11 @@ async function initRustRayTracingModule(mod: any): Promise<void> {
     const wasmUrl = new URL('../../pkg/surface_origins_bg.wasm', import.meta.url);
     const wasmPath = fileURLToPath(wasmUrl);
     const bytes = await readFile(wasmPath);
-    await mod.default({ module_or_path: bytes });
+    const exportsObj = await mod.default({ module_or_path: bytes });
+    return exportsObj || null;
   } catch {
     // Fail silently in browser context
+    return null;
   }
 }
 
@@ -235,7 +250,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
       try {
         rustWasmLastInitAttemptMs = Date.now();
         const mod = await importSurfaceOriginsModule();
-        await initRustRayTracingModule(mod);
+        const initExports = await initRustRayTracingModule(mod);
         const api: RustRayTracingWasm = {
           intersect_aspheric_rt10: mod.intersect_aspheric_rt10,
           intersect_aspheric_rt10_batch: mod.intersect_aspheric_rt10_batch,
@@ -265,6 +280,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           generate_fd_perturbation_points: mod.generate_fd_perturbation_points,
           assemble_fd_jacobian: mod.assemble_fd_jacobian,
           optimize_system_in_wasm: mod.optimize_system_in_wasm,
+          optimize_one_iter_from_buffers: mod.optimize_one_iter_from_buffers,
           vector_add_scaled: mod.vector_add_scaled,
           vector_dot: mod.vector_dot,
           vector_norm: mod.vector_norm,
@@ -278,7 +294,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           update_trust_region_radius: mod.update_trust_region_radius,
           malloc: mod.malloc,
           free: mod.free,
-          memory: mod.memory
+          memory: mod.memory || initExports?.memory
         };
         if (
           typeof api.intersect_aspheric_rt10 !== 'function' ||

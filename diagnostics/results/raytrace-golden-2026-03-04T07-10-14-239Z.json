@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-03-03T09:21:46.876Z",
+  "timestamp": "2026-03-04T07:10:14.260Z",
   "inputPath": "defaults/default-load.json",
-  "outputPath": "diagnostics/results/raytrace-golden-2026-03-03T09-21-46-801Z.json",
+  "outputPath": "diagnostics/results/raytrace-golden-2026-03-04T07-10-14-239Z.json",
   "settings": {
     "engine": "both",
     "rayCount": 25,
@@ -1679,7 +1679,7 @@
           "index": 0,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706888,
+            "at": 1772608214272,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -1726,7 +1726,7 @@
           "index": 1,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706888,
+            "at": 1772608214272,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -1773,7 +1773,7 @@
           "index": 2,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706888,
+            "at": 1772608214272,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -1820,7 +1820,7 @@
           "index": 3,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706889,
+            "at": 1772608214272,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -1867,7 +1867,7 @@
           "index": 4,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706889,
+            "at": 1772608214273,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -1914,7 +1914,7 @@
           "index": 5,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706889,
+            "at": 1772608214273,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -1961,7 +1961,7 @@
           "index": 6,
           "reachedTarget": true,
           "probe": {
-            "at": 1772529706889,
+            "at": 1772608214273,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2008,7 +2008,7 @@
           "index": 7,
           "reachedTarget": true,
           "probe": {
-            "at": 1772529706889,
+            "at": 1772608214273,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2055,7 +2055,7 @@
           "index": 8,
           "reachedTarget": true,
           "probe": {
-            "at": 1772529706889,
+            "at": 1772608214273,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2102,7 +2102,7 @@
           "index": 9,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706889,
+            "at": 1772608214273,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2149,7 +2149,7 @@
           "index": 10,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706889,
+            "at": 1772608214273,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2196,7 +2196,7 @@
           "index": 11,
           "reachedTarget": true,
           "probe": {
-            "at": 1772529706890,
+            "at": 1772608214274,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2243,7 +2243,7 @@
           "index": 12,
           "reachedTarget": true,
           "probe": {
-            "at": 1772529706890,
+            "at": 1772608214274,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2290,7 +2290,7 @@
           "index": 13,
           "reachedTarget": true,
           "probe": {
-            "at": 1772529706890,
+            "at": 1772608214274,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2337,7 +2337,7 @@
           "index": 14,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706890,
+            "at": 1772608214274,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2384,7 +2384,7 @@
           "index": 15,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706890,
+            "at": 1772608214274,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2431,7 +2431,7 @@
           "index": 16,
           "reachedTarget": true,
           "probe": {
-            "at": 1772529706890,
+            "at": 1772608214274,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2478,7 +2478,7 @@
           "index": 17,
           "reachedTarget": true,
           "probe": {
-            "at": 1772529706890,
+            "at": 1772608214274,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2525,7 +2525,7 @@
           "index": 18,
           "reachedTarget": true,
           "probe": {
-            "at": 1772529706890,
+            "at": 1772608214275,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2572,7 +2572,7 @@
           "index": 19,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706891,
+            "at": 1772608214275,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2619,7 +2619,7 @@
           "index": 20,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706891,
+            "at": 1772608214275,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2666,7 +2666,7 @@
           "index": 21,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706891,
+            "at": 1772608214275,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2713,7 +2713,7 @@
           "index": 22,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706891,
+            "at": 1772608214275,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2760,7 +2760,7 @@
           "index": 23,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706891,
+            "at": 1772608214275,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2807,7 +2807,7 @@
           "index": 24,
           "reachedTarget": false,
           "probe": {
-            "at": 1772529706891,
+            "at": 1772608214275,
             "surfaceIndex": 3,
             "surfaceNumber": 4,
             "useRustWasm": false,
@@ -2860,7 +2860,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706901,
+            "at": 1772608214285,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -2874,7 +2874,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706901,
+            "at": 1772608214285,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -2888,7 +2888,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706901,
+            "at": 1772608214285,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -2902,7 +2902,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706901,
+            "at": 1772608214286,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -2916,7 +2916,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706901,
+            "at": 1772608214286,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -2930,7 +2930,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706902,
+            "at": 1772608214286,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -2948,7 +2948,7 @@
           },
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706902,
+            "at": 1772608214286,
             "status": 1,
             "statusLabel": "ok",
             "targetSurfaceIndex": 23,
@@ -2970,7 +2970,7 @@
           },
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706902,
+            "at": 1772608214286,
             "status": 1,
             "statusLabel": "ok",
             "targetSurfaceIndex": 23,
@@ -2992,7 +2992,7 @@
           },
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706902,
+            "at": 1772608214286,
             "status": 1,
             "statusLabel": "ok",
             "targetSurfaceIndex": 23,
@@ -3010,7 +3010,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706902,
+            "at": 1772608214286,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -3024,7 +3024,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706902,
+            "at": 1772608214287,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -3042,7 +3042,7 @@
           },
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706903,
+            "at": 1772608214287,
             "status": 1,
             "statusLabel": "ok",
             "targetSurfaceIndex": 23,
@@ -3064,7 +3064,7 @@
           },
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706903,
+            "at": 1772608214287,
             "status": 1,
             "statusLabel": "ok",
             "targetSurfaceIndex": 23,
@@ -3086,7 +3086,7 @@
           },
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706903,
+            "at": 1772608214287,
             "status": 1,
             "statusLabel": "ok",
             "targetSurfaceIndex": 23,
@@ -3104,7 +3104,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706903,
+            "at": 1772608214287,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -3118,7 +3118,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706903,
+            "at": 1772608214287,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -3136,7 +3136,7 @@
           },
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706903,
+            "at": 1772608214288,
             "status": 1,
             "statusLabel": "ok",
             "targetSurfaceIndex": 23,
@@ -3158,7 +3158,7 @@
           },
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706903,
+            "at": 1772608214288,
             "status": 1,
             "statusLabel": "ok",
             "targetSurfaceIndex": 23,
@@ -3180,7 +3180,7 @@
           },
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706904,
+            "at": 1772608214288,
             "status": 1,
             "statusLabel": "ok",
             "targetSurfaceIndex": 23,
@@ -3198,7 +3198,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706904,
+            "at": 1772608214288,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -3212,7 +3212,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706904,
+            "at": 1772608214288,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -3226,7 +3226,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706904,
+            "at": 1772608214288,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -3240,7 +3240,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706904,
+            "at": 1772608214288,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -3254,7 +3254,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706904,
+            "at": 1772608214288,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,
@@ -3268,7 +3268,7 @@
           "hitPoint": null,
           "failure": null,
           "rustSingleMeta": {
-            "at": 1772529706904,
+            "at": 1772608214289,
             "status": 4,
             "statusLabel": "aperture_block",
             "targetSurfaceIndex": 23,

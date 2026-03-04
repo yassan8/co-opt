@@ -200,6 +200,14 @@ export function fft_2d_inverse(real_ptr, imag_ptr, rows, cols, real_out_ptr, ima
 }
 
 /**
+ * @param {number} ptr
+ * @param {number} size
+ */
+export function free(ptr, size) {
+    wasm.free(ptr, size);
+}
+
+/**
  * @param {number} ray_count
  * @param {number} max_radius
  * @param {number} ring_count
@@ -302,6 +310,15 @@ export function intersect_aspheric_rt10_batch(rays, ray_count, params, mode_odd,
 }
 
 /**
+ * @param {number} size
+ * @returns {number}
+ */
+export function malloc(size) {
+    const ret = wasm.malloc(size);
+    return ret >>> 0;
+}
+
+/**
  * Matrix-vector multiplication: result = A * x
  * A is stored in row-major order (flat array)
  * @param {Float64Array} a_flat
@@ -319,6 +336,26 @@ export function matrix_vector_multiply(a_flat, x, rows, cols) {
     var v3 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v3;
+}
+
+/**
+ * @param {number} x_ptr
+ * @param {number} steps_ptr
+ * @param {number} r0_ptr
+ * @param {number} r_batches_ptr
+ * @param {number} var_scales_ptr
+ * @param {number} out_dx_ptr
+ * @param {number} out_x_next_ptr
+ * @param {number} out_meta_ptr
+ * @param {number} n
+ * @param {number} m
+ * @param {number} damping
+ * @param {number} trust_radius
+ * @returns {number}
+ */
+export function optimize_one_iter_from_buffers(x_ptr, steps_ptr, r0_ptr, r_batches_ptr, var_scales_ptr, out_dx_ptr, out_x_next_ptr, out_meta_ptr, n, m, damping, trust_radius) {
+    const ret = wasm.optimize_one_iter_from_buffers(x_ptr, steps_ptr, r0_ptr, r_batches_ptr, var_scales_ptr, out_dx_ptr, out_x_next_ptr, out_meta_ptr, n, m, damping, trust_radius);
+    return ret >>> 0;
 }
 
 /**

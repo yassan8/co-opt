@@ -1,0 +1,738 @@
+{
+  "timestamp": "2026-03-04T06:53:56.037Z",
+  "targetSurfaceIndex": 23,
+  "loops": 20,
+  "repeat": 11,
+  "compareLightweightModes": true,
+  "rayCounts": [
+    21,
+    31,
+    51,
+    81,
+    101,
+    151
+  ],
+  "sweep": [
+    {
+      "rayCount": 21,
+      "repeat": 11,
+      "loops": 20,
+      "medianLightweightPerCallMs": 6.575227100000006,
+      "medianStatsOnlyPerCallMs": 6.496658350000007,
+      "medianStatsOnlySpeedup": 1.012093717380105,
+      "runs": [
+        {
+          "lightweightPerCallMs": 6.478452099999998,
+          "statsOnlyPerCallMs": 6.4789604,
+          "statsOnlySpeedup": 0.999921546055444,
+          "lightweightMs": 129.56904199999997,
+          "statsOnlyMs": 129.579208,
+          "lightweightPointsAvg": 22,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 6.441777049999996,
+          "statsOnlyPerCallMs": 7.057937500000003,
+          "statsOnlySpeedup": 0.9126996449033437,
+          "lightweightMs": 128.83554099999992,
+          "statsOnlyMs": 141.15875000000005,
+          "lightweightPointsAvg": 22,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 6.715549999999996,
+          "statsOnlyPerCallMs": 6.496658350000007,
+          "statsOnlySpeedup": 1.033692960012279,
+          "lightweightMs": 134.31099999999992,
+          "statsOnlyMs": 129.93316700000014,
+          "lightweightPointsAvg": 22,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 6.579895849999991,
+          "statsOnlyPerCallMs": 6.461433299999999,
+          "statsOnlySpeedup": 1.0183337882633552,
+          "lightweightMs": 131.59791699999982,
+          "statsOnlyMs": 129.22866599999998,
+          "lightweightPointsAvg": 22,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 6.539995850000014,
+          "statsOnlyPerCallMs": 6.473062500000003,
+          "statsOnlySpeedup": 1.010340291013722,
+          "lightweightMs": 130.79991700000028,
+          "statsOnlyMs": 129.46125000000006,
+          "lightweightPointsAvg": 22,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 6.575227100000006,
+          "statsOnlyPerCallMs": 6.460058299999991,
+          "statsOnlySpeedup": 1.0178278267241048,
+          "lightweightMs": 131.50454200000013,
+          "statsOnlyMs": 129.20116599999983,
+          "lightweightPointsAvg": 22,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 6.439685400000007,
+          "statsOnlyPerCallMs": 6.38353125000001,
+          "statsOnlySpeedup": 1.0087967220337486,
+          "lightweightMs": 128.79370800000015,
+          "statsOnlyMs": 127.6706250000002,
+          "lightweightPointsAvg": 22,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 6.49404790000001,
+          "statsOnlyPerCallMs": 6.51421670000002,
+          "statsOnlySpeedup": 0.996903879479476,
+          "lightweightMs": 129.8809580000002,
+          "statsOnlyMs": 130.2843340000004,
+          "lightweightPointsAvg": 22,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 6.5945332999999895,
+          "statsOnlyPerCallMs": 6.535527099999991,
+          "statsOnlySpeedup": 1.0090285296192865,
+          "lightweightMs": 131.89066599999978,
+          "statsOnlyMs": 130.7105419999998,
+          "lightweightPointsAvg": 22,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 6.61075209999999,
+          "statsOnlyPerCallMs": 6.730743750000011,
+          "statsOnlySpeedup": 0.9821726016534175,
+          "lightweightMs": 132.2150419999998,
+          "statsOnlyMs": 134.6148750000002,
+          "lightweightPointsAvg": 22,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 6.578022899999996,
+          "statsOnlyPerCallMs": 6.638887499999987,
+          "statsOnlySpeedup": 0.9908321085422835,
+          "lightweightMs": 131.56045799999993,
+          "statsOnlyMs": 132.77774999999974,
+          "lightweightPointsAvg": 22,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        }
+      ]
+    },
+    {
+      "rayCount": 31,
+      "repeat": 11,
+      "loops": 20,
+      "medianLightweightPerCallMs": 7.7491750000000135,
+      "medianStatsOnlyPerCallMs": 7.735595850000027,
+      "medianStatsOnlySpeedup": 1.0017554109939684,
+      "runs": [
+        {
+          "lightweightPerCallMs": 7.875587499999983,
+          "statsOnlyPerCallMs": 7.756412499999987,
+          "statsOnlySpeedup": 1.0153647062994646,
+          "lightweightMs": 157.51174999999967,
+          "statsOnlyMs": 155.12824999999975,
+          "lightweightPointsAvg": 31,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 7.7491750000000135,
+          "statsOnlyPerCallMs": 7.6568145500000355,
+          "statsOnlySpeedup": 1.0120625162587982,
+          "lightweightMs": 154.98350000000028,
+          "statsOnlyMs": 153.1362910000007,
+          "lightweightPointsAvg": 31,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 7.820708350000041,
+          "statsOnlyPerCallMs": 7.810502100000031,
+          "statsOnlySpeedup": 1.0013067341726993,
+          "lightweightMs": 156.41416700000082,
+          "statsOnlyMs": 156.2100420000006,
+          "lightweightPointsAvg": 31,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 7.759197899999981,
+          "statsOnlyPerCallMs": 7.733616650000021,
+          "statsOnlySpeedup": 1.0033077990748298,
+          "lightweightMs": 155.18395799999962,
+          "statsOnlyMs": 154.67233300000044,
+          "lightweightPointsAvg": 31,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 7.7176229000000145,
+          "statsOnlyPerCallMs": 7.8492312500000025,
+          "statsOnlySpeedup": 0.9832329631006873,
+          "lightweightMs": 154.3524580000003,
+          "statsOnlyMs": 156.98462500000005,
+          "lightweightPointsAvg": 31,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 7.790629200000012,
+          "statsOnlyPerCallMs": 7.735595850000027,
+          "statsOnlySpeedup": 1.0071143000574396,
+          "lightweightMs": 155.81258400000024,
+          "statsOnlyMs": 154.71191700000054,
+          "lightweightPointsAvg": 31,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 7.746010449999995,
+          "statsOnlyPerCallMs": 7.824852050000027,
+          "statsOnlySpeedup": 0.9899242056595776,
+          "lightweightMs": 154.9202089999999,
+          "statsOnlyMs": 156.49704100000054,
+          "lightweightPointsAvg": 31,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 7.727272949999997,
+          "statsOnlyPerCallMs": 7.7509187499999825,
+          "statsOnlySpeedup": 0.9969492906889282,
+          "lightweightMs": 154.54545899999994,
+          "statsOnlyMs": 155.01837499999965,
+          "lightweightPointsAvg": 31,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 7.675633349999998,
+          "statsOnlyPerCallMs": 7.721214550000013,
+          "statsOnlySpeedup": 0.9940966282305916,
+          "lightweightMs": 153.51266699999996,
+          "statsOnlyMs": 154.42429100000027,
+          "lightweightPointsAvg": 31,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 7.786006249999991,
+          "statsOnlyPerCallMs": 7.7036895999999615,
+          "statsOnlySpeedup": 1.010685353937421,
+          "lightweightMs": 155.72012499999983,
+          "statsOnlyMs": 154.07379199999923,
+          "lightweightPointsAvg": 31,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 7.69712499999996,
+          "statsOnlyPerCallMs": 7.657254150000062,
+          "statsOnlySpeedup": 1.0052069383122013,
+          "lightweightMs": 153.9424999999992,
+          "statsOnlyMs": 153.14508300000125,
+          "lightweightPointsAvg": 31,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        }
+      ]
+    },
+    {
+      "rayCount": 51,
+      "repeat": 11,
+      "loops": 20,
+      "medianLightweightPerCallMs": 10.055708349999986,
+      "medianStatsOnlyPerCallMs": 10.256560400000035,
+      "medianStatsOnlySpeedup": 0.9804172117974317,
+      "runs": [
+        {
+          "lightweightPerCallMs": 9.946114600000055,
+          "statsOnlyPerCallMs": 10.024270799999977,
+          "statsOnlySpeedup": 0.9922033032068605,
+          "lightweightMs": 198.9222920000011,
+          "statsOnlyMs": 200.48541599999953,
+          "lightweightPointsAvg": 51,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 9.98032290000001,
+          "statsOnlyPerCallMs": 9.961966649999976,
+          "statsOnlySpeedup": 1.0018426331511594,
+          "lightweightMs": 199.6064580000002,
+          "statsOnlyMs": 199.23933299999953,
+          "lightweightPointsAvg": 51,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 10.027345850000074,
+          "statsOnlyPerCallMs": 9.969433349999964,
+          "statsOnlySpeedup": 1.0058090061859044,
+          "lightweightMs": 200.54691700000149,
+          "statsOnlyMs": 199.38866699999926,
+          "lightweightPointsAvg": 51,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 9.985104150000007,
+          "statsOnlyPerCallMs": 10.048043750000033,
+          "statsOnlySpeedup": 0.9937361339613966,
+          "lightweightMs": 199.70208300000013,
+          "statsOnlyMs": 200.96087500000067,
+          "lightweightPointsAvg": 51,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 10.055708349999986,
+          "statsOnlyPerCallMs": 10.082049999999981,
+          "statsOnlySpeedup": 0.9973872724297146,
+          "lightweightMs": 201.11416699999972,
+          "statsOnlyMs": 201.64099999999962,
+          "lightweightPointsAvg": 51,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 10.033760400000029,
+          "statsOnlyPerCallMs": 10.304916700000012,
+          "statsOnlySpeedup": 0.9736867062690586,
+          "lightweightMs": 200.67520800000057,
+          "statsOnlyMs": 206.09833400000025,
+          "lightweightPointsAvg": 51,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 10.211966699999994,
+          "statsOnlyPerCallMs": 10.338654150000002,
+          "statsOnlySpeedup": 0.9877462338751309,
+          "lightweightMs": 204.23933399999987,
+          "statsOnlyMs": 206.77308300000004,
+          "lightweightPointsAvg": 51,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 10.225152049999997,
+          "statsOnlyPerCallMs": 10.66386249999996,
+          "statsOnlySpeedup": 0.9588600800132255,
+          "lightweightMs": 204.50304099999994,
+          "statsOnlyMs": 213.27724999999919,
+          "lightweightPointsAvg": 51,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 10.121695799999998,
+          "statsOnlyPerCallMs": 10.352706249999937,
+          "statsOnlySpeedup": 0.977685984280686,
+          "lightweightMs": 202.43391599999995,
+          "statsOnlyMs": 207.05412499999875,
+          "lightweightPointsAvg": 51,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 10.156370800000058,
+          "statsOnlyPerCallMs": 10.287739599999986,
+          "statsOnlySpeedup": 0.9872305477094377,
+          "lightweightMs": 203.12741600000118,
+          "statsOnlyMs": 205.75479199999972,
+          "lightweightPointsAvg": 51,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 10.27598125000004,
+          "statsOnlyPerCallMs": 10.256560400000035,
+          "statsOnlySpeedup": 1.0018935051559785,
+          "lightweightMs": 205.51962500000081,
+          "statsOnlyMs": 205.1312080000007,
+          "lightweightPointsAvg": 51,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        }
+      ]
+    },
+    {
+      "rayCount": 81,
+      "repeat": 11,
+      "loops": 20,
+      "medianLightweightPerCallMs": 13.71704580000005,
+      "medianStatsOnlyPerCallMs": 13.710558300000049,
+      "medianStatsOnlySpeedup": 1.0004731754796594,
+      "runs": [
+        {
+          "lightweightPerCallMs": 13.786733300000014,
+          "statsOnlyPerCallMs": 14.024939600000016,
+          "statsOnlySpeedup": 0.9830155204376066,
+          "lightweightMs": 275.7346660000003,
+          "statsOnlyMs": 280.4987920000003,
+          "lightweightPointsAvg": 82,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 13.809231249999993,
+          "statsOnlyPerCallMs": 13.839710449999984,
+          "statsOnlySpeedup": 0.997797699589879,
+          "lightweightMs": 276.18462499999987,
+          "statsOnlyMs": 276.7942089999997,
+          "lightweightPointsAvg": 82,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 13.692299999999978,
+          "statsOnlyPerCallMs": 13.833987500000058,
+          "statsOnlySpeedup": 0.9897580144553348,
+          "lightweightMs": 273.84599999999955,
+          "statsOnlyMs": 276.67975000000115,
+          "lightweightPointsAvg": 82,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 13.722022899999956,
+          "statsOnlyPerCallMs": 13.710558300000049,
+          "statsOnlySpeedup": 1.0008361876846334,
+          "lightweightMs": 274.4404579999991,
+          "statsOnlyMs": 274.21116600000096,
+          "lightweightPointsAvg": 82,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 13.808750000000146,
+          "statsOnlyPerCallMs": 13.795843750000131,
+          "statsOnlySpeedup": 1.0009355172640322,
+          "lightweightMs": 276.1750000000029,
+          "statsOnlyMs": 275.9168750000026,
+          "lightweightPointsAvg": 82,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 13.539895799999977,
+          "statsOnlyPerCallMs": 13.703424999999879,
+          "statsOnlySpeedup": 0.9880665454074509,
+          "lightweightMs": 270.79791599999953,
+          "statsOnlyMs": 274.0684999999976,
+          "lightweightPointsAvg": 82,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 13.37724789999993,
+          "statsOnlyPerCallMs": 13.515581249999922,
+          "statsOnlySpeedup": 0.9897648981985149,
+          "lightweightMs": 267.5449579999986,
+          "statsOnlyMs": 270.31162499999846,
+          "lightweightPointsAvg": 82,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 13.43378544999996,
+          "statsOnlyPerCallMs": 13.382362499999909,
+          "statsOnlySpeedup": 1.0038425913212299,
+          "lightweightMs": 268.6757089999992,
+          "statsOnlyMs": 267.64724999999817,
+          "lightweightPointsAvg": 82,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 13.71704580000005,
+          "statsOnlyPerCallMs": 13.49668330000004,
+          "statsOnlySpeedup": 1.0163271594288659,
+          "lightweightMs": 274.340916000001,
+          "statsOnlyMs": 269.9336660000008,
+          "lightweightPointsAvg": 82,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 13.439202100000148,
+          "statsOnlyPerCallMs": 13.535143750000135,
+          "statsOnlySpeedup": 0.9929116637568046,
+          "lightweightMs": 268.78404200000296,
+          "statsOnlyMs": 270.7028750000027,
+          "lightweightPointsAvg": 82,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 14.004266649999954,
+          "statsOnlyPerCallMs": 13.719843749999928,
+          "statsOnlySpeedup": 1.0207307681619937,
+          "lightweightMs": 280.0853329999991,
+          "statsOnlyMs": 274.39687499999854,
+          "lightweightPointsAvg": 82,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        }
+      ]
+    },
+    {
+      "rayCount": 101,
+      "repeat": 11,
+      "loops": 20,
+      "medianLightweightPerCallMs": 15.947677100000146,
+      "medianStatsOnlyPerCallMs": 15.990168749999976,
+      "medianStatsOnlySpeedup": 0.9973426390512714,
+      "runs": [
+        {
+          "lightweightPerCallMs": 15.947677100000146,
+          "statsOnlyPerCallMs": 16.037100000000102,
+          "statsOnlySpeedup": 0.9944239981043982,
+          "lightweightMs": 318.9535420000029,
+          "statsOnlyMs": 320.742000000002,
+          "lightweightPointsAvg": 102,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 15.816885449999972,
+          "statsOnlyPerCallMs": 15.999629149999965,
+          "statsOnlySpeedup": 0.9885782540153443,
+          "lightweightMs": 316.33770899999945,
+          "statsOnlyMs": 319.9925829999993,
+          "lightweightPointsAvg": 102,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 15.771504199999981,
+          "statsOnlyPerCallMs": 15.913170849999915,
+          "statsOnlySpeedup": 0.9910975222138123,
+          "lightweightMs": 315.4300839999996,
+          "statsOnlyMs": 318.2634169999983,
+          "lightweightPointsAvg": 102,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 15.771839550000005,
+          "statsOnlyPerCallMs": 15.666381249999905,
+          "statsOnlySpeedup": 1.0067315034861737,
+          "lightweightMs": 315.4367910000001,
+          "statsOnlyMs": 313.3276249999981,
+          "lightweightPointsAvg": 102,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 15.790570800000022,
+          "statsOnlyPerCallMs": 15.75682080000006,
+          "statsOnlySpeedup": 1.0021419295445666,
+          "lightweightMs": 315.81141600000046,
+          "statsOnlyMs": 315.1364160000012,
+          "lightweightPointsAvg": 102,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 16.176987499999996,
+          "statsOnlyPerCallMs": 16.352352100000097,
+          "statsOnlySpeedup": 0.9892758791562407,
+          "lightweightMs": 323.5397499999999,
+          "statsOnlyMs": 327.04704200000197,
+          "lightweightPointsAvg": 102,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 16.210422950000066,
+          "statsOnlyPerCallMs": 16.409327099999974,
+          "statsOnlySpeedup": 0.9878785919259353,
+          "lightweightMs": 324.2084590000013,
+          "statsOnlyMs": 328.18654199999946,
+          "lightweightPointsAvg": 102,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 16.009137499999998,
+          "statsOnlyPerCallMs": 15.910612500000024,
+          "statsOnlySpeedup": 1.0061924077404294,
+          "lightweightMs": 320.18274999999994,
+          "statsOnlyMs": 318.2122500000005,
+          "lightweightPointsAvg": 102,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 16.007956249999914,
+          "statsOnlyPerCallMs": 15.990168749999976,
+          "statsOnlySpeedup": 1.0011124022690467,
+          "lightweightMs": 320.1591249999983,
+          "statsOnlyMs": 319.8033749999995,
+          "lightweightPointsAvg": 102,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 15.74939585000011,
+          "statsOnlyPerCallMs": 15.770381249999991,
+          "statsOnlySpeedup": 0.9986693156197551,
+          "lightweightMs": 314.9879170000022,
+          "statsOnlyMs": 315.4076249999998,
+          "lightweightPointsAvg": 102,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 16.276010400000086,
+          "statsOnlyPerCallMs": 16.053531250000013,
+          "statsOnlySpeedup": 1.0138585801799882,
+          "lightweightMs": 325.52020800000173,
+          "statsOnlyMs": 321.0706250000003,
+          "lightweightPointsAvg": 102,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        }
+      ]
+    },
+    {
+      "rayCount": 151,
+      "repeat": 11,
+      "loops": 20,
+      "medianLightweightPerCallMs": 21.96983959999998,
+      "medianStatsOnlyPerCallMs": 21.95226040000016,
+      "medianStatsOnlySpeedup": 1.000800792250069,
+      "runs": [
+        {
+          "lightweightPerCallMs": 21.932066649999978,
+          "statsOnlyPerCallMs": 21.804231249999976,
+          "statsOnlySpeedup": 1.0058628712259692,
+          "lightweightMs": 438.6413329999996,
+          "statsOnlyMs": 436.0846249999995,
+          "lightweightPointsAvg": 151,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 21.750137499999983,
+          "statsOnlyPerCallMs": 21.66456249999992,
+          "statsOnlySpeedup": 1.0039499989902894,
+          "lightweightMs": 435.00274999999965,
+          "statsOnlyMs": 433.2912499999984,
+          "lightweightPointsAvg": 151,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 22.018329149999772,
+          "statsOnlyPerCallMs": 21.94594374999979,
+          "statsOnlySpeedup": 1.0032983498374266,
+          "lightweightMs": 440.36658299999544,
+          "statsOnlyMs": 438.91887499999575,
+          "lightweightPointsAvg": 151,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 21.7622625,
+          "statsOnlyPerCallMs": 21.951625000000057,
+          "statsOnlySpeedup": 0.9913736454590465,
+          "lightweightMs": 435.24524999999994,
+          "statsOnlyMs": 439.03250000000116,
+          "lightweightPointsAvg": 151,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 22.110252050000053,
+          "statsOnlyPerCallMs": 22.007068749999963,
+          "statsOnlySpeedup": 1.0046886435068774,
+          "lightweightMs": 442.2050410000011,
+          "statsOnlyMs": 440.14137499999924,
+          "lightweightPointsAvg": 151,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 22.047108300000037,
+          "statsOnlyPerCallMs": 21.976954199999817,
+          "statsOnlySpeedup": 1.0031921666379147,
+          "lightweightMs": 440.9421660000007,
+          "statsOnlyMs": 439.53908399999636,
+          "lightweightPointsAvg": 151,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 22.12526874999967,
+          "statsOnlyPerCallMs": 22.167058349999934,
+          "statsOnlySpeedup": 0.9981147881987569,
+          "lightweightMs": 442.50537499999336,
+          "statsOnlyMs": 443.3411669999987,
+          "lightweightPointsAvg": 151,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 21.96983959999998,
+          "statsOnlyPerCallMs": 21.95226040000016,
+          "statsOnlySpeedup": 1.000800792250069,
+          "lightweightMs": 439.39679199999955,
+          "statsOnlyMs": 439.0452080000032,
+          "lightweightPointsAvg": 151,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 22.136979199999768,
+          "statsOnlyPerCallMs": 22.078583300000172,
+          "statsOnlySpeedup": 1.0026449115509868,
+          "lightweightMs": 442.7395839999954,
+          "statsOnlyMs": 441.57166600000346,
+          "lightweightPointsAvg": 151,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        },
+        {
+          "lightweightPerCallMs": 21.839864599999782,
+          "statsOnlyPerCallMs": 21.868354150000233,
+          "statsOnlySpeedup": 0.9986972247748946,
+          "lightweightMs": 436.79729199999565,
+          "statsOnlyMs": 437.36708300000464,
+          "lightweightPointsAvg": 151,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": false
+        },
+        {
+          "lightweightPerCallMs": 21.90182295000013,
+          "statsOnlyPerCallMs": 22.01583329999994,
+          "statsOnlySpeedup": 0.994821438350925,
+          "lightweightMs": 438.03645900000265,
+          "statsOnlyMs": 440.3166659999988,
+          "lightweightPointsAvg": 151,
+          "statsOnlyPointsAvg": 0,
+          "statsFirst": true
+        }
+      ]
+    }
+  ],
+  "medianOfMedianStatsOnlySpeedup": 1.0006369838648643
+}

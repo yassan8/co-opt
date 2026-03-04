@@ -1706,7 +1706,8 @@ class MeritFunctionEditor {
                     imageSurfaceIndex,
                     [fieldSetting],
                     wavelength,
-                    rayCount
+                    rayCount,
+                    { lightweight: true }
                 ) as any;
                 if (this._runtimeCache) this._runtimeCache.set(taCacheKey, results);
             }
@@ -1715,49 +1716,58 @@ class MeritFunctionEditor {
             return 0;
         }
 
-        const collectValues = (series: any[]): number[] => {
-            if (!Array.isArray(series)) return [];
-            const values: number[] = [];
+        const collectStats = (series: any[]) => {
+            let sumSq = 0;
+            let count = 0;
+            if (!Array.isArray(series)) return { sumSq, count };
             for (let i = 0; i < series.length; i++) {
                 const item = series[i];
                 const pts = item?.points;
                 if (!Array.isArray(pts)) continue;
-                for (const p of pts) {
-                    const t = toFiniteNumber(p?.transverseAberration, NaN);
-                    if (Number.isFinite(t)) values.push(t);
+                for (let j = 0; j < pts.length; j++) {
+                    const t = toFiniteNumber(pts[j]?.transverseAberration, NaN);
+                    if (!Number.isFinite(t)) continue;
+                    sumSq += t * t;
+                    count++;
                 }
             }
-            return values;
+            return { sumSq, count };
         };
 
-        const meridionalValues = collectValues(results?.meridionalData);
-        const sagittalValues = collectValues(results?.sagittalData);
+        const meridionalStats = collectStats(results?.meridionalData);
+        const sagittalStats = collectStats(results?.sagittalData);
 
         // SELECT VALUES BASED ON COMPONENT PARAMETER
-        let valuesMm: number[] = [];
+        let sumSq = 0;
+        let count = 0;
         let effectiveComponent = component;
         if (component === 'meridional') {
-            valuesMm = meridionalValues;
-            if (valuesMm.length === 0 && sagittalValues.length > 0) {
-                valuesMm = sagittalValues;
+            sumSq = meridionalStats.sumSq;
+            count = meridionalStats.count;
+            if (count === 0 && sagittalStats.count > 0) {
+                sumSq = sagittalStats.sumSq;
+                count = sagittalStats.count;
                 effectiveComponent = 'sagittal-fallback';
             }
         } else if (component === 'sagittal') {
-            valuesMm = sagittalValues;
-            if (valuesMm.length === 0 && meridionalValues.length > 0) {
-                valuesMm = meridionalValues;
+            sumSq = sagittalStats.sumSq;
+            count = sagittalStats.count;
+            if (count === 0 && meridionalStats.count > 0) {
+                sumSq = meridionalStats.sumSq;
+                count = meridionalStats.count;
                 effectiveComponent = 'meridional-fallback';
             }
         } else {
             // 'total' or default: combine both
-            valuesMm = [...meridionalValues, ...sagittalValues];
+            sumSq = meridionalStats.sumSq + sagittalStats.sumSq;
+            count = meridionalStats.count + sagittalStats.count;
         }
 
-        if (!Array.isArray(valuesMm) || valuesMm.length === 0) {
+        if (count <= 0) {
             console.warn('⚠️ TA_RMS_UM: no transverse aberration data points', {
                 component,
-                meridionalCount: meridionalValues.length,
-                sagittalCount: sagittalValues.length
+                meridionalCount: meridionalStats.count,
+                sagittalCount: sagittalStats.count
             });
             // Return NaN so optimizer can treat it as invalid-current penalty,
             // instead of a misleading constant zero landscape.
@@ -1774,10 +1784,7 @@ class MeritFunctionEditor {
             });
         }
 
-        let sumSq = 0;
-        for (const v of valuesMm) sumSq += v * v;
-
-        const rmsMm = Math.sqrt(sumSq / valuesMm.length);
+        const rmsMm = Math.sqrt(sumSq / count);
         const resultUm = rmsMm * 1000;
         return resultUm;
     }

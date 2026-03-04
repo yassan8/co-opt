@@ -7,6 +7,23 @@ type OptimizerWasmApi = {
   generate_fd_perturbation_points?: (x: Float64Array, steps: Float64Array, n: number) => Float64Array;
   assemble_fd_jacobian?: (r0: Float64Array, rBatches: Float64Array, m: number, n: number, steps: Float64Array) => Float64Array;
   optimize_system_in_wasm?: (payloadJson: string) => any;
+  optimize_one_iter_from_buffers?: (
+    xPtr: number,
+    stepsPtr: number,
+    r0Ptr: number,
+    rBatchesPtr: number,
+    varScalesPtr: number,
+    outDxPtr: number,
+    outXNextPtr: number,
+    outMetaPtr: number,
+    n: number,
+    m: number,
+    damping: number,
+    trustRadius: number
+  ) => number;
+  malloc?: (size: number) => number;
+  free?: (ptr: number, size?: number) => void;
+  memory?: { buffer: ArrayBuffer };
   // Phase 1: Linear Algebra Kernels
   vector_add_scaled?: (x: Float64Array, y: Float64Array, alpha: number) => Float64Array;
   vector_dot?: (x: Float64Array, y: Float64Array) => number;
@@ -51,6 +68,7 @@ const optimizerWasmBridgeDebugState: Record<string, any> = {
   hasBuildNormalEq: false,
   hasFdBatchPoints: false,
   hasFdBatchJacobian: false,
+  hasPilotBufferAbi: false,
   hasVectorOps: false,
   hasMatrixOps: false,
   hasCholesky: false,
@@ -65,8 +83,159 @@ const optimizerWasmBridgeDebugState: Record<string, any> = {
   lastSolveReason: 'not-run',
   lastNormalEqReason: 'not-run',
   lastPilotReason: 'not-run',
-  lastPilotErrorDetail: null
+  lastPilotErrorDetail: null,
+  lastPilotPath: 'none',
+  lastPilotBufferAttempted: false,
+  lastPilotBufferStatus: null,
+  kktWasmBufferCalls: 0,
+  kktWasmBufferHits: 0,
+  kktWasmBufferFallbacks: 0,
+  kktWasmBufferStatusHistogram: {}
 };
+
+type OptimizerWasmWorkspace = {
+  capN: number;
+  capM: number;
+  ptrX: number;
+  ptrSteps: number;
+  ptrR0: number;
+  ptrRBatches: number;
+  ptrScales: number;
+  ptrDx: number;
+  ptrXNext: number;
+  ptrMeta: number;
+};
+
+let optimizerWasmWorkspace: OptimizerWasmWorkspace | null = null;
+
+function allocBytes(api: OptimizerWasmApi, bytes: number): number {
+  const allocFn = (typeof api.malloc === 'function')
+    ? api.malloc.bind(api)
+    : (typeof (api as any).__wbindgen_malloc === 'function' ? (api as any).__wbindgen_malloc.bind(api) : null);
+  if (typeof allocFn !== 'function') throw new Error('allocator-missing');
+  const ptr = Number(allocFn(bytes));
+  if (!Number.isFinite(ptr) || ptr <= 0) throw new Error('allocator-returned-invalid-pointer');
+  return ptr;
+}
+
+function freeBytes(api: OptimizerWasmApi, ptr: number, bytes: number): void {
+  if (!Number.isFinite(ptr) || ptr <= 0 || !Number.isFinite(bytes) || bytes <= 0) return;
+  const freeFn = (typeof api.free === 'function')
+    ? api.free.bind(api)
+    : (typeof (api as any).__wbindgen_free === 'function' ? (api as any).__wbindgen_free.bind(api) : null);
+  if (typeof freeFn !== 'function') return;
+  try {
+    if (freeFn.length >= 3) {
+      (freeFn as any)(ptr, bytes, 8);
+    } else if (freeFn.length >= 2) {
+      (freeFn as any)(ptr, bytes);
+    } else {
+      (freeFn as any)(ptr);
+    }
+  } catch {
+    // ignore free failures for best-effort cleanup
+  }
+}
+
+function releaseOptimizerWorkspace(api: OptimizerWasmApi): void {
+  const ws = optimizerWasmWorkspace;
+  if (!ws) return;
+  freeBytes(api, ws.ptrX, ws.capN * 8);
+  freeBytes(api, ws.ptrSteps, ws.capN * 8);
+  freeBytes(api, ws.ptrR0, ws.capM * 8);
+  freeBytes(api, ws.ptrRBatches, ws.capN * ws.capM * 8);
+  freeBytes(api, ws.ptrScales, ws.capN * 8);
+  freeBytes(api, ws.ptrDx, ws.capN * 8);
+  freeBytes(api, ws.ptrXNext, ws.capN * 8);
+  freeBytes(api, ws.ptrMeta, 8 * 8);
+  optimizerWasmWorkspace = null;
+}
+
+function ensureOptimizerWorkspace(api: OptimizerWasmApi, n: number, m: number): OptimizerWasmWorkspace | null {
+  if (!api?.memory?.buffer || typeof api.optimize_one_iter_from_buffers !== 'function') return null;
+  const targetN = Math.max(1, Math.floor(Number(n) || 0));
+  const targetM = Math.max(1, Math.floor(Number(m) || 0));
+  if (targetN <= 0 || targetM <= 0) return null;
+
+  const current = optimizerWasmWorkspace;
+  if (current && current.capN >= targetN && current.capM >= targetM) return current;
+
+  const nextN = current ? Math.max(targetN, Math.ceil(current.capN * 1.5)) : targetN;
+  const nextM = current ? Math.max(targetM, Math.ceil(current.capM * 1.5)) : targetM;
+
+  if (current) releaseOptimizerWorkspace(api);
+
+  try {
+    const ws: OptimizerWasmWorkspace = {
+      capN: nextN,
+      capM: nextM,
+      ptrX: allocBytes(api, nextN * 8),
+      ptrSteps: allocBytes(api, nextN * 8),
+      ptrR0: allocBytes(api, nextM * 8),
+      ptrRBatches: allocBytes(api, nextN * nextM * 8),
+      ptrScales: allocBytes(api, nextN * 8),
+      ptrDx: allocBytes(api, nextN * 8),
+      ptrXNext: allocBytes(api, nextN * 8),
+      ptrMeta: allocBytes(api, 8 * 8)
+    };
+    optimizerWasmWorkspace = ws;
+    return ws;
+  } catch {
+    optimizerWasmWorkspace = null;
+    return null;
+  }
+}
+
+function asFiniteFloat64Vector(input: any, expectedLen: number): Float64Array | null {
+  if (!(expectedLen > 0)) return null;
+  const arr = new Float64Array(expectedLen);
+  if (Array.isArray(input)) {
+    if (input.length < expectedLen) return null;
+    for (let i = 0; i < expectedLen; i++) {
+      const v = Number(input[i]);
+      if (!Number.isFinite(v)) return null;
+      arr[i] = v;
+    }
+    return arr;
+  }
+  if (ArrayBuffer.isView(input) && typeof (input as any).length === 'number') {
+    if ((input as any).length < expectedLen) return null;
+    for (let i = 0; i < expectedLen; i++) {
+      const v = Number((input as any)[i]);
+      if (!Number.isFinite(v)) return null;
+      arr[i] = v;
+    }
+    return arr;
+  }
+  return null;
+}
+
+function asFiniteColMajorResidualBatch(input: any, m: number, n: number): Float64Array | null {
+  if (ArrayBuffer.isView(input) && typeof (input as any).length === 'number') {
+    if ((input as any).length !== m * n) return null;
+    const out = new Float64Array(m * n);
+    for (let i = 0; i < m * n; i++) {
+      const v = Number((input as any)[i]);
+      if (!Number.isFinite(v)) return null;
+      out[i] = v;
+    }
+    return out;
+  }
+  if (!Array.isArray(input) || input.length !== n) return null;
+  const out = new Float64Array(m * n);
+  for (let col = 0; col < n; col++) {
+    const row = input[col];
+    if (!Array.isArray(row) && !(ArrayBuffer.isView(row) && typeof (row as any).length === 'number')) return null;
+    if ((row as any).length < m) return null;
+    const base = col * m;
+    for (let i = 0; i < m; i++) {
+      const v = Number((row as any)[i]);
+      if (!Number.isFinite(v)) return null;
+      out[base + i] = v;
+    }
+  }
+  return out;
+}
 
 function setBridgeReason(kind: 'solve' | 'normalEq', reason: string): void {
   if (kind === 'solve') optimizerWasmBridgeDebugState.lastSolveReason = String(reason || 'unknown');
@@ -76,6 +245,14 @@ function setBridgeReason(kind: 'solve' | 'normalEq', reason: string): void {
 function setPilotReason(reason: string, detail: any = null): void {
   optimizerWasmBridgeDebugState.lastPilotReason = String(reason || 'unknown');
   optimizerWasmBridgeDebugState.lastPilotErrorDetail = detail == null ? null : String(detail);
+}
+
+function recordBufferStatus(key: any): void {
+  const histogram = (optimizerWasmBridgeDebugState.kktWasmBufferStatusHistogram && typeof optimizerWasmBridgeDebugState.kktWasmBufferStatusHistogram === 'object')
+    ? optimizerWasmBridgeDebugState.kktWasmBufferStatusHistogram
+    : (optimizerWasmBridgeDebugState.kktWasmBufferStatusHistogram = {});
+  const k = String(key == null ? 'unknown' : key);
+  histogram[k] = (Number(histogram[k]) || 0) + 1;
 }
 
 export function getOptimizerWasmBridgeDebugInfo(): Record<string, any> {
@@ -159,6 +336,10 @@ async function preloadOptimizerDirectWasmModule(): Promise<OptimizerWasmApi | nu
           generate_fd_perturbation_points: (typeof mod.generate_fd_perturbation_points === 'function') ? mod.generate_fd_perturbation_points : undefined,
           assemble_fd_jacobian: (typeof mod.assemble_fd_jacobian === 'function') ? mod.assemble_fd_jacobian : undefined,
           optimize_system_in_wasm: (typeof mod.optimize_system_in_wasm === 'function') ? mod.optimize_system_in_wasm : undefined,
+          optimize_one_iter_from_buffers: (typeof mod.optimize_one_iter_from_buffers === 'function') ? mod.optimize_one_iter_from_buffers : undefined,
+          malloc: (typeof mod.malloc === 'function') ? mod.malloc : undefined,
+          free: (typeof mod.free === 'function') ? mod.free : undefined,
+          memory: mod.memory,
           // Phase 1: Linear Algebra Kernels
           vector_add_scaled: (typeof mod.vector_add_scaled === 'function') ? mod.vector_add_scaled : undefined,
           vector_dot: (typeof mod.vector_dot === 'function') ? mod.vector_dot : undefined,
@@ -272,6 +453,13 @@ export async function preloadOptimizerWasmBridge(): Promise<boolean> {
   optimizerWasmBridgeDebugState.hasBuildNormalEq = !!(api && typeof api.build_normal_equations === 'function');
   optimizerWasmBridgeDebugState.hasFdBatchPoints = !!(api && typeof api.generate_fd_perturbation_points === 'function');
   optimizerWasmBridgeDebugState.hasFdBatchJacobian = !!(api && typeof api.assemble_fd_jacobian === 'function');
+  optimizerWasmBridgeDebugState.hasPilotBufferAbi = !!(
+    api
+    && typeof api.optimize_one_iter_from_buffers === 'function'
+    && typeof api.malloc === 'function'
+    && typeof api.free === 'function'
+    && !!api.memory?.buffer
+  );
   optimizerWasmBridgeDebugState.hasVectorOps = !!(api && typeof api.vector_add_scaled === 'function' && typeof api.vector_dot === 'function' && typeof api.vector_norm === 'function');
   optimizerWasmBridgeDebugState.hasMatrixOps = !!(api && typeof api.matrix_vector_multiply === 'function');
   optimizerWasmBridgeDebugState.hasCholesky = !!(api && typeof api.cholesky_factorization === 'function');
@@ -500,13 +688,13 @@ export function assembleFiniteDifferenceJacobianWasm(
 }
 
 export function optimizeSystemOneIterationWasm(payload: {
-  x: number[];
-  steps: number[];
-  residual0: number[];
-  residualsPerturbed: number[][];
+  x: number[] | ArrayBufferView;
+  steps: number[] | ArrayBufferView;
+  residual0: number[] | ArrayBufferView;
+  residualsPerturbed: number[][] | ArrayBufferView;
   damping?: number;
   trustRegionRadius?: number;
-  varScales?: number[];
+  varScales?: number[] | ArrayBufferView;
 }): {
   ok: boolean;
   status: string;
@@ -518,22 +706,154 @@ export function optimizeSystemOneIterationWasm(payload: {
   usedTrustRegionRadius?: number;
 } | null {
   const api = getOptimizerApiSync();
+  optimizerWasmBridgeDebugState.lastPilotPath = 'none';
+  optimizerWasmBridgeDebugState.lastPilotBufferAttempted = false;
+  optimizerWasmBridgeDebugState.lastPilotBufferStatus = null;
   if (!api) {
     setPilotReason('api-missing');
     return null;
   }
   if (typeof api.optimize_system_in_wasm !== 'function') {
-    setPilotReason('pilot-kernel-missing');
-    return null;
+    if (typeof api.optimize_one_iter_from_buffers !== 'function') {
+      setPilotReason('pilot-kernel-missing');
+      return null;
+    }
   }
 
   try {
+    const getVectorLen = (v: any): number => {
+      if (Array.isArray(v)) return v.length;
+      if (ArrayBuffer.isView(v) && typeof (v as any).length === 'number') return Number((v as any).length) || 0;
+      return 0;
+    };
+
+    const n = getVectorLen(payload?.x);
+    const m = getVectorLen(payload?.residual0);
+
+    if (
+      n > 0
+      && m > 0
+      && typeof api.optimize_one_iter_from_buffers === 'function'
+      && typeof api.malloc === 'function'
+      && typeof api.free === 'function'
+      && !!api.memory?.buffer
+    ) {
+      optimizerWasmBridgeDebugState.lastPilotBufferAttempted = true;
+      optimizerWasmBridgeDebugState.kktWasmBufferCalls = (Number(optimizerWasmBridgeDebugState.kktWasmBufferCalls) || 0) + 1;
+      try {
+        const xVec = asFiniteFloat64Vector(payload.x, n);
+        const hVec = asFiniteFloat64Vector(payload.steps, n);
+        const r0Vec = asFiniteFloat64Vector(payload.residual0, m);
+        const rbVec = asFiniteColMajorResidualBatch(payload.residualsPerturbed, m, n);
+        const scalesVec = asFiniteFloat64Vector(
+          Array.isArray(payload.varScales) && payload.varScales.length === n ? payload.varScales : new Float64Array(n).fill(1),
+          n
+        );
+
+        if (xVec && hVec && r0Vec && rbVec && scalesVec) {
+          const ws = ensureOptimizerWorkspace(api, n, m);
+          if (ws && api.memory?.buffer) {
+            const xView = new Float64Array(api.memory.buffer, ws.ptrX, n);
+            const hView = new Float64Array(api.memory.buffer, ws.ptrSteps, n);
+            const r0View = new Float64Array(api.memory.buffer, ws.ptrR0, m);
+            const rbView = new Float64Array(api.memory.buffer, ws.ptrRBatches, n * m);
+            const scalesView = new Float64Array(api.memory.buffer, ws.ptrScales, n);
+
+            xView.set(xVec);
+            hView.set(hVec);
+            r0View.set(r0Vec);
+            rbView.set(rbVec);
+            scalesView.set(scalesVec);
+
+            const statusCode = Number(api.optimize_one_iter_from_buffers(
+              ws.ptrX,
+              ws.ptrSteps,
+              ws.ptrR0,
+              ws.ptrRBatches,
+              ws.ptrScales,
+              ws.ptrDx,
+              ws.ptrXNext,
+              ws.ptrMeta,
+              n,
+              m,
+              Number(payload?.damping),
+              Number(payload?.trustRegionRadius)
+            ));
+
+            if (statusCode === 0) {
+              const dxView = new Float64Array(api.memory.buffer, ws.ptrDx, n);
+              const xNextView = new Float64Array(api.memory.buffer, ws.ptrXNext, n);
+              const metaView = new Float64Array(api.memory.buffer, ws.ptrMeta, 8);
+
+              const dx = Array.from(dxView);
+              const xNext = Array.from(xNextView);
+              const predictedReduction = Number(metaView[0]) || 0;
+              const jacM = Number(metaView[3]) || m;
+              const jacN = Number(metaView[4]) || n;
+
+              optimizerWasmBridgeDebugState.lastPilotPath = 'buffer';
+              optimizerWasmBridgeDebugState.lastPilotBufferStatus = '0';
+              optimizerWasmBridgeDebugState.kktWasmBufferHits = (Number(optimizerWasmBridgeDebugState.kktWasmBufferHits) || 0) + 1;
+              recordBufferStatus('0');
+              setPilotReason('ok', 'buffer-abi');
+              return {
+                ok: true,
+                status: 'pilot-one-iteration-buffer',
+                xNext,
+                dx,
+                predictedReduction,
+                jacobianShape: [jacM, jacN],
+                usedDamping: Number(metaView[1]),
+                usedTrustRegionRadius: Number(metaView[2])
+              };
+            }
+
+            optimizerWasmBridgeDebugState.lastPilotBufferStatus = String(statusCode);
+            optimizerWasmBridgeDebugState.kktWasmBufferFallbacks = (Number(optimizerWasmBridgeDebugState.kktWasmBufferFallbacks) || 0) + 1;
+            recordBufferStatus(String(statusCode));
+            setPilotReason('buffer-status', String(statusCode));
+          }
+        } else {
+          optimizerWasmBridgeDebugState.lastPilotBufferStatus = 'input-invalid';
+          optimizerWasmBridgeDebugState.kktWasmBufferFallbacks = (Number(optimizerWasmBridgeDebugState.kktWasmBufferFallbacks) || 0) + 1;
+          recordBufferStatus('input-invalid');
+          setPilotReason('buffer-input-invalid');
+        }
+      } catch (bufferErr) {
+        optimizerWasmBridgeDebugState.lastPilotBufferStatus = 'exception';
+        optimizerWasmBridgeDebugState.kktWasmBufferFallbacks = (Number(optimizerWasmBridgeDebugState.kktWasmBufferFallbacks) || 0) + 1;
+        recordBufferStatus('exception');
+        setPilotReason('buffer-exception', (bufferErr as any)?.message || bufferErr);
+      }
+    }
+
+    const isNumericTypedArray = (value: any): value is
+      Int8Array |
+      Uint8Array |
+      Uint8ClampedArray |
+      Int16Array |
+      Uint16Array |
+      Int32Array |
+      Uint32Array |
+      Float32Array |
+      Float64Array => {
+      return value instanceof Int8Array ||
+        value instanceof Uint8Array ||
+        value instanceof Uint8ClampedArray ||
+        value instanceof Int16Array ||
+        value instanceof Uint16Array ||
+        value instanceof Int32Array ||
+        value instanceof Uint32Array ||
+        value instanceof Float32Array ||
+        value instanceof Float64Array;
+    };
+
     const normalizeNumericVector = (v: any): number[] => {
       if (Array.isArray(v)) {
         return v.map((item) => Number(item)).filter((item) => Number.isFinite(item));
       }
-      if (ArrayBuffer.isView(v) && typeof (v as any).length === 'number') {
-        return Array.from(v as ArrayLike<number>).map((item) => Number(item)).filter((item) => Number.isFinite(item));
+      if (isNumericTypedArray(v)) {
+        return Array.from(v).map((item) => Number(item)).filter((item) => Number.isFinite(item));
       }
       if (v && typeof v === 'object' && typeof (v as any)[Symbol.iterator] === 'function') {
         try {
@@ -545,6 +865,10 @@ export function optimizeSystemOneIterationWasm(payload: {
       return [];
     };
 
+    if (typeof api.optimize_system_in_wasm !== 'function') {
+      return null;
+    }
+    optimizerWasmBridgeDebugState.lastPilotPath = 'json';
     const raw = api.optimize_system_in_wasm(JSON.stringify(payload));
     if (!raw) {
       setPilotReason('result-null-or-empty');
@@ -575,12 +899,12 @@ export function optimizeSystemOneIterationWasm(payload: {
     const xNext = normalizeNumericVector((parsed as any).xNext);
     const dx = normalizeNumericVector((parsed as any).dx);
 
-    if (xNext.length > 0 && xNext.length !== payload.x.length) {
-      setPilotReason('result-xNext-size-mismatch', `expected=${payload.x.length}, actual=${xNext.length}`);
+    if (xNext.length > 0 && xNext.length !== n) {
+      setPilotReason('result-xNext-size-mismatch', `expected=${n}, actual=${xNext.length}`);
       return null;
     }
-    if (dx.length !== payload.x.length) {
-      setPilotReason('result-dx-size-mismatch', `expected=${payload.x.length}, actual=${dx.length}`);
+    if (dx.length !== n) {
+      setPilotReason('result-dx-size-mismatch', `expected=${n}, actual=${dx.length}`);
       return null;
     }
 

@@ -125,6 +125,9 @@ function pickTimingMetricsFromProfile(profile) {
   const pilotCalls = Number(profile?.kktWasmPilotCalls ?? profile?.counts?.kktWasmPilotCalls) || 0;
   const pilotHits = Number(profile?.kktWasmPilotHits ?? profile?.counts?.kktWasmPilotHits) || 0;
   const pilotFallbacks = Number(profile?.kktWasmPilotFallbacks ?? profile?.counts?.kktWasmPilotFallbacks) || 0;
+  const bufferCalls = Number(profile?.kktWasmBufferCalls ?? profile?.counts?.kktWasmBufferCalls) || 0;
+  const bufferHits = Number(profile?.kktWasmBufferHits ?? profile?.counts?.kktWasmBufferHits) || 0;
+  const bufferFallbacks = Number(profile?.kktWasmBufferFallbacks ?? profile?.counts?.kktWasmBufferFallbacks) || 0;
 
   return {
     objectiveMs,
@@ -139,7 +142,263 @@ function pickTimingMetricsFromProfile(profile) {
     pilotCalls,
     pilotHits,
     pilotFallbacks,
-    pilotHitRatePct: pilotCalls > 0 ? (100 * pilotHits / pilotCalls) : 0
+    pilotHitRatePct: pilotCalls > 0 ? (100 * pilotHits / pilotCalls) : 0,
+    bufferCalls,
+    bufferHits,
+    bufferFallbacks,
+    bufferHitRatePct: bufferCalls > 0 ? (100 * bufferHits / bufferCalls) : 0
+  };
+}
+
+function pickKktFdMetricsFromProfile(profile) {
+  const pick = (k, fallback = 0) => Number(profile?.[k] ?? profile?.counts?.[k] ?? fallback) || 0;
+  const rawCols = pick('kktFiniteDiffColumnsRaw');
+  const effectiveCols = pick('kktFiniteDiffColumnsEffective');
+  const groups = pick('kktFiniteDiffGroups');
+  const residualEvals = pick('kktFiniteDiffResidualEvals');
+  const analyticConstraintRows = pick('kktAnalyticConstraintRows');
+  const analyticEqualityCandidateRows = pick('kktAnalyticEqualityCandidateRows');
+  const analyticEqualityRows = pick('kktAnalyticEqualityRows');
+  const analyticEqualityCalibratedRows = pick('kktAnalyticEqualityCalibratedRows');
+  return {
+    rawCols,
+    effectiveCols,
+    groups,
+    residualEvals,
+    analyticConstraintRows,
+    analyticEqualityCandidateRows,
+    analyticEqualityRows,
+    analyticEqualityCalibratedRows,
+    effectiveRatioPct: rawCols > 0 ? (100 * effectiveCols / rawCols) : 0,
+    reductionPct: rawCols > 0 ? (100 * (rawCols - effectiveCols) / rawCols) : 0
+  };
+}
+
+export async function compareKktAnalyticEqBenchmark(baseOptions = {}) {
+  const source = isPlainObject(baseOptions) ? baseOptions : {};
+  const common = { ...source };
+  const repeatRaw = Number(source.repeat ?? source.benchmarkRepeat ?? 1);
+  const repeat = Number.isFinite(repeatRaw) ? Math.max(1, Math.floor(repeatRaw)) : 1;
+  try { delete common.repeat; } catch (_) {}
+  try { delete common.benchmarkRepeat; } catch (_) {}
+  try { delete common.kktUseAnalyticEqualityCtctJacobian; } catch (_) {}
+
+  const deepClone = (v) => {
+    try {
+      return JSON.parse(JSON.stringify(v));
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const originalSystemConfig = loadSystemConfigurationsRaw();
+  const baselineSystemConfig = deepClone(originalSystemConfig);
+
+  const restoreBaselineConfig = () => {
+    if (!baselineSystemConfig) return;
+    try {
+      saveSystemConfigurationsRaw(deepClone(baselineSystemConfig));
+    } catch (_) {}
+  };
+
+  const runOne = async (enableAnalyticEq) => {
+    restoreBaselineConfig();
+    const options = {
+      ...common,
+      method: 'kkt',
+      profile: true,
+      kktUseAnalyticEqualityCtctJacobian: !!enableAnalyticEq
+    };
+    const t0 = nowMs();
+    const result = await runOptimizationMVP(options);
+    const elapsedMs = nowMs() - t0;
+    const profile = getLastOptimizeProfile();
+    const timing = pickTimingMetricsFromProfile(profile);
+    const kkt = pickKktFdMetricsFromProfile(profile);
+    return { enableAnalyticEq: !!enableAnalyticEq, options, result, elapsedMs, profile, timing, kkt };
+  };
+
+  const offRuns = [];
+  const onRuns = [];
+  try {
+    for (let i = 0; i < repeat; i++) {
+      offRuns.push(await runOne(false));
+      onRuns.push(await runOne(true));
+    }
+  } finally {
+    try {
+      if (originalSystemConfig) saveSystemConfigurationsRaw(originalSystemConfig);
+    } catch (_) {}
+  }
+
+  const summarize = (runs) => {
+    const values = (path) => runs.map((r) => {
+      try {
+        const parts = path.split('.');
+        let cur = r;
+        for (const p of parts) cur = cur?.[p];
+        const n = Number(cur);
+        return Number.isFinite(n) ? n : 0;
+      } catch (_) {
+        return 0;
+      }
+    });
+    const avgOf = (path) => {
+      const arr = values(path);
+      if (arr.length === 0) return 0;
+      return arr.reduce((a, b) => a + b, 0) / arr.length;
+    };
+    return {
+      repeat: runs.length,
+      elapsedMs: avgOf('elapsedMs'),
+      objectiveMs: avgOf('timing.objectiveMs'),
+      wasmMs: avgOf('timing.wasmMs'),
+      jsMs: avgOf('timing.jsMs'),
+      fdRawCols: avgOf('kkt.rawCols'),
+      fdEffectiveCols: avgOf('kkt.effectiveCols'),
+      fdGroups: avgOf('kkt.groups'),
+      fdResidualEvals: avgOf('kkt.residualEvals'),
+      analyticConstraintRows: avgOf('kkt.analyticConstraintRows'),
+      analyticEqualityCandidateRows: avgOf('kkt.analyticEqualityCandidateRows'),
+      analyticEqualityRows: avgOf('kkt.analyticEqualityRows'),
+      analyticEqualityCalibratedRows: avgOf('kkt.analyticEqualityCalibratedRows'),
+      fdEffectiveRatioPct: avgOf('kkt.effectiveRatioPct'),
+      fdReductionPct: avgOf('kkt.reductionPct'),
+      okRatePct: avgOf('result.ok') * 100
+    };
+  };
+
+  const off = summarize(offRuns);
+  const on = summarize(onRuns);
+  const delta = {
+    elapsedMs: on.elapsedMs - off.elapsedMs,
+    fdEffectiveCols: on.fdEffectiveCols - off.fdEffectiveCols,
+    fdReductionPct: on.fdReductionPct - off.fdReductionPct,
+    analyticEqualityCandidateRows: on.analyticEqualityCandidateRows - off.analyticEqualityCandidateRows,
+    analyticEqualityRows: on.analyticEqualityRows - off.analyticEqualityRows,
+    analyticEqualityCalibratedRows: on.analyticEqualityCalibratedRows - off.analyticEqualityCalibratedRows
+  };
+
+  try {
+    console.groupCollapsed('[OptimizerMVP] KKT analytic-equality benchmark');
+    console.log('off(kktUseAnalyticEqualityCtctJacobian=false)', {
+      repeat: off.repeat,
+      elapsedMs: Math.round(off.elapsedMs),
+      fdRawCols: Math.round(off.fdRawCols),
+      fdEffectiveCols: Math.round(off.fdEffectiveCols),
+      fdReductionPct: Math.round(off.fdReductionPct * 10) / 10,
+      analyticEqualityCandidateRows: Math.round(off.analyticEqualityCandidateRows),
+      analyticEqualityRows: Math.round(off.analyticEqualityRows),
+      analyticEqualityCalibratedRows: Math.round(off.analyticEqualityCalibratedRows),
+      okRatePct: Math.round(off.okRatePct * 10) / 10
+    });
+    console.log('on(kktUseAnalyticEqualityCtctJacobian=true)', {
+      repeat: on.repeat,
+      elapsedMs: Math.round(on.elapsedMs),
+      fdRawCols: Math.round(on.fdRawCols),
+      fdEffectiveCols: Math.round(on.fdEffectiveCols),
+      fdReductionPct: Math.round(on.fdReductionPct * 10) / 10,
+      analyticEqualityCandidateRows: Math.round(on.analyticEqualityCandidateRows),
+      analyticEqualityRows: Math.round(on.analyticEqualityRows),
+      analyticEqualityCalibratedRows: Math.round(on.analyticEqualityCalibratedRows),
+      okRatePct: Math.round(on.okRatePct * 10) / 10
+    });
+    console.log('delta(on - off)', {
+      elapsedMs: Math.round(delta.elapsedMs),
+      fdEffectiveCols: Math.round(delta.fdEffectiveCols),
+      fdReductionPct: Math.round(delta.fdReductionPct * 10) / 10,
+      analyticEqualityCandidateRows: Math.round(delta.analyticEqualityCandidateRows),
+      analyticEqualityRows: Math.round(delta.analyticEqualityRows),
+      analyticEqualityCalibratedRows: Math.round(delta.analyticEqualityCalibratedRows)
+    });
+    console.groupEnd();
+  } catch (_) {}
+
+  return {
+    off,
+    on,
+    delta,
+    offRuns,
+    onRuns
+  };
+}
+
+export function pickAnalyticDerivativeCandidates(profileOrOptions = {}, maybeOptions = {}) {
+  const fromOptions = (obj, key, fallback) => {
+    try {
+      const value = obj?.[key];
+      return Number.isFinite(Number(value)) ? Number(value) : fallback;
+    } catch (_) {
+      return fallback;
+    }
+  };
+
+  const hasProfileShape = profileOrOptions && typeof profileOrOptions === 'object' && (
+    typeof profileOrOptions.operandMs === 'object'
+    || typeof profileOrOptions.operandCfgMs === 'object'
+    || typeof profileOrOptions.counts === 'object'
+  );
+
+  const profile = hasProfileShape ? profileOrOptions : (getLastOptimizeProfile() || {});
+  const options = hasProfileShape ? maybeOptions : profileOrOptions;
+
+  const limitRaw = fromOptions(options, 'limit', 3);
+  const limit = Math.max(1, Math.floor(limitRaw));
+  const minCalls = Math.max(1, Math.floor(fromOptions(options, 'minCalls', 5)));
+  const minMs = Math.max(0, fromOptions(options, 'minMs', 1));
+  const hotPct = Math.max(0, fromOptions(options, 'hotPct', 2));
+
+  const byOperand = profile?.operandMs && typeof profile.operandMs === 'object'
+    ? profile.operandMs
+    : {};
+  const byOperandCfg = profile?.operandCfgMs && typeof profile.operandCfgMs === 'object'
+    ? profile.operandCfgMs
+    : {};
+  const totalOperandMs = Object.values(byOperand).reduce((acc, entry: any) => {
+    const ms = Number(entry?.ms) || 0;
+    return acc + (Number.isFinite(ms) ? Math.max(0, ms) : 0);
+  }, 0);
+
+  const candidates = Object.entries(byOperand)
+    .map(([operand, entry]: [string, any]) => {
+      const ms = Number(entry?.ms) || 0;
+      const calls = Number(entry?.calls) || 0;
+      const msPerCall = calls > 0 ? (ms / calls) : 0;
+      const pctOperand = totalOperandMs > 0 ? (100 * ms / totalOperandMs) : 0;
+      const cfgRows = Object.entries(byOperandCfg)
+        .filter(([key]) => String(key).startsWith(`${operand}|cfg:`))
+        .map(([key, cfgEntry]: [string, any]) => ({
+          key,
+          ms: Number(cfgEntry?.ms) || 0,
+          calls: Number(cfgEntry?.calls) || 0
+        }))
+        .sort((a, b) => (Number(b.ms) || 0) - (Number(a.ms) || 0));
+
+      const dominantCfg = cfgRows[0] || null;
+      return {
+        operand,
+        ms,
+        calls,
+        msPerCall,
+        pctOperand,
+        dominantCfgKey: dominantCfg?.key || null,
+        dominantCfgMs: Number(dominantCfg?.ms) || 0,
+        dominantCfgCalls: Number(dominantCfg?.calls) || 0,
+        score: (ms * Math.log2(calls + 2))
+      };
+    })
+    .filter((row) => row.calls >= minCalls && row.ms >= minMs && row.pctOperand >= hotPct)
+    .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0))
+    .slice(0, limit);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    limit,
+    minCalls,
+    minMs,
+    hotPct,
+    totalOperandMs,
+    candidates
   };
 }
 
@@ -200,6 +459,7 @@ export async function compareWasmPilotBenchmark(baseOptions = {}) {
     const wasmPct = pick('metrics.wasmPct');
     const jsPct = pick('metrics.jsPct');
     const pilotHitRatePct = pick('metrics.pilotHitRatePct');
+    const bufferHitRatePct = pick('metrics.bufferHitRatePct');
     const okRatePct = pick('result.ok');
 
     return {
@@ -212,6 +472,7 @@ export async function compareWasmPilotBenchmark(baseOptions = {}) {
       wasmPct,
       jsPct,
       pilotHitRatePct,
+      bufferHitRatePct,
       okRatePct: okRatePct.avg * 100
     };
   };
@@ -272,7 +533,8 @@ export async function compareWasmPilotBenchmark(baseOptions = {}) {
     objectivePct: pilot.objectivePct.avg - baseline.objectivePct.avg,
     wasmPct: pilot.wasmPct.avg - baseline.wasmPct.avg,
     jsPct: pilot.jsPct.avg - baseline.jsPct.avg,
-    pilotHitRatePct: pilot.pilotHitRatePct.avg - baseline.pilotHitRatePct.avg
+    pilotHitRatePct: pilot.pilotHitRatePct.avg - baseline.pilotHitRatePct.avg,
+    bufferHitRatePct: pilot.bufferHitRatePct.avg - baseline.bufferHitRatePct.avg
   };
 
   try {
@@ -291,6 +553,7 @@ export async function compareWasmPilotBenchmark(baseOptions = {}) {
       objectivePctAvg: Math.round(baseline.objectivePct.avg * 10) / 10,
       wasmPctAvg: Math.round(baseline.wasmPct.avg * 10) / 10,
       jsPctAvg: Math.round(baseline.jsPct.avg * 10) / 10,
+      bufferHitRatePctAvg: Math.round(baseline.bufferHitRatePct.avg * 10) / 10,
       okRatePct: Math.round(baseline.okRatePct * 10) / 10
     });
     console.log('pilot(kktUseWasmPilotOptimizer=true)', {
@@ -308,6 +571,7 @@ export async function compareWasmPilotBenchmark(baseOptions = {}) {
       wasmPctAvg: Math.round(pilot.wasmPct.avg * 10) / 10,
       jsPctAvg: Math.round(pilot.jsPct.avg * 10) / 10,
       pilotHitRatePctAvg: Math.round(pilot.pilotHitRatePct.avg * 10) / 10,
+      bufferHitRatePctAvg: Math.round(pilot.bufferHitRatePct.avg * 10) / 10,
       okRatePct: Math.round(pilot.okRatePct * 10) / 10
     });
     console.log('delta(pilot - baseline)', {
@@ -318,7 +582,8 @@ export async function compareWasmPilotBenchmark(baseOptions = {}) {
       objectivePct: Math.round(delta.objectivePct * 10) / 10,
       wasmPct: Math.round(delta.wasmPct * 10) / 10,
       jsPct: Math.round(delta.jsPct * 10) / 10,
-      pilotHitRatePct: Math.round(delta.pilotHitRatePct * 10) / 10
+      pilotHitRatePct: Math.round(delta.pilotHitRatePct * 10) / 10,
+      bufferHitRatePct: Math.round(delta.bufferHitRatePct * 10) / 10
     });
     console.groupEnd();
   } catch (_) {}
@@ -374,6 +639,10 @@ export async function exportWasmPilotBenchmarkCsv(options = {}) {
     'pilotHits',
     'pilotFallbacks',
     'pilotHitRatePct',
+    'bufferCalls',
+    'bufferHits',
+    'bufferFallbacks',
+    'bufferHitRatePct',
     'ok',
     'best'
   ]);
@@ -397,6 +666,10 @@ export async function exportWasmPilotBenchmarkCsv(options = {}) {
         Number(metrics.pilotHits) || 0,
         Number(metrics.pilotFallbacks) || 0,
         Number(metrics.pilotHitRatePct) || 0,
+        Number(metrics.bufferCalls) || 0,
+        Number(metrics.bufferHits) || 0,
+        Number(metrics.bufferFallbacks) || 0,
+        Number(metrics.bufferHitRatePct) || 0,
         !!result.ok,
         Number(result.best)
       ]);
@@ -2459,6 +2732,13 @@ export async function runOptimizationMVP(options = {}) {
       kktFiniteDiffJacobianCalls: 0,
       kktFiniteDiffJacobianMs: 0,
       kktFiniteDiffColumns: 0,
+      kktFiniteDiffColumnsRaw: 0,
+      kktFiniteDiffColumnsEffective: 0,
+      kktFiniteDiffGroups: 0,
+      kktAnalyticConstraintRows: 0,
+      kktAnalyticEqualityCandidateRows: 0,
+      kktAnalyticEqualityRows: 0,
+      kktAnalyticEqualityCalibratedRows: 0,
       kktFiniteDiffResidualEvals: 0,
       kktJacobianFullCalls: 0,
       kktJacobianPartialCalls: 0,
@@ -2479,7 +2759,11 @@ export async function runOptimizationMVP(options = {}) {
       kktWasmPilotCalls: 0,
       kktWasmPilotHits: 0,
       kktWasmPilotFallbacks: 0,
-      kktWasmPilotLastReason: 'not-run'
+      kktWasmPilotLastReason: 'not-run',
+      kktWasmBufferCalls: 0,
+      kktWasmBufferHits: 0,
+      kktWasmBufferFallbacks: 0,
+      kktWasmBufferStatusHistogram: {}
     }
   } : null;
 
@@ -2559,6 +2843,13 @@ export async function runOptimizationMVP(options = {}) {
         __profile.kktFiniteDiffJacobianCalls = Number(__profile.counts.kktFiniteDiffJacobianCalls) || 0;
         __profile.kktFiniteDiffJacobianMs = Number(__profile.counts.kktFiniteDiffJacobianMs) || 0;
         __profile.kktFiniteDiffColumns = Number(__profile.counts.kktFiniteDiffColumns) || 0;
+        __profile.kktFiniteDiffColumnsRaw = Number(__profile.counts.kktFiniteDiffColumnsRaw) || 0;
+        __profile.kktFiniteDiffColumnsEffective = Number(__profile.counts.kktFiniteDiffColumnsEffective) || 0;
+        __profile.kktFiniteDiffGroups = Number(__profile.counts.kktFiniteDiffGroups) || 0;
+        __profile.kktAnalyticConstraintRows = Number(__profile.counts.kktAnalyticConstraintRows) || 0;
+        __profile.kktAnalyticEqualityCandidateRows = Number(__profile.counts.kktAnalyticEqualityCandidateRows) || 0;
+        __profile.kktAnalyticEqualityRows = Number(__profile.counts.kktAnalyticEqualityRows) || 0;
+        __profile.kktAnalyticEqualityCalibratedRows = Number(__profile.counts.kktAnalyticEqualityCalibratedRows) || 0;
         __profile.kktFiniteDiffResidualEvals = Number(__profile.counts.kktFiniteDiffResidualEvals) || 0;
         __profile.kktJacobianFullCalls = Number(__profile.counts.kktJacobianFullCalls) || 0;
         __profile.kktJacobianPartialCalls = Number(__profile.counts.kktJacobianPartialCalls) || 0;
@@ -2583,6 +2874,12 @@ export async function runOptimizationMVP(options = {}) {
         __profile.kktWasmPilotHits = Number(__profile.counts.kktWasmPilotHits) || 0;
         __profile.kktWasmPilotFallbacks = Number(__profile.counts.kktWasmPilotFallbacks) || 0;
         __profile.kktWasmPilotLastReason = String(__profile.counts.kktWasmPilotLastReason || 'not-run');
+        __profile.kktWasmBufferCalls = Number(__profile.counts.kktWasmBufferCalls) || 0;
+        __profile.kktWasmBufferHits = Number(__profile.counts.kktWasmBufferHits) || 0;
+        __profile.kktWasmBufferFallbacks = Number(__profile.counts.kktWasmBufferFallbacks) || 0;
+        __profile.kktWasmBufferStatusHistogram = (__profile.counts.kktWasmBufferStatusHistogram && typeof __profile.counts.kktWasmBufferStatusHistogram === 'object')
+          ? { ...__profile.counts.kktWasmBufferStatusHistogram }
+          : {};
       }
     } catch (_) {}
 
@@ -2740,6 +3037,22 @@ export async function runOptimizationMVP(options = {}) {
       }
 
       try {
+        const analyticCandidates = pickAnalyticDerivativeCandidates(__profile, { limit: 3, minCalls: 5, minMs: 1, hotPct: 2 });
+        __profile.analyticDerivativeCandidates = analyticCandidates;
+        const topCandidates = Array.isArray(analyticCandidates?.candidates) ? analyticCandidates.candidates : [];
+        if (topCandidates.length > 0) {
+          console.log('[OptimizerMVP] analytic-derivative candidates (top)', topCandidates.map((c) => ({
+            operand: c.operand,
+            ms: Math.round(Number(c.ms) || 0),
+            calls: Number(c.calls) || 0,
+            msPerCall: Math.round((Number(c.msPerCall) || 0) * 1000) / 1000,
+            pctOperand: Math.round((Number(c.pctOperand) || 0) * 10) / 10,
+            dominantCfgKey: c.dominantCfgKey
+          })));
+        }
+      } catch (_) {}
+
+      try {
         const cacheHits = Number(__profile.counts.operandValueCacheHits) || 0;
         const cacheMisses = Number(__profile.counts.operandValueCacheMisses) || 0;
         const cacheTotal = cacheHits + cacheMisses;
@@ -2753,6 +3066,13 @@ export async function runOptimizationMVP(options = {}) {
         const pilotFallbacks = Number(__profile.counts.kktWasmPilotFallbacks) || 0;
         const pilotLastReason = String(__profile.counts.kktWasmPilotLastReason || 'not-run');
         const pilotHitRatePct = pilotCalls > 0 ? (100 * pilotHits / pilotCalls) : 0;
+        const bufferCalls = Number(__profile.counts.kktWasmBufferCalls) || 0;
+        const bufferHits = Number(__profile.counts.kktWasmBufferHits) || 0;
+        const bufferFallbacks = Number(__profile.counts.kktWasmBufferFallbacks) || 0;
+        const bufferHitRatePct = bufferCalls > 0 ? (100 * bufferHits / bufferCalls) : 0;
+        const bufferStatusHistogram = (__profile.counts.kktWasmBufferStatusHistogram && typeof __profile.counts.kktWasmBufferStatusHistogram === 'object')
+          ? { ...__profile.counts.kktWasmBufferStatusHistogram }
+          : {};
         console.log('[OptimizerMVP] cache stats', {
           operandValueCacheHits: cacheHits,
           operandValueCacheMisses: cacheMisses,
@@ -2767,6 +3087,13 @@ export async function runOptimizationMVP(options = {}) {
           kktFiniteDiffJacobianCalls: Number(__profile.counts.kktFiniteDiffJacobianCalls) || 0,
           kktFiniteDiffJacobianMs: Number(__profile.counts.kktFiniteDiffJacobianMs) || 0,
           kktFiniteDiffColumns: Number(__profile.counts.kktFiniteDiffColumns) || 0,
+          kktFiniteDiffColumnsRaw: Number(__profile.counts.kktFiniteDiffColumnsRaw) || 0,
+          kktFiniteDiffColumnsEffective: Number(__profile.counts.kktFiniteDiffColumnsEffective) || 0,
+          kktFiniteDiffGroups: Number(__profile.counts.kktFiniteDiffGroups) || 0,
+          kktAnalyticConstraintRows: Number(__profile.counts.kktAnalyticConstraintRows) || 0,
+          kktAnalyticEqualityCandidateRows: Number(__profile.counts.kktAnalyticEqualityCandidateRows) || 0,
+          kktAnalyticEqualityRows: Number(__profile.counts.kktAnalyticEqualityRows) || 0,
+          kktAnalyticEqualityCalibratedRows: Number(__profile.counts.kktAnalyticEqualityCalibratedRows) || 0,
           kktFiniteDiffResidualEvals: Number(__profile.counts.kktFiniteDiffResidualEvals) || 0,
           kktJacobianFullCalls: Number(__profile.counts.kktJacobianFullCalls) || 0,
           kktJacobianPartialCalls: Number(__profile.counts.kktJacobianPartialCalls) || 0,
@@ -2784,7 +3111,12 @@ export async function runOptimizationMVP(options = {}) {
           kktWasmPilotCalls: pilotCalls,
           kktWasmPilotHits: pilotHits,
           kktWasmPilotFallbacks: pilotFallbacks,
-          kktWasmPilotLastReason: pilotLastReason
+          kktWasmPilotLastReason: pilotLastReason,
+          kktWasmBufferCalls: bufferCalls,
+          kktWasmBufferHits: bufferHits,
+          kktWasmBufferFallbacks: bufferFallbacks,
+          kktWasmBufferHitRatePct: Math.round(bufferHitRatePct * 10) / 10,
+          kktWasmBufferStatusHistogram: bufferStatusHistogram
         });
 
         console.log('[OptimizerMVP] timing comparison', {
@@ -2795,7 +3127,8 @@ export async function runOptimizationMVP(options = {}) {
           objectiveToWasmRatio: wasmMs > 0 ? Math.round((objectiveMs / wasmMs) * 1000) / 1000 : null,
           kktWasmPilotEnabled: opts?.kktUseWasmPilotOptimizer === true,
           kktWasmPilotHitRatePct: Math.round(pilotHitRatePct * 10) / 10,
-          kktWasmPilotLastReason: pilotLastReason
+          kktWasmPilotLastReason: pilotLastReason,
+          kktWasmBufferHitRatePct: Math.round(bufferHitRatePct * 10) / 10
         });
       } catch (_) {}
       console.groupEnd();
@@ -5166,12 +5499,236 @@ export async function runOptimizationMVP(options = {}) {
         return { base, residuals: res.concat(rConstr) };
       };
 
-      const finiteDiffJacobian = (x: number[], r0: number[], lambdaVec: number[], mu: number, maxViol: number = 1.0) => {
+      const kktUseAnalyticAsphereConstraintJacobian = opts?.kktUseAnalyticAsphereConstraintJacobian !== false;
+      const kktRequirementIneqCount = (Array.isArray(residualItems) ? residualItems : []).reduce((acc, it) => {
+        const req = it?.req;
+        if (!req || !req.enabled || !req.operand) return acc;
+        const op = String(req.op || '').trim();
+        return (op === '<=' || op === '>=') ? (acc + 1) : acc;
+      }, 0);
+
+      const buildActiveAsphereMonotonicConstraints = (xClamped: number[]): Array<{ prevIdx: number; currIdx: number; value: number }> => {
+        const groups = new Map<string, Array<{ idx: number; order: number; value: number }>>();
+        for (let i = 0; i < Math.min(varIds.length, xClamped.length); i++) {
+          const varId = String(varIds[i] ?? '');
+          const match = varId.match(/^(\d+):(.+?)\.(.+Coef)(\d+)$/);
+          if (!match) continue;
+          const order = parseInt(match[4], 10);
+          if (!(Number.isFinite(order) && order >= 4)) continue;
+          const key = `${match[1]}:${match[2]}.${match[3]}`;
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key)!.push({ idx: i, order, value: Number(xClamped[i]) || 0 });
+        }
+
+        const out: Array<{ prevIdx: number; currIdx: number; value: number }> = [];
+        for (const [, group] of groups) {
+          if (!Array.isArray(group) || group.length < 2) continue;
+          group.sort((a, b) => a.order - b.order);
+          for (let i = 1; i < group.length; i++) {
+            const prev = group[i - 1];
+            const curr = group[i];
+            const prevSq = prev.value * prev.value;
+            const currSq = curr.value * curr.value;
+            if (!(prevSq > 1e-30)) continue;
+            const violation = currSq - 1.44 * prevSq;
+            if (!(violation > 0)) continue;
+            out.push({ prevIdx: prev.idx, currIdx: curr.idx, value: violation * 10 });
+          }
+        }
+        return out;
+      };
+
+      const smoothMaxDerivative = (val: number, beta: number): number => {
+        const vb = Number(val) * Number(beta);
+        if (!Number.isFinite(vb)) return 0;
+        if (vb > 20) return 1;
+        if (vb < -20) return 0;
+        const e = Math.exp(vb);
+        return e / (1 + e);
+      };
+
+      const applyAnalyticAsphereConstraintJacobianOverlay = (
+        J: number[][],
+        x: number[],
+        lambdaVec: number[],
+        mu: number,
+        maxViol: number,
+        baseResidualCount: number
+      ): number => {
+        if (!kktUseAnalyticAsphereConstraintJacobian) return 0;
+        if (!(Array.isArray(J) && J.length > 0)) return 0;
+        const n = x.length;
+        if (!(n > 0)) return 0;
+
+        const active = buildActiveAsphereMonotonicConstraints(x);
+        if (!Array.isArray(active) || active.length === 0) return 0;
+
+        const adaptiveBeta = maxViol < 0.01 ? 10 : (maxViol < 0.1 ? 30 : 100);
+        const muSafe = Math.max(1e-12, Number(mu) || 0);
+        const muScale = Math.sqrt(Math.max(1, Number(mu) || 0));
+        const rowOffset = Math.max(0, Number(baseResidualCount) || 0) + Math.max(0, Number(kktRequirementIneqCount) || 0);
+
+        let touched = 0;
+        for (let q = 0; q < active.length; q++) {
+          const row = rowOffset + q;
+          if (!(row >= 0 && row < J.length)) continue;
+          const item = active[q];
+          const prevIdx = item.prevIdx;
+          const currIdx = item.currIdx;
+          if (!(prevIdx >= 0 && prevIdx < n && currIdx >= 0 && currIdx < n)) continue;
+
+          const li = Number(lambdaVec?.[Math.max(0, Number(kktRequirementIneqCount) || 0) + q]) || 0;
+          const adj = item.value + li / muSafe;
+          const dsmooth = smoothMaxDerivative(adj, adaptiveBeta);
+          const common = muScale * dsmooth;
+          const dcdPrev = -28.8 * (Number(x[prevIdx]) || 0);
+          const dcdCurr = 20 * (Number(x[currIdx]) || 0);
+
+          J[row][prevIdx] = Number.isFinite(common * dcdPrev) ? (common * dcdPrev) : 0;
+          J[row][currIdx] = Number.isFinite(common * dcdCurr) ? (common * dcdCurr) : 0;
+          touched++;
+        }
+        return touched;
+      };
+
+      const kktUseAnalyticEqualityCtctJacobian = opts?.kktUseAnalyticEqualityCtctJacobian === true;
+      const kktAnalyticEqCalibrationMaxCandidates = Number.isFinite(Number(opts?.kktAnalyticEqCalibrationMaxCandidates))
+        ? Math.max(4, Math.floor(Number(opts.kktAnalyticEqCalibrationMaxCandidates)))
+        : 24;
+      const kktAnalyticEqMinAbsSlope = Number.isFinite(Number(opts?.kktAnalyticEqMinAbsSlope))
+        ? Math.max(1e-14, Number(opts.kktAnalyticEqMinAbsSlope))
+        : 1e-10;
+      const equalityResidualMeta: Array<{ rowIndex: number; configId: string; req: any }> = [];
+      {
+        const items = Array.isArray(residualItems) ? residualItems : [];
+        for (const it of items) {
+          const req = it?.req;
+          if (!req || !req.enabled || !req.operand) continue;
+          if (String(req.op || '').trim() !== '=') continue;
+          equalityResidualMeta.push({
+            rowIndex: equalityResidualMeta.length,
+            configId: String(it?.configId ?? req.configId ?? ''),
+            req
+          });
+        }
+      }
+      let analyticEqualityRowSpecs: Array<{ rowIndex: number; varIdx: number; slope: number }> = [];
+      let analyticEqualityCalibrated = false;
+
+      const applyAnalyticEqualityCtctJacobianOverlay = (
+        J: number[][],
+        n: number,
+        baseResidualCount: number
+      ): number => {
+        if (!kktUseAnalyticEqualityCtctJacobian) return 0;
+        if (!Array.isArray(analyticEqualityRowSpecs) || analyticEqualityRowSpecs.length === 0) return 0;
+        const rowCap = Math.max(0, Math.min(baseResidualCount, J.length));
+        let touched = 0;
+        for (const spec of analyticEqualityRowSpecs) {
+          const row = Number(spec?.rowIndex);
+          const col = Number(spec?.varIdx);
+          const slope = Number(spec?.slope);
+          if (!(row >= 0 && row < rowCap)) continue;
+          if (!(col >= 0 && col < n)) continue;
+          if (!Number.isFinite(slope)) continue;
+          for (let j = 0; j < n; j++) J[row][j] = 0;
+          J[row][col] = slope;
+          touched++;
+        }
+        return touched;
+      };
+
+      const kktUseSparseFdGrouping = opts?.kktUseSparseFdGrouping !== false;
+      const kktFdSupportThreshold = Number.isFinite(Number(opts?.kktFdSupportThreshold))
+        ? Math.max(0, Number(opts.kktFdSupportThreshold))
+        : 1e-10;
+      const kktFdGroupingMaxCols = Number.isFinite(Number(opts?.kktFdGroupingMaxCols))
+        ? Math.max(1, Math.floor(Number(opts.kktFdGroupingMaxCols)))
+        : 8;
+      let jacobianColumnSupports: number[][] | null = null;
+
+      const buildSupportsFromJacobian = (J: number[][], rowCount: number, colCount: number, threshold: number): number[][] => {
+        const supports: number[][] = Array.from({ length: colCount }, () => []);
+        const t = Math.max(0, Number(threshold) || 0);
+        for (let col = 0; col < colCount; col++) {
+          const rows: number[] = [];
+          for (let row = 0; row < rowCount; row++) {
+            const value = Math.abs(Number(J?.[row]?.[col]) || 0);
+            if (value > t) rows.push(row);
+          }
+          supports[col] = rows;
+        }
+        return supports;
+      };
+
+      const updateSupportsForColumns = (J: number[][], rowCount: number, columns: number[], threshold: number): void => {
+        if (!Array.isArray(jacobianColumnSupports)) return;
+        const t = Math.max(0, Number(threshold) || 0);
+        for (const col of columns) {
+          if (!(col >= 0 && col < jacobianColumnSupports.length)) continue;
+          const rows: number[] = [];
+          for (let row = 0; row < rowCount; row++) {
+            const value = Math.abs(Number(J?.[row]?.[col]) || 0);
+            if (value > t) rows.push(row);
+          }
+          jacobianColumnSupports[col] = rows;
+        }
+      };
+
+      const buildDisjointColumnGroups = (columns: number[], supports: number[][], maxGroupCols: number): number[][] => {
+        const groups: number[][] = [];
+        const sorted = (Array.isArray(columns) ? columns.slice() : [])
+          .filter((col) => Number.isFinite(col))
+          .map((col) => Math.max(0, Math.floor(Number(col))))
+          .sort((a, b) => a - b);
+        const maxCols = Math.max(1, Math.floor(Number(maxGroupCols) || 1));
+
+        for (const col of sorted) {
+          const supportRows = Array.isArray(supports?.[col]) ? supports[col] : [];
+          if (supportRows.length === 0) {
+            groups.push([col]);
+            continue;
+          }
+          let placed = false;
+          for (const group of groups) {
+            if (!Array.isArray(group) || group.length >= maxCols) continue;
+            let conflict = false;
+            for (const existingCol of group) {
+              const existingRows = Array.isArray(supports?.[existingCol]) ? supports[existingCol] : [];
+              if (existingRows.length === 0) {
+                conflict = true;
+                break;
+              }
+              const small = supportRows.length <= existingRows.length ? supportRows : existingRows;
+              const largeSet = new Set(supportRows.length <= existingRows.length ? existingRows : supportRows);
+              for (const row of small) {
+                if (largeSet.has(row)) {
+                  conflict = true;
+                  break;
+                }
+              }
+              if (conflict) break;
+            }
+            if (!conflict) {
+              group.push(col);
+              placed = true;
+              break;
+            }
+          }
+          if (!placed) groups.push([col]);
+        }
+        return groups;
+      };
+
+      const finiteDiffJacobian = (x: number[], r0: number[], lambdaVec: number[], mu: number, maxViol: number = 1.0, baseResidualCount: number = 0) => {
         const __fdT0 = nowMs();
         const n = x.length;
         const m = r0.length;
         const J = Array.from({ length: m }, () => Array(n).fill(0));
         const useWasmBatchFd = opts?.kktUseWasmBatchFd !== false;
+        const canUseGrouping = kktUseSparseFdGrouping
+          && Array.isArray(jacobianColumnSupports)
+          && jacobianColumnSupports.length === n;
         const fdSteps = new Array(n).fill(0);
         const perturbedResidualsByColumn: number[][] = new Array(n);
 
@@ -5188,52 +5745,100 @@ export async function runOptimizationMVP(options = {}) {
           fdSteps[i] = eps;
         }
 
-        const batchPoints = useWasmBatchFd
-          ? __profileBucketWrap('time_wasm_call', () => generateFiniteDifferencePerturbationPointsWasm(x, fdSteps))
-          : null;
-
-        for (let i = 0; i < n; i++) {
-          let xp = Array.isArray(batchPoints) && Array.isArray(batchPoints[i])
-            ? batchPoints[i].slice()
-            : x.slice();
-          if (xp[i] === x[i]) {
-            xp[i] = x[i] + fdSteps[i];
-          }
-
-          const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
-          const r1 = e1.residuals;
-          perturbedResidualsByColumn[i] = Array.isArray(r1) ? r1.slice(0, m) : [];
-        }
-
-        const Jw = useWasmBatchFd
-          ? __profileBucketWrap('time_wasm_call', () => assembleFiniteDifferenceJacobianWasm(r0, perturbedResidualsByColumn, fdSteps))
-          : null;
-
-        if (Array.isArray(Jw) && Jw.length === m) {
-          for (let rowIndex = 0; rowIndex < m; rowIndex++) {
-            const row = Jw[rowIndex];
-            if (!Array.isArray(row)) continue;
-            for (let colIndex = 0; colIndex < Math.min(n, row.length); colIndex++) {
-              const v = Number(row[colIndex]);
-              J[rowIndex][colIndex] = Number.isFinite(v) ? v : 0;
+        let effectiveEvals = 0;
+        let groupCount = 0;
+        if (canUseGrouping) {
+          const allCols = Array.from({ length: n }, (_, i) => i);
+          const groups = buildDisjointColumnGroups(allCols, jacobianColumnSupports || [], kktFdGroupingMaxCols);
+          groupCount = groups.length;
+          for (const group of groups) {
+            if (!Array.isArray(group) || group.length === 0) continue;
+            const xp = x.slice();
+            for (const col of group) {
+              if (!(col >= 0 && col < n)) continue;
+              xp[col] = x[col] + fdSteps[col];
+            }
+            const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+            const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
+            effectiveEvals += 1;
+            for (const col of group) {
+              if (!(col >= 0 && col < n)) continue;
+              const eps = fdSteps[col];
+              if (!Number.isFinite(eps) || eps === 0) continue;
+              const supportRows = Array.isArray(jacobianColumnSupports?.[col]) ? jacobianColumnSupports[col] : [];
+              if (supportRows.length === 0) {
+                for (let row = 0; row < Math.min(m, r1.length); row++) {
+                  const deriv = (r1[row] - r0[row]) / eps;
+                  J[row][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+                }
+              } else {
+                for (const row of supportRows) {
+                  if (!(row >= 0 && row < m) || row >= r1.length) continue;
+                  const deriv = (r1[row] - r0[row]) / eps;
+                  J[row][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+                }
+              }
             }
           }
         } else {
+          const batchPoints = useWasmBatchFd
+            ? __profileBucketWrap('time_wasm_call', () => generateFiniteDifferencePerturbationPointsWasm(x, fdSteps))
+            : null;
+
           for (let i = 0; i < n; i++) {
-            const r1 = perturbedResidualsByColumn[i];
-            const eps = fdSteps[i];
-            if (!Array.isArray(r1) || !Number.isFinite(eps) || eps === 0) continue;
-            for (let k = 0; k < Math.min(m, r1.length); k++) {
-              const deriv = (r1[k] - r0[k]) / eps;
-              J[k][i] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+            let xp = Array.isArray(batchPoints) && Array.isArray(batchPoints[i])
+              ? batchPoints[i].slice()
+              : x.slice();
+            if (xp[i] === x[i]) {
+              xp[i] = x[i] + fdSteps[i];
+            }
+
+            const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+            const r1 = e1.residuals;
+            perturbedResidualsByColumn[i] = Array.isArray(r1) ? r1.slice(0, m) : [];
+          }
+
+          const Jw = useWasmBatchFd
+            ? __profileBucketWrap('time_wasm_call', () => assembleFiniteDifferenceJacobianWasm(r0, perturbedResidualsByColumn, fdSteps))
+            : null;
+
+          if (Array.isArray(Jw) && Jw.length === m) {
+            for (let rowIndex = 0; rowIndex < m; rowIndex++) {
+              const row = Jw[rowIndex];
+              if (!Array.isArray(row)) continue;
+              for (let colIndex = 0; colIndex < Math.min(n, row.length); colIndex++) {
+                const v = Number(row[colIndex]);
+                J[rowIndex][colIndex] = Number.isFinite(v) ? v : 0;
+              }
+            }
+          } else {
+            for (let i = 0; i < n; i++) {
+              const r1 = perturbedResidualsByColumn[i];
+              const eps = fdSteps[i];
+              if (!Array.isArray(r1) || !Number.isFinite(eps) || eps === 0) continue;
+              for (let k = 0; k < Math.min(m, r1.length); k++) {
+                const deriv = (r1[k] - r0[k]) / eps;
+                J[k][i] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+              }
             }
           }
+          effectiveEvals = n;
+          groupCount = n;
         }
+
+        const analyticRows = applyAnalyticAsphereConstraintJacobianOverlay(J, x, lambdaVec, mu, maxViol, baseResidualCount);
+        const analyticEqRows = applyAnalyticEqualityCtctJacobianOverlay(J, n, baseResidualCount);
+        jacobianColumnSupports = buildSupportsFromJacobian(J, m, n, kktFdSupportThreshold);
 
         if (__profile && __profile.counts) {
           __profile.counts.kktFiniteDiffJacobianCalls = (Number(__profile.counts.kktFiniteDiffJacobianCalls) || 0) + 1;
           __profile.counts.kktFiniteDiffColumns = (Number(__profile.counts.kktFiniteDiffColumns) || 0) + n;
-          __profile.counts.kktFiniteDiffResidualEvals = (Number(__profile.counts.kktFiniteDiffResidualEvals) || 0) + n;
+          __profile.counts.kktFiniteDiffColumnsRaw = (Number(__profile.counts.kktFiniteDiffColumnsRaw) || 0) + n;
+          __profile.counts.kktFiniteDiffColumnsEffective = (Number(__profile.counts.kktFiniteDiffColumnsEffective) || 0) + effectiveEvals;
+          __profile.counts.kktFiniteDiffGroups = (Number(__profile.counts.kktFiniteDiffGroups) || 0) + groupCount;
+          __profile.counts.kktFiniteDiffResidualEvals = (Number(__profile.counts.kktFiniteDiffResidualEvals) || 0) + effectiveEvals;
+          __profile.counts.kktAnalyticConstraintRows = (Number(__profile.counts.kktAnalyticConstraintRows) || 0) + analyticRows;
+          __profile.counts.kktAnalyticEqualityRows = (Number(__profile.counts.kktAnalyticEqualityRows) || 0) + analyticEqRows;
           __profile.counts.kktFiniteDiffJacobianMs = (Number(__profile.counts.kktFiniteDiffJacobianMs) || 0) + (nowMs() - __fdT0);
           __profile.counts.kktJacobianFullCalls = (Number(__profile.counts.kktJacobianFullCalls) || 0) + 1;
         }
@@ -5272,7 +5877,8 @@ export async function runOptimizationMVP(options = {}) {
         mu: number,
         maxViol: number,
         baseJ: number[][],
-        refreshCols: number[]
+        refreshCols: number[],
+        baseResidualCount: number = 0
       ) => {
         const __fdT0 = nowMs();
         const n = x.length;
@@ -5290,31 +5896,69 @@ export async function runOptimizationMVP(options = {}) {
           }
         }
 
+        const stepByCol: Record<number, number> = {};
         for (const col of refreshCols) {
           if (!(col >= 0 && col < n)) continue;
           const vObj = { id: varIds[col], key: vars[col]?.key, value: x[col] };
           let eps = finiteDifferenceStepForVar(vObj);
-
-          const xp = x.slice();
-          xp[col] += eps;
-          if (xp[col] === x[col]) {
-            eps = Math.max(1e-8, Math.abs(x[col]) * 1e-6);
-            xp[col] = x[col] + eps;
+          const xi = Number(x[col]);
+          if (!Number.isFinite(eps) || eps === 0 || xi + eps === xi) {
+            eps = Math.max(1e-8, Math.abs(xi) * 1e-6);
           }
+          stepByCol[col] = eps;
+        }
 
+        const validCols = refreshCols.filter((col) => col >= 0 && col < n && Number.isFinite(stepByCol[col]) && stepByCol[col] !== 0);
+        const canUseGrouping = kktUseSparseFdGrouping
+          && Array.isArray(jacobianColumnSupports)
+          && jacobianColumnSupports.length === n;
+        const groups = canUseGrouping
+          ? buildDisjointColumnGroups(validCols, jacobianColumnSupports || [], kktFdGroupingMaxCols)
+          : validCols.map((col) => [col]);
+
+        let effectiveEvals = 0;
+        for (const group of groups) {
+          if (!Array.isArray(group) || group.length === 0) continue;
+          const xp = x.slice();
+          for (const col of group) {
+            xp[col] = x[col] + stepByCol[col];
+          }
           const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
-          const r1 = e1.residuals;
+          const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
+          effectiveEvals += 1;
 
-          for (let k = 0; k < Math.min(m, r1.length); k++) {
-            const deriv = (r1[k] - r0[k]) / eps;
-            J[k][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+          for (const col of group) {
+            const eps = stepByCol[col];
+            if (!Number.isFinite(eps) || eps === 0) continue;
+            const supportRows = Array.isArray(jacobianColumnSupports?.[col]) ? jacobianColumnSupports[col] : [];
+            if (supportRows.length === 0) {
+              for (let k = 0; k < Math.min(m, r1.length); k++) {
+                const deriv = (r1[k] - r0[k]) / eps;
+                J[k][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+              }
+            } else {
+              for (const row of supportRows) {
+                if (!(row >= 0 && row < m) || row >= r1.length) continue;
+                const deriv = (r1[row] - r0[row]) / eps;
+                J[row][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+              }
+            }
           }
         }
+
+        const analyticRows = applyAnalyticAsphereConstraintJacobianOverlay(J, x, lambdaVec, mu, maxViol, baseResidualCount);
+        const analyticEqRows = applyAnalyticEqualityCtctJacobianOverlay(J, n, baseResidualCount);
+        updateSupportsForColumns(J, m, validCols, kktFdSupportThreshold);
 
         if (__profile && __profile.counts) {
           __profile.counts.kktFiniteDiffJacobianCalls = (Number(__profile.counts.kktFiniteDiffJacobianCalls) || 0) + 1;
           __profile.counts.kktFiniteDiffColumns = (Number(__profile.counts.kktFiniteDiffColumns) || 0) + refreshCols.length;
-          __profile.counts.kktFiniteDiffResidualEvals = (Number(__profile.counts.kktFiniteDiffResidualEvals) || 0) + refreshCols.length;
+          __profile.counts.kktFiniteDiffColumnsRaw = (Number(__profile.counts.kktFiniteDiffColumnsRaw) || 0) + refreshCols.length;
+          __profile.counts.kktFiniteDiffColumnsEffective = (Number(__profile.counts.kktFiniteDiffColumnsEffective) || 0) + effectiveEvals;
+          __profile.counts.kktFiniteDiffGroups = (Number(__profile.counts.kktFiniteDiffGroups) || 0) + groups.length;
+          __profile.counts.kktFiniteDiffResidualEvals = (Number(__profile.counts.kktFiniteDiffResidualEvals) || 0) + effectiveEvals;
+          __profile.counts.kktAnalyticConstraintRows = (Number(__profile.counts.kktAnalyticConstraintRows) || 0) + analyticRows;
+          __profile.counts.kktAnalyticEqualityRows = (Number(__profile.counts.kktAnalyticEqualityRows) || 0) + analyticEqRows;
           __profile.counts.kktFiniteDiffJacobianMs = (Number(__profile.counts.kktFiniteDiffJacobianMs) || 0) + (nowMs() - __fdT0);
           __profile.counts.kktJacobianPartialCalls = (Number(__profile.counts.kktJacobianPartialCalls) || 0) + 1;
         }
@@ -5325,6 +5969,91 @@ export async function runOptimizationMVP(options = {}) {
       let bestScore = initialScore;
       let bestEval = initialStateEval || null;
       let currentX = bestX.slice();
+
+      const calibrateAnalyticEqualityCtctRows = (xRef: number[]) => {
+        if (!kktUseAnalyticEqualityCtctJacobian) {
+          analyticEqualityCalibrated = true;
+          return;
+        }
+        if (analyticEqualityCalibrated) return;
+        analyticEqualityCalibrated = true;
+        analyticEqualityRowSpecs = [];
+
+        try {
+          const baseEval = evalSQPAtX(xRef);
+          const baseResiduals = Array.isArray(baseEval?.residuals) ? baseEval.residuals : [];
+          if (baseResiduals.length === 0) return;
+
+          const candidateRows = equalityResidualMeta
+            .filter((meta) => String(meta?.req?.operand || '').trim().toUpperCase() === 'CTCT')
+            .filter((meta) => meta.rowIndex >= 0 && meta.rowIndex < baseResiduals.length);
+
+          if (__profile && __profile.counts) {
+            __profile.counts.kktAnalyticEqualityCandidateRows = (Number(__profile.counts.kktAnalyticEqualityCandidateRows) || 0) + candidateRows.length;
+          }
+
+          if (candidateRows.length === 0) return;
+
+          for (const meta of candidateRows) {
+            const row = meta.rowIndex;
+            const cfgId = String(meta.configId || '');
+            const candidateVarIdxs: number[] = [];
+            for (let vi = 0; vi < varIds.length; vi++) {
+              const parsed = parseJointVariableId(varIds[vi]);
+              const varCfg = String(parsed.configId || activeConfigId || '');
+              const key = String(vars?.[vi]?.key || parsed.baseId || '').toLowerCase();
+              if (cfgId && varCfg && cfgId !== varCfg) continue;
+              if (!key.includes('thickness')) continue;
+              candidateVarIdxs.push(vi);
+            }
+
+            const limitedCandidates = candidateVarIdxs.slice(0, kktAnalyticEqCalibrationMaxCandidates);
+            if (limitedCandidates.length === 0) continue;
+
+            let best: { idx: number; slope: number; absSlope: number } | null = null;
+            let secondAbs = 0;
+
+            for (const vi of limitedCandidates) {
+              const xv = Number(xRef[vi]);
+              const vObj = { id: varIds[vi], key: vars[vi]?.key, value: xv };
+              let eps = finiteDifferenceStepForVar(vObj);
+              if (!Number.isFinite(eps) || eps === 0 || xv + eps === xv) {
+                eps = Math.max(1e-8, Math.abs(xv) * 1e-6);
+              }
+              if (!Number.isFinite(eps) || eps === 0) continue;
+
+              const xp = xRef.slice();
+              xp[vi] = xv + eps;
+              const e1 = evalSQPAtX(xp);
+              const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
+              if (!(row < r1.length)) continue;
+              const slope = (Number(r1[row]) - Number(baseResiduals[row])) / eps;
+              const absSlope = Math.abs(slope);
+              if (!Number.isFinite(absSlope)) continue;
+
+              if (!best || absSlope > best.absSlope) {
+                secondAbs = best ? best.absSlope : secondAbs;
+                best = { idx: vi, slope, absSlope };
+              } else if (absSlope > secondAbs) {
+                secondAbs = absSlope;
+              }
+            }
+
+            if (!best || best.absSlope < kktAnalyticEqMinAbsSlope) continue;
+            const dominance = secondAbs > 0 ? (best.absSlope / secondAbs) : Number.POSITIVE_INFINITY;
+            if (!(dominance >= 3)) continue;
+            analyticEqualityRowSpecs.push({ rowIndex: row, varIdx: best.idx, slope: best.slope });
+          }
+
+          if (__profile && __profile.counts) {
+            __profile.counts.kktAnalyticEqualityCalibratedRows = (Number(__profile.counts.kktAnalyticEqualityCalibratedRows) || 0) + analyticEqualityRowSpecs.length;
+          }
+        } catch (_) {
+          analyticEqualityRowSpecs = [];
+        }
+      };
+
+      calibrateAnalyticEqualityCtctRows(currentX);
       
       // 【重要】初期評価を recordEval() に記録（LMメソッドと同様）
       // これにより getBestEvalSoFar() が null を返さず、正しくベスト追跡できる
@@ -5720,13 +6449,13 @@ export async function runOptimizationMVP(options = {}) {
             if (hasReusableJacobian) {
               if (shouldRunFiniteDiffRefresh) {
                 if (shouldRunFullJacobianRefresh) {
-                  J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol);
+                  J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
                   if (iter < 3 || iter % 100 === 0) {
                     console.log(`[Broyden] Iter ${iter}: Periodic full finite-diff Jacobian refresh`);
                   }
                 } else {
                   const refreshCols = pickJacobianRefreshColumns(currentX, lastX || null, jacobianRefreshMaxCols);
-                  J = finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, lastJ!, refreshCols);
+                  J = finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, lastJ!, refreshCols, aug0.base?.residuals?.length || 0);
                   if (iter < 3 || iter % 100 === 0) {
                     console.log(`[Broyden] Iter ${iter}: Partial finite-diff refresh (${refreshCols.length}/${n} cols)`);
                   }
@@ -5741,7 +6470,7 @@ export async function runOptimizationMVP(options = {}) {
                 }
               }
             } else {
-              J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol);
+              J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
               jacobianReuseSinceRefresh = 0;
             }
             broydenSkipCount = 0;
@@ -5752,13 +6481,13 @@ export async function runOptimizationMVP(options = {}) {
           if (hasReusableJacobian) {
             if (shouldRunFiniteDiffRefresh) {
               if (shouldRunFullJacobianRefresh) {
-                J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol);
+                J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
                 if (iter < 3 || iter % 100 === 0) {
                   console.log(`[Broyden] Iter ${iter}: Periodic full finite-diff Jacobian refresh`);
                 }
               } else {
                 const refreshCols = pickJacobianRefreshColumns(currentX, lastX || null, jacobianRefreshMaxCols);
-                J = finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, lastJ!, refreshCols);
+                J = finiteDiffJacobianPartial(currentX, r0, lambdaVec, mu, currentMaxViol, lastJ!, refreshCols, aug0.base?.residuals?.length || 0);
                 if (iter < 3 || iter % 100 === 0) {
                   console.log(`[Broyden] Iter ${iter}: Partial finite-diff refresh (${refreshCols.length}/${n} cols)`);
                 }
@@ -5773,7 +6502,7 @@ export async function runOptimizationMVP(options = {}) {
               }
             }
           } else {
-            J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol);
+            J = finiteDiffJacobian(currentX, r0, lambdaVec, mu, currentMaxViol, aug0.base?.residuals?.length || 0);
             jacobianReuseSinceRefresh = 0;
           }
           broydenSkipCount = 0;
@@ -5814,34 +6543,62 @@ export async function runOptimizationMVP(options = {}) {
             __profile.counts.kktWasmPilotCalls = (Number(__profile.counts.kktWasmPilotCalls) || 0) + 1;
           }
           try {
-            const fdSteps = new Array(n).fill(0).map((_, col) => {
+            const fdSteps = new Float64Array(n);
+            for (let col = 0; col < n; col++) {
               const vObj = { id: varIds[col], key: vars[col]?.key, value: currentX[col] };
               let h = finiteDifferenceStepForVar(vObj);
               const xcol = Number(currentX[col]);
               if (!Number.isFinite(h) || h === 0 || xcol + h === xcol) {
                 h = Math.max(1e-8, Math.abs(xcol) * 1e-6);
               }
-              return h;
-            });
+              fdSteps[col] = h;
+            }
 
-            const residualsPerturbed = Array.from({ length: n }, (_, col) => {
-              const h = fdSteps[col];
-              const out = new Array(m).fill(0);
+            const residualsPerturbedFlat = new Float64Array(m * n);
+            for (let col = 0; col < n; col++) {
+              const h = Number(fdSteps[col]);
+              const base = col * m;
               for (let row = 0; row < m; row++) {
-                out[row] = r0[row] + J[row][col] * h;
+                residualsPerturbedFlat[base + row] = r0[row] + J[row][col] * h;
               }
-              return out;
-            });
+            }
+
+            const currentXVec = Float64Array.from(currentX);
+            const residual0Vec = Float64Array.from(r0);
+            const varScalesVec = Float64Array.from(varScales);
 
             const pilotResult = __profileBucketWrap('time_wasm_call', () => optimizeSystemOneIterationWasm({
-              x: currentX,
+              x: currentXVec,
               steps: fdSteps,
-              residual0: r0,
-              residualsPerturbed,
+              residual0: residual0Vec,
+              residualsPerturbed: residualsPerturbedFlat,
               damping: lmDamp,
               trustRegionRadius: Math.max(1e-4, trustRegionDeltaEff),
-              varScales: varScales
+              varScales: varScalesVec
             }));
+
+            if (__profile && __profile.counts) {
+              try {
+                const dbg = getOptimizerWasmBridgeDebugInfo();
+                const bufferAttempted = dbg?.lastPilotBufferAttempted === true;
+                const bufferPath = String(dbg?.lastPilotPath || 'none');
+                const bufferStatusRaw = dbg?.lastPilotBufferStatus;
+                const bufferStatus = bufferStatusRaw == null ? null : String(bufferStatusRaw);
+                if (bufferAttempted) {
+                  __profile.counts.kktWasmBufferCalls = (Number(__profile.counts.kktWasmBufferCalls) || 0) + 1;
+                  if (bufferPath === 'buffer') {
+                    __profile.counts.kktWasmBufferHits = (Number(__profile.counts.kktWasmBufferHits) || 0) + 1;
+                  } else {
+                    __profile.counts.kktWasmBufferFallbacks = (Number(__profile.counts.kktWasmBufferFallbacks) || 0) + 1;
+                    const histogram = (__profile.counts.kktWasmBufferStatusHistogram && typeof __profile.counts.kktWasmBufferStatusHistogram === 'object')
+                      ? __profile.counts.kktWasmBufferStatusHistogram
+                      : (__profile.counts.kktWasmBufferStatusHistogram = {});
+                    const key = String(bufferStatus || 'unknown');
+                    histogram[key] = (Number(histogram[key]) || 0) + 1;
+                  }
+                }
+              } catch (_) {}
+            }
 
             if (pilotResult && pilotResult.ok && Array.isArray(pilotResult.dx) && pilotResult.dx.length === n) {
               dx = pilotResult.dx.slice();
@@ -7267,7 +8024,9 @@ if (typeof window !== 'undefined') {
   window['OptimizationMVP'] = {
     run: runOptimizationMVP,
     compareWasmPilot: compareWasmPilotBenchmark,
+    compareKktAnalyticEq: compareKktAnalyticEqBenchmark,
     exportBenchmarkCsv: exportWasmPilotBenchmarkCsv,
+    pickAnalyticCandidates: pickAnalyticDerivativeCandidates,
     stop: () => {
       __optimizerStopRequested = true;
       try {

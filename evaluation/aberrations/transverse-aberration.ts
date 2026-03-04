@@ -73,7 +73,7 @@ function isFiniteSystem(opticalSystemRows) {
  * @param {number} rayCount - 光線数 (奇数推奨)
  * @returns {Object} 横収差データ
  */
-export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIndex, fieldSettings = null, wavelength = 0.5876, rayCount = 51) {
+export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIndex, fieldSettings = null, wavelength = 0.5876, rayCount = 51, options = null) {
     // デバッグモードの設定（デフォルトは静か）
     const debugMode = TRANSVERSE_DEBUG;
     
@@ -162,22 +162,24 @@ export function calculateTransverseAberration(opticalSystemRows, targetSurfaceIn
         }
     };
     
+    const lightweight = !!(options && typeof options === 'object' && options.lightweight === true);
+
     // 各フィールド設定について計算
     for (let i = 0; i < fieldSettings.length; i++) {
         const fieldSetting = fieldSettings[i];
 
         try {
             // 十字光線を生成（絞り面インデックスと評価面インデックスも渡す）
-            const crossBeamData = generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, rayCount, wavelength, stopSurfaceIndex, targetSurfaceIndex);
+            const crossBeamData = generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, rayCount, wavelength, stopSurfaceIndex, targetSurfaceIndex, lightweight);
             
             if (crossBeamData) {
                 // メリジオナル・サジタル光線を分離して横収差を計算（絞り半径と入射瞳半径を別々に渡す）
                 const meridionalResult = calculateMeridionalAberrationFromCrossBeam(
-                    crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo, stopSurfaceInfo, mirrorSign
+                    crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo, stopSurfaceInfo, mirrorSign, lightweight
                 );
                 
                 const sagittalResult = calculateSagittalAberrationFromCrossBeam(
-                    crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo, stopSurfaceInfo, mirrorSign
+                    crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo, stopSurfaceInfo, mirrorSign, lightweight
                 );
                 
                 aberrationData.meridionalData.push(meridionalResult);
@@ -237,7 +239,8 @@ export async function calculateTransverseAberrationAsync(
             targetSurfaceIndex,
             [fs],
             wavelength,
-            rayCount
+            rayCount,
+            options
         );
 
         if (partial && typeof partial === 'object') {
@@ -276,7 +279,7 @@ export async function calculateTransverseAberrationAsync(
  * @param {number} targetSurfaceIndex - 評価面インデックス
  * @returns {Object} 十字光線データ
  */
-function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, rayCount, wavelength, stopSurfaceIndex, targetSurfaceIndex) {
+function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, rayCount, wavelength, stopSurfaceIndex, targetSurfaceIndex, lightweight = false) {
     const debugMode = TRANSVERSE_DEBUG;
     
     const options = {
@@ -358,7 +361,7 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
         // 横収差計算用のrayGroups形式に変換（絞り面インデックスを渡す）
         // NOTE: ray.path は Object/Coord Break 行を交点として記録しないため、
         // 以降の分類/評価で表面インデックス→rayPath点インデックス変換が必要。
-        const convertedData = convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSystemRows);
+        const convertedData = convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSystemRows, lightweight);
         
         return convertedData;
         
@@ -374,7 +377,7 @@ function generateCrossBeamForField(opticalSystemRows, fieldSetting, isFinite, ra
  * @param {number} stopSurfaceIndex - 絞り面インデックス
  * @returns {Object} rayGroups形式のデータ
  */
-function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSystemRows = null) {
+function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSystemRows = null, lightweight = false) {
     try {
         const rayGroups = [];
         
@@ -418,13 +421,22 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
                             rayType = 'right_marginal';
                         }
                         
-                        rays.push({
-                            rayType: rayType,
-                            path: tracedRay.rayPath,
-                            originalRay: originalRay,
-                            objectIndex: objectIndex,
-                            isFullSuccess: true
-                        });
+                        rays.push(
+                            lightweight
+                                ? {
+                                    rayType: rayType,
+                                    path: tracedRay.rayPath,
+                                    objectIndex: objectIndex,
+                                    isFullSuccess: true
+                                }
+                                : {
+                                    rayType: rayType,
+                                    path: tracedRay.rayPath,
+                                    originalRay: originalRay,
+                                    objectIndex: objectIndex,
+                                    isFullSuccess: true
+                                }
+                        );
                         
                         successCount++;
                     } else if (!tracedRay.success && tracedRay.originalRay && tracedRay.partialPath && tracedRay.partialPath.length > 0) {
@@ -453,15 +465,26 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
                             rayType = 'right_marginal';
                         }
                         
-                        rays.push({
-                            rayType: rayType,
-                            path: tracedRay.partialPath,
-                            originalRay: originalRay,
-                            objectIndex: objectIndex,
-                            isFullSuccess: false,
-                            isPartial: true,
-                            failureReason: tracedRay.error || 'Unknown error'
-                        });
+                        rays.push(
+                            lightweight
+                                ? {
+                                    rayType: rayType,
+                                    path: tracedRay.partialPath,
+                                    objectIndex: objectIndex,
+                                    isFullSuccess: false,
+                                    isPartial: true,
+                                    failureReason: tracedRay.error || 'Unknown error'
+                                }
+                                : {
+                                    rayType: rayType,
+                                    path: tracedRay.partialPath,
+                                    originalRay: originalRay,
+                                    objectIndex: objectIndex,
+                                    isFullSuccess: false,
+                                    isPartial: true,
+                                    failureReason: tracedRay.error || 'Unknown error'
+                                }
+                        );
                         
                         partialCount++;
                     } else {
@@ -470,7 +493,7 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
                 });
                 
                 // 十字光線の詳細分類を行う
-                classifyCrossBeamRays(rays, stopSurfaceIndex, opticalSystemRows);
+                if (!lightweight) classifyCrossBeamRays(rays, stopSurfaceIndex, opticalSystemRows);
                 
                 rayGroups.push({
                     objectIndex: objectIndex,
@@ -515,13 +538,22 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
                             rayType = 'right_marginal';
                         }
                         
-                        rays.push({
-                            rayType: rayType,
-                            path: tracedRay.rayPath,
-                            originalRay: originalRay,
-                            angleIndex: angleIndex,
-                            isFullSuccess: true
-                        });
+                        rays.push(
+                            lightweight
+                                ? {
+                                    rayType: rayType,
+                                    path: tracedRay.rayPath,
+                                    angleIndex: angleIndex,
+                                    isFullSuccess: true
+                                }
+                                : {
+                                    rayType: rayType,
+                                    path: tracedRay.rayPath,
+                                    originalRay: originalRay,
+                                    angleIndex: angleIndex,
+                                    isFullSuccess: true
+                                }
+                        );
                         
                         successCount++;
                     } else if (!tracedRay.success && tracedRay.originalRay && tracedRay.partialPath && tracedRay.partialPath.length > 0) {
@@ -550,15 +582,26 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
                             rayType = 'right_marginal';
                         }
                         
-                        rays.push({
-                            rayType: rayType,
-                            path: tracedRay.partialPath,
-                            originalRay: originalRay,
-                            angleIndex: angleIndex,
-                            isFullSuccess: false,
-                            isPartial: true,
-                            failureReason: tracedRay.error || 'Unknown error'
-                        });
+                        rays.push(
+                            lightweight
+                                ? {
+                                    rayType: rayType,
+                                    path: tracedRay.partialPath,
+                                    angleIndex: angleIndex,
+                                    isFullSuccess: false,
+                                    isPartial: true,
+                                    failureReason: tracedRay.error || 'Unknown error'
+                                }
+                                : {
+                                    rayType: rayType,
+                                    path: tracedRay.partialPath,
+                                    originalRay: originalRay,
+                                    angleIndex: angleIndex,
+                                    isFullSuccess: false,
+                                    isPartial: true,
+                                    failureReason: tracedRay.error || 'Unknown error'
+                                }
+                        );
                         
                         partialCount++;
                     } else {
@@ -567,7 +610,7 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
                 });
                 
                 // 十字光線の詳細分類を行う
-                classifyCrossBeamRays(rays, stopSurfaceIndex, opticalSystemRows);
+                if (!lightweight) classifyCrossBeamRays(rays, stopSurfaceIndex, opticalSystemRows);
                 
                 rayGroups.push({
                     angleIndex: angleIndex,
@@ -576,26 +619,28 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
             });
         }
         
-        // 光線タイプの分布を確認（詳細版）
-        const rayTypeCounts = {};
-        const originalTypeCounts = {};
-        rayGroups.forEach(group => {
-            group.rays.forEach(ray => {
-                rayTypeCounts[ray.rayType] = (rayTypeCounts[ray.rayType] || 0) + 1;
-                const originalType = ray.originalRay?.type || 'undefined';
-                originalTypeCounts[originalType] = (originalTypeCounts[originalType] || 0) + 1;
+        if (!lightweight) {
+            // 光線タイプの分布を確認（詳細版）
+            const rayTypeCounts = {};
+            const originalTypeCounts = {};
+            rayGroups.forEach(group => {
+                group.rays.forEach(ray => {
+                    rayTypeCounts[ray.rayType] = (rayTypeCounts[ray.rayType] || 0) + 1;
+                    const originalType = ray.originalRay?.type || 'undefined';
+                    originalTypeCounts[originalType] = (originalTypeCounts[originalType] || 0) + 1;
+                });
             });
-        });
-        
-        
-        // 主要な光線タイプのみ報告
-        const importantTypes = ['chief', 'left_marginal', 'right_marginal', 'upper_marginal', 'lower_marginal'];
-        const importantCounts = {};
-        importantTypes.forEach(type => {
-            if (rayTypeCounts[type]) {
-                importantCounts[type] = rayTypeCounts[type];
-            }
-        });
+
+
+            // 主要な光線タイプのみ報告
+            const importantTypes = ['chief', 'left_marginal', 'right_marginal', 'upper_marginal', 'lower_marginal'];
+            const importantCounts = {};
+            importantTypes.forEach(type => {
+                if (rayTypeCounts[type]) {
+                    importantCounts[type] = rayTypeCounts[type];
+                }
+            });
+        }
         
         return {
             rayGroups: rayGroups,
@@ -623,7 +668,7 @@ function convertToRayGroupsFormat(rawCrossBeamData, stopSurfaceIndex, opticalSys
  * @param {number} mirrorSign - ミラーによる符号反転 (1 or -1)
  * @returns {Object} メリジオナル横収差データ
  */
-function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo = null, stopSurfaceInfo = null, mirrorSign = 1) {
+function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo = null, stopSurfaceInfo = null, mirrorSign = 1, lightweight = false) {
     const points = [];
     
     if (!crossBeamData || !crossBeamData.rayGroups || crossBeamData.rayGroups.length === 0) {
@@ -677,8 +722,13 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
         };
     }
     
+    const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
+    const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
+
     // 主光線の評価面での座標を取得
-    const chiefIntersection = getIntersectionAtSurface(chiefRay, targetSurfaceIndex, opticalSystemRows, targetSurfaceInfo, mirrorSign);
+    const chiefIntersection = Number.isInteger(targetPointIndex)
+        ? getIntersectionAtPathPoint(chiefRay, targetPointIndex, targetSurfaceInfo, mirrorSign, true)
+        : getIntersectionAtSurface(chiefRay, targetSurfaceIndex, opticalSystemRows, targetSurfaceInfo, mirrorSign);
     if (!chiefIntersection) {
         console.warn('⚠️ 主光線の評価面交点が見つかりません');
         return {
@@ -687,21 +737,21 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
             points: points
         };
     }
-    
-    
-    const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
-    const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
 
     // メリディオナル光線の絞り面でのX座標とY座標統計を収集（オフセット補正用のみ）
     const stopXCoordinates = [];
     const stopYCoordinates = [];
-    meridionalRays.forEach(ray => {
-        const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
-        if (stopIntersection) {
-            stopXCoordinates.push(stopIntersection.x);
-            stopYCoordinates.push(stopIntersection.y);
-        }
-    });
+    if (!lightweight) {
+        meridionalRays.forEach(ray => {
+            const stopIntersection = Number.isInteger(stopPointIndex)
+                ? getIntersectionAtPathPoint(ray, stopPointIndex, null, 1, false)
+                : getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
+            if (stopIntersection) {
+                stopXCoordinates.push(stopIntersection.x);
+                stopYCoordinates.push(stopIntersection.y);
+            }
+        });
+    }
     
     // X座標の中点を計算（X方向オフセット補正値）
     let xOffset = 0;
@@ -726,15 +776,16 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     // 🔧 FIX: 部分的光線処理用も同じ瞳半径を使用
     const maxCorrectedY = entrancePupilRadius;  // = stopRadius
     
-    // 主光線の絞り面座標を取得（必要時に使用）
-    getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
-    
     // メリジオナル光線の横収差を計算（座標分布に基づく正規化）
     meridionalRays.forEach((ray, index) => {
-        const intersection = getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows, targetSurfaceInfo, mirrorSign);
+        const intersection = Number.isInteger(targetPointIndex)
+            ? getIntersectionAtPathPoint(ray, targetPointIndex, targetSurfaceInfo, mirrorSign, true)
+            : getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows, targetSurfaceInfo, mirrorSign);
         if (intersection) {
             // 絞り面での座標を取得
-            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
+            const stopIntersection = Number.isInteger(stopPointIndex)
+                ? getIntersectionAtPathPoint(ray, stopPointIndex, stopSurfaceInfo, mirrorSign, false)
+                : getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
             if (stopIntersection) {
                 // Y座標はオフセット補正なしで直接使用
                 const stopY = stopIntersection.y;
@@ -747,34 +798,43 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                 // 規格化座標が±1以内の光線を含める
                 if (Math.abs(normalizedPupilCoord) <= 1.0) {
                     successCount++;
-                    points.push({
-                        pupilCoordinate: normalizedPupilCoord, // Y座標を直接正規化
-                        transverseAberration: transverseAberration,
-                        rayType: ray.rayType,
-                        isPartial: ray.isPartial || false,
-                        isFullSuccess: ray.isFullSuccess !== false,
-                        failureReason: ray.failureReason || null,
-                        actualCoordinate: {
-                            x: intersection.x,
-                            y: intersection.y
-                        },
-                        chiefReference: {
-                            x: chiefIntersection.x,
-                            y: chiefIntersection.y
-                        },
-                        stopCoordinate: {
-                            x: stopIntersection.x,
-                            y: stopIntersection.y,
-                            maxAbsY: maxAbsY,
-                            normalizedY: normalizedPupilCoord
-                        }
-                    });
+                    points.push(
+                        lightweight
+                            ? {
+                                pupilCoordinate: normalizedPupilCoord,
+                                transverseAberration: transverseAberration
+                            }
+                            : {
+                                pupilCoordinate: normalizedPupilCoord, // Y座標を直接正規化
+                                transverseAberration: transverseAberration,
+                                rayType: ray.rayType,
+                                isPartial: ray.isPartial || false,
+                                isFullSuccess: ray.isFullSuccess !== false,
+                                failureReason: ray.failureReason || null,
+                                actualCoordinate: {
+                                    x: intersection.x,
+                                    y: intersection.y
+                                },
+                                chiefReference: {
+                                    x: chiefIntersection.x,
+                                    y: chiefIntersection.y
+                                },
+                                stopCoordinate: {
+                                    x: stopIntersection.x,
+                                    y: stopIntersection.y,
+                                    maxAbsY: maxAbsY,
+                                    normalizedY: normalizedPupilCoord
+                                }
+                            }
+                    );
                 }
             }
         } else if (ray.isPartial && ray.path) {
             // 🔧 FIX: 絞り面に実際に到達しているかチェック（ケラレ検出）
             // 部分的な光線でも絞り面まで到達していれば処理する
-            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
+            const stopIntersection = Number.isInteger(stopPointIndex)
+                ? getIntersectionAtPathPoint(ray, stopPointIndex, null, 1, false)
+                : getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
             if (!stopIntersection) {
                 // 絞り面に到達していない = ケラレている
                 vignetteCount++;
@@ -802,7 +862,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                     // 評価面まで到達していない場合は外挿して推定
                     let estimatedIntersection = null;
                     if (Number.isInteger(targetPointIndex) && targetPointIndex <= maxSurfaceIndex) {
-                        estimatedIntersection = getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows);
+                        estimatedIntersection = getIntersectionAtPathPoint(ray, targetPointIndex, null, 1, false);
                     } else {
                         // 外挿による推定（最後の2面から推定）
                         if (ray.path.length >= 2) {
@@ -826,31 +886,38 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
                         const transverseAberration = estimatedIntersection.y - chiefIntersection.y;
                         
 
-                        points.push({
-                            pupilCoordinate: normalizedPupilCoord, // 座標分布に基づく正規化座標
-                            transverseAberration: transverseAberration,
-                            rayType: ray.rayType,
-                            isPartial: true,
-                            isFullSuccess: false,
-                            isExtrapolated: true,
-                            failureReason: ray.failureReason || 'Partial ray path',
-                            actualCoordinate: {
-                                x: estimatedIntersection.x,
-                                y: estimatedIntersection.y
-                            },
-                            chiefReference: {
-                                x: chiefIntersection.x,
-                                y: chiefIntersection.y
-                            },
-                            stopCoordinate: {
-                                x: stopIntersection.x,
-                                y: stopIntersection.y,
-                                correctedY: correctedStopY,
-                                yOffset: yOffset,
-                                maxCorrectedY: maxCorrectedY,
-                                normalizedY: normalizedPupilCoord
-                            }
-                        });
+                        points.push(
+                            lightweight
+                                ? {
+                                    pupilCoordinate: normalizedPupilCoord,
+                                    transverseAberration: transverseAberration
+                                }
+                                : {
+                                    pupilCoordinate: normalizedPupilCoord, // 座標分布に基づく正規化座標
+                                    transverseAberration: transverseAberration,
+                                    rayType: ray.rayType,
+                                    isPartial: true,
+                                    isFullSuccess: false,
+                                    isExtrapolated: true,
+                                    failureReason: ray.failureReason || 'Partial ray path',
+                                    actualCoordinate: {
+                                        x: estimatedIntersection.x,
+                                        y: estimatedIntersection.y
+                                    },
+                                    chiefReference: {
+                                        x: chiefIntersection.x,
+                                        y: chiefIntersection.y
+                                    },
+                                    stopCoordinate: {
+                                        x: stopIntersection.x,
+                                        y: stopIntersection.y,
+                                        correctedY: correctedStopY,
+                                        yOffset: yOffset,
+                                        maxCorrectedY: maxCorrectedY,
+                                        normalizedY: normalizedPupilCoord
+                                    }
+                                }
+                        );
                     }
                 }
             }
@@ -858,7 +925,9 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     });
     
     // 主光線の絞り面座標を取得
-    const chiefStopIntersection = getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
+    const chiefStopIntersection = Number.isInteger(stopPointIndex)
+        ? getIntersectionAtPathPoint(chiefRay, stopPointIndex, stopSurfaceInfo, mirrorSign, false)
+        : getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
 
     // 🔧 FIX: 主光線を明示的に追加（Ray number偶数時に瞳座標=0が含まれない問題を回避）
     const chiefStopY = chiefStopIntersection ? chiefStopIntersection.y : 0;
@@ -868,85 +937,93 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
     const chiefAlreadyExistsMeridional = points.some(p => Math.abs(p.pupilCoordinate - chiefNormalizedPupilCoordMeridional) < 1e-9);
     
     if (!chiefAlreadyExistsMeridional) {
-        points.push({
-            pupilCoordinate: chiefNormalizedPupilCoordMeridional,
-            transverseAberration: 0, // 主光線の横収差は定義上0
-            rayType: 'chief',
-            isPartial: false,
-            isFullSuccess: true,
-            failureReason: null,
-            actualCoordinate: {
-                x: chiefIntersection.x,
-                y: chiefIntersection.y
-            },
-            chiefReference: {
-                x: chiefIntersection.x,
-                y: chiefIntersection.y
-            },
-            stopCoordinate: {
-                x: chiefStopIntersection ? chiefStopIntersection.x : 0,
-                y: chiefStopY,
-                maxAbsY: maxAbsY,
-                normalizedY: chiefNormalizedPupilCoordMeridional
-            }
-        });
+        points.push(
+            lightweight
+                ? {
+                    pupilCoordinate: chiefNormalizedPupilCoordMeridional,
+                    transverseAberration: 0
+                }
+                : {
+                    pupilCoordinate: chiefNormalizedPupilCoordMeridional,
+                    transverseAberration: 0, // 主光線の横収差は定義上0
+                    rayType: 'chief',
+                    isPartial: false,
+                    isFullSuccess: true,
+                    failureReason: null,
+                    actualCoordinate: {
+                        x: chiefIntersection.x,
+                        y: chiefIntersection.y
+                    },
+                    chiefReference: {
+                        x: chiefIntersection.x,
+                        y: chiefIntersection.y
+                    },
+                    stopCoordinate: {
+                        x: chiefStopIntersection ? chiefStopIntersection.x : 0,
+                        y: chiefStopY,
+                        maxAbsY: maxAbsY,
+                        normalizedY: chiefNormalizedPupilCoordMeridional
+                    }
+                }
+        );
     }
-    
-    // 瞳座標でソート
-    points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
-    
-    // ケラレ統計は内部で保持のみ（ログ出力なし）
-    
-    // 横収差0位置を求める
+
     let zeroAberrationPosition = null;
     let offsetMethod = 'none';
-    
-    if (points.length >= 3) {
-        // 新しい統一手法：最小絶対値点とその前後3点による直線近似
-        const minAbsZero = findZeroAberrationByMinAbsThreePoints(points);
-        if (minAbsZero !== null) {
-            zeroAberrationPosition = minAbsZero;
-            offsetMethod = 'min_abs_3points';
-        } else {
-        }
-    } else if (points.length === 2) {
-        // 2点の場合は線形補間で横収差0位置を求める（フォールバック）
-        const p1 = points[0];
-        const p2 = points[1];
-        
-        // 収差値の符号が異なる場合のみ0点を計算
-        if (p1.transverseAberration * p2.transverseAberration <= 0) {
-            const deltaX = p2.pupilCoordinate - p1.pupilCoordinate;
-            const deltaY = p2.transverseAberration - p1.transverseAberration;
-            
-            if (Math.abs(deltaY) > 1e-12) {
-                // 線形補間: y = 0となるxを求める
-                const t = -p1.transverseAberration / deltaY;
-                zeroAberrationPosition = p1.pupilCoordinate + t * deltaX;
-                offsetMethod = 'linear_2points';
-                
-                // 有効範囲内かチェック
-                if (Math.abs(zeroAberrationPosition) > 1.5) {
-                    zeroAberrationPosition = null;
-                    offsetMethod = 'none';
+    if (!lightweight) {
+        // 瞳座標でソート
+        points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
+
+        // ケラレ統計は内部で保持のみ（ログ出力なし）
+
+    // 横収差0位置を求める
+        if (points.length >= 3) {
+            // 新しい統一手法：最小絶対値点とその前後3点による直線近似
+            const minAbsZero = findZeroAberrationByMinAbsThreePoints(points);
+            if (minAbsZero !== null) {
+                zeroAberrationPosition = minAbsZero;
+                offsetMethod = 'min_abs_3points';
+            } else {
+            }
+        } else if (points.length === 2) {
+            // 2点の場合は線形補間で横収差0位置を求める（フォールバック）
+            const p1 = points[0];
+            const p2 = points[1];
+
+            // 収差値の符号が異なる場合のみ0点を計算
+            if (p1.transverseAberration * p2.transverseAberration <= 0) {
+                const deltaX = p2.pupilCoordinate - p1.pupilCoordinate;
+                const deltaY = p2.transverseAberration - p1.transverseAberration;
+
+                if (Math.abs(deltaY) > 1e-12) {
+                    // 線形補間: y = 0となるxを求める
+                    const t = -p1.transverseAberration / deltaY;
+                    zeroAberrationPosition = p1.pupilCoordinate + t * deltaX;
+                    offsetMethod = 'linear_2points';
+
+                    // 有効範囲内かチェック
+                    if (Math.abs(zeroAberrationPosition) > 1.5) {
+                        zeroAberrationPosition = null;
+                        offsetMethod = 'none';
+                    }
                 }
             }
         }
-    }
-    
-    // 横収差0位置でのオフセット適用
-    if (zeroAberrationPosition !== null && Math.abs(zeroAberrationPosition) > 1e-6) {
-        // 284点以上の場合も同じ処理を適用
-        
-        // 全点の瞳座標をオフセット
-        points.forEach(point => {
-            point.originalPupilCoordinate = point.pupilCoordinate; // 元の座標を保存
-            point.pupilCoordinate -= zeroAberrationPosition; // オフセット適用
-        });
-        
-        // オフセット後に再ソート
-        points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
-        
+
+        // 横収差0位置でのオフセット適用
+        if (zeroAberrationPosition !== null && Math.abs(zeroAberrationPosition) > 1e-6) {
+            // 284点以上の場合も同じ処理を適用
+
+            // 全点の瞳座標をオフセット
+            points.forEach(point => {
+                point.originalPupilCoordinate = point.pupilCoordinate; // 元の座標を保存
+                point.pupilCoordinate -= zeroAberrationPosition; // オフセット適用
+            });
+
+            // オフセット後に再ソート
+            points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
+
+        }
     }
     
     // メリジオナル統計情報（必要時に利用）
@@ -977,7 +1054,7 @@ function calculateMeridionalAberrationFromCrossBeam(crossBeamData, opticalSystem
  * @param {number} mirrorSign - ミラーによる符号反転 (1 or -1)
  * @returns {Object} サジタル横収差データ
  */
-function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo = null, stopSurfaceInfo = null, mirrorSign = 1) {
+function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRows, targetSurfaceIndex, stopSurfaceIndex, stopRadius, entrancePupilRadius, fieldSetting, targetSurfaceInfo = null, stopSurfaceInfo = null, mirrorSign = 1, lightweight = false) {
     const points = [];
     
     if (!crossBeamData || !crossBeamData.rayGroups || crossBeamData.rayGroups.length === 0) {
@@ -1031,8 +1108,13 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
         };
     }
     
+    const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
+    const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
+
     // 主光線の評価面での座標を取得
-    const chiefIntersection = getIntersectionAtSurface(chiefRay, targetSurfaceIndex, opticalSystemRows, targetSurfaceInfo, mirrorSign);
+    const chiefIntersection = Number.isInteger(targetPointIndex)
+        ? getIntersectionAtPathPoint(chiefRay, targetPointIndex, targetSurfaceInfo, mirrorSign, true)
+        : getIntersectionAtSurface(chiefRay, targetSurfaceIndex, opticalSystemRows, targetSurfaceInfo, mirrorSign);
     if (!chiefIntersection) {
         console.warn('⚠️ 主光線の評価面交点が見つかりません');
         return {
@@ -1041,18 +1123,19 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
             points: points
         };
     }
-    
-    const stopPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, stopSurfaceIndex);
-    const targetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
 
     // サジタル光線の絞り面でのX座標統計を収集（デバッグ用）
     const stopXCoordinates = [];
-    sagittalRays.forEach(ray => {
-        const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
-        if (stopIntersection) {
-            stopXCoordinates.push(stopIntersection.x);
-        }
-    });
+    if (!lightweight) {
+        sagittalRays.forEach(ray => {
+            const stopIntersection = Number.isInteger(stopPointIndex)
+                ? getIntersectionAtPathPoint(ray, stopPointIndex, null, 1, false)
+                : getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
+            if (stopIntersection) {
+                stopXCoordinates.push(stopIntersection.x);
+            }
+        });
+    }
     
     // 🔧 FIX: オフセット補正は不要（メリディオナルと同じロジック）
     // 絞り面X座標を直接使用して正規化する
@@ -1069,14 +1152,20 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     const maxCorrectedX = entrancePupilRadius;  // = stopRadius
     
     // 主光線の絞り面X座標も取得（参考用）
-    const chiefStopIntersection = getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
+    const chiefStopIntersection = Number.isInteger(stopPointIndex)
+        ? getIntersectionAtPathPoint(chiefRay, stopPointIndex, stopSurfaceInfo, mirrorSign, false)
+        : getIntersectionAtSurface(chiefRay, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
     
     // サジタル光線の横収差を計算（座標分布に基づく正規化）
     sagittalRays.forEach((ray, index) => {
-        const intersection = getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows, targetSurfaceInfo, mirrorSign);
+        const intersection = Number.isInteger(targetPointIndex)
+            ? getIntersectionAtPathPoint(ray, targetPointIndex, targetSurfaceInfo, mirrorSign, true)
+            : getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows, targetSurfaceInfo, mirrorSign);
         if (intersection) {
             // 絞り面での座標を取得
-            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
+            const stopIntersection = Number.isInteger(stopPointIndex)
+                ? getIntersectionAtPathPoint(ray, stopPointIndex, stopSurfaceInfo, mirrorSign, false)
+                : getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows, stopSurfaceInfo, mirrorSign);
             if (stopIntersection) {
                 // 🔧 FIX: X座標をオフセット補正せずに直接使用（メリディオナルと同じロジック）
                 const stopX = stopIntersection.x;
@@ -1089,34 +1178,43 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                 // 規格化座標が±1以内の光線を含める
                 if (Math.abs(normalizedPupilCoord) <= 1.0) {
                     successCount++;
-                    points.push({
-                        pupilCoordinate: normalizedPupilCoord, // 座標分布に基づく正規化座標
-                        transverseAberration: transverseAberration,
-                        rayType: ray.rayType,
-                        isPartial: ray.isPartial || false,
-                        isFullSuccess: ray.isFullSuccess !== false,
-                        failureReason: ray.failureReason || null,
-                        actualCoordinate: {
-                            x: intersection.x,
-                            y: intersection.y
-                        },
-                        chiefReference: {
-                            x: chiefIntersection.x,
-                            y: chiefIntersection.y
-                        },
-                        stopCoordinate: {
-                            x: stopIntersection.x,
-                            y: stopIntersection.y,
-                            maxCorrectedX: maxCorrectedX,
-                            normalizedX: normalizedPupilCoord
-                        }
-                    });
+                    points.push(
+                        lightweight
+                            ? {
+                                pupilCoordinate: normalizedPupilCoord,
+                                transverseAberration: transverseAberration
+                            }
+                            : {
+                                pupilCoordinate: normalizedPupilCoord, // 座標分布に基づく正規化座標
+                                transverseAberration: transverseAberration,
+                                rayType: ray.rayType,
+                                isPartial: ray.isPartial || false,
+                                isFullSuccess: ray.isFullSuccess !== false,
+                                failureReason: ray.failureReason || null,
+                                actualCoordinate: {
+                                    x: intersection.x,
+                                    y: intersection.y
+                                },
+                                chiefReference: {
+                                    x: chiefIntersection.x,
+                                    y: chiefIntersection.y
+                                },
+                                stopCoordinate: {
+                                    x: stopIntersection.x,
+                                    y: stopIntersection.y,
+                                    maxCorrectedX: maxCorrectedX,
+                                    normalizedX: normalizedPupilCoord
+                                }
+                            }
+                    );
                 }
             }
         } else if (ray.isPartial && ray.path) {
             // 🔧 FIX: 絞り面に実際に到達しているかチェック（ケラレ検出）
             // 部分的な光線でも絞り面まで到達していれば処理する
-            const stopIntersection = getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
+            const stopIntersection = Number.isInteger(stopPointIndex)
+                ? getIntersectionAtPathPoint(ray, stopPointIndex, null, 1, false)
+                : getIntersectionAtSurface(ray, stopSurfaceIndex, opticalSystemRows);
             if (!stopIntersection) {
                 // 絞り面に到達していない = ケラレている
                 vignetteCount++;
@@ -1144,7 +1242,7 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                     // 評価面まで到達していない場合は外挿して推定
                     let estimatedIntersection = null;
                     if (Number.isInteger(targetPointIndex) && targetPointIndex <= maxSurfaceIndex) {
-                        estimatedIntersection = getIntersectionAtSurface(ray, targetSurfaceIndex, opticalSystemRows);
+                        estimatedIntersection = getIntersectionAtPathPoint(ray, targetPointIndex, null, 1, false);
                     } else {
                         // 外挿による推定（最後の2面から推定）
                         if (ray.path.length >= 2) {
@@ -1168,31 +1266,38 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
                         const transverseAberration = estimatedIntersection.x - chiefIntersection.x; // X方向の収差
                         
 
-                        points.push({
-                            pupilCoordinate: normalizedPupilCoord, // 座標分布に基づく正規化座標
-                            transverseAberration: transverseAberration,
-                            rayType: ray.rayType,
-                            isPartial: true,
-                            isFullSuccess: false,
-                            isExtrapolated: true,
-                            failureReason: ray.failureReason || 'Partial ray path',
-                            actualCoordinate: {
-                                x: estimatedIntersection.x,
-                                y: estimatedIntersection.y
-                            },
-                            chiefReference: {
-                                x: chiefIntersection.x,
-                                y: chiefIntersection.y
-                            },
-                            stopCoordinate: {
-                                x: stopIntersection.x,
-                                y: stopIntersection.y,
-                                correctedX: correctedStopX,
-                                xOffset: xOffset,
-                                maxCorrectedX: maxCorrectedX,
-                                normalizedX: normalizedPupilCoord
-                            }
-                        });
+                        points.push(
+                            lightweight
+                                ? {
+                                    pupilCoordinate: normalizedPupilCoord,
+                                    transverseAberration: transverseAberration
+                                }
+                                : {
+                                    pupilCoordinate: normalizedPupilCoord, // 座標分布に基づく正規化座標
+                                    transverseAberration: transverseAberration,
+                                    rayType: ray.rayType,
+                                    isPartial: true,
+                                    isFullSuccess: false,
+                                    isExtrapolated: true,
+                                    failureReason: ray.failureReason || 'Partial ray path',
+                                    actualCoordinate: {
+                                        x: estimatedIntersection.x,
+                                        y: estimatedIntersection.y
+                                    },
+                                    chiefReference: {
+                                        x: chiefIntersection.x,
+                                        y: chiefIntersection.y
+                                    },
+                                    stopCoordinate: {
+                                        x: stopIntersection.x,
+                                        y: stopIntersection.y,
+                                        correctedX: correctedStopX,
+                                        xOffset: xOffset,
+                                        maxCorrectedX: maxCorrectedX,
+                                        normalizedX: normalizedPupilCoord
+                                    }
+                                }
+                        );
                     }
                 }
             }
@@ -1207,85 +1312,93 @@ function calculateSagittalAberrationFromCrossBeam(crossBeamData, opticalSystemRo
     const chiefAlreadyExistsSagittal = points.some(p => Math.abs(p.pupilCoordinate - chiefNormalizedPupilCoordSagittal) < 1e-9);
     
     if (!chiefAlreadyExistsSagittal) {
-        points.push({
-            pupilCoordinate: chiefNormalizedPupilCoordSagittal,
-            transverseAberration: 0, // 主光線の横収差は定義上0
-            rayType: 'chief',
-            isPartial: false,
-            isFullSuccess: true,
-            failureReason: null,
-            actualCoordinate: {
-                x: chiefIntersection.x,
-                y: chiefIntersection.y
-            },
-            chiefReference: {
-                x: chiefIntersection.x,
-                y: chiefIntersection.y
-            },
-            stopCoordinate: {
-                x: chiefStopX,
-                y: chiefStopIntersection ? chiefStopIntersection.y : 0,
-                maxCorrectedX: maxCorrectedX,
-                normalizedX: chiefNormalizedPupilCoordSagittal
-            }
-        });
+        points.push(
+            lightweight
+                ? {
+                    pupilCoordinate: chiefNormalizedPupilCoordSagittal,
+                    transverseAberration: 0
+                }
+                : {
+                    pupilCoordinate: chiefNormalizedPupilCoordSagittal,
+                    transverseAberration: 0, // 主光線の横収差は定義上0
+                    rayType: 'chief',
+                    isPartial: false,
+                    isFullSuccess: true,
+                    failureReason: null,
+                    actualCoordinate: {
+                        x: chiefIntersection.x,
+                        y: chiefIntersection.y
+                    },
+                    chiefReference: {
+                        x: chiefIntersection.x,
+                        y: chiefIntersection.y
+                    },
+                    stopCoordinate: {
+                        x: chiefStopX,
+                        y: chiefStopIntersection ? chiefStopIntersection.y : 0,
+                        maxCorrectedX: maxCorrectedX,
+                        normalizedX: chiefNormalizedPupilCoordSagittal
+                    }
+                }
+        );
     }
-    
-    // 瞳座標でソート
-    points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
-    
-    // ケラレ統計は内部で保持のみ（ログ出力なし）
-    
-    // 横収差0位置を求める
+
     let zeroAberrationPosition = null;
     let offsetMethod = 'none';
-    
-    if (points.length >= 3) {
-        // 新しい統一手法：最小絶対値点とその前後3点による直線近似
-        const minAbsZero = findZeroAberrationByMinAbsThreePoints(points);
-        if (minAbsZero !== null) {
-            zeroAberrationPosition = minAbsZero;
-            offsetMethod = 'min_abs_3points';
-        } else {
-        }
-    } else if (points.length === 2) {
-        // 2点の場合は線形補間で横収差0位置を求める（フォールバック）
-        const p1 = points[0];
-        const p2 = points[1];
-        
-        // 収差値の符号が異なる場合のみ0点を計算
-        if (p1.transverseAberration * p2.transverseAberration <= 0) {
-            const deltaX = p2.pupilCoordinate - p1.pupilCoordinate;
-            const deltaY = p2.transverseAberration - p1.transverseAberration;
-            
-            if (Math.abs(deltaY) > 1e-12) {
-                // 線形補間: y = 0となるxを求める
-                const t = -p1.transverseAberration / deltaY;
-                zeroAberrationPosition = p1.pupilCoordinate + t * deltaX;
-                offsetMethod = 'linear_2points';
-                
-                // 有効範囲内かチェック
-                if (Math.abs(zeroAberrationPosition) > 1.5) {
-                    zeroAberrationPosition = null;
-                    offsetMethod = 'none';
+    if (!lightweight) {
+        // 瞳座標でソート
+        points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
+
+        // ケラレ統計は内部で保持のみ（ログ出力なし）
+
+        // 横収差0位置を求める
+        if (points.length >= 3) {
+            // 新しい統一手法：最小絶対値点とその前後3点による直線近似
+            const minAbsZero = findZeroAberrationByMinAbsThreePoints(points);
+            if (minAbsZero !== null) {
+                zeroAberrationPosition = minAbsZero;
+                offsetMethod = 'min_abs_3points';
+            } else {
+            }
+        } else if (points.length === 2) {
+            // 2点の場合は線形補間で横収差0位置を求める（フォールバック）
+            const p1 = points[0];
+            const p2 = points[1];
+
+            // 収差値の符号が異なる場合のみ0点を計算
+            if (p1.transverseAberration * p2.transverseAberration <= 0) {
+                const deltaX = p2.pupilCoordinate - p1.pupilCoordinate;
+                const deltaY = p2.transverseAberration - p1.transverseAberration;
+
+                if (Math.abs(deltaY) > 1e-12) {
+                    // 線形補間: y = 0となるxを求める
+                    const t = -p1.transverseAberration / deltaY;
+                    zeroAberrationPosition = p1.pupilCoordinate + t * deltaX;
+                    offsetMethod = 'linear_2points';
+
+                    // 有効範囲内かチェック
+                    if (Math.abs(zeroAberrationPosition) > 1.5) {
+                        zeroAberrationPosition = null;
+                        offsetMethod = 'none';
+                    }
                 }
             }
         }
-    }
-    
-    // 横収差0位置でのオフセット適用
-    if (zeroAberrationPosition !== null && Math.abs(zeroAberrationPosition) > 1e-6) {
-        // 284点以上の場合も同じ処理を適用
-        
-        // 全点の瞳座標をオフセット
-        points.forEach(point => {
-            point.originalPupilCoordinate = point.pupilCoordinate; // 元の座標を保存
-            point.pupilCoordinate -= zeroAberrationPosition; // オフセット適用
-        });
-        
-        // オフセット後に再ソート
-        points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
-        
+
+        // 横収差0位置でのオフセット適用
+        if (zeroAberrationPosition !== null && Math.abs(zeroAberrationPosition) > 1e-6) {
+            // 284点以上の場合も同じ処理を適用
+
+            // 全点の瞳座標をオフセット
+            points.forEach(point => {
+                point.originalPupilCoordinate = point.pupilCoordinate; // 元の座標を保存
+                point.pupilCoordinate -= zeroAberrationPosition; // オフセット適用
+            });
+
+            // オフセット後に再ソート
+            points.sort((a, b) => a.pupilCoordinate - b.pupilCoordinate);
+
+        }
     }
     
     // サジタル統計情報（必要時に利用）
@@ -1351,6 +1464,32 @@ function surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex) {
         count++;
     }
     return count > 0 ? count : null;
+}
+
+function getIntersectionAtPathPoint(ray, pointIndex, surfaceInfo = null, mirrorSign = 1, preferTargetPath = true) {
+    try {
+        const targetPath = (preferTargetPath && ray?.rayPathToTarget) ? ray.rayPathToTarget : ray?.path;
+        if (!Array.isArray(targetPath)) return null;
+        if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= targetPath.length) return null;
+
+        const intersectionGlobal = targetPath[pointIndex];
+        if (!intersectionGlobal || typeof intersectionGlobal.x !== 'number' || typeof intersectionGlobal.y !== 'number') {
+            return null;
+        }
+
+        let intersection = intersectionGlobal;
+        if (surfaceInfo?.rotationMatrix) {
+            intersection = applyRotationMatrixToVector(surfaceInfo.rotationMatrix, intersectionGlobal);
+        }
+
+        return {
+            x: intersection.x,
+            y: intersection.y * mirrorSign,
+            z: intersection.z || 0
+        };
+    } catch (_) {
+        return null;
+    }
 }
 
 function getIntersectionAtSurface(ray, surfaceIndex, opticalSystemRows, surfaceInfo = null, mirrorSign = 1) {
