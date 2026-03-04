@@ -621,10 +621,6 @@ export async function compareWasmPilotBenchmark(baseOptions = {}) {
 export async function compareMatrixFreeBenchmark(baseOptions = {}) {
   const source = isPlainObject(baseOptions) ? baseOptions : {};
   const common = { ...source };
-  const taRayCountFastRaw = Number(source.taRayCountFast);
-  const taRayCountFast = Number.isFinite(taRayCountFastRaw)
-    ? Math.max(9, Math.min(201, Math.floor(taRayCountFastRaw)))
-    : 13;
   const matchBaselineBestStop = source.matchBaselineBestStop !== false;
   const matchBaselineBestRelTolRaw = Number(source.matchBaselineBestRelTol ?? 0);
   const matchBaselineBestRelTol = Number.isFinite(matchBaselineBestRelTolRaw)
@@ -683,8 +679,7 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
       ...common,
       profile: true,
       method: 'kkt',
-      kktUseMatrixFreeCore: !!useMatrixFree,
-      taRayCountFast
+      kktUseMatrixFreeCore: !!useMatrixFree
     };
     if (useMatrixFree && hasTargetBest) {
       options.kktStopWhenBestLeq = targetBestRaw + targetBestTol;
@@ -826,7 +821,6 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
       repeat,
       warmupDiscard,
       filterOutliers: useOutlierFilter,
-      taRayCountFast,
       matchBaselineBestStop,
       matchBaselineBestRelTol,
       matchBaselineBestAbsTol,
@@ -3942,15 +3936,11 @@ export async function runOptimizationMVP(options = {}) {
       const spotEarlyAbortStreakMaxHits = Number.isFinite(Number(opts.spotEarlyAbortStreakMaxHits))
         ? Math.max(0, Math.floor(Number(opts.spotEarlyAbortStreakMaxHits)))
         : 12;
-      const taRayCountFast = Number.isFinite(Number(opts.taRayCountFast))
-        ? Math.max(9, Math.min(201, Math.floor(Number(opts.taRayCountFast))))
-        : 21;
 
       globalThis.__cooptMeritFastMode = {
         enabled: true,
         spotRayCount: spotRayCountFast,
         spotAnnularRingCount: spotAnnularRingCountFast,
-        taRayCount: taRayCountFast,
         // Keep semantics aligned with Requirements/Spot Diagram (surfaceIndex, primary wavelength, etc.)
         // while still avoiding reading live UI tables for non-active configs.
         spotUseUiDefaults: true,
