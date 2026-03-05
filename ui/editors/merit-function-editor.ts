@@ -1691,11 +1691,6 @@ class MeritFunctionEditor {
                 const meritFast = (typeof globalThis !== 'undefined' && (globalThis as any).__cooptMeritFastMode)
                     ? (globalThis as any).__cooptMeritFastMode
                     : null;
-                const fastTaRayCount = Number(meritFast?.taRayCount);
-                if (Number.isFinite(fastTaRayCount) && fastTaRayCount >= 3) {
-                    rayCount = Math.floor(fastTaRayCount);
-                }
-
                 taCrossEvalCacheEnabled = meritFast?.enabled === true && meritFast?.taCrossEvalCache !== false;
                 taCrossEvalCacheEvalXKeyApprox = String((globalThis as any).__cooptEvalXKeyApproxTa || '').trim();
                 taCrossEvalCacheRunId = String((globalThis as any).__cooptTaEvalRunId || '').trim();
