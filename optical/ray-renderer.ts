@@ -2037,7 +2037,23 @@ function generateRaysForAngleObject(obj, opticalSystemRows, rayCount, pattern, a
         // the direction to point at the stop center).
         // Default to enabled unless explicitly disabled.
         let allowStopBasedOriginSolve = options?.allowStopBasedOriginSolve !== false;
-        const originSolveTraceBackend = options?.originSolveTraceBackend === 'rust' ? 'rust' : 'ts';
+        const requestedOriginSolveTraceBackend = options?.originSolveTraceBackend;
+        const originSolveTraceBackend = (() => {
+            if (requestedOriginSolveTraceBackend === 'rust') return 'rust';
+            if (requestedOriginSolveTraceBackend === 'ts') return 'ts';
+            try {
+                const ua = String(navigator.userAgent || '');
+                const isChromeDesktop = /\bChrome\//.test(ua)
+                    && !/\bEdg\//.test(ua)
+                    && !/\bOPR\//.test(ua)
+                    && !/\bCriOS\//.test(ua);
+                if (!isChromeDesktop) return 'ts';
+                const rust = getRustRayTracingWasmSync();
+                return rust ? 'rust' : 'ts';
+            } catch (_) {
+                return 'ts';
+            }
+        })();
         
         // 軸上オブジェクトかどうかを判定
         const isOnAxis = (Math.abs(angleX) < 1e-10 && Math.abs(angleY) < 1e-10);
