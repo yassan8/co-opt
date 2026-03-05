@@ -504,11 +504,16 @@ function ensurePopupMessageHandler(): void {
             const popup = w.popup3DWindow;
             if (popup && !popup.closed) {
                 try {
+                    const initialRayCount = (() => {
+                        const input = document.getElementById('draw-ray-count-input') as HTMLInputElement | null;
+                        const v = parseInt(input?.value || '51', 10);
+                        return Number.isFinite(v) && v > 0 ? v : 51;
+                    })();
                     // Send initial draw request to popup
                     const initialViewState = {
                         userAdjustedView: false,
                         viewAxis: 'YZ',
-                        rayCount: 51,
+                        rayCount: initialRayCount,
                         rayColorMode: 'object'
                     };
                     
@@ -1227,15 +1232,20 @@ function executeCrossSectionView(options: {
                                 objectThicknessStr === 'INF' || 
                                 objectThicknessStr === 'INFINITY' || 
                                 (Number(objectThickness) > 1e6);
+        const rayCount = (() => {
+            const rayCountInput = document.getElementById('draw-ray-count-input') as HTMLInputElement | null;
+            const v = parseInt(rayCountInput?.value || '51', 10);
+            return Number.isFinite(v) && v > 0 ? v : 51;
+        })();
         
         let result: any;
         if (isInfiniteSystem) {
             if (typeof generateInfiniteSystemCrossBeam === 'function') {
-                result = generateInfiniteSystemCrossBeam(opticalSystemRows, { rayCount: 51 });
+                result = generateInfiniteSystemCrossBeam(opticalSystemRows, { rayCount });
             }
         } else {
             if (typeof generateCrossBeam === 'function' && objectRows && objectRows.length > 0) {
-                result = generateCrossBeam(opticalSystemRows, objectRows, { rayCount: 51 });
+                result = generateCrossBeam(opticalSystemRows, objectRows, { rayCount });
             }
         }
         

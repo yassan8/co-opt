@@ -13,6 +13,7 @@
  */
 
 import { traceRay, traceRayHitPointBatch, calculateSurfaceOrigins, asphericSag } from '../core/ray-tracing.ts';
+import { getRustRayTracingWasmSync } from '../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 
 const RENDER_TS_TRACE_OPTIONS = {
     allowNonStrict: true,
@@ -23,14 +24,71 @@ const RENDER_TS_TRACE_OPTIONS = {
     __renderRayTracingTsOnly: true
 };
 
+const RENDER_RUST_TRACE_OPTIONS = {
+    allowNonStrict: true,
+    requireWasmRayTracing: false,
+    useRustWasm: true,
+    requireRustWasm: false,
+    disableWasmRayTracing: false,
+    __renderRayTracingRustPreferred: true
+};
+
+const IS_CHROME_DESKTOP = (() => {
+    try {
+        const ua = String(navigator.userAgent || '');
+        return /\bChrome\//.test(ua)
+            && !/\bEdg\//.test(ua)
+            && !/\bOPR\//.test(ua)
+            && !/\bCriOS\//.test(ua);
+    } catch (_) {
+        return false;
+    }
+})();
+
+const CHROME_RENDER_RUST_MIN_BATCH = 24;
+
+function shouldUseRustRenderTracing(workloadSize = 1) {
+    const size = Number.isFinite(Number(workloadSize)) ? Math.max(1, Number(workloadSize)) : 1;
+    try {
+        if (typeof globalThis !== 'undefined') {
+            const g = globalThis as any;
+            const mode = String(g.__COOPT_CHROME_RENDER_BACKEND_MODE || '').trim().toLowerCase();
+            if (mode === 'ts') return false;
+            if (mode === 'rust') {
+                try {
+                    return !!getRustRayTracingWasmSync();
+                } catch (_) {
+                    return false;
+                }
+            }
+        }
+    } catch (_) {}
+
+    if (!IS_CHROME_DESKTOP) return false;
+    try {
+        if (typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_DISABLE_CHROME_RENDER_RUST === true) {
+            return false;
+        }
+    } catch (_) {}
+    try {
+        const rustReady = !!getRustRayTracingWasmSync();
+        if (!rustReady) return false;
+        return size >= CHROME_RENDER_RUST_MIN_BATCH;
+    } catch (_) {
+        return false;
+    }
+}
+
 function traceRayForRenderTs(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, maxSurfaceIndex = null) {
-    return traceRay(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, RENDER_TS_TRACE_OPTIONS);
+    const opts = shouldUseRustRenderTracing(1) ? RENDER_RUST_TRACE_OPTIONS : RENDER_TS_TRACE_OPTIONS;
+    return traceRay(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, opts);
 }
 
 function traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, n0 = 1.0, targetSurfaceIndex = null) {
     const list = Array.isArray(rays) ? rays : [];
     if (!list.length) return [];
-    return traceRayHitPointBatch(opticalSystemRows, list, n0, targetSurfaceIndex, RENDER_TS_TRACE_OPTIONS);
+    const opts = shouldUseRustRenderTracing(list.length) ? RENDER_RUST_TRACE_OPTIONS : RENDER_TS_TRACE_OPTIONS;
+    return traceRayHitPointBatch(opticalSystemRows, list, n0, targetSurfaceIndex, opts);
 }
 
 function isCoordTransRow(row) {
