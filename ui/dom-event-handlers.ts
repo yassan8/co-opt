@@ -4870,6 +4870,102 @@ function __blocks_setVarMode(blockId: string, key: string, enabled: boolean, sco
     } catch (_) {}
 }
 
+function __blocks_setParameterAndApertureModeBulk(enabled: boolean): { ok: boolean; changedCount: number; reason?: string } {
+    try {
+        const systemConfig = loadSystemConfigurations();
+        if (!systemConfig || !Array.isArray(systemConfig.configurations)) {
+            return { ok: false, changedCount: 0, reason: 'no system configurations' };
+        }
+
+        const activeId = systemConfig.activeConfigId;
+        const activeCfg = systemConfig.configurations.find((c: any) => c && c.id === activeId) || null;
+        if (!activeCfg || !Array.isArray(activeCfg.blocks)) {
+            return { ok: false, changedCount: 0, reason: 'active configuration or blocks not found' };
+        }
+
+        const beforeBlocks = JSON.parse(JSON.stringify(activeCfg.blocks));
+        const mode = enabled ? 'V' : 'F';
+        let changedCount = 0;
+
+        for (const block of activeCfg.blocks) {
+            if (!block || typeof block !== 'object') continue;
+
+            if (!block.variables || typeof block.variables !== 'object') {
+                block.variables = {};
+            }
+
+            const params = (block.parameters && typeof block.parameters === 'object') ? block.parameters : null;
+            const paramKeys = params ? Object.keys(params) : [];
+            for (const key of paramKeys) {
+                if (!block.variables[key] || typeof block.variables[key] !== 'object') {
+                    block.variables[key] = { value: params ? params[key] : '' };
+                }
+                if (Object.prototype.hasOwnProperty.call(block.variables[key], 'value') === false) {
+                    block.variables[key].value = params ? params[key] : '';
+                }
+                if (!block.variables[key].optimize || typeof block.variables[key].optimize !== 'object') {
+                    block.variables[key].optimize = {};
+                }
+
+                const prevMode = String(block.variables[key].optimize.mode ?? '').trim();
+                if (prevMode !== mode) changedCount++;
+                block.variables[key].optimize.mode = mode;
+                if (!block.variables[key].optimize.scope) {
+                    block.variables[key].optimize.scope = 'perConfig';
+                }
+            }
+
+            const aperture = (block.aperture && typeof block.aperture === 'object') ? block.aperture : null;
+            const apertureKeys = aperture ? Object.keys(aperture) : [];
+            for (const key of apertureKeys) {
+                if (!block.variables[key] || typeof block.variables[key] !== 'object') {
+                    block.variables[key] = { value: aperture ? aperture[key] : '' };
+                }
+                if (Object.prototype.hasOwnProperty.call(block.variables[key], 'value') === false) {
+                    block.variables[key].value = aperture ? aperture[key] : '';
+                }
+                if (!block.variables[key].optimize || typeof block.variables[key].optimize !== 'object') {
+                    block.variables[key].optimize = {};
+                }
+
+                const prevMode = String(block.variables[key].optimize.mode ?? '').trim();
+                if (prevMode !== mode) changedCount++;
+                block.variables[key].optimize.mode = mode;
+                if (!block.variables[key].optimize.scope) {
+                    block.variables[key].optimize.scope = 'perConfig';
+                }
+            }
+        }
+
+        if (changedCount <= 0) {
+            return { ok: true, changedCount: 0 };
+        }
+
+        const afterBlocks = JSON.parse(JSON.stringify(activeCfg.blocks));
+
+        try {
+            if (w.undoHistory && w.SetDesignIntentOptimizeBulkCommand && !w.undoHistory.isExecuting) {
+                const cmd = new w.SetDesignIntentOptimizeBulkCommand(String(activeCfg.id ?? activeId ?? ''), beforeBlocks, afterBlocks, enabled);
+                w.undoHistory.record(cmd);
+            }
+        } catch (_) {}
+
+        saveSystemConfigurations(systemConfig);
+
+        try { refreshBlockInspector(); } catch (_) {}
+        try { if (typeof w.loadActiveConfigurationToTables === 'function') w.loadActiveConfigurationToTables(); } catch (_) {}
+        try {
+            if (w.popup3DWindow && !w.popup3DWindow.closed) {
+                w.popup3DWindow.postMessage({ action: 'request-redraw' }, '*');
+            }
+        } catch (_) {}
+
+        return { ok: true, changedCount };
+    } catch (e: any) {
+        return { ok: false, changedCount: 0, reason: String(e?.message || e) };
+    }
+}
+
 function formatBlockPreview(block: any): string {
     const b = block && typeof block === 'object' ? block : null;
     if (!b) return '';
@@ -7433,6 +7529,8 @@ function __blocks_deleteBlockFromActiveConfig(blockId: string): any {
 function setupDesignIntentButtons(): void {
     const addBtn = document.getElementById('design-intent-add-block-btn');
     const deleteBtn = document.getElementById('design-intent-delete-block-btn');
+    const paramAllOnBtn = document.getElementById('design-intent-param-all-on-btn');
+    const paramAllOffBtn = document.getElementById('design-intent-param-all-off-btn');
     const typeSelect = document.getElementById('design-intent-add-block-type') as HTMLSelectElement | null;
 
     if (addBtn && !addBtn.dataset.designIntentAddBound) {
@@ -7516,6 +7614,30 @@ function setupDesignIntentButtons(): void {
             } catch (e) {
                 console.error('❌ Failed to delete block:', e);
                 alert(`Failed to delete block: ${(e as Error)?.message || String(e)}`);
+            }
+        });
+    }
+
+    if (paramAllOnBtn && !paramAllOnBtn.dataset.designIntentParamAllOnBound) {
+        paramAllOnBtn.dataset.designIntentParamAllOnBound = '1';
+        paramAllOnBtn.addEventListener('click', (e) => {
+            try { e?.preventDefault?.(); } catch (_) {}
+            try { e?.stopPropagation?.(); } catch (_) {}
+            const res = __blocks_setParameterAndApertureModeBulk(true);
+            if (!res || res.ok !== true) {
+                alert(`Failed to set Parameter All ON: ${res?.reason || 'unknown error'}`);
+            }
+        });
+    }
+
+    if (paramAllOffBtn && !paramAllOffBtn.dataset.designIntentParamAllOffBound) {
+        paramAllOffBtn.dataset.designIntentParamAllOffBound = '1';
+        paramAllOffBtn.addEventListener('click', (e) => {
+            try { e?.preventDefault?.(); } catch (_) {}
+            try { e?.stopPropagation?.(); } catch (_) {}
+            const res = __blocks_setParameterAndApertureModeBulk(false);
+            if (!res || res.ok !== true) {
+                alert(`Failed to set Parameter All OFF: ${res?.reason || 'unknown error'}`);
             }
         });
     }

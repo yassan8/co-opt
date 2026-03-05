@@ -12,7 +12,7 @@
  * 作成日: 2025/07/23 (Brent法対応)
  */
 
-import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, asphericSag } from '../core/ray-tracing.ts';
+import { traceRay, traceRayHitPointBatch, calculateSurfaceOrigins, asphericSag } from '../core/ray-tracing.ts';
 
 const RENDER_TS_TRACE_OPTIONS = {
     allowNonStrict: true,
@@ -27,8 +27,10 @@ function traceRayForRenderTs(opticalSystemRows, ray0, n0 = 1.0, debugLog = null,
     return traceRay(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, RENDER_TS_TRACE_OPTIONS);
 }
 
-function traceRayHitPointForRenderTs(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null) {
-    return traceRayHitPoint(opticalSystemRows, ray0, n0, targetSurfaceIndex, RENDER_TS_TRACE_OPTIONS);
+function traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, n0 = 1.0, targetSurfaceIndex = null) {
+    const list = Array.isArray(rays) ? rays : [];
+    if (!list.length) return [];
+    return traceRayHitPointBatch(opticalSystemRows, list, n0, targetSurfaceIndex, RENDER_TS_TRACE_OPTIONS);
 }
 
 function isCoordTransRow(row) {
@@ -312,55 +314,106 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
             console.log(`   初期方向ベクトル: (${initialDirection.i.toFixed(6)}, ${initialDirection.j.toFixed(6)}, ${initialDirection.k.toFixed(6)})`);
         }
 
-        // X方向成分の目的関数
-        const objectiveFunctionDirX = (dirX) => {
-            // 残りの成分を計算（単位ベクトル条件を維持）
-            const dirY = optimalDirY; // 最新のY成分を使用
+        const signK = Math.sign(initialDirection.k) || 1;
+        const errCache = new Map();
+        const cacheKey = (dirX, dirY) => `${Number(dirX).toFixed(12)}|${Number(dirY).toFixed(12)}`;
+        const evaluateStopError = (dirX, dirY) => {
+            const key = cacheKey(dirX, dirY);
+            const cached = errCache.get(key);
+            if (cached) return cached;
+
             const dirZ_squared = 1 - dirX*dirX - dirY*dirY;
-            
             if (dirZ_squared <= 0) {
-                return 1000; // 無効な方向ベクトル
+                const v = { x: 1000, y: 1000 };
+                errCache.set(key, v);
+                return v;
             }
-            
-            const dirZ = Math.sqrt(dirZ_squared) * Math.sign(initialDirection.k);
-            
+
+            const dirZ = Math.sqrt(dirZ_squared) * signK;
             const ray = {
                 wavelength: wavelength,
                 pos: { x: objectPosition.x, y: objectPosition.y, z: objectPosition.z },
                 dir: { x: dirX, y: dirY, z: dirZ }
             };
-            
             try {
-                const actualStopPoint = traceRayHitPointForRenderTs(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
-                return actualStopPoint ? (actualStopPoint.x - stopCenter.x) : 1000;
-            } catch (error) {
-                return 1000;
+                const points = traceRayHitPointBatchForRenderTs(opticalSystemRows, [ray], 1.0, stopSurfaceIndex);
+                const actualStopPoint = Array.isArray(points) ? points[0] : null;
+                const v = actualStopPoint
+                    ? { x: actualStopPoint.x - stopCenter.x, y: actualStopPoint.y - stopCenter.y }
+                    : { x: 1000, y: 1000 };
+                errCache.set(key, v);
+                return v;
+            } catch (_) {
+                const v = { x: 1000, y: 1000 };
+                errCache.set(key, v);
+                return v;
             }
+        };
+
+        const evaluateStopErrorBatch = (pairs) => {
+            const out = new Array(Array.isArray(pairs) ? pairs.length : 0);
+            const rays = [];
+            const rayToPairIndex = [];
+
+            for (let i = 0; i < out.length; i++) {
+                const pair = pairs[i] || {};
+                const dirX = Number(pair.x);
+                const dirY = Number(pair.y);
+                const key = cacheKey(dirX, dirY);
+                const cached = errCache.get(key);
+                if (cached) {
+                    out[i] = cached;
+                    continue;
+                }
+
+                const dirZ_squared = 1 - dirX*dirX - dirY*dirY;
+                if (dirZ_squared <= 0) {
+                    const v = { x: 1000, y: 1000 };
+                    errCache.set(key, v);
+                    out[i] = v;
+                    continue;
+                }
+
+                const dirZ = Math.sqrt(dirZ_squared) * signK;
+                rays.push({
+                    wavelength: wavelength,
+                    pos: { x: objectPosition.x, y: objectPosition.y, z: objectPosition.z },
+                    dir: { x: dirX, y: dirY, z: dirZ }
+                });
+                rayToPairIndex.push(i);
+            }
+
+            if (rays.length) {
+                let points = [];
+                try {
+                    points = traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, 1.0, stopSurfaceIndex);
+                } catch (_) {
+                    points = [];
+                }
+                for (let ri = 0; ri < rayToPairIndex.length; ri++) {
+                    const oi = rayToPairIndex[ri];
+                    const pair = pairs[oi] || {};
+                    const key = cacheKey(Number(pair.x), Number(pair.y));
+                    const p = Array.isArray(points) ? points[ri] : null;
+                    const v = p ? { x: p.x - stopCenter.x, y: p.y - stopCenter.y } : { x: 1000, y: 1000 };
+                    errCache.set(key, v);
+                    out[oi] = v;
+                }
+            }
+
+            return out.map(v => v || { x: 1000, y: 1000 });
+        };
+
+        // X方向成分の目的関数
+        const objectiveFunctionDirX = (dirX) => {
+            const dirY = optimalDirY; // 最新のY成分を使用
+            return evaluateStopError(dirX, dirY).x;
         };
         
         // Y方向成分の目的関数
         const objectiveFunctionDirY = (dirY) => {
             const dirX = optimalDirX; // 最新のX成分を使用
-            const dirZ_squared = 1 - dirX*dirX - dirY*dirY;
-            
-            if (dirZ_squared <= 0) {
-                return 1000;
-            }
-            
-            const dirZ = Math.sqrt(dirZ_squared) * Math.sign(initialDirection.k);
-            
-            const ray = {
-                wavelength: wavelength,
-                pos: { x: objectPosition.x, y: objectPosition.y, z: objectPosition.z },
-                dir: { x: dirX, y: dirY, z: dirZ }
-            };
-            
-            try {
-                const actualStopPoint = traceRayHitPointForRenderTs(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
-                return actualStopPoint ? (actualStopPoint.y - stopCenter.y) : 1000;
-            } catch (error) {
-                return 1000;
-            }
+            return evaluateStopError(dirX, dirY).y;
         };
         
         // 探索範囲（方向ベクトル成分の範囲）
@@ -385,8 +438,10 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                 const adaptiveRangeX = Math.max(0.1, Math.abs(optimalDirX) * 2);
                 let aX = Math.max(-searchRange, optimalDirX - adaptiveRangeX);
                 let bX = Math.min(searchRange, optimalDirX + adaptiveRangeX);
-                let faX = objectiveFunctionDirX(aX);
-                let fbX = objectiveFunctionDirX(bX);
+                let [faX, fbX] = evaluateStopErrorBatch([
+                    { x: aX, y: optimalDirY },
+                    { x: bX, y: optimalDirY }
+                ]).map(e => e.x);
                 
                 if (debugMode) {
                     console.log(`🔍 [Brent-X] 反復${iter + 1}: 適応範囲±${adaptiveRangeX.toFixed(3)}, 初期区間[${aX.toFixed(6)}, ${bX.toFixed(6)}], f(a)=${faX.toFixed(6)}, f(b)=${fbX.toFixed(6)}`);
@@ -395,16 +450,32 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                 if (faX * fbX >= 0) {
                     // 符号変化区間を広範囲で探索（無限系のアプローチ）
                     let found = false;
-                    for (let i = 1; i <= 50 && !found; i++) {
-                        const range = Math.max(0.05 * i, adaptiveRangeX * (1 + i * 0.5));
-                        aX = Math.max(-searchRange, optimalDirX - range);
-                        bX = Math.min(searchRange, optimalDirX + range);
-                        faX = objectiveFunctionDirX(aX);
-                        fbX = objectiveFunctionDirX(bX);
-                        if (faX * fbX < 0) {
-                            found = true;
-                            if (debugMode) {
-                                console.log(`   ✅ X方向: 符号変化区間発見 (試行${i}回目, 範囲±${range.toFixed(3)}): [${aX.toFixed(6)}, ${bX.toFixed(6)}]`);
+                    const batchSpan = 4;
+                    for (let i = 1; i <= 50 && !found; i += batchSpan) {
+                        const pairs = [];
+                        const metas = [];
+                        for (let j = i; j < i + batchSpan && j <= 50; j++) {
+                            const range = Math.max(0.05 * j, adaptiveRangeX * (1 + j * 0.5));
+                            const ax = Math.max(-searchRange, optimalDirX - range);
+                            const bx = Math.min(searchRange, optimalDirX + range);
+                            metas.push({ j, range, ax, bx });
+                            pairs.push({ x: ax, y: optimalDirY }, { x: bx, y: optimalDirY });
+                        }
+                        const vals = evaluateStopErrorBatch(pairs).map(e => e.x);
+                        for (let m = 0; m < metas.length; m++) {
+                            const meta = metas[m];
+                            const fA = vals[m * 2];
+                            const fB = vals[m * 2 + 1];
+                            if (fA * fB < 0) {
+                                aX = meta.ax;
+                                bX = meta.bx;
+                                faX = fA;
+                                fbX = fB;
+                                found = true;
+                                if (debugMode) {
+                                    console.log(`   ✅ X方向: 符号変化区間発見 (試行${meta.j}回目, 範囲±${meta.range.toFixed(3)}): [${aX.toFixed(6)}, ${bX.toFixed(6)}]`);
+                                }
+                                break;
                             }
                         }
                     }
@@ -427,8 +498,10 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                             } catch (_) {}
                         }
                         const step = 0.001;
-                        const f0 = objectiveFunctionDirX(optimalDirX);
-                        const fp = objectiveFunctionDirX(optimalDirX + step);
+                        const [f0, fp] = evaluateStopErrorBatch([
+                            { x: optimalDirX, y: optimalDirY },
+                            { x: optimalDirX + step, y: optimalDirY }
+                        ]).map(e => e.x);
                         const gradient = (fp - f0) / step;
                         if (Math.abs(gradient) > 1e-10) {
                             const newDirX = optimalDirX - f0 / gradient;
@@ -457,8 +530,10 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                 const adaptiveRangeY = Math.max(0.1, Math.abs(optimalDirY) * 2);
                 let aY = Math.max(-searchRange, optimalDirY - adaptiveRangeY);
                 let bY = Math.min(searchRange, optimalDirY + adaptiveRangeY);
-                let faY = objectiveFunctionDirY(aY);
-                let fbY = objectiveFunctionDirY(bY);
+                let [faY, fbY] = evaluateStopErrorBatch([
+                    { x: optimalDirX, y: aY },
+                    { x: optimalDirX, y: bY }
+                ]).map(e => e.y);
                 
                 if (debugMode) {
                     console.log(`🔍 [Brent-Y] 反復${iter + 1}: 適応範囲±${adaptiveRangeY.toFixed(3)}, 初期区間[${aY.toFixed(6)}, ${bY.toFixed(6)}], f(a)=${faY.toFixed(6)}, f(b)=${fbY.toFixed(6)}`);
@@ -467,16 +542,32 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                 if (faY * fbY >= 0) {
                     // 符号変化区間を広範囲で探索（無限系のアプローチ）
                     let found = false;
-                    for (let i = 1; i <= 50 && !found; i++) {
-                        const range = Math.max(0.05 * i, adaptiveRangeY * (1 + i * 0.5));
-                        aY = Math.max(-searchRange, optimalDirY - range);
-                        bY = Math.min(searchRange, optimalDirY + range);
-                        faY = objectiveFunctionDirY(aY);
-                        fbY = objectiveFunctionDirY(bY);
-                        if (faY * fbY < 0) {
-                            found = true;
-                            if (debugMode) {
-                                console.log(`   ✅ Y方向: 符号変化区間発見 (試行${i}回目, 範囲±${range.toFixed(3)}): [${aY.toFixed(6)}, ${bY.toFixed(6)}]`);
+                    const batchSpan = 4;
+                    for (let i = 1; i <= 50 && !found; i += batchSpan) {
+                        const pairs = [];
+                        const metas = [];
+                        for (let j = i; j < i + batchSpan && j <= 50; j++) {
+                            const range = Math.max(0.05 * j, adaptiveRangeY * (1 + j * 0.5));
+                            const ay = Math.max(-searchRange, optimalDirY - range);
+                            const by = Math.min(searchRange, optimalDirY + range);
+                            metas.push({ j, range, ay, by });
+                            pairs.push({ x: optimalDirX, y: ay }, { x: optimalDirX, y: by });
+                        }
+                        const vals = evaluateStopErrorBatch(pairs).map(e => e.y);
+                        for (let m = 0; m < metas.length; m++) {
+                            const meta = metas[m];
+                            const fA = vals[m * 2];
+                            const fB = vals[m * 2 + 1];
+                            if (fA * fB < 0) {
+                                aY = meta.ay;
+                                bY = meta.by;
+                                faY = fA;
+                                fbY = fB;
+                                found = true;
+                                if (debugMode) {
+                                    console.log(`   ✅ Y方向: 符号変化区間発見 (試行${meta.j}回目, 範囲±${meta.range.toFixed(3)}): [${aY.toFixed(6)}, ${bY.toFixed(6)}]`);
+                                }
+                                break;
                             }
                         }
                     }
@@ -499,8 +590,10 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
                             } catch (_) {}
                         }
                         const step = 0.001;
-                        const f0 = objectiveFunctionDirY(optimalDirY);
-                        const fp = objectiveFunctionDirY(optimalDirY + step);
+                        const [f0, fp] = evaluateStopErrorBatch([
+                            { x: optimalDirX, y: optimalDirY },
+                            { x: optimalDirX, y: optimalDirY + step }
+                        ]).map(e => e.y);
                         const gradient = (fp - f0) / step;
                         if (Math.abs(gradient) > 1e-10) {
                             const newDirY = optimalDirY - f0 / gradient;
@@ -571,22 +664,15 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
         }
         
         // 結果を検証
-        const verificationRay = {
-            pos: objectPosition,
-            dir: { x: result.i, y: result.j, z: result.k },
-            wavelength: wavelength
-        };
-        
-        const verificationPoint = traceRayHitPointForRenderTs(opticalSystemRows, verificationRay, 1.0, stopSurfaceIndex);
-        if (verificationPoint) {
-            const actualPoint = verificationPoint;
-            const errorX = actualPoint.x - stopCenter.x;
-            const errorY = actualPoint.y - stopCenter.y;
+        const verificationErr = evaluateStopError(result.i, result.j);
+        if (Number.isFinite(verificationErr.x) && Number.isFinite(verificationErr.y) && Math.abs(verificationErr.x) < 999 && Math.abs(verificationErr.y) < 999) {
+            const errorX = verificationErr.x;
+            const errorY = verificationErr.y;
             const totalError = Math.sqrt(errorX*errorX + errorY*errorY);
             
             if (debugMode) {
                 console.log(`   最適方向ベクトル: (${result.i.toFixed(6)}, ${result.j.toFixed(6)}, ${result.k.toFixed(6)})`);
-                console.log(`   Stop面実際位置: (${actualPoint.x.toFixed(3)}, ${actualPoint.y.toFixed(3)})`);
+                console.log(`   Stop面実際位置: (${(stopCenter.x + errorX).toFixed(3)}, ${(stopCenter.y + errorY).toFixed(3)})`);
                 console.log(`   Stop面目標位置: (${stopCenter.x.toFixed(3)}, ${stopCenter.y.toFixed(3)})`);
                 console.log(`   誤差: X=${errorX.toFixed(6)}mm, Y=${errorY.toFixed(6)}mm, 総合=${totalError.toFixed(6)}mm`);
             }
@@ -607,27 +693,38 @@ export function findFiniteSystemChiefRayDirection(objectPosition, stopCenter, st
             const xEnd = 0.10;
             const xStep = 0.005;   // 0.01 → 0.005 (2倍精度)
             
+            const candidates = [];
             for (let yDir = yStart; yDir <= yEnd; yDir += yStep) {
                 for (let xDir = xStart; xDir <= xEnd; xDir += xStep) {
                     const zDir = Math.sqrt(Math.max(0, 1 - xDir*xDir - yDir*yDir));
-                    if (zDir < 0.9) continue; // 現実的な範囲のみ
-                    
-                    const testRay = {
-                        pos: objectPosition,
-                        dir: { x: xDir, y: yDir, z: zDir },
-                        wavelength: wavelength
-                    };
-                    
-                    const testPoint = traceRayHitPointForRenderTs(opticalSystemRows, testRay, 1.0, stopSurfaceIndex);
-                    if (testPoint) {
-                        const testErrorX = testPoint.x - stopCenter.x;
-                        const testErrorY = testPoint.y - stopCenter.y;
-                        const testError = Math.sqrt(testErrorX*testErrorX + testErrorY*testErrorY);
-                        
-                        if (testError < bestError) {
-                            bestError = testError;
-                            bestDir = { i: xDir, j: yDir, k: zDir };
-                        }
+                    if (zDir < 0.9) continue;
+                    candidates.push({ i: xDir, j: yDir, k: zDir });
+                }
+            }
+
+            const batchSize = 256;
+            for (let bi = 0; bi < candidates.length; bi += batchSize) {
+                const chunk = candidates.slice(bi, bi + batchSize);
+                const rays = chunk.map(c => ({
+                    pos: objectPosition,
+                    dir: { x: c.i, y: c.j, z: c.k },
+                    wavelength: wavelength
+                }));
+                let points = [];
+                try {
+                    points = traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, 1.0, stopSurfaceIndex);
+                } catch (_) {
+                    points = [];
+                }
+                for (let ci = 0; ci < chunk.length; ci++) {
+                    const p = Array.isArray(points) ? points[ci] : null;
+                    if (!p) continue;
+                    const testErrorX = p.x - stopCenter.x;
+                    const testErrorY = p.y - stopCenter.y;
+                    const testError = Math.sqrt(testErrorX*testErrorX + testErrorY*testErrorY);
+                    if (testError < bestError) {
+                        bestError = testError;
+                        bestDir = chunk[ci];
                     }
                 }
             }
@@ -704,54 +801,104 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
             console.log(`🎯 [Marginal] 目標点: (${targetPoint.x.toFixed(3)}, ${targetPoint.y.toFixed(3)}, ${targetPoint.z.toFixed(3)})`);
         }
 
-        // X方向成分の目的関数
-        const objectiveFunctionDirX = (dirX) => {
-            const dirY = initialDirection.j; // Y成分は固定
+        const signK = Math.sign(initialDirection.k) || 1;
+        const errCache = new Map();
+        const cacheKey = (dirX, dirY) => `${Number(dirX).toFixed(12)}|${Number(dirY).toFixed(12)}`;
+        const evaluateStopError = (dirX, dirY) => {
+            const key = cacheKey(dirX, dirY);
+            const cached = errCache.get(key);
+            if (cached) return cached;
+
             const dirZ_squared = 1 - dirX*dirX - dirY*dirY;
-            
             if (dirZ_squared <= 0) {
-                return 1000; // 無効な方向ベクトル
+                const v = { x: 1000, y: 1000 };
+                errCache.set(key, v);
+                return v;
             }
-            
-            const dirZ = Math.sqrt(dirZ_squared) * Math.sign(initialDirection.k);
-            
+
+            const dirZ = Math.sqrt(dirZ_squared) * signK;
             const ray = {
                 wavelength: wavelength,
                 pos: { x: objectPosition.x, y: objectPosition.y, z: objectPosition.z },
                 dir: { x: dirX, y: dirY, z: dirZ }
             };
-            
             try {
-                const actualStopPoint = traceRayHitPointForRenderTs(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
-                return actualStopPoint ? (actualStopPoint.x - targetPoint.x) : 1000;
-            } catch (error) {
-                return 1000;
+                const points = traceRayHitPointBatchForRenderTs(opticalSystemRows, [ray], 1.0, stopSurfaceIndex);
+                const actualStopPoint = Array.isArray(points) ? points[0] : null;
+                const v = actualStopPoint
+                    ? { x: actualStopPoint.x - targetPoint.x, y: actualStopPoint.y - targetPoint.y }
+                    : { x: 1000, y: 1000 };
+                errCache.set(key, v);
+                return v;
+            } catch (_) {
+                const v = { x: 1000, y: 1000 };
+                errCache.set(key, v);
+                return v;
             }
+        };
+
+        const evaluateStopErrorBatch = (pairs) => {
+            const out = new Array(Array.isArray(pairs) ? pairs.length : 0);
+            const rays = [];
+            const rayToPairIndex = [];
+
+            for (let i = 0; i < out.length; i++) {
+                const pair = pairs[i] || {};
+                const dirX = Number(pair.x);
+                const dirY = Number(pair.y);
+                const key = cacheKey(dirX, dirY);
+                const cached = errCache.get(key);
+                if (cached) {
+                    out[i] = cached;
+                    continue;
+                }
+                const dirZ_squared = 1 - dirX*dirX - dirY*dirY;
+                if (dirZ_squared <= 0) {
+                    const v = { x: 1000, y: 1000 };
+                    errCache.set(key, v);
+                    out[i] = v;
+                    continue;
+                }
+                const dirZ = Math.sqrt(dirZ_squared) * signK;
+                rays.push({
+                    wavelength: wavelength,
+                    pos: { x: objectPosition.x, y: objectPosition.y, z: objectPosition.z },
+                    dir: { x: dirX, y: dirY, z: dirZ }
+                });
+                rayToPairIndex.push(i);
+            }
+
+            if (rays.length) {
+                let points = [];
+                try {
+                    points = traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, 1.0, stopSurfaceIndex);
+                } catch (_) {
+                    points = [];
+                }
+                for (let ri = 0; ri < rayToPairIndex.length; ri++) {
+                    const oi = rayToPairIndex[ri];
+                    const pair = pairs[oi] || {};
+                    const key = cacheKey(Number(pair.x), Number(pair.y));
+                    const p = Array.isArray(points) ? points[ri] : null;
+                    const v = p ? { x: p.x - targetPoint.x, y: p.y - targetPoint.y } : { x: 1000, y: 1000 };
+                    errCache.set(key, v);
+                    out[oi] = v;
+                }
+            }
+
+            return out.map(v => v || { x: 1000, y: 1000 });
+        };
+
+        // X方向成分の目的関数
+        const objectiveFunctionDirX = (dirX) => {
+            const dirY = initialDirection.j; // Y成分は固定
+            return evaluateStopError(dirX, dirY).x;
         };
         
         // Y方向成分の目的関数
         const objectiveFunctionDirY = (dirY) => {
             const dirX = initialDirection.i; // X成分は固定
-            const dirZ_squared = 1 - dirX*dirX - dirY*dirY;
-            
-            if (dirZ_squared <= 0) {
-                return 1000;
-            }
-            
-            const dirZ = Math.sqrt(dirZ_squared) * Math.sign(initialDirection.k);
-            
-            const ray = {
-                wavelength: wavelength,
-                pos: { x: objectPosition.x, y: objectPosition.y, z: objectPosition.z },
-                dir: { x: dirX, y: dirY, z: dirZ }
-            };
-            
-            try {
-                const actualStopPoint = traceRayHitPointForRenderTs(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
-                return actualStopPoint ? (actualStopPoint.y - targetPoint.y) : 1000;
-            } catch (error) {
-                return 1000;
-            }
+            return evaluateStopError(dirX, dirY).y;
         };
 
         // 探索範囲（方向ベクトル成分の範囲）
@@ -763,20 +910,37 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
         try {
             let aX = Math.max(-searchRange, initialDirection.i - 0.9);
             let bX = Math.min(searchRange, initialDirection.i + 0.9);
-            let faX = objectiveFunctionDirX(aX);
-            let fbX = objectiveFunctionDirX(bX);
+            let [faX, fbX] = evaluateStopErrorBatch([
+                { x: aX, y: initialDirection.j },
+                { x: bX, y: initialDirection.j }
+            ]).map(e => e.x);
             
             if (faX * fbX >= 0) {
                 // 符号変化区間を探す
                 let found = false;
-                for (let i = 1; i <= 30 && !found; i++) {
-                    const range = 0.03 * i; // より細かい刻み
-                    aX = Math.max(-searchRange, initialDirection.i - range);
-                    bX = Math.min(searchRange, initialDirection.i + range);
-                    faX = objectiveFunctionDirX(aX);
-                    fbX = objectiveFunctionDirX(bX);
-                    if (faX * fbX < 0) {
-                        found = true;
+                const batchSpan = 4;
+                for (let i = 1; i <= 30 && !found; i += batchSpan) {
+                    const pairs = [];
+                    const metas = [];
+                    for (let j = i; j < i + batchSpan && j <= 30; j++) {
+                        const range = 0.03 * j;
+                        const ax = Math.max(-searchRange, initialDirection.i - range);
+                        const bx = Math.min(searchRange, initialDirection.i + range);
+                        metas.push({ ax, bx });
+                        pairs.push({ x: ax, y: initialDirection.j }, { x: bx, y: initialDirection.j });
+                    }
+                    const vals = evaluateStopErrorBatch(pairs).map(e => e.x);
+                    for (let m = 0; m < metas.length; m++) {
+                        const fA = vals[m * 2];
+                        const fB = vals[m * 2 + 1];
+                        if (fA * fB < 0) {
+                            aX = metas[m].ax;
+                            bX = metas[m].bx;
+                            faX = fA;
+                            fbX = fB;
+                            found = true;
+                            break;
+                        }
                     }
                 }
                 
@@ -800,19 +964,36 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
         try {
             let aY = Math.max(-searchRange, initialDirection.j - 0.9);
             let bY = Math.min(searchRange, initialDirection.j + 0.9);
-            let faY = objectiveFunctionDirY(aY);
-            let fbY = objectiveFunctionDirY(bY);
+            let [faY, fbY] = evaluateStopErrorBatch([
+                { x: initialDirection.i, y: aY },
+                { x: initialDirection.i, y: bY }
+            ]).map(e => e.y);
             
             if (faY * fbY >= 0) {
                 let found = false;
-                for (let i = 1; i <= 30 && !found; i++) {
-                    const range = 0.03 * i; // より細かい刻み
-                    aY = Math.max(-searchRange, initialDirection.j - range);
-                    bY = Math.min(searchRange, initialDirection.j + range);
-                    faY = objectiveFunctionDirY(aY);
-                    fbY = objectiveFunctionDirY(bY);
-                    if (faY * fbY < 0) {
-                        found = true;
+                const batchSpan = 4;
+                for (let i = 1; i <= 30 && !found; i += batchSpan) {
+                    const pairs = [];
+                    const metas = [];
+                    for (let j = i; j < i + batchSpan && j <= 30; j++) {
+                        const range = 0.03 * j;
+                        const ay = Math.max(-searchRange, initialDirection.j - range);
+                        const by = Math.min(searchRange, initialDirection.j + range);
+                        metas.push({ ay, by });
+                        pairs.push({ x: initialDirection.i, y: ay }, { x: initialDirection.i, y: by });
+                    }
+                    const vals = evaluateStopErrorBatch(pairs).map(e => e.y);
+                    for (let m = 0; m < metas.length; m++) {
+                        const fA = vals[m * 2];
+                        const fB = vals[m * 2 + 1];
+                        if (fA * fB < 0) {
+                            aY = metas[m].ay;
+                            bY = metas[m].by;
+                            faY = fA;
+                            fbY = fB;
+                            found = true;
+                            break;
+                        }
                     }
                 }
                 
@@ -861,15 +1042,14 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
         }
         
         // 結果を検証
-        const verificationRay = {
-            pos: objectPosition,
-            dir: { x: result.i, y: result.j, z: result.k }
-        };
-        
         try {
-            const verificationPoint = traceRayHitPointForRenderTs(opticalSystemRows, verificationRay, 1.0, stopSurfaceIndex);
-            if (verificationPoint) {
-                const actualPoint = verificationPoint;
+            const verificationError = evaluateStopErrorBatch([{ x: result.i, y: result.j }])[0] || { x: 1000, y: 1000 };
+            const hasVerificationPoint = Number.isFinite(verificationError.x) && Number.isFinite(verificationError.y) && Math.abs(verificationError.x) < 999 && Math.abs(verificationError.y) < 999;
+            if (hasVerificationPoint) {
+                const actualPoint = {
+                    x: targetPoint.x + verificationError.x,
+                    y: targetPoint.y + verificationError.y
+                };
                 const errorX = actualPoint.x - targetPoint.x;
                 const errorY = actualPoint.y - targetPoint.y;
                 const totalError = Math.sqrt(errorX*errorX + errorY*errorY);
@@ -904,33 +1084,42 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                     let bestDir = null;
                     let bestError = Infinity;
                     
+                    const gridCandidates = [];
                     for (let dirJ = yStart; dirJ <= yEnd; dirJ += yStep) {
                         for (let dirI = xStart; dirI <= xEnd; dirI += xStep) {
                             const dirK_squared = 1 - dirI*dirI - dirJ*dirJ;
                             if (dirK_squared <= 0) continue;
-                            
                             const dirK = Math.sqrt(dirK_squared);
                             if (dirK < 0.5) continue;
-                            
-                            const testRay = {
-                                wavelength: wavelength,
-                                pos: { x: objectPosition.x, y: objectPosition.y, z: objectPosition.z },
-                                dir: { x: dirI, y: dirJ, z: dirK }
-                            };
-                            
-                            try {
-                                const actualPoint = traceRayHitPointForRenderTs(opticalSystemRows, testRay, 1.0, stopSurfaceIndex);
-                                if (!actualPoint) continue;
-                                const errorX = actualPoint.x - targetPoint.x;
-                                const errorY = actualPoint.y - targetPoint.y;
-                                const totalError = Math.sqrt(errorX*errorX + errorY*errorY);
-                                
-                                if (totalError < bestError) {
-                                    bestError = totalError;
-                                    bestDir = { i: dirI, j: dirJ, k: dirK };
-                                }
-                            } catch (error) {
-                                continue;
+                            gridCandidates.push({ i: dirI, j: dirJ, k: dirK });
+                        }
+                    }
+
+                    const batchSize = 256;
+                    for (let bi = 0; bi < gridCandidates.length; bi += batchSize) {
+                        const chunk = gridCandidates.slice(bi, bi + batchSize);
+                        const rays = chunk.map(c => ({
+                            wavelength: wavelength,
+                            pos: { x: objectPosition.x, y: objectPosition.y, z: objectPosition.z },
+                            dir: { x: c.i, y: c.j, z: c.k }
+                        }));
+                        let points = [];
+                        try {
+                            points = traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, 1.0, stopSurfaceIndex);
+                        } catch (_) {
+                            points = [];
+                        }
+
+                        for (let ci = 0; ci < chunk.length; ci++) {
+                            const actualPoint = Array.isArray(points) ? points[ci] : null;
+                            if (!actualPoint) continue;
+                            const errorX = actualPoint.x - targetPoint.x;
+                            const errorY = actualPoint.y - targetPoint.y;
+                            const totalError = Math.sqrt(errorX*errorX + errorY*errorY);
+                            if (totalError < bestError) {
+                                bestError = totalError;
+                                const c = chunk[ci];
+                                bestDir = { i: c.i, j: c.j, k: c.k };
                             }
                         }
                     }
@@ -961,10 +1150,11 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                         }
                         const k2 = 1 - (refined.i*refined.i + refined.j*refined.j);
                         refined.k = k2 > 0 ? Math.sqrt(k2) : 1e-6;
-                        const p = traceRayHitPointForRenderTs(opticalSystemRows, { pos: objectPosition, dir: { x: refined.i, y: refined.j, z: refined.k } }, 1.0, stopSurfaceIndex);
-                        if (p) {
-                            const ex = p.x - targetPoint.x;
-                            const ey = p.y - targetPoint.y;
+                        const refinedError = evaluateStopErrorBatch([{ x: refined.i, y: refined.j }])[0] || { x: 1000, y: 1000 };
+                        const hasRefinedPoint = Number.isFinite(refinedError.x) && Number.isFinite(refinedError.y) && Math.abs(refinedError.x) < 999 && Math.abs(refinedError.y) < 999;
+                        if (hasRefinedPoint) {
+                            const ex = refinedError.x;
+                            const ey = refinedError.y;
                             const e = Math.sqrt(ex*ex + ey*ey);
                             if (e < bestErr) {
                                 bestErr = e;
@@ -1003,33 +1193,42 @@ function findFiniteSystemMarginalRayDirection(objectPosition, targetPoint, stopS
                 let bestDir = null;
                 let bestError = Infinity;
                 
+                const gridCandidates = [];
                 for (let dirJ = yStart; dirJ <= yEnd; dirJ += yStep) {
                     for (let dirI = xStart; dirI <= xEnd; dirI += xStep) {
                         const dirK_squared = 1 - dirI*dirI - dirJ*dirJ;
                         if (dirK_squared <= 0) continue;
-                        
                         const dirK = Math.sqrt(dirK_squared);
-                        if (dirK < 0.5) continue; // 極端な傾きは除外
-                        
-                        const testRay = {
-                            wavelength: wavelength,
-                            pos: { x: objectPosition.x, y: objectPosition.y, z: objectPosition.z },
-                            dir: { x: dirI, y: dirJ, z: dirK }
-                        };
-                        
-                        try {
-                            const actualPoint = traceRayHitPointForRenderTs(opticalSystemRows, testRay, 1.0, stopSurfaceIndex);
-                            if (!actualPoint) continue;
-                            const errorX = actualPoint.x - targetPoint.x;
-                            const errorY = actualPoint.y - targetPoint.y;
-                            const totalError = Math.sqrt(errorX*errorX + errorY*errorY);
-                            
-                            if (totalError < bestError) {
-                                bestError = totalError;
-                                bestDir = { i: dirI, j: dirJ, k: dirK };
-                            }
-                        } catch (error) {
-                            continue;
+                        if (dirK < 0.5) continue;
+                        gridCandidates.push({ i: dirI, j: dirJ, k: dirK });
+                    }
+                }
+
+                const batchSize = 256;
+                for (let bi = 0; bi < gridCandidates.length; bi += batchSize) {
+                    const chunk = gridCandidates.slice(bi, bi + batchSize);
+                    const rays = chunk.map(c => ({
+                        wavelength: wavelength,
+                        pos: { x: objectPosition.x, y: objectPosition.y, z: objectPosition.z },
+                        dir: { x: c.i, y: c.j, z: c.k }
+                    }));
+                    let points = [];
+                    try {
+                        points = traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, 1.0, stopSurfaceIndex);
+                    } catch (_) {
+                        points = [];
+                    }
+
+                    for (let ci = 0; ci < chunk.length; ci++) {
+                        const actualPoint = Array.isArray(points) ? points[ci] : null;
+                        if (!actualPoint) continue;
+                        const errorX = actualPoint.x - targetPoint.x;
+                        const errorY = actualPoint.y - targetPoint.y;
+                        const totalError = Math.sqrt(errorX*errorX + errorY*errorY);
+                        if (totalError < bestError) {
+                            bestError = totalError;
+                            const c = chunk[ci];
+                            bestDir = { i: c.i, j: c.j, k: c.k };
                         }
                     }
                 }

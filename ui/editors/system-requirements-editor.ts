@@ -410,7 +410,8 @@ class SystemRequirementsEditor {
       op: 80,
       tol: 90,
       target: 100,
-      weight: 100
+      weight: 100,
+      score: 110
     };
     const stickyOrder = [
       { key: 'id', label: 'Num', width: widths.id },
@@ -451,6 +452,7 @@ class SystemRequirementsEditor {
     headRow.appendChild(mkTh('Tol', widths.tol, null));
     headRow.appendChild(mkTh('Target', widths.target, null));
     headRow.appendChild(mkTh('Weight', widths.weight, null));
+    headRow.appendChild(mkTh('Score', widths.score, null));
     headRow.appendChild(mkTh('Rationale', widths.rationale, null));
 
     thead.appendChild(headRow);
@@ -471,6 +473,12 @@ class SystemRequirementsEditor {
     const onCellBlur = (): void => setEditing(false);
 
     const formatCurrentCell = (v: any): string => {
+      if (v === null || v === undefined) return '';
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toFixed(6) : String(v);
+    };
+
+    const formatScoreCell = (v: any): string => {
       if (v === null || v === undefined) return '';
       const n = Number(v);
       return Number.isFinite(n) ? n.toFixed(6) : String(v);
@@ -1469,6 +1477,12 @@ class SystemRequirementsEditor {
       tr.appendChild(mkInput('target', widths.target).td);
       tr.appendChild(mkInput('weight', widths.weight).td);
 
+      const tdScore = mkTd(widths.score, null);
+      tdScore.style.textAlign = 'center';
+      tdScore.textContent = formatScoreCell(row._contribution);
+      tdScore.dataset.role = 'score';
+      tr.appendChild(tdScore);
+
       // Rationale is the right-most column
       const tdRat = mkTd(widths.rationale, null);
 
@@ -2364,6 +2378,55 @@ class SystemRequirementsEditor {
     }
   }
 
+  setAllEnabled(enabled: boolean): void {
+    const nextEnabled = !!enabled;
+    const live = this._getLiveRequirementsData();
+    this.requirements = live;
+    if (!Array.isArray(live) || live.length === 0) return;
+
+    const beforeRows = (() => {
+      try {
+        const rows = loadSystemRequirementsTableData();
+        return Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) : [];
+      } catch (_) {
+        return [];
+      }
+    })();
+
+    let changed = false;
+    for (const row of live) {
+      if (!row || typeof row !== 'object') continue;
+      const prevEnabled = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
+      if (prevEnabled !== nextEnabled) {
+        row.enabled = nextEnabled;
+        changed = true;
+      }
+    }
+
+    if (!changed) return;
+
+    this.saveToStorage();
+
+    const afterRows = (() => {
+      try {
+        const rows = loadSystemRequirementsTableData();
+        return Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) : [];
+      } catch (_) {
+        return [];
+      }
+    })();
+
+    try {
+      if (w.undoHistory && w.SetRequirementEnabledBulkCommand && !w.undoHistory.isExecuting) {
+        const cmd = new w.SetRequirementEnabledBulkCommand(beforeRows, afterRows, nextEnabled);
+        w.undoHistory.record(cmd);
+      }
+    } catch (_) {}
+
+    this.renderTable();
+    this.scheduleEvaluateAndUpdate();
+  }
+
   transferSelectedToEvaluation(): void {
     alert('System Evaluation は廃止されました。Requirements が仕様（合否）です。');
   }
@@ -2614,19 +2677,25 @@ class SystemRequirementsEditor {
           }
         }
 
-        // Patch DOM for Current/Status only to preserve focus.
+        // Patch DOM for Current/Status/Score only to preserve focus.
         if (this._tbody) {
           for (const u of updates) {
             const tr = this._tbody.querySelector(`tr[data-id="${String(u.id)}"]`);
             if (!tr) continue;
             const curEl = tr.querySelector('td[data-role="current"]');
             const stEl = tr.querySelector('td[data-role="status"]');
+            const scoreEl = tr.querySelector('td[data-role="score"]');
             if (curEl) {
               const v = u.current;
               const n = Number(v);
               curEl.textContent = (v === null || v === undefined) ? '' : (Number.isFinite(n) ? n.toFixed(6) : String(v));
             }
             if (stEl) stEl.textContent = String(u.status ?? '').trim();
+            if (scoreEl) {
+              const v = u._contribution;
+              const n = Number(v);
+              scoreEl.textContent = (v === null || v === undefined) ? '' : (Number.isFinite(n) ? n.toFixed(6) : String(v));
+            }
           }
         }
       }

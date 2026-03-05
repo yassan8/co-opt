@@ -73,6 +73,32 @@ export default function RequirementsSection() {
     }
   };
 
+  const handleSetAllRequirementOn = async () => {
+    const editor = await waitForRequirementsEditorReady();
+    if (editor && typeof editor.setAllEnabled === 'function') {
+      try {
+        editor.setAllEnabled(true);
+      } catch (err) {
+        console.error('[RequirementsSection] ❌ Error in setAllEnabled(true):', err);
+      }
+      return;
+    }
+    console.error('[RequirementsSection] ❌ Editor or setAllEnabled method not available');
+  };
+
+  const handleSetAllRequirementOff = async () => {
+    const editor = await waitForRequirementsEditorReady();
+    if (editor && typeof editor.setAllEnabled === 'function') {
+      try {
+        editor.setAllEnabled(false);
+      } catch (err) {
+        console.error('[RequirementsSection] ❌ Error in setAllEnabled(false):', err);
+      }
+      return;
+    }
+    console.error('[RequirementsSection] ❌ Editor or setAllEnabled method not available');
+  };
+
   return (
     <section className="merit-function-section requirements-section ide-section-card" id="requirements-container" aria-label="Requirements">
       <h2 className="section-title">Requirements</h2>
@@ -80,6 +106,8 @@ export default function RequirementsSection() {
         <button id="add-requirement-btn" type="button" onClick={handleAddRequirement}>Add Requirement</button>
         <button id="delete-requirement-btn" type="button" onClick={handleDeleteRequirement}>Delete Requirement</button>
         <button id="update-requirement-btn" type="button" onClick={handleUpdateRequirement}>Update Requirement</button>
+        <button id="set-all-requirement-on-btn" type="button" onClick={handleSetAllRequirementOn}>All On</button>
+        <button id="set-all-requirement-off-btn" type="button" onClick={handleSetAllRequirementOff}>All Off</button>
       </div>
 
       {/* Progress bar container - will be populated by the editor */}
