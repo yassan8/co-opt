@@ -657,6 +657,45 @@ function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays,
     return rays;
 }
 
+function generateParallelPointsFromOffsetsViaRust(origin, uAxis, vAxis, offsets) {
+    try {
+        const rust = getRustRayTracingWasmSync();
+        const rustFn = rust?.generate_parallel_start_points_flat;
+        if (typeof rustFn !== 'function') return null;
+        const count = Array.isArray(offsets) ? offsets.length : 0;
+        if (count <= 0) return [];
+
+        const flatOffsets = new Float64Array(count * 2);
+        for (let i = 0; i < count; i++) {
+            flatOffsets[i * 2] = Number(offsets[i]?.u) || 0;
+            flatOffsets[i * 2 + 1] = Number(offsets[i]?.v) || 0;
+        }
+
+        const flat = rustFn(
+            new Float64Array([Number(origin?.x) || 0, Number(origin?.y) || 0, Number(origin?.z) || 0]),
+            new Float64Array([Number(uAxis?.x) || 0, Number(uAxis?.y) || 0, Number(uAxis?.z) || 0]),
+            new Float64Array([Number(vAxis?.x) || 0, Number(vAxis?.y) || 0, Number(vAxis?.z) || 0]),
+            flatOffsets,
+            count
+        );
+
+        if (!flat || typeof (flat as any).length !== 'number') return null;
+        const out = [];
+        for (let i = 0; i + 4 < (flat as any).length; i += 5) {
+            out.push({
+                x: Number((flat as any)[i]) || 0,
+                y: Number((flat as any)[i + 1]) || 0,
+                z: Number((flat as any)[i + 2]) || 0,
+                u: Number((flat as any)[i + 3]) || 0,
+                v: Number((flat as any)[i + 4]) || 0
+            });
+        }
+        return out;
+    } catch (_) {
+        return null;
+    }
+}
+
 function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, planeV, radius, rayCount, crossType, objectIndex, wavelength, extents = null) {
     const rays = [];
 
@@ -681,23 +720,27 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
         z: base.z + axis.z * s
     });
 
-    const addBetween = (a, b, type, roleA, roleB, count) => {
-        // Boundary rays
-        rays.push({ origin: a, direction, type, role: roleA, objectIndex, wavelength });
-        rays.push({ origin: b, direction, type, role: roleB, objectIndex, wavelength });
+    const addLineFromOffsets = (lineOffsets, type, roleStart, roleEnd) => {
+        if (!Array.isArray(lineOffsets) || lineOffsets.length < 2) return;
 
-        const intermediateCount = Math.max(0, count - 2);
-        for (let i = 1; i <= intermediateCount; i++) {
-            const t = i / (intermediateCount + 1);
+        const rustPoints = generateParallelPointsFromOffsetsViaRust(centerOrigin, planeU, planeV, lineOffsets);
+        const points = (Array.isArray(rustPoints) && rustPoints.length === lineOffsets.length)
+            ? rustPoints
+            : lineOffsets.map(ofs => ({
+                x: centerOrigin.x + planeU.x * ofs.u + planeV.x * ofs.v,
+                y: centerOrigin.y + planeU.y * ofs.u + planeV.y * ofs.v,
+                z: centerOrigin.z + planeU.z * ofs.u + planeV.z * ofs.v
+            }));
+
+        for (let i = 0; i < points.length; i++) {
+            const role = (i === 0)
+                ? roleStart
+                : ((i === points.length - 1) ? roleEnd : `${type}_${i}`);
             rays.push({
-                origin: {
-                    x: a.x + t * (b.x - a.x),
-                    y: a.y + t * (b.y - a.y),
-                    z: a.z + t * (b.z - a.z)
-                },
+                origin: points[i],
                 direction,
                 type,
-                role: `${type}_${i}`,
+                role,
                 objectIndex,
                 wavelength
             });
@@ -708,15 +751,25 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
 
     // Use planeV as "vertical" and planeU as "horizontal" to match Draw Cross conventions.
     if (crossType === 'both' || crossType === 'vertical') {
-        const upper = mk(centerOrigin, planeV, vPos);
-        const lower = mk(centerOrigin, planeV, -vNeg);
-        addBetween(upper, lower, 'vertical_cross', 'upper', 'lower', nPerAxis);
+        const verticalOffsets = [];
+        const den = Math.max(1, nPerAxis - 1);
+        for (let i = 0; i < nPerAxis; i++) {
+            const t = i / den;
+            const v = vPos + t * (-vNeg - vPos);
+            verticalOffsets.push({ u: 0, v });
+        }
+        addLineFromOffsets(verticalOffsets, 'vertical_cross', 'upper', 'lower');
     }
 
     if (crossType === 'both' || crossType === 'horizontal') {
-        const left = mk(centerOrigin, planeU, -uNeg);
-        const right = mk(centerOrigin, planeU, uPos);
-        addBetween(left, right, 'horizontal_cross', 'left', 'right', nPerAxis);
+        const horizontalOffsets = [];
+        const den = Math.max(1, nPerAxis - 1);
+        for (let i = 0; i < nPerAxis; i++) {
+            const t = i / den;
+            const u = -uNeg + t * (uPos + uNeg);
+            horizontalOffsets.push({ u, v: 0 });
+        }
+        addLineFromOffsets(horizontalOffsets, 'horizontal_cross', 'left', 'right');
     }
 
     return rays;
@@ -3465,24 +3518,21 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
                 continue;
             }
             
-            // 全面まで追跡（光線描画用）
+            // 全面まで追跡（描画・評価を兼用）
             const rayPathFull = traceRayForRenderTs(systemRowsForTrace, {
                 pos: rayPosition,
                 dir: rayDirection,
                 wavelength: wavelength  // 波長を追加
             }, 1.0);  // 全面追跡
-            
-            // 評価面まで追跡（横収差計算用）
-            const rayPathToTarget = targetSurfaceIndex !== null ? traceRayForRenderTs(systemRowsForTrace, {
-                pos: rayPosition,
-                dir: rayDirection,
-                wavelength: wavelength  // 波長を追加
-            }, 1.0, null, targetSurfaceIndex) : rayPathFull;
+
+            const rayPathToTarget = (Array.isArray(rayPathFull) && effectiveTargetPointIndex !== null)
+                ? rayPathFull.slice(0, effectiveTargetPointIndex + 1)
+                : rayPathFull;
             
             // NOTE: 「何か返った」ではなく「指定面まで到達」を成功とする
-            const reachedTarget = Array.isArray(rayPathToTarget)
+            const reachedTarget = Array.isArray(rayPathFull)
                 && effectiveTargetPointIndex !== null
-                && rayPathToTarget.length > effectiveTargetPointIndex;
+                && rayPathFull.length > effectiveTargetPointIndex;
 
             if (reachedTarget) {
                 // メタデータ正規化（描画・集計向け）

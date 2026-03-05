@@ -349,6 +349,101 @@ export class SetRequirementCommand extends Command {
 }
 
 /**
+ * Command for setting all requirement enabled flags in a single undo step
+ */
+export class SetRequirementEnabledBulkCommand extends Command {
+  beforeRows: any[];
+  afterRows: any[];
+  enabled: boolean;
+
+  constructor(beforeRows: any[], afterRows: any[], enabled: boolean) {
+    super(`Set all requirements ${enabled ? 'ON' : 'OFF'}`);
+    this.beforeRows = Array.isArray(beforeRows) ? JSON.parse(JSON.stringify(beforeRows)) : [];
+    this.afterRows = Array.isArray(afterRows) ? JSON.parse(JSON.stringify(afterRows)) : [];
+    this.enabled = !!enabled;
+  }
+
+  execute(): void {
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
+    try {
+      saveSystemRequirementsTableData(JSON.parse(JSON.stringify(this.afterRows)) as any);
+      this.refreshUI();
+    } finally {
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
+    }
+  }
+
+  undo(): void {
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
+    try {
+      saveSystemRequirementsTableData(JSON.parse(JSON.stringify(this.beforeRows)) as any);
+      this.refreshUI();
+    } finally {
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
+    }
+  }
+
+  refreshUI(): void {
+    if (w.systemRequirementsEditor) {
+      w.systemRequirementsEditor.loadFromStorage();
+      w.systemRequirementsEditor.renderTable();
+      if (typeof w.systemRequirementsEditor.scheduleEvaluateAndUpdate === 'function') {
+        w.systemRequirementsEditor.scheduleEvaluateAndUpdate();
+      }
+    }
+  }
+}
+
+/**
+ * Command for setting Design Intent parameter/aperture optimize mode in bulk
+ */
+export class SetDesignIntentOptimizeBulkCommand extends Command {
+  configId: string;
+  beforeBlocks: any[];
+  afterBlocks: any[];
+
+  constructor(configId: string, beforeBlocks: any[], afterBlocks: any[], enabled: boolean) {
+    super(`Design Intent Parameter All ${enabled ? 'ON' : 'OFF'}`);
+    this.configId = String(configId ?? '');
+    this.beforeBlocks = Array.isArray(beforeBlocks) ? JSON.parse(JSON.stringify(beforeBlocks)) : [];
+    this.afterBlocks = Array.isArray(afterBlocks) ? JSON.parse(JSON.stringify(afterBlocks)) : [];
+  }
+
+  execute(): void {
+    this.applyBlocks(this.afterBlocks);
+  }
+
+  undo(): void {
+    this.applyBlocks(this.beforeBlocks);
+  }
+
+  private applyBlocks(blocksSnapshot: any[]): void {
+    if (w.undoHistory) w.undoHistory.isExecuting = true;
+    try {
+      const sysConfig = w.loadSystemConfigurations?.();
+      if (!sysConfig || !Array.isArray(sysConfig.configurations)) return;
+
+      const cfg = sysConfig.configurations.find((c: any) => c && (String(c.id) === this.configId || String(c.name) === this.configId));
+      if (!cfg) return;
+
+      cfg.blocks = Array.isArray(blocksSnapshot) ? JSON.parse(JSON.stringify(blocksSnapshot)) : [];
+
+      if (w.expandBlocksToOpticalSystemRows) {
+        const expanded = w.expandBlocksToOpticalSystemRows(cfg.blocks);
+        if (expanded && expanded.rows) cfg.opticalSystemRows = expanded.rows;
+      }
+
+      if (w.saveSystemConfigurations) w.saveSystemConfigurations(sysConfig);
+      if (w.refreshBlockInspector) requestRefreshBlockInspector(w);
+      if (w.loadActiveConfigurationToTables) w.loadActiveConfigurationToTables();
+      if (w.refreshAllUI) w.refreshAllUI();
+    } finally {
+      if (w.undoHistory) w.undoHistory.isExecuting = false;
+    }
+  }
+}
+
+/**
  * Command for setting a Source (wavelength) field
  */
 export class SetSourceFieldCommand extends Command {
@@ -937,6 +1032,8 @@ if (typeof window !== 'undefined') {
   w.SetBlockParameterCommand = SetBlockParameterCommand;
   w.SetSurfaceFieldCommand = SetSurfaceFieldCommand;
   w.SetRequirementCommand = SetRequirementCommand;
+  w.SetRequirementEnabledBulkCommand = SetRequirementEnabledBulkCommand;
+  w.SetDesignIntentOptimizeBulkCommand = SetDesignIntentOptimizeBulkCommand;
   w.SetSourceFieldCommand = SetSourceFieldCommand;
   w.SetObjectFieldCommand = SetObjectFieldCommand;
   w['AddBlockCommand'] = AddBlockCommand;

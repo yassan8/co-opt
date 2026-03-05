@@ -71,21 +71,33 @@ const toStrArg = (name, fallback) => {
   return String(v);
 };
 
+const toBoolArg = (name, fallback) => {
+  const v = getArg(name, null);
+  if (v === null || v === undefined) return fallback;
+  const s = String(v).trim().toLowerCase();
+  if (!s) return fallback;
+  return s === '1' || s === 'true' || s === 'yes' || s === 'on';
+};
+
 const normalizeStartStep = (v) => {
-  const s = String(v ?? 'raytrace').trim().toLowerCase();
+  const s = String(v ?? 'perfquick').trim().toLowerCase();
+  if (s === 'perfquick' || s === 'perf-quick' || s === 'quick' || s === '0') return 'perfquick';
   if (s === 'raytrace' || s === 'ray' || s === '1') return 'raytrace';
   if (s === 'opd' || s === '2') return 'opd';
   if (s === 'ta' || s === 'ta-mode' || s === 'tamode' || s === '3') return 'ta';
   if (s === 'kkt' || s === '4') return 'kkt';
-  return 'raytrace';
+  return 'perfquick';
 };
 
-const stepOrder = ['raytrace', 'opd', 'ta', 'kkt'];
+const stepOrder = ['perfquick', 'raytrace', 'opd', 'ta', 'kkt'];
 
 const run = async () => {
   const startedAt = new Date().toISOString();
-  const startFrom = normalizeStartStep(getArg('start-from', 'raytrace'));
+  const startFrom = normalizeStartStep(getArg('start-from', 'perfquick'));
   const startIdx = stepOrder.indexOf(startFrom);
+  const endAt = normalizeStartStep(getArg('end-at', 'kkt'));
+  const endIdx = stepOrder.indexOf(endAt);
+  const enablePerfQuick = toBoolArg('enable-perf-quick', true);
 
   const outDefault = `release-gate-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
   const outRel = toStrArg('out', path.join('diagnostics/results', outDefault));
@@ -119,6 +131,13 @@ const run = async () => {
     kktMinWasmFeasibleRate: toNumArg('kkt-min-wasm-feasible-rate', 1.0)
   };
 
+  const perfQuickConfig = {
+    opdGridSize: toNumArg('perf-opd-grid-size', 64),
+    opdFieldX: toNumArg('perf-opd-field-x', 10),
+    opdRuns: toNumArg('perf-opd-runs', 3),
+    rayRays: toNumArg('perf-ray-rays', 25)
+  };
+
   const kktRounds = toNumArg('kkt-rounds', 6);
   const kktN = toNumArg('kkt-n', 24);
   const kktMeq = toNumArg('kkt-meq', 6);
@@ -138,10 +157,13 @@ const run = async () => {
     },
     controls: {
       startFrom,
+      endAt,
+      enablePerfQuick,
       output: path.relative(projectRoot, outAbs),
       checkpoint: path.relative(projectRoot, checkpointAbs)
     },
     steps: {
+      perfquick: { passed: false, skipped: false, result: null, raytrace: null, aperture: null },
       raytrace: { passed: false, skipped: false, golden: null, analysis: null },
       opd: { passed: false, skipped: false, result: null, analysis: null },
       ta: { passed: false, skipped: false, result: null, analysis: null },
@@ -154,10 +176,44 @@ const run = async () => {
 
   const shouldRunStep = (step) => {
     const idx = stepOrder.indexOf(step);
-    return idx >= 0 && idx >= startIdx;
+    return idx >= 0 && idx >= startIdx && idx <= endIdx;
   };
 
   try {
+    if (enablePerfQuick && shouldRunStep('perfquick')) {
+      const perfStamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const perfOpdRel = path.join('diagnostics/results', `opd-full-batch-quick-release-gate-${perfStamp}.json`);
+      const perfRayRel = path.join('diagnostics/results', `raytrace-golden-quick-release-gate-${perfStamp}.json`);
+
+      runNode('diagnostics/perf-quick-auto.mjs', [
+        '--require', 'true',
+        '--opd-out', perfOpdRel,
+        '--ray-out', perfRayRel,
+        '--opd-grid-size', String(perfQuickConfig.opdGridSize),
+        '--opd-field-x', String(perfQuickConfig.opdFieldX),
+        '--opd-runs', String(perfQuickConfig.opdRuns),
+        '--ray-rays', String(perfQuickConfig.rayRays),
+        '--min-opd-speedup', String(thresholds.opdMinSpeedup),
+        '--max-ray-status-mismatch', String(thresholds.raytraceMaxMismatchRate),
+        '--max-ray-success-mismatch', String(thresholds.raytraceMaxSuccessMismatchRate),
+        '--max-ray-max-opl-um', String(thresholds.raytraceMaxOplUm)
+      ]);
+
+      const perfOpdAbs = path.resolve(projectRoot, perfOpdRel);
+      const perfRayAbs = path.resolve(projectRoot, perfRayRel);
+      const perfApertureAbs = path.resolve(projectRoot, perfRayRel.replace(/\.json$/i, '-aperture.json'));
+      summary.steps.perfquick = {
+        passed: true,
+        skipped: false,
+        result: path.relative(projectRoot, perfOpdAbs),
+        raytrace: path.relative(projectRoot, perfRayAbs),
+        aperture: path.relative(projectRoot, perfApertureAbs)
+      };
+    } else {
+      summary.steps.perfquick = { ...summary.steps.perfquick, skipped: true };
+    }
+    await persistSummary(summary);
+
     if (shouldRunStep('raytrace')) {
       runNode('diagnostics/raytrace-golden-auto.mjs', [
         '--max-mismatch-rate', String(thresholds.raytraceMaxMismatchRate),
@@ -262,14 +318,15 @@ const run = async () => {
     }
     await persistSummary(summary);
 
-    summary.passed = ['raytrace', 'opd', 'ta', 'kkt'].every((step) => {
+    summary.passed = ['perfquick', 'raytrace', 'opd', 'ta', 'kkt'].every((step) => {
       const s = summary.steps[step];
       return s.skipped || s.passed;
     });
   } catch (e) {
     const msg = String((e && e.message) ? e.message : e || 'release gate failed');
     summary.error = msg;
-    if (msg.includes('raytrace-golden-auto')) summary.failedStep = 'raytrace';
+    if (msg.includes('perf-quick-auto')) summary.failedStep = 'perfquick';
+    else if (msg.includes('raytrace-golden-auto')) summary.failedStep = 'raytrace';
     else if (msg.includes('opd-full-batch-benchmark') || msg.includes('opd-full-batch-analyze') || msg.includes('opd-full-batch-auto')) summary.failedStep = 'opd';
     else if (msg.includes('ta-rms-lightweight-mode-auto') || msg.includes('ta-rms-lightweight-mode-analyze') || msg.includes('ta-rms-micro-benchmark')) summary.failedStep = 'ta';
     else if (msg.includes('kkt-e2e-auto')) summary.failedStep = 'kkt';
@@ -277,6 +334,21 @@ const run = async () => {
     else summary.failedStep = 'unknown';
 
     // Best-effort artifact discovery for debugging failed step.
+    if (enablePerfQuick && shouldRunStep('perfquick')) {
+      const perfOpd = await listLatest(/^opd-full-batch-quick-.*\.json$/i);
+      const perfRay = await listLatest(/^raytrace-golden-quick-.*\.json$/i, /^raytrace-golden-analysis-.*\.json$/i);
+      const perfAperture = perfRay ? path.resolve(path.dirname(perfRay), `${path.basename(perfRay, '.json')}-aperture.json`) : null;
+      if (perfOpd || perfRay) {
+        summary.steps.perfquick = {
+          passed: false,
+          skipped: false,
+          result: perfOpd ? path.relative(projectRoot, perfOpd) : null,
+          raytrace: perfRay ? path.relative(projectRoot, perfRay) : null,
+          aperture: perfAperture ? path.relative(projectRoot, perfAperture) : null
+        };
+      }
+    }
+
     if (shouldRunStep('raytrace')) {
       const rayGolden = await listLatest(/^raytrace-golden-.*\.json$/i, /^raytrace-golden-analysis-.*\.json$/i);
       const rayAnalysis = await listLatest(/^raytrace-golden-analysis-.*\.json$/i);
@@ -340,6 +412,7 @@ const run = async () => {
     checkpoint: path.relative(projectRoot, checkpointAbs),
     passed: summary.passed,
     failedStep: summary.failedStep,
+    perfQuickEnabled: enablePerfQuick,
     steps: summary.steps
   }, null, 2));
 

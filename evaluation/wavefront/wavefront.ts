@@ -4093,6 +4093,148 @@ ${surfaceTypeList}
         }
     }
 
+    generateFiniteInitialRaysBatch(pupilPoints, fieldSetting, options = undefined) {
+        const points = Array.isArray(pupilPoints) ? pupilPoints : [];
+        if (!points.length) return [];
+
+        const fastSolve = !!(options && (options.fastMarginalRay || options.fastSolve));
+        const objectPosition = this.getFiniteObjectPosition(fieldSetting);
+        const stopCenter = this.getSurfaceOrigin(this.stopSurfaceIndex);
+        const stopSurface = this.opticalSystemRows[this.stopSurfaceIndex] || {};
+
+        let baseStopRadius = Math.abs(parseFloat(stopSurface.aperture || stopSurface.Aperture || stopSurface.semidia || 10));
+        if (stopSurface.aperture || stopSurface.Aperture) {
+            baseStopRadius = baseStopRadius / 2;
+        }
+
+        const axes = this.getSurfaceAxes(this.stopSurfaceIndex);
+        const dot = (a, b) => (a.x * b.x + a.y * b.y + a.z * b.z);
+
+        const aimedStopPoints = new Array(points.length);
+        const rays = new Array(points.length).fill(null);
+        const active = new Uint8Array(points.length);
+
+        for (let i = 0; i < points.length; i++) {
+            const p = points[i] || {};
+            const pupilX = Number(p.x);
+            const pupilY = Number(p.y);
+            if (!Number.isFinite(pupilX) || !Number.isFinite(pupilY)) continue;
+
+            const pupilRadius = Math.hypot(pupilX, pupilY);
+            const effectiveStopRadius = (pupilRadius > 1.0)
+                ? (baseStopRadius * Math.max(1.0, pupilRadius * 1.1))
+                : baseStopRadius;
+            const stopOffset = this.addVec(
+                this.scaleVec(axes.ex, pupilX * effectiveStopRadius),
+                this.scaleVec(axes.ey, pupilY * effectiveStopRadius)
+            );
+            const aimed = {
+                x: stopCenter.x + stopOffset.x,
+                y: stopCenter.y + stopOffset.y,
+                z: stopCenter.z + stopOffset.z,
+                desiredLocalX: pupilX * baseStopRadius,
+                desiredLocalY: pupilY * baseStopRadius
+            };
+            aimedStopPoints[i] = aimed;
+
+            const rayDirection = this.calculateRayDirection(objectPosition, aimed);
+            if (!rayDirection || !Number.isFinite(rayDirection.x) || !Number.isFinite(rayDirection.y) || !Number.isFinite(rayDirection.z)) {
+                continue;
+            }
+            rays[i] = {
+                pos: objectPosition,
+                dir: rayDirection,
+                wavelength: this.wavelength
+            };
+            active[i] = 1;
+        }
+
+        const stopTol = fastSolve ? 0.06 : 0.03;
+        const maxStopIters = fastSolve ? 4 : 7;
+        const gain = fastSolve ? 0.65 : 0.7;
+        const maxStep = Math.max(0.5, baseStopRadius * 0.12);
+        const preferRustMetaBatch = options?.preferRustMetaBatch !== false;
+        const traceOptions = {
+            ...(options?.traceOptions || {}),
+            useRustWasm: preferRustMetaBatch,
+            requireRustWasm: false,
+            disableWasmRayTracing: false
+        };
+
+        for (let iter = 0; iter < maxStopIters; iter++) {
+            const batchRays = [];
+            const batchIndices = [];
+            for (let i = 0; i < rays.length; i++) {
+                if (!active[i]) continue;
+                const ray = rays[i];
+                if (!ray || !ray.pos || !ray.dir) continue;
+                batchRays.push(ray);
+                batchIndices.push(i);
+            }
+            if (!batchRays.length) break;
+
+            const stops = this.traceRayHitPointToSurfaceBatch(batchRays, this.stopSurfaceIndex, 1.0, traceOptions);
+            let updated = false;
+
+            for (let bi = 0; bi < batchIndices.length; bi++) {
+                const idx = batchIndices[bi];
+                const aimed = aimedStopPoints[idx];
+                const actualStop = Array.isArray(stops) ? stops[bi] : null;
+                if (!aimed || !actualStop) {
+                    active[idx] = 0;
+                    continue;
+                }
+
+                const d = {
+                    x: actualStop.x - stopCenter.x,
+                    y: actualStop.y - stopCenter.y,
+                    z: actualStop.z - stopCenter.z
+                };
+                const actualLocalX = dot(d, axes.ex);
+                const actualLocalY = dot(d, axes.ey);
+                const errLX = actualLocalX - aimed.desiredLocalX;
+                const errLY = actualLocalY - aimed.desiredLocalY;
+                const errMag = Math.hypot(errLX, errLY);
+
+                if (!Number.isFinite(errMag) || errMag <= stopTol) {
+                    active[idx] = 0;
+                    continue;
+                }
+
+                const errVec = this.addVec(this.scaleVec(axes.ex, errLX), this.scaleVec(axes.ey, errLY));
+                const stepMag = Math.hypot(errVec.x, errVec.y, errVec.z);
+                const stepScale = (Number.isFinite(stepMag) && stepMag > maxStep) ? (maxStep / stepMag) : 1.0;
+                const step = {
+                    x: errVec.x * gain * stepScale,
+                    y: errVec.y * gain * stepScale,
+                    z: errVec.z * gain * stepScale
+                };
+
+                aimed.x -= step.x;
+                aimed.y -= step.y;
+                aimed.z -= step.z;
+
+                const rayDirection = this.calculateRayDirection(objectPosition, aimed);
+                if (!rayDirection || !Number.isFinite(rayDirection.x) || !Number.isFinite(rayDirection.y) || !Number.isFinite(rayDirection.z)) {
+                    active[idx] = 0;
+                    continue;
+                }
+
+                rays[idx] = {
+                    pos: objectPosition,
+                    dir: rayDirection,
+                    wavelength: this.wavelength
+                };
+                active[idx] = (iter + 1 < maxStopIters) ? 1 : 0;
+                updated = true;
+            }
+
+            if (!updated) break;
+        }
+
+        return rays;
+    }
+
     /**
      * 有限系の周辺光線生成
      * @param {number} pupilX - 瞳座標X
@@ -7061,18 +7203,33 @@ export class WavefrontAberrationAnalyzer {
                 emitProgress(9, 'batch', 'Preparing batch rays...');
                 const batchInputRays = [];
                 const batchInputCells = [];
+                const preferRustMetaBatch = options?.fullBatchPreferRustMetaBatch !== false;
                 const batchTraceOptions = {
                     ...(traceOptionsPatch || {}),
+                    useRustWasm: preferRustMetaBatch,
+                    requireRustWasm: false,
+                    disableWasmRayTracing: false,
                     fastMarginalRay: true,
                     returnInitialRayOnly: true
                 };
 
-                for (let bi = 0; bi < gridPoints.length; bi++) {
-                    const gp = gridPoints[bi];
-                    const ray0 = this.opdCalculator.generateFiniteMarginalRay(gp.x, gp.y, fieldSetting, batchTraceOptions);
-                    if (!ray0 || !ray0.pos || !ray0.dir) continue;
-                    batchInputRays.push(ray0);
-                    batchInputCells.push(gp);
+                const useSimpleFiniteSeed = options?.fullBatchTraceUseSimpleFiniteSeed !== false;
+                if (useSimpleFiniteSeed) {
+                    const seeded = this.opdCalculator.generateFiniteInitialRaysBatch(gridPoints, fieldSetting, batchTraceOptions);
+                    for (let bi = 0; bi < seeded.length; bi++) {
+                        const ray0 = seeded[bi];
+                        if (!ray0 || !ray0.pos || !ray0.dir) continue;
+                        batchInputRays.push(ray0);
+                        batchInputCells.push(gridPoints[bi]);
+                    }
+                } else {
+                    for (let bi = 0; bi < gridPoints.length; bi++) {
+                        const gp = gridPoints[bi];
+                        const ray0 = this.opdCalculator.generateFiniteMarginalRay(gp.x, gp.y, fieldSetting, batchTraceOptions);
+                        if (!ray0 || !ray0.pos || !ray0.dir) continue;
+                        batchInputRays.push(ray0);
+                        batchInputCells.push(gp);
+                    }
                 }
 
                 if (batchInputRays.length > 0) {

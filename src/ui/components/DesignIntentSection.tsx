@@ -17,6 +17,8 @@ export default function DesignIntentSection() {
         </select>
         <button id="design-intent-add-block-btn" type="button">Add Block</button>
         <button id="design-intent-delete-block-btn" type="button">Delete Block</button>
+        <button id="design-intent-param-all-on-btn" type="button">Parameter All ON</button>
+        <button id="design-intent-param-all-off-btn" type="button">Parameter All OFF</button>
       </div>
 
       <div
