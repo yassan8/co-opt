@@ -1,11 +1,13 @@
 {
-  "name": "co-opt",
+  "name": "co-opt-pro",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:desktop": "tauri dev",
     "build": "vite build",
+    "build:desktop": "tauri build",
     "build:check": "vite build",
     "preview": "vite preview",
     "diag:opd": "node --experimental-strip-types diagnostics/opd-benchmark.mjs",
@@ -39,11 +41,14 @@
     "pr:all": "bash ./scripts/pr-all.sh"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.3.0",
+    "@tauri-apps/plugin-dialog": "^2.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.182.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.3.1",
     "@types/node": "^25.2.3",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
