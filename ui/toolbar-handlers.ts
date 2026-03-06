@@ -10,6 +10,7 @@ import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
 import { generateZmxText, getDefaultProject, getNewProjectTemplate } from '../src/desktop/ipc/client.ts';
+import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText } from '../src/desktop/ipc/client.ts';
 
 declare global {
   interface Window {
@@ -535,7 +536,18 @@ export function handleImportZemax(): void {
         console.log('📥 [Zemax Import] Selected file:', syntheticFile.name, `(${syntheticFile.size} bytes)`);
 
         const now = new Date().toISOString();
-        const parsed: any = parseZMXArrayBufferToOpticalSystemRows(arrayBuffer);
+          let parsed: any;
+          try {
+            parsed = await parseZmxText({ text: picked.content });
+          } catch (rustParseErr) {
+            console.warn('⚠️ [Zemax Import] Rust parser failed, fallback to TS parser:', rustParseErr);
+            const encoded = new TextEncoder().encode(picked.content);
+            const arrayBuffer = encoded.buffer.slice(
+              encoded.byteOffset,
+              encoded.byteOffset + encoded.byteLength,
+            ) as ArrayBuffer;
+            parsed = parseZMXArrayBufferToOpticalSystemRows(arrayBuffer);
+          }
 
         if (!parsed || typeof parsed !== 'object') {
           throw new Error('Invalid Zemax parse result.');

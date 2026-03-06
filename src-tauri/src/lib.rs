@@ -11,6 +11,7 @@ pub fn run() {
             commands::project::new_project_template,
             commands::project::load_default_project,
             commands::zemax::generate_zmx_text,
+            commands::zemax::parse_zmx_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running co-opt-pro tauri application");
