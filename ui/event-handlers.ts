@@ -8803,11 +8803,19 @@ export function setupTransformationControls(): void {
                 'transverse-aberration': 'open-transverse-aberration-window-btn',
                 'opd': 'open-opd-window-btn',
                 'psf': 'open-psf-window-btn',
-                'mtf': 'open-mtf-window-btn'
+                'mtf': 'open-mtf-window-btn',
+                'through-focus-spot': 'open-through-focus-spot-window-btn',
+                'through-focus-mtf': 'open-through-focus-mtf-window-btn',
+                'field-mtf': 'open-field-mtf-window-btn'
             };
             
             const buttonId = analysisButtonMap[selectedValue];
             if (buttonId) {
+                try {
+                    if (typeof w.setupAnalysisWindows === 'function') {
+                        w.setupAnalysisWindows();
+                    }
+                } catch (_) {}
                 const button = document.getElementById(buttonId);
                 if (button) {
                     button.click();
