@@ -8,6 +8,8 @@ pub fn run() {
             commands::io::read_text_file,
             commands::io::write_text_file,
             commands::ai::ai_chat_stub,
+            commands::project::new_project_template,
+            commands::project::load_default_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running co-opt-pro tauri application");

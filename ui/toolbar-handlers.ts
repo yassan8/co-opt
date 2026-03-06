@@ -9,6 +9,7 @@ import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-i
 import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, saveJsonFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
+import { getDefaultProject, getNewProjectTemplate } from '../src/desktop/ipc/client.ts';
 
 declare global {
   interface Window {
@@ -21,6 +22,26 @@ export function handleNewFile(): void {
   if (!confirm('Create new file? Current data will be cleared.')) return;
   
   try {
+    if (isTauriRuntime()) {
+      (async () => {
+        try {
+          const { project } = await getNewProjectTemplate();
+          if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
+            await (window as any).__loadAllDataObjectIntoApp(project, { filename: 'new-project-template.json' });
+          }
+          setLoadedFileName('new-project-template.json');
+          try {
+            window.dispatchEvent(new CustomEvent('coopt:loaded-file-updated'));
+          } catch (_) {}
+          console.log('✅ [New File] Loaded Rust template project.');
+        } catch (desktopErr) {
+          console.error('❌ [New File] Rust template load failed:', desktopErr);
+          alert(`New file failed: ${(desktopErr as Error)?.message || String(desktopErr)}`);
+        }
+      })();
+      return;
+    }
+
     console.log('🔵 [New File] Clearing localStorage and creating default configuration...');
     clearAllPersistedState();
     
@@ -229,6 +250,14 @@ export async function handleLoadDefault(): Promise<void> {
   if (!confirm('Load default optical system? Current data will be replaced.')) return;
   
   try {
+    if (isTauriRuntime()) {
+      const { project } = await getDefaultProject();
+      if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
+        await (window as any).__loadAllDataObjectIntoApp(project, { filename: 'default-load.json' });
+      }
+      return;
+    }
+
     let response = await fetch('/co-opt/defaults/default-load.json');
     if (!response.ok) {
       response = await fetch('/defaults/default-load.json');
