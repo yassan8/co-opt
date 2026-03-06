@@ -9,7 +9,6 @@ import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-i
 import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
-import { generateZmxText, getDefaultProject, getNewProjectTemplate } from '../src/desktop/ipc/client.ts';
 import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText, recommendWavefrontGrid, runAnalysisPreview, runOptimizerStep } from '../src/desktop/ipc/client.ts';
 
 declare global {
@@ -20,7 +19,7 @@ declare global {
 const w: Record<string, any> = window;
 
 export function handleNewFile(): void {
-  if (!confirm('Create new file? Current data will be cleared.')) return;
+  if (!isTauriRuntime() && !confirm('Create new file? Current data will be cleared.')) return;
   
   try {
     if (isTauriRuntime()) {
@@ -248,7 +247,7 @@ export function handleSave(): void {
 }
 
 export async function handleLoadDefault(): Promise<void> {
-  if (!confirm('Load default optical system? Current data will be replaced.')) return;
+  if (!isTauriRuntime() && !confirm('Load default optical system? Current data will be replaced.')) return;
   
   try {
     if (isTauriRuntime()) {
@@ -326,7 +325,7 @@ export function handleLoad(): void {
 }
 
 export function handleClearStorage(): void {
-  if (!confirm(
+  if (!isTauriRuntime() && !confirm(
     '⚠️ ローカルストレージをクリアします。すべての未保存データが失われます。\n\n' +
     'Clear localStorage? All unsaved data will be lost.'
   )) return;
@@ -1084,6 +1083,38 @@ export function handleAnalysisSelect(selectedValue: string): void {
   const value = String(selectedValue || '').trim();
   if (!value) return;
 
+  const analysisButtonMap: Record<string, string> = {
+    'spot-diagram': 'open-spot-diagram-window-btn',
+    'spherical-aberration': 'open-spherical-aberration-window-btn',
+    'astigmatism': 'open-astigmatism-window-btn',
+    'distortion': 'open-distortion-window-btn',
+    'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
+    'integrated-aberration': 'open-integrated-aberration-window-btn',
+    'transverse-aberration': 'open-transverse-aberration-window-btn',
+    'opd': 'open-opd-window-btn',
+    'psf': 'open-psf-window-btn',
+    'mtf': 'open-mtf-window-btn',
+    'through-focus-spot': 'open-through-focus-spot-window-btn',
+    'through-focus-mtf': 'open-through-focus-mtf-window-btn',
+    'field-mtf': 'open-field-mtf-window-btn'
+  };
+
+  const buttonId = analysisButtonMap[value];
+  if (buttonId) {
+    const w = window as any;
+    try {
+      if (typeof w.setupAnalysisWindows === 'function') {
+        w.setupAnalysisWindows();
+      }
+    } catch (_) {}
+
+    const button = document.getElementById(buttonId);
+    if (button) {
+      const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+      button.dispatchEvent(clickEvent);
+    }
+  }
+
   if (isTauriRuntime()) {
     (async () => {
       try {
@@ -1125,37 +1156,5 @@ export function handleAnalysisSelect(selectedValue: string): void {
         console.error('❌ [Analysis][Rust] recommendation failed:', err);
       }
     })();
-  }
-
-  const analysisButtonMap: Record<string, string> = {
-    'spot-diagram': 'open-spot-diagram-window-btn',
-    'spherical-aberration': 'open-spherical-aberration-window-btn',
-    'astigmatism': 'open-astigmatism-window-btn',
-    'distortion': 'open-distortion-window-btn',
-    'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
-    'integrated-aberration': 'open-integrated-aberration-window-btn',
-    'transverse-aberration': 'open-transverse-aberration-window-btn',
-    'opd': 'open-opd-window-btn',
-    'psf': 'open-psf-window-btn',
-    'mtf': 'open-mtf-window-btn',
-    'through-focus-spot': 'open-through-focus-spot-window-btn',
-    'through-focus-mtf': 'open-through-focus-mtf-window-btn',
-    'field-mtf': 'open-field-mtf-window-btn'
-  };
-
-  const buttonId = analysisButtonMap[value];
-  if (!buttonId) return;
-
-  const w = window as any;
-  try {
-    if (typeof w.setupAnalysisWindows === 'function') {
-      w.setupAnalysisWindows();
-    }
-  } catch (_) {}
-
-  const button = document.getElementById(buttonId);
-  if (button) {
-    const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
-    button.dispatchEvent(clickEvent);
   }
 }
