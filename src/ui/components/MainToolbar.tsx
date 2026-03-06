@@ -9,6 +9,7 @@ import {
   handleExportZemax,
   handleOptimize,
   handleRender3D,
+  handleSystemData,
   handleAnalysisSelect
 } from '../../../ui/toolbar-handlers';
 import { getLoadedFileName, getLoadedFileWarn } from '../../../ui/loaded-file-storage';
@@ -133,6 +134,7 @@ export default function MainToolbar() {
           <button
             id="open-system-data-window-btn"
             title="Open System Data in popup window"
+            onClick={handleSystemData}
           >
             Open System Data
           </button>
