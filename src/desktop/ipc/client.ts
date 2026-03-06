@@ -26,6 +26,8 @@ import type {
   OptimizeStepResponse,
 } from "../../shared/contracts/optimizer";
 import type {
+  RunAnalysisComputeRequest,
+  RunAnalysisComputeResponse,
   RunAnalysisPreviewRequest,
   RunAnalysisPreviewResponse,
   GridRecommendation,
@@ -83,6 +85,12 @@ export async function runAnalysisPreview(
   payload: RunAnalysisPreviewRequest,
 ): Promise<RunAnalysisPreviewResponse> {
   return invoke<RunAnalysisPreviewResponse>("run_analysis_preview", { req: payload });
+}
+
+export async function runAnalysisCompute(
+  payload: RunAnalysisComputeRequest,
+): Promise<RunAnalysisComputeResponse> {
+  return invoke<RunAnalysisComputeResponse>("run_analysis_compute", { req: payload });
 }
 
 export async function getNewProjectTemplate(): Promise<NewProjectTemplateResponse> {

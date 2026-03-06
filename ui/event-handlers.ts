@@ -25,6 +25,9 @@ import { calculateFocalLength, findStopSurfaceIndex } from '../raytracing/core/r
 import { DEFAULT_STOP_SEMI_DIAMETER } from '../data/block-schema.ts';
 import { loadSystemConfigurations } from '../data/table-configuration.ts';
 import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
+import { runAnalysisCompute } from '../src/desktop/ipc/client.ts';
+import { isTauriRuntime } from '../src/desktop/runtime.ts';
+import type { RunAnalysisComputeRequest, RunAnalysisComputeResponse } from '../src/shared/contracts/analysis.ts';
 
 let popupPsfCalculatorCache: PSFCalculator | null = null;
 
@@ -42,6 +45,51 @@ function getPopupPsfCalculator(): PSFCalculator {
     popupPsfCalculatorCache = new PsfCalculatorCtor();
     return popupPsfCalculatorCache;
 }
+
+function collectPopupRowsFromMainWindow(): {
+    opticalSystemRows: any[];
+    sourceRows: any[];
+    objectRows: any[];
+} {
+    let opticalSystemRows: any[] = [];
+    let sourceRows: any[] = [];
+    let objectRows: any[] = [];
+
+    try {
+        const rows = getOpticalSystemRows(w.tableOpticalSystem);
+        if (Array.isArray(rows)) opticalSystemRows = rows;
+    } catch (_) {}
+
+    try {
+        const rows = getSourceRows(w.tableSource);
+        if (Array.isArray(rows)) sourceRows = rows;
+    } catch (_) {}
+
+    try {
+        const rows = getObjectRows(w.tableObject);
+        if (Array.isArray(rows)) objectRows = rows;
+    } catch (_) {}
+
+    return { opticalSystemRows, sourceRows, objectRows };
+}
+
+async function runDesktopAnalysisComputeForPopup(
+    payload: Omit<RunAnalysisComputeRequest, 'opticalSystemRows' | 'sourceRows' | 'objectRows'>,
+): Promise<RunAnalysisComputeResponse> {
+    if (!isTauriRuntime()) {
+        throw new Error('Desktop runtime is not available');
+    }
+
+    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    return runAnalysisCompute({
+        ...payload,
+        opticalSystemRows,
+        sourceRows,
+        objectRows,
+    });
+}
+
+w.runDesktopAnalysisComputeForPopup = runDesktopAnalysisComputeForPopup;
 
 // ============================================================================
 // GLOBAL CONFIGURATION: FORCE INFINITE PUPIL MODE
@@ -4794,6 +4842,52 @@ export function setupAnalysisWindows() {
 
                 setProgress(0, 'Starting...');
 
+                const canUseDesktopRust = !!(
+                    window.opener
+                    && window.opener.__TAURI_INTERNALS__
+                    && typeof window.opener.runDesktopAnalysisComputeForPopup === 'function'
+                );
+
+                if (canUseDesktopRust) {
+                    setProgress(20, 'Computing OPD (Rust)...');
+                    const result = await window.opener.runDesktopAnalysisComputeForPopup({
+                        kind: 'opd',
+                        gridSize: Number.isFinite(gridSize) ? gridSize : 128,
+                    });
+                    const opdGrid = Array.isArray(result?.opdGrid) ? result.opdGrid : [];
+                    if (!opdGrid.length || !Array.isArray(opdGrid[0])) {
+                        throw new Error('Rust OPD result does not contain opdGrid');
+                    }
+
+                    setProgress(80, 'Rendering OPD...');
+                    const trace = (String(plotType) === 'contour')
+                        ? [{ z: opdGrid, type: 'contour', colorscale: 'Viridis', contours: { coloring: 'heatmap' } }]
+                        : [{ z: opdGrid, type: 'surface', colorscale: 'Viridis' }];
+                    const layout = (String(plotType) === 'contour')
+                        ? {
+                            margin: { l: 45, r: 20, t: 30, b: 40 },
+                            xaxis: { title: 'Pupil X' },
+                            yaxis: { title: 'Pupil Y' },
+                        }
+                        : {
+                            margin: { l: 0, r: 0, t: 30, b: 0 },
+                            scene: {
+                                xaxis: { title: 'Pupil X' },
+                                yaxis: { title: 'Pupil Y' },
+                                zaxis: { title: 'OPD (a.u.)' },
+                            },
+                        };
+
+                    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
+                        throw new Error('Plotly is not available in OPD popup');
+                    }
+                    await window.Plotly.newPlot(containerEl, trace, layout, { responsive: true });
+                    setProgress(100, 'Done (Rust)');
+                    flushPendingProgress(true);
+                    resizePlot();
+                    return;
+                }
+
                 // NOTE: Wavefront generator supports only options.onProgress (same as PSF)
                 const onProgress = (evt) => {
                     try {
@@ -5475,6 +5569,51 @@ export function setupAnalysisWindows() {
                 setProgress(0, 'Starting...');
                 // Allow the popup to paint the progress UI before heavy computation begins.
                 await new Promise(r => setTimeout(r, 0));
+
+                const canUseDesktopRust = !!(
+                    window.opener
+                    && window.opener.__TAURI_INTERNALS__
+                    && typeof window.opener.runDesktopAnalysisComputeForPopup === 'function'
+                );
+
+                if (canUseDesktopRust) {
+                    setProgress(20, 'Computing PSF (Rust)...');
+                    const result = await window.opener.runDesktopAnalysisComputeForPopup({
+                        kind: 'psf',
+                        gridSize: Number.isFinite(zernikeSampling) ? zernikeSampling : 128,
+                    });
+                    const psfGrid = Array.isArray(result?.psfGrid) ? result.psfGrid : [];
+                    if (!psfGrid.length || !Array.isArray(psfGrid[0])) {
+                        throw new Error('Rust PSF result does not contain psfGrid');
+                    }
+
+                    const zData = logScale
+                        ? psfGrid.map((row) => row.map((v) => {
+                            const n = Number(v);
+                            return Number.isFinite(n) && n > 0 ? Math.log10(n) : -12;
+                        }))
+                        : psfGrid;
+
+                    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
+                        throw new Error('Plotly is not available in PSF popup');
+                    }
+
+                    setProgress(80, 'Rendering PSF...');
+                    await window.Plotly.newPlot(containerEl, [{
+                        z: zData,
+                        type: 'heatmap',
+                        colorscale: 'Hot',
+                    }], {
+                        margin: { l: 45, r: 20, t: 30, b: 40 },
+                        xaxis: { title: 'Pupil X' },
+                        yaxis: { title: 'Pupil Y', scaleanchor: 'x', scaleratio: 1 },
+                    }, { responsive: true });
+
+                    setProgress(100, 'Done (Rust)');
+                    resizePlot();
+                    hideProgress();
+                    return;
+                }
 
                 const onProgress = (evt) => {
                     try {
@@ -6432,15 +6571,76 @@ export function setupAnalysisWindows() {
 
             try {
                 const opener = getOpener();
-                if (!opener || typeof opener.showMTFDiagram !== 'function') {
+                if (!opener) {
+                    throw new Error('Opener is not available');
+                }
+                if (wavelength !== 'all' && !Number.isFinite(wavelength) && !(Number.isFinite(primary) && primary > 0)) {
+                    throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
+                }
+
+                const canUseDesktopRust = !!(
+                    opener.__TAURI_INTERNALS__
+                    && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
+                );
+
+                if (canUseDesktopRust) {
+                    setProgress(0, 'Starting...');
+                    await new Promise(r => setTimeout(r, 0));
+                    setProgress(25, 'Computing MTF (Rust)...');
+
+                    const result = await opener.runDesktopAnalysisComputeForPopup({
+                        kind: 'mtf',
+                        gridSize: Number.isFinite(sampling) ? sampling : 256,
+                        maxFrequencyLpmm: Number.isFinite(maxFreq) ? maxFreq : 100,
+                    });
+
+                    const freq = Array.isArray(result?.frequencyAxis) ? result.frequencyAxis : [];
+                    const tan = Array.isArray(result?.mtfTangential) ? result.mtfTangential : [];
+                    const sag = Array.isArray(result?.mtfSagittal) ? result.mtfSagittal : [];
+                    if (!freq.length || !tan.length || !sag.length) {
+                        throw new Error('Rust MTF result does not contain valid curves');
+                    }
+
+                    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
+                        throw new Error('Plotly is not available in MTF popup');
+                    }
+
+                    setProgress(80, 'Rendering MTF...');
+                    await window.Plotly.newPlot(containerEl, [
+                        {
+                            x: freq,
+                            y: tan,
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Tangential',
+                            line: { color: '#2563eb', width: 2 },
+                        },
+                        {
+                            x: freq,
+                            y: sag,
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Sagittal',
+                            line: { color: '#dc2626', width: 2 },
+                        },
+                    ], {
+                        margin: { l: 50, r: 20, t: 28, b: 42 },
+                        xaxis: { title: 'Spatial frequency (lp/mm)' },
+                        yaxis: { title: 'MTF', range: [0, 1.05] },
+                        showlegend: true,
+                    }, { responsive: true });
+
+                    setProgress(100, 'Done (Rust)');
+                    hideProgress();
+                    return;
+                }
+
+                if (typeof opener.showMTFDiagram !== 'function') {
                     throw new Error('showMTFDiagram is not available on opener');
                 }
                 setProgress(0, 'Starting...');
                 // Allow the popup to paint the progress UI before heavy computation begins.
                 await new Promise(r => setTimeout(r, 0));
-                if (wavelength !== 'all' && !Number.isFinite(wavelength) && !(Number.isFinite(primary) && primary > 0)) {
-                    throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
-                }
                 await opener.showMTFDiagram({
                     wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : primary),
                     objectIndex: Number.isFinite(objectIndex) ? objectIndex : 0,
