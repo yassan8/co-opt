@@ -40,3 +40,15 @@ export interface GenerateZmxTextRequest {
 export interface GenerateZmxTextResponse {
   zmxText: string;
 }
+
+export interface ParseZmxTextRequest {
+  text: string;
+}
+
+export interface ParseZmxTextResponse {
+  rows: unknown[];
+  issues: Array<{ severity: string; message: string }>;
+  sourceRows: unknown[];
+  objectRows: unknown[];
+  entrancePupilDiameterMm: number | null;
+}
