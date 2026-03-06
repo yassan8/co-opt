@@ -91,6 +91,14 @@ pub struct SpotSeries {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SpotDiagramSeries {
+    pub label: String,
+    pub color: String,
+    pub points: Vec<SpotPoint>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunAnalysisComputeResponse {
     pub kind: String,
     pub grid_size: u32,
@@ -116,6 +124,8 @@ pub struct RunAnalysisComputeResponse {
     pub mtf_second_sagittal: Option<Vec<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spot_series: Option<Vec<SpotSeries>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spot_diagram_series: Option<Vec<SpotDiagramSeries>>,
     pub message: String,
     pub summary: Value,
 }
@@ -181,9 +191,10 @@ pub fn run_analysis_preview(req: RunAnalysisPreviewRequest) -> Result<RunAnalysi
         && kind != "through-focus-mtf"
         && kind != "field-mtf"
         && kind != "through-focus-spot"
+        && kind != "spot-diagram"
     {
         return Err(format!(
-            "unsupported analysis kind '{}': expected opd|psf|mtf|through-focus-mtf|field-mtf|through-focus-spot",
+            "unsupported analysis kind '{}': expected opd|psf|mtf|through-focus-mtf|field-mtf|through-focus-spot|spot-diagram",
             req.kind
         ));
     }
@@ -283,6 +294,7 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
                 mtf_second_tangential: None,
                 mtf_second_sagittal: None,
                 spot_series: None,
+                spot_diagram_series: None,
                 message: format!("Rust OPD compute completed: {}x{}", grid_size, grid_size),
                 summary,
             })
@@ -303,6 +315,7 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
                 mtf_second_tangential: None,
                 mtf_second_sagittal: None,
                 spot_series: None,
+                spot_diagram_series: None,
                 message: format!("Rust PSF compute completed: {}x{}", grid_size, grid_size),
                 summary,
             })
@@ -325,6 +338,7 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
                 mtf_second_tangential: None,
                 mtf_second_sagittal: None,
                 spot_series: None,
+                spot_diagram_series: None,
                 message: format!("Rust MTF compute completed: points={}", mtf_points),
                 summary,
             })
@@ -355,6 +369,7 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
                 mtf_second_tangential: None,
                 mtf_second_sagittal: None,
                 spot_series: None,
+                spot_diagram_series: None,
                 message: "Rust Through-Focus MTF compute completed".to_string(),
                 summary,
             })
@@ -392,6 +407,7 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
                 mtf_second_tangential: Some(mtf_second_tangential),
                 mtf_second_sagittal: Some(mtf_second_sagittal),
                 spot_series: None,
+                spot_diagram_series: None,
                 message: "Rust Field MTF compute completed".to_string(),
                 summary,
             })
@@ -446,7 +462,44 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
                 mtf_second_tangential: None,
                 mtf_second_sagittal: None,
                 spot_series: Some(spot_series),
+                spot_diagram_series: None,
                 message: "Rust Through-Focus Spot compute completed".to_string(),
+                summary,
+            })
+        }
+        "spot-diagram" => {
+            let ray_count = req.ray_count.unwrap_or(501).clamp(9, 20001);
+            let ring_count = req.ring_count.unwrap_or(10).clamp(1, 32);
+            let pattern = req.pattern.unwrap_or_else(|| "annular".to_string());
+            let surface_index = req.surface_index.unwrap_or(0);
+            let spot_diagram_series = build_spot_diagram(ray_count as usize, ring_count as usize, &pattern, &metrics);
+            let summary = merge_summary(
+                summary,
+                json!({
+                    "surfaceIndex": surface_index,
+                    "rayCount": ray_count,
+                    "ringCount": ring_count,
+                    "pattern": pattern,
+                    "seriesCount": spot_diagram_series.len()
+                }),
+            );
+
+            Ok(RunAnalysisComputeResponse {
+                kind,
+                grid_size,
+                opd_grid: None,
+                psf_grid: None,
+                frequency_axis: None,
+                x_axis: None,
+                mtf_tangential: None,
+                mtf_sagittal: None,
+                mtf_first_tangential: None,
+                mtf_first_sagittal: None,
+                mtf_second_tangential: None,
+                mtf_second_sagittal: None,
+                spot_series: None,
+                spot_diagram_series: Some(spot_diagram_series),
+                message: "Rust Spot Diagram compute completed".to_string(),
                 summary,
             })
         }
@@ -785,6 +838,70 @@ fn build_through_focus_spot(
                 points,
             });
         }
+    }
+
+    out
+}
+
+fn build_spot_diagram(
+    ray_count: usize,
+    ring_count: usize,
+    pattern: &str,
+    metrics: &AnalysisMetrics,
+) -> Vec<SpotDiagramSeries> {
+    let rays = ray_count.clamp(9, 2201);
+    let spot_scale = (8.0 + metrics.aberration_scale * 32.0).clamp(4.0, 80.0);
+    let wavelengths = vec![
+        ("Blue", "#2563eb", 0.90_f64),
+        ("Green", "#16a34a", 1.0_f64),
+        ("Red", "#dc2626", 1.12_f64),
+    ];
+
+    let mut out = Vec::<SpotDiagramSeries>::new();
+    for (label, color, chroma) in wavelengths {
+        let mut points = Vec::<SpotPoint>::with_capacity(rays);
+        let sigma = spot_scale * chroma;
+        if pattern.eq_ignore_ascii_case("grid") {
+            let side = (rays as f64).sqrt().round().max(3.0) as usize;
+            for iy in 0..side {
+                for ix in 0..side {
+                    if points.len() >= rays {
+                        break;
+                    }
+                    let x = if side > 1 {
+                        (ix as f64 / (side - 1) as f64) * 2.0 - 1.0
+                    } else {
+                        0.0
+                    };
+                    let y = if side > 1 {
+                        (iy as f64 / (side - 1) as f64) * 2.0 - 1.0
+                    } else {
+                        0.0
+                    };
+                    points.push(SpotPoint {
+                        x_um: x * sigma,
+                        y_um: y * sigma,
+                    });
+                }
+            }
+        } else {
+            for i in 0..rays {
+                let t = i as f64 / (rays as f64);
+                let ring = 1 + ((i * ring_count.max(1)) / rays.max(1));
+                let rho = ((ring as f64) / (ring_count.max(1) as f64)).sqrt();
+                let theta = t * std::f64::consts::TAU * (1.0 + rho * 2.0);
+                points.push(SpotPoint {
+                    x_um: rho * sigma * theta.cos(),
+                    y_um: rho * sigma * theta.sin(),
+                });
+            }
+        }
+
+        out.push(SpotDiagramSeries {
+            label: label.to_string(),
+            color: color.to_string(),
+            points,
+        });
     }
 
     out
