@@ -6955,13 +6955,81 @@ export function setupAnalysisWindows() {
             if (openerRing && ringEl) openerRing.value = ringEl.value;
 
             const opener = window.opener;
-            if (!opener || typeof opener.showThroughFocusSpotDiagram !== 'function') {
-                if (containerEl) containerEl.textContent = 'showThroughFocusSpotDiagram is not available in the main window.';
+            if (!opener) {
+                if (containerEl) containerEl.textContent = 'Main window is not available.';
                 return;
             }
 
             try {
                 setProgress(0, 'Starting...');
+
+                const canUseDesktopRust = !!(
+                    opener.__TAURI_INTERNALS__
+                    && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
+                );
+
+                if (canUseDesktopRust) {
+                    setProgress(25, 'Computing Through-Focus Spot (Rust)...');
+                    const result = await opener.runDesktopAnalysisComputeForPopup({
+                        kind: 'through-focus-spot',
+                        surfaceIndex: surfEl && surfEl.value !== '' ? parseInt(surfEl.value, 10) : undefined,
+                        rayCount: rayEl && rayEl.value !== '' ? parseInt(rayEl.value, 10) : undefined,
+                        ringCount: ringEl && ringEl.value !== '' ? parseInt(ringEl.value, 10) : undefined,
+                        defocusMinMm: minDefocusEl ? Number(minDefocusEl.value) : undefined,
+                        defocusMaxMm: maxDefocusEl ? Number(maxDefocusEl.value) : undefined,
+                        steps: stepsEl ? parseInt(stepsEl.value, 10) : undefined,
+                        scaleUm: scaleEl ? Number(scaleEl.value) : undefined,
+                        wavelengthMode: wlModeEl ? String(wlModeEl.value || 'all') : 'all',
+                        pattern: patternEl ? String(patternEl.value || 'annular') : 'annular',
+                    });
+
+                    const spotSeries = Array.isArray(result?.spotSeries) ? result.spotSeries : [];
+                    if (!spotSeries.length) {
+                        throw new Error('Rust Through-Focus Spot result is empty');
+                    }
+                    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
+                        throw new Error('Plotly is not available in Through-Focus Spot popup');
+                    }
+
+                    const traces = [];
+                    for (const series of spotSeries) {
+                        const pts = Array.isArray(series?.points) ? series.points : [];
+                        const x = pts.map((p) => Number(p?.xUm) || 0);
+                        const y = pts.map((p) => Number(p?.yUm) || 0);
+                        traces.push({
+                            x,
+                            y,
+                            type: 'scattergl',
+                            mode: 'markers',
+                            name: String(series?.wavelengthLabel || 'WL') + ' @ ' + (Number(series?.defocusMm) || 0).toFixed(3) + ' mm',
+                            marker: {
+                                size: 3,
+                                color: String(series?.color || '#2563eb'),
+                                opacity: 0.55,
+                            },
+                            hovertemplate: 'x=%{x:.2f}µm<br>y=%{y:.2f}µm<extra></extra>',
+                        });
+                    }
+
+                    setProgress(88, 'Rendering Through-Focus Spot...');
+                    await window.Plotly.newPlot(containerEl, traces, {
+                        title: { text: 'Through-Focus Spot Diagram', x: 0.5, xanchor: 'center' },
+                        margin: { l: 50, r: 20, t: 50, b: 45 },
+                        xaxis: { title: 'X (µm)', zeroline: true },
+                        yaxis: { title: 'Y (µm)', zeroline: true, scaleanchor: 'x', scaleratio: 1 },
+                        showlegend: true,
+                        paper_bgcolor: '#ffffff',
+                        plot_bgcolor: '#ffffff',
+                    }, { responsive: true, displaylogo: false });
+                    setProgress(100, 'Done (Rust)');
+                    return;
+                }
+
+                if (typeof opener.showThroughFocusSpotDiagram !== 'function') {
+                    if (containerEl) containerEl.textContent = 'showThroughFocusSpotDiagram is not available in the main window.';
+                    return;
+                }
+
                 await opener.showThroughFocusSpotDiagram({
                     surfaceIndex: surfEl && surfEl.value !== '' ? parseInt(surfEl.value, 10) : undefined,
                     rayCount: rayEl && rayEl.value !== '' ? parseInt(rayEl.value, 10) : undefined,
