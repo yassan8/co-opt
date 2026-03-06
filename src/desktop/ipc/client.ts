@@ -8,6 +8,8 @@ import type {
 import type {
   AiChatRequest,
   AiChatResponse,
+  GenerateZmxTextRequest,
+  GenerateZmxTextResponse,
   ReadTextFileRequest,
   ReadTextFileResponse,
   WriteTextFileRequest,
@@ -38,6 +40,10 @@ export async function writeTextFile(payload: WriteTextFileRequest): Promise<Writ
 
 export async function aiChat(payload: AiChatRequest): Promise<AiChatResponse> {
   return invoke<AiChatResponse>("ai_chat_stub", { req: payload });
+}
+
+export async function generateZmxText(payload: GenerateZmxTextRequest): Promise<GenerateZmxTextResponse> {
+  return invoke<GenerateZmxTextResponse>("generate_zmx_text", { req: payload });
 }
 
 export async function getNewProjectTemplate(): Promise<NewProjectTemplateResponse> {

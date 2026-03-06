@@ -28,3 +28,15 @@ export interface AiChatResponse {
   model: string;
   answer: string;
 }
+
+export interface GenerateZmxTextRequest {
+  opticalSystemRows: unknown[];
+  sourceRows?: unknown[];
+  objectRows?: unknown[];
+  title?: string;
+  units?: string;
+}
+
+export interface GenerateZmxTextResponse {
+  zmxText: string;
+}
