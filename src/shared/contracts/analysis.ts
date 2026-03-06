@@ -16,3 +16,20 @@ export interface RecommendWavefrontGridForTimeRequest {
   targetTimeMs: number;
   fieldAngleDeg?: number;
 }
+
+export type AnalysisKind = "opd" | "psf" | "mtf";
+
+export interface RunAnalysisPreviewRequest {
+  kind: AnalysisKind;
+  opticalSystemRows: unknown[];
+  sourceRows?: unknown[];
+  objectRows?: unknown[];
+}
+
+export interface RunAnalysisPreviewResponse {
+  kind: AnalysisKind;
+  sampleCount: number;
+  score: number;
+  message: string;
+  summary: Record<string, number | string | boolean>;
+}

@@ -26,6 +26,8 @@ import type {
   OptimizeStepResponse,
 } from "../../shared/contracts/optimizer";
 import type {
+  RunAnalysisPreviewRequest,
+  RunAnalysisPreviewResponse,
   GridRecommendation,
   RecommendWavefrontGridForTimeRequest,
   RecommendWavefrontGridRequest,
@@ -75,6 +77,12 @@ export async function recommendWavefrontGridForTime(
   payload: RecommendWavefrontGridForTimeRequest,
 ): Promise<GridRecommendation> {
   return invoke<GridRecommendation>("recommend_wavefront_grid_for_time", { req: payload });
+}
+
+export async function runAnalysisPreview(
+  payload: RunAnalysisPreviewRequest,
+): Promise<RunAnalysisPreviewResponse> {
+  return invoke<RunAnalysisPreviewResponse>("run_analysis_preview", { req: payload });
 }
 
 export async function getNewProjectTemplate(): Promise<NewProjectTemplateResponse> {
