@@ -10,7 +10,7 @@ import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
 import { generateZmxText, getDefaultProject, getNewProjectTemplate } from '../src/desktop/ipc/client.ts';
-import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText, recommendWavefrontGrid, runOptimizerStep } from '../src/desktop/ipc/client.ts';
+import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText, recommendWavefrontGrid, runAnalysisPreview, runOptimizerStep } from '../src/desktop/ipc/client.ts';
 
 declare global {
   interface Window {
@@ -1098,6 +1098,29 @@ export function handleAnalysisSelect(selectedValue: string): void {
           (window as any).__cooptRustAnalysisRecommendation = rec;
         } catch (_) {}
         console.log('✅ [Analysis][Rust] grid recommendation:', rec);
+
+        if (value === 'opd' || value === 'psf' || value === 'mtf') {
+          const opticalSystemRows = (window as any).getOpticalSystemRows
+            ? (window as any).getOpticalSystemRows((window as any).tableOpticalSystem)
+            : [];
+          const sourceRows = (window as any).tableSource && typeof (window as any).tableSource.getData === 'function'
+            ? (window as any).tableSource.getData()
+            : [];
+          const objectRows = (window as any).tableObject && typeof (window as any).tableObject.getData === 'function'
+            ? (window as any).tableObject.getData()
+            : [];
+
+          const preview = await runAnalysisPreview({
+            kind: value as 'opd' | 'psf' | 'mtf',
+            opticalSystemRows,
+            sourceRows,
+            objectRows,
+          });
+          try {
+            (window as any).__cooptRustAnalysisPreview = preview;
+          } catch (_) {}
+          console.log('✅ [Analysis][Rust] preview:', preview);
+        }
       } catch (err) {
         console.error('❌ [Analysis][Rust] recommendation failed:', err);
       }

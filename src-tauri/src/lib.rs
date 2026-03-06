@@ -8,6 +8,7 @@ pub fn run() {
             commands::optimizer::run_optimizer_step,
             commands::analysis::recommend_wavefront_grid,
             commands::analysis::recommend_wavefront_grid_for_time,
+            commands::analysis::run_analysis_preview,
             commands::io::read_text_file,
             commands::io::write_text_file,
             commands::ai::ai_chat_stub,
