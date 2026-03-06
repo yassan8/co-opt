@@ -12,6 +12,8 @@ import {
     saveSystemConfigurations as saveSystemConfigurationsFromTableConfig
 } from '../data/table-configuration.ts';
 import { tryLoadPersistedTableData as tryLoadPersistedOpticalSystemTableData } from '../data/table-optical-system.ts';
+import { aiChat } from '../src/desktop/ipc/client.ts';
+import { isTauriRuntime } from '../src/desktop/runtime.ts';
 
 const AI_CONFIG_KEY = 'ai_assistant_config';
 const AI_HISTORY_KEY = 'ai_assistant_history';
@@ -773,7 +775,16 @@ function attachEventListeners() {
     if (settingsOpenBtn && modal) settingsOpenBtn.onclick = () => {
         // Populate fields
         if (providerSelect) providerSelect.value = aiConfig.provider;
-        if (apiKeyInput) apiKeyInput.value = aiConfig.apiKey;
+        if (apiKeyInput) {
+            if (isTauriRuntime()) {
+                apiKeyInput.value = '';
+                apiKeyInput.disabled = true;
+                apiKeyInput.placeholder = 'Desktop mode: API key is managed by Rust backend env vars';
+            } else {
+                apiKeyInput.disabled = false;
+                apiKeyInput.value = aiConfig.apiKey;
+            }
+        }
         modal.style.display = 'block';
 
         refreshModelOptionsForProvider({
@@ -798,7 +809,7 @@ function attachEventListeners() {
         const selVal = modelSelect?.value ?? '';
         const modelVal = (selVal === '__custom__') ? (modelCustom?.value ?? '') : selVal;
         aiConfig.model = String(modelVal || '').trim();
-        aiConfig.apiKey = apiKeyInput?.value ?? '';
+        aiConfig.apiKey = isTauriRuntime() ? '' : (apiKeyInput?.value ?? '');
         saveConfig();
         modal.style.display = 'none';
         alert('AI Settings Saved!');
@@ -917,6 +928,23 @@ function attachEventListeners() {
 
         // Call API
             console.log('Sending to AI:', { provider: aiConfig.provider, model: aiConfig.model || '(auto)', userText: text });
+
+            if (isTauriRuntime()) {
+                try {
+                    const response = await aiChat({
+                        provider: aiConfig.provider,
+                        model: aiConfig.model || 'auto',
+                        userMessage: text
+                    });
+                    updateMessage(thinkingMsgId, { content: response?.answer || '(no response)' });
+                } catch (desktopErr) {
+                    const msg = (desktopErr && typeof desktopErr === 'object' && 'message' in desktopErr)
+                        ? String((desktopErr as any).message)
+                        : String(desktopErr);
+                    updateMessage(thinkingMsgId, { content: `❌ Desktop AI command failed: ${msg}` });
+                }
+                return;
+            }
         
             if (!aiConfig.apiKey) {
                 updateMessage(thinkingMsgId, { content: '⚠️ Please configure your API Key in settings (⚙️).' });
