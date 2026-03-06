@@ -17,7 +17,7 @@ export interface RecommendWavefrontGridForTimeRequest {
   fieldAngleDeg?: number;
 }
 
-export type AnalysisKind = "opd" | "psf" | "mtf";
+export type AnalysisKind = "opd" | "psf" | "mtf" | "through-focus-mtf" | "field-mtf";
 
 export interface RunAnalysisPreviewRequest {
   kind: AnalysisKind;
@@ -41,6 +41,15 @@ export interface RunAnalysisComputeRequest {
   objectRows?: unknown[];
   gridSize?: number;
   maxFrequencyLpmm?: number;
+  targetFrequencyLpmm?: number;
+  defocusMinMm?: number;
+  defocusMaxMm?: number;
+  fieldMin?: number;
+  fieldMax?: number;
+  steps?: number;
+  firstFrequencyLpmm?: number;
+  secondFrequencyLpmm?: number;
+  fieldAxisMode?: "angle" | "height";
 }
 
 export interface RunAnalysisComputeResponse {
@@ -49,8 +58,13 @@ export interface RunAnalysisComputeResponse {
   opdGrid?: number[][];
   psfGrid?: number[][];
   frequencyAxis?: number[];
+  xAxis?: number[];
   mtfTangential?: number[];
   mtfSagittal?: number[];
+  mtfFirstTangential?: number[];
+  mtfFirstSagittal?: number[];
+  mtfSecondTangential?: number[];
+  mtfSecondSagittal?: number[];
   message: string;
   summary: Record<string, number | string | boolean>;
 }

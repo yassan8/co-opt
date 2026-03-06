@@ -7325,14 +7325,77 @@ export function setupAnalysisWindows() {
 
             try {
                 const opener = getOpener();
-                if (!opener || typeof opener.showThroughFocusMTFDiagram !== 'function') {
-                    throw new Error('showThroughFocusMTFDiagram is not available on opener');
+                if (!opener) {
+                    throw new Error('Opener is not available');
                 }
                 setProgress(0, 'Starting...');
                 await new Promise(r => setTimeout(r, 0));
                 if (wavelength !== 'all' && !Number.isFinite(wavelength) && !(Number.isFinite(primary) && primary > 0)) {
                     throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                 }
+
+                const canUseDesktopRust = !!(
+                    opener.__TAURI_INTERNALS__
+                    && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
+                );
+
+                if (canUseDesktopRust) {
+                    setProgress(25, 'Computing Through-Focus MTF (Rust)...');
+                    const result = await opener.runDesktopAnalysisComputeForPopup({
+                        kind: 'through-focus-mtf',
+                        gridSize: Number.isFinite(sampling) ? sampling : 256,
+                        targetFrequencyLpmm: Number.isFinite(targetFrequencyLpmm) ? targetFrequencyLpmm : 10,
+                        defocusMinMm: Number.isFinite(defocusMinMm) ? defocusMinMm : -0.1,
+                        defocusMaxMm: Number.isFinite(defocusMaxMm) ? defocusMaxMm : 0.1,
+                        steps: Number.isFinite(steps) ? steps : 21,
+                    });
+
+                    const x = Array.isArray(result?.xAxis) ? result.xAxis : [];
+                    const tangential = Array.isArray(result?.mtfTangential) ? result.mtfTangential : [];
+                    const sagittal = Array.isArray(result?.mtfSagittal) ? result.mtfSagittal : [];
+                    if (!x.length || !tangential.length || !sagittal.length) {
+                        throw new Error('Rust Through-Focus MTF result is invalid');
+                    }
+                    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
+                        throw new Error('Plotly is not available in Through-Focus MTF popup');
+                    }
+
+                    setProgress(85, 'Rendering Through-Focus MTF...');
+                    await window.Plotly.newPlot(containerEl, [
+                        {
+                            x,
+                            y: tangential,
+                            type: 'scatter',
+                            mode: 'lines+markers',
+                            name: 'Tangential',
+                            line: { color: '#2563eb', width: 2 },
+                            marker: { size: 4 },
+                        },
+                        {
+                            x,
+                            y: sagittal,
+                            type: 'scatter',
+                            mode: 'lines+markers',
+                            name: 'Sagittal',
+                            line: { color: '#dc2626', width: 2 },
+                            marker: { size: 4 },
+                        },
+                    ], {
+                        margin: { l: 55, r: 20, t: 30, b: 45 },
+                        xaxis: { title: 'Defocus (mm)' },
+                        yaxis: { title: 'MTF', range: [0, 1.05] },
+                        showlegend: true,
+                    }, { responsive: true });
+
+                    setProgress(100, 'Done (Rust)');
+                    hideProgress();
+                    return;
+                }
+
+                if (typeof opener.showThroughFocusMTFDiagram !== 'function') {
+                    throw new Error('showThroughFocusMTFDiagram is not available on opener');
+                }
+
                 await opener.showThroughFocusMTFDiagram({
                     wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : primary),
                     objectIndex: Number.isFinite(objectIndex) ? objectIndex : 0,
@@ -7730,14 +7793,99 @@ export function setupAnalysisWindows() {
 
             try {
                 const opener = getOpener();
-                if (!opener || typeof opener.showFieldMTFDiagram !== 'function') {
-                    throw new Error('showFieldMTFDiagram is not available on opener');
+                if (!opener) {
+                    throw new Error('Opener is not available');
                 }
                 setProgress(0, 'Starting...');
                 await new Promise(r => setTimeout(r, 0));
                 if (wavelength !== 'all' && !Number.isFinite(wavelength) && !(Number.isFinite(primary) && primary > 0)) {
                     throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                 }
+
+                const canUseDesktopRust = !!(
+                    opener.__TAURI_INTERNALS__
+                    && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
+                );
+
+                if (canUseDesktopRust) {
+                    setProgress(25, 'Computing Object MTF (Rust)...');
+                    const result = await opener.runDesktopAnalysisComputeForPopup({
+                        kind: 'field-mtf',
+                        gridSize: Number.isFinite(sampling) ? sampling : 256,
+                        fieldMin: Number.isFinite(fieldMin) ? fieldMin : 0,
+                        fieldMax: Number.isFinite(fieldMax) ? fieldMax : 10,
+                        steps: Number.isFinite(steps) ? steps : 21,
+                        firstFrequencyLpmm: Number.isFinite(meridionalFreq) ? meridionalFreq : 10,
+                        secondFrequencyLpmm: Number.isFinite(sagittalFreq) ? sagittalFreq : 30,
+                        fieldAxisMode: axisInfo.mode,
+                    });
+
+                    const x = Array.isArray(result?.xAxis) ? result.xAxis : [];
+                    const firstTangential = Array.isArray(result?.mtfFirstTangential) ? result.mtfFirstTangential : [];
+                    const firstSagittal = Array.isArray(result?.mtfFirstSagittal) ? result.mtfFirstSagittal : [];
+                    const secondTangential = Array.isArray(result?.mtfSecondTangential) ? result.mtfSecondTangential : [];
+                    const secondSagittal = Array.isArray(result?.mtfSecondSagittal) ? result.mtfSecondSagittal : [];
+                    if (!x.length || !firstTangential.length || !firstSagittal.length || !secondTangential.length || !secondSagittal.length) {
+                        throw new Error('Rust Field MTF result is invalid');
+                    }
+                    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
+                        throw new Error('Plotly is not available in Object MTF popup');
+                    }
+
+                    setProgress(85, 'Rendering Object MTF...');
+                    await window.Plotly.newPlot(containerEl, [
+                        {
+                            x,
+                            y: firstTangential,
+                            type: 'scatter',
+                            mode: 'lines+markers',
+                            name: 'M @ ' + (Number.isFinite(meridionalFreq) ? meridionalFreq : 10) + ' lp/mm',
+                            line: { color: '#2563eb', width: 2 },
+                            marker: { size: 4 },
+                        },
+                        {
+                            x,
+                            y: firstSagittal,
+                            type: 'scatter',
+                            mode: 'lines+markers',
+                            name: 'S @ ' + (Number.isFinite(meridionalFreq) ? meridionalFreq : 10) + ' lp/mm',
+                            line: { color: '#60a5fa', width: 2, dash: 'dot' },
+                            marker: { size: 4 },
+                        },
+                        {
+                            x,
+                            y: secondTangential,
+                            type: 'scatter',
+                            mode: 'lines+markers',
+                            name: 'M @ ' + (Number.isFinite(sagittalFreq) ? sagittalFreq : 30) + ' lp/mm',
+                            line: { color: '#dc2626', width: 2 },
+                            marker: { size: 4 },
+                        },
+                        {
+                            x,
+                            y: secondSagittal,
+                            type: 'scatter',
+                            mode: 'lines+markers',
+                            name: 'S @ ' + (Number.isFinite(sagittalFreq) ? sagittalFreq : 30) + ' lp/mm',
+                            line: { color: '#f87171', width: 2, dash: 'dot' },
+                            marker: { size: 4 },
+                        },
+                    ], {
+                        margin: { l: 55, r: 20, t: 30, b: 45 },
+                        xaxis: { title: axisInfo.label },
+                        yaxis: { title: 'MTF', range: [0, 1.05] },
+                        showlegend: true,
+                    }, { responsive: true });
+
+                    setProgress(100, 'Done (Rust)');
+                    hideProgress();
+                    return;
+                }
+
+                if (typeof opener.showFieldMTFDiagram !== 'function') {
+                    throw new Error('showFieldMTFDiagram is not available on opener');
+                }
+
                 const requestPayload = {
                     wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : primary),
                     firstFrequencyLpmm: Number.isFinite(meridionalFreq) ? meridionalFreq : 10,
