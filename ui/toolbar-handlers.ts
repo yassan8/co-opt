@@ -10,7 +10,7 @@ import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
 import { generateZmxText, getDefaultProject, getNewProjectTemplate } from '../src/desktop/ipc/client.ts';
-import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText, runOptimizerStep } from '../src/desktop/ipc/client.ts';
+import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText, recommendWavefrontGrid, runOptimizerStep } from '../src/desktop/ipc/client.ts';
 
 declare global {
   interface Window {
@@ -1083,6 +1083,26 @@ export function handleSystemData(): void {
 export function handleAnalysisSelect(selectedValue: string): void {
   const value = String(selectedValue || '').trim();
   if (!value) return;
+
+  if (isTauriRuntime()) {
+    (async () => {
+      try {
+        const purpose = (value === 'opd' || value === 'psf' || value === 'mtf')
+          ? 'high-quality'
+          : 'interactive';
+        const rec = await recommendWavefrontGrid({
+          purpose,
+          fieldAngleDeg: 0,
+        });
+        try {
+          (window as any).__cooptRustAnalysisRecommendation = rec;
+        } catch (_) {}
+        console.log('✅ [Analysis][Rust] grid recommendation:', rec);
+      } catch (err) {
+        console.error('❌ [Analysis][Rust] recommendation failed:', err);
+      }
+    })();
+  }
 
   const analysisButtonMap: Record<string, string> = {
     'spot-diagram': 'open-spot-diagram-window-btn',

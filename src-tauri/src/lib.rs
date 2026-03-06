@@ -6,6 +6,8 @@ pub fn run() {
             commands::optics::optics_echo,
             commands::optics::run_raytrace_preview,
             commands::optimizer::run_optimizer_step,
+            commands::analysis::recommend_wavefront_grid,
+            commands::analysis::recommend_wavefront_grid_for_time,
             commands::io::read_text_file,
             commands::io::write_text_file,
             commands::ai::ai_chat_stub,
