@@ -7,7 +7,7 @@ import { BLOCK_SCHEMA_VERSION, deriveBlocksFromLegacyOpticalSystemRows } from '.
 import { loadSystemConfigurations, saveSystemConfigurations, clearAllPersistedState } from '../data/table-configuration.ts';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.ts';
 import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
-import { openJsonFromNativeDialog, saveJsonFromNativeDialog } from '../src/desktop/adapters/file.ts';
+import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
 import { getDefaultProject, getNewProjectTemplate } from '../src/desktop/ipc/client.ts';
 
@@ -517,6 +517,170 @@ function __coopt_normalizeObjectDistanceInBlocks(blocks: any[]): any[] {
 }
 
 export function handleImportZemax(): void {
+  if (isTauriRuntime()) {
+    (async () => {
+      try {
+        const picked = await openTextFromNativeDialog({
+          filters: [{ name: 'Zemax', extensions: ['zmx'] }],
+        });
+        if (!picked) return;
+
+        const encoded = new TextEncoder().encode(picked.content);
+        const arrayBuffer = encoded.buffer.slice(
+          encoded.byteOffset,
+          encoded.byteOffset + encoded.byteLength,
+        ) as ArrayBuffer;
+
+        const syntheticFile = { name: basenameFromPath(picked.path), size: encoded.byteLength } as const;
+        console.log('📥 [Zemax Import] Selected file:', syntheticFile.name, `(${syntheticFile.size} bytes)`);
+
+        const now = new Date().toISOString();
+        const parsed: any = parseZMXArrayBufferToOpticalSystemRows(arrayBuffer);
+
+        if (!parsed || typeof parsed !== 'object') {
+          throw new Error('Invalid Zemax parse result.');
+        }
+
+        console.log('📥 [Zemax Import] Parsed:', {
+          rows: Array.isArray(parsed?.rows) ? parsed.rows.length : 0,
+          sourceRows: Array.isArray(parsed?.sourceRows) ? parsed.sourceRows.length : 0,
+          objectRows: Array.isArray(parsed?.objectRows) ? parsed.objectRows.length : 0,
+          issues: Array.isArray(parsed?.issues) ? parsed.issues.length : 0
+        });
+
+        const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+        const sourceRows = Array.isArray(parsed?.sourceRows) ? parsed.sourceRows : [];
+        const objectRows = Array.isArray(parsed?.objectRows) ? parsed.objectRows : [];
+        const parsedStopIndex = rows.findIndex((r: any) => {
+          const ot = String(r?.['object type'] ?? r?.object ?? '').trim().toLowerCase();
+          return ot === 'stop';
+        });
+        const stopSemidiaWasMissing = (() => {
+          if (parsedStopIndex < 0) return false;
+          const stopRow = rows[parsedStopIndex] || {};
+          const raw = stopRow?.semidia ?? stopRow?.semiDiameter ?? stopRow?.semiDia ?? stopRow?.['semi diameter'] ?? stopRow?.['Semi Diameter'];
+          if (raw === null || raw === undefined) return true;
+          const s = String(raw).trim();
+          if (s === '') return true;
+          const n = Number(s);
+          return !(Number.isFinite(n) && n > 0);
+        })();
+
+        let blocks: any[] = [];
+        try {
+          const derived = deriveBlocksFromLegacyOpticalSystemRows(rows);
+          const fatals = Array.isArray(derived?.issues)
+            ? derived.issues.filter((it: any) => it?.severity === 'fatal')
+            : [];
+          if (Array.isArray(derived?.blocks) && derived.blocks.length > 0 && fatals.length === 0) {
+            blocks = __coopt_normalizeObjectDistanceInBlocks(derived.blocks);
+          } else {
+            blocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(rows));
+            if (fatals.length > 0) {
+              console.warn('⚠️ [Zemax Import] deriveBlocks had fatals; fallback blocks generated:', fatals);
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ [Zemax Import] deriveBlocks failed; fallback blocks generated:', e);
+          blocks = __coopt_normalizeObjectDistanceInBlocks(__coopt_buildFallbackBlocksFromRows(rows));
+        }
+
+        const payload = {
+          configurations: [{
+            id: 1,
+            name: 'Config 1',
+            schemaVersion: BLOCK_SCHEMA_VERSION,
+            blocks,
+            source: sourceRows,
+            object: objectRows,
+            opticalSystem: rows,
+            meritFunction: [],
+            systemData: { referenceFocalLength: '' },
+            metadata: {
+              created: now,
+              modified: now,
+              locked: false,
+              importedFrom: 'zemax'
+            }
+          }],
+          activeConfigId: 1,
+          meritFunction: [],
+          systemRequirements: [],
+          optimizationRules: {}
+        };
+
+        if (typeof (window as any).__loadAllDataObjectIntoApp !== 'function') {
+          throw new Error('App loader is not ready. Please reload and try again.');
+        }
+        const loaded = await (window as any).__loadAllDataObjectIntoApp(payload, { filename: syntheticFile.name });
+        if (!loaded) {
+          throw new Error('Zemax import parsed, but app load step returned false.');
+        }
+
+        try {
+          if (typeof (window as any).autoCalculateMissingSemidia === 'function') {
+            (window as any).autoCalculateMissingSemidia(sourceRows, objectRows, {
+              entrancePupilDiameterMm: Number(parsed?.entrancePupilDiameterMm),
+              stopSemidiaWasMissing
+            });
+          }
+        } catch (_) {}
+
+        try {
+          if (typeof (window as any).calculateImageSemiDiaFromChiefRays === 'function') {
+            const tryAutoImageSemidia = (triesLeft: number) => {
+              setTimeout(() => {
+                try {
+                  Promise.resolve((window as any).calculateImageSemiDiaFromChiefRays())
+                    .then((ok: any) => {
+                      if (ok === true) {
+                        try {
+                          if (typeof (window as any).refreshBlockInspector === 'function') {
+                            (window as any).refreshBlockInspector();
+                          }
+                        } catch (_) {}
+                        try {
+                          if (typeof (window as any).refreshAllUI === 'function') {
+                            (window as any).refreshAllUI();
+                          }
+                        } catch (_) {}
+                        return;
+                      }
+                      if (triesLeft > 0) {
+                        tryAutoImageSemidia(triesLeft - 1);
+                      }
+                    })
+                    .catch(() => {
+                      if (triesLeft > 0) {
+                        tryAutoImageSemidia(triesLeft - 1);
+                      }
+                    });
+                } catch (_) {
+                  if (triesLeft > 0) {
+                    tryAutoImageSemidia(triesLeft - 1);
+                  }
+                }
+              }, 200);
+            };
+            tryAutoImageSemidia(4);
+          }
+        } catch (_) {}
+
+        if (Array.isArray(parsed?.issues)) {
+          const fatal = parsed.issues.filter((it: any) => it?.severity === 'fatal');
+          if (fatal.length > 0) {
+            console.warn('⚠️ Zemax import issues:', fatal);
+          }
+        }
+        console.log('✅ Zemax file imported:', syntheticFile.name);
+      } catch (err) {
+        console.error('❌ Zemax import failed:', err);
+        alert(`Import failed: ${(err as Error)?.message || String(err)}`);
+      }
+    })();
+    return;
+  }
+
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.zmx';
@@ -720,7 +884,20 @@ export function handleExportZemax(): void {
         objectRows
       });
       
-      if (typeof (window as any).downloadZMX === 'function') {
+      if (isTauriRuntime()) {
+        (async () => {
+          try {
+            const savedPath = await saveTextFromNativeDialog(zmxText, {
+              filters: [{ name: 'Zemax', extensions: ['zmx'] }],
+            });
+            if (!savedPath) return;
+            console.log('✅ Zemax file exported successfully:', savedPath);
+          } catch (nativeErr) {
+            console.error('❌ Native Zemax export failed:', nativeErr);
+            alert(`Export failed: ${(nativeErr as Error)?.message || String(nativeErr)}`);
+          }
+        })();
+      } else if (typeof (window as any).downloadZMX === 'function') {
         (window as any).downloadZMX(zmxText, filename);
         console.log('✅ Zemax file exported successfully');
       } else {
