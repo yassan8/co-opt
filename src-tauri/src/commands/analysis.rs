@@ -56,6 +56,15 @@ pub struct RunAnalysisComputeRequest {
     pub object_rows: Vec<Value>,
     pub grid_size: Option<u32>,
     pub max_frequency_lpmm: Option<f64>,
+    pub target_frequency_lpmm: Option<f64>,
+    pub defocus_min_mm: Option<f64>,
+    pub defocus_max_mm: Option<f64>,
+    pub field_min: Option<f64>,
+    pub field_max: Option<f64>,
+    pub steps: Option<u32>,
+    pub first_frequency_lpmm: Option<f64>,
+    pub second_frequency_lpmm: Option<f64>,
+    pub field_axis_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -70,9 +79,19 @@ pub struct RunAnalysisComputeResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frequency_axis: Option<Vec<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub x_axis: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mtf_tangential: Option<Vec<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mtf_sagittal: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtf_first_tangential: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtf_first_sagittal: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtf_second_tangential: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtf_second_sagittal: Option<Vec<f64>>,
     pub message: String,
     pub summary: Value,
 }
@@ -132,8 +151,11 @@ pub fn recommend_wavefront_grid_for_time(
 #[tauri::command]
 pub fn run_analysis_preview(req: RunAnalysisPreviewRequest) -> Result<RunAnalysisPreviewResponse, String> {
     let kind = req.kind.trim().to_lowercase();
-    if kind != "opd" && kind != "psf" && kind != "mtf" {
-        return Err(format!("unsupported analysis kind '{}': expected opd|psf|mtf", req.kind));
+    if kind != "opd" && kind != "psf" && kind != "mtf" && kind != "through-focus-mtf" && kind != "field-mtf" {
+        return Err(format!(
+            "unsupported analysis kind '{}': expected opd|psf|mtf|through-focus-mtf|field-mtf",
+            req.kind
+        ));
     }
     if req.optical_system_rows.is_empty() {
         return Err("analysis preview: opticalSystemRows is empty".to_string());
@@ -223,8 +245,13 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
                 opd_grid: Some(opd_grid),
                 psf_grid: None,
                 frequency_axis: None,
+                x_axis: None,
                 mtf_tangential: None,
                 mtf_sagittal: None,
+                mtf_first_tangential: None,
+                mtf_first_sagittal: None,
+                mtf_second_tangential: None,
+                mtf_second_sagittal: None,
                 message: format!("Rust OPD compute completed: {}x{}", grid_size, grid_size),
                 summary,
             })
@@ -237,8 +264,13 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
                 opd_grid: None,
                 psf_grid: Some(psf_grid),
                 frequency_axis: None,
+                x_axis: None,
                 mtf_tangential: None,
                 mtf_sagittal: None,
+                mtf_first_tangential: None,
+                mtf_first_sagittal: None,
+                mtf_second_tangential: None,
+                mtf_second_sagittal: None,
                 message: format!("Rust PSF compute completed: {}x{}", grid_size, grid_size),
                 summary,
             })
@@ -253,9 +285,79 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
                 opd_grid: None,
                 psf_grid: None,
                 frequency_axis: Some(frequency_axis),
+                x_axis: None,
                 mtf_tangential: Some(mtf_tangential),
                 mtf_sagittal: Some(mtf_sagittal),
+                mtf_first_tangential: None,
+                mtf_first_sagittal: None,
+                mtf_second_tangential: None,
+                mtf_second_sagittal: None,
                 message: format!("Rust MTF compute completed: points={}", mtf_points),
+                summary,
+            })
+        }
+        "through-focus-mtf" => {
+            let target_freq = req.target_frequency_lpmm.unwrap_or(10.0).clamp(1.0, 2000.0);
+            let min_defocus = req.defocus_min_mm.unwrap_or(-0.1);
+            let max_defocus = req.defocus_max_mm.unwrap_or(0.1);
+            let steps = req.steps.unwrap_or(21).clamp(3, 401) as usize;
+            let (x_axis, mtf_tangential, mtf_sagittal) = build_through_focus_mtf(
+                steps,
+                min_defocus,
+                max_defocus,
+                target_freq,
+                &metrics,
+            );
+            Ok(RunAnalysisComputeResponse {
+                kind,
+                grid_size,
+                opd_grid: None,
+                psf_grid: None,
+                frequency_axis: None,
+                x_axis: Some(x_axis),
+                mtf_tangential: Some(mtf_tangential),
+                mtf_sagittal: Some(mtf_sagittal),
+                mtf_first_tangential: None,
+                mtf_first_sagittal: None,
+                mtf_second_tangential: None,
+                mtf_second_sagittal: None,
+                message: "Rust Through-Focus MTF compute completed".to_string(),
+                summary,
+            })
+        }
+        "field-mtf" => {
+            let field_min = req.field_min.unwrap_or(0.0);
+            let field_max = req.field_max.unwrap_or(10.0);
+            let steps = req.steps.unwrap_or(21).clamp(3, 401) as usize;
+            let first_freq = req.first_frequency_lpmm.unwrap_or(10.0).clamp(1.0, 2000.0);
+            let second_freq = req.second_frequency_lpmm.unwrap_or(30.0).clamp(1.0, 2000.0);
+            let axis_mode = req.field_axis_mode.unwrap_or_else(|| "angle".to_string());
+
+            let (x_axis, mtf_first_tangential, mtf_first_sagittal, mtf_second_tangential, mtf_second_sagittal) =
+                build_field_mtf(
+                    steps,
+                    field_min,
+                    field_max,
+                    first_freq,
+                    second_freq,
+                    &metrics,
+                );
+            let summary = merge_summary(summary, json!({ "fieldAxisMode": axis_mode }));
+
+            Ok(RunAnalysisComputeResponse {
+                kind,
+                grid_size,
+                opd_grid: None,
+                psf_grid: None,
+                frequency_axis: None,
+                x_axis: Some(x_axis),
+                mtf_tangential: None,
+                mtf_sagittal: None,
+                mtf_first_tangential: Some(mtf_first_tangential),
+                mtf_first_sagittal: Some(mtf_first_sagittal),
+                mtf_second_tangential: Some(mtf_second_tangential),
+                mtf_second_sagittal: Some(mtf_second_sagittal),
+                message: "Rust Field MTF compute completed".to_string(),
                 summary,
             })
         }
@@ -417,4 +519,98 @@ fn build_mtf_axes(points: usize, max_freq: f64, metrics: &AnalysisMetrics) -> (V
     }
 
     (freq, tangential, sagittal)
+}
+
+fn build_through_focus_mtf(
+    points: usize,
+    min_defocus: f64,
+    max_defocus: f64,
+    target_frequency_lpmm: f64,
+    metrics: &AnalysisMetrics,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let mut x_axis = Vec::with_capacity(points);
+    let mut tangential = Vec::with_capacity(points);
+    let mut sagittal = Vec::with_capacity(points);
+
+    let span = (max_defocus - min_defocus).abs().max(1e-6);
+    let center = (min_defocus + max_defocus) * 0.5;
+    let sigma = (span * (0.14 + metrics.aberration_scale * 0.20)).clamp(span * 0.06, span * 0.35);
+    let freq_penalty = (target_frequency_lpmm / 120.0).clamp(0.0, 4.0);
+    let anisotropy = (0.03 + metrics.aberration_scale * 0.12).clamp(0.02, 0.22);
+
+    for i in 0..points {
+        let x = if points > 1 {
+            min_defocus + (i as f64) * (max_defocus - min_defocus) / ((points - 1) as f64)
+        } else {
+            center
+        };
+        let t = (x - center) / sigma;
+        let base = (-(0.5 + 0.1 * freq_penalty) * t * t).exp();
+        let tan = (base * (1.0 - anisotropy * t.abs())).clamp(0.0, 1.0);
+        let sag = (base * (1.0 + anisotropy * 0.8 * t.abs())).clamp(0.0, 1.0);
+        x_axis.push(x);
+        tangential.push(tan);
+        sagittal.push(sag);
+    }
+    (x_axis, tangential, sagittal)
+}
+
+fn build_field_mtf(
+    points: usize,
+    field_min: f64,
+    field_max: f64,
+    first_frequency_lpmm: f64,
+    second_frequency_lpmm: f64,
+    metrics: &AnalysisMetrics,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let mut x_axis = Vec::with_capacity(points);
+    let mut first_tangential = Vec::with_capacity(points);
+    let mut first_sagittal = Vec::with_capacity(points);
+    let mut second_tangential = Vec::with_capacity(points);
+    let mut second_sagittal = Vec::with_capacity(points);
+
+    let freq1_penalty = (first_frequency_lpmm / 120.0).clamp(0.0, 4.0);
+    let freq2_penalty = (second_frequency_lpmm / 120.0).clamp(0.0, 4.0);
+    let anisotropy = (0.04 + metrics.aberration_scale * 0.10).clamp(0.02, 0.2);
+
+    for i in 0..points {
+        let x = if points > 1 {
+            field_min + (i as f64) * (field_max - field_min) / ((points - 1) as f64)
+        } else {
+            field_min
+        };
+        let normalized_field = if (field_max - field_min).abs() > 1e-9 {
+            ((x - field_min) / (field_max - field_min)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let edge_factor = 1.0 - normalized_field.powf(1.2);
+
+        let base1 = (edge_factor.powf(0.9 + 0.12 * freq1_penalty)).clamp(0.0, 1.0);
+        let base2 = (edge_factor.powf(1.05 + 0.14 * freq2_penalty)).clamp(0.0, 1.0);
+
+        x_axis.push(x);
+        first_tangential.push((base1 * (1.0 - anisotropy * normalized_field)).clamp(0.0, 1.0));
+        first_sagittal.push((base1 * (1.0 + anisotropy * 0.7 * normalized_field)).clamp(0.0, 1.0));
+        second_tangential.push((base2 * (1.0 - anisotropy * 1.1 * normalized_field)).clamp(0.0, 1.0));
+        second_sagittal.push((base2 * (1.0 + anisotropy * 0.9 * normalized_field)).clamp(0.0, 1.0));
+    }
+
+    (
+        x_axis,
+        first_tangential,
+        first_sagittal,
+        second_tangential,
+        second_sagittal,
+    )
+}
+
+fn merge_summary(base: Value, extra: Value) -> Value {
+    let mut merged = base;
+    if let (Some(base_obj), Some(extra_obj)) = (merged.as_object_mut(), extra.as_object()) {
+        for (k, v) in extra_obj {
+            base_obj.insert(k.to_string(), v.clone());
+        }
+    }
+    merged
 }
