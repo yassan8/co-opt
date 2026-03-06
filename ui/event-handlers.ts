@@ -3416,13 +3416,74 @@ export function setupAnalysisWindows() {
             if (openerRing && popupRing) openerRing.value = popupRing.value;
             if (openerSurface && popupSurface) openerSurface.value = popupSurface.value;
 
-            if (!window.opener || typeof window.opener.showSpotDiagram !== 'function') {
-                if (popupContainer) popupContainer.textContent = 'showSpotDiagram is not available in the main window.';
+            const opener = window.opener;
+            if (!opener) {
+                if (popupContainer) popupContainer.textContent = 'Main window is not available.';
                 return;
             }
 
             try {
                 setProgress(0, 'Starting...');
+
+                const canUseDesktopRust = !!(
+                    opener.__TAURI_INTERNALS__
+                    && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
+                );
+
+                if (canUseDesktopRust) {
+                    setProgress(25, 'Computing Spot Diagram (Rust)...');
+                    const result = await opener.runDesktopAnalysisComputeForPopup({
+                        kind: 'spot-diagram',
+                        surfaceIndex: popupSurface && popupSurface.value !== '' ? parseInt(popupSurface.value, 10) : undefined,
+                        rayCount: popupRay && popupRay.value !== '' ? parseInt(popupRay.value, 10) : undefined,
+                        ringCount: popupRing && popupRing.value !== '' ? parseInt(popupRing.value, 10) : undefined,
+                        pattern: popupPattern ? String(popupPattern.value || 'annular') : 'annular',
+                    });
+                    const series = Array.isArray(result?.spotDiagramSeries) ? result.spotDiagramSeries : [];
+                    if (!series.length) {
+                        throw new Error('Rust Spot Diagram result is empty');
+                    }
+                    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
+                        throw new Error('Plotly is not available in Spot Diagram popup');
+                    }
+
+                    const traces = [];
+                    for (const s of series) {
+                        const points = Array.isArray(s?.points) ? s.points : [];
+                        traces.push({
+                            x: points.map((p) => Number(p?.xUm) || 0),
+                            y: points.map((p) => Number(p?.yUm) || 0),
+                            type: 'scattergl',
+                            mode: 'markers',
+                            name: String(s?.label || 'Series'),
+                            marker: {
+                                size: 3,
+                                color: String(s?.color || '#2563eb'),
+                                opacity: 0.6,
+                            },
+                            hovertemplate: 'x=%{x:.2f}µm<br>y=%{y:.2f}µm<extra></extra>',
+                        });
+                    }
+
+                    setProgress(85, 'Rendering Spot Diagram...');
+                    await window.Plotly.newPlot(popupContainer, traces, {
+                        title: { text: 'Spot Diagram', x: 0.5, xanchor: 'center' },
+                        margin: { l: 52, r: 20, t: 48, b: 45 },
+                        xaxis: { title: 'X (µm)', zeroline: true },
+                        yaxis: { title: 'Y (µm)', zeroline: true, scaleanchor: 'x', scaleratio: 1 },
+                        showlegend: true,
+                        paper_bgcolor: '#ffffff',
+                        plot_bgcolor: '#ffffff',
+                    }, { responsive: true, displaylogo: false });
+                    setProgress(100, 'Done (Rust)');
+                    return;
+                }
+
+                if (typeof opener.showSpotDiagram !== 'function') {
+                    if (popupContainer) popupContainer.textContent = 'showSpotDiagram is not available in the main window.';
+                    return;
+                }
+
                 const onProgress = (evt) => {
                     try {
                         const p = Number(evt?.percent);
@@ -3432,7 +3493,7 @@ export function setupAnalysisWindows() {
                     } catch (_) {}
                 };
 
-                await window.opener.showSpotDiagram({
+                await opener.showSpotDiagram({
                     surfaceIndex: popupSurface && popupSurface.value !== '' ? parseInt(popupSurface.value, 10) : undefined,
                     rayCount: popupRay && popupRay.value !== '' ? parseInt(popupRay.value, 10) : undefined,
                     ringCount: popupRing && popupRing.value !== '' ? parseInt(popupRing.value, 10) : undefined,

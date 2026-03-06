@@ -17,7 +17,7 @@ export interface RecommendWavefrontGridForTimeRequest {
   fieldAngleDeg?: number;
 }
 
-export type AnalysisKind = "opd" | "psf" | "mtf" | "through-focus-mtf" | "field-mtf" | "through-focus-spot";
+export type AnalysisKind = "opd" | "psf" | "mtf" | "through-focus-mtf" | "field-mtf" | "through-focus-spot" | "spot-diagram";
 
 export interface SpotPoint {
   xUm: number;
@@ -27,6 +27,12 @@ export interface SpotPoint {
 export interface SpotSeries {
   defocusMm: number;
   wavelengthLabel: string;
+  color: string;
+  points: SpotPoint[];
+}
+
+export interface SpotDiagramSeries {
+  label: string;
   color: string;
   points: SpotPoint[];
 }
@@ -84,6 +90,7 @@ export interface RunAnalysisComputeResponse {
   mtfSecondTangential?: number[];
   mtfSecondSagittal?: number[];
   spotSeries?: SpotSeries[];
+  spotDiagramSeries?: SpotDiagramSeries[];
   message: string;
   summary: Record<string, number | string | boolean>;
 }
