@@ -94,7 +94,18 @@ pub fn optics_echo(req: OpticsEchoRequest) -> Result<OpticsEchoResponse, String>
 
 ## 6. 次の実装ステップ
 
-1. `commands::ai`に実APIクライアント実装（環境変数/OS keychain連携）
+1. `commands::ai`の環境変数運用をOS keychain連携へ拡張
 2. `commands::io`にプロジェクト保存形式（`*.coopt.json`）を追加
 3. 既存UI操作を`desktop/adapters`経由へ置換
 4. 機能単位で計算ロジックをRustへ移行（Web版との数値差分検証付き）
+
+## 7. Desktop AIキー運用（実装済み）
+
+- Desktop実行時のAI送信はRust `ai_chat_stub` コマンド経由。
+- APIキーはフロントから送らず、以下の環境変数のみ参照。
+  - `COOPT_OPENAI_API_KEY`
+  - `COOPT_GEMINI_API_KEY`
+- 例（macOS）:
+  - `export COOPT_OPENAI_API_KEY=...`
+  - `export COOPT_GEMINI_API_KEY=...`
+  - `npm run dev:desktop`

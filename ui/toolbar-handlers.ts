@@ -7,6 +7,8 @@ import { BLOCK_SCHEMA_VERSION, deriveBlocksFromLegacyOpticalSystemRows } from '.
 import { loadSystemConfigurations, saveSystemConfigurations, clearAllPersistedState } from '../data/table-configuration.ts';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.ts';
 import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
+import { openJsonFromNativeDialog, saveJsonFromNativeDialog } from '../src/desktop/adapters/file.ts';
+import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
 
 declare global {
   interface Window {
@@ -167,6 +169,27 @@ export function handleSave(): void {
     if (document.activeElement) (document.activeElement as HTMLElement).blur();
 
     const allData = buildAllDataForExport();
+    const serialized = JSON.stringify(allData, null, 2);
+
+    if (isTauriRuntime()) {
+      (async () => {
+        try {
+          const savedPath = await saveJsonFromNativeDialog(serialized);
+          if (!savedPath) return;
+          const filename = basenameFromPath(savedPath);
+          setLoadedFileName(filename);
+          try {
+            window.dispatchEvent(new CustomEvent('coopt:loaded-file-updated'));
+          } catch (_) {}
+          console.log('✅ データが保存されました:', savedPath);
+        } catch (nativeErr) {
+          console.error('❌ Native save failed:', nativeErr);
+          alert(`Native save failed: ${(nativeErr as Error)?.message || String(nativeErr)}`);
+        }
+      })();
+      return;
+    }
+
     const loadedFileName = getLoadedFileName();
     let defaultName = 'optical_system_data';
     
@@ -183,7 +206,7 @@ export function handleSave(): void {
     if (!filename) return;
     if (!filename.endsWith('.json')) filename += '.json';
 
-    const blob = new Blob([JSON.stringify(allData, null, 2)], { type: 'application/json' });
+    const blob = new Blob([serialized], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -225,6 +248,24 @@ export async function handleLoadDefault(): Promise<void> {
 }
 
 export function handleLoad(): void {
+  if (isTauriRuntime()) {
+    (async () => {
+      try {
+        const picked = await openJsonFromNativeDialog();
+        if (!picked) return;
+        const data = JSON.parse(picked.content);
+        if (typeof (window as any).__loadAllDataObjectIntoApp === 'function') {
+          await (window as any).__loadAllDataObjectIntoApp(data, { filename: basenameFromPath(picked.path) });
+        }
+        console.log('✅ File loaded:', picked.path);
+      } catch (err) {
+        console.error('❌ Failed to load file (native):', err);
+        alert(`Load failed: ${(err as Error)?.message || String(err)}`);
+      }
+    })();
+    return;
+  }
+
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.json';
