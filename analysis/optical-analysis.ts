@@ -985,94 +985,32 @@ export async function showSpotDiagram(options: any = {}): Promise<void> {
             console.log(`🔍 [Surface Resolution] Conjugate: ${conjugateType}, Looking for surfaceId=${surfaceId} in ${opts.length} options`);
             console.log(`🔍 [Surface Options Sample]:`, opts.slice(0, 3).map((o: any) => ({ surfaceId: o.surfaceId, value: o.value, rowIndex: o.rowIndex, label: o.label })));
             
-            /**
-             * Resolve surface for FINITE conjugate systems.
-             * Strategy: Ensure Image surface selection is preserved across configs.
-             * Detect if surfaceId accidentally matches Image-1 due to CB number differences.
-             */
-            const resolveSurfaceForFiniteConjugate = (): number | null => {
-                // First, identify if Image surface exists in current config
+            const resolveSurfaceRowIndex = (): number | null => {
                 const imageOpt = opts.find((o: any) => typeof o?.label === 'string' && o.label.includes('(Image)'));
-                
-                console.log(`🔍 [Finite] Image surface found:`, imageOpt ? `surfaceId=${imageOpt.surfaceId}, rowIndex=${imageOpt.rowIndex}, label="${imageOpt.label}"` : 'NOT FOUND');
-                
-                // Strategy 1: Check if surfaceId matches Image surface's ID
-                if (imageOpt && Number(imageOpt.surfaceId) === Number(surfaceId)) {
-                    console.log(`✅ [Finite] surfaceId=${surfaceId} is Image surface at rowIndex=${imageOpt.rowIndex}`);
-                    return imageOpt.rowIndex;
-                }
-                
-                // Strategy 2: Direct surfaceId match (for non-Image surfaces)
                 const match = opts.find((o: any) => Number(o?.surfaceId) === Number(surfaceId));
+
+                // Always honor explicit Surf selection first.
                 if (match && Number.isInteger(match.rowIndex)) {
-                    console.log(`🔍 [Finite] Found match: surfaceId=${surfaceId} → rowIndex=${match.rowIndex}, label="${match.label}"`);
-                    
-                    // Verify this isn't accidentally matching wrong surface due to CB differences
-                    const isImageSurface = typeof match.label === 'string' && match.label.includes('(Image)');
-                    if (!isImageSurface && imageOpt) {
-                        const distance = Math.abs(match.rowIndex - imageOpt.rowIndex);
-                        console.log(`🔍 [Finite] Distance from Image: ${distance} (match.rowIndex=${match.rowIndex}, imageOpt.rowIndex=${imageOpt.rowIndex})`);
-                        
-                        if (distance <= 1) {
-                            // Matched surface is very close to Image surface, likely config mismatch
-                            console.warn(`⚠️ [Finite] surfaceId=${surfaceId} matched rowIndex=${match.rowIndex} (${match.label}) is adjacent to Image at ${imageOpt.rowIndex}, using Image instead`);
-                            return imageOpt.rowIndex;
-                        }
-                    }
-                    console.log(`✅ [Finite] Matched surfaceId=${surfaceId} → rowIndex=${match.rowIndex} (${match.label})`);
+                    console.log(`✅ [Surface Resolution] Matched surfaceId=${surfaceId} → rowIndex=${match.rowIndex} (${match.label})`);
                     return match.rowIndex;
                 }
-                
-                console.warn(`⚠️ [Finite] surfaceId=${surfaceId} not found in current config`);
-                
-                // Strategy 3: Default to Image surface (most common expectation)
+
+                console.warn(`⚠️ [Surface Resolution] surfaceId=${surfaceId} not found in current config; fallback to Image/last`);
+
                 if (imageOpt && Number.isInteger(imageOpt.rowIndex)) {
-                    console.warn(`⚠️ [Finite] Using Image surface at rowIndex=${imageOpt.rowIndex}`);
+                    console.warn(`⚠️ [Surface Resolution] Using Image surface at rowIndex=${imageOpt.rowIndex}`);
                     return imageOpt.rowIndex;
                 }
-                
-                // Strategy 4: Fallback to last surface
+
                 if (opts.length > 0 && Number.isInteger(opts[opts.length - 1].rowIndex)) {
-                    console.warn(`⚠️ [Finite] Using last surface at rowIndex=${opts[opts.length - 1].rowIndex}`);
+                    console.warn(`⚠️ [Surface Resolution] Using last surface at rowIndex=${opts[opts.length - 1].rowIndex}`);
                     return opts[opts.length - 1].rowIndex;
                 }
-                
+
                 return null;
             };
-            
-            /**
-             * Resolve surface for INFINITE conjugate systems.
-             * Strategy: ALWAYS prioritize Image surface for infinite systems.
-             * Infinite systems typically focus at the image plane regardless of surfaceId.
-             */
-            const resolveSurfaceForInfiniteConjugate = (): number | null => {
-                // Strategy 1: For infinite systems, ALWAYS use Image surface (physical expectation)
-                const imageOpt = opts.find((o: any) => typeof o?.label === 'string' && o.label.includes('(Image)'));
-                if (imageOpt && Number.isInteger(imageOpt.rowIndex)) {
-                    console.log(`✅ [Infinite] Using Image surface at rowIndex=${imageOpt.rowIndex} (surfaceId=${imageOpt.surfaceId})`);
-                    return imageOpt.rowIndex;
-                }
-                
-                // Strategy 2: If no Image surface found (unusual), try surfaceId match
-                const match = opts.find((o: any) => Number(o?.surfaceId) === Number(surfaceId));
-                if (match && Number.isInteger(match.rowIndex)) {
-                    console.warn(`⚠️ [Infinite] No Image surface, matched surfaceId=${surfaceId} → rowIndex=${match.rowIndex}`);
-                    return match.rowIndex;
-                }
-                
-                // Strategy 3: Fallback to last surface
-                if (opts.length > 0 && Number.isInteger(opts[opts.length - 1].rowIndex)) {
-                    console.warn(`⚠️ [Infinite] Using last surface at rowIndex=${opts[opts.length - 1].rowIndex}`);
-                    return opts[opts.length - 1].rowIndex;
-                }
-                
-                return null;
-            };
-            
-            // Route to appropriate resolver based on conjugate type
-            resolvedSurfaceRowIndex = (conjugateType === 'finite')
-                ? resolveSurfaceForFiniteConjugate()
-                : resolveSurfaceForInfiniteConjugate();
+
+            resolvedSurfaceRowIndex = resolveSurfaceRowIndex();
             
             if (Number.isInteger(resolvedSurfaceRowIndex)) {
                 console.log(`✅ [Surface Resolution] ${conjugateType} resolved: surfaceId=${surfaceId} → rowIndex=${resolvedSurfaceRowIndex}`);
