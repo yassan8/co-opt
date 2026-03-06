@@ -2677,7 +2677,10 @@ export function setupAnalysisWindows() {
             document.getElementById('open-spot-diagram-window-btn') ||
             document.getElementById('open-opd-window-btn') ||
             document.getElementById('open-psf-window-btn') ||
-            document.getElementById('analysis-select')
+            document.getElementById('open-mtf-window-btn') ||
+            document.getElementById('open-through-focus-spot-window-btn') ||
+            document.getElementById('open-through-focus-mtf-window-btn') ||
+            document.getElementById('open-field-mtf-window-btn')
         );
 
         if (!hasAnyAnalysisButton) {
