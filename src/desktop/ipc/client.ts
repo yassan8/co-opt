@@ -25,6 +25,11 @@ import type {
   OptimizeStepRequest,
   OptimizeStepResponse,
 } from "../../shared/contracts/optimizer";
+import type {
+  GridRecommendation,
+  RecommendWavefrontGridForTimeRequest,
+  RecommendWavefrontGridRequest,
+} from "../../shared/contracts/analysis";
 
 export async function opticsEcho(payload: OpticsEchoRequest): Promise<OpticsEchoResponse> {
   return invoke<OpticsEchoResponse>("optics_echo", { req: payload });
@@ -58,6 +63,18 @@ export async function parseZmxText(payload: ParseZmxTextRequest): Promise<ParseZ
 
 export async function runOptimizerStep(payload: OptimizeStepRequest): Promise<OptimizeStepResponse> {
   return invoke<OptimizeStepResponse>("run_optimizer_step", { req: payload });
+}
+
+export async function recommendWavefrontGrid(
+  payload: RecommendWavefrontGridRequest,
+): Promise<GridRecommendation> {
+  return invoke<GridRecommendation>("recommend_wavefront_grid", { req: payload });
+}
+
+export async function recommendWavefrontGridForTime(
+  payload: RecommendWavefrontGridForTimeRequest,
+): Promise<GridRecommendation> {
+  return invoke<GridRecommendation>("recommend_wavefront_grid_for_time", { req: payload });
 }
 
 export async function getNewProjectTemplate(): Promise<NewProjectTemplateResponse> {
