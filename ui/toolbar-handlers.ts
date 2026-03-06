@@ -9,7 +9,7 @@ import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-i
 import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
-import { getDefaultProject, getNewProjectTemplate } from '../src/desktop/ipc/client.ts';
+import { generateZmxText, getDefaultProject, getNewProjectTemplate } from '../src/desktop/ipc/client.ts';
 
 declare global {
   interface Window {
@@ -878,26 +878,36 @@ export function handleExportZemax(): void {
     if (!filename) return;
     if (!/\.zmx$/i.test(filename)) filename += '.zmx';
     
+    if (isTauriRuntime()) {
+      (async () => {
+        try {
+          const generated = await generateZmxText({
+            opticalSystemRows,
+            sourceRows,
+            objectRows,
+            title: 'co-opt export',
+            units: 'MM',
+          });
+          const savedPath = await saveTextFromNativeDialog(generated.zmxText, {
+            filters: [{ name: 'Zemax', extensions: ['zmx'] }],
+          });
+          if (!savedPath) return;
+          console.log('✅ Zemax file exported successfully:', savedPath);
+        } catch (nativeErr) {
+          console.error('❌ Native Zemax export failed:', nativeErr);
+          alert(`Export failed: ${(nativeErr as Error)?.message || String(nativeErr)}`);
+        }
+      })();
+      return;
+    }
+
     if (typeof (window as any).generateZMXText === 'function') {
       const zmxText = (window as any).generateZMXText(opticalSystemRows, {
         sourceRows,
         objectRows
       });
-      
-      if (isTauriRuntime()) {
-        (async () => {
-          try {
-            const savedPath = await saveTextFromNativeDialog(zmxText, {
-              filters: [{ name: 'Zemax', extensions: ['zmx'] }],
-            });
-            if (!savedPath) return;
-            console.log('✅ Zemax file exported successfully:', savedPath);
-          } catch (nativeErr) {
-            console.error('❌ Native Zemax export failed:', nativeErr);
-            alert(`Export failed: ${(nativeErr as Error)?.message || String(nativeErr)}`);
-          }
-        })();
-      } else if (typeof (window as any).downloadZMX === 'function') {
+
+      if (typeof (window as any).downloadZMX === 'function') {
         (window as any).downloadZMX(zmxText, filename);
         console.log('✅ Zemax file exported successfully');
       } else {
