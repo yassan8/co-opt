@@ -33,3 +33,24 @@ export interface RunAnalysisPreviewResponse {
   message: string;
   summary: Record<string, number | string | boolean>;
 }
+
+export interface RunAnalysisComputeRequest {
+  kind: AnalysisKind;
+  opticalSystemRows: unknown[];
+  sourceRows?: unknown[];
+  objectRows?: unknown[];
+  gridSize?: number;
+  maxFrequencyLpmm?: number;
+}
+
+export interface RunAnalysisComputeResponse {
+  kind: AnalysisKind;
+  gridSize: number;
+  opdGrid?: number[][];
+  psfGrid?: number[][];
+  frequencyAxis?: number[];
+  mtfTangential?: number[];
+  mtfSagittal?: number[];
+  message: string;
+  summary: Record<string, number | string | boolean>;
+}
