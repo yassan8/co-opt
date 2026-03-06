@@ -5,6 +5,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::optics::optics_echo,
             commands::optics::run_raytrace_preview,
+            commands::optimizer::run_optimizer_step,
             commands::io::read_text_file,
             commands::io::write_text_file,
             commands::ai::ai_chat_stub,

@@ -21,6 +21,10 @@ import type {
   DefaultProjectResponse,
   NewProjectTemplateResponse,
 } from "../../shared/contracts/project";
+import type {
+  OptimizeStepRequest,
+  OptimizeStepResponse,
+} from "../../shared/contracts/optimizer";
 
 export async function opticsEcho(payload: OpticsEchoRequest): Promise<OpticsEchoResponse> {
   return invoke<OpticsEchoResponse>("optics_echo", { req: payload });
@@ -50,6 +54,10 @@ export async function generateZmxText(payload: GenerateZmxTextRequest): Promise<
 
 export async function parseZmxText(payload: ParseZmxTextRequest): Promise<ParseZmxTextResponse> {
   return invoke<ParseZmxTextResponse>("parse_zmx_text", { req: payload });
+}
+
+export async function runOptimizerStep(payload: OptimizeStepRequest): Promise<OptimizeStepResponse> {
+  return invoke<OptimizeStepResponse>("run_optimizer_step", { req: payload });
 }
 
 export async function getNewProjectTemplate(): Promise<NewProjectTemplateResponse> {

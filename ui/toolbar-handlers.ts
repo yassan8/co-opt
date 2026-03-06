@@ -10,7 +10,7 @@ import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
 import { generateZmxText, getDefaultProject, getNewProjectTemplate } from '../src/desktop/ipc/client.ts';
-import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText } from '../src/desktop/ipc/client.ts';
+import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText, runOptimizerStep } from '../src/desktop/ipc/client.ts';
 
 declare global {
   interface Window {
@@ -939,8 +939,58 @@ export function handleExportZemax(): void {
 // Note: Optimize button handler is very complex and should remain in dom-event-handlers.ts
 // We'll trigger it through a window function
 export function handleOptimize(): void {
+  if (isTauriRuntime()) {
+    (async () => {
+      try {
+        const opticalSystemRows = (window as any).getOpticalSystemRows
+          ? (window as any).getOpticalSystemRows((window as any).tableOpticalSystem)
+          : [];
+
+        if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+          alert('最適化対象の光学系データがありません。');
+          return;
+        }
+
+        const result = await runOptimizerStep({
+          opticalSystemRows,
+          maxIterations: 24,
+        });
+
+        console.log('✅ [Optimize][Rust]', result);
+        alert(
+          [
+            'Rust optimizer step completed',
+            `iterations: ${result.iterations}`,
+            `variables: ${result.variableCount}`,
+            `merit: ${result.meritBefore.toFixed(6)} -> ${result.meritAfter.toFixed(6)}`,
+            result.converged ? 'status: converged' : 'status: in-progress',
+          ].join('\n')
+        );
+      } catch (err) {
+        console.error('❌ [Optimize][Rust] failed:', err);
+        alert(`Rust optimize failed: ${(err as Error)?.message || String(err)}`);
+      }
+    })();
+    return;
+  }
+
   if (!(window as any).OptimizationMVP) {
     alert('OptimizationMVP が利用できません。');
+    return;
+  }
+
+  const w = window as any;
+  try {
+    if (typeof w.runOptimization === 'function') {
+      w.runOptimization();
+      return;
+    }
+    if (typeof w.optimizeDesignIntent === 'function') {
+      w.optimizeDesignIntent();
+      return;
+    }
+  } catch (err) {
+    console.error('❌ [Optimize][Web] failed:', err);
   }
 }
 
