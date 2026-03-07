@@ -17,7 +17,7 @@ export interface RecommendWavefrontGridForTimeRequest {
   fieldAngleDeg?: number;
 }
 
-export type AnalysisKind = "opd" | "psf" | "mtf" | "through-focus-mtf" | "field-mtf" | "through-focus-spot" | "spot-diagram";
+export type AnalysisKind = "opd" | "psf" | "mtf" | "through-focus-mtf" | "field-mtf" | "through-focus-spot" | "spot-diagram" | "spherical-aberration";
 
 export interface SpotPoint {
   xUm: number;
@@ -92,5 +92,21 @@ export interface RunAnalysisComputeResponse {
   spotSeries?: SpotSeries[];
   spotDiagramSeries?: SpotDiagramSeries[];
   message: string;
+  summary: Record<string, number | string | boolean>;
+}
+
+export type SystemDataReportKind = "paraxial" | "seidel" | "seidel-afocal";
+
+export interface RunSystemDataReportRequest {
+  kind: SystemDataReportKind;
+  opticalSystemRows: unknown[];
+  sourceRows?: unknown[];
+  objectRows?: unknown[];
+  referenceFocalLength?: number;
+}
+
+export interface RunSystemDataReportResponse {
+  kind: SystemDataReportKind;
+  text: string;
   summary: Record<string, number | string | boolean>;
 }

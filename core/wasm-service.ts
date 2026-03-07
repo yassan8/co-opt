@@ -8,6 +8,7 @@ type WasmSystemInstance = any;
 
 let wasmSystemInstance: WasmSystemInstance | null = null;
 let requireRayTracingWasmStrict = false;
+let requirePsfWasmStrict = true;
 let rayTracingWasmInitPromise: Promise<ReturnType<typeof getRayTracingWasmReadiness>> | null = null;
 let lastRayTracingBootstrapError: string | null = null;
 
@@ -32,6 +33,14 @@ export function setRayTracingWasmStrict(required: boolean): void {
 
 export function isRayTracingWasmStrict(): boolean {
   return requireRayTracingWasmStrict === true;
+}
+
+export function setPsfWasmStrict(required: boolean): void {
+  requirePsfWasmStrict = required === true;
+}
+
+export function isPsfWasmStrict(): boolean {
+  return requirePsfWasmStrict === true;
 }
 
 export function getRayTracingWasmReadiness(): {
@@ -120,6 +129,9 @@ export async function ensureMtfWasmReady(): Promise<{
     const mod = await import('../rust-wasm/ts/psf/psf-wasm-wrapper.ts');
     const W = mod?.PSFCalculatorWasm;
     if (typeof W !== 'function') {
+      if (requirePsfWasmStrict) {
+        throw new Error('MTF requires PSF WASM wrapper, but wrapper is unavailable');
+      }
       console.warn('⚠️ PSF WASM wrapper is unavailable; continuing with fallback path.');
     } else {
       const psf = new W();
@@ -129,10 +141,16 @@ export async function ensureMtfWasmReady(): Promise<{
       psfReady = !!psf.isReady && !psf.initializationFailed;
       if (!psfReady) {
         const message = 'MTF requires PSF WASM, but initialization failed or module is not ready';
+        if (requirePsfWasmStrict) {
+          throw new Error(message);
+        }
         console.warn(`⚠️ ${message}; continuing with fallback path.`);
       }
     }
   } catch (error) {
+    if (requirePsfWasmStrict) {
+      throw error;
+    }
     console.warn('⚠️ PSF WASM readiness check failed; continuing with fallback path:', error);
     psfReady = false;
   }

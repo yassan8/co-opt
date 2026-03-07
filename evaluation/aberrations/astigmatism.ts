@@ -27,7 +27,14 @@
 
 import { calculateChiefRayNewton } from './transverse-aberration.ts';
 import { getObjectRows, getSourceRows } from '../../utils/data-utils.ts';
-import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../../raytracing/core/ray-tracing.ts';
+import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, solveRayOriginsToStopPointsWithRustMeta } from '../../raytracing/core/ray-tracing.ts';
+
+const RUST_RT_OPTIONS = Object.freeze({
+    useRustWasm: true,
+    requireRustWasm: true,
+    allowNonStrict: true,
+    requireForwardHit: false
+});
 
 function __pickPrimaryWavelengthMicrons(sourceRows, fallback = 0.5876) {
     try {
@@ -220,9 +227,9 @@ function adjustChiefRayByMode(chiefRay, rayGroup, targetSurfaceIndex, opticalSys
     };
 }
 
-function traceRayPathWrapped(opticalSystemRows, ray0, targetSurfaceIndex) {
+function traceRayPathWrapped(opticalSystemRows, ray0, targetSurfaceIndex, options = RUST_RT_OPTIONS) {
     try {
-        const rayPath = traceRay(opticalSystemRows, ray0, 1.0, null, targetSurfaceIndex);
+        const rayPath = traceRay(opticalSystemRows, ray0, 1.0, null, targetSurfaceIndex, options || RUST_RT_OPTIONS);
         return { success: Array.isArray(rayPath) && rayPath.length > 1, rayPath };
     } catch (error) {
         return { success: false, rayPath: null, error };
@@ -245,7 +252,8 @@ function solveRayDirectionToStopPointFast(origin, stopTarget, stopSurfaceIndex, 
             opticalSystemRows,
             { pos: origin, dir, wavelength },
             1.0,
-            stopSurfaceIndex
+            stopSurfaceIndex,
+            RUST_RT_OPTIONS
         );
         if (!p || Array.isArray(p)) return null;
         const err = {
@@ -261,13 +269,15 @@ function solveRayDirectionToStopPointFast(origin, stopTarget, stopSurfaceIndex, 
             opticalSystemRows,
             { pos: origin, dir: normalize3({ x: dir.x + eps, y: dir.y, z: dir.z }) || dir, wavelength },
             1.0,
-            stopSurfaceIndex
+            stopSurfaceIndex,
+            RUST_RT_OPTIONS
         );
         const py = traceRayHitPoint(
             opticalSystemRows,
             { pos: origin, dir: normalize3({ x: dir.x, y: dir.y + eps, z: dir.z }) || dir, wavelength },
             1.0,
-            stopSurfaceIndex
+            stopSurfaceIndex,
+            RUST_RT_OPTIONS
         );
         if (!px || Array.isArray(px) || !py || Array.isArray(py)) return null;
 
@@ -317,7 +327,8 @@ function solveRayOriginToStopPointFast(originGuess, direction, stopTarget, stopS
             opticalSystemRows,
             { pos: origin, dir, wavelength },
             1.0,
-            stopSurfaceIndex
+            stopSurfaceIndex,
+            RUST_RT_OPTIONS
         );
         if (!p || Array.isArray(p)) return null;
         const err = { x: stopTarget.x - p.x, y: stopTarget.y - p.y, z: stopTarget.z - p.z };
@@ -329,13 +340,15 @@ function solveRayOriginToStopPointFast(originGuess, direction, stopTarget, stopS
             opticalSystemRows,
             { pos: { x: origin.x + eps, y: origin.y, z: origin.z }, dir, wavelength },
             1.0,
-            stopSurfaceIndex
+            stopSurfaceIndex,
+            RUST_RT_OPTIONS
         );
         const py = traceRayHitPoint(
             opticalSystemRows,
             { pos: { x: origin.x, y: origin.y + eps, z: origin.z }, dir, wavelength },
             1.0,
-            stopSurfaceIndex
+            stopSurfaceIndex,
+            RUST_RT_OPTIONS
         );
         if (!px || Array.isArray(px) || !py || Array.isArray(py)) return null;
 
@@ -425,6 +438,11 @@ function buildStopSolveRayFan(opticalSystemRows, chiefRayResult, wavelength, sto
 
     if (isInfinite) {
         const dir = normalize3(dirBase) || { x: 0, y: 0, z: 1 };
+        const initialOrigins = [];
+        const dirVectors = [];
+        const stopTargets = [];
+        const guessOrigins = [];
+
         for (let i = 0; i < n; i++) {
             const pNorm = -1 + (2 * i) / (n - 1);
             const offset = pNorm * stopSolveMax;
@@ -438,11 +456,44 @@ function buildStopSolveRayFan(opticalSystemRows, chiefRayResult, wavelength, sto
                 y: originBase.y + axisVec.y * offset,
                 z: originBase.z
             };
-            const refined = solveRayOriginToStopPointFast(guess, dir, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength);
-            const origin = refined || guess;
-            const traced = traceRayPathWrapped(opticalSystemRows, { pos: origin, dir, wavelength }, targetSurfaceIndex);
+            initialOrigins.push(guess);
+            dirVectors.push(dir);
+            stopTargets.push(stopTarget);
+            guessOrigins.push(guess);
+        }
+
+        const rustSolvedOrigins = solveRayOriginsToStopPointsWithRustMeta(
+            opticalSystemRows,
+            initialOrigins,
+            dirVectors,
+            stopTargets,
+            stopSurfaceIndex,
+            wavelength,
+            {
+                ...RUST_RT_OPTIONS,
+                maxIter: 18,
+                tolMm: 1e-6,
+                eps: 1e-4,
+                maxStep: 5.0
+            }
+        );
+
+        for (let i = 0; i < n; i++) {
+            const stopTarget = stopTargets[i];
+            const guess = guessOrigins[i];
+
+            let origin = guess;
+            const rustOrigin = Array.isArray(rustSolvedOrigins) ? rustSolvedOrigins[i] : null;
+            if (rustOrigin && Number.isFinite(rustOrigin.x) && Number.isFinite(rustOrigin.y) && Number.isFinite(rustOrigin.z)) {
+                origin = { x: rustOrigin.x, y: rustOrigin.y, z: rustOrigin.z };
+            } else {
+                const refined = solveRayOriginToStopPointFast(guess, dir, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength);
+                origin = refined || guess;
+            }
+
+            const traced = traceRayPathWrapped(opticalSystemRows, { pos: origin, dir, wavelength }, targetSurfaceIndex, RUST_RT_OPTIONS);
             if (!traced.success || !traced.rayPath || traced.rayPath.length <= targetPointIndex) continue;
-            fan.push({ segments: traced.rayPath, type: `${axis}_stop_solve` });
+            fan.push({ segments: traced.rayPath, type: `${axis}_stop_solve`, dir });
         }
         return fan;
     }
@@ -457,9 +508,9 @@ function buildStopSolveRayFan(opticalSystemRows, chiefRayResult, wavelength, sto
         };
         const solvedDir = solveRayDirectionToStopPointFast(originBase, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength);
         if (!solvedDir) continue;
-        const traced = traceRayPathWrapped(opticalSystemRows, { pos: originBase, dir: solvedDir, wavelength }, targetSurfaceIndex);
+        const traced = traceRayPathWrapped(opticalSystemRows, { pos: originBase, dir: solvedDir, wavelength }, targetSurfaceIndex, RUST_RT_OPTIONS);
         if (!traced.success || !traced.rayPath || traced.rayPath.length <= targetPointIndex) continue;
-        fan.push({ segments: traced.rayPath, type: `${axis}_stop_solve` });
+        fan.push({ segments: traced.rayPath, type: `${axis}_stop_solve`, dir: solvedDir });
     }
     return fan;
 }
@@ -550,7 +601,7 @@ function calculateParaxialImagePosition(opticalSystemRows, chiefRay, targetSurfa
     
     // 近軸像点は主光線の光軸との交点
     // findAxisIntersection を使用して主光線の焦点位置を計算
-    const paraxialZ = findAxisIntersection(opticalSystemRows, chiefRay, targetSurfaceIndex, imageSurfaceInfo);
+    const paraxialZ = findAxisIntersection(opticalSystemRows, chiefRay, targetSurfaceIndex, imageSurfaceInfo, chiefRay?.dir || null);
     
     if (paraxialZ === null) {
         console.warn('      ⚠️ calculateParaxialImagePosition: 主光線の焦点計算に失敗 → 評価面Zで代用');
@@ -570,7 +621,7 @@ function calculateParaxialImagePosition(opticalSystemRows, chiefRay, targetSurfa
  * @param {number} targetSurfaceIndex - 評価面のインデックス
  * @returns {number|null} Z座標（像面位置）
  */
-function findAxisIntersection(opticalSystemRows, rayData, targetSurfaceIndex, imageSurfaceInfo) {
+function findAxisIntersection(opticalSystemRows, rayData, targetSurfaceIndex, imageSurfaceInfo, rayDirection = null) {
     if (!rayData || !rayData.segments || rayData.segments.length === 0) {
         console.warn('      ⚠️ findAxisIntersection: rayDataが不正です');
         return null;
@@ -592,19 +643,16 @@ function findAxisIntersection(opticalSystemRows, rayData, targetSurfaceIndex, im
     // 方向ベクトルを計算（次の点、または前の点との差分）
     let nextSegment;
     const nextIndex = targetPointIndex + 1;
-    const prevIndex = targetPointIndex - 1;
-
     if (nextIndex < rayData.segments.length) {
         nextSegment = rayData.segments[nextIndex];
-    } else if (prevIndex >= 0) {
-        const prevSegment = rayData.segments[prevIndex];
+    } else if (rayDirection && Number.isFinite(rayDirection.x) && Number.isFinite(rayDirection.y) && Number.isFinite(rayDirection.z)) {
         nextSegment = {
-            x: targetSegment.x + (targetSegment.x - prevSegment.x),
-            y: targetSegment.y + (targetSegment.y - prevSegment.y),
-            z: targetSegment.z + (targetSegment.z - prevSegment.z)
+            x: targetSegment.x + rayDirection.x,
+            y: targetSegment.y + rayDirection.y,
+            z: targetSegment.z + rayDirection.z
         };
     } else {
-        console.warn(`      ⚠️ findAxisIntersection: 方向ベクトル計算不可（セグメントが1つのみ）`);
+        console.warn(`      ⚠️ findAxisIntersection: 次セグメントがないため方向ベクトル計算不可`);
         return null;
     }
 
@@ -680,7 +728,7 @@ function projectRayToZ(segment, nextSegment, targetZ) {
  * @param {string} direction - 'meridional' または 'sagittal'
  * @returns {number|null} RMS値
  */
-function calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, targetZ, direction, imageSurfaceInfo) {
+function calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, targetZ, direction, imageSurfaceInfo, chiefRayDirection = null) {
     const rawTargetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
     if (rawTargetPointIndex === null) return null;
 
@@ -701,7 +749,6 @@ function calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex
     const chiefTargetIndex = Math.min(rawTargetPointIndex, chiefRay.segments.length - 1);
     const chiefSegment = chiefRay.segments[chiefTargetIndex];
     const chiefNextIndex = chiefTargetIndex + 1;
-    const chiefPrevIndex = chiefTargetIndex - 1;
     
     if (!chiefSegment) {
         return null;
@@ -711,14 +758,11 @@ function calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex
     let chiefNextSegment;
     if (chiefNextIndex < chiefRay.segments.length) {
         chiefNextSegment = chiefRay.segments[chiefNextIndex];
-    } else if (chiefPrevIndex >= 0) {
-        // 最終面の場合、前の点を使用して方向を逆算
-        const chiefPrevSegment = chiefRay.segments[chiefPrevIndex];
-        // 前の点から現在点への方向を使用
+    } else if (chiefRayDirection && Number.isFinite(chiefRayDirection.x) && Number.isFinite(chiefRayDirection.y) && Number.isFinite(chiefRayDirection.z)) {
         chiefNextSegment = {
-            x: chiefSegment.x + (chiefSegment.x - chiefPrevSegment.x),
-            y: chiefSegment.y + (chiefSegment.y - chiefPrevSegment.y),
-            z: chiefSegment.z + (chiefSegment.z - chiefPrevSegment.z)
+            x: chiefSegment.x + chiefRayDirection.x,
+            y: chiefSegment.y + chiefRayDirection.y,
+            z: chiefSegment.z + chiefRayDirection.z
         };
     } else {
         return null;
@@ -744,13 +788,11 @@ function calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex
         let nextSegment;
         if (rayTargetIndex + 1 < ray.segments.length) {
             nextSegment = ray.segments[rayTargetIndex + 1];
-        } else if (rayTargetIndex - 1 >= 0) {
-            // 最終面の場合
-            const prevSegment = ray.segments[rayTargetIndex - 1];
+        } else if (ray.dir && Number.isFinite(ray.dir.x) && Number.isFinite(ray.dir.y) && Number.isFinite(ray.dir.z)) {
             nextSegment = {
-                x: segment.x + (segment.x - prevSegment.x),
-                y: segment.y + (segment.y - prevSegment.y),
-                z: segment.z + (segment.z - prevSegment.z)
+                x: segment.x + ray.dir.x,
+                y: segment.y + ray.dir.y,
+                z: segment.z + ray.dir.z
             };
         } else {
             continue;
@@ -789,7 +831,7 @@ function calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex
  * @param {string} direction - 'meridional' または 'sagittal'
  * @returns {number|null} 最良焦点のZ座標
  */
-function findBestFocusZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, referenceZ, direction, imageSurfaceInfo) {
+function findBestFocusZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, referenceZ, direction, imageSurfaceInfo, chiefRayDirection = null) {
     console.log(`      🔍 最良焦点探索（ハイブリッド法）: 光線ファン=${rayFan.length}本, 基準位置=${referenceZ.toFixed(4)}mm`);
     
     // 探索範囲：Image面（基準位置） ± 10mm
@@ -808,7 +850,7 @@ function findBestFocusZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex,
     const coarseSamples = [];
     for (let i = 0; i < numCoarseSamples; i++) {
         const z = zMin + (zMax - zMin) * i / (numCoarseSamples - 1);
-        const rms = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, z, direction, imageSurfaceInfo);
+        const rms = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, z, direction, imageSurfaceInfo, chiefRayDirection);
         
         if (rms !== null) {
             validSamples++;
@@ -851,8 +893,8 @@ function findBestFocusZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex,
     let x1 = a + resphi * (b - a);
     let x2 = b - resphi * (b - a);
     
-    let f1 = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, x1, direction, imageSurfaceInfo);
-    let f2 = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, x2, direction, imageSurfaceInfo);
+    let f1 = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, x1, direction, imageSurfaceInfo, chiefRayDirection);
+    let f2 = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, x2, direction, imageSurfaceInfo, chiefRayDirection);
     
     if (f1 === null || f2 === null) {
         console.warn(`      ⚠️ 黄金分割法の初期評価失敗`);
@@ -868,13 +910,13 @@ function findBestFocusZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex,
             x2 = x1;
             f2 = f1;
             x1 = a + resphi * (b - a);
-            f1 = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, x1, direction, imageSurfaceInfo);
+            f1 = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, x1, direction, imageSurfaceInfo, chiefRayDirection);
         } else {
             a = x1;
             x1 = x2;
             f1 = f2;
             x2 = b - resphi * (b - a);
-            f2 = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, x2, direction, imageSurfaceInfo);
+            f2 = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, x2, direction, imageSurfaceInfo, chiefRayDirection);
         }
         
         if (f1 === null || f2 === null) break;
@@ -893,7 +935,7 @@ function findBestFocusZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex,
     
     // 最終的な最良Z位置（区間の中点）
     const finalZ = (a + b) / 2;
-    const finalRMS = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, finalZ, direction, imageSurfaceInfo);
+    const finalRMS = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, finalZ, direction, imageSurfaceInfo, chiefRayDirection);
     
     console.log(`      📊 ${direction} 最良焦点: Z=${finalZ.toFixed(6)}mm, RMS=${finalRMS?.toFixed(6)}mm (反復${iteration}回)`);
     
@@ -974,7 +1016,16 @@ function traceMeridionalMarginalRay(
         }
         
         // RMSベースの最良焦点探索（Image面Z位置を基準）
-        const bestZ = findBestFocusZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, imageSurfaceZ, 'meridional', imageSurfaceInfo);
+        const bestZ = findBestFocusZ(
+            rayFan,
+            chiefRay,
+            opticalSystemRows,
+            targetSurfaceIndex,
+            imageSurfaceZ,
+            'meridional',
+            imageSurfaceInfo,
+            chiefRay?.dir || null
+        );
         
         if (bestZ === null) {
             console.warn('      ⚠️ メリディオナル: 最良焦点が見つかりませんでした');
@@ -1063,7 +1114,16 @@ function traceSagittalMarginalRay(
         }
         
         // RMSベースの最良焦点探索（Image面Z位置を基準）
-        const bestZ = findBestFocusZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, imageSurfaceZ, 'sagittal', imageSurfaceInfo);
+        const bestZ = findBestFocusZ(
+            rayFan,
+            chiefRay,
+            opticalSystemRows,
+            targetSurfaceIndex,
+            imageSurfaceZ,
+            'sagittal',
+            imageSurfaceInfo,
+            chiefRay?.dir || null
+        );
         
         if (bestZ === null) {
             console.warn('      ⚠️ サジタル: 最良焦点が見つかりませんでした');
@@ -1311,16 +1371,18 @@ export async function calculateAstigmatismData(
         verbose?: boolean;
         onProgress?: any;
         yieldEvery?: number;
+        requireRustWasm?: boolean;
         chiefRayMode?: 'stopCenter' | 'beamCenter' | 'centroid' | 'stopCenterImage' | 'beamCenterImage' | 'centroidImage';
     } = {}
 ) {
     const {
         spotDiagramMode = false,
-        rayCount = 51,
+        rayCount = 100,
         interpolationPoints = 20,  // プロット点数を20点に増加
         verbose = false,  // 詳細ログを制御
         onProgress = null,
         yieldEvery = 1,
+        requireRustWasm = true,
         chiefRayMode = 'stopCenter'  // 'stopCenter' | 'beamCenter' | 'centroid' | '*Image'
     } = options;
 
@@ -1360,7 +1422,7 @@ export async function calculateAstigmatismData(
     }
     
     try {
-        safeProgress(0, 'Preparing astigmatism...');
+        safeProgress(0, 'Preparing...');
         await yieldToUI();
 
         // Sourceテーブルから波長を取得
@@ -1580,7 +1642,8 @@ export async function calculateAstigmatismData(
                 'unified',
                 { 
                     targetSurfaceIndex,
-                    rayCount: rayCount  // クロスビーム光線本数を指定
+                    rayCount: rayCount,  // クロスビーム光線本数を指定
+                    requireRustWasm: requireRustWasm
                 }
             );
             
@@ -1684,6 +1747,7 @@ export async function calculateAstigmatismData(
                     verbose,
                     imageSurfaceInfo,
                     mirrorSign,
+                    requireRustWasm,
                     chiefRayMode
                 );
 
@@ -1757,7 +1821,7 @@ export async function calculateAstigmatismData(
         const endTime = performance.now();
         console.log(`✅ 非点収差計算完了 (${(endTime - startTime).toFixed(0)}ms, ${astigmatismData.data.length}点)`);
 
-        safeProgress(100, 'Done');
+        safeProgress(100, '');
         
         return astigmatismData;
         
@@ -1784,6 +1848,7 @@ function calculateFieldData(
     verbose,
     imageSurfaceInfo,
     mirrorSign,
+    requireRustWasm,
     chiefRayMode = 'stopCenter'
 ) {
     // フィールド角を取得
@@ -1819,16 +1884,36 @@ function calculateFieldData(
             fieldSetting, 
             wavelength, 
             'unified',
-            { rayCount: rayCount, chiefRayMode: chiefRayMode }  // クロスビームの光線本数と主光線モードを渡す
+            {
+                rayCount: rayCount,
+                chiefRayMode: chiefRayMode,
+                requireRustWasm: requireRustWasm
+            }  // クロスビームの光線本数と主光線モードを渡す
         );
-        if (!chiefRayResult || !chiefRayResult.success) {
-            if (verbose) console.warn(`      ⚠️ 主光線の計算に失敗しました`);
+        const chiefSucceeded = !!(
+            chiefRayResult && (
+                chiefRayResult.success === true ||
+                chiefRayResult.convergence === true ||
+                !!chiefRayResult.rayData ||
+                !!chiefRayResult.ray
+            )
+        );
+        if (!chiefSucceeded) {
+            console.warn(
+                `[ASTIG_DEBUG][FIELD_FAIL] chief-ray-failed ` +
+                `field=${fieldSetting?.displayName ?? fieldIndex} wl=${wavelength} ` +
+                `success=${chiefRayResult?.success} convergence=${chiefRayResult?.convergence} ` +
+                `error=${chiefRayResult?.finalError ?? 'n/a'}`
+            );
             return null;
         }
         
-        let chiefRay = chiefRayResult.rayData;
+        let chiefRay = chiefRayResult.rayData || chiefRayResult.ray;
         if (!chiefRay || !chiefRay.segments) {
-            if (verbose) console.warn(`      ⚠️ 主光線データが不正です`);
+            console.warn(
+                `[ASTIG_DEBUG][FIELD_FAIL] chief-ray-invalid ` +
+                `field=${fieldSetting?.displayName ?? fieldIndex} wl=${wavelength}`
+            );
             return null;
         }
         
@@ -1865,13 +1950,19 @@ function calculateFieldData(
             ? null
             : Math.min(rawTargetPointIndex, chiefRay.segments.length - 1);
         if (targetPointIndex === null) {
-            if (verbose) console.warn(`      ⚠️ targetSurfaceIndex変換失敗`);
+            console.warn(
+                `[ASTIG_DEBUG][FIELD_FAIL] target-index-convert-failed ` +
+                `field=${fieldSetting?.displayName ?? fieldIndex} wl=${wavelength} targetSurfaceIndex=${targetSurfaceIndex}`
+            );
             return null;
         }
 
         const chiefSegment = chiefRay.segments[targetPointIndex];
         if (!chiefSegment) {
-            if (verbose) console.warn(`      ⚠️ 主光線が評価面に到達していません`);
+            console.warn(
+                `[ASTIG_DEBUG][FIELD_FAIL] chief-not-reaching-target ` +
+                `field=${fieldSetting?.displayName ?? fieldIndex} wl=${wavelength} targetPointIndex=${targetPointIndex} segLen=${chiefRay.segments.length}`
+            );
             return null;
         }
         const toLocal = (point) => {
@@ -1892,7 +1983,10 @@ function calculateFieldData(
         // 近軸像点（理想像点）を計算（絶対インデックスを使用）
         const paraxialImageZ = calculateParaxialImagePosition(opticalSystemRows, chiefRay, targetSurfaceIndex, imageSurfaceInfo);
         if (paraxialImageZ === null) {
-            if (verbose) console.warn(`      ⚠️ 近軸像点計算失敗`);
+            console.warn(
+                `[ASTIG_DEBUG][FIELD_FAIL] paraxial-null ` +
+                `field=${fieldSetting?.displayName ?? fieldIndex} wl=${wavelength}`
+            );
             return null;
         }
         
@@ -2060,6 +2154,10 @@ function calculateFieldData(
         };
         
     } catch (fieldError) {
+        console.error(
+            `[ASTIG_DEBUG][FIELD_FAIL] exception field=${fieldSetting?.displayName ?? fieldIndex} wl=${wavelength}:`,
+            fieldError
+        );
         if (verbose) {
             console.error(`      ❌ フィールド ${fieldIndex + 1} (${fieldAngle}°) の計算エラー:`, fieldError);
             console.error(`      エラースタック:`, fieldError.stack);

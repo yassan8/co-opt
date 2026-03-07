@@ -1331,9 +1331,17 @@ export function drawRayWithSegmentColors(rayPath, objectId, rayNumber, scene) {
         'cross-vertical': 0x0000ff,             // 青 (縦方向)
         'cross-horizontal-obj0': 0x0000ff,      // Object0 横方向 - 青
         'cross-vertical-obj0': 0x0000ff,        // Object0 縦方向 - 青
-    // 主光線（chief）の色指定
-    'chief-obj0': 0x0000ff,                 // Object0 主光線 - 青
-    'chief-obj1': 0x00cc00,                 // Object1 主光線 - 緑（周辺光線と同じ）
+        // 主光線（chief）の色指定（Raynum依存差を避けるため cross-horizontal と同一に統一）
+        'chief-obj0': 0x0000ff,
+        'chief-obj1': 0x00cc00,
+        'chief-obj2': 0xff8000,
+        'chief-obj3': 0x8000ff,
+        'chief-obj4': 0xff0080,
+        'chief-obj5': 0x00ff80,
+        'chief-obj6': 0xffff00,
+        'chief-obj7': 0xaa00ff,
+        'chief-obj8': 0xffaa00,
+        'chief-obj9': 0x00aaff,
         'cross-horizontal-obj1': 0x00cc00,      // Object1 横方向 - 緑
         'cross-vertical-obj1': 0x00cc00,        // Object1 縦方向 - 緑
         'cross-horizontal-obj2': 0xff8000,      // Object2 横方向 - オレンジ

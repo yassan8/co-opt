@@ -5,6 +5,7 @@ import {
   handleLoad, 
   handleLoadDefault, 
   handleClearStorage,
+  handleShareUrl,
   handleImportZemax,
   handleExportZemax,
   handleOptimize,
@@ -100,11 +101,11 @@ export default function MainToolbar() {
       >
         <div className="button-group">
           <span className="button-group-label">File</span>
-          <button id="new-file-btn" onClick={handleNewFile}>New File</button>
-          <button id="save-all-btn" onClick={handleSave}>Save File</button>
-          <button id="load-all-btn" onClick={handleLoad}>Load File</button>
-          <button id="load-default-btn" onClick={handleLoadDefault}>Load Default</button>
-          <button id="share-url-btn">Share URL</button>
+          <button id="new-file-btn" onClick={handleNewFile} data-react-handled="1">New File</button>
+          <button id="save-all-btn" onClick={handleSave} data-react-handled="1">Save File</button>
+          <button id="load-all-btn" onClick={handleLoad} data-react-handled="1">Load File</button>
+          <button id="load-default-btn" onClick={handleLoadDefault} data-react-handled="1">Load Default</button>
+          <button id="share-url-btn" onClick={handleShareUrl} data-react-handled="1">Share URL</button>
           <button id="clear-storage-btn" onClick={handleClearStorage}>Clear Cache</button>
         </div>
 
@@ -114,6 +115,7 @@ export default function MainToolbar() {
             id="import-zemax-btn"
             title="Import a Zemax .zmx file (minimal subset)"
             onClick={handleImportZemax}
+            data-react-handled="1"
           >
             Import Zemax
           </button>
@@ -121,6 +123,7 @@ export default function MainToolbar() {
             id="export-zemax-btn"
             title="Export current optical system as Zemax .zmx"
             onClick={handleExportZemax}
+            data-react-handled="1"
           >
             Export Zemax
           </button>
@@ -128,13 +131,15 @@ export default function MainToolbar() {
 
         <div className="button-group">
           <span className="button-group-label">View</span>
-          <button id="open-3d-window-btn" title="Render 3D view in popup window" onClick={handleRender3D}>
+          <button id="open-3d-window-btn" title="Render 3D view in popup window" onClick={handleRender3D} data-react-handled="1">
             Open Render
           </button>
           <button
             id="open-system-data-window-btn"
             title="Open System Data in popup window"
             onClick={handleSystemData}
+            data-react-handled="1"
+            type="button"
           >
             Open System Data
           </button>
@@ -152,6 +157,7 @@ export default function MainToolbar() {
             id="optimize-design-intent-btn"
             title="Optimize marked variables (V) to satisfy Requirements (all scenarios)."
             onClick={handleOptimize}
+            data-react-handled="1"
           >
             Optimize
           </button>
