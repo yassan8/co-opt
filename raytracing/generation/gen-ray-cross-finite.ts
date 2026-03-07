@@ -15,80 +15,33 @@
 import { traceRay, traceRayHitPointBatch, calculateSurfaceOrigins, asphericSag } from '../core/ray-tracing.ts';
 import { getRustRayTracingWasmSync } from '../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 
-const RENDER_TS_TRACE_OPTIONS = {
-    allowNonStrict: true,
-    requireWasmRayTracing: false,
-    useRustWasm: false,
-    requireRustWasm: false,
-    disableWasmRayTracing: true,
-    __renderRayTracingTsOnly: true
-};
-
 const RENDER_RUST_TRACE_OPTIONS = {
     allowNonStrict: true,
     requireWasmRayTracing: false,
     useRustWasm: true,
-    requireRustWasm: false,
+    requireRustWasm: true,
     disableWasmRayTracing: false,
     __renderRayTracingRustPreferred: true
 };
 
-const IS_CHROME_DESKTOP = (() => {
-    try {
-        const ua = String(navigator.userAgent || '');
-        return /\bChrome\//.test(ua)
-            && !/\bEdg\//.test(ua)
-            && !/\bOPR\//.test(ua)
-            && !/\bCriOS\//.test(ua);
-    } catch (_) {
-        return false;
-    }
-})();
-
-const CHROME_RENDER_RUST_MIN_BATCH = 24;
-
-function shouldUseRustRenderTracing(workloadSize = 1) {
-    const size = Number.isFinite(Number(workloadSize)) ? Math.max(1, Number(workloadSize)) : 1;
-    try {
-        if (typeof globalThis !== 'undefined') {
-            const g = globalThis as any;
-            const mode = String(g.__COOPT_CHROME_RENDER_BACKEND_MODE || '').trim().toLowerCase();
-            if (mode === 'ts') return false;
-            if (mode === 'rust') {
-                try {
-                    return !!getRustRayTracingWasmSync();
-                } catch (_) {
-                    return false;
-                }
-            }
-        }
-    } catch (_) {}
-
-    if (!IS_CHROME_DESKTOP) return false;
-    try {
-        if (typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_DISABLE_CHROME_RENDER_RUST === true) {
-            return false;
-        }
-    } catch (_) {}
+function assertRustRenderTracingAvailable() {
     try {
         const rustReady = !!getRustRayTracingWasmSync();
-        if (!rustReady) return false;
-        return size >= CHROME_RENDER_RUST_MIN_BATCH;
-    } catch (_) {
-        return false;
-    }
+        if (rustReady) return;
+    } catch (_) {}
+    throw new Error('Rust ray tracing WASM is unavailable for finite cross-beam generation.');
 }
 
 function traceRayForRenderTs(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, maxSurfaceIndex = null) {
-    const opts = shouldUseRustRenderTracing(1) ? RENDER_RUST_TRACE_OPTIONS : RENDER_TS_TRACE_OPTIONS;
-    return traceRay(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, opts);
+    assertRustRenderTracingAvailable();
+    return traceRay(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, RENDER_RUST_TRACE_OPTIONS);
 }
 
 function traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, n0 = 1.0, targetSurfaceIndex = null) {
     const list = Array.isArray(rays) ? rays : [];
     if (!list.length) return [];
-    const opts = shouldUseRustRenderTracing(list.length) ? RENDER_RUST_TRACE_OPTIONS : RENDER_TS_TRACE_OPTIONS;
-    return traceRayHitPointBatch(opticalSystemRows, list, n0, targetSurfaceIndex, opts);
+    assertRustRenderTracingAvailable();
+    return traceRayHitPointBatch(opticalSystemRows, list, n0, targetSurfaceIndex, RENDER_RUST_TRACE_OPTIONS);
 }
 
 function isCoordTransRow(row) {
@@ -1617,6 +1570,13 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
             };
             rays.push(chiefRay);
 
+            // rayCount=1 の場合は chief のみを返す（周辺光線を追加しない）
+            if (rayCount <= 1) {
+                if (actualDebugMode) {
+                    console.log(`   rayCount=${rayCount}: chief ray only`);
+                }
+            } else {
+
             if (actualDebugMode) {
                 console.log(`   主光線方向: (${chiefRayDirection.i.toFixed(6)}, ${chiefRayDirection.j.toFixed(6)}, ${chiefRayDirection.k.toFixed(6)})`);
             }
@@ -1760,10 +1720,15 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                     rayIndex: rayIndex++
                 };
 
-                rays.push(leftRay, rightRay);
+                if (rayIndex < rayCount) {
+                    rays.push(leftRay);
+                }
+                if (rayIndex < rayCount) {
+                    rays.push(rightRay);
+                }
             }
 
-            if (crossType === 'both' || crossType === 'vertical') {
+            if ((crossType === 'both' || crossType === 'vertical') && rayIndex < rayCount) {
                 // 垂直方向マージナル光線の目標点を計算（絞り中心基準）
                 const topTarget = { 
                     x: stopCenter.x, 
@@ -1831,7 +1796,12 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                     rayIndex: rayIndex++
                 };
 
-                rays.push(topRay, bottomRay);
+                if (rayIndex < rayCount) {
+                    rays.push(topRay);
+                }
+                if (rayIndex < rayCount) {
+                    rays.push(bottomRay);
+                }
             }
 
             // 3. 残りの光線を対称的に配置（-方向から+方向への等分）
@@ -1988,6 +1958,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                         }
                     }
                 }
+            }
             }
 
             // 4. 光線追跡
@@ -2212,20 +2183,18 @@ function outputFiniteSystemChiefRayToSystemData(objectNumber, xPosition, yPositi
         }
         
         // System Data出力文字列の作成
-        const convergenceReport = `
-=== 主光線収束解析 [有限系] (Object ${objectNumber}, 位置: ${xPosition.toFixed(3)}mm, ${yPosition.toFixed(3)}mm) ===
-絞り中心からの距離: ${distanceFromCenter.toFixed(6)}mm
+        const convergenceReport = `絞り中心からの距離: ${distanceFromCenter.toFixed(6)}mm
 最適化手法: ${methodName}
 収束品質: ${qualityAssessment}
 解析時刻: ${new Date().toLocaleTimeString()}
 ------------------------------------------------------------
 `;
         
-        // テキストエリアの先頭に追加
-        systemDataTextarea.value = convergenceReport + systemDataTextarea.value;
-        
-        // スクロールを最上位に移動
-        systemDataTextarea.scrollTop = 0;
+        // テキストエリア末尾に追加
+        systemDataTextarea.value += (systemDataTextarea.value ? '\n' : '') + convergenceReport;
+
+        // スクロールを最下部に移動
+        systemDataTextarea.scrollTop = systemDataTextarea.scrollHeight;
         
     } catch (error) {
         console.error(`❌ [SystemData] System Data出力エラー:`, error);

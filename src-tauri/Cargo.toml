@@ -1,0 +1,23 @@
+[package]
+name = "co-opt-pro"
+version = "0.1.0"
+description = "co-opt-pro desktop backend"
+authors = ["co-opt-pro"]
+edition = "2021"
+
+[lib]
+name = "co_opt_pro_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+thiserror = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+chrono = { version = "0.4", default-features = true, features = ["clock"] }
+rustfft = "6"

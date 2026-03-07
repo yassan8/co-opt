@@ -12,19 +12,19 @@ import {
     calculateFullSystemParaxialTrace,
     calculateParaxialData,
     findStopSurfaceIndex
-} from '../../compat/ray-paraxial.ts';
+} from '../../raytracing/core/ray-paraxial.ts';
 import {
     traceRay,
     traceRayHitPoint,
     calculateSurfaceOrigins,
     transformPointToLocal
-} from '../../compat/ray-tracing.ts';
+} from '../../raytracing/core/ray-tracing.ts';
 import {
     getOpticalSystemRows,
     getObjectRows,
     getSourceRows
-} from '../../compat/data-utils.ts';
-import { calculateSeidelCoefficients } from '../../compat/seidel-coefficients.ts';
+} from '../../utils/data-utils.ts';
+import { calculateSeidelCoefficients } from '../../evaluation/aberrations/seidel-coefficients.ts';
 import { calculateAfocalSeidelCoefficientsIntegrated } from '../../evaluation/aberrations/seidel-coefficients-afocal.ts';
 import { generateSpotDiagram, generateSpotDiagramAsync, generateSurfaceOptions } from '../../evaluation/spot-diagram.ts';
 import { createOPDCalculator, WavefrontAberrationAnalyzer } from '../../evaluation/wavefront/wavefront.ts';

@@ -2901,8 +2901,9 @@ export function calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelen
         if (!chiefRay) {
             const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
             const alreadyRetried = !!((options as any)?.__chiefRayJsRetry);
+            const requireRustWasm = !!((options as any)?.requireRustWasm);
             const rustOverrideActive = !!(g && g.__cooptTraceOptionsOverride && g.__cooptTraceOptionsOverride.useRustWasm === true);
-            if (rustOverrideActive && !alreadyRetried) {
+            if (rustOverrideActive && !alreadyRetried && !requireRustWasm) {
                 const prevOverride = g.__cooptTraceOptionsOverride;
                 try {
                     g.__cooptTraceOptionsOverride = {

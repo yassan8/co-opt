@@ -18,7 +18,7 @@ import {
     deriveBlocksFromLegacyOpticalSystemRows,
     validateBlocksConfiguration,
     BLOCK_SCHEMA_VERSION
-} from '../compat/block-schema.ts';
+} from '../data/block-schema.ts';
 import { SetBlockParameterCommand } from '../core/undo-history.ts';
 import { requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
 import { 
@@ -58,6 +58,8 @@ import {
     loadTableData as loadSystemRequirementsTableData,
     saveTableData as saveSystemRequirementsTableData
 } from '../data/table-system-requirements.ts';
+import { isTauriRuntime } from '../src/desktop/runtime.ts';
+import { runOptimizerStep } from '../src/desktop/ipc/client.ts';
 
 // Type definitions
 type BlockType = string;
@@ -1802,9 +1804,15 @@ if (typeof window !== 'undefined') {
     } catch (_) {}
 }
 
+function isReactManagedButton(el: HTMLElement | null): boolean {
+    if (!el) return false;
+    return el.getAttribute('data-react-handled') === '1';
+}
+
 function setupLoadAllButton(): void {
     const btn = document.getElementById('load-all-btn');
     if (!btn) return;
+    if (isReactManagedButton(btn as HTMLElement)) return;
 
     const loadHandler = () => {
         const input = document.createElement('input');
@@ -2093,6 +2101,7 @@ function __normalizeZmxFilenameDefault(name: string | null | undefined): string 
 function setupImportZemaxButton(): void {
     const btn = document.getElementById('import-zemax-btn');
     if (!btn) return;
+    if (isReactManagedButton(btn as HTMLElement)) return;
 
     const importHandler = () => {
         const input = document.createElement('input');
@@ -2225,6 +2234,7 @@ function setupImportZemaxButton(): void {
 function setupExportZemaxButton(): void {
     const btn = document.getElementById('export-zemax-btn');
     if (!btn) return;
+    if (isReactManagedButton(btn as HTMLElement)) return;
 
     const exportHandler = async () => {
         try {
@@ -2292,6 +2302,7 @@ function setupExportZemaxButton(): void {
 function setupOptimizeDesignIntentButton(): void {
     const optimizeBtn = document.getElementById('optimize-design-intent-btn') as HTMLButtonElement | null;
     if (!optimizeBtn) return;
+    if (isReactManagedButton(optimizeBtn)) return;
 
     optimizeBtn.addEventListener('click', async () => {
         const _gThis = (typeof globalThis !== 'undefined') ? globalThis as any : {} as any;
@@ -2310,6 +2321,33 @@ function setupOptimizeDesignIntentButton(): void {
         const prevDisabled = optimizeBtn.disabled;
         optimizeBtn.disabled = true;
         try {
+            if (isTauriRuntime()) {
+                const opticalSystemRows = (w.getOpticalSystemRows && w.tableOpticalSystem)
+                    ? w.getOpticalSystemRows(w.tableOpticalSystem)
+                    : ((w.tableOpticalSystem && typeof w.tableOpticalSystem.getData === 'function') ? w.tableOpticalSystem.getData() : []);
+
+                if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+                    alert('最適化対象の光学系データがありません。');
+                    return;
+                }
+
+                const result = await runOptimizerStep({
+                    opticalSystemRows,
+                    maxIterations: 24,
+                });
+
+                alert(
+                    [
+                        'Rust optimizer step completed',
+                        `iterations: ${result.iterations}`,
+                        `variables: ${result.variableCount}`,
+                        `merit: ${result.meritBefore.toFixed(6)} -> ${result.meritAfter.toFixed(6)}`,
+                        result.converged ? 'status: converged' : 'status: in-progress',
+                    ].join('\n')
+                );
+                return;
+            }
+
             const opt = w.OptimizationMVP;
             if (!opt || typeof opt.run !== 'function') {
                 alert('OptimizationMVP が利用できません。');
@@ -3768,6 +3806,7 @@ function setupSuggestOptimizeButtons(): void {
 function setupNewFileButton(): void {
     const btn = document.getElementById('new-file-btn');
     if (!btn) return;
+    if (isReactManagedButton(btn as HTMLElement)) return;
 
     // Remove existing listener to prevent duplicates
     const newHandler = () => {
@@ -3857,6 +3896,7 @@ function setupNewFileButton(): void {
 function setupSaveButton(): void {
     const btn = document.getElementById('save-all-btn');
     if (!btn) return;
+    if (isReactManagedButton(btn as HTMLElement)) return;
 
     const saveHandler = async () => {
         try {
@@ -3980,6 +4020,7 @@ function buildAllDataForExport(): any {
 function setupLoadDefaultButton(): void {
     const btn = document.getElementById('load-default-btn');
     if (!btn) return;
+    if (isReactManagedButton(btn as HTMLElement)) return;
 
     const defaultHandler = async () => {
         if (!confirm('Load default optical system? Current data will be replaced.')) return;
@@ -4011,6 +4052,7 @@ function setupLoadDefaultButton(): void {
 function setupShareUrlButton(): void {
     const btn = document.getElementById('share-url-btn');
     if (!btn) return;
+    if (isReactManagedButton(btn as HTMLElement)) return;
 
     const WARN_LEN = 2000;
     const MAX_LEN = 30000;
@@ -4077,7 +4119,7 @@ function setupClearStorageButton(): void {
 function setupParaxialButton(): void {
     const btn = document.getElementById('calculate-paraxial-btn');
     if (!btn) return;
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
         try {
             if (typeof w.outputParaxialDataToDebug === 'function') {
                 const tableOpticalSystem = w.tableOpticalSystem;
@@ -4094,7 +4136,7 @@ function setupParaxialButton(): void {
 function setupSeidelButton(): void {
     const btn = document.getElementById('calculate-seidel-btn');
     if (!btn) return;
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
         try {
             if (typeof w.outputSeidelCoefficientsToDebug === 'function') {
                 w.outputSeidelCoefficientsToDebug();

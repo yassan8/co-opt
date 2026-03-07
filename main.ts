@@ -183,7 +183,7 @@ import './optimization/suggest-design-intent.ts';
 import './tools/benchmark-tfmtf.ts';
 
 // Analysis modules
-import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, showMagnificationChromaticAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene } from './analysis/optical-analysis.ts';
+import { clearAllDrawing, showSpotDiagram, showThroughFocusSpotDiagram, showTransverseAberrationDiagram, showLongitudinalAberrationDiagram, showAstigmatismDiagram, showIntegratedAberrationDiagram, showMagnificationChromaticAberrationDiagram, outputChiefRayConvergenceData, calculateSceneBounds, fitCameraToScene, runSpotParityDiagnostics } from './analysis/optical-analysis.ts';
 
 // Performance monitoring (削除されたファイルなのでコメントアウト)
 // import { performanceMonitor } from './performance-monitor.ts';
@@ -476,6 +476,7 @@ async function initializeApplication() {
         window['showMTFDiagram'] = showMTFDiagram;
         window['showMTFComparisonDiagram'] = showMTFComparisonDiagram;
         window['showThroughFocusSpotDiagram'] = showThroughFocusSpotDiagram;
+        window['runSpotParityDiagnostics'] = runSpotParityDiagnostics;
         window['showThroughFocusMTFDiagram'] = showThroughFocusMTFDiagram;
         window['showFieldMTFDiagram'] = showFieldMTFDiagram;
         window['benchmarkMTFOnce'] = async (options: any = {}) => {
@@ -819,6 +820,7 @@ function drawOpticalSystemSurfaceWrapper(options = {}) {
         
         
     } catch (error) {
+        console.error('[RenderWindow] drawOpticalSystemSurfaceWrapper failed:', error);
     }
 }
 
@@ -851,7 +853,7 @@ function improvedDrawOpticalSystemSurfaceWrapper() {
             showSurfaceOrigins: false,
             showSemidiaRing: true,
             showMirrorBackText: false,
-            crossSectionDirection: 'z',
+            crossSectionDirection: 'YZ',
             crossSectionCenterOffset: 0
         });
         
@@ -861,6 +863,7 @@ function improvedDrawOpticalSystemSurfaceWrapper() {
         }
         
     } catch (error) {
+        console.error('[RenderWindow] improvedDrawOpticalSystemSurfaceWrapper failed:', error);
     }
 }
 
@@ -897,7 +900,9 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
         objectRows.forEach((obj, objIndex) => {
 
             // Get ray count from UI input
-            const rayCountInput = document.getElementById('draw-ray-count-input') as HTMLInputElement | null;
+            const rayCountInput =
+                (document.getElementById('render-ray-count-input') as HTMLInputElement | null)
+                || (document.getElementById('draw-ray-count-input') as HTMLInputElement | null);
             const rayCount = rayCountInput ? (parseInt(rayCountInput.value || '5', 10) || 5) : 5;
 
             const isAngle = (obj?.position === 'Angle' || obj?.position === 'angle');
@@ -936,14 +941,12 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                     );
 
                     // window.traceRayと同じ呼び出し方法
-                    const rayPath = window.traceRay ? window.traceRay(opticalSystemRows, ray, 1.0, null, null, {
-                        allowNonStrict: true,
-                        requireWasmRayTracing: false,
-                        useRustWasm: false,
-                        requireRustWasm: false,
-                        disableWasmRayTracing: true,
-                        __renderRayTracingTsOnly: true
-                    }) : null;
+                        const rayPath = window.traceRay ? window.traceRay(opticalSystemRows, ray, 1.0, null, null, {
+                            allowNonStrict: true,
+                            requireWasmRayTracing: false,
+                            useRustWasm: true,
+                            disableWasmRayTracing: false,
+                        }) : null;
 
                     if (rayPath && rayPath.length > 1) {
                         console.log(`   開始位置確認: (${rayPath[0].x.toFixed(3)}, ${rayPath[0].y.toFixed(3)}, ${rayPath[0].z.toFixed(3)})`);
@@ -973,85 +976,6 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                 rayIndex++;
             }
         });
-        
-        
-    } catch (error) {
-    }
-}
-
-/**
- * Force draw everything for testing
- */
-function forceDrawEverything() {
-    
-    try {
-        // Clear scene first
-        const scene = getScene?.();
-        if (scene) {
-            // Remove all optical elements
-            const objectsToRemove = [];
-            scene.traverse((object) => {
-                if (object.userData.opticalElement) {
-                    objectsToRemove.push(object);
-                }
-            });
-            objectsToRemove.forEach(obj => scene.remove(obj));
-        }
-        
-        // Get data
-        const opticalSystemRows = getOpticalSystemRows();
-        const objectRows = getObjectRows();
-        
-        console.log('  - Optical system rows:', opticalSystemRows?.length || 0);
-        console.log('  - Object rows:', objectRows?.length || 0);
-        
-        if (!opticalSystemRows || opticalSystemRows.length === 0) {
-            initializeTablesWithDummyData();
-        }
-        
-        // Force draw optical surfaces
-        if (!scene) {
-            return;
-        }
-        drawOpticalSystemSurfaces({
-            opticalSystemData: getOpticalSystemRows(),
-            scene: scene,
-            crossSectionOnly: false,
-            showSurfaceOrigins: false,
-            showSemidiaRing: true,
-            showMirrorBackText: false,
-            crossSectionDirection: 'z',
-            crossSectionCenterOffset: 0
-        });
-        
-        // Force draw rays
-        const finalOpticalSystemRows = getOpticalSystemRows();
-        const finalObjectRows = getObjectRows();
-        
-        if (finalObjectRows && finalObjectRows.length > 0) {
-            drawOptimizedRaysFromObjects(finalOpticalSystemRows);
-        } else {
-            const defaultObject = {
-                height: 10,
-                distance: 100,
-                angle: 0,
-                position: 'height'
-            };
-            
-            const rayStartPoints = generateRayStartPointsForObject(defaultObject, finalOpticalSystemRows, 11);
-            if (rayStartPoints && rayStartPoints.length > 0) {
-                rayStartPoints.forEach((rayStart: any) => {
-                    drawRayWithSegmentColors(rayStart, finalOpticalSystemRows, [], scene);
-                });
-            }
-        }
-        
-        // Force render
-        const renderer = getRenderer?.();
-        const camera = getCamera?.();
-        if (renderer && scene && camera) {
-            renderer.render(scene, camera);
-        }
         
         
     } catch (error) {
@@ -1685,7 +1609,6 @@ window['setRayEmissionPattern'] = setRayEmissionPattern;
 window['getRayEmissionPattern'] = getRayEmissionPattern;
 window['setRayColorMode'] = setRayColorMode;
 window['getRayColorMode'] = getRayColorMode;
-window['forceDrawEverything'] = forceDrawEverything;
 window['fitCameraToOpticalSystem'] = fitCameraToOpticalSystem;
 window['setCameraForYZCrossSection'] = setCameraForYZCrossSection;
 window['setCameraForXZCrossSection'] = setCameraForXZCrossSection;
@@ -1697,6 +1620,7 @@ window['traceRay'] = traceRay;
 window['getOpticalSystemRows'] = getOpticalSystemRows;
 window['getObjectRows'] = getObjectRows;
 window['getSourceRows'] = getSourceRows;
+window['generateSurfaceOptions'] = generateSurfaceOptions;
 
 // Export main functions
 window['initializeApplication'] = initializeApplication;
@@ -2265,7 +2189,13 @@ function drawCrossBeamRays(tracedRays, targetScene) {
         return;
     }
     
+    let previousRayColorMode: string | null = null;
     try {
+        previousRayColorMode = getRayColorMode();
+        if (previousRayColorMode !== 'object') {
+            try { setRayColorMode('object'); } catch (_) {}
+        }
+
         // Object毎の光線数を集計
         const objectRayCount = {};
         tracedRays.forEach(rayData => {
@@ -2275,6 +2205,19 @@ function drawCrossBeamRays(tracedRays, targetScene) {
         
         
         // 全ての光線を描画
+        const rawObjectIndices = tracedRays
+            .map((rayData) => Number.parseInt(String(
+                rayData?.objectIndex ??
+                rayData?.originalRay?.objectIndex ??
+                rayData?.originalRay?.objIndex ??
+                NaN
+            ), 10))
+            .filter((value) => Number.isFinite(value));
+        const shouldNormalizeOneBasedObjectIndex =
+            rawObjectIndices.length > 0 &&
+            !rawObjectIndices.includes(0) &&
+            rawObjectIndices.every((value) => value >= 1);
+
         tracedRays.forEach((rayData, index) => {
             if (!rayData.success) {
                 return;
@@ -2286,7 +2229,16 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             }
             
             // Object識別情報を取得
-            const objectIndex = rayData.objectIndex || 0;
+            const objectIndexRaw =
+                rayData.objectIndex ??
+                rayData.originalRay?.objectIndex ??
+                rayData.originalRay?.objIndex ??
+                0;
+            const objectIndexNum = Number.parseInt(String(objectIndexRaw), 10);
+            const objectIndex = Number.isFinite(objectIndexNum) ? Math.max(0, objectIndexNum) : 0;
+            const normalizedObjectIndex = shouldNormalizeOneBasedObjectIndex
+                ? Math.max(0, objectIndex - 1)
+                : objectIndex;
             const objectPosition = rayData.objectPosition;
 
             // beamType/side の正規化（generator由来の originalRay を尊重）
@@ -2319,7 +2271,7 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             
             // 光線の実際の開始位置を確認
             if (objectPosition) {
-                console.log(`   Object${objectIndex + 1}位置: (${objectPosition.x}, ${objectPosition.y}, ${objectPosition.z})`);
+                console.log(`   Object${normalizedObjectIndex + 1}位置: (${objectPosition.x}, ${objectPosition.y}, ${objectPosition.z})`);
             }
             
             // 色分けモードを取得
@@ -2331,7 +2283,7 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             
             if (currentColorMode === 'object') {
                 // Object別色分け
-                rayColor = colorSystem.getColor(colorSystem.MODE.OBJECT, objectIndex, null);
+                rayColor = colorSystem.getColor(colorSystem.MODE.OBJECT, normalizedObjectIndex, null);
             } else if (currentColorMode === 'segment') {
                 // Segment別色分け（光線タイプに基づく）
                 const segmentType = rayData.segmentType || 'chief';
@@ -2345,25 +2297,29 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             if (rayData.optimized) {
             }
             
-            // 光線の色を設定（Object毎に異なる色を使用）
+            // 光線の型に応じたobjectIdを構築
+            // chief も Raynum>=2 のクロスビーム色に合わせて同一Object色へ寄せる
             let objectId;
-            if (beamType === 'horizontal') {
-                objectId = `cross-horizontal-obj${objectIndex}`;
+            if (beamType === 'chief') {
+                objectId = `cross-horizontal-obj${normalizedObjectIndex}`;
+            } else if (beamType === 'horizontal') {
+                objectId = `cross-horizontal-obj${normalizedObjectIndex}`;
             } else if (beamType === 'vertical') {
-                objectId = `cross-vertical-obj${objectIndex}`;
-            } else if (beamType === 'chief') {
-                // 主光線は専用IDにして色マップで制御（Object1=青）
-                objectId = `chief-obj${objectIndex}`;
+                objectId = `cross-vertical-obj${normalizedObjectIndex}`;
             } else {
-                // 主光線などグループ外はObject色にフォールバック
-                objectId = objectIndex;
+                // フォールバック
+                objectId = `cross-vertical-obj${normalizedObjectIndex}`;
             }
             
             // 光線パスを描画（正しいパラメータで呼び出し）
             drawRayWithSegmentColors(rayPath, objectId, index, scene);
         });
-        
+
     } catch (error) {
+    } finally {
+        if (previousRayColorMode && previousRayColorMode !== 'object') {
+            try { setRayColorMode(previousRayColorMode); } catch (_) {}
+        }
     }
 }
 
@@ -2556,11 +2512,19 @@ if (analysisSelect) {
             'transverse-aberration': 'open-transverse-aberration-window-btn',
             'opd': 'open-opd-window-btn',
             'psf': 'open-psf-window-btn',
-            'mtf': 'open-mtf-window-btn'
+            'mtf': 'open-mtf-window-btn',
+            'through-focus-spot': 'open-through-focus-spot-window-btn',
+            'through-focus-mtf': 'open-through-focus-mtf-window-btn',
+            'field-mtf': 'open-field-mtf-window-btn'
         };
         
         const btnId = buttonMap[value];
         if (btnId) {
+            try {
+                if (typeof (window as any).setupAnalysisWindows === 'function') {
+                    (window as any).setupAnalysisWindows();
+                }
+            } catch (_) {}
             const btn = document.getElementById(btnId);
             if (btn) {
                 btn.click();

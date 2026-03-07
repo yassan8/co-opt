@@ -1103,6 +1103,11 @@ export function clearAllOpticalElements(scene) {
     const objectsToRemove = [];
     
     scene.traverse((child) => {
+        // Keep popup cross-section debug/fill overlays alive unless explicitly cleared by popup-specific logic.
+        if (child?.userData?.type === 'popupLensFill' || child?.userData?.isUltraDebugOverlay === true) {
+            return;
+        }
+
         // Surface and lens objects by name
         if (child.name && 
             (child.name.startsWith('surface') || 
@@ -1182,6 +1187,10 @@ function clearExistingOpticalElements(scene) {
     const elementsToRemove = [];
     
     scene.traverse((child) => {
+        if (child?.userData?.type === 'popupLensFill' || child?.userData?.isUltraDebugOverlay === true) {
+            return;
+        }
+
         // Clear renderables (Mesh/Line/Sprite/Points) created by the optical renderer.
         // Sprites are used for labels (e.g., mirrorBackText) and must be cleared too.
         if (!(child.isMesh || child.isLine || child.isSprite || child.isPoints)) return;
