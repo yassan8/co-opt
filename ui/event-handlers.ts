@@ -7,6 +7,7 @@ declare global {
 const w: Record<string, any> = window;
 
 import { clearAllOpticalElements } from '../optical/system-renderer.ts';
+import * as THREE_NS from 'three';
 import { setRayEmissionPattern, setRayColorMode } from '../optical/ray-renderer.ts';
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
 import { calculateOpticalSystemOffset } from '../utils/math.ts';
@@ -21,11 +22,11 @@ import { PSFPlotter } from '../evaluation/psf/psf-plot.ts';
 import { createOPDCalculator, createWavefrontAnalyzer, WavefrontAberrationAnalyzer } from '../evaluation/wavefront/wavefront.ts';
 import { PSFCalculator } from '../evaluation/psf/psf-calculator.ts';
 import { getLastWavefrontMap, getLastWavefrontMeta, patchLastWavefrontMap } from '../evaluation/wavefront/last-wavefront-runtime.ts';
-import { calculateFocalLength, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.ts';
+import { calculateFocalLength, calculateParaxialData, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.ts';
 import { DEFAULT_STOP_SEMI_DIAMETER } from '../data/block-schema.ts';
 import { loadSystemConfigurations } from '../data/table-configuration.ts';
 import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
-import { runAnalysisCompute } from '../src/desktop/ipc/client.ts';
+import { runAnalysisCompute, runNativeSphericalAberration, runNativeSpotRaytrace } from '../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
 import type { RunAnalysisComputeRequest, RunAnalysisComputeResponse } from '../src/shared/contracts/analysis.ts';
 
@@ -70,7 +71,147 @@ function collectPopupRowsFromMainWindow(): {
         if (Array.isArray(rows)) objectRows = rows;
     } catch (_) {}
 
+    if (!Array.isArray(objectRows) || objectRows.length === 0) {
+        try {
+            const directRows = w.tableObject && Array.isArray(w.tableObject.data) ? w.tableObject.data : null;
+            if (Array.isArray(directRows) && directRows.length > 0) {
+                objectRows = directRows;
+            }
+        } catch (_) {}
+    }
+
+    if (!Array.isArray(objectRows) || objectRows.length === 0) {
+        try {
+            const raw = localStorage.getItem('objectTableData');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    objectRows = parsed;
+                }
+            }
+        } catch (_) {}
+    }
+
+    if (!Array.isArray(objectRows) || objectRows.length === 0) {
+        try {
+            let activeConfig: any = null;
+            if (typeof w.getActiveConfiguration === 'function') {
+                activeConfig = w.getActiveConfiguration();
+            }
+            if (!activeConfig) {
+                const all = loadSystemConfigurations();
+                const activeId = Number(all?.activeConfigId);
+                const list = Array.isArray(all?.configurations) ? all.configurations : [];
+                if (Number.isFinite(activeId)) {
+                    activeConfig = list.find((c: any) => Number(c?.id) === activeId) || null;
+                }
+                if (!activeConfig && list.length > 0) {
+                    activeConfig = list[0];
+                }
+            }
+
+            const cfgRows = activeConfig && Array.isArray(activeConfig.object) ? activeConfig.object : null;
+            if (Array.isArray(cfgRows) && cfgRows.length > 0) {
+                objectRows = cfgRows.map((row: any) => (row && typeof row === 'object') ? { ...row } : row);
+            }
+        } catch (_) {}
+    }
+
     return { opticalSystemRows, sourceRows, objectRows };
+}
+
+function getPrimaryWavelengthMicronsFromSourceRows(sourceRows: any[]): number {
+    try {
+        if (!Array.isArray(sourceRows) || sourceRows.length === 0) return 0.5876;
+        const isPrimaryRow = (raw: any): boolean => {
+            if (raw === true || raw === 1) return true;
+            const s = String(raw ?? '').trim().toLowerCase();
+            return s.includes('primary') || s === 'true' || s === 'yes' || s === '1';
+        };
+
+        let fallbackWavelength = NaN;
+        for (let i = 0; i < sourceRows.length; i++) {
+            const row = sourceRows[i];
+            const wl = Number(row?.wavelength);
+            if (!Number.isFinite(wl) || wl <= 0) continue;
+            if (!Number.isFinite(fallbackWavelength)) fallbackWavelength = wl;
+            if (isPrimaryRow(row?.primary)) return wl;
+        }
+
+        return Number.isFinite(fallbackWavelength) && fallbackWavelength > 0 ? fallbackWavelength : 0.5876;
+    } catch (_) {
+        return 0.5876;
+    }
+}
+
+function getStopDiameterMmFromOpticalRows(opticalSystemRows: any[]): number {
+    let stopDiameterMm = 24.0;
+    try {
+        const stopIndex = findStopSurfaceIndex(opticalSystemRows);
+        const stopRow = Number.isInteger(stopIndex) && stopIndex >= 0 ? opticalSystemRows?.[stopIndex] : null;
+        const sd = Math.abs(parseFloat(
+            stopRow?.semidia
+            ?? stopRow?.Semidia
+            ?? stopRow?.['Semi Diameter']
+            ?? stopRow?.aperture
+            ?? stopRow?.Aperture
+            ?? NaN,
+        ));
+        if (Number.isFinite(sd) && sd > 0) {
+            const hasApertureField = !!(stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined));
+            const stopRadiusMm = hasApertureField ? (sd * 0.5) : sd;
+            if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
+                stopDiameterMm = stopRadiusMm * 2;
+            }
+        }
+    } catch (_) {}
+    return stopDiameterMm;
+}
+
+function derivePupilAndFocalLengthMmForAiry(opticalSystemRows: any[], wavelengthUm: number): { pupilDiameterMm: number; focalLengthMm: number } {
+    let pupilDiameterMm = NaN;
+    let focalLengthMm = NaN;
+
+    try {
+        const paraxial = calculateParaxialData(opticalSystemRows, wavelengthUm);
+        const enpd = Number(paraxial?.entrancePupilDiameter);
+        const expd = Number(paraxial?.exitPupilDiameter);
+        if (Number.isFinite(enpd) && enpd > 0) {
+            pupilDiameterMm = Math.abs(enpd);
+        } else if (Number.isFinite(expd) && expd > 0) {
+            pupilDiameterMm = Math.abs(expd);
+        }
+
+        const paraxialFocal = Number(paraxial?.focalLength);
+        if (Number.isFinite(paraxialFocal) && Math.abs(paraxialFocal) > 1e-9 && paraxialFocal !== Infinity) {
+            focalLengthMm = Math.abs(paraxialFocal);
+        }
+    } catch (_) {}
+
+    if (!Number.isFinite(pupilDiameterMm) || pupilDiameterMm <= 0) {
+        pupilDiameterMm = getStopDiameterMmFromOpticalRows(opticalSystemRows);
+    }
+
+    if (!Number.isFinite(focalLengthMm) || focalLengthMm <= 0) {
+        focalLengthMm = Math.abs(Number(calculateFocalLength(opticalSystemRows, wavelengthUm)));
+    }
+
+    return { pupilDiameterMm, focalLengthMm };
+}
+
+function computePopupAiryRadiusUm(opticalSystemRows: any[], sourceRows: any[]): number {
+    try {
+        const wavelengthUm = getPrimaryWavelengthMicronsFromSourceRows(sourceRows);
+        const { pupilDiameterMm, focalLengthMm } = derivePupilAndFocalLengthMmForAiry(opticalSystemRows, wavelengthUm);
+        if (![wavelengthUm, pupilDiameterMm, focalLengthMm].every(Number.isFinite)) return NaN;
+        if (wavelengthUm <= 0 || pupilDiameterMm <= 0 || focalLengthMm <= 0) return NaN;
+        const fNumber = focalLengthMm / pupilDiameterMm;
+        if (!Number.isFinite(fNumber) || fNumber <= 0) return NaN;
+        const airyRadiusUm = 1.22 * wavelengthUm * fNumber;
+        return Number.isFinite(airyRadiusUm) && airyRadiusUm > 0 ? airyRadiusUm : NaN;
+    } catch (_) {
+        return NaN;
+    }
 }
 
 async function runDesktopAnalysisComputeForPopup(
@@ -78,6 +219,10 @@ async function runDesktopAnalysisComputeForPopup(
 ): Promise<RunAnalysisComputeResponse> {
     if (!isTauriRuntime()) {
         throw new Error('Desktop runtime is not available');
+    }
+
+    if (!shouldUseDesktopRustAnalysis()) {
+        throw new Error('Desktop Rust analysis is disabled until TS parity migration is complete');
     }
 
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
@@ -90,6 +235,362 @@ async function runDesktopAnalysisComputeForPopup(
 }
 
 w.runDesktopAnalysisComputeForPopup = runDesktopAnalysisComputeForPopup;
+
+function clonePopupOpticalRowsWithDefocusShift(opticalSystemRows: any[], defocusShiftMm?: number): any[] {
+    if (!Array.isArray(opticalSystemRows)) return [];
+    const shift = Number(defocusShiftMm);
+    const cloned = opticalSystemRows.map((row) => (row && typeof row === 'object') ? { ...row } : row);
+    if (!Number.isFinite(shift) || Math.abs(shift) < 1e-15) {
+        return cloned;
+    }
+
+    const imageIdx = cloned.findIndex((row: any) => {
+        const objType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+        return objType === 'image';
+    });
+    const targetIdx = (imageIdx > 0) ? (imageIdx - 1) : Math.max(0, cloned.length - 2);
+    if (targetIdx < 0 || targetIdx >= cloned.length) {
+        return cloned;
+    }
+
+    const target = (cloned[targetIdx] && typeof cloned[targetIdx] === 'object') ? { ...cloned[targetIdx] } : {};
+    const baseThickness = Number((target as any).thickness);
+    const safeBaseThickness = Number.isFinite(baseThickness) ? baseThickness : 0;
+    (target as any).thickness = safeBaseThickness + shift;
+    cloned[targetIdx] = target;
+    return cloned;
+}
+
+async function runDesktopNativeSpotRaytraceForPopup(payload: {
+    surfaceIndex?: number;
+    rayCount?: number;
+    ringCount?: number;
+    pattern?: string;
+    wavelengthMode?: string;
+    objectRows?: any[];
+    defocusMm?: number;
+}): Promise<any> {
+    if (!isTauriRuntime()) {
+        throw new Error('Desktop runtime is not available');
+    }
+
+    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    const explicitObjectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : null;
+    const effectiveObjectRows = (explicitObjectRows && explicitObjectRows.length > 0) ? explicitObjectRows : objectRows;
+    const effectiveOpticalRows = clonePopupOpticalRowsWithDefocusShift(opticalSystemRows, payload?.defocusMm);
+    const targetSurfaceIndex = Number.isInteger(payload?.surfaceIndex) ? Number(payload.surfaceIndex) : undefined;
+    const tStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+    const requestedPattern = payload?.pattern ? String(payload.pattern) : 'annular';
+    const airyRadiusUm = computePopupAiryRadiusUm(effectiveOpticalRows, sourceRows);
+    const tInvokeStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+    const requestBody = {
+        opticalSystemRows: effectiveOpticalRows,
+        sourceRows,
+        objectRows: effectiveObjectRows,
+        surfaceIndex: targetSurfaceIndex,
+        rayCount: Number.isInteger(payload?.rayCount) ? payload.rayCount : undefined,
+        ringCount: Number.isInteger(payload?.ringCount) ? payload.ringCount : undefined,
+        pattern: requestedPattern,
+        wavelengthMode: payload?.wavelengthMode ? String(payload.wavelengthMode) : undefined,
+    };
+
+    let result = await runNativeSpotRaytrace(requestBody);
+
+    const selectedSurfaceHasNoHit = (Number(result?.totalHitRays) || 0) <= 0;
+    if (selectedSurfaceHasNoHit) {
+        const findImageSurfaceIndex = (rows: any[]): number | undefined => {
+            if (!Array.isArray(rows) || rows.length === 0) return undefined;
+            const normalize = (v: any) => String(v ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+            for (let i = 0; i < rows.length; i++) {
+                const row = rows[i] || {};
+                const objectType = normalize(row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? row?.surfType);
+                if (objectType === 'image' || objectType.startsWith('image')) {
+                    return i;
+                }
+            }
+            for (let i = rows.length - 1; i >= 0; i--) {
+                const row = rows[i] || {};
+                const objectType = normalize(row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? row?.surfType);
+                if (objectType !== 'object' && objectType !== 'gap' && objectType !== 'airgap') {
+                    return i;
+                }
+            }
+            return undefined;
+        };
+
+        const fallbackSurfaceIndex = findImageSurfaceIndex(effectiveOpticalRows);
+        if (Number.isInteger(fallbackSurfaceIndex) && fallbackSurfaceIndex !== targetSurfaceIndex) {
+            result = await runNativeSpotRaytrace({
+                ...requestBody,
+                surfaceIndex: fallbackSurfaceIndex,
+            });
+            try {
+                (result as any).__surfaceIndexRetriedFrom = targetSurfaceIndex;
+                (result as any).__surfaceIndexRetriedTo = fallbackSurfaceIndex;
+            } catch (_) {}
+        }
+    }
+    const tInvokeEnd = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+    const rustRayGenerationMs = Number(result?.rayGenerationMs);
+    const rustTraceMs = Number(result?.traceMs);
+
+    return {
+        ...result,
+        airyRadiusUm: Number.isFinite(airyRadiusUm) ? airyRadiusUm : undefined,
+        timingMs: {
+            raySeriesGeneration: Number.isFinite(rustRayGenerationMs) ? rustRayGenerationMs : 0,
+            nativeInvoke: Math.max(0, tInvokeEnd - tInvokeStart),
+            nativeTrace: Number.isFinite(rustTraceMs) ? rustTraceMs : 0,
+            total: Math.max(0, tInvokeEnd - tStart),
+        },
+    };
+}
+
+w.runDesktopNativeSpotRaytraceForPopup = runDesktopNativeSpotRaytraceForPopup;
+
+async function runDesktopNativeSphericalAberrationForPopup(payload: {
+    surfaceIndex?: number;
+    rayCount?: number;
+    referenceFocusMode?: 'primary-paraxial' | 'current-paraxial' | 'chief-ray';
+    wavelengthMode?: 'all' | 'primary';
+}): Promise<any> {
+    if (!isTauriRuntime()) {
+        throw new Error('Desktop runtime is not available');
+    }
+
+    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    return runNativeSphericalAberration({
+        opticalSystemRows,
+        sourceRows,
+        objectRows,
+        surfaceIndex: Number.isInteger(payload?.surfaceIndex) ? Number(payload.surfaceIndex) : undefined,
+        rayCount: Number.isInteger(payload?.rayCount) ? Number(payload.rayCount) : undefined,
+        referenceFocusMode: payload?.referenceFocusMode || 'current-paraxial',
+        wavelengthMode: payload?.wavelengthMode || 'all',
+    });
+}
+
+w.runDesktopNativeSphericalAberrationForPopup = runDesktopNativeSphericalAberrationForPopup;
+
+function collectSphericalWavelengthsFromSourceRows(sourceRows: any[]): number[] {
+    const normalizeUm = (raw: any): number | null => {
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n <= 0) return null;
+        return n > 10 ? (n / 1000) : n;
+    };
+
+    const rows = Array.isArray(sourceRows) ? sourceRows : [];
+    const out: number[] = [];
+    for (const row of rows) {
+        const wl = normalizeUm(row?.wavelength ?? row?.Wavelength);
+        if (wl === null || !Number.isFinite(wl) || wl <= 0) continue;
+        if (!out.some((v) => Math.abs(v - wl) < 1e-12)) out.push(wl);
+        if (out.length >= 6) break;
+    }
+    return out.length > 0 ? out : [0.5876];
+}
+
+function summarizeSphericalParityDiff(tsData: any, rustData: any): any {
+    const makeSeriesMap = (series: any[]): Map<string, any> => {
+        const map = new Map<string, any>();
+        for (const entry of (Array.isArray(series) ? series : [])) {
+            const wl = Number(entry?.wavelength);
+            if (!Number.isFinite(wl)) continue;
+            const key = wl.toFixed(7);
+            map.set(key, entry);
+        }
+        return map;
+    };
+
+    const perWavelength: Array<{
+        wavelengthUm: number;
+        meridionalMaxAbsDeltaMm: number;
+        sagittalMaxAbsDeltaMm: number;
+        comparedPointCount: number;
+    }> = [];
+
+    const compareAxis = (axisName: 'meridional' | 'sagittal', tsSeries: any[], rustSeries: any[]) => {
+        const tsMap = makeSeriesMap(tsSeries);
+        const rustMap = makeSeriesMap(rustSeries);
+        const axisResults: Array<{ wl: number; maxAbs: number; sumAbs: number; count: number }> = [];
+
+        for (const [key, rustEntry] of rustMap.entries()) {
+            const tsEntry = tsMap.get(key);
+            if (!tsEntry) continue;
+
+            const tsPoints = Array.isArray(tsEntry?.points) ? tsEntry.points : [];
+            const rustPoints = Array.isArray(rustEntry?.points) ? rustEntry.points : [];
+            if (tsPoints.length === 0 || rustPoints.length === 0) continue;
+
+            const tsByPupil = new Map<string, number>();
+            for (const p of tsPoints) {
+                const pupil = Number(p?.pupilCoordinate);
+                const la = Number(p?.longitudinalAberration);
+                if (!Number.isFinite(pupil) || !Number.isFinite(la)) continue;
+                tsByPupil.set(pupil.toFixed(6), la);
+            }
+
+            let maxAbs = 0;
+            let sumAbs = 0;
+            let count = 0;
+            for (const p of rustPoints) {
+                const pupil = Number(p?.pupilCoordinate);
+                const laRust = Number(p?.longitudinalAberration);
+                if (!Number.isFinite(pupil) || !Number.isFinite(laRust)) continue;
+                const laTs = tsByPupil.get(pupil.toFixed(6));
+                if (!Number.isFinite(laTs as number)) continue;
+                const abs = Math.abs(laRust - (laTs as number));
+                maxAbs = Math.max(maxAbs, abs);
+                sumAbs += abs;
+                count += 1;
+            }
+
+            axisResults.push({
+                wl: Number(rustEntry?.wavelength),
+                maxAbs,
+                sumAbs,
+                count,
+            });
+        }
+
+        return axisResults;
+    };
+
+    const merResults = compareAxis('meridional', tsData?.meridionalData, rustData?.meridionalData);
+    const sagResults = compareAxis('sagittal', tsData?.sagittalData, rustData?.sagittalData);
+
+    const byWl = new Map<number, {
+        wavelengthUm: number;
+        meridionalMaxAbsDeltaMm: number;
+        sagittalMaxAbsDeltaMm: number;
+        comparedPointCount: number;
+        sumAbs: number;
+    }>();
+
+    for (const result of merResults) {
+        if (!Number.isFinite(result.wl)) continue;
+        const current = byWl.get(result.wl) || {
+            wavelengthUm: result.wl,
+            meridionalMaxAbsDeltaMm: 0,
+            sagittalMaxAbsDeltaMm: 0,
+            comparedPointCount: 0,
+            sumAbs: 0,
+        };
+        current.meridionalMaxAbsDeltaMm = Math.max(current.meridionalMaxAbsDeltaMm, result.maxAbs);
+        current.comparedPointCount += result.count;
+        current.sumAbs += result.sumAbs;
+        byWl.set(result.wl, current);
+    }
+    for (const result of sagResults) {
+        if (!Number.isFinite(result.wl)) continue;
+        const current = byWl.get(result.wl) || {
+            wavelengthUm: result.wl,
+            meridionalMaxAbsDeltaMm: 0,
+            sagittalMaxAbsDeltaMm: 0,
+            comparedPointCount: 0,
+            sumAbs: 0,
+        };
+        current.sagittalMaxAbsDeltaMm = Math.max(current.sagittalMaxAbsDeltaMm, result.maxAbs);
+        current.comparedPointCount += result.count;
+        current.sumAbs += result.sumAbs;
+        byWl.set(result.wl, current);
+    }
+
+    let globalMaxAbs = 0;
+    let globalSumAbs = 0;
+    let globalCount = 0;
+    for (const item of byWl.values()) {
+        globalMaxAbs = Math.max(globalMaxAbs, item.meridionalMaxAbsDeltaMm, item.sagittalMaxAbsDeltaMm);
+        globalSumAbs += item.sumAbs;
+        globalCount += item.comparedPointCount;
+        perWavelength.push({
+            wavelengthUm: item.wavelengthUm,
+            meridionalMaxAbsDeltaMm: item.meridionalMaxAbsDeltaMm,
+            sagittalMaxAbsDeltaMm: item.sagittalMaxAbsDeltaMm,
+            comparedPointCount: item.comparedPointCount,
+        });
+    }
+
+    perWavelength.sort((a, b) => a.wavelengthUm - b.wavelengthUm);
+
+    return {
+        comparedPointCount: globalCount,
+        maxAbsDeltaMm: globalMaxAbs,
+        meanAbsDeltaMm: globalCount > 0 ? (globalSumAbs / globalCount) : 0,
+        largeDeltaThresholdMm: 1e-3,
+        hasLargeDelta: globalMaxAbs > 1e-3,
+        perWavelength,
+    };
+}
+
+async function compareSphericalAberrationTsVsRustForPopup(payload: {
+    rustResult: any;
+    rayCount?: number;
+    referenceFocusMode?: 'primary-paraxial' | 'current-paraxial' | 'chief-ray';
+    surfaceIndex?: number;
+}): Promise<any> {
+    const rustResult = payload?.rustResult;
+    if (!rustResult || typeof rustResult !== 'object') {
+        throw new Error('compareSphericalAberrationTsVsRustForPopup: rustResult is required');
+    }
+
+    const { opticalSystemRows, sourceRows } = collectPopupRowsFromMainWindow();
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+        throw new Error('compareSphericalAberrationTsVsRustForPopup: opticalSystemRows is empty');
+    }
+
+    const targetSurfaceIndex = Number.isInteger(payload?.surfaceIndex)
+        ? Number(payload.surfaceIndex)
+        : (opticalSystemRows.length - 1);
+    const rayCount = Number.isInteger(payload?.rayCount) ? Number(payload.rayCount) : 51;
+    const referenceFocusMode = payload?.referenceFocusMode || 'current-paraxial';
+    const wavelengths = collectSphericalWavelengthsFromSourceRows(sourceRows);
+
+    const { calculateLongitudinalAberrationAsync } = await import('../evaluation/aberrations/longitudinal-aberration.ts');
+    const tsData = await calculateLongitudinalAberrationAsync(
+        opticalSystemRows,
+        targetSurfaceIndex,
+        wavelengths as any,
+        rayCount,
+        {
+            silent: true,
+            referenceFocusMode,
+        } as any
+    );
+
+    const summary = summarizeSphericalParityDiff(tsData, rustResult);
+    try {
+        console.log('📊 [SA TS-Rust][opener] summary', {
+            comparedPointCount: summary?.comparedPointCount,
+            maxAbsDeltaMm: summary?.maxAbsDeltaMm,
+            meanAbsDeltaMm: summary?.meanAbsDeltaMm,
+            hasLargeDelta: summary?.hasLargeDelta,
+        });
+    } catch (_) {}
+    try {
+        w.__COOPT_LAST_SA_TS_RUST_DIFF = {
+            ...summary,
+            at: Date.now(),
+            referenceFocusMode,
+            rayCount,
+            surfaceIndex: targetSurfaceIndex,
+        };
+    } catch (_) {}
+    return summary;
+}
+
+w.compareSphericalAberrationTsVsRustForPopup = compareSphericalAberrationTsVsRustForPopup;
+
+function shouldUseDesktopRustAnalysis(): boolean {
+    try {
+        if (typeof window !== 'undefined' && (window as any).__COOPT_DISABLE_DESKTOP_RUST_ANALYSIS === true) {
+            return false;
+        }
+    } catch (_) {}
+    return true;
+}
+
+w.shouldUseDesktopRustAnalysis = shouldUseDesktopRustAnalysis;
 
 // ============================================================================
 // GLOBAL CONFIGURATION: FORCE INFINITE PUPIL MODE
@@ -238,15 +739,83 @@ function __coopt_isGapSurface(surface: any): boolean {
     return false;
 }
 
+function __coopt_isGlassMaterial(materialValue: any): boolean {
+    const material = String(materialValue ?? '').trim().toUpperCase();
+    if (!material) return false;
+    if (material === 'AIR' || material === '0' || material === 'MIRROR') return false;
+    return true;
+}
+
+function __coopt_hasLensTag(surface: any): boolean {
+    const blockType = String(surface?._blockType ?? surface?.blockType ?? '').trim().toLowerCase();
+    const surfaceRole = String(surface?._surfaceRole ?? surface?.surfaceRole ?? '').trim().toLowerCase();
+    if (blockType === 'lens' || blockType === 'glass' || blockType === 'element') return true;
+    if (surfaceRole === 'lens' || surfaceRole === 'front' || surfaceRole === 'back') return true;
+    return false;
+}
+
 function __coopt_isLensInterval(frontSurface: any, backSurface: any): boolean {
     if (!frontSurface || !backSurface) return false;
     if ((frontSurface['object type'] || '') === 'Object') return false;
     if (__coopt_isGapSurface(frontSurface) || __coopt_isGapSurface(backSurface)) return false;
     if (__coopt_isCoordBreakSurface(frontSurface) || __coopt_isCoordBreakSurface(backSurface)) return false;
 
-    const material = String(frontSurface.material ?? '').trim().toUpperCase();
-    if (!material || material === 'AIR' || material === '0' || material === 'MIRROR') return false;
+    const frontIsGlass = __coopt_isGlassMaterial(frontSurface.material);
+    const backIsGlass = __coopt_isGlassMaterial(backSurface.material);
+    const frontHasLensTag = __coopt_hasLensTag(frontSurface);
+    const backHasLensTag = __coopt_hasLensTag(backSurface);
+    return frontIsGlass || backIsGlass || frontHasLensTag || backHasLensTag;
+}
+
+function __coopt_getSurfaceSemidiaMm(surface: any): number | null {
+    const candidates: Array<{ value: any; isDiameter: boolean }> = [
+        { value: surface?.semidia, isDiameter: false },
+        { value: surface?.semiDiameter, isDiameter: false },
+        { value: surface?.['semi-diameter'], isDiameter: false },
+        { value: surface?.semi_diameter, isDiameter: false },
+        { value: surface?.clearAperture, isDiameter: false },
+        { value: surface?.Clear_Aperture, isDiameter: false },
+        { value: surface?.diameter, isDiameter: true }
+    ];
+    for (const candidate of candidates) {
+        const value = candidate.value;
+        const n = Number(value);
+        const parsed = Number.isFinite(n) ? n : parseFloat(String(value ?? ''));
+        const resolved = Number.isFinite(parsed) ? parsed : NaN;
+        if (Number.isFinite(resolved) && resolved > 0) {
+            if (candidate.isDiameter) return resolved * 0.5;
+            return resolved;
+        }
+    }
+    return null;
+}
+
+function __coopt_isObjectSurface(surface: any): boolean {
+    const objectType = String(surface?.['object type'] ?? surface?.type ?? '').trim().toLowerCase();
+    return objectType === 'object';
+}
+
+function __coopt_isRenderableLensCandidateSurface(surface: any): boolean {
+    if (!surface) return false;
+    if (__coopt_isObjectSurface(surface)) return false;
+    if (__coopt_isGapSurface(surface)) return false;
+    if (__coopt_isCoordBreakSurface(surface)) return false;
     return true;
+}
+
+function __coopt_buildApproxSurfaceOrigins(rows: any[]): Array<{ origin: { x: number; y: number; z: number } }> {
+    const out: Array<{ origin: { x: number; y: number; z: number } }> = [];
+    if (!Array.isArray(rows) || rows.length === 0) return out;
+    let z = 0;
+    for (let i = 0; i < rows.length; i++) {
+        out.push({ origin: { x: 0, y: 0, z } });
+        const thicknessRaw = rows[i]?.thickness;
+        const thickness = Number.isFinite(Number(thicknessRaw)) ? Number(thicknessRaw) : parseFloat(String(thicknessRaw ?? ''));
+        if (Number.isFinite(thickness)) {
+            z += thickness;
+        }
+    }
+    return out;
 }
 
 function __coopt_loadSurfaceColorOverridesSafe(): Record<string, any> {
@@ -300,17 +869,121 @@ function __coopt_orientPolyline(points: any[], startRef: any, endRef: any): any[
     return d1 <= d2 ? points.slice() : points.slice().reverse();
 }
 
+function __coopt_addUltraDebugCrossOverlay(scene: any, THREE: any, viewAxis: 'XZ' | 'YZ'): void {
+    if (!scene || !THREE) return;
+
+    const size = 100000;
+    const ortho = 0;
+
+    const positions = new Float32Array(12);
+    if (viewAxis === 'YZ') {
+        positions.set([
+            ortho, -size, -size,
+            ortho, size, -size,
+            ortho, -size, size,
+            ortho, size, size
+        ]);
+    } else {
+        positions.set([
+            -size, ortho, -size,
+            size, ortho, -size,
+            -size, ortho, size,
+            size, ortho, size
+        ]);
+    }
+
+    const indices = new Uint16Array([0, 1, 2, 1, 3, 2]);
+    const meshGeometry = new THREE.BufferGeometry();
+    meshGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    meshGeometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    meshGeometry.computeVertexNormals();
+
+    const meshMaterial = new THREE.MeshBasicMaterial({
+        color: 0xff00ff,
+        transparent: true,
+        opacity: 0.22,
+        side: THREE.DoubleSide,
+        depthTest: false,
+        depthWrite: false
+    });
+
+    const mesh = new THREE.Mesh(meshGeometry, meshMaterial);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 60000;
+    mesh.userData = {
+        type: 'popupLensFill',
+        viewAxis,
+        surfaceIndex: -999,
+        isOpticalElement: true,
+        isUltraDebugOverlay: true
+    };
+    scene.add(mesh);
+
+    const guidePoints = viewAxis === 'YZ'
+        ? [new THREE.Vector3(0, -size, 0), new THREE.Vector3(0, size, 0), new THREE.Vector3(0, 0, -size), new THREE.Vector3(0, 0, size)]
+        : [new THREE.Vector3(-size, 0, 0), new THREE.Vector3(size, 0, 0), new THREE.Vector3(0, 0, -size), new THREE.Vector3(0, 0, size)];
+
+    const lineGeometryA = new THREE.BufferGeometry().setFromPoints([guidePoints[0], guidePoints[1]]);
+    const lineGeometryB = new THREE.BufferGeometry().setFromPoints([guidePoints[2], guidePoints[3]]);
+    const lineMaterial = new THREE.LineBasicMaterial({
+        color: 0xffff00,
+        transparent: true,
+        opacity: 1.0,
+        depthTest: false,
+        depthWrite: false
+    });
+    const lineA = new THREE.Line(lineGeometryA, lineMaterial.clone());
+    const lineB = new THREE.Line(lineGeometryB, lineMaterial.clone());
+    lineA.renderOrder = 60010;
+    lineB.renderOrder = 60010;
+    lineA.frustumCulled = false;
+    lineB.frustumCulled = false;
+    lineA.userData = { type: 'popupLensFill', isUltraDebugOverlay: true, isOpticalElement: true };
+    lineB.userData = { type: 'popupLensFill', isUltraDebugOverlay: true, isOpticalElement: true };
+    scene.add(lineA);
+    scene.add(lineB);
+}
+
+function __coopt_getFillDebugStatusSuffix(viewAxis?: 'XZ' | 'YZ'): string {
+    try {
+        const debug = (w as any).__cooptLastFillDebug;
+        if (!debug) return '';
+        if (viewAxis && String(debug.viewAxis || '') !== viewAxis) return '';
+        const meshCount = Number(debug.createdMeshCount) || 0;
+        const sceneCount = Number(debug.sceneChildCount) || 0;
+        const source = String(debug.source || 'unknown');
+        return ` fillMesh=${meshCount} scene=${sceneCount} source=${source}`;
+    } catch (_) {
+        return '';
+    }
+}
+
+function __coopt_setPopupStatusWithFillDebug(popupWindow: any, baseStatus: string, viewAxis: 'XZ' | 'YZ'): void {
+    const suffix = __coopt_getFillDebugStatusSuffix(viewAxis);
+    const statusText = `${baseStatus}${suffix}`;
+    try {
+        const popupStatus = popupWindow?.document?.getElementById?.('status');
+        if (popupStatus) popupStatus.textContent = statusText;
+    } catch (_) {}
+    try {
+        popupWindow?.postMessage?.({ status: statusText }, '*');
+    } catch (_) {}
+}
+
 function __coopt_applyPopupCrossSectionLensFill(options: {
     popupWindow: any;
     scene: any;
     viewAxis: 'XZ' | 'YZ';
     opticalSystemRows: any[];
+    source?: string;
 }): void {
-    const { popupWindow, scene, viewAxis, opticalSystemRows } = options;
+    const { popupWindow, scene, viewAxis, opticalSystemRows, source = 'unknown' } = options;
     if (!scene || !Array.isArray(opticalSystemRows) || opticalSystemRows.length < 2) return;
 
-    const THREE = popupWindow?.THREE || w.THREE;
+    const THREE = popupWindow?.THREE || w.THREE || THREE_NS;
     if (!THREE) return;
+
+    const FORCE_DEBUG_FILL = true;
 
     __coopt_clearPopupLensFillMeshes(scene);
 
@@ -375,12 +1048,50 @@ function __coopt_applyPopupCrossSectionLensFill(options: {
     });
 
     const overrides = __coopt_loadSurfaceColorOverridesSafe();
+    const surfaceOrigins = (() => {
+        try {
+            const exact = calculateSurfaceOrigins(opticalSystemRows);
+            if (Array.isArray(exact) && exact.length > 0) return exact;
+            return __coopt_buildApproxSurfaceOrigins(opticalSystemRows);
+        } catch (_) {
+            return __coopt_buildApproxSurfaceOrigins(opticalSystemRows);
+        }
+    })();
     const axisCoord = (p: any) => (viewAxis === 'YZ' ? p.y : p.x);
 
+    const strictIntervalIndices: number[] = [];
     for (let i = 0; i < opticalSystemRows.length - 1; i++) {
         const frontSurface = opticalSystemRows[i];
         const backSurface = opticalSystemRows[i + 1];
-        if (!__coopt_isLensInterval(frontSurface, backSurface)) continue;
+        if (__coopt_isLensInterval(frontSurface, backSurface)) {
+            strictIntervalIndices.push(i);
+        }
+    }
+
+    const fallbackIntervalIndices: number[] = [];
+    if (strictIntervalIndices.length === 0) {
+        console.warn('[RenderWindow] Lens fill strict interval detection matched 0 pairs. Falling back to geometry-based adjacent pairing.');
+        for (let i = 0; i < opticalSystemRows.length - 1; i++) {
+            const frontSurface = opticalSystemRows[i];
+            const backSurface = opticalSystemRows[i + 1];
+            if (!__coopt_isRenderableLensCandidateSurface(frontSurface) || !__coopt_isRenderableLensCandidateSurface(backSurface)) {
+                continue;
+            }
+            const sd1 = __coopt_getSurfaceSemidiaMm(frontSurface);
+            const sd2 = __coopt_getSurfaceSemidiaMm(backSurface);
+            if (Number.isFinite(sd1) && Number.isFinite(sd2) && (sd1 as number) > 0 && (sd2 as number) > 0) {
+                fallbackIntervalIndices.push(i);
+            }
+        }
+    }
+
+    const intervalIndices = strictIntervalIndices.length > 0 ? strictIntervalIndices : fallbackIntervalIndices;
+
+    let createdMeshCount = 0;
+
+    for (const i of intervalIndices) {
+        const frontSurface = opticalSystemRows[i];
+        const backSurface = opticalSystemRows[i + 1];
 
         const frontSurfaceIndex = i + 1;
         const backSurfaceIndex = i + 2;
@@ -389,12 +1100,39 @@ function __coopt_applyPopupCrossSectionLensFill(options: {
         const backLine = activeProfileMap.get(backSurfaceIndex);
         const sideLines = activeConnectionMap.get(frontSurfaceIndex) || [];
 
-        if (!frontLine || !backLine || sideLines.length < 2) continue;
+        let frontPoints = frontLine ? __coopt_readWorldPolylinePoints(frontLine, THREE) : [];
+        let backPoints = backLine ? __coopt_readWorldPolylinePoints(backLine, THREE) : [];
 
-        const frontPoints = __coopt_readWorldPolylinePoints(frontLine, THREE);
-        const backPoints = __coopt_readWorldPolylinePoints(backLine, THREE);
+        if (frontPoints.length < 2 || backPoints.length < 2) {
+            const o1 = surfaceOrigins?.[i]?.origin;
+            const o2 = surfaceOrigins?.[i + 1]?.origin;
+            const sd1 = __coopt_getSurfaceSemidiaMm(frontSurface);
+            const sd2 = __coopt_getSurfaceSemidiaMm(backSurface);
+            if (o1 && o2 && Number.isFinite(sd1) && Number.isFinite(sd2) && sd1! > 0 && sd2! > 0) {
+                if (viewAxis === 'YZ') {
+                    frontPoints = [
+                        new THREE.Vector3(Number(o1.x) || 0, -sd1!, Number(o1.z) || 0),
+                        new THREE.Vector3(Number(o1.x) || 0, sd1!, Number(o1.z) || 0)
+                    ];
+                    backPoints = [
+                        new THREE.Vector3(Number(o2.x) || 0, -sd2!, Number(o2.z) || 0),
+                        new THREE.Vector3(Number(o2.x) || 0, sd2!, Number(o2.z) || 0)
+                    ];
+                } else {
+                    frontPoints = [
+                        new THREE.Vector3(-sd1!, Number(o1.y) || 0, Number(o1.z) || 0),
+                        new THREE.Vector3(sd1!, Number(o1.y) || 0, Number(o1.z) || 0)
+                    ];
+                    backPoints = [
+                        new THREE.Vector3(-sd2!, Number(o2.y) || 0, Number(o2.z) || 0),
+                        new THREE.Vector3(sd2!, Number(o2.y) || 0, Number(o2.z) || 0)
+                    ];
+                }
+            }
+        }
         if (frontPoints.length < 2 || backPoints.length < 2) continue;
 
+        const boundary3D: any[] = [];
         const sideCandidates = sideLines
             .map((lineObj: any) => {
                 const pts = __coopt_readWorldPolylinePoints(lineObj, THREE);
@@ -405,61 +1143,91 @@ function __coopt_applyPopupCrossSectionLensFill(options: {
             .filter(Boolean)
             .sort((a: any, b: any) => a.avg - b.avg);
 
-        if (sideCandidates.length < 2) continue;
+        if (sideCandidates.length >= 2) {
+            const negSideRaw = sideCandidates[0].pts;
+            const posSideRaw = sideCandidates[sideCandidates.length - 1].pts;
 
-        const negSideRaw = sideCandidates[0].pts;
-        const posSideRaw = sideCandidates[sideCandidates.length - 1].pts;
+            const frontNeg = frontPoints[0];
+            const frontPos = frontPoints[frontPoints.length - 1];
+            const backNeg = backPoints[0];
+            const backPos = backPoints[backPoints.length - 1];
 
-        const frontNeg = frontPoints[0];
-        const frontPos = frontPoints[frontPoints.length - 1];
-        const backNeg = backPoints[0];
-        const backPos = backPoints[backPoints.length - 1];
+            const posSide = __coopt_orientPolyline(posSideRaw, frontPos, backPos);
+            const negSide = __coopt_orientPolyline(negSideRaw, backNeg, frontNeg);
 
-        const posSide = __coopt_orientPolyline(posSideRaw, frontPos, backPos);
-        const negSide = __coopt_orientPolyline(negSideRaw, backNeg, frontNeg);
+            boundary3D.push(...frontPoints);
+            boundary3D.push(...posSide.slice(1));
+            boundary3D.push(...backPoints.slice().reverse().slice(1));
+            boundary3D.push(...negSide.slice(1));
+        } else {
+            const frontStart = frontPoints[0];
+            const frontEnd = frontPoints[frontPoints.length - 1];
+            const backStart = backPoints[0];
+            const backEnd = backPoints[backPoints.length - 1];
 
-        const boundary3D: any[] = [];
-        boundary3D.push(...frontPoints);
-        boundary3D.push(...posSide.slice(1));
-        boundary3D.push(...backPoints.slice().reverse().slice(1));
-        boundary3D.push(...negSide.slice(1));
+            const forwardCost = frontStart.distanceToSquared(backStart) + frontEnd.distanceToSquared(backEnd);
+            const reverseCost = frontStart.distanceToSquared(backEnd) + frontEnd.distanceToSquared(backStart);
+            const alignedBack = (forwardCost <= reverseCost) ? backPoints.slice() : backPoints.slice().reverse();
 
-        const cleaned3D: any[] = [];
-        for (const p of boundary3D) {
-            if (!Number.isFinite(p?.x) || !Number.isFinite(p?.y) || !Number.isFinite(p?.z)) continue;
-            if (cleaned3D.length === 0 || cleaned3D[cleaned3D.length - 1].distanceToSquared(p) > 1e-12) {
-                cleaned3D.push(p.clone());
+            boundary3D.push(...frontPoints);
+            boundary3D.push(...alignedBack.slice().reverse().slice(1));
+        }
+
+        const frontStart = frontPoints[0];
+        const frontEnd = frontPoints[frontPoints.length - 1];
+        const backStart = backPoints[0];
+        const backEnd = backPoints[backPoints.length - 1];
+
+        const forwardCost = frontStart.distanceToSquared(backStart) + frontEnd.distanceToSquared(backEnd);
+        const reverseCost = frontStart.distanceToSquared(backEnd) + frontEnd.distanceToSquared(backStart);
+        const alignedBack = (forwardCost <= reverseCost) ? backPoints.slice() : backPoints.slice().reverse();
+
+        const sampleCount = Math.max(2, Math.min(frontPoints.length, alignedBack.length));
+        const samplePolyline = (pts: any[], count: number): any[] => {
+            if (!Array.isArray(pts) || pts.length === 0 || count < 2) return [];
+            const out: any[] = [];
+            for (let s = 0; s < count; s++) {
+                const t = s / (count - 1);
+                const idx = Math.round(t * (pts.length - 1));
+                const p = pts[Math.max(0, Math.min(idx, pts.length - 1))];
+                if (Number.isFinite(p?.x) && Number.isFinite(p?.y) && Number.isFinite(p?.z)) {
+                    out.push(p.clone());
+                }
             }
-        }
-        if (cleaned3D.length < 3) continue;
+            return out;
+        };
 
-        const cleaned2D = cleaned3D.map((p: any) => new THREE.Vector2(axisCoord(p), p.z));
-        if (Math.abs(THREE.ShapeUtils.area(cleaned2D)) < 1e-8) continue;
+        const sampledFront = samplePolyline(frontPoints, sampleCount);
+        const sampledBack = samplePolyline(alignedBack, sampleCount);
+        if (sampledFront.length < 2 || sampledBack.length < 2 || sampledFront.length !== sampledBack.length) continue;
 
-        let triangles: any[] = [];
-        try {
-            triangles = THREE.ShapeUtils.triangulateShape(cleaned2D, []);
-        } catch (_) {
-            triangles = [];
-        }
-        if (!Array.isArray(triangles) || triangles.length === 0) continue;
-
-        const positions = new Float32Array(cleaned3D.length * 3);
-        for (let j = 0; j < cleaned3D.length; j++) {
-            positions[j * 3] = cleaned3D[j].x;
-            positions[j * 3 + 1] = cleaned3D[j].y;
-            positions[j * 3 + 2] = cleaned3D[j].z;
+        const vertexCount = sampledFront.length * 2;
+        const positions = new Float32Array(vertexCount * 3);
+        for (let j = 0; j < sampledFront.length; j++) {
+            const f = sampledFront[j];
+            const b = sampledBack[j];
+            const fi = j * 2;
+            const bi = fi + 1;
+            positions[fi * 3] = f.x;
+            positions[fi * 3 + 1] = f.y;
+            positions[fi * 3 + 2] = f.z;
+            positions[bi * 3] = b.x;
+            positions[bi * 3 + 1] = b.y;
+            positions[bi * 3 + 2] = b.z;
         }
 
         const flatIndices: number[] = [];
-        triangles.forEach((tri: any) => {
-            if (Array.isArray(tri) && tri.length === 3) {
-                flatIndices.push(tri[0], tri[1], tri[2]);
-            }
-        });
+        for (let j = 0; j < sampledFront.length - 1; j++) {
+            const a = j * 2;
+            const b = a + 1;
+            const c = a + 2;
+            const d = a + 3;
+            flatIndices.push(a, b, c);
+            flatIndices.push(b, d, c);
+        }
         if (flatIndices.length < 3) continue;
 
-        const indexArray = (cleaned3D.length > 65535)
+        const indexArray = (vertexCount > 65535)
             ? new Uint32Array(flatIndices)
             : new Uint16Array(flatIndices);
 
@@ -470,20 +1238,38 @@ function __coopt_applyPopupCrossSectionLensFill(options: {
 
         const key = __coopt_surfaceColorKey(frontSurface, i);
         const colorOverride = __coopt_parseColorToInt(overrides?.[key]);
-        const lensColor = (colorOverride !== null) ? colorOverride : 0x00ccff;
+        const isWhiteLike = (value: number | null): boolean => {
+            if (value === null || !Number.isFinite(value)) return false;
+            const r = (value >> 16) & 0xff;
+            const g = (value >> 8) & 0xff;
+            const b = value & 0xff;
+            return r >= 245 && g >= 245 && b >= 245;
+        };
+        const lensColor = (colorOverride !== null && !isWhiteLike(colorOverride)) ? colorOverride : 0x00ccff;
 
-        const material = new THREE.MeshBasicMaterial({
-            color: lensColor,
-            transparent: true,
-            opacity: 0.35,
-            side: THREE.DoubleSide,
-            depthTest: false,
-            depthWrite: false
-        });
+        const material = new THREE.MeshBasicMaterial(
+            FORCE_DEBUG_FILL
+                ? {
+                    color: 0xff00ff,
+                    transparent: true,
+                    opacity: 1.0,
+                    side: THREE.DoubleSide,
+                    depthTest: false,
+                    depthWrite: false
+                }
+                : {
+                    color: lensColor,
+                    transparent: true,
+                    opacity: 0.72,
+                    side: THREE.DoubleSide,
+                    depthTest: false,
+                    depthWrite: false
+                }
+        );
 
         const mesh = new THREE.Mesh(geometry, material);
         mesh.frustumCulled = false;
-        mesh.renderOrder = 900;
+        mesh.renderOrder = FORCE_DEBUG_FILL ? 50000 : 1400;
         mesh.userData = {
             type: 'popupLensFill',
             viewAxis,
@@ -491,7 +1277,128 @@ function __coopt_applyPopupCrossSectionLensFill(options: {
             isOpticalElement: true
         };
         scene.add(mesh);
+        createdMeshCount += 1;
     }
+
+    if (FORCE_DEBUG_FILL && createdMeshCount === 0) {
+        const fallbackPoints: any[] = [];
+
+        activeProfileMap.forEach((lineObj: any) => {
+            const pts = __coopt_readWorldPolylinePoints(lineObj, THREE);
+            if (pts.length > 0) fallbackPoints.push(...pts);
+        });
+
+        if (fallbackPoints.length < 2) {
+            for (let i = 0; i < opticalSystemRows.length; i++) {
+                const row = opticalSystemRows[i];
+                if (!__coopt_isRenderableLensCandidateSurface(row)) continue;
+                const o = surfaceOrigins?.[i]?.origin;
+                const sd = __coopt_getSurfaceSemidiaMm(row);
+                if (!o || !Number.isFinite(sd) || (sd as number) <= 0) continue;
+                if (viewAxis === 'YZ') {
+                    fallbackPoints.push(
+                        new THREE.Vector3(Number(o.x) || 0, -(sd as number), Number(o.z) || 0),
+                        new THREE.Vector3(Number(o.x) || 0, (sd as number), Number(o.z) || 0)
+                    );
+                } else {
+                    fallbackPoints.push(
+                        new THREE.Vector3(-(sd as number), Number(o.y) || 0, Number(o.z) || 0),
+                        new THREE.Vector3((sd as number), Number(o.y) || 0, Number(o.z) || 0)
+                    );
+                }
+            }
+        }
+
+        if (fallbackPoints.length >= 2) {
+            let minZ = Infinity;
+            let maxZ = -Infinity;
+            let minAxis = Infinity;
+            let maxAxis = -Infinity;
+            let fixedOrth = 0;
+
+            fallbackPoints.forEach((p: any) => {
+                minZ = Math.min(minZ, Number(p.z));
+                maxZ = Math.max(maxZ, Number(p.z));
+                if (viewAxis === 'YZ') {
+                    minAxis = Math.min(minAxis, Number(p.y));
+                    maxAxis = Math.max(maxAxis, Number(p.y));
+                    fixedOrth = Number.isFinite(Number(p.x)) ? Number(p.x) : fixedOrth;
+                } else {
+                    minAxis = Math.min(minAxis, Number(p.x));
+                    maxAxis = Math.max(maxAxis, Number(p.x));
+                    fixedOrth = Number.isFinite(Number(p.y)) ? Number(p.y) : fixedOrth;
+                }
+            });
+
+            if (Number.isFinite(minZ) && Number.isFinite(maxZ) && Number.isFinite(minAxis) && Number.isFinite(maxAxis)) {
+                const zPad = Math.max(0.1, (maxZ - minZ) * 0.01);
+                const aPad = Math.max(0.1, (maxAxis - minAxis) * 0.01);
+                minZ -= zPad;
+                maxZ += zPad;
+                minAxis -= aPad;
+                maxAxis += aPad;
+
+                const positions = new Float32Array(12);
+                if (viewAxis === 'YZ') {
+                    positions.set([
+                        fixedOrth, minAxis, minZ,
+                        fixedOrth, maxAxis, minZ,
+                        fixedOrth, minAxis, maxZ,
+                        fixedOrth, maxAxis, maxZ
+                    ]);
+                } else {
+                    positions.set([
+                        minAxis, fixedOrth, minZ,
+                        maxAxis, fixedOrth, minZ,
+                        minAxis, fixedOrth, maxZ,
+                        maxAxis, fixedOrth, maxZ
+                    ]);
+                }
+
+                const indices = new Uint16Array([0, 1, 2, 1, 3, 2]);
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+                geometry.computeVertexNormals();
+
+                const material = new THREE.MeshBasicMaterial({
+                    color: 0xff00ff,
+                    transparent: true,
+                    opacity: 0.95,
+                    side: THREE.DoubleSide,
+                    depthTest: false,
+                    depthWrite: false
+                });
+
+                const fallbackMesh = new THREE.Mesh(geometry, material);
+                fallbackMesh.frustumCulled = false;
+                fallbackMesh.renderOrder = 50000;
+                fallbackMesh.userData = {
+                    type: 'popupLensFill',
+                    viewAxis,
+                    surfaceIndex: -1,
+                    isOpticalElement: true,
+                    isDebugFallback: true
+                };
+                scene.add(fallbackMesh);
+            }
+        }
+    }
+
+    if (FORCE_DEBUG_FILL) {
+        __coopt_addUltraDebugCrossOverlay(scene, THREE, viewAxis);
+    }
+
+    try {
+        w.__cooptLastFillDebug = {
+            time: Date.now(),
+            viewAxis,
+            source,
+            createdMeshCount,
+            sceneChildCount: Array.isArray(scene?.children) ? scene.children.length : 0,
+            forceDebugFill: FORCE_DEBUG_FILL
+        };
+    } catch (_) {}
 }
 
 // ============================================================================
@@ -879,7 +1786,8 @@ function ensurePopupMessageHandler(): void {
                             popupWindow,
                             scene: popupScene,
                             viewAxis,
-                            opticalSystemRows
+                            opticalSystemRows,
+                            source: 'draw-cross'
                         });
                     } catch (e) {
                         console.warn('⚠️ Popup lens fill postprocess failed:', e);
@@ -930,7 +1838,7 @@ function ensurePopupMessageHandler(): void {
                         popupRendererAfterCamera.render(popupScene, popupCameraAfterCamera);
                     }
 
-                    w.popup3DWindow.postMessage({ status: 'Drawing complete' }, '*');
+                    __coopt_setPopupStatusWithFillDebug(w.popup3DWindow, 'Drawing complete', viewAxis);
                 } else {
                     w.popup3DWindow.postMessage({ status: 'Error: ' + crossBeamResult.error }, '*');
                 }
@@ -1070,6 +1978,9 @@ function ensurePopupMessageHandler(): void {
                             const objectsToRemove: any[] = [];
                             scene.traverse((child: any) => {
                                 const ud = child.userData || {};
+                                if (ud.type === 'popupLensFill' || ud.isUltraDebugOverlay === true) {
+                                    return;
+                                }
                                 if (ud.isRayLine || ud.type === 'ray') {
                                     return;
                                 }
@@ -1139,7 +2050,8 @@ function ensurePopupMessageHandler(): void {
                                 popupWindow,
                                 scene: popupScene,
                                 viewAxis,
-                                opticalSystemRows: Array.isArray(opticalSystemRows) ? opticalSystemRows : []
+                                opticalSystemRows: Array.isArray(opticalSystemRows) ? opticalSystemRows : [],
+                                source: 'view-switch-camera-only'
                             });
                         } catch (e) {
                             console.warn('⚠️ Popup lens fill postprocess failed:', e);
@@ -1153,10 +2065,7 @@ function ensurePopupMessageHandler(): void {
                         console.error('Error updating surfaces:', e);
                     }
 
-                    if (popupStatus) {
-                        popupStatus.textContent = `${viewAxis === 'XZ' ? 'X-Z' : 'Y-Z'} view ready`;
-                    }
-                    popupWindow.postMessage({ status: `${viewAxis === 'XZ' ? 'X-Z' : 'Y-Z'} view ready` }, '*');
+                    __coopt_setPopupStatusWithFillDebug(popupWindow, `${viewAxis === 'XZ' ? 'X-Z' : 'Y-Z'} view ready`, viewAxis);
                 } else {
                     await executeCrossSectionView({
                         viewAxis,
@@ -1175,7 +2084,8 @@ function ensurePopupMessageHandler(): void {
                             popupWindow,
                             scene: popupScene,
                             viewAxis,
-                            opticalSystemRows: Array.isArray(opticalSystemRows) ? opticalSystemRows : []
+                            opticalSystemRows: Array.isArray(opticalSystemRows) ? opticalSystemRows : [],
+                            source: 'view-switch-execute-after'
                         });
                         if (popupRenderer && popupScene && popupCamera) {
                             popupRenderer.render(popupScene, popupCamera);
@@ -1184,7 +2094,7 @@ function ensurePopupMessageHandler(): void {
                         console.warn('⚠️ Popup lens fill postprocess failed:', e);
                     }
 
-                    popupWindow.postMessage({ status: `${viewAxis === 'XZ' ? 'X-Z' : 'Y-Z'} view ready` }, '*');
+                    __coopt_setPopupStatusWithFillDebug(popupWindow, `${viewAxis === 'XZ' ? 'X-Z' : 'Y-Z'} view ready`, viewAxis);
                 }
             } catch (error: any) {
                 popupWindow.postMessage({ status: `Error: ${error.message}` }, '*');
@@ -1332,6 +2242,18 @@ function executeCrossSectionView(options: {
                 crossSectionOnly: true,
                 crossSectionDirection: viewAxis
             });
+        }
+
+        try {
+            __coopt_applyPopupCrossSectionLensFill({
+                popupWindow: window,
+                scene: sceneRef,
+                viewAxis,
+                opticalSystemRows,
+                source: 'execute-cross-initial'
+            });
+        } catch (fillErr) {
+            console.warn('[RenderWindow] Lens fill postprocess failed:', fillErr);
         }
         
         if (sceneRef && typeof harmonizeSceneGeometry === 'function') {
@@ -1504,13 +2426,26 @@ function executeCrossSectionView(options: {
         if (sceneRef && typeof harmonizeSceneGeometry === 'function') {
             harmonizeSceneGeometry(sceneRef);
         }
+
+        try {
+            __coopt_applyPopupCrossSectionLensFill({
+                popupWindow: window,
+                scene: sceneRef,
+                viewAxis,
+                opticalSystemRows,
+                source: 'execute-cross-final'
+            });
+        } catch (fillErr) {
+            console.warn('[RenderWindow] Lens fill postprocess (final pass) failed:', fillErr);
+        }
         
         if (rendererRef && sceneRef && cameraRef) {
             rendererRef.render(sceneRef, cameraRef);
         }
         
         if (statusElement) {
-            statusElement.textContent = `${viewAxis} view complete`;
+            const debugText = __coopt_getFillDebugStatusSuffix(viewAxis as 'XZ' | 'YZ');
+            statusElement.textContent = `${viewAxis} view complete${debugText}`;
         }
         
     } catch (error) {
@@ -2690,17 +3625,48 @@ export function setupAnalysisWindows() {
         if (w.__analysisWindowsBound) {
             return;
         }
+
+        const isAnalysisWindowContext = (() => {
+            try {
+                const url = new URL(window.location.href);
+                return url.searchParams.get('coopt_analysis_window') === '1';
+            } catch (_) {
+                return false;
+            }
+        })();
+
+        if (isTauriRuntime() && !isAnalysisWindowContext) {
+            w.__analysisWindowsBound = true;
+            return;
+        }
+
         w.__analysisWindowsBound = true;
+
+        const consumePreopenedAnalysisPopup = (title: string, features: string) => {
+            try {
+                const store = w.__preopenedAnalysisPopupMap;
+                const pre = store && store[title];
+                if (pre && !pre.closed) {
+                    try { delete store[title]; } catch (_) {}
+                    try { pre.focus(); } catch (_) {}
+                    return pre;
+                }
+            } catch (_) {}
+            return window.open('', title, features);
+        };
+
         // System Data popup window button
         const openSystemDataWindowBtn = document.getElementById('open-system-data-window-btn');
         if (openSystemDataWindowBtn) {
-                openSystemDataWindowBtn.addEventListener('click', () => {
+            const isReactHandled = (openSystemDataWindowBtn as HTMLElement).getAttribute('data-react-handled') === '1';
+            if (!isReactHandled) {
+            openSystemDataWindowBtn.addEventListener('click', () => {
                         if (w.__systemDataPopup && !w.__systemDataPopup.closed) {
                                 try { w.__systemDataPopup.focus(); } catch (_) {}
                                 return;
                         }
 
-                        const popup = window.open('', 'System Data', 'width=1200,height=600');
+                        const popup = consumePreopenedAnalysisPopup('System Data', 'width=1200,height=600');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -3047,6 +4013,7 @@ export function setupAnalysisWindows() {
 
                         try { popup.document.close(); } catch (_) {}
                 });
+                }
         }
 
         // Spot Diagram popup window button
@@ -3054,8 +4021,8 @@ export function setupAnalysisWindows() {
         if (openSpotDiagramWindowBtn) {
                 openSpotDiagramWindowBtn.addEventListener('click', () => {
                         if (w.__spotDiagramPopup && !w.__spotDiagramPopup.closed) {
-                                try { w.__spotDiagramPopup.focus(); } catch (_) {}
-                                return;
+                    try { w.__spotDiagramPopup.close(); } catch (_) {}
+                    w.__spotDiagramPopup = null;
                         }
 
                         // Ensure parent window selects are populated before opening popup
@@ -3065,7 +4032,7 @@ export function setupAnalysisWindows() {
                             console.warn('Failed to update spot diagram selects:', e);
                         }
 
-                        const popup = window.open('', 'Spot Diagram', 'width=800,height=600');
+                        const popup = consumePreopenedAnalysisPopup('Spot Diagram', 'width=800,height=600');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -3145,13 +4112,13 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Spot Diagram</div>
+    <div class="header"></div>
     <div class="controls">
         <label for="popup-surface-number-select">Surf:</label>
         <select id="popup-surface-number-select"></select>
 
         <label for="popup-ray-count-input">Ray number:</label>
-        <input type="number" id="popup-ray-count-input" value="501" min="1" max="10001" step="1" />
+        <input type="number" id="popup-ray-count-input" value="501" min="1" step="1" />
 
         <label for="popup-ring-count-select">Ring count:</label>
         <select id="popup-ring-count-select">
@@ -3181,9 +4148,9 @@ export function setupAnalysisWindows() {
 
         <button id="popup-show-spot-diagram-btn" type="button">Show spot diagram</button>
     </div>
-    <div class="note">
-        Note: Select a surface where rays can reach (usually Image surface or earlier).
-    </div>
+    <div id="popup-spot-debug" style="display:none;"></div>
+    <div id="popup-spot-run-debug" style="display:none;"></div>
+    <div id="popup-spot-stats" style="display:none;"></div>
     <div id="popup-spot-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
         <div id="popup-spot-progress-text" style="margin-bottom: 6px;">Calculating spot diagram...</div>
         <progress id="popup-spot-progressbar" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
@@ -3201,6 +4168,21 @@ export function setupAnalysisWindows() {
             }
         }
 
+        function setPopupDebug(text) {
+            return;
+        }
+
+        function setPopupRunDebug(text) {
+            return;
+        }
+
+        function setPopupStats(text) {
+            try {
+                const el = document.getElementById('popup-spot-stats');
+                if (el) el.textContent = String(text || '');
+            } catch (_) {}
+        }
+
         function syncSurfaceOptionsFromOpener() {
             const openerSelect = getOpenerEl('surface-number-select');
             const popupSelect = document.getElementById('popup-surface-number-select');
@@ -3208,10 +4190,77 @@ export function setupAnalysisWindows() {
 
             const populateFromOpenerRows = () => {
                 try {
-                    const rows = (window.opener && typeof window.opener.getOpticalSystemRows === 'function')
-                        ? window.opener.getOpticalSystemRows()
-                        : null;
-                    if (!Array.isArray(rows) || rows.length === 0) return false;
+                    const rows = (() => {
+                        try {
+                            if (!window.opener) return null;
+                            if (typeof window.opener.getOpticalSystemRows === 'function') {
+                                const r = window.opener.getOpticalSystemRows(window.opener.tableOpticalSystem);
+                                if (Array.isArray(r) && r.length > 0) return r;
+                                const r2 = window.opener.getOpticalSystemRows();
+                                if (Array.isArray(r2) && r2.length > 0) return r2;
+                            }
+                        } catch (_) {}
+                        try {
+                            if (window.opener && window.opener.tableOpticalSystem && typeof window.opener.tableOpticalSystem.getData === 'function') {
+                                const r = window.opener.tableOpticalSystem.getData();
+                                if (Array.isArray(r) && r.length > 0) return r;
+                            }
+                        } catch (_) {}
+                        return null;
+                    })();
+                    if (!Array.isArray(rows) || rows.length === 0) {
+                        setPopupDebug('Surf sync: opener rows unavailable (0 rows)');
+                        return false;
+                    }
+
+                    const sharedOptions = (() => {
+                        try {
+                            if (window.opener && typeof window.opener.generateSurfaceOptions === 'function') {
+                                const opts = window.opener.generateSurfaceOptions(rows);
+                                if (Array.isArray(opts) && opts.length > 0) return opts;
+                            }
+                        } catch (_) {}
+                        return null;
+                    })();
+
+                    if (Array.isArray(sharedOptions) && sharedOptions.length > 0) {
+                        popupSelect.innerHTML = '';
+                        const placeholder = document.createElement('option');
+                        placeholder.value = '';
+                        placeholder.textContent = 'Select Surf';
+                        popupSelect.appendChild(placeholder);
+
+                        for (const o of sharedOptions) {
+                            const opt = document.createElement('option');
+                            opt.value = String(o?.value ?? o?.surfaceId ?? '');
+                            opt.textContent = String(o?.label ?? ('Surf ' + String(o?.surfaceId ?? '')));
+                            {
+                                const labelLower = String(opt.textContent || '').toLowerCase();
+                                const imageFlag = !!(o?.isImage === true || labelLower.includes('(image)') || labelLower.includes(' image'));
+                                opt.dataset.isImage = imageFlag ? '1' : '0';
+                            }
+                            if (o && o.rowId !== undefined && o.rowId !== null && String(o.rowId) !== '') {
+                                opt.dataset.rowId = String(o.rowId);
+                            }
+                            if (o && Number.isInteger(o.rowIndex)) {
+                                opt.dataset.rowIndex = String(o.rowIndex);
+                            }
+                            popupSelect.appendChild(opt);
+                        }
+
+                        if (String(popupSelect.value || '').trim() === '') {
+                            const opts = Array.from(popupSelect.options || []);
+                            const image = opts.find((opt) => String(opt.textContent || '').includes('(Image)') && String(opt.value || '').trim() !== '');
+                            if (image) popupSelect.value = String(image.value);
+                            else {
+                                const last = opts.filter((opt) => String(opt.value || '').trim() !== '').pop();
+                                if (last) popupSelect.value = String(last.value);
+                            }
+                        }
+
+                        setPopupDebug('Surf sync: populated from shared generateSurfaceOptions. rows=' + rows.length + ', options=' + sharedOptions.length + ', selected=' + String(popupSelect.value || '(none)'));
+                        return true;
+                    }
 
                     const normalizeType = (v) => String(v || '').trim().toLowerCase();
                     const compactType = (v) => normalizeType(v).replace(/[\s_-]+/g, '');
@@ -3255,7 +4304,7 @@ export function setupAnalysisWindows() {
                     placeholder.textContent = 'Select Surf';
                     popupSelect.appendChild(placeholder);
 
-                    for (const row of rows) {
+                    for (const [i, row] of rows.entries()) {
                         const objTypeRaw = row && (row['object type'] ?? row.objectType ?? row.object ?? '');
                         const surfTypeRaw = row && (row.surfType ?? row['surf type'] ?? row.type ?? '');
                         const surfaceType = objTypeRaw || surfTypeRaw || 'Standard';
@@ -3276,11 +4325,43 @@ export function setupAnalysisWindows() {
                         const opt = document.createElement('option');
                         opt.value = String(surfaceId);
                         opt.textContent = label;
+                        opt.dataset.rowIndex = String(i);
+                        opt.dataset.isImage = isImage ? '1' : '0';
+                        if (row && row.id !== undefined && row.id !== null && String(row.id) !== '') {
+                            opt.dataset.rowId = String(row.id);
+                        }
+                        try {
+                            const norm = (v) => String(v ?? '').trim().toLowerCase();
+                            const n0 = (v) => {
+                                const x = Number(v);
+                                return Number.isFinite(x) ? String(x) : norm(v);
+                            };
+                            const rowSig = [
+                                't:' + norm(surfaceType),
+                                'r:' + n0(row?.radius ?? row?.R ?? ''),
+                                'th:' + n0(row?.thickness ?? row?.T ?? ''),
+                                'sd:' + n0(row?.semidia ?? row?.semiDia ?? ''),
+                                'm:' + norm(row?.material ?? row?.glass ?? row?.['glass'] ?? row?.refractiveIndex ?? ''),
+                                'c:' + norm(row?.comment ?? row?.name ?? '')
+                            ].join('|');
+                            if (rowSig) opt.dataset.rowSig = rowSig;
+                        } catch (_) {}
                         popupSelect.appendChild(opt);
                         added++;
                     }
+                    if (added > 0 && String(popupSelect.value || '').trim() === '') {
+                        const opts = Array.from(popupSelect.options || []);
+                        const image = opts.find((opt) => String(opt.textContent || '').includes('(Image)') && String(opt.value || '').trim() !== '');
+                        if (image) popupSelect.value = String(image.value);
+                        else {
+                            const last = opts.filter((opt) => String(opt.value || '').trim() !== '').pop();
+                            if (last) popupSelect.value = String(last.value);
+                        }
+                    }
+                    setPopupDebug('Surf sync: populated from opener rows. rows=' + rows.length + ', options=' + added + ', selected=' + String(popupSelect.value || '(none)'));
                     return added > 0;
                 } catch (_) {
+                    setPopupDebug('Surf sync: failed to read opener rows');
                     return false;
                 }
             };
@@ -3308,12 +4389,14 @@ export function setupAnalysisWindows() {
             if (!openerSelect || !openerSelect.options || openerSelect.options.length <= 1) {
                 if (populateFromOpenerRows()) {
                     if (prevValue !== '') popupSelect.value = prevValue;
+                    setPopupDebug('Surf sync: fallback row population used');
                     return;
                 }
                 const opt = document.createElement('option');
                 opt.value = '';
                 opt.textContent = 'Select Surf';
                 popupSelect.appendChild(opt);
+                setPopupDebug('Surf sync: opener select unavailable and fallback failed');
                 return;
             }
 
@@ -3323,6 +4406,14 @@ export function setupAnalysisWindows() {
                 // Replace Japanese "面" prefix and "Surface" prefix with "Surf".
                 const label = (o.textContent || '').replace(/^面\s*/,'Surf ').replace(/^Surface\s*/,'Surf ');
                 opt.textContent = label;
+                if (o.dataset && o.dataset.rowIndex) opt.dataset.rowIndex = String(o.dataset.rowIndex);
+                if (o.dataset && o.dataset.rowId) opt.dataset.rowId = String(o.dataset.rowId);
+                if (o.dataset && o.dataset.rowSig) opt.dataset.rowSig = String(o.dataset.rowSig);
+                if (o.dataset && o.dataset.isImage) opt.dataset.isImage = String(o.dataset.isImage);
+                else {
+                    const labelLower = String(label || '').toLowerCase();
+                    opt.dataset.isImage = (labelLower.includes('(image)') || labelLower.includes(' image')) ? '1' : '0';
+                }
                 popupSelect.appendChild(opt);
             }
 
@@ -3346,6 +4437,99 @@ export function setupAnalysisWindows() {
             }
             // Fallback: mirror opener selection.
             popupSelect.value = openerSelect.value;
+            if (String(popupSelect.value || '').trim() === '') {
+                const opts = Array.from(popupSelect.options || []);
+                const image = opts.find((opt) => String(opt.textContent || '').includes('(Image)') && String(opt.value || '').trim() !== '');
+                if (image) popupSelect.value = String(image.value);
+                else {
+                    const last = opts.filter((opt) => String(opt.value || '').trim() !== '').pop();
+                    if (last) popupSelect.value = String(last.value);
+                }
+            }
+            setPopupDebug('Surf sync: mirrored opener select. openerOptions=' + openerSelect.options.length + ', popupOptions=' + Math.max(0, popupSelect.options.length - 1) + ', selected=' + String(popupSelect.value || '(none)'));
+        }
+
+        function resolvePopupSurfaceRowIndexForNative(popupSelect, selectedOption) {
+            try {
+                const ds = selectedOption && selectedOption.dataset ? selectedOption.dataset : null;
+                const rowIndexRaw = ds ? ds.rowIndex : undefined;
+                const rowIndex = Number(rowIndexRaw);
+                if (Number.isInteger(rowIndex) && rowIndex >= 0) {
+                    return rowIndex;
+                }
+
+                const ordinal = Number.parseInt(String(popupSelect && popupSelect.value !== undefined ? popupSelect.value : ''), 10);
+                if (!Number.isInteger(ordinal) || ordinal <= 0) {
+                    return undefined;
+                }
+
+                const rows = (() => {
+                    try {
+                        if (!window.opener) return null;
+                        if (typeof window.opener.getOpticalSystemRows === 'function') {
+                            const r = window.opener.getOpticalSystemRows(window.opener.tableOpticalSystem);
+                            if (Array.isArray(r) && r.length > 0) return r;
+                            const r2 = window.opener.getOpticalSystemRows();
+                            if (Array.isArray(r2) && r2.length > 0) return r2;
+                        }
+                    } catch (_) {}
+                    try {
+                        if (window.opener && window.opener.tableOpticalSystem && typeof window.opener.tableOpticalSystem.getData === 'function') {
+                            const r = window.opener.tableOpticalSystem.getData();
+                            if (Array.isArray(r) && r.length > 0) return r;
+                        }
+                    } catch (_) {}
+                    return null;
+                })();
+
+                if (!Array.isArray(rows) || rows.length === 0) {
+                    return undefined;
+                }
+
+                const normalizeType = (v) => String(v || '').trim().toLowerCase();
+                const compactType = (v) => normalizeType(v).replace(/[\s_-]+/g, '');
+                const isObjectType = (v) => {
+                    const n = normalizeType(v);
+                    const c = compactType(v);
+                    if (!n && !c) return false;
+                    if (n === 'object' || c === 'object' || c === 'objectsurface') return true;
+                    return n.startsWith('object ') || n.startsWith('object-') || n.startsWith('object_');
+                };
+                const isCoordTransType = (v) => {
+                    const n = normalizeType(v);
+                    const c = compactType(v);
+                    return n === 'ct' || n === 'coord trans' || n === 'coordinate break' || c === 'ct' || c === 'coordtrans' || c === 'coordinatebreak';
+                };
+                const isGapType = (v) => {
+                    const n = normalizeType(v);
+                    const c = compactType(v);
+                    return n === 'gap' || n === 'air gap' || c === 'gap' || c === 'airgap';
+                };
+                const isSkippableRow = (row) => {
+                    const objTypeRaw = row && (row['object type'] ?? row.objectType ?? row.object ?? '');
+                    const surfTypeRaw = row && (row.surfType ?? row['surf type'] ?? row.type ?? '');
+                    const surfaceType = objTypeRaw || surfTypeRaw || 'Standard';
+                    const blockType = row && (row._blockType ?? row.blockType ?? '');
+                    const blockRole = row && (row._surfaceRole ?? row.surfaceRole ?? '');
+                    return (
+                        isObjectType(objTypeRaw) || isObjectType(surfTypeRaw) || isObjectType(surfaceType) ||
+                        isCoordTransType(objTypeRaw) || isCoordTransType(surfTypeRaw) || isCoordTransType(surfaceType) ||
+                        isGapType(objTypeRaw) || isGapType(surfTypeRaw) || isGapType(surfaceType) ||
+                        isGapType(blockType) || isGapType(blockRole)
+                    );
+                };
+
+                let count = 0;
+                for (let i = 0; i < rows.length; i++) {
+                    if (isSkippableRow(rows[i])) continue;
+                    count += 1;
+                    if (count === ordinal) return i;
+                }
+
+                return undefined;
+            } catch (_) {
+                return undefined;
+            }
         }
 
         function syncInputsFromOpener() {
@@ -3361,8 +4545,11 @@ export function setupAnalysisWindows() {
             const annular = getOpenerEl('annular-pattern-btn');
             const popupPattern = document.getElementById('popup-pattern-select');
             if (popupPattern) {
-                const isAnnular = !!annular && annular.classList.contains('active');
-                popupPattern.value = isAnnular ? 'annular' : 'grid';
+                const userLocked = popupPattern.dataset && popupPattern.dataset.userLocked === '1';
+                if (!userLocked) {
+                    const isAnnular = !!annular && annular.classList.contains('active');
+                    popupPattern.value = isAnnular ? 'annular' : 'grid';
+                }
             }
         }
 
@@ -3385,12 +4572,32 @@ export function setupAnalysisWindows() {
 
         document.getElementById('popup-pattern-select').addEventListener('change', (e) => {
             const v = e && e.target && e.target.value ? String(e.target.value) : 'annular';
+            try {
+                const popupPattern = document.getElementById('popup-pattern-select');
+                if (popupPattern && popupPattern.dataset) popupPattern.dataset.userLocked = '1';
+            } catch (_) {}
             setPopupPattern(v);
         });
 
         document.getElementById('popup-show-spot-diagram-btn').addEventListener('click', async () => {
             const popupContainer = document.getElementById('popup-spot-diagram-container');
             if (popupContainer) popupContainer.innerHTML = '';
+
+            const opener = window.opener;
+            if (!opener) {
+                if (popupContainer) popupContainer.textContent = 'Main window is not available.';
+                return;
+            }
+
+            try {
+                if (typeof opener.loadActiveConfigurationToTables === 'function') {
+                    await opener.loadActiveConfigurationToTables({
+                        applyToUI: true,
+                        suppressOpticalSystemDataChanged: true,
+                    });
+                    await new Promise((resolve) => setTimeout(resolve, 0));
+                }
+            } catch (_) {}
 
             // Ensure surface indices/options are up-to-date (CB insert/delete shifts indices).
             try { syncSurfaceOptionsFromOpener(); } catch (_) {}
@@ -3414,26 +4621,482 @@ export function setupAnalysisWindows() {
             const popupRing = document.getElementById('popup-ring-count-select');
             const popupSurface = document.getElementById('popup-surface-number-select');
             const popupPattern = document.getElementById('popup-pattern-select');
+            const popupSurfaceSelectedOption = (popupSurface && popupSurface.selectedOptions && popupSurface.selectedOptions.length > 0)
+                ? popupSurface.selectedOptions[0]
+                : null;
+            const popupSurfaceIsImage = !!(popupSurfaceSelectedOption && (
+                (popupSurfaceSelectedOption.dataset && String(popupSurfaceSelectedOption.dataset.isImage || '') === '1') ||
+                String(popupSurfaceSelectedOption.textContent || '').toLowerCase().includes('(image)')
+            ));
+            const popupSurfaceRowIndex = resolvePopupSurfaceRowIndexForNative(popupSurface, popupSurfaceSelectedOption);
+            const popupSurfaceRowId = (() => {
+                const raw = popupSurfaceSelectedOption && popupSurfaceSelectedOption.dataset
+                    ? popupSurfaceSelectedOption.dataset.rowId
+                    : undefined;
+                const s = String(raw || '').trim();
+                return s !== '' ? s : undefined;
+            })();
+            const popupSurfaceRowSig = (() => {
+                const raw = popupSurfaceSelectedOption && popupSurfaceSelectedOption.dataset
+                    ? popupSurfaceSelectedOption.dataset.rowSig
+                    : undefined;
+                const s = String(raw || '').trim();
+                return s !== '' ? s : undefined;
+            })();
+
+            if (!popupSurface || String(popupSurface.value || '').trim() === '') {
+                if (popupContainer) {
+                    popupContainer.textContent = 'Please select Surf before running Spot Diagram.';
+                }
+                setPopupRunDebug('Show failed: Surf not selected. popupOptions=' + ((popupSurface && popupSurface.options) ? Math.max(0, popupSurface.options.length - 1) : 0));
+                setProgress(100, 'Failed: Surf not selected');
+                return;
+            }
 
             if (openerRay && popupRay) openerRay.value = popupRay.value;
             if (openerRing && popupRing) openerRing.value = popupRing.value;
             if (openerSurface && popupSurface) openerSurface.value = popupSurface.value;
 
-            const opener = window.opener;
-            if (!opener) {
-                if (popupContainer) popupContainer.textContent = 'Main window is not available.';
-                return;
-            }
-
             try {
                 setProgress(0, 'Starting...');
+                setPopupStats('Native stats: running...');
 
-                const canUseDesktopRust = !!(
+                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
                     opener.__TAURI_INTERNALS__
                     && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
                 );
+                const canUseNativeRustSpot = canUseDesktopRust && !!(
+                    typeof opener.runDesktopNativeSpotRaytraceForPopup === 'function'
+                );
+                const canUseRustSpotDiagram = canUseDesktopRust && !!(
+                    typeof window !== 'undefined'
+                    && window.__COOPT_ENABLE_RUST_SPOT_DIAGRAM === true
+                );
 
-                if (canUseDesktopRust) {
+                if (canUseNativeRustSpot) {
+                    try {
+                        setProgress(25, 'Computing Spot Diagram (Native Rust)...');
+                        const nativeStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+                        try {
+                            const objCount = Array.isArray(opener.getObjectRows ? opener.getObjectRows(opener.tableObject) : null)
+                                ? opener.getObjectRows(opener.tableObject).length
+                                : (Array.isArray(opener.tableObject?.data) ? opener.tableObject.data.length : 0);
+                            setPopupRunDebug('Native Spot input: objectRows=' + objCount);
+                        } catch (_) {}
+                        const objectRowsForNative = (() => {
+                            try {
+                                if (opener.tableObject && typeof opener.tableObject.getData === 'function') {
+                                    const rows = opener.tableObject.getData();
+                                    if (Array.isArray(rows)) return rows;
+                                }
+                            } catch (_) {}
+                            try {
+                                if (typeof opener.getObjectRows === 'function') {
+                                    const rows = opener.getObjectRows(opener.tableObject);
+                                    if (Array.isArray(rows)) return rows;
+                                }
+                            } catch (_) {}
+                            try {
+                                const raw = opener.localStorage && opener.localStorage.getItem('objectTableData');
+                                if (raw) {
+                                    const parsed = JSON.parse(raw);
+                                    if (Array.isArray(parsed)) return parsed;
+                                }
+                            } catch (_) {}
+                            return [];
+                        })();
+                        try {
+                            const highFieldObjects = (Array.isArray(objectRowsForNative) ? objectRowsForNative : []).filter((row) => {
+                                const ax = Number(row?.xAngle ?? row?.objectAngleX ?? row?.xHeightAngle ?? row?.x ?? row?.angleX);
+                                const ay = Number(row?.yAngle ?? row?.objectAngleY ?? row?.yHeightAngle ?? row?.y ?? row?.angle ?? row?.angleY);
+                                const maxField = Math.max(Math.abs(Number.isFinite(ax) ? ax : 0), Math.abs(Number.isFinite(ay) ? ay : 0));
+                                return maxField >= 15;
+                            });
+                            setPopupRunDebug(
+                                'Native Spot preflight: objects=' + String(objectRowsForNative.length) +
+                                ', highFieldObjects=' + String(highFieldObjects.length)
+                            );
+                        } catch (_) {}
+
+                        const result = await opener.runDesktopNativeSpotRaytraceForPopup({
+                            surfaceIndex: (popupSurfaceRowIndex !== undefined)
+                                ? popupSurfaceRowIndex
+                                : (popupSurface && popupSurface.value !== '' ? parseInt(popupSurface.value, 10) : undefined),
+                            rayCount: popupRay && popupRay.value !== '' ? parseInt(popupRay.value, 10) : undefined,
+                            ringCount: popupRing && popupRing.value !== '' ? parseInt(popupRing.value, 10) : undefined,
+                            pattern: popupPattern ? String(popupPattern.value || 'annular') : 'annular',
+                            wavelengthMode: 'all',
+                            objectRows: objectRowsForNative,
+                        });
+                        const series = Array.isArray(result?.series) ? result.series : [];
+                        const totalPointCount = series.reduce((sum, s) => {
+                            const pts = Array.isArray(s?.points) ? s.points.length : 0;
+                            return sum + pts;
+                        }, 0);
+                        const firstSeries = series.length > 0 ? series[0] : null;
+                        const firstPoint = (firstSeries && Array.isArray(firstSeries.points) && firstSeries.points.length > 0)
+                            ? firstSeries.points[0]
+                            : null;
+                        try {
+                            setPopupRunDebug(
+                                'Native Spot run: selected=' + String(popupSurface && popupSurface.value || '(none)') +
+                                ', rowIndex=' + String(popupSurfaceRowIndex !== undefined ? popupSurfaceRowIndex : '(unresolved)') +
+                                ', hit=' + String(Number(result?.totalHitRays) || 0) +
+                                ', series=' + String(series.length) +
+                                ', points=' + String(totalPointCount) +
+                                (firstPoint
+                                    ? ', first=(' + Number(firstPoint?.xUm || 0).toFixed(2) + ',' + Number(firstPoint?.yUm || 0).toFixed(2) + ')'
+                                    : ', first=(none)')
+                            );
+                        } catch (_) {}
+                        if (!series.length) {
+                            throw new Error('Native Rust Spot result is empty');
+                        }
+                        const airyRadiusUm = Number(result?.airyRadiusUm);
+                        try {
+                            const requestedRays = Number(result?.requestedRays);
+                            const generatedRays = Number(result?.generatedRays);
+                            const totalAttemptedRays = Number(result?.totalAttemptedRays);
+                            const totalHitRays = Number(result?.totalHitRays);
+                            const meanHitRatePercent = Number(result?.meanHitRatePercent);
+                            const maxHitRays = Number(result?.maxHitRays);
+                            const wavelengthCount = Number(result?.wavelengthCount);
+                            const raySeriesGenerationMs = Number(result?.timingMs?.raySeriesGeneration);
+                            const nativeInvokeMs = Number(result?.timingMs?.nativeInvoke);
+                            const nativeTraceMs = Number(result?.timingMs?.nativeTrace);
+                            const stats = Array.isArray(result?.seriesStats) ? result.seriesStats : [];
+                            const statsText = stats.slice(0, 3).map((s) => {
+                                const label = String(s?.label || '-');
+                                const h = Number(s?.hitRays) || 0;
+                                const a = Number(s?.attemptedRays) || 0;
+                                const r = Number(s?.hitRatePercent) || 0;
+                                return label + ': ' + h + '/' + a + ' (' + r.toFixed(1) + '%)';
+                            }).join(', ');
+                            const timingsText =
+                                'timing(ms): gen=' + (Number.isFinite(raySeriesGenerationMs) ? raySeriesGenerationMs.toFixed(1) : '-') +
+                                ', trace=' + (Number.isFinite(nativeTraceMs) ? nativeTraceMs.toFixed(1) : '-') +
+                                ', native=' + (Number.isFinite(nativeInvokeMs) ? nativeInvokeMs.toFixed(1) : '-');
+                            setPopupStats(
+                                'Native stats: requested=' + (Number.isFinite(requestedRays) ? requestedRays : '-') +
+                                ', generated=' + (Number.isFinite(generatedRays) ? generatedRays : '-') +
+                                ', attempted=' + (Number.isFinite(totalAttemptedRays) ? totalAttemptedRays : '-') +
+                                ', hits=' + (Number.isFinite(totalHitRays) ? totalHitRays : '-') +
+                                ', meanHitRate=' + (Number.isFinite(meanHitRatePercent) ? meanHitRatePercent.toFixed(1) + '%' : '-') +
+                                ', maxHit=' + (Number.isFinite(maxHitRays) ? maxHitRays : '-') +
+                                ', wavelengths=' + (Number.isFinite(wavelengthCount) ? wavelengthCount : '-') +
+                                (Number.isFinite(airyRadiusUm) && airyRadiusUm > 0 ? ', airyR=' + airyRadiusUm.toFixed(2) + 'µm' : '') +
+                                (statsText ? ' | ' + statsText : '') +
+                                ' | ' + timingsText
+                            );
+                        } catch (_) {}
+                        if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
+                            throw new Error('Plotly is not available in Spot Diagram popup');
+                        }
+
+                        const traces = [];
+                        const toWavelengthLabel = (rawLabel) => {
+                            const text = String(rawLabel || '').trim();
+                            const nm = text.match(/(\d+(?:\.\d+)?)\s*nm/i);
+                            if (nm && nm[1]) return 'Wavelength ' + nm[1] + 'nm';
+                            const lower = text.toLowerCase();
+                            if (lower.includes('primary')) return 'Wavelength Primary';
+                            return 'Wavelength ' + text;
+                        };
+                        const wavelengthLabelFromSeries = (seriesItem, rawLabel) => {
+                            const wl = Number(seriesItem?.wavelengthUm);
+                            if (Number.isFinite(wl) && wl > 0) {
+                                return 'Wavelength ' + (wl * 1000).toFixed(1) + 'nm';
+                            }
+                            return toWavelengthLabel(rawLabel);
+                        };
+                        const parseSeriesLabel = (label, fallbackObjectLabel) => {
+                            const raw = String(label || '').trim();
+                            if (!raw) {
+                                return { objectLabel: fallbackObjectLabel, wavelengthLabel: 'Wavelength Primary' };
+                            }
+                            const m = raw.match(/(Primary(?:\s*\([^)]*\))?|\d+(?:\.\d+)?\s*nm)\s*$/i);
+                            if (m && m[1]) {
+                                const wlRaw = String(m[1] || 'Primary');
+                                const prefix = raw.slice(0, Math.max(0, m.index || 0)).replace(/[|@\-\s]+$/, '').trim();
+                                return {
+                                    objectLabel: prefix || fallbackObjectLabel,
+                                    wavelengthLabel: toWavelengthLabel(wlRaw),
+                                };
+                            }
+                            return { objectLabel: raw, wavelengthLabel: 'Wavelength Primary' };
+                        };
+
+                        const calcPercentile = (arr, q) => {
+                            if (!Array.isArray(arr) || arr.length === 0) return 0;
+                            const sorted = arr
+                                .filter((v) => Number.isFinite(v) && v >= 0)
+                                .sort((a, b) => a - b);
+                            if (sorted.length === 0) return 0;
+                            const qq = Math.max(0, Math.min(1, Number(q) || 0));
+                            const idx = Math.floor((sorted.length - 1) * qq);
+                            return sorted[Math.max(0, Math.min(sorted.length - 1, idx))] || 0;
+                        };
+
+                        const cullExtremeSpotOutliers = (rawPoints, centerXUm, centerYUm) => {
+                            const pts = (Array.isArray(rawPoints) ? rawPoints : [])
+                                .map((p) => ({
+                                    xUm: Number(p?.xUm),
+                                    yUm: Number(p?.yUm),
+                                }))
+                                .filter((p) => Number.isFinite(p.xUm) && Number.isFinite(p.yUm));
+                            if (pts.length < 40) {
+                                return { points: pts, culled: 0 };
+                            }
+
+                            const cx = Number.isFinite(centerXUm) ? centerXUm : 0;
+                            const cy = Number.isFinite(centerYUm) ? centerYUm : 0;
+                            const radii = pts.map((p) => {
+                                const dx = p.xUm - cx;
+                                const dy = p.yUm - cy;
+                                return Math.sqrt(dx * dx + dy * dy);
+                            });
+
+                            const p95 = calcPercentile(radii, 0.95);
+                            const p99 = calcPercentile(radii, 0.99);
+                            const maxR = radii.reduce((m, v) => Math.max(m, Number(v) || 0), 0);
+                            const clipR = Math.max(5, p99 * 1.35, p95 * 2.2);
+                            if (!Number.isFinite(clipR) || clipR <= 0 || maxR <= clipR) {
+                                return { points: pts, culled: 0 };
+                            }
+
+                            const filtered = [];
+                            for (let i = 0; i < pts.length; i++) {
+                                const p = pts[i];
+                                const dx = p.xUm - cx;
+                                const dy = p.yUm - cy;
+                                const r = Math.sqrt(dx * dx + dy * dy);
+                                if (r <= clipR) {
+                                    filtered.push(p);
+                                }
+                            }
+
+                            const culled = pts.length - filtered.length;
+                            const maxAllowCull = Math.max(3, Math.floor(pts.length * 0.02));
+                            if (culled <= 0 || culled > maxAllowCull || filtered.length < 10) {
+                                return { points: pts, culled: 0 };
+                            }
+
+                            return { points: filtered, culled };
+                        };
+
+                        const groupedByObject = new Map();
+                        for (let i = 0; i < series.length; i++) {
+                            const s = series[i] || {};
+                            const parsed = parseSeriesLabel(s?.label, 'Object ' + (i + 1));
+                            if (!groupedByObject.has(parsed.objectLabel)) {
+                                groupedByObject.set(parsed.objectLabel, []);
+                            }
+                            groupedByObject.get(parsed.objectLabel).push(s);
+                        }
+                        const objectEntries = Array.from(groupedByObject.entries());
+
+                        let culledPointsCount = 0;
+                        const preparedObjects = objectEntries.map(([objectLabel, objectSeries], index) => {
+                            const groups = [];
+                            for (let sIdx = 0; sIdx < objectSeries.length; sIdx++) {
+                                const s = objectSeries[sIdx] || {};
+                                const parsed = parseSeriesLabel(s?.label, objectLabel);
+                                const points = Array.isArray(s?.points) ? s.points : [];
+                                const hasFieldAngle = !!s?.hasFieldAngle;
+                                const chiefXUm = Number(s?.chiefPointUm?.xUm);
+                                const chiefYUm = Number(s?.chiefPointUm?.yUm);
+                                const useChiefCentering = hasFieldAngle && Number.isFinite(chiefXUm) && Number.isFinite(chiefYUm);
+                                const centeredPoints = useChiefCentering
+                                    ? points.map((p) => ({
+                                        xUm: (Number(p?.xUm) || 0) - chiefXUm,
+                                        yUm: (Number(p?.yUm) || 0) - chiefYUm,
+                                    }))
+                                    : points.map((p) => ({
+                                        xUm: Number(p?.xUm) || 0,
+                                        yUm: Number(p?.yUm) || 0,
+                                    }));
+
+                                const culled = cullExtremeSpotOutliers(
+                                    centeredPoints,
+                                    useChiefCentering ? 0 : undefined,
+                                    useChiefCentering ? 0 : undefined,
+                                );
+                                culledPointsCount += Number(culled?.culled) || 0;
+
+                                groups.push({
+                                    label: wavelengthLabelFromSeries(s, parsed.wavelengthLabel),
+                                    color: String(s?.color || '#2563eb'),
+                                    points: culled.points,
+                                });
+                            }
+                            return { objectLabel, objectIndex: index + 1, groups };
+                        });
+
+                        const absSamples = [];
+                        for (const obj of preparedObjects) {
+                            for (const g of obj.groups) {
+                                const pts = Array.isArray(g?.points) ? g.points : [];
+                                for (const p of pts) {
+                                    const x = Math.abs(Number(p?.xUm) || 0);
+                                    const y = Math.abs(Number(p?.yUm) || 0);
+                                    absSamples.push(x, y);
+                                }
+                            }
+                        }
+                        const maxAbs = absSamples.reduce((m, v) => Math.max(m, Number(v) || 0), 0);
+                        const p98Abs = calcPercentile(absSamples, 0.98);
+                        let unifiedRangeAbs = Math.max(1, p98Abs * 1.25);
+                        if (Number.isFinite(airyRadiusUm) && airyRadiusUm > 0) {
+                            unifiedRangeAbs = Math.max(unifiedRangeAbs, airyRadiusUm * 1.5);
+                        }
+                        unifiedRangeAbs = Math.min(unifiedRangeAbs, Math.max(50, maxAbs * 1.05 || 50));
+
+                        const layout = {
+                            margin: { l: 40, r: 16, t: 92, b: 32 },
+                            showlegend: true,
+                            paper_bgcolor: '#ffffff',
+                            plot_bgcolor: '#ffffff',
+                            annotations: [],
+                            shapes: [],
+                            legend: {
+                                orientation: 'h',
+                                yanchor: 'bottom',
+                                y: 1.12,
+                                xanchor: 'left',
+                                x: 0,
+                                traceorder: 'normal',
+                                font: { size: 11 },
+                            },
+                            legendgroupclick: 'togglegroup',
+                        };
+
+                        const count = Math.max(1, preparedObjects.length);
+                        const cols = Math.max(1, Math.min(3, Math.ceil(Math.sqrt(count))));
+                        const rows = Math.max(1, Math.ceil(count / cols));
+                        const hGap = 0.05;
+                        const vGap = 0.12;
+                        const cellW = (1 - (cols - 1) * hGap) / cols;
+                        const cellH = (1 - (rows - 1) * vGap) / rows;
+                        layout.height = Math.max(360, rows * 340);
+
+                        const legendAdded = new Set();
+                        const legendColorByLabel = new Map();
+
+                        for (let i = 0; i < preparedObjects.length; i++) {
+                            const obj = preparedObjects[i];
+                            const objectLabel = obj.objectLabel;
+                            const groups = obj.groups;
+
+                            const axisSuffix = i === 0 ? '' : String(i + 1);
+                            const xAxisName = 'x' + axisSuffix;
+                            const yAxisName = 'y' + axisSuffix;
+                            const xAxisLayoutKey = 'xaxis' + axisSuffix;
+                            const yAxisLayoutKey = 'yaxis' + axisSuffix;
+
+                            const col = i % cols;
+                            const rowFromTop = Math.floor(i / cols);
+                            const x0 = col * (cellW + hGap);
+                            const x1 = x0 + cellW;
+                            const y1 = 1 - rowFromTop * (cellH + vGap);
+                            const y0 = y1 - cellH;
+
+                            layout[xAxisLayoutKey] = {
+                                domain: [x0, x1],
+                                zeroline: true,
+                                range: [-unifiedRangeAbs, unifiedRangeAbs],
+                                title: rowFromTop === (rows - 1) ? 'X (µm)' : '',
+                                anchor: yAxisName,
+                            };
+                            layout[yAxisLayoutKey] = {
+                                domain: [y0, y1],
+                                zeroline: true,
+                                range: [-unifiedRangeAbs, unifiedRangeAbs],
+                                title: col === 0 ? 'Y (µm)' : '',
+                                anchor: xAxisName,
+                                scaleanchor: xAxisName,
+                                scaleratio: 1,
+                            };
+
+                            if (Number.isFinite(airyRadiusUm) && airyRadiusUm > 0) {
+                                layout.shapes.push({
+                                    type: 'circle',
+                                    xref: xAxisName,
+                                    yref: yAxisName,
+                                    x0: -airyRadiusUm,
+                                    y0: -airyRadiusUm,
+                                    x1: airyRadiusUm,
+                                    y1: airyRadiusUm,
+                                    line: { color: '#111827', width: 1 },
+                                    fillcolor: 'rgba(0,0,0,0)',
+                                });
+                            }
+
+                            for (const g of groups) {
+                                const wlLabel = String(g?.label || 'Wavelength');
+                                const pts = Array.isArray(g?.points) ? g.points : [];
+                                traces.push({
+                                    x: pts.map((p) => Number(p?.xUm) || 0),
+                                    y: pts.map((p) => Number(p?.yUm) || 0),
+                                    xaxis: xAxisName,
+                                    yaxis: yAxisName,
+                                    type: 'scattergl',
+                                    mode: 'markers',
+                                    name: wlLabel,
+                                    legendgroup: wlLabel,
+                                    showlegend: false,
+                                    marker: {
+                                        size: 6,
+                                        color: String(g?.color || '#2563eb'),
+                                        opacity: 0.85,
+                                        symbol: 'circle',
+                                        line: {
+                                            width: 0.8,
+                                            color: '#333333',
+                                        },
+                                    },
+                                    hovertemplate: 'x=%{x:.2f}µm<br>y=%{y:.2f}µm<extra></extra>',
+                                });
+                                if (!legendColorByLabel.has(wlLabel)) {
+                                    legendColorByLabel.set(wlLabel, String(g?.color || '#2563eb'));
+                                }
+                            }
+                        }
+
+                        for (const [wlLabel, color] of legendColorByLabel.entries()) {
+                            if (legendAdded.has(wlLabel)) continue;
+                            legendAdded.add(wlLabel);
+                            traces.push({
+                                x: [null],
+                                y: [null],
+                                type: 'scatter',
+                                mode: 'markers',
+                                name: wlLabel,
+                                legendgroup: wlLabel,
+                                showlegend: true,
+                                marker: {
+                                    size: 8,
+                                    color: color,
+                                    symbol: 'circle',
+                                },
+                                hoverinfo: 'skip',
+                            });
+                        }
+
+                        setProgress(85, 'Rendering Spot Diagram...');
+                        const plotStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+                        await window.Plotly.newPlot(popupContainer, traces, layout, { responsive: true, displaylogo: false });
+                        const plotEnd = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+                        try {
+                            if (progressWrapper) progressWrapper.style.display = 'none';
+                        } catch (_) {}
+                        return;
+                    } catch (nativeErr) {
+                        setPopupRunDebug('Native spot failed; fallback to Rust-WASM: ' + String(nativeErr && nativeErr.message ? nativeErr.message : nativeErr));
+                        setPopupStats('Native stats: unavailable (fallback to Rust-WASM)');
+                    }
+                }
+
+                if (canUseRustSpotDiagram) {
                     setProgress(25, 'Computing Spot Diagram (Rust)...');
                     const result = await opener.runDesktopAnalysisComputeForPopup({
                         kind: 'spot-diagram',
@@ -3470,8 +5133,7 @@ export function setupAnalysisWindows() {
 
                     setProgress(85, 'Rendering Spot Diagram...');
                     await window.Plotly.newPlot(popupContainer, traces, {
-                        title: { text: 'Spot Diagram', x: 0.5, xanchor: 'center' },
-                        margin: { l: 52, r: 20, t: 48, b: 45 },
+                        margin: { l: 52, r: 20, t: 20, b: 45 },
                         xaxis: { title: 'X (µm)', zeroline: true },
                         yaxis: { title: 'Y (µm)', zeroline: true, scaleanchor: 'x', scaleratio: 1 },
                         showlegend: true,
@@ -3483,28 +5145,32 @@ export function setupAnalysisWindows() {
                 }
 
                 if (typeof opener.showSpotDiagram !== 'function') {
-                    if (popupContainer) popupContainer.textContent = 'showSpotDiagram is not available in the main window.';
-                    return;
+                    throw new Error('showSpotDiagram is not available on opener');
                 }
 
-                const onProgress = (evt) => {
-                    try {
-                        const p = Number(evt?.percent);
-                        const msg = evt?.message || evt?.phase || 'Working...';
-                        if (Number.isFinite(p)) setProgress(p, msg);
-                        else setProgress(undefined, msg);
-                    } catch (_) {}
-                };
-
+                setProgress(25, 'Computing Spot Diagram (Rust-WASM raytrace)...');
                 await opener.showSpotDiagram({
+                    containerElement: popupContainer,
                     surfaceIndex: popupSurface && popupSurface.value !== '' ? parseInt(popupSurface.value, 10) : undefined,
+                    surfaceRowIndex: popupSurfaceRowIndex,
+                    surfaceRowId: popupSurfaceRowId,
+                    surfaceRowSig: popupSurfaceRowSig,
+                    surfaceIsImage: popupSurfaceIsImage,
                     rayCount: popupRay && popupRay.value !== '' ? parseInt(popupRay.value, 10) : undefined,
                     ringCount: popupRing && popupRing.value !== '' ? parseInt(popupRing.value, 10) : undefined,
                     pattern: popupPattern ? String(popupPattern.value || 'annular') : 'annular',
-                    containerElement: popupContainer,
-                    onProgress
+                    forceRustWasmTrace: true,
+                    requireRustWasmTrace: true,
+                    onProgress: (evt) => {
+                        try {
+                            const p = Number(evt && evt.percent);
+                            const msg = (evt && evt.message) || (evt && evt.phase) || 'Working...';
+                            if (Number.isFinite(p)) setProgress(p, msg);
+                            else setProgress(undefined, msg);
+                        } catch (_) {}
+                    },
                 });
-                setProgress(100, 'Done');
+                setProgress(100, 'Done (Rust-WASM)');
             } catch (e) {
                 if (popupContainer) popupContainer.textContent = String(e && e.message ? e.message : e);
                 setProgress(100, 'Failed');
@@ -3516,7 +5182,6 @@ export function setupAnalysisWindows() {
             syncInputsFromOpener();
         }
 
-        // Allow the opener to request a resync after table edits (e.g., CB insert/delete).
         try {
             w.__cooptSpotPopupSyncAll = syncAll;
         } catch (_) {}
@@ -3525,12 +5190,11 @@ export function setupAnalysisWindows() {
                 const data = ev && ev.data;
                 if (!data || data.action !== 'coopt-spot-sync') return;
                 syncAll();
-            } catch (_) {
-                // ignore
-            }
+            } catch (_) {}
         });
 
         window.addEventListener('focus', syncAll);
+        setInterval(syncAll, 1000);
         syncAll();
     </script>
 </body>
@@ -3555,7 +5219,7 @@ export function setupAnalysisWindows() {
                                 return;
                         }
 
-                        const popup = window.open('', 'Spherical Aberration', 'width=800,height=600');
+                        const popup = consumePreopenedAnalysisPopup('Spherical Aberration', 'width=800,height=600');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -3577,14 +5241,6 @@ export function setupAnalysisWindows() {
             flex-direction: column;
             height: 100vh;
             background: #f4f4f4;
-        }
-        .header {
-            padding: 10px 12px;
-            background: #f8f8f8;
-            color: #333;
-            border-bottom: 1px solid #ddd;
-            font-size: 14px;
-            font-weight: 600;
         }
         .controls {
             padding: 10px 12px;
@@ -3633,7 +5289,6 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Spherical Aberration</div>
     <div class="controls">
         <label for="popup-longitudinal-ray-count-input">Ray number:</label>
         <input type="number" id="popup-longitudinal-ray-count-input" value="100" min="1" max="1001" step="1" />
@@ -3644,7 +5299,7 @@ export function setupAnalysisWindows() {
             <option value="current-paraxial" selected>Current paraxial</option>
             <option value="chief-ray">Chief ray</option>
         </select>
-        <button id="popup-show-spherical-aberration-btn" type="button">Show spherical aberration diagram</button>
+        <button id="popup-show-spherical-aberration-btn" type="button">Show</button>
     </div>
     <div id="popup-spherical-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
         <div id="popup-spherical-progress-text" style="margin-bottom: 6px;">Calculating spherical aberration...</div>
@@ -3705,29 +5360,59 @@ export function setupAnalysisWindows() {
                 openerMode.value = referenceFocusMode;
             }
 
+            const opener = window.opener;
+            const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
+                opener
+                && opener.__TAURI_INTERNALS__
+                && typeof opener.runDesktopNativeSphericalAberrationForPopup === 'function'
+            );
+            try {
+                console.log('📊 [SA TS-Rust] mode', {
+                    canUseDesktopRust,
+                    hasNativeRunner: !!(opener && typeof opener.runDesktopNativeSphericalAberrationForPopup === 'function'),
+                    referenceFocusMode,
+                    rayCount,
+                });
+            } catch (_) {}
+
+            const onProgress = (evt) => {
+                try {
+                    const p = Number(evt?.percent);
+                    const msg = evt?.message || evt?.phase || 'Working...';
+                    if (Number.isFinite(p)) setProgress(p, msg);
+                    else setProgress(undefined, msg);
+                } catch (_) {}
+            };
+
             const containerEl = document.getElementById('popup-longitudinal-aberration-container');
             if (containerEl) containerEl.innerHTML = '';
 
             try {
-                if (!window.opener || typeof window.opener.showLongitudinalAberrationDiagram !== 'function') {
+                setProgress(0, 'Starting...');
+                if (!canUseDesktopRust) {
+                    throw new Error('Rust spherical aberration is required, but desktop native Rust analysis is unavailable');
+                }
+
+                setProgress(25, 'Computing spherical aberration (Rust)...');
+                const rustResult = await opener.runDesktopNativeSphericalAberrationForPopup({
+                    rayCount: Number.isFinite(rayCount) ? rayCount : 51,
+                    referenceFocusMode: referenceFocusMode,
+                    wavelengthMode: 'all',
+                });
+
+                if (!opener || typeof opener.showLongitudinalAberrationDiagram !== 'function') {
                     throw new Error('showLongitudinalAberrationDiagram is not available on opener');
                 }
-                setProgress(0, 'Starting...');
-                const onProgress = (evt) => {
-                    try {
-                        const p = Number(evt?.percent);
-                        const msg = evt?.message || evt?.phase || 'Working...';
-                        if (Number.isFinite(p)) setProgress(p, msg);
-                        else setProgress(undefined, msg);
-                    } catch (_) {}
-                };
-                await window.opener.showLongitudinalAberrationDiagram({
-                    rayCount: Number.isFinite(rayCount) ? rayCount : 51,
+                setProgress(80, 'Rendering...');
+                await opener.showLongitudinalAberrationDiagram({
                     containerElement: containerEl,
                     onProgress,
-                    referenceFocusMode
+                    precomputedAberrationData: rustResult,
                 });
-                setProgress(100, 'Done');
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'none';
+                } catch (_) {}
+                return;
             } catch (err) {
                 console.error(err);
                 setProgress(100, 'Failed');
@@ -3771,7 +5456,7 @@ export function setupAnalysisWindows() {
                                 return;
                         }
 
-                        const popup = window.open('', 'Astigmatism', 'width=800,height=600');
+                        const popup = consumePreopenedAnalysisPopup('Astigmatism', 'width=800,height=600');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -3794,14 +5479,6 @@ export function setupAnalysisWindows() {
             height: 100vh;
             background: #f4f4f4;
         }
-        .header {
-            padding: 10px 12px;
-            background: #f8f8f8;
-            color: #333;
-            border-bottom: 1px solid #ddd;
-            font-size: 14px;
-            font-weight: 600;
-        }
         .controls {
             padding: 10px 12px;
             background: #f8f8f8;
@@ -3822,13 +5499,6 @@ export function setupAnalysisWindows() {
             color: #333;
         }
         .controls button:hover { background: #e9e9e9; }
-        .note {
-            padding: 10px 12px;
-            color: #666;
-            font-size: 12px;
-            border-bottom: 1px solid #eee;
-            background: #fff;
-        }
         .content {
             flex: 1 1 auto;
             min-height: 0;
@@ -3840,7 +5510,6 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Astigmatism</div>
     <div class="controls">
         <label for="popup-astigmatism-chief-ray" style="font-size:12px;color:#333;white-space:nowrap;">Chief ray:</label>
         <select id="popup-astigmatism-chief-ray" style="padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;">
@@ -3851,14 +5520,11 @@ export function setupAnalysisWindows() {
             <option value="beam-midpoint-image">Beam midpoint (image plane)</option>
             <option value="beam-centroid-image">Beam centroid (image plane)</option>
         </select>
-        <button id="popup-show-astigmatism-btn" type="button">Show astigmatism diagram</button>
+        <button id="popup-show-astigmatism-btn" type="button">Show</button>
     </div>
     <div id="popup-astigmatism-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
-        <div id="popup-astigmatism-progress-text" style="margin-bottom: 6px;">Calculating astigmatism...</div>
+        <div id="popup-astigmatism-progress-text" style="margin-bottom: 6px;">Calculating...</div>
         <progress id="popup-astigmatism-progressbar" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
-    </div>
-    <div class="note">
-        Note: Astigmatism diagram shows sagittal and meridional focal positions across field.
     </div>
     <div class="content">
         <div id="popup-astigmatic-field-curves-container"></div>
@@ -3890,6 +5556,7 @@ export function setupAnalysisWindows() {
                 setProgress(0, 'Starting...');
                 const onProgress = (evt) => {
                     try {
+                        try { console.log('[ASTIG_POPUP][progress]', evt); } catch (_) {}
                         const p = Number(evt?.percent);
                         const msg = evt?.message || evt?.phase || 'Working...';
                         if (Number.isFinite(p)) setProgress(p, msg);
@@ -3898,12 +5565,17 @@ export function setupAnalysisWindows() {
                 };
                 await window.opener.showAstigmatismDiagram({
                     containerElement: containerEl,
+                    rayCount: 100,
+                    requireRustWasm: true,
+                    forceRustWasmTrace: true,
+                    requireRustWasmTrace: true,
                     onProgress,
                     chiefRayDefinition,
                     logChiefRayDefinition: true,
-                    useActiveConfigSnapshot: true
+                    useActiveConfigSnapshot: false
                 });
-                setProgress(100, 'Done');
+                try { console.log('[ASTIG_POPUP][done] showAstigmatismDiagram resolved'); } catch (_) {}
+                setProgress(100, '');
             } catch (err) {
                 console.error(err);
                 setProgress(100, 'Failed');
@@ -3939,7 +5611,7 @@ export function setupAnalysisWindows() {
                                 return;
                         }
 
-                        const popup = window.open('', 'Distortion', 'width=800,height=600');
+                        const popup = consumePreopenedAnalysisPopup('Distortion', 'width=800,height=600');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -4217,7 +5889,7 @@ export function setupAnalysisWindows() {
                                 return;
                         }
 
-                        const popup = window.open('', 'Lateral Chromatic Aberration', 'width=800,height=600');
+                        const popup = consumePreopenedAnalysisPopup('Lateral Chromatic Aberration', 'width=800,height=600');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -4413,7 +6085,7 @@ export function setupAnalysisWindows() {
                                 return;
                         }
 
-                        const popup = window.open('', 'Integrated Aberration', 'width=800,height=600');
+                        const popup = consumePreopenedAnalysisPopup('Integrated Aberration', 'width=800,height=600');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -4572,7 +6244,7 @@ export function setupAnalysisWindows() {
                     w.__opdPopup = null;
                         }
 
-                        const popup = window.open('', 'Optical Path Difference', 'width=800,height=600');
+                        const popup = consumePreopenedAnalysisPopup('Optical Path Difference', 'width=800,height=600');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -4906,7 +6578,7 @@ export function setupAnalysisWindows() {
 
                 setProgress(0, 'Starting...');
 
-                const canUseDesktopRust = !!(
+                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
                     window.opener
                     && window.opener.__TAURI_INTERNALS__
                     && typeof window.opener.runDesktopAnalysisComputeForPopup === 'function'
@@ -4950,6 +6622,10 @@ export function setupAnalysisWindows() {
                     flushPendingProgress(true);
                     resizePlot();
                     return;
+                }
+
+                if (isTauriRuntime()) {
+                    throw new Error('Rust OPD compute path is required in desktop mode, but desktop compute bridge is unavailable');
                 }
 
                 // NOTE: Wavefront generator supports only options.onProgress (same as PSF)
@@ -5238,7 +6914,7 @@ export function setupAnalysisWindows() {
                                 w.__psfPopup = null;
                         }
 
-                        const popup = window.open('', 'Point Spread Function', 'width=800,height=600');
+                        const popup = consumePreopenedAnalysisPopup('Point Spread Function', 'width=800,height=600');
                         if (!popup || !popup.document) {
                             try { popup?.close(); } catch (_) {}
                             alert('Popup could not be opened. Please allow popups for this site.');
@@ -5634,7 +7310,7 @@ export function setupAnalysisWindows() {
                 // Allow the popup to paint the progress UI before heavy computation begins.
                 await new Promise(r => setTimeout(r, 0));
 
-                const canUseDesktopRust = !!(
+                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
                     window.opener
                     && window.opener.__TAURI_INTERNALS__
                     && typeof window.opener.runDesktopAnalysisComputeForPopup === 'function'
@@ -6330,7 +8006,7 @@ export function setupAnalysisWindows() {
                                 return;
                         }
 
-                        const popup = window.open('', 'Modulation Transfer Function', 'width=800,height=600');
+                        const popup = consumePreopenedAnalysisPopup('Modulation Transfer Function', 'width=800,height=600');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -6642,7 +8318,7 @@ export function setupAnalysisWindows() {
                     throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                 }
 
-                const canUseDesktopRust = !!(
+                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
                     opener.__TAURI_INTERNALS__
                     && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
                 );
@@ -6759,7 +8435,7 @@ export function setupAnalysisWindows() {
                             requestUpdateSurfaceNumberSelect(w);
                         } catch (_) {}
 
-                        const popup = window.open('', 'Through-Focus Spot', 'width=980,height=700');
+                        const popup = consumePreopenedAnalysisPopup('Through-Focus Spot', 'width=980,height=700');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -6826,13 +8502,6 @@ export function setupAnalysisWindows() {
             color: #333;
         }
         .controls button:hover { background: #e9e9e9; }
-        .note {
-            padding: 8px 12px;
-            color: #666;
-            font-size: 12px;
-            border-bottom: 1px solid #eee;
-            background: #fff;
-        }
         .content {
             flex: 1 1 auto;
             min-height: 0;
@@ -6849,11 +8518,7 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Through-Focus Spot</div>
     <div class="controls">
-        <label for="popup-through-focus-spot-surface-select">Surf:</label>
-        <select id="popup-through-focus-spot-surface-select"></select>
-
         <label for="popup-through-focus-spot-wavelength-mode-select">Wavelength:</label>
         <select id="popup-through-focus-spot-wavelength-mode-select">
             <option value="all" selected>All</option>
@@ -6861,10 +8526,10 @@ export function setupAnalysisWindows() {
         </select>
 
         <label for="popup-through-focus-spot-min-defocus-input">Defocus min (mm):</label>
-        <input id="popup-through-focus-spot-min-defocus-input" type="number" step="0.001" value="-0.1" />
+        <input id="popup-through-focus-spot-min-defocus-input" type="number" step="0.001" value="-0.5" />
 
         <label for="popup-through-focus-spot-max-defocus-input">Defocus max (mm):</label>
-        <input id="popup-through-focus-spot-max-defocus-input" type="number" step="0.001" value="0.1" />
+        <input id="popup-through-focus-spot-max-defocus-input" type="number" step="0.001" value="0.5" />
 
         <label for="popup-through-focus-spot-steps-input">Steps:</label>
         <input id="popup-through-focus-spot-steps-input" type="number" min="3" max="61" step="1" value="5" />
@@ -6903,9 +8568,6 @@ export function setupAnalysisWindows() {
 
         <button id="popup-show-through-focus-spot-btn" type="button">Show Through-Focus Spot</button>
     </div>
-    <div class="note">
-        Note: Select a reachable surface (usually Image) and choose the defocus range.
-    </div>
     <div id="popup-through-focus-spot-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
         <div id="popup-through-focus-spot-progress-text" style="margin-bottom: 6px;">Calculating Through-Focus Spot...</div>
         <progress id="popup-through-focus-spot-progress" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
@@ -6921,36 +8583,6 @@ export function setupAnalysisWindows() {
             } catch (_) {
                 return null;
             }
-        }
-
-        function syncSurfaceOptionsFromOpener() {
-            const openerSelect = getOpenerEl('surface-number-select');
-            const popupSelect = document.getElementById('popup-through-focus-spot-surface-select');
-            if (!popupSelect) return;
-
-            const prevValue = popupSelect.value;
-            popupSelect.innerHTML = '';
-
-            if (!openerSelect || !openerSelect.options || openerSelect.options.length <= 1) {
-                const opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = 'Select Surf';
-                popupSelect.appendChild(opt);
-                return;
-            }
-
-            for (const o of openerSelect.options) {
-                const opt = document.createElement('option');
-                opt.value = o.value;
-                opt.textContent = (o.textContent || '').replace(/^面\s*/, 'Surf ').replace(/^Surface\s*/, 'Surf ');
-                popupSelect.appendChild(opt);
-            }
-
-            if (prevValue !== '' && Array.from(popupSelect.options).some((opt) => String(opt.value) === String(prevValue))) {
-                popupSelect.value = prevValue;
-                return;
-            }
-            popupSelect.value = openerSelect.value;
         }
 
         function syncInputsFromOpener() {
@@ -6978,15 +8610,12 @@ export function setupAnalysisWindows() {
         }
 
         function syncAll() {
-            syncSurfaceOptionsFromOpener();
             syncInputsFromOpener();
         }
 
         window.renderThroughFocusSpot = async () => {
             const containerEl = document.getElementById('popup-through-focus-spot-container');
             if (containerEl) containerEl.innerHTML = '';
-
-            try { syncSurfaceOptionsFromOpener(); } catch (_) {}
 
             const progressWrapper = document.getElementById('popup-through-focus-spot-progress-wrapper');
             const progressEl = document.getElementById('popup-through-focus-spot-progress');
@@ -7000,11 +8629,9 @@ export function setupAnalysisWindows() {
                 } catch (_) {}
             };
 
-            const openerSurface = getOpenerEl('surface-number-select');
             const openerRay = getOpenerEl('ray-count-input');
             const openerRing = getOpenerEl('ring-count-select');
 
-            const surfEl = document.getElementById('popup-through-focus-spot-surface-select');
             const wlModeEl = document.getElementById('popup-through-focus-spot-wavelength-mode-select');
             const minDefocusEl = document.getElementById('popup-through-focus-spot-min-defocus-input');
             const maxDefocusEl = document.getElementById('popup-through-focus-spot-max-defocus-input');
@@ -7014,7 +8641,6 @@ export function setupAnalysisWindows() {
             const ringEl = document.getElementById('popup-through-focus-spot-ring-count-select');
             const patternEl = document.getElementById('popup-through-focus-spot-pattern-select');
 
-            if (openerSurface && surfEl) openerSurface.value = surfEl.value;
             if (openerRay && rayEl) openerRay.value = rayEl.value;
             if (openerRing && ringEl) openerRing.value = ringEl.value;
 
@@ -7027,94 +8653,351 @@ export function setupAnalysisWindows() {
             try {
                 setProgress(0, 'Starting...');
 
-                const canUseDesktopRust = !!(
+                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
                     opener.__TAURI_INTERNALS__
                     && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
                 );
+                const canUseNativeRustSpot = canUseDesktopRust && !!(
+                    typeof opener.runDesktopNativeSpotRaytraceForPopup === 'function'
+                );
 
-                if (canUseDesktopRust) {
-                    setProgress(25, 'Computing Through-Focus Spot (Rust)...');
-                    const result = await opener.runDesktopAnalysisComputeForPopup({
-                        kind: 'through-focus-spot',
-                        surfaceIndex: surfEl && surfEl.value !== '' ? parseInt(surfEl.value, 10) : undefined,
-                        rayCount: rayEl && rayEl.value !== '' ? parseInt(rayEl.value, 10) : undefined,
-                        ringCount: ringEl && ringEl.value !== '' ? parseInt(ringEl.value, 10) : undefined,
-                        defocusMinMm: minDefocusEl ? Number(minDefocusEl.value) : undefined,
-                        defocusMaxMm: maxDefocusEl ? Number(maxDefocusEl.value) : undefined,
-                        steps: stepsEl ? parseInt(stepsEl.value, 10) : undefined,
-                        scaleUm: scaleEl ? Number(scaleEl.value) : undefined,
-                        wavelengthMode: wlModeEl ? String(wlModeEl.value || 'all') : 'all',
-                        pattern: patternEl ? String(patternEl.value || 'annular') : 'annular',
+                if (canUseNativeRustSpot) {
+                    const toFiniteNumber = (v, fallback) => {
+                        const n = Number(v);
+                        return Number.isFinite(n) ? n : fallback;
+                    };
+                    const toInt = (v, fallback) => {
+                        const n = parseInt(String(v ?? ''), 10);
+                        return Number.isInteger(n) ? n : fallback;
+                    };
+                    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+                    const toWavelengthLabel = (rawLabel) => {
+                        const text = String(rawLabel || '').trim();
+                        const nm = text.match(/(\d+(?:\.\d+)?)\s*nm/i);
+                        if (nm && nm[1]) return 'Wavelength ' + nm[1] + 'nm';
+                        const lower = text.toLowerCase();
+                        if (lower.includes('primary')) return 'Wavelength Primary';
+                        return 'Wavelength ' + text;
+                    };
+                    const wavelengthLabelFromSeries = (seriesItem, rawLabel) => {
+                        const wl = Number(seriesItem?.wavelengthUm);
+                        if (Number.isFinite(wl) && wl > 0) {
+                            return 'Wavelength ' + (wl * 1000).toFixed(1) + 'nm';
+                        }
+                        return toWavelengthLabel(rawLabel);
+                    };
+                    const parseSeriesLabel = (label, fallbackObjectLabel) => {
+                        const raw = String(label || '').trim();
+                        if (!raw) {
+                            return { objectLabel: fallbackObjectLabel, wavelengthLabel: 'Wavelength Primary' };
+                        }
+                        const m = raw.match(/(Primary(?:\s*\([^)]*\))?|\d+(?:\.\d+)?\s*nm)\s*$/i);
+                        if (m && m[1]) {
+                            const wlRaw = String(m[1] || 'Primary');
+                            const prefix = raw.slice(0, Math.max(0, m.index || 0)).replace(/[|@\-\s]+$/, '').trim();
+                            return {
+                                objectLabel: prefix || fallbackObjectLabel,
+                                wavelengthLabel: toWavelengthLabel(wlRaw),
+                            };
+                        }
+                        return { objectLabel: raw, wavelengthLabel: 'Wavelength Primary' };
+                    };
+
+                    const selectedSurfaceIndex = undefined;
+                    const selectedRayCount = rayEl && rayEl.value !== '' ? parseInt(rayEl.value, 10) : undefined;
+                    const selectedRingCount = ringEl && ringEl.value !== '' ? parseInt(ringEl.value, 10) : undefined;
+                    const selectedPattern = patternEl ? String(patternEl.value || 'annular') : 'annular';
+                    const selectedWavelengthMode = wlModeEl ? String(wlModeEl.value || 'all') : 'all';
+                    const minDefocusMm = toFiniteNumber(minDefocusEl ? minDefocusEl.value : -0.5, -0.5);
+                    const maxDefocusMm = toFiniteNumber(maxDefocusEl ? maxDefocusEl.value : 0.5, 0.5);
+                    const steps = clamp(toInt(stepsEl ? stepsEl.value : 5, 5), 3, 61);
+                    const scaleUm = Math.max(1, toFiniteNumber(scaleEl ? scaleEl.value : 100, 100));
+                    const halfScaleUm = scaleUm * 0.5;
+
+                    const objectRows = (() => {
+                        try {
+                            if (opener.tableObject && typeof opener.tableObject.getData === 'function') {
+                                const rows = opener.tableObject.getData();
+                                if (Array.isArray(rows)) return rows;
+                            }
+                        } catch (_) {}
+                        try {
+                            if (typeof opener.getObjectRows === 'function') {
+                                const rows = opener.getObjectRows(opener.tableObject);
+                                if (Array.isArray(rows)) return rows;
+                            }
+                        } catch (_) {}
+                        try {
+                            const raw = opener.localStorage && opener.localStorage.getItem('objectTableData');
+                            if (raw) {
+                                const parsed = JSON.parse(raw);
+                                if (Array.isArray(parsed)) return parsed;
+                            }
+                        } catch (_) {}
+                        return [];
+                    })();
+
+                    const getObjectLabel = (row, index) => {
+                        const id = row && row.id !== undefined ? String(row.id).trim() : '';
+                        if (id) return id;
+                        const obj = row && row.object !== undefined ? String(row.object).trim() : '';
+                        if (obj) return obj;
+                        const pos = row && row.position !== undefined ? String(row.position).trim() : '';
+                        if (pos) return 'Object ' + (index + 1) + ' (' + pos + ')';
+                        return 'Object ' + (index + 1);
+                    };
+
+                    const objectLabels = [];
+                    const focusGrid = [];
+                    const getObjectLabelByIndex = (index) => {
+                        if (Array.isArray(objectRows) && objectRows[index]) {
+                            return getObjectLabel(objectRows[index], index);
+                        }
+                        return 'Object ' + (index + 1);
+                    };
+                    const ensureObjectRow = (preferredIndex, label) => {
+                        let idx = Number(preferredIndex);
+                        if (!Number.isInteger(idx) || idx < 0) {
+                            idx = objectLabels.length;
+                        }
+                        while (objectLabels.length <= idx) {
+                            const next = objectLabels.length;
+                            objectLabels.push(getObjectLabelByIndex(next));
+                            focusGrid.push([]);
+                        }
+                        const labelText = String(label || '').trim();
+                        if (labelText) {
+                            objectLabels[idx] = labelText;
+                        }
+                        return idx;
+                    };
+                    const defocusValues = Array.from({ length: steps }, (_, i) => {
+                        if (steps <= 1) return minDefocusMm;
+                        const t = i / (steps - 1);
+                        return minDefocusMm + t * (maxDefocusMm - minDefocusMm);
                     });
 
-                    const spotSeries = Array.isArray(result?.spotSeries) ? result.spotSeries : [];
-                    if (!spotSeries.length) {
-                        throw new Error('Rust Through-Focus Spot result is empty');
+                    for (let i = 0; i < defocusValues.length; i++) {
+                        const shift = defocusValues[i];
+                        const baseProgress = Math.floor((i / Math.max(1, defocusValues.length)) * 85);
+                        setProgress(baseProgress, 'Computing defocus ' + shift.toFixed(4) + ' mm (' + (i + 1) + '/' + defocusValues.length + ')...');
+
+                        const result = await opener.runDesktopNativeSpotRaytraceForPopup({
+                            surfaceIndex: selectedSurfaceIndex,
+                            rayCount: selectedRayCount,
+                            ringCount: selectedRingCount,
+                            pattern: selectedPattern,
+                            wavelengthMode: selectedWavelengthMode,
+                            objectRows,
+                            defocusMm: shift,
+                        });
+                        const airyRadiusUm = Number(result?.airyRadiusUm);
+                        const safeAiryRadiusUm = (Number.isFinite(airyRadiusUm) && airyRadiusUm > 0) ? airyRadiusUm : NaN;
+
+                        const series = Array.isArray(result?.series) ? result.series : [];
+                        const groupedByObject = new Map();
+                        const wlCountRaw = Number(result?.wavelengthCount);
+                        const inferredWavelengthCount = (() => {
+                            if (Number.isInteger(wlCountRaw) && wlCountRaw > 0) return wlCountRaw;
+                            const unique = new Set();
+                            for (const s of series) {
+                                const key = wavelengthLabelFromSeries(s, String(s?.label || ''));
+                                unique.add(key);
+                            }
+                            return Math.max(1, unique.size);
+                        })();
+
+                        for (let sIdx = 0; sIdx < series.length; sIdx++) {
+                            const s = series[sIdx] || {};
+                            const objectIndexByOrder = Math.floor(sIdx / inferredWavelengthCount);
+                            const fallbackObj = getObjectLabelByIndex(objectIndexByOrder);
+                            const parsed = parseSeriesLabel(s.label, fallbackObj);
+                            const rowIndex = ensureObjectRow(objectIndexByOrder, fallbackObj || parsed.objectLabel);
+                            const pts = Array.isArray(s.points) ? s.points : [];
+                            const hasFieldAngle = !!s.hasFieldAngle;
+                            const chiefXUm = Number(s?.chiefPointUm?.xUm);
+                            const chiefYUm = Number(s?.chiefPointUm?.yUm);
+                            const useChiefCentering = hasFieldAngle && Number.isFinite(chiefXUm) && Number.isFinite(chiefYUm);
+                            const centered = useChiefCentering
+                                ? pts.map((p) => ({
+                                    xUm: (Number(p?.xUm) || 0) - chiefXUm,
+                                    yUm: (Number(p?.yUm) || 0) - chiefYUm,
+                                }))
+                                : pts.map((p) => ({
+                                    xUm: Number(p?.xUm) || 0,
+                                    yUm: Number(p?.yUm) || 0,
+                                }));
+
+                            if (!groupedByObject.has(rowIndex)) {
+                                groupedByObject.set(rowIndex, []);
+                            }
+                            const wlLabel = wavelengthLabelFromSeries(s, parsed.wavelengthLabel);
+                            groupedByObject.get(rowIndex).push({
+                                key: wlLabel,
+                                label: wlLabel,
+                                color: String(s?.color || '#2563eb'),
+                                points: centered,
+                            });
+                        }
+
+                        for (let rowIndex = 0; rowIndex < focusGrid.length; rowIndex++) {
+                            const groups = Array.isArray(groupedByObject.get(rowIndex)) ? groupedByObject.get(rowIndex) : [];
+                            const merged = [];
+                            for (const g of groups) {
+                                const pts = Array.isArray(g?.points) ? g.points : [];
+                                for (const p of pts) {
+                                    merged.push({ xUm: Number(p?.xUm) || 0, yUm: Number(p?.yUm) || 0 });
+                                }
+                            }
+
+                            let cx = 0;
+                            let cy = 0;
+                            if (merged.length > 0) {
+                                cx = merged.reduce((sum, p) => sum + p.xUm, 0) / merged.length;
+                                cy = merged.reduce((sum, p) => sum + p.yUm, 0) / merged.length;
+                            }
+
+                            focusGrid[rowIndex].push({
+                                shiftMm: shift,
+                                airyRadiusUm: safeAiryRadiusUm,
+                                pointsByWavelength: groups.map((g) => ({
+                                    key: g.key,
+                                    label: g.label,
+                                    color: g.color,
+                                    points: (Array.isArray(g.points) ? g.points : []).map((p) => ({
+                                        xUm: (Number(p?.xUm) || 0) - cx,
+                                        yUm: (Number(p?.yUm) || 0) - cy,
+                                    })),
+                                })),
+                            });
+                        }
                     }
+
                     if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
                         throw new Error('Plotly is not available in Through-Focus Spot popup');
                     }
 
+                    const rows = Math.max(1, focusGrid.length);
+                    const cols = Math.max(1, defocusValues.length);
                     const traces = [];
-                    for (const series of spotSeries) {
-                        const pts = Array.isArray(series?.points) ? series.points : [];
-                        const x = pts.map((p) => Number(p?.xUm) || 0);
-                        const y = pts.map((p) => Number(p?.yUm) || 0);
+                    const layout = {
+                        showlegend: true,
+                        grid: { rows, columns: cols, pattern: 'independent' },
+                        margin: { l: 60, r: 20, t: 56, b: 60 },
+                        paper_bgcolor: '#ffffff',
+                        plot_bgcolor: '#ffffff',
+                        height: Math.max(420, rows * 145 + 90),
+                        legend: {
+                            orientation: 'h',
+                            yanchor: 'bottom',
+                            y: 1.06,
+                            xanchor: 'center',
+                            x: 0.5,
+                        },
+                        legendgroupclick: 'togglegroup',
+                        shapes: [],
+                    };
+
+                    const legendEntries = new Map();
+                    for (let r = 0; r < rows; r++) {
+                        for (let c = 0; c < cols; c++) {
+                            const idx = r * cols + c + 1;
+                            const axisRefX = idx === 1 ? 'x' : 'x' + idx;
+                            const axisRefY = idx === 1 ? 'y' : 'y' + idx;
+                            const axisKeyX = idx === 1 ? 'xaxis' : 'xaxis' + idx;
+                            const axisKeyY = idx === 1 ? 'yaxis' : 'yaxis' + idx;
+                            const cell = (focusGrid[r] && focusGrid[r][c]) ? focusGrid[r][c] : { pointsByWavelength: [] };
+                            const airyRadiusUm = Number(cell?.airyRadiusUm);
+                            const groups = Array.isArray(cell?.pointsByWavelength) ? cell.pointsByWavelength : [];
+
+                            for (const group of groups) {
+                                const pts = Array.isArray(group?.points) ? group.points : [];
+                                const groupKey = String(group?.key || group?.label || 'wavelength');
+                                if (!legendEntries.has(groupKey)) {
+                                    legendEntries.set(groupKey, {
+                                        label: String(group?.label || groupKey),
+                                        color: String(group?.color || '#2563eb'),
+                                    });
+                                }
+                                traces.push({
+                                    x: pts.map((p) => Number(p?.xUm) || 0),
+                                    y: pts.map((p) => Number(p?.yUm) || 0),
+                                    mode: 'markers',
+                                    type: 'scattergl',
+                                    name: String(group?.label || groupKey),
+                                    legendgroup: groupKey,
+                                    showlegend: false,
+                                    marker: {
+                                        size: 4,
+                                        color: String(group?.color || '#2563eb'),
+                                        opacity: 0.75,
+                                    },
+                                    xaxis: axisRefX,
+                                    yaxis: axisRefY,
+                                    hovertemplate: 'x=%{x:.2f} µm<br>y=%{y:.2f} µm<extra></extra>',
+                                });
+                            }
+
+                            layout[axisKeyX] = {
+                                range: [-halfScaleUm, halfScaleUm],
+                                showgrid: true,
+                                zeroline: true,
+                                showticklabels: r === rows - 1,
+                                title: r === rows - 1 ? defocusValues[c].toFixed(3) + ' mm' : '',
+                            };
+                            layout[axisKeyY] = {
+                                range: [-halfScaleUm, halfScaleUm],
+                                showgrid: true,
+                                zeroline: true,
+                                showticklabels: c === 0,
+                                title: c === 0 ? (objectLabels[r] || ('Object ' + (r + 1))) : '',
+                                scaleanchor: axisRefX,
+                                scaleratio: 1,
+                            };
+
+                            if (Number.isFinite(airyRadiusUm) && airyRadiusUm > 0) {
+                                layout.shapes.push({
+                                    type: 'circle',
+                                    xref: axisRefX,
+                                    yref: axisRefY,
+                                    x0: -airyRadiusUm,
+                                    y0: -airyRadiusUm,
+                                    x1: airyRadiusUm,
+                                    y1: airyRadiusUm,
+                                    line: { color: '#111827', width: 1 },
+                                    fillcolor: 'rgba(0,0,0,0)',
+                                });
+                            }
+                        }
+                    }
+
+                    for (const [groupKey, entry] of legendEntries.entries()) {
                         traces.push({
-                            x,
-                            y,
-                            type: 'scattergl',
+                            x: [null],
+                            y: [null],
                             mode: 'markers',
-                            name: String(series?.wavelengthLabel || 'WL') + ' @ ' + (Number(series?.defocusMm) || 0).toFixed(3) + ' mm',
+                            type: 'scatter',
+                            name: entry.label,
+                            legendgroup: groupKey,
+                            showlegend: true,
                             marker: {
-                                size: 3,
-                                color: String(series?.color || '#2563eb'),
-                                opacity: 0.55,
+                                size: 8,
+                                color: entry.color,
+                                symbol: 'circle',
                             },
-                            hovertemplate: 'x=%{x:.2f}µm<br>y=%{y:.2f}µm<extra></extra>',
+                            hoverinfo: 'skip',
                         });
                     }
 
-                    setProgress(88, 'Rendering Through-Focus Spot...');
-                    await window.Plotly.newPlot(containerEl, traces, {
-                        title: { text: 'Through-Focus Spot Diagram', x: 0.5, xanchor: 'center' },
-                        margin: { l: 50, r: 20, t: 50, b: 45 },
-                        xaxis: { title: 'X (µm)', zeroline: true },
-                        yaxis: { title: 'Y (µm)', zeroline: true, scaleanchor: 'x', scaleratio: 1 },
-                        showlegend: true,
-                        paper_bgcolor: '#ffffff',
-                        plot_bgcolor: '#ffffff',
-                    }, { responsive: true, displaylogo: false });
-                    setProgress(100, 'Done (Rust)');
+                    setProgress(92, 'Rendering Through-Focus Spot...');
+                    await window.Plotly.newPlot(containerEl, traces, layout, { responsive: true, displaylogo: false });
+                    try {
+                        if (progressWrapper) progressWrapper.style.display = 'none';
+                    } catch (_) {}
                     return;
                 }
 
-                if (typeof opener.showThroughFocusSpotDiagram !== 'function') {
-                    if (containerEl) containerEl.textContent = 'showThroughFocusSpotDiagram is not available in the main window.';
-                    return;
-                }
-
-                await opener.showThroughFocusSpotDiagram({
-                    surfaceIndex: surfEl && surfEl.value !== '' ? parseInt(surfEl.value, 10) : undefined,
-                    rayCount: rayEl && rayEl.value !== '' ? parseInt(rayEl.value, 10) : undefined,
-                    ringCount: ringEl && ringEl.value !== '' ? parseInt(ringEl.value, 10) : undefined,
-                    defocusMinMm: minDefocusEl ? Number(minDefocusEl.value) : undefined,
-                    defocusMaxMm: maxDefocusEl ? Number(maxDefocusEl.value) : undefined,
-                    steps: stepsEl ? parseInt(stepsEl.value, 10) : undefined,
-                    scaleUm: scaleEl ? Number(scaleEl.value) : undefined,
-                    wavelengthMode: wlModeEl ? String(wlModeEl.value || 'all') : 'all',
-                    pattern: patternEl ? String(patternEl.value || 'annular') : 'annular',
-                    containerElement: containerEl,
-                    onProgress: (evt) => {
-                        try {
-                            const p = Number(evt && evt.percent);
-                            const msg = (evt && (evt.message || evt.phase)) || 'Working...';
-                            if (Number.isFinite(p)) setProgress(p, msg);
-                            else setProgress(undefined, msg);
-                        } catch (_) {}
-                    }
-                });
-                setProgress(100, 'Done');
+                throw new Error('Native Rust Spot path is unavailable. Ensure Tauri runtime and desktop Rust analysis bridge are active.');
             } catch (e) {
                 if (containerEl) containerEl.textContent = String(e && e.message ? e.message : e);
                 setProgress(100, 'Failed');
@@ -7148,7 +9031,7 @@ export function setupAnalysisWindows() {
                                 return;
                         }
 
-                        const popup = window.open('', 'Through-Focus MTF', 'width=900,height=680');
+                        const popup = consumePreopenedAnalysisPopup('Through-Focus MTF', 'width=900,height=680');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -7466,7 +9349,7 @@ export function setupAnalysisWindows() {
                     throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                 }
 
-                const canUseDesktopRust = !!(
+                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
                     opener.__TAURI_INTERNALS__
                     && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
                 );
@@ -7581,7 +9464,7 @@ export function setupAnalysisWindows() {
                                 return;
                         }
 
-                        const popup = window.open('', 'Object MTF', 'width=900,height=650');
+                        const popup = consumePreopenedAnalysisPopup('Object MTF', 'width=900,height=650');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
@@ -7934,7 +9817,7 @@ export function setupAnalysisWindows() {
                     throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                 }
 
-                const canUseDesktopRust = !!(
+                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
                     opener.__TAURI_INTERNALS__
                     && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
                 );
@@ -8092,7 +9975,7 @@ export function setupAnalysisWindows() {
                                 return;
                         }
 
-                        const popup = window.open('', 'Transverse Aberration', 'width=800,height=600');
+                        const popup = consumePreopenedAnalysisPopup('Transverse Aberration', 'width=800,height=600');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;

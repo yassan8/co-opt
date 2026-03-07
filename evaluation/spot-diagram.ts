@@ -648,11 +648,11 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                         if (hitPointLocal && typeof hitPointLocal.x === 'number' && typeof hitPointLocal.y === 'number') {
                             const isChief = rayStart.isChief === true || (rayStart.isChief === undefined && i === 0);
                             
-                            // For spot diagram, use global coordinates at the target surface.
-                            // The chief-ray-relative centering is done later in drawSpotDiagram.
+                            // For spot diagram, use local coordinates on the target surface.
+                            // Using global XY distorts the pattern when CoordTrans/tilt/decenter exists.
                             const spotPoint = {
-                                x: hitPointGlobal.x,
-                                y: hitPointGlobal.y,
+                                x: hitPointLocal.x,
+                                y: hitPointLocal.y,
                                 z: hitPointLocal.z,
                                 globalX: hitPointGlobal?.x,
                                 globalY: hitPointGlobal?.y,

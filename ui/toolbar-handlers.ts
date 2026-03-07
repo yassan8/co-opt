@@ -3,13 +3,14 @@
  * Extracted from dom-event-handlers.ts for use in React components
  */
 
-import { BLOCK_SCHEMA_VERSION, deriveBlocksFromLegacyOpticalSystemRows } from '../compat/block-schema.ts';
+import { BLOCK_SCHEMA_VERSION, deriveBlocksFromLegacyOpticalSystemRows } from '../data/block-schema.ts';
 import { loadSystemConfigurations, saveSystemConfigurations, clearAllPersistedState } from '../data/table-configuration.ts';
 import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-import.ts';
 import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
 import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText, recommendWavefrontGrid, runAnalysisPreview, runOptimizerStep } from '../src/desktop/ipc/client.ts';
+import { buildShareUrlFromCompressedString, encodeAllDataToCompressedString } from '../utils/url-share.ts';
 
 declare global {
   interface Window {
@@ -338,6 +339,43 @@ export function handleClearStorage(): void {
   } catch (err) {
     console.error('❌ Failed to clear storage:', err);
     alert(`Clear storage failed: ${(err as Error)?.message || String(err)}`);
+  }
+}
+
+export async function handleShareUrl(): Promise<void> {
+  try {
+    if (document.activeElement) (document.activeElement as HTMLElement).blur();
+
+    let compressed: string;
+    try {
+      const allData = buildAllDataForExport();
+      compressed = encodeAllDataToCompressedString(allData);
+    } catch (encodeErr) {
+      alert((encodeErr as Error)?.message || 'Failed to generate share URL');
+      return;
+    }
+
+    const base = `${location.origin}${location.pathname}`;
+    const url = buildShareUrlFromCompressedString(compressed, base);
+
+    const urlLength = url.length;
+    if (urlLength > 30000) {
+      alert(`Share URL is too long (${urlLength} chars). Please use Save instead.`);
+      return;
+    }
+    if (urlLength >= 2000) {
+      const ok = confirm(`Share URL is long (${urlLength} chars) and may not work in some apps.\n\nContinue?`);
+      if (!ok) return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(url);
+      alert('Share URL copied to clipboard.');
+    } catch (_) {
+      prompt('Copy this URL:', url);
+    }
+  } catch (err) {
+    alert(`Share failed: ${(err as Error)?.message || String(err)}`);
   }
 }
 
@@ -938,59 +976,42 @@ export function handleExportZemax(): void {
 // Note: Optimize button handler is very complex and should remain in dom-event-handlers.ts
 // We'll trigger it through a window function
 export function handleOptimize(): void {
-  if (isTauriRuntime()) {
-    (async () => {
-      try {
-        const opticalSystemRows = (window as any).getOpticalSystemRows
-          ? (window as any).getOpticalSystemRows((window as any).tableOpticalSystem)
-          : [];
+  if (!isTauriRuntime()) {
+    alert('Desktop Rust optimizer is required. Please run in Tauri desktop mode.');
+    return;
+  }
 
-        if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
-          alert('最適化対象の光学系データがありません。');
-          return;
-        }
+  (async () => {
+    try {
+      const opticalSystemRows = (window as any).getOpticalSystemRows
+        ? (window as any).getOpticalSystemRows((window as any).tableOpticalSystem)
+        : [];
 
-        const result = await runOptimizerStep({
-          opticalSystemRows,
-          maxIterations: 24,
-        });
-
-        console.log('✅ [Optimize][Rust]', result);
-        alert(
-          [
-            'Rust optimizer step completed',
-            `iterations: ${result.iterations}`,
-            `variables: ${result.variableCount}`,
-            `merit: ${result.meritBefore.toFixed(6)} -> ${result.meritAfter.toFixed(6)}`,
-            result.converged ? 'status: converged' : 'status: in-progress',
-          ].join('\n')
-        );
-      } catch (err) {
-        console.error('❌ [Optimize][Rust] failed:', err);
-        alert(`Rust optimize failed: ${(err as Error)?.message || String(err)}`);
+      if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+        alert('最適化対象の光学系データがありません。');
+        return;
       }
-    })();
-    return;
-  }
 
-  if (!(window as any).OptimizationMVP) {
-    alert('OptimizationMVP が利用できません。');
-    return;
-  }
+      const result = await runOptimizerStep({
+        opticalSystemRows,
+        maxIterations: 24,
+      });
 
-  const w = window as any;
-  try {
-    if (typeof w.runOptimization === 'function') {
-      w.runOptimization();
-      return;
+      console.log('✅ [Optimize][Rust]', result);
+      alert(
+        [
+          'Rust optimizer step completed',
+          `iterations: ${result.iterations}`,
+          `variables: ${result.variableCount}`,
+          `merit: ${result.meritBefore.toFixed(6)} -> ${result.meritAfter.toFixed(6)}`,
+          result.converged ? 'status: converged' : 'status: in-progress',
+        ].join('\n')
+      );
+    } catch (err) {
+      console.error('❌ [Optimize][Rust] failed:', err);
+      alert(`Rust optimize failed: ${(err as Error)?.message || String(err)}`);
     }
-    if (typeof w.optimizeDesignIntent === 'function') {
-      w.optimizeDesignIntent();
-      return;
-    }
-  } catch (err) {
-    console.error('❌ [Optimize][Web] failed:', err);
-  }
+  })();
 }
 
 export function handleRender3D(): void {
@@ -1001,6 +1022,65 @@ export function handleRender3D(): void {
   w.__render3DInProgress = true;
 
   try {
+    if (isTauriRuntime()) {
+      (async () => {
+        try {
+          try {
+            const cm = (window as any).ConfigurationManager;
+            if (cm && typeof cm.saveCurrentToActiveConfiguration === 'function') {
+              cm.saveCurrentToActiveConfiguration();
+            }
+          } catch (_) {}
+
+          const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+          const label = 'render-window';
+          const existing = await WebviewWindow.getByLabel(label);
+          if (existing) {
+            await existing.setFocus();
+            return;
+          }
+
+          const url = new URL(window.location.href);
+          url.searchParams.set('coopt_render_window', '1');
+
+          const created = new WebviewWindow(label, {
+            title: 'Render Optical System',
+            url: url.toString(),
+            width: 1100,
+            height: 760,
+            resizable: true,
+            focus: true,
+          });
+
+          created.once('tauri://error', (error) => {
+            console.error('❌ [Render3D][Desktop] failed to create render window:', error);
+            alert('Failed to open Render window.');
+          });
+        } catch (err) {
+          console.error('❌ [Render3D][Desktop] WebviewWindow error:', err);
+          alert('Failed to open Render window.');
+        }
+      })();
+      return;
+    }
+
+    const existingPopup = w.popup3DWindow;
+    if (existingPopup && !existingPopup.closed) {
+      try {
+        existingPopup.focus();
+        return;
+      } catch (_) {}
+    }
+
+    const preopenedPopup = window.open('', 'popup-3d-optical-system', 'width=800,height=600')
+      || window.open('about:blank', '_blank', 'width=800,height=600');
+
+    if (!preopenedPopup) {
+      alert('Popup blocked. Please allow popups for this site.');
+      return;
+    }
+    w.popup3DWindow = preopenedPopup;
+
     // Ensure legacy popup infrastructure is bound first
     if (typeof w.setupOpticalSystemChangeListeners === 'function' && !w.__opticalSystemChangeListenersBound) {
       w.setupOpticalSystemChangeListeners(w.scene || null);
@@ -1008,28 +1088,106 @@ export function handleRender3D(): void {
 
     // Delegate to the proven legacy popup renderer path
     if (typeof w.__open3DWindowLegacy === 'function') {
-      w.__open3DWindowLegacy();
+      w.__open3DWindowLegacy(preopenedPopup);
       return;
     }
 
     // Safety fallback if legacy bridge is unavailable
-    const popup = window.open('', '3D Optical System', 'width=800,height=600');
-    if (!popup) {
-      alert('Popup blocked. Please allow popups for this site.');
+    if (typeof w.initialize3DPopup === 'function') {
+      w.initialize3DPopup(preopenedPopup);
       return;
     }
-    w.popup3DWindow = popup;
-    if (typeof w.initialize3DPopup === 'function') {
-      w.initialize3DPopup(popup);
-    }
+
+    try { preopenedPopup.close(); } catch (_) {}
+    alert('Failed to initialize Render window. Please retry after app startup finishes.');
   } finally {
     w.__render3DInProgress = false;
   }
 }
 
+type AnalysisWindowKey =
+  | 'system-data'
+  | 'spot-diagram'
+  | 'spherical-aberration'
+  | 'astigmatism'
+  | 'distortion'
+  | 'magnification-chromatic-aberration'
+  | 'integrated-aberration'
+  | 'transverse-aberration'
+  | 'opd'
+  | 'psf'
+  | 'mtf'
+  | 'through-focus-spot'
+  | 'through-focus-mtf'
+  | 'field-mtf';
+
+const ANALYSIS_WINDOW_SIZE_MAP: Record<AnalysisWindowKey, { width: number; height: number; title: string }> = {
+  'system-data': { width: 1200, height: 760, title: 'System Data' },
+  'spot-diagram': { width: 980, height: 760, title: 'Spot Diagram' },
+  'spherical-aberration': { width: 980, height: 760, title: 'Spherical Aberration' },
+  'astigmatism': { width: 980, height: 760, title: 'Astigmatism' },
+  'distortion': { width: 980, height: 760, title: 'Distortion' },
+  'magnification-chromatic-aberration': { width: 980, height: 760, title: 'Lateral Chromatic Aberration' },
+  'integrated-aberration': { width: 980, height: 760, title: 'Integrated Aberration' },
+  'transverse-aberration': { width: 980, height: 760, title: 'Transverse Aberration' },
+  'opd': { width: 980, height: 760, title: 'Optical Path Difference' },
+  'psf': { width: 980, height: 760, title: 'Point Spread Function' },
+  'mtf': { width: 980, height: 760, title: 'Modulation Transfer Function' },
+  'through-focus-spot': { width: 1100, height: 820, title: 'Through-Focus Spot' },
+  'through-focus-mtf': { width: 1100, height: 820, title: 'Through-Focus MTF' },
+  'field-mtf': { width: 1100, height: 820, title: 'Object MTF' },
+};
+
+function isAnalysisWindowContext(): boolean {
+  try {
+    const url = new URL(window.location.href);
+    return url.searchParams.get('coopt_analysis_window') === '1';
+  } catch (_) {
+    return false;
+  }
+}
+
+async function openDesktopAnalysisWindow(kind: AnalysisWindowKey): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+
+  const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+  const label = `analysis-${kind}`;
+  const existing = await WebviewWindow.getByLabel(label);
+  if (existing) {
+    await existing.setFocus();
+    return true;
+  }
+
+  const url = new URL(window.location.href);
+  url.searchParams.set('coopt_analysis_window', '1');
+  url.searchParams.set('coopt_analysis', kind);
+
+  const winCfg = ANALYSIS_WINDOW_SIZE_MAP[kind] || { width: 980, height: 760, title: 'Analysis' };
+  new WebviewWindow(label, {
+    title: winCfg.title,
+    url: url.toString(),
+    width: winCfg.width,
+    height: winCfg.height,
+    resizable: true,
+    focus: true,
+  });
+  return true;
+}
+
 export function handleSystemData(): void {
   console.log('[SystemData] Button clicked');
   const w = window as any;
+
+  if (isTauriRuntime() && !isAnalysisWindowContext()) {
+    (async () => {
+      try {
+        await openDesktopAnalysisWindow('system-data');
+      } catch (err) {
+        console.error('❌ [SystemData][Desktop] WebviewWindow error:', err);
+      }
+    })();
+    return;
+  }
   
   // Ensure event listeners are set up first
   if (typeof w.setupAnalysisWindows === 'function' && typeof w.setupOpticalSystemChangeListeners === 'function') {
@@ -1083,6 +1241,22 @@ export function handleAnalysisSelect(selectedValue: string): void {
   const value = String(selectedValue || '').trim();
   if (!value) return;
 
+  const analysisPopupConfigMap: Record<string, { key: string; title: string; features: string }> = {
+    'spot-diagram': { key: 'spot-diagram', title: 'Spot Diagram', features: 'width=800,height=600' },
+    'spherical-aberration': { key: 'spherical-aberration', title: 'Spherical Aberration', features: 'width=800,height=600' },
+    'astigmatism': { key: 'astigmatism', title: 'Astigmatism', features: 'width=800,height=600' },
+    'distortion': { key: 'distortion', title: 'Distortion', features: 'width=800,height=600' },
+    'magnification-chromatic-aberration': { key: 'magnification-chromatic-aberration', title: 'Lateral Chromatic Aberration', features: 'width=800,height=600' },
+    'integrated-aberration': { key: 'integrated-aberration', title: 'Integrated Aberration', features: 'width=800,height=600' },
+    'transverse-aberration': { key: 'transverse-aberration', title: 'Transverse Aberration', features: 'width=800,height=600' },
+    'opd': { key: 'opd', title: 'Optical Path Difference', features: 'width=800,height=600' },
+    'psf': { key: 'psf', title: 'Point Spread Function', features: 'width=800,height=600' },
+    'mtf': { key: 'mtf', title: 'Modulation Transfer Function', features: 'width=800,height=600' },
+    'through-focus-spot': { key: 'through-focus-spot', title: 'Through-Focus Spot', features: 'width=980,height=700' },
+    'through-focus-mtf': { key: 'through-focus-mtf', title: 'Through-Focus MTF', features: 'width=900,height=680' },
+    'field-mtf': { key: 'field-mtf', title: 'Object MTF', features: 'width=900,height=650' }
+  };
+
   const analysisButtonMap: Record<string, string> = {
     'spot-diagram': 'open-spot-diagram-window-btn',
     'spherical-aberration': 'open-spherical-aberration-window-btn',
@@ -1100,8 +1274,38 @@ export function handleAnalysisSelect(selectedValue: string): void {
   };
 
   const buttonId = analysisButtonMap[value];
+
+  const mappedAnalysisKind = (
+    value in ANALYSIS_WINDOW_SIZE_MAP ? value : null
+  ) as AnalysisWindowKey | null;
+
+  if (isTauriRuntime() && !isAnalysisWindowContext() && mappedAnalysisKind && buttonId) {
+    (async () => {
+      try {
+        await openDesktopAnalysisWindow(mappedAnalysisKind);
+      } catch (err) {
+        console.error('❌ [Analysis][Desktop] WebviewWindow error:', err);
+      }
+    })();
+    return;
+  }
+
   if (buttonId) {
     const w = window as any;
+    let preopenedPopup: Window | null = null;
+    let popupConsumedByHandler = false;
+    try {
+      const cfg = analysisPopupConfigMap[value];
+      if (cfg) {
+        const preopened = window.open('', cfg.title, cfg.features);
+        if (preopened) {
+          preopenedPopup = preopened;
+          w.__preopenedAnalysisPopupMap = w.__preopenedAnalysisPopupMap || {};
+          w.__preopenedAnalysisPopupMap[cfg.title] = preopened;
+        }
+      }
+    } catch (_) {}
+
     try {
       if (typeof w.setupAnalysisWindows === 'function') {
         w.setupAnalysisWindows();
@@ -1110,8 +1314,27 @@ export function handleAnalysisSelect(selectedValue: string): void {
 
     const button = document.getElementById(buttonId);
     if (button) {
-      const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
-      button.dispatchEvent(clickEvent);
+      const originalWindowOpen = window.open;
+      try {
+        if (preopenedPopup) {
+          (window as any).open = (...args: any[]) => {
+            if (!popupConsumedByHandler) {
+              popupConsumedByHandler = true;
+              try { preopenedPopup!.focus(); } catch (_) {}
+              return preopenedPopup;
+            }
+            return originalWindowOpen.apply(window, args as any);
+          };
+        }
+
+        const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+        button.dispatchEvent(clickEvent);
+      } finally {
+        (window as any).open = originalWindowOpen;
+        if (preopenedPopup && !popupConsumedByHandler) {
+          try { preopenedPopup.close(); } catch (_) {}
+        }
+      }
     }
   }
 

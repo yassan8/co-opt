@@ -1,5 +1,45 @@
 import { useEffect } from 'react';
 
+export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
+  return (
+    <div className={`system-section ${visible ? 'system-section-window-fit' : ''}`} style={{ display: visible ? 'flex' : 'none' }}>
+      <h2>System Data</h2>
+
+      <div
+        id="transform-error-bar"
+        className="merit-function-help"
+        style={{ display: 'none', borderLeftColor: '#dc3545', marginBottom: 10 }}
+      >
+        <strong>Error:</strong> <span id="transform-error-text"></span>
+      </div>
+
+      <div
+        id="transform-progress-wrapper"
+        style={{
+          display: 'none',
+          padding: '8px 12px',
+          borderBottom: '1px solid #eee',
+          background: '#fff',
+          marginBottom: 10,
+        }}
+      >
+        <div id="transform-progress-text">Calculating...</div>
+        <progress id="transform-progressbar" max={100} value={0} style={{ width: '100%', marginTop: 4 }}></progress>
+      </div>
+
+      <div className="system-controls">
+        <button id="calculate-paraxial-btn">Calculate Paraxial</button>
+        <button id="calculate-seidel-btn">Aberration Coefficients</button>
+        <button id="calculate-seidel-afocal-btn">Aberration Coefficients (Afocal)</button>
+        <label htmlFor="reference-focal-length">Reference Focal Length:</label>
+        <input type="text" id="reference-focal-length" placeholder="Auto" style={{ width: '80px' }} />
+        <button id="coord-transform-btn">Coord Transform</button>
+      </div>
+      <textarea id="system-data" rows={15} cols={100} placeholder="System information will appear here..."></textarea>
+    </div>
+  );
+}
+
 export default function LegacyPanels() {
   useEffect(() => {
     // Re-initialize event listeners when component mounts
@@ -81,41 +121,7 @@ export default function LegacyPanels() {
         </div>
       </div>
 
-      <div className="system-section" style={{ display: "none" }}>
-        <h2>System Data</h2>
-
-        <div
-          id="transform-error-bar"
-          className="merit-function-help"
-          style={{ display: "none", borderLeftColor: "#dc3545", marginBottom: 10 }}
-        >
-          <strong>Error:</strong> <span id="transform-error-text"></span>
-        </div>
-
-        <div
-          id="transform-progress-wrapper"
-          style={{
-            display: "none",
-            padding: "8px 12px",
-            borderBottom: "1px solid #eee",
-            background: "#fff",
-            marginBottom: 10,
-          }}
-        >
-          <div id="transform-progress-text">Calculating...</div>
-          <progress id="transform-progressbar" max={100} value={0} style={{ width: "100%", marginTop: 4 }}></progress>
-        </div>
-
-        <div className="system-controls">
-          <button id="calculate-paraxial-btn">Calculate Paraxial</button>
-          <button id="calculate-seidel-btn">Aberration Coefficients</button>
-          <button id="calculate-seidel-afocal-btn">Aberration Coefficients (Afocal)</button>
-          <label htmlFor="reference-focal-length">Reference Focal Length:</label>
-          <input type="text" id="reference-focal-length" placeholder="Auto" style={{ width: '80px' }} />
-          <button id="coord-transform-btn">Coord Transform</button>
-        </div>
-        <textarea id="system-data" rows={15} cols={100} placeholder="System information will appear here..."></textarea>
-      </div>
+      <SystemDataPanel />
 
       {false && (
       <div className="draw-system-container">

@@ -15,97 +15,42 @@ import { traceRay, traceRayHitPoint, calculateSurfaceOrigins } from '../core/ray
 import { getRustRayTracingWasmSync } from '../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 import { setWindowDebugBagValue } from '../../utils/window-debug-bag.ts';
 
-const RENDER_TS_TRACE_OPTIONS = {
-    allowNonStrict: true,
-    requireWasmRayTracing: false,
-    useRustWasm: false,
-    requireRustWasm: false,
-    disableWasmRayTracing: true,
-    __renderRayTracingTsOnly: true
-};
-
 const RENDER_RUST_TRACE_OPTIONS = {
     allowNonStrict: true,
     requireWasmRayTracing: false,
     useRustWasm: true,
-    requireRustWasm: false,
+    requireRustWasm: true,
     disableWasmRayTracing: false,
     __renderRayTracingRustPreferred: true
 };
 
-const IS_CHROME_DESKTOP = (() => {
-    try {
-        const ua = String(navigator.userAgent || '');
-        return /\bChrome\//.test(ua)
-            && !/\bEdg\//.test(ua)
-            && !/\bOPR\//.test(ua)
-            && !/\bCriOS\//.test(ua);
-    } catch (_) {
-        return false;
-    }
-})();
-
-const CHROME_RENDER_RUST_MIN_BATCH = 24;
-
-function shouldUseRustRenderTracing(workloadSize = 1) {
-    const size = Number.isFinite(Number(workloadSize)) ? Math.max(1, Number(workloadSize)) : 1;
-    try {
-        if (typeof globalThis !== 'undefined') {
-            const g = globalThis as any;
-            const mode = String(g.__COOPT_CHROME_RENDER_BACKEND_MODE || '').trim().toLowerCase();
-            if (mode === 'ts') return false;
-            if (mode === 'rust') {
-                try {
-                    return !!getRustRayTracingWasmSync();
-                } catch (_) {
-                    return false;
-                }
-            }
-        }
-    } catch (_) {}
-
-    if (!IS_CHROME_DESKTOP) return false;
-    try {
-        if (typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_DISABLE_CHROME_RENDER_RUST === true) {
-            return false;
-        }
-    } catch (_) {}
+function assertRustRenderTracingAvailable() {
     try {
         const rustReady = !!getRustRayTracingWasmSync();
-        if (!rustReady) return false;
-        return size >= CHROME_RENDER_RUST_MIN_BATCH;
-    } catch (_) {
-        return false;
-    }
+        if (rustReady) return;
+    } catch (_) {}
+    throw new Error('Rust ray tracing WASM is unavailable for infinite cross-beam generation.');
 }
 
 function traceRayForRenderTs(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, maxSurfaceIndex = null) {
-    const opts = shouldUseRustRenderTracing(1) ? RENDER_RUST_TRACE_OPTIONS : RENDER_TS_TRACE_OPTIONS;
-    return traceRay(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, opts);
+    assertRustRenderTracingAvailable();
+    return traceRay(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, RENDER_RUST_TRACE_OPTIONS);
 }
 
 function traceRayHitPointForRenderTs(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null) {
-    const opts = shouldUseRustRenderTracing(1) ? RENDER_RUST_TRACE_OPTIONS : RENDER_TS_TRACE_OPTIONS;
-    return traceRayHitPoint(opticalSystemRows, ray0, n0, targetSurfaceIndex, opts);
+    assertRustRenderTracingAvailable();
+    return traceRayHitPoint(opticalSystemRows, ray0, n0, targetSurfaceIndex, RENDER_RUST_TRACE_OPTIONS);
 }
 
 const CHIEF_RUST_TRACE_OPTIONS = {
     allowNonStrict: true,
     useRustWasm: true,
-    requireRustWasm: false
+    requireRustWasm: true
 };
 
 function traceRayHitPointForChiefSearch(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null) {
-    try {
-        const disabled = !!(typeof globalThis !== 'undefined' && (globalThis as any).__COOPT_DISABLE_RUST_CHIEF_SEARCH === true);
-        if (!disabled) {
-            const rust = getRustRayTracingWasmSync();
-            if (rust) {
-                return traceRayHitPoint(opticalSystemRows, ray0, n0, targetSurfaceIndex, CHIEF_RUST_TRACE_OPTIONS as any);
-            }
-        }
-    } catch (_) {}
-    return traceRayHitPointForRenderTs(opticalSystemRows, ray0, n0, targetSurfaceIndex);
+    assertRustRenderTracingAvailable();
+    return traceRayHitPoint(opticalSystemRows, ray0, n0, targetSurfaceIndex, CHIEF_RUST_TRACE_OPTIONS as any);
 }
 
 // Runtime build stamp (for cache/stale-module diagnostics)
@@ -377,6 +322,119 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
     }
     
     return null;
+}
+
+function refineChiefDirectionToStopCenter(
+    chiefOrigin,
+    initialDirection,
+    stopCenter,
+    stopSurfaceIndex,
+    opticalSystemRows,
+    wavelength,
+    maxIter = 20,
+    tol = 1e-4
+) {
+    if (!chiefOrigin || !initialDirection || !stopCenter || !Number.isInteger(stopSurfaceIndex)) return null;
+
+    const origin = {
+        x: Number(chiefOrigin.x),
+        y: Number(chiefOrigin.y),
+        z: Number(chiefOrigin.z)
+    };
+    if (![origin.x, origin.y, origin.z].every(Number.isFinite)) return null;
+
+    const stopX = Number(stopCenter.x);
+    const stopY = Number(stopCenter.y);
+    if (!Number.isFinite(stopX) || !Number.isFinite(stopY)) return null;
+
+    const i0 = Number(initialDirection.i) || 0;
+    const j0 = Number(initialDirection.j) || 0;
+    const k0 = Number(initialDirection.k) || 1;
+    if (!Number.isFinite(k0) || Math.abs(k0) < 1e-12) return null;
+
+    let sx = i0 / k0;
+    let sy = j0 / k0;
+
+    const normalizeDir = (ux, uy) => {
+        const inv = 1 / Math.sqrt(1 + ux * ux + uy * uy);
+        return { i: ux * inv, j: uy * inv, k: 1 * inv };
+    };
+
+    const evaluate = (ux, uy) => {
+        const d = normalizeDir(ux, uy);
+        const ray = {
+            pos: { ...origin },
+            dir: { x: d.i, y: d.j, z: d.k },
+            wavelength
+        };
+        const hit = traceRayHitPointForChiefSearch(opticalSystemRows, ray, 1.0, stopSurfaceIndex);
+        if (!hit) return { valid: false, error: Infinity, hit: null, dir: d };
+        const ex = hit.x - stopX;
+        const ey = hit.y - stopY;
+        return { valid: true, error: Math.hypot(ex, ey), ex, ey, hit, dir: d };
+    };
+
+    let best = evaluate(sx, sy);
+    if (!best.valid) return null;
+    if (best.error <= tol) return best.dir;
+
+    for (let iter = 0; iter < maxIter; iter++) {
+        const center = evaluate(sx, sy);
+        if (!center.valid) break;
+        if (center.error < best.error) best = center;
+        if (center.error <= tol) return center.dir;
+
+        const eps = Math.max(1e-5, 1e-4 * (1 + center.error));
+        const ex = evaluate(sx + eps, sy);
+        const ey = evaluate(sx, sy + eps);
+        if (!ex.valid || !ey.valid) break;
+
+        const j11 = (ex.hit.x - center.hit.x) / eps;
+        const j21 = (ex.hit.y - center.hit.y) / eps;
+        const j12 = (ey.hit.x - center.hit.x) / eps;
+        const j22 = (ey.hit.y - center.hit.y) / eps;
+
+        const det = j11 * j22 - j12 * j21;
+        let dsx;
+        let dsy;
+
+        if (!Number.isFinite(det) || Math.abs(det) < 1e-14) {
+            dsx = -0.2 * center.ex;
+            dsy = -0.2 * center.ey;
+        } else {
+            dsx = (-j22 * center.ex + j12 * center.ey) / det;
+            dsy = (j21 * center.ex - j11 * center.ey) / det;
+        }
+
+        if (!Number.isFinite(dsx) || !Number.isFinite(dsy)) break;
+
+        const maxStep = 0.05;
+        const norm = Math.hypot(dsx, dsy);
+        if (norm > maxStep) {
+            const scale = maxStep / norm;
+            dsx *= scale;
+            dsy *= scale;
+        }
+
+        let accepted = false;
+        let alpha = 1;
+        for (let ls = 0; ls < 10; ls++) {
+            const nsx = sx + alpha * dsx;
+            const nsy = sy + alpha * dsy;
+            const next = evaluate(nsx, nsy);
+            if (next.valid && next.error < center.error) {
+                sx = nsx;
+                sy = nsy;
+                accepted = true;
+                if (next.error < best.error) best = next;
+                break;
+            }
+            alpha *= 0.5;
+        }
+        if (!accepted) break;
+    }
+
+    return best && best.valid && best.error <= Math.max(tol, 5e-4) ? best.dir : null;
 }
 
 // 色分けシステム（有限系と同じ仕様）
@@ -664,6 +722,13 @@ function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays,
         objectIndex: objectIndex,
         wavelength: 0.5876
     });
+
+    if (rayCount <= 1) {
+        if (debugMode) {
+            console.log(`🔧 [CrossBeam] Object${objectIndex}: rayCount=${rayCount}, chief only`);
+        }
+        return rays;
+    }
     
     if (debugMode) {
         console.log(`🔧 [CrossBeam] Object${objectIndex}: 主光線追加`);
@@ -673,14 +738,25 @@ function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays,
     const verticalRays = boundaryRays.filter(r => ['upper', 'lower'].includes(r.direction));
     const horizontalRays = boundaryRays.filter(r => ['left', 'right'].includes(r.direction));
     
+    // rayCount を厳守するため、chief 以外の本数を配分
+    let remainingCount = Math.max(0, rayCount - 1);
+    const useVertical = (crossType === 'both' || crossType === 'vertical') && verticalRays.length >= 2;
+    const useHorizontal = (crossType === 'both' || crossType === 'horizontal') && horizontalRays.length >= 2;
+    const verticalTargetCount = useVertical
+        ? (useHorizontal ? Math.floor(remainingCount / 2) : remainingCount)
+        : 0;
+    const horizontalTargetCount = useHorizontal
+        ? (useVertical ? (remainingCount - verticalTargetCount) : remainingCount)
+        : 0;
+
     // 3. 垂直クロスビーム生成
-    if ((crossType === 'both' || crossType === 'vertical') && verticalRays.length >= 2) {
+    if (verticalTargetCount > 0 && useVertical) {
         const upRay = verticalRays.find(r => r.direction === 'upper');
         const downRay = verticalRays.find(r => r.direction === 'lower');
         
         if (upRay && downRay) {
             const verticalCrossRays = generateRaysBetweenBoundaries(
-                upRay, downRay, direction, Math.floor(rayCount / 2), 'vertical_cross', objectIndex
+                upRay, downRay, direction, verticalTargetCount, 'vertical_cross', objectIndex
             );
             rays.push(...verticalCrossRays);
             
@@ -691,13 +767,13 @@ function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays,
     }
     
     // 4. 水平クロスビーム生成
-    if ((crossType === 'both' || crossType === 'horizontal') && horizontalRays.length >= 2) {
+    if (horizontalTargetCount > 0 && useHorizontal) {
         const leftRay = horizontalRays.find(r => r.direction === 'left');
         const rightRay = horizontalRays.find(r => r.direction === 'right');
         
         if (leftRay && rightRay) {
             const horizontalCrossRays = generateRaysBetweenBoundaries(
-                leftRay, rightRay, direction, Math.floor(rayCount / 2), 'horizontal_cross', objectIndex
+                leftRay, rightRay, direction, horizontalTargetCount, 'horizontal_cross', objectIndex
             );
             rays.push(...horizontalCrossRays);
             
@@ -771,6 +847,10 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
         wavelength
     });
 
+    if (rayCount <= 1) {
+        return rays;
+    }
+
     const mk = (base, axis, s) => ({
         x: base.x + axis.x * s,
         y: base.y + axis.y * s,
@@ -778,7 +858,7 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
     });
 
     const addLineFromOffsets = (lineOffsets, type, roleStart, roleEnd) => {
-        if (!Array.isArray(lineOffsets) || lineOffsets.length < 2) return;
+        if (!Array.isArray(lineOffsets) || lineOffsets.length < 1) return;
 
         const rustPoints = generateParallelPointsFromOffsetsViaRust(centerOrigin, planeU, planeV, lineOffsets);
         const points = (Array.isArray(rustPoints) && rustPoints.length === lineOffsets.length)
@@ -790,9 +870,11 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
             }));
 
         for (let i = 0; i < points.length; i++) {
-            const role = (i === 0)
-                ? roleStart
-                : ((i === points.length - 1) ? roleEnd : `${type}_${i}`);
+            const role = (points.length === 1)
+                ? `${type}_center`
+                : ((i === 0)
+                    ? roleStart
+                    : ((i === points.length - 1) ? roleEnd : `${type}_${i}`));
             rays.push({
                 origin: points[i],
                 direction,
@@ -804,27 +886,43 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
         }
     };
 
-    const nPerAxis = Math.max(2, Math.floor(rayCount / 2));
+    let remainingCount = Math.max(0, rayCount - 1);
+    const useVertical = (crossType === 'both' || crossType === 'vertical');
+    const useHorizontal = (crossType === 'both' || crossType === 'horizontal');
+    const verticalTargetCount = useVertical
+        ? (useHorizontal ? Math.floor(remainingCount / 2) : remainingCount)
+        : 0;
+    const horizontalTargetCount = useHorizontal
+        ? (useVertical ? (remainingCount - verticalTargetCount) : remainingCount)
+        : 0;
 
     // Use planeV as "vertical" and planeU as "horizontal" to match Draw Cross conventions.
-    if (crossType === 'both' || crossType === 'vertical') {
+    if (verticalTargetCount > 0) {
         const verticalOffsets = [];
-        const den = Math.max(1, nPerAxis - 1);
-        for (let i = 0; i < nPerAxis; i++) {
-            const t = i / den;
-            const v = vPos + t * (-vNeg - vPos);
-            verticalOffsets.push({ u: 0, v });
+        if (verticalTargetCount === 1) {
+            verticalOffsets.push({ u: 0, v: vPos });
+        } else {
+            const den = Math.max(1, verticalTargetCount - 1);
+            for (let i = 0; i < verticalTargetCount; i++) {
+                const t = i / den;
+                const v = vPos + t * (-vNeg - vPos);
+                verticalOffsets.push({ u: 0, v });
+            }
         }
         addLineFromOffsets(verticalOffsets, 'vertical_cross', 'upper', 'lower');
     }
 
-    if (crossType === 'both' || crossType === 'horizontal') {
+    if (horizontalTargetCount > 0) {
         const horizontalOffsets = [];
-        const den = Math.max(1, nPerAxis - 1);
-        for (let i = 0; i < nPerAxis; i++) {
-            const t = i / den;
-            const u = -uNeg + t * (uPos + uNeg);
-            horizontalOffsets.push({ u, v: 0 });
+        if (horizontalTargetCount === 1) {
+            horizontalOffsets.push({ u: uPos, v: 0 });
+        } else {
+            const den = Math.max(1, horizontalTargetCount - 1);
+            for (let i = 0; i < horizontalTargetCount; i++) {
+                const t = i / den;
+                const u = -uNeg + t * (uPos + uNeg);
+                horizontalOffsets.push({ u, v: 0 });
+            }
         }
         addLineFromOffsets(horizontalOffsets, 'horizontal_cross', 'left', 'right');
     }
@@ -1011,6 +1109,27 @@ function buildEntrancePlaneAxesLikeOPD(directionXYZ) {
  */
 function generateRaysBetweenBoundaries(ray1, ray2, direction, count, type, objectIndex) {
     const rays = [];
+
+    const targetCount = Math.max(0, Math.floor(Number(count) || 0));
+    if (targetCount <= 0) {
+        return rays;
+    }
+
+    if (targetCount === 1) {
+        rays.push({
+            origin: {
+                x: (ray1.origin.x + ray2.origin.x) * 0.5,
+                y: (ray1.origin.y + ray2.origin.y) * 0.5,
+                z: (ray1.origin.z + ray2.origin.z) * 0.5
+            },
+            direction: direction,
+            type: type,
+            role: `${type}_center`,
+            objectIndex: objectIndex,
+            wavelength: 0.5876
+        });
+        return rays;
+    }
     
     // 境界光線自体を追加
     rays.push({
@@ -1032,7 +1151,7 @@ function generateRaysBetweenBoundaries(ray1, ray2, direction, count, type, objec
     });
     
     // 中間光線を生成
-    const intermediateCount = Math.max(0, count - 2); // 境界光線2本を除く
+    const intermediateCount = Math.max(0, targetCount - 2); // 境界光線2本を除く
     for (let i = 1; i <= intermediateCount; i++) {
         const t = i / (intermediateCount + 1); // 0から1の間で等間隔
         
@@ -1245,9 +1364,9 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         }
 
         // 3. 主光線射出座標の探索
-        const dirX = direction?.x ?? direction?.i;
-        const dirY = direction?.y ?? direction?.j;
-        const dirZ = direction?.z ?? direction?.k;
+        const dirX = direction?.i;
+        const dirY = direction?.j;
+        const dirZ = direction?.k;
         const dirStr = (Number.isFinite(dirX) && Number.isFinite(dirY) && Number.isFinite(dirZ))
             ? `(${dirX.toFixed(6)}, ${dirY.toFixed(6)}, ${dirZ.toFixed(6)})`
             : '(invalid)';
@@ -1427,8 +1546,18 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
 
         // chiefRayOrigin は上で null チェック済み
 
+        const refinedChiefDirection = refineChiefDirectionToStopCenter(
+            chiefRayOrigin,
+            direction,
+            stopSurfaceInfo.center,
+            stopSurfaceInfo.index,
+            opticalSystemRows,
+            wavelength
+        );
+        const chiefDirection = refinedChiefDirection || direction;
+
         // 4. 各objectの主光線に垂直な面を計算
-        const perpendicularPlane = calculatePerpendicularPlane(chiefRayOrigin, direction, debugMode);
+        const perpendicularPlane = calculatePerpendicularPlane(chiefRayOrigin, chiefDirection, debugMode);
         
         if (!perpendicularPlane) {
             console.warn(`⚠️ [InfiniteSystem] Object${objectIndex + 1}の垂直面計算失敗`);
@@ -1439,7 +1568,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         // - stop: boundary rays on the stop (legacy)
         // - entrance: rays sampled on the entrance pupil plane (aligned with OPD's entrance mode)
 
-        const dirXYZ = { x: direction.i, y: direction.j, z: direction.k };
+        const dirXYZ = { x: chiefDirection.i, y: chiefDirection.j, z: chiefDirection.k };
         let apertureBoundaryRays = [];
         let entrancePupil = null;
         let crossBeamRays = [];
@@ -1598,7 +1727,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             objectIndex: objectIndex,
             objectAngle: objectAngle,
             objectPosition: objectAngle,  // 互換性のために角度を位置としても保存
-            direction: direction,
+            direction: chiefDirection,
             chiefRayOrigin: chiefRayOrigin,
             stopSurfaceInfo: stopSurfaceInfo,
             pupilSamplingMode: pupilSamplingMode,
@@ -1881,6 +2010,116 @@ export function findInfiniteSystemChiefRayOrigin(direction, stopCenter, stopSurf
                 return { valid: false, error: Infinity, stopPoint: null };
             }
         };
+
+        const solveChiefOriginByNewton2D = (x0, y0) => {
+            let x = x0;
+            let y = y0;
+            let best = { x, y, error: Infinity };
+            const tol = 1e-6;
+
+            for (let iter = 0; iter < 40; iter++) {
+                const centerEval = evaluateRayToStop(x, y);
+                if (!centerEval.valid || !centerEval.stopPoint) {
+                    return null;
+                }
+
+                const fx = centerEval.stopPoint.x - stopX;
+                const fy = centerEval.stopPoint.y - stopY;
+                const centerError = Math.hypot(fx, fy);
+                if (centerError < best.error) {
+                    best = { x, y, error: centerError };
+                }
+                if (centerError <= tol) {
+                    return best;
+                }
+
+                const eps = Math.max(1e-4, 1e-3 * (1 + centerError));
+                const evalX = evaluateRayToStop(x + eps, y);
+                const evalY = evaluateRayToStop(x, y + eps);
+                if (!evalX.valid || !evalX.stopPoint || !evalY.valid || !evalY.stopPoint) {
+                    return best.error < 1e-3 ? best : null;
+                }
+
+                const j11 = (evalX.stopPoint.x - centerEval.stopPoint.x) / eps;
+                const j21 = (evalX.stopPoint.y - centerEval.stopPoint.y) / eps;
+                const j12 = (evalY.stopPoint.x - centerEval.stopPoint.x) / eps;
+                const j22 = (evalY.stopPoint.y - centerEval.stopPoint.y) / eps;
+
+                const det = j11 * j22 - j12 * j21;
+                let dx;
+                let dy;
+
+                if (!Number.isFinite(det) || Math.abs(det) < 1e-14) {
+                    dx = -0.25 * fx;
+                    dy = -0.25 * fy;
+                } else {
+                    dx = (-j22 * fx + j12 * fy) / det;
+                    dy = (j21 * fx - j11 * fy) / det;
+                }
+
+                if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+                    return best.error < 1e-3 ? best : null;
+                }
+
+                const maxStep = Math.max(0.5, dynamicHalfRange * 0.05);
+                const stepNorm = Math.hypot(dx, dy);
+                if (stepNorm > maxStep) {
+                    const scale = maxStep / stepNorm;
+                    dx *= scale;
+                    dy *= scale;
+                }
+
+                let accepted = false;
+                let alpha = 1.0;
+                for (let ls = 0; ls < 10; ls++) {
+                    const nx = x + alpha * dx;
+                    const ny = y + alpha * dy;
+                    const nEval = evaluateRayToStop(nx, ny);
+                    if (nEval.valid && nEval.error < centerError) {
+                        x = nx;
+                        y = ny;
+                        accepted = true;
+                        break;
+                    }
+                    alpha *= 0.5;
+                }
+
+                if (!accepted) {
+                    return best.error < 1e-3 ? best : null;
+                }
+            }
+
+            return best.error < 1e-3 ? best : null;
+        };
+
+        const newtonResult = solveChiefOriginByNewton2D(guessX, guessY);
+        if (newtonResult) {
+            const result = {
+                x: newtonResult.x,
+                y: newtonResult.y,
+                z: initialZ
+            };
+
+            if (typeof window !== 'undefined') {
+                setLastChiefRayResult({
+                    direction: direction,
+                    optimalX: result.x,
+                    optimalY: result.y,
+                    error: newtonResult.error,
+                    method: 'newton-2d-stop-center'
+                });
+            }
+
+            if (cacheKey) {
+                chiefRayOriginSearchCache.set(cacheKey, { ...result });
+                if (chiefRayOriginSearchCache.size > 256) {
+                    const firstKey = chiefRayOriginSearchCache.keys().next().value;
+                    if (firstKey !== undefined) chiefRayOriginSearchCache.delete(firstKey);
+                }
+            }
+
+            return result;
+        }
 
         // 同時最適化のための目的関数（XとYを同時に最適化）
         const objectiveFunction2D = (x, y) => {
@@ -2314,20 +2553,18 @@ export function outputChiefRayConvergenceToSystemData(objectNumber, xAngle, yAng
         }
         
         // System Data出力文字列の作成
-        const convergenceReport = `
-=== 主光線収束解析 (Object ${objectNumber}, 角度: ${xAngle.toFixed(1)}°, ${yAngle.toFixed(1)}°) ===
-絞り中心からの距離: ${distanceFromCenter.toFixed(6)}mm
+        const convergenceReport = `絞り中心からの距離: ${distanceFromCenter.toFixed(6)}mm
 最適化手法: ${methodName}
 収束品質: ${qualityAssessment}
 解析時刻: ${new Date().toLocaleTimeString()}
 ------------------------------------------------------------
 `;
         
-        // テキストエリアの先頭に追加
-        systemDataTextarea.value = convergenceReport + systemDataTextarea.value;
-        
-        // スクロールを最上位に移動
-        systemDataTextarea.scrollTop = 0;
+        // テキストエリア末尾に追加
+        systemDataTextarea.value += (systemDataTextarea.value ? '\n' : '') + convergenceReport;
+
+        // スクロールを最下部に移動
+        systemDataTextarea.scrollTop = systemDataTextarea.scrollHeight;
     } catch (error) {
         console.error(`❌ [SystemData] System Data出力エラー:`, error);
     }
@@ -2349,7 +2586,7 @@ export function outputChiefRayConvergenceToSystemData(objectNumber, xAngle, yAng
 /**
  * 高精度ニュートン法による絞り周辺光線計算（ray-marginal.js風）
  */
-function calculateApertureRayNewton(chiefRayOrigin, direction, perpendicularPlane, targetStopPoint, stopSurfaceIndex, opticalSystemRows, maxIterations, tolerance, debugMode) {
+function calculateApertureRayNewton(chiefRayOrigin, direction, perpendicularPlane, targetStopPoint, stopSurfaceIndex, opticalSystemRows, maxIterations, tolerance, debugMode, wavelength = 0.5876) {
     // より適切な初期推定：目標点の方向により大きく射出位置を移動
     const targetOffsetX = targetStopPoint.x - chiefRayOrigin.x;
     const targetOffsetY = targetStopPoint.y - chiefRayOrigin.y;
@@ -2485,7 +2722,7 @@ function calculateNumericalJacobianForPosition(origin, direction, stopSurfaceInd
 /**
  * Brent法による1次元最適化フォールバック
  */
-function calculateApertureRayBrent(chiefRayOrigin, direction, perpendicularPlane, searchDir, stopCenter, stopRadius, stopSurfaceIndex, opticalSystemRows, maxIterations, tolerance, debugMode, targetStopPointOverride = null) {
+function calculateApertureRayBrent(chiefRayOrigin, direction, perpendicularPlane, searchDir, stopCenter, stopRadius, stopSurfaceIndex, opticalSystemRows, maxIterations, tolerance, debugMode, targetStopPointOverride = null, wavelength = 0.5876) {
     // 探索方向に沿った1次元最適化
     // 垂直面のu/vを停止面XYに投影して、フィールド角がついても安定に探索
     const { u, v } = perpendicularPlane;
@@ -2568,7 +2805,7 @@ function calculateApertureRayBrent(chiefRayOrigin, direction, perpendicularPlane
     return { success: false };
 }
 
-function findInfiniteSystemApertureRays(chiefRayOrigin, direction, perpendicularPlane, stopCenter, stopRadius, stopSurfaceIndex, opticalSystemRows, debugMode, targetSurfaceIndex) {
+function findInfiniteSystemApertureRays(chiefRayOrigin, direction, perpendicularPlane, stopCenter, stopRadius, stopSurfaceIndex, opticalSystemRows, debugMode, targetSurfaceIndex, wavelength = 0.5876) {
     const apertureBoundaryRays = [];
     const { u, v } = perpendicularPlane;
 
