@@ -59,6 +59,521 @@ export class WavefrontPlotter {
         return { calculator, analyzer };
     }
 
+    _resolveHostWindow() {
+        const globalWindow = (typeof window !== 'undefined') ? window : null;
+        return globalWindow?.opener || globalWindow;
+    }
+
+    _buildWavefrontMapFromOpdGrid(opdGrid, wavelength = 0.5876) {
+        const n = Array.isArray(opdGrid) ? opdGrid.length : 0;
+        const axis = n > 1
+            ? Array.from({ length: n }, (_, i) => -1 + (2 * i) / (n - 1))
+            : [0];
+
+        const pupilCoordinates = [];
+        const opdsMicrons = [];
+        const opdsWaves = [];
+        for (let iy = 0; iy < n; iy++) {
+            const row = Array.isArray(opdGrid[iy]) ? opdGrid[iy] : [];
+            for (let ix = 0; ix < row.length; ix++) {
+                const raw = row[ix];
+                if (raw === null || raw === undefined) continue;
+                const v = Number(raw);
+                if (!Number.isFinite(v)) continue;
+                const x = axis[Math.min(ix, axis.length - 1)] ?? 0;
+                const y = axis[Math.min(iy, axis.length - 1)] ?? 0;
+                pupilCoordinates.push({ x, y, ix, iy });
+                opdsWaves.push(v);
+                opdsMicrons.push(v * wavelength);
+            }
+        }
+
+        const stats = (values) => {
+            if (!Array.isArray(values) || values.length === 0) {
+                return { count: 0, sampleCount: 0, mean: NaN, rms: NaN, peakToPeak: NaN, min: NaN, max: NaN };
+            }
+            let sum = 0;
+            let sumSq = 0;
+            let min = Infinity;
+            let max = -Infinity;
+            let count = 0;
+            for (const v of values) {
+                if (!Number.isFinite(v)) continue;
+                sum += v;
+                sumSq += v * v;
+                if (v < min) min = v;
+                if (v > max) max = v;
+                count += 1;
+            }
+            if (count === 0) {
+                return { count: 0, sampleCount: 0, mean: NaN, rms: NaN, peakToPeak: NaN, min: NaN, max: NaN };
+            }
+            const mean = sum / count;
+            return {
+                count,
+                sampleCount: count,
+                mean,
+                rms: Math.sqrt(Math.max(0, sumSq / count)),
+                peakToPeak: max - min,
+                min,
+                max,
+            };
+        };
+
+        const statsWaves = stats(opdsWaves);
+        const statsMicrons = stats(opdsMicrons);
+
+        return {
+            pupilCoordinates,
+            pupilRange: 1.0,
+            opds: opdsMicrons,
+            opdsInWavelengths: opdsWaves,
+            wavefrontAberrations: opdsWaves,
+            raw: {
+                opds: opdsMicrons.slice(),
+                opdsInWavelengths: opdsWaves.slice(),
+                wavefrontAberrations: opdsWaves.slice(),
+                opdGrid,
+                opdMicrons: statsMicrons,
+                opdWavelengths: statsWaves,
+            },
+            display: {
+                opds: opdsMicrons.slice(),
+                opdsInWavelengths: opdsWaves.slice(),
+                wavefrontAberrations: opdsWaves.slice(),
+                opdGrid,
+            },
+            statistics: {
+                wavefront: statsWaves,
+                opdMicrons: statsMicrons,
+                opdWavelengths: statsWaves,
+                raw: {
+                    wavefront: statsWaves,
+                    opdMicrons: statsMicrons,
+                    opdWavelengths: statsWaves,
+                },
+                display: {
+                    opdMicrons: statsMicrons,
+                    opdWavelengths: statsWaves,
+                },
+            },
+        };
+    }
+
+    _buildGridFromSamples(pupilCoordinates, sampleValues, gridSize) {
+        const n = Math.max(1, Math.floor(Number(gridSize) || 1));
+        const out = Array.from({ length: n }, () => Array.from({ length: n }, () => null));
+        if (!Array.isArray(pupilCoordinates) || !Array.isArray(sampleValues)) return out;
+        const m = Math.min(pupilCoordinates.length, sampleValues.length);
+        for (let i = 0; i < m; i++) {
+            const p = pupilCoordinates[i];
+            const v = Number(sampleValues[i]);
+            if (!p || !Number.isFinite(v)) continue;
+            const ix = Number.isInteger(p?.ix) ? p.ix : Math.round(((Number(p?.x) + 1) * 0.5) * (n - 1));
+            const iy = Number.isInteger(p?.iy) ? p.iy : Math.round(((Number(p?.y) + 1) * 0.5) * (n - 1));
+            if (!Number.isFinite(ix) || !Number.isFinite(iy)) continue;
+            if (iy < 0 || iy >= n || ix < 0 || ix >= n) continue;
+            out[iy][ix] = v;
+        }
+        return out;
+    }
+
+    _applyNativeZernikePostProcess(wavefrontMap, analyzer, options = {}) {
+        const wavelength = Number(options?.wavelength);
+        const opdDisplayMode = String(options?.opdDisplayMode || 'pistonTiltRemoved');
+        const skipZernikeFit = !!options?.skipZernikeFit;
+        const maxNoll = Number.isFinite(Number(options?.zernikeMaxNoll))
+            ? Math.max(1, Math.floor(Number(options.zernikeMaxNoll)))
+            : 37;
+
+        wavefrontMap.opdMode = 'simple';
+        wavefrontMap.opdDisplayModeRequested = opdDisplayMode;
+        wavefrontMap.skipZernikeFit = skipZernikeFit;
+
+        if (skipZernikeFit) {
+            wavefrontMap.zernike = null;
+        } else {
+            const sampleCount = Array.isArray(wavefrontMap?.raw?.opds) ? wavefrontMap.raw.opds.length : 0;
+            const zernikeMaxNoll = Math.max(1, Math.min(maxNoll, sampleCount));
+            wavefrontMap.zernike = analyzer.fitZernikePolynomials({
+                pupilCoordinates: wavefrontMap.pupilCoordinates,
+                opds: wavefrontMap.raw.opds,
+            }, zernikeMaxNoll);
+        }
+
+        if (wavefrontMap?.zernike?.removedModelMicrons?.length === wavefrontMap?.opds?.length) {
+            for (let k = 0; k < wavefrontMap.opds.length; k++) {
+                const rawOpdUm = Number(wavefrontMap.raw.opds[k]);
+                const modelUm = Number(wavefrontMap.zernike.removedModelMicrons[k]);
+                const correctedUm = (Number.isFinite(rawOpdUm) && Number.isFinite(modelUm)) ? (rawOpdUm - modelUm) : NaN;
+                wavefrontMap.opds[k] = correctedUm;
+                wavefrontMap.opdsInWavelengths[k] = (Number.isFinite(correctedUm) && Number.isFinite(wavelength) && wavelength > 0)
+                    ? (correctedUm / wavelength)
+                    : NaN;
+                wavefrontMap.wavefrontAberrations[k] = wavefrontMap.opdsInWavelengths[k];
+            }
+        }
+
+        let display = null;
+        let displayStats = null;
+        if (opdDisplayMode === 'pistonTiltRemoved') {
+            const fit = analyzer._removeBestFitPlane(wavefrontMap.pupilCoordinates, wavefrontMap.opds);
+            if (fit && Array.isArray(fit.residualMicrons) && Array.isArray(fit.residualWaves)) {
+                display = {
+                    mode: 'pistonTiltRemoved',
+                    planeCoefficientsMicrons: fit.coefficientsMicrons,
+                    opds: fit.residualMicrons,
+                    opdsInWavelengths: fit.residualWaves,
+                    wavefrontAberrations: fit.residualWaves,
+                };
+                displayStats = {
+                    mode: 'pistonTiltRemoved',
+                    planeCoefficientsMicrons: fit.coefficientsMicrons,
+                    opdMicrons: analyzer.calculateStatistics(fit.residualMicrons, { removePiston: false }),
+                    opdWavelengths: analyzer.calculateStatistics(fit.residualWaves, { removePiston: false }),
+                };
+            } else {
+                // Fallback: remove piston/tilt via low-order Zernike fit if plane fit is unavailable.
+                const lowPt = analyzer._calculateLowOrderRemovedStats(
+                    wavefrontMap.pupilCoordinates,
+                    wavefrontMap.opds,
+                    { removeIndices: [0, 1, 2], maxOrder: 2, pupilRange: wavefrontMap.pupilRange }
+                );
+                if (lowPt && Array.isArray(lowPt.residualMicrons) && Array.isArray(lowPt.residualWaves)) {
+                    display = {
+                        mode: 'pistonTiltRemoved',
+                        opds: lowPt.residualMicrons,
+                        opdsInWavelengths: lowPt.residualWaves,
+                        wavefrontAberrations: lowPt.residualWaves,
+                    };
+                    displayStats = {
+                        mode: 'pistonTiltRemoved',
+                        opdMicrons: analyzer.calculateStatistics(lowPt.residualMicrons, { removePiston: false }),
+                        opdWavelengths: analyzer.calculateStatistics(lowPt.residualWaves, { removePiston: false }),
+                    };
+                }
+            }
+        } else if (opdDisplayMode === 'pistonTiltDefocusRemoved') {
+            const low = analyzer._calculateLowOrderRemovedStats(
+                wavefrontMap.pupilCoordinates,
+                wavefrontMap.opds,
+                { removeIndices: [0, 1, 2, 4], maxOrder: 2, pupilRange: wavefrontMap.pupilRange }
+            );
+            if (low && Array.isArray(low.residualMicrons) && Array.isArray(low.residualWaves)) {
+                display = {
+                    mode: 'pistonTiltDefocusRemoved',
+                    opds: low.residualMicrons,
+                    opdsInWavelengths: low.residualWaves,
+                    wavefrontAberrations: low.residualWaves,
+                };
+                displayStats = {
+                    mode: 'pistonTiltDefocusRemoved',
+                    opdMicrons: analyzer.calculateStatistics(low.residualMicrons, { removePiston: false }),
+                    opdWavelengths: analyzer.calculateStatistics(low.residualWaves, { removePiston: false }),
+                };
+            }
+        }
+
+        if (!display || !displayStats) {
+            display = {
+                mode: 'default',
+                opds: wavefrontMap.opds.slice(),
+                opdsInWavelengths: wavefrontMap.opdsInWavelengths.slice(),
+                wavefrontAberrations: wavefrontMap.wavefrontAberrations.slice(),
+            };
+            // If caller requested a removal mode but solver failed, at least center piston
+            // so UI does not report a misleading huge mean.
+            if (opdDisplayMode !== 'default') {
+                const centeredMicrons = display.opds.slice();
+                let sum = 0;
+                let count = 0;
+                for (const v of centeredMicrons) {
+                    if (!Number.isFinite(v)) continue;
+                    sum += v;
+                    count += 1;
+                }
+                const mean = count > 0 ? (sum / count) : 0;
+                for (let i = 0; i < centeredMicrons.length; i++) {
+                    const v = centeredMicrons[i];
+                    centeredMicrons[i] = Number.isFinite(v) ? (v - mean) : NaN;
+                }
+                display.opds = centeredMicrons;
+                display.opdsInWavelengths = centeredMicrons.map((v) =>
+                    (Number.isFinite(v) && Number.isFinite(wavelength) && wavelength > 0) ? (v / wavelength) : NaN
+                );
+                display.wavefrontAberrations = display.opdsInWavelengths.slice();
+                display.mode = `${opdDisplayMode} (piston-only fallback)`;
+            }
+            displayStats = {
+                mode: display.mode || 'default',
+                opdMicrons: analyzer.calculateStatistics(display.opds, { removePiston: false }),
+                opdWavelengths: analyzer.calculateStatistics(display.opdsInWavelengths, { removePiston: false }),
+            };
+        }
+
+        const n = Array.isArray(wavefrontMap?.raw?.opdGrid) ? wavefrontMap.raw.opdGrid.length : 0;
+        display.opdGrid = this._buildGridFromSamples(wavefrontMap.pupilCoordinates, display.opdsInWavelengths, n);
+        wavefrontMap.display = display;
+
+        const lowOrderRemoved = analyzer._calculateLowOrderRemovedStats(
+            wavefrontMap.pupilCoordinates,
+            wavefrontMap.raw.opds,
+            { removeIndices: [0, 1, 2, 4], maxOrder: 2, pupilRange: wavefrontMap.pupilRange }
+        );
+
+        const usedOpdMode = wavefrontMap.opdMode || 'simple';
+        const usedSkipZernikeFit = !!wavefrontMap.skipZernikeFit;
+        const mode = wavefrontMap.pupilSamplingMode || null;
+
+        wavefrontMap.statistics = {
+            wavefront: analyzer.calculateStatistics(wavefrontMap.wavefrontAberrations, { removePiston: true }),
+            opdMicrons: displayStats.opdMicrons,
+            opdWavelengths: displayStats.opdWavelengths,
+            raw: {
+                wavefront: analyzer.calculateStatistics(wavefrontMap.raw.wavefrontAberrations, { removePiston: false }),
+                opdMicrons: analyzer.calculateStatistics(wavefrontMap.raw.opds, { removePiston: false }),
+                opdWavelengths: analyzer.calculateStatistics(wavefrontMap.raw.opdsInWavelengths, { removePiston: false }),
+            },
+            aberration: lowOrderRemoved,
+            display: displayStats,
+        };
+
+        const statsTargets = [
+            wavefrontMap.statistics?.wavefront,
+            wavefrontMap.statistics?.opdMicrons,
+            wavefrontMap.statistics?.opdWavelengths,
+            wavefrontMap.statistics?.raw?.wavefront,
+            wavefrontMap.statistics?.raw?.opdMicrons,
+            wavefrontMap.statistics?.raw?.opdWavelengths,
+            wavefrontMap.statistics?.display?.opdMicrons,
+            wavefrontMap.statistics?.display?.opdWavelengths,
+            wavefrontMap.statistics?.aberration?.opdMicrons,
+            wavefrontMap.statistics?.aberration?.opdWavelengths,
+        ];
+        for (const st of statsTargets) {
+            if (!st || typeof st !== 'object') continue;
+            st.pupilSamplingMode = mode;
+            st.opdMode = usedOpdMode;
+            st.skipZernikeFit = usedSkipZernikeFit;
+        }
+        if (wavefrontMap.statistics?.display?.opdMicrons) {
+            wavefrontMap.statistics.display.opdMicrons.opdDisplayMode = opdDisplayMode;
+        }
+        if (wavefrontMap.statistics?.display?.opdWavelengths) {
+            wavefrontMap.statistics.display.opdWavelengths.opdDisplayMode = opdDisplayMode;
+        }
+        if (wavefrontMap.statistics?.aberration?.opdMicrons && wavefrontMap.statistics?.aberration?.removeIndices) {
+            wavefrontMap.statistics.aberration.opdMicrons.removeIndices = wavefrontMap.statistics.aberration.removeIndices;
+        }
+        if (wavefrontMap.statistics?.aberration?.opdWavelengths && wavefrontMap.statistics?.aberration?.removeIndices) {
+            wavefrontMap.statistics.aberration.opdWavelengths.removeIndices = wavefrontMap.statistics.aberration.removeIndices;
+        }
+    }
+
+    async _computeNativeOpdWavefrontMap(opticalSystemRows, fieldSetting, gridSize, options = {}) {
+        const emitProgress = (percent, message) => {
+            try {
+                if (typeof options?.onProgress === 'function') {
+                    options.onProgress({ percent, message, phase: 'opd-native' });
+                }
+            } catch (_) {}
+        };
+
+        emitProgress(5, 'Checking desktop Rust runtime...');
+        const runtime = await import('../../src/desktop/runtime.ts');
+        if (!runtime?.isTauriRuntime || !runtime.isTauriRuntime()) {
+            throw new Error('OPD is native-Rust only and requires desktop (Tauri) runtime.');
+        }
+
+        emitProgress(10, 'Loading native OPD bridge...');
+        const { runNativeOpdMap } = await import('../../src/desktop/ipc/client.ts');
+        const host = this._resolveHostWindow();
+        emitProgress(16, 'Collecting optical/source/object rows...');
+        const sourceRows = (host && typeof host.getSourceRows === 'function') ? host.getSourceRows() : [];
+        const objectRows = (host && typeof host.getObjectRows === 'function') ? host.getObjectRows() : [];
+        const objectIndex = Number.isInteger(Number(fieldSetting?.objectIndex)) ? Number(fieldSetting.objectIndex) : 0;
+        const resolveForcedInfinitePupilMode = () => {
+            const sanitize = (v) => {
+                const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
+                return (s === 'stop' || s === 'entrance') ? s : '';
+            };
+            try {
+                const fromGlobal = globalThis?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? globalThis?.COOPT_FORCE_INFINITE_PUPIL_MODE;
+                const g = sanitize(fromGlobal);
+                if (g) return g;
+            } catch (_) {}
+            try {
+                const fromStorage = localStorage.getItem('coopt.forceInfinitePupilMode');
+                return sanitize(fromStorage);
+            } catch (_) {
+                return '';
+            }
+        };
+        const forcedInfinitePupilMode = resolveForcedInfinitePupilMode();
+        const selectedObject = (Array.isArray(objectRows) && objectRows[objectIndex]) ? objectRows[objectIndex] : null;
+        const objectPositionRaw = String(
+            selectedObject?.position
+            ?? selectedObject?.object
+            ?? selectedObject?.objectType
+            ?? selectedObject?.type
+            ?? fieldSetting?.type
+            ?? ''
+        ).trim().toLowerCase();
+        const requestEntrancePupilSampling = (
+            objectPositionRaw.includes('angle')
+            || objectPositionRaw === 'point'
+            || String(fieldSetting?.type || '').trim().toLowerCase() === 'angle'
+        );
+        const fieldAngleX = Number(selectedObject?.xHeightAngle ?? selectedObject?.xFieldAngle ?? selectedObject?.xAngle ?? fieldSetting?.fieldAngle?.x ?? 0);
+        const fieldAngleY = Number(selectedObject?.yHeightAngle ?? selectedObject?.yFieldAngle ?? selectedObject?.yAngle ?? selectedObject?.fieldAngle ?? fieldSetting?.fieldAngle?.y ?? 0);
+        const isNonZeroAngleField = Math.abs(fieldAngleX) > 1e-12 || Math.abs(fieldAngleY) > 1e-12;
+        const requestedPupilSamplingMode = (forcedInfinitePupilMode === 'stop' || forcedInfinitePupilMode === 'entrance')
+            ? forcedInfinitePupilMode
+            : (requestEntrancePupilSampling && isNonZeroAngleField ? 'entrance' : undefined);
+
+        const normalizedGridSize = (() => {
+            const n = Number(gridSize);
+            if (!Number.isFinite(n)) return 129;
+            return Math.max(17, Math.floor(n));
+        })();
+
+        const requestedGridSize = Number.isFinite(Number(gridSize)) ? Math.floor(Number(gridSize)) : 129;
+        if (requestedGridSize < 17 && requestedGridSize !== normalizedGridSize) {
+            emitProgress(
+                20,
+                `Grid request raised to minimum for native compute (${requestedGridSize} -> ${normalizedGridSize})`,
+            );
+        }
+
+        emitProgress(25, `Tracing rays in native Rust (grid=${normalizedGridSize})...`);
+        const jobId = `native-opd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        let unlistenProgress = null;
+        try {
+            const { listen } = await import('@tauri-apps/api/event');
+            unlistenProgress = await listen('analysis-progress', (event) => {
+                try {
+                    const data = event?.payload || {};
+                    if (!data || String(data.jobId || '') !== jobId) return;
+                    emitProgress(data.percent, data.phase || 'opd-native', data.message || 'Tracing rays in native Rust...');
+                } catch (_) {}
+            });
+        } catch (_) {
+            // Event bridge is optional; fallback still works with coarse local progress.
+        }
+        let response;
+        try {
+            response = await runNativeOpdMap({
+                jobId,
+                opticalSystemRows: Array.isArray(opticalSystemRows) ? opticalSystemRows : [],
+                sourceRows: Array.isArray(sourceRows) ? sourceRows : [],
+                objectRows: Array.isArray(objectRows) ? objectRows : [],
+                objectIndex,
+                gridSize: normalizedGridSize,
+                pupilSamplingMode: requestedPupilSamplingMode,
+                opdDisplayMode: options?.opdDisplayMode || 'pistonTiltRemoved',
+            });
+        } finally {
+            try {
+                if (typeof unlistenProgress === 'function') {
+                    unlistenProgress();
+                }
+            } catch (_) {}
+        }
+        try { console.log('🧭 [OPD Backend] native', response?.backend, { gridSize: response?.gridSize, hitCount: response?.hitCount }); } catch (_) {}
+        const hitCount = Number(response?.hitCount) || 0;
+        const sampleCount = Number(response?.sampleCount) || 0;
+        const hitRate = sampleCount > 0 ? ((hitCount / sampleCount) * 100) : 0;
+        const hitRateText = Number.isFinite(hitRate) ? hitRate.toFixed(1) : '0.0';
+        emitProgress(75, `Converting OPD map (hits=${hitCount}/${sampleCount}, valid=${hitRateText}%)...`);
+
+        const hasFiniteInGrid = (g) => {
+            if (!Array.isArray(g) || g.length === 0) return false;
+            for (const row of g) {
+                if (!Array.isArray(row)) continue;
+                for (const v of row) {
+                    if (Number.isFinite(Number(v))) return true;
+                }
+            }
+            return false;
+        };
+
+        const displayGrid = Array.isArray(response?.displayOpdGrid) ? response.displayOpdGrid : [];
+        const rawGrid = Array.isArray(response?.rawOpdGrid) ? response.rawOpdGrid : [];
+        const usingDisplayGrid = hasFiniteInGrid(displayGrid);
+        const grid = usingDisplayGrid ? displayGrid : rawGrid;
+        if (!usingDisplayGrid) {
+            try {
+                console.warn('⚠️ [OPD Native] display grid had no finite samples; falling back to raw grid', {
+                    backend: response?.backend,
+                    message: response?.message,
+                    hitCount: response?.hitCount,
+                    sampleCount: response?.sampleCount,
+                });
+            } catch (_) {}
+        }
+        if (!grid.length || !Array.isArray(grid[0]) || !hasFiniteInGrid(grid)) {
+            throw new Error('Native OPD map is empty');
+        }
+
+        const { analyzer } = this._createWavefrontEngine(opticalSystemRows, Number(fieldSetting?.wavelength) || 0.5876);
+        const wavelength = Number(fieldSetting?.wavelength) || 0.5876;
+        const map = this._buildWavefrontMapFromOpdGrid(grid, wavelength);
+        this._applyNativeZernikePostProcess(map, analyzer, {
+            wavelength,
+            opdDisplayMode: options?.opdDisplayMode || 'pistonTiltRemoved',
+            skipZernikeFit: !!options?.skipZernikeFit,
+            zernikeMaxNoll: Number.isFinite(Number(options?.zernikeMaxNoll)) ? Number(options.zernikeMaxNoll) : 37,
+        });
+        try {
+            const mode = options?.opdDisplayMode || 'pistonTiltRemoved';
+            const responseMode = String(response?.pupilSamplingMode || '').toLowerCase();
+            const pupilSamplingMode = (responseMode === 'stop' || responseMode === 'entrance')
+                ? responseMode
+                : (String(response?.message || '').includes('stop -> entrance') ? 'entrance' : 'stop');
+            const chiefReferenceMode = (() => {
+                const msg = String(response?.message || '');
+                const m = msg.match(/chief reference mode=([^,\)]+)/i);
+                return m && m[1] ? String(m[1]).trim() : '';
+            })();
+            map.pupilSamplingMode = pupilSamplingMode;
+            const statsTargets = [
+                map?.statistics?.wavefront,
+                map?.statistics?.opdMicrons,
+                map?.statistics?.opdWavelengths,
+                map?.statistics?.raw?.wavefront,
+                map?.statistics?.raw?.opdMicrons,
+                map?.statistics?.raw?.opdWavelengths,
+                map?.statistics?.display?.opdMicrons,
+                map?.statistics?.display?.opdWavelengths,
+            ];
+            for (const st of statsTargets) {
+                if (!st || typeof st !== 'object') continue;
+                st.pupilSamplingMode = pupilSamplingMode;
+                st.opdDisplayMode = mode;
+                if (chiefReferenceMode) st.chiefReferenceMode = chiefReferenceMode;
+            }
+            map.nativeMeta = {
+                backend: response?.backend || 'run_native_opd_map',
+                message: response?.message || null,
+                gridSource: usingDisplayGrid ? 'displayOpdGrid' : 'rawOpdGrid',
+                hitCount: Number(response?.hitCount ?? 0),
+                sampleCount: Number(response?.sampleCount ?? 0),
+                pupilSamplingMode,
+                chiefReferenceMode: chiefReferenceMode || null,
+            };
+            try {
+                console.log('🧭 [OPD Native] reference policy', {
+                    chiefReferenceMode: chiefReferenceMode || '(unknown)',
+                    message: response?.message || null,
+                    hitCount: response?.hitCount,
+                    sampleCount: response?.sampleCount,
+                });
+            } catch (_) {}
+        } catch (_) {}
+        emitProgress(90, `Preparing plot samples (${Number(map?.statistics?.opdWavelengths?.count) || 0})...`);
+        return map;
+    }
+
     /**
      * PSFと同じ強度系カラースケール（低→高: 青→緑→赤）
      * Plotlyのcolorscale配列を返す
@@ -202,43 +717,19 @@ export class WavefrontPlotter {
     async plotOPDSurface(opticalSystemRows, fieldSetting, wavelength = 0.5876, gridSize = 16, options = {}) {
         try {
             console.log('🌊 OPD 3Dサーフェスプロット生成開始...');
+            const emitProgress = (percent, message) => {
+                try {
+                    if (typeof options?.onProgress === 'function') {
+                        options.onProgress({ percent, message, phase: 'opd-render' });
+                    }
+                } catch (_) {}
+            };
             // Enable profiling automatically when progress UI is active.
-            const profileEnabled = !!((typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_PROFILE === true) || options?.onProgress);
-            const wasmFastOnly = options?.wasmFastOnly !== undefined
-                ? !!options.wasmFastOnly
-                : !!(typeof globalThis !== 'undefined' && globalThis.__OPD_WASM_FAST_ONLY === true);
-            const enableHeavyDiagnostics = !!options?.enableHeavyDiagnostics;
-
-            const { analyzer } = this._createWavefrontEngine(opticalSystemRows, wavelength);
-
-            // Discontinuity診断は重いためデフォルトOFF（必要なら runtime でON）
-            //   globalThis.__WAVEFRONT_DIAG_DISCONTINUITIES = true
-            const diagnoseDiscontinuities = (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_DIAG_DISCONTINUITIES === true);
-
-            // 波面収差マップを生成
-            if (profileEnabled) console.time('⏱️ plotOPDSurface.generateWavefrontMap');
             const displayMode = options?.opdDisplayMode || 'pistonTiltRemoved';
-            const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, 'circular', {
-                recordRays: false,
-                // Avoid console-log progress (it can dominate runtime on large grids)
-                progressEvery: 0,
-                diagnoseDiscontinuities,
-                diagTopK: 5,
-                // OPD is fixed to simple (no reference-sphere correction) semantics.
-                opdMode: 'simple',
-                zernikeMaxNoll: 37,
-                // Enable Zernike fit for System Data reporting
-                skipZernikeFit: false,
-                renderFromZernike: false,
-                // OPD display mode for plots (piston/tilt or piston/tilt/defocus removal).
+            const wavefrontMap = await this._computeNativeOpdWavefrontMap(opticalSystemRows, fieldSetting, gridSize, {
                 opdDisplayMode: displayMode,
-                profile: profileEnabled,
-                wasmFastOnly,
-                enableHeavyDiagnostics,
-                cancelToken: options?.cancelToken || null,
-                onProgress: options?.onProgress || null
+                onProgress: options?.onProgress || null,
             });
-            if (profileEnabled) console.timeEnd('⏱️ plotOPDSurface.generateWavefrontMap');
 
             if (wavefrontMap?.error) {
                 this._renderCalculationUnavailable(this.resolveContainer(), {
@@ -273,9 +764,6 @@ export class WavefrontPlotter {
                 return wavefrontMap;
             }
 
-            // Update System Data with Zernike coefficients
-            this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
-
             // Debug: report effective pupil coverage.
             try {
                 const dbg = (typeof globalThis !== 'undefined') && (globalThis.__OPD_DEBUG === true);
@@ -304,24 +792,100 @@ export class WavefrontPlotter {
                 }
             } catch (_) {}
 
-            // If display mode is enabled, plot the transformed OPD arrays.
-            const mapForPlot = (displayMode !== 'raw' && wavefrontMap?.display?.opdsInWavelengths)
-                ? {
-                    ...wavefrontMap,
-                    opds: wavefrontMap.display.opds,
-                    opdsInWavelengths: wavefrontMap.display.opdsInWavelengths,
-                    wavefrontAberrations: wavefrontMap.display.wavefrontAberrations
+            const opdGridDisplay = Array.isArray(wavefrontMap?.display?.opdGrid) ? wavefrontMap.display.opdGrid : [];
+            const opdGridRaw = Array.isArray(wavefrontMap?.raw?.opdGrid) ? wavefrontMap.raw.opdGrid : [];
+            const opdGridForRender = (Array.isArray(opdGridDisplay) && opdGridDisplay.length && Array.isArray(opdGridDisplay[0]))
+                ? opdGridDisplay
+                : opdGridRaw;
+            if (!opdGridForRender.length || !Array.isArray(opdGridForRender[0])) {
+                throw new Error('Native OPD grid is unavailable for plotting');
+            }
+            const n = opdGridForRender.length;
+            const maxRenderGrid = 255;
+            const renderGridSize = n > maxRenderGrid ? maxRenderGrid : n;
+            if (n > renderGridSize) {
+                try {
+                    console.warn(`⚠️ [OPD] Surface render grid downsampled ${n} -> ${renderGridSize} (compute grid kept at ${n})`);
+                } catch (_) {}
+            }
+
+            const axis = renderGridSize > 1
+                ? Array.from({ length: renderGridSize }, (_, i) => -1 + (2 * i) / (renderGridSize - 1))
+                : [0];
+
+            const normalizeGridValue = (v) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? NaN : Number(v));
+            const zGrid = (() => {
+                const source = opdGridForRender.map((row) =>
+                    (Array.isArray(row) ? row : []).map((v) => normalizeGridValue(v))
+                );
+
+                if (renderGridSize >= n) {
+                    return source;
                 }
-                : wavefrontMap;
 
-            // Plotly用のデータに変換
-            // OPD is fixed to raw-grid rendering (no Zernike surface rendering).
-            // rawMode keeps the raw-grid sampling (no Zernike surface), but we still
-            // allow small interior hole-filling to avoid Plotly rendering artifacts.
-            let surfaceData = this.convertToPlotlySurfaceData(mapForPlot, 'opd', { rawMode: true, fillHoles: true });
+                const out = Array.from({ length: renderGridSize }, () => Array.from({ length: renderGridSize }, () => NaN));
+                for (let yi = 0; yi < renderGridSize; yi++) {
+                    const yStart = Math.floor((yi * n) / renderGridSize);
+                    const yEnd = Math.max(yStart, Math.min(n - 1, Math.floor(((yi + 1) * n) / renderGridSize) - 1));
+                    for (let xi = 0; xi < renderGridSize; xi++) {
+                        const xStart = Math.floor((xi * n) / renderGridSize);
+                        const xEnd = Math.max(xStart, Math.min(n - 1, Math.floor(((xi + 1) * n) / renderGridSize) - 1));
+                        let sum = 0;
+                        let count = 0;
+                        for (let sy = yStart; sy <= yEnd; sy++) {
+                            const row = source[sy] || [];
+                            for (let sx = xStart; sx <= xEnd; sx++) {
+                                const v = row[sx];
+                                if (!Number.isFinite(v)) continue;
+                                sum += v;
+                                count += 1;
+                            }
+                        }
+                        if (count > 0) {
+                            out[yi][xi] = sum / count;
+                        }
+                    }
+                }
 
-            // Plotly側で描画行列を入れ替え（z転置）
-            surfaceData = this._transposeZForPlotly(surfaceData);
+                for (let pass = 0; pass < 2; pass++) {
+                    const next = out.map((row) => row.slice());
+                    for (let yi = 0; yi < renderGridSize; yi++) {
+                        for (let xi = 0; xi < renderGridSize; xi++) {
+                            if (Number.isFinite(out[yi][xi])) continue;
+                            let sum = 0;
+                            let count = 0;
+                            for (let dy = -1; dy <= 1; dy++) {
+                                for (let dx = -1; dx <= 1; dx++) {
+                                    if (dx === 0 && dy === 0) continue;
+                                    const ny = yi + dy;
+                                    const nx = xi + dx;
+                                    if (ny < 0 || ny >= renderGridSize || nx < 0 || nx >= renderGridSize) continue;
+                                    const nv = out[ny][nx];
+                                    if (!Number.isFinite(nv)) continue;
+                                    sum += nv;
+                                    count += 1;
+                                }
+                            }
+                            if (count >= 5) {
+                                next[yi][xi] = sum / count;
+                            }
+                        }
+                    }
+                    for (let yi = 0; yi < renderGridSize; yi++) out[yi] = next[yi];
+                }
+
+                return out;
+            })();
+            const surfaceData = {
+                type: 'surface',
+                x: axis,
+                y: axis,
+                z: zGrid,
+                connectgaps: false,
+                colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
+                showscale: true,
+                colorbar: { title: 'OPD [λ]' },
+            };
 
             // プロット設定
             const layout = {
@@ -370,10 +934,10 @@ export class WavefrontPlotter {
                     dataSize: `${surfaceData.z.length}x${surfaceData.z[0]?.length}`
                 });
 
+                emitProgress(96, 'Rendering OPD surface...');
                 layout.autosize = true;
-                if (profileEnabled) console.time('⏱️ plotOPDSurface.Plotly.newPlot');
                 await plotly.newPlot(container, [surfaceData], layout, this.plotlyConfig);
-                if (profileEnabled) console.timeEnd('⏱️ plotOPDSurface.Plotly.newPlot');
+                emitProgress(100, 'Completed');
                 console.log('✅ OPD 3Dサーフェス描画完了');
             } catch (error) {
                 console.error('❌ OPD 3Dサーフェス描画エラー:', error);
@@ -622,36 +1186,18 @@ export class WavefrontPlotter {
     async plotOPDHeatmap(opticalSystemRows, fieldSetting, wavelength = 0.5876, gridSize = 31, options = {}) {
         try {
             console.log('🌊 OPD ヒートマップ生成開始...');
-            const profileEnabled = !!((typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_PROFILE === true) || options?.onProgress);
-            const wasmFastOnly = options?.wasmFastOnly !== undefined
-                ? !!options.wasmFastOnly
-                : !!(typeof globalThis !== 'undefined' && globalThis.__OPD_WASM_FAST_ONLY === true);
-            const enableHeavyDiagnostics = !!options?.enableHeavyDiagnostics;
-            const { analyzer } = this._createWavefrontEngine(opticalSystemRows, wavelength);
-            // 波面収差マップを生成（Zernike 37項で関数面を描画）
-            const diagnoseDiscontinuities = (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_DIAG_DISCONTINUITIES === true);
+            const emitProgress = (percent, message) => {
+                try {
+                    if (typeof options?.onProgress === 'function') {
+                        options.onProgress({ percent, message, phase: 'opd-render' });
+                    }
+                } catch (_) {}
+            };
             const displayMode = options?.opdDisplayMode || 'pistonTiltRemoved';
-            const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, 'circular', {
-                recordRays: false,
-                // Avoid console-log progress (it can dominate runtime on large grids)
-                progressEvery: 0,
-                diagnoseDiscontinuities,
-                diagTopK: 5,
-                // OPD is fixed to simple (no reference-sphere correction) semantics.
-                opdMode: 'simple',
-                zernikeMaxNoll: 37,
-                renderFromZernike: false,
-                // Enable Zernike fit for System Data reporting
-                skipZernikeFit: false,
-                // OPD display mode for plots (piston/tilt or piston/tilt/defocus removal).
+            const wavefrontMap = await this._computeNativeOpdWavefrontMap(opticalSystemRows, fieldSetting, gridSize, {
                 opdDisplayMode: displayMode,
-                cancelToken: options?.cancelToken || null,
                 onProgress: options?.onProgress || null,
-                profile: profileEnabled,
-                wasmFastOnly,
-                enableHeavyDiagnostics
             });
-            this._updateSystemDataWithZernike(analyzer, wavefrontMap, 37);
             // NOTE: wavefrontMap is large (arrays). Dumping it to console can freeze the UI.
             if (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_DEBUG_DUMP === true) {
                 console.log('🟦 wavefrontMap:', wavefrontMap);
@@ -659,17 +1205,30 @@ export class WavefrontPlotter {
             if (!wavefrontMap || !wavefrontMap.pupilCoordinates || wavefrontMap.pupilCoordinates.length === 0) {
                 throw new Error('有効な光線データがありません。光学系設定を確認してください。');
             }
-            // ヒートマップ用のデータに変換
-            // If display mode is enabled, plot the transformed OPD arrays.
-            const mapForPlot = (displayMode !== 'raw' && wavefrontMap?.display?.opdsInWavelengths)
-                ? {
-                    ...wavefrontMap,
-                    opds: wavefrontMap.display.opds,
-                    opdsInWavelengths: wavefrontMap.display.opdsInWavelengths,
-                    wavefrontAberrations: wavefrontMap.display.wavefrontAberrations
-                }
-                : wavefrontMap;
-            const heatmapData = this.convertToPlotlyHeatmapData(mapForPlot, 'opd', gridSize, { rawMode: true });
+            const opdGridDisplay = Array.isArray(wavefrontMap?.display?.opdGrid) ? wavefrontMap.display.opdGrid : [];
+            const opdGridRaw = Array.isArray(wavefrontMap?.raw?.opdGrid) ? wavefrontMap.raw.opdGrid : [];
+            const opdGridForRender = (Array.isArray(opdGridDisplay) && opdGridDisplay.length && Array.isArray(opdGridDisplay[0]))
+                ? opdGridDisplay
+                : opdGridRaw;
+            if (!opdGridForRender.length || !Array.isArray(opdGridForRender[0])) {
+                throw new Error('Native OPD grid is unavailable for heatmap plotting');
+            }
+            const n = opdGridForRender.length;
+            const axis = n > 1
+                ? Array.from({ length: n }, (_, i) => -1 + (2 * i) / (n - 1))
+                : [0];
+            const zGrid = opdGridForRender.map((row) =>
+                (Array.isArray(row) ? row : []).map((v) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? NaN : Number(v)))
+            );
+            const heatmapData = {
+                x: axis,
+                y: axis,
+                z: zGrid,
+                type: 'heatmap',
+                zsmooth: 'best',
+                colorscale: WavefrontPlotter.getBlueGreenRedColorscale(),
+                colorbar: { title: 'OPD [λ]' },
+            };
             
             // 🆕 実際のデータ範囲に基づいて軸範囲を設定
             const xRange = heatmapData.x.length > 0 ? [Math.min(...heatmapData.x) - 0.1, Math.max(...heatmapData.x) + 0.1] : [-1.1, 1.1];
@@ -707,7 +1266,9 @@ export class WavefrontPlotter {
             layout.autosize = true;
             delete layout.width;
             delete layout.height;
+            emitProgress(96, 'Rendering OPD heatmap...');
             await plotly.newPlot(container, [heatmapData], layout, this.plotlyConfig);
+            emitProgress(100, 'Completed');
             // 統計情報を表示
             {
                 // IMPORTANT: Stats must match what is plotted.
@@ -867,6 +1428,60 @@ export class WavefrontPlotter {
             
         } catch (error) {
             console.error('❌ マルチフィールド比較プロット生成エラー:', error);
+            throw error;
+        }
+    }
+
+    async plotOPDMultiFieldComparisonRust(opticalSystemRows, fieldSettings, wavelength = 0.5876, gridSize = 16) {
+        try {
+            console.log('🌊 マルチフィールド OPD 比較プロット生成開始... (Rust)');
+
+            const traces = [];
+            for (const fieldSetting of fieldSettings) {
+                const wavefrontMap = await this._computeNativeOpdWavefrontMap(opticalSystemRows, fieldSetting, gridSize, {
+                    opdDisplayMode: 'pistonTiltRemoved'
+                });
+
+                const mapForPlot = wavefrontMap?.display?.opdsInWavelengths
+                    ? {
+                        ...wavefrontMap,
+                        opds: wavefrontMap.display.opds,
+                        opdsInWavelengths: wavefrontMap.display.opdsInWavelengths,
+                        wavefrontAberrations: wavefrontMap.display.wavefrontAberrations
+                    }
+                    : wavefrontMap;
+                const surfaceData = this.convertToPlotlySurfaceData(mapForPlot, 'opd', { rawMode: true, fillHoles: true });
+                surfaceData.name = fieldSetting?.displayName || `Field ${fieldSetting?.id ?? ''}`;
+                surfaceData.opacity = 0.8;
+                surfaceData.showscale = false;
+                traces.push(surfaceData);
+            }
+
+            const layout = {
+                title: {
+                    text: 'Multi-field OPD Comparison',
+                    font: { size: 16 }
+                },
+                scene: {
+                    xaxis: { title: 'Pupil coordinate X' },
+                    yaxis: { title: 'Pupil coordinate Y' },
+                    zaxis: { title: 'OPD [λ]' },
+                    camera: { eye: { x: 1.5, y: 1.5, z: 1.5 } }
+                },
+                margin: { l: 0, r: 0, b: 0, t: 40 }
+            };
+
+            const container = this.resolveContainer();
+            const plotly = this.resolvePlotly(container);
+            if (!container || !plotly) {
+                throw new Error('Plotly.jsライブラリが読み込まれていません');
+            }
+            layout.autosize = true;
+            await plotly.newPlot(container, traces, layout, this.plotlyConfig);
+
+            console.log('✅ マルチフィールド OPD 比較プロット生成完了 (Rust)');
+        } catch (error) {
+            console.error('❌ マルチフィールド OPD 比較プロット生成エラー:', error);
             throw error;
         }
     }
@@ -1453,6 +2068,16 @@ export class WavefrontPlotter {
             ? `<div class="stats-note"><strong>OPD mode:</strong> ${String(opdMode)}</div>`
             : '';
 
+        const opdDisplayMode = statistics?.opdDisplayMode;
+        const opdDisplayModeNote = opdDisplayMode
+            ? `<div class="stats-note"><strong>OPD display mode:</strong> ${String(opdDisplayMode)}</div>`
+            : '';
+
+        const chiefReferenceMode = statistics?.chiefReferenceMode;
+        const chiefReferenceModeNote = chiefReferenceMode
+            ? `<div class="stats-note"><strong>Chief reference mode:</strong> ${String(chiefReferenceMode)}</div>`
+            : '';
+
         const zernikeNote = (typeof skipZernikeFit === 'boolean')
             ? `<div class="stats-note"><strong>Zernike fit:</strong> ${skipZernikeFit ? 'OFF (raw)' : 'ON'}</div>`
             : '';
@@ -1465,12 +2090,19 @@ export class WavefrontPlotter {
             ? `<div class="stats-note"><strong>Stats removal (OSA):</strong> [${statistics.removeIndices.join(', ')}] (piston/tilt/defocus)</div>`
             : '';
         
+        const formatStat = (value: any, digits = 4): string => {
+            const n = Number(value);
+            return Number.isFinite(n) ? n.toFixed(digits) : 'n/a';
+        };
+
+        const meanValue = Number(statistics?.mean);
+
         // Check if mean value is unusually large (potential piston issue)
         // NOTE: When showing raw OPD, the mean value includes piston by design.
-        const meanMagnitude = Math.abs(statistics.mean);
-        const largePistonWarning = (unit === 'λ' && meanMagnitude > 10)
+        const meanMagnitude = Math.abs(meanValue);
+        const largePistonWarning = (unit === 'λ' && Number.isFinite(meanMagnitude) && meanMagnitude > 10)
             ? `<div class="stats-warning" style="color: #ff6b6b; margin-top: 8px;">
-                ⚠️ <strong>Large piston (mean)</strong>: mean=${statistics.mean.toFixed(2)} ${unit}<br>
+                ⚠️ <strong>Large piston (mean)</strong>: mean=${formatStat(meanValue, 2)} ${unit}<br>
                 → Enable piston removal in the statistics to make the mean closer to 0.
                </div>`
             : '';
@@ -1480,16 +2112,18 @@ export class WavefrontPlotter {
                 <h4>${title} Statistics</h4>
                 ${modeNote}
                 ${opdModeNote}
+                ${opdDisplayModeNote}
+                ${chiefReferenceModeNote}
                 ${zernikeNote}
                 ${rawMeanNote}
                 ${removalNote}
                 <div class="stats-grid">
-                    <div><strong>Data points:</strong> ${statistics.count}</div>
-                    <div><strong>Mean:</strong> ${statistics.mean.toFixed(4)} ${unit}</div>
-                    <div><strong>RMS:</strong> ${statistics.rms.toFixed(4)} ${unit}</div>
-                    <div><strong>Peak-to-Peak:</strong> ${statistics.peakToPeak.toFixed(4)} ${unit}</div>
-                    <div><strong>Min:</strong> ${statistics.min.toFixed(4)} ${unit}</div>
-                    <div><strong>Max:</strong> ${statistics.max.toFixed(4)} ${unit}</div>
+                    <div><strong>Data points:</strong> ${Number.isFinite(Number(statistics?.count)) ? Number(statistics.count) : 'n/a'}</div>
+                    <div><strong>Mean:</strong> ${formatStat(statistics?.mean, 4)} ${unit}</div>
+                    <div><strong>RMS:</strong> ${formatStat(statistics?.rms, 4)} ${unit}</div>
+                    <div><strong>Peak-to-Peak:</strong> ${formatStat(statistics?.peakToPeak, 4)} ${unit}</div>
+                    <div><strong>Min:</strong> ${formatStat(statistics?.min, 4)} ${unit}</div>
+                    <div><strong>Max:</strong> ${formatStat(statistics?.max, 4)} ${unit}</div>
                 </div>
                 ${largePistonWarning}
             </div>
@@ -1802,8 +2436,10 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
 
             // IMPORTANT: Do not populate both angle and height with the same value.
             // This caused ambiguous semantics (deg vs mm) and can mis-route solvers.
-            const isAngleMode = pos === 'angle' || pos === 'field angle' || pos === 'angles';
-            const isHeightMode = pos === 'rectangle' || pos === 'height' || pos === 'point';
+            // Keep semantics aligned with popup/native paths:
+            // Point rows store field angles in xHeightAngle/yHeightAngle.
+            const isAngleMode = pos === 'angle' || pos === 'field angle' || pos === 'angles' || pos === 'point';
+            const isHeightMode = pos === 'rectangle' || pos === 'height';
 
             let fieldAngle = { x: 0, y: 0 };
             let xHeight = 0;
@@ -1931,6 +2567,8 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
             } catch (_) {}
         };
 
+        let plotResult: any = null;
+
         switch (plotType) {
             case 'surface':
                 if (dataType === 'opd') {
@@ -1942,9 +2580,11 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                         enableHeavyDiagnostics: options?.enableHeavyDiagnostics
                     });
                     storeLast(wavefrontMap);
+                    plotResult = wavefrontMap;
                 } else {
                     const wavefrontMap = await plotter.plotWavefrontAberrationSurface(opticalSystemRows, fieldSetting, wavelength, gridSize);
                     storeLast(wavefrontMap);
+                    plotResult = wavefrontMap;
                 }
                 break;
                 
@@ -1958,26 +2598,44 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                         enableHeavyDiagnostics: options?.enableHeavyDiagnostics
                     });
                     storeLast(wavefrontMap);
+                    plotResult = wavefrontMap;
                 } else {
                     const wavefrontMap = await plotter.plotWavefrontHeatmap(opticalSystemRows, fieldSetting, wavelength, gridSize);
                     storeLast(wavefrontMap);
+                    plotResult = wavefrontMap;
                 }
                 break;
                 
             case 'multifield':
                 // マルチフィールド比較では全Objectを使用
-                await plotter.plotMultiFieldComparison(opticalSystemRows, fieldSettings, wavelength, gridSize);
+                if (dataType === 'opd') {
+                    await plotter.plotOPDMultiFieldComparisonRust(opticalSystemRows, fieldSettings, wavelength, gridSize);
+                } else {
+                    await plotter.plotMultiFieldComparison(opticalSystemRows, fieldSettings, wavelength, gridSize);
+                }
+                plotResult = { success: true };
                 break;
                 
             default:
                 throw new Error(`未対応のプロットタイプ: ${plotType}`);
         }
+
+        if (plotResult?.error) {
+            throw new Error(String(plotResult?.error?.message || plotResult?.error || 'Wavefront plot failed'));
+        }
         
         console.log('✅ 波面収差図表示完了');
+        return plotResult || { success: true };
         
-    } catch (error) {
+    } catch (error: any) {
         console.error('❌ 波面収差図表示エラー:', error);
-        alert(`波面収差図エラー: ${error.message}`);
+        if (options?.showAlert !== false) {
+            alert(`波面収差図エラー: ${error?.message || error}`);
+        }
+        if (options?.throwOnError === true) {
+            throw error;
+        }
+        return { error: { message: String(error?.message || error || 'Wavefront plot failed') } };
     }
 }
 

@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-03-08T14:52:34.323Z",
+  "inputPath": "diagnostics/results/opd-full-batch-release-gate-2026-03-08T14-52-09-242Z.json",
+  "metrics": {
+    "offAvgMs": 36.77763550000001,
+    "onAvgMs": 19.114187749999992,
+    "speedup": 1.9241014047274922,
+    "speedupPercent": 92.41014047274922,
+    "validOff": 3096,
+    "validOn": 3096,
+    "validDiff": 0
+  },
+  "requirementGate": {
+    "enabled": true,
+    "thresholds": {
+      "minSpeedup": 1.05,
+      "maxValidDiff": 0
+    },
+    "checks": [
+      {
+        "name": "speedup",
+        "actual": 1.9241014047274922,
+        "limit": 1.05,
+        "pass": true
+      },
+      {
+        "name": "validDiff",
+        "actual": 0,
+        "limit": 0,
+        "pass": true
+      }
+    ],
+    "failedChecks": [],
+    "passed": true
+  }
+}

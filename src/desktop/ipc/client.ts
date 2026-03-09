@@ -4,10 +4,28 @@ import type {
   NativeAstigmatismResponse,
   NativeAstigmatismDebugRequest,
   NativeAstigmatismDebugResponse,
+  NativeTransverseAberrationRequest,
+  NativeTransverseAberrationResponse,
+  NativeOpdMapRequest,
+  NativeOpdMapResponse,
+  NativePsfMapRequest,
+  NativePsfMapResponse,
+  NativeMtfMapRequest,
+  NativeMtfMapResponse,
+  NativeFieldMtfMapRequest,
+  NativeFieldMtfMapResponse,
+  NativeThroughFocusMtfMapRequest,
+  NativeThroughFocusMtfMapResponse,
   NativeSphericalAberrationRequest,
   NativeSphericalAberrationResponse,
   NativeSpotRaytraceRequest,
   NativeSpotRaytraceResponse,
+  NativeDistortionRequest,
+  NativeDistortionResponse,
+  NativeGridDistortionRequest,
+  NativeGridDistortionResponse,
+  NativeMagnificationChromaticAberrationRequest,
+  NativeMagnificationChromaticAberrationResponse,
   OpticsEchoRequest,
   OpticsEchoResponse,
   RaytracePreviewRequest,
@@ -131,6 +149,72 @@ export async function runNativeAstigmatism(
   payload: NativeAstigmatismRequest,
 ): Promise<NativeAstigmatismResponse> {
   return invokeCommand<NativeAstigmatismRequest, NativeAstigmatismResponse>("run_native_astigmatism", payload);
+}
+
+export async function runNativeTransverseAberration(
+  payload: NativeTransverseAberrationRequest,
+): Promise<NativeTransverseAberrationResponse> {
+  return invokeCommand<NativeTransverseAberrationRequest, NativeTransverseAberrationResponse>(
+    "run_native_transverse_aberration",
+    payload,
+  );
+}
+
+export async function runNativeOpdMap(
+  payload: NativeOpdMapRequest,
+): Promise<NativeOpdMapResponse> {
+  return invokeCommand<NativeOpdMapRequest, NativeOpdMapResponse>("run_native_opd_map", payload);
+}
+
+export async function runNativePsfMap(
+  payload: NativePsfMapRequest,
+): Promise<NativePsfMapResponse> {
+  return invokeCommand<NativePsfMapRequest, NativePsfMapResponse>("run_native_psf_map", payload);
+}
+
+export async function runNativeMtfMap(
+  payload: NativeMtfMapRequest,
+): Promise<NativeMtfMapResponse> {
+  return invokeCommand<NativeMtfMapRequest, NativeMtfMapResponse>("run_native_mtf_map", payload);
+}
+
+export async function runNativeThroughFocusMtfMap(
+  payload: NativeThroughFocusMtfMapRequest,
+): Promise<NativeThroughFocusMtfMapResponse> {
+  return invokeCommand<NativeThroughFocusMtfMapRequest, NativeThroughFocusMtfMapResponse>(
+    "run_native_through_focus_mtf_map",
+    payload,
+  );
+}
+
+export async function runNativeFieldMtfMap(
+  payload: NativeFieldMtfMapRequest,
+): Promise<NativeFieldMtfMapResponse> {
+  return invokeCommand<NativeFieldMtfMapRequest, NativeFieldMtfMapResponse>(
+    "run_native_field_mtf_map",
+    payload,
+  );
+}
+
+export async function runNativeDistortion(
+  payload: NativeDistortionRequest,
+): Promise<NativeDistortionResponse> {
+  return invokeCommand<NativeDistortionRequest, NativeDistortionResponse>("run_native_distortion", payload);
+}
+
+export async function runNativeGridDistortion(
+  payload: NativeGridDistortionRequest,
+): Promise<NativeGridDistortionResponse> {
+  return invokeCommand<NativeGridDistortionRequest, NativeGridDistortionResponse>("run_native_grid_distortion", payload);
+}
+
+export async function runNativeMagnificationChromaticAberration(
+  payload: NativeMagnificationChromaticAberrationRequest,
+): Promise<NativeMagnificationChromaticAberrationResponse> {
+  return invokeCommand<NativeMagnificationChromaticAberrationRequest, NativeMagnificationChromaticAberrationResponse>(
+    "run_native_magnification_chromatic_aberration",
+    payload,
+  );
 }
 
 export async function readTextFile(payload: ReadTextFileRequest): Promise<ReadTextFileResponse> {

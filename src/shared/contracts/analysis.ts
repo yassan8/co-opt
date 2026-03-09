@@ -54,6 +54,7 @@ export interface RunAnalysisPreviewResponse {
 
 export interface RunAnalysisComputeRequest {
   kind: AnalysisKind;
+  jobId?: string;
   opticalSystemRows: unknown[];
   sourceRows?: unknown[];
   objectRows?: unknown[];

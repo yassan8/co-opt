@@ -205,7 +205,7 @@ export default function LegacyPanels() {
             <h2>Transverse Aberration Diagram</h2>
             <div className="transverse-aberration-controls">
               <label htmlFor="transverse-ray-count-input">Ray number:</label>
-              <input type="number" id="transverse-ray-count-input" defaultValue={101} min={1} max={1001} step={1} />
+              <input type="number" id="transverse-ray-count-input" defaultValue={101} min={9} max={10001} step={1} />
               <span className="note">(Always normalized by stop diameter)</span>
               <button id="show-transverse-aberration-diagram-btn">Show transverse aberration diagram</button>
             </div>
@@ -225,9 +225,6 @@ export default function LegacyPanels() {
                 <option value="stopCenter">① 絞り中央通過 (Stop Center)</option>
                 <option value="beamCenter">② 光束巾の真ん中 (Beam Center)</option>
                 <option value="centroid">③ 光束の重心 (Centroid)</option>
-                <option value="stopCenterImage">④ 絞り中央通過（像面基準）</option>
-                <option value="beamCenterImage">⑤ 光束巾の真ん中（像面基準）</option>
-                <option value="centroidImage">⑥ 光束の重心（像面基準）</option>
               </select>
               <button id="show-astigmatism-diagram-btn" style={{ marginLeft: 12 }}>Show astigmatism diagram</button>
             </div>
@@ -249,6 +246,16 @@ export default function LegacyPanels() {
             </div>
             <div className="distortion-controls">
               <button id="show-distortion-diagram-btn">Show distortion diagram</button>
+            </div>
+            <div id="distortion-percent"></div>
+          </div>
+
+          <div className="distortion-grid-section" style={{ display: "none" }}>
+            <h2>Distortion Grid</h2>
+            <div className="distortion-help">
+              <strong>Note:</strong> Distortion Grid plots ideal grid lines and traced image points.
+            </div>
+            <div className="distortion-controls">
               <label htmlFor="grid-size-select" style={{ marginLeft: 20 }}>
                 Grid Size:
               </label>
@@ -265,7 +272,6 @@ export default function LegacyPanels() {
               </select>
               <button id="show-distortion-grid-btn">Show grid distortion</button>
             </div>
-            <div id="distortion-percent"></div>
             <div id="distortion-grid"></div>
           </div>
 
@@ -414,6 +420,9 @@ export default function LegacyPanels() {
               <button id="stop-psf-btn" title="Stop the current PSF calculation" disabled>
                 Stop
               </button>
+              <span id="psf-pipeline-badge" title="PSF execution route">
+                Unified pipeline: Ready
+              </span>
             </div>
             <div className="psf-help" style={{ fontSize: 12, color: "#666", margin: "10px 0" }}>
               <strong>Note:</strong> PSF is calculated from OPD data using Fourier transform. Generate OPD data first using the Optical Path Difference section above.
