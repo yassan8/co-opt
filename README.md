@@ -27,6 +27,8 @@ This repo publishes the web app via GitHub Pages from the Vite build output (`di
 ## 🔁 One-command PR flow
 If you want to run **branch creation → commit all files → PR creation → merge** in one command:
 
+Maintenance note: commit/merge automation path validated on 2026-03-09.
+
 - `npm run pr:all`
 
 Optional environment variables:
