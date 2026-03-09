@@ -19,12 +19,22 @@ const RENDER_RUST_TRACE_OPTIONS = {
     allowNonStrict: true,
     requireWasmRayTracing: false,
     useRustWasm: true,
-    requireRustWasm: true,
+    requireRustWasm: false,
     disableWasmRayTracing: false,
     __renderRayTracingRustPreferred: true
 };
 
+const REQUIRE_RUST_CROSS_BEAM = (() => {
+    try {
+        const v = String((globalThis as any)?.process?.env?.COOPT_REQUIRE_RUST_CROSS_BEAM ?? '').trim().toLowerCase();
+        return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+    } catch (_) {
+        return false;
+    }
+})();
+
 function assertRustRenderTracingAvailable() {
+    if (!REQUIRE_RUST_CROSS_BEAM) return;
     try {
         const rustReady = !!getRustRayTracingWasmSync();
         if (rustReady) return;
@@ -45,7 +55,7 @@ function traceRayHitPointForRenderTs(opticalSystemRows, ray0, n0 = 1.0, targetSu
 const CHIEF_RUST_TRACE_OPTIONS = {
     allowNonStrict: true,
     useRustWasm: true,
-    requireRustWasm: true
+    requireRustWasm: false
 };
 
 function traceRayHitPointForChiefSearch(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null) {

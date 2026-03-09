@@ -1,0 +1,54 @@
+{
+  "timestamp": "2026-03-08T15:27:58.102Z",
+  "inputPath": "diagnostics/results/kkt-e2e-2026-03-08T15-27-58-031Z.json",
+  "metrics": {
+    "runCount": 6,
+    "totalSpeedup": 1.640906909373223,
+    "solverSpeedup": 1.3136897771693017,
+    "wasmOkRate": 1,
+    "tsOkRate": 1,
+    "wasmFeasibleRate": 1,
+    "tsFeasibleRate": 1,
+    "wasmAvgTotalMs": 6.974860833333331,
+    "tsAvgTotalMs": 11.445097333333338,
+    "wasmAvgIterations": 6.166666666666667,
+    "tsAvgIterations": 11
+  },
+  "requirementGate": {
+    "enabled": true,
+    "thresholds": {
+      "minTotalSpeedup": 1.5,
+      "minSolverSpeedup": 1,
+      "minWasmOkRate": 1,
+      "minWasmFeasibleRate": 1
+    },
+    "checks": [
+      {
+        "name": "totalSpeedup",
+        "actual": 1.640906909373223,
+        "limit": 1.5,
+        "pass": true
+      },
+      {
+        "name": "solverSpeedup",
+        "actual": 1.3136897771693017,
+        "limit": 1,
+        "pass": true
+      },
+      {
+        "name": "wasmOkRate",
+        "actual": 1,
+        "limit": 1,
+        "pass": true
+      },
+      {
+        "name": "wasmFeasibleRate",
+        "actual": 1,
+        "limit": 1,
+        "pass": true
+      }
+    ],
+    "failedChecks": [],
+    "passed": true
+  }
+}

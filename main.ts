@@ -127,7 +127,7 @@ import { calculateFocalLength, calculateBackFocalLength, calculateImageDistance,
 import { calculateAdaptiveMarginalRay, calculateAllMarginalRays } from './raytracing/core/ray-marginal.ts';
 
 // Analysis modules
-import { generateSpotDiagram, drawSpotDiagram, generateSurfaceOptions } from './evaluation/spot-diagram.ts';
+import { derivePupilAndFocalLengthMmFromParaxial, generateSpotDiagram, drawSpotDiagram, generateSurfaceOptions } from './evaluation/spot-diagram.ts';
 import { calculateTransverseAberration, getFieldAnglesFromSource, getPrimaryWavelengthForAberration, validateAberrationData, calculateChiefRayNewton, getEstimatedEntrancePupilDiameter } from './evaluation/aberrations/transverse-aberration.ts';
 import { plotTransverseAberrationDiagram, showTransverseAberrationInNewWindow } from './evaluation/aberrations/transverse-aberration-plot.ts';
 import { showWavefrontDiagram } from './evaluation/wavefront/wavefront-plot.ts';
@@ -135,7 +135,7 @@ import { OpticalPathDifferenceCalculator, WavefrontAberrationAnalyzer, createOPD
 import { runOPDProfiling } from './evaluation/wavefront/opd-profiler.ts'; // ✅ OPD profiling functions
 import { PSFCalculator } from './evaluation/psf/psf-calculator.ts';
 import { PSFPlotter, PSFDisplayManager } from './evaluation/psf/psf-plot.ts';
-import { showMTFDiagram, showThroughFocusMTFDiagram, showFieldMTFDiagram, showMTFComparisonDiagram } from './evaluation/mtf-plot.ts';
+import { showMTFDiagram, showThroughFocusMTFDiagram, showMTFComparisonDiagram } from './evaluation/mtf-plot.ts';
 import { fitZernikeWeighted, reconstructOPD, getZernikeName } from './evaluation/wavefront/zernike-fitting.ts';
 import { calculateOPDWithZernike, displayZernikeAnalysis, exportZernikeAnalysisJSON } from './evaluation/wavefront/opd-zernike-analysis.ts';
 import { generateCrossBeam, generateFiniteSystemCrossBeam, RayColorSystem } from './raytracing/generation/gen-ray-cross-finite.ts';
@@ -162,13 +162,14 @@ import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOp
 import { updateSurfaceNumberSelect, updateAllUIElements, initializeUIEventListeners } from './ui/ui-updates.ts';
 import { loadFromCompressedDataHashIfPresent, setupDOMEventHandlers, loadSystemConfigurations, saveSystemConfigurations, loadActiveConfigurationToTables, refreshBlockInspector } from './ui/dom-event-handlers.ts';
 import { getToolbarCollapsed, setToolbarCollapsed } from './ui/toolbar-collapsed-storage.ts';
-import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.ts';
+import { updateWavefrontObjectSelect, initializeWavefrontObjectUI, initializePSFObjectUI, debugResetObjectTable } from './ui/wavefront-object-select.ts';
 import { initializeConfigurationUI } from './ui/configuration-handlers.ts';
 import { getActiveConfiguration } from './data/table-configuration.ts';
 import { expandBlocksToOpticalSystemRows } from './data/block-schema.ts';
 import { exposeWindowValue, installCooptWindowFacadeMarker, requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from './core/window-facade.ts';
 import { setRenderingContext } from './core/rendering-context.ts';
 import { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } from './rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
+import { isTauriRuntime } from './src/desktop/runtime.ts';
 
 // Editor modules (must be imported to initialize)
 import './ui/editors/system-requirements-editor.ts';
@@ -352,6 +353,12 @@ async function initializeApplication() {
 
         } catch (error) {
         }
+
+        // PSF Object選択UI初期化
+        try {
+            initializePSFObjectUI();
+        } catch (error) {
+        }
         
         // Update UI elements
         try {
@@ -413,6 +420,9 @@ async function initializeApplication() {
                 if (window.updateWavefrontObjectSelect) {
                     window.updateWavefrontObjectSelect();
                 }
+                if (window.updatePSFObjectOptions) {
+                    window.updatePSFObjectOptions();
+                }
             } catch (error) {
             }
             
@@ -430,6 +440,18 @@ async function initializeApplication() {
         window['clearAllDrawing'] = clearAllDrawing;
         window['showSpotDiagram'] = showSpotDiagram;
         window['showTransverseAberrationDiagram'] = showTransverseAberrationDiagram;
+        window['showTransverseAberration'] = async () => {
+            const transverseRayCountInput = document.getElementById('transverse-ray-count-input') as HTMLInputElement | null;
+            let rayCount = 51;
+            if (transverseRayCountInput && transverseRayCountInput.value !== '') {
+                const inputValue = parseInt(transverseRayCountInput.value, 10);
+                if (!isNaN(inputValue) && inputValue > 0) {
+                    rayCount = inputValue;
+                }
+            }
+            rayCount = Math.max(9, Math.min(10001, Math.round(rayCount)));
+            await showTransverseAberrationDiagram({ rayCount });
+        };
         window['showLongitudinalAberrationDiagram'] = showLongitudinalAberrationDiagram;
         window['showMagnificationChromaticAberrationDiagram'] = showMagnificationChromaticAberrationDiagram;
         window['showAstigmatismDiagram'] = showAstigmatismDiagram;
@@ -472,13 +494,665 @@ async function initializeApplication() {
         };
         window['showIntegratedAberrationDiagram'] = showIntegratedAberrationDiagram;
         window['showWavefrontDiagram'] = showWavefrontDiagram;
+        window['compareOpdNativeVsWasm'] = async (options: any = {}) => {
+            const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                ? () => performance.now()
+                : () => Date.now();
+
+            const toStats = (values: number[]) => {
+                const finite = values.filter((v) => Number.isFinite(v));
+                if (!finite.length) {
+                    return { count: 0, rms: NaN, peakToPeak: NaN, min: NaN, max: NaN };
+                }
+                let sumSq = 0;
+                let min = Infinity;
+                let max = -Infinity;
+                for (const v of finite) {
+                    sumSq += v * v;
+                    if (v < min) min = v;
+                    if (v > max) max = v;
+                }
+                return {
+                    count: finite.length,
+                    rms: Math.sqrt(sumSq / finite.length),
+                    peakToPeak: max - min,
+                    min,
+                    max
+                };
+            };
+
+            const flattenGrid = (grid: any) => {
+                const out: number[] = [];
+                if (!Array.isArray(grid)) return out;
+                for (const row of grid) {
+                    if (!Array.isArray(row)) continue;
+                    for (const v of row) {
+                        if (v === null || v === undefined) continue;
+                        const n = Number(v);
+                        if (Number.isFinite(n)) out.push(n);
+                    }
+                }
+                return out;
+            };
+
+            const computeOpdRmsWaves = (opd: Float32Array[] | number[][], mask: boolean[][], wavelengthUm: number) => {
+                if (!Array.isArray(opd) || !Array.isArray(mask) || !Number.isFinite(wavelengthUm) || wavelengthUm <= 0) {
+                    return { validCount: 0, meanUm: NaN, rmsUm: NaN, rmsWaves: NaN, marechalStrehl: NaN };
+                }
+                let count = 0;
+                let sum = 0;
+                for (let iy = 0; iy < opd.length; iy++) {
+                    const row = opd[iy] as any;
+                    const mrow = mask[iy] as any;
+                    if (!row || !mrow) continue;
+                    const w = Math.min(row.length || 0, mrow.length || 0);
+                    for (let ix = 0; ix < w; ix++) {
+                        if (!mrow[ix]) continue;
+                        const v = Number(row[ix]);
+                        if (!Number.isFinite(v)) continue;
+                        sum += v;
+                        count += 1;
+                    }
+                }
+                if (count <= 0) {
+                    return { validCount: 0, meanUm: NaN, rmsUm: NaN, rmsWaves: NaN, marechalStrehl: NaN };
+                }
+                const meanUm = sum / count;
+                let sumSq = 0;
+                for (let iy = 0; iy < opd.length; iy++) {
+                    const row = opd[iy] as any;
+                    const mrow = mask[iy] as any;
+                    if (!row || !mrow) continue;
+                    const w = Math.min(row.length || 0, mrow.length || 0);
+                    for (let ix = 0; ix < w; ix++) {
+                        if (!mrow[ix]) continue;
+                        const v = Number(row[ix]);
+                        if (!Number.isFinite(v)) continue;
+                        const d = v - meanUm;
+                        sumSq += d * d;
+                    }
+                }
+                const rmsUm = Math.sqrt(sumSq / count);
+                const rmsWaves = rmsUm / wavelengthUm;
+                const marechalStrehl = Math.exp(-Math.pow(2 * Math.PI * rmsWaves, 2));
+                return {
+                    validCount: count,
+                    meanUm,
+                    rmsUm,
+                    rmsWaves,
+                    marechalStrehl: Number.isFinite(marechalStrehl) ? Math.max(0, Math.min(1, marechalStrehl)) : NaN,
+                };
+            };
+
+            const opticalSystemRows = getOpticalSystemRows();
+            const objectRows = getObjectRows();
+            const sourceRows = getSourceRows();
+            const objectIndex = Number.isFinite(Number(options?.objectIndex)) ? Number(options.objectIndex) : 0;
+            const gridSize = Number.isFinite(Number(options?.gridSize)) ? Math.max(17, Math.min(513, Math.floor(Number(options.gridSize)))) : 129;
+            const displayMode = String(options?.opdDisplayMode || 'pistonTiltRemoved');
+            const wasmOpdMode = String(options?.wasmOpdMode || 'simple');
+            const wavelength = (() => {
+                try {
+                    if (typeof window.getPrimaryWavelength === 'function') {
+                        const w = Number(window.getPrimaryWavelength());
+                        if (Number.isFinite(w) && w > 0) return w;
+                    }
+                } catch (_) {}
+                const fallback = Number(getPrimaryWavelength?.());
+                return Number.isFinite(fallback) && fallback > 0 ? fallback : 0.5876;
+            })();
+
+            const selectedObject = (Array.isArray(objectRows) && objectRows[objectIndex]) ? objectRows[objectIndex] : (objectRows?.[0] || {});
+            const pos = String(selectedObject?.position ?? selectedObject?.Position ?? '').toLowerCase();
+            const xVal = Number(selectedObject?.xHeightAngle ?? selectedObject?.x ?? 0) || 0;
+            const yVal = Number(selectedObject?.yHeightAngle ?? selectedObject?.y ?? 0) || 0;
+            const isAngleMode = pos === 'angle' || pos === 'field angle' || pos === 'angles' || pos === 'point';
+            const fieldSetting = {
+                id: selectedObject?.id || objectIndex + 1,
+                displayName: `Object ${objectIndex + 1}`,
+                type: isAngleMode ? 'Angle' : 'Rectangle',
+                fieldAngle: isAngleMode ? { x: xVal, y: yVal } : { x: 0, y: 0 },
+                xHeight: isAngleMode ? 0 : xVal,
+                yHeight: isAngleMode ? 0 : yVal,
+                objectIndex,
+                wavelength
+            };
+
+            const wasmStart = now();
+            const calculator = createOPDCalculator(opticalSystemRows, wavelength);
+            const analyzer = createWavefrontAnalyzer(calculator);
+            const wasmMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, 'circular', {
+                recordRays: false,
+                progressEvery: 0,
+                opdMode: wasmOpdMode,
+                skipZernikeFit: true,
+                renderFromZernike: false,
+                opdDisplayMode: displayMode,
+                fullBatchTraceExperimental: true
+            });
+            const wasmElapsedMs = now() - wasmStart;
+            if (wasmMap?.error) {
+                throw new Error(`WASM/legacy OPD failed: ${wasmMap.error?.message || wasmMap.error}`);
+            }
+
+            const wasmValues = (() => {
+                if (Array.isArray(wasmMap?.display?.opdsInWavelengths)) return wasmMap.display.opdsInWavelengths;
+                if (Array.isArray(wasmMap?.opdsInWavelengths)) return wasmMap.opdsInWavelengths;
+                if (Array.isArray(wasmMap?.opds)) return wasmMap.opds;
+                return [];
+            })().map((v: any) => Number(v)).filter((v: number) => Number.isFinite(v));
+            const wasmRawValues = (() => {
+                if (Array.isArray(wasmMap?.raw?.opdsInWavelengths)) return wasmMap.raw.opdsInWavelengths;
+                if (Array.isArray(wasmMap?.raw?.opds)) return wasmMap.raw.opds;
+                return [];
+            })().map((v: any) => Number(v)).filter((v: number) => Number.isFinite(v));
+
+            const nativeStart = now();
+            const { runNativeOpdMap } = await import('./src/desktop/ipc/client.ts');
+            const native = await runNativeOpdMap({
+                opticalSystemRows: Array.isArray(opticalSystemRows) ? opticalSystemRows : [],
+                sourceRows: Array.isArray(sourceRows) ? sourceRows : [],
+                objectRows: Array.isArray(objectRows) ? objectRows : [],
+                objectIndex,
+                gridSize,
+                wavelengthUm: wavelength,
+                opdDisplayMode: (displayMode === 'raw' || displayMode === 'pistonTiltRemoved' || displayMode === 'pistonTiltDefocusRemoved') ? displayMode : 'pistonTiltRemoved'
+            });
+            const nativeElapsedMs = now() - nativeStart;
+
+            const nativeGrid = Array.isArray(native?.displayOpdGrid) && native.displayOpdGrid.length
+                ? native.displayOpdGrid
+                : native?.rawOpdGrid;
+            const nativeValues = flattenGrid(nativeGrid);
+            const nativeRawValues = flattenGrid(native?.rawOpdGrid);
+
+            const wasmStats = toStats(wasmValues);
+            const nativeStats = toStats(nativeValues);
+            const nativeComparedCount = Number.isFinite(Number(native?.hitCount))
+                ? Number(native.hitCount)
+                : (nativeStats.count || 0);
+            const diff = {
+                rmsAbs: Number.isFinite(wasmStats.rms) && Number.isFinite(nativeStats.rms) ? Math.abs(nativeStats.rms - wasmStats.rms) : NaN,
+                peakToPeakAbs: Number.isFinite(wasmStats.peakToPeak) && Number.isFinite(nativeStats.peakToPeak) ? Math.abs(nativeStats.peakToPeak - wasmStats.peakToPeak) : NaN,
+                countDiff: Math.abs(nativeComparedCount - (wasmStats.count || 0))
+            };
+            const wasmRawStats = toStats(wasmRawValues);
+            const nativeRawStats = toStats(nativeRawValues);
+            const nativeRawComparedCount = Number.isFinite(Number(native?.hitCount))
+                ? Number(native.hitCount)
+                : (nativeRawStats.count || 0);
+            const rawDiff = {
+                rmsAbs: Number.isFinite(wasmRawStats.rms) && Number.isFinite(nativeRawStats.rms) ? Math.abs(nativeRawStats.rms - wasmRawStats.rms) : NaN,
+                peakToPeakAbs: Number.isFinite(wasmRawStats.peakToPeak) && Number.isFinite(nativeRawStats.peakToPeak) ? Math.abs(nativeRawStats.peakToPeak - wasmRawStats.peakToPeak) : NaN,
+                countDiff: Math.abs(nativeRawComparedCount - (wasmRawStats.count || 0))
+            };
+
+            const report = {
+                backend: { wasm: 'wavefront.generateWavefrontMap', native: native?.backend || 'run_native_opd_map' },
+                options: { objectIndex, gridSize, wavelength, opdDisplayMode: displayMode, wasmOpdMode },
+                wasm: { elapsedMs: wasmElapsedMs, stats: wasmStats },
+                native: {
+                    elapsedMs: nativeElapsedMs,
+                    stats: nativeStats,
+                    sampleCount: Number(native?.sampleCount ?? 0),
+                    hitCount: Number(native?.hitCount ?? 0)
+                },
+                diff,
+                raw: {
+                    wasm: wasmRawStats,
+                    native: nativeRawStats,
+                    diff: rawDiff
+                }
+            };
+
+            console.log('📊 [OPD Parity] native vs wasm', report);
+            try {
+                console.log(
+                    `[OPD Parity Summary] display rms wasm=${Number(wasmStats.rms).toFixed(6)} native=${Number(nativeStats.rms).toFixed(6)} diff=${Number(diff.rmsAbs).toFixed(6)} ` +
+                    `pp wasm=${Number(wasmStats.peakToPeak).toFixed(6)} native=${Number(nativeStats.peakToPeak).toFixed(6)} diff=${Number(diff.peakToPeakAbs).toFixed(6)} count wasm=${wasmStats.count} native=${nativeComparedCount} (gridNonNull=${nativeStats.count})`
+                );
+                console.log(
+                    `[OPD Parity Summary][raw] rms wasm=${Number(wasmRawStats.rms).toFixed(6)} native=${Number(nativeRawStats.rms).toFixed(6)} diff=${Number(rawDiff.rmsAbs).toFixed(6)} ` +
+                    `pp wasm=${Number(wasmRawStats.peakToPeak).toFixed(6)} native=${Number(nativeRawStats.peakToPeak).toFixed(6)} diff=${Number(rawDiff.peakToPeakAbs).toFixed(6)} count wasm=${wasmRawStats.count} native=${nativeRawComparedCount} (gridNonNull=${nativeRawStats.count})`
+                );
+            } catch (_) {}
+            return report;
+        };
+        window['comparePsfNativeVsJs'] = async (options: any = {}) => {
+            const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                ? () => performance.now()
+                : () => Date.now();
+
+            const signatureFromGrid = (grid: any) => {
+                if (!Array.isArray(grid) || !grid.length || !Array.isArray(grid[0])) {
+                    return { count: 0, sum: NaN, sumSq: NaN, min: NaN, max: NaN, hash: 'na' };
+                }
+                let count = 0;
+                let sum = 0;
+                let sumSq = 0;
+                let min = Infinity;
+                let max = -Infinity;
+                let hash = 2166136261 >>> 0;
+                for (let iy = 0; iy < grid.length; iy++) {
+                    const row = grid[iy];
+                    if (!Array.isArray(row)) continue;
+                    for (let ix = 0; ix < row.length; ix++) {
+                        const v = Number(row[ix]);
+                        if (!Number.isFinite(v)) continue;
+                        count++;
+                        sum += v;
+                        sumSq += v * v;
+                        if (v < min) min = v;
+                        if (v > max) max = v;
+                        const q = Math.round(v * 1e9);
+                        hash ^= (q & 0xff);
+                        hash = Math.imul(hash, 16777619) >>> 0;
+                        hash ^= ((q >> 8) & 0xff);
+                        hash = Math.imul(hash, 16777619) >>> 0;
+                        hash ^= ((q >> 16) & 0xff);
+                        hash = Math.imul(hash, 16777619) >>> 0;
+                        hash ^= ((q >> 24) & 0xff);
+                        hash = Math.imul(hash, 16777619) >>> 0;
+                    }
+                }
+                return {
+                    count,
+                    sum,
+                    sumSq,
+                    min: Number.isFinite(min) ? min : NaN,
+                    max: Number.isFinite(max) ? max : NaN,
+                    hash: hash.toString(16),
+                };
+            };
+
+            const flattenGrid = (grid: any) => {
+                const out: number[] = [];
+                if (!Array.isArray(grid)) return out;
+                for (const row of grid) {
+                    if (!Array.isArray(row)) continue;
+                    for (const v of row) {
+                        const n = Number(v);
+                        if (Number.isFinite(n)) out.push(n);
+                    }
+                }
+                return out;
+            };
+
+            const computeOpdRmsWaves = (opd: Float32Array[] | number[][], mask: boolean[][], wavelengthUm: number) => {
+                if (!Array.isArray(opd) || !Array.isArray(mask) || !Number.isFinite(wavelengthUm) || wavelengthUm <= 0) {
+                    return { validCount: 0, meanUm: NaN, rmsUm: NaN, rmsWaves: NaN, marechalStrehl: NaN };
+                }
+                let count = 0;
+                let sum = 0;
+                for (let iy = 0; iy < opd.length; iy++) {
+                    const row = opd[iy] as any;
+                    const mrow = mask[iy] as any;
+                    if (!row || !mrow) continue;
+                    const w = Math.min(row.length || 0, mrow.length || 0);
+                    for (let ix = 0; ix < w; ix++) {
+                        if (!mrow[ix]) continue;
+                        const v = Number(row[ix]);
+                        if (!Number.isFinite(v)) continue;
+                        sum += v;
+                        count += 1;
+                    }
+                }
+                if (count <= 0) {
+                    return { validCount: 0, meanUm: NaN, rmsUm: NaN, rmsWaves: NaN, marechalStrehl: NaN };
+                }
+                const meanUm = sum / count;
+                let sumSq = 0;
+                for (let iy = 0; iy < opd.length; iy++) {
+                    const row = opd[iy] as any;
+                    const mrow = mask[iy] as any;
+                    if (!row || !mrow) continue;
+                    const w = Math.min(row.length || 0, mrow.length || 0);
+                    for (let ix = 0; ix < w; ix++) {
+                        if (!mrow[ix]) continue;
+                        const v = Number(row[ix]);
+                        if (!Number.isFinite(v)) continue;
+                        const d = v - meanUm;
+                        sumSq += d * d;
+                    }
+                }
+                const rmsUm = Math.sqrt(sumSq / count);
+                const rmsWaves = rmsUm / wavelengthUm;
+                const marechalStrehl = Math.exp(-Math.pow(2 * Math.PI * rmsWaves, 2));
+                return {
+                    validCount: count,
+                    meanUm,
+                    rmsUm,
+                    rmsWaves,
+                    marechalStrehl: Number.isFinite(marechalStrehl) ? Math.max(0, Math.min(1, marechalStrehl)) : NaN,
+                };
+            };
+
+            const opticalSystemRows = getOpticalSystemRows();
+            const objectRows = getObjectRows();
+            const sourceRows = getSourceRows();
+            const objectIndex = Number.isFinite(Number(options?.objectIndex)) ? Number(options.objectIndex) : 0;
+            const samplingSize = Number.isFinite(Number(options?.samplingSize)) ? Math.max(32, Math.min(1024, Math.floor(Number(options.samplingSize)))) : 128;
+            const zeroPadToRaw = options?.zeroPadTo;
+            const zeroPadTo = Number.isFinite(Number(zeroPadToRaw)) ? Math.max(0, Math.min(4096, Math.floor(Number(zeroPadToRaw)))) : 0;
+            const opdDisplayMode = String(options?.opdDisplayMode || 'pistonTiltRemoved');
+            const removeTilt = options?.removeTilt === undefined ? false : !!options.removeTilt;
+            const recenterIfWrapped = options?.recenterIfWrapped === undefined ? undefined : !!options.recenterIfWrapped;
+            const wavelength = (() => {
+                try {
+                    if (typeof window.getPrimaryWavelength === 'function') {
+                        const w = Number(window.getPrimaryWavelength());
+                        if (Number.isFinite(w) && w > 0) return w;
+                    }
+                } catch (_) {}
+                const fallback = Number(getPrimaryWavelength?.());
+                return Number.isFinite(fallback) && fallback > 0 ? fallback : 0.5876;
+            })();
+
+            if (!isTauriRuntime()) {
+                throw new Error('comparePsfNativeVsJs requires Tauri runtime');
+            }
+
+            const selectedObject = (Array.isArray(objectRows) && objectRows[objectIndex]) ? objectRows[objectIndex] : (objectRows?.[0] || {});
+            const pos = String(selectedObject?.position ?? selectedObject?.Position ?? '').toLowerCase();
+            const xVal = Number(selectedObject?.xHeightAngle ?? selectedObject?.x ?? 0) || 0;
+            const yVal = Number(selectedObject?.yHeightAngle ?? selectedObject?.y ?? 0) || 0;
+            const isAngleMode = pos === 'angle' || pos === 'field angle' || pos === 'angles';
+            const fieldSetting = {
+                id: selectedObject?.id || objectIndex + 1,
+                displayName: `Object ${objectIndex + 1}`,
+                type: isAngleMode ? 'Angle' : 'Rectangle',
+                fieldAngle: isAngleMode ? { x: xVal, y: yVal } : { x: 0, y: 0 },
+                xHeight: isAngleMode ? 0 : xVal,
+                yHeight: isAngleMode ? 0 : yVal,
+                objectIndex,
+                wavelength
+            };
+
+            const wfStart = now();
+            const calculator = createOPDCalculator(opticalSystemRows, wavelength);
+            const analyzer = createWavefrontAnalyzer(calculator);
+            const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, samplingSize, 'circular', {
+                recordRays: false,
+                progressEvery: 0,
+                opdMode: 'simple',
+                skipZernikeFit: true,
+                renderFromZernike: false,
+                opdDisplayMode,
+                fullBatchTraceExperimental: true
+            });
+            const wfElapsedMs = now() - wfStart;
+            if (wavefrontMap?.error) {
+                throw new Error(`Wavefront generation failed: ${wavefrontMap.error?.message || wavefrontMap.error}`);
+            }
+
+            const s = Math.max(16, Math.floor(Number(samplingSize)));
+            const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
+            const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
+            const maskGrid = Array.from({ length: s }, () => Array(s).fill(false));
+            const xCoords = new Float32Array(s);
+            const yCoords = new Float32Array(s);
+
+            const pupilRange = (Number.isFinite(Number(wavefrontMap?.pupilRange)) && Number(wavefrontMap.pupilRange) > 0)
+                ? Number(wavefrontMap.pupilRange)
+                : 1.0;
+            for (let i = 0; i < s; i++) {
+                const t = (i / (s - 1 || 1)) * 2 - 1;
+                xCoords[i] = t * pupilRange;
+                yCoords[i] = t * pupilRange;
+            }
+
+            const coords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
+            const useDisplayOpd = (opdDisplayMode !== 'raw') && Array.isArray(wavefrontMap?.display?.opds);
+            const opdMicrons = useDisplayOpd
+                ? wavefrontMap.display.opds
+                : (Array.isArray(wavefrontMap?.opds) ? wavefrontMap.opds : []);
+            const nPts = Math.min(coords.length, opdMicrons.length);
+
+            const rayData: any[] = [];
+            for (let k = 0; k < nPts; k++) {
+                const c = coords[k];
+                const ix = Number.isInteger(c?.ix) ? c.ix : null;
+                const iy = Number.isInteger(c?.iy) ? c.iy : null;
+                const vMicrons = Number(opdMicrons[k]);
+                if (ix !== null && iy !== null && ix >= 0 && ix < s && iy >= 0 && iy < s && Number.isFinite(vMicrons)) {
+                    maskGrid[iy][ix] = true;
+                    opdGrid[iy][ix] = vMicrons;
+                    ampGrid[iy][ix] = 1.0;
+                }
+
+                const x = Number(c?.x);
+                const y = Number(c?.y);
+                if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(vMicrons)) {
+                    rayData.push({ pupilX: x, pupilY: y, opd: vMicrons, isVignetted: false });
+                }
+            }
+
+            const opdData = {
+                gridSize: s,
+                wavelength,
+                rayData,
+                gridData: {
+                    opd: opdGrid,
+                    amplitude: ampGrid,
+                    pupilMask: maskGrid,
+                    xCoords,
+                    yCoords,
+                }
+            };
+
+            let stopDiameterMm = 24.0;
+            try {
+                const stopIndex = Number((window as any).findStopSurfaceIndex?.(opticalSystemRows));
+                const stopRow = (Number.isFinite(stopIndex) && stopIndex >= 0 && opticalSystemRows?.[stopIndex]) ? opticalSystemRows[stopIndex] : null;
+                const sdRaw =
+                    (stopRow && stopRow.semidia !== undefined && stopRow.semidia !== null) ? stopRow.semidia :
+                    (stopRow && stopRow.Semidia !== undefined && stopRow.Semidia !== null) ? stopRow.Semidia :
+                    (stopRow && stopRow['Semi Diameter'] !== undefined && stopRow['Semi Diameter'] !== null) ? stopRow['Semi Diameter'] :
+                    (stopRow && stopRow.aperture !== undefined && stopRow.aperture !== null) ? stopRow.aperture :
+                    (stopRow && stopRow.Aperture !== undefined && stopRow.Aperture !== null) ? stopRow.Aperture :
+                    NaN;
+                const sd = Math.abs(parseFloat(sdRaw));
+                if (Number.isFinite(sd) && sd > 0) {
+                    const isApertureField = stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined);
+                    const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
+                    if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) stopDiameterMm = stopRadiusMm * 2;
+                }
+            } catch (_) {}
+
+            let focalLengthMm = 100.0;
+            try {
+                if (typeof (window as any).calculateFocalLength === 'function') {
+                    const fl = Number((window as any).calculateFocalLength(opticalSystemRows, wavelength));
+                    if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) focalLengthMm = Math.abs(fl);
+                }
+            } catch (_) {}
+
+            const { PSFCalculator } = await import('./evaluation/psf/psf-calculator.ts');
+            const psfCalculator = new PSFCalculator();
+
+            const nativeStart = now();
+            const nativeResult = await psfCalculator.calculatePSF(opdData, {
+                samplingSize: s,
+                wavelength,
+                zeroPadTo,
+                pupilDiameter: stopDiameterMm,
+                focalLength: focalLengthMm,
+                forceImplementation: 'native',
+                removeTilt,
+                recenterIfWrapped,
+            });
+            const nativeElapsedMs = now() - nativeStart;
+
+            const jsStart = now();
+            const jsResult = await psfCalculator.calculatePSF(opdData, {
+                samplingSize: s,
+                wavelength,
+                zeroPadTo,
+                pupilDiameter: stopDiameterMm,
+                focalLength: focalLengthMm,
+                forceImplementation: 'javascript',
+                removeTilt,
+                recenterIfWrapped,
+            });
+            const jsElapsedMs = now() - jsStart;
+
+            const nativeGrid = Array.isArray(nativeResult?.psfData) ? nativeResult.psfData : [];
+            const jsGrid = Array.isArray(jsResult?.psfData) ? jsResult.psfData : [];
+            const h = Math.min(nativeGrid.length, jsGrid.length);
+            const w = h > 0 ? Math.min((nativeGrid[0] || []).length, (jsGrid[0] || []).length) : 0;
+            const nativeSig = signatureFromGrid(nativeGrid);
+            const jsSig = signatureFromGrid(jsGrid);
+
+            let count = 0;
+            let sumSq = 0;
+            let sumAbs = 0;
+            let maxAbs = 0;
+            for (let iy = 0; iy < h; iy++) {
+                for (let ix = 0; ix < w; ix++) {
+                    const a = Number(nativeGrid[iy]?.[ix]);
+                    const b = Number(jsGrid[iy]?.[ix]);
+                    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+                    const d = a - b;
+                    const ad = Math.abs(d);
+                    sumSq += d * d;
+                    sumAbs += ad;
+                    if (ad > maxAbs) maxAbs = ad;
+                    count++;
+                }
+            }
+
+            const opdQuality = computeOpdRmsWaves(opdGrid as any, maskGrid as any, wavelength);
+
+            const nativeStrehl = Number(nativeResult?.metrics?.strehlRatio);
+            const jsStrehl = Number(jsResult?.metrics?.strehlRatio);
+
+            const report = {
+                options: {
+                    objectIndex,
+                    samplingSize: s,
+                    zeroPadTo,
+                    wavelength,
+                    opdDisplayMode,
+                    removeTilt,
+                    recenterIfWrapped: recenterIfWrapped === undefined ? null : recenterIfWrapped,
+                    pupilDiameterMm: stopDiameterMm,
+                    focalLengthMm,
+                },
+                timings: {
+                    wavefrontMs: wfElapsedMs,
+                    nativeMs: nativeElapsedMs,
+                    javascriptMs: jsElapsedMs,
+                },
+                backend: {
+                    native: String(nativeResult?.implementationUsed || 'unknown'),
+                    javascript: String(jsResult?.implementationUsed || 'unknown'),
+                    nativeMethod: String(nativeResult?.metadata?.method || ''),
+                    javascriptMethod: String(jsResult?.metadata?.method || ''),
+                },
+                diff: {
+                    comparedGrid: `${h}x${w}`,
+                    count,
+                    rmsAbs: count > 0 ? Math.sqrt(sumSq / count) : NaN,
+                    meanAbs: count > 0 ? (sumAbs / count) : NaN,
+                    maxAbs,
+                },
+                metrics: {
+                    native: nativeResult?.metrics || null,
+                    javascript: jsResult?.metrics || null,
+                    expected: opdQuality,
+                    delta: {
+                        strehl: nativeStrehl - jsStrehl,
+                        fwhmAvgUm: Number(nativeResult?.metrics?.fwhm?.average) - Number(jsResult?.metrics?.fwhm?.average),
+                        centerX: Number(nativeResult?.metrics?.centerPosition?.x) - Number(jsResult?.metrics?.centerPosition?.x),
+                        centerY: Number(nativeResult?.metrics?.centerPosition?.y) - Number(jsResult?.metrics?.centerPosition?.y),
+                    }
+                },
+                grids: {
+                    native: flattenGrid(nativeGrid).length,
+                    javascript: flattenGrid(jsGrid).length,
+                    nativeHash: nativeSig.hash,
+                    javascriptHash: jsSig.hash,
+                    nativeSum: nativeSig.sum,
+                    javascriptSum: jsSig.sum,
+                }
+            };
+
+            console.log('📊 [PSF Parity] native vs javascript', report);
+            try {
+                console.log(
+                    `[PSF Parity Summary] grid=${report.diff.comparedGrid} n=${report.diff.count} ` +
+                    `rmsAbs=${Number(report.diff.rmsAbs).toExponential(4)} meanAbs=${Number(report.diff.meanAbs).toExponential(4)} maxAbs=${Number(report.diff.maxAbs).toExponential(4)} ` +
+                    `strehl(native=${Number(nativeStrehl).toFixed(6)},js=${Number(jsStrehl).toFixed(6)},Δ=${Number(report.metrics.delta.strehl).toExponential(4)}) ` +
+                    `marechal≈${Number(report.metrics.expected?.marechalStrehl).toFixed(6)} opdRms=${Number(report.metrics.expected?.rmsWaves).toExponential(4)}waves ` +
+                    `fwhmAvgΔ=${Number(report.metrics.delta.fwhmAvgUm).toExponential(4)}µm centerΔ=(${report.metrics.delta.centerX},${report.metrics.delta.centerY}) ` +
+                    `backend(native=${report.backend.native}, js=${report.backend.javascript})`
+                );
+            } catch (_) {}
+            return report;
+        };
+        window['comparePsfNativeVsJsForObjects'] = async (options: any = {}) => {
+            const rows = getObjectRows();
+            const totalObjects = Array.isArray(rows) ? rows.length : 0;
+            const requested = Array.isArray(options?.objectIndices)
+                ? options.objectIndices
+                : (totalObjects >= 2 ? [0, 1] : [0]);
+            const objectIndices = requested
+                .map((v: any) => Number(v))
+                .filter((v: number) => Number.isFinite(v) && v >= 0 && v < Math.max(1, totalObjects));
+
+            if (!objectIndices.length) {
+                throw new Error('No valid objectIndices. Example: [0, 1]');
+            }
+
+            const reports: any[] = [];
+            for (const objectIndex of objectIndices) {
+                const r = await (window as any).comparePsfNativeVsJs({
+                    ...options,
+                    objectIndex,
+                });
+                reports.push(r);
+            }
+
+            const byObject = reports.map((r) => ({
+                objectIndex: Number(r?.options?.objectIndex),
+                nativeHash: r?.grids?.nativeHash,
+                jsHash: r?.grids?.javascriptHash,
+                nativeStrehl: Number(r?.metrics?.native?.strehlRatio),
+                jsStrehl: Number(r?.metrics?.javascript?.strehlRatio),
+                marechalStrehl: Number(r?.metrics?.expected?.marechalStrehl),
+                opdRmsWaves: Number(r?.metrics?.expected?.rmsWaves),
+                nativeFwhmAvg: Number(r?.metrics?.native?.fwhm?.average),
+                jsFwhmAvg: Number(r?.metrics?.javascript?.fwhm?.average),
+                centerNative: r?.metrics?.native?.centerPosition,
+                centerJs: r?.metrics?.javascript?.centerPosition,
+            }));
+
+            const variation: any[] = [];
+            for (let i = 1; i < byObject.length; i++) {
+                const a = byObject[i - 1];
+                const b = byObject[i];
+                variation.push({
+                    fromObject: a.objectIndex,
+                    toObject: b.objectIndex,
+                    nativeHashChanged: a.nativeHash !== b.nativeHash,
+                    jsHashChanged: a.jsHash !== b.jsHash,
+                    nativeStrehlDelta: b.nativeStrehl - a.nativeStrehl,
+                    jsStrehlDelta: b.jsStrehl - a.jsStrehl,
+                    nativeFwhmDelta: b.nativeFwhmAvg - a.nativeFwhmAvg,
+                    jsFwhmDelta: b.jsFwhmAvg - a.jsFwhmAvg,
+                });
+            }
+
+            const summary = { objectIndices, byObject, variation };
+            console.log('📊 [PSF Object Compare] native vs javascript', summary);
+            return summary;
+        };
         window['runOPDProfiling'] = runOPDProfiling; // ✅ OPD performance profiling
         window['showMTFDiagram'] = showMTFDiagram;
         window['showMTFComparisonDiagram'] = showMTFComparisonDiagram;
         window['showThroughFocusSpotDiagram'] = showThroughFocusSpotDiagram;
         window['runSpotParityDiagnostics'] = runSpotParityDiagnostics;
         window['showThroughFocusMTFDiagram'] = showThroughFocusMTFDiagram;
-        window['showFieldMTFDiagram'] = showFieldMTFDiagram;
         window['benchmarkMTFOnce'] = async (options: any = {}) => {
             const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
             const prevWavefrontProfile = g ? g.__WAVEFRONT_PROFILE : undefined;
@@ -675,6 +1349,9 @@ async function initializeApplication() {
         // window.createOPDCalculator is already exported at module top-level
         // window.PSFCalculator / window.PSFPlotter are owned by evaluation/psf modules
         window['calculateFocalLength'] = calculateFocalLength;
+        window['calculateParaxialData'] = calculateParaxialData;
+        window['calculateEntrancePupilDiameter'] = calculateEntrancePupilDiameter;
+        window['derivePupilAndFocalLengthMmFromParaxial'] = derivePupilAndFocalLengthMmFromParaxial;
         window['findStopSurfaceIndex'] = findStopSurfaceIndex;
         
         // Export coordinate transformation functions

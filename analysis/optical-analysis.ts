@@ -2346,7 +2346,7 @@ export async function runSpotParityDiagnostics(options: any = {}): Promise<any> 
 /**
  * Show transverse aberration diagram
  */
-export async function showTransverseAberrationDiagram(options: any = {}): Promise<void> {
+export async function showTransverseAberrationDiagram(options: any = {}): Promise<any> {
     console.log('📊 Starting transverse aberration calculation...');
 
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
@@ -2385,6 +2385,7 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
                 rayCount = inputValue;
             }
         }
+        rayCount = Math.max(9, Math.min(10001, Math.round(rayCount)));
 
         const tableOpticalSystem = getTableOpticalSystem();
         const opticalSystemRows = getOpticalSystemRows(tableOpticalSystem);
@@ -2439,20 +2440,33 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
         console.log(`📊 評価面: Surface ${targetSurfaceIndex + 1}`);
         console.log(`📊 光線本数: ${rayCount}本`);
 
-        const { getPrimaryWavelengthForAberration, calculateTransverseAberrationAsync } = await import('../evaluation/aberrations/transverse-aberration.js');
+        const { getPrimaryWavelengthForAberration } = await import('../evaluation/aberrations/transverse-aberration.js');
         const { plotTransverseAberrationDiagram } = await import('../evaluation/aberrations/transverse-aberration-plot.js');
+        const runtime = await import('../src/desktop/runtime.ts');
+        if (!runtime.isTauriRuntime()) {
+            throw new Error('Transverse aberration is Rust-native only in this build. Please run desktop app.');
+        }
+        const { runNativeTransverseAberration } = await import('../src/desktop/ipc/client.ts');
 
         const wavelength = getPrimaryWavelengthForAberration(); // μm
         console.log(`📊 Wavelength: ${wavelength} μm`);
 
-        const aberrationData = await calculateTransverseAberrationAsync(
+        const tableSource = getTableSource();
+        const tableObject = getTableObject();
+        const sourceRows = getSourceRows(tableSource);
+        const objectRows = getObjectRows(tableObject);
+
+        try { onProgress?.({ percent: 10, message: 'Computing transverse aberration (Rust)...' }); } catch (_) {}
+        const aberrationData = await runNativeTransverseAberration({
             opticalSystemRows,
-            targetSurfaceIndex,
-            null,
-            wavelength,
+            sourceRows: Array.isArray(sourceRows) ? sourceRows : [],
+            objectRows: Array.isArray(objectRows) ? objectRows : [],
+            surfaceIndex: targetSurfaceIndex,
             rayCount,
-            { onProgress } as any
-        );
+            pattern: 'cross',
+            wavelengthMode: 'primary',
+            wavelength,
+        });
 
         if (!aberrationData) {
             throw new Error('Failed to calculate transverse aberration data');
@@ -2462,6 +2476,7 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
         plotTransverseAberrationDiagram(aberrationData, containerTarget, typeof containerTarget === 'string' ? document : containerTarget.ownerDocument);
         try { onProgress?.({ percent: 100, message: 'Done' }); } catch (_) {}
         console.log('✅ Transverse aberration diagram generated successfully');
+        return aberrationData;
     } catch (error) {
         console.error('❌ Transverse aberration diagram error:', error);
         const container = typeof containerTarget === 'string'
@@ -2475,6 +2490,7 @@ export async function showTransverseAberrationDiagram(options: any = {}): Promis
             </div>`;
         }
         alert(`Transverse aberration error: ${(error as any).message}`);
+        return null;
     } finally {
         setIsGeneratingTransverseAberration(false);
     }
@@ -2489,6 +2505,9 @@ export async function showMagnificationChromaticAberrationDiagram(options: any =
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
+    const chiefRayDefinition = (options && typeof options === 'object' && typeof options.chiefRayDefinition === 'string')
+        ? options.chiefRayDefinition
+        : 'stop-center';
 
     let containerTarget: any = 'magnification-chromatic-aberration-container';
     if (options && typeof options === 'object') {
@@ -2614,7 +2633,7 @@ export async function showMagnificationChromaticAberrationDiagram(options: any =
             opticalSystemRows,
             fieldValues,
             wavelengths,
-            { referenceWavelength, heightMode, onProgress } as any
+            { referenceWavelength, heightMode, onProgress, chiefRayDefinition, sourceRows } as any
         );
 
         if (!data) {
@@ -2856,23 +2875,17 @@ export async function showAstigmatismDiagram(options: any = {}): Promise<void> {
         const chiefRayDefinitionMap: Record<string, ChiefRayMode> = {
             'stop-center': 'stopCenter',
             'beam-midpoint': 'beamCenter',
-            'beam-centroid': 'centroid',
-            'stop-center-image': 'stopCenterImage',
-            'beam-midpoint-image': 'beamCenterImage',
-            'beam-centroid-image': 'centroidImage'
+            'beam-centroid': 'centroid'
         };
         const chiefRayModeFromPopup = chiefRayDefinitionMap[chiefRayDefinition] || null;
         const chiefRayModeValue = chiefRayModeFromPopup
             ? chiefRayModeFromPopup
             : (chiefRayModeSelect ? chiefRayModeSelect.value : 'stopCenter');
-        type ChiefRayMode = 'stopCenter' | 'beamCenter' | 'centroid' | 'stopCenterImage' | 'beamCenterImage' | 'centroidImage';
+        type ChiefRayMode = 'stopCenter' | 'beamCenter' | 'centroid';
         const chiefRayModeCandidates: ChiefRayMode[] = [
             'stopCenter',
             'beamCenter',
-            'centroid',
-            'stopCenterImage',
-            'beamCenterImage',
-            'centroidImage'
+            'centroid'
         ];
         const chiefRayMode: ChiefRayMode = chiefRayModeCandidates.includes(chiefRayModeValue as ChiefRayMode)
             ? (chiefRayModeValue as ChiefRayMode)
@@ -3568,7 +3581,7 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
             rayCount: rayCountAstigmatism,
             ringCount: astigRingCount,
             pattern: astigPattern,
-            chiefRayMode: true,
+            chiefRayMode: 'stopCenter',
             wavelengthMode: 'all',
         });
         

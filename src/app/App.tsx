@@ -1102,6 +1102,7 @@ export default function App() {
       'spherical-aberration': 'open-spherical-aberration-window-btn',
       'astigmatism': 'open-astigmatism-window-btn',
       'distortion': 'open-distortion-window-btn',
+      'distortion-grid': 'open-distortion-grid-window-btn',
       'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
       'integrated-aberration': 'open-integrated-aberration-window-btn',
       'transverse-aberration': 'open-transverse-aberration-window-btn',
@@ -1254,9 +1255,6 @@ export default function App() {
             <option value="stop-center">Stop center</option>
             <option value="beam-midpoint">Beam midpoint</option>
             <option value="beam-centroid">Beam centroid</option>
-            <option value="stop-center-image">Stop center (image)</option>
-            <option value="beam-midpoint-image">Beam midpoint (image)</option>
-            <option value="beam-centroid-image">Beam centroid (image)</option>
           </select>
           <label htmlFor="analysis-astig-beam-pattern" style={{ fontSize: 12, color: '#333' }}>Beam:</label>
           <select
@@ -1335,6 +1333,24 @@ export default function App() {
         )}
         <div id="analysis-astig-container" style={{ flex: 1, minHeight: 0, background: 'white' }} />
       </div>
+    );
+  }
+
+  if (analysisWindowMode.enabled) {
+    return (
+      <>
+        <div style={{ height: '100vh', width: '100vw', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f4f4f4', color: '#444', fontSize: 13 }}>
+          Launching analysis window...
+        </div>
+        <div style={{ display: 'none' }}>
+          <MainToolbar />
+          <ConfigurationSection />
+          <SourceObjectSection />
+          <DesignIntentSection />
+          <RequirementsSection />
+          <LegacyPanels />
+        </div>
+      </>
     );
   }
 

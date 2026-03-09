@@ -1,0 +1,85 @@
+{
+  "timestamp": "2026-03-08T14:46:21.001Z",
+  "startedAt": "2026-03-08T14:45:55.890Z",
+  "thresholds": {
+    "raytraceMaxMismatchRate": 0,
+    "raytraceMaxSuccessMismatchRate": 0,
+    "raytraceMaxMeanOplUm": 0,
+    "raytraceMaxOplUm": 0,
+    "opdParityMaxDiffWaves": 0.001,
+    "opdParityRmsDiffWaves": 0.0005,
+    "opdParityMeanDiffWaves": 0.0005,
+    "opdParityGrid": 65,
+    "opdParityFields": "0,5,10,15",
+    "opdMinSpeedup": 1.05,
+    "opdMaxValidDiff": 0,
+    "taMinMedianOfMedianSpeedup": 0.99,
+    "taMinPerRaycountSpeedup": 0.97,
+    "taRayCounts": "21,31,51,81,101,151",
+    "taLoops": 20,
+    "taRepeat": 11,
+    "kktMinTotalSpeedup": 1.5,
+    "kktMinSolverSpeedup": 1,
+    "kktMinWasmOkRate": 1,
+    "kktMinWasmFeasibleRate": 1
+  },
+  "kktConfig": {
+    "rounds": 6,
+    "n": 24,
+    "meq": 6,
+    "mineq": 6,
+    "maxIter": 20
+  },
+  "controls": {
+    "startFrom": "opd",
+    "endAt": "opd",
+    "enablePerfQuick": true,
+    "stepTimeoutMs": 300000,
+    "stepIdleTimeoutMs": 20000,
+    "stepRetries": 1,
+    "stepHeartbeatMs": 5000,
+    "output": "diagnostics/results/release-gate-2026-03-08T14-45-55-891Z.json",
+    "checkpoint": "diagnostics/results/release-gate-checkpoint.json"
+  },
+  "steps": {
+    "perfquick": {
+      "passed": false,
+      "skipped": true,
+      "result": null,
+      "raytrace": null,
+      "aperture": null
+    },
+    "raytrace": {
+      "passed": false,
+      "skipped": true,
+      "golden": null,
+      "analysis": null
+    },
+    "opdparity": {
+      "passed": false,
+      "skipped": true,
+      "result": null
+    },
+    "opd": {
+      "passed": true,
+      "skipped": false,
+      "result": "diagnostics/results/opd-full-batch-release-gate-2026-03-08T14-45-55-893Z.json",
+      "analysis": "diagnostics/results/opd-full-batch-analysis-release-gate-2026-03-08T14-45-55-893Z.json"
+    },
+    "ta": {
+      "passed": false,
+      "skipped": true,
+      "result": null,
+      "analysis": null
+    },
+    "kkt": {
+      "passed": false,
+      "skipped": true,
+      "result": null,
+      "analysis": null
+    }
+  },
+  "passed": true,
+  "failedStep": null,
+  "error": null
+}

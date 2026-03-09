@@ -95,6 +95,72 @@ export function updateWavefrontObjectSelect(): void {
 }
 
 /**
+ * PSF Object選択ドロップダウンを更新
+ */
+export function updatePSFObjectOptions(): void {
+    try {
+        const objectSelect = document.getElementById('psf-object-select') as HTMLSelectElement | null;
+        if (!objectSelect) {
+            return;
+        }
+
+        let objectRows: any[] = [];
+        if (typeof window !== 'undefined' && w.tableObject && w.tableObject.getData) {
+            const allObjectRows = w.tableObject.getData();
+            objectRows = Array.isArray(allObjectRows)
+                ? allObjectRows.filter((obj) => obj && obj !== null && obj !== undefined)
+                : [];
+        }
+
+        const currentSelection = objectSelect.value;
+        objectSelect.innerHTML = '';
+
+        if (objectRows.length === 0) {
+            const defaultOption = document.createElement('option');
+            defaultOption.value = '0';
+            defaultOption.textContent = 'Object 1 (Empty)';
+            defaultOption.disabled = true;
+            objectSelect.appendChild(defaultOption);
+            return;
+        }
+
+        objectRows.forEach((obj, index) => {
+            const option = document.createElement('option');
+            option.value = index.toString();
+
+            const xRaw = obj?.xHeightAngle ?? obj?.xFieldAngle ?? obj?.xAngle ?? obj?.x ?? 0;
+            const yRaw = obj?.yHeightAngle ?? obj?.yFieldAngle ?? obj?.yAngle ?? obj?.y ?? obj?.fieldAngle ?? 0;
+            const x = Number.isFinite(Number(xRaw)) ? Number(xRaw) : 0;
+            const y = Number.isFinite(Number(yRaw)) ? Number(yRaw) : 0;
+            const position = String(obj?.position ?? obj?.object ?? obj?.objectType ?? 'Object');
+
+            option.textContent = `${index + 1}: ${position} (${x}, ${y})`;
+            objectSelect.appendChild(option);
+        });
+
+        if (currentSelection && objectSelect.querySelector(`option[value="${currentSelection}"]`)) {
+            objectSelect.value = currentSelection;
+        } else {
+            objectSelect.value = '0';
+        }
+    } catch (error) {
+        console.error('❌ PSF Object選択ドロップダウン更新エラー:', error);
+    }
+}
+
+/**
+ * PSF Object選択UIの初期化
+ */
+export function initializePSFObjectUI(): void {
+    updatePSFObjectOptions();
+
+    // Compatibility aliases for existing callers.
+    w.updatePSFObjectOptions = updatePSFObjectOptions;
+    w.updatePSFObjectSelect = updatePSFObjectOptions;
+    w.setupPSFObjectSelect = updatePSFObjectOptions;
+}
+
+/**
  * Object選択ドロップダウンの変更イベントリスナーを設定
  */
 export function setupWavefrontObjectSelectListener(): void {
@@ -137,4 +203,5 @@ export function debugResetObjectTable(): void {
  */
 export function onObjectTableUpdated(): void {
     updateWavefrontObjectSelect();
+    updatePSFObjectOptions();
 }

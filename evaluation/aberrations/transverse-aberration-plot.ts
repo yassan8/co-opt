@@ -165,15 +165,11 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                         x: x,
                         y: y,
                         type: 'scatter',
-                        mode: 'lines+markers',
+                        mode: 'lines',
                         name: `${data.fieldSetting.displayName} (M)`,
                         line: {
                             color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
                             width: 2
-                        },
-                        marker: {
-                            size: 4,
-                            color: plotOptions.colors[fieldIndex % plotOptions.colors.length]
                         },
                         xaxis: 'x',
                         yaxis: 'y',
@@ -194,16 +190,12 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                         x: x,
                         y: y,
                         type: 'scatter',
-                        mode: 'markers',
+                        mode: 'lines',
                         name: `${data.fieldSetting.displayName} (M-部分)`,
-                        marker: {
-                            size: 6,
+                        line: {
                             color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
-                            symbol: 'triangle-up',
-                            line: {
-                                width: 2,
-                                color: 'rgba(0,0,0,0.3)'
-                            }
+                            width: 1.5,
+                            dash: 'dot'
                         },
                         xaxis: 'x',
                         yaxis: 'y',
@@ -247,17 +239,12 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                         x: x,
                         y: y,
                         type: 'scatter',
-                        mode: 'lines+markers',
+                        mode: 'lines',
                         name: `${data.fieldSetting.displayName} (S)`,
                         line: {
                             color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
                             width: 2,
                             dash: 'dash' // サジタルは破線で区別
-                        },
-                        marker: {
-                            size: 4,
-                            color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
-                            symbol: 'square' // サジタルは四角マーカーで区別
                         },
                         xaxis: 'x2',
                         yaxis: 'y2',
@@ -278,16 +265,12 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                         x: partialX,
                         y: partialY,
                         type: 'scatter',
-                        mode: 'markers',
+                        mode: 'lines',
                         name: `${data.fieldSetting.displayName} (S-部分)`,
-                        marker: {
-                            size: 6,
+                        line: {
                             color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
-                            symbol: 'diamond',
-                            line: {
-                                width: 2,
-                                color: 'rgba(0,0,0,0.3)'
-                            }
+                            width: 1.5,
+                            dash: 'dot'
                         },
                         xaxis: 'x2',
                         yaxis: 'y2',
@@ -768,15 +751,11 @@ export function showTransverseAberrationInNewWindow(aberrationData) {
                                 x: x,
                                 y: y,
                                 type: 'scatter',
-                                mode: 'lines+markers',
+                                mode: 'lines',
                                 name: `${data.fieldSetting.displayName} (M)`,
                                 line: {
                                     color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
                                     width: 2
-                                },
-                                marker: {
-                                    size: 4,
-                                    color: plotOptions.colors[fieldIndex % plotOptions.colors.length]
                                 },
                                 xaxis: 'x',
                                 yaxis: 'y'
@@ -808,17 +787,12 @@ export function showTransverseAberrationInNewWindow(aberrationData) {
                                 x: x,
                                 y: y,
                                 type: 'scatter',
-                                mode: 'lines+markers',
+                                mode: 'lines',
                                 name: `${data.fieldSetting.displayName} (S)`,
                                 line: {
                                     color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
                                     width: 2,
                                     dash: 'dash'
-                                },
-                                marker: {
-                                    size: 4,
-                                    color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
-                                    symbol: 'square'
                                 },
                                 xaxis: 'x2',
                                 yaxis: 'y2'

@@ -17,7 +17,7 @@ import {
     validateSceneGeometry
 } from '../optical/surface.ts';
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.ts';
-import { generateSurfaceOptions } from '../evaluation/spot-diagram.ts';
+import { derivePupilAndFocalLengthMmFromParaxial, generateSurfaceOptions } from '../evaluation/spot-diagram.ts';
 import { PSFPlotter } from '../evaluation/psf/psf-plot.ts';
 import { createOPDCalculator, createWavefrontAnalyzer, WavefrontAberrationAnalyzer } from '../evaluation/wavefront/wavefront.ts';
 import { PSFCalculator } from '../evaluation/psf/psf-calculator.ts';
@@ -26,8 +26,10 @@ import { calculateFocalLength, calculateParaxialData, findStopSurfaceIndex } fro
 import { DEFAULT_STOP_SEMI_DIAMETER } from '../data/block-schema.ts';
 import { loadSystemConfigurations } from '../data/table-configuration.ts';
 import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
-import { runAnalysisCompute, runNativeSphericalAberration, runNativeSpotRaytrace } from '../src/desktop/ipc/client.ts';
+import { runAnalysisCompute, runNativeFieldMtfMap, runNativeMtfMap, runNativeOpdMap, runNativePsfMap, runNativeSphericalAberration, runNativeSpotRaytrace, runNativeThroughFocusMtfMap } from '../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
+import { listen } from '@tauri-apps/api/event';
+import { hideAnalysisProgressHud, showAnalysisProgressHud, updateAnalysisProgressHud } from './shared/analysis-progress-hud.ts';
 import type { RunAnalysisComputeRequest, RunAnalysisComputeResponse } from '../src/shared/contracts/analysis.ts';
 
 let popupPsfCalculatorCache: PSFCalculator | null = null;
@@ -144,59 +146,14 @@ function getPrimaryWavelengthMicronsFromSourceRows(sourceRows: any[]): number {
     }
 }
 
-function getStopDiameterMmFromOpticalRows(opticalSystemRows: any[]): number {
-    let stopDiameterMm = 24.0;
-    try {
-        const stopIndex = findStopSurfaceIndex(opticalSystemRows);
-        const stopRow = Number.isInteger(stopIndex) && stopIndex >= 0 ? opticalSystemRows?.[stopIndex] : null;
-        const sd = Math.abs(parseFloat(
-            stopRow?.semidia
-            ?? stopRow?.Semidia
-            ?? stopRow?.['Semi Diameter']
-            ?? stopRow?.aperture
-            ?? stopRow?.Aperture
-            ?? NaN,
-        ));
-        if (Number.isFinite(sd) && sd > 0) {
-            const hasApertureField = !!(stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined));
-            const stopRadiusMm = hasApertureField ? (sd * 0.5) : sd;
-            if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
-                stopDiameterMm = stopRadiusMm * 2;
-            }
-        }
-    } catch (_) {}
-    return stopDiameterMm;
-}
-
 function derivePupilAndFocalLengthMmForAiry(opticalSystemRows: any[], wavelengthUm: number): { pupilDiameterMm: number; focalLengthMm: number } {
-    let pupilDiameterMm = NaN;
-    let focalLengthMm = NaN;
-
     try {
-        const paraxial = calculateParaxialData(opticalSystemRows, wavelengthUm);
-        const enpd = Number(paraxial?.entrancePupilDiameter);
-        const expd = Number(paraxial?.exitPupilDiameter);
-        if (Number.isFinite(enpd) && enpd > 0) {
-            pupilDiameterMm = Math.abs(enpd);
-        } else if (Number.isFinite(expd) && expd > 0) {
-            pupilDiameterMm = Math.abs(expd);
-        }
-
-        const paraxialFocal = Number(paraxial?.focalLength);
-        if (Number.isFinite(paraxialFocal) && Math.abs(paraxialFocal) > 1e-9 && paraxialFocal !== Infinity) {
-            focalLengthMm = Math.abs(paraxialFocal);
-        }
+        const derived = derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows, wavelengthUm, true);
+        const pupilDiameterMm = Number(derived?.pupilDiameterMm);
+        const focalLengthMm = Number(derived?.focalLengthMm);
+        return { pupilDiameterMm, focalLengthMm };
     } catch (_) {}
-
-    if (!Number.isFinite(pupilDiameterMm) || pupilDiameterMm <= 0) {
-        pupilDiameterMm = getStopDiameterMmFromOpticalRows(opticalSystemRows);
-    }
-
-    if (!Number.isFinite(focalLengthMm) || focalLengthMm <= 0) {
-        focalLengthMm = Math.abs(Number(calculateFocalLength(opticalSystemRows, wavelengthUm)));
-    }
-
-    return { pupilDiameterMm, focalLengthMm };
+    return { pupilDiameterMm: NaN, focalLengthMm: NaN };
 }
 
 function computePopupAiryRadiusUm(opticalSystemRows: any[], sourceRows: any[]): number {
@@ -225,16 +182,997 @@ async function runDesktopAnalysisComputeForPopup(
         throw new Error('Desktop Rust analysis is disabled until TS parity migration is complete');
     }
 
+    const jobId = `analysis-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let unlisten: null | (() => void) = null;
+
+    showAnalysisProgressHud('Starting analysis...', 180);
+
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
-    return runAnalysisCompute({
-        ...payload,
-        opticalSystemRows,
-        sourceRows,
-        objectRows,
-    });
+    try {
+        try {
+            unlisten = await listen('analysis-progress', (event) => {
+                try {
+                    const data = event?.payload as any;
+                    if (!data || String(data.jobId || '') !== jobId) return;
+
+                    const message = String(data?.message || data?.phase || 'Computing analysis...');
+                    const percentRaw = Number(data?.percent);
+                    const percent = Number.isFinite(percentRaw) ? percentRaw : null;
+                    updateAnalysisProgressHud({ label: message, percent });
+                } catch (_) {}
+            });
+        } catch (listenErr) {
+            // Some popup windows do not have permission for event.listen.
+            // Continue without progress subscription and still run native compute.
+            try {
+                console.warn('[analysis-progress] listen unavailable in this window, continuing without progress events:', listenErr);
+            } catch (_) {}
+            unlisten = null;
+        }
+
+        const response = await runAnalysisCompute({
+            ...payload,
+            jobId,
+            opticalSystemRows,
+            sourceRows,
+            objectRows,
+        });
+        updateAnalysisProgressHud({ label: 'Done', percent: 100 });
+        return response;
+    } finally {
+        if (typeof unlisten === 'function') {
+            try {
+                unlisten();
+            } catch (_) {}
+        }
+        window.setTimeout(() => {
+            try {
+                hideAnalysisProgressHud();
+            } catch (_) {}
+        }, 220);
+    }
 }
 
 w.runDesktopAnalysisComputeForPopup = runDesktopAnalysisComputeForPopup;
+
+async function runDesktopNativeOpdMapForPopup(payload: {
+    objectIndex?: number;
+    gridSize?: number;
+    wavelengthUm?: number;
+    opdDisplayMode?: 'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved' | string;
+}) {
+    if (!isTauriRuntime()) {
+        throw new Error('Desktop runtime is not available');
+    }
+
+    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    const jobId = `native-opd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let unlistenProgress: null | (() => void) = null;
+
+    try {
+        showAnalysisProgressHud('Native OPD: starting...', 140);
+        try {
+            unlistenProgress = await listen('analysis-progress', (event: any) => {
+                try {
+                    const data = event?.payload || {};
+                    if (!data || String(data.jobId || '') !== jobId) return;
+                    const percent = Number(data.percent);
+                    updateAnalysisProgressHud({
+                        label: data.message || 'Native OPD running...',
+                        percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null,
+                    });
+                } catch (_) {}
+            });
+        } catch (listenErr) {
+            try {
+                console.warn('[analysis-progress] listen unavailable for native OPD, continuing without progress events:', listenErr);
+            } catch (_) {}
+            unlistenProgress = null;
+        }
+
+        const fieldSetting = buildPopupFieldSettingFromObjectRows(
+            objectRows,
+            Number.isFinite(Number(payload?.objectIndex)) ? Number(payload.objectIndex) : 0,
+            Number.isFinite(Number(payload?.wavelengthUm)) ? Number(payload.wavelengthUm) : getPrimaryWavelengthMicronsFromSourceRows(sourceRows || [])
+        );
+        const forcedInfinitePupilMode = __cooptGetForceInfinitePupilMode();
+        const autoAngleX = Number(fieldSetting?.fieldAngle?.x ?? 0);
+        const autoAngleY = Number(fieldSetting?.fieldAngle?.y ?? 0);
+        const isNonZeroAngleField = Math.abs(autoAngleX) > 1e-12 || Math.abs(autoAngleY) > 1e-12;
+        const requestedPupilSamplingMode = (forcedInfinitePupilMode === 'stop' || forcedInfinitePupilMode === 'entrance')
+            ? forcedInfinitePupilMode
+            : ((String(fieldSetting?.type || '').toLowerCase() === 'angle' && isNonZeroAngleField) ? 'entrance' : undefined);
+
+        const result = await runNativeOpdMap({
+            jobId,
+            opticalSystemRows,
+            sourceRows,
+            objectRows,
+            objectIndex: Number.isFinite(Number(payload?.objectIndex)) ? Number(payload.objectIndex) : 0,
+            gridSize: Number.isFinite(Number(payload?.gridSize)) ? Number(payload.gridSize) : 129,
+            wavelengthUm: Number.isFinite(Number(payload?.wavelengthUm)) ? Number(payload.wavelengthUm) : undefined,
+            pupilSamplingMode: requestedPupilSamplingMode,
+            opdDisplayMode: (payload?.opdDisplayMode as any) || 'pistonTiltRemoved',
+        });
+
+        updateAnalysisProgressHud({ label: 'Native OPD done', percent: 100 });
+        return result;
+    } finally {
+        try {
+            if (unlistenProgress) {
+                unlistenProgress();
+            }
+        } catch (_) {}
+        setTimeout(() => {
+            try {
+                hideAnalysisProgressHud();
+            } catch (_) {}
+        }, 220);
+    }
+}
+
+w.runDesktopNativeOpdMapForPopup = runDesktopNativeOpdMapForPopup;
+
+async function runDesktopNativePsfMapForPopup(payload: {
+    gridOpd: number[][];
+    pupilMask: boolean[][];
+    gridAmplitude?: number[][];
+    wavelengthUm: number;
+    pixelSizeUm?: number;
+    removeTilt?: boolean;
+    zeroPadTo?: number;
+    recenterIfWrapped?: boolean;
+}) {
+    if (!isTauriRuntime()) {
+        throw new Error('Desktop runtime is not available');
+    }
+
+    const jobId = `native-psf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let unlistenProgress: null | (() => void) = null;
+
+    try {
+        showAnalysisProgressHud('Native PSF: starting...', 140);
+        try {
+            unlistenProgress = await listen('analysis-progress', (event: any) => {
+                try {
+                    const data = event?.payload || {};
+                    if (!data || String(data.jobId || '') !== jobId) return;
+                    const percent = Number(data.percent);
+                    updateAnalysisProgressHud({
+                        label: data.message || 'Native PSF running...',
+                        percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null,
+                    });
+                } catch (_) {}
+            });
+        } catch (listenErr) {
+            try {
+                console.warn('[analysis-progress] listen unavailable for native PSF, continuing without progress events:', listenErr);
+            } catch (_) {}
+            unlistenProgress = null;
+        }
+
+        const result = await runNativePsfMap({
+            jobId,
+            gridOpd: Array.isArray(payload?.gridOpd) ? payload.gridOpd : [],
+            pupilMask: Array.isArray(payload?.pupilMask) ? payload.pupilMask : [],
+            gridAmplitude: Array.isArray(payload?.gridAmplitude) ? payload.gridAmplitude : undefined,
+            wavelengthUm: Number(payload?.wavelengthUm),
+            pixelSizeUm: Number.isFinite(Number(payload?.pixelSizeUm)) ? Number(payload?.pixelSizeUm) : undefined,
+            removeTilt: !!payload?.removeTilt,
+            zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Number(payload?.zeroPadTo) : undefined,
+            recenterIfWrapped: !!payload?.recenterIfWrapped,
+        });
+
+        updateAnalysisProgressHud({ label: 'Native PSF done', percent: 100 });
+        return result;
+    } finally {
+        try {
+            if (unlistenProgress) {
+                unlistenProgress();
+            }
+        } catch (_) {}
+        setTimeout(() => {
+            try {
+                hideAnalysisProgressHud();
+            } catch (_) {}
+        }, 220);
+    }
+}
+
+w.runDesktopNativePsfMapForPopup = runDesktopNativePsfMapForPopup;
+
+async function runDesktopNativeMtfMapForPopup(payload: {
+    psfData: number[][];
+    pixelSizeUm: number;
+    maxFrequencyLpmm?: number;
+    points?: number;
+}) {
+    if (!isTauriRuntime()) {
+        throw new Error('Desktop runtime is not available');
+    }
+
+    const result = await runNativeMtfMap({
+        psfData: Array.isArray(payload?.psfData) ? payload.psfData : [],
+        pixelSizeUm: Number(payload?.pixelSizeUm),
+        maxFrequencyLpmm: Number.isFinite(Number(payload?.maxFrequencyLpmm)) ? Number(payload.maxFrequencyLpmm) : undefined,
+        points: Number.isFinite(Number(payload?.points)) ? Number(payload.points) : undefined,
+    });
+    return result;
+}
+
+w.runDesktopNativeMtfMapForPopup = runDesktopNativeMtfMapForPopup;
+
+async function runDesktopNativeThroughFocusMtfForPopup(payload: {
+    objectIndex?: number;
+    wavelengths?: number[];
+    targetFrequencyLpmm?: number;
+    defocusMinMm?: number;
+    defocusMaxMm?: number;
+    steps?: number;
+    samplingSize?: number;
+    zeroPadTo?: number;
+    opdDisplayMode?: string;
+}) {
+    if (!isTauriRuntime()) {
+        throw new Error('Desktop runtime is not available');
+    }
+
+    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 256;
+    const zeroPadTo = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
+    const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0;
+
+    let wavelengthForScale = Number.NaN;
+    if (Array.isArray(payload?.wavelengths) && payload.wavelengths.length > 0) {
+        const w0 = Number(payload.wavelengths[0]);
+        if (Number.isFinite(w0) && w0 > 0) wavelengthForScale = w0;
+    }
+    if (!Number.isFinite(wavelengthForScale) || wavelengthForScale <= 0) {
+        wavelengthForScale = getPrimaryWavelengthMicronsFromSourceRows(sourceRows || []);
+    }
+    if (!Number.isFinite(wavelengthForScale) || wavelengthForScale <= 0) {
+        wavelengthForScale = 0.5876;
+    }
+
+    const { pupilDiameterMm, focalLengthMm } = derivePupilAndFocalLengthMmForAiry(opticalSystemRows || [], wavelengthForScale);
+    const requestedFftSize = (!zeroPadTo || zeroPadTo === 0)
+        ? Math.max(samplingSize, 512)
+        : Math.max(samplingSize, zeroPadTo);
+    const basePixelPitchUm = (wavelengthForScale * Math.abs(Number(focalLengthMm))) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
+    const pixelSizeUm = basePixelPitchUm * (samplingSize / requestedFftSize);
+
+    return runNativeThroughFocusMtfMap({
+        opticalSystemRows,
+        sourceRows,
+        objectRows,
+        objectIndex,
+        wavelengths: Array.isArray(payload?.wavelengths)
+            ? payload.wavelengths.filter((w) => Number.isFinite(Number(w)) && Number(w) > 0).map((w) => Number(w))
+            : [],
+        targetFrequencyLpmm: Number.isFinite(Number(payload?.targetFrequencyLpmm)) ? Number(payload.targetFrequencyLpmm) : 10,
+        defocusMinMm: Number.isFinite(Number(payload?.defocusMinMm)) ? Number(payload.defocusMinMm) : -0.5,
+        defocusMaxMm: Number.isFinite(Number(payload?.defocusMaxMm)) ? Number(payload.defocusMaxMm) : 0.5,
+        steps: Number.isFinite(Number(payload?.steps)) ? Math.floor(Number(payload.steps)) : 21,
+        samplingSize,
+        zeroPadTo: requestedFftSize,
+        pixelSizeUm,
+        opdDisplayMode: String(payload?.opdDisplayMode || 'pistonTiltRemoved'),
+    });
+}
+
+w.runDesktopNativeThroughFocusMtfForPopup = runDesktopNativeThroughFocusMtfForPopup;
+
+async function runDesktopNativeFieldMtfForPopup(payload: {
+    objectIndex?: number;
+    wavelengths?: number[];
+    firstFrequencyLpmm?: number;
+    secondFrequencyLpmm?: number;
+    fieldMin?: number;
+    fieldMax?: number;
+    steps?: number;
+    samplingSize?: number;
+    zeroPadTo?: number;
+    opdDisplayMode?: string;
+    fieldAxisMode?: 'angle' | 'height';
+}) {
+    if (!isTauriRuntime()) {
+        throw new Error('Desktop runtime is not available');
+    }
+
+    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 256;
+    const zeroPadTo = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
+    const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0;
+
+    const isPowerOfTwo = (n: number) => Number.isInteger(n) && n > 0 && (n & (n - 1)) === 0;
+    const nextPowerOfTwo = (n: number) => {
+        let p = 1;
+        const target = Math.max(1, Math.floor(Number(n) || 1));
+        while (p < target && p < 4096) p <<= 1;
+        return p;
+    };
+
+    let wavelengthForScale = Number.NaN;
+    if (Array.isArray(payload?.wavelengths) && payload.wavelengths.length > 0) {
+        const w0 = Number(payload.wavelengths[0]);
+        if (Number.isFinite(w0) && w0 > 0) wavelengthForScale = w0;
+    }
+    if (!Number.isFinite(wavelengthForScale) || wavelengthForScale <= 0) {
+        wavelengthForScale = getPrimaryWavelengthMicronsFromSourceRows(sourceRows || []);
+    }
+    if (!Number.isFinite(wavelengthForScale) || wavelengthForScale <= 0) {
+        wavelengthForScale = 0.5876;
+    }
+
+    const { pupilDiameterMm, focalLengthMm } = derivePupilAndFocalLengthMmForAiry(opticalSystemRows || [], wavelengthForScale);
+    const desiredPlotPointCount = 121;
+    const hasExplicitZeroPad = Number.isFinite(zeroPadTo) && zeroPadTo >= samplingSize && isPowerOfTwo(zeroPadTo);
+    const minRequiredNForBins = Math.max(samplingSize, 2 * (desiredPlotPointCount - 1));
+    const adaptiveZeroPadTo = nextPowerOfTwo(minRequiredNForBins);
+    let requestedFftSize = hasExplicitZeroPad ? zeroPadTo : adaptiveZeroPadTo;
+    if (hasExplicitZeroPad && requestedFftSize === samplingSize && samplingSize <= 32) {
+        requestedFftSize = 64;
+    }
+    const basePixelPitchUm = (wavelengthForScale * Math.abs(Number(focalLengthMm))) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
+    const pixelSizeUm = basePixelPitchUm * (samplingSize / requestedFftSize);
+
+    return runNativeFieldMtfMap({
+        opticalSystemRows,
+        sourceRows,
+        objectRows,
+        objectIndex,
+        wavelengths: Array.isArray(payload?.wavelengths)
+            ? payload.wavelengths.filter((w) => Number.isFinite(Number(w)) && Number(w) > 0).map((w) => Number(w))
+            : [],
+        firstFrequencyLpmm: Number.isFinite(Number(payload?.firstFrequencyLpmm)) ? Number(payload.firstFrequencyLpmm) : 10,
+        secondFrequencyLpmm: Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload.secondFrequencyLpmm) : 30,
+        fieldMin: Number.isFinite(Number(payload?.fieldMin)) ? Number(payload.fieldMin) : 0,
+        fieldMax: Number.isFinite(Number(payload?.fieldMax)) ? Number(payload.fieldMax) : 10,
+        steps: Number.isFinite(Number(payload?.steps)) ? Math.floor(Number(payload.steps)) : 21,
+        samplingSize,
+        zeroPadTo: requestedFftSize,
+        pixelSizeUm,
+        opdDisplayMode: String(payload?.opdDisplayMode || 'pistonTiltRemoved'),
+        fieldAxisMode: payload?.fieldAxisMode === 'height' ? 'height' : 'angle',
+    });
+}
+
+w.runDesktopNativeFieldMtfForPopup = runDesktopNativeFieldMtfForPopup;
+
+function buildPopupFieldSettingFromObjectRows(objectRows: any[], objectIndex: number, wavelengthUm: number): any {
+    const rows = Array.isArray(objectRows) ? objectRows : [];
+    const idx = Number.isInteger(objectIndex)
+        ? Math.max(0, Math.min(objectIndex, Math.max(0, rows.length - 1)))
+        : 0;
+    const row = rows[idx] || {};
+    const positionRaw = String(row?.position ?? row?.object ?? row?.type ?? '').trim().toLowerCase();
+    const isAngle = positionRaw.includes('angle') || positionRaw === 'point';
+    if (isAngle) {
+        return {
+            objectIndex: idx,
+            type: 'Angle',
+            fieldAngle: {
+                x: Number(row?.xHeightAngle ?? row?.xFieldAngle ?? row?.xAngle ?? row?.x ?? 0) || 0,
+                y: Number(row?.yHeightAngle ?? row?.yFieldAngle ?? row?.fieldAngle ?? row?.yAngle ?? row?.angle ?? row?.y ?? 0) || 0,
+            },
+            xHeight: 0,
+            yHeight: 0,
+            wavelength: Number.isFinite(wavelengthUm) && wavelengthUm > 0 ? wavelengthUm : 0.5876,
+        };
+    }
+    return {
+        objectIndex: idx,
+        type: 'Height',
+        fieldAngle: { x: 0, y: 0 },
+        xHeight: Number(row?.xHeight ?? row?.x ?? 0) || 0,
+        yHeight: Number(row?.yHeight ?? row?.y ?? row?.height ?? 0) || 0,
+        wavelength: Number.isFinite(wavelengthUm) && wavelengthUm > 0 ? wavelengthUm : 0.5876,
+    };
+}
+
+function summarizeOpdParityDiff(tsGridIn: any, nativeGridIn: any, topK: number = 12): any {
+    const tsGrid = Array.isArray(tsGridIn) ? tsGridIn : [];
+    const nativeGrid = Array.isArray(nativeGridIn) ? nativeGridIn : [];
+    const h = Math.min(tsGrid.length, nativeGrid.length);
+    const w = (h > 0)
+        ? Math.min(
+            Array.isArray(tsGrid[0]) ? tsGrid[0].length : 0,
+            Array.isArray(nativeGrid[0]) ? nativeGrid[0].length : 0,
+        )
+        : 0;
+
+    const diffs: Array<{ x: number; y: number; ts: number; native: number; abs: number }> = [];
+    let count = 0;
+    let sumAbs = 0;
+    let sumSq = 0;
+    let maxAbs = 0;
+    let sumTs = 0;
+    let sumNative = 0;
+    let sumTs2 = 0;
+    let sumNative2 = 0;
+    let sumTsNative = 0;
+
+    for (let y = 0; y < h; y++) {
+        const tr = Array.isArray(tsGrid[y]) ? tsGrid[y] : [];
+        const nr = Array.isArray(nativeGrid[y]) ? nativeGrid[y] : [];
+        for (let x = 0; x < w; x++) {
+            const tv = (tr[x] === null || tr[x] === undefined) ? NaN : Number(tr[x]);
+            const nv = (nr[x] === null || nr[x] === undefined) ? NaN : Number(nr[x]);
+            if (!Number.isFinite(tv) || !Number.isFinite(nv)) continue;
+            const abs = Math.abs(tv - nv);
+            count += 1;
+            sumAbs += abs;
+            sumSq += abs * abs;
+            if (abs > maxAbs) maxAbs = abs;
+            sumTs += tv;
+            sumNative += nv;
+            sumTs2 += tv * tv;
+            sumNative2 += nv * nv;
+            sumTsNative += tv * nv;
+            diffs.push({ x, y, ts: tv, native: nv, abs });
+        }
+    }
+
+    const meanTs = count > 0 ? (sumTs / count) : 0;
+    const meanNative = count > 0 ? (sumNative / count) : 0;
+    const varTs = sumTs2 - (sumTs * sumTs) / Math.max(1, count);
+    const varNative = sumNative2 - (sumNative * sumNative) / Math.max(1, count);
+    const cov = sumTsNative - (sumTs * sumNative) / Math.max(1, count);
+    const slope = (Math.abs(varTs) > 1e-20) ? (cov / varTs) : NaN;
+    const intercept = Number.isFinite(slope) ? (meanNative - slope * meanTs) : NaN;
+    const corr = (varTs > 1e-20 && varNative > 1e-20)
+        ? (cov / Math.sqrt(varTs * varNative))
+        : NaN;
+
+    let rmsAfterAffineFit = NaN;
+    let rmsAfterNegTs = NaN;
+    if (count > 0) {
+        let errFitSq = 0;
+        let errNegSq = 0;
+        for (const d of diffs) {
+            if (Number.isFinite(slope) && Number.isFinite(intercept)) {
+                const pred = slope * d.ts + intercept;
+                const e = d.native - pred;
+                errFitSq += e * e;
+            }
+            const eNeg = d.native - (-d.ts);
+            errNegSq += eNeg * eNeg;
+        }
+        if (Number.isFinite(slope) && Number.isFinite(intercept)) {
+            rmsAfterAffineFit = Math.sqrt(errFitSq / count);
+        }
+        rmsAfterNegTs = Math.sqrt(errNegSq / count);
+    }
+
+    diffs.sort((a, b) => b.abs - a.abs);
+    return {
+        overlap: { width: w, height: h, comparedPointCount: count },
+        maxAbsDeltaWaves: maxAbs,
+        meanAbsDeltaWaves: count > 0 ? (sumAbs / count) : 0,
+        rmsDeltaWaves: count > 0 ? Math.sqrt(sumSq / count) : 0,
+        affine: {
+            slopeTsToNative: slope,
+            interceptTsToNative: intercept,
+            correlation: corr,
+            rmsAfterAffineFit,
+            rmsAfterNegTs,
+            meanTs,
+            meanNative,
+        },
+        topDiffs: diffs.slice(0, Math.max(1, Math.floor(topK))).map((d) => ({
+            x: d.x,
+            y: d.y,
+            tsWaves: d.ts,
+            nativeWaves: d.native,
+            absDeltaWaves: d.abs,
+        })),
+    };
+}
+
+async function runPsfParityInMain(options: any = {}) {
+    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+        throw new Error('No optical system data');
+    }
+    if (!Array.isArray(objectRows) || objectRows.length === 0) {
+        throw new Error('No object data');
+    }
+
+    const requestedObjectIndex = Number.isFinite(Number(options?.objectIndex))
+        ? Math.max(0, Math.floor(Number(options.objectIndex)))
+        : Math.max(0, objectRows.length - 1);
+    const objectIndex = Math.max(0, Math.min(requestedObjectIndex, objectRows.length - 1));
+    const gridSize = Math.max(16, Math.floor(Number(options?.gridSize ?? 128)));
+    const wavelength = Number.isFinite(Number(options?.wavelengthUm))
+        ? Number(options.wavelengthUm)
+        : getPrimaryWavelengthMicronsFromSourceRows(sourceRows);
+    const zeroPadTo = Number.isFinite(Number(options?.zeroPadTo)) ? Number(options.zeroPadTo) : 0;
+    const opdDisplayMode = String(options?.opdDisplayMode || 'pistonTiltRemoved');
+
+    const fieldSetting = buildPopupFieldSettingFromObjectRows(objectRows, objectIndex, wavelength);
+    const opdCalculator = createOPDCalculator(opticalSystemRows, wavelength);
+    const analyzer = createWavefrontAnalyzer(opdCalculator) as WavefrontAberrationAnalyzer;
+
+    const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, 'circular', {
+        recordRays: false,
+        progressEvery: 0,
+        renderFromZernike: false,
+        skipZernikeFit: true,
+        opdMode: 'simple',
+        opdDisplayMode,
+    });
+
+    if (wavefrontMap && (wavefrontMap as any).error) {
+        const msg = String((wavefrontMap as any).error?.message || 'Wavefront map generation failed');
+        throw new Error(msg);
+    }
+
+    const s = gridSize;
+    const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
+    const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
+    const maskGrid = Array.from({ length: s }, () => Array(s).fill(false));
+    const xCoords = new Float32Array(s);
+    const yCoords = new Float32Array(s);
+
+    const pupilRange = (Number.isFinite(Number((wavefrontMap as any)?.pupilRange)) && Number((wavefrontMap as any).pupilRange) > 0)
+        ? Number((wavefrontMap as any).pupilRange)
+        : 1.0;
+    for (let i = 0; i < s; i++) {
+        const t = (i / (s - 1 || 1)) * 2 - 1;
+        xCoords[i] = t * pupilRange;
+        yCoords[i] = t * pupilRange;
+    }
+
+    const coords = Array.isArray((wavefrontMap as any)?.pupilCoordinates) ? (wavefrontMap as any).pupilCoordinates : [];
+    const opdMicrons = ((wavefrontMap as any)?.display && Array.isArray((wavefrontMap as any).display.opds))
+        ? (wavefrontMap as any).display.opds
+        : (Array.isArray((wavefrontMap as any)?.opds) ? (wavefrontMap as any).opds : []);
+
+    const nSamples = Math.min(coords.length, opdMicrons.length);
+    for (let k = 0; k < nSamples; k++) {
+        const c = coords[k];
+        const ix = Number.isInteger(c?.ix) ? c.ix : null;
+        const iy = Number.isInteger(c?.iy) ? c.iy : null;
+        if (ix === null || iy === null || ix < 0 || ix >= s || iy < 0 || iy >= s) continue;
+        const vMicrons = Number(opdMicrons[k]);
+        if (!Number.isFinite(vMicrons)) continue;
+        maskGrid[iy][ix] = true;
+        opdGrid[iy][ix] = vMicrons;
+        ampGrid[iy][ix] = 1.0;
+    }
+
+    const opdData = {
+        gridSize: s,
+        wavelength,
+        rayData: [],
+        gridData: {
+            opd: opdGrid,
+            amplitude: ampGrid,
+            pupilMask: maskGrid,
+            xCoords,
+            yCoords,
+        },
+    };
+
+    const derived = derivePupilAndFocalLengthMmForAiry(opticalSystemRows, wavelength);
+    const pupilDiameter = (Number.isFinite(Number(derived?.pupilDiameterMm)) && Number(derived.pupilDiameterMm) > 0)
+        ? Number(derived.pupilDiameterMm)
+        : 10.0;
+    const focalLength = (Number.isFinite(Number(derived?.focalLengthMm)) && Number(derived.focalLengthMm) > 0)
+        ? Number(derived.focalLengthMm)
+        : 100.0;
+
+    const psfCalculator = new PSFCalculator();
+    const baseOpts = {
+        samplingSize: s,
+        wavelength,
+        zeroPadTo,
+        pupilDiameter,
+        focalLength,
+        removeTilt: false,
+        recenterIfWrapped: false,
+    };
+
+    const nativeResult = await psfCalculator.calculatePSF(opdData, {
+        ...baseOpts,
+        forceImplementation: isTauriRuntime() ? 'native' : 'javascript',
+    });
+    const jsResult = await psfCalculator.calculatePSF(opdData, {
+        ...baseOpts,
+        forceImplementation: 'javascript',
+    });
+
+    const nativeGrid = Array.isArray((nativeResult as any)?.psfData) ? (nativeResult as any).psfData : [];
+    const jsGrid = Array.isArray((jsResult as any)?.psfData) ? (jsResult as any).psfData : [];
+    const h = Math.min(nativeGrid.length, jsGrid.length);
+    const width = h > 0 ? Math.min((nativeGrid[0] || []).length, (jsGrid[0] || []).length) : 0;
+
+    let count = 0;
+    let sumSq = 0;
+    let sumAbs = 0;
+    let maxAbs = 0;
+    for (let iy = 0; iy < h; iy++) {
+        for (let ix = 0; ix < width; ix++) {
+            const a = Number(nativeGrid[iy]?.[ix]);
+            const b = Number(jsGrid[iy]?.[ix]);
+            if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+            const d = a - b;
+            const ad = Math.abs(d);
+            sumSq += d * d;
+            sumAbs += ad;
+            if (ad > maxAbs) maxAbs = ad;
+            count++;
+        }
+    }
+
+    const rmsAbs = count > 0 ? Math.sqrt(sumSq / count) : NaN;
+    const meanAbs = count > 0 ? (sumAbs / count) : NaN;
+    const nMetrics = (nativeResult as any)?.metrics || {};
+    const jMetrics = (jsResult as any)?.metrics || {};
+    const fwhmNative = Number(nMetrics?.fwhm?.average);
+    const fwhmJs = Number(jMetrics?.fwhm?.average);
+    const strehlNative = Number(nMetrics?.strehlRatio);
+    const strehlJs = Number(jMetrics?.strehlRatio);
+    const centerNative = nMetrics?.centerPosition || {};
+    const centerJs = jMetrics?.centerPosition || {};
+
+    const parityLine =
+        '📊 [PSF Parity][main] native-vs-js ' +
+        'grid=' + h + 'x' + width + ' n=' + count + ' ' +
+        'rmsAbs=' + (Number.isFinite(rmsAbs) ? rmsAbs.toExponential(4) : 'NaN') + ' ' +
+        'meanAbs=' + (Number.isFinite(meanAbs) ? meanAbs.toExponential(4) : 'NaN') + ' ' +
+        'maxAbs=' + (Number.isFinite(maxAbs) ? maxAbs.toExponential(4) : 'NaN') + ' ' +
+        'strehlΔ=' + (Number.isFinite(strehlNative) && Number.isFinite(strehlJs) ? (strehlNative - strehlJs).toExponential(4) : 'NaN') + ' ' +
+        'fwhmAvgΔ=' + (Number.isFinite(fwhmNative) && Number.isFinite(fwhmJs) ? (fwhmNative - fwhmJs).toExponential(4) : 'NaN') + 'µm ' +
+        'centerΔ=(' + ((Number(centerNative?.x) - Number(centerJs?.x))) + ',' + ((Number(centerNative?.y) - Number(centerJs?.y))) + ')';
+
+    const paritySummary = {
+        objectIndex,
+        gridSize: s,
+        wavelengthUm: wavelength,
+        impl: {
+            native: String((nativeResult as any)?.implementationUsed || 'unknown'),
+            js: String((jsResult as any)?.implementationUsed || 'unknown'),
+        },
+        abs: {
+            rms: Number.isFinite(rmsAbs) ? rmsAbs : null,
+            mean: Number.isFinite(meanAbs) ? meanAbs : null,
+            max: Number.isFinite(maxAbs) ? maxAbs : null,
+        },
+        delta: {
+            strehl: Number.isFinite(strehlNative) && Number.isFinite(strehlJs) ? (strehlNative - strehlJs) : null,
+            fwhmAvgUm: Number.isFinite(fwhmNative) && Number.isFinite(fwhmJs) ? (fwhmNative - fwhmJs) : null,
+            centerX: Number(centerNative?.x) - Number(centerJs?.x),
+            centerY: Number(centerNative?.y) - Number(centerJs?.y),
+        },
+    };
+
+    (globalThis as any).__lastPsfParityLine = parityLine;
+    (globalThis as any).__lastPsfParity = paritySummary;
+    console.log(parityLine);
+    return {
+        parityLine,
+        parity: paritySummary,
+        nativeResult,
+        jsResult,
+    };
+}
+
+w.runPsfParityInMain = runPsfParityInMain;
+
+function transformGridForParity(
+    srcIn: Array<Array<number | null>>,
+    mode: 'identity' | 'flipX' | 'flipY' | 'flipXY' | 'transpose' | 'transposeFlipX' | 'transposeFlipY' | 'transposeFlipXY',
+): Array<Array<number | null>> {
+    const src = Array.isArray(srcIn) ? srcIn : [];
+    const h = src.length;
+    const w = h > 0 && Array.isArray(src[0]) ? src[0].length : 0;
+    if (h === 0 || w === 0) return [];
+
+    const get = (x: number, y: number): number | null => {
+        const row = src[y];
+        return Array.isArray(row) ? (row[x] ?? null) : null;
+    };
+
+    const build = (oh: number, ow: number, sample: (x: number, y: number) => number | null) => {
+        const out: Array<Array<number | null>> = Array.from({ length: oh }, () => Array.from({ length: ow }, () => null));
+        for (let y = 0; y < oh; y++) {
+            for (let x = 0; x < ow; x++) {
+                out[y][x] = sample(x, y);
+            }
+        }
+        return out;
+    };
+
+    switch (mode) {
+        case 'identity':
+            return build(h, w, (x, y) => get(x, y));
+        case 'flipX':
+            return build(h, w, (x, y) => get((w - 1) - x, y));
+        case 'flipY':
+            return build(h, w, (x, y) => get(x, (h - 1) - y));
+        case 'flipXY':
+            return build(h, w, (x, y) => get((w - 1) - x, (h - 1) - y));
+        case 'transpose':
+            return build(w, h, (x, y) => get(y, x));
+        case 'transposeFlipX':
+            return build(w, h, (x, y) => get(y, (h - 1) - x));
+        case 'transposeFlipY':
+            return build(w, h, (x, y) => get((w - 1) - y, x));
+        case 'transposeFlipXY':
+            return build(w, h, (x, y) => get((w - 1) - y, (h - 1) - x));
+        default:
+            return build(h, w, (x, y) => get(x, y));
+    }
+}
+
+function findBestParityAlignment(
+    tsGrid: Array<Array<number | null>>,
+    nativeGrid: Array<Array<number | null>>,
+    topK: number,
+): { alignment: string; summary: any } {
+    const modes: Array<'identity' | 'flipX' | 'flipY' | 'flipXY' | 'transpose' | 'transposeFlipX' | 'transposeFlipY' | 'transposeFlipXY'> = [
+        'identity',
+        'flipX',
+        'flipY',
+        'flipXY',
+        'transpose',
+        'transposeFlipX',
+        'transposeFlipY',
+        'transposeFlipXY',
+    ];
+
+    let best = {
+        alignment: 'identity',
+        summary: summarizeOpdParityDiff(tsGrid, nativeGrid, topK),
+    };
+
+    for (const mode of modes) {
+        const transformed = transformGridForParity(tsGrid, mode);
+        const candidate = summarizeOpdParityDiff(transformed, nativeGrid, topK);
+        const cCount = Number(candidate?.overlap?.comparedPointCount || 0);
+        const bCount = Number(best?.summary?.overlap?.comparedPointCount || 0);
+        const cRms = Number(candidate?.rmsDeltaWaves || Infinity);
+        const bRms = Number(best?.summary?.rmsDeltaWaves || Infinity);
+        if (cCount > bCount || (cCount === bCount && cRms < bRms)) {
+            best = { alignment: mode, summary: candidate };
+        }
+    }
+
+    return best;
+}
+
+function normalizeWavefrontOpdGridWaves(
+    wavefrontMap: any,
+    gridSize: number,
+    wavelengthUm: number,
+    mode: 'display' | 'raw' = 'display',
+): Array<Array<number | null>> {
+    const isNestedGrid = (v: any): boolean => {
+        if (!Array.isArray(v) || v.length === 0) return false;
+        return Array.isArray(v[0]);
+    };
+
+    const cloneNested = (v: any): Array<Array<number | null>> => {
+        const src = Array.isArray(v) ? v : [];
+        return src.map((row: any) => (Array.isArray(row) ? row.map((x: any) => {
+            if (x === null || x === undefined) return null;
+            const n = Number(x);
+            return Number.isFinite(n) ? n : null;
+        }) : []));
+    };
+
+    const coords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
+    const safeGrid = Number.isFinite(Number(gridSize)) ? Math.max(3, Math.floor(Number(gridSize))) : 129;
+    const out: Array<Array<number | null>> = Array.from({ length: safeGrid }, () => Array.from({ length: safeGrid }, () => null));
+
+    const displayWaves = wavefrontMap?.display?.opdsInWavelengths;
+    const displayMicrons = wavefrontMap?.display?.opds;
+    const rawWaves = wavefrontMap?.raw?.opdsInWavelengths ?? wavefrontMap?.opdsInWavelengths;
+    const rawMicrons = wavefrontMap?.raw?.opds ?? wavefrontMap?.opds;
+
+    const primaryWaves = mode === 'raw' ? rawWaves : displayWaves;
+    const primaryMicrons = mode === 'raw' ? rawMicrons : displayMicrons;
+    const fallbackWaves = mode === 'raw' ? displayWaves : rawWaves;
+    const fallbackMicrons = mode === 'raw' ? displayMicrons : rawMicrons;
+
+    if (isNestedGrid(primaryWaves)) return cloneNested(primaryWaves);
+    if (isNestedGrid(fallbackWaves)) return cloneNested(fallbackWaves);
+
+    const srcFlat = Array.isArray(primaryWaves)
+        ? primaryWaves
+        : (Array.isArray(fallbackWaves)
+            ? fallbackWaves
+            : (Array.isArray(primaryMicrons)
+                ? primaryMicrons
+                : (Array.isArray(fallbackMicrons) ? fallbackMicrons : [])));
+    const srcIsMicrons = !Array.isArray(primaryWaves) && !Array.isArray(fallbackWaves);
+
+    if (!Array.isArray(srcFlat) || srcFlat.length === 0) {
+        return out;
+    }
+
+    const toWaves = (v: any): number | null => {
+        if (v === null || v === undefined) return null;
+        const n = Number(v);
+        if (!Number.isFinite(n)) return null;
+        if (srcIsMicrons) {
+            if (!Number.isFinite(wavelengthUm) || wavelengthUm <= 0) return null;
+            return n / wavelengthUm;
+        }
+        return n;
+    };
+
+    let mapped = 0;
+    for (let i = 0; i < srcFlat.length; i++) {
+        const coord = coords[i];
+        if (!coord || !Number.isFinite(Number(coord?.ix)) || !Number.isFinite(Number(coord?.iy))) {
+            continue;
+        }
+        const ix = Math.floor(Number(coord.ix));
+        const iy = Math.floor(Number(coord.iy));
+        if (ix < 0 || ix >= safeGrid || iy < 0 || iy >= safeGrid) continue;
+        const w = toWaves(srcFlat[i]);
+        if (!Number.isFinite(Number(w))) continue;
+        out[iy][ix] = Number(w);
+        mapped += 1;
+    }
+
+    if (mapped > 0) return out;
+
+    const n = Math.min(srcFlat.length, safeGrid * safeGrid);
+    for (let idx = 0; idx < n; idx++) {
+        const y = Math.floor(idx / safeGrid);
+        const x = idx % safeGrid;
+        const w = toWaves(srcFlat[idx]);
+        if (Number.isFinite(Number(w))) out[y][x] = Number(w);
+    }
+    return out;
+}
+
+async function compareOpdTsVsRustForPopup(payload: {
+    objectIndex?: number;
+    gridSize?: number;
+    wavelengthUm?: number;
+    opdDisplayMode?: 'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved' | string;
+    topK?: number;
+} = {}): Promise<any> {
+    if (!isTauriRuntime()) {
+        throw new Error('Desktop runtime is not available');
+    }
+
+    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+        throw new Error('compareOpdTsVsRustForPopup: opticalSystemRows is empty');
+    }
+
+    const objectIndex = Number.isInteger(payload?.objectIndex) ? Number(payload.objectIndex) : 0;
+    const gridSize = Number.isFinite(Number(payload?.gridSize)) ? Math.max(17, Math.floor(Number(payload.gridSize))) : 129;
+    const wavelengthUm = Number.isFinite(Number(payload?.wavelengthUm))
+        ? Number(payload?.wavelengthUm)
+        : getPrimaryWavelengthMicronsFromSourceRows(sourceRows);
+    const opdDisplayMode = (payload?.opdDisplayMode as any) || 'pistonTiltRemoved';
+    const fieldSetting = buildPopupFieldSettingFromObjectRows(objectRows, objectIndex, wavelengthUm);
+    const forcedInfinitePupilMode = __cooptGetForceInfinitePupilMode();
+    const autoAngleX = Number(fieldSetting?.fieldAngle?.x ?? 0);
+    const autoAngleY = Number(fieldSetting?.fieldAngle?.y ?? 0);
+    const isNonZeroAngleField = Math.abs(autoAngleX) > 1e-12 || Math.abs(autoAngleY) > 1e-12;
+    const requestedPupilSamplingMode = (forcedInfinitePupilMode === 'stop' || forcedInfinitePupilMode === 'entrance')
+        ? forcedInfinitePupilMode
+        : ((String(fieldSetting?.type || '').toLowerCase() === 'angle' && isNonZeroAngleField) ? 'entrance' : undefined);
+
+    const opdCalculator = createOPDCalculator(opticalSystemRows, wavelengthUm);
+    const jsPupilRadiusMm = Number((opdCalculator as any)?._getCachedStopRadiusMm?.());
+
+    const nativeResult = await runNativeOpdMap({
+        opticalSystemRows,
+        sourceRows,
+        objectRows,
+        objectIndex,
+        gridSize,
+        wavelengthUm,
+        pupilRadiusMm: Number.isFinite(jsPupilRadiusMm) && jsPupilRadiusMm > 0 ? jsPupilRadiusMm : undefined,
+        pupilSamplingMode: requestedPupilSamplingMode,
+        opdDisplayMode,
+    });
+
+    const analyzer = createWavefrontAnalyzer(opdCalculator);
+    const wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, 'circular', {
+        recordRays: false,
+        progressEvery: 0,
+        renderFromZernike: false,
+        skipZernikeFit: true,
+        opdMode: 'simple',
+        opdDisplayMode,
+    });
+
+    const tsGrid = normalizeWavefrontOpdGridWaves(wavefrontMap, gridSize, wavelengthUm, 'display');
+    const tsRawGrid = normalizeWavefrontOpdGridWaves(wavefrontMap, gridSize, wavelengthUm, 'raw');
+    const nativeGrid = (Array.isArray(nativeResult?.displayOpdGrid)
+        ? nativeResult.displayOpdGrid
+        : (Array.isArray(nativeResult?.rawOpdGrid) ? nativeResult.rawOpdGrid : [])) as any[];
+    const nativeRawGrid = (Array.isArray(nativeResult?.rawOpdGrid)
+        ? nativeResult.rawOpdGrid
+        : (Array.isArray(nativeResult?.displayOpdGrid) ? nativeResult.displayOpdGrid : [])) as any[];
+
+    const bestDisplay = findBestParityAlignment(tsGrid, nativeGrid, Number(payload?.topK) || 12);
+    const bestRaw = findBestParityAlignment(tsRawGrid, nativeRawGrid, Number(payload?.topK) || 12);
+    const summary = {
+        ...bestDisplay.summary,
+        alignment: bestDisplay.alignment,
+    };
+    const rawSummary = {
+        ...bestRaw.summary,
+        alignment: bestRaw.alignment,
+    };
+    const out = {
+        config: {
+            objectIndex,
+            gridSize,
+            wavelengthUm,
+            opdDisplayMode,
+        },
+        nativeMeta: {
+            backend: nativeResult?.backend,
+            targetSurface: nativeResult?.targetSurface,
+            stopSurface: nativeResult?.stopSurface,
+            usedObjectPosition: nativeResult?.usedObjectPosition,
+            usedObjectX: nativeResult?.usedObjectX,
+            usedObjectY: nativeResult?.usedObjectY,
+            hitCount: nativeResult?.hitCount,
+            sampleCount: nativeResult?.sampleCount,
+            message: nativeResult?.message,
+        },
+        rawSummary,
+        summary,
+    };
+
+    try {
+        console.log('📊 [OPD TS-Rust][opener] summary', {
+            objectIndex,
+            gridSize,
+            wavelengthUm,
+            mode: opdDisplayMode,
+            tsGridShape: {
+                h: Array.isArray(tsGrid) ? tsGrid.length : 0,
+                w: (Array.isArray(tsGrid) && Array.isArray(tsGrid[0])) ? tsGrid[0].length : 0,
+            },
+            comparedPointCount: summary?.overlap?.comparedPointCount,
+            maxAbsDeltaWaves: summary?.maxAbsDeltaWaves,
+            meanAbsDeltaWaves: summary?.meanAbsDeltaWaves,
+            rmsDeltaWaves: summary?.rmsDeltaWaves,
+            rawComparedPointCount: rawSummary?.overlap?.comparedPointCount,
+            rawMaxAbsDeltaWaves: rawSummary?.maxAbsDeltaWaves,
+            rawMeanAbsDeltaWaves: rawSummary?.meanAbsDeltaWaves,
+            rawRmsDeltaWaves: rawSummary?.rmsDeltaWaves,
+            alignment: summary?.alignment,
+            rawAlignment: rawSummary?.alignment,
+            affineSlopeTsToNative: summary?.affine?.slopeTsToNative,
+            affineInterceptTsToNative: summary?.affine?.interceptTsToNative,
+            affineCorrelation: summary?.affine?.correlation,
+            affineRmsAfterFit: summary?.affine?.rmsAfterAffineFit,
+            affineRmsAfterNegTs: summary?.affine?.rmsAfterNegTs,
+            rawAffineSlopeTsToNative: rawSummary?.affine?.slopeTsToNative,
+            rawAffineInterceptTsToNative: rawSummary?.affine?.interceptTsToNative,
+            rawAffineCorrelation: rawSummary?.affine?.correlation,
+            rawAffineRmsAfterFit: rawSummary?.affine?.rmsAfterAffineFit,
+            rawAffineRmsAfterNegTs: rawSummary?.affine?.rmsAfterNegTs,
+            nativeHitCount: nativeResult?.hitCount,
+            nativeSampleCount: nativeResult?.sampleCount,
+        });
+    } catch (_) {}
+
+    try {
+        w.__COOPT_LAST_OPD_TS_RUST_DIFF = {
+            ...out,
+            at: Date.now(),
+        };
+    } catch (_) {}
+
+    return out;
+}
+
+w.compareOpdTsVsRustForPopup = compareOpdTsVsRustForPopup;
 
 function clonePopupOpticalRowsWithDefocusShift(opticalSystemRows: any[], defocusShiftMm?: number): any[] {
     if (!Array.isArray(opticalSystemRows)) return [];
@@ -2244,11 +3182,13 @@ function executeCrossSectionView(options: {
             });
         }
 
+        const fillViewAxis: 'XZ' | 'YZ' = (viewAxis === 'XZ') ? 'XZ' : 'YZ';
+
         try {
             __coopt_applyPopupCrossSectionLensFill({
                 popupWindow: window,
                 scene: sceneRef,
-                viewAxis,
+                viewAxis: fillViewAxis,
                 opticalSystemRows,
                 source: 'execute-cross-initial'
             });
@@ -2431,7 +3371,7 @@ function executeCrossSectionView(options: {
             __coopt_applyPopupCrossSectionLensFill({
                 popupWindow: window,
                 scene: sceneRef,
-                viewAxis,
+                viewAxis: fillViewAxis,
                 opticalSystemRows,
                 source: 'execute-cross-final'
             });
@@ -4610,7 +5550,11 @@ export function setupAnalysisWindows() {
                 try {
                     if (progressWrapper) progressWrapper.style.display = 'block';
                     if (progressBarEl && Number.isFinite(value)) progressBarEl.value = Math.max(0, Math.min(100, value));
-                    if (progressTextEl && typeof text === 'string') progressTextEl.textContent = text;
+                    if (progressTextEl) {
+                        const pct = Number.isFinite(value) ? (String(Math.round(Math.max(0, Math.min(100, Number(value))))) + '%') : '';
+                        const msg = (typeof text === 'string' && text.trim().length > 0) ? text : 'Working...';
+                        progressTextEl.textContent = pct ? (msg + ' (' + pct + ')') : msg;
+                    }
                 } catch (_) {}
             };
 
@@ -4661,9 +5605,21 @@ export function setupAnalysisWindows() {
                 setProgress(0, 'Starting...');
                 setPopupStats('Native stats: running...');
 
-                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
-                    opener.__TAURI_INTERNALS__
-                    && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
+                const shouldUseDesktopRust = (() => {
+                    try {
+                        if (typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') {
+                            return !!window['shouldUseDesktopRustAnalysis']();
+                        }
+                        if (opener && typeof opener.shouldUseDesktopRustAnalysis === 'function') {
+                            return !!opener.shouldUseDesktopRustAnalysis();
+                        }
+                        return true;
+                    } catch (_) {
+                        return false;
+                    }
+                })();
+                const canUseDesktopRust = shouldUseDesktopRust && !!(
+                    typeof opener.runDesktopAnalysisComputeForPopup === 'function'
                 );
                 const canUseNativeRustSpot = canUseDesktopRust && !!(
                     typeof opener.runDesktopNativeSpotRaytraceForPopup === 'function'
@@ -5140,7 +6096,9 @@ export function setupAnalysisWindows() {
                         paper_bgcolor: '#ffffff',
                         plot_bgcolor: '#ffffff',
                     }, { responsive: true, displaylogo: false });
-                    setProgress(100, 'Done (Rust)');
+                    try {
+                        if (progressWrapper) progressWrapper.style.display = 'none';
+                    } catch (_) {}
                     return;
                 }
 
@@ -5170,7 +6128,9 @@ export function setupAnalysisWindows() {
                         } catch (_) {}
                     },
                 });
-                setProgress(100, 'Done (Rust-WASM)');
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'none';
+                } catch (_) {}
             } catch (e) {
                 if (popupContainer) popupContainer.textContent = String(e && e.message ? e.message : e);
                 setProgress(100, 'Failed');
@@ -5343,7 +6303,11 @@ export function setupAnalysisWindows() {
                 try {
                     if (progressWrapper) progressWrapper.style.display = 'block';
                     if (progressBarEl && Number.isFinite(value)) progressBarEl.value = Math.max(0, Math.min(100, value));
-                    if (progressTextEl && typeof text === 'string') progressTextEl.textContent = text;
+                    if (progressTextEl) {
+                        const pct = Number.isFinite(value) ? (String(Math.round(Math.max(0, Math.min(100, Number(value))))) + '%') : '';
+                        const msg = (typeof text === 'string' && text.trim().length > 0) ? text : 'Working...';
+                        progressTextEl.textContent = pct ? (msg + ' (' + pct + ')') : msg;
+                    }
                 } catch (_) {}
             };
 
@@ -5361,7 +6325,20 @@ export function setupAnalysisWindows() {
             }
 
             const opener = window.opener;
-            const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
+            const shouldUseDesktopRust = (() => {
+                try {
+                    if (typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') {
+                        return !!window['shouldUseDesktopRustAnalysis']();
+                    }
+                    if (opener && typeof opener.shouldUseDesktopRustAnalysis === 'function') {
+                        return !!opener.shouldUseDesktopRustAnalysis();
+                    }
+                    return !!(opener && opener.__TAURI_INTERNALS__);
+                } catch (_) {
+                    return false;
+                }
+            })();
+            const canUseDesktopRust = shouldUseDesktopRust && !!(
                 opener
                 && opener.__TAURI_INTERNALS__
                 && typeof opener.runDesktopNativeSphericalAberrationForPopup === 'function'
@@ -5516,9 +6493,6 @@ export function setupAnalysisWindows() {
             <option value="stop-center">Stop center</option>
             <option value="beam-midpoint">Beam midpoint</option>
             <option value="beam-centroid">Beam centroid</option>
-            <option value="stop-center-image">Stop center (image plane)</option>
-            <option value="beam-midpoint-image">Beam midpoint (image plane)</option>
-            <option value="beam-centroid-image">Beam centroid (image plane)</option>
         </select>
         <button id="popup-show-astigmatism-btn" type="button">Show</button>
     </div>
@@ -5546,6 +6520,12 @@ export function setupAnalysisWindows() {
                     if (progressWrapper) progressWrapper.style.display = 'block';
                     if (progressBarEl && Number.isFinite(value)) progressBarEl.value = Math.max(0, Math.min(100, value));
                     if (progressTextEl && typeof text === 'string') progressTextEl.textContent = text;
+                } catch (_) {}
+            };
+
+            const hideProgress = () => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'none';
                 } catch (_) {}
             };
 
@@ -5608,6 +6588,11 @@ export function setupAnalysisWindows() {
                 openDistortionWindowBtn.addEventListener('click', () => {
                         if (w.__distortionPopup && !w.__distortionPopup.closed) {
                                 try { w.__distortionPopup.focus(); } catch (_) {}
+                    try {
+                        if (typeof w.__distortionPopup.renderDistortion === 'function') {
+                            w.__distortionPopup.renderDistortion();
+                        }
+                    } catch (_) {}
                                 return;
                         }
 
@@ -5633,14 +6618,6 @@ export function setupAnalysisWindows() {
             flex-direction: column;
             height: 100vh;
             background: #f4f4f4;
-        }
-        .header {
-            padding: 10px 12px;
-            background: #f8f8f8;
-            color: #333;
-            border-bottom: 1px solid #ddd;
-            font-size: 14px;
-            font-weight: 600;
         }
         .controls {
             padding: 10px 12px;
@@ -5675,13 +6652,10 @@ export function setupAnalysisWindows() {
             min-height: 0;
             overflow: hidden;
             background: white;
-            display: flex;
-            flex-direction: column;
+            display: block;
         }
-        .plot-area { flex: 1 1 auto; min-height: 0; }
-        #popup-distortion-grid-area { display: none; border-top: 1px solid #eee; }
+        .plot-area { width: 100%; height: 100%; min-height: 0; }
         #popup-distortion-percent { height: 100%; }
-        #popup-distortion-grid { height: 100%; }
     </style>
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
@@ -5689,6 +6663,163 @@ export function setupAnalysisWindows() {
     <div class="header">Distortion</div>
     <div class="controls">
         <button id="popup-show-distortion-btn" type="button">Show distortion diagram</button>
+    </div>
+    <div id="popup-distortion-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
+        <div id="popup-distortion-progress-text" style="margin-bottom: 6px;">Calculating distortion...</div>
+        <progress id="popup-distortion-progressbar" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
+    </div>
+    <div class="content">
+        <div id="popup-distortion-percent-area" class="plot-area"><div id="popup-distortion-percent"></div></div>
+    </div>
+
+    <script>
+        function resizePlots() {
+            try {
+                const plotly = window.Plotly;
+                if (!plotly || !plotly.Plots) return;
+                const a = document.getElementById('popup-distortion-percent');
+                if (a) plotly.Plots.resize(a);
+            } catch (_) {}
+        }
+
+        window['renderDistortion'] = async () => {
+            const percentEl = document.getElementById('popup-distortion-percent');
+            if (percentEl) percentEl.innerHTML = '';
+
+            const progressWrapper = document.getElementById('popup-distortion-progress-wrapper');
+            const progressBarEl = document.getElementById('popup-distortion-progressbar');
+            const progressTextEl = document.getElementById('popup-distortion-progress-text');
+
+            const setProgress = (value, text) => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'block';
+                    if (progressBarEl && Number.isFinite(value)) progressBarEl.value = Math.max(0, Math.min(100, value));
+                    if (progressTextEl && typeof text === 'string') progressTextEl.textContent = text;
+                } catch (_) {}
+            };
+            let renderSucceeded = false;
+
+            try {
+                if (!window.opener || typeof window.opener.generateDistortionPlots !== 'function') {
+                    throw new Error('generateDistortionPlots is not available on opener');
+                }
+                setProgress(0, 'Starting...');
+                await new Promise((resolve) => setTimeout(resolve, 0));
+                const onProgress = (evt) => {
+                    try {
+                        const p = Number(evt?.percent);
+                        const msg = evt?.message || evt?.phase || 'Working...';
+                        if (Number.isFinite(p)) setProgress(p, msg);
+                        else setProgress(undefined, msg);
+                    } catch (_) {}
+                };
+                await window.opener.generateDistortionPlots({ targetElement: percentEl, onProgress });
+                renderSucceeded = true;
+                setTimeout(resizePlots, 0);
+            } catch (err) {
+                console.error(err);
+                setProgress(100, 'Failed');
+                if (percentEl) {
+                    percentEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate distortion diagram. Check console.</div>';
+                }
+            } finally {
+                if (renderSucceeded && progressWrapper) {
+                    setTimeout(() => {
+                        try { progressWrapper.style.display = 'none'; } catch (_) {}
+                    }, 250);
+                }
+            }
+        };
+
+        document.getElementById('popup-show-distortion-btn').addEventListener('click', () => window.renderDistortion());
+        window.addEventListener('resize', resizePlots);
+
+        // Auto-render immediately on open
+        window.addEventListener('load', () => {
+            try { window.renderDistortion(); } catch (_) {}
+        });
+    </script>
+</body>
+</html>
+                        `);
+
+                        try { popup.document.close(); } catch (_) {}
+                });
+        }
+
+        // Distortion Grid popup window button
+        const openDistortionGridWindowBtn = document.getElementById('open-distortion-grid-window-btn');
+        if (openDistortionGridWindowBtn) {
+                openDistortionGridWindowBtn.addEventListener('click', () => {
+                        if (w.__distortionGridPopup && !w.__distortionGridPopup.closed) {
+                                try { w.__distortionGridPopup.focus(); } catch (_) {}
+                                return;
+                        }
+
+                        const popup = consumePreopenedAnalysisPopup('Distortion Grid', 'width=800,height=600');
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__distortionGridPopup = popup;
+
+                        popup.document.write(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Distortion Grid</title>
+    <style>
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: #f4f4f4;
+        }
+        .controls {
+            padding: 10px 12px;
+            background: #f8f8f8;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 10px;
+            align-items: center;
+            flex: 0 0 auto;
+        }
+        .controls label { font-size: 12px; color: #333; white-space: nowrap; }
+        .controls select {
+            padding: 5px 8px;
+            font-size: 12px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            background: white;
+        }
+        .controls button {
+            padding: 6px 10px;
+            border: 1px solid #bbb;
+            background: #f8f8f8;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #333;
+        }
+        .controls button:hover { background: #e9e9e9; }
+        .content {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: hidden;
+            background: white;
+        }
+        #popup-distortion-grid { width: 100%; height: 100%; }
+    </style>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body>
+    <div class="header">Distortion Grid</div>
+    <div class="controls">
         <label for="popup-distortion-grid-size">Grid Size:</label>
         <select id="popup-distortion-grid-size">
             <option value="10">10×10</option>
@@ -5701,15 +6832,14 @@ export function setupAnalysisWindows() {
             <option value="45">45×45</option>
             <option value="50">50×50</option>
         </select>
-        <button id="popup-show-distortion-grid-btn" type="button">Show grid distortion</button>
+        <button id="popup-show-distortion-grid-btn" type="button">Show distortion grid</button>
     </div>
-    <div id="popup-distortion-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
-        <div id="popup-distortion-progress-text" style="margin-bottom: 6px;">Calculating distortion...</div>
-        <progress id="popup-distortion-progressbar" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
+    <div id="popup-distortion-grid-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
+        <div id="popup-distortion-grid-progress-text" style="margin-bottom: 6px;">Calculating grid distortion...</div>
+        <progress id="popup-distortion-grid-progressbar" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
     </div>
     <div class="content">
-        <div id="popup-distortion-percent-area" class="plot-area"><div id="popup-distortion-percent"></div></div>
-        <div id="popup-distortion-grid-area" class="plot-area"><div id="popup-distortion-grid"></div></div>
+        <div id="popup-distortion-grid"></div>
     </div>
 
     <script>
@@ -5729,91 +6859,26 @@ export function setupAnalysisWindows() {
             }
         }
 
-        function resizePlots() {
+        function resizePlot() {
             try {
                 const plotly = window.Plotly;
                 if (!plotly || !plotly.Plots) return;
-                const a = document.getElementById('popup-distortion-percent');
-                const b = document.getElementById('popup-distortion-grid');
-                if (a) plotly.Plots.resize(a);
-                if (b) plotly.Plots.resize(b);
+                const grid = document.getElementById('popup-distortion-grid');
+                if (grid) plotly.Plots.resize(grid);
             } catch (_) {}
         }
 
-        function setGridVisible(visible) {
-            const gridArea = document.getElementById('popup-distortion-grid-area');
-            const percentArea = document.getElementById('popup-distortion-percent-area');
-            if (!gridArea || !percentArea) return;
-
-            if (visible) {
-                gridArea.style.display = 'block';
-                percentArea.style.flex = '1 1 50%';
-                gridArea.style.flex = '1 1 50%';
-            } else {
-                gridArea.style.display = 'none';
-                percentArea.style.flex = '1 1 auto';
-            }
-
-            // Let layout settle, then resize plots
-            setTimeout(resizePlots, 0);
-        }
-
-        window['renderDistortion'] = async () => {
-            const percentEl = document.getElementById('popup-distortion-percent');
-            if (percentEl) percentEl.innerHTML = '';
-            // Default to full-height distortion plot
-            setGridVisible(false);
-
-            const progressWrapper = document.getElementById('popup-distortion-progress-wrapper');
-            const progressBarEl = document.getElementById('popup-distortion-progressbar');
-            const progressTextEl = document.getElementById('popup-distortion-progress-text');
-
-            const setProgress = (value, text) => {
-                try {
-                    if (progressWrapper) progressWrapper.style.display = 'block';
-                    if (progressBarEl && Number.isFinite(value)) progressBarEl.value = Math.max(0, Math.min(100, value));
-                    if (progressTextEl && typeof text === 'string') progressTextEl.textContent = text;
-                } catch (_) {}
-            };
-
-            try {
-                if (!window.opener || typeof window.opener.generateDistortionPlots !== 'function') {
-                    throw new Error('generateDistortionPlots is not available on opener');
-                }
-                setProgress(0, 'Starting...');
-                const onProgress = (evt) => {
-                    try {
-                        const p = Number(evt?.percent);
-                        const msg = evt?.message || evt?.phase || 'Working...';
-                        if (Number.isFinite(p)) setProgress(p, msg);
-                        else setProgress(undefined, msg);
-                    } catch (_) {}
-                };
-                await window.opener.generateDistortionPlots({ targetElement: percentEl, onProgress });
-                setProgress(100, 'Done');
-                setTimeout(resizePlots, 0);
-            } catch (err) {
-                console.error(err);
-                setProgress(100, 'Failed');
-                if (percentEl) {
-                    percentEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate distortion diagram. Check console.</div>';
-                }
-            }
-        };
-
-        window['renderGridDistortion'] = async () => {
-            if (window.__gridDistortionRenderInFlight) return;
-            window.__gridDistortionRenderInFlight = true;
+        window['renderDistortionGrid'] = async () => {
+            if (window.__distortionGridRenderInFlight) return;
+            window.__distortionGridRenderInFlight = true;
             const gridEl = document.getElementById('popup-distortion-grid');
             const gridBtn = document.getElementById('popup-show-distortion-grid-btn');
             if (gridBtn) gridBtn.disabled = true;
             if (gridEl) gridEl.innerHTML = '';
-            // Split view when grid is requested
-            setGridVisible(true);
 
-            const progressWrapper = document.getElementById('popup-distortion-progress-wrapper');
-            const progressBarEl = document.getElementById('popup-distortion-progressbar');
-            const progressTextEl = document.getElementById('popup-distortion-progress-text');
+            const progressWrapper = document.getElementById('popup-distortion-grid-progress-wrapper');
+            const progressBarEl = document.getElementById('popup-distortion-grid-progressbar');
+            const progressTextEl = document.getElementById('popup-distortion-grid-progress-text');
 
             const setProgress = (value, text) => {
                 try {
@@ -5827,12 +6892,14 @@ export function setupAnalysisWindows() {
             const gridSize = gridSizeEl ? parseInt(gridSizeEl.value, 10) : 20;
             const openerGrid = getOpenerEl('grid-size-select');
             if (openerGrid && Number.isFinite(gridSize)) openerGrid.value = String(gridSize);
+            let renderSucceeded = false;
 
             try {
                 if (!window.opener || typeof window.opener.generateGridDistortionPlot !== 'function') {
                     throw new Error('generateGridDistortionPlot is not available on opener');
                 }
                 setProgress(0, 'Starting...');
+                await new Promise((resolve) => setTimeout(resolve, 0));
                 const onProgress = (evt) => {
                     try {
                         const p = Number(evt?.percent);
@@ -5842,8 +6909,8 @@ export function setupAnalysisWindows() {
                     } catch (_) {}
                 };
                 await window.opener.generateGridDistortionPlot({ gridSize: Number.isFinite(gridSize) ? gridSize : 20, targetElement: gridEl, onProgress });
-                setProgress(100, 'Done');
-                setTimeout(resizePlots, 0);
+                renderSucceeded = true;
+                setTimeout(resizePlot, 0);
             } catch (err) {
                 console.error(err);
                 setProgress(100, 'Failed');
@@ -5851,21 +6918,20 @@ export function setupAnalysisWindows() {
                     gridEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate grid distortion. Check console.</div>';
                 }
             } finally {
-                window.__gridDistortionRenderInFlight = false;
+                window.__distortionGridRenderInFlight = false;
                 if (gridBtn) gridBtn.disabled = false;
+                if (renderSucceeded && progressWrapper) {
+                    setTimeout(() => {
+                        try { progressWrapper.style.display = 'none'; } catch (_) {}
+                    }, 250);
+                }
             }
         };
 
-        document.getElementById('popup-show-distortion-btn').addEventListener('click', () => window.renderDistortion());
-        document.getElementById('popup-show-distortion-grid-btn').addEventListener('click', () => window.renderGridDistortion());
-        window.addEventListener('resize', resizePlots);
+        document.getElementById('popup-show-distortion-grid-btn').addEventListener('click', () => window.renderDistortionGrid());
+        window.addEventListener('resize', resizePlot);
         window.addEventListener('focus', syncFromOpener);
         syncFromOpener();
-
-        // Auto-render immediately on open (distortion percent)
-        window.addEventListener('load', () => {
-            try { window.renderDistortion(); } catch (_) {}
-        });
     </script>
 </body>
 </html>
@@ -5971,6 +7037,12 @@ export function setupAnalysisWindows() {
         <span style="font-size:12px;color:#666;">(mm)</span>
         <label for="popup-mca-points" style="margin-left:6px;">Points:</label>
         <input type="number" id="popup-mca-points" value="21" min="2" max="201" step="1" />
+        <label for="popup-mca-chief-ray" style="margin-left:6px;">Chief ray:</label>
+        <select id="popup-mca-chief-ray" style="padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;">
+            <option value="stop-center">Stop center</option>
+            <option value="beam-midpoint">Beam midpoint</option>
+            <option value="beam-centroid">Beam centroid</option>
+        </select>
         <button id="popup-show-mca-btn" type="button">Show lateral chromatic aberration</button>
     </div>
     <div id="popup-mca-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
@@ -6019,12 +7091,20 @@ export function setupAnalysisWindows() {
                 } catch (_) {}
             };
 
+            const hideProgress = () => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'none';
+                } catch (_) {}
+            };
+
             const xMinEl = document.getElementById('popup-mca-xmin');
             const xMaxEl = document.getElementById('popup-mca-xmax');
             const pointEl = document.getElementById('popup-mca-points');
+            const chiefRayEl = document.getElementById('popup-mca-chief-ray');
             const xMin = xMinEl ? parseFloat(xMinEl.value) : -0.5;
             const xMax = xMaxEl ? parseFloat(xMaxEl.value) : 0.5;
             const pointCount = pointEl ? parseInt(pointEl.value, 10) : 11;
+            const chiefRayDefinition = (chiefRayEl && chiefRayEl.value) ? chiefRayEl.value : 'stop-center';
 
             try {
                 if (!window.opener || typeof window.opener.showMagnificationChromaticAberrationDiagram !== 'function') {
@@ -6044,9 +7124,10 @@ export function setupAnalysisWindows() {
                     xMin,
                     xMax,
                     pointCount,
+                    chiefRayDefinition,
                     onProgress
                 });
-                setProgress(100, 'Done');
+                hideProgress();
             } catch (err) {
                 console.error(err);
                 setProgress(100, 'Failed');
@@ -6108,34 +7189,6 @@ export function setupAnalysisWindows() {
             height: 100vh;
             background: #f4f4f4;
         }
-        .header {
-            padding: 10px 12px;
-            background: #f8f8f8;
-            color: #333;
-            border-bottom: 1px solid #ddd;
-            font-size: 14px;
-            font-weight: 600;
-        }
-        .controls {
-            padding: 10px 12px;
-            background: #f8f8f8;
-            border-bottom: 1px solid #ddd;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px 10px;
-            align-items: center;
-            flex: 0 0 auto;
-        }
-        .controls button {
-            padding: 6px 10px;
-            border: 1px solid #bbb;
-            background: #f8f8f8;
-            cursor: pointer;
-            border-radius: 4px;
-            font-size: 12px;
-            color: #333;
-        }
-        .controls button:hover { background: #e9e9e9; }
         .content {
             flex: 1 1 auto;
             min-height: 0;
@@ -6147,12 +7200,7 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Integrated Aberration</div>
-    <div class="controls">
-        <button id="popup-show-integrated-aberration-btn" type="button">Show integrated aberration diagram</button>
-    </div>
     <div id="popup-integrated-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
-        <div id="popup-integrated-progress-text" style="margin-bottom: 6px;">Calculating integrated aberration...</div>
         <progress id="popup-integrated-progressbar" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
     </div>
     <div class="content">
@@ -6186,6 +7234,12 @@ export function setupAnalysisWindows() {
                 } catch (_) {}
             };
 
+            const hideProgress = () => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'none';
+                } catch (_) {}
+            };
+
             try {
                 if (!window.opener || typeof window.opener.showIntegratedAberrationDiagram !== 'function') {
                     throw new Error('showIntegratedAberrationDiagram is not available on opener');
@@ -6204,7 +7258,7 @@ export function setupAnalysisWindows() {
                     onProgress,
                     useActiveConfigSnapshot: true
                 });
-                setProgress(100, 'Done');
+                hideProgress();
                 resizePlot();
             } catch (err) {
                 console.error(err);
@@ -6214,10 +7268,6 @@ export function setupAnalysisWindows() {
                 }
             }
         };
-
-        document.getElementById('popup-show-integrated-aberration-btn').addEventListener('click', () => {
-            window.renderIntegratedAberration();
-        });
 
         window.addEventListener('resize', resizePlot);
 
@@ -6319,7 +7369,6 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Optical Path Difference</div>
     <div class="controls">
         <label for="popup-wavefront-object-select">Object:</label>
         <select id="popup-wavefront-object-select"></select>
@@ -6439,6 +7488,12 @@ export function setupAnalysisWindows() {
             } else {
                 popupSelect.value = popupSelect.options[0]?.value ?? '0';
             }
+
+            try {
+                if (typeof window.__opdStage === 'function') {
+                    window.__opdStage('Object options synchronized', 'count=' + popupSelect.options.length + ', selected=' + String(popupSelect.value ?? 'n/a'));
+                }
+            } catch (_) {}
         }
 
         function syncInputsFromOpener() {
@@ -6462,9 +7517,25 @@ export function setupAnalysisWindows() {
             } catch (_) {}
         }
 
+        function createStageTraceHelpers() {
+            const clear = (_label = 'Idle') => {};
+            const push = (_stage, _detail = '', _level = 'info') => {};
+            const pushWarn = (_stage, _detail = '') => {};
+
+            return { clear, push, pushWarn };
+        }
+
+        const opdStageTrace = createStageTraceHelpers();
+        window.__opdStage = opdStageTrace.push;
+
         window['renderOPD'] = async () => {
             const containerEl = document.getElementById('popup-wavefront-container');
             if (containerEl) containerEl.innerHTML = '';
+
+            try {
+                opdStageTrace.clear('Preparing...');
+                opdStageTrace.push('Render requested');
+            } catch (_) {}
 
             const progressWrapper = document.getElementById('popup-opd-progress-wrapper');
             const progressBarEl = document.getElementById('popup-opd-progressbar');
@@ -6476,6 +7547,7 @@ export function setupAnalysisWindows() {
             let lastProgressUiUpdateAt = 0;
             let pendingProgressEvent = null;
             let progressFlushTimer = null;
+            let lastComputingMilestone = 0;
 
             const setProgress = (value, text, force = false) => {
                 try {
@@ -6501,6 +7573,13 @@ export function setupAnalysisWindows() {
                 } catch (_) {}
             };
 
+            const hideProgress = () => {
+                try {
+                    if (progressWrapper) progressWrapper.style.display = 'none';
+                    progressVisible = false;
+                } catch (_) {}
+            };
+
             const flushPendingProgress = (force = false) => {
                 if (progressFlushTimer) {
                     clearTimeout(progressFlushTimer);
@@ -6522,6 +7601,14 @@ export function setupAnalysisWindows() {
             const popupZernikeFit = document.getElementById('popup-zernike-fit-checkbox');
             const popupRemovePtd = document.getElementById('popup-opd-remove-ptd-checkbox');
 
+            try {
+                if (!popupObject) {
+                    opdStageTrace.push('Object selector missing', 'popup-wavefront-object-select not found; fallback index=0');
+                } else {
+                    opdStageTrace.push('Object selector ready', 'options=' + String(popupObject.options?.length ?? 0));
+                }
+            } catch (_) {}
+
             const objectIndex = (() => {
                 if (!popupObject) return 0;
                 const v = parseInt(String(popupObject.value), 10);
@@ -6535,6 +7622,21 @@ export function setupAnalysisWindows() {
                 ? 'pistonTiltDefocusRemoved'
                 : 'pistonTiltRemoved';
 
+            try {
+                opdStageTrace.push('Input resolved', 'object=' + String(objectIndex) + ', plot=' + String(plotType) + ', grid=' + String(gridSize) + ', mode=' + String(opdDisplayMode));
+            } catch (_) {}
+
+            try {
+                const optionCount = Number(popupObject?.options?.length ?? 0);
+                const selectedText = popupObject?.selectedOptions?.[0]?.textContent || popupObject?.options?.[popupObject?.selectedIndex || 0]?.textContent || '';
+                const inRange = optionCount <= 0 ? true : (objectIndex >= 0 && objectIndex < optionCount);
+                if (!inRange) {
+                    opdStageTrace.push('Object index out of range', 'index=' + String(objectIndex) + ', options=' + String(optionCount));
+                } else {
+                    opdStageTrace.push('Object resolved', 'index=' + String(objectIndex) + (selectedText ? (', label=' + String(selectedText)) : ''));
+                }
+            } catch (_) {}
+
             const openerObject = getOpenerEl('wavefront-object-select');
             const openerPlotType = getOpenerEl('wavefront-plot-type-select');
             const openerGrid = getOpenerEl('wavefront-grid-size-select');
@@ -6543,6 +7645,15 @@ export function setupAnalysisWindows() {
             if (openerPlotType) openerPlotType.value = plotType;
             if (openerGrid && Number.isFinite(gridSize)) openerGrid.value = String(gridSize);
             if (openerRemovePtd) openerRemovePtd.checked = (opdDisplayMode === 'pistonTiltDefocusRemoved');
+
+            try {
+                const openerSyncOk = !!openerObject;
+                if (openerSyncOk) {
+                    opdStageTrace.push('Opener sync', 'object=' + String(objectIndex));
+                } else {
+                    opdStageTrace.pushWarn('Opener sync', 'opener object selector not found');
+                }
+            } catch (_) {}
 
             try {
                 const computeInPopup = false;
@@ -6578,60 +7689,60 @@ export function setupAnalysisWindows() {
 
                 setProgress(0, 'Starting...');
 
-                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
-                    window.opener
-                    && window.opener.__TAURI_INTERNALS__
-                    && typeof window.opener.runDesktopAnalysisComputeForPopup === 'function'
+                const opener = window.opener;
+                const shouldUseDesktopRust = (() => {
+                    try {
+                        if (typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') {
+                            return !!window['shouldUseDesktopRustAnalysis']();
+                        }
+                        if (opener && typeof opener.shouldUseDesktopRustAnalysis === 'function') {
+                            return !!opener.shouldUseDesktopRustAnalysis();
+                        }
+                        return !!(opener && opener.__TAURI_INTERNALS__);
+                    } catch (_) {
+                        return false;
+                    }
+                })();
+
+                const canUseDesktopRust = shouldUseDesktopRust && !!(
+                    opener
+                    && opener.__TAURI_INTERNALS__
+                    && typeof opener.showWavefrontDiagram === 'function'
                 );
 
-                if (canUseDesktopRust) {
-                    setProgress(20, 'Computing OPD (Rust)...');
-                    const result = await window.opener.runDesktopAnalysisComputeForPopup({
-                        kind: 'opd',
-                        gridSize: Number.isFinite(gridSize) ? gridSize : 128,
-                    });
-                    const opdGrid = Array.isArray(result?.opdGrid) ? result.opdGrid : [];
-                    if (!opdGrid.length || !Array.isArray(opdGrid[0])) {
-                        throw new Error('Rust OPD result does not contain opdGrid');
-                    }
+                try {
+                    opdStageTrace.push('Runtime check', 'desktopRust=' + String(!!canUseDesktopRust));
+                } catch (_) {}
 
-                    setProgress(80, 'Rendering OPD...');
-                    const trace = (String(plotType) === 'contour')
-                        ? [{ z: opdGrid, type: 'contour', colorscale: 'Viridis', contours: { coloring: 'heatmap' } }]
-                        : [{ z: opdGrid, type: 'surface', colorscale: 'Viridis' }];
-                    const layout = (String(plotType) === 'contour')
-                        ? {
-                            margin: { l: 45, r: 20, t: 30, b: 40 },
-                            xaxis: { title: 'Pupil X' },
-                            yaxis: { title: 'Pupil Y' },
+                if (!canUseDesktopRust) {
+                    try { opdStageTrace.push('Blocked', 'Desktop Rust runtime unavailable'); } catch (_) {}
+                    throw new Error('OPD calculation is Rust-only. Desktop runtime with Rust analysis is required.');
+                }
+
+                try {
+                    if (popupObject && popupObject.options && popupObject.options.length > 0) {
+                        const optionCount = popupObject.options.length;
+                        if (objectIndex < 0 || objectIndex >= optionCount) {
+                            opdStageTrace.push('Blocked', 'Object index is invalid for current options');
                         }
-                        : {
-                            margin: { l: 0, r: 0, t: 30, b: 0 },
-                            scene: {
-                                xaxis: { title: 'Pupil X' },
-                                yaxis: { title: 'Pupil Y' },
-                                zaxis: { title: 'OPD (a.u.)' },
-                            },
-                        };
-
-                    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
-                        throw new Error('Plotly is not available in OPD popup');
                     }
-                    await window.Plotly.newPlot(containerEl, trace, layout, { responsive: true });
-                    setProgress(100, 'Done (Rust)');
-                    flushPendingProgress(true);
-                    resizePlot();
-                    return;
-                }
-
-                if (isTauriRuntime()) {
-                    throw new Error('Rust OPD compute path is required in desktop mode, but desktop compute bridge is unavailable');
-                }
+                } catch (_) {}
 
                 // NOTE: Wavefront generator supports only options.onProgress (same as PSF)
                 const onProgress = (evt) => {
                     try {
                         pendingProgressEvent = evt;
+                        const pct = Number(evt?.percent);
+                        if (Number.isFinite(pct)) {
+                            const msg = String(evt?.message || evt?.phase || 'working');
+                            const milestones = [25, 50, 75, 100];
+                            for (const milestone of milestones) {
+                                if (milestone > lastComputingMilestone && pct >= (milestone - 0.001)) {
+                                    opdStageTrace.push('Computing', msg + ' (' + String(milestone) + '%)');
+                                    lastComputingMilestone = milestone;
+                                }
+                            }
+                        }
                         const now = Date.now();
                         const elapsed = now - lastProgressUiUpdateAt;
                         if (elapsed >= PROGRESS_UI_UPDATE_INTERVAL_MS) {
@@ -6651,22 +7762,46 @@ export function setupAnalysisWindows() {
                 
                 try {
                     if (!window.opener || typeof window.opener.showWavefrontDiagram !== 'function') {
+                        try { opdStageTrace.push('Blocked', 'showWavefrontDiagram is unavailable'); } catch (_) {}
                         throw new Error('showWavefrontDiagram is not available on opener');
                     }
-                    await window.opener.showWavefrontDiagram(plotType, 'opd', Number.isFinite(gridSize) ? gridSize : 256, Number.isFinite(objectIndex) ? objectIndex : 0, {
+                    try { opdStageTrace.push('Wavefront call started', 'Delegating to opener.showWavefrontDiagram'); } catch (_) {}
+                    const wavefrontResult = await window.opener.showWavefrontDiagram(plotType, 'opd', Number.isFinite(gridSize) ? gridSize : 256, Number.isFinite(objectIndex) ? objectIndex : 0, {
                         containerElement: containerEl,
                         cancelToken: popupCancelToken,
                         onProgress,
-                        opdDisplayMode
+                        opdDisplayMode,
+                        throwOnError: true,
+                        showAlert: false
                     });
+                    if (wavefrontResult?.error) {
+                        throw new Error(String(wavefrontResult?.error?.message || wavefrontResult?.error || 'Wavefront plot failed'));
+                    }
+                    if (lastComputingMilestone < 100) {
+                        try {
+                            const completionMilestones = [25, 50, 75, 100];
+                            for (const milestone of completionMilestones) {
+                                if (milestone > lastComputingMilestone) {
+                                    const detail = (milestone === 100)
+                                        ? 'Plot data prepared (100%)'
+                                        : ('Progress checkpoint (' + String(milestone) + '%)');
+                                    opdStageTrace.push('Computing', detail);
+                                    lastComputingMilestone = milestone;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+                    try { opdStageTrace.push('Wavefront call completed', 'Plot render returned'); } catch (_) {}
 
                     // Optional: Zernike fit + push report to System Data
                     const shouldZernikeFit = !!(popupZernikeFit && popupZernikeFit.checked);
                     if (shouldZernikeFit) {
                         try {
                             if (String(plotType) === 'multifield') {
+                                try { opdStageTrace.push('Zernike skipped', 'Not supported for multi-field'); } catch (_) {}
                                 setProgress(100, 'Zernike fit is not available for Multi-field');
                             } else {
+                                try { opdStageTrace.push('Zernike started'); } catch (_) {}
                                 setProgress(98, 'Zernike fitting...');
 
                                 const opener = window.opener;
@@ -6833,31 +7968,46 @@ export function setupAnalysisWindows() {
                                 const pushed = pushSystemData(reportText);
                                 const opened = tryOpenSystemDataWindow();
                                 if (pushed && opened) {
+                                    try { opdStageTrace.push('Zernike completed', 'Report pushed to System Data'); } catch (_) {}
                                     setProgress(100, 'Zernike report pushed to System Data');
                                 } else if (pushed) {
+                                    try { opdStageTrace.push('Zernike completed', 'Report pushed, popup open skipped'); } catch (_) {}
                                     setProgress(100, 'Zernike report pushed. See System data.');
                                 } else {
+                                    try { opdStageTrace.push('Zernike partial', 'Could not push report to System Data'); } catch (_) {}
                                     setProgress(100, 'Zernike fit done (could not write System Data). See System data.');
                                 }
                             }
                         } catch (e) {
+                            try { opdStageTrace.push('Zernike failed', String(e?.message || e || 'unknown error')); } catch (_) {}
                             setProgress(100, 'Zernike fit failed. See console.');
                         }
                     }
 
-                    if (!shouldZernikeFit) setProgress(100, 'Done');
                     flushPendingProgress(true);
                     resizePlot();
+                    try { opdStageTrace.push('Render complete'); } catch (_) {}
                 } catch (err) {
                     if (err?.message?.includes('Cancelled')) {
                         flushPendingProgress(true);
                         setProgress(100, 'Cancelled');
+                        try { opdStageTrace.push('Cancelled', 'Stopped by user'); } catch (_) {}
                         console.log('🛑 OPD calculation cancelled by user');
                     } else {
+                        try {
+                            const em = String(err?.message || err || 'unknown error').toLowerCase();
+                            if (em.includes('object')) {
+                                opdStageTrace.push('Object-stage failure', String(err?.message || err || 'unknown error'));
+                            }
+                        } catch (_) {}
+                        try { opdStageTrace.push('Wavefront call failed', String(err?.message || err || 'unknown error')); } catch (_) {}
                         throw err;
                     }
                 } finally {
                     flushPendingProgress(true);
+                    setTimeout(() => {
+                        try { hideProgress(); } catch (_) {}
+                    }, 250);
                     if (stopBtn) {
                         stopBtn.disabled = true;
                         stopBtn.textContent = 'Stop';
@@ -6868,6 +8018,10 @@ export function setupAnalysisWindows() {
                 console.error(err);
                 flushPendingProgress(true);
                 setProgress(100, 'Failed');
+                try { opdStageTrace.push('Failed', String(err?.message || err || 'unknown error')); } catch (_) {}
+                setTimeout(() => {
+                    try { hideProgress(); } catch (_) {}
+                }, 600);
                 if (containerEl) {
                     containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate OPD diagram. Check console.</div>';
                 }
@@ -6922,6 +8076,42 @@ export function setupAnalysisWindows() {
                         }
                         w.__psfPopup = popup;
 
+                        const collectObjectRowsForPsfPopup = (): any[] => {
+                            try {
+                                if (w.tableObject && typeof w.tableObject.getData === 'function') {
+                                    const rows = w.tableObject.getData();
+                                    if (Array.isArray(rows) && rows.length > 0) return rows;
+                                }
+                            } catch (_) {}
+                            try {
+                                if (typeof w.getObjectRows === 'function') {
+                                    const rows = w.getObjectRows(w.tableObject);
+                                    if (Array.isArray(rows) && rows.length > 0) return rows;
+                                }
+                            } catch (_) {}
+                            try {
+                                const raw = localStorage.getItem('objectTableData');
+                                const parsed = raw ? JSON.parse(raw) : null;
+                                if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+                            } catch (_) {}
+                            try {
+                                if (typeof w.loadSystemConfigurations === 'function') {
+                                    const all = w.loadSystemConfigurations();
+                                    const list = Array.isArray(all && all.configurations) ? all.configurations : [];
+                                    const activeId = Number(all && all.activeConfigId);
+                                    const active = Number.isFinite(activeId)
+                                        ? (list.find((c: any) => Number(c && c.id) === activeId) || null)
+                                        : (list[0] || null);
+                                    const rows = active && Array.isArray(active.object) ? active.object : null;
+                                    if (Array.isArray(rows) && rows.length > 0) return rows;
+                                }
+                            } catch (_) {}
+                            return [];
+                        };
+
+                        const psfInitialObjectRows = collectObjectRowsForPsfPopup();
+                        const psfInitialObjectRowsJson = JSON.stringify(psfInitialObjectRows).replace(/</g, '\\u003c');
+
                         try { popup.document.open(); } catch (_) {}
 
                         popup.document.write(`
@@ -6929,7 +8119,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Point Spread Function</title>
+    <title>PSF</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -6991,16 +8181,16 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Point Spread Function</div>
+    <div class="header"></div>
     <div class="controls">
         <label for="popup-psf-object-select">Object:</label>
         <select id="popup-psf-object-select"><option value="0">1</option></select>
         <label for="popup-psf-sampling-select" title="Zero-padding increases FFT size without increasing OPD ray grid.">Zero pad:</label>
         <select id="popup-psf-sampling-select" title="Auto: pad to at least 512. None: no padding (FFT size = OPD grid). Or choose an explicit FFT size.">
-            <option value="auto">Auto (≥512)</option>
+            <option value="auto" selected>Auto (≥512)</option>
             <option value="none">None</option>
             <option value="512">512</option>
-            <option value="1024" selected>1024</option>
+            <option value="1024">1024</option>
             <option value="2048">2048</option>
             <option value="4096">4096</option>
         </select>
@@ -7017,12 +8207,9 @@ export function setupAnalysisWindows() {
         </select>
         <label><input type="checkbox" id="popup-psf-log-scale-checkbox"> Log scale</label>
         <label><input type="checkbox" id="popup-psf-remove-ptd-checkbox"> Remove P/T/D</label>
-        <label><input type="checkbox" id="popup-psf-force-wasm-checkbox"> Force WASM</label>
         <button id="popup-show-psf-btn" type="button">Show PSF</button>
         <button id="popup-stop-psf-btn" type="button" disabled>Stop</button>
-    </div>
-    <div class="note">
-        Note: PSF is calculated from OPD data using Fourier transform. Generate OPD data first.
+        <span id="popup-psf-pipeline-badge"></span>
     </div>
     <div id="popup-psf-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
         <div id="popup-psf-progress-text" style="margin-bottom: 6px;">Calculating PSF...</div>
@@ -7031,8 +8218,10 @@ export function setupAnalysisWindows() {
     <div class="content">
         <div id="popup-psf-container"></div>
         <div id="popup-psf-container-stats"></div>
+        <div id="popup-psf-opd-parity-diff" style="display:none;height:220px;border-top:1px solid #eee;"></div>
     </div>
         <script>
+        const __PSF_INITIAL_OBJECT_ROWS = ${psfInitialObjectRowsJson};
         // Debug: confirm the popup script version in console.
                 // build tag intentionally not shown
         function isIOSLike() {
@@ -7041,6 +8230,16 @@ export function setupAnalysisWindows() {
                 if (/iPad|iPhone|iPod/i.test(ua)) return true;
                 // iPadOS 13+ may masquerade as Mac
                 if (/Macintosh/i.test(ua) && Number(navigator.maxTouchPoints || 0) > 1) return true;
+            } catch (_) {}
+            return false;
+        }
+
+        function isPopupTauriRuntime() {
+            try {
+                if (window && window.__TAURI_INTERNALS__) return true;
+            } catch (_) {}
+            try {
+                if (window && window.opener && window.opener.__TAURI_INTERNALS__) return true;
             } catch (_) {}
             return false;
         }
@@ -7117,18 +8316,89 @@ export function setupAnalysisWindows() {
             const current = popupSelect.value;
             const nextOptions = [];
 
-            // OPD/MTF-style: build options from opener.getObjectRows() first.
+            // OPD/MTF-style: resolve object rows from multiple opener sources.
             let opener = null;
             try { opener = window.opener || null; } catch (_) { opener = null; }
             let objects = [];
-            if (opener && typeof opener.getObjectRows === 'function') {
+            if (opener) {
                 try {
-                    objects = opener.getObjectRows(opener.tableObject);
-                    if (!Array.isArray(objects) || objects.length === 0) objects = [];
-                } catch (_) {
-                    objects = [];
+                    if (opener.tableObject && typeof opener.tableObject.getData === 'function') {
+                        const rows = opener.tableObject.getData();
+                        if (Array.isArray(rows) && rows.length > 0) objects = rows;
+                    }
+                } catch (_) {}
+
+                if (!Array.isArray(objects) || objects.length === 0) {
+                    try {
+                        if (typeof opener.getObjectRows === 'function') {
+                            const rows = opener.getObjectRows(opener.tableObject);
+                            if (Array.isArray(rows) && rows.length > 0) objects = rows;
+                        }
+                    } catch (_) {}
+                }
+
+                if (!Array.isArray(objects) || objects.length === 0) {
+                    try {
+                        if (opener.localStorage && typeof opener.localStorage.getItem === 'function') {
+                            const raw = opener.localStorage.getItem('objectTableData');
+                            const parsed = raw ? JSON.parse(raw) : null;
+                            if (Array.isArray(parsed) && parsed.length > 0) objects = parsed;
+                        }
+                    } catch (_) {}
+                }
+
+                if (!Array.isArray(objects) || objects.length === 0) {
+                    try {
+                        if (typeof opener.getActiveConfiguration === 'function') {
+                            const cfg = opener.getActiveConfiguration();
+                            const rows = cfg && Array.isArray(cfg.object) ? cfg.object : null;
+                            if (Array.isArray(rows) && rows.length > 0) objects = rows;
+                        }
+                    } catch (_) {}
+                }
+
+                if (!Array.isArray(objects) || objects.length === 0) {
+                    try {
+                        if (typeof opener.loadSystemConfigurations === 'function') {
+                            const all = opener.loadSystemConfigurations();
+                            const list = Array.isArray(all && all.configurations) ? all.configurations : [];
+                            const activeId = Number(all && all.activeConfigId);
+                            const active = Number.isFinite(activeId)
+                                ? (list.find((c) => Number(c && c.id) === activeId) || null)
+                                : (list[0] || null);
+                            const rows = active && Array.isArray(active.object) ? active.object : null;
+                            if (Array.isArray(rows) && rows.length > 0) objects = rows;
+                        }
+                    } catch (_) {}
                 }
             }
+
+            if ((!Array.isArray(objects) || objects.length === 0) && Array.isArray(__PSF_INITIAL_OBJECT_ROWS) && __PSF_INITIAL_OBJECT_ROWS.length > 0) {
+                objects = __PSF_INITIAL_OBJECT_ROWS;
+            }
+
+            if (!Array.isArray(objects) || objects.length === 0) {
+                try {
+                    const raw = localStorage.getItem('objectTableData');
+                    const parsed = raw ? JSON.parse(raw) : null;
+                    if (Array.isArray(parsed) && parsed.length > 0) objects = parsed;
+                } catch (_) {}
+            }
+
+            if (!Array.isArray(objects) || objects.length === 0) {
+                try {
+                    const rawCfg = localStorage.getItem('systemConfigurations');
+                    const parsedCfg = rawCfg ? JSON.parse(rawCfg) : null;
+                    const list = Array.isArray(parsedCfg && parsedCfg.configurations) ? parsedCfg.configurations : [];
+                    const activeId = Number(parsedCfg && parsedCfg.activeConfigId);
+                    const active = Number.isFinite(activeId)
+                        ? (list.find((c) => Number(c && c.id) === activeId) || null)
+                        : (list[0] || null);
+                    const rows = active && Array.isArray(active.object) ? active.object : null;
+                    if (Array.isArray(rows) && rows.length > 0) objects = rows;
+                } catch (_) {}
+            }
+
             if (Array.isArray(objects) && objects.length > 0) {
                 for (let i = 0; i < objects.length; i++) {
                     const obj = objects[i];
@@ -7218,10 +8488,8 @@ export function setupAnalysisWindows() {
                 }
             }
             if (popupZernikeSampling && openerZernikeSampling && openerZernikeSampling.value) popupZernikeSampling.value = openerZernikeSampling.value;
-            // Default: Log scale should start unchecked for PSF.
             try {
-                if (openerLog) openerLog.checked = false;
-                if (popupLog) popupLog.checked = false;
+                if (popupLog && openerLog) popupLog.checked = !!openerLog.checked;
             } catch (_) {}
             try {
                 if (popupRemovePtd) popupRemovePtd.checked = !!(openerRemovePtd && openerRemovePtd.checked);
@@ -7234,12 +8502,73 @@ export function setupAnalysisWindows() {
                 if (!plotly || !plotly.Plots) return;
                 const el = document.getElementById('popup-psf-container');
                 if (el) plotly.Plots.resize(el);
+                const diffEl = document.getElementById('popup-psf-opd-parity-diff');
+                if (diffEl && diffEl.style.display !== 'none') {
+                    plotly.Plots.resize(diffEl);
+                }
             } catch (_) {}
+        }
+
+        function clearOpdParityHeatmap() {
+            try {
+                const diffEl = document.getElementById('popup-psf-opd-parity-diff');
+                if (!diffEl) return;
+                diffEl.style.display = 'none';
+                diffEl.innerHTML = '';
+            } catch (_) {}
+        }
+
+        async function renderOpdParityHeatmap(diffGridWaves, meta) {
+            try {
+                const diffEl = document.getElementById('popup-psf-opd-parity-diff');
+                if (!diffEl) return;
+                if (!Array.isArray(diffGridWaves) || diffGridWaves.length === 0 || !window.Plotly) {
+                    clearOpdParityHeatmap();
+                    return;
+                }
+
+                const maxAbs = Number(meta && meta.maxAbsWaves);
+                const zAbs = (Number.isFinite(maxAbs) && maxAbs > 0) ? maxAbs : 1;
+                const title = 'OPD parity map (Native - JS) [waves]';
+
+                diffEl.style.display = 'block';
+                await window.Plotly.newPlot(diffEl, [{
+                    z: diffGridWaves,
+                    type: 'heatmap',
+                    colorscale: 'RdBu',
+                    zmid: 0,
+                    zmin: -zAbs,
+                    zmax: zAbs,
+                    colorbar: { title: 'waves' }
+                }], {
+                    title: { text: title, font: { size: 12 } },
+                    margin: { l: 50, r: 20, t: 32, b: 40 },
+                    xaxis: { title: 'Pupil ix' },
+                    yaxis: { title: 'Pupil iy', autorange: 'reversed' }
+                }, { responsive: true, displaylogo: false });
+            } catch (_) {
+                clearOpdParityHeatmap();
+            }
         }
 
         window['renderPSF'] = async () => {
             const containerEl = document.getElementById('popup-psf-container');
             if (containerEl) containerEl.innerHTML = '';
+            clearOpdParityHeatmap();
+
+            const setPopupPsfBadge = (status) => {
+                try {
+                    const el = document.getElementById('popup-psf-pipeline-badge');
+                    if (!el) return;
+                    const text = String(status || '');
+                    el.textContent = text;
+                    if (text) {
+                        el.setAttribute('title', text);
+                    } else {
+                        el.removeAttribute('title');
+                    }
+                } catch (_) {}
+            };
 
             const progressWrapper = document.getElementById('popup-psf-progress-wrapper');
             const progressEl = document.getElementById('popup-psf-progress');
@@ -7271,7 +8600,6 @@ export function setupAnalysisWindows() {
             const popupZernikeSampling = document.getElementById('popup-psf-zernike-sampling-select');
             const popupLog = document.getElementById('popup-psf-log-scale-checkbox');
             const popupRemovePtd = document.getElementById('popup-psf-remove-ptd-checkbox');
-            const popupForceWasm = document.getElementById('popup-psf-force-wasm-checkbox');
 
             let objectIndex = popupObject ? parseInt(popupObject.value, 10) : 0;
             if (!Number.isFinite(objectIndex) && popupObject && Number.isFinite(popupObject.selectedIndex)) {
@@ -7283,7 +8611,6 @@ export function setupAnalysisWindows() {
             const opdDisplayMode = (popupRemovePtd && popupRemovePtd.checked)
                 ? 'pistonTiltDefocusRemoved'
                 : 'pistonTiltRemoved';
-            const forceWasm = !!(popupForceWasm && popupForceWasm.checked);
             const PSF_DEBUG = !!(typeof globalThis !== 'undefined' && globalThis.__PSF_DEBUG);
 
             const openerObject = getOpenerEl('psf-object-select');
@@ -7306,54 +8633,10 @@ export function setupAnalysisWindows() {
             if (openerLog) openerLog.checked = logScale;
 
             try {
+                setPopupPsfBadge('Running');
                 setProgress(0, 'Starting...');
                 // Allow the popup to paint the progress UI before heavy computation begins.
                 await new Promise(r => setTimeout(r, 0));
-
-                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
-                    window.opener
-                    && window.opener.__TAURI_INTERNALS__
-                    && typeof window.opener.runDesktopAnalysisComputeForPopup === 'function'
-                );
-
-                if (canUseDesktopRust) {
-                    setProgress(20, 'Computing PSF (Rust)...');
-                    const result = await window.opener.runDesktopAnalysisComputeForPopup({
-                        kind: 'psf',
-                        gridSize: Number.isFinite(zernikeSampling) ? zernikeSampling : 128,
-                    });
-                    const psfGrid = Array.isArray(result?.psfGrid) ? result.psfGrid : [];
-                    if (!psfGrid.length || !Array.isArray(psfGrid[0])) {
-                        throw new Error('Rust PSF result does not contain psfGrid');
-                    }
-
-                    const zData = logScale
-                        ? psfGrid.map((row) => row.map((v) => {
-                            const n = Number(v);
-                            return Number.isFinite(n) && n > 0 ? Math.log10(n) : -12;
-                        }))
-                        : psfGrid;
-
-                    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
-                        throw new Error('Plotly is not available in PSF popup');
-                    }
-
-                    setProgress(80, 'Rendering PSF...');
-                    await window.Plotly.newPlot(containerEl, [{
-                        z: zData,
-                        type: 'heatmap',
-                        colorscale: 'Hot',
-                    }], {
-                        margin: { l: 45, r: 20, t: 30, b: 40 },
-                        xaxis: { title: 'Pupil X' },
-                        yaxis: { title: 'Pupil Y', scaleanchor: 'x', scaleratio: 1 },
-                    }, { responsive: true });
-
-                    setProgress(100, 'Done (Rust)');
-                    resizePlot();
-                    hideProgress();
-                    return;
-                }
 
                 const onProgress = (evt) => {
                     try {
@@ -7434,6 +8717,15 @@ export function setupAnalysisWindows() {
                     })();
 
                     const objects = (() => {
+                        if (Array.isArray(__PSF_INITIAL_OBJECT_ROWS) && __PSF_INITIAL_OBJECT_ROWS.length > 0) {
+                            return cloneRows(__PSF_INITIAL_OBJECT_ROWS);
+                        }
+                        try {
+                            if (window.opener && window.opener.tableObject && typeof window.opener.tableObject.getData === 'function') {
+                                const r = window.opener.tableObject.getData();
+                                if (Array.isArray(r) && r.length > 0) return cloneRows(r);
+                            }
+                        } catch (_) {}
                         try {
                             if (window.opener && typeof window.opener.getObjectRows === 'function') {
                                 const r = window.opener.getObjectRows(window.opener.tableObject);
@@ -7446,6 +8738,22 @@ export function setupAnalysisWindows() {
                                 const r = window.opener.getObjectRows();
                                 if (Array.isArray(r) && r.length > 0) return cloneRows(r);
                             }
+                        } catch (_) {}
+                        try {
+                            const raw = localStorage.getItem('objectTableData');
+                            const parsed = raw ? JSON.parse(raw) : null;
+                            if (Array.isArray(parsed) && parsed.length > 0) return cloneRows(parsed);
+                        } catch (_) {}
+                        try {
+                            const rawCfg = localStorage.getItem('systemConfigurations');
+                            const parsedCfg = rawCfg ? JSON.parse(rawCfg) : null;
+                            const list = Array.isArray(parsedCfg && parsedCfg.configurations) ? parsedCfg.configurations : [];
+                            const activeId = Number(parsedCfg && parsedCfg.activeConfigId);
+                            const active = Number.isFinite(activeId)
+                                ? (list.find((c) => Number(c && c.id) === activeId) || null)
+                                : (list[0] || null);
+                            const rows = active && Array.isArray(active.object) ? active.object : null;
+                            if (Array.isArray(rows) && rows.length > 0) return cloneRows(rows);
                         } catch (_) {}
                         return [];
                     })();
@@ -7630,61 +8938,452 @@ export function setupAnalysisWindows() {
                         } catch (_) {}
                     };
 
-                    const host = window.opener || window;
-                    const calculatorFactory =
-                        (host && typeof host.createOPDCalculator === 'function' && host.createOPDCalculator)
-                        || (typeof window.createOPDCalculator === 'function' && window.createOPDCalculator)
-                        || (typeof createOPDCalculator === 'function' ? createOPDCalculator : null);
-                    const analyzerFactory =
-                        (host && typeof host.createWavefrontAnalyzer === 'function' && host.createWavefrontAnalyzer)
-                        || (typeof window.createWavefrontAnalyzer === 'function' && window.createWavefrontAnalyzer)
-                        || (typeof createWavefrontAnalyzer === 'function' ? createWavefrontAnalyzer : null);
-                    const opdCalculator = calculatorFactory ? calculatorFactory(opticalSystemRows, wavelength) : null;
-                    if (!opdCalculator) {
-                        throw new Error('createOPDCalculator is not available');
-                    }
-                    const analyzer = analyzerFactory ? analyzerFactory(opdCalculator) : null;
-                    if (!analyzer) {
-                        throw new Error('WavefrontAberrationAnalyzer is not available');
-                    }
-                    
-                    // NOTE:
-                    // Keep infinite-field pupil mode adaptive (or globally forced by user setting).
-                    // Hard-forcing stop mode here can make valid pupil samples collapse for off-axis fields.
-                    
-                    onProgress({ percent: 0, phase: 'opd', message: 'OPD...' });
                     const wavefrontGridSize = Number.isFinite(zernikeSampling)
                         ? Math.max(16, Math.floor(Number(zernikeSampling)))
                         : 128;
-                    const wavefrontMap = await raceWithCancel(analyzer.generateWavefrontMap(fieldSetting, wavefrontGridSize, 'circular', {
-                        // Match OPD display pipeline:
-                        // - simple (no referenceSphere)
-                        // - no Zernike fit
-                        // - piston+tilt removed (display)
-                        recordRays: false,
-                        progressEvery: 0,
-                        renderFromZernike: false,
-                        skipZernikeFit: true,
-                        opdMode: 'simple',
-                        opdDisplayMode,
-                        diagnoseDiscontinuities: PSF_DEBUG,
-                        diagTopK: 8,
-                        cancelToken: activeCancelToken,
-                        onProgress: (evt) => {
-                            const p = Number(evt && evt.percent);
-                            const msg = (evt && evt.message) || (evt && evt.phase) || 'OPD...';
-                            const phase = (evt && evt.phase) ? evt.phase : 'opd';
-                            if (Number.isFinite(p)) onProgress({ percent: Math.max(0, Math.min(80, p * 0.8)), phase, message: msg });
-                            else onProgress({ percent: null, phase, message: msg });
-                        }
-                    }), activeCancelToken);
-                    throwIfCancelled(activeCancelToken);
+                    onProgress({ percent: 0, phase: 'opd', message: 'OPD...' });
 
-                    if (wavefrontMap && wavefrontMap.error) {
-                        const err = new Error((wavefrontMap.error && wavefrontMap.error.message) ? wavefrontMap.error.message : 'Wavefront generation failed (popup).');
-                        err.code = 'WAVEFRONT_UNAVAILABLE';
-                        err.wavefrontError = wavefrontMap.error;
-                        throw err;
+                    let wavefrontMap = null;
+                    let nativeOpdResp = null;
+                    let nativeOpdDiag = null;
+                    const forceJsOpdMap = !!(typeof window !== 'undefined' && window.__PSF_POPUP_FORCE_JS_OPD_MAP === true);
+                    const preferNativeOpdMap = (typeof window !== 'undefined' && window.__PSF_POPUP_USE_NATIVE_OPD_MAP === false)
+                        ? false
+                        : true;
+                    const canUseNativeOpdMap = !forceJsOpdMap && preferNativeOpdMap && isPopupTauriRuntime()
+                        && !!(window.opener && typeof window.opener.runDesktopNativeOpdMapForPopup === 'function');
+
+                    if (canUseNativeOpdMap) {
+                        try {
+                            nativeOpdResp = await raceWithCancel(window.opener.runDesktopNativeOpdMapForPopup({
+                                objectIndex: idx,
+                                gridSize: wavefrontGridSize,
+                                wavelengthUm: wavelength,
+                                opdDisplayMode,
+                            }), activeCancelToken);
+                            throwIfCancelled(activeCancelToken);
+                            {
+                                const usedIdx = Number(nativeOpdResp?.usedObjectIndex);
+                                if (Number.isFinite(usedIdx) && Number.isFinite(idx) && usedIdx !== idx) {
+                                    throw new Error('Native OPD object mismatch: requested=' + String(idx) + ', used=' + String(usedIdx));
+                                }
+                            }
+                            try {
+                                const opdLine = '🧪 [PSF popup] OPD backend=' + String(nativeOpdResp?.backend || 'unknown') +
+                                    ' reqObjIdx=' + (nativeOpdResp?.requestedObjectIndex ?? 'n/a') +
+                                    ' usedObjIdx=' + Number(nativeOpdResp?.usedObjectIndex ?? -1) +
+                                    ' usedObj=' + String(nativeOpdResp?.usedObjectPosition || 'n/a') +
+                                    ' field=(' + Number(nativeOpdResp?.usedObjectX ?? 0) + ',' + Number(nativeOpdResp?.usedObjectY ?? 0) + ')' +
+                                    ' hitCount=' + Number(nativeOpdResp?.hitCount || 0) +
+                                    ' sampleCount=' + Number(nativeOpdResp?.sampleCount || 0);
+                                console.log(opdLine);
+                                try {
+                                    if (window.opener && window.opener.console && typeof window.opener.console.log === 'function') {
+                                        window.opener.console.log(opdLine);
+                                    }
+                                } catch (_) {}
+                            } catch (_) {}
+
+                            try {
+                                const enableOpdParityDiag = !!(typeof window !== 'undefined' && window.__PSF_POPUP_ENABLE_OPD_PARITY_DIAG === true);
+                                if (!enableOpdParityDiag) {
+                                    // Skip heavy JS re-computation parity diagnostics unless explicitly enabled.
+                                    throw new Error('__skip_opd_parity_diag__');
+                                }
+
+                                const host = window.opener || window;
+                                const calculatorFactory =
+                                    (host && typeof host.createOPDCalculator === 'function' && host.createOPDCalculator)
+                                    || (typeof window.createOPDCalculator === 'function' && window.createOPDCalculator)
+                                    || (typeof createOPDCalculator === 'function' ? createOPDCalculator : null);
+                                const analyzerFactory =
+                                    (host && typeof host.createWavefrontAnalyzer === 'function' && host.createWavefrontAnalyzer)
+                                    || (typeof window.createWavefrontAnalyzer === 'function' && window.createWavefrontAnalyzer)
+                                    || (typeof createWavefrontAnalyzer === 'function' ? createWavefrontAnalyzer : null);
+                                const opdCalculator = calculatorFactory ? calculatorFactory(opticalSystemRows, wavelength) : null;
+                                const analyzer = analyzerFactory ? analyzerFactory(opdCalculator) : null;
+                                if (analyzer && Array.isArray(nativeOpdResp?.displayOpdGrid)) {
+                                    try {
+                                        const nativeTarget = Number(nativeOpdResp?.targetSurface);
+                                        const nativeStop = Number(nativeOpdResp?.stopSurface);
+                                        const isFiniteFieldObj = !!(fieldSetting && String(fieldSetting.type || '').toLowerCase().includes('angle'));
+
+                                        if (Number.isFinite(nativeStop) && nativeStop >= 0 && opdCalculator) {
+                                            opdCalculator.stopSurfaceIndex = Math.floor(nativeStop);
+                                        }
+                                        if (Number.isFinite(nativeTarget) && nativeTarget >= 0 && opdCalculator) {
+                                            opdCalculator.evaluationSurfaceIndex = Math.floor(nativeTarget);
+                                        }
+                                        if (opdCalculator) {
+                                            const evalIdx = Number(opdCalculator.evaluationSurfaceIndex);
+                                            const stopIdx = Number(opdCalculator.stopSurfaceIndex);
+                                            const maxIdx = Math.max(
+                                                Number.isFinite(evalIdx) ? evalIdx : 0,
+                                                Number.isFinite(stopIdx) ? stopIdx : 0
+                                            );
+                                            opdCalculator.traceMaxSurfaceIndex = maxIdx;
+
+                                            if (isFiniteFieldObj && typeof opdCalculator._setInfinitePupilMode === 'function') {
+                                                const nativeMode = String(nativeOpdResp?.pupilSamplingMode || '').toLowerCase();
+                                                opdCalculator._setInfinitePupilMode(fieldSetting, nativeMode === 'stop' ? 'stop' : 'entrance');
+                                            }
+
+                                            // Rebuild chief/reference after overriding indices/mode.
+                                            opdCalculator.referenceOpticalPath = null;
+                                            opdCalculator.lastFieldKey = null;
+                                            if (typeof opdCalculator.setReferenceRay === 'function') {
+                                                opdCalculator.setReferenceRay(fieldSetting);
+                                            }
+                                        }
+                                    } catch (_) {}
+
+                                    const jsDiagMap = await raceWithCancel(analyzer.generateWavefrontMap(fieldSetting, wavefrontGridSize, 'circular', {
+                                        recordRays: false,
+                                        progressEvery: 0,
+                                        renderFromZernike: false,
+                                        skipZernikeFit: true,
+                                        opdMode: 'simple',
+                                        opdDisplayMode,
+                                        diagnoseDiscontinuities: false,
+                                        cancelToken: activeCancelToken,
+                                    }), activeCancelToken);
+
+                                    if (jsDiagMap && !jsDiagMap.error) {
+                                        const sDiag = Math.max(2, Math.floor(Number(wavefrontGridSize)));
+                                        const jsGrid = Array.from({ length: sDiag }, () => Array(sDiag).fill(NaN));
+                                        const coords = Array.isArray(jsDiagMap?.pupilCoordinates) ? jsDiagMap.pupilCoordinates : [];
+                                        const jsOpdMicrons = (jsDiagMap?.display && Array.isArray(jsDiagMap.display.opds))
+                                            ? jsDiagMap.display.opds
+                                            : (Array.isArray(jsDiagMap?.opds) ? jsDiagMap.opds : []);
+                                        const jsRawOpdMicrons = (jsDiagMap?.raw && Array.isArray(jsDiagMap.raw.opds))
+                                            ? jsDiagMap.raw.opds
+                                            : (Array.isArray(jsDiagMap?.opds) ? jsDiagMap.opds : []);
+                                        const nDiag = Math.min(coords.length, jsOpdMicrons.length);
+                                        for (let k = 0; k < nDiag; k++) {
+                                            const c = coords[k];
+                                            const ix = Number.isInteger(c?.ix) ? c.ix : null;
+                                            const iy = Number.isInteger(c?.iy) ? c.iy : null;
+                                            if (ix === null || iy === null) continue;
+                                            if (ix < 0 || ix >= sDiag || iy < 0 || iy >= sDiag) continue;
+                                            const rawV = jsOpdMicrons[k];
+                                            if (rawV === null || rawV === undefined || rawV === '') continue;
+                                            const v = Number(rawV);
+                                            if (!Number.isFinite(v)) continue;
+                                            jsGrid[iy][ix] = v;
+                                        }
+
+                                        const jsRawGrid = Array.from({ length: sDiag }, () => Array(sDiag).fill(NaN));
+                                        const nRawDiag = Math.min(coords.length, jsRawOpdMicrons.length);
+                                        for (let k = 0; k < nRawDiag; k++) {
+                                            const c = coords[k];
+                                            const ix = Number.isInteger(c?.ix) ? c.ix : null;
+                                            const iy = Number.isInteger(c?.iy) ? c.iy : null;
+                                            if (ix === null || iy === null) continue;
+                                            if (ix < 0 || ix >= sDiag || iy < 0 || iy >= sDiag) continue;
+                                            const rawV = jsRawOpdMicrons[k];
+                                            if (rawV === null || rawV === undefined || rawV === '') continue;
+                                            const v = Number(rawV);
+                                            if (!Number.isFinite(v)) continue;
+                                            jsRawGrid[iy][ix] = v;
+                                        }
+
+                                        let count = 0;
+                                        let sumAbs = 0;
+                                        let sumSq = 0;
+                                        let maxAbs = 0;
+                                        let sumA = 0;
+                                        let sumB = 0;
+                                        let sumBB = 0;
+                                        let sumBA = 0;
+                                        let maxIx = -1;
+                                        let maxIy = -1;
+                                        const diffGridWaves = Array.from({ length: sDiag }, () => Array(sDiag).fill(NaN));
+                                        const radial = {
+                                            center: { count: 0, sumAbs: 0, sumSq: 0 },
+                                            mid: { count: 0, sumAbs: 0, sumSq: 0 },
+                                            edge: { count: 0, sumAbs: 0, sumSq: 0 },
+                                        };
+                                        const cx = (sDiag - 1) / 2;
+                                        const cy = (sDiag - 1) / 2;
+                                        const rMax = Math.max(1, Math.hypot(cx, cy));
+                                        for (let iy = 0; iy < sDiag; iy++) {
+                                            const nRow = nativeOpdResp.displayOpdGrid[iy] || [];
+                                            for (let ix = 0; ix < sDiag; ix++) {
+                                                const rawA = nRow[ix];
+                                                const rawB = jsGrid[iy][ix];
+                                                if (rawA === null || rawA === undefined || rawA === '' || rawB === null || rawB === undefined || rawB === '') continue;
+                                                const a = Number(rawA);
+                                                const b = Number(rawB);
+                                                if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+                                                // Native OPD map is returned in waves, while JS map here is in microns.
+                                                // Convert JS OPD to waves before parity comparison.
+                                                const bWaves = b / wavelength;
+                                                const dWaves = a - bWaves;
+                                                diffGridWaves[iy][ix] = dWaves;
+                                                const ad = Math.abs(dWaves);
+                                                sumAbs += ad;
+                                                sumSq += dWaves * dWaves;
+                                                sumA += a;
+                                                sumB += bWaves;
+                                                sumBB += bWaves * bWaves;
+                                                sumBA += bWaves * a;
+                                                if (ad > maxAbs) {
+                                                    maxAbs = ad;
+                                                    maxIx = ix;
+                                                    maxIy = iy;
+                                                }
+                                                const rn = Math.hypot(ix - cx, iy - cy) / rMax;
+                                                const band = (rn < 0.35) ? radial.center : (rn < 0.7 ? radial.mid : radial.edge);
+                                                band.count++;
+                                                band.sumAbs += ad;
+                                                band.sumSq += dWaves * dWaves;
+                                                count++;
+                                            }
+                                        }
+
+                                        if (count > 0) {
+                                            let fitScale = NaN;
+                                            let fitOffset = NaN;
+                                            let fitResidualRms = NaN;
+                                            if (count >= 2) {
+                                                const denom = (count * sumBB) - (sumB * sumB);
+                                                if (Number.isFinite(denom) && Math.abs(denom) > 1e-18) {
+                                                    fitScale = ((count * sumBA) - (sumB * sumA)) / denom;
+                                                    fitOffset = (sumA - fitScale * sumB) / count;
+
+                                                    let fitSumSq = 0;
+                                                    let fitCount = 0;
+                                                    for (let iy = 0; iy < sDiag; iy++) {
+                                                        const nRow2 = nativeOpdResp.displayOpdGrid[iy] || [];
+                                                        const jRow2 = jsGrid[iy] || [];
+                                                        for (let ix = 0; ix < sDiag; ix++) {
+                                                            const rawA2 = nRow2[ix];
+                                                            const rawB2 = jRow2[ix];
+                                                            if (rawA2 === null || rawA2 === undefined || rawA2 === '' || rawB2 === null || rawB2 === undefined || rawB2 === '') continue;
+                                                            const a2 = Number(rawA2);
+                                                            const b2 = Number(rawB2);
+                                                            if (!Number.isFinite(a2) || !Number.isFinite(b2)) continue;
+                                                            const bw2 = b2 / wavelength;
+                                                            const e2 = a2 - (fitScale * bw2 + fitOffset);
+                                                            fitSumSq += e2 * e2;
+                                                            fitCount++;
+                                                        }
+                                                    }
+                                                    fitResidualRms = fitCount > 0 ? Math.sqrt(fitSumSq / fitCount) : NaN;
+                                                }
+                                            }
+
+                                            let rawCount = 0;
+                                            let rawSumAbs = 0;
+                                            let rawSumSq = 0;
+                                            let rawMaxAbs = 0;
+                                            for (let iy = 0; iy < sDiag; iy++) {
+                                                const nRowRaw = Array.isArray(nativeOpdResp.rawOpdGrid) ? (nativeOpdResp.rawOpdGrid[iy] || []) : [];
+                                                const jRowRaw = jsRawGrid[iy] || [];
+                                                for (let ix = 0; ix < sDiag; ix++) {
+                                                    const rawARaw = nRowRaw[ix];
+                                                    const rawBRaw = jRowRaw[ix];
+                                                    if (rawARaw === null || rawARaw === undefined || rawARaw === '' || rawBRaw === null || rawBRaw === undefined || rawBRaw === '') continue;
+                                                    const aRaw = Number(rawARaw);
+                                                    const bRaw = Number(rawBRaw);
+                                                    if (!Number.isFinite(aRaw) || !Number.isFinite(bRaw)) continue;
+                                                    const dRawWaves = aRaw - (bRaw / wavelength);
+                                                    const adRaw = Math.abs(dRawWaves);
+                                                    rawSumAbs += adRaw;
+                                                    rawSumSq += dRawWaves * dRawWaves;
+                                                    if (adRaw > rawMaxAbs) rawMaxAbs = adRaw;
+                                                    rawCount++;
+                                                }
+                                            }
+
+                                            const rawDiag = (rawCount > 0)
+                                                ? {
+                                                    count: rawCount,
+                                                    rmsWaves: Math.sqrt(rawSumSq / rawCount),
+                                                    meanAbsWaves: rawSumAbs / rawCount,
+                                                    maxAbsWaves: rawMaxAbs,
+                                                }
+                                                : null;
+
+                                            const maxAllowedRmsWaves = (() => {
+                                                const v = Number((typeof window !== 'undefined')
+                                                    ? window.__PSF_POPUP_NATIVE_OPD_PARITY_MAX_RMS_WAVES
+                                                    : NaN);
+                                                return (Number.isFinite(v) && v > 0) ? v : 5e-2;
+                                            })();
+                                            nativeOpdDiag = {
+                                                count,
+                                                rmsWaves: Math.sqrt(sumSq / count),
+                                                meanAbsWaves: sumAbs / count,
+                                                maxAbsWaves: maxAbs,
+                                                maxLoc: { ix: maxIx, iy: maxIy },
+                                                radialBands: {
+                                                    center: {
+                                                        count: radial.center.count,
+                                                        rmsWaves: radial.center.count > 0 ? Math.sqrt(radial.center.sumSq / radial.center.count) : NaN,
+                                                        meanAbsWaves: radial.center.count > 0 ? (radial.center.sumAbs / radial.center.count) : NaN,
+                                                    },
+                                                    mid: {
+                                                        count: radial.mid.count,
+                                                        rmsWaves: radial.mid.count > 0 ? Math.sqrt(radial.mid.sumSq / radial.mid.count) : NaN,
+                                                        meanAbsWaves: radial.mid.count > 0 ? (radial.mid.sumAbs / radial.mid.count) : NaN,
+                                                    },
+                                                    edge: {
+                                                        count: radial.edge.count,
+                                                        rmsWaves: radial.edge.count > 0 ? Math.sqrt(radial.edge.sumSq / radial.edge.count) : NaN,
+                                                        meanAbsWaves: radial.edge.count > 0 ? (radial.edge.sumAbs / radial.edge.count) : NaN,
+                                                    },
+                                                },
+                                                fit: {
+                                                    scale: fitScale,
+                                                    offsetWaves: fitOffset,
+                                                    residualRmsWaves: fitResidualRms,
+                                                },
+                                                rawParity: rawDiag,
+                                            };
+                                            const diagLine = '📐 [PSF popup][OPD parity] Native-vs-JS count=' + count +
+                                                ' rms=' + Number(nativeOpdDiag.rmsWaves).toExponential(3) + 'λ' +
+                                                ' meanAbs=' + Number(nativeOpdDiag.meanAbsWaves).toExponential(3) + 'λ' +
+                                                ' maxAbs=' + Number(nativeOpdDiag.maxAbsWaves).toExponential(3) + 'λ' +
+                                                ' @(' + String(maxIx) + ',' + String(maxIy) + ')' +
+                                                ' fitScale=' + (Number.isFinite(fitScale) ? Number(fitScale).toExponential(3) : 'NaN') +
+                                                ' fitOffset=' + (Number.isFinite(fitOffset) ? Number(fitOffset).toExponential(3) : 'NaN') + 'λ' +
+                                                ' fitResidual=' + (Number.isFinite(fitResidualRms) ? Number(fitResidualRms).toExponential(3) : 'NaN') + 'λ' +
+                                                (rawDiag
+                                                    ? (' | raw rms=' + Number(rawDiag.rmsWaves).toExponential(3) + 'λ meanAbs=' + Number(rawDiag.meanAbsWaves).toExponential(3) + 'λ maxAbs=' + Number(rawDiag.maxAbsWaves).toExponential(3) + 'λ')
+                                                    : '');
+                                            const hasReliableRawParity = !!(rawDiag && Number.isFinite(Number(rawDiag.rmsWaves)) && Number(rawDiag.count) >= 64);
+                                            const hasReliableDisplayParity = Number.isFinite(Number(nativeOpdDiag.rmsWaves)) && Number(count) >= 64;
+                                            const parityForFallback = hasReliableRawParity
+                                                ? Number(rawDiag.rmsWaves)
+                                                : (hasReliableDisplayParity ? Number(nativeOpdDiag.rmsWaves) : NaN);
+                                            const shouldFallbackToJsOpd = Number.isFinite(parityForFallback)
+                                                ? (parityForFallback > maxAllowedRmsWaves)
+                                                : false;
+
+                                            if (shouldFallbackToJsOpd) {
+                                                console.warn('⚠️ ' + diagLine);
+                                            } else {
+                                                console.log(diagLine);
+                                            }
+                                            try {
+                                                if (window.opener && window.opener.console) {
+                                                    const logFn = shouldFallbackToJsOpd
+                                                        ? window.opener.console.warn
+                                                        : window.opener.console.log;
+                                                    if (typeof logFn === 'function') {
+                                                        logFn.call(window.opener.console, (shouldFallbackToJsOpd ? '⚠️ ' : '') + diagLine);
+                                                    }
+                                                }
+                                            } catch (_) {}
+
+                                            try {
+                                                window['__lastOpdParityDiffWaves'] = diffGridWaves;
+                                                window['__lastOpdParitySummary'] = nativeOpdDiag;
+                                                window['__lastOpdParityRawSummary'] = rawDiag;
+                                                if (window.opener) {
+                                                    window.opener['__lastOpdParitySummary'] = nativeOpdDiag;
+                                                    window.opener['__lastOpdParityRawSummary'] = rawDiag;
+                                                }
+                                            } catch (_) {}
+
+                                            await renderOpdParityHeatmap(diffGridWaves, nativeOpdDiag);
+
+                                            if (shouldFallbackToJsOpd) {
+                                                try {
+                                                    const fbMsg = '⚠️ [PSF popup] Native OPD parity exceeded threshold (rms=' +
+                                                        Number(parityForFallback).toExponential(3) + 'λ > ' +
+                                                        Number(maxAllowedRmsWaves).toExponential(3) + 'λ). Falling back to JS OPD.';
+                                                    console.warn(fbMsg);
+                                                    if (window.opener && window.opener.console && typeof window.opener.console.warn === 'function') {
+                                                        window.opener.console.warn(fbMsg);
+                                                    }
+                                                } catch (_) {}
+                                                nativeOpdResp = null;
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (diagErr) {
+                                try {
+                                    if (String(diagErr?.message || '') !== '__skip_opd_parity_diag__') {
+                                        // Non-fatal diagnostic path failure should not block native pipeline.
+                                        console.warn('⚠️ [PSF popup] OPD parity diagnostic skipped due to error:', diagErr);
+                                    }
+                                } catch (_) {}
+                            }
+
+                            if (nativeOpdResp) {
+                                const nativePupilMode = String(nativeOpdResp?.pupilSamplingMode || '').toLowerCase();
+                                wavefrontMap = {
+                                    pupilSamplingMode: nativePupilMode === 'stop' ? 'stop' : 'entrance',
+                                    pupilPhysicalRadiusMm: NaN,
+                                    entranceEffectiveRadiusMm: NaN,
+                                    pupilRange: 1.0,
+                                    pupilCoordinates: [],
+                                    display: { opds: [] },
+                                    opds: []
+                                };
+                            }
+                        } catch (nativeErr) {
+                            nativeOpdResp = null;
+                            try {
+                                const msg = '⚠️ [PSF popup] Native OPD failed, falling back to JS OPD: ' + String(nativeErr?.message || nativeErr || 'unknown');
+                                console.warn(msg);
+                                try {
+                                    if (window.opener && window.opener.console && typeof window.opener.console.warn === 'function') {
+                                        window.opener.console.warn(msg);
+                                    }
+                                } catch (_) {}
+                            } catch (_) {}
+                        }
+                    }
+
+                    if (!nativeOpdResp) {
+                        const host = window.opener || window;
+                        const calculatorFactory =
+                            (host && typeof host.createOPDCalculator === 'function' && host.createOPDCalculator)
+                            || (typeof window.createOPDCalculator === 'function' && window.createOPDCalculator)
+                            || (typeof createOPDCalculator === 'function' ? createOPDCalculator : null);
+                        const analyzerFactory =
+                            (host && typeof host.createWavefrontAnalyzer === 'function' && host.createWavefrontAnalyzer)
+                            || (typeof window.createWavefrontAnalyzer === 'function' && window.createWavefrontAnalyzer)
+                            || (typeof createWavefrontAnalyzer === 'function' ? createWavefrontAnalyzer : null);
+                        const opdCalculator = calculatorFactory ? calculatorFactory(opticalSystemRows, wavelength) : null;
+                        if (!opdCalculator) {
+                            throw new Error('createOPDCalculator is not available');
+                        }
+                        const analyzer = analyzerFactory ? analyzerFactory(opdCalculator) : null;
+                        if (!analyzer) {
+                            throw new Error('WavefrontAberrationAnalyzer is not available');
+                        }
+
+                        wavefrontMap = await raceWithCancel(analyzer.generateWavefrontMap(fieldSetting, wavefrontGridSize, 'circular', {
+                            recordRays: false,
+                            progressEvery: 0,
+                            renderFromZernike: false,
+                            skipZernikeFit: true,
+                            opdMode: 'simple',
+                            opdDisplayMode,
+                            diagnoseDiscontinuities: PSF_DEBUG,
+                            diagTopK: 8,
+                            cancelToken: activeCancelToken,
+                            onProgress: (evt) => {
+                                const p = Number(evt && evt.percent);
+                                const msg = (evt && evt.message) || (evt && evt.phase) || 'OPD...';
+                                const phase = (evt && evt.phase) ? evt.phase : 'opd';
+                                if (Number.isFinite(p)) onProgress({ percent: Math.max(0, Math.min(80, p * 0.8)), phase, message: msg });
+                                else onProgress({ percent: null, phase, message: msg });
+                            }
+                        }), activeCancelToken);
+                        throwIfCancelled(activeCancelToken);
+
+                        if (wavefrontMap && wavefrontMap.error) {
+                            const err = new Error((wavefrontMap.error && wavefrontMap.error.message) ? wavefrontMap.error.message : 'Wavefront generation failed (popup).');
+                            err.code = 'WAVEFRONT_UNAVAILABLE';
+                            err.wavefrontError = wavefrontMap.error;
+                            throw err;
+                        }
                     }
 
                     if (PSF_DEBUG) {
@@ -7717,10 +9416,40 @@ export function setupAnalysisWindows() {
                         yCoords[i] = t * pupilRange;
                     }
 
-                    const coords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
-                    const opdMicrons = (wavefrontMap?.display && Array.isArray(wavefrontMap.display.opds))
-                        ? wavefrontMap.display.opds
-                        : (Array.isArray(wavefrontMap?.opds) ? wavefrontMap.opds : []);
+                    let rayData = [];
+                    let coords = [];
+                    let opdMicrons = [];
+                    if (nativeOpdResp && Array.isArray(nativeOpdResp.displayOpdGrid)) {
+                        for (let iy = 0; iy < s; iy++) {
+                            const rowDisplay = nativeOpdResp.displayOpdGrid[iy] || [];
+                            const rowRaw = Array.isArray(nativeOpdResp.rawOpdGrid) ? (nativeOpdResp.rawOpdGrid[iy] || []) : [];
+                            for (let ix = 0; ix < s; ix++) {
+                                const rawCell = rowRaw[ix];
+                                if (rawCell === null || rawCell === undefined || rawCell === '') continue;
+                                const vRawWaves = Number(rawCell);
+                                // IMPORTANT: Use raw OPD occupancy as the pupil validity mask.
+                                // Native display grid can be detrended/fitted and become dense, which
+                                // incorrectly turns PSF pupil mask into full grid.
+                                if (!Number.isFinite(vRawWaves)) continue;
+
+                                const displayCell = rowDisplay[ix];
+                                const vDisplayWaves = (displayCell === null || displayCell === undefined || displayCell === '')
+                                    ? NaN
+                                    : Number(displayCell);
+                                const vWaves = Number.isFinite(vDisplayWaves) ? vDisplayWaves : vRawWaves;
+                                // Native OPD map grid values are in waves; PSF calculator expects microns.
+                                const vMicrons = vWaves * wavelength;
+                                coords.push({ ix, iy, x: Number(xCoords[ix]), y: Number(yCoords[iy]) });
+                                opdMicrons.push(vMicrons);
+                            }
+                        }
+                    } else {
+                        coords = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
+                        opdMicrons = (wavefrontMap?.display && Array.isArray(wavefrontMap.display.opds))
+                            ? wavefrontMap.display.opds
+                            : (Array.isArray(wavefrontMap?.opds) ? wavefrontMap.opds : []);
+                    }
+
                     const n = Math.min(coords.length, opdMicrons.length);
                     for (let k = 0; k < n; k++) {
                         const c = coords[k];
@@ -7735,7 +9464,6 @@ export function setupAnalysisWindows() {
                         ampGrid[iy][ix] = 1.0;
                     }
 
-                    const rayData = [];
                     for (let k = 0; k < n; k++) {
                         const c = coords[k];
                         const x = Number(c?.x);
@@ -7750,6 +9478,13 @@ export function setupAnalysisWindows() {
                         });
                     }
 
+                    let filledCount = 0;
+                    for (let iy = 0; iy < s; iy++) {
+                        for (let ix = 0; ix < s; ix++) {
+                            if (maskGrid[iy][ix]) filledCount++;
+                        }
+                    }
+
                     const opdData = {
                         gridSize: s,
                         wavelength: wavelength,
@@ -7762,7 +9497,7 @@ export function setupAnalysisWindows() {
                             yCoords
                         }
                     };
-                    
+
                     if (PSF_DEBUG) try {
                         let valid = 0;
                         let sum = 0;
@@ -7831,88 +9566,317 @@ export function setupAnalysisWindows() {
                         } catch (_) {}
                     } catch (_) {}
 
-                    let pupilDiameterMm = actualPupilRadiusMm * 2;  // Use actual entrance pupil diameter
-                    let focalLengthMm = 100.0;
+                    let pupilDiameterMm = actualPupilRadiusMm * 2;
+                    let focalLengthMm = Number.NaN;
                     let stopIndexForLog = -1;
-                    
-                    // Get stop diameter for PSF calculation
-                    // CRITICAL: Always use stop diameter for Strehl ratio calculation
-                    // Entrance pupil radius is only for understanding vignetting, not for defining diffraction limit
-                    let stopDiameterMm = 24.0;  // Default
+
                     try {
-                        const stopIndex = findStopSurfaceIndex(opticalSystemRows);
-                        stopIndexForLog = stopIndex;
-                        const stopRow = (stopIndex >= 0 && opticalSystemRows && opticalSystemRows.length > stopIndex) ? opticalSystemRows[stopIndex] : null;
-                        const sdRaw =
-                            (stopRow && stopRow.semidia !== undefined && stopRow.semidia !== null) ? stopRow.semidia :
-                            (stopRow && stopRow.Semidia !== undefined && stopRow.Semidia !== null) ? stopRow.Semidia :
-                            (stopRow && stopRow['Semi Diameter'] !== undefined && stopRow['Semi Diameter'] !== null) ? stopRow['Semi Diameter'] :
-                            (stopRow && stopRow.aperture !== undefined && stopRow.aperture !== null) ? stopRow.aperture :
-                            (stopRow && stopRow.Aperture !== undefined && stopRow.Aperture !== null) ? stopRow.Aperture :
-                            NaN;
+                        const si = Number(findStopSurfaceIndex(opticalSystemRows));
+                        if (Number.isFinite(si)) stopIndexForLog = si;
+                    } catch (_) {}
+
+                    try {
+                        let derivedPupil = NaN;
+                        let derivedFocal = NaN;
+                        const si = Number((window.opener && typeof window.opener.findStopSurfaceIndex === 'function')
+                            ? window.opener.findStopSurfaceIndex(opticalSystemRows)
+                            : findStopSurfaceIndex(opticalSystemRows));
+                        const stopRow = (Number.isFinite(si) && si >= 0) ? opticalSystemRows?.[si] : null;
+                        const sdRaw = stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.['Semi Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? NaN;
                         const sd = Math.abs(parseFloat(sdRaw));
                         if (Number.isFinite(sd) && sd > 0) {
-                            const isApertureField = stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined);
+                            const isApertureField = !!(stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined));
                             const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
-                            if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) stopDiameterMm = stopRadiusMm * 2;
+                            if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
+                                derivedPupil = stopRadiusMm * 2;
+                            }
+                        }
+
+                        if (!(Number.isFinite(derivedPupil) && derivedPupil > 0)) {
+                            const paraxial = (window.opener && typeof window.opener.calculateParaxialData === 'function')
+                                ? window.opener.calculateParaxialData(opticalSystemRows, wavelength)
+                                : null;
+                            const enpd = Number(paraxial?.entrancePupilDiameter);
+                            const expd = Number(paraxial?.exitPupilDiameter);
+                            if (Number.isFinite(enpd) && enpd > 0) {
+                                derivedPupil = Math.abs(enpd);
+                            } else if (Number.isFinite(expd) && expd > 0) {
+                                derivedPupil = Math.abs(expd);
+                            }
+                        }
+
+                        const fl = Number((window.opener && typeof window.opener.calculateFocalLength === 'function')
+                            ? window.opener.calculateFocalLength(opticalSystemRows, wavelength)
+                            : calculateFocalLength(opticalSystemRows, wavelength));
+                        if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) {
+                            derivedFocal = Math.abs(fl);
+                        }
+
+                        if (!(Number.isFinite(derivedFocal) && derivedFocal > 0)) {
+                            const paraxial = (window.opener && typeof window.opener.calculateParaxialData === 'function')
+                                ? window.opener.calculateParaxialData(opticalSystemRows, wavelength)
+                                : null;
+                            const flParaxial = Number(paraxial?.focalLength);
+                            if (Number.isFinite(flParaxial) && Math.abs(flParaxial) > 1e-9 && flParaxial !== Infinity) {
+                                derivedFocal = Math.abs(flParaxial);
+                            }
+                        }
+
+                        if (Number.isFinite(derivedPupil) && derivedPupil > 0) {
+                            pupilDiameterMm = Math.abs(derivedPupil);
+                        }
+                        if (Number.isFinite(derivedFocal) && derivedFocal > 0) {
+                            focalLengthMm = Math.abs(derivedFocal);
                         }
                     } catch (_) {}
-                    
-                    // In entrance pupil mode, keep actualPupilRadiusMm for understanding
-                    // but use stopDiameterMm for PSF calculation to maintain consistent diffraction limit
-                    if (wavefrontMap.pupilSamplingMode === 'entrance') {
-                        pupilDiameterMm = stopDiameterMm;
-                    } else {
-                        pupilDiameterMm = stopDiameterMm;  // Use stop diameter in stop mode too
+
+                    if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
+                        // Last-resort safeguard to keep FFT scaling defined even when paraxial FL is unavailable.
+                        focalLengthMm = 100.0;
                     }
-                    
-                    try {
-                        const calcFL = window.opener && typeof window.opener.calculateFocalLength === 'function'
-                            ? window.opener.calculateFocalLength
-                            : null;
-                        if (calcFL) {
-                            const fl = calcFL(opticalSystemRows, wavelength);
-                            if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) focalLengthMm = Math.abs(fl);
-                        }
-                    } catch (_) {}
 
                     logScaleInputs(pupilDiameterMm, focalLengthMm, stopIndexForLog);
 
-                    const psfCalculator = (() => {
-                        const host = window.opener || window;
-                        const PsfCalculatorCtor =
-                            (host && host.PSFCalculator)
-                            || window.PSFCalculator;
-                        if (typeof PsfCalculatorCtor !== 'function') {
-                            throw new Error('PSFCalculator is not available');
-                        }
-                        return new PsfCalculatorCtor();
-                    })();
                     const psfSamplingSize = Number.isFinite(zernikeSampling) ? zernikeSampling : 128;
                     const zeroPadTo = (zeroPadRaw === 'none')
                         ? psfSamplingSize
                         : (zeroPadRaw === 'auto')
                             ? 0
                             : (Number.isFinite(parseInt(zeroPadRaw)) ? parseInt(zeroPadRaw) : 0);
-                    const psfResult = await raceWithCancel(psfCalculator.calculatePSF(opdData, {
+                    const canUseNativePsfMap = isPopupTauriRuntime()
+                        && !!(window.opener && typeof window.opener.runDesktopNativePsfMapForPopup === 'function');
+                    if (!canUseNativePsfMap) {
+                        throw new Error('Native Rust PSF map path is required but unavailable.');
+                    }
+
+                    const minRecommendedFftSize = 512;
+                    const requestedFftSize = (!zeroPadTo || zeroPadTo === 0)
+                        ? Math.max(psfSamplingSize, minRecommendedFftSize)
+                        : Math.max(psfSamplingSize, zeroPadTo);
+                    const basePixelPitchUm = (Number(wavelength) * Math.abs(Number(focalLengthMm))) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
+                    const pixelSizeUm = basePixelPitchUm * (psfSamplingSize / requestedFftSize);
+
+                    onProgress({ percent: 80, phase: 'psf', message: 'PSF (native)...' });
+                    const nativePsfResp = await raceWithCancel(window.opener.runDesktopNativePsfMapForPopup({
+                        gridOpd: Array.from({ length: s }, (_, iy) => Array.from(opdGrid[iy] || [])),
+                        gridAmplitude: Array.from({ length: s }, (_, iy) => Array.from(ampGrid[iy] || [])),
+                        pupilMask: Array.from({ length: s }, (_, iy) => Array.from(maskGrid[iy] || [])),
+                        wavelengthUm: wavelength,
+                        pixelSizeUm,
+                        removeTilt: false,
+                        zeroPadTo: requestedFftSize,
+                        recenterIfWrapped: false,
+                    }), activeCancelToken);
+                    const psfResult = {
+                        psfData: nativePsfResp?.psfData,
+                        metrics: nativePsfResp?.metrics,
                         samplingSize: psfSamplingSize,
                         wavelength,
-                        zeroPadTo,
-                        pupilDiameter: pupilDiameterMm,
-                        focalLength: focalLengthMm,
-                        forceImplementation: 'javascript', // Force JavaScript to use zeroPadTo parameter
-                        // Zernike render removes piston+tilt (Noll 1..3) by design.
-                        // Still safe to leave removeTilt=true for robustness; but keep it off to preserve definition.
-                        removeTilt: false,
-                        onProgress: (evt) => {
-                            const p = Number(evt && evt.percent);
-                            const msg = (evt && evt.message) || (evt && evt.phase) || 'PSF...';
-                            const phase = (evt && evt.phase) ? evt.phase : 'psf';
-                            if (!Number.isFinite(p)) { onProgress({ percent: null, phase, message: msg }); return; }
-                            onProgress({ percent: 80 + 0.2 * p, phase, message: msg });
-                        }
-                    }), activeCancelToken);
+                        gridData: opdData?.gridData,
+                        options: { pupilDiameter: pupilDiameterMm, focalLength: focalLengthMm, pixelSize: pixelSizeUm },
+                        metadata: {
+                            method: 'native-rust-psf-map',
+                            backend: nativePsfResp?.backend,
+                            samplingSize: psfSamplingSize,
+                            fftSize: nativePsfResp?.fftSize,
+                            wavelength,
+                            pixelSize: pixelSizeUm,
+                        },
+                        implementationUsed: 'NativeRust',
+                    };
                     throwIfCancelled(activeCancelToken);
+
+                    setPopupPsfBadge('');
+
+                    try {
+                        const impl = String(psfResult?.implementationUsed || 'unknown');
+                        const method = String(psfResult?.metadata?.method || '');
+                        const implLine = '🧪 [PSF popup] implementation=' + impl + (method ? (' method=' + method) : '');
+                        const pixelSizeUm = Number(psfResult?.options?.pixelSize);
+                        const scaleLine = '📏 [PSF popup] scale pupilDiameterMm=' + Number(pupilDiameterMm).toFixed(6)
+                            + ' focalLengthMm=' + Number(focalLengthMm).toFixed(6)
+                            + ' pixelSizeUm=' + (Number.isFinite(pixelSizeUm) ? pixelSizeUm.toFixed(6) : 'n/a');
+                        console.log(implLine);
+                        console.log(scaleLine);
+                        try {
+                            window['__lastPsfImplLine'] = implLine;
+                            window['__lastPsfScaleLine'] = scaleLine;
+                        } catch (_) {}
+                        try {
+                            if (window.opener && window.opener.console && typeof window.opener.console.log === 'function') {
+                                window.opener.console.log(implLine);
+                                window.opener.console.log(scaleLine);
+                            }
+                        } catch (_) {}
+
+                        const statsEl = document.getElementById('popup-psf-container-stats');
+                        if (statsEl) {
+                            statsEl.innerHTML = '';
+                            statsEl.textContent = '';
+                            statsEl.style.display = 'none';
+                            if (nativeOpdDiag && Number.isFinite(nativeOpdDiag.rmsWaves)) {
+                                const maxAllowedRmsWaves = (() => {
+                                    const v = Number((typeof window !== 'undefined')
+                                        ? window.__PSF_POPUP_NATIVE_OPD_PARITY_MAX_RMS_WAVES
+                                        : NaN);
+                                    return (Number.isFinite(v) && v > 0) ? v : 5e-2;
+                                })();
+                                const warn = Number(nativeOpdDiag.rmsWaves) > maxAllowedRmsWaves;
+                                const prefix = warn ? '⚠️ ' : 'ℹ️ ';
+                                const centerRms = Number(nativeOpdDiag?.radialBands?.center?.rmsWaves);
+                                const midRms = Number(nativeOpdDiag?.radialBands?.mid?.rmsWaves);
+                                const edgeRms = Number(nativeOpdDiag?.radialBands?.edge?.rmsWaves);
+                                const maxIx = Number(nativeOpdDiag?.maxLoc?.ix);
+                                const maxIy = Number(nativeOpdDiag?.maxLoc?.iy);
+                                const fitScale = Number(nativeOpdDiag?.fit?.scale);
+                                const fitOffset = Number(nativeOpdDiag?.fit?.offsetWaves);
+                                const fitResidual = Number(nativeOpdDiag?.fit?.residualRmsWaves);
+                                const rawRms = Number(nativeOpdDiag?.rawParity?.rmsWaves);
+                                const rawMean = Number(nativeOpdDiag?.rawParity?.meanAbsWaves);
+                                const rawMax = Number(nativeOpdDiag?.rawParity?.maxAbsWaves);
+                                const bandMsg = ' bands(rms λ): C=' + (Number.isFinite(centerRms) ? centerRms.toExponential(2) : 'n/a')
+                                    + ' M=' + (Number.isFinite(midRms) ? midRms.toExponential(2) : 'n/a')
+                                    + ' E=' + (Number.isFinite(edgeRms) ? edgeRms.toExponential(2) : 'n/a');
+                                const fitMsg = ' fit: s=' + (Number.isFinite(fitScale) ? fitScale.toExponential(2) : 'n/a')
+                                    + ' b=' + (Number.isFinite(fitOffset) ? fitOffset.toExponential(2) : 'n/a') + 'λ'
+                                    + ' rmsRes=' + (Number.isFinite(fitResidual) ? fitResidual.toExponential(2) : 'n/a') + 'λ';
+                                const rawMsg = (Number.isFinite(rawRms) || Number.isFinite(rawMean) || Number.isFinite(rawMax))
+                                    ? (' raw(rms/mean/max λ)=' +
+                                        (Number.isFinite(rawRms) ? rawRms.toExponential(2) : 'n/a') + '/' +
+                                        (Number.isFinite(rawMean) ? rawMean.toExponential(2) : 'n/a') + '/' +
+                                        (Number.isFinite(rawMax) ? rawMax.toExponential(2) : 'n/a'))
+                                    : '';
+                                const msg = prefix + 'OPD parity (Native vs JS): ' +
+                                    'rms=' + Number(nativeOpdDiag.rmsWaves).toExponential(3) + 'λ, ' +
+                                    'meanAbs=' + Number(nativeOpdDiag.meanAbsWaves).toExponential(3) + 'λ, ' +
+                                    'maxAbs=' + Number(nativeOpdDiag.maxAbsWaves).toExponential(3) + 'λ@(' + (Number.isFinite(maxIx) ? String(maxIx) : '?') + ',' + (Number.isFinite(maxIy) ? String(maxIy) : '?') + ')' +
+                                    bandMsg + fitMsg + rawMsg;
+                                void msg;
+                                statsEl.style.color = warn ? '#b91c1c' : '#334155';
+                            }
+                        }
+                    } catch (_) {}
+
+                    try {
+                        const enablePsfParityDiag = !!(typeof window !== 'undefined' && window.__PSF_POPUP_ENABLE_PSF_PARITY_DIAG === true);
+                        if (!enablePsfParityDiag) {
+                            throw new Error('__skip_psf_parity_diag__');
+                        }
+
+                        const isNative = String(psfResult?.implementationUsed || '').toLowerCase() === 'nativerust';
+                        const parityEnabled = isPopupTauriRuntime() && isNative;
+                        const parityRan = !!window['__psfNativeParityDone'];
+                        if (parityEnabled && !parityRan) {
+                            window['__psfNativeParityDone'] = true;
+                            void (async () => {
+                                try {
+                                    const psfCalculator = (() => {
+                                        const host = window.opener || window;
+                                        const PsfCalculatorCtor =
+                                            (host && host.PSFCalculator)
+                                            || window.PSFCalculator;
+                                        if (typeof PsfCalculatorCtor !== 'function') {
+                                            throw new Error('PSFCalculator is not available');
+                                        }
+                                        return new PsfCalculatorCtor();
+                                    })();
+                                    const jsResult = await psfCalculator.calculatePSF(opdData, {
+                                        samplingSize: psfSamplingSize,
+                                        wavelength,
+                                        zeroPadTo,
+                                        pupilDiameter: pupilDiameterMm,
+                                        focalLength: focalLengthMm,
+                                        forceImplementation: 'javascript',
+                                        removeTilt: false,
+                                    });
+
+                                    const nativeGrid = Array.isArray(psfResult?.psfData) ? psfResult.psfData : [];
+                                    const jsGrid = Array.isArray(jsResult?.psfData) ? jsResult.psfData : [];
+                                    const h = Math.min(nativeGrid.length, jsGrid.length);
+                                    const w = h > 0 ? Math.min((nativeGrid[0] || []).length, (jsGrid[0] || []).length) : 0;
+
+                                    let n = 0;
+                                    let sumSq = 0;
+                                    let maxAbs = 0;
+                                    let sumAbs = 0;
+                                    for (let iy = 0; iy < h; iy++) {
+                                        for (let ix = 0; ix < w; ix++) {
+                                            const a = Number(nativeGrid[iy]?.[ix]);
+                                            const b = Number(jsGrid[iy]?.[ix]);
+                                            if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+                                            const d = a - b;
+                                            const ad = Math.abs(d);
+                                            sumSq += d * d;
+                                            sumAbs += ad;
+                                            if (ad > maxAbs) maxAbs = ad;
+                                            n++;
+                                        }
+                                    }
+
+                                    const rmsAbs = n > 0 ? Math.sqrt(sumSq / n) : NaN;
+                                    const meanAbs = n > 0 ? (sumAbs / n) : NaN;
+
+                                    const nMetrics = psfResult?.metrics || {};
+                                    const jMetrics = jsResult?.metrics || {};
+                                    const fwhmNative = Number(nMetrics?.fwhm?.average);
+                                    const fwhmJs = Number(jMetrics?.fwhm?.average);
+                                    const strehlNative = Number(nMetrics?.strehlRatio);
+                                    const strehlJs = Number(jMetrics?.strehlRatio);
+                                    const centerNative = nMetrics?.centerPosition || {};
+                                    const centerJs = jMetrics?.centerPosition || {};
+
+                                    const parityLine =
+                                        '📊 [PSF Parity] native-vs-js ' +
+                                        'grid=' + h + 'x' + w + ' n=' + n + ' ' +
+                                        'rmsAbs=' + (Number.isFinite(rmsAbs) ? rmsAbs.toExponential(4) : 'NaN') + ' ' +
+                                        'meanAbs=' + (Number.isFinite(meanAbs) ? meanAbs.toExponential(4) : 'NaN') + ' ' +
+                                        'maxAbs=' + (Number.isFinite(maxAbs) ? maxAbs.toExponential(4) : 'NaN') + ' ' +
+                                        'strehlΔ=' + (strehlNative - strehlJs).toExponential(4) + ' ' +
+                                        'fwhmAvgΔ=' + (fwhmNative - fwhmJs).toExponential(4) + 'µm ' +
+                                        'centerΔ=(' + (Number(centerNative?.x) - Number(centerJs?.x)) + ',' + (Number(centerNative?.y) - Number(centerJs?.y)) + ')';
+
+                                    const paritySummary = {
+                                        grid: { h, w, n },
+                                        abs: {
+                                            rms: Number.isFinite(rmsAbs) ? rmsAbs : null,
+                                            mean: Number.isFinite(meanAbs) ? meanAbs : null,
+                                            max: Number.isFinite(maxAbs) ? maxAbs : null,
+                                        },
+                                        delta: {
+                                            strehl: Number.isFinite(strehlNative) && Number.isFinite(strehlJs) ? (strehlNative - strehlJs) : null,
+                                            fwhmAvgUm: Number.isFinite(fwhmNative) && Number.isFinite(fwhmJs) ? (fwhmNative - fwhmJs) : null,
+                                            centerX: Number(centerNative?.x) - Number(centerJs?.x),
+                                            centerY: Number(centerNative?.y) - Number(centerJs?.y),
+                                        },
+                                    };
+
+                                    try {
+                                        window['__lastPsfParityLine'] = parityLine;
+                                        window['__lastPsfParity'] = paritySummary;
+                                        if (window.opener) {
+                                            window.opener['__lastPsfParityLine'] = parityLine;
+                                            window.opener['__lastPsfParity'] = paritySummary;
+                                        }
+                                    } catch (_) {}
+
+                                    console.log(parityLine);
+                                    try {
+                                        if (window.opener && window.opener.console && typeof window.opener.console.log === 'function') {
+                                            window.opener.console.log(parityLine);
+                                        }
+                                    } catch (_) {}
+                                } catch (parityErr) {
+                                    console.warn('⚠️ [PSF Parity] native-vs-js compare failed:', parityErr);
+                                }
+                            })();
+                        }
+                    } catch (parityDiagErr) {
+                        try {
+                            if (String(parityDiagErr?.message || '') !== '__skip_psf_parity_diag__') {
+                                console.warn('⚠️ [PSF popup] PSF parity diagnostic skipped due to error:', parityDiagErr);
+                            }
+                        } catch (_) {}
+                    }
 
                     const plotter = (() => {
                         if (window.opener && window.opener.PSFPlotter) {
@@ -7920,13 +9884,14 @@ export function setupAnalysisWindows() {
                         }
                         throw new Error('PSFPlotter not available from opener window');
                     })();
-                    await plotter.plot2DPSF(psfResult, { logScale, title: 'Point Spread Function' });
+                    await plotter.plot2DPSF(psfResult, { logScale, title: '', recenterToCentroid: false });
                 }
 
-                setProgress(100, 'Done');
+                hideProgress();
                 resizePlot();
                 hideProgress();
             } catch (err) {
+                setPopupPsfBadge('Error');
                 console.error(err);
                 setProgress(100, 'Failed');
                 if (containerEl) {
@@ -7960,6 +9925,10 @@ export function setupAnalysisWindows() {
 
         document.getElementById('popup-stop-psf-btn').addEventListener('click', () => {
             try {
+                const el = document.getElementById('popup-psf-pipeline-badge');
+                if (el) el.textContent = '';
+            } catch (_) {}
+            try {
                 if (activeCancelToken && typeof activeCancelToken.abort === 'function') {
                     activeCancelToken.abort('Stopped by user');
                 }
@@ -7983,9 +9952,9 @@ export function setupAnalysisWindows() {
                 const popupSampling = document.getElementById('popup-psf-sampling-select');
                 const popupZernikeSampling = document.getElementById('popup-psf-zernike-sampling-select');
                 const popupLog = document.getElementById('popup-psf-log-scale-checkbox');
-                if (popupSampling) popupSampling.value = '1024';
-                if (popupZernikeSampling) popupZernikeSampling.value = '128';
-                if (popupLog) popupLog.checked = false;
+                if (popupSampling && !popupSampling.value) popupSampling.value = 'auto';
+                if (popupZernikeSampling && !popupZernikeSampling.value) popupZernikeSampling.value = '256';
+                if (popupLog && typeof popupLog.checked !== 'boolean') popupLog.checked = false;
             } catch (_) {}
         });
     </script>
@@ -7995,6 +9964,154 @@ export function setupAnalysisWindows() {
 
                         try { popup.document.close(); } catch (_) {}
                 });
+
+                w.runPsfParityCapture = async (options: any = {}) => {
+                    const opts: any = options || {};
+                    const timeoutMs = Math.max(1000, Number(opts.timeoutMs) || 15000);
+                    const pollMs = Math.max(50, Number(opts.pollMs) || 120);
+                    const startedAt = Date.now();
+
+                    try {
+                        if (!w.__psfPopup || w.__psfPopup.closed) {
+                            openPsfWindowBtn.click();
+                        }
+                    } catch (_) {}
+
+                    while ((!w.__psfPopup || w.__psfPopup.closed) && (Date.now() - startedAt) < timeoutMs) {
+                        await new Promise((r) => setTimeout(r, pollMs));
+                    }
+
+                    const popup = w.__psfPopup;
+                    if (!popup || popup.closed) {
+                        throw new Error('PSF popup could not be opened. Please open it manually and run again.');
+                    }
+
+                    while ((typeof popup.renderPSF !== 'function') && (Date.now() - startedAt) < timeoutMs) {
+                        await new Promise((r) => setTimeout(r, pollMs));
+                    }
+
+                    if (typeof popup.renderPSF !== 'function') {
+                        throw new Error('PSF popup is open but renderPSF is not ready yet. Try again in 1-2 seconds.');
+                    }
+
+                    popup.__PSF_DEBUG = true;
+                    popup.__PSF_USE_DESKTOP_ANALYSIS_PREVIEW = false;
+                    popup.__psfNativeParityDone = false;
+
+                    await popup.renderPSF();
+
+                    const result = {
+                        implLine: popup.__lastPsfImplLine || null,
+                        scaleLine: popup.__lastPsfScaleLine || null,
+                        parityLine: popup.__lastPsfParityLine || w.__lastPsfParityLine || null,
+                        parity: popup.__lastPsfParity || w.__lastPsfParity || null,
+                    };
+
+                    try {
+                        console.log('🧪 [runPsfParityCapture] result:', result);
+                    } catch (_) {}
+                    return result;
+                };
+
+                const mainShowPsfBtn = document.getElementById('show-psf-btn');
+                if (mainShowPsfBtn && !(mainShowPsfBtn as any).__cooptUnifiedPsfPipelineBound) {
+                    (mainShowPsfBtn as any).__cooptUnifiedPsfPipelineBound = true;
+                    mainShowPsfBtn.addEventListener('click', async () => {
+                        const setUnifiedPsfBadge = (status: string) => {
+                            try {
+                                const el = document.getElementById('psf-pipeline-badge');
+                                if (!el) return;
+                                const text = String(status || '');
+                                el.textContent = text;
+                                if (text) {
+                                    el.setAttribute('title', text + ' (Main Show PSF uses Popup renderPSF)');
+                                } else {
+                                    el.removeAttribute('title');
+                                }
+                            } catch (_) {}
+                        };
+
+                        const getDoneStatusWithImpl = (popupRef: any) => {
+                            try {
+                                const implLine = String(popupRef?.__lastPsfImplLine || '');
+                                const m = implLine.match(/implementation=([^\s]+)/);
+                                const impl = m && m[1] ? String(m[1]) : '';
+                                return impl ? ('Done (' + impl + ')') : 'Done';
+                            } catch (_) {
+                                return 'Done';
+                            }
+                        };
+
+                        const waitForPopupReady = async (popupRef: any, timeoutMs: number = 12000) => {
+                            const startedAt = Date.now();
+                            while ((Date.now() - startedAt) < timeoutMs) {
+                                try {
+                                    if (popupRef && !popupRef.closed && typeof popupRef.renderPSF === 'function') return true;
+                                } catch (_) {}
+                                await new Promise((r) => setTimeout(r, 80));
+                            }
+                            return false;
+                        };
+
+                        try {
+                            setUnifiedPsfBadge('Running');
+                            if (w.__psfPopup && !w.__psfPopup.closed) {
+                                try {
+                                    if (typeof w.__psfPopup.syncAll === 'function') {
+                                        w.__psfPopup.syncAll();
+                                    }
+                                } catch (_) {}
+                                try { w.__psfPopup.focus(); } catch (_) {}
+                                if (typeof w.__psfPopup.renderPSF === 'function') {
+                                    await w.__psfPopup.renderPSF();
+                                    setUnifiedPsfBadge(getDoneStatusWithImpl(w.__psfPopup));
+                                    return;
+                                }
+                            }
+
+                            (openPsfWindowBtn as HTMLButtonElement).click();
+                            const popup = w.__psfPopup;
+                            const ready = await waitForPopupReady(popup, 15000);
+                            if (!ready) {
+                                throw new Error('PSF popup is not ready.');
+                            }
+                            try {
+                                if (typeof popup.syncAll === 'function') {
+                                    popup.syncAll();
+                                }
+                            } catch (_) {}
+                            await popup.renderPSF();
+                            setUnifiedPsfBadge(getDoneStatusWithImpl(popup));
+                        } catch (err: any) {
+                            setUnifiedPsfBadge('Error');
+                            console.error('❌ [PSF Unified] Failed to render via popup pipeline:', err);
+                            alert(`PSF calculation failed: ${String(err?.message || err || 'Unknown error')}`);
+                        }
+                    });
+                }
+
+                const mainStopPsfBtn = document.getElementById('stop-psf-btn');
+                if (mainStopPsfBtn && !(mainStopPsfBtn as any).__cooptUnifiedPsfPipelineBound) {
+                    (mainStopPsfBtn as any).__cooptUnifiedPsfPipelineBound = true;
+                    mainStopPsfBtn.addEventListener('click', () => {
+                        try {
+                            const el = document.getElementById('psf-pipeline-badge');
+                            if (el) el.textContent = '';
+                        } catch (_) {}
+                        try {
+                            const popup = w.__psfPopup;
+                            if (!popup || popup.closed) return;
+                            const stopBtn = popup.document && popup.document.getElementById('popup-stop-psf-btn');
+                            if (stopBtn && typeof (stopBtn as HTMLButtonElement).click === 'function') {
+                                (stopBtn as HTMLButtonElement).click();
+                                return;
+                            }
+                            if (typeof popup.activeCancelToken?.abort === 'function') {
+                                popup.activeCancelToken.abort('Stopped by user');
+                            }
+                        } catch (_) {}
+                    });
+                }
         }
 
         // Modulation Transfer Function (MTF) popup window button
@@ -8318,94 +10435,281 @@ export function setupAnalysisWindows() {
                     throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                 }
 
-                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
+                const shouldUseDesktopRust = (() => {
+                    try {
+                        if (typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') {
+                            return !!window['shouldUseDesktopRustAnalysis']();
+                        }
+                        if (opener && typeof opener.shouldUseDesktopRustAnalysis === 'function') {
+                            return !!opener.shouldUseDesktopRustAnalysis();
+                        }
+                        return !!(opener && opener.__TAURI_INTERNALS__);
+                    } catch (_) {
+                        return false;
+                    }
+                })();
+                const canUseDesktopRust = shouldUseDesktopRust && !!(
                     opener.__TAURI_INTERNALS__
-                    && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
+                    && typeof opener.runDesktopNativeOpdMapForPopup === 'function'
+                    && typeof opener.runDesktopNativePsfMapForPopup === 'function'
+                    && typeof opener.runDesktopNativeMtfMapForPopup === 'function'
                 );
 
                 if (canUseDesktopRust) {
                     setProgress(0, 'Starting...');
                     await new Promise(r => setTimeout(r, 0));
-                    setProgress(25, 'Computing MTF (Rust)...');
+                    const wavefrontGridSize = Number.isFinite(sampling) ? Math.max(32, Math.floor(sampling)) : 256;
 
-                    const result = await opener.runDesktopAnalysisComputeForPopup({
-                        kind: 'mtf',
-                        gridSize: Number.isFinite(sampling) ? sampling : 256,
-                        maxFrequencyLpmm: Number.isFinite(maxFreq) ? maxFreq : 100,
-                    });
+                    const sourceRows = (typeof opener.getSourceRows === 'function')
+                        ? (safeCall(() => opener.getSourceRows(opener.tableSource), []) || [])
+                        : [];
+                    const wavelengthList = (() => {
+                        const out = [];
+                        if (wavelength === 'all') {
+                            if (Array.isArray(sourceRows) && sourceRows.length > 0) {
+                                for (let i = 0; i < sourceRows.length; i++) {
+                                    const wl = Number(sourceRows[i]?.wavelength);
+                                    if (!Number.isFinite(wl) || wl <= 0) continue;
+                                    if (out.some(v => Math.abs(v - wl) < 1e-9)) continue;
+                                    out.push(wl);
+                                }
+                            }
+                            if (out.length === 0 && Number.isFinite(primary) && primary > 0) {
+                                out.push(primary);
+                            }
+                        } else {
+                            const wl = (Number.isFinite(Number(wavelength)) && Number(wavelength) > 0)
+                                ? Number(wavelength)
+                                : ((Number.isFinite(primary) && primary > 0) ? primary : 0.5876);
+                            out.push(wl);
+                        }
+                        if (out.length === 0) out.push(0.5876);
+                        return out;
+                    })();
 
-                    const freq = Array.isArray(result?.frequencyAxis) ? result.frequencyAxis : [];
-                    const tan = Array.isArray(result?.mtfTangential) ? result.mtfTangential : [];
-                    const sag = Array.isArray(result?.mtfSagittal) ? result.mtfSagittal : [];
-                    if (!freq.length || !tan.length || !sag.length) {
-                        throw new Error('Rust MTF result does not contain valid curves');
+                    const getColorForWavelengthPopup = (wl) => {
+                        try {
+                            if (typeof opener.getColorForWavelength === 'function') {
+                                const c = opener.getColorForWavelength(wl);
+                                if (typeof c === 'string' && c) return c;
+                            }
+                        } catch (_) {}
+                        const nm = Number(wl) * 1000;
+                        if (!Number.isFinite(nm)) return '#2563eb';
+                        if (nm < 470) return '#2563eb';
+                        if (nm < 530) return '#16a34a';
+                        if (nm < 600) return '#f59e0b';
+                        return '#dc2626';
+                    };
+
+                    const traces = [];
+                    let nyquistGlobal = 0;
+                    const selectedObjectIndex = Number.isFinite(objectIndex) ? objectIndex : 0;
+
+                    for (let wli = 0; wli < wavelengthList.length; wli++) {
+                        const wl = wavelengthList[wli];
+                        const titleNm = (wl * 1000).toFixed(1);
+                        const baseProgress = (wli / Math.max(1, wavelengthList.length)) * 80;
+                        setProgress(10 + baseProgress, 'λ=' + titleNm + 'nm: OPD (Rust native)...');
+
+                        const nativeOpdResp = await opener.runDesktopNativeOpdMapForPopup({
+                            objectIndex: selectedObjectIndex,
+                            gridSize: wavefrontGridSize,
+                            wavelengthUm: wl,
+                            opdDisplayMode,
+                        });
+
+                        const s = wavefrontGridSize;
+                        const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
+                        const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
+                        const maskGrid = Array.from({ length: s }, () => Array(s).fill(false));
+
+                        const displayOpdGrid = Array.isArray(nativeOpdResp?.displayOpdGrid) ? nativeOpdResp.displayOpdGrid : [];
+                        const rawOpdGrid = Array.isArray(nativeOpdResp?.rawOpdGrid) ? nativeOpdResp.rawOpdGrid : [];
+                        for (let iy = 0; iy < s; iy++) {
+                            const rowDisplay = displayOpdGrid[iy] || [];
+                            const rowRaw = rawOpdGrid[iy] || [];
+                            for (let ix = 0; ix < s; ix++) {
+                                const rawCell = rowRaw[ix];
+                                if (rawCell === null || rawCell === undefined || rawCell === '') continue;
+                                const vRawWaves = Number(rawCell);
+                                if (!Number.isFinite(vRawWaves)) continue;
+
+                                const displayCell = rowDisplay[ix];
+                                const vDisplayWaves = (displayCell === null || displayCell === undefined || displayCell === '')
+                                    ? NaN
+                                    : Number(displayCell);
+                                const vWaves = Number.isFinite(vDisplayWaves) ? vDisplayWaves : vRawWaves;
+                                const vMicrons = vWaves * wl;
+
+                                maskGrid[iy][ix] = true;
+                                opdGrid[iy][ix] = vMicrons;
+                                ampGrid[iy][ix] = 1.0;
+                            }
+                        }
+
+                        const opticalRows = (typeof opener.getOpticalSystemRows === 'function')
+                            ? (opener.getOpticalSystemRows(opener.tableOpticalSystem) || [])
+                            : [];
+                        let pupilDiameterMm = 10.0;
+                        let focalLengthMm = Number.NaN;
+                        try {
+                            const si = Number((typeof opener.findStopSurfaceIndex === 'function')
+                                ? opener.findStopSurfaceIndex(opticalRows)
+                                : -1);
+                            const stopRow = (Number.isFinite(si) && si >= 0) ? opticalRows?.[si] : null;
+                            const sdRaw = stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.['Semi Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? NaN;
+                            const sd = Math.abs(parseFloat(sdRaw));
+                            if (Number.isFinite(sd) && sd > 0) {
+                                const isApertureField = !!(stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined));
+                                const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
+                                if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
+                                    pupilDiameterMm = stopRadiusMm * 2;
+                                }
+                            }
+                            const fl = Number((typeof opener.calculateFocalLength === 'function')
+                                ? opener.calculateFocalLength(opticalRows, wl)
+                                : NaN);
+                            if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) {
+                                focalLengthMm = Math.abs(fl);
+                            }
+
+                            if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
+                                const paraxial = (typeof opener.calculateParaxialData === 'function')
+                                    ? opener.calculateParaxialData(opticalRows, wl)
+                                    : null;
+                                const flParaxial = Number(paraxial?.focalLength);
+                                if (Number.isFinite(flParaxial) && Math.abs(flParaxial) > 1e-9 && flParaxial !== Infinity) {
+                                    focalLengthMm = Math.abs(flParaxial);
+                                }
+                            }
+                        } catch (_) {}
+
+                        if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
+                            // Last-resort safeguard to keep FFT scaling defined even when paraxial FL is unavailable.
+                            focalLengthMm = 100.0;
+                        }
+
+                        const minRecommendedFftSize = 512;
+                        const requestedFftSize = (!zeroPadTo || zeroPadTo === 0)
+                            ? Math.max(wavefrontGridSize, minRecommendedFftSize)
+                            : Math.max(wavefrontGridSize, zeroPadTo);
+                        const basePixelPitchUm = (wl * Math.abs(Number(focalLengthMm))) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
+                        const pixelSizeUm = basePixelPitchUm * (wavefrontGridSize / requestedFftSize);
+
+                        setProgress(20 + baseProgress, 'λ=' + titleNm + 'nm: PSF (Rust native)...');
+                        const nativePsfResp = await opener.runDesktopNativePsfMapForPopup({
+                            gridOpd: Array.from({ length: s }, (_, iy) => Array.from(opdGrid[iy] || [])),
+                            gridAmplitude: Array.from({ length: s }, (_, iy) => Array.from(ampGrid[iy] || [])),
+                            pupilMask: Array.from({ length: s }, (_, iy) => Array.from(maskGrid[iy] || [])),
+                            wavelengthUm: wl,
+                            pixelSizeUm,
+                            removeTilt: false,
+                            zeroPadTo: requestedFftSize,
+                            recenterIfWrapped: false,
+                        });
+
+                        setProgress(30 + baseProgress, 'λ=' + titleNm + 'nm: MTF (Rust native)...');
+                        const mtfResp = await opener.runDesktopNativeMtfMapForPopup({
+                            psfData: nativePsfResp?.psfData,
+                            pixelSizeUm,
+                            maxFrequencyLpmm: Number.isFinite(maxFreq) ? maxFreq : undefined,
+                            points: Math.max(32, Math.min(512, Math.floor(requestedFftSize / 2))),
+                        });
+
+                        const freq = Array.isArray(mtfResp?.frequencyAxis) ? mtfResp.frequencyAxis : [];
+                        const tan = Array.isArray(mtfResp?.mtfTangential) ? mtfResp.mtfTangential : [];
+                        const sag = Array.isArray(mtfResp?.mtfSagittal) ? mtfResp.mtfSagittal : [];
+                        if (!freq.length || !tan.length || !sag.length) {
+                            throw new Error('Native Rust MTF result does not contain valid curves');
+                        }
+
+                        const color = getColorForWavelengthPopup(wl);
+                        traces.push({
+                            x: freq,
+                            y: tan,
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Tangential (' + titleNm + 'nm)',
+                            line: { color, width: 2, dash: 'solid' },
+                        });
+                        traces.push({
+                            x: freq,
+                            y: sag,
+                            type: 'scatter',
+                            mode: 'lines',
+                            name: 'Sagittal (' + titleNm + 'nm)',
+                            line: { color, width: 2, dash: 'dot' },
+                        });
+
+                        const nyquist = Number(mtfResp?.nyquistLpmm);
+                        if (Number.isFinite(nyquist) && nyquist > 0) {
+                            nyquistGlobal = Math.max(nyquistGlobal, nyquist);
+                        }
+
+                        if (showDiffractionLimit) {
+                            try {
+                                const fNumber = Math.abs(Number(focalLengthMm)) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
+                                if (Number.isFinite(fNumber) && fNumber > 0) {
+                                    const diffY = [];
+                                    for (let i = 0; i < freq.length; i++) {
+                                        const f = Number(freq[i]);
+                                        const cutoff = 1000.0 / (Math.max(1e-12, wl) * fNumber);
+                                        const nu = f / Math.max(1e-12, cutoff);
+                                        let val = 0;
+                                        if (nu <= 0) val = 1;
+                                        else if (nu >= 1) val = 0;
+                                        else {
+                                            const c = Math.max(-1, Math.min(1, nu));
+                                            val = (2 / Math.PI) * (Math.acos(c) - c * Math.sqrt(Math.max(0, 1 - c * c)));
+                                        }
+                                        diffY.push(Number.isFinite(val) ? Math.max(0, Math.min(1, val)) : 0);
+                                    }
+                                    traces.push({
+                                        x: freq,
+                                        y: diffY,
+                                        type: 'scatter',
+                                        mode: 'lines',
+                                        name: 'Diff. Limit (' + titleNm + 'nm)',
+                                        line: { color, width: 1.5, dash: 'dash' },
+                                    });
+                                }
+                            } catch (_) {}
+                        }
                     }
 
                     if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
                         throw new Error('Plotly is not available in MTF popup');
                     }
+                    if (!traces.length) {
+                        throw new Error('Native Rust MTF did not produce any traces');
+                    }
 
                     setProgress(80, 'Rendering MTF...');
-                    await window.Plotly.newPlot(containerEl, [
-                        {
-                            x: freq,
-                            y: tan,
-                            type: 'scatter',
-                            mode: 'lines',
-                            name: 'Tangential',
-                            line: { color: '#2563eb', width: 2 },
-                        },
-                        {
-                            x: freq,
-                            y: sag,
-                            type: 'scatter',
-                            mode: 'lines',
-                            name: 'Sagittal',
-                            line: { color: '#dc2626', width: 2 },
-                        },
-                    ], {
+                    const xAxisRangeMax = Number.isFinite(maxFreq) && maxFreq > 0
+                        ? maxFreq
+                        : (nyquistGlobal > 0 ? nyquistGlobal : undefined);
+                    await window.Plotly.newPlot(containerEl, traces, {
                         margin: { l: 50, r: 20, t: 28, b: 42 },
-                        xaxis: { title: 'Spatial frequency (lp/mm)' },
+                        xaxis: {
+                            title: 'Spatial frequency (lp/mm)',
+                            ...(Number.isFinite(xAxisRangeMax) ? { range: [0, xAxisRangeMax] } : {}),
+                        },
                         yaxis: { title: 'MTF', range: [0, 1.05] },
                         showlegend: true,
                     }, { responsive: true });
 
-                    setProgress(100, 'Done (Rust)');
                     hideProgress();
                     return;
                 }
 
-                if (typeof opener.showMTFDiagram !== 'function') {
-                    throw new Error('showMTFDiagram is not available on opener');
-                }
-                setProgress(0, 'Starting...');
-                // Allow the popup to paint the progress UI before heavy computation begins.
-                await new Promise(r => setTimeout(r, 0));
-                await opener.showMTFDiagram({
-                    wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : primary),
-                    objectIndex: Number.isFinite(objectIndex) ? objectIndex : 0,
-                    maxFrequencyLpmm: Number.isFinite(maxFreq) ? maxFreq : 100,
-                    samplingSize: Number.isFinite(sampling) ? sampling : 256,
-                    zeroPadTo,
-                    opdDisplayMode,
-                    showDiffractionLimit,
-                    onProgress: (evt) => {
-                        try {
-                            const p = Number(evt?.percent);
-                            const msg = evt?.message || evt?.phase || 'Working...';
-                            if (Number.isFinite(p)) setProgress(p, msg);
-                            else setProgress(undefined, msg);
-                        } catch (_) {}
-                    },
-                    containerElement: containerEl
-                });
-                setProgress(100, 'Done');
-                hideProgress();
+                throw new Error('Rust MTF path is required but unavailable. Ensure desktop Rust analysis is enabled.');
             } catch (err) {
                 console.error(err);
                 setProgress(100, 'Failed');
                 if (containerEl) {
-                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate MTF. Check console.</div>';
+                    const details = String((err && err.message) ? err.message : err || 'Unknown error');
+                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate MTF.<br/><span style="font-size:12px;color:#555;">' + details.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</span></div>';
                 }
             }
         };
@@ -8653,9 +10957,21 @@ export function setupAnalysisWindows() {
             try {
                 setProgress(0, 'Starting...');
 
-                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
-                    opener.__TAURI_INTERNALS__
-                    && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
+                const shouldUseDesktopRust = (() => {
+                    try {
+                        if (typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') {
+                            return !!window['shouldUseDesktopRustAnalysis']();
+                        }
+                        if (opener && typeof opener.shouldUseDesktopRustAnalysis === 'function') {
+                            return !!opener.shouldUseDesktopRustAnalysis();
+                        }
+                        return true;
+                    } catch (_) {
+                        return false;
+                    }
+                })();
+                const canUseDesktopRust = shouldUseDesktopRust && !!(
+                    typeof opener.runDesktopAnalysisComputeForPopup === 'function'
                 );
                 const canUseNativeRustSpot = canUseDesktopRust && !!(
                     typeof opener.runDesktopNativeSpotRaytraceForPopup === 'function'
@@ -9127,9 +11443,9 @@ export function setupAnalysisWindows() {
         <label for="popup-through-focus-mtf-target-freq-input">Freq (lp/mm):</label>
         <input id="popup-through-focus-mtf-target-freq-input" type="number" min="0" step="1" value="10" />
         <label for="popup-through-focus-mtf-min-defocus-input">Defocus min (mm):</label>
-        <input id="popup-through-focus-mtf-min-defocus-input" type="number" step="0.001" value="-0.1" />
+        <input id="popup-through-focus-mtf-min-defocus-input" type="number" step="0.001" value="-0.5" />
         <label for="popup-through-focus-mtf-max-defocus-input">Defocus max (mm):</label>
-        <input id="popup-through-focus-mtf-max-defocus-input" type="number" step="0.001" value="0.1" />
+        <input id="popup-through-focus-mtf-max-defocus-input" type="number" step="0.001" value="0.5" />
         <label for="popup-through-focus-mtf-steps-input">Steps:</label>
         <input id="popup-through-focus-mtf-steps-input" type="number" min="3" max="201" step="1" value="21" />
         <label for="popup-through-focus-mtf-sampling-select">Sampling:</label>
@@ -9324,8 +11640,8 @@ export function setupAnalysisWindows() {
             const wavelength = (wlValue === 'all') ? 'all' : Number(wlValue);
             const objectIndex = objSel ? parseInt(objSel.value, 10) : 0;
             const targetFrequencyLpmm = targetFreqEl ? Number(targetFreqEl.value) : 10;
-            const defocusMinMm = minDefocusEl ? Number(minDefocusEl.value) : -0.1;
-            const defocusMaxMm = maxDefocusEl ? Number(maxDefocusEl.value) : 0.1;
+            const defocusMinMm = minDefocusEl ? Number(minDefocusEl.value) : -0.5;
+            const defocusMaxMm = maxDefocusEl ? Number(maxDefocusEl.value) : 0.5;
             const steps = stepsEl ? Number(stepsEl.value) : 21;
             const sampling = samplingEl ? Number(samplingEl.value) : 256;
             const zeroPadRaw = zeroPadEl ? String(zeroPadEl.value || 'auto') : 'auto';
@@ -9349,96 +11665,117 @@ export function setupAnalysisWindows() {
                     throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                 }
 
-                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
-                    opener.__TAURI_INTERNALS__
-                    && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
-                );
-
-                if (canUseDesktopRust) {
-                    setProgress(25, 'Computing Through-Focus MTF (Rust)...');
-                    const result = await opener.runDesktopAnalysisComputeForPopup({
-                        kind: 'through-focus-mtf',
-                        gridSize: Number.isFinite(sampling) ? sampling : 256,
-                        targetFrequencyLpmm: Number.isFinite(targetFrequencyLpmm) ? targetFrequencyLpmm : 10,
-                        defocusMinMm: Number.isFinite(defocusMinMm) ? defocusMinMm : -0.1,
-                        defocusMaxMm: Number.isFinite(defocusMaxMm) ? defocusMaxMm : 0.1,
-                        steps: Number.isFinite(steps) ? steps : 21,
-                    });
-
-                    const x = Array.isArray(result?.xAxis) ? result.xAxis : [];
-                    const tangential = Array.isArray(result?.mtfTangential) ? result.mtfTangential : [];
-                    const sagittal = Array.isArray(result?.mtfSagittal) ? result.mtfSagittal : [];
-                    if (!x.length || !tangential.length || !sagittal.length) {
-                        throw new Error('Rust Through-Focus MTF result is invalid');
-                    }
-                    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
-                        throw new Error('Plotly is not available in Through-Focus MTF popup');
-                    }
-
-                    setProgress(85, 'Rendering Through-Focus MTF...');
-                    await window.Plotly.newPlot(containerEl, [
-                        {
-                            x,
-                            y: tangential,
-                            type: 'scatter',
-                            mode: 'lines+markers',
-                            name: 'Tangential',
-                            line: { color: '#2563eb', width: 2 },
-                            marker: { size: 4 },
-                        },
-                        {
-                            x,
-                            y: sagittal,
-                            type: 'scatter',
-                            mode: 'lines+markers',
-                            name: 'Sagittal',
-                            line: { color: '#dc2626', width: 2 },
-                            marker: { size: 4 },
-                        },
-                    ], {
-                        margin: { l: 55, r: 20, t: 30, b: 45 },
-                        xaxis: { title: 'Defocus (mm)' },
-                        yaxis: { title: 'MTF', range: [0, 1.05] },
-                        showlegend: true,
-                    }, { responsive: true });
-
-                    setProgress(100, 'Done (Rust)');
-                    hideProgress();
-                    return;
+                if (typeof opener.runDesktopNativeThroughFocusMtfForPopup !== 'function') {
+                    throw new Error('runDesktopNativeThroughFocusMtfForPopup is not available on opener');
                 }
 
-                if (typeof opener.showThroughFocusMTFDiagram !== 'function') {
-                    throw new Error('showThroughFocusMTFDiagram is not available on opener');
-                }
+                const sourceRows = (typeof opener.getSourceRows === 'function')
+                    ? (safeCall(() => opener.getSourceRows(opener.tableSource), []) || [])
+                    : [];
+                const wavelengthList = (() => {
+                    const out = [];
+                    if (wavelength === 'all') {
+                        if (Array.isArray(sourceRows) && sourceRows.length > 0) {
+                            for (let i = 0; i < sourceRows.length; i++) {
+                                const wl = Number(sourceRows[i]?.wavelength);
+                                if (!Number.isFinite(wl) || wl <= 0) continue;
+                                if (out.some(v => Math.abs(v - wl) < 1e-9)) continue;
+                                out.push(wl);
+                            }
+                        }
+                        if (out.length === 0 && Number.isFinite(primary) && primary > 0) {
+                            out.push(primary);
+                        }
+                    } else {
+                        const wl = (Number.isFinite(Number(wavelength)) && Number(wavelength) > 0)
+                            ? Number(wavelength)
+                            : ((Number.isFinite(primary) && primary > 0) ? primary : 0.5876);
+                        out.push(wl);
+                    }
+                    if (out.length === 0) out.push(0.5876);
+                    return out;
+                })();
 
-                await opener.showThroughFocusMTFDiagram({
-                    wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : primary),
+                setProgress(20, 'Computing Through-Focus MTF (Rust native)...');
+                const nativeResp = await opener.runDesktopNativeThroughFocusMtfForPopup({
                     objectIndex: Number.isFinite(objectIndex) ? objectIndex : 0,
+                    wavelengths: wavelengthList,
                     targetFrequencyLpmm: Number.isFinite(targetFrequencyLpmm) ? targetFrequencyLpmm : 10,
-                    defocusMinMm: Number.isFinite(defocusMinMm) ? defocusMinMm : -0.1,
-                    defocusMaxMm: Number.isFinite(defocusMaxMm) ? defocusMaxMm : 0.1,
+                    defocusMinMm: Number.isFinite(defocusMinMm) ? defocusMinMm : -0.5,
+                    defocusMaxMm: Number.isFinite(defocusMaxMm) ? defocusMaxMm : 0.5,
                     steps: Number.isFinite(steps) ? steps : 21,
                     samplingSize: Number.isFinite(sampling) ? sampling : 256,
                     zeroPadTo,
                     opdDisplayMode,
-                    onProgress: (evt) => {
-                        try {
-                            const p = Number(evt?.percent);
-                            const sub = evt?.subMessage;
-                            const msg = sub || evt?.message || evt?.phase || 'Working...';
-                            if (Number.isFinite(p)) setProgress(p, msg);
-                            else setProgress(undefined, msg);
-                        } catch (_) {}
-                    },
-                    containerElement: containerEl
                 });
-                setProgress(100, 'Done');
+
+                if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
+                    throw new Error('Plotly is not available in Through-Focus MTF popup');
+                }
+                const xAxis = Array.isArray(nativeResp?.xAxis) ? nativeResp.xAxis : [];
+                const series = Array.isArray(nativeResp?.series) ? nativeResp.series : [];
+                if (!xAxis.length || !series.length) {
+                    throw new Error('Native Through-Focus MTF did not produce valid data');
+                }
+
+                const getColorForWavelengthPopup = (wl) => {
+                    try {
+                        if (typeof opener.getColorForWavelength === 'function') {
+                            const c = opener.getColorForWavelength(wl);
+                            if (typeof c === 'string' && c) return c;
+                        }
+                    } catch (_) {}
+                    const nm = Number(wl) * 1000;
+                    if (!Number.isFinite(nm)) return '#2563eb';
+                    if (nm < 470) return '#2563eb';
+                    if (nm < 530) return '#16a34a';
+                    if (nm < 600) return '#f59e0b';
+                    return '#dc2626';
+                };
+
+                const traces = [];
+                for (let i = 0; i < series.length; i++) {
+                    const s = series[i] || {};
+                    const wl = Number(s.wavelengthUm);
+                    const nm = Number.isFinite(wl) ? (wl * 1000).toFixed(1) : 'N/A';
+                    const color = getColorForWavelengthPopup(wl);
+                    const tan = Array.isArray(s.mtfTangential) ? s.mtfTangential : [];
+                    const sag = Array.isArray(s.mtfSagittal) ? s.mtfSagittal : [];
+                    traces.push({
+                        x: xAxis,
+                        y: tan,
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Meridional (' + nm + 'nm)',
+                        line: { color, width: 2, dash: 'solid' },
+                    });
+                    traces.push({
+                        x: xAxis,
+                        y: sag,
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Sagittal (' + nm + 'nm)',
+                        line: { color, width: 2, dash: 'dot' },
+                    });
+                }
+
+                setProgress(85, 'Rendering Through-Focus MTF...');
+                await window.Plotly.newPlot(containerEl, traces, {
+                    title: 'Through-Focus MTF (' + String(Number.isFinite(targetFrequencyLpmm) ? targetFrequencyLpmm.toFixed(1) : 10) + ' lp/mm)',
+                    xaxis: { title: 'Defocus shift (mm)' },
+                    yaxis: { title: 'MTF', range: [0, 1.05] },
+                    margin: { l: 60, r: 20, t: 50, b: 50 },
+                    showlegend: true,
+                }, { responsive: true, displaylogo: false });
+
                 hideProgress();
+                return;
             } catch (err) {
                 console.error(err);
                 setProgress(100, 'Failed');
                 if (containerEl) {
-                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate Through-Focus MTF. Check console.</div>';
+                    const details = String((err && err.message) ? err.message : err || 'Unknown error');
+                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate Through-Focus MTF.<br/><span style="font-size:12px;color:#555;">' + details.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</span></div>';
                 }
             }
         };
@@ -9817,92 +12154,41 @@ export function setupAnalysisWindows() {
                     throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                 }
 
-                const canUseDesktopRust = ((typeof window !== 'undefined' && typeof window['shouldUseDesktopRustAnalysis'] === 'function') ? !!window['shouldUseDesktopRustAnalysis']() : false) && !!(
-                    opener.__TAURI_INTERNALS__
-                    && typeof opener.runDesktopAnalysisComputeForPopup === 'function'
-                );
-
-                if (canUseDesktopRust) {
-                    setProgress(25, 'Computing Object MTF (Rust)...');
-                    const result = await opener.runDesktopAnalysisComputeForPopup({
-                        kind: 'field-mtf',
-                        gridSize: Number.isFinite(sampling) ? sampling : 256,
-                        fieldMin: Number.isFinite(fieldMin) ? fieldMin : 0,
-                        fieldMax: Number.isFinite(fieldMax) ? fieldMax : 10,
-                        steps: Number.isFinite(steps) ? steps : 21,
-                        firstFrequencyLpmm: Number.isFinite(meridionalFreq) ? meridionalFreq : 10,
-                        secondFrequencyLpmm: Number.isFinite(sagittalFreq) ? sagittalFreq : 30,
-                        fieldAxisMode: axisInfo.mode,
-                    });
-
-                    const x = Array.isArray(result?.xAxis) ? result.xAxis : [];
-                    const firstTangential = Array.isArray(result?.mtfFirstTangential) ? result.mtfFirstTangential : [];
-                    const firstSagittal = Array.isArray(result?.mtfFirstSagittal) ? result.mtfFirstSagittal : [];
-                    const secondTangential = Array.isArray(result?.mtfSecondTangential) ? result.mtfSecondTangential : [];
-                    const secondSagittal = Array.isArray(result?.mtfSecondSagittal) ? result.mtfSecondSagittal : [];
-                    if (!x.length || !firstTangential.length || !firstSagittal.length || !secondTangential.length || !secondSagittal.length) {
-                        throw new Error('Rust Field MTF result is invalid');
-                    }
-                    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
-                        throw new Error('Plotly is not available in Object MTF popup');
-                    }
-
-                    setProgress(85, 'Rendering Object MTF...');
-                    await window.Plotly.newPlot(containerEl, [
-                        {
-                            x,
-                            y: firstTangential,
-                            type: 'scatter',
-                            mode: 'lines+markers',
-                            name: 'M @ ' + (Number.isFinite(meridionalFreq) ? meridionalFreq : 10) + ' lp/mm',
-                            line: { color: '#2563eb', width: 2 },
-                            marker: { size: 4 },
-                        },
-                        {
-                            x,
-                            y: firstSagittal,
-                            type: 'scatter',
-                            mode: 'lines+markers',
-                            name: 'S @ ' + (Number.isFinite(meridionalFreq) ? meridionalFreq : 10) + ' lp/mm',
-                            line: { color: '#60a5fa', width: 2, dash: 'dot' },
-                            marker: { size: 4 },
-                        },
-                        {
-                            x,
-                            y: secondTangential,
-                            type: 'scatter',
-                            mode: 'lines+markers',
-                            name: 'M @ ' + (Number.isFinite(sagittalFreq) ? sagittalFreq : 30) + ' lp/mm',
-                            line: { color: '#dc2626', width: 2 },
-                            marker: { size: 4 },
-                        },
-                        {
-                            x,
-                            y: secondSagittal,
-                            type: 'scatter',
-                            mode: 'lines+markers',
-                            name: 'S @ ' + (Number.isFinite(sagittalFreq) ? sagittalFreq : 30) + ' lp/mm',
-                            line: { color: '#f87171', width: 2, dash: 'dot' },
-                            marker: { size: 4 },
-                        },
-                    ], {
-                        margin: { l: 55, r: 20, t: 30, b: 45 },
-                        xaxis: { title: axisInfo.label },
-                        yaxis: { title: 'MTF', range: [0, 1.05] },
-                        showlegend: true,
-                    }, { responsive: true });
-
-                    setProgress(100, 'Done (Rust)');
-                    hideProgress();
-                    return;
+                if (typeof opener.runDesktopNativeFieldMtfForPopup !== 'function') {
+                    throw new Error('runDesktopNativeFieldMtfForPopup is not available on opener');
                 }
 
-                if (typeof opener.showFieldMTFDiagram !== 'function') {
-                    throw new Error('showFieldMTFDiagram is not available on opener');
-                }
+                const sourceRows = (typeof opener.getSourceRows === 'function')
+                    ? (safeCall(() => opener.getSourceRows(opener.tableSource), []) || [])
+                    : [];
+                const wavelengthList = (() => {
+                    const out = [];
+                    if (wavelength === 'all') {
+                        if (Array.isArray(sourceRows) && sourceRows.length > 0) {
+                            for (let i = 0; i < sourceRows.length; i++) {
+                                const wl = Number(sourceRows[i]?.wavelength);
+                                if (!Number.isFinite(wl) || wl <= 0) continue;
+                                if (out.some(v => Math.abs(v - wl) < 1e-9)) continue;
+                                out.push(wl);
+                            }
+                        }
+                        if (out.length === 0 && Number.isFinite(primary) && primary > 0) {
+                            out.push(primary);
+                        }
+                    } else {
+                        const wl = (Number.isFinite(Number(wavelength)) && Number(wavelength) > 0)
+                            ? Number(wavelength)
+                            : ((Number.isFinite(primary) && primary > 0) ? primary : 0.5876);
+                        out.push(wl);
+                    }
+                    if (out.length === 0) out.push(0.5876);
+                    return out;
+                })();
 
-                const requestPayload = {
-                    wavelengthMicrons: (wavelength === 'all') ? 'all' : (Number.isFinite(wavelength) ? wavelength : primary),
+                setProgress(20, 'Computing Object MTF (Rust native)...');
+                const nativeResp = await opener.runDesktopNativeFieldMtfForPopup({
+                    objectIndex: 0,
+                    wavelengths: wavelengthList,
                     firstFrequencyLpmm: Number.isFinite(meridionalFreq) ? meridionalFreq : 10,
                     secondFrequencyLpmm: Number.isFinite(sagittalFreq) ? sagittalFreq : 30,
                     fieldMin: Number.isFinite(fieldMin) ? fieldMin : 0,
@@ -9912,39 +12198,92 @@ export function setupAnalysisWindows() {
                     zeroPadTo,
                     opdDisplayMode,
                     fieldAxisMode: axisInfo.mode,
-                    onProgress: (evt) => {
-                        try {
-                            const p = Number(evt?.percent);
-                            const sub = evt?.subMessage;
-                            const msg = sub || evt?.message || evt?.phase || 'Working...';
-                            if (Number.isFinite(p)) setProgress(p, msg);
-                            else setProgress(undefined, msg);
-                        } catch (_) {}
-                    },
-                    containerElement: containerEl
-                };
-
-                popupLog('[Object MTF Popup] invoking opener.showFieldMTFDiagram', {
-                    axisMode: axisInfo.mode,
-                    fieldMin: requestPayload.fieldMin,
-                    fieldMax: requestPayload.fieldMax,
-                    steps: requestPayload.steps,
-                    samplingSize: requestPayload.samplingSize,
-                    firstFrequencyLpmm: requestPayload.firstFrequencyLpmm,
-                    secondFrequencyLpmm: requestPayload.secondFrequencyLpmm,
-                    wavelengthMicrons: requestPayload.wavelengthMicrons
                 });
 
-                await opener.showFieldMTFDiagram(requestPayload);
+                if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
+                    throw new Error('Plotly is not available in Object MTF popup');
+                }
+                const xAxis = Array.isArray(nativeResp?.xAxis) ? nativeResp.xAxis : [];
+                const series = Array.isArray(nativeResp?.series) ? nativeResp.series : [];
+                if (!xAxis.length || !series.length) {
+                    throw new Error('Native Object MTF did not produce valid data');
+                }
 
-                popupLog('[Object MTF Popup] opener.showFieldMTFDiagram completed');
-                setProgress(100, 'Done');
+                const getColorForWavelengthPopup = (wl) => {
+                    try {
+                        if (typeof opener.getColorForWavelength === 'function') {
+                            const c = opener.getColorForWavelength(wl);
+                            if (typeof c === 'string' && c) return c;
+                        }
+                    } catch (_) {}
+                    const nm = Number(wl) * 1000;
+                    if (!Number.isFinite(nm)) return '#2563eb';
+                    if (nm < 470) return '#2563eb';
+                    if (nm < 530) return '#16a34a';
+                    if (nm < 600) return '#f59e0b';
+                    return '#dc2626';
+                };
+
+                const firstFreqText = String(Number.isFinite(meridionalFreq) ? meridionalFreq.toFixed(1) : '10.0');
+                const secondFreqText = String(Number.isFinite(sagittalFreq) ? sagittalFreq.toFixed(1) : '30.0');
+                const traces = [];
+                for (let i = 0; i < series.length; i++) {
+                    const s = series[i] || {};
+                    const wl = Number(s.wavelengthUm);
+                    const nm = Number.isFinite(wl) ? (wl * 1000).toFixed(1) : 'N/A';
+                    const color = getColorForWavelengthPopup(wl);
+
+                    traces.push({
+                        x: xAxis,
+                        y: Array.isArray(s.meridionalFirst) ? s.meridionalFirst : [],
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Meridional ' + firstFreqText + ' lp/mm (' + nm + 'nm)',
+                        line: { color, width: 2, dash: 'solid' },
+                    });
+                    traces.push({
+                        x: xAxis,
+                        y: Array.isArray(s.sagittalFirst) ? s.sagittalFirst : [],
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Sagittal ' + firstFreqText + ' lp/mm (' + nm + 'nm)',
+                        line: { color, width: 2, dash: 'dot' },
+                    });
+                    traces.push({
+                        x: xAxis,
+                        y: Array.isArray(s.meridionalSecond) ? s.meridionalSecond : [],
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Meridional ' + secondFreqText + ' lp/mm (' + nm + 'nm)',
+                        line: { color, width: 2, dash: 'dash' },
+                    });
+                    traces.push({
+                        x: xAxis,
+                        y: Array.isArray(s.sagittalSecond) ? s.sagittalSecond : [],
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'Sagittal ' + secondFreqText + ' lp/mm (' + nm + 'nm)',
+                        line: { color, width: 2, dash: 'dashdot' },
+                    });
+                }
+
+                setProgress(85, 'Rendering Object MTF...');
+                await window.Plotly.newPlot(containerEl, traces, {
+                    title: 'Object MTF (' + firstFreqText + ' / ' + secondFreqText + ' lp/mm)',
+                    xaxis: { title: axisInfo.label },
+                    yaxis: { title: 'MTF', range: [0, 1.05] },
+                    margin: { l: 60, r: 20, t: 50, b: 50 },
+                    showlegend: true,
+                }, { responsive: true, displaylogo: false });
+
                 hideProgress();
+                return;
             } catch (err) {
                 popupError('[Object MTF Popup] renderFieldMTF failed', err);
                 setProgress(100, 'Failed');
                 if (containerEl) {
-                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate Object MTF. Check console.</div>';
+                    const details = String((err && err.message) ? err.message : err || 'Unknown error');
+                    containerEl.innerHTML = '<div style="padding:20px;color:red;font-family:Arial;">Failed to generate Object MTF.<br/><span style="font-size:12px;color:#555;">' + details.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</span></div>';
                 }
             }
         };
@@ -10035,13 +12374,6 @@ export function setupAnalysisWindows() {
             background: white;
             width: 90px;
         }
-        .note {
-            padding: 10px 12px;
-            color: #666;
-            font-size: 12px;
-            border-bottom: 1px solid #eee;
-            background: #fff;
-        }
         .content {
             flex: 1 1 auto;
             min-height: 0;
@@ -10053,19 +12385,15 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Transverse Aberration</div>
     <div class="controls">
         <label for="popup-transverse-ray-count-input">Ray number:</label>
-        <input type="number" id="popup-transverse-ray-count-input" value="101" min="1" max="1001" step="1" />
+        <input type="number" id="popup-transverse-ray-count-input" value="101" min="9" max="10001" step="1" />
         <span class="note-inline" style="font-size:12px;color:#666;">(Always normalized by stop diameter)</span>
         <button id="popup-show-transverse-aberration-btn" type="button">Show transverse aberration diagram</button>
     </div>
     <div id="popup-transverse-progress-wrapper" style="display:none;padding:10px 12px;border-bottom:1px solid #eee;background:#fff;">
         <div id="popup-transverse-progress-text" style="margin-bottom: 6px; font-size:12px; color:#555;">Starting...</div>
         <progress id="popup-transverse-progressbar" value="0" max="100" style="display:block;width:calc(100% + 24px);margin-left:-12px;height:14px;"></progress>
-    </div>
-    <div class="note">
-        Note: X-axis is transverse aberration (μm), Y-axis is normalized pupil coordinate.
     </div>
     <div class="content">
         <div id="popup-transverse-aberration-container"></div>
@@ -10099,6 +12427,11 @@ export function setupAnalysisWindows() {
                     if (progressText) progressText.textContent = message || '';
                 } catch (_) {}
             };
+            const hideProgress = () => {
+                try {
+                    if (progressWrap) progressWrap.style.display = 'none';
+                } catch (_) {}
+            };
             const onProgress = (evt) => {
                 const p = Number(evt?.percent);
                 const msg = (evt && (evt.message || evt.phase)) ? String(evt.message || evt.phase) : '';
@@ -10125,7 +12458,7 @@ export function setupAnalysisWindows() {
                     containerElement: containerEl,
                     onProgress
                 });
-                setProgress(100, 'Done');
+                hideProgress();
             } catch (err) {
                 console.error(err);
                 if (containerEl) {
@@ -10157,8 +12490,7 @@ export function setupAnalysisWindows() {
 
         // Settings popup (environment settings)
         const openSettingsBtn = document.getElementById('open-settings-btn');
-        if (openSettingsBtn) {
-                openSettingsBtn.addEventListener('click', () => {
+        const openSettingsPopup = () => {
                         if (w.__settingsPopup && !w.__settingsPopup.closed) {
                                 try { w.__settingsPopup.focus(); } catch (_) {}
                                 return;
@@ -10427,7 +12759,24 @@ export function setupAnalysisWindows() {
                         `);
 
                         try { popup.document.close(); } catch (_) {}
-                });
+                };
+
+        if (openSettingsBtn) {
+                openSettingsBtn.addEventListener('click', openSettingsPopup);
+        }
+
+        // React toolbar can mount after this initializer, so delegate as a fallback.
+        if (!(w as any).__cooptSettingsButtonDelegatedBound) {
+            document.addEventListener('click', (ev: Event) => {
+                try {
+                    const target = ev.target as HTMLElement | null;
+                    if (!target || typeof target.closest !== 'function') return;
+                    const btn = target.closest('#open-settings-btn');
+                    if (!btn) return;
+                    openSettingsPopup();
+                } catch (_) {}
+            });
+            (w as any).__cooptSettingsButtonDelegatedBound = true;
         }
 
         // Dark Mode initialization
@@ -10684,6 +13033,7 @@ export function setupTransformationControls(): void {
                 'spherical-aberration': 'open-spherical-aberration-window-btn',
                 'astigmatism': 'open-astigmatism-window-btn',
                 'distortion': 'open-distortion-window-btn',
+                'distortion-grid': 'open-distortion-grid-window-btn',
                 'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
                 'integrated-aberration': 'open-integrated-aberration-window-btn',
                 'transverse-aberration': 'open-transverse-aberration-window-btn',

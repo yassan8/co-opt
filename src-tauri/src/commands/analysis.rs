@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use chrono::Local;
 use rustfft::{FftPlanner, num_complex::Complex};
+use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,22 +52,16 @@ pub struct RunAnalysisPreviewResponse {
 #[serde(rename_all = "camelCase")]
 pub struct RunAnalysisComputeRequest {
     pub kind: String,
+    pub job_id: Option<String>,
     pub optical_system_rows: Vec<Value>,
     #[serde(default)]
     pub source_rows: Vec<Value>,
     #[serde(default)]
     pub object_rows: Vec<Value>,
     pub grid_size: Option<u32>,
-    pub max_frequency_lpmm: Option<f64>,
-    pub target_frequency_lpmm: Option<f64>,
     pub defocus_min_mm: Option<f64>,
     pub defocus_max_mm: Option<f64>,
-    pub field_min: Option<f64>,
-    pub field_max: Option<f64>,
     pub steps: Option<u32>,
-    pub first_frequency_lpmm: Option<f64>,
-    pub second_frequency_lpmm: Option<f64>,
-    pub field_axis_mode: Option<String>,
     pub surface_index: Option<usize>,
     pub ray_count: Option<u32>,
     pub ring_count: Option<u32>,
@@ -130,6 +125,74 @@ pub struct RunAnalysisComputeResponse {
     pub spot_diagram_series: Option<Vec<SpotDiagramSeries>>,
     pub message: String,
     pub summary: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnalysisProgressEvent {
+    job_id: String,
+    kind: String,
+    phase: String,
+    message: String,
+    percent: Option<f64>,
+    indeterminate: bool,
+    done: bool,
+    error: bool,
+}
+
+fn emit_analysis_progress(
+    app: &AppHandle,
+    job_id: &str,
+    kind: &str,
+    phase: &str,
+    message: &str,
+    percent: Option<f64>,
+) {
+    let payload = AnalysisProgressEvent {
+        job_id: job_id.to_string(),
+        kind: kind.to_string(),
+        phase: phase.to_string(),
+        message: message.to_string(),
+        percent,
+        indeterminate: percent.is_none(),
+        done: false,
+        error: false,
+    };
+    if let Err(err) = app.emit("analysis-progress", payload) {
+        eprintln!("[analysis-progress] emit failed: {err}");
+    }
+}
+
+fn emit_analysis_done(app: &AppHandle, job_id: &str, kind: &str, message: &str) {
+    let payload = AnalysisProgressEvent {
+        job_id: job_id.to_string(),
+        kind: kind.to_string(),
+        phase: "done".to_string(),
+        message: message.to_string(),
+        percent: Some(100.0),
+        indeterminate: false,
+        done: true,
+        error: false,
+    };
+    if let Err(err) = app.emit("analysis-progress", payload) {
+        eprintln!("[analysis-progress] done emit failed: {err}");
+    }
+}
+
+fn emit_analysis_error(app: &AppHandle, job_id: &str, kind: &str, message: &str) {
+    let payload = AnalysisProgressEvent {
+        job_id: job_id.to_string(),
+        kind: kind.to_string(),
+        phase: "error".to_string(),
+        message: message.to_string(),
+        percent: Some(100.0),
+        indeterminate: false,
+        done: true,
+        error: true,
+    };
+    if let Err(err) = app.emit("analysis-progress", payload) {
+        eprintln!("[analysis-progress] error emit failed: {err}");
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,16 +271,12 @@ pub fn recommend_wavefront_grid_for_time(
 pub fn run_analysis_preview(req: RunAnalysisPreviewRequest) -> Result<RunAnalysisPreviewResponse, String> {
     let kind = req.kind.trim().to_lowercase();
     if kind != "opd"
-        && kind != "psf"
-        && kind != "mtf"
-        && kind != "through-focus-mtf"
-        && kind != "field-mtf"
         && kind != "through-focus-spot"
         && kind != "spot-diagram"
         && kind != "spherical-aberration"
     {
         return Err(format!(
-            "unsupported analysis kind '{}': expected opd|psf|mtf|through-focus-mtf|field-mtf|through-focus-spot|spot-diagram|spherical-aberration",
+            "unsupported analysis kind '{}': expected opd|through-focus-spot|spot-diagram|spherical-aberration",
             req.kind
         ));
     }
@@ -249,8 +308,6 @@ pub fn run_analysis_preview(req: RunAnalysisPreviewRequest) -> Result<RunAnalysi
     let base = (curvature_energy + thickness_energy) / (sample_count.max(1) as f64);
     let score = match kind.as_str() {
         "opd" => (base * 0.011).max(0.0),
-        "psf" => (base * 0.007).max(0.0),
-        "mtf" => (1.0 / (1.0 + base * 0.003)).clamp(0.0, 1.0),
         _ => 0.0,
     };
 
@@ -279,25 +336,52 @@ pub fn run_analysis_preview(req: RunAnalysisPreviewRequest) -> Result<RunAnalysi
 }
 
 #[tauri::command]
-pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysisComputeResponse, String> {
-    let kind = req.kind.trim().to_lowercase();
+pub async fn run_analysis_compute(
+    req: RunAnalysisComputeRequest,
+    app: AppHandle,
+) -> Result<RunAnalysisComputeResponse, String> {
+    let requested_kind = req.kind.trim().to_string();
+    let kind = requested_kind.to_lowercase();
+    let job_id = req
+        .job_id
+        .clone()
+        .unwrap_or_else(|| format!("analysis-{}-{}", kind, Local::now().timestamp_millis()));
+
+    emit_analysis_progress(
+        &app,
+        &job_id,
+        &kind,
+        "init",
+        "Initializing analysis compute...",
+        Some(0.0),
+    );
+
     if kind != "opd"
-        && kind != "psf"
-        && kind != "mtf"
-        && kind != "through-focus-mtf"
-        && kind != "field-mtf"
         && kind != "through-focus-spot"
         && kind != "spot-diagram"
         && kind != "spherical-aberration"
     {
-        return Err(format!(
-            "unsupported analysis kind '{}': expected opd|psf|mtf|through-focus-mtf|field-mtf|through-focus-spot|spot-diagram|spherical-aberration",
-            req.kind
-        ));
+        let err = format!(
+            "unsupported analysis kind '{}': expected opd|through-focus-spot|spot-diagram|spherical-aberration",
+            requested_kind
+        );
+        emit_analysis_error(&app, &job_id, &kind, &err);
+        return Err(err);
     }
     if req.optical_system_rows.is_empty() {
-        return Err("analysis compute: opticalSystemRows is empty".to_string());
+        let err = "analysis compute: opticalSystemRows is empty".to_string();
+        emit_analysis_error(&app, &job_id, &kind, &err);
+        return Err(err);
     }
+
+    emit_analysis_progress(
+        &app,
+        &job_id,
+        &kind,
+        "preprocess",
+        "Collecting input metrics...",
+        Some(8.0),
+    );
 
     let grid_size = req.grid_size.unwrap_or(128).clamp(32, 512);
     let metrics = collect_metrics(&req.optical_system_rows);
@@ -311,11 +395,12 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
         "aberrationScale": metrics.aberration_scale
     });
 
-    match kind.as_str() {
+    let result = match kind.as_str() {
         "opd" => {
+            emit_analysis_progress(&app, &job_id, &kind, "compute", "Building OPD grid...", Some(22.0));
             let opd_grid = build_opd_grid(grid_size as usize, &metrics);
             Ok(RunAnalysisComputeResponse {
-                kind,
+                kind: kind.clone(),
                 grid_size,
                 opd_grid: Some(opd_grid),
                 psf_grid: None,
@@ -333,125 +418,6 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
                 summary,
             })
         }
-        "psf" => {
-            let opd_grid = build_opd_grid(grid_size as usize, &metrics);
-            let psf_grid = build_psf_grid_from_opd(&opd_grid);
-            Ok(RunAnalysisComputeResponse {
-                kind,
-                grid_size,
-                opd_grid: None,
-                psf_grid: Some(psf_grid),
-                frequency_axis: None,
-                x_axis: None,
-                mtf_tangential: None,
-                mtf_sagittal: None,
-                mtf_first_tangential: None,
-                mtf_first_sagittal: None,
-                mtf_second_tangential: None,
-                mtf_second_sagittal: None,
-                spot_series: None,
-                spot_diagram_series: None,
-                message: format!("Rust PSF compute completed: {}x{}", grid_size, grid_size),
-                summary,
-            })
-        }
-        "mtf" => {
-            let max_freq = req.max_frequency_lpmm.unwrap_or(100.0).clamp(10.0, 2000.0);
-            let mtf_points = (grid_size / 2).clamp(32, 256) as usize;
-            let opd_grid = build_opd_grid(grid_size as usize, &metrics);
-            let psf_grid = build_psf_grid_from_opd(&opd_grid);
-            let (frequency_axis, mtf_tangential, mtf_sagittal) =
-                build_mtf_axes_from_psf(&psf_grid, mtf_points, max_freq);
-            Ok(RunAnalysisComputeResponse {
-                kind,
-                grid_size,
-                opd_grid: None,
-                psf_grid: None,
-                frequency_axis: Some(frequency_axis),
-                x_axis: None,
-                mtf_tangential: Some(mtf_tangential),
-                mtf_sagittal: Some(mtf_sagittal),
-                mtf_first_tangential: None,
-                mtf_first_sagittal: None,
-                mtf_second_tangential: None,
-                mtf_second_sagittal: None,
-                spot_series: None,
-                spot_diagram_series: None,
-                message: format!("Rust MTF compute completed: points={}", mtf_points),
-                summary,
-            })
-        }
-        "through-focus-mtf" => {
-            let target_freq = req.target_frequency_lpmm.unwrap_or(10.0).clamp(1.0, 2000.0);
-            let min_defocus = req.defocus_min_mm.unwrap_or(-0.1);
-            let max_defocus = req.defocus_max_mm.unwrap_or(0.1);
-            let steps = req.steps.unwrap_or(21).clamp(3, 401) as usize;
-            let (x_axis, mtf_tangential, mtf_sagittal) = build_through_focus_mtf(
-                steps,
-                min_defocus,
-                max_defocus,
-                target_freq,
-                grid_size as usize,
-                &metrics,
-            );
-            Ok(RunAnalysisComputeResponse {
-                kind,
-                grid_size,
-                opd_grid: None,
-                psf_grid: None,
-                frequency_axis: None,
-                x_axis: Some(x_axis),
-                mtf_tangential: Some(mtf_tangential),
-                mtf_sagittal: Some(mtf_sagittal),
-                mtf_first_tangential: None,
-                mtf_first_sagittal: None,
-                mtf_second_tangential: None,
-                mtf_second_sagittal: None,
-                spot_series: None,
-                spot_diagram_series: None,
-                message: "Rust Through-Focus MTF compute completed".to_string(),
-                summary,
-            })
-        }
-        "field-mtf" => {
-            let field_min = req.field_min.unwrap_or(0.0);
-            let field_max = req.field_max.unwrap_or(10.0);
-            let steps = req.steps.unwrap_or(21).clamp(3, 401) as usize;
-            let first_freq = req.first_frequency_lpmm.unwrap_or(10.0).clamp(1.0, 2000.0);
-            let second_freq = req.second_frequency_lpmm.unwrap_or(30.0).clamp(1.0, 2000.0);
-            let axis_mode = req.field_axis_mode.unwrap_or_else(|| "angle".to_string());
-
-            let (x_axis, mtf_first_tangential, mtf_first_sagittal, mtf_second_tangential, mtf_second_sagittal) =
-                build_field_mtf(
-                    steps,
-                    field_min,
-                    field_max,
-                    first_freq,
-                    second_freq,
-                    grid_size as usize,
-                    &metrics,
-                );
-            let summary = merge_summary(summary, json!({ "fieldAxisMode": axis_mode }));
-
-            Ok(RunAnalysisComputeResponse {
-                kind,
-                grid_size,
-                opd_grid: None,
-                psf_grid: None,
-                frequency_axis: None,
-                x_axis: Some(x_axis),
-                mtf_tangential: None,
-                mtf_sagittal: None,
-                mtf_first_tangential: Some(mtf_first_tangential),
-                mtf_first_sagittal: Some(mtf_first_sagittal),
-                mtf_second_tangential: Some(mtf_second_tangential),
-                mtf_second_sagittal: Some(mtf_second_sagittal),
-                spot_series: None,
-                spot_diagram_series: None,
-                message: "Rust Field MTF compute completed".to_string(),
-                summary,
-            })
-        }
         "through-focus-spot" => {
             let min_defocus = req.defocus_min_mm.unwrap_or(-0.1);
             let max_defocus = req.defocus_max_mm.unwrap_or(0.1);
@@ -463,6 +429,14 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
             let wavelength_mode = req.wavelength_mode.unwrap_or_else(|| "all".to_string());
             let surface_index = req.surface_index.unwrap_or(0);
 
+            emit_analysis_progress(
+                &app,
+                &job_id,
+                &kind,
+                "compute",
+                &format!("Computing through-focus spot ({} steps)...", steps),
+                Some(24.0),
+            );
             let spot_series = build_through_focus_spot(
                 min_defocus,
                 max_defocus,
@@ -491,7 +465,7 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
             );
 
             Ok(RunAnalysisComputeResponse {
-                kind,
+                kind: kind.clone(),
                 grid_size,
                 opd_grid: None,
                 psf_grid: None,
@@ -515,6 +489,7 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
             let pattern = req.pattern.unwrap_or_else(|| "annular".to_string());
             let wavelength_mode = req.wavelength_mode.unwrap_or_else(|| "all".to_string());
             let surface_index = req.surface_index.unwrap_or(0);
+            emit_analysis_progress(&app, &job_id, &kind, "compute", "Computing spot diagram...", Some(24.0));
             let spot_diagram_series = build_spot_diagram(
                 ray_count as usize,
                 ring_count as usize,
@@ -537,7 +512,7 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
             );
 
             Ok(RunAnalysisComputeResponse {
-                kind,
+                kind: kind.clone(),
                 grid_size,
                 opd_grid: None,
                 psf_grid: None,
@@ -555,8 +530,21 @@ pub fn run_analysis_compute(req: RunAnalysisComputeRequest) -> Result<RunAnalysi
                 summary,
             })
         }
-        "spherical-aberration" => Err("spherical-aberration rust compute is temporarily disabled until TS parity is implemented".to_string()),
+        "spherical-aberration" => Err(
+            "spherical-aberration rust compute is temporarily disabled until TS parity is implemented".to_string(),
+        ),
         _ => Err("unsupported analysis kind".to_string()),
+    };
+
+    match result {
+        Ok(response) => {
+            emit_analysis_done(&app, &job_id, &kind, &response.message);
+            Ok(response)
+        }
+        Err(err) => {
+            emit_analysis_error(&app, &job_id, &kind, &err);
+            Err(err)
+        }
     }
 }
 
@@ -901,61 +889,6 @@ fn build_psf_grid_from_opd_with_phase_scale(opd: &[Vec<f64>], phase_scale: f64) 
     fftshift_real(&psf)
 }
 
-fn build_psf_grid_from_opd(opd: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    build_psf_grid_from_opd_with_phase_scale(opd, 1.0)
-}
-
-fn build_mtf_axes_from_psf(psf: &[Vec<f64>], points: usize, max_freq: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    let n = psf.len();
-    if n == 0 || psf[0].len() != n || points == 0 {
-        return (vec![], vec![], vec![]);
-    }
-
-    let psf_unshifted = fftshift_real(psf);
-    let mut data = vec![vec![Complex::new(0.0, 0.0); n]; n];
-    for y in 0..n {
-        for x in 0..n {
-            data[y][x] = Complex::new(psf_unshifted[y][x], 0.0);
-        }
-    }
-
-    fft2d_in_place(&mut data, false);
-
-    let dc = data[0][0].norm().max(1e-12);
-    let mut mtf_map = vec![vec![0.0; n]; n];
-    for y in 0..n {
-        for x in 0..n {
-            mtf_map[y][x] = (data[y][x].norm() / dc).clamp(0.0, 1.0);
-        }
-    }
-    let mtf_shifted = fftshift_real(&mtf_map);
-
-    let mut freq = Vec::with_capacity(points);
-    let mut tangential = Vec::with_capacity(points);
-    let mut sagittal = Vec::with_capacity(points);
-    let c = n / 2;
-    let max_idx = c.saturating_sub(1).max(1);
-
-    for i in 0..points {
-        let t = if points > 1 {
-            i as f64 / (points - 1) as f64
-        } else {
-            0.0
-        };
-        let idx = ((t * max_idx as f64).round() as usize).min(max_idx);
-        let sx = (c + idx).min(n - 1);
-        let sy = (c + idx).min(n - 1);
-
-        freq.push(t * max_freq);
-        let sag = if i == 0 { 1.0 } else { mtf_shifted[c][sx] };
-        let tan = if i == 0 { 1.0 } else { mtf_shifted[sy][c] };
-        sagittal.push(sag.clamp(0.0, 1.0));
-        tangential.push(tan.clamp(0.0, 1.0));
-    }
-
-    (freq, tangential, sagittal)
-}
-
 fn build_opd_variant(
     base_opd: &[Vec<f64>],
     defocus_mm: f64,
@@ -998,129 +931,6 @@ fn build_opd_variant(
     }
 
     out
-}
-
-fn sample_mtf_at_frequency_from_psf(psf: &[Vec<f64>], target_frequency_lpmm: f64, max_frequency_lpmm: f64) -> (f64, f64) {
-    let points = 128usize;
-    let (freq_axis, tan, sag) = build_mtf_axes_from_psf(psf, points, max_frequency_lpmm);
-    if freq_axis.is_empty() || tan.is_empty() || sag.is_empty() {
-        return (0.0, 0.0);
-    }
-
-    let mut best_index = 0usize;
-    let mut best_err = f64::INFINITY;
-    for (i, f) in freq_axis.iter().enumerate() {
-        let err = (f - target_frequency_lpmm).abs();
-        if err < best_err {
-            best_err = err;
-            best_index = i;
-        }
-    }
-
-    (
-        tan.get(best_index).copied().unwrap_or(0.0).clamp(0.0, 1.0),
-        sag.get(best_index).copied().unwrap_or(0.0).clamp(0.0, 1.0),
-    )
-}
-
-fn build_through_focus_mtf(
-    points: usize,
-    min_defocus: f64,
-    max_defocus: f64,
-    target_frequency_lpmm: f64,
-    grid_size: usize,
-    metrics: &AnalysisMetrics,
-) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    let mut x_axis = Vec::with_capacity(points);
-    let mut tangential = Vec::with_capacity(points);
-    let mut sagittal = Vec::with_capacity(points);
-
-    let span = (max_defocus - min_defocus).abs();
-    let center = (min_defocus + max_defocus) * 0.5;
-    let sample_size = if points > 101 {
-        grid_size.clamp(48, 96)
-    } else {
-        grid_size.clamp(64, 192)
-    };
-    let base_opd = build_opd_grid(sample_size, metrics);
-    let max_freq = (target_frequency_lpmm * 1.5).max(target_frequency_lpmm + 1.0).clamp(10.0, 2000.0);
-    let defocus_scale = span.max(0.02);
-
-    for i in 0..points {
-        let x = if points > 1 {
-            min_defocus + (i as f64) * (max_defocus - min_defocus) / ((points - 1) as f64)
-        } else {
-            center
-        };
-
-        let opd = build_opd_variant(&base_opd, x - center, defocus_scale, 0.0, metrics);
-        let psf = build_psf_grid_from_opd(&opd);
-        let (tan, sag) = sample_mtf_at_frequency_from_psf(&psf, target_frequency_lpmm, max_freq);
-
-        x_axis.push(x);
-        tangential.push(tan);
-        sagittal.push(sag);
-    }
-    (x_axis, tangential, sagittal)
-}
-
-fn build_field_mtf(
-    points: usize,
-    field_min: f64,
-    field_max: f64,
-    first_frequency_lpmm: f64,
-    second_frequency_lpmm: f64,
-    grid_size: usize,
-    metrics: &AnalysisMetrics,
-) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
-    let mut x_axis = Vec::with_capacity(points);
-    let mut first_tangential = Vec::with_capacity(points);
-    let mut first_sagittal = Vec::with_capacity(points);
-    let mut second_tangential = Vec::with_capacity(points);
-    let mut second_sagittal = Vec::with_capacity(points);
-
-    let max_freq = (first_frequency_lpmm.max(second_frequency_lpmm) * 1.5)
-        .max(first_frequency_lpmm.max(second_frequency_lpmm) + 1.0)
-        .clamp(10.0, 2000.0);
-    let sample_size = if points > 101 {
-        grid_size.clamp(48, 96)
-    } else {
-        grid_size.clamp(64, 192)
-    };
-    let base_opd = build_opd_grid(sample_size, metrics);
-    let field_span = (field_max - field_min).abs().max(1e-9);
-
-    for i in 0..points {
-        let x = if points > 1 {
-            field_min + (i as f64) * (field_max - field_min) / ((points - 1) as f64)
-        } else {
-            field_min
-        };
-        let field_norm = if field_span > 1e-9 {
-            ((x - field_min) / field_span) * 2.0 - 1.0
-        } else {
-            0.0
-        };
-
-        let opd = build_opd_variant(&base_opd, 0.0, 1.0, field_norm, metrics);
-        let psf = build_psf_grid_from_opd(&opd);
-        let (tan1, sag1) = sample_mtf_at_frequency_from_psf(&psf, first_frequency_lpmm, max_freq);
-        let (tan2, sag2) = sample_mtf_at_frequency_from_psf(&psf, second_frequency_lpmm, max_freq);
-
-        x_axis.push(x);
-        first_tangential.push(tan1);
-        first_sagittal.push(sag1);
-        second_tangential.push(tan2);
-        second_sagittal.push(sag2);
-    }
-
-    (
-        x_axis,
-        first_tangential,
-        first_sagittal,
-        second_tangential,
-        second_sagittal,
-    )
 }
 
 fn merge_summary(base: Value, extra: Value) -> Value {

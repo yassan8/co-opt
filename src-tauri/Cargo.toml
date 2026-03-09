@@ -21,3 +21,11 @@ thiserror = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 chrono = { version = "0.4", default-features = true, features = ["clock"] }
 rustfft = "6"
+rayon = "1"
+lazy_static = "1.5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = "0.29"
+objc = "0.2"
+cocoa = "0.26"
+core-graphics = "0.24"

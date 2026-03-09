@@ -2669,16 +2669,6 @@ function __getCorrectRefractiveIndex_impl(surface, wavelength = 0.5875618) {
   const effectiveRindex = surface.__cooptActualRindex ?? surface.rindex;
   const effectiveAbbe = surface.__cooptActualAbbe ?? surface.abbe;
 
-  // Check if effectiveMaterial is a numeric string (e.g., "1.336")
-  // If so, treat it as a direct refractive index value
-  if (effectiveMaterial && effectiveMaterial !== '') {
-    const materialAsNumber = parseFloat(String(effectiveMaterial));
-    if (!isNaN(materialAsNumber) && materialAsNumber > 1.0) {
-      // Material field contains a numeric refractive index value
-      return materialAsNumber;
-    }
-  }
-
   // Create a temporary object with the effective values for refraction lookup
   const effectiveSurface = {
     ...surface,

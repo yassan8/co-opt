@@ -108,7 +108,8 @@ export class PSFPlotter {
             logScale = false,
             colorscale = PSFPlotter.getBlueGreenRedColorscale(),
             showMetrics = true,
-            title = 'Point Spread Function'
+            title = 'Point Spread Function',
+            recenterToCentroid = true
         } = options;
 
         // console.log('📊 [PSFPlot] 2D PSFプロット生成中...');
@@ -191,21 +192,35 @@ export class PSFPlotter {
             console.log(`📊 [PSF-Plot] Center=${center}, shift needed: (${shiftI}, ${shiftJ})`);
             
             let finalData = transposed;
-            if (shiftI !== 0 || shiftJ !== 0) {
-                console.log(`📊 [PSF-Plot] Applying centroid-based shift to transposed data...`);
-                finalData = Array(size).fill().map(() => Array(size).fill(0));
+            if (recenterToCentroid && (shiftI !== 0 || shiftJ !== 0)) {
+                console.log(`📊 [PSF-Plot] Applying centroid-based shift to transposed data (zero-fill, non-cyclic)...`);
+                let fillValue = 0;
+                if (logScale) {
+                    let minVal = Infinity;
+                    for (let i = 0; i < size; i++) {
+                        for (let j = 0; j < size; j++) {
+                            const v = Number(transposed[i][j]);
+                            if (Number.isFinite(v) && v < minVal) minVal = v;
+                        }
+                    }
+                    fillValue = Number.isFinite(minVal) ? minVal : -12;
+                }
+
+                finalData = Array(size).fill().map(() => Array(size).fill(fillValue));
                 for (let i = 0; i < size; i++) {
                     for (let j = 0; j < size; j++) {
-                        const srcI = (i - shiftI + size) % size;
-                        const srcJ = (j - shiftJ + size) % size;
+                        const srcI = i - shiftI;
+                        const srcJ = j - shiftJ;
+                        if (srcI < 0 || srcI >= size || srcJ < 0 || srcJ >= size) continue;
                         finalData[i][j] = transposed[srcI][srcJ];
                     }
                 }
-                // 検証
                 const checkVal = finalData[center][center];
                 console.log(`✅ [PSF-Plot] Shift complete, finalData[${center}][${center}]=${checkVal.toExponential(3)}`);
-            } else {
+            } else if (recenterToCentroid) {
                 console.log(`📊 [PSF-Plot] No shift needed, centroid already at center`);
+            } else {
+                console.log(`📊 [PSF-Plot] Centroid recenter disabled; preserving native PSF position`);
             }
             
             // 軸の座標を生成
@@ -249,10 +264,16 @@ export class PSFPlotter {
                 xaxis: {
                     title: 'Position (μm)',
                     scaleanchor: 'y',
-                    scaleratio: 1
+                    scaleratio: 1,
+                    zeroline: false,
+                    showgrid: false,
+                    showspikes: false
                 },
                 yaxis: {
-                    title: 'Position (μm)'
+                    title: 'Position (μm)',
+                    zeroline: false,
+                    showgrid: false,
+                    showspikes: false
                 },
                 width: 600,
                 height: 500,
