@@ -92,6 +92,149 @@ function isFiniteSystem(opticalSystemRows) {
   return !!first.isObjectSpace && typeof first.thickness === 'number' && isFinite(first.thickness) && first.thickness > 0;
 }
 
+async function tryCalculateDistortionDataNative(opticalSystemRows, fieldSamples, wavelength, heightMode, imageSurfaceIndex, onProgress = null) {
+  try {
+    const runtime = await import('../../src/desktop/runtime.ts');
+    if (!runtime?.isTauriRuntime || !runtime.isTauriRuntime()) {
+      return null;
+    }
+
+    const { runNativeSpotRaytrace } = await import('../../src/desktop/ipc/client.ts');
+    if (typeof runNativeSpotRaytrace !== 'function') {
+      return null;
+    }
+
+    const objectRows = fieldSamples.map((sample, index) => {
+      if (heightMode) {
+        return {
+          id: `Field-${index}`,
+          name: `h=${sample}`,
+          position: 'Rectangle',
+          xHeight: 0,
+          yHeight: sample,
+          x: 0,
+          y: sample,
+        };
+      }
+      return {
+        id: `Field-${index}`,
+        name: `θ=${sample}`,
+        position: 'Angle',
+        xHeightAngle: 0,
+        yHeightAngle: sample,
+        x: 0,
+        y: sample,
+      };
+    });
+
+    const sourceRows = [{
+      id: 'DistortionNativeSource',
+      name: 'DistortionNativeSource',
+      wavelength,
+      color: '#22c55e',
+      isPrimary: true,
+      intensity: 1,
+    }];
+
+    try {
+      onProgress?.({ percent: 2, message: 'Distortion native raytrace...' });
+    } catch (_) {}
+
+    const response = await runNativeSpotRaytrace({
+      opticalSystemRows,
+      sourceRows,
+      objectRows,
+      surfaceIndex: imageSurfaceIndex,
+      rayCount: 11,
+      ringCount: 1,
+      pattern: 'cross',
+      wavelengthMode: 'primary',
+    });
+
+    const heights = new Array(fieldSamples.length).fill(null);
+    const parseIndex = (label) => {
+      const m = String(label || '').match(/Field-(\d+)/);
+      if (!m) return null;
+      const idx = Number(m[1]);
+      return Number.isInteger(idx) ? idx : null;
+    };
+
+    const series = Array.isArray(response?.series) ? response.series : [];
+    for (const row of series) {
+      const idx = parseIndex(row?.label);
+      if (idx === null || idx < 0 || idx >= heights.length) continue;
+      const chiefYum = Number(row?.chiefPointUm?.yUm);
+      if (Number.isFinite(chiefYum)) {
+        heights[idx] = Math.abs(chiefYum) / 1000.0;
+      }
+    }
+
+    return heights;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function tryCalculateGridDistortionNative(opticalSystemRows, objectRows, wavelength, imageSurfaceIndex, onProgress = null) {
+  try {
+    const runtime = await import('../../src/desktop/runtime.ts');
+    if (!runtime?.isTauriRuntime || !runtime.isTauriRuntime()) {
+      return null;
+    }
+
+    const { runNativeSpotRaytrace } = await import('../../src/desktop/ipc/client.ts');
+    if (typeof runNativeSpotRaytrace !== 'function') {
+      return null;
+    }
+
+    const sourceRows = [{
+      id: 'GridDistortionNativeSource',
+      name: 'GridDistortionNativeSource',
+      wavelength,
+      color: '#22c55e',
+      isPrimary: true,
+      intensity: 1,
+    }];
+
+    try {
+      onProgress?.({ percent: 2, message: 'Grid distortion native raytrace...' });
+    } catch (_) {}
+
+    const response = await runNativeSpotRaytrace({
+      opticalSystemRows,
+      sourceRows,
+      objectRows,
+      surfaceIndex: imageSurfaceIndex,
+      rayCount: 11,
+      ringCount: 1,
+      pattern: 'cross',
+      wavelengthMode: 'primary',
+    });
+
+    const parseIndex = (label) => {
+      const m = String(label || '').match(/Field-(\d+)/);
+      if (!m) return null;
+      const idx = Number(m[1]);
+      return Number.isInteger(idx) ? idx : null;
+    };
+
+    const out = new Array(Array.isArray(objectRows) ? objectRows.length : 0).fill(null);
+    const series = Array.isArray(response?.series) ? response.series : [];
+    for (const row of series) {
+      const idx = parseIndex(row?.label);
+      if (idx === null || idx < 0 || idx >= out.length) continue;
+      const xUm = Number(row?.chiefPointUm?.xUm);
+      const yUm = Number(row?.chiefPointUm?.yUm);
+      if (!Number.isFinite(xUm) || !Number.isFinite(yUm)) continue;
+      out[idx] = { x: xUm / 1000.0, y: yUm / 1000.0 };
+    }
+
+    return out;
+  } catch (_) {
+    return null;
+  }
+}
+
 /**
  * Calculate distortion data for a list of field angles (degrees, Y-direction) or object heights (mm).
  * @param {Array} opticalSystemRows - optical system definition rows.
@@ -101,21 +244,10 @@ function isFiniteSystem(opticalSystemRows) {
  * @returns {Object} { fieldValues, idealHeights, realHeights, distortion, distortionPercent, meta }
  */
 export async function calculateDistortionData(opticalSystemRows, fieldSamples, wavelength = 0.5876, options = {}) {
-  const { heightMode = false, objectDistance: objDistOverride } = options;
+  const { heightMode = false } = options;
   const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
     ? options.onProgress
     : null;
-
-  const now = () => (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
-  let lastYield = now();
-  const maybeYield = async () => {
-    const t = now();
-    if (t - lastYield >= 16) {
-      await new Promise(r => setTimeout(r, 0));
-      lastYield = now();
-    }
-  };
-
   if (!opticalSystemRows || !Array.isArray(opticalSystemRows)) {
     console.error('❌ calculateDistortionData: opticalSystemRows invalid');
     return null;
@@ -125,152 +257,32 @@ export async function calculateDistortionData(opticalSystemRows, fieldSamples, w
     return null;
   }
 
-  // Detect mirrors and calculate sign flip for odd mirror count
-  const mirrorCount = Array.isArray(opticalSystemRows)
-    ? opticalSystemRows.filter(isMirrorRow).length
-    : 0;
-  const mirrorSign = (mirrorCount % 2 === 1) ? -1 : 1;
-  console.log(`🔍 Distortion: Detected ${mirrorCount} mirror(s), mirrorSign=${mirrorSign}`);
-
-  // Calculate surface origins (for coordinate transformation support)
-  const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
-
-  // Find image surface index (last non-CT surface)
-  let imageSurfaceIndex = opticalSystemRows.length - 1;
-  for (let i = opticalSystemRows.length - 1; i >= 0; i--) {
-    const row = opticalSystemRows[i];
-    const surfType = String(row?.surfType ?? row?.type ?? '').toLowerCase();
-    if (surfType === 'image') {
-      imageSurfaceIndex = i;
-      break;
+  try {
+    const runtime = await import('../../src/desktop/runtime.ts');
+    if (!runtime?.isTauriRuntime || !runtime.isTauriRuntime()) {
+      throw new Error('Distortion is Rust-native only in this build. Please run desktop app.');
     }
-  }
-  const imageSurfaceInfo = surfaceOrigins?.[imageSurfaceIndex] || null;
+    const { runNativeDistortion } = await import('../../src/desktop/ipc/client.ts');
+    try { onProgress?.({ percent: 0, message: 'Running native distortion...' }); } catch (_) {}
+    const response = await runNativeDistortion({
+      opticalSystemRows,
+      fieldSamples,
+      heightMode,
+      wavelength,
+    });
 
-  const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
-  const fPrime = paraxial?.focalLength; // 有効焦点距離
-  if (!fPrime || !isFinite(fPrime)) {
-    console.error('❌ calculateDistortionData: focal length unavailable');
+    return {
+      fieldValues: Array.isArray(response?.fieldValues) ? response.fieldValues : fieldSamples,
+      idealHeights: Array.isArray(response?.idealHeights) ? response.idealHeights : [],
+      realHeights: Array.isArray(response?.realHeights) ? response.realHeights : [],
+      distortion: Array.isArray(response?.distortion) ? response.distortion : [],
+      distortionPercent: Array.isArray(response?.distortionPercent) ? response.distortionPercent : [],
+      meta: response?.meta || {}
+    };
+  } catch (error) {
+    console.error('❌ calculateDistortionData(native) failed:', error);
     return null;
   }
-
-  const finite = isFiniteSystem(opticalSystemRows);
-
-  const idealHeights = [];
-  const realHeights = [];
-  const distortion = [];
-  const distortionPercent = [];
-  const chiefRayDetails = [];
-
-  // Object distance (for magnification in height mode)
-  const objectDistance = objDistOverride ?? (opticalSystemRows[0]?.thickness || null);
-  const imageDistance = paraxial?.imageDistance ?? paraxial?.backFocalLength ?? fPrime;
-  const magnification = (heightMode && objectDistance && imageDistance)
-    ? -(imageDistance / objectDistance)
-    : -1; // fallback magnification
-
-  for (let sampleIndex = 0; sampleIndex < fieldSamples.length; sampleIndex++) {
-    const sample = fieldSamples[sampleIndex];
-    let hIdeal;
-    let thetaDeg = null;
-    let fieldSetting;
-
-    if (heightMode) {
-      const hObj = sample;
-      // For afocal/infinite systems, use object height as ideal to avoid meaningless paraxial magnification.
-      hIdeal = finite ? (magnification * hObj) : hObj;
-      thetaDeg = null;
-      fieldSetting = { fieldType: 'Height', xHeight: 0, yHeight: hObj, displayName: `h=${hObj}mm` };
-    } else {
-      thetaDeg = sample;
-      const thetaRad = thetaDeg * Math.PI / 180.0;
-      hIdeal = fPrime * Math.tan(thetaRad);
-      fieldSetting = { fieldType: 'Angle', x: 0, y: thetaDeg, displayName: `θ=${thetaDeg}°` };
-    }
-
-    idealHeights.push(hIdeal);
-
-    // For finite system with angle input, still approximate object height from angle
-    if (!heightMode && finite) {
-      const s = opticalSystemRows[0]?.thickness || 0;
-      const thetaRad = sample * Math.PI / 180.0;
-      const hObject = s * Math.tan(thetaRad);
-      fieldSetting = { fieldType: 'Height', xHeight: 0, yHeight: hObject, displayName: `θ=${sample}°` };
-    }
-
-    let hReal = null;
-    try {
-      const chief = calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelength, 'unified', { rayCount: 11 });
-      if (chief?.success && chief?.ray?.path?.length) {
-        const lastPointGlobal = chief.ray.path[chief.ray.path.length - 1];
-        
-        // Transform to local coordinates if CT/rotation is present
-        let lastPoint = lastPointGlobal;
-        if (imageSurfaceInfo?.rotationMatrix) {
-          const origin = imageSurfaceInfo.origin || { x: 0, y: 0, z: 0 };
-          const relative = {
-            x: lastPointGlobal.x - origin.x,
-            y: lastPointGlobal.y - origin.y,
-            z: lastPointGlobal.z - origin.z
-          };
-          lastPoint = applyRotationMatrixToVector(imageSurfaceInfo.rotationMatrix, relative);
-        }
-        
-        // Apply mirror sign to coordinates
-        const localY = lastPoint.y * mirrorSign;
-        
-        // Use Y coordinate for height (since we varied y angle); fallback radial if x present.
-        hReal = Math.abs(localY);
-        // Optionally radial: const r = Math.sqrt(lastPoint.x*lastPoint.x + localY*localY);
-        chiefRayDetails.push({ sample, thetaDeg, lastPoint: { ...lastPoint, y: localY } });
-      } else {
-        chiefRayDetails.push({ sample, thetaDeg, error: chief?.finalError || 'chief ray failure' });
-      }
-    } catch (e) {
-        console.warn('⚠️ chief ray tracing failed for sample=', sample, e);
-        chiefRayDetails.push({ sample, thetaDeg, error: e.message });
-    }
-
-    realHeights.push(hReal);
-
-    if (hIdeal === 0) { // center
-      distortion.push(0);
-      distortionPercent.push(0);
-    } else if (hReal == null) {
-      distortion.push(null);
-      distortionPercent.push(null);
-    } else {
-      const d = (hReal - hIdeal) / hIdeal;
-      distortion.push(d);
-      distortionPercent.push(d * 100.0);
-    }
-
-    if (onProgress) {
-      try {
-        const percent = ((sampleIndex + 1) / fieldSamples.length) * 100;
-        const label = heightMode ? `h=${sample}` : `θ=${sample}°`;
-        onProgress({ percent, message: `Distortion sample ${sampleIndex + 1}/${fieldSamples.length} (${label})` });
-      } catch (_) {}
-    }
-
-    await maybeYield();
-  }
-
-  return {
-    fieldValues: fieldSamples,
-    idealHeights,
-    realHeights,
-    distortion,
-    distortionPercent,
-    meta: {
-      wavelength,
-      focalLength: fPrime,
-      finiteSystem: finite,
-      heightMode,
-      magnification,
-      chiefRayDetails
-    }
-  };
 }
 
 /**
@@ -284,178 +296,44 @@ export async function calculateGridDistortion(opticalSystemRows, gridSize = 20, 
   const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
     ? options.onProgress
     : null;
-
-  const now = () => (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
-  let lastYield = now();
-  const maybeYield = async () => {
-    const t = now();
-    if (t - lastYield >= 16) {
-      await new Promise(r => setTimeout(r, 0));
-      lastYield = now();
-    }
-  };
   if (!opticalSystemRows || !Array.isArray(opticalSystemRows)) {
     console.error('❌ calculateGridDistortion: opticalSystemRows invalid');
     return null;
   }
 
-  // Detect mirrors and calculate sign flip for odd mirror count
-  const mirrorCount = Array.isArray(opticalSystemRows)
-    ? opticalSystemRows.filter(isMirrorRow).length
-    : 0;
-  const mirrorSign = (mirrorCount % 2 === 1) ? -1 : 1;
-  console.log(`🔍 Grid Distortion: Detected ${mirrorCount} mirror(s), mirrorSign=${mirrorSign}`);
-
-  // Calculate surface origins (for coordinate transformation support)
-  const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
-
-  // Find image surface index (last non-CT surface)
-  let imageSurfaceIndex = opticalSystemRows.length - 1;
-  for (let i = opticalSystemRows.length - 1; i >= 0; i--) {
-    const row = opticalSystemRows[i];
-    const surfType = String(row?.surfType ?? row?.type ?? '').toLowerCase();
-    if (surfType === 'image') {
-      imageSurfaceIndex = i;
-      break;
+  try {
+    const runtime = await import('../../src/desktop/runtime.ts');
+    if (!runtime?.isTauriRuntime || !runtime.isTauriRuntime()) {
+      throw new Error('Grid distortion is Rust-native only in this build. Please run desktop app.');
     }
-  }
-  const imageSurfaceInfo = surfaceOrigins?.[imageSurfaceIndex] || null;
+    const { runNativeGridDistortion } = await import('../../src/desktop/ipc/client.ts');
+    let objectRows = [];
+    try { objectRows = getObjectRowsLocal(); } catch (_) { objectRows = []; }
+    try { onProgress?.({ percent: 0, message: 'Running native grid distortion...' }); } catch (_) {}
+    const response = await runNativeGridDistortion({
+      opticalSystemRows,
+      objectRows: Array.isArray(objectRows) ? objectRows : [],
+      gridSize,
+      wavelength,
+    });
 
-  const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
-  const fPrime = paraxial?.focalLength;
-  if (!fPrime || !isFinite(fPrime)) {
-    console.error('❌ calculateGridDistortion: focal length unavailable');
+    return {
+      idealGrid: {
+        x: Array.isArray(response?.idealX) ? response.idealX : [],
+        y: Array.isArray(response?.idealY) ? response.idealY : [],
+      },
+      realGrid: {
+        x: Array.isArray(response?.realX) ? response.realX : [],
+        y: Array.isArray(response?.realY) ? response.realY : [],
+      },
+      gridSize: Number.isFinite(Number(response?.gridSize)) ? Number(response.gridSize) : gridSize,
+      maxFieldAngle: Number.isFinite(Number(response?.maxFieldAngle)) ? Number(response.maxFieldAngle) : deriveMaxFieldAngleLocal(),
+      meta: response?.meta || {}
+    };
+  } catch (error) {
+    console.error('❌ calculateGridDistortion(native) failed:', error);
     return null;
   }
-
-  const finite = isFiniteSystem(opticalSystemRows);
-
-  // Determine max field angle from Object table
-  const maxFieldAngle = deriveMaxFieldAngleLocal();
-  console.log(`📐 Grid distortion: max field angle = ${maxFieldAngle}° (auto-detected from Object table)`);
-
-  // Create grid points with equal spacing in image plane (not angle space)
-  const idealGrid = { x: [], y: [] }; // ideal image positions
-  const realGrid = { x: [], y: [] };  // real traced image positions
-
-  // Generate grid lines with equal spacing in image plane coordinates
-  // Max image height for display (corresponds to maxFieldAngle)
-  const maxImageHeight = fPrime * Math.tan((maxFieldAngle * Math.PI) / 180);
-  const step = (2 * maxImageHeight) / (gridSize - 1);
-
-  const totalPoints = gridSize * gridSize;
-  let completedPoints = 0;
-
-  for (let i = 0; i < gridSize; i++) {
-    // Grid points at equal intervals in image plane (Y-direction)
-    const hImageY = -maxImageHeight + i * step;
-    // Convert back to angle for tracing
-    const thetaYRad = Math.atan(hImageY / fPrime);
-    const thetaY = (thetaYRad * 180) / Math.PI;
-
-    for (let j = 0; j < gridSize; j++) {
-      // Grid points at equal intervals in image plane (X-direction)
-      const hImageX = -maxImageHeight + j * step;
-      // Convert back to angle for tracing
-      const thetaXRad = Math.atan(hImageX / fPrime);
-      const thetaX = (thetaXRad * 180) / Math.PI;
-
-      // Ideal image position (paraxial) - already linear in image plane
-      const hIdealX = hImageX;
-      const hIdealY = hImageY;
-      idealGrid.x.push(hIdealX);
-      idealGrid.y.push(hIdealY);
-
-      // Trace chief ray to get real image position
-      let fieldSetting;
-      if (finite) {
-        const s = opticalSystemRows[0]?.thickness || 0;
-        const hObjectX = s * Math.tan(thetaXRad);
-        const hObjectY = s * Math.tan(thetaYRad);
-        fieldSetting = { 
-          fieldType: 'Height', 
-          xHeight: hObjectX, 
-          yHeight: hObjectY, 
-          displayName: `(${thetaX.toFixed(1)}°, ${thetaY.toFixed(1)}°)` 
-        };
-      } else {
-        fieldSetting = { 
-          fieldType: 'Angle', 
-          x: thetaX, 
-          y: thetaY, 
-          displayName: `(${thetaX.toFixed(1)}°, ${thetaY.toFixed(1)}°)` 
-        };
-      }
-
-      let hRealX = null;
-      let hRealY = null;
-      try {
-        const chief = calculateChiefRayNewton(
-          opticalSystemRows, 
-          fieldSetting, 
-          wavelength, 
-          'unified', 
-          { rayCount: 11 }
-        );
-        if (chief?.success && chief?.ray?.path?.length) {
-          const lastPointGlobal = chief.ray.path[chief.ray.path.length - 1];
-          
-          // Transform to local coordinates if CT/rotation is present
-          let lastPoint = lastPointGlobal;
-          if (imageSurfaceInfo?.rotationMatrix) {
-            const origin = imageSurfaceInfo.origin || { x: 0, y: 0, z: 0 };
-            const relative = {
-              x: lastPointGlobal.x - origin.x,
-              y: lastPointGlobal.y - origin.y,
-              z: lastPointGlobal.z - origin.z
-            };
-            lastPoint = applyRotationMatrixToVector(imageSurfaceInfo.rotationMatrix, relative);
-          }
-          
-          // Apply mirror sign to coordinates
-          const localX = lastPoint.x * mirrorSign;
-          const localY = lastPoint.y * mirrorSign;
-          
-          // Validate that the coordinates are finite numbers
-          // Also filter out the error sentinel value (-50, -50)
-          if (lastPoint && 
-              typeof localX === 'number' && isFinite(localX) &&
-              typeof localY === 'number' && isFinite(localY) &&
-              !(localX === -50 && localY === -50)) {
-            hRealX = localX;
-            hRealY = localY;
-          }
-        }
-      } catch (e) {
-        console.warn(`⚠️ chief ray tracing failed for (${thetaX.toFixed(1)}°, ${thetaY.toFixed(1)}°)`);
-      }
-
-      realGrid.x.push(hRealX);
-      realGrid.y.push(hRealY);
-
-      completedPoints++;
-      if (onProgress) {
-        try {
-          const percent = (completedPoints / totalPoints) * 100;
-          onProgress({ percent, message: `Grid distortion ${completedPoints}/${totalPoints}` });
-        } catch (_) {}
-      }
-
-      await maybeYield();
-    }
-  }
-
-  return {
-    idealGrid,
-    realGrid,
-    gridSize,
-    maxFieldAngle,
-    meta: {
-      wavelength,
-      focalLength: fPrime,
-      finiteSystem: finite
-    }
-  };
 }
 
 // Minimal global exposure of calculation only (plotting moved to eva-distortion-plot.js)

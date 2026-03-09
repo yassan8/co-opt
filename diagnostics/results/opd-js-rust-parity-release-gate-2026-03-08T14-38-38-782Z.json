@@ -1,0 +1,641 @@
+{
+  "timestamp": "2026-03-08T14:38:39.230Z",
+  "config": {
+    "gridSize": 65,
+    "wavelengthUm": 0.5876,
+    "forceFinite": true,
+    "fields": [
+      0,
+      5,
+      10,
+      15
+    ],
+    "topK": 10
+  },
+  "aggregate": {
+    "opdUm": {
+      "count": 12836,
+      "max": 0,
+      "mean": 0,
+      "rms": 0
+    },
+    "opdWaves": {
+      "count": 12836,
+      "max": 0,
+      "mean": 0,
+      "rms": 0
+    }
+  },
+  "requirementGate": {
+    "enabled": true,
+    "thresholds": {
+      "maxDiffWaves": 0.001,
+      "rmsDiffWaves": 0.0005,
+      "meanDiffWaves": 0.0005
+    },
+    "checks": [
+      {
+        "metric": "maxDiffWaves",
+        "value": 0,
+        "limit": 0.001,
+        "pass": true
+      },
+      {
+        "metric": "rmsDiffWaves",
+        "value": 0,
+        "limit": 0.0005,
+        "pass": true
+      },
+      {
+        "metric": "meanDiffWaves",
+        "value": 0,
+        "limit": 0.0005,
+        "pass": true
+      }
+    ],
+    "failedChecks": [],
+    "passed": true
+  },
+  "perField": [
+    {
+      "fieldAngleXDeg": 0,
+      "js": {
+        "sampleCount": 3209,
+        "rmsWaves": 0.0001653630116585677,
+        "p2pWaves": 0.000574182894734594,
+        "invalidReasons": {}
+      },
+      "rustWasm": {
+        "sampleCount": 3209,
+        "rmsWaves": 0.0001653630116585677,
+        "p2pWaves": 0.000574182894734594,
+        "invalidReasons": {}
+      },
+      "comparison": {
+        "overlap": {
+          "bothFinite": 3209,
+          "jsOnlyFinite": 0,
+          "rustOnlyFinite": 0,
+          "totalComparedCells": 3209
+        },
+        "delta": {
+          "opdUm": {
+            "count": 3209,
+            "max": 0,
+            "mean": 0,
+            "rms": 0
+          },
+          "opdWaves": {
+            "count": 3209,
+            "max": 0,
+            "mean": 0,
+            "rms": 0
+          }
+        },
+        "aggregateRaw": {
+          "comparedCount": 3209,
+          "sumAbsUm": 0,
+          "sumSqUm": 0,
+          "maxAbsUm": 0
+        },
+        "topDiffs": [
+          {
+            "key": "32:32",
+            "ix": 32,
+            "iy": 32,
+            "x": 0,
+            "y": 0,
+            "jsOpdUm": 0,
+            "rustOpdUm": 0,
+            "absDiffUm": 0
+          },
+          {
+            "key": "33:32",
+            "ix": 33,
+            "iy": 32,
+            "x": 0.03125,
+            "y": 0,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "31:32",
+            "ix": 31,
+            "iy": 32,
+            "x": -0.03125,
+            "y": 0,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "32:33",
+            "ix": 32,
+            "iy": 33,
+            "x": 0,
+            "y": 0.03125,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "32:31",
+            "ix": 32,
+            "iy": 31,
+            "x": 0,
+            "y": -0.03125,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "34:32",
+            "ix": 34,
+            "iy": 32,
+            "x": 0.0625,
+            "y": 0,
+            "jsOpdUm": -0.0000013571807357948273,
+            "rustOpdUm": -0.0000013571807357948273,
+            "absDiffUm": 0
+          },
+          {
+            "key": "33:33",
+            "ix": 33,
+            "iy": 33,
+            "x": 0.03125,
+            "y": 0.03125,
+            "jsOpdUm": -6.786285666748881e-7,
+            "rustOpdUm": -6.786285666748881e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "33:31",
+            "ix": 33,
+            "iy": 31,
+            "x": 0.03125,
+            "y": -0.03125,
+            "jsOpdUm": -6.786285666748881e-7,
+            "rustOpdUm": -6.786285666748881e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "30:32",
+            "ix": 30,
+            "iy": 32,
+            "x": -0.0625,
+            "y": 0,
+            "jsOpdUm": -0.0000013571807357948273,
+            "rustOpdUm": -0.0000013571807357948273,
+            "absDiffUm": 0
+          },
+          {
+            "key": "31:33",
+            "ix": 31,
+            "iy": 33,
+            "x": -0.03125,
+            "y": 0.03125,
+            "jsOpdUm": -6.786285666748881e-7,
+            "rustOpdUm": -6.786285666748881e-7,
+            "absDiffUm": 0
+          }
+        ]
+      }
+    },
+    {
+      "fieldAngleXDeg": 5,
+      "js": {
+        "sampleCount": 3209,
+        "rmsWaves": 0.0001653630116585677,
+        "p2pWaves": 0.000574182894734594,
+        "invalidReasons": {}
+      },
+      "rustWasm": {
+        "sampleCount": 3209,
+        "rmsWaves": 0.0001653630116585677,
+        "p2pWaves": 0.000574182894734594,
+        "invalidReasons": {}
+      },
+      "comparison": {
+        "overlap": {
+          "bothFinite": 3209,
+          "jsOnlyFinite": 0,
+          "rustOnlyFinite": 0,
+          "totalComparedCells": 3209
+        },
+        "delta": {
+          "opdUm": {
+            "count": 3209,
+            "max": 0,
+            "mean": 0,
+            "rms": 0
+          },
+          "opdWaves": {
+            "count": 3209,
+            "max": 0,
+            "mean": 0,
+            "rms": 0
+          }
+        },
+        "aggregateRaw": {
+          "comparedCount": 3209,
+          "sumAbsUm": 0,
+          "sumSqUm": 0,
+          "maxAbsUm": 0
+        },
+        "topDiffs": [
+          {
+            "key": "32:32",
+            "ix": 32,
+            "iy": 32,
+            "x": 0,
+            "y": 0,
+            "jsOpdUm": 0,
+            "rustOpdUm": 0,
+            "absDiffUm": 0
+          },
+          {
+            "key": "33:32",
+            "ix": 33,
+            "iy": 32,
+            "x": 0.03125,
+            "y": 0,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "31:32",
+            "ix": 31,
+            "iy": 32,
+            "x": -0.03125,
+            "y": 0,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "32:33",
+            "ix": 32,
+            "iy": 33,
+            "x": 0,
+            "y": 0.03125,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "32:31",
+            "ix": 32,
+            "iy": 31,
+            "x": 0,
+            "y": -0.03125,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "34:32",
+            "ix": 34,
+            "iy": 32,
+            "x": 0.0625,
+            "y": 0,
+            "jsOpdUm": -0.0000013571807357948273,
+            "rustOpdUm": -0.0000013571807357948273,
+            "absDiffUm": 0
+          },
+          {
+            "key": "33:33",
+            "ix": 33,
+            "iy": 33,
+            "x": 0.03125,
+            "y": 0.03125,
+            "jsOpdUm": -6.786285666748881e-7,
+            "rustOpdUm": -6.786285666748881e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "33:31",
+            "ix": 33,
+            "iy": 31,
+            "x": 0.03125,
+            "y": -0.03125,
+            "jsOpdUm": -6.786285666748881e-7,
+            "rustOpdUm": -6.786285666748881e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "30:32",
+            "ix": 30,
+            "iy": 32,
+            "x": -0.0625,
+            "y": 0,
+            "jsOpdUm": -0.0000013571807357948273,
+            "rustOpdUm": -0.0000013571807357948273,
+            "absDiffUm": 0
+          },
+          {
+            "key": "31:33",
+            "ix": 31,
+            "iy": 33,
+            "x": -0.03125,
+            "y": 0.03125,
+            "jsOpdUm": -6.786285666748881e-7,
+            "rustOpdUm": -6.786285666748881e-7,
+            "absDiffUm": 0
+          }
+        ]
+      }
+    },
+    {
+      "fieldAngleXDeg": 10,
+      "js": {
+        "sampleCount": 3209,
+        "rmsWaves": 0.0001653630116585677,
+        "p2pWaves": 0.000574182894734594,
+        "invalidReasons": {}
+      },
+      "rustWasm": {
+        "sampleCount": 3209,
+        "rmsWaves": 0.0001653630116585677,
+        "p2pWaves": 0.000574182894734594,
+        "invalidReasons": {}
+      },
+      "comparison": {
+        "overlap": {
+          "bothFinite": 3209,
+          "jsOnlyFinite": 0,
+          "rustOnlyFinite": 0,
+          "totalComparedCells": 3209
+        },
+        "delta": {
+          "opdUm": {
+            "count": 3209,
+            "max": 0,
+            "mean": 0,
+            "rms": 0
+          },
+          "opdWaves": {
+            "count": 3209,
+            "max": 0,
+            "mean": 0,
+            "rms": 0
+          }
+        },
+        "aggregateRaw": {
+          "comparedCount": 3209,
+          "sumAbsUm": 0,
+          "sumSqUm": 0,
+          "maxAbsUm": 0
+        },
+        "topDiffs": [
+          {
+            "key": "32:32",
+            "ix": 32,
+            "iy": 32,
+            "x": 0,
+            "y": 0,
+            "jsOpdUm": 0,
+            "rustOpdUm": 0,
+            "absDiffUm": 0
+          },
+          {
+            "key": "33:32",
+            "ix": 33,
+            "iy": 32,
+            "x": 0.03125,
+            "y": 0,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "31:32",
+            "ix": 31,
+            "iy": 32,
+            "x": -0.03125,
+            "y": 0,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "32:33",
+            "ix": 32,
+            "iy": 33,
+            "x": 0,
+            "y": 0.03125,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "32:31",
+            "ix": 32,
+            "iy": 31,
+            "x": 0,
+            "y": -0.03125,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "34:32",
+            "ix": 34,
+            "iy": 32,
+            "x": 0.0625,
+            "y": 0,
+            "jsOpdUm": -0.0000013571807357948273,
+            "rustOpdUm": -0.0000013571807357948273,
+            "absDiffUm": 0
+          },
+          {
+            "key": "33:33",
+            "ix": 33,
+            "iy": 33,
+            "x": 0.03125,
+            "y": 0.03125,
+            "jsOpdUm": -6.786285666748881e-7,
+            "rustOpdUm": -6.786285666748881e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "33:31",
+            "ix": 33,
+            "iy": 31,
+            "x": 0.03125,
+            "y": -0.03125,
+            "jsOpdUm": -6.786285666748881e-7,
+            "rustOpdUm": -6.786285666748881e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "30:32",
+            "ix": 30,
+            "iy": 32,
+            "x": -0.0625,
+            "y": 0,
+            "jsOpdUm": -0.0000013571807357948273,
+            "rustOpdUm": -0.0000013571807357948273,
+            "absDiffUm": 0
+          },
+          {
+            "key": "31:33",
+            "ix": 31,
+            "iy": 33,
+            "x": -0.03125,
+            "y": 0.03125,
+            "jsOpdUm": -6.786285666748881e-7,
+            "rustOpdUm": -6.786285666748881e-7,
+            "absDiffUm": 0
+          }
+        ]
+      }
+    },
+    {
+      "fieldAngleXDeg": 15,
+      "js": {
+        "sampleCount": 3209,
+        "rmsWaves": 0.0001653630116585677,
+        "p2pWaves": 0.000574182894734594,
+        "invalidReasons": {}
+      },
+      "rustWasm": {
+        "sampleCount": 3209,
+        "rmsWaves": 0.0001653630116585677,
+        "p2pWaves": 0.000574182894734594,
+        "invalidReasons": {}
+      },
+      "comparison": {
+        "overlap": {
+          "bothFinite": 3209,
+          "jsOnlyFinite": 0,
+          "rustOnlyFinite": 0,
+          "totalComparedCells": 3209
+        },
+        "delta": {
+          "opdUm": {
+            "count": 3209,
+            "max": 0,
+            "mean": 0,
+            "rms": 0
+          },
+          "opdWaves": {
+            "count": 3209,
+            "max": 0,
+            "mean": 0,
+            "rms": 0
+          }
+        },
+        "aggregateRaw": {
+          "comparedCount": 3209,
+          "sumAbsUm": 0,
+          "sumSqUm": 0,
+          "maxAbsUm": 0
+        },
+        "topDiffs": [
+          {
+            "key": "32:32",
+            "ix": 32,
+            "iy": 32,
+            "x": 0,
+            "y": 0,
+            "jsOpdUm": 0,
+            "rustOpdUm": 0,
+            "absDiffUm": 0
+          },
+          {
+            "key": "33:32",
+            "ix": 33,
+            "iy": 32,
+            "x": 0.03125,
+            "y": 0,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "31:32",
+            "ix": 31,
+            "iy": 32,
+            "x": -0.03125,
+            "y": 0,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "32:33",
+            "ix": 32,
+            "iy": 33,
+            "x": 0,
+            "y": 0.03125,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "32:31",
+            "ix": 32,
+            "iy": 31,
+            "x": 0,
+            "y": -0.03125,
+            "jsOpdUm": -3.3931792131625116e-7,
+            "rustOpdUm": -3.3931792131625116e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "34:32",
+            "ix": 34,
+            "iy": 32,
+            "x": 0.0625,
+            "y": 0,
+            "jsOpdUm": -0.0000013571807357948273,
+            "rustOpdUm": -0.0000013571807357948273,
+            "absDiffUm": 0
+          },
+          {
+            "key": "33:33",
+            "ix": 33,
+            "iy": 33,
+            "x": 0.03125,
+            "y": 0.03125,
+            "jsOpdUm": -6.786285666748881e-7,
+            "rustOpdUm": -6.786285666748881e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "33:31",
+            "ix": 33,
+            "iy": 31,
+            "x": 0.03125,
+            "y": -0.03125,
+            "jsOpdUm": -6.786285666748881e-7,
+            "rustOpdUm": -6.786285666748881e-7,
+            "absDiffUm": 0
+          },
+          {
+            "key": "30:32",
+            "ix": 30,
+            "iy": 32,
+            "x": -0.0625,
+            "y": 0,
+            "jsOpdUm": -0.0000013571807357948273,
+            "rustOpdUm": -0.0000013571807357948273,
+            "absDiffUm": 0
+          },
+          {
+            "key": "31:33",
+            "ix": 31,
+            "iy": 33,
+            "x": -0.03125,
+            "y": 0.03125,
+            "jsOpdUm": -6.786285666748881e-7,
+            "rustOpdUm": -6.786285666748881e-7,
+            "absDiffUm": 0
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1111,6 +1111,7 @@ type AnalysisWindowKey =
   | 'spherical-aberration'
   | 'astigmatism'
   | 'distortion'
+  | 'distortion-grid'
   | 'magnification-chromatic-aberration'
   | 'integrated-aberration'
   | 'transverse-aberration'
@@ -1127,6 +1128,7 @@ const ANALYSIS_WINDOW_SIZE_MAP: Record<AnalysisWindowKey, { width: number; heigh
   'spherical-aberration': { width: 980, height: 760, title: 'Spherical Aberration' },
   'astigmatism': { width: 980, height: 760, title: 'Astigmatism' },
   'distortion': { width: 980, height: 760, title: 'Distortion' },
+  'distortion-grid': { width: 980, height: 760, title: 'Distortion Grid' },
   'magnification-chromatic-aberration': { width: 980, height: 760, title: 'Lateral Chromatic Aberration' },
   'integrated-aberration': { width: 980, height: 760, title: 'Integrated Aberration' },
   'transverse-aberration': { width: 980, height: 760, title: 'Transverse Aberration' },
@@ -1246,6 +1248,7 @@ export function handleAnalysisSelect(selectedValue: string): void {
     'spherical-aberration': { key: 'spherical-aberration', title: 'Spherical Aberration', features: 'width=800,height=600' },
     'astigmatism': { key: 'astigmatism', title: 'Astigmatism', features: 'width=800,height=600' },
     'distortion': { key: 'distortion', title: 'Distortion', features: 'width=800,height=600' },
+    'distortion-grid': { key: 'distortion-grid', title: 'Distortion Grid', features: 'width=800,height=600' },
     'magnification-chromatic-aberration': { key: 'magnification-chromatic-aberration', title: 'Lateral Chromatic Aberration', features: 'width=800,height=600' },
     'integrated-aberration': { key: 'integrated-aberration', title: 'Integrated Aberration', features: 'width=800,height=600' },
     'transverse-aberration': { key: 'transverse-aberration', title: 'Transverse Aberration', features: 'width=800,height=600' },
@@ -1262,6 +1265,7 @@ export function handleAnalysisSelect(selectedValue: string): void {
     'spherical-aberration': 'open-spherical-aberration-window-btn',
     'astigmatism': 'open-astigmatism-window-btn',
     'distortion': 'open-distortion-window-btn',
+    'distortion-grid': 'open-distortion-grid-window-btn',
     'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
     'integrated-aberration': 'open-integrated-aberration-window-btn',
     'transverse-aberration': 'open-transverse-aberration-window-btn',
@@ -1380,4 +1384,219 @@ export function handleAnalysisSelect(selectedValue: string): void {
       }
     })();
   }
+}
+
+export function handleOpenSettings(): void {
+  const sanitizeMode = (v: any): string => {
+    const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
+    return (s === 'stop' || s === 'entrance') ? s : '';
+  };
+
+  const getCurrentMode = (): string => {
+    try {
+      if (typeof window.__cooptGetForceInfinitePupilMode === 'function') {
+        const m = sanitizeMode(window.__cooptGetForceInfinitePupilMode());
+        if (m) return m;
+      }
+    } catch (_) {}
+    try {
+      return sanitizeMode(localStorage.getItem('coopt.forceInfinitePupilMode'));
+    } catch (_) {
+      return '';
+    }
+  };
+
+  const applyMode = (mode: string): void => {
+    const m = sanitizeMode(mode);
+    try {
+      if (typeof window.__cooptSetForceInfinitePupilMode === 'function') {
+        window.__cooptSetForceInfinitePupilMode(m);
+      } else {
+        if (m) {
+          window.__COOPT_FORCE_INFINITE_PUPIL_MODE = m;
+          window.COOPT_FORCE_INFINITE_PUPIL_MODE = m;
+        } else {
+          try { delete window.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { window.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+          try { delete window.COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { window.COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+        }
+      }
+    } catch (_) {}
+    try {
+      if (m) localStorage.setItem('coopt.forceInfinitePupilMode', m);
+      else localStorage.removeItem('coopt.forceInfinitePupilMode');
+    } catch (_) {}
+  };
+
+  const showFallbackModal = (): void => {
+    const existing = document.getElementById('coopt-settings-fallback-modal') as HTMLElement | null;
+    if (existing) {
+      existing.style.display = 'flex';
+      const cur = getCurrentMode();
+      existing.querySelectorAll('input[name="coopt-force-mode"]').forEach((n) => {
+        const r = n as HTMLInputElement;
+        const v = sanitizeMode(r.value);
+        r.checked = (v === cur) || (cur === '' && v === '');
+      });
+      return;
+    }
+
+    const modal = document.createElement('div');
+    modal.id = 'coopt-settings-fallback-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;z-index:2400;';
+    modal.innerHTML = `
+      <div style="width:520px;max-width:92vw;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;box-shadow:0 8px 28px rgba(0,0,0,0.22);font-family:Arial,sans-serif;">
+        <div style="padding:10px 12px;background:#f8f8f8;border-bottom:1px solid #ddd;font-weight:600;">Settings</div>
+        <div style="padding:12px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Infinite Field: Pupil Sampling Mode</div>
+          <div style="font-size:12px;color:#666;line-height:1.35;margin-bottom:10px;">Fix the sampling mode used for infinite-field wavefront/PSF/MTF generation.<br />Note: Changes take effect on the next calculation.</div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <label><input type="radio" name="coopt-force-mode" value="" /> Auto (default)</label>
+            <label><input type="radio" name="coopt-force-mode" value="stop" /> Force stop</label>
+            <label><input type="radio" name="coopt-force-mode" value="entrance" /> Force entrance</label>
+          </div>
+        </div>
+        <div style="padding:10px 12px;background:#f8f8f8;border-top:1px solid #ddd;display:flex;justify-content:flex-end;">
+          <button id="coopt-settings-fallback-close" type="button" style="padding:6px 10px;border:1px solid #bbb;background:#f8f8f8;border-radius:4px;cursor:pointer;">Close</button>
+        </div>
+      </div>
+    `;
+
+    const hide = () => { modal.style.display = 'none'; };
+    modal.addEventListener('click', (ev) => {
+      if (ev.target === modal) hide();
+    });
+    const closeBtn = modal.querySelector('#coopt-settings-fallback-close') as HTMLButtonElement | null;
+    if (closeBtn) closeBtn.addEventListener('click', hide);
+    modal.querySelectorAll('input[name="coopt-force-mode"]').forEach((n) => {
+      const r = n as HTMLInputElement;
+      r.addEventListener('change', () => {
+        if (r.checked) applyMode(r.value);
+      });
+    });
+
+    document.body.appendChild(modal);
+    const cur = getCurrentMode();
+    modal.querySelectorAll('input[name="coopt-force-mode"]').forEach((n) => {
+      const r = n as HTMLInputElement;
+      const v = sanitizeMode(r.value);
+      r.checked = (v === cur) || (cur === '' && v === '');
+    });
+  };
+
+  try {
+    const existing = window.__settingsPopup;
+    if (existing && !existing.closed) {
+      try { existing.focus(); } catch (_) {}
+      return;
+    }
+  } catch (_) {}
+
+  const popup = window.open('about:blank', 'Settings', 'width=520,height=340');
+  if (!popup) {
+    showFallbackModal();
+    return;
+  }
+  window.__settingsPopup = popup;
+
+  popup.document.write(`
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Settings</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #f4f4f4; }
+    .header { padding: 10px 12px; background: #f8f8f8; border-bottom: 1px solid #ddd; font-weight: 600; }
+    .content { padding: 12px; background: #fff; }
+    .section-title { font-size: 13px; font-weight: 600; margin: 0 0 8px 0; }
+    .help { font-size: 12px; color: #666; line-height: 1.35; margin: 0 0 10px 0; }
+    .radio-group { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px 0; }
+    .footer { padding: 10px 12px; border-top: 1px solid #ddd; background: #f8f8f8; display: flex; justify-content: flex-end; }
+    button { padding: 6px 10px; border: 1px solid #bbb; background: #f8f8f8; border-radius: 4px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="header">Settings</div>
+  <div class="content">
+    <div class="section-title">Infinite Field: Pupil Sampling Mode</div>
+    <div class="help">
+      Fix the sampling mode used for infinite-field wavefront/PSF/MTF generation.
+      <br />
+      Auto uses the default pipeline behavior.
+    </div>
+    <div class="radio-group">
+      <label><input type="radio" name="force-mode" value="" /> Auto (default)</label>
+      <label><input type="radio" name="force-mode" value="stop" /> Force stop</label>
+      <label><input type="radio" name="force-mode" value="entrance" /> Force entrance</label>
+    </div>
+    <div class="help">Note: Changes take effect on the next calculation.</div>
+  </div>
+  <div class="footer">
+    <button id="close-btn" type="button">Close</button>
+  </div>
+  <script>
+    const KEY = 'coopt.forceInfinitePupilMode';
+    const sanitize = (v) => {
+      const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
+      return (s === 'stop' || s === 'entrance') ? s : '';
+    };
+    const getOpener = () => { try { return window.opener || null; } catch (_) { return null; } };
+
+    function getCurrent() {
+      const o = getOpener();
+      try {
+        const fromOpener = (o && typeof o.__cooptGetForceInfinitePupilMode === 'function')
+          ? sanitize(o.__cooptGetForceInfinitePupilMode())
+          : sanitize(o?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? o?.COOPT_FORCE_INFINITE_PUPIL_MODE);
+        if (fromOpener) return fromOpener;
+      } catch (_) {}
+      try { return sanitize(localStorage.getItem(KEY)); } catch (_) { return ''; }
+    }
+
+    function applyMode(mode) {
+      const m = sanitize(mode);
+      const o = getOpener();
+      try {
+        if (o && typeof o.__cooptSetForceInfinitePupilMode === 'function') {
+          o.__cooptSetForceInfinitePupilMode(m);
+        } else if (o) {
+          if (m) {
+            o.__COOPT_FORCE_INFINITE_PUPIL_MODE = m;
+            o.COOPT_FORCE_INFINITE_PUPIL_MODE = m;
+          } else {
+            try { delete o.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { o.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+            try { delete o.COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { o.COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+          }
+        }
+      } catch (_) {}
+      try {
+        if (m) localStorage.setItem(KEY, m);
+        else localStorage.removeItem(KEY);
+      } catch (_) {}
+    }
+
+    function syncUI() {
+      const cur = getCurrent();
+      document.querySelectorAll('input[name="force-mode"]').forEach((r) => {
+        const v = sanitize(r.value);
+        r.checked = (v === cur) || (cur === '' && v === '');
+      });
+    }
+
+    document.querySelectorAll('input[name="force-mode"]').forEach((r) => {
+      r.addEventListener('change', () => {
+        if (r.checked) applyMode(r.value);
+      });
+    });
+    document.getElementById('close-btn').addEventListener('click', () => {
+      try { window.close(); } catch (_) {}
+    });
+    window.addEventListener('focus', syncUI);
+    syncUI();
+  </script>
+</body>
+</html>
+  `);
+
+  try { popup.document.close(); } catch (_) {}
 }

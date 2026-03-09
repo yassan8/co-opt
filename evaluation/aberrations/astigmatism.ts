@@ -1372,7 +1372,7 @@ export async function calculateAstigmatismData(
         onProgress?: any;
         yieldEvery?: number;
         requireRustWasm?: boolean;
-        chiefRayMode?: 'stopCenter' | 'beamCenter' | 'centroid' | 'stopCenterImage' | 'beamCenterImage' | 'centroidImage';
+        chiefRayMode?: 'stopCenter' | 'beamCenter' | 'centroid';
     } = {}
 ) {
     const {

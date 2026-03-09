@@ -11,7 +11,8 @@ import {
   handleOptimize,
   handleRender3D,
   handleSystemData,
-  handleAnalysisSelect
+  handleAnalysisSelect,
+  handleOpenSettings
 } from '../../../ui/toolbar-handlers';
 import { getLoadedFileName, getLoadedFileWarn } from '../../../ui/loaded-file-storage';
 import { getToolbarCollapsed, setToolbarCollapsed } from '../../../ui/toolbar-collapsed-storage';
@@ -81,7 +82,7 @@ export default function MainToolbar() {
         <span id="loaded-file-name" className="top-file-name" style={{ color: loadedFileColor }}>
           {loadedFileText}
         </span>
-        <button id="open-settings-btn" className="top-settings-btn" title="Settings">
+        <button id="open-settings-btn" className="top-settings-btn" title="Settings" onClick={handleOpenSettings} type="button">
           ⚙️
         </button>
         <button
@@ -179,6 +180,7 @@ export default function MainToolbar() {
             <option value="spherical-aberration">Spherical Aberration</option>
             <option value="astigmatism">Astigmatism</option>
             <option value="distortion">Distortion</option>
+            <option value="distortion-grid">Distortion Grid</option>
             <option value="magnification-chromatic-aberration">Lateral Chromatic Aberration</option>
             <option value="integrated-aberration">Integrated Aberration</option>
             <option value="transverse-aberration">Transverse Aberration</option>
@@ -234,6 +236,12 @@ export default function MainToolbar() {
           title="Open Distortion in popup window"
         >
           Distortion
+        </button>
+        <button
+          id="open-distortion-grid-window-btn"
+          title="Open Distortion Grid in popup window"
+        >
+          Distortion Grid
         </button>
         <button
           id="open-magnification-chromatic-aberration-window-btn"

@@ -1675,10 +1675,14 @@ export function getRefractiveIndex(surface, wavelength = 0.5875618) {
   const effectiveAbbe = surface.__cooptActualAbbe ?? surface.abbe;
   
   // Check if effectiveMaterial is a numeric string (e.g., "1.336")
-  // If so, treat it as a direct refractive index value
+  // If so, treat it as nd and, when Abbe is available, apply wavelength dispersion approximation.
   if (effectiveMaterial && effectiveMaterial !== '') {
     const materialAsNumber = parseFloat(String(effectiveMaterial));
     if (!isNaN(materialAsNumber) && materialAsNumber > 1.0) {
+      const vdFromSurface = parseFloat(effectiveAbbe || surface.Abbe || surface.vd || surface.Vd);
+      if (!isNaN(vdFromSurface) && vdFromSurface > 0) {
+        return estimateRefractiveIndexFromNdVd(materialAsNumber, vdFromSurface, wavelength);
+      }
       return materialAsNumber;
     }
   }

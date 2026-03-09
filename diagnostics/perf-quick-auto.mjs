@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,16 +31,89 @@ const toNumber = (v, fallback) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
-const runNode = (scriptRel, args = [], envPatch = {}) => {
+const runNode = async (scriptRel, args = [], envPatch = {}, options = {}) => {
   const scriptAbs = path.resolve(projectRoot, scriptRel);
-  const r = spawnSync(process.execPath, ['--import', 'tsx', scriptAbs, ...args], {
-    cwd: projectRoot,
-    stdio: 'inherit',
-    env: { ...process.env, ...envPatch }
+  const timeoutMs = Math.max(0, Number(options?.timeoutMs) || 0);
+  const idleTimeoutMs = Math.max(0, Number(options?.idleTimeoutMs) || 0);
+  const heartbeatMs = Math.max(1000, Number(options?.heartbeatMs) || 30000);
+  const label = String(options?.label || scriptRel);
+  const successMarker = options?.successMarker ? String(options.successMarker) : '';
+  const successOnMarkerIdle = options?.successOnMarkerIdle === true;
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--import', 'tsx', scriptAbs, ...args], {
+      cwd: projectRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ...envPatch }
+    });
+
+    const startedAt = Date.now();
+    let lastOutputAt = Date.now();
+    let markerSeen = false;
+    let settled = false;
+    const finish = (err = null) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(heartbeatTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (err) reject(err);
+      else resolve(undefined);
+    };
+
+    child.stdout?.on('data', (chunk) => {
+      const text = String(chunk ?? '');
+      lastOutputAt = Date.now();
+      if (successMarker && text.includes(successMarker)) markerSeen = true;
+      try { process.stdout.write(chunk); } catch (_) {}
+    });
+
+    child.stderr?.on('data', (chunk) => {
+      const text = String(chunk ?? '');
+      lastOutputAt = Date.now();
+      if (successMarker && text.includes(successMarker)) markerSeen = true;
+      try { process.stderr.write(chunk); } catch (_) {}
+    });
+
+    child.on('error', (e) => finish(e));
+
+    child.on('close', (code, signal) => {
+      if (signal) {
+        finish(new Error(`${scriptRel} failed with signal ${String(signal)}`));
+        return;
+      }
+      if (code !== 0) {
+        finish(new Error(`${scriptRel} failed with code ${code ?? 1}`));
+        return;
+      }
+      finish(null);
+    });
+
+    const heartbeatTimer = setInterval(() => {
+      const elapsedSec = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+      console.log(`⏱️ [perf-quick] ${label} running... ${elapsedSec}s elapsed`);
+
+      if (idleTimeoutMs > 0) {
+        const idleMs = Date.now() - lastOutputAt;
+        if (idleMs >= idleTimeoutMs) {
+          try { child.kill('SIGTERM'); } catch (_) {}
+          if (successOnMarkerIdle && markerSeen) {
+            console.warn(`⚠️ [perf-quick] ${label} idle timeout (${idleTimeoutMs}ms) after success marker; treating as completed`);
+            finish(null);
+          } else {
+            finish(new Error(`${scriptRel} idle timed out after ${idleTimeoutMs}ms with no output`));
+          }
+        }
+      }
+    }, heartbeatMs);
+
+    let timeoutTimer = null;
+    if (timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        try { child.kill('SIGTERM'); } catch (_) {}
+        finish(new Error(`${scriptRel} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    }
   });
-  if (r.status !== 0) {
-    process.exit(r.status ?? 1);
-  }
 };
 
 const readJson = async (absPath) => {
@@ -68,13 +141,25 @@ const run = async () => {
   const maxRayMaxOplUm = toNumber(getArg('max-ray-max-opl-um', '0'), 0);
   const requirePass = toBool(getArg('require', 'false'), false);
 
-  runNode('diagnostics/opd-full-batch-benchmark.mjs', ['--out', opdOutRel], {
+  await runNode('diagnostics/opd-full-batch-benchmark.mjs', ['--out', opdOutRel], {
     OPD_GRID_SIZE: opdGrid,
     OPD_FIELD_X: opdFieldX,
     OPD_RUNS: opdRuns
+  }, {
+    label: 'opd-benchmark',
+    heartbeatMs: 5000,
+    timeoutMs: 300000,
+    idleTimeoutMs: 20000,
+    successMarker: '✅ OPD full-batch A/B benchmark summary',
+    successOnMarkerIdle: true
   });
 
-  runNode('diagnostics/raytrace-golden-capture.mjs', ['--engine', 'both', '--rays', rayCount, '--out', rayOutRel]);
+  await runNode('diagnostics/raytrace-golden-capture.mjs', ['--engine', 'both', '--rays', rayCount, '--out', rayOutRel], {}, {
+    label: 'raytrace-capture',
+    heartbeatMs: 5000,
+    timeoutMs: 300000,
+    idleTimeoutMs: 0
+  });
 
   const opd = await readJson(opdOutAbs);
   const ray = await readJson(rayOutAbs);

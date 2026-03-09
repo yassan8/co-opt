@@ -15,6 +15,9 @@
 
 // @ts-nocheck
 
+import { isTauriRuntime } from '../../src/desktop/runtime.ts';
+import { runNativePsfMap } from '../../src/desktop/ipc/client.ts';
+
 // WebAssembly版PSF計算器のインポート（動的）
 let PSFCalculatorWasm = null;
 let PSFCalculatorAuto = null;
@@ -429,6 +432,38 @@ export class PSFCalculator {
 
         // console.log('🔬 [PSF] PSF計算開始');
 
+        const effectiveWavelength = wavelength || this.getSourceWavelength();
+
+        const forceNative = forceImplementation === 'native';
+        const preferNative = isTauriRuntime() && forceImplementation !== 'javascript' && forceImplementation !== 'wasm';
+        if (forceNative || preferNative) {
+            try {
+                console.log(`🚀 [PSF] NativeRust requested (force=${forceNative}, prefer=${preferNative})`);
+                emitProgress(0, 'psf-native', `Native PSF start (${samplingSize}x${samplingSize})`);
+                const nativeStartTime = performance.now();
+                const nativeResult = await this.calculatePSFNative(opdData, {
+                    ...options,
+                    samplingSize,
+                    wavelength: effectiveWavelength,
+                    pupilDiameter,
+                    focalLength,
+                    pixelSize,
+                });
+                const nativeEndTime = performance.now();
+                nativeResult.calculationTime = nativeEndTime - nativeStartTime;
+                nativeResult.implementationUsed = 'NativeRust';
+                console.log(`✅ [PSF] NativeRust completed (${nativeResult.calculationTime.toFixed(1)}ms)`);
+                emitProgress(100, 'psf-native', 'Native PSF done');
+                return nativeResult;
+            } catch (error) {
+                if (forceNative) {
+                    console.error('❌ [PSF] NativeRust failed (force mode):', error);
+                    throw error;
+                }
+                console.warn('⚠️ [PSF] Native PSF failed, falling back to JavaScript:', error);
+            }
+        }
+
         // 可能なら先にWASM初期化を待ってから実装方法を決定する。
         // ここで待たないと、初回計算が常にJSへ落ちてしまう。
         const wantsWasm = false;
@@ -528,7 +563,7 @@ export class PSFCalculator {
                 // WASM計算器のメソッドを直接呼び出し
                 const wasmResult = await this.wasmCalculator.calculatePSFWasm(opdData, {
                     samplingSize,
-                    wavelength: wavelength || this.getSourceWavelength(),
+                    wavelength: effectiveWavelength,
                     pupilDiameter,
                     focalLength,
                     ...options
@@ -539,7 +574,7 @@ export class PSFCalculator {
                 // console.log(`✅ [PSF] WASM calculation completed in ${(wasmEndTime - wasmStartTime).toFixed(1)}ms`);
                 
                 // WASM結果をPSFCalculator形式に変換
-                const result = this.convertWasmResultToStandardFormat(wasmResult, samplingSize, wavelength || this.getSourceWavelength());
+                const result = this.convertWasmResultToStandardFormat(wasmResult, samplingSize, effectiveWavelength);
                 result.calculationTime = wasmEndTime - wasmStartTime;
                 result.implementationUsed = 'WASM';
                 emitProgress(100, 'psf-wasm', 'WASM PSF done');
@@ -563,6 +598,109 @@ export class PSFCalculator {
         result.calculationTime = jsEndTime - jsStartTime;
         result.implementationUsed = 'JavaScript';
         return result;
+    }
+
+    async calculatePSFNative(opdData, options = {}) {
+        const {
+            samplingSize = 128,
+            wavelength = null,
+            pupilDiameter = 10.0,
+            focalLength = 100.0,
+            pixelSize = null,
+            removeTilt = true,
+            recenterIfWrapped = undefined,
+            zeroPadTo = 0
+        } = options;
+        const onProgress = (options && typeof options.onProgress === 'function') ? options.onProgress : null;
+
+        if (!opdData || (!opdData.rayData && !opdData.gridData)) {
+            throw new Error('有効なOPDデータが必要です');
+        }
+        if (!this.supportedSamplings.includes(samplingSize)) {
+            throw new Error(`サポートされていないサンプリングサイズ: ${samplingSize}`);
+        }
+
+        const effectiveWavelength = wavelength || this.getSourceWavelength();
+        const gridData = this.convertOPDToGrid(opdData, samplingSize);
+
+        const shouldRecenterIfWrapped = (recenterIfWrapped === undefined)
+            ? !!removeTilt
+            : !!recenterIfWrapped;
+
+        const minRecommendedSize = 512;
+        const autoZeroPad = (!zeroPadTo || zeroPadTo === 0);
+        const targetSize = autoZeroPad
+            ? Math.max(samplingSize, minRecommendedSize)
+            : ((zeroPadTo > samplingSize && this.supportedSamplings.includes(zeroPadTo)) ? zeroPadTo : samplingSize);
+
+        const usedPixelSize = pixelSize || this.calculatePixelSize(
+            effectiveWavelength,
+            focalLength,
+            pupilDiameter,
+            samplingSize,
+            targetSize
+        );
+
+        const jobId = `native-psf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        let unlistenProgress = null;
+        if (onProgress) {
+            try {
+                const { listen } = await import('@tauri-apps/api/event');
+                unlistenProgress = await listen('analysis-progress', (event) => {
+                    try {
+                        const data = event?.payload || {};
+                        if (!data || String(data.jobId || '') !== jobId) return;
+                        const percent = Number(data.percent);
+                        onProgress({
+                            percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null,
+                            phase: data.phase || 'psf-native',
+                            message: data.message || null,
+                        });
+                    } catch (_) {}
+                });
+            } catch (_) {
+                // Event bridge is optional; caller still receives coarse progress.
+            }
+        }
+
+        let response;
+        try {
+            response = await runNativePsfMap({
+                jobId,
+                gridOpd: Array.from({ length: samplingSize }, (_, i) => Array.from(gridData.opd[i] || [])),
+                gridAmplitude: Array.from({ length: samplingSize }, (_, i) => Array.from(gridData.amplitude[i] || [])),
+                pupilMask: Array.from({ length: samplingSize }, (_, i) => Array.from(gridData.pupilMask[i] || [])),
+                wavelengthUm: effectiveWavelength,
+                pixelSizeUm: usedPixelSize,
+                removeTilt,
+                zeroPadTo: targetSize,
+                recenterIfWrapped: shouldRecenterIfWrapped,
+            });
+        } finally {
+            try {
+                if (typeof unlistenProgress === 'function') {
+                    unlistenProgress();
+                }
+            } catch (_) {}
+        }
+
+        return {
+            psfData: response.psfData,
+            metrics: response.metrics,
+            samplingSize,
+            wavelength: effectiveWavelength,
+            gridData,
+            options: { pupilDiameter, focalLength, pixelSize: usedPixelSize },
+            timestamp: new Date().toISOString(),
+            metadata: {
+                method: 'native-rust',
+                backend: response.backend,
+                samplingSize,
+                fftSize: response.fftSize,
+                wavelength: effectiveWavelength,
+                pixelSize: usedPixelSize
+            }
+        };
     }
 
     /**
@@ -662,10 +800,11 @@ export class PSFCalculator {
             }
         };
 
-        // Force recentering for consistent PSF position across different sampling sizes
-        // This ensures that PSF peak is always at the center, regardless of optical aberrations
+        // Default recentering policy:
+        // - removeTilt=true  : keep legacy behavior (allow wrap recenter)
+        // - removeTilt=false : preserve physical tilt shift and avoid wrap artifacts
         const shouldRecenterIfWrapped = (recenterIfWrapped === undefined)
-            ? true  // Always recenter by default for position stability
+            ? !!removeTilt
             : !!recenterIfWrapped;
 
         // console.log('🔬 [PSF] JavaScript PSF計算開始');

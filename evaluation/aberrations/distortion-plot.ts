@@ -294,11 +294,18 @@ export async function generateDistortionPlots({
  * @param {Object} data - grid distortion data from calculateGridDistortion.
  * @param {string} targetDivId - target div ID for Plotly.
  */
-export function plotGridDistortion(data, targetDivId = 'distortion-grid') {
+export async function plotGridDistortion(data, targetDivId = 'distortion-grid', onProgress = null) {
   if (!data || !data.idealGrid || !data.realGrid) {
     console.warn('Invalid data for grid distortion plot');
     return;
   }
+
+  const progress = (typeof onProgress === 'function') ? onProgress : null;
+  const reportProgress = (percent, message) => {
+    try {
+      progress?.({ percent, message });
+    } catch (_) {}
+  };
 
   const { idealGrid, realGrid, gridSize, maxFieldAngle, meta } = data;
   const traces = [];
@@ -320,6 +327,10 @@ export function plotGridDistortion(data, targetDivId = 'distortion-grid') {
       name: i === 0 ? 'Ideal Grid' : undefined,
       hoverinfo: 'skip'
     });
+
+    if ((i + 1) % 10 === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   }
 
   // Vertical lines
@@ -340,12 +351,17 @@ export function plotGridDistortion(data, targetDivId = 'distortion-grid') {
       showlegend: false,
       hoverinfo: 'skip'
     });
+
+    if ((j + 1) % 10 === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   }
 
   // Collect real positions (points only)
   let validPointCount = 0;
   const realX = [];
   const realY = [];
+  const totalPoints = Math.max(1, realGrid.x.length);
   
   for (let i = 0; i < realGrid.x.length; i++) {
     const x = realGrid.x[i];
@@ -363,6 +379,13 @@ export function plotGridDistortion(data, targetDivId = 'distortion-grid') {
       realY.push(y);
       
       validPointCount++;
+    }
+
+    const pct = ((i + 1) / totalPoints) * 100;
+    reportProgress(pct, `Grid distortion: ${i + 1}/${totalPoints}`);
+
+    if ((i + 1) % 50 === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
 
@@ -393,10 +416,12 @@ export function plotGridDistortion(data, targetDivId = 'distortion-grid') {
       title: 'Image Height X (mm)',
       scaleanchor: 'y',
       scaleratio: 1,
+      zeroline: false,
       range: [-equalRangeHalf, equalRangeHalf]
     },
     yaxis: { 
       title: 'Image Height Y (mm)',
+      zeroline: false,
       range: [-equalRangeHalf, equalRangeHalf]
     },
     width: 800,
@@ -436,14 +461,40 @@ export async function generateGridDistortionPlot({
   onProgress = null
 } = {}) {
   const rows = opticalSystemRows || getOpticalSystemRows();
+  const progress = (typeof onProgress === 'function') ? onProgress : null;
+  const reportProgress = (percent, message) => {
+    try {
+      progress?.({ percent, message });
+    } catch (_) {}
+  };
   
-  const data = await calculateGridDistortion(rows, gridSize, wavelength, { onProgress });
+  const data = await calculateGridDistortion(rows, gridSize, wavelength, {
+    onProgress: progress
+      ? (evt) => {
+          const p = Number(evt?.percent);
+          const msg = evt?.message || evt?.phase || 'Grid distortion raytrace...';
+          const mapped = Number.isFinite(p) ? Math.max(0, Math.min(20, p * 0.2)) : 5;
+          reportProgress(mapped, msg);
+        }
+      : null
+  });
   if (!data) {
     console.error('Failed to calculate grid distortion');
     return null;
   }
 
-  plotGridDistortion(data, targetElement || 'distortion-grid');
+  await plotGridDistortion(
+    data,
+    targetElement || 'distortion-grid',
+    progress
+      ? (evt) => {
+          const p = Number(evt?.percent);
+          const msg = evt?.message || evt?.phase || 'Grid distortion plotting...';
+          const mapped = Number.isFinite(p) ? Math.max(20, Math.min(100, 20 + p * 0.8)) : 20;
+          reportProgress(mapped, msg);
+        }
+      : null
+  );
   return data;
 }
 
