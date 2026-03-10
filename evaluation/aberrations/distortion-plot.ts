@@ -151,9 +151,8 @@ export function plotDistortionPercent(dataArray, targetDivId = 'distortion-perce
       x: data.distortionPercent,  // Horizontal axis
       y: data.fieldValues,        // Vertical axis
       name: `DIST ${wavelengthNm}nm (${label})`,
-      mode: 'lines+markers',
-      line: { color, width: 2 },
-      marker: { symbol: 'circle', size: 6, color }
+      mode: 'lines',
+      line: { color, width: 2 }
     };
   }).filter(trace => trace !== null);
 

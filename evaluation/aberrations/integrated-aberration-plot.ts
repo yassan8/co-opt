@@ -199,6 +199,24 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
     }
     const fieldMode = inferObjectFieldMode(objectRows);
     const heightMode = fieldMode.mode === 'height';
+    const astigFieldMode = (() => {
+        const mode = String(astigmatismData?.fieldMode || '').toLowerCase();
+        if (mode === 'angle' || mode === 'height') return mode;
+        const fsList = Array.isArray(astigmatismData?.fieldSettings) ? astigmatismData.fieldSettings : [];
+        const hasHeight = fsList.some((fs) => {
+            const pos = String(fs?.position || fs?.fieldType || '').toLowerCase();
+            return pos.includes('rect') || pos.includes('height');
+        });
+        return hasHeight ? 'height' : 'angle';
+    })();
+    const getAstigFieldValue = (point) => {
+        if (!point || typeof point !== 'object') return null;
+        const raw = (astigFieldMode === 'height')
+            ? (point.fieldValue ?? point.objectHeight ?? point.yHeight ?? point.fieldAngle)
+            : (point.fieldAngle ?? point.fieldValue ?? point.objectAngle ?? point.yHeightAngle);
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : null;
+    };
     
     // ===========================================
     // 1. 球面収差（左側：subplot 1）
@@ -275,12 +293,21 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
             const wavelengthNm = (wl * 1000).toFixed(1);
             const color = getColorForWavelength(wl);
             
-            // フィールド角度でソート
-            const sortedPoints = points.sort((a, b) => a.fieldAngle - b.fieldAngle);
+            // フィールド値（角度/高さ）でソート
+            const sortedPoints = points
+                .map((p) => ({ p, v: getAstigFieldValue(p) }))
+                .filter((entry) => Number.isFinite(entry.v))
+                .sort((a, b) => Number(a.v) - Number(b.v));
             
             // メリディオナル曲線（実線）
-            const meridionalX = sortedPoints.map(p => p.meridionalDeviation || 0);
-            const meridionalY = sortedPoints.map(p => p.fieldAngle);
+            const meridionalX = [];
+            const meridionalY = [];
+            for (const entry of sortedPoints) {
+                const d = Number(entry.p?.meridionalDeviation);
+                if (!Number.isFinite(d)) continue;
+                meridionalX.push(d);
+                meridionalY.push(Number(entry.v));
+            }
             
             if (meridionalX.length > 0) {
                 traces.push({
@@ -298,8 +325,14 @@ function createIntegratedPlot(target, longitudinalData, astigmatismData, distort
             }
             
             // サジタル曲線（破線）
-            const sagittalX = sortedPoints.map(p => p.sagittalDeviation || 0);
-            const sagittalY = sortedPoints.map(p => p.fieldAngle);
+            const sagittalX = [];
+            const sagittalY = [];
+            for (const entry of sortedPoints) {
+                const d = Number(entry.p?.sagittalDeviation);
+                if (!Number.isFinite(d)) continue;
+                sagittalX.push(d);
+                sagittalY.push(Number(entry.v));
+            }
             
             if (sagittalX.length > 0) {
                 traces.push({
@@ -598,8 +631,27 @@ function updateInfoPanel(target, longitudinalData, astigmatismData, distortionDa
     }
     
     if (astigmatismData && astigmatismData.data) {
+        const astigFieldMode = (() => {
+            const mode = String(astigmatismData?.fieldMode || '').toLowerCase();
+            if (mode === 'angle' || mode === 'height') return mode;
+            const fsList = Array.isArray(astigmatismData?.fieldSettings) ? astigmatismData.fieldSettings : [];
+            const hasHeight = fsList.some((fs: any) => {
+                const pos = String(fs?.position || fs?.fieldType || '').toLowerCase();
+                return pos.includes('rect') || pos.includes('height');
+            });
+            return hasHeight ? 'height' : 'angle';
+        })();
+        const fieldValues = (astigmatismData.data || [])
+            .map((p: any) => {
+                const raw = (astigFieldMode === 'height')
+                    ? (p?.fieldValue ?? p?.objectHeight ?? p?.yHeight ?? p?.fieldAngle)
+                    : (p?.fieldAngle ?? p?.fieldValue ?? p?.objectAngle ?? p?.yHeightAngle);
+                const n = Number(raw);
+                return Number.isFinite(n) ? n : null;
+            })
+            .filter((v: any) => Number.isFinite(v));
         // ユニークなフィールド値をカウント
-        const uniqueFieldValues = new Set(astigmatismData.data.map(p => p.fieldAngle));
+        const uniqueFieldValues = new Set(fieldValues);
         const fieldCount = uniqueFieldValues.size;
         const fieldLabel = heightMode ? 'object heights' : 'object angles';
         html += `<li><strong>Astigmatism:</strong> ${fieldCount} ${fieldLabel}</li>`;
