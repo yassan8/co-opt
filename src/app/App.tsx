@@ -7,6 +7,7 @@ import RequirementsSection from "../ui/components/RequirementsSection";
 import LegacyPanels from "../ui/components/LegacyPanels";
 import { SystemDataPanel } from "../ui/components/LegacyPanels";
 import { requestRefreshBlockInspector } from "../../core/window-facade.ts";
+import { handleOpenSettings } from "../../ui/toolbar-handlers";
 
 export default function App() {
   const [renderWindowStatus, setRenderWindowStatus] = useState("Initializing...");
@@ -36,6 +37,49 @@ export default function App() {
       return { enabled, analysis };
     } catch (_) {
       return { enabled: false, analysis: '' };
+    }
+  })();
+
+  useEffect(() => {
+    const isTauri = !!(window as any).__TAURI_INTERNALS__;
+    if (!isTauri) return;
+
+    const requestKey = 'coopt.windowCloseRequest';
+
+    const closeByLabel = async (label: string) => {
+      const normalized = String(label || '').trim();
+      if (!normalized) return;
+      try {
+        const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+        const target = await WebviewWindow.getByLabel(normalized);
+        if (target && typeof (target as any).close === 'function') {
+          await (target as any).close();
+        }
+      } catch (_) {}
+    };
+
+    const onStorage = (ev: StorageEvent) => {
+      if (ev.key !== requestKey || !ev.newValue) return;
+      try {
+        const payload = JSON.parse(ev.newValue);
+        const label = String(payload?.label || '').trim();
+        if (label) {
+          closeByLabel(label);
+        }
+      } catch (_) {}
+    };
+
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+  const isSettingsWindowMode = (() => {
+    try {
+      const url = new URL(window.location.href);
+      return url.searchParams.get('coopt_settings_window') === '1';
+    } catch (_) {
+      return false;
     }
   })();
 
@@ -1065,6 +1109,60 @@ export default function App() {
   }, [isRenderWindowMode, renderViewAxis]);
 
   useEffect(() => {
+    if (!isSettingsWindowMode) return;
+
+    let disposed = false;
+    let rafId = 0;
+    let timeoutId = 0;
+    let tries = 0;
+    const maxTries = 180;
+
+    const attemptLaunch = () => {
+      if (disposed) return;
+      tries += 1;
+      try {
+        handleOpenSettings();
+        return;
+      } catch (_) {}
+      if (tries >= maxTries) return;
+      rafId = window.requestAnimationFrame(attemptLaunch);
+    };
+
+    timeoutId = window.setTimeout(() => {
+      if (disposed) return;
+      attemptLaunch();
+    }, 0);
+    rafId = window.requestAnimationFrame(attemptLaunch);
+
+    return () => {
+      disposed = true;
+      try { window.cancelAnimationFrame(rafId); } catch (_) {}
+      try { window.clearTimeout(timeoutId); } catch (_) {}
+    };
+  }, [isSettingsWindowMode]);
+
+  useEffect(() => {
+    if (!(isSettingsWindowMode || analysisWindowMode.enabled)) return;
+
+    (window as any).__cooptCloseCurrentWindow = async (): Promise<boolean> => {
+      if (!(window as any).__TAURI_INTERNALS__) return false;
+      try {
+        const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+        const current = getCurrentWebviewWindow();
+        if (current && typeof (current as any).close === 'function') {
+          await (current as any).close();
+          return true;
+        }
+      } catch (_) {}
+      return false;
+    };
+
+    return () => {
+      try { delete (window as any).__cooptCloseCurrentWindow; } catch (_) { (window as any).__cooptCloseCurrentWindow = undefined; }
+    };
+  }, [isSettingsWindowMode, analysisWindowMode.enabled]);
+
+  useEffect(() => {
     if (!analysisWindowMode.enabled) return;
     if (analysisWindowMode.analysis === 'astigmatism') return;
 
@@ -1171,6 +1269,14 @@ export default function App() {
       if (restoreOpener) restoreOpener();
     };
   }, [analysisWindowMode.enabled, analysisWindowMode.analysis]);
+
+  if (isSettingsWindowMode) {
+    return (
+      <div style={{ height: '100vh', width: '100vw', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f4f4f4', color: '#444', fontSize: 13 }}>
+        Launching settings window...
+      </div>
+    );
+  }
 
   useEffect(() => {
     if (!(analysisWindowMode.enabled && analysisWindowMode.analysis === 'astigmatism')) return;

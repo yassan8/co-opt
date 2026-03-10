@@ -13130,24 +13130,66 @@ export function setupAnalysisWindows() {
         // Settings popup (environment settings)
         const openSettingsBtn = document.getElementById('open-settings-btn');
         const openSettingsPopup = () => {
+                        const isSettingsWindowContext = (() => {
+                            try {
+                                const url = new URL(window.location.href);
+                                return url.searchParams.get('coopt_settings_window') === '1';
+                            } catch (_) {
+                                return false;
+                            }
+                        })();
+
+                        if (isTauriRuntime() && !isSettingsWindowContext) {
+                            (async () => {
+                                try {
+                                    const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+                                    const label = 'settings-window';
+                                    const existing = await WebviewWindow.getByLabel(label);
+                                    if (existing) {
+                                        await existing.setFocus();
+                                        return;
+                                    }
+
+                                    const url = new URL(window.location.href);
+                                    url.searchParams.set('coopt_settings_window', '1');
+                                    new WebviewWindow(label, {
+                                        title: 'Settings',
+                                        url: url.toString(),
+                                        width: 520,
+                                        height: 620,
+                                        resizable: true,
+                                        focus: true,
+                                    });
+                                } catch (err) {
+                                    console.error('❌ [Settings][Desktop] WebviewWindow error:', err);
+                                    alert('Failed to open Settings window.');
+                                }
+                            })();
+                            return;
+                        }
+
                         if (w.__settingsPopup && !w.__settingsPopup.closed) {
                                 try { w.__settingsPopup.focus(); } catch (_) {}
                                 return;
                         }
 
-                        const popup = window.open('', 'Settings', 'width=520,height=340');
+                        const popup = (isTauriRuntime() && isSettingsWindowContext)
+                            ? window
+                            : window.open('', 'Settings', 'width=520,height=340');
                         if (!popup) {
                             alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
                             return;
                         }
-                        w.__settingsPopup = popup;
+                        if (!(isTauriRuntime() && isSettingsWindowContext)) {
+                            w.__settingsPopup = popup;
+                        }
 
                         popup.document.write(`
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Settings</title>
+    <title></title>
     <style>
         html, body { height: 100%; }
         body {
@@ -13184,21 +13226,11 @@ export function setupAnalysisWindows() {
             justify-content: flex-end;
             gap: 8px;
         }
-        button {
-            padding: 6px 10px;
-            border: 1px solid #bbb;
-            background: #f8f8f8;
-            cursor: pointer;
-            border-radius: 4px;
-            font-size: 12px;
-            color: #333;
-        }
-        button:hover { background: #e9e9e9; }
         code { font-family: Menlo, Consolas, monospace; font-size: 12px; }
     </style>
 </head>
 <body>
-    <div class="header">Settings</div>
+    <div class="header"></div>
     <div class="content">
         <div class="section-title">Glass Map: Default Manufacturers</div>
         <div class="help">
@@ -13241,9 +13273,7 @@ export function setupAnalysisWindows() {
             Note: Changes take effect on the next calculation.
         </div>
     </div>
-    <div class="footer">
-        <button id="close-btn" type="button">Close</button>
-    </div>
+    <div class="footer"></div>
 
     <script>
         const KEY = 'coopt.forceInfinitePupilMode';
@@ -13386,10 +13416,6 @@ export function setupAnalysisWindows() {
             });
         }
 
-        document.getElementById('close-btn').addEventListener('click', () => {
-            try { window.close(); } catch (_) {}
-        });
-
         window.addEventListener('focus', syncUI);
         syncUI();
     </script>
@@ -13400,12 +13426,12 @@ export function setupAnalysisWindows() {
                         try { popup.document.close(); } catch (_) {}
                 };
 
-        if (openSettingsBtn) {
+        if (openSettingsBtn && !isTauriRuntime()) {
                 openSettingsBtn.addEventListener('click', openSettingsPopup);
         }
 
         // React toolbar can mount after this initializer, so delegate as a fallback.
-        if (!(w as any).__cooptSettingsButtonDelegatedBound) {
+        if (!isTauriRuntime() && !(w as any).__cooptSettingsButtonDelegatedBound) {
             document.addEventListener('click', (ev: Event) => {
                 try {
                     const target = ev.target as HTMLElement | null;
