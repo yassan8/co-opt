@@ -1149,6 +1149,40 @@ function isAnalysisWindowContext(): boolean {
   }
 }
 
+function isSettingsWindowContext(): boolean {
+  try {
+    const url = new URL(window.location.href);
+    return url.searchParams.get('coopt_settings_window') === '1';
+  } catch (_) {
+    return false;
+  }
+}
+
+async function openDesktopSettingsWindow(): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+
+  const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+  const label = 'settings-window';
+  const existing = await WebviewWindow.getByLabel(label);
+  if (existing) {
+    await existing.setFocus();
+    return true;
+  }
+
+  const url = new URL(window.location.href);
+  url.searchParams.set('coopt_settings_window', '1');
+
+  new WebviewWindow(label, {
+    title: 'Settings',
+    url: url.toString(),
+    width: 520,
+    height: 620,
+    resizable: true,
+    focus: true,
+  });
+  return true;
+}
+
 async function openDesktopAnalysisWindow(kind: AnalysisWindowKey): Promise<boolean> {
   if (!isTauriRuntime()) return false;
 
@@ -1387,6 +1421,18 @@ export function handleAnalysisSelect(selectedValue: string): void {
 }
 
 export function handleOpenSettings(): void {
+  if (isTauriRuntime() && !isSettingsWindowContext() && !isAnalysisWindowContext()) {
+    (async () => {
+      try {
+        await openDesktopSettingsWindow();
+      } catch (err) {
+        console.error('❌ [Settings][Desktop] WebviewWindow error:', err);
+        alert('Failed to open Settings window.');
+      }
+    })();
+    return;
+  }
+
   const sanitizeMode = (v: any): string => {
     const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
     return (s === 'stop' || s === 'entrance') ? s : '';
@@ -1428,151 +1474,7 @@ export function handleOpenSettings(): void {
   };
 
   const showFallbackModal = (): void => {
-    const sanitizeMfrList = (list: any[]): string[] => {
-      if (!Array.isArray(list)) return [];
-      const allow = new Set(['SCHOTT', 'HOYA', 'HIKARI', 'OHARA', 'SUMITA', 'CDGM', 'SPECIAL']);
-      const out: string[] = [];
-      for (const v of list) {
-        const s = String(v ?? '').trim();
-        if (!s) continue;
-        const upper = s.toUpperCase();
-        if (!allow.has(upper)) continue;
-        if (upper === 'SUMITA') out.push('Sumita');
-        else if (upper === 'SPECIAL') out.push('Special');
-        else out.push(upper);
-      }
-      return Array.from(new Set(out));
-    };
-
-    const syncGlassMapChecks = (root: HTMLElement): void => {
-      let stored: string[] = [];
-      try {
-        stored = sanitizeMfrList(JSON.parse(localStorage.getItem('coopt.glassMap.defaultManufacturers') || '[]'));
-      } catch (_) {
-        stored = [];
-      }
-      const set = new Set(stored.map((s) => String(s).toUpperCase()));
-      root.querySelectorAll('input[data-coopt-glassmap="1"]').forEach((n) => {
-        const cb = n as HTMLInputElement;
-        cb.checked = set.has(String(cb.value || '').toUpperCase());
-      });
-    };
-
-    const saveGlassMapChecks = (root: HTMLElement): void => {
-      const selected: string[] = [];
-      root.querySelectorAll('input[data-coopt-glassmap="1"]').forEach((n) => {
-        const cb = n as HTMLInputElement;
-        if (cb.checked) selected.push(String(cb.value || ''));
-      });
-      const sanitized = sanitizeMfrList(selected);
-      try {
-        if (sanitized.length) localStorage.setItem('coopt.glassMap.defaultManufacturers', JSON.stringify(sanitized));
-        else localStorage.removeItem('coopt.glassMap.defaultManufacturers');
-      } catch (_) {}
-    };
-
-    const syncDarkMode = (root: HTMLElement): void => {
-      const darkCb = root.querySelector('#coopt-settings-fallback-dark-mode') as HTMLInputElement | null;
-      if (!darkCb) return;
-      try {
-        darkCb.checked = localStorage.getItem('coopt.darkMode') === 'true';
-      } catch (_) {
-        darkCb.checked = false;
-      }
-    };
-
-    const existing = document.getElementById('coopt-settings-fallback-modal') as HTMLElement | null;
-    if (existing) {
-      existing.style.display = 'flex';
-      const cur = getCurrentMode();
-      existing.querySelectorAll('input[name="coopt-force-mode"]').forEach((n) => {
-        const r = n as HTMLInputElement;
-        const v = sanitizeMode(r.value);
-        r.checked = (v === cur) || (cur === '' && v === '');
-      });
-      syncGlassMapChecks(existing);
-      syncDarkMode(existing);
-      return;
-    }
-
-    const modal = document.createElement('div');
-    modal.id = 'coopt-settings-fallback-modal';
-    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;z-index:2400;';
-    modal.innerHTML = `
-      <div style="width:520px;max-width:92vw;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;box-shadow:0 8px 28px rgba(0,0,0,0.22);font-family:Arial,sans-serif;">
-        <div style="padding:10px 12px;background:#f8f8f8;border-bottom:1px solid #ddd;font-weight:600;">Settings</div>
-        <div style="padding:12px;">
-          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Glass Map: Default Manufacturers</div>
-          <div style="font-size:12px;color:#666;line-height:1.35;margin-bottom:10px;">Choose which manufacturers are enabled by default when opening Glass Map.<br />If nothing is selected, Glass Map will show all manufacturers.</div>
-          <div style="display:flex;flex-direction:column;gap:8px;margin:8px 0 14px 0;">
-            <label><input type="checkbox" data-coopt-glassmap="1" value="SCHOTT" /> SCHOTT</label>
-            <label><input type="checkbox" data-coopt-glassmap="1" value="HOYA" /> HOYA</label>
-            <label><input type="checkbox" data-coopt-glassmap="1" value="HIKARI" /> HIKARI</label>
-            <label><input type="checkbox" data-coopt-glassmap="1" value="OHARA" /> OHARA</label>
-            <label><input type="checkbox" data-coopt-glassmap="1" value="Sumita" /> Sumita</label>
-            <label><input type="checkbox" data-coopt-glassmap="1" value="CDGM" /> CDGM</label>
-            <label><input type="checkbox" data-coopt-glassmap="1" value="Special" /> Special</label>
-          </div>
-
-          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Dark Mode</div>
-          <div style="font-size:12px;color:#666;line-height:1.35;margin-bottom:10px;">Enable VS Code-style dark mode for the entire UI.</div>
-          <label style="margin:8px 0 14px 0;display:block;"><input type="checkbox" id="coopt-settings-fallback-dark-mode" /> Enable Dark Mode</label>
-
-          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Infinite Field: Pupil Sampling Mode</div>
-          <div style="font-size:12px;color:#666;line-height:1.35;margin-bottom:10px;">Fix the sampling mode used for infinite-field wavefront/PSF/MTF generation.<br />Note: Changes take effect on the next calculation.</div>
-          <div style="display:flex;flex-direction:column;gap:8px;">
-            <label><input type="radio" name="coopt-force-mode" value="" /> Auto (default)</label>
-            <label><input type="radio" name="coopt-force-mode" value="stop" /> Force stop</label>
-            <label><input type="radio" name="coopt-force-mode" value="entrance" /> Force entrance</label>
-          </div>
-        </div>
-        <div style="padding:10px 12px;background:#f8f8f8;border-top:1px solid #ddd;display:flex;justify-content:flex-end;">
-          <button id="coopt-settings-fallback-close" type="button" style="padding:6px 10px;border:1px solid #bbb;background:#f8f8f8;border-radius:4px;cursor:pointer;">Close</button>
-        </div>
-      </div>
-    `;
-
-    const hide = () => { modal.style.display = 'none'; };
-    modal.addEventListener('click', (ev) => {
-      if (ev.target === modal) hide();
-    });
-    const closeBtn = modal.querySelector('#coopt-settings-fallback-close') as HTMLButtonElement | null;
-    if (closeBtn) closeBtn.addEventListener('click', hide);
-    modal.querySelectorAll('input[name="coopt-force-mode"]').forEach((n) => {
-      const r = n as HTMLInputElement;
-      r.addEventListener('change', () => {
-        if (r.checked) applyMode(r.value);
-      });
-    });
-    modal.querySelectorAll('input[data-coopt-glassmap="1"]').forEach((n) => {
-      const cb = n as HTMLInputElement;
-      cb.addEventListener('change', () => {
-        saveGlassMapChecks(modal);
-      });
-    });
-    const darkCb = modal.querySelector('#coopt-settings-fallback-dark-mode') as HTMLInputElement | null;
-    if (darkCb) {
-      darkCb.addEventListener('change', () => {
-        try {
-          if (typeof window.__cooptSetDarkMode === 'function') {
-            window.__cooptSetDarkMode(!!darkCb.checked);
-          }
-        } catch (_) {}
-        try {
-          localStorage.setItem('coopt.darkMode', darkCb.checked ? 'true' : 'false');
-        } catch (_) {}
-      });
-    }
-
-    document.body.appendChild(modal);
-    const cur = getCurrentMode();
-    modal.querySelectorAll('input[name="coopt-force-mode"]').forEach((n) => {
-      const r = n as HTMLInputElement;
-      const v = sanitizeMode(r.value);
-      r.checked = (v === cur) || (cur === '' && v === '');
-    });
-    syncGlassMapChecks(modal);
-    syncDarkMode(modal);
+    alert('Settings popup was blocked. Please allow popups for this app and try again.');
   };
 
   try {
@@ -1583,19 +1485,32 @@ export function handleOpenSettings(): void {
     }
   } catch (_) {}
 
-  const popup = window.open('about:blank', 'Settings', 'width=520,height=560');
+  const inTauriSettingsWindow = isTauriRuntime() && isSettingsWindowContext();
+  const popup = inTauriSettingsWindow
+    ? window
+    : window.open('about:blank', 'Settings', 'width=520,height=560');
   if (!popup) {
+    if (!isTauriRuntime()) {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('coopt_settings_window', '1');
+        window.location.assign(url.toString());
+        return;
+      } catch (_) {}
+    }
     showFallbackModal();
     return;
   }
-  window.__settingsPopup = popup;
+  if (!inTauriSettingsWindow) {
+    window.__settingsPopup = popup;
+  }
 
   popup.document.write(`
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>Settings</title>
+  <title></title>
   <style>
     html, body { height: 100%; }
     body { margin: 0; font-family: Arial, sans-serif; background: #f4f4f4; display:flex; flex-direction:column; }
@@ -1604,12 +1519,10 @@ export function handleOpenSettings(): void {
     .section-title { font-size: 13px; font-weight: 600; margin: 0 0 8px 0; }
     .help { font-size: 12px; color: #666; line-height: 1.35; margin: 0 0 10px 0; }
     .radio-group { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px 0; }
-    .footer { padding: 10px 12px; border-top: 1px solid #ddd; background: #f8f8f8; display: flex; justify-content: flex-end; }
-    button { padding: 6px 10px; border: 1px solid #bbb; background: #f8f8f8; border-radius: 4px; cursor: pointer; }
   </style>
 </head>
 <body>
-  <div class="header">Settings</div>
+  <div class="header"></div>
   <div class="content">
     <div class="section-title">Glass Map: Default Manufacturers</div>
     <div class="help">
@@ -1644,9 +1557,6 @@ export function handleOpenSettings(): void {
       <label><input type="radio" name="force-mode" value="entrance" /> Force entrance</label>
     </div>
     <div class="help">Note: Changes take effect on the next calculation.</div>
-  </div>
-  <div class="footer">
-    <button id="close-btn" type="button">Close</button>
   </div>
   <script>
     const KEY = 'coopt.forceInfinitePupilMode';
@@ -1771,9 +1681,6 @@ export function handleOpenSettings(): void {
         applyDarkMode(!!darkModeCb.checked);
       });
     }
-    document.getElementById('close-btn').addEventListener('click', () => {
-      try { window.close(); } catch (_) {}
-    });
     window.addEventListener('focus', syncUI);
     syncUI();
   </script>
