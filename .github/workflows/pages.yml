@@ -43,7 +43,7 @@ jobs:
         with:
           script: |
             try {
-              const res = await github.rest.repos.getPagesSite({
+              const res = await github.request('GET /repos/{owner}/{repo}/pages', {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
               });
