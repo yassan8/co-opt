@@ -1428,6 +1428,59 @@ export function handleOpenSettings(): void {
   };
 
   const showFallbackModal = (): void => {
+    const sanitizeMfrList = (list: any[]): string[] => {
+      if (!Array.isArray(list)) return [];
+      const allow = new Set(['SCHOTT', 'HOYA', 'HIKARI', 'OHARA', 'SUMITA', 'CDGM', 'SPECIAL']);
+      const out: string[] = [];
+      for (const v of list) {
+        const s = String(v ?? '').trim();
+        if (!s) continue;
+        const upper = s.toUpperCase();
+        if (!allow.has(upper)) continue;
+        if (upper === 'SUMITA') out.push('Sumita');
+        else if (upper === 'SPECIAL') out.push('Special');
+        else out.push(upper);
+      }
+      return Array.from(new Set(out));
+    };
+
+    const syncGlassMapChecks = (root: HTMLElement): void => {
+      let stored: string[] = [];
+      try {
+        stored = sanitizeMfrList(JSON.parse(localStorage.getItem('coopt.glassMap.defaultManufacturers') || '[]'));
+      } catch (_) {
+        stored = [];
+      }
+      const set = new Set(stored.map((s) => String(s).toUpperCase()));
+      root.querySelectorAll('input[data-coopt-glassmap="1"]').forEach((n) => {
+        const cb = n as HTMLInputElement;
+        cb.checked = set.has(String(cb.value || '').toUpperCase());
+      });
+    };
+
+    const saveGlassMapChecks = (root: HTMLElement): void => {
+      const selected: string[] = [];
+      root.querySelectorAll('input[data-coopt-glassmap="1"]').forEach((n) => {
+        const cb = n as HTMLInputElement;
+        if (cb.checked) selected.push(String(cb.value || ''));
+      });
+      const sanitized = sanitizeMfrList(selected);
+      try {
+        if (sanitized.length) localStorage.setItem('coopt.glassMap.defaultManufacturers', JSON.stringify(sanitized));
+        else localStorage.removeItem('coopt.glassMap.defaultManufacturers');
+      } catch (_) {}
+    };
+
+    const syncDarkMode = (root: HTMLElement): void => {
+      const darkCb = root.querySelector('#coopt-settings-fallback-dark-mode') as HTMLInputElement | null;
+      if (!darkCb) return;
+      try {
+        darkCb.checked = localStorage.getItem('coopt.darkMode') === 'true';
+      } catch (_) {
+        darkCb.checked = false;
+      }
+    };
+
     const existing = document.getElementById('coopt-settings-fallback-modal') as HTMLElement | null;
     if (existing) {
       existing.style.display = 'flex';
@@ -1437,6 +1490,8 @@ export function handleOpenSettings(): void {
         const v = sanitizeMode(r.value);
         r.checked = (v === cur) || (cur === '' && v === '');
       });
+      syncGlassMapChecks(existing);
+      syncDarkMode(existing);
       return;
     }
 
@@ -1447,6 +1502,22 @@ export function handleOpenSettings(): void {
       <div style="width:520px;max-width:92vw;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;box-shadow:0 8px 28px rgba(0,0,0,0.22);font-family:Arial,sans-serif;">
         <div style="padding:10px 12px;background:#f8f8f8;border-bottom:1px solid #ddd;font-weight:600;">Settings</div>
         <div style="padding:12px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Glass Map: Default Manufacturers</div>
+          <div style="font-size:12px;color:#666;line-height:1.35;margin-bottom:10px;">Choose which manufacturers are enabled by default when opening Glass Map.<br />If nothing is selected, Glass Map will show all manufacturers.</div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin:8px 0 14px 0;">
+            <label><input type="checkbox" data-coopt-glassmap="1" value="SCHOTT" /> SCHOTT</label>
+            <label><input type="checkbox" data-coopt-glassmap="1" value="HOYA" /> HOYA</label>
+            <label><input type="checkbox" data-coopt-glassmap="1" value="HIKARI" /> HIKARI</label>
+            <label><input type="checkbox" data-coopt-glassmap="1" value="OHARA" /> OHARA</label>
+            <label><input type="checkbox" data-coopt-glassmap="1" value="Sumita" /> Sumita</label>
+            <label><input type="checkbox" data-coopt-glassmap="1" value="CDGM" /> CDGM</label>
+            <label><input type="checkbox" data-coopt-glassmap="1" value="Special" /> Special</label>
+          </div>
+
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Dark Mode</div>
+          <div style="font-size:12px;color:#666;line-height:1.35;margin-bottom:10px;">Enable VS Code-style dark mode for the entire UI.</div>
+          <label style="margin:8px 0 14px 0;display:block;"><input type="checkbox" id="coopt-settings-fallback-dark-mode" /> Enable Dark Mode</label>
+
           <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Infinite Field: Pupil Sampling Mode</div>
           <div style="font-size:12px;color:#666;line-height:1.35;margin-bottom:10px;">Fix the sampling mode used for infinite-field wavefront/PSF/MTF generation.<br />Note: Changes take effect on the next calculation.</div>
           <div style="display:flex;flex-direction:column;gap:8px;">
@@ -1473,6 +1544,25 @@ export function handleOpenSettings(): void {
         if (r.checked) applyMode(r.value);
       });
     });
+    modal.querySelectorAll('input[data-coopt-glassmap="1"]').forEach((n) => {
+      const cb = n as HTMLInputElement;
+      cb.addEventListener('change', () => {
+        saveGlassMapChecks(modal);
+      });
+    });
+    const darkCb = modal.querySelector('#coopt-settings-fallback-dark-mode') as HTMLInputElement | null;
+    if (darkCb) {
+      darkCb.addEventListener('change', () => {
+        try {
+          if (typeof window.__cooptSetDarkMode === 'function') {
+            window.__cooptSetDarkMode(!!darkCb.checked);
+          }
+        } catch (_) {}
+        try {
+          localStorage.setItem('coopt.darkMode', darkCb.checked ? 'true' : 'false');
+        } catch (_) {}
+      });
+    }
 
     document.body.appendChild(modal);
     const cur = getCurrentMode();
@@ -1481,6 +1571,8 @@ export function handleOpenSettings(): void {
       const v = sanitizeMode(r.value);
       r.checked = (v === cur) || (cur === '' && v === '');
     });
+    syncGlassMapChecks(modal);
+    syncDarkMode(modal);
   };
 
   try {
@@ -1491,7 +1583,7 @@ export function handleOpenSettings(): void {
     }
   } catch (_) {}
 
-  const popup = window.open('about:blank', 'Settings', 'width=520,height=340');
+  const popup = window.open('about:blank', 'Settings', 'width=520,height=560');
   if (!popup) {
     showFallbackModal();
     return;
@@ -1505,9 +1597,10 @@ export function handleOpenSettings(): void {
   <meta charset="UTF-8" />
   <title>Settings</title>
   <style>
-    body { margin: 0; font-family: Arial, sans-serif; background: #f4f4f4; }
+    html, body { height: 100%; }
+    body { margin: 0; font-family: Arial, sans-serif; background: #f4f4f4; display:flex; flex-direction:column; }
     .header { padding: 10px 12px; background: #f8f8f8; border-bottom: 1px solid #ddd; font-weight: 600; }
-    .content { padding: 12px; background: #fff; }
+    .content { padding: 12px; background: #fff; flex:1 1 auto; overflow:auto; }
     .section-title { font-size: 13px; font-weight: 600; margin: 0 0 8px 0; }
     .help { font-size: 12px; color: #666; line-height: 1.35; margin: 0 0 10px 0; }
     .radio-group { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px 0; }
@@ -1518,11 +1611,32 @@ export function handleOpenSettings(): void {
 <body>
   <div class="header">Settings</div>
   <div class="content">
+    <div class="section-title">Glass Map: Default Manufacturers</div>
+    <div class="help">
+      Choose which manufacturers are enabled by default when opening Glass Map.
+      <br />If nothing is selected, Glass Map will show all manufacturers.
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin:8px 0 14px 0;">
+      <label><input type="checkbox" class="glassmap-mfr-cb" value="SCHOTT" /> SCHOTT</label>
+      <label><input type="checkbox" class="glassmap-mfr-cb" value="HOYA" /> HOYA</label>
+      <label><input type="checkbox" class="glassmap-mfr-cb" value="HIKARI" /> HIKARI</label>
+      <label><input type="checkbox" class="glassmap-mfr-cb" value="OHARA" /> OHARA</label>
+      <label><input type="checkbox" class="glassmap-mfr-cb" value="Sumita" /> Sumita</label>
+      <label><input type="checkbox" class="glassmap-mfr-cb" value="CDGM" /> CDGM</label>
+      <label><input type="checkbox" class="glassmap-mfr-cb" value="Special" /> Special</label>
+    </div>
+
+    <div class="section-title">Dark Mode</div>
+    <div class="help">Enable VS Code-style dark mode for the entire UI.</div>
+    <label style="margin: 8px 0 14px 0; display: block;">
+      <input type="checkbox" id="dark-mode-cb" /> Enable Dark Mode
+    </label>
+
     <div class="section-title">Infinite Field: Pupil Sampling Mode</div>
     <div class="help">
       Fix the sampling mode used for infinite-field wavefront/PSF/MTF generation.
       <br />
-      Auto uses the default pipeline behavior.
+      This sets <code>__COOPT_FORCE_INFINITE_PUPIL_MODE</code> to <code>stop</code> or <code>entrance</code>.
     </div>
     <div class="radio-group">
       <label><input type="radio" name="force-mode" value="" /> Auto (default)</label>
@@ -1536,9 +1650,26 @@ export function handleOpenSettings(): void {
   </div>
   <script>
     const KEY = 'coopt.forceInfinitePupilMode';
+    const GLASS_MAP_MFR_KEY = 'coopt.glassMap.defaultManufacturers';
+    const DARK_MODE_KEY = 'coopt.darkMode';
     const sanitize = (v) => {
       const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
       return (s === 'stop' || s === 'entrance') ? s : '';
+    };
+    const sanitizeMfrList = (list) => {
+      if (!Array.isArray(list)) return [];
+      const allow = new Set(['SCHOTT', 'HOYA', 'HIKARI', 'OHARA', 'SUMITA', 'CDGM', 'SPECIAL']);
+      const out = [];
+      for (const v of list) {
+        const s = String(v ?? '').trim();
+        if (!s) continue;
+        const upper = s.toUpperCase();
+        if (!allow.has(upper)) continue;
+        if (upper === 'SUMITA') out.push('Sumita');
+        else if (upper === 'SPECIAL') out.push('Special');
+        else out.push(upper);
+      }
+      return Array.from(new Set(out));
     };
     const getOpener = () => { try { return window.opener || null; } catch (_) { return null; } };
 
@@ -1581,6 +1712,47 @@ export function handleOpenSettings(): void {
         const v = sanitize(r.value);
         r.checked = (v === cur) || (cur === '' && v === '');
       });
+
+      let stored = [];
+      try {
+        stored = sanitizeMfrList(JSON.parse(localStorage.getItem(GLASS_MAP_MFR_KEY) || '[]'));
+      } catch (_) {
+        stored = [];
+      }
+      const set = new Set(stored.map((s) => String(s).toUpperCase()));
+      document.querySelectorAll('.glassmap-mfr-cb').forEach((cb) => {
+        const c = cb;
+        c.checked = set.has(String(c.value || '').toUpperCase());
+      });
+
+      const darkModeCb = document.getElementById('dark-mode-cb');
+      if (darkModeCb) {
+        let isDark = false;
+        try { isDark = localStorage.getItem(DARK_MODE_KEY) === 'true'; } catch (_) {}
+        darkModeCb.checked = isDark;
+      }
+    }
+
+    function saveGlassMapMfrSelection() {
+      const selected = [];
+      document.querySelectorAll('.glassmap-mfr-cb').forEach((cb) => {
+        if (cb.checked) selected.push(cb.value);
+      });
+      const sanitized = sanitizeMfrList(selected);
+      try {
+        if (sanitized.length) localStorage.setItem(GLASS_MAP_MFR_KEY, JSON.stringify(sanitized));
+        else localStorage.removeItem(GLASS_MAP_MFR_KEY);
+      } catch (_) {}
+    }
+
+    function applyDarkMode(enabled) {
+      const o = getOpener();
+      try {
+        if (o && typeof o.__cooptSetDarkMode === 'function') {
+          o.__cooptSetDarkMode(enabled);
+        }
+      } catch (_) {}
+      try { localStorage.setItem(DARK_MODE_KEY, enabled ? 'true' : 'false'); } catch (_) {}
     }
 
     document.querySelectorAll('input[name="force-mode"]').forEach((r) => {
@@ -1588,6 +1760,17 @@ export function handleOpenSettings(): void {
         if (r.checked) applyMode(r.value);
       });
     });
+    document.querySelectorAll('.glassmap-mfr-cb').forEach((cb) => {
+      cb.addEventListener('change', () => {
+        saveGlassMapMfrSelection();
+      });
+    });
+    const darkModeCb = document.getElementById('dark-mode-cb');
+    if (darkModeCb) {
+      darkModeCb.addEventListener('change', () => {
+        applyDarkMode(!!darkModeCb.checked);
+      });
+    }
     document.getElementById('close-btn').addEventListener('click', () => {
       try { window.close(); } catch (_) {}
     });
