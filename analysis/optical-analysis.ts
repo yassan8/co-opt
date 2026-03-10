@@ -3516,7 +3516,7 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
         // デフォルト設定
         // Integrated Aberration Diagram の球面収差は 100 本
         const rayCountSpherical = 100;
-        const rayCountAstigmatism = 71;
+        const rayCountAstigmatism = 30;
 
         // Wavelengths:
         // - Prefer Source table wavelengths (μm). If the user entered nm (e.g. 587.6), normalize to μm.
@@ -3572,7 +3572,7 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
         }
         const { runNativeAstigmatism } = await import('../src/desktop/ipc/client.ts');
         const astigRingCount = 32;
-        const astigPattern: 'grid' = 'grid';
+        const astigPattern: 'annular' = 'annular';
         const astigmatismData = await runNativeAstigmatism({
             opticalSystemRows,
             sourceRows: sourceRows || [],

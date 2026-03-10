@@ -58,6 +58,70 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
     };
     
     const plotOptions = { ...defaultOptions, ...options };
+
+    const computeSquareDomains = () => {
+        const margin = { l: 80, r: 150, t: 80, b: 80 };
+        const gap = 0.1;
+        const maxSpanBySpace = (1 - gap) / 2; // 0.45
+
+        const containerWidth = Math.max(200, Number(container?.clientWidth) || Number(plotOptions.width) || 1000);
+        const containerHeight = Math.max(200, Number(container?.clientHeight) || Number(plotOptions.height) || 600);
+        const innerW = Math.max(100, containerWidth - margin.l - margin.r);
+        const innerH = Math.max(100, containerHeight - margin.t - margin.b);
+        const spanByAspect = innerH / innerW;
+
+        // Case A: wide canvas -> shrink X span and keep full Y.
+        // Case B: tall canvas -> keep max X span and shrink Y span.
+        let xSpan = maxSpanBySpace;
+        let ySpan = 1;
+        if (spanByAspect <= maxSpanBySpace) {
+            xSpan = Math.max(0.1, spanByAspect);
+            ySpan = 1;
+        } else {
+            xSpan = maxSpanBySpace;
+            ySpan = Math.max(0.1, Math.min(1, (xSpan * innerW) / innerH));
+        }
+
+        const totalX = 2 * xSpan + gap;
+        const xStart = Math.max(0, (1 - totalX) / 2);
+        const yStart = Math.max(0, (1 - ySpan) / 2);
+
+        const x1: [number, number] = [xStart, xStart + xSpan];
+        const x2: [number, number] = [xStart + xSpan + gap, xStart + 2 * xSpan + gap];
+        const y: [number, number] = [yStart, yStart + ySpan];
+
+        return {
+            margin,
+            x1,
+            x2,
+            y,
+            meridionalCenterX: x1[0] + xSpan / 2,
+            sagittalCenterX: x2[0] + xSpan / 2,
+        };
+    };
+
+    const parseNumber = (v) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+    };
+    const getFieldLabel = (fieldSetting, index) => {
+        const fs = fieldSetting || {};
+        const posRaw = String(fs.position ?? fs.fieldType ?? fs.type ?? '').toLowerCase();
+        const isAngle = posRaw.includes('angle') && !posRaw.includes('rect');
+
+        const fx = isAngle
+            ? parseNumber(fs.fieldAngle?.x ?? fs.xFieldAngle ?? fs.xHeightAngle ?? fs.x)
+            : parseNumber(fs.xHeight ?? fs.x ?? fs.xHeightAngle);
+        const fy = isAngle
+            ? parseNumber(fs.fieldAngle?.y ?? fs.yFieldAngle ?? fs.yHeightAngle ?? fs.y)
+            : parseNumber(fs.yHeight ?? fs.y ?? fs.yHeightAngle);
+
+        const unit = isAngle ? 'deg' : 'mm';
+        const modeLabel = isAngle ? 'Angle' : 'Height';
+        const xText = Number.isFinite(fx) ? fx.toFixed(3) : '0.000';
+        const yText = Number.isFinite(fy) ? fy.toFixed(3) : '0.000';
+        return `Object ${index + 1} (${modeLabel}: X=${xText} ${unit}, Y=${yText} ${unit})`;
+    };
     
     try {
         // Plotlyの可用性チェック
@@ -166,7 +230,7 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                         y: y,
                         type: 'scatter',
                         mode: 'lines',
-                        name: `${data.fieldSetting.displayName} (M)`,
+                        name: `${getFieldLabel(data.fieldSetting, fieldIndex)} (M)`,
                         line: {
                             color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
                             width: 2
@@ -191,7 +255,7 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                         y: y,
                         type: 'scatter',
                         mode: 'lines',
-                        name: `${data.fieldSetting.displayName} (M-部分)`,
+                        name: `${getFieldLabel(data.fieldSetting, fieldIndex)} (M-partial)`,
                         line: {
                             color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
                             width: 1.5,
@@ -240,7 +304,7 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                         y: y,
                         type: 'scatter',
                         mode: 'lines',
-                        name: `${data.fieldSetting.displayName} (S)`,
+                        name: `${getFieldLabel(data.fieldSetting, fieldIndex)} (S)`,
                         line: {
                             color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
                             width: 2,
@@ -266,7 +330,7 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                         y: partialY,
                         type: 'scatter',
                         mode: 'lines',
-                        name: `${data.fieldSetting.displayName} (S-部分)`,
+                        name: `${getFieldLabel(data.fieldSetting, fieldIndex)} (S-partial)`,
                         line: {
                             color: plotOptions.colors[fieldIndex % plotOptions.colors.length],
                             width: 1.5,
@@ -284,6 +348,7 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
         });
         
         // レイアウト設定
+        const squareDomains = computeSquareDomains();
         const layout = {
             title: {
                 text: plotOptions.title,
@@ -306,14 +371,14 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                 range: [-1.1, 1.1], // ±1まで（10%マージン）
                 showgrid: plotOptions.gridLines,
                 zeroline: true,
-                domain: [0, 0.45]
+                domain: squareDomains.x1
             },
             yaxis: {
                 title: 'Transverse Aberration (μm)',
                 range: yAxisRange,
                 showgrid: plotOptions.gridLines,
                 zeroline: true,
-                domain: [0, 1]
+                domain: squareDomains.y
             },
             
             // サジタル軸（右側）
@@ -322,14 +387,14 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                 range: [-1.1, 1.1], // ±1まで（10%マージン）
                 showgrid: plotOptions.gridLines,
                 zeroline: true,
-                domain: [0.55, 1]
+                domain: squareDomains.x2
             },
             yaxis2: {
                 title: 'Transverse Aberration (μm)',
                 range: yAxisRange,
                 showgrid: plotOptions.gridLines,
                 zeroline: true,
-                domain: [0, 1]
+                domain: squareDomains.y
             },
             
             // 凡例設定
@@ -346,7 +411,7 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
             annotations: [
                 {
                     text: 'Meridional',
-                    x: 0.225,
+                    x: squareDomains.meridionalCenterX,
                     y: 1.02,
                     xref: 'paper',
                     yref: 'paper',
@@ -357,7 +422,7 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                 },
                 {
                     text: 'Sagittal',
-                    x: 0.775,
+                    x: squareDomains.sagittalCenterX,
                     y: 1.02,
                     xref: 'paper',
                     yref: 'paper',
@@ -370,10 +435,10 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
             
             // マージン設定
             margin: {
-                l: 80,
-                r: 150,
-                t: 80,
-                b: 80
+                l: squareDomains.margin.l,
+                r: squareDomains.margin.r,
+                t: squareDomains.margin.t,
+                b: squareDomains.margin.b
             }
         };
         
@@ -396,7 +461,18 @@ export function plotTransverseAberration(containerId, aberrationData, options = 
                 try { win.removeEventListener('resize', container.__transversePlotResizeHandler); } catch (_) {}
             }
             container.__transversePlotResizeHandler = () => {
-                try { plotlyRef.Plots.resize(container); } catch (_) {}
+                try {
+                    plotlyRef.Plots.resize(container);
+                    const d = computeSquareDomains();
+                    plotlyRef.relayout(container, {
+                        'xaxis.domain': d.x1,
+                        'xaxis2.domain': d.x2,
+                        'yaxis.domain': d.y,
+                        'yaxis2.domain': d.y,
+                        'annotations[0].x': d.meridionalCenterX,
+                        'annotations[1].x': d.sagittalCenterX,
+                    });
+                } catch (_) {}
             };
             win.addEventListener('resize', container.__transversePlotResizeHandler);
             try { container.__transversePlotResizeHandler(); } catch (_) {}

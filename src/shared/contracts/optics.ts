@@ -325,6 +325,7 @@ export interface NativeThroughFocusMtfMapRequest {
   sourceRows?: unknown[];
   objectRows?: unknown[];
   objectIndex?: number;
+  pupilSamplingMode?: "stop" | "entrance";
   wavelengths?: number[];
   targetFrequencyLpmm?: number;
   defocusMinMm?: number;
@@ -350,6 +351,28 @@ export interface NativeFieldMtfSeries {
   sagittalFirst: number[];
   meridionalSecond: number[];
   sagittalSecond: number[];
+  fieldDiagnostics?: NativeFieldMtfPointDiagnostic[];
+}
+
+export interface NativeFieldMtfPointDiagnostic {
+  fieldValue: number;
+  effectivePupilSamplingMode: string;
+  usedObjectPosition?: string;
+  targetSurfaceIndex: number;
+  usedObjectIndex: number;
+  opdSampleCount: number;
+  opdHitCount: number;
+  opdHitRate: number;
+  firstFrequencyLpmm: number;
+  firstBracketLowLpmm?: number;
+  firstBracketHighLpmm?: number;
+  firstValueMeridional: number;
+  firstValueSagittal: number;
+  secondFrequencyLpmm: number;
+  secondBracketLowLpmm?: number;
+  secondBracketHighLpmm?: number;
+  secondValueMeridional: number;
+  secondValueSagittal: number;
 }
 
 export interface NativeFieldMtfMapRequest {
@@ -358,6 +381,7 @@ export interface NativeFieldMtfMapRequest {
   sourceRows?: unknown[];
   objectRows?: unknown[];
   objectIndex?: number;
+  pupilSamplingMode?: "stop" | "entrance";
   wavelengths?: number[];
   firstFrequencyLpmm?: number;
   secondFrequencyLpmm?: number;

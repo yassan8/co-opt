@@ -22,7 +22,7 @@ import { PSFPlotter } from '../evaluation/psf/psf-plot.ts';
 import { createOPDCalculator, createWavefrontAnalyzer, WavefrontAberrationAnalyzer } from '../evaluation/wavefront/wavefront.ts';
 import { PSFCalculator } from '../evaluation/psf/psf-calculator.ts';
 import { getLastWavefrontMap, getLastWavefrontMeta, patchLastWavefrontMap } from '../evaluation/wavefront/last-wavefront-runtime.ts';
-import { calculateFocalLength, calculateParaxialData, findStopSurfaceIndex } from '../raytracing/core/ray-paraxial.ts';
+import { calculateFocalLength, calculateParaxialData, findStopSurfaceIndex, calculateImageSpaceDiffractionParams } from '../raytracing/core/ray-paraxial.ts';
 import { DEFAULT_STOP_SEMI_DIAMETER } from '../data/block-schema.ts';
 import { loadSystemConfigurations } from '../data/table-configuration.ts';
 import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
@@ -404,6 +404,7 @@ w.runDesktopNativeMtfMapForPopup = runDesktopNativeMtfMapForPopup;
 
 async function runDesktopNativeThroughFocusMtfForPopup(payload: {
     objectIndex?: number;
+    pupilSamplingMode?: 'stop' | 'entrance';
     wavelengths?: number[];
     targetFrequencyLpmm?: number;
     defocusMinMm?: number;
@@ -421,6 +422,18 @@ async function runDesktopNativeThroughFocusMtfForPopup(payload: {
     const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 256;
     const zeroPadTo = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
     const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0;
+    const fieldSetting = buildPopupFieldSettingFromObjectRows(
+        objectRows,
+        objectIndex,
+        Number.isFinite(Number(payload?.wavelengths?.[0])) ? Number(payload.wavelengths?.[0]) : getPrimaryWavelengthMicronsFromSourceRows(sourceRows || [])
+    );
+    const forcedInfinitePupilMode = __cooptGetForceInfinitePupilMode();
+    const autoAngleX = Number(fieldSetting?.fieldAngle?.x ?? 0);
+    const autoAngleY = Number(fieldSetting?.fieldAngle?.y ?? 0);
+    const isNonZeroAngleField = Math.abs(autoAngleX) > 1e-12 || Math.abs(autoAngleY) > 1e-12;
+    const requestedPupilSamplingMode = (forcedInfinitePupilMode === 'stop' || forcedInfinitePupilMode === 'entrance')
+        ? forcedInfinitePupilMode
+        : ((String(fieldSetting?.type || '').toLowerCase() === 'angle' && isNonZeroAngleField) ? 'entrance' : undefined);
 
     let wavelengthForScale = Number.NaN;
     if (Array.isArray(payload?.wavelengths) && payload.wavelengths.length > 0) {
@@ -434,7 +447,22 @@ async function runDesktopNativeThroughFocusMtfForPopup(payload: {
         wavelengthForScale = 0.5876;
     }
 
-    const { pupilDiameterMm, focalLengthMm } = derivePupilAndFocalLengthMmForAiry(opticalSystemRows || [], wavelengthForScale);
+    let pupilDiameterMm = Number.NaN;
+    let focalLengthMm = Number.NaN;
+    try {
+        const diffParams = calculateImageSpaceDiffractionParams(opticalSystemRows || [], wavelengthForScale);
+        const fWork = Number(diffParams?.fNumberWorking);
+        const fl = Number(diffParams?.focalLengthMm);
+        if (Number.isFinite(fWork) && fWork > 0 && Number.isFinite(fl) && fl > 0) {
+            focalLengthMm = Math.abs(fl);
+            pupilDiameterMm = focalLengthMm / fWork;
+        }
+    } catch (_) {}
+    if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0) || !(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
+        const derived = derivePupilAndFocalLengthMmForAiry(opticalSystemRows || [], wavelengthForScale);
+        pupilDiameterMm = Number(derived?.pupilDiameterMm);
+        focalLengthMm = Number(derived?.focalLengthMm);
+    }
     const requestedFftSize = (!zeroPadTo || zeroPadTo === 0)
         ? Math.max(samplingSize, 512)
         : Math.max(samplingSize, zeroPadTo);
@@ -446,6 +474,9 @@ async function runDesktopNativeThroughFocusMtfForPopup(payload: {
         sourceRows,
         objectRows,
         objectIndex,
+        pupilSamplingMode: (payload?.pupilSamplingMode === 'stop' || payload?.pupilSamplingMode === 'entrance')
+            ? payload.pupilSamplingMode
+            : requestedPupilSamplingMode,
         wavelengths: Array.isArray(payload?.wavelengths)
             ? payload.wavelengths.filter((w) => Number.isFinite(Number(w)) && Number(w) > 0).map((w) => Number(w))
             : [],
@@ -462,8 +493,584 @@ async function runDesktopNativeThroughFocusMtfForPopup(payload: {
 
 w.runDesktopNativeThroughFocusMtfForPopup = runDesktopNativeThroughFocusMtfForPopup;
 
+async function runDesktopNativeCompareMtfVsTfmtfForPopup(payload: {
+    objectIndex?: number;
+    wavelengthUm?: number;
+    targetFrequencyLpmm?: number;
+    samplingSize?: number;
+    zeroPadTo?: number;
+    opdDisplayMode?: string;
+    pupilSamplingMode?: 'stop' | 'entrance';
+}) {
+    if (!isTauriRuntime()) {
+        throw new Error('Desktop runtime is not available');
+    }
+
+    const { opticalSystemRows, sourceRows } = collectPopupRowsFromMainWindow();
+    const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0;
+    const targetFrequencyLpmm = Number.isFinite(Number(payload?.targetFrequencyLpmm)) ? Number(payload.targetFrequencyLpmm) : 10;
+    const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 256;
+    const zeroPadToRaw = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
+    const requestedFftSize = (!zeroPadToRaw || zeroPadToRaw === 0)
+        ? Math.max(samplingSize, 512)
+        : Math.max(samplingSize, zeroPadToRaw);
+    const opdDisplayModeRaw = String(payload?.opdDisplayMode || 'pistonTiltRemoved');
+    const opdDisplayMode: 'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved' =
+        (opdDisplayModeRaw === 'raw' || opdDisplayModeRaw === 'pistonTiltDefocusRemoved')
+            ? opdDisplayModeRaw
+            : 'pistonTiltRemoved';
+
+    const wlFromPayload = Number(payload?.wavelengthUm);
+    const wavelengthUm = (Number.isFinite(wlFromPayload) && wlFromPayload > 0)
+        ? wlFromPayload
+        : getPrimaryWavelengthMicronsFromSourceRows(sourceRows || []);
+    const wl = (Number.isFinite(wavelengthUm) && wavelengthUm > 0) ? wavelengthUm : 0.5876;
+
+    const interpolateAxisValue = (axis: any[], values: any[], targetX: number): number => {
+        if (!Array.isArray(axis) || !Array.isArray(values) || axis.length !== values.length) return NaN;
+        const pts = axis
+            .map((x: any, i: number) => ({ x: Number(x), y: Number(values[i]) }))
+            .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+            .sort((a, b) => a.x - b.x);
+        if (!pts.length) return NaN;
+        if (pts.length === 1) return pts[0].y;
+        if (targetX <= pts[0].x) return pts[0].y;
+        if (targetX >= pts[pts.length - 1].x) return pts[pts.length - 1].y;
+        for (let i = 1; i < pts.length; i++) {
+            const a = pts[i - 1];
+            const b = pts[i];
+            if (targetX <= b.x && b.x > a.x) {
+                const t = (targetX - a.x) / (b.x - a.x);
+                return a.y + t * (b.y - a.y);
+            }
+        }
+        return pts[pts.length - 1].y;
+    };
+
+    const pickZeroDefocusValue = (xAxis: any[], yAxis: any[]): number => {
+        if (!Array.isArray(xAxis) || !Array.isArray(yAxis) || xAxis.length !== yAxis.length || xAxis.length === 0) return NaN;
+        let bestIdx = 0;
+        let best = Infinity;
+        for (let i = 0; i < xAxis.length; i++) {
+            const x = Number(xAxis[i]);
+            if (!Number.isFinite(x)) continue;
+            const d = Math.abs(x);
+            if (d < best) {
+                best = d;
+                bestIdx = i;
+            }
+        }
+        const v = Number(yAxis[bestIdx]);
+        return Number.isFinite(v) ? v : NaN;
+    };
+
+    // Native TFMTF at defocus=0
+    const tfmtfResp = await runDesktopNativeThroughFocusMtfForPopup({
+        objectIndex,
+        pupilSamplingMode: payload?.pupilSamplingMode,
+        wavelengths: [wl],
+        targetFrequencyLpmm,
+        defocusMinMm: 0,
+        defocusMaxMm: 0,
+        steps: 3,
+        samplingSize,
+        zeroPadTo: requestedFftSize,
+        opdDisplayMode,
+    });
+
+    const tfSeries = Array.isArray(tfmtfResp?.series) ? tfmtfResp.series[0] : null;
+    const tfXAxis = Array.isArray(tfmtfResp?.xAxis) ? tfmtfResp.xAxis : [];
+    const tfTangential = pickZeroDefocusValue(tfXAxis, Array.isArray(tfSeries?.mtfTangential) ? tfSeries.mtfTangential : []);
+    const tfSagittal = pickZeroDefocusValue(tfXAxis, Array.isArray(tfSeries?.mtfSagittal) ? tfSeries.mtfSagittal : []);
+
+    // Native MTF (single-focus)
+    const nativeOpdResp = await runDesktopNativeOpdMapForPopup({
+        objectIndex,
+        gridSize: samplingSize,
+        wavelengthUm: wl,
+        opdDisplayMode,
+    });
+
+    const s = samplingSize;
+    const opdGrid = Array.from({ length: s }, () => new Float32Array(s));
+    const ampGrid = Array.from({ length: s }, () => new Float32Array(s));
+    const maskGrid = Array.from({ length: s }, () => Array(s).fill(false));
+    const displayOpdGrid = Array.isArray(nativeOpdResp?.displayOpdGrid) ? nativeOpdResp.displayOpdGrid : [];
+    const rawOpdGrid = Array.isArray(nativeOpdResp?.rawOpdGrid) ? nativeOpdResp.rawOpdGrid : [];
+
+    for (let iy = 0; iy < s; iy++) {
+        const rowDisplay = displayOpdGrid[iy] || [];
+        const rowRaw = rawOpdGrid[iy] || [];
+        for (let ix = 0; ix < s; ix++) {
+            const rawCell = rowRaw[ix];
+            if (rawCell === null || rawCell === undefined) continue;
+            const vRawWaves = Number(rawCell);
+            if (!Number.isFinite(vRawWaves)) continue;
+            const displayCell = rowDisplay[ix];
+            const vDisplayWaves = (displayCell === null || displayCell === undefined) ? NaN : Number(displayCell);
+            const vWaves = Number.isFinite(vDisplayWaves) ? vDisplayWaves : vRawWaves;
+            opdGrid[iy][ix] = vWaves * wl;
+            ampGrid[iy][ix] = 1.0;
+            maskGrid[iy][ix] = true;
+        }
+    }
+
+    let pupilDiameterMm = Number.NaN;
+    let focalLengthMm = Number.NaN;
+    let fNumberForDiffraction = Number.NaN;
+    let naImage = Number.NaN;
+    let cutoffLpmm = Number.NaN;
+    try {
+        const diffParams = calculateImageSpaceDiffractionParams(opticalSystemRows || [], wl);
+        const fWork = Number(diffParams?.fNumberWorking);
+        const fl = Number(diffParams?.focalLengthMm);
+        const naImg = Number(diffParams?.naImage);
+        const cutoff = Number(diffParams?.cutoffLpmm);
+        if (Number.isFinite(fWork) && fWork > 0 && Number.isFinite(fl) && fl > 0) {
+            focalLengthMm = Math.abs(fl);
+            pupilDiameterMm = focalLengthMm / fWork;
+            fNumberForDiffraction = fWork;
+        }
+        if (Number.isFinite(naImg) && naImg > 0) {
+            naImage = naImg;
+        }
+        if (Number.isFinite(cutoff) && cutoff > 0) {
+            cutoffLpmm = cutoff;
+        }
+    } catch (_) {}
+    if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0) || !(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
+        const derived = derivePupilAndFocalLengthMmForAiry(opticalSystemRows || [], wl);
+        pupilDiameterMm = Number(derived?.pupilDiameterMm);
+        focalLengthMm = Number(derived?.focalLengthMm);
+    }
+
+    const basePixelPitchUm = (wl * Math.abs(Number(focalLengthMm))) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
+    const pixelSizeUm = basePixelPitchUm * (samplingSize / requestedFftSize);
+    if (!(Number.isFinite(fNumberForDiffraction) && fNumberForDiffraction > 0)) {
+        const fNum = Math.abs(Number(focalLengthMm)) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
+        if (Number.isFinite(fNum) && fNum > 0) {
+            fNumberForDiffraction = fNum;
+        }
+    }
+    if (!(Number.isFinite(cutoffLpmm) && cutoffLpmm > 0) && Number.isFinite(fNumberForDiffraction) && fNumberForDiffraction > 0) {
+        cutoffLpmm = 1000.0 / (Math.max(1e-12, wl) * fNumberForDiffraction);
+    }
+
+    const nativePsfResp = await runDesktopNativePsfMapForPopup({
+        gridOpd: Array.from({ length: s }, (_, iy) => Array.from(opdGrid[iy] || [])),
+        gridAmplitude: Array.from({ length: s }, (_, iy) => Array.from(ampGrid[iy] || [])),
+        pupilMask: Array.from({ length: s }, (_, iy) => Array.from(maskGrid[iy] || [])),
+        wavelengthUm: wl,
+        pixelSizeUm,
+        removeTilt: false,
+        zeroPadTo: requestedFftSize,
+        recenterIfWrapped: false,
+    });
+
+    const nativeMtfResp = await runDesktopNativeMtfMapForPopup({
+        psfData: nativePsfResp?.psfData,
+        pixelSizeUm,
+        maxFrequencyLpmm: Number.isFinite(targetFrequencyLpmm) ? Math.max(1, targetFrequencyLpmm) : 10,
+        points: 121,
+    });
+
+    const freqAxis = Array.isArray(nativeMtfResp?.frequencyAxis) ? nativeMtfResp.frequencyAxis : [];
+    const mtfTangentialAxis = Array.isArray(nativeMtfResp?.mtfTangential) ? nativeMtfResp.mtfTangential : [];
+    const mtfSagittalAxis = Array.isArray(nativeMtfResp?.mtfSagittal) ? nativeMtfResp.mtfSagittal : [];
+    const mtfTangential = interpolateAxisValue(freqAxis, mtfTangentialAxis, targetFrequencyLpmm);
+    const mtfSagittal = interpolateAxisValue(freqAxis, mtfSagittalAxis, targetFrequencyLpmm);
+
+    const report = {
+        backend: 'desktop-native-rust',
+        conditions: {
+            objectIndex,
+            wavelengthUm: wl,
+            targetFrequencyLpmm,
+            samplingSize,
+            zeroPadTo: requestedFftSize,
+            opdDisplayMode,
+            pupilSamplingMode: String(nativeOpdResp?.pupilSamplingMode || ''),
+            pixelSizeUm,
+            fNumberForDiffraction,
+            naImage,
+            cutoffLpmm,
+        },
+        mtf: {
+            tangential: mtfTangential,
+            sagittal: mtfSagittal,
+            nyquistLpmm: Number(nativeMtfResp?.nyquistLpmm),
+        },
+        tfmtfAtDefocus0: {
+            tangential: tfTangential,
+            sagittal: tfSagittal,
+        },
+        delta: {
+            tangential: (Number.isFinite(mtfTangential) && Number.isFinite(tfTangential)) ? (tfTangential - mtfTangential) : NaN,
+            sagittal: (Number.isFinite(mtfSagittal) && Number.isFinite(tfSagittal)) ? (tfSagittal - mtfSagittal) : NaN,
+        }
+    };
+
+    console.log('📊 [Native Rust MTF vs TFMTF parity]', report);
+    return report;
+}
+
+w.runDesktopNativeCompareMtfVsTfmtfForPopup = runDesktopNativeCompareMtfVsTfmtfForPopup;
+
 async function runDesktopNativeFieldMtfForPopup(payload: {
     objectIndex?: number;
+    pupilSamplingMode?: 'stop' | 'entrance';
+    wavelengths?: number[];
+    firstFrequencyLpmm?: number;
+    secondFrequencyLpmm?: number;
+    fieldMin?: number;
+    fieldMax?: number;
+    steps?: number;
+    samplingSize?: number;
+    zeroPadTo?: number;
+    opdDisplayMode?: string;
+    fieldAxisMode?: 'angle' | 'height';
+    onProgress?: (evt: { percent?: number; message?: string }) => void;
+}) {
+    if (!isTauriRuntime()) {
+        throw new Error('Desktop runtime is not available');
+    }
+
+    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 256;
+    const zeroPadTo = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
+    const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0;
+    const forcedInfinitePupilMode = __cooptGetForceInfinitePupilMode();
+    const requestedPupilSamplingMode = (payload?.pupilSamplingMode === 'stop' || payload?.pupilSamplingMode === 'entrance')
+        ? payload.pupilSamplingMode
+        : ((forcedInfinitePupilMode === 'stop' || forcedInfinitePupilMode === 'entrance') ? forcedInfinitePupilMode : undefined);
+
+    const isPowerOfTwo = (n: number) => Number.isInteger(n) && n > 0 && (n & (n - 1)) === 0;
+    const nextPowerOfTwo = (n: number) => {
+        let p = 1;
+        const target = Math.max(1, Math.floor(Number(n) || 1));
+        while (p < target && p < 4096) p <<= 1;
+        return p;
+    };
+
+    const firstFrequencyLpmm = Number.isFinite(Number(payload?.firstFrequencyLpmm)) ? Number(payload.firstFrequencyLpmm) : 10;
+    const secondFrequencyLpmm = Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload.secondFrequencyLpmm) : 30;
+    const fieldMinRaw = Number.isFinite(Number(payload?.fieldMin)) ? Number(payload.fieldMin) : 0;
+    const fieldMaxRaw = Number.isFinite(Number(payload?.fieldMax)) ? Number(payload.fieldMax) : 10;
+    const fieldMin = Math.min(fieldMinRaw, fieldMaxRaw);
+    const fieldMax = Math.max(fieldMinRaw, fieldMaxRaw);
+    const steps = Number.isFinite(Number(payload?.steps)) ? Math.max(3, Math.floor(Number(payload.steps))) : 21;
+    const opdDisplayModeRaw = String(payload?.opdDisplayMode || 'pistonTiltRemoved');
+    const opdDisplayMode: 'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved' =
+        (opdDisplayModeRaw === 'raw' || opdDisplayModeRaw === 'pistonTiltDefocusRemoved')
+            ? opdDisplayModeRaw
+            : 'pistonTiltRemoved';
+    const axisMode = payload?.fieldAxisMode === 'height' ? 'height' : 'angle';
+
+    const desiredPlotPointCount = 121;
+    const hasExplicitZeroPad = Number.isFinite(zeroPadTo) && zeroPadTo >= samplingSize && isPowerOfTwo(zeroPadTo);
+    const minRequiredNForBins = Math.max(samplingSize, 2 * (desiredPlotPointCount - 1));
+    const adaptiveZeroPadTo = nextPowerOfTwo(minRequiredNForBins);
+    let requestedFftSize = hasExplicitZeroPad ? zeroPadTo : adaptiveZeroPadTo;
+    if (hasExplicitZeroPad && requestedFftSize === samplingSize && samplingSize <= 32) {
+        requestedFftSize = 64;
+    }
+
+    const wavelengths = (() => {
+        const arr = Array.isArray(payload?.wavelengths)
+            ? payload.wavelengths.filter((w) => Number.isFinite(Number(w)) && Number(w) > 0).map((w) => Number(w))
+            : [];
+        if (arr.length > 0) return arr;
+        const p = getPrimaryWavelengthMicronsFromSourceRows(sourceRows || []);
+        return [Number.isFinite(p) && p > 0 ? p : 0.5876];
+    })();
+
+    const xAxis = Array.from({ length: steps }, (_, i) => {
+        if (steps <= 1) return fieldMin;
+        const t = i / (steps - 1);
+        return fieldMin + t * (fieldMax - fieldMin);
+    });
+
+    const reportProgress = (percent: number, message: string) => {
+        try {
+            const fn = payload?.onProgress;
+            if (typeof fn === 'function') {
+                fn({ percent, message });
+            }
+        } catch (_) {}
+    };
+
+    const interpolateAxis = (axis: any[], values: any[], targetX: number): number => {
+        if (!Array.isArray(axis) || !Array.isArray(values) || axis.length !== values.length) return 0;
+        const pts = axis
+            .map((x: any, i: number) => ({ x: Number(x), y: Number(values[i]) }))
+            .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+            .sort((a, b) => a.x - b.x);
+        if (!pts.length) return 0;
+        if (pts.length === 1) return Math.max(0, Math.min(1, pts[0].y));
+        if (targetX <= pts[0].x) return Math.max(0, Math.min(1, pts[0].y));
+        if (targetX >= pts[pts.length - 1].x) return Math.max(0, Math.min(1, pts[pts.length - 1].y));
+        for (let i = 1; i < pts.length; i++) {
+            const a = pts[i - 1];
+            const b = pts[i];
+            if (targetX <= b.x && b.x > a.x) {
+                const t = (targetX - a.x) / (b.x - a.x);
+                return Math.max(0, Math.min(1, a.y + t * (b.y - a.y)));
+            }
+        }
+        return Math.max(0, Math.min(1, pts[pts.length - 1].y));
+    };
+
+    const findBracket = (axis: any[], targetX: number): [number | null, number | null] => {
+        if (!Array.isArray(axis) || axis.length === 0 || !Number.isFinite(targetX)) return [null, null];
+        const pts = axis.map((x: any) => Number(x)).filter((x: number) => Number.isFinite(x)).sort((a: number, b: number) => a - b);
+        if (!pts.length) return [null, null];
+        if (targetX <= pts[0]) return [pts[0], pts[0]];
+        if (targetX >= pts[pts.length - 1]) return [pts[pts.length - 1], pts[pts.length - 1]];
+        for (let i = 1; i < pts.length; i++) {
+            if (targetX <= pts[i]) return [pts[i - 1], pts[i]];
+        }
+        return [pts[pts.length - 1], pts[pts.length - 1]];
+    };
+
+    const cloneObjectRowsForField = (fieldValue: number): any[] => {
+        const cloned = Array.isArray(objectRows)
+            ? objectRows.map((r) => {
+                try { return JSON.parse(JSON.stringify(r)); } catch (_) { return { ...(r || {}) }; }
+            })
+            : [];
+        if (!cloned.length) {
+            cloned.push(axisMode === 'angle'
+                ? { name: 'AutoField0', position: 'Angle', xHeightAngle: 0, yHeightAngle: fieldValue, x: 0, y: fieldValue }
+                : { name: 'AutoField0', position: 'Rectangle', xHeight: 0, yHeight: fieldValue, x: 0, y: fieldValue });
+        }
+        const idx = Math.max(0, Math.min(objectIndex, cloned.length - 1));
+        const row: any = cloned[idx] && typeof cloned[idx] === 'object' ? cloned[idx] : {};
+        if (axisMode === 'angle') {
+            row.position = 'Angle';
+            row.xHeightAngle = 0;
+            row.yHeightAngle = fieldValue;
+            row.x = 0;
+            row.y = fieldValue;
+        } else {
+            row.position = 'Rectangle';
+            row.xHeight = 0;
+            row.yHeight = fieldValue;
+            row.x = 0;
+            row.y = fieldValue;
+        }
+        cloned[idx] = row;
+        return cloned;
+    };
+
+    const inferTanAxis = (fieldValue: number): 'x' | 'y' => {
+        const fx = 0;
+        const fy = Number(fieldValue);
+        if (!(Math.abs(fx) > 0 || Math.abs(fy) > 0)) return 'x';
+        return Math.abs(fx) >= Math.abs(fy) ? 'x' : 'y';
+    };
+
+    const computePixelSizeUm = (wl: number): number => {
+        let pupilDiameterMm = Number.NaN;
+        let focalLengthMm = Number.NaN;
+        try {
+            const diffParams = calculateImageSpaceDiffractionParams(opticalSystemRows || [], wl);
+            const fWork = Number(diffParams?.fNumberWorking);
+            const fl = Number(diffParams?.focalLengthMm);
+            if (Number.isFinite(fl) && fl > 0 && Number.isFinite(fWork) && fWork > 0) {
+                focalLengthMm = Math.abs(fl);
+                pupilDiameterMm = focalLengthMm / fWork;
+            }
+        } catch (_) {}
+
+        if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0)) {
+            try {
+                const si = Number(findStopSurfaceIndex(opticalSystemRows || []));
+                const stopRow: any = (Number.isFinite(si) && si >= 0) ? (opticalSystemRows as any[])?.[si] : null;
+                const sdRaw = stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.['Semi Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? NaN;
+                const sd = Math.abs(parseFloat(sdRaw));
+                if (Number.isFinite(sd) && sd > 0) {
+                    const isApertureField = !!(stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined));
+                    const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
+                    if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
+                        pupilDiameterMm = stopRadiusMm * 2;
+                    }
+                }
+            } catch (_) {}
+        }
+
+        if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
+            try {
+                const fl = Number(calculateFocalLength(opticalSystemRows || [], wl));
+                if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) {
+                    focalLengthMm = Math.abs(fl);
+                }
+            } catch (_) {}
+        }
+
+        if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0) || !(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
+            const derived = derivePupilAndFocalLengthMmForAiry(opticalSystemRows || [], wl);
+            if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0)) pupilDiameterMm = Number(derived?.pupilDiameterMm);
+            if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) focalLengthMm = Number(derived?.focalLengthMm);
+        }
+
+        if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
+            focalLengthMm = 100.0;
+        }
+        if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0)) {
+            pupilDiameterMm = 10.0;
+        }
+
+        const basePixelPitchUm = (wl * Math.abs(Number(focalLengthMm))) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
+        return basePixelPitchUm * (samplingSize / requestedFftSize);
+    };
+
+    const series: any[] = [];
+    const totalPoints = Math.max(1, wavelengths.length * xAxis.length);
+    let completedPoints = 0;
+    reportProgress(5, `Computing Object MTF: ${wavelengths.length} wavelength(s), ${xAxis.length} field points`);
+    for (const wl of wavelengths) {
+        const meridionalFirst: number[] = [];
+        const sagittalFirst: number[] = [];
+        const meridionalSecond: number[] = [];
+        const sagittalSecond: number[] = [];
+        const fieldDiagnostics: any[] = [];
+        const pixelSizeUm = computePixelSizeUm(wl);
+
+        for (let fieldIndex = 0; fieldIndex < xAxis.length; fieldIndex++) {
+            const fieldValue = xAxis[fieldIndex];
+            const overallIndex = completedPoints + 1;
+            const nm = (wl * 1000).toFixed(1);
+            const unit = axisMode === 'height' ? 'mm' : 'deg';
+            const pct = 5 + (overallIndex / totalPoints) * 90;
+            reportProgress(
+                Math.max(5, Math.min(95, pct)),
+                `Computing Object MTF: λ=${nm}nm, point ${fieldIndex + 1}/${xAxis.length} (${Number(fieldValue).toFixed(3)} ${unit})`
+            );
+
+            const stepObjectRows = cloneObjectRowsForField(fieldValue);
+            const autoMode = axisMode === 'angle' ? 'entrance' : undefined;
+            const pupilSamplingMode = requestedPupilSamplingMode || autoMode;
+
+            const opdResp = await runNativeOpdMap({
+                opticalSystemRows,
+                sourceRows,
+                objectRows: stepObjectRows,
+                objectIndex,
+                surfaceIndex: undefined,
+                gridSize: samplingSize,
+                wavelengthUm: wl,
+                pupilSamplingMode,
+                opdDisplayMode,
+            });
+
+            const s = samplingSize;
+            const gridOpd = Array.from({ length: s }, () => Array.from({ length: s }, () => 0));
+            const pupilMask = Array.from({ length: s }, () => Array.from({ length: s }, () => false));
+            const displayOpdGrid = Array.isArray((opdResp as any)?.displayOpdGrid) ? (opdResp as any).displayOpdGrid : [];
+            const rawOpdGrid = Array.isArray((opdResp as any)?.rawOpdGrid) ? (opdResp as any).rawOpdGrid : [];
+            for (let iy = 0; iy < s; iy++) {
+                const rowDisplay = displayOpdGrid[iy] || [];
+                const rowRaw = rawOpdGrid[iy] || [];
+                for (let ix = 0; ix < s; ix++) {
+                    const rawCell = rowRaw[ix];
+                    if (rawCell === null || rawCell === undefined || rawCell === '') continue;
+                    const vRawWaves = Number(rawCell);
+                    if (!Number.isFinite(vRawWaves)) continue;
+                    const displayCell = rowDisplay[ix];
+                    const vDisplayWaves = (displayCell === null || displayCell === undefined || displayCell === '') ? NaN : Number(displayCell);
+                    const vWaves = Number.isFinite(vDisplayWaves) ? vDisplayWaves : vRawWaves;
+                    gridOpd[iy][ix] = vWaves * wl;
+                    pupilMask[iy][ix] = true;
+                }
+            }
+
+            const psfResp = await runNativePsfMap({
+                gridOpd,
+                pupilMask,
+                wavelengthUm: wl,
+                pixelSizeUm,
+                removeTilt: false,
+                zeroPadTo: requestedFftSize,
+                recenterIfWrapped: false,
+            });
+
+            const mtfResp = await runNativeMtfMap({
+                psfData: (psfResp as any)?.psfData,
+                pixelSizeUm,
+                maxFrequencyLpmm: Math.max(1, Math.max(firstFrequencyLpmm, secondFrequencyLpmm) * 2),
+                points: 121,
+            });
+
+            const freqAxis = Array.isArray((mtfResp as any)?.frequencyAxis) ? (mtfResp as any).frequencyAxis : [];
+            const mtfTangential = Array.isArray((mtfResp as any)?.mtfTangential) ? (mtfResp as any).mtfTangential : [];
+            const mtfSagittal = Array.isArray((mtfResp as any)?.mtfSagittal) ? (mtfResp as any).mtfSagittal : [];
+            const tanAxis = inferTanAxis(fieldValue);
+            const tanVals = tanAxis === 'x' ? mtfSagittal : mtfTangential;
+            const sagVals = tanAxis === 'x' ? mtfTangential : mtfSagittal;
+
+            const firstM = interpolateAxis(freqAxis, tanVals, firstFrequencyLpmm);
+            const firstS = interpolateAxis(freqAxis, sagVals, firstFrequencyLpmm);
+            const secondM = interpolateAxis(freqAxis, tanVals, secondFrequencyLpmm);
+            const secondS = interpolateAxis(freqAxis, sagVals, secondFrequencyLpmm);
+
+            meridionalFirst.push(firstM);
+            sagittalFirst.push(firstS);
+            meridionalSecond.push(secondM);
+            sagittalSecond.push(secondS);
+
+            const [firstLo, firstHi] = findBracket(freqAxis, firstFrequencyLpmm);
+            const [secondLo, secondHi] = findBracket(freqAxis, secondFrequencyLpmm);
+            const sampleCount = Number((opdResp as any)?.sampleCount || 0);
+            const hitCount = Number((opdResp as any)?.hitCount || 0);
+            fieldDiagnostics.push({
+                fieldValue,
+                effectivePupilSamplingMode: String((opdResp as any)?.pupilSamplingMode || ''),
+                usedObjectPosition: String((opdResp as any)?.usedObjectPosition || ''),
+                targetSurfaceIndex: Number((opdResp as any)?.targetSurface),
+                usedObjectIndex: Number((opdResp as any)?.usedObjectIndex),
+                opdSampleCount: sampleCount,
+                opdHitCount: hitCount,
+                opdHitRate: sampleCount > 0 ? (hitCount / sampleCount) : 0,
+                firstFrequencyLpmm,
+                firstBracketLowLpmm: firstLo,
+                firstBracketHighLpmm: firstHi,
+                firstValueMeridional: firstM,
+                firstValueSagittal: firstS,
+                secondFrequencyLpmm,
+                secondBracketLowLpmm: secondLo,
+                secondBracketHighLpmm: secondHi,
+                secondValueMeridional: secondM,
+                secondValueSagittal: secondS,
+            });
+
+            completedPoints += 1;
+        }
+
+        series.push({
+            wavelengthUm: wl,
+            label: `${(wl * 1000).toFixed(1)}nm`,
+            meridionalFirst,
+            sagittalFirst,
+            meridionalSecond,
+            sagittalSecond,
+            fieldDiagnostics,
+        });
+    }
+
+    return {
+        backend: 'desktop-native-field-mtf-via-analysis-mtf',
+        xAxis,
+        axisMode,
+        series,
+        message: 'Native Object MTF computed via background analysis MTF sampling',
+    };
+}
+
+w.runDesktopNativeFieldMtfForPopup = runDesktopNativeFieldMtfForPopup;
+
+async function runDesktopNativeFieldMtfDiagnosticsForPopup(payload: {
+    objectIndex?: number;
+    pupilSamplingMode?: 'stop' | 'entrance';
     wavelengths?: number[];
     firstFrequencyLpmm?: number;
     secondFrequencyLpmm?: number;
@@ -475,69 +1082,97 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
     opdDisplayMode?: string;
     fieldAxisMode?: 'angle' | 'height';
 }) {
-    if (!isTauriRuntime()) {
-        throw new Error('Desktop runtime is not available');
+    const response = await runDesktopNativeFieldMtfForPopup(payload || {});
+    const series = Array.isArray((response as any)?.series) ? (response as any).series : [];
+    const diagnostics = Array.isArray(series?.[0]?.fieldDiagnostics) ? series[0].fieldDiagnostics : [];
+
+    const discontinuities: any[] = [];
+    let modeSwitchAcrossAll = 0;
+    let positionSwitchAcrossAll = 0;
+    let surfaceSwitchAcrossAll = 0;
+    for (let i = 1; i < diagnostics.length; i++) {
+        const a: any = diagnostics[i - 1] || {};
+        const b: any = diagnostics[i] || {};
+        if (String(a.effectivePupilSamplingMode || '') !== String(b.effectivePupilSamplingMode || '')) modeSwitchAcrossAll += 1;
+        if (String(a.usedObjectPosition || '') !== String(b.usedObjectPosition || '')) positionSwitchAcrossAll += 1;
+        if (Number(a.targetSurfaceIndex) !== Number(b.targetSurfaceIndex)) surfaceSwitchAcrossAll += 1;
+        const dM1 = Math.abs(Number(b.firstValueMeridional) - Number(a.firstValueMeridional));
+        const dS1 = Math.abs(Number(b.firstValueSagittal) - Number(a.firstValueSagittal));
+        const dM2 = Math.abs(Number(b.secondValueMeridional) - Number(a.secondValueMeridional));
+        const dS2 = Math.abs(Number(b.secondValueSagittal) - Number(a.secondValueSagittal));
+
+        if ([dM1, dS1, dM2, dS2].some((v) => Number.isFinite(v) && v > 0.12)) {
+            discontinuities.push({
+                fromField: Number(a.fieldValue),
+                toField: Number(b.fieldValue),
+                deltaFirstMeridional: dM1,
+                deltaFirstSagittal: dS1,
+                deltaSecondMeridional: dM2,
+                deltaSecondSagittal: dS2,
+                opdHitRateFrom: Number(a.opdHitRate),
+                opdHitRateTo: Number(b.opdHitRate),
+                opdHitRateDelta: Math.abs(Number(b.opdHitRate) - Number(a.opdHitRate)),
+                modeFrom: String(a.effectivePupilSamplingMode || ''),
+                modeTo: String(b.effectivePupilSamplingMode || ''),
+                usedObjectPositionFrom: String(a.usedObjectPosition || ''),
+                firstBracketTo: [Number(b.firstBracketLowLpmm), Number(b.firstBracketHighLpmm)],
+                secondBracketTo: [Number(b.secondBracketLowLpmm), Number(b.secondBracketHighLpmm)],
+                usedObjectPositionTo: String(b.usedObjectPosition || ''),
+                targetSurfaceFrom: Number(a.targetSurfaceIndex),
+                targetSurfaceTo: Number(b.targetSurfaceIndex),
+                usedObjectIndexFrom: Number(a.usedObjectIndex),
+                usedObjectIndexTo: Number(b.usedObjectIndex),
+            });
+        }
     }
 
-    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
-    const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 256;
-    const zeroPadTo = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
-    const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0;
+    let modeSwitchOnDiscontinuity = 0;
+    let positionSwitchOnDiscontinuity = 0;
+    let surfaceSwitchOnDiscontinuity = 0;
+    let hitRateJumpOnDiscontinuity = 0;
+    for (const d of discontinuities) {
+        if (String(d.modeFrom || '') !== String(d.modeTo || '')) modeSwitchOnDiscontinuity += 1;
+        if (String(d.usedObjectPositionFrom || '') !== String(d.usedObjectPositionTo || '')) positionSwitchOnDiscontinuity += 1;
+        if (Number(d.targetSurfaceFrom) !== Number(d.targetSurfaceTo)) surfaceSwitchOnDiscontinuity += 1;
+        if (Number.isFinite(Number(d.opdHitRateDelta)) && Number(d.opdHitRateDelta) > 0.03) hitRateJumpOnDiscontinuity += 1;
+    }
 
-    const isPowerOfTwo = (n: number) => Number.isInteger(n) && n > 0 && (n & (n - 1)) === 0;
-    const nextPowerOfTwo = (n: number) => {
-        let p = 1;
-        const target = Math.max(1, Math.floor(Number(n) || 1));
-        while (p < target && p < 4096) p <<= 1;
-        return p;
+    const report = {
+        conditions: {
+            objectIndex: Number.isFinite(Number(payload?.objectIndex)) ? Number(payload?.objectIndex) : 0,
+            firstFrequencyLpmm: Number.isFinite(Number(payload?.firstFrequencyLpmm)) ? Number(payload?.firstFrequencyLpmm) : 10,
+            secondFrequencyLpmm: Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload?.secondFrequencyLpmm) : 30,
+            fieldMin: Number.isFinite(Number(payload?.fieldMin)) ? Number(payload?.fieldMin) : 0,
+            fieldMax: Number.isFinite(Number(payload?.fieldMax)) ? Number(payload?.fieldMax) : 10,
+            steps: Number.isFinite(Number(payload?.steps)) ? Number(payload?.steps) : 21,
+            samplingSize: Number.isFinite(Number(payload?.samplingSize)) ? Number(payload?.samplingSize) : 256,
+            zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Number(payload?.zeroPadTo) : 0,
+            opdDisplayMode: String(payload?.opdDisplayMode || 'pistonTiltRemoved'),
+            fieldAxisMode: payload?.fieldAxisMode === 'height' ? 'height' : 'angle',
+            pupilSamplingMode: payload?.pupilSamplingMode,
+        },
+        diagnosticsCount: diagnostics.length,
+        summary: {
+            discontinuityCount: discontinuities.length,
+            modeSwitchAcrossAll,
+            positionSwitchAcrossAll,
+            surfaceSwitchAcrossAll,
+            modeSwitchOnDiscontinuity,
+            positionSwitchOnDiscontinuity,
+            surfaceSwitchOnDiscontinuity,
+            hitRateJumpOnDiscontinuity,
+        },
+        discontinuities,
+        diagnostics,
     };
 
-    let wavelengthForScale = Number.NaN;
-    if (Array.isArray(payload?.wavelengths) && payload.wavelengths.length > 0) {
-        const w0 = Number(payload.wavelengths[0]);
-        if (Number.isFinite(w0) && w0 > 0) wavelengthForScale = w0;
-    }
-    if (!Number.isFinite(wavelengthForScale) || wavelengthForScale <= 0) {
-        wavelengthForScale = getPrimaryWavelengthMicronsFromSourceRows(sourceRows || []);
-    }
-    if (!Number.isFinite(wavelengthForScale) || wavelengthForScale <= 0) {
-        wavelengthForScale = 0.5876;
-    }
-
-    const { pupilDiameterMm, focalLengthMm } = derivePupilAndFocalLengthMmForAiry(opticalSystemRows || [], wavelengthForScale);
-    const desiredPlotPointCount = 121;
-    const hasExplicitZeroPad = Number.isFinite(zeroPadTo) && zeroPadTo >= samplingSize && isPowerOfTwo(zeroPadTo);
-    const minRequiredNForBins = Math.max(samplingSize, 2 * (desiredPlotPointCount - 1));
-    const adaptiveZeroPadTo = nextPowerOfTwo(minRequiredNForBins);
-    let requestedFftSize = hasExplicitZeroPad ? zeroPadTo : adaptiveZeroPadTo;
-    if (hasExplicitZeroPad && requestedFftSize === samplingSize && samplingSize <= 32) {
-        requestedFftSize = 64;
-    }
-    const basePixelPitchUm = (wavelengthForScale * Math.abs(Number(focalLengthMm))) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
-    const pixelSizeUm = basePixelPitchUm * (samplingSize / requestedFftSize);
-
-    return runNativeFieldMtfMap({
-        opticalSystemRows,
-        sourceRows,
-        objectRows,
-        objectIndex,
-        wavelengths: Array.isArray(payload?.wavelengths)
-            ? payload.wavelengths.filter((w) => Number.isFinite(Number(w)) && Number(w) > 0).map((w) => Number(w))
-            : [],
-        firstFrequencyLpmm: Number.isFinite(Number(payload?.firstFrequencyLpmm)) ? Number(payload.firstFrequencyLpmm) : 10,
-        secondFrequencyLpmm: Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload.secondFrequencyLpmm) : 30,
-        fieldMin: Number.isFinite(Number(payload?.fieldMin)) ? Number(payload.fieldMin) : 0,
-        fieldMax: Number.isFinite(Number(payload?.fieldMax)) ? Number(payload.fieldMax) : 10,
-        steps: Number.isFinite(Number(payload?.steps)) ? Math.floor(Number(payload.steps)) : 21,
-        samplingSize,
-        zeroPadTo: requestedFftSize,
-        pixelSizeUm,
-        opdDisplayMode: String(payload?.opdDisplayMode || 'pistonTiltRemoved'),
-        fieldAxisMode: payload?.fieldAxisMode === 'height' ? 'height' : 'angle',
-    });
+    try {
+        console.log('📊 [Object MTF native diagnostics await]', report);
+    } catch (_) {}
+    return report;
 }
 
-w.runDesktopNativeFieldMtfForPopup = runDesktopNativeFieldMtfForPopup;
+w.runDesktopNativeFieldMtfDiagnosticsForPopup = runDesktopNativeFieldMtfDiagnosticsForPopup;
 
 function buildPopupFieldSettingFromObjectRows(objectRows: any[], objectIndex: number, wavelengthUm: number): any {
     const rows = Array.isArray(objectRows) ? objectRows : [];
@@ -6265,9 +6900,6 @@ export function setupAnalysisWindows() {
         <div id="popup-spherical-progress-text" style="margin-bottom: 6px;">Calculating spherical aberration...</div>
         <progress id="popup-spherical-progressbar" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
     </div>
-    <div class="note">
-        Note: X-axis is longitudinal aberration (mm), Y-axis is normalized pupil coordinate.
-    </div>
     <div class="content">
         <div id="popup-longitudinal-aberration-container"></div>
     </div>
@@ -6608,7 +7240,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Distortion</title>
+    <title>Analysis</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -6660,7 +7292,6 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Distortion</div>
     <div class="controls">
         <button id="popup-show-distortion-btn" type="button">Show distortion diagram</button>
     </div>
@@ -6768,7 +7399,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Distortion Grid</title>
+    <title>Analysis</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -6818,7 +7449,6 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Distortion Grid</div>
     <div class="controls">
         <label for="popup-distortion-grid-size">Grid Size:</label>
         <select id="popup-distortion-grid-size">
@@ -6967,7 +7597,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Lateral Chromatic Aberration</title>
+    <title>Analysis</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -7028,7 +7658,6 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Lateral Chromatic Aberration</div>
     <div class="controls">
         <label for="popup-mca-xmin">Lateral displacement:</label>
         <input type="number" id="popup-mca-xmin" value="-0.05" step="0.01" />
@@ -7049,7 +7678,6 @@ export function setupAnalysisWindows() {
         <div id="popup-mca-progress-text" style="margin-bottom: 6px;">Calculating lateral chromatic aberration...</div>
         <progress id="popup-mca-progressbar" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
     </div>
-    <div class="note">Note: Lateral displacement is plotted relative to d-line at each object value.</div>
     <div class="content">
         <div id="popup-mca-container"></div>
     </div>
@@ -9576,59 +10204,34 @@ export function setupAnalysisWindows() {
                     } catch (_) {}
 
                     try {
-                        let derivedPupil = NaN;
-                        let derivedFocal = NaN;
-                        const si = Number((window.opener && typeof window.opener.findStopSurfaceIndex === 'function')
-                            ? window.opener.findStopSurfaceIndex(opticalSystemRows)
-                            : findStopSurfaceIndex(opticalSystemRows));
-                        const stopRow = (Number.isFinite(si) && si >= 0) ? opticalSystemRows?.[si] : null;
-                        const sdRaw = stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.['Semi Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? NaN;
-                        const sd = Math.abs(parseFloat(sdRaw));
-                        if (Number.isFinite(sd) && sd > 0) {
-                            const isApertureField = !!(stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined));
-                            const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
-                            if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
-                                derivedPupil = stopRadiusMm * 2;
-                            }
-                        }
+                        const diffParams = calculateImageSpaceDiffractionParams(opticalSystemRows, wavelength);
+                        const fWork = Number(diffParams?.fNumberWorking);
+                        const derivedFocal = Number(diffParams?.focalLengthMm);
 
-                        if (!(Number.isFinite(derivedPupil) && derivedPupil > 0)) {
-                            const paraxial = (window.opener && typeof window.opener.calculateParaxialData === 'function')
-                                ? window.opener.calculateParaxialData(opticalSystemRows, wavelength)
-                                : null;
-                            const enpd = Number(paraxial?.entrancePupilDiameter);
-                            const expd = Number(paraxial?.exitPupilDiameter);
-                            if (Number.isFinite(enpd) && enpd > 0) {
-                                derivedPupil = Math.abs(enpd);
-                            } else if (Number.isFinite(expd) && expd > 0) {
-                                derivedPupil = Math.abs(expd);
-                            }
-                        }
-
-                        const fl = Number((window.opener && typeof window.opener.calculateFocalLength === 'function')
-                            ? window.opener.calculateFocalLength(opticalSystemRows, wavelength)
-                            : calculateFocalLength(opticalSystemRows, wavelength));
-                        if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) {
-                            derivedFocal = Math.abs(fl);
-                        }
-
-                        if (!(Number.isFinite(derivedFocal) && derivedFocal > 0)) {
-                            const paraxial = (window.opener && typeof window.opener.calculateParaxialData === 'function')
-                                ? window.opener.calculateParaxialData(opticalSystemRows, wavelength)
-                                : null;
-                            const flParaxial = Number(paraxial?.focalLength);
-                            if (Number.isFinite(flParaxial) && Math.abs(flParaxial) > 1e-9 && flParaxial !== Infinity) {
-                                derivedFocal = Math.abs(flParaxial);
-                            }
-                        }
-
-                        if (Number.isFinite(derivedPupil) && derivedPupil > 0) {
-                            pupilDiameterMm = Math.abs(derivedPupil);
-                        }
-                        if (Number.isFinite(derivedFocal) && derivedFocal > 0) {
+                        if (Number.isFinite(fWork) && fWork > 0 && Number.isFinite(derivedFocal) && derivedFocal > 0) {
                             focalLengthMm = Math.abs(derivedFocal);
+                            pupilDiameterMm = focalLengthMm / fWork;
                         }
                     } catch (_) {}
+
+                    // Fallback to stop diameter only when paraxial/image-space data is unavailable.
+                    if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0)) {
+                        try {
+                            const si = Number((window.opener && typeof window.opener.findStopSurfaceIndex === 'function')
+                                ? window.opener.findStopSurfaceIndex(opticalSystemRows)
+                                : findStopSurfaceIndex(opticalSystemRows));
+                            const stopRow = (Number.isFinite(si) && si >= 0) ? opticalSystemRows?.[si] : null;
+                            const sdRaw = stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.['Semi Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? NaN;
+                            const sd = Math.abs(parseFloat(sdRaw));
+                            if (Number.isFinite(sd) && sd > 0) {
+                                const isApertureField = !!(stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined));
+                                const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
+                                if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
+                                    pupilDiameterMm = stopRadiusMm * 2;
+                                }
+                            }
+                        } catch (_) {}
+                    }
 
                     if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
                         // Last-resort safeguard to keep FFT scaling defined even when paraxial FL is unavailable.
@@ -10135,7 +10738,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Modulation Transfer Function</title>
+    <title>Analysis</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -10210,7 +10813,6 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Modulation Transfer Function</div>
     <div class="controls">
         <label for="popup-mtf-wavelength-select">Wavelength:</label>
         <select id="popup-mtf-wavelength-select"></select>
@@ -10247,9 +10849,6 @@ export function setupAnalysisWindows() {
             Diffraction Limit
         </label>
         <button id="popup-show-mtf-btn" type="button">Show MTF</button>
-    </div>
-    <div class="note">
-        Note: MTF is computed from PSF via Fourier transform.
     </div>
     <div id="popup-mtf-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
         <div id="popup-mtf-progress-text" style="margin-bottom: 6px;">Calculating MTF...</div>
@@ -10554,36 +11153,45 @@ export function setupAnalysisWindows() {
                         let pupilDiameterMm = 10.0;
                         let focalLengthMm = Number.NaN;
                         try {
-                            const si = Number((typeof opener.findStopSurfaceIndex === 'function')
-                                ? opener.findStopSurfaceIndex(opticalRows)
-                                : -1);
-                            const stopRow = (Number.isFinite(si) && si >= 0) ? opticalRows?.[si] : null;
-                            const sdRaw = stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.['Semi Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? NaN;
-                            const sd = Math.abs(parseFloat(sdRaw));
-                            if (Number.isFinite(sd) && sd > 0) {
-                                const isApertureField = !!(stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined));
-                                const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
-                                if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
-                                    pupilDiameterMm = stopRadiusMm * 2;
-                                }
-                            }
-                            const fl = Number((typeof opener.calculateFocalLength === 'function')
-                                ? opener.calculateFocalLength(opticalRows, wl)
-                                : NaN);
-                            if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) {
+                            const diffParams = (typeof opener.calculateImageSpaceDiffractionParams === 'function')
+                                ? opener.calculateImageSpaceDiffractionParams(opticalRows, wl)
+                                : null;
+                            const fWork = Number(diffParams?.fNumberWorking);
+                            const fl = Number(diffParams?.focalLengthMm);
+                            if (Number.isFinite(fl) && fl > 0 && Number.isFinite(fWork) && fWork > 0) {
                                 focalLengthMm = Math.abs(fl);
-                            }
-
-                            if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
-                                const paraxial = (typeof opener.calculateParaxialData === 'function')
-                                    ? opener.calculateParaxialData(opticalRows, wl)
-                                    : null;
-                                const flParaxial = Number(paraxial?.focalLength);
-                                if (Number.isFinite(flParaxial) && Math.abs(flParaxial) > 1e-9 && flParaxial !== Infinity) {
-                                    focalLengthMm = Math.abs(flParaxial);
-                                }
+                                pupilDiameterMm = focalLengthMm / fWork;
                             }
                         } catch (_) {}
+
+                        if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0)) {
+                            try {
+                                const si = Number((typeof opener.findStopSurfaceIndex === 'function')
+                                    ? opener.findStopSurfaceIndex(opticalRows)
+                                    : -1);
+                                const stopRow = (Number.isFinite(si) && si >= 0) ? opticalRows?.[si] : null;
+                                const sdRaw = stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.['Semi Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? NaN;
+                                const sd = Math.abs(parseFloat(sdRaw));
+                                if (Number.isFinite(sd) && sd > 0) {
+                                    const isApertureField = !!(stopRow && (stopRow.aperture !== undefined || stopRow.Aperture !== undefined));
+                                    const stopRadiusMm = isApertureField ? (sd * 0.5) : sd;
+                                    if (Number.isFinite(stopRadiusMm) && stopRadiusMm > 0) {
+                                        pupilDiameterMm = stopRadiusMm * 2;
+                                    }
+                                }
+                            } catch (_) {}
+                        }
+
+                        if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
+                            try {
+                                const fl = Number((typeof opener.calculateFocalLength === 'function')
+                                    ? opener.calculateFocalLength(opticalRows, wl)
+                                    : NaN);
+                                if (Number.isFinite(fl) && Math.abs(fl) > 1e-9 && fl !== Infinity) {
+                                    focalLengthMm = Math.abs(fl);
+                                }
+                            } catch (_) {}
+                        }
 
                         if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
                             // Last-resort safeguard to keep FFT scaling defined even when paraxial FL is unavailable.
@@ -10614,7 +11222,8 @@ export function setupAnalysisWindows() {
                             psfData: nativePsfResp?.psfData,
                             pixelSizeUm,
                             maxFrequencyLpmm: Number.isFinite(maxFreq) ? maxFreq : undefined,
-                            points: Math.max(32, Math.min(512, Math.floor(requestedFftSize / 2))),
+                            // Keep parity with TFMTF native path which uses 121 plot points.
+                            points: 121,
                         });
 
                         const freq = Array.isArray(mtfResp?.frequencyAxis) ? mtfResp.frequencyAxis : [];
@@ -11359,7 +11968,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Through-Focus MTF</title>
+    <title>Analysis</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -11434,7 +12043,6 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Through-Focus MTF</div>
     <div class="controls">
         <label for="popup-through-focus-mtf-wavelength-select">Wavelength:</label>
         <select id="popup-through-focus-mtf-wavelength-select"></select>
@@ -11472,13 +12080,10 @@ export function setupAnalysisWindows() {
             <input id="popup-through-focus-mtf-remove-ptd-checkbox" type="checkbox" />
             Remove P/T/D
         </label>
-        <button id="popup-show-through-focus-mtf-btn" type="button">Show Through-Focus MTF</button>
-    </div>
-    <div class="note">
-        Note: X-axis is defocus shift (mm), Y-axis is MTF at the selected spatial frequency.
+        <button id="popup-show-through-focus-mtf-btn" type="button">Show Plot</button>
     </div>
     <div id="popup-through-focus-mtf-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
-        <div id="popup-through-focus-mtf-progress-text" style="margin-bottom: 6px;">Calculating Through-Focus MTF...</div>
+        <div id="popup-through-focus-mtf-progress-text" style="margin-bottom: 6px;">Calculating...</div>
         <progress id="popup-through-focus-mtf-progress" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
     </div>
     <div class="content">
@@ -11761,7 +12366,7 @@ export function setupAnalysisWindows() {
 
                 setProgress(85, 'Rendering Through-Focus MTF...');
                 await window.Plotly.newPlot(containerEl, traces, {
-                    title: 'Through-Focus MTF (' + String(Number.isFinite(targetFrequencyLpmm) ? targetFrequencyLpmm.toFixed(1) : 10) + ' lp/mm)',
+                    title: String(Number.isFinite(targetFrequencyLpmm) ? targetFrequencyLpmm.toFixed(1) : 10) + ' lp/mm',
                     xaxis: { title: 'Defocus shift (mm)' },
                     yaxis: { title: 'MTF', range: [0, 1.05] },
                     margin: { l: 60, r: 20, t: 50, b: 50 },
@@ -11813,7 +12418,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Object MTF</title>
+    <title>Analysis</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -11888,7 +12493,6 @@ export function setupAnalysisWindows() {
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 </head>
 <body>
-    <div class="header">Object MTF</div>
     <div class="controls">
         <label for="popup-field-mtf-wavelength-select">Wavelength:</label>
         <select id="popup-field-mtf-wavelength-select"></select>
@@ -11926,13 +12530,10 @@ export function setupAnalysisWindows() {
             <input id="popup-field-mtf-remove-ptd-checkbox" type="checkbox" />
             Remove P/T/D
         </label>
-        <button id="popup-show-field-mtf-btn" type="button">Show Object MTF</button>
-    </div>
-    <div class="note">
-        Note: X-axis is object angle/height (auto-detected from Object table). Y-axis is MTF at the specified 1st/2nd spatial frequencies (both M and S calculated at each).
+        <button id="popup-show-field-mtf-btn" type="button">Show Plot</button>
     </div>
     <div id="popup-field-mtf-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
-        <div id="popup-field-mtf-progress-text" style="margin-bottom: 6px;">Calculating Object MTF...</div>
+        <div id="popup-field-mtf-progress-text" style="margin-bottom: 6px;">Calculating...</div>
         <progress id="popup-field-mtf-progress" style="display:block;width:calc(100% + 24px);margin-left:-12px;" max="100"></progress>
     </div>
     <div class="content">
@@ -12198,6 +12799,15 @@ export function setupAnalysisWindows() {
                     zeroPadTo,
                     opdDisplayMode,
                     fieldAxisMode: axisInfo.mode,
+                    onProgress: (evt) => {
+                        const p = Number(evt && evt.percent);
+                        const msg = String((evt && evt.message) || 'Computing Object MTF...');
+                        if (Number.isFinite(p)) {
+                            setProgress(p, msg);
+                        } else {
+                            setProgress(20, msg);
+                        }
+                    },
                 });
 
                 if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
@@ -12208,6 +12818,35 @@ export function setupAnalysisWindows() {
                 if (!xAxis.length || !series.length) {
                     throw new Error('Native Object MTF did not produce valid data');
                 }
+
+                try {
+                    const diag = Array.isArray(series?.[0]?.fieldDiagnostics) ? series[0].fieldDiagnostics : [];
+                    if (diag.length) {
+                        popupLog('📊 [Object MTF diag] field diagnostics count=', diag.length);
+                        const jumps = [];
+                        for (let i = 1; i < diag.length; i++) {
+                            const a = diag[i - 1];
+                            const b = diag[i];
+                            const d1 = Math.abs(Number(b?.firstValueMeridional) - Number(a?.firstValueMeridional));
+                            const d2 = Math.abs(Number(b?.secondValueMeridional) - Number(a?.secondValueMeridional));
+                            if ((Number.isFinite(d1) && d1 > 0.12) || (Number.isFinite(d2) && d2 > 0.12)) {
+                                jumps.push({
+                                    fromField: Number(a?.fieldValue),
+                                    toField: Number(b?.fieldValue),
+                                    deltaFirstMeridional: d1,
+                                    deltaSecondMeridional: d2,
+                                    modeFrom: String(a?.effectivePupilSamplingMode || ''),
+                                    modeTo: String(b?.effectivePupilSamplingMode || ''),
+                                    firstBracketTo: [Number(b?.firstBracketLowLpmm), Number(b?.firstBracketHighLpmm)],
+                                    secondBracketTo: [Number(b?.secondBracketLowLpmm), Number(b?.secondBracketHighLpmm)],
+                                });
+                            }
+                        }
+                        if (jumps.length) {
+                            popupLog('⚠️ [Object MTF diag] potential discontinuities:', jumps.slice(0, 20));
+                        }
+                    }
+                } catch (_) {}
 
                 const getColorForWavelengthPopup = (wl) => {
                     try {
@@ -12269,7 +12908,7 @@ export function setupAnalysisWindows() {
 
                 setProgress(85, 'Rendering Object MTF...');
                 await window.Plotly.newPlot(containerEl, traces, {
-                    title: 'Object MTF (' + firstFreqText + ' / ' + secondFreqText + ' lp/mm)',
+                    title: firstFreqText + ' / ' + secondFreqText + ' lp/mm',
                     xaxis: { title: axisInfo.label },
                     yaxis: { title: 'MTF', range: [0, 1.05] },
                     margin: { l: 60, r: 20, t: 50, b: 50 },

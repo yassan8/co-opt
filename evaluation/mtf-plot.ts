@@ -1,6 +1,9 @@
 // Import data utility functions
 import { getOpticalSystemRows, getObjectRows, getSourceRows } from '../utils/data-utils.ts';
+import { calculateImageSpaceDiffractionParams } from '../raytracing/core/ray-paraxial.ts';
 import { ensureMtfWasmReady, setRayTracingWasmStrict, isRayTracingWasmStrict } from '../core/wasm-service.ts';
+import { isTauriRuntime } from '../src/desktop/runtime.ts';
+import { runNativeMtfMap } from '../src/desktop/ipc/client.ts';
 import { TFMTFWorkerPool, getGlobalTFMTFWorkerPool } from './tfmtf-worker-pool.ts';
 import { extractPSFGridFromCalculatorResult, validatePSFGrid, extractPSFMetadata } from './psf-serialization.ts';
 
@@ -285,6 +288,38 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                 g.__COOPT_FORCE_INFINITE_PUPIL_MODE = prev;
             }
         }
+    };
+
+    const sanitizePupilMode = (value: any): 'stop' | 'entrance' | '' => {
+        const s = (typeof value === 'string') ? value.trim().toLowerCase() : '';
+        return (s === 'stop' || s === 'entrance') ? s : '';
+    };
+
+    const getForcedInfinitePupilMode = (): 'stop' | 'entrance' | '' => {
+        try {
+            const fromGlobal = sanitizePupilMode(g?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? g?.COOPT_FORCE_INFINITE_PUPIL_MODE);
+            if (fromGlobal) return fromGlobal;
+        } catch (_) {}
+        try {
+            return sanitizePupilMode(localStorage.getItem('coopt.forceInfinitePupilMode'));
+        } catch (_) {
+            return '';
+        }
+    };
+
+    const resolveRequestedPupilSamplingMode = (customFieldSetting: any): { mode: 'stop' | 'entrance' | undefined; forced: boolean } => {
+        const forcedMode = getForcedInfinitePupilMode();
+        if (forcedMode === 'stop' || forcedMode === 'entrance') {
+            return { mode: forcedMode, forced: true };
+        }
+
+        const typeLower = String(customFieldSetting?.type || '').trim().toLowerCase();
+        const fx = Number(customFieldSetting?.fieldAngle?.x ?? 0);
+        const fy = Number(customFieldSetting?.fieldAngle?.y ?? 0);
+        const isNonZeroAngleField = Math.abs(fx) > 1e-12 || Math.abs(fy) > 1e-12;
+        // Auto: use entrance only for non-zero angle fields; otherwise defer to analyzer default.
+        const autoMode = (typeLower === 'angle' && isNonZeroAngleField) ? 'entrance' : undefined;
+        return { mode: autoMode, forced: false };
     };
 
     try {
@@ -603,24 +638,37 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         let wavefrontMap = null;
         const errors = [];
 
-        // 1) 🔧 Prefer entrance mode (more robust for infinite systems)
-        const entranceAttempt = await runWavefrontAttempt('entrance', fieldSetting, true);
-        if (entranceAttempt.map) {
-            wavefrontMap = entranceAttempt.map;
-            console.log(`✅ [TFMTF Pupil] Entrance mode succeeded`);
+        // 1) Primary mode from Settings (Force stop/entrance or Auto)
+        const requested = resolveRequestedPupilSamplingMode(fieldSetting);
+        const primaryMode = requested.mode;
+        const primaryLabel = primaryMode || 'auto';
+        const primaryAttempt = await runWavefrontAttempt(primaryMode, fieldSetting, true);
+        if (primaryAttempt.map) {
+            wavefrontMap = primaryAttempt.map;
+            console.log(`✅ [TFMTF Pupil] Primary mode succeeded: ${primaryLabel}${requested.forced ? ' (forced)' : ''}`);
         } else {
-            errors.push(`entrance=${entranceAttempt.error}`);
-            console.warn(`⚠️ [TFMTF Pupil] Entrance mode failed: ${entranceAttempt.error}`);
+            errors.push(`${primaryLabel}=${primaryAttempt.error}`);
+            console.warn(`⚠️ [TFMTF Pupil] Primary mode failed: ${primaryLabel} (${primaryAttempt.error})`);
         }
 
-        // 2) 🔧 Retry stop mode if entrance fails (stable scaling for some systems)
-        if (!wavefrontMap && shouldRetryWithStop(entranceAttempt.error)) {
-            reportProgress(localBase + localSpan * 0.10, `λ=${titleNmLocal} nm: Retrying with stop mode...`);
-            const stopAttempt = await runWavefrontAttempt('stop', fieldSetting, true);
-            if (stopAttempt.map) {
-                wavefrontMap = stopAttempt.map;
-            } else {
-                errors.push(`stop=${stopAttempt.error}`);
+        // 2) Fallback mode only when not forced
+        if (!wavefrontMap && !requested.forced) {
+            const fallbackModes: Array<'entrance' | 'stop'> = [];
+            if (primaryMode === 'entrance') fallbackModes.push('stop');
+            else if (primaryMode === 'stop') fallbackModes.push('entrance');
+            else fallbackModes.push('entrance', 'stop');
+
+            for (const fallbackMode of fallbackModes) {
+                if (!shouldRetryWithStop(primaryAttempt.error) && primaryMode === 'entrance' && fallbackMode === 'stop') {
+                    continue;
+                }
+                reportProgress(localBase + localSpan * 0.10, `λ=${titleNmLocal} nm: Retrying with ${fallbackMode} mode...`);
+                const fallbackAttempt = await runWavefrontAttempt(fallbackMode, fieldSetting, true);
+                if (fallbackAttempt.map) {
+                    wavefrontMap = fallbackAttempt.map;
+                    break;
+                }
+                errors.push(`${fallbackMode}=${fallbackAttempt.error}`);
             }
         }
 
@@ -641,17 +689,29 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
                     forceFinite: true
                 };
 
-                // 🔧 Entrance優先でfinite-fieldも試行
-                const finiteEntranceAttempt = await runWavefrontAttempt('entrance', finiteFieldSetting, true);
-                if (finiteEntranceAttempt.map) {
-                    wavefrontMap = finiteEntranceAttempt.map;
+                const finiteRequested = resolveRequestedPupilSamplingMode(finiteFieldSetting);
+                const finitePrimary = finiteRequested.mode;
+                const finitePrimaryLabel = finitePrimary || 'auto';
+
+                const finitePrimaryAttempt = await runWavefrontAttempt(finitePrimary, finiteFieldSetting, true);
+                if (finitePrimaryAttempt.map) {
+                    wavefrontMap = finitePrimaryAttempt.map;
                 } else {
-                    errors.push(`finite-entrance=${finiteEntranceAttempt.error}`);
-                    const finiteStopAttempt = await runWavefrontAttempt('stop', finiteFieldSetting, true);
-                    if (finiteStopAttempt.map) {
-                        wavefrontMap = finiteStopAttempt.map;
-                    } else {
-                        errors.push(`finite-stop=${finiteStopAttempt.error}`);
+                    errors.push(`finite-${finitePrimaryLabel}=${finitePrimaryAttempt.error}`);
+                    if (!finiteRequested.forced) {
+                        const finiteFallbackModes: Array<'entrance' | 'stop'> = [];
+                        if (finitePrimary === 'entrance') finiteFallbackModes.push('stop');
+                        else if (finitePrimary === 'stop') finiteFallbackModes.push('entrance');
+                        else finiteFallbackModes.push('entrance', 'stop');
+
+                        for (const fallbackMode of finiteFallbackModes) {
+                            const finiteFallbackAttempt = await runWavefrontAttempt(fallbackMode, finiteFieldSetting, true);
+                            if (finiteFallbackAttempt.map) {
+                                wavefrontMap = finiteFallbackAttempt.map;
+                                break;
+                            }
+                            errors.push(`finite-${fallbackMode}=${finiteFallbackAttempt.error}`);
+                        }
                     }
                 }
             }
@@ -664,17 +724,29 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             const looksStrictSamplingCollapse = /No valid OPD samples|trace to eval failed/i.test(joinedErrors);
             if (looksStrictSamplingCollapse) {
                 reportProgress(localBase + localSpan * 0.18, `λ=${titleNmLocal} nm: Retrying with compatibility ray tracing...`);
-                // 🔧 Entrance優先でcompatibility modeも試行
-                const compatEntrance = await runWavefrontAttempt('entrance', fieldSetting, false);
-                if (compatEntrance.map) {
-                    wavefrontMap = compatEntrance.map;
+                const compatRequested = resolveRequestedPupilSamplingMode(fieldSetting);
+                const compatPrimary = compatRequested.mode;
+                const compatPrimaryLabel = compatPrimary || 'auto';
+
+                const compatPrimaryAttempt = await runWavefrontAttempt(compatPrimary, fieldSetting, false);
+                if (compatPrimaryAttempt.map) {
+                    wavefrontMap = compatPrimaryAttempt.map;
                 } else {
-                    errors.push(`compat-entrance=${compatEntrance.error}`);
-                    const compatStop = await runWavefrontAttempt('stop', fieldSetting, false);
-                    if (compatStop.map) {
-                        wavefrontMap = compatStop.map;
-                    } else {
-                        errors.push(`compat-stop=${compatStop.error}`);
+                    errors.push(`compat-${compatPrimaryLabel}=${compatPrimaryAttempt.error}`);
+                    if (!compatRequested.forced) {
+                        const compatFallbackModes: Array<'entrance' | 'stop'> = [];
+                        if (compatPrimary === 'entrance') compatFallbackModes.push('stop');
+                        else if (compatPrimary === 'stop') compatFallbackModes.push('entrance');
+                        else compatFallbackModes.push('entrance', 'stop');
+
+                        for (const fallbackMode of compatFallbackModes) {
+                            const compatFallbackAttempt = await runWavefrontAttempt(fallbackMode, fieldSetting, false);
+                            if (compatFallbackAttempt.map) {
+                                wavefrontMap = compatFallbackAttempt.map;
+                                break;
+                            }
+                            errors.push(`compat-${fallbackMode}=${compatFallbackAttempt.error}`);
+                        }
                     }
                 }
             }
@@ -763,9 +835,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         const basePixelSizeMicronsForMTF = (pupilDiameterMm > 0)
             ? (wlLocal * focalLengthMm / pupilDiameterMm)
             : 1.0;
-        const fNumberForDiffraction = (pupilDiameterMm > 0)
-            ? (focalLengthMm / pupilDiameterMm)
-            : NaN;
+        const imageSpaceDiffraction = calculateImageSpaceDiffractionParams(opticalSystemRows, wlLocal);
+        const fNumberForDiffraction = Number(imageSpaceDiffraction?.fNumberWorking);
 
         const desiredBinCount = Math.max(2, resolvedPlotPointCount);
         // Keep MTF numerics independent of Max(lp/mm): Max should crop display range only.
@@ -850,7 +921,44 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         let tan: { freq: number[]; mtfVals: any[] } | null = null;
         let sag: { freq: number[]; mtfVals: any[] } | null = null;
 
-        if (typeof wasmMTFFn === 'function') {
+        if (!useLegacyBaselineMode && isTauriRuntime()) {
+            try {
+                const nativePoints = Math.max(2, Math.min(1024, resolvedPlotPointCount));
+                const nativeResp = await runNativeMtfMap({
+                    psfData: psf2D,
+                    pixelSizeUm: pixelSizeMicrons,
+                    maxFrequencyLpmm: requestedPlotLpmm,
+                    points: nativePoints,
+                } as any);
+
+                const freq = Array.isArray(nativeResp?.frequencyAxis) ? nativeResp.frequencyAxis : [];
+                const nativeTan = Array.isArray(nativeResp?.mtfTangential) ? nativeResp.mtfTangential : [];
+                const nativeSag = Array.isArray(nativeResp?.mtfSagittal) ? nativeResp.mtfSagittal : [];
+                if (freq.length > 1 && nativeTan.length === freq.length && nativeSag.length === freq.length) {
+                    // Rust path defines: x-axis=sagittal, y-axis=tangential.
+                    // Align to local tangential/sagittal axis selection used by analysis MTF.
+                    const tanVals = (tanAxis === 'x') ? nativeSag : nativeTan;
+                    const sagVals = (sagAxis === 'x') ? nativeSag : nativeTan;
+
+                    tan = {
+                        freq: Array.from(freq, (v: any) => Number(v)),
+                        mtfVals: Array.from(tanVals, (v: any) => Number.isFinite(Number(v)) ? Number(v) : null)
+                    };
+                    sag = {
+                        freq: Array.from(freq, (v: any) => Number(v)),
+                        mtfVals: Array.from(sagVals, (v: any) => Number.isFinite(Number(v)) ? Number(v) : null)
+                    };
+                    if (tan.mtfVals.length > 0) tan.mtfVals[0] = 1.0;
+                    if (sag.mtfVals.length > 0) sag.mtfVals[0] = 1.0;
+                }
+            } catch (nativeMtfErr) {
+                console.warn('⚠️ Native Rust MTF extraction failed; falling back to JS/WASM path.', nativeMtfErr);
+                tan = null;
+                sag = null;
+            }
+        }
+
+        if ((!tan || !sag) && typeof wasmMTFFn === 'function') {
             try {
                 const axes = wasmMTFFn.call(psfCalculator.wasmCalculator, psfFlat, N, kDataMax);
                 if (axes?.xAxis && axes?.yAxis) {
