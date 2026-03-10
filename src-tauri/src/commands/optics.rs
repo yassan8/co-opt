@@ -487,6 +487,7 @@ pub struct NativeThroughFocusMtfMapRequest {
     #[serde(default)]
     pub object_rows: Vec<Value>,
     pub object_index: Option<usize>,
+    pub pupil_sampling_mode: Option<String>,
     #[serde(default)]
     pub wavelengths: Vec<f64>,
     pub target_frequency_lpmm: Option<f64>,
@@ -527,6 +528,7 @@ pub struct NativeFieldMtfMapRequest {
     #[serde(default)]
     pub object_rows: Vec<Value>,
     pub object_index: Option<usize>,
+    pub pupil_sampling_mode: Option<String>,
     #[serde(default)]
     pub wavelengths: Vec<f64>,
     pub first_frequency_lpmm: Option<f64>,
@@ -550,6 +552,30 @@ pub struct NativeFieldMtfSeries {
     pub sagittal_first: Vec<f64>,
     pub meridional_second: Vec<f64>,
     pub sagittal_second: Vec<f64>,
+    pub field_diagnostics: Vec<NativeFieldMtfPointDiagnostic>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeFieldMtfPointDiagnostic {
+    pub field_value: f64,
+    pub effective_pupil_sampling_mode: String,
+    pub used_object_position: Option<String>,
+    pub target_surface_index: usize,
+    pub used_object_index: usize,
+    pub opd_sample_count: usize,
+    pub opd_hit_count: usize,
+    pub opd_hit_rate: f64,
+    pub first_frequency_lpmm: f64,
+    pub first_bracket_low_lpmm: Option<f64>,
+    pub first_bracket_high_lpmm: Option<f64>,
+    pub first_value_meridional: f64,
+    pub first_value_sagittal: f64,
+    pub second_frequency_lpmm: f64,
+    pub second_bracket_low_lpmm: Option<f64>,
+    pub second_bracket_high_lpmm: Option<f64>,
+    pub second_value_meridional: f64,
+    pub second_value_sagittal: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1438,32 +1464,10 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
         out
     };
 
-    if use_infinite_mode && (used_object_x.abs() > 1e-10 || used_object_y.abs() > 1e-10) {
-        let target_surface_origin = surface_data
-            .get(target_surface_index)
-            .map(|s| s.origin)
-            .unwrap_or(stop_surface.origin);
-        if let Some(refined) = search_high_field_origin_for_target_native(
-            infinite_emission_origin,
-            infinite_direction,
-            target_surface_index,
-            target_surface_origin,
-            &packed_target,
-            sampling_radius.max(0.5),
-        ) {
-            infinite_emission_origin = apply_symmetry_axis_lock(refined);
-        } else if let Some((bundle_refined, _)) = search_high_field_origin_by_bundle_native(
-            infinite_emission_origin,
-            infinite_direction,
-            infinite_u_axis,
-            infinite_v_axis,
-            target_surface_index,
-            &packed_target,
-            sampling_radius.max(0.5),
-        ) {
-            infinite_emission_origin = apply_symmetry_axis_lock(bundle_refined);
-        }
-    }
+    // Keep emission origin deterministic across adjacent fields.
+    // High-field local-search refinements can jump between minima and introduce
+    // Object MTF discontinuities even when mode/surface stays constant.
+    infinite_emission_origin = apply_symmetry_axis_lock(infinite_emission_origin);
     let mut effective_emission_origin = infinite_emission_origin;
 
     let mut effective_stop_center = stop_surface.origin;
@@ -1846,9 +1850,11 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
             stop_sampling_fallback_to_entrance = true;
         }
         effective_pupil_sampling_mode = "entrance";
-        // Mirror Web entrance-pupil best-effort behavior in high-field cases
-        // where strict stop-based chief ray cannot be formed.
-        effective_sampling_radius = entrance_radius.max(0.01);
+        // Use a smooth, deterministic scale vs field magnitude so adjacent
+        // field points do not flip effective ray coverage abruptly.
+        let field_mag = (used_object_x * used_object_x + used_object_y * used_object_y).sqrt();
+        let entrance_radius_scale = (0.92_f64 - 0.012_f64 * field_mag).clamp(0.76, 0.92);
+        effective_sampling_radius = (entrance_radius * entrance_radius_scale).max(0.01);
 
         if use_infinite_mode {
             effective_emission_origin = apply_symmetry_axis_lock(search_entrance_origin_grid_brent_native(
@@ -1892,99 +1898,13 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
             }
         }
         chief_reference_mode = if prefer_entrance_sampling {
-            "entrance-chief-requested(grid-brent)".to_string()
+            format!("entrance-chief-requested(grid-brent,r={:.3})", entrance_radius_scale)
         } else {
-            "entrance-chief-fallback(grid-brent)".to_string()
+            format!("entrance-chief-fallback(grid-brent,r={:.3})", entrance_radius_scale)
         };
 
-        // Web parity: in entrance best-effort mode, shrink the effective pupil
-        // radius when needed so reachable rays define the valid pupil.
-        if use_infinite_mode {
-            let base_radius = effective_sampling_radius.max(0.01);
-            let scales = [1.0_f64, 0.9, 0.8, 0.72, 0.64, 0.56, 0.5, 0.44, 0.4, 0.35, 0.32, 0.28, 0.25, 0.22, 0.2, 0.16, 0.125, 0.1, 0.08];
-            let probes = [
-                (0.0_f64, 0.0_f64),
-                (0.5, 0.0),
-                (-0.5, 0.0),
-                (0.0, 0.5),
-                (0.0, -0.5),
-                (0.7, 0.0),
-                (-0.7, 0.0),
-                (0.0, 0.7),
-                (0.0, -0.7),
-                (0.85, 0.0),
-                (-0.85, 0.0),
-                (0.0, 0.85),
-                (0.0, -0.85),
-                (0.95, 0.0),
-                (-0.95, 0.0),
-                (0.0, 0.95),
-                (0.0, -0.95),
-                (0.5, 0.5),
-                (-0.5, 0.5),
-                (0.5, -0.5),
-                (-0.5, -0.5),
-                (0.67, 0.67),
-                (-0.67, 0.67),
-                (0.67, -0.67),
-                (-0.67, -0.67),
-            ];
-
-            let mut best_scale = 1.0_f64;
-            let mut best_hits = 0usize;
-            let mut best_ratio = -1.0_f64;
-
-            for s in scales {
-                let r = base_radius * s;
-                let mut hits = 0usize;
-                for (pu, pv) in probes {
-                    let Some(ray) = build_marginal_ray(pu, pv, r, effective_emission_origin) else {
-                        continue;
-                    };
-                    let h = trace_single_ray_hit_point_with_meta_core(
-                        &ray,
-                        target_surface_index,
-                        object_space_n,
-                        &packed_target.row_meta,
-                        &packed_target.row_params,
-                        &packed_target.row_origins,
-                        &packed_target.row_inv_rots,
-                        &packed_target.row_rots,
-                        packed_target.row_count,
-                    );
-                    if (h[0] - 1.0).abs() <= f64::EPSILON {
-                        hits += 1;
-                    }
-                }
-
-                let ratio = (hits as f64) / (probes.len() as f64);
-                // Prefer higher hit ratio first, then larger scale to keep as much pupil as possible.
-                let better = (ratio > best_ratio + 1e-9)
-                    || ((ratio - best_ratio).abs() <= 1e-9 && s > best_scale);
-
-                if better {
-                    best_hits = hits;
-                    best_scale = s;
-                    best_ratio = ratio;
-                }
-                // Prefer the largest scale that keeps almost all probes valid.
-                if hits + 1 >= probes.len() {
-                    best_scale = s;
-                    best_hits = hits;
-                    best_ratio = ratio;
-                    break;
-                }
-            }
-
-            effective_sampling_radius = (base_radius * best_scale).max(0.01);
-            chief_reference_mode = format!(
-                "entrance-chief-fallback(s={:.3} hits={}/{} ratio={:.3})",
-                best_scale,
-                best_hits,
-                probes.len(),
-                best_ratio.max(0.0)
-            );
-        }
+        // Keep a fixed entrance radius in strict mode to avoid field-by-field
+        // radius changes that can introduce Object MTF discontinuities.
     }
     let chief_opl = chief_target_hit[1];
     if !chief_opl.is_finite() {
@@ -2055,6 +1975,23 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
     let attempted_samples: usize = row_results.iter().map(|(attempted, _, _)| *attempted).sum();
     let hit_count: usize = row_results.iter().map(|(_, hits, _)| *hits).sum();
     let raw_grid: Vec<Vec<Option<f64>>> = row_results.into_iter().map(|(_, _, row)| row).collect();
+
+    let hit_rate = if attempted_samples > 0 {
+        hit_count as f64 / attempted_samples as f64
+    } else {
+        0.0
+    };
+    if use_infinite_mode
+        && effective_pupil_sampling_mode == "entrance"
+        && hit_rate < 0.35
+    {
+        return Err(format!(
+            "No valid OPD samples for entrance mode (hit-rate={:.3}, hits={}, samples={})",
+            hit_rate,
+            hit_count,
+            attempted_samples
+        ));
+    }
 
     let mode = req
         .opd_display_mode
@@ -2869,6 +2806,42 @@ fn nearest_axis_value(axis: &[f64], values: &[f64], target_x: f64) -> f64 {
         .clamp(0.0, 1.0)
 }
 
+fn find_interpolation_bracket(axis: &[f64], target_x: f64) -> (Option<f64>, Option<f64>) {
+    if axis.is_empty() || !target_x.is_finite() {
+        return (None, None);
+    }
+    let mut xs = axis
+        .iter()
+        .copied()
+        .filter(|x| x.is_finite())
+        .collect::<Vec<f64>>();
+    if xs.is_empty() {
+        return (None, None);
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    if xs.len() == 1 {
+        return (Some(xs[0]), Some(xs[0]));
+    }
+    if target_x <= xs[0] {
+        return (Some(xs[0]), Some(xs[0]));
+    }
+    let last = xs.len() - 1;
+    if target_x >= xs[last] {
+        return (Some(xs[last]), Some(xs[last]));
+    }
+    for i in 1..xs.len() {
+        let xa = xs[i - 1];
+        let xb = xs[i];
+        if xb <= xa {
+            continue;
+        }
+        if target_x <= xb {
+            return (Some(xa), Some(xb));
+        }
+    }
+    (Some(xs[last]), Some(xs[last]))
+}
+
 fn next_power_of_two_clamped(mut n: usize, min_v: usize, max_v: usize) -> usize {
     n = n.max(1);
     let mut p = 1usize;
@@ -3020,9 +2993,6 @@ fn clone_object_rows_with_field_axis_native(
             obj.insert("position".to_string(), Value::from("Angle"));
             obj.insert("xHeightAngle".to_string(), Value::from(x));
             obj.insert("yHeightAngle".to_string(), Value::from(y));
-            obj.insert("xFieldAngle".to_string(), Value::from(x));
-            obj.insert("yFieldAngle".to_string(), Value::from(y));
-            obj.insert("fieldAngle".to_string(), Value::from(y));
             obj.insert("x".to_string(), Value::from(x));
             obj.insert("y".to_string(), Value::from(y));
         } else {
@@ -3040,37 +3010,17 @@ fn clone_object_rows_with_field_axis_native(
 fn run_native_opd_map_for_field_mtf_with_retry(
     app: AppHandle,
     base_req: NativeOpdMapRequest,
-    axis_mode: &str,
-    field_value: f64,
 ) -> Result<NativeOpdMapResponse, String> {
-    match run_native_opd_map(base_req.clone(), app.clone()) {
-        Ok(resp) => Ok(resp),
-        Err(primary_err) => {
-            let should_retry_finite_on_axis = axis_mode.eq_ignore_ascii_case("angle") && field_value.abs() <= 1.0e-12;
-            if !should_retry_finite_on_axis {
-                return Err(primary_err);
-            }
+    run_native_opd_map(base_req, app)
+}
 
-            let fallback_object_rows = clone_object_rows_with_field_axis_native(
-                &base_req.object_rows,
-                base_req.object_index.unwrap_or(0),
-                "height",
-                0.0,
-            );
-
-            let mut retry_req = base_req;
-            retry_req.object_rows = fallback_object_rows;
-            retry_req.object_index = Some(0);
-
-            match run_native_opd_map(retry_req, app) {
-                Ok(resp) => Ok(resp),
-                Err(retry_err) => Err(format!(
-                    "{} ; finite-on-axis retry failed: {}",
-                    primary_err, retry_err
-                )),
-            }
-        }
+fn should_retry_with_stop(error_message: &str) -> bool {
+    let msg = error_message.to_ascii_lowercase();
+    let strict_sampling_collapse = msg.contains("no valid opd samples") || msg.contains("trace to eval failed");
+    if !msg.contains("entrance") && !strict_sampling_collapse {
+        return false;
     }
+    strict_sampling_collapse || msg.contains("fail") || msg.contains("unreachable") || msg.contains("pupil")
 }
 
 #[tauri::command]
@@ -3110,6 +3060,11 @@ pub fn run_native_through_focus_mtf_map(
             .filter(|v| v.is_finite() && *v > 0.0)
             .unwrap_or(1.0);
         let object_index = req.object_index.unwrap_or(0);
+        let requested_pupil_sampling_mode = req
+            .pupil_sampling_mode
+            .as_ref()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| s == "stop" || s == "entrance");
         let opd_display_mode = req
             .opd_display_mode
             .clone()
@@ -3164,7 +3119,7 @@ pub fn run_native_through_focus_mtf_map(
                         grid_size: Some(sampling_size as u32),
                         wavelength_um: Some(wl),
                         pupil_radius_mm: None,
-                        pupil_sampling_mode: None,
+                        pupil_sampling_mode: requested_pupil_sampling_mode.clone(),
                         opd_display_mode: Some(opd_display_mode.clone()),
                     },
                     app.clone(),
@@ -3217,7 +3172,9 @@ pub fn run_native_through_focus_mtf_map(
                         job_id: Some(sub_job),
                         psf_data: psf_resp.psf_data,
                         pixel_size_um,
-                        max_frequency_lpmm: Some(target_freq_lpmm.max(1.0)),
+                        // Compute beyond target frequency to avoid endpoint-clamp bias
+                        // when extracting the value at target_freq_lpmm.
+                        max_frequency_lpmm: Some((target_freq_lpmm * 2.0).max(1.0)),
                         points: Some(121),
                     },
                     app.clone(),
@@ -3312,20 +3269,17 @@ pub fn run_native_field_mtf_map(
             .map(normalize_coord_trans_row)
             .collect::<Vec<Value>>();
         let object_index = req.object_index.unwrap_or(0);
-        let fixed_surface_index = find_evaluation_surface_index_native(&normalized_optical_rows)
-            .min(normalized_optical_rows.len().saturating_sub(1));
         let axis_mode = infer_field_axis_mode_native(
             &normalized_optical_rows,
             &req.object_rows,
             object_index,
             req.field_axis_mode.as_deref(),
         );
-        let preferred_pupil_radius_mm = if axis_mode.eq_ignore_ascii_case("angle") {
-            Some(estimate_entrance_radius_mm(&normalized_optical_rows).clamp(0.01, 500.0))
-        } else {
-            None
-        };
-
+        let requested_pupil_sampling_mode = req
+            .pupil_sampling_mode
+            .as_ref()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| s == "stop" || s == "entrance");
         let field_min_raw = req.field_min.unwrap_or(0.0);
         let field_max_raw = req.field_max.unwrap_or(10.0);
         let field_min = field_min_raw.min(field_max_raw);
@@ -3376,6 +3330,7 @@ pub fn run_native_field_mtf_map(
             let mut sagittal_first = Vec::<f64>::with_capacity(x_axis.len());
             let mut meridional_second = Vec::<f64>::with_capacity(x_axis.len());
             let mut sagittal_second = Vec::<f64>::with_capacity(x_axis.len());
+            let mut field_diagnostics = Vec::<NativeFieldMtfPointDiagnostic>::with_capacity(x_axis.len());
 
             for (si, field_axis_value) in x_axis.iter().enumerate() {
                 let object_rows = clone_object_rows_with_field_axis_native(
@@ -3392,110 +3347,243 @@ pub fn run_native_field_mtf_map(
                     si
                 );
 
-                let opd_resp = run_native_opd_map_for_field_mtf_with_retry(
-                    app.clone(),
-                    NativeOpdMapRequest {
-                        job_id: Some(sub_job.clone()),
-                        optical_system_rows: req.optical_system_rows.clone(),
-                        source_rows: req.source_rows.clone(),
-                        object_rows: object_rows.clone(),
-                        object_index: Some(0),
-                        surface_index: Some(fixed_surface_index),
-                        grid_size: Some(sampling_size as u32),
-                        wavelength_um: Some(wl),
-                        pupil_radius_mm: preferred_pupil_radius_mm,
-                        pupil_sampling_mode: if axis_mode.eq_ignore_ascii_case("angle") {
-                            Some("entrance".to_string())
-                        } else {
-                            None
-                        },
-                        opd_display_mode: Some(opd_display_mode.clone()),
-                    },
-                    &axis_mode,
-                    *field_axis_value,
-                )?;
-
-                let s = sampling_size;
-                let mut grid_opd = vec![vec![0.0_f64; s]; s];
-                let mut pupil_mask = vec![vec![false; s]; s];
-
-                for iy in 0..s {
-                    let row_display = opd_resp.display_opd_grid.get(iy);
-                    let row_raw = opd_resp.raw_opd_grid.get(iy);
-                    for ix in 0..s {
-                        let raw_cell = row_raw.and_then(|r| r.get(ix)).and_then(|v| *v);
-                        let Some(v_raw_waves) = raw_cell else {
-                            continue;
-                        };
-                        if !v_raw_waves.is_finite() {
-                            continue;
-                        }
-
-                        let v_display_waves = row_display
-                            .and_then(|r| r.get(ix))
-                            .and_then(|v| *v)
-                            .filter(|v| v.is_finite());
-                        let v_waves = v_display_waves.unwrap_or(v_raw_waves);
-
-                        pupil_mask[iy][ix] = true;
-                        grid_opd[iy][ix] = v_waves * wl;
-                    }
-                }
-
-                let psf_resp = run_native_psf_map(
-                    NativePsfMapRequest {
-                        job_id: Some(sub_job.clone()),
-                        grid_opd,
-                        pupil_mask,
-                        grid_amplitude: vec![],
-                        wavelength_um: wl,
-                        pixel_size_um: Some(pixel_size_um),
-                        remove_tilt: Some(false),
-                        zero_pad_to: Some(requested_fft_size as u32),
-                        recenter_if_wrapped: Some(false),
-                    },
-                    app.clone(),
-                )?;
-
-                let mtf_resp = run_native_mtf_map(
-                    NativeMtfMapRequest {
-                        job_id: Some(sub_job),
-                        psf_data: psf_resp.psf_data,
-                        pixel_size_um,
-                        max_frequency_lpmm: Some((first_frequency_lpmm.max(second_frequency_lpmm) * 2.0).max(1.0)),
-                        points: Some(121),
-                    },
-                    app.clone(),
-                )?;
-
-                let tan_axis = infer_tan_axis_from_object_rows(&object_rows, 0, &axis_mode);
-                let (tan_vals, sag_vals) = if tan_axis == "x" {
-                    (&mtf_resp.mtf_sagittal, &mtf_resp.mtf_tangential)
+                let primary_mode = if let Some(forced_mode) = requested_pupil_sampling_mode.as_deref() {
+                    Some(forced_mode)
+                } else if axis_mode.eq_ignore_ascii_case("angle") {
+                    // Keep sampling mode consistent from on-axis to off-axis
+                    // to avoid first-step discontinuity in Object MTF.
+                    Some("entrance")
                 } else {
-                    (&mtf_resp.mtf_tangential, &mtf_resp.mtf_sagittal)
+                    None
+                };
+                let is_forced_mode = requested_pupil_sampling_mode.is_some();
+
+                let base_opd_req = NativeOpdMapRequest {
+                    job_id: Some(sub_job.clone()),
+                    optical_system_rows: req.optical_system_rows.clone(),
+                    source_rows: req.source_rows.clone(),
+                    object_rows: object_rows.clone(),
+                    object_index: Some(object_index),
+                    surface_index: None,
+                    grid_size: Some(sampling_size as u32),
+                    wavelength_um: Some(wl),
+                    pupil_radius_mm: None,
+                    pupil_sampling_mode: primary_mode.map(|m| m.to_string()),
+                    opd_display_mode: Some(opd_display_mode.clone()),
                 };
 
-                meridional_first.push(nearest_axis_value(
-                    &mtf_resp.frequency_axis,
-                    tan_vals,
-                    first_frequency_lpmm,
-                ));
-                sagittal_first.push(nearest_axis_value(
-                    &mtf_resp.frequency_axis,
-                    sag_vals,
-                    first_frequency_lpmm,
-                ));
-                meridional_second.push(nearest_axis_value(
-                    &mtf_resp.frequency_axis,
-                    tan_vals,
-                    second_frequency_lpmm,
-                ));
-                sagittal_second.push(nearest_axis_value(
-                    &mtf_resp.frequency_axis,
-                    sag_vals,
-                    second_frequency_lpmm,
-                ));
+                let mut opd_resp = match run_native_opd_map_for_field_mtf_with_retry(
+                    app.clone(),
+                    base_opd_req.clone(),
+                ) {
+                    Ok(resp) => resp,
+                    Err(primary_err) => {
+                        let mut errors = vec![format!(
+                            "{}={}"
+                            , primary_mode.unwrap_or("auto")
+                            , primary_err
+                        )];
 
+                        let mut fallback_success: Option<NativeOpdMapResponse> = None;
+                        if !is_forced_mode {
+                            let fallback_modes: Vec<&str> = if primary_mode == Some("entrance") {
+                                if should_retry_with_stop(&primary_err) { vec!["stop"] } else { vec![] }
+                            } else if primary_mode == Some("stop") {
+                                vec!["entrance"]
+                            } else {
+                                vec!["entrance", "stop"]
+                            };
+
+                            for fallback_mode in fallback_modes {
+                                let mut fallback_req = base_opd_req.clone();
+                                fallback_req.pupil_sampling_mode = Some(fallback_mode.to_string());
+                                match run_native_opd_map_for_field_mtf_with_retry(app.clone(), fallback_req) {
+                                    Ok(resp) => {
+                                        fallback_success = Some(resp);
+                                        break;
+                                    }
+                                    Err(err) => errors.push(format!("{}={}", fallback_mode, err)),
+                                }
+                            }
+                        }
+
+                        if let Some(resp) = fallback_success {
+                            resp
+                        } else {
+                            let on_axis = axis_mode.eq_ignore_ascii_case("angle") && field_axis_value.abs() <= 1.0e-12;
+                            if on_axis {
+                                let finite_object_rows = clone_object_rows_with_field_axis_native(
+                                    &req.object_rows,
+                                    object_index,
+                                    "height",
+                                    0.0,
+                                );
+                                let finite_primary_mode = requested_pupil_sampling_mode.as_deref();
+                                let mut finite_req = base_opd_req.clone();
+                                finite_req.object_rows = finite_object_rows;
+                                finite_req.object_index = Some(object_index);
+                                finite_req.pupil_sampling_mode = finite_primary_mode.map(|m| m.to_string());
+
+                                match run_native_opd_map_for_field_mtf_with_retry(app.clone(), finite_req.clone()) {
+                                    Ok(resp) => resp,
+                                    Err(finite_primary_err) => {
+                                        errors.push(format!(
+                                            "finite-{}={}"
+                                            , finite_primary_mode.unwrap_or("auto")
+                                            , finite_primary_err
+                                        ));
+
+                                        if !is_forced_mode {
+                                            let finite_fallback_modes: Vec<&str> = if finite_primary_mode == Some("entrance") {
+                                                vec!["stop"]
+                                            } else if finite_primary_mode == Some("stop") {
+                                                vec!["entrance"]
+                                            } else {
+                                                vec!["entrance", "stop"]
+                                            };
+
+                                            let mut finite_success: Option<NativeOpdMapResponse> = None;
+                                            for fallback_mode in finite_fallback_modes {
+                                                let mut finite_fallback_req = finite_req.clone();
+                                                finite_fallback_req.pupil_sampling_mode = Some(fallback_mode.to_string());
+                                                match run_native_opd_map_for_field_mtf_with_retry(app.clone(), finite_fallback_req) {
+                                                    Ok(resp) => {
+                                                        finite_success = Some(resp);
+                                                        break;
+                                                    }
+                                                    Err(err) => errors.push(format!("finite-{}={}", fallback_mode, err)),
+                                                }
+                                            }
+                                            if let Some(resp) = finite_success {
+                                                resp
+                                            } else {
+                                                return Err(errors.join(" ; "));
+                                            }
+                                        } else {
+                                            return Err(errors.join(" ; "));
+                                        }
+                                    }
+                                }
+                            } else {
+                                return Err(errors.join(" ; "));
+                            }
+                        }
+                    }
+                };
+
+                let eval_point = |opd: &NativeOpdMapResponse, job_suffix: &str| -> Result<(f64, f64, f64, f64, Option<f64>, Option<f64>, Option<f64>, Option<f64>), String> {
+                    let s = sampling_size;
+                    let mut grid_opd = vec![vec![0.0_f64; s]; s];
+                    let mut pupil_mask = vec![vec![false; s]; s];
+
+                    for iy in 0..s {
+                        let row_display = opd.display_opd_grid.get(iy);
+                        let row_raw = opd.raw_opd_grid.get(iy);
+                        for ix in 0..s {
+                            let raw_cell = row_raw.and_then(|r| r.get(ix)).and_then(|v| *v);
+                            let Some(v_raw_waves) = raw_cell else {
+                                continue;
+                            };
+                            if !v_raw_waves.is_finite() {
+                                continue;
+                            }
+
+                            let v_display_waves = row_display
+                                .and_then(|r| r.get(ix))
+                                .and_then(|v| *v)
+                                .filter(|v| v.is_finite());
+                            let v_waves = v_display_waves.unwrap_or(v_raw_waves);
+
+                            pupil_mask[iy][ix] = true;
+                            grid_opd[iy][ix] = v_waves * wl;
+                        }
+                    }
+
+                    let psf_resp = run_native_psf_map(
+                        NativePsfMapRequest {
+                            job_id: Some(format!("{}-{}", sub_job, job_suffix)),
+                            grid_opd,
+                            pupil_mask,
+                            grid_amplitude: vec![],
+                            wavelength_um: wl,
+                            pixel_size_um: Some(pixel_size_um),
+                            remove_tilt: Some(false),
+                            zero_pad_to: Some(requested_fft_size as u32),
+                            recenter_if_wrapped: Some(false),
+                        },
+                        app.clone(),
+                    )?;
+
+                    let mtf_resp = run_native_mtf_map(
+                        NativeMtfMapRequest {
+                            job_id: Some(format!("{}-{}", sub_job, job_suffix)),
+                            psf_data: psf_resp.psf_data,
+                            pixel_size_um,
+                            max_frequency_lpmm: Some((first_frequency_lpmm.max(second_frequency_lpmm) * 2.0).max(1.0)),
+                            points: Some(121),
+                        },
+                        app.clone(),
+                    )?;
+
+                    let tan_axis = infer_tan_axis_from_object_rows(&object_rows, object_index, &axis_mode);
+                    let (tan_vals, sag_vals) = if tan_axis == "x" {
+                        (&mtf_resp.mtf_sagittal, &mtf_resp.mtf_tangential)
+                    } else {
+                        (&mtf_resp.mtf_tangential, &mtf_resp.mtf_sagittal)
+                    };
+
+                    // Keep native Object MTF extraction consistent with TS field sweep,
+                    // which samples the nearest frequency bin from the computed MTF trace.
+                    let first_m = nearest_axis_value(&mtf_resp.frequency_axis, tan_vals, first_frequency_lpmm);
+                    let first_s = nearest_axis_value(&mtf_resp.frequency_axis, sag_vals, first_frequency_lpmm);
+                    let second_m = nearest_axis_value(&mtf_resp.frequency_axis, tan_vals, second_frequency_lpmm);
+                    let second_s = nearest_axis_value(&mtf_resp.frequency_axis, sag_vals, second_frequency_lpmm);
+
+                    let (first_lo, first_hi) = find_interpolation_bracket(&mtf_resp.frequency_axis, first_frequency_lpmm);
+                    let (second_lo, second_hi) = find_interpolation_bracket(&mtf_resp.frequency_axis, second_frequency_lpmm);
+                    Ok((first_m, first_s, second_m, second_s, first_lo, first_hi, second_lo, second_hi))
+                };
+
+                let chosen_opd = opd_resp;
+                let chosen = eval_point(&chosen_opd, "a")?;
+
+                let first_m = chosen.0;
+                let first_s = chosen.1;
+                let second_m = chosen.2;
+                let second_s = chosen.3;
+                let first_lo = chosen.4;
+                let first_hi = chosen.5;
+                let second_lo = chosen.6;
+                let second_hi = chosen.7;
+
+                meridional_first.push(first_m);
+                sagittal_first.push(first_s);
+                meridional_second.push(second_m);
+                sagittal_second.push(second_s);
+                field_diagnostics.push(NativeFieldMtfPointDiagnostic {
+                    field_value: *field_axis_value,
+                    effective_pupil_sampling_mode: chosen_opd.pupil_sampling_mode.clone(),
+                    used_object_position: Some(chosen_opd.used_object_position.clone()),
+                    target_surface_index: chosen_opd.target_surface,
+                    used_object_index: chosen_opd.used_object_index,
+                    opd_sample_count: chosen_opd.sample_count,
+                    opd_hit_count: chosen_opd.hit_count,
+                    opd_hit_rate: if chosen_opd.sample_count > 0 {
+                        chosen_opd.hit_count as f64 / chosen_opd.sample_count as f64
+                    } else {
+                        0.0
+                    },
+                    first_frequency_lpmm,
+                    first_bracket_low_lpmm: first_lo,
+                    first_bracket_high_lpmm: first_hi,
+                    first_value_meridional: first_m,
+                    first_value_sagittal: first_s,
+                    second_frequency_lpmm,
+                    second_bracket_low_lpmm: second_lo,
+                    second_bracket_high_lpmm: second_hi,
+                    second_value_meridional: second_m,
+                    second_value_sagittal: second_s,
+                });
                 completed += 1;
                 let progress = 10.0 + (completed as f64 / total_runs as f64) * 85.0;
                 emit_native_analysis_progress(
@@ -3520,6 +3608,7 @@ pub fn run_native_field_mtf_map(
                 sagittal_first,
                 meridional_second,
                 sagittal_second,
+                field_diagnostics,
             });
         }
 
