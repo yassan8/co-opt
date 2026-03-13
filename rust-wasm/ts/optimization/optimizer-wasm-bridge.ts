@@ -7,6 +7,14 @@ type OptimizerWasmApi = {
   normal_eq_matvec?: (jFlat: Float64Array, m: number, n: number, v: Float64Array, damping: number) => Float64Array;
   generate_fd_perturbation_points?: (x: Float64Array, steps: Float64Array, n: number) => Float64Array;
   assemble_fd_jacobian?: (r0: Float64Array, rBatches: Float64Array, m: number, n: number, steps: Float64Array) => Float64Array;
+  assemble_fd_jacobian_grouped?: (
+    r0: Float64Array,
+    rBatches: Float64Array,
+    m: number,
+    n: number,
+    colIndices: Uint32Array,
+    steps: Float64Array
+  ) => Float64Array;
   optimize_system_in_wasm?: (payloadJson: string) => any;
   optimize_one_iter_from_buffers?: (
     xPtr: number,
@@ -69,6 +77,7 @@ const optimizerWasmBridgeDebugState: Record<string, any> = {
   hasBuildNormalEq: false,
   hasFdBatchPoints: false,
   hasFdBatchJacobian: false,
+  hasFdBatchJacobianGrouped: false,
   hasPilotBufferAbi: false,
   hasVectorOps: false,
   hasMatrixOps: false,
@@ -337,6 +346,7 @@ async function preloadOptimizerDirectWasmModule(): Promise<OptimizerWasmApi | nu
           normal_eq_matvec: (typeof mod.normal_eq_matvec === 'function') ? mod.normal_eq_matvec : undefined,
           generate_fd_perturbation_points: (typeof mod.generate_fd_perturbation_points === 'function') ? mod.generate_fd_perturbation_points : undefined,
           assemble_fd_jacobian: (typeof mod.assemble_fd_jacobian === 'function') ? mod.assemble_fd_jacobian : undefined,
+          assemble_fd_jacobian_grouped: (typeof mod.assemble_fd_jacobian_grouped === 'function') ? mod.assemble_fd_jacobian_grouped : undefined,
           optimize_system_in_wasm: (typeof mod.optimize_system_in_wasm === 'function') ? mod.optimize_system_in_wasm : undefined,
           optimize_one_iter_from_buffers: (typeof mod.optimize_one_iter_from_buffers === 'function') ? mod.optimize_one_iter_from_buffers : undefined,
           malloc: (typeof mod.malloc === 'function') ? mod.malloc : undefined,
@@ -455,6 +465,7 @@ export async function preloadOptimizerWasmBridge(): Promise<boolean> {
   optimizerWasmBridgeDebugState.hasBuildNormalEq = !!(api && typeof api.build_normal_equations === 'function');
   optimizerWasmBridgeDebugState.hasFdBatchPoints = !!(api && typeof api.generate_fd_perturbation_points === 'function');
   optimizerWasmBridgeDebugState.hasFdBatchJacobian = !!(api && typeof api.assemble_fd_jacobian === 'function');
+  optimizerWasmBridgeDebugState.hasFdBatchJacobianGrouped = !!(api && typeof api.assemble_fd_jacobian_grouped === 'function');
   optimizerWasmBridgeDebugState.hasPilotBufferAbi = !!(
     api
     && typeof api.optimize_one_iter_from_buffers === 'function'
@@ -684,6 +695,87 @@ export function assembleFiniteDifferenceJacobianWasm(
       }
     }
     return J;
+  } catch {
+    return null;
+  }
+}
+
+export function assembleFiniteDifferenceJacobianGroupedWasm(
+  baseResiduals: number[],
+  perturbedResidualsByActiveColumn: number[][],
+  steps: number[],
+  activeCols: number[]
+): number[][] | null {
+  const api = getOptimizerApiSync();
+  if (!api) return null;
+  if (!Array.isArray(baseResiduals) || !Array.isArray(steps) || !Array.isArray(activeCols)) return null;
+
+  const m = baseResiduals.length;
+  const n = steps.length;
+  const k = activeCols.length;
+  if (m <= 0 || n <= 0) return null;
+  if (!Array.isArray(perturbedResidualsByActiveColumn) || perturbedResidualsByActiveColumn.length !== k) return null;
+
+  const r0 = toFloat64Vector(baseResiduals, m);
+  const hVec = toFloat64Vector(steps, n);
+  if (!r0 || !hVec) return null;
+
+  const colVec = new Uint32Array(k);
+  const groupedBatchFlat = new Float64Array(m * k);
+  for (let groupedIndex = 0; groupedIndex < k; groupedIndex++) {
+    const col = Number(activeCols[groupedIndex]);
+    if (!Number.isInteger(col) || col < 0 || col >= n) return null;
+    colVec[groupedIndex] = col >>> 0;
+
+    const residuals = perturbedResidualsByActiveColumn[groupedIndex];
+    if (!Array.isArray(residuals) || residuals.length < m) return null;
+    const base = groupedIndex * m;
+    for (let row = 0; row < m; row++) {
+      const v = Number(residuals[row]);
+      if (!Number.isFinite(v)) return null;
+      groupedBatchFlat[base + row] = v;
+    }
+  }
+
+  const decodeFlatJacobian = (flat: ArrayLike<number>): number[][] | null => {
+    if (!flat || (flat as any).length !== m * n) return null;
+    const J: number[][] = Array.from({ length: m }, () => Array(n).fill(0));
+    for (let row = 0; row < m; row++) {
+      const rowBase = row * n;
+      for (let col = 0; col < n; col++) {
+        const v = Number((flat as any)[rowBase + col]);
+        J[row][col] = Number.isFinite(v) ? v : 0;
+      }
+    }
+    return J;
+  };
+
+  try {
+    if (typeof api.assemble_fd_jacobian_grouped === 'function') {
+      const out = api.assemble_fd_jacobian_grouped(r0, groupedBatchFlat, m, n, colVec, hVec);
+      return decodeFlatJacobian(out);
+    }
+
+    if (typeof api.assemble_fd_jacobian !== 'function') return null;
+
+    // Legacy fallback: expand grouped payload to full n columns.
+    const fullBatchFlat = new Float64Array(m * n);
+    for (let col = 0; col < n; col++) {
+      const base = col * m;
+      for (let row = 0; row < m; row++) {
+        fullBatchFlat[base + row] = r0[row];
+      }
+    }
+    for (let groupedIndex = 0; groupedIndex < k; groupedIndex++) {
+      const col = colVec[groupedIndex];
+      const srcBase = groupedIndex * m;
+      const dstBase = col * m;
+      for (let row = 0; row < m; row++) {
+        fullBatchFlat[dstBase + row] = groupedBatchFlat[srcBase + row];
+      }
+    }
+    const out = api.assemble_fd_jacobian(r0, fullBatchFlat, m, n, hVec);
+    return decodeFlatJacobian(out);
   } catch {
     return null;
   }

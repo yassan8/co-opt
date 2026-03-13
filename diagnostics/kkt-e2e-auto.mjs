@@ -49,7 +49,10 @@ const analyzeArgs = [
   ...forwardIfPresent('min-total-speedup'),
   ...forwardIfPresent('min-solver-speedup'),
   ...forwardIfPresent('min-wasm-ok-rate'),
-  ...forwardIfPresent('min-wasm-feasible-rate')
+  ...forwardIfPresent('min-wasm-feasible-rate'),
+  ...forwardIfPresent('require-phase-c'),
+  ...forwardIfPresent('max-matrixfree-fallback-rate'),
+  ...forwardIfPresent('max-matrixfree-unknown-fallback-rate')
 ];
 
 await runCommand(process.execPath, ['--import', 'tsx', 'diagnostics/kkt-e2e-benchmark.mjs', ...benchmarkArgs]);

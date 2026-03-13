@@ -28,6 +28,7 @@
 import { calculateChiefRayNewton } from './transverse-aberration.ts';
 import { getObjectRows, getSourceRows } from '../../utils/data-utils.ts';
 import { traceRay, traceRayHitPoint, calculateSurfaceOrigins, solveRayOriginsToStopPointsWithRustMeta } from '../../raytracing/core/ray-tracing.ts';
+import { asphericSurfaceZ } from '../../optical/surface.ts';
 
 const RUST_RT_OPTIONS = Object.freeze({
     useRustWasm: true,
@@ -111,6 +112,54 @@ function normalize3(v) {
     return { x: x / mag, y: y / mag, z: z / mag };
 }
 
+function parseAngleInput(value) {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : 0;
+    }
+    if (typeof value === 'string') {
+        const normalized = value.trim().replace(',', '.');
+        if (!normalized) return 0;
+        const parsed = parseFloat(normalized);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+}
+
+function crossProduct(a, b) {
+    return {
+        x: a.y * b.z - a.z * b.y,
+        y: a.z * b.x - a.x * b.z,
+        z: a.x * b.y - a.y * b.x,
+    };
+}
+
+function buildDirectionFromFieldAngles(angleXDeg, angleYDeg) {
+    const radX = parseAngleInput(angleXDeg) * Math.PI / 180;
+    const radY = parseAngleInput(angleYDeg) * Math.PI / 180;
+    const cosX = Math.cos(radX);
+    const cosY = Math.cos(radY);
+    const sinX = Math.sin(radX);
+    const sinY = Math.sin(radY);
+    return normalize3({
+        x: sinX * cosY,
+        y: sinY * cosX,
+        z: cosX * cosY,
+    });
+}
+
+function buildPerpendicularBasis(direction) {
+    const dir = normalize3(direction);
+    let reference = Math.abs(dir.z) < 0.99 ? { x: 0, y: 0, z: 1 } : { x: 0, y: 1, z: 0 };
+    let uAxis = crossProduct(reference, dir);
+    if (Math.hypot(uAxis.x, uAxis.y, uAxis.z) < 1e-12) {
+        reference = { x: 1, y: 0, z: 0 };
+        uAxis = crossProduct(reference, dir);
+    }
+    const u = normalize3(uAxis);
+    const v = normalize3(crossProduct(dir, u));
+    return { dir, u, v };
+}
+
 /**
  * 主光線モードに応じて主光線を調整
  * @param {Object} chiefRay - 絞り中心を通る主光線データ
@@ -187,18 +236,11 @@ function adjustChiefRayByMode(chiefRay, rayGroup, targetSurfaceIndex, opticalSys
         referenceX = (xMin + xMax) / 2;
         referenceY = (yMin + yMax) / 2;
         
-        if (verbose) {
-            console.log(`      📐 光束巾の真ん中: X=${referenceX.toFixed(4)}mm (範囲: ${xMin.toFixed(4)}～${xMax.toFixed(4)}mm)`);
-            console.log(`      📐 光束巾の真ん中: Y=${referenceY.toFixed(4)}mm (範囲: ${yMin.toFixed(4)}～${yMax.toFixed(4)}mm)`);
-        }
     } else if (baseMode === 'centroid') {
         // 光束の重心：全光線の平均位置
         referenceX = positions.reduce((sum, p) => sum + p.x, 0) / positions.length;
         referenceY = positions.reduce((sum, p) => sum + p.y, 0) / positions.length;
         
-        if (verbose) {
-            console.log(`      📐 光束の重心: X=${referenceX.toFixed(4)}mm, Y=${referenceY.toFixed(4)}mm (${positions.length}本の平均)`);
-        }
     }
     
     // 元の主光線の像面上位置
@@ -206,11 +248,6 @@ function adjustChiefRayByMode(chiefRay, rayGroup, targetSurfaceIndex, opticalSys
     const localOriginal = toLocal(originalPoint);
     const offsetX = referenceX - localOriginal.x;
     const offsetY = referenceY - localOriginal.y;
-    
-    if (verbose) {
-        console.log(`      📊 元の主光線位置: (${originalPoint.x.toFixed(4)}, ${originalPoint.y.toFixed(4)})mm`);
-        console.log(`      📊 オフセット: (${offsetX.toFixed(4)}, ${offsetY.toFixed(4)})mm`);
-    }
     
     // 主光線の全セグメントをオフセット（像面上の位置を基準位置に合わせる）
     const deltaGlobal = toGlobalDelta({ x: offsetX, y: offsetY, z: 0 });
@@ -416,7 +453,233 @@ function computeStopPlaneFrame(opticalSystemRows, stopSurfaceIndex) {
     return { stopPlaneCenter3d, stopPlaneU, stopPlaneV, stopSolveMax };
 }
 
-function buildStopSolveRayFan(opticalSystemRows, chiefRayResult, wavelength, stopSurfaceIndex, targetSurfaceIndex, targetPointIndex, axis /* 'meridional'|'sagittal' */, isAngleField = false) {
+function cross3(a, b) {
+    return {
+        x: a.y * b.z - a.z * b.y,
+        y: a.z * b.x - a.x * b.z,
+        z: a.x * b.y - a.y * b.x,
+    };
+}
+
+function extractRayStartAndDirection(ray) {
+    const original = ray?.originalRay || {};
+    const start = original.pos || original.position || ray?.startP || ray?.start_p || ray?.path?.[0] || null;
+    let dir = original.dir || original.direction || ray?.dir || ray?.direction || null;
+
+    if ((!dir || !Number.isFinite(dir.x) || !Number.isFinite(dir.y) || !Number.isFinite(dir.z)) && Array.isArray(ray?.path) && ray.path.length >= 2) {
+        const p0 = ray.path[0];
+        const p1 = ray.path[1];
+        dir = {
+            x: p1.x - p0.x,
+            y: p1.y - p0.y,
+            z: p1.z - p0.z,
+        };
+    }
+
+    if (!start || !dir) return null;
+    if (!Number.isFinite(start.x) || !Number.isFinite(start.y) || !Number.isFinite(start.z)) return null;
+    const normalizedDir = normalize3(dir);
+    if (!normalizedDir) return null;
+
+    return {
+        start: { x: start.x, y: start.y, z: start.z },
+        dir: normalizedDir,
+    };
+}
+
+function intersectRayWithPlane(start, dir, planeCenter, planeNormal) {
+    const denom = dir.x * planeNormal.x + dir.y * planeNormal.y + dir.z * planeNormal.z;
+    if (!Number.isFinite(denom) || Math.abs(denom) < 1e-12) return null;
+
+    const vx = planeCenter.x - start.x;
+    const vy = planeCenter.y - start.y;
+    const vz = planeCenter.z - start.z;
+    const t = (vx * planeNormal.x + vy * planeNormal.y + vz * planeNormal.z) / denom;
+    if (!Number.isFinite(t)) return null;
+
+    return {
+        x: start.x + t * dir.x,
+        y: start.y + t * dir.y,
+        z: start.z + t * dir.z,
+    };
+}
+
+function selectAxisFanRaysFromExistingRays(rays, chiefRayEntry, meridional, desiredCount) {
+    const chief = extractRayStartAndDirection(chiefRayEntry);
+    if (!chief) return [];
+
+    const collect = (strictRatio) => {
+        const out = [];
+        for (const ray of rays || []) {
+            if (!ray || ray === chiefRayEntry || String(ray?.rayType || '').toLowerCase() === 'chief') continue;
+            const current = extractRayStartAndDirection(ray);
+            if (!current) continue;
+
+            const offX = current.start.x - chief.start.x;
+            const offY = current.start.y - chief.start.y;
+            const primary = meridional ? Math.abs(offY) : Math.abs(offX);
+            const secondary = meridional ? Math.abs(offX) : Math.abs(offY);
+            if (!Number.isFinite(primary) || primary < 1e-8) continue;
+
+            const ratio = secondary / primary;
+            if (!Number.isFinite(ratio) || ratio > strictRatio) continue;
+            out.push({ metric: primary, ray });
+        }
+        return out;
+    };
+
+    let candidates = collect(0.35);
+    if (candidates.length < 5) {
+        candidates = collect(1.0);
+    }
+    if (candidates.length === 0) return [];
+
+    candidates.sort((a, b) => a.metric - b.metric);
+    const takeCount = Math.max(3, Math.min(desiredCount, candidates.length));
+    if (takeCount >= candidates.length) return candidates.map(item => item.ray);
+
+    const out = [];
+    for (let i = 0; i < takeCount; i++) {
+        const idx = Math.round(i * (candidates.length - 1) / (takeCount - 1));
+        out.push(candidates[idx].ray);
+    }
+    return out;
+}
+
+function selectAxisFanRaysByStopPlane(rays, chiefRayEntry, meridional, desiredCount, stopCenter, stopPlaneU, stopPlaneV) {
+    const stopNormal = normalize3(cross3(stopPlaneU, stopPlaneV));
+    if (!stopNormal) {
+        return selectAxisFanRaysFromExistingRays(rays, chiefRayEntry, meridional, desiredCount);
+    }
+
+    const chief = extractRayStartAndDirection(chiefRayEntry);
+    if (!chief) {
+        return selectAxisFanRaysFromExistingRays(rays, chiefRayEntry, meridional, desiredCount);
+    }
+
+    const chiefPoint = intersectRayWithPlane(chief.start, chief.dir, stopCenter, stopNormal);
+    if (!chiefPoint) {
+        return selectAxisFanRaysFromExistingRays(rays, chiefRayEntry, meridional, desiredCount);
+    }
+
+    const extractCandidates = (strictRatio) => {
+        const out = [];
+        for (const ray of rays || []) {
+            if (!ray || ray === chiefRayEntry || String(ray?.rayType || '').toLowerCase() === 'chief') continue;
+            const current = extractRayStartAndDirection(ray);
+            if (!current) continue;
+
+            const point = intersectRayWithPlane(current.start, current.dir, stopCenter, stopNormal);
+            if (!point) continue;
+
+            const rel = {
+                x: point.x - chiefPoint.x,
+                y: point.y - chiefPoint.y,
+                z: point.z - chiefPoint.z,
+            };
+            const du = rel.x * stopPlaneU.x + rel.y * stopPlaneU.y + rel.z * stopPlaneU.z;
+            const dv = rel.x * stopPlaneV.x + rel.y * stopPlaneV.y + rel.z * stopPlaneV.z;
+            const primary = meridional ? dv : du;
+            const secondary = meridional ? Math.abs(du) : Math.abs(dv);
+            const primaryAbs = Math.abs(primary);
+            if (!Number.isFinite(primaryAbs) || primaryAbs < 1e-8) continue;
+
+            const ratio = secondary / primaryAbs;
+            if (!Number.isFinite(ratio) || ratio > strictRatio) continue;
+            out.push({ metric: primary, ray });
+        }
+        return out;
+    };
+
+    let candidates = extractCandidates(0.35);
+    if (candidates.length < 5) {
+        candidates = extractCandidates(0.8);
+    }
+    if (candidates.length < 5) {
+        return selectAxisFanRaysFromExistingRays(rays, chiefRayEntry, meridional, desiredCount);
+    }
+
+    candidates.sort((a, b) => a.metric - b.metric);
+    const takeCount = Math.max(3, Math.min(desiredCount, candidates.length));
+    if (takeCount >= candidates.length) return candidates.map(item => item.ray);
+
+    const out = [];
+    for (let i = 0; i < takeCount; i++) {
+        const idx = Math.round(i * (candidates.length - 1) / (takeCount - 1));
+        out.push(candidates[idx].ray);
+    }
+    return out;
+}
+
+function selectAxisRaysFromSuccessfulByStopPlane(successfulRays, chiefRayEntry, meridional, desiredCount, stopCenter, stopPlaneU, stopPlaneV) {
+    if (!Array.isArray(successfulRays) || successfulRays.length === 0) return [];
+
+    const stopNormal = normalize3(cross3(stopPlaneU, stopPlaneV));
+    if (!stopNormal) return [];
+
+    const chief = extractRayStartAndDirection(chiefRayEntry);
+    if (!chief) return [];
+    const chiefPoint = intersectRayWithPlane(chief.start, chief.dir, stopCenter, stopNormal);
+    if (!chiefPoint) return [];
+
+    const strict = [];
+    const relaxed = [];
+
+    for (const ray of successfulRays) {
+        const current = extractRayStartAndDirection(ray);
+        if (!current) continue;
+
+        const point = intersectRayWithPlane(current.start, current.dir, stopCenter, stopNormal);
+        if (!point) continue;
+
+        const rel = {
+            x: point.x - chiefPoint.x,
+            y: point.y - chiefPoint.y,
+            z: point.z - chiefPoint.z,
+        };
+        const du = rel.x * stopPlaneU.x + rel.y * stopPlaneU.y + rel.z * stopPlaneU.z;
+        const dv = rel.x * stopPlaneV.x + rel.y * stopPlaneV.y + rel.z * stopPlaneV.z;
+        const primary = meridional ? dv : du;
+        const secondaryAbs = meridional ? Math.abs(du) : Math.abs(dv);
+        const primaryAbs = Math.abs(primary);
+        if (!Number.isFinite(primaryAbs) || primaryAbs < 1e-8) continue;
+
+        const ratio = secondaryAbs / primaryAbs;
+        if (!Number.isFinite(ratio)) continue;
+
+        const item = { metric: primary, ray };
+        if (ratio <= 0.8) strict.push(item);
+        relaxed.push(item);
+    }
+
+    const candidates = (strict.length >= 3) ? strict : relaxed;
+    if (candidates.length === 0) return [];
+
+    candidates.sort((a, b) => a.metric - b.metric);
+    const takeCount = Math.max(3, Math.min(desiredCount, candidates.length));
+    if (takeCount >= candidates.length) return candidates.map(item => item.ray);
+
+    const out = [];
+    for (let i = 0; i < takeCount; i++) {
+        const idx = Math.round(i * (candidates.length - 1) / (takeCount - 1));
+        out.push(candidates[idx].ray);
+    }
+    return out;
+}
+
+function buildStopSolveRayFan(
+    opticalSystemRows,
+    chiefRayResult,
+    wavelength,
+    stopSurfaceIndex,
+    targetSurfaceIndex,
+    targetPointIndex,
+    axis /* 'meridional'|'sagittal' */,
+    isAngleField = false,
+    samplingPattern = 'annular',
+    ringCount = 10,
+    rayCount = 30
+) {
     const { stopPlaneCenter3d, stopPlaneU, stopPlaneV, stopSolveMax } = computeStopPlaneFrame(opticalSystemRows, stopSurfaceIndex);
     if (!stopPlaneCenter3d) return [];
 
@@ -433,7 +696,39 @@ function buildStopSolveRayFan(opticalSystemRows, chiefRayResult, wavelength, sto
     // CBの有無で crossBeamData の有無/内容が揺れることがあるので、フィールド種別で判定する。
     const isInfinite = !!isAngleField;
 
-    const n = 25;
+    const normalizedPattern = (() => {
+        const p = String(samplingPattern || '').trim().toLowerCase();
+        return (p === 'cross' || p === 'grid' || p === 'annular') ? p : 'annular';
+    })();
+    const normalizedRingCount = Number.isFinite(Number(ringCount))
+        ? Math.max(1, Math.min(64, Math.round(Number(ringCount))))
+        : 10;
+    const normalizedRayCount = Number.isFinite(Number(rayCount))
+        ? Math.max(9, Math.min(2001, Math.round(Number(rayCount))))
+        : 30;
+
+    const sampleOffsets = (() => {
+        if (normalizedPattern === 'cross') {
+            return [-1, -0.5, 0, 0.5, 1];
+        }
+        if (normalizedPattern === 'grid') {
+            const n = Math.max(9, Math.min(101, (normalizedRayCount % 2 === 0) ? (normalizedRayCount + 1) : normalizedRayCount));
+            const out = [];
+            for (let i = 0; i < n; i++) {
+                out.push(-1 + (2 * i) / (n - 1));
+            }
+            return out;
+        }
+        const rings = Math.max(1, normalizedRingCount);
+        const out = [];
+        for (let r = 1; r <= rings; r++) {
+            const radius = r / rings;
+            out.push(-radius);
+            out.push(radius);
+        }
+        return out;
+    })();
+
     const fan = [];
 
     if (isInfinite) {
@@ -443,8 +738,8 @@ function buildStopSolveRayFan(opticalSystemRows, chiefRayResult, wavelength, sto
         const stopTargets = [];
         const guessOrigins = [];
 
-        for (let i = 0; i < n; i++) {
-            const pNorm = -1 + (2 * i) / (n - 1);
+        for (let i = 0; i < sampleOffsets.length; i++) {
+            const pNorm = sampleOffsets[i];
             const offset = pNorm * stopSolveMax;
             const stopTarget = {
                 x: stopPlaneCenter3d.x + axisVec.x * offset,
@@ -478,7 +773,7 @@ function buildStopSolveRayFan(opticalSystemRows, chiefRayResult, wavelength, sto
             }
         );
 
-        for (let i = 0; i < n; i++) {
+        for (let i = 0; i < sampleOffsets.length; i++) {
             const stopTarget = stopTargets[i];
             const guess = guessOrigins[i];
 
@@ -493,13 +788,14 @@ function buildStopSolveRayFan(opticalSystemRows, chiefRayResult, wavelength, sto
 
             const traced = traceRayPathWrapped(opticalSystemRows, { pos: origin, dir, wavelength }, targetSurfaceIndex, RUST_RT_OPTIONS);
             if (!traced.success || !traced.rayPath || traced.rayPath.length <= targetPointIndex) continue;
-            fan.push({ segments: traced.rayPath, type: `${axis}_stop_solve`, dir });
+            fan.push({ segments: traced.rayPath, type: `${axis}_stop_solve`, dir,
+                originalRay: { pos: { ...origin }, dir: { ...dir }, wavelength } });
         }
         return fan;
     }
 
-    for (let i = 0; i < n; i++) {
-        const pNorm = -1 + (2 * i) / (n - 1);
+    for (let i = 0; i < sampleOffsets.length; i++) {
+        const pNorm = sampleOffsets[i];
         const offset = pNorm * stopSolveMax;
         const stopTarget = {
             x: stopPlaneCenter3d.x + axisVec.x * offset,
@@ -510,7 +806,8 @@ function buildStopSolveRayFan(opticalSystemRows, chiefRayResult, wavelength, sto
         if (!solvedDir) continue;
         const traced = traceRayPathWrapped(opticalSystemRows, { pos: originBase, dir: solvedDir, wavelength }, targetSurfaceIndex, RUST_RT_OPTIONS);
         if (!traced.success || !traced.rayPath || traced.rayPath.length <= targetPointIndex) continue;
-        fan.push({ segments: traced.rayPath, type: `${axis}_stop_solve`, dir: solvedDir });
+        fan.push({ segments: traced.rayPath, type: `${axis}_stop_solve`, dir: solvedDir,
+            originalRay: { pos: { ...originBase }, dir: { ...solvedDir }, wavelength } });
     }
     return fan;
 }
@@ -585,8 +882,6 @@ function calculateParaxialImagePosition(opticalSystemRows, chiefRay, targetSurfa
     }
     const targetPointIndex = Math.min(rawTargetPointIndex, chiefRay.segments.length - 1);
     
-    console.log(`      🔍 主光線セグメント数: ${chiefRay.segments.length}, 評価面インデックス: ${targetSurfaceIndex}`);
-    
     // 評価面での主光線位置を取得（絶対インデックスを使用）
     if (targetPointIndex >= chiefRay.segments.length) {
         console.warn(`      ⚠️ calculateParaxialImagePosition: targetPointIndex=${targetPointIndex}が範囲外です（最大: ${chiefRay.segments.length - 1}）`);
@@ -607,11 +902,9 @@ function calculateParaxialImagePosition(opticalSystemRows, chiefRay, targetSurfa
         console.warn('      ⚠️ calculateParaxialImagePosition: 主光線の焦点計算に失敗 → 評価面Zで代用');
         const fallbackZ = chiefRay.segments[targetPointIndex]?.z;
         if (fallbackZ === undefined || fallbackZ === null) return null;
-        console.log(`      📍 近軸像点位置(代用): Z = ${fallbackZ.toFixed(4)}mm`);
         return fallbackZ;
     }
 
-    console.log(`      📍 近軸像点位置: Z = ${paraxialZ.toFixed(4)}mm`);
     return paraxialZ;
 }
 
@@ -719,6 +1012,158 @@ function projectRayToZ(segment, nextSegment, targetZ) {
     };
 }
 
+function buildTargetHitForFocusSearch(rayData, opticalSystemRows, targetSurfaceIndex, imageSurfaceInfo, rayDirection = null) {
+    const toLocal = (point) => {
+        if (!imageSurfaceInfo || !imageSurfaceInfo.origin || !imageSurfaceInfo.rotationMatrix) return point;
+        const dx = point.x - imageSurfaceInfo.origin.x;
+        const dy = point.y - imageSurfaceInfo.origin.y;
+        const dz = point.z - imageSurfaceInfo.origin.z;
+        const R = imageSurfaceInfo.rotationMatrix;
+        return {
+            x: R[0][0] * dx + R[1][0] * dy + R[2][0] * dz,
+            y: R[0][1] * dx + R[1][1] * dy + R[2][1] * dz,
+            z: R[0][2] * dx + R[1][2] * dy + R[2][2] * dz
+        };
+    };
+
+    const toLocalDelta = (vector) => {
+        if (!imageSurfaceInfo || !imageSurfaceInfo.rotationMatrix) return vector;
+        const R = imageSurfaceInfo.rotationMatrix;
+        return {
+            x: R[0][0] * vector.x + R[1][0] * vector.y + R[2][0] * vector.z,
+            y: R[0][1] * vector.x + R[1][1] * vector.y + R[2][1] * vector.z,
+            z: R[0][2] * vector.x + R[1][2] * vector.y + R[2][2] * vector.z
+        };
+    };
+
+    const originalRay = rayData?.originalRay && rayData?.originalRay?.pos && rayData?.originalRay?.dir
+        ? {
+            pos: { ...rayData.originalRay.pos },
+            dir: { ...rayData.originalRay.dir },
+            wavelength: Number(rayData?.originalRay?.wavelength ?? rayData?.wavelength)
+        }
+        : null;
+
+    if (originalRay && Number.isFinite(originalRay.wavelength)) {
+        const directHit = traceRayHitPoint(
+            opticalSystemRows,
+            originalRay,
+            1.0,
+            targetSurfaceIndex,
+            { ...RUST_RT_OPTIONS, __returnHitDirection: true }
+        );
+        if (directHit && Number.isFinite(directHit.x) && Number.isFinite(directHit.y) && Number.isFinite(directHit.z) &&
+            Number.isFinite(directHit.dx) && Number.isFinite(directHit.dy) && Number.isFinite(directHit.dz)) {
+            const targetLocal = toLocal({ x: directHit.x, y: directHit.y, z: directHit.z });
+            const dirLocal = toLocalDelta({ x: directHit.dx, y: directHit.dy, z: directHit.dz });
+            if (Number.isFinite(targetLocal.x) && Number.isFinite(targetLocal.y) && Number.isFinite(targetLocal.z) &&
+                Number.isFinite(dirLocal.x) && Number.isFinite(dirLocal.y) && Number.isFinite(dirLocal.z)) {
+                return {
+                    hx: targetLocal.x,
+                    hy: targetLocal.y,
+                    hz: targetLocal.z,
+                    dx: dirLocal.x,
+                    dy: dirLocal.y,
+                    dz: dirLocal.z,
+                };
+            }
+        }
+    }
+
+    if (!rayData || !Array.isArray(rayData.segments) || rayData.segments.length === 0) {
+        return null;
+    }
+
+    const rawTargetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
+    if (rawTargetPointIndex === null) {
+        return null;
+    }
+
+    const targetPointIndex = Math.min(rawTargetPointIndex, rayData.segments.length - 1);
+    const targetSegment = rayData.segments[targetPointIndex];
+    if (!targetSegment) {
+        return null;
+    }
+
+    let nextSegment;
+    if (targetPointIndex + 1 < rayData.segments.length) {
+        nextSegment = rayData.segments[targetPointIndex + 1];
+    } else if (targetPointIndex >= 1) {
+        const prevSegment = rayData.segments[targetPointIndex - 1];
+        const ddx = targetSegment.x - prevSegment.x;
+        const ddy = targetSegment.y - prevSegment.y;
+        const ddz = targetSegment.z - prevSegment.z;
+        const len = Math.hypot(ddx, ddy, ddz);
+        if (len < 1e-12) return null;
+        nextSegment = {
+            x: targetSegment.x + ddx / len,
+            y: targetSegment.y + ddy / len,
+            z: targetSegment.z + ddz / len
+        };
+    } else if (rayDirection && Number.isFinite(rayDirection.x) && Number.isFinite(rayDirection.y) && Number.isFinite(rayDirection.z)) {
+        nextSegment = {
+            x: targetSegment.x + rayDirection.x,
+            y: targetSegment.y + rayDirection.y,
+            z: targetSegment.z + rayDirection.z
+        };
+    } else {
+        return null;
+    }
+
+    const targetLocal = toLocal(targetSegment);
+    const nextLocal = toLocal(nextSegment);
+    const dx = nextLocal.x - targetLocal.x;
+    const dy = nextLocal.y - targetLocal.y;
+    const dz = nextLocal.z - targetLocal.z;
+
+    if (!Number.isFinite(targetLocal.x) || !Number.isFinite(targetLocal.y) || !Number.isFinite(targetLocal.z) ||
+        !Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) {
+        return null;
+    }
+
+    return {
+        hx: targetLocal.x,
+        hy: targetLocal.y,
+        hz: targetLocal.z,
+        dx,
+        dy,
+        dz,
+    };
+}
+
+function projectHitToZForFocusSearch(hit, targetZ) {
+    if (!hit || !Number.isFinite(hit.dz) || Math.abs(hit.dz) < 1e-12) {
+        return null;
+    }
+    const t = (targetZ - hit.hz) / hit.dz;
+    const x = hit.hx + t * hit.dx;
+    const y = hit.hy + t * hit.dy;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+    }
+    return { x, y };
+}
+
+function calculateRMSAtZFromHitsNativeLike(fanHits, chiefHit, targetZ, meridional) {
+    const chiefAtZ = projectHitToZForFocusSearch(chiefHit, targetZ);
+    if (!chiefAtZ) return null;
+
+    const deviations = [];
+    for (const hit of fanHits) {
+        const pointAtZ = projectHitToZForFocusSearch(hit, targetZ);
+        if (!pointAtZ) continue;
+        const dev = meridional ? (pointAtZ.y - chiefAtZ.y) : (pointAtZ.x - chiefAtZ.x);
+        if (Number.isFinite(dev)) deviations.push(dev);
+    }
+
+    if (deviations.length === 0) {
+        return null;
+    }
+
+    const sumSq = deviations.reduce((sum, value) => sum + value * value, 0);
+    return Math.sqrt(sumSq / deviations.length);
+}
+
 /**
  * 指定のZ平面での横収差RMSを計算
  * @param {Array} rayFan - 光線ファンの配列 [{segments: [...], ...}, ...]
@@ -754,10 +1199,28 @@ function calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex
         return null;
     }
     
-    // 主光線の方向ベクトルを計算（次の点、または前の点）
+    // 主光線の方向ベクトルを計算
+    // NOTE: native Rust uses the outgoing direction AT the target surface (stored by
+    // trace_target_with_packed_native as hit[5..7]).  For a flat image-surface det,
+    // that equals the incoming direction, i.e. segments[targetIdx] - segments[targetIdx-1].
+    // Using the *initial* ray.dir (entrance direction) here produces wrong extrapolation
+    // at high field angles and is the main cause of discontinuous M/S curves.
     let chiefNextSegment;
     if (chiefNextIndex < chiefRay.segments.length) {
         chiefNextSegment = chiefRay.segments[chiefNextIndex];
+    } else if (chiefTargetIndex >= 1) {
+        // Use the direction the chief ray was traveling just before the image surface.
+        const prev = chiefRay.segments[chiefTargetIndex - 1];
+        const ddx = chiefSegment.x - prev.x;
+        const ddy = chiefSegment.y - prev.y;
+        const ddz = chiefSegment.z - prev.z;
+        const len = Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
+        if (len < 1e-12) return null;
+        chiefNextSegment = {
+            x: chiefSegment.x + ddx / len,
+            y: chiefSegment.y + ddy / len,
+            z: chiefSegment.z + ddz / len
+        };
     } else if (chiefRayDirection && Number.isFinite(chiefRayDirection.x) && Number.isFinite(chiefRayDirection.y) && Number.isFinite(chiefRayDirection.z)) {
         chiefNextSegment = {
             x: chiefSegment.x + chiefRayDirection.x,
@@ -785,9 +1248,24 @@ function calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex
         const segment = ray.segments[rayTargetIndex];
         
         // 光線の方向ベクトルを計算
+        // Prefer segments[i+1] (outgoing), then segments[i]-segments[i-1] (incoming ≈ outgoing
+        // for flat image surface), finally ray.dir as last resort.  Never use initial-direction
+        // ray.dir as a substitute for the exit direction at the image surface.
         let nextSegment;
         if (rayTargetIndex + 1 < ray.segments.length) {
             nextSegment = ray.segments[rayTargetIndex + 1];
+        } else if (rayTargetIndex >= 1) {
+            const prevSeg = ray.segments[rayTargetIndex - 1];
+            const ddx = segment.x - prevSeg.x;
+            const ddy = segment.y - prevSeg.y;
+            const ddz = segment.z - prevSeg.z;
+            const len = Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
+            if (len < 1e-12) continue;
+            nextSegment = {
+                x: segment.x + ddx / len,
+                y: segment.y + ddy / len,
+                z: segment.z + ddz / len
+            };
         } else if (ray.dir && Number.isFinite(ray.dir.x) && Number.isFinite(ray.dir.y) && Number.isFinite(ray.dir.z)) {
             nextSegment = {
                 x: segment.x + ray.dir.x,
@@ -832,77 +1310,84 @@ function calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex
  * @returns {number|null} 最良焦点のZ座標
  */
 function findBestFocusZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, referenceZ, direction, imageSurfaceInfo, chiefRayDirection = null) {
-    console.log(`      🔍 最良焦点探索（ハイブリッド法）: 光線ファン=${rayFan.length}本, 基準位置=${referenceZ.toFixed(4)}mm`);
-    
-    // 探索範囲：Image面（基準位置） ± 10mm
-    const searchRange = 10; // mm
+    if (!Array.isArray(rayFan) || rayFan.length < 3) {
+        return null;
+    }
+
+    const meridional = direction === 'meridional';
+    const chiefHit = buildTargetHitForFocusSearch(
+        chiefRay,
+        opticalSystemRows,
+        targetSurfaceIndex,
+        imageSurfaceInfo,
+        chiefRayDirection
+    );
+    if (!chiefHit) {
+        return null;
+    }
+
+    const fanHits = [];
+    for (const ray of rayFan) {
+        const hit = buildTargetHitForFocusSearch(
+            ray,
+            opticalSystemRows,
+            targetSurfaceIndex,
+            imageSurfaceInfo,
+            ray?.dir || null
+        );
+        if (hit) fanHits.push(hit);
+    }
+    if (fanHits.length < 3) {
+        return null;
+    }
+
+    const searchRange = 10.0;
     let zMin = referenceZ - searchRange;
     let zMax = referenceZ + searchRange;
-    
-    // ステップ1: 粗探索で初期範囲を絞る（41点サンプリング）
-    const numCoarseSamples = 41;
-    let bestZ = referenceZ;
-    let minRMS = Infinity;
-    let validSamples = 0;
-    
-    console.log(`      🔍 粗探索: ${zMin.toFixed(2)}mm ~ ${zMax.toFixed(2)}mm (${numCoarseSamples}点)`);
-    
+
     const coarseSamples = [];
-    for (let i = 0; i < numCoarseSamples; i++) {
-        const z = zMin + (zMax - zMin) * i / (numCoarseSamples - 1);
-        const rms = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, z, direction, imageSurfaceInfo, chiefRayDirection);
-        
+    const coarseSampleCount = 41;
+    let bestZ = referenceZ;
+    let bestRms = Infinity;
+
+    for (let index = 0; index < coarseSampleCount; index++) {
+        const z = zMin + (zMax - zMin) * index / (coarseSampleCount - 1);
+        const rms = calculateRMSAtZFromHitsNativeLike(fanHits, chiefHit, z, meridional);
         if (rms !== null) {
-            validSamples++;
-            coarseSamples.push({ z, rms });
-            if (rms < minRMS) {
-                minRMS = rms;
+            coarseSamples.push([z, rms]);
+            if (rms < bestRms) {
+                bestRms = rms;
                 bestZ = z;
             }
         }
     }
-    
-    console.log(`      📊 粗探索結果: 有効サンプル=${validSamples}/${numCoarseSamples}, 初期最良Z=${bestZ.toFixed(4)}mm, RMS=${minRMS.toFixed(6)}mm`);
-    
-    if (minRMS === Infinity || coarseSamples.length < 3) {
-        console.warn(`      ⚠️ 有効なサンプルが不足`);
+
+    if (!Number.isFinite(bestRms) || coarseSamples.length < 3) {
         return null;
     }
-    
-    // 最小値周辺の範囲を特定（3点法：左、中央、右）
-    coarseSamples.sort((a, b) => a.z - b.z);
-    let bestIndex = coarseSamples.findIndex(s => s.z === bestZ);
-    
-    // 最小値の左右の点を見つける
-    let leftIndex = Math.max(0, bestIndex - 2);
-    let rightIndex = Math.min(coarseSamples.length - 1, bestIndex + 2);
-    
-    zMin = coarseSamples[leftIndex].z;
-    zMax = coarseSamples[rightIndex].z;
-    
-    console.log(`      🔍 範囲絞り込み: ${zMin.toFixed(4)}mm ~ ${zMax.toFixed(4)}mm (幅=${(zMax - zMin).toFixed(4)}mm)`);
-    
-    // ステップ2: 黄金分割法で高精度探索
-    const tolerance = 0.001; // 収束判定：0.001mm以下
+
+    coarseSamples.sort((left, right) => left[0] - right[0]);
+    const bestIndex = coarseSamples.findIndex(([z]) => Math.abs(z - bestZ) < 1e-12);
+    const leftIndex = Math.max(0, bestIndex >= 0 ? bestIndex - 2 : 0);
+    const rightIndex = Math.min(coarseSamples.length - 1, (bestIndex >= 0 ? bestIndex + 2 : 0));
+    zMin = coarseSamples[leftIndex][0];
+    zMax = coarseSamples[rightIndex][0];
+
+    const tolerance = 1e-3;
     const maxIterations = 30;
-    const phi = (1 + Math.sqrt(5)) / 2; // 黄金比
+    const phi = (1 + Math.sqrt(5)) * 0.5;
     const resphi = 2 - phi;
-    
+
     let a = zMin;
     let b = zMax;
     let x1 = a + resphi * (b - a);
     let x2 = b - resphi * (b - a);
-    
-    let f1 = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, x1, direction, imageSurfaceInfo, chiefRayDirection);
-    let f2 = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, x2, direction, imageSurfaceInfo, chiefRayDirection);
-    
+    let f1 = calculateRMSAtZFromHitsNativeLike(fanHits, chiefHit, x1, meridional);
+    let f2 = calculateRMSAtZFromHitsNativeLike(fanHits, chiefHit, x2, meridional);
     if (f1 === null || f2 === null) {
-        console.warn(`      ⚠️ 黄金分割法の初期評価失敗`);
-        return bestZ;
+        return null;
     }
-    
-    console.log(`      🔍 黄金分割法開始: [${a.toFixed(6)}, ${b.toFixed(6)}]mm, 収束判定=${tolerance}mm`);
-    
+
     let iteration = 0;
     while (iteration < maxIterations && (b - a) > tolerance) {
         if (f1 < f2) {
@@ -910,36 +1395,20 @@ function findBestFocusZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex,
             x2 = x1;
             f2 = f1;
             x1 = a + resphi * (b - a);
-            f1 = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, x1, direction, imageSurfaceInfo, chiefRayDirection);
+            f1 = calculateRMSAtZFromHitsNativeLike(fanHits, chiefHit, x1, meridional);
+            if (f1 === null) break;
         } else {
             a = x1;
             x1 = x2;
             f1 = f2;
             x2 = b - resphi * (b - a);
-            f2 = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, x2, direction, imageSurfaceInfo, chiefRayDirection);
+            f2 = calculateRMSAtZFromHitsNativeLike(fanHits, chiefHit, x2, meridional);
+            if (f2 === null) break;
         }
-        
-        if (f1 === null || f2 === null) break;
-        
-        iteration++;
-        
-        if (iteration <= 5 || iteration % 5 === 0) {
-            console.log(`      📊 反復${iteration}: [${a.toFixed(6)}, ${b.toFixed(6)}]mm, 幅=${(b - a).toFixed(6)}mm, RMS1=${f1.toFixed(6)}mm, RMS2=${f2.toFixed(6)}mm`);
-        }
-        
-        if ((b - a) <= tolerance) {
-            console.log(`      ✅ 収束: 範囲幅=${(b - a).toFixed(6)}mm <= ${tolerance}mm`);
-            break;
-        }
+        iteration += 1;
     }
-    
-    // 最終的な最良Z位置（区間の中点）
-    const finalZ = (a + b) / 2;
-    const finalRMS = calculateRMSAtZ(rayFan, chiefRay, opticalSystemRows, targetSurfaceIndex, finalZ, direction, imageSurfaceInfo, chiefRayDirection);
-    
-    console.log(`      📊 ${direction} 最良焦点: Z=${finalZ.toFixed(6)}mm, RMS=${finalRMS?.toFixed(6)}mm (反復${iteration}回)`);
-    
-    return finalZ;
+
+    return (a + b) * 0.5;
 }
 
 /**
@@ -964,11 +1433,12 @@ function traceMeridionalMarginalRay(
     targetSurfaceIndex,
     imageSurfaceZ,
     imageSurfaceInfo,
-    isAngleField = false
+    isAngleField = false,
+    samplingPattern = 'annular',
+    ringCount = 10,
+    rayCount = 30
 ) {
     try {
-        console.log('      📊 Stop-solve 光線ファンを使用（メリディオナル）');
-        
         // Draw Crossの光線グループを取得
         if (!chiefRayResult || !chiefRayResult.rayGroups || !chiefRayResult.rayGroups[0]) {
             console.warn('      ⚠️ メリディオナル: rayGroupsが不正です');
@@ -980,12 +1450,6 @@ function traceMeridionalMarginalRay(
             console.warn('      ⚠️ メリディオナル: rayGroup.raysが不正です');
             return null;
         }
-
-        console.log(`      🔍 光線グループ内の光線数: ${rayGroup.rays.length}`);
-
-        // CBの有無で Draw Cross の分類/到達が揺れるため、常に stop-solve でファンを構築して一貫性を確保する。
-        const rayFan = [];
-
         const rawTargetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
         if (rawTargetPointIndex === null) {
             console.warn('      ⚠️ メリディオナル: targetSurfaceIndex変換失敗');
@@ -994,22 +1458,89 @@ function traceMeridionalMarginalRay(
         
         // CTがあると実際の光線セグメント数より大きい値になるのでクランプ
         const targetPointIndex = Math.min(rawTargetPointIndex, chiefRay.segments.length - 1);
+
+        const rayFan = [];
+        const chiefRayEntry = rayGroup.rays.find(r => (r?.rayType || '').toLowerCase() === 'chief') || null;
+        const axisFanTarget = samplingPattern === 'cross'
+            ? Math.max(25, Math.min(401, rayCount - 1))
+            : Math.max(25, Math.min(401, Math.round(Math.sqrt(rayCount) * 3)));
+
+        if (chiefRayEntry) {
+            const { stopPlaneCenter3d, stopPlaneU, stopPlaneV } = computeStopPlaneFrame(opticalSystemRows, stopSurfaceIndex);
+            if (stopPlaneCenter3d) {
+                const selectedRays = selectAxisFanRaysByStopPlane(
+                    rayGroup.rays,
+                    chiefRayEntry,
+                    true,
+                    axisFanTarget,
+                    stopPlaneCenter3d,
+                    stopPlaneU,
+                    stopPlaneV
+                );
+                for (const ray of selectedRays) {
+                    if (ray?.path && ray.path.length > targetPointIndex) {
+                        rayFan.push({
+                            segments: ray.path,
+                            dir: extractRayStartAndDirection(ray)?.dir || ray.dir || null,
+                            type: ray.rayType || 'meridional_selected',
+                            originalRay: ray.originalRay || null,
+                            wavelength: ray.wavelength
+                        });
+                    }
+                }
+            }
+        }
         
-        const solvedFan = buildStopSolveRayFan(
-            opticalSystemRows,
-            chiefRayResult,
-            wavelength,
-            stopSurfaceIndex,
-            targetSurfaceIndex,
-            targetPointIndex,
-            'meridional',
-            isAngleField
-        );
-        if (solvedFan.length > 0) {
-            rayFan.push(...solvedFan);
+        const minAxisHitsForRms = 5;
+        if (rayFan.length < minAxisHitsForRms && chiefRayEntry) {
+            const successful = (rayGroup.rays || []).filter((ray: any) => {
+                if (!ray || ray === chiefRayEntry || String(ray?.rayType || '').toLowerCase() === 'chief') return false;
+                return Array.isArray(ray.path) && ray.path.length > targetPointIndex;
+            });
+            const { stopPlaneCenter3d, stopPlaneU, stopPlaneV } = computeStopPlaneFrame(opticalSystemRows, stopSurfaceIndex);
+            if (stopPlaneCenter3d && successful.length > 0) {
+                const recovered = selectAxisRaysFromSuccessfulByStopPlane(
+                    successful,
+                    chiefRayEntry,
+                    true,
+                    axisFanTarget,
+                    stopPlaneCenter3d,
+                    stopPlaneU,
+                    stopPlaneV
+                );
+                if (recovered.length > rayFan.length) {
+                    rayFan.length = 0;
+                    for (const ray of recovered) {
+                        rayFan.push({
+                            segments: ray.path,
+                            dir: extractRayStartAndDirection(ray)?.dir || ray.dir || null,
+                            type: ray.rayType || 'meridional_recovered',
+                            originalRay: ray.originalRay || null,
+                            wavelength: ray.wavelength
+                        });
+                    }
+                }
+            }
         }
 
-        console.log(`      📊 メリディオナル光線ファン(stop-solve): ${rayFan.length}本使用`);
+        if (rayFan.length < minAxisHitsForRms) {
+            const solvedFan = buildStopSolveRayFan(
+                opticalSystemRows,
+                chiefRayResult,
+                wavelength,
+                stopSurfaceIndex,
+                targetSurfaceIndex,
+                targetPointIndex,
+                'meridional',
+                isAngleField,
+                samplingPattern,
+                ringCount,
+                rayCount
+            );
+            if (solvedFan.length > 0) {
+                rayFan.push(...solvedFan);
+            }
+        }
         if (rayFan.length < 3) {
             console.warn('      ⚠️ メリディオナル: stop-solveでも光線が不足しています');
             return null;
@@ -1062,11 +1593,12 @@ function traceSagittalMarginalRay(
     targetSurfaceIndex,
     imageSurfaceZ,
     imageSurfaceInfo,
-    isAngleField = false
+    isAngleField = false,
+    samplingPattern = 'annular',
+    ringCount = 10,
+    rayCount = 30
 ) {
     try {
-        console.log('      📊 Stop-solve 光線ファンを使用（サジタル）');
-        
         // Draw Crossの光線グループを取得
         if (!chiefRayResult || !chiefRayResult.rayGroups || !chiefRayResult.rayGroups[0]) {
             console.warn('      ⚠️ サジタル: rayGroupsが不正です');
@@ -1078,12 +1610,6 @@ function traceSagittalMarginalRay(
             console.warn('      ⚠️ サジタル: rayGroup.raysが不正です');
             return null;
         }
-
-        console.log(`      🔍 光線グループ内の光線数: ${rayGroup.rays.length}`);
-
-        // CBの有無で Draw Cross の分類/到達が揺れるため、常に stop-solve でファンを構築して一貫性を確保する。
-        const rayFan = [];
-
         const rawTargetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
         if (rawTargetPointIndex === null) {
             console.warn('      ⚠️ サジタル: targetSurfaceIndex変換失敗');
@@ -1092,22 +1618,89 @@ function traceSagittalMarginalRay(
         
         // CTがあると実際の光線セグメント数より大きい値になるのでクランプ
         const targetPointIndex = Math.min(rawTargetPointIndex, chiefRay.segments.length - 1);
+
+        const rayFan = [];
+        const chiefRayEntry = rayGroup.rays.find(r => (r?.rayType || '').toLowerCase() === 'chief') || null;
+        const axisFanTarget = samplingPattern === 'cross'
+            ? Math.max(25, Math.min(401, rayCount - 1))
+            : Math.max(25, Math.min(401, Math.round(Math.sqrt(rayCount) * 3)));
+
+        if (chiefRayEntry) {
+            const { stopPlaneCenter3d, stopPlaneU, stopPlaneV } = computeStopPlaneFrame(opticalSystemRows, stopSurfaceIndex);
+            if (stopPlaneCenter3d) {
+                const selectedRays = selectAxisFanRaysByStopPlane(
+                    rayGroup.rays,
+                    chiefRayEntry,
+                    false,
+                    axisFanTarget,
+                    stopPlaneCenter3d,
+                    stopPlaneU,
+                    stopPlaneV
+                );
+                for (const ray of selectedRays) {
+                    if (ray?.path && ray.path.length > targetPointIndex) {
+                        rayFan.push({
+                            segments: ray.path,
+                            dir: extractRayStartAndDirection(ray)?.dir || ray.dir || null,
+                            type: ray.rayType || 'sagittal_selected',
+                            originalRay: ray.originalRay || null,
+                            wavelength: ray.wavelength
+                        });
+                    }
+                }
+            }
+        }
         
-        const solvedFan = buildStopSolveRayFan(
-            opticalSystemRows,
-            chiefRayResult,
-            wavelength,
-            stopSurfaceIndex,
-            targetSurfaceIndex,
-            targetPointIndex,
-            'sagittal',
-            isAngleField
-        );
-        if (solvedFan.length > 0) {
-            rayFan.push(...solvedFan);
+        const minAxisHitsForRms = 5;
+        if (rayFan.length < minAxisHitsForRms && chiefRayEntry) {
+            const successful = (rayGroup.rays || []).filter((ray: any) => {
+                if (!ray || ray === chiefRayEntry || String(ray?.rayType || '').toLowerCase() === 'chief') return false;
+                return Array.isArray(ray.path) && ray.path.length > targetPointIndex;
+            });
+            const { stopPlaneCenter3d, stopPlaneU, stopPlaneV } = computeStopPlaneFrame(opticalSystemRows, stopSurfaceIndex);
+            if (stopPlaneCenter3d && successful.length > 0) {
+                const recovered = selectAxisRaysFromSuccessfulByStopPlane(
+                    successful,
+                    chiefRayEntry,
+                    false,
+                    axisFanTarget,
+                    stopPlaneCenter3d,
+                    stopPlaneU,
+                    stopPlaneV
+                );
+                if (recovered.length > rayFan.length) {
+                    rayFan.length = 0;
+                    for (const ray of recovered) {
+                        rayFan.push({
+                            segments: ray.path,
+                            dir: extractRayStartAndDirection(ray)?.dir || ray.dir || null,
+                            type: ray.rayType || 'sagittal_recovered',
+                            originalRay: ray.originalRay || null,
+                            wavelength: ray.wavelength
+                        });
+                    }
+                }
+            }
         }
 
-        console.log(`      📊 サジタル光線ファン(stop-solve): ${rayFan.length}本使用`);
+        if (rayFan.length < minAxisHitsForRms) {
+            const solvedFan = buildStopSolveRayFan(
+                opticalSystemRows,
+                chiefRayResult,
+                wavelength,
+                stopSurfaceIndex,
+                targetSurfaceIndex,
+                targetPointIndex,
+                'sagittal',
+                isAngleField,
+                samplingPattern,
+                ringCount,
+                rayCount
+            );
+            if (solvedFan.length > 0) {
+                rayFan.push(...solvedFan);
+            }
+        }
         if (rayFan.length < 3) {
             console.warn('      ⚠️ サジタル: stop-solveでも光線が不足しています');
             return null;
@@ -1171,8 +1764,6 @@ function getFieldSettingsFromObject(objectRowsParam, systemMode = 'height') {
             return [];
         }
         
-        console.log(`   Object行数: ${objectRows.length}, SystemMode: ${systemMode}`);
-        
         const fieldSettings = [];
         
         for (let i = 0; i < objectRows.length; i++) {
@@ -1214,8 +1805,6 @@ function getFieldSettingsFromObject(objectRowsParam, systemMode = 'height') {
                 objectIndex: i,
                 position: normalizedPosition
             });
-
-            console.log(`      Object ${i + 1}: "${name}" -> ${normalizedPosition.toUpperCase()} (x=${xValue}, y=${yValue})`);
         }
         
         return fieldSettings;
@@ -1242,8 +1831,6 @@ function interpolateFieldSettings(originalFields, totalPoints = 9) {
     
     const minAngle = sortedFields[0].y;
     const maxAngle = sortedFields[sortedFields.length - 1].y;
-    
-    console.log(`   📊 補間: ${originalFields.length}点 → ${totalPoints}点 (${minAngle}° ~ ${maxAngle}°)`);
     
     const interpolatedFields = [];
     
@@ -1299,8 +1886,6 @@ function interpolateHeightFieldSettings(originalFields, totalPoints = 9) {
     const minH = sortedFields[0].y;
     const maxH = sortedFields[sortedFields.length - 1].y;
 
-    console.log(`   📊 補間(高さ): ${originalFields.length}点 → ${totalPoints}点 (${minH}mm ~ ${maxH}mm)`);
-
     const interpolatedFields = [];
 
     for (let i = 0; i < totalPoints; i++) {
@@ -1347,6 +1932,1015 @@ function interpolateHeightFieldSettings(originalFields, totalPoints = 9) {
     return interpolatedFields;
 }
 
+function maybeInterpolateAngleFieldSettingsForAstig(originalFields, totalPoints = 51) {
+    if (!Array.isArray(originalFields) || originalFields.length === 0) {
+        return [];
+    }
+
+    const angleFields = originalFields.filter(field => {
+        const position = String(field?.position || field?.fieldType || '').toLowerCase();
+        return position.includes('angle') && !position.includes('rectangle') && !position.includes('height');
+    });
+    if (angleFields.length !== originalFields.length) {
+        return originalFields;
+    }
+
+    let maxAngle = 0;
+    for (const field of originalFields) {
+        const angle = Math.abs(Number(field?.yFieldAngle ?? field?.fieldAngle ?? field?.yHeightAngle ?? field?.y ?? 0));
+        if (Number.isFinite(angle)) {
+            maxAngle = Math.max(maxAngle, angle);
+        }
+    }
+    if (!Number.isFinite(maxAngle) || maxAngle <= 0) {
+        return originalFields;
+    }
+
+    const sampleCount = Math.max(3, Math.round(Number(totalPoints) || 51));
+    const out = [];
+    for (let i = 0; i < sampleCount; i++) {
+        const angle = maxAngle * i / (sampleCount - 1);
+        out.push({
+            name: `Field${i}`,
+            displayName: `${angle.toFixed(1)}°`,
+            x: 0,
+            y: angle,
+            xHeight: 0,
+            yHeight: 0,
+            xHeightAngle: 0,
+            yHeightAngle: angle,
+            yFieldAngle: angle,
+            fieldAngle: angle,
+            fieldType: 'angle',
+            position: 'angle',
+            objectIndex: -1,
+            isInterpolated: true
+        });
+    }
+    return out;
+}
+
+function collectSpotWavelengthsForAstigWeb(sourceRows, wavelengthMode = 'all') {
+    const all = [];
+    let primary = 0.5875618;
+    let hasExplicitPrimary = false;
+
+    for (const row of Array.isArray(sourceRows) ? sourceRows : []) {
+        const wl = Number(row?.wavelength ?? row?.Wavelength);
+        if (!Number.isFinite(wl) || wl <= 0) continue;
+        all.push(wl);
+
+        if (!hasExplicitPrimary && all.length === 1) {
+            primary = wl;
+        }
+
+        const primaryFlag = row?.primary ?? row?.Primary ?? row?.['Primary Wavelength'] ?? row?.isPrimary;
+        const isPrimary = typeof primaryFlag === 'boolean'
+            ? primaryFlag
+            : String(primaryFlag ?? '').trim().toLowerCase();
+        if (isPrimary === true || isPrimary === 'true' || isPrimary === '1' || isPrimary === 'yes' || (typeof isPrimary === 'string' && isPrimary.includes('primary'))) {
+            primary = wl;
+            hasExplicitPrimary = true;
+        }
+    }
+
+    if (all.length === 0) {
+        all.push(primary);
+    }
+
+    const unique = [...all]
+        .filter((wl, idx, arr) => arr.findIndex(v => Math.abs(v - wl) < 1e-9) === idx)
+        .sort((a, b) => a - b);
+
+    if (String(wavelengthMode || '').toLowerCase() === 'primary') {
+        return [{ wavelengthUm: primary, label: 'Primary', color: '#2563eb' }];
+    }
+
+    const palette = [
+        '#2563eb', '#16a34a', '#dc2626', '#7c3aed', '#ea580c', '#0891b2', '#4f46e5', '#0f766e', '#b91c1c', '#1d4ed8'
+    ];
+
+    return unique.map((wl, idx) => ({
+        wavelengthUm: wl,
+        label: Math.abs(wl - primary) < 1e-6 ? `Primary (${(wl * 1000).toFixed(1)}nm)` : `${(wl * 1000).toFixed(1)}nm`,
+        color: palette[idx % palette.length]
+    }));
+}
+
+function maybeInterpolateAngleObjectRowsForAstigWeb(objectRows, infiniteConjugate) {
+    if (!infiniteConjugate || !Array.isArray(objectRows) || objectRows.length === 0) {
+        return Array.isArray(objectRows) ? objectRows : [];
+    }
+
+    const hasHeightRect = objectRows.some((row) => {
+        const pos = String(row?.position ?? row?.fieldType ?? row?.type ?? '').toLowerCase();
+        return pos.includes('height') || pos.includes('rect');
+    });
+    if (hasHeightRect) return objectRows;
+
+    let maxYAngle = 0;
+    for (const row of objectRows) {
+        const y = Math.abs(Number(row?.yHeightAngle ?? row?.yFieldAngle ?? row?.fieldAngle ?? row?.y ?? 0));
+        if (Number.isFinite(y)) {
+            maxYAngle = Math.max(maxYAngle, y);
+        }
+    }
+
+    if (!Number.isFinite(maxYAngle) || maxYAngle <= 0) {
+        return objectRows;
+    }
+
+    const subdivisions = 50;
+    const out = [];
+    for (let i = 0; i <= subdivisions; i++) {
+        const angle = maxYAngle * i / subdivisions;
+        out.push({
+            name: `Field${i}`,
+            position: 'Angle',
+            xHeightAngle: 0,
+            yHeightAngle: angle
+        });
+    }
+    return out;
+}
+
+function generateCrossOffsetsNativeLike(rayCount, maxRadius) {
+    const offsets = [];
+    if (rayCount <= 0) return offsets;
+    offsets.push({ offsetU: 0, offsetV: 0 });
+    if (rayCount === 1) return offsets;
+
+    let remaining = rayCount - 1;
+    const armSteps = Math.max(1, Math.floor((remaining + 3) / 4));
+    for (let index = 0; index < armSteps && remaining > 0; index++) {
+        const t = (index + 1) / armSteps;
+        const r = maxRadius * t;
+        const candidates = [
+            { offsetU: r, offsetV: 0 },
+            { offsetU: -r, offsetV: 0 },
+            { offsetU: 0, offsetV: r },
+            { offsetU: 0, offsetV: -r }
+        ];
+        for (const candidate of candidates) {
+            if (remaining <= 0) break;
+            offsets.push(candidate);
+            remaining -= 1;
+        }
+    }
+    return offsets;
+}
+
+function generateAnnularOffsetsNativeLike(rayCount, maxRadius, ringCount) {
+    const offsets = [];
+    if (rayCount <= 0) return offsets;
+    offsets.push({ offsetU: 0, offsetV: 0 });
+    if (rayCount === 1) return offsets;
+
+    const safeRingCount = Math.max(1, Math.floor(ringCount || 1));
+    const rings = Math.min(safeRingCount, rayCount);
+    let raysLeft = rayCount - 1;
+    for (let ringIndex = 1; ringIndex <= rings && raysLeft > 0; ringIndex++) {
+        const ringsRemaining = rings - ringIndex + 1;
+        let raysForThisRing = Math.max(4, Math.floor(raysLeft / ringsRemaining));
+        if (ringIndex === rings) raysForThisRing = raysLeft;
+        const radius = (ringIndex / rings) * maxRadius;
+        const angleStep = (2 * Math.PI) / Math.max(1, raysForThisRing);
+        const startAngle = (ringIndex % 2 === 0) ? angleStep / 2 : 0;
+        for (let i = 0; i < raysForThisRing && raysLeft > 0; i++) {
+            const angle = startAngle + angleStep * i;
+            offsets.push({
+                offsetU: radius * Math.cos(angle),
+                offsetV: radius * Math.sin(angle)
+            });
+            raysLeft -= 1;
+        }
+    }
+    return offsets;
+}
+
+function generateCenteredGridOffsetsNativeLike(rayCount, halfExtent) {
+    if (rayCount <= 0) return [];
+    let gridSize = Math.max(1, Math.ceil(Math.sqrt(rayCount)));
+    if (gridSize % 2 === 0) gridSize += 1;
+    const spacing = gridSize > 1 ? (2 * halfExtent) / (gridSize - 1) : 0;
+    const center = (gridSize - 1) / 2;
+    const out = [];
+    for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+            if (out.length >= rayCount) break;
+            out.push({
+                offsetU: gridSize > 1 ? (i - center) * spacing : 0,
+                offsetV: gridSize > 1 ? (j - center) * spacing : 0
+            });
+        }
+        if (out.length >= rayCount) break;
+    }
+    return out;
+}
+
+function generateOffsetsForPatternNativeLike(pattern, rayCount, radius, ringCount) {
+    const safeRadius = Number.isFinite(radius) && radius > 1e-6 ? radius : 1e-6;
+    if (pattern === 'grid') {
+        return generateCenteredGridOffsetsNativeLike(rayCount, safeRadius);
+    }
+    if (pattern === 'cross') {
+        return generateCrossOffsetsNativeLike(rayCount, safeRadius);
+    }
+    return generateAnnularOffsetsNativeLike(rayCount, safeRadius, ringCount);
+}
+
+function resolveInfiniteObjectZNativeLike(opticalSystemRows, objectRow, objectPlaneZ) {
+    const renderDistFromRows = Number(opticalSystemRows?.[0]?.objectRenderDistance ?? 0);
+    const renderDist = (Number.isFinite(renderDistFromRows) && Math.abs(renderDistFromRows) > 1e-12)
+        ? renderDistFromRows
+        : Number(
+            objectRow?.objectRenderDistance ?? objectRow?.renderDistance ?? objectRow?.distance ?? objectRow?.z ?? 0
+        );
+    if (Number.isFinite(renderDist) && Math.abs(renderDist) > 1e-12) {
+        return -Math.abs(renderDist);
+    }
+    return objectPlaneZ - 25;
+}
+
+function computeObjectSurfaceSagNativeLike(opticalSystemRows, x, y) {
+    const first = Array.isArray(opticalSystemRows) ? opticalSystemRows[0] : null;
+    if (!first) return 0;
+
+    const radiusRaw = first.radius;
+    if (radiusRaw === undefined || radiusRaw === null) return 0;
+    const radiusText = String(radiusRaw).trim().toUpperCase();
+    if (radiusText === 'INF' || radiusText === 'INFINITY' || radiusText === '∞') return 0;
+    const radius = Number(radiusRaw);
+    if (!Number.isFinite(radius) || Math.abs(radius) <= 1e-12) return 0;
+
+    const conic = Number(first.conic) || 0;
+    const coeffs = Array.from({ length: 10 }, (_, index) => Number(first[`coef${index + 1}`]) || 0);
+    const surfType = String(first.surfType ?? first.type ?? '').toLowerCase();
+    const mode = surfType.includes('odd') ? 'odd' : 'even';
+    const r = Math.hypot(x, y);
+    const sag = asphericSurfaceZ(r, {
+        radius,
+        conic,
+        coef1: coeffs[0],
+        coef2: coeffs[1],
+        coef3: coeffs[2],
+        coef4: coeffs[3],
+        coef5: coeffs[4],
+        coef6: coeffs[5],
+        coef7: coeffs[6],
+        coef8: coeffs[7],
+        coef9: coeffs[8],
+        coef10: coeffs[9]
+    }, mode);
+    return Number.isFinite(sag) ? sag : 0;
+}
+
+function optimizeAngleObjectPositionNativeLike(angleXDeg, angleYDeg, stopOrigin, objectZ) {
+    const dir = buildDirectionFromFieldAngles(angleXDeg, angleYDeg);
+    const safeK = Math.abs(dir.z) > 1e-12 ? dir.z : (dir.z >= 0 ? 1e-12 : -1e-12);
+    const dz = Number(stopOrigin?.z) - objectZ;
+    const x0 = Number(stopOrigin?.x) - (dir.x / safeK) * dz;
+    const y0 = Number(stopOrigin?.y) - (dir.y / safeK) * dz;
+    if (!Number.isFinite(x0) || !Number.isFinite(y0) || Math.abs(x0) > 1e8 || Math.abs(y0) > 1e8) {
+        return { x: 0, y: 0 };
+    }
+    return { x: x0, y: y0 };
+}
+
+function traceRayHitPointWrapped(opticalSystemRows, ray0, targetSurfaceIndex, options = RUST_RT_OPTIONS) {
+    try {
+        const hit = traceRayHitPoint(opticalSystemRows, ray0, 1.0, targetSurfaceIndex, options || RUST_RT_OPTIONS);
+        return hit && !Array.isArray(hit) ? hit : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function countRaysHittingSurfaceWeb(starts, opticalSystemRows, targetSurfaceIndex, wavelengthUm) {
+    let hits = 0;
+    for (const start of starts) {
+        const hit = traceRayHitPointWrapped(opticalSystemRows, {
+            pos: start.startP,
+            dir: start.dir,
+            wavelength: wavelengthUm
+        }, targetSurfaceIndex, RUST_RT_OPTIONS);
+        if (hit) hits += 1;
+    }
+    return hits;
+}
+
+function searchHighFieldOriginForTargetWeb(initialOrigin, chiefDir, opticalSystemRows, targetSurfaceIndex, targetSurfaceOrigin, samplingRadius, wavelengthUm) {
+    const baseSpan = Math.max(samplingRadius, 0.5);
+    const spans = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+    const grid = [-1, -0.5, 0, 0.5, 1];
+    let bestOrigin = null;
+    let bestScore = Infinity;
+
+    for (const spanMul of spans) {
+        const span = baseSpan * spanMul;
+        for (const gx of grid) {
+            for (const gy of grid) {
+                const candidate = {
+                    x: initialOrigin.x + gx * span,
+                    y: initialOrigin.y + gy * span,
+                    z: initialOrigin.z
+                };
+                const hit = traceRayHitPointWrapped(opticalSystemRows, {
+                    pos: candidate,
+                    dir: chiefDir,
+                    wavelength: wavelengthUm
+                }, targetSurfaceIndex, RUST_RT_OPTIONS);
+                if (!hit) continue;
+                const dx = Number(hit.x) - Number(targetSurfaceOrigin?.x ?? 0);
+                const dy = Number(hit.y) - Number(targetSurfaceOrigin?.y ?? 0);
+                const score = Math.hypot(dx, dy);
+                if (Number.isFinite(score) && score < bestScore) {
+                    bestScore = score;
+                    bestOrigin = candidate;
+                }
+            }
+        }
+        if (bestOrigin) break;
+    }
+
+    return bestOrigin;
+}
+
+function searchHighFieldOriginByBundleWeb(initialOrigin, chiefDir, uAxis, vAxis, opticalSystemRows, targetSurfaceIndex, samplingRadius, wavelengthUm) {
+    const baseSpan = Math.max(samplingRadius, 0.5);
+    const spans = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+    const grid = [-1, -0.5, 0, 0.5, 1];
+    const probeR = Math.min(5, Math.max(0.2, samplingRadius * 0.2));
+    const probes = [
+        [0, 0], [probeR, 0], [-probeR, 0], [0, probeR], [0, -probeR],
+        [0.707 * probeR, 0.707 * probeR], [-0.707 * probeR, 0.707 * probeR],
+        [0.707 * probeR, -0.707 * probeR], [-0.707 * probeR, -0.707 * probeR]
+    ];
+
+    let bestOrigin = null;
+    let bestHits = 0;
+    for (const spanMul of spans) {
+        const span = baseSpan * spanMul;
+        for (const gx of grid) {
+            for (const gy of grid) {
+                const candidate = {
+                    x: initialOrigin.x + gx * span * uAxis.x + gy * span * vAxis.x,
+                    y: initialOrigin.y + gx * span * uAxis.y + gy * span * vAxis.y,
+                    z: initialOrigin.z + gx * span * uAxis.z + gy * span * vAxis.z
+                };
+                let hits = 0;
+                for (const [pu, pv] of probes) {
+                    const hit = traceRayHitPointWrapped(opticalSystemRows, {
+                        pos: {
+                            x: candidate.x + pu * uAxis.x + pv * vAxis.x,
+                            y: candidate.y + pu * uAxis.y + pv * vAxis.y,
+                            z: candidate.z + pu * uAxis.z + pv * vAxis.z
+                        },
+                        dir: chiefDir,
+                        wavelength: wavelengthUm
+                    }, targetSurfaceIndex, RUST_RT_OPTIONS);
+                    if (hit) hits += 1;
+                }
+                if (hits > bestHits) {
+                    bestHits = hits;
+                    bestOrigin = candidate;
+                }
+            }
+        }
+        if (bestHits >= 3) break;
+    }
+    return bestOrigin;
+}
+
+function buildNativeLikeRayStartsForAstig(
+    opticalSystemRows,
+    objectRow,
+    wavelengthUm,
+    targetSurfaceIndex,
+    rayCount,
+    pattern,
+    ringCount,
+    surfaceOrigins,
+    stopSurfaceIndex,
+    previousEmissionOriginHint = null,
+    previousModeHint = null,
+    currentFieldMagnitude = 0,
+    maxFieldMagnitude = 0
+) {
+    const firstSurfaceOrigin = surfaceOrigins?.[0]?.origin || { x: 0, y: 0, z: 0 };
+    const objectPlaneZ = Number.isFinite(firstSurfaceOrigin?.z) ? firstSurfaceOrigin.z : 0;
+    const stopFrame = computeStopPlaneFrame(opticalSystemRows, stopSurfaceIndex);
+    const stopOrigin = stopFrame?.stopPlaneCenter3d || { x: 0, y: 0, z: objectPlaneZ + 10 };
+    const stopPlaneU = stopFrame?.stopPlaneU || { x: 1, y: 0, z: 0 };
+    const stopPlaneV = stopFrame?.stopPlaneV || { x: 0, y: 1, z: 0 };
+    const stopRow = opticalSystemRows?.[stopSurfaceIndex] || {};
+    const stopRadius = Number(stopRow?.semidia ?? stopRow?.semiDiameter ?? stopRow?.['Semi-Diameter'] ?? stopRow?.aperture ?? stopRow?.Aperture ?? stopFrame?.stopSolveMax ?? 10);
+    const samplingRadius = Math.max(0.01, Number.isFinite(stopRadius) && stopRadius > 0 ? stopRadius : (stopFrame?.stopSolveMax || 10));
+
+    const systemMode = detectSystemConjugateMode(opticalSystemRows);
+    const infiniteConjugate = systemMode === 'angle';
+    const pos = String(objectRow?.position ?? objectRow?.fieldType ?? objectRow?.type ?? '').toLowerCase();
+    const positionType = pos.includes('angle') ? 'angle' : (pos.includes('point') ? 'point' : 'rectangle');
+
+    const annularInsideScale = pattern === 'annular' ? (Math.max(1, ringCount) / (Math.max(1, ringCount) + 1)) : 1;
+    const effectiveRadius = Math.min(samplingRadius, samplingRadius * annularInsideScale);
+    const offsets = generateOffsetsForPatternNativeLike(pattern, rayCount, effectiveRadius, ringCount);
+
+    if (positionType === 'angle') {
+        const angleX = parseAngleInput(objectRow?.xAngle ?? objectRow?.objectAngleX ?? objectRow?.xHeightAngle ?? objectRow?.x ?? objectRow?.angleX);
+        const angleY = parseAngleInput(objectRow?.yAngle ?? objectRow?.objectAngleY ?? objectRow?.yHeightAngle ?? objectRow?.y ?? objectRow?.angle ?? objectRow?.angleY);
+        const chiefDir = buildDirectionFromFieldAngles(angleX, angleY);
+        const isOnAxis = Math.abs(angleX) < 1e-10 && Math.abs(angleY) < 1e-10;
+        const objectZ = infiniteConjugate
+            ? resolveInfiniteObjectZNativeLike(opticalSystemRows, objectRow, objectPlaneZ)
+            : objectPlaneZ;
+        const originXY = isOnAxis
+            ? { x: 0, y: 0 }
+            : (infiniteConjugate
+                ? { x: Math.tan(angleX * Math.PI / 180), y: Math.tan(angleY * Math.PI / 180) }
+                : optimizeAngleObjectPositionNativeLike(angleX, angleY, stopOrigin, objectZ));
+        const centerSag = computeObjectSurfaceSagNativeLike(opticalSystemRows, originXY.x, originXY.y);
+        let emissionOrigin = { x: originXY.x, y: originXY.y, z: objectZ + centerSag };
+        const basis = buildPerpendicularBasis(chiefDir);
+
+        // Match native behavior: previous emission origin is a seed for search, not a post-search override.
+        if (!isOnAxis && previousEmissionOriginHint && Number.isFinite(previousEmissionOriginHint.x) && Number.isFinite(previousEmissionOriginHint.y) && Number.isFinite(previousEmissionOriginHint.z)) {
+            emissionOrigin = {
+                x: previousEmissionOriginHint.x,
+                y: previousEmissionOriginHint.y,
+                z: previousEmissionOriginHint.z
+            };
+        }
+
+        if (infiniteConjugate && !isOnAxis) {
+            const targetSurfaceOrigin = surfaceOrigins?.[targetSurfaceIndex]?.origin || stopOrigin;
+            emissionOrigin = searchHighFieldOriginForTargetWeb(
+                emissionOrigin,
+                chiefDir,
+                opticalSystemRows,
+                targetSurfaceIndex,
+                targetSurfaceOrigin,
+                samplingRadius,
+                wavelengthUm
+            ) || searchHighFieldOriginByBundleWeb(
+                emissionOrigin,
+                chiefDir,
+                basis.u,
+                basis.v,
+                opticalSystemRows,
+                targetSurfaceIndex,
+                samplingRadius,
+                wavelengthUm
+            ) || emissionOrigin;
+        }
+
+        const buildCandidateRays = (pupilScale, allowOriginSolve, candidateRayCount = rayCount) => {
+            const count = Math.max(1, Math.round(Number(candidateRayCount) || rayCount));
+            const candidateRadius = Math.max(0.005, Math.min(samplingRadius, effectiveRadius * pupilScale));
+            const candidateOffsets = generateOffsetsForPatternNativeLike(pattern, count, candidateRadius, ringCount);
+            let baseOrigin = { ...emissionOrigin };
+            if (allowOriginSolve && infiniteConjugate) {
+                const solved = solveRayOriginsToStopPointsWithRustMeta(
+                    opticalSystemRows,
+                    [{ ...baseOrigin }],
+                    [{ ...chiefDir }],
+                    [{ ...stopOrigin }],
+                    stopSurfaceIndex,
+                    wavelengthUm,
+                    {
+                        ...RUST_RT_OPTIONS,
+                        maxIter: 18,
+                        tolMm: 1e-6,
+                        eps: 1e-4,
+                        maxStep: 5.0
+                    }
+                );
+                const solvedChief = Array.isArray(solved) ? solved[0] : null;
+                if (solvedChief && Number.isFinite(solvedChief.x) && Number.isFinite(solvedChief.y) && Number.isFinite(solvedChief.z)) {
+                    baseOrigin = { x: solvedChief.x, y: solvedChief.y, z: solvedChief.z };
+                }
+            }
+
+            return candidateOffsets.map(({ offsetU, offsetV }, index) => {
+                const startP = {
+                    x: baseOrigin.x + offsetU * basis.u.x + offsetV * basis.v.x,
+                    y: baseOrigin.y + offsetU * basis.u.y + offsetV * basis.v.y,
+                    z: baseOrigin.z + offsetU * basis.u.z + offsetV * basis.v.z,
+                };
+                return {
+                    startP,
+                    dir: { ...chiefDir },
+                    description: index === 0 ? 'chief' : 'native-like-angle',
+                    isChief: index === 0
+                };
+            });
+        };
+
+        if (infiniteConjugate && !isOnAxis) {
+            const effectiveCurrentField = Math.abs(Number(currentFieldMagnitude) || 0);
+            const effectiveMaxField = Math.abs(Number(maxFieldMagnitude) || 0);
+            const continuityBiasThreshold = Math.max(12, effectiveMaxField * 0.75);
+            const useContinuityModeHint = effectiveMaxField > 0 && effectiveCurrentField >= continuityBiasThreshold;
+            const modes: Array<[number, boolean]> = [
+                [1.0, true], [0.7, true], [0.5, true], [0.35, true], [0.25, true], [0.18, true], [0.12, true], [0.085, true], [0.06, true], [0.04, true], [0.03, true], [0.02, true], [0.015, true], [0.01, true],
+                [1.0, false], [0.7, false], [0.5, false], [0.35, false], [0.25, false]
+            ];
+            let best = null;
+            let bestHits = -1;
+            const probeRayCount = Math.max(25, Math.min(121, rayCount));
+            let bestMode = null;
+            for (const [scale, allowOriginSolve] of modes) {
+                const starts = buildCandidateRays(scale, allowOriginSolve, probeRayCount);
+                const hits = countRaysHittingSurfaceWeb(starts, opticalSystemRows, targetSurfaceIndex, wavelengthUm);
+                const continuityPenalty = (() => {
+                    if (!useContinuityModeHint || !previousModeHint) return 0;
+                    let penalty = 0;
+                    if (previousModeHint.allowOriginSolve !== allowOriginSolve) penalty += 0.25;
+                    const prevScale = Number(previousModeHint.scale);
+                    if (Number.isFinite(prevScale)) {
+                        penalty += Math.abs(prevScale - Number(scale)) * 0.5;
+                    }
+                    return penalty;
+                })();
+                const score = hits - continuityPenalty;
+                const bestScore = bestHits - (bestMode ? 0 : 0);
+                if (score > bestScore || (Math.abs(score - bestScore) < 1e-9 && hits > bestHits)) {
+                    bestHits = hits;
+                    best = buildCandidateRays(scale, allowOriginSolve, rayCount);
+                    bestMode = { scale, allowOriginSolve };
+                }
+            }
+            return {
+                starts: Array.isArray(best) ? best : buildCandidateRays(1.0, true),
+                refinedOrigin: { ...emissionOrigin },
+                mode: bestMode || { scale: 1.0, allowOriginSolve: true }
+            };
+        }
+
+        return {
+            starts: buildCandidateRays(1.0, infiniteConjugate && !isOnAxis),
+            refinedOrigin: { ...emissionOrigin },
+            mode: { scale: 1.0, allowOriginSolve: !!(infiniteConjugate && !isOnAxis) }
+        };
+    }
+
+    const objectX = Number(objectRow?.xHeightAngle ?? objectRow?.x ?? objectRow?.xHeight ?? objectRow?.objectX ?? 0);
+    const objectY = Number(objectRow?.yHeightAngle ?? objectRow?.y ?? objectRow?.yHeight ?? objectRow?.objectY ?? 0);
+    const objectZ = infiniteConjugate
+        ? resolveInfiniteObjectZNativeLike(opticalSystemRows, objectRow, objectPlaneZ)
+        : objectPlaneZ;
+    const centerSag = computeObjectSurfaceSagNativeLike(opticalSystemRows, objectX, objectY);
+    const center = { x: objectX, y: objectY, z: objectZ + centerSag };
+    const chiefDir = (Number(stopOrigin.z) - center.z > 1e-6)
+        ? normalize3({ x: stopOrigin.x - center.x, y: stopOrigin.y - center.y, z: stopOrigin.z - center.z })
+        : { x: 0, y: 0, z: 1 };
+    const basis = buildPerpendicularBasis(chiefDir);
+
+    return {
+        starts: offsets.map(({ offsetU, offsetV }, index) => {
+        const startP = infiniteConjugate
+            ? {
+                x: center.x + offsetU * basis.u.x + offsetV * basis.v.x,
+                y: center.y + offsetU * basis.u.y + offsetV * basis.v.y,
+                z: center.z + offsetU * basis.u.z + offsetV * basis.v.z,
+            }
+            : { ...center };
+        const dir = !infiniteConjugate && Number(stopOrigin.z) - center.z > 1e-6
+            ? normalize3({
+                x: (stopOrigin.x + offsetU * stopPlaneU.x + offsetV * stopPlaneV.x) - startP.x,
+                y: (stopOrigin.y + offsetU * stopPlaneU.y + offsetV * stopPlaneV.y) - startP.y,
+                z: (stopOrigin.z + offsetU * stopPlaneU.z + offsetV * stopPlaneV.z) - startP.z,
+            })
+            : { ...chiefDir };
+        return {
+            startP,
+            dir,
+            description: index === 0 ? 'chief' : 'native-like-object',
+            isChief: index === 0
+        };
+        }),
+        refinedOrigin: null,
+        mode: { scale: 1.0, allowOriginSolve: false }
+    };
+}
+
+function resolveNativeLikeFieldSetting(objectRow, objectIndex, infiniteConjugate) {
+    const label = String(objectRow?.id ?? `Object ${objectIndex + 1}`);
+    const displayName = String(objectRow?.name ?? objectRow?.comment ?? label);
+    const pos = String(objectRow?.position ?? objectRow?.fieldType ?? objectRow?.type ?? '').toLowerCase();
+    const isAngleField = pos.includes('angle') && !pos.includes('rect') && !pos.includes('height')
+        ? true
+        : !!infiniteConjugate && !pos.includes('rect') && !pos.includes('height');
+    const y = isAngleField
+        ? Number(objectRow?.yFieldAngle ?? objectRow?.fieldAngle ?? objectRow?.yAngle ?? objectRow?.yHeightAngle ?? objectRow?.y ?? 0)
+        : Number(objectRow?.yHeight ?? objectRow?.y ?? objectRow?.yHeightAngle ?? objectRow?.yFieldAngle ?? objectRow?.fieldAngle ?? 0);
+
+    return {
+        label,
+        displayName,
+        y: Number.isFinite(y) ? y : 0,
+        position: isAngleField ? 'Angle' : 'Rectangle',
+        isAngleField
+    };
+}
+
+function pickChiefLikeRayEntry(rays, opticalSystemRows, targetSurfaceIndex) {
+    const rawTargetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
+    if (rawTargetPointIndex === null) return null;
+
+    const chiefEntry = rays.find(ray => ray?.isChief) || rays[0] || null;
+    const rayHitsTarget = (ray) => Array.isArray(ray?.path) && ray.path.length > rawTargetPointIndex;
+    if (chiefEntry && rayHitsTarget(chiefEntry)) return chiefEntry;
+
+    const chiefStart = chiefEntry?.originalRay?.pos || chiefEntry?.startP || null;
+    let bestEntry = null;
+    let bestDist2 = Infinity;
+    for (const ray of rays) {
+        if (!rayHitsTarget(ray)) continue;
+        if (!chiefStart) return ray;
+        const start = ray?.originalRay?.pos || ray?.startP || null;
+        if (!start) continue;
+        const dx = Number(start.x) - Number(chiefStart.x);
+        const dy = Number(start.y) - Number(chiefStart.y);
+        const dist2 = dx * dx + dy * dy;
+        if (Number.isFinite(dist2) && dist2 < bestDist2) {
+            bestDist2 = dist2;
+            bestEntry = ray;
+        }
+    }
+    return bestEntry;
+}
+
+function buildNativeLikeChiefResult(rayEntries, chiefEntry) {
+    if (!chiefEntry || !Array.isArray(chiefEntry?.path) || chiefEntry.path.length === 0) {
+        return null;
+    }
+
+    const chiefDirection = extractRayStartAndDirection(chiefEntry)?.dir || chiefEntry?.dir || chiefEntry?.originalRay?.dir || null;
+    return {
+        success: true,
+        convergence: true,
+        rayData: {
+            segments: chiefEntry.path,
+            dir: chiefDirection,
+            originalRay: chiefEntry.originalRay || null,
+            wavelength: chiefEntry.wavelength
+        },
+        rayGroups: [{ rays: rayEntries }]
+    };
+}
+
+export async function calculateAstigmatismDataNativeLike(
+    opticalSystemRows,
+    sourceRows,
+    objectRows,
+    targetSurfaceIndex,
+    options: {
+        rayCount?: number;
+        ringCount?: number;
+        pattern?: 'grid' | 'cross' | 'annular';
+        requireRustWasm?: boolean;
+        verbose?: boolean;
+        onProgress?: any;
+        wavelengthMode?: 'all' | 'primary';
+    } = {}
+) {
+    const {
+        rayCount = 100,
+        ringCount = 10,
+        pattern = 'annular',
+        requireRustWasm = true,
+        verbose = false,
+        onProgress = null,
+        wavelengthMode = 'all'
+    } = options;
+
+    const progressCb = (typeof onProgress === 'function') ? onProgress : null;
+    const safeProgress = (percent, message) => {
+        try { progressCb?.({ percent, message }); } catch (_) {}
+    };
+    const yieldToUI = async () => new Promise(resolve => setTimeout(resolve, 0));
+
+    const systemMode = detectSystemConjugateMode(opticalSystemRows);
+    const infiniteConjugate = systemMode === 'angle';
+    const isAngleField = infiniteConjugate;
+    const mirrorCount = Array.isArray(opticalSystemRows)
+        ? opticalSystemRows.filter(row => {
+            if (!row) return false;
+            if (row.material === 'MIRROR') return true;
+            if (row.type === 'Mirror') return true;
+            if (row._blockType === 'Mirror') return true;
+            const surfType = String(row.surfType ?? row.type ?? row.surfaceType ?? '').trim().toLowerCase();
+            return surfType === 'mirror';
+        }).length
+        : 0;
+    const mirrorSign = (mirrorCount % 2 === 1) ? -1 : 1;
+    const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+    const imageSurfaceInfo = surfaceOrigins?.[targetSurfaceIndex] || null;
+    const stopSurfaceIndex = findStopSurfaceIndex(opticalSystemRows);
+
+    let effectiveObjectRows = Array.isArray(objectRows) ? [...objectRows] : [];
+    if (effectiveObjectRows.length === 0) {
+        effectiveObjectRows = [
+            infiniteConjugate
+                ? { name: 'AutoField0', position: 'Angle', xHeightAngle: 0, yHeightAngle: 0 }
+                : { name: 'AutoField0', position: 'Rectangle', xHeight: 0, yHeight: 0 }
+        ];
+    }
+    effectiveObjectRows = maybeInterpolateAngleObjectRowsForAstigWeb(effectiveObjectRows, infiniteConjugate);
+
+    const wavelengths = collectSpotWavelengthsForAstigWeb(sourceRows, wavelengthMode);
+    const primaryWavelength = __pickPrimaryWavelengthMicrons(sourceRows, wavelengths[0]?.wavelengthUm || 0.5876);
+    const rawTargetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
+    if (rawTargetPointIndex === null) {
+        throw new Error('Astigmatism(native-like web): target surface conversion failed');
+    }
+
+    const tracedSeries = [];
+    const fieldSettings = [];
+    const previousAngleOriginByWl = Array.from({ length: wavelengths.length }, () => null);
+    const previousModeByWl = Array.from({ length: wavelengths.length }, () => null);
+    const resolvedFieldSettings = effectiveObjectRows.map((objectRow, objectIndex) =>
+        resolveNativeLikeFieldSetting(objectRow, objectIndex, infiniteConjugate)
+    );
+    const maxFieldMagnitude = resolvedFieldSettings.reduce((maxValue, field) => {
+        const y = Math.abs(Number(field?.y) || 0);
+        return Number.isFinite(y) ? Math.max(maxValue, y) : maxValue;
+    }, 0);
+    let seriesCounter = 0;
+    const totalSeries = Math.max(1, effectiveObjectRows.length * wavelengths.length);
+
+    safeProgress(5, 'Generating native-like ray series...');
+    await yieldToUI();
+
+    for (let objectIndex = 0; objectIndex < effectiveObjectRows.length; objectIndex++) {
+        const objectRow = effectiveObjectRows[objectIndex];
+        const fieldSetting = resolvedFieldSettings[objectIndex] || resolveNativeLikeFieldSetting(objectRow, objectIndex, infiniteConjugate);
+        fieldSettings.push({
+            displayName: fieldSetting.displayName,
+            y: fieldSetting.y,
+            position: fieldSetting.position
+        });
+
+        for (let wlIndex = 0; wlIndex < wavelengths.length; wlIndex++) {
+            const wavelength = wavelengths[wlIndex];
+            const generation = buildNativeLikeRayStartsForAstig(
+                opticalSystemRows,
+                objectRow,
+                wavelength.wavelengthUm,
+                targetSurfaceIndex,
+                rayCount,
+                pattern,
+                ringCount,
+                surfaceOrigins,
+                stopSurfaceIndex,
+                previousAngleOriginByWl[wlIndex],
+                previousModeByWl[wlIndex],
+                fieldSetting.y,
+                maxFieldMagnitude
+            ) || { starts: [], refinedOrigin: null, mode: null };
+            const starts = Array.isArray(generation?.starts) ? generation.starts : [];
+            if (generation?.refinedOrigin && Number.isFinite(generation.refinedOrigin.x) && Number.isFinite(generation.refinedOrigin.y) && Number.isFinite(generation.refinedOrigin.z)) {
+                previousAngleOriginByWl[wlIndex] = {
+                    x: generation.refinedOrigin.x,
+                    y: generation.refinedOrigin.y,
+                    z: generation.refinedOrigin.z
+                };
+            }
+            const generationMode: any = (generation as any)?.mode;
+            if (generationMode && Number.isFinite(Number(generationMode.scale))) {
+                previousModeByWl[wlIndex] = {
+                    scale: Number(generationMode.scale),
+                    allowOriginSolve: generationMode.allowOriginSolve === true
+                };
+            }
+
+            const rayEntries = starts.map((start, index) => {
+                const ray0 = {
+                    pos: { ...start.startP },
+                    dir: { ...start.dir },
+                    wavelength: wavelength.wavelengthUm
+                };
+                const traced = traceRayPathWrapped(opticalSystemRows, ray0, targetSurfaceIndex, RUST_RT_OPTIONS);
+                return {
+                    path: Array.isArray(traced?.rayPath) ? traced.rayPath : [],
+                    dir: { ...start.dir },
+                    wavelength: wavelength.wavelengthUm,
+                    rayType: index === 0 ? 'chief' : 'generated',
+                    isChief: index === 0,
+                    originalRay: {
+                        pos: { ...start.startP },
+                        dir: { ...start.dir },
+                        wavelength: wavelength.wavelengthUm
+                    },
+                    description: start?.description || ''
+                };
+            });
+
+            tracedSeries.push({
+                fieldSetting,
+                wavelengthUm: wavelength.wavelengthUm,
+                rays: rayEntries,
+                hasFieldAngle: fieldSetting.isAngleField
+            });
+
+            seriesCounter++;
+            const percent = 5 + (25 * (seriesCounter / totalSeries));
+            safeProgress(percent, `Generating rays (${seriesCounter}/${totalSeries})...`);
+            await yieldToUI();
+        }
+    }
+
+    fieldSettings.sort((a, b) => Math.abs(a.y) - Math.abs(b.y) || String(a.displayName).localeCompare(String(b.displayName)));
+    const dedupedFieldSettings = fieldSettings.filter((item, index, arr) => {
+        return arr.findIndex(other => other.displayName === item.displayName && other.position === item.position && Math.abs(other.y - item.y) < 1e-9) === index;
+    });
+
+    safeProgress(35, 'Computing field curves from traced rays...');
+    await yieldToUI();
+
+    let primaryReferenceZ = null;
+    let bestAxis = Infinity;
+    const computedRows = [];
+    const previousFocusByWavelength = new Map();
+
+    const medianOr = (values, fallbackValue) => {
+        if (Array.isArray(values) && values.length > 0) {
+            const sorted = [...values].filter(v => Number.isFinite(v)).sort((a, b) => a - b);
+            if (sorted.length > 0) {
+                const n = sorted.length;
+                if ((n % 2) === 1) return sorted[Math.floor(n / 2)];
+                return 0.5 * (sorted[n / 2 - 1] + sorted[n / 2]);
+            }
+        }
+        return Number.isFinite(fallbackValue) ? fallbackValue : null;
+    };
+
+    for (let index = 0; index < tracedSeries.length; index++) {
+        const series = tracedSeries[index];
+        const chiefEntry = pickChiefLikeRayEntry(series.rays, opticalSystemRows, targetSurfaceIndex);
+        const chiefResult = buildNativeLikeChiefResult(series.rays, chiefEntry);
+        if (!chiefResult) continue;
+
+        const chiefRay = chiefResult.rayData;
+        const paraxialImageZ = calculateParaxialImagePosition(opticalSystemRows, chiefRay, targetSurfaceIndex, imageSurfaceInfo);
+        if (paraxialImageZ === null || !Number.isFinite(paraxialImageZ)) {
+            continue;
+        }
+
+        const chiefSegment = chiefRay?.segments?.[Math.min(rawTargetPointIndex, chiefRay.segments.length - 1)] || null;
+        const imageSurfaceZ = (() => {
+            if (!chiefSegment) return null;
+            if (!imageSurfaceInfo?.origin || !imageSurfaceInfo?.rotationMatrix) return chiefSegment.z;
+            const dx = chiefSegment.x - imageSurfaceInfo.origin.x;
+            const dy = chiefSegment.y - imageSurfaceInfo.origin.y;
+            const dz = chiefSegment.z - imageSurfaceInfo.origin.z;
+            const R = imageSurfaceInfo.rotationMatrix;
+            return R[0][2] * dx + R[1][2] * dy + R[2][2] * dz;
+        })();
+        if (!Number.isFinite(imageSurfaceZ)) {
+            continue;
+        }
+
+        if (Math.abs(series.wavelengthUm - primaryWavelength) < 1e-6) {
+            const axisAbs = Math.abs(series.fieldSetting.y);
+            if (axisAbs < bestAxis) {
+                bestAxis = axisAbs;
+                primaryReferenceZ = paraxialImageZ;
+            }
+        }
+
+        const meridionalFocusRms = traceMeridionalMarginalRay(
+            opticalSystemRows,
+            chiefRay,
+            chiefResult,
+            series.wavelengthUm,
+            stopSurfaceIndex,
+            targetSurfaceIndex,
+            imageSurfaceZ,
+            imageSurfaceInfo,
+            series.hasFieldAngle,
+            pattern,
+            ringCount,
+            rayCount
+        );
+
+        const sagittalFocusRms = traceSagittalMarginalRay(
+            opticalSystemRows,
+            chiefRay,
+            chiefResult,
+            series.wavelengthUm,
+            stopSurfaceIndex,
+            targetSurfaceIndex,
+            imageSurfaceZ,
+            imageSurfaceInfo,
+            series.hasFieldAngle,
+            pattern,
+            ringCount,
+            rayCount
+        );
+
+        // Native-compatible fallback path: if RMS-based focus is unstable/missing,
+        // reuse previous wavelength focus or fall back to median focus from all rays.
+        const merFocuses = [];
+        const sagFocuses = [];
+        const chiefStart = extractRayStartAndDirection(chiefEntry)?.start || null;
+        for (const ray of (series.rays || [])) {
+            if (!Array.isArray(ray?.path) || ray.path.length === 0) continue;
+            const rayDir = extractRayStartAndDirection(ray)?.dir || ray?.dir || null;
+            const focus = findAxisIntersection(
+                opticalSystemRows,
+                { segments: ray.path },
+                targetSurfaceIndex,
+                imageSurfaceInfo,
+                rayDir
+            );
+            if (!Number.isFinite(focus)) continue;
+            if (Number.isFinite(paraxialImageZ) && Math.abs(focus - paraxialImageZ) > 50) continue;
+
+            const rayStart = extractRayStartAndDirection(ray)?.start || null;
+            if (!chiefStart || !rayStart) continue;
+            const dx = Number(rayStart.x) - Number(chiefStart.x);
+            const dy = Number(rayStart.y) - Number(chiefStart.y);
+            if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
+
+            if (Math.abs(dx) <= Math.abs(dy)) {
+                merFocuses.push(focus);
+            } else {
+                sagFocuses.push(focus);
+            }
+        }
+
+        const wlKey = Math.round(series.wavelengthUm * 1_000_000);
+        const prevFocus = previousFocusByWavelength.get(wlKey) || { mer: null, sag: null };
+
+        const meridionalFocusZ = Number.isFinite(meridionalFocusRms)
+            ? meridionalFocusRms
+            : (Number.isFinite(prevFocus.mer) ? prevFocus.mer : medianOr(merFocuses, paraxialImageZ));
+        const sagittalFocusZ = Number.isFinite(sagittalFocusRms)
+            ? sagittalFocusRms
+            : (Number.isFinite(prevFocus.sag) ? prevFocus.sag : medianOr(sagFocuses, paraxialImageZ));
+
+        previousFocusByWavelength.set(wlKey, {
+            mer: Number.isFinite(meridionalFocusZ) ? meridionalFocusZ : prevFocus.mer,
+            sag: Number.isFinite(sagittalFocusZ) ? sagittalFocusZ : prevFocus.sag,
+        });
+
+        computedRows.push({
+            wavelength: series.wavelengthUm,
+            fieldAngle: Math.abs(series.fieldSetting.y),
+            fieldName: series.fieldSetting.displayName,
+            paraxialImageZ,
+            meridionalFocusZ,
+            sagittalFocusZ
+        });
+
+        const percent = 35 + (55 * ((index + 1) / tracedSeries.length));
+        safeProgress(percent, `Computing curves (${index + 1}/${tracedSeries.length})...`);
+        await yieldToUI();
+    }
+
+    if (primaryReferenceZ === null) {
+        primaryReferenceZ = computedRows.find(row => Math.abs(row.wavelength - primaryWavelength) < 1e-6)?.paraxialImageZ ?? null;
+    }
+
+    const data = computedRows.map((row) => {
+        const meridionalDeviation = Number.isFinite(row.meridionalFocusZ) && Number.isFinite(primaryReferenceZ)
+            ? (row.meridionalFocusZ - primaryReferenceZ) * mirrorSign
+            : null;
+        const sagittalDeviation = Number.isFinite(row.sagittalFocusZ) && Number.isFinite(primaryReferenceZ)
+            ? (row.sagittalFocusZ - primaryReferenceZ) * mirrorSign
+            : null;
+        return {
+            wavelength: row.wavelength,
+            fieldAngle: row.fieldAngle,
+            fieldName: row.fieldName,
+            paraxialImageZ: row.paraxialImageZ,
+            meridionalDeviation,
+            sagittalDeviation,
+            astigmaticDifference: (meridionalDeviation !== null && sagittalDeviation !== null)
+                ? (meridionalDeviation - sagittalDeviation)
+                : null,
+            crossBeamIntersections: null
+        };
+    }).sort((a, b) => a.wavelength - b.wavelength || a.fieldAngle - b.fieldAngle);
+
+    safeProgress(100, '');
+
+    return {
+        targetSurface: targetSurfaceIndex,
+        stopSurface: stopSurfaceIndex,
+        relativeTargetIndex: targetSurfaceIndex - stopSurfaceIndex,
+        wavelengths: wavelengths.map(item => item.wavelengthUm),
+        fieldSettings: dedupedFieldSettings,
+        fieldMode: systemMode,
+        isAngleField,
+        primaryWavelength,
+        primaryReferenceZ,
+        data
+    };
+}
+
 /**
  * 非点収差データを計算
  * @param {Array} opticalSystemRows - 光学系データ
@@ -1367,6 +2961,8 @@ export async function calculateAstigmatismData(
     options: {
         spotDiagramMode?: boolean;
         rayCount?: number;
+        ringCount?: number;
+        pattern?: 'grid' | 'cross' | 'annular';
         interpolationPoints?: number;
         verbose?: boolean;
         onProgress?: any;
@@ -1378,6 +2974,8 @@ export async function calculateAstigmatismData(
     const {
         spotDiagramMode = false,
         rayCount = 100,
+        ringCount = 10,
+        pattern = 'annular',
         interpolationPoints = 20,  // プロット点数を20点に増加
         verbose = false,  // 詳細ログを制御
         onProgress = null,
@@ -1385,6 +2983,13 @@ export async function calculateAstigmatismData(
         requireRustWasm = true,
         chiefRayMode = 'stopCenter'  // 'stopCenter' | 'beamCenter' | 'centroid' | '*Image'
     } = options;
+    const samplingPattern: 'grid' | 'cross' | 'annular' =
+        (pattern === 'grid' || pattern === 'cross' || pattern === 'annular')
+            ? pattern
+            : 'annular';
+    const samplingRingCount = Number.isFinite(Number(ringCount))
+        ? Math.max(1, Math.min(64, Math.round(Number(ringCount))))
+        : 10;
 
     const isMirrorRow = (row) => {
         if (!row) return false;
@@ -1407,20 +3012,6 @@ export async function calculateAstigmatismData(
     };
     const yieldToUI = async () => new Promise(resolve => setTimeout(resolve, 0));
 
-    console.log(
-        `[ASTIG_DIAG][ENTRY] spotDiagramMode=${spotDiagramMode} ` +
-        `targetSurfaceIndex=${targetSurfaceIndex} rayCount=${rayCount} interpolationPoints=${interpolationPoints}`
-    );
-    
-    if (verbose) {
-        console.log('🎯🎯🎯 非点収差計算開始（新バージョン） 🎯🎯🎯');
-        console.log(`   評価面: Surface ${targetSurfaceIndex + 1}`);
-        console.log(`   光線本数: ${rayCount}本`);
-        console.log(`   モード: ${spotDiagramMode ? 'スポットダイアグラム（全画角表示）' : '非点収差図'}`);
-        console.log(`   🔍 spotDiagramMode = ${spotDiagramMode}`);
-        console.log(`   🔍 主光線モード: ${chiefRayMode}`);
-    }
-    
     try {
         safeProgress(0, 'Preparing...');
         await yieldToUI();
@@ -1429,10 +3020,7 @@ export async function calculateAstigmatismData(
         const wavelengths = sourceRows
             .map(row => parseFloat(row.wavelength || row.Wavelength || 0.5876))
             .filter(w => Number.isFinite(w) && w > 0);
-        if (verbose) console.log(`   波長数: ${wavelengths.length}`);
-        
         const systemConjugateMode = detectSystemConjugateMode(opticalSystemRows);
-        console.log(`   ⚖️ システム共役モード判定: ${systemConjugateMode.toUpperCase()} (Based on Surface 0 Thickness)`);
 
         let fieldSettings = getFieldSettingsFromObject(objectRows, systemConjugateMode);
         if (!fieldSettings || fieldSettings.length === 0) {
@@ -1471,31 +3059,24 @@ export async function calculateAstigmatismData(
             };
         }
         
-        console.log(`   元のフィールド数: ${fieldSettings.length}`);
-        console.log(`   元のフィールド設定:`, fieldSettings.map(f => `${f.displayName} (y=${f.y}°)`));
-        
         // スポット表示モードでは補間を行わない。補間は角度フィールドのときのみ実行（Rectangle/heightの場合はそのまま）。
         if (!spotDiagramMode && interpolationPoints > 0) {
             if (systemConjugateMode === 'angle') {
-                fieldSettings = interpolateFieldSettings(fieldSettings, interpolationPoints);
+                fieldSettings = maybeInterpolateAngleFieldSettingsForAstig(
+                    fieldSettings,
+                    Math.max(interpolationPoints, 51)
+                );
             } else if (fieldSettings.length >= 2) {
                 fieldSettings = interpolateHeightFieldSettings(fieldSettings, interpolationPoints);
             }
         }
         
-        console.log(`   計算するフィールド数: ${fieldSettings.length}`);
-        console.log(`   最終フィールド設定:`, fieldSettings.map(f => `${f.displayName} (y=${f.y}°)`));
-
         safeProgress(5, 'Computing reference focus...');
         await yieldToUI();
 
         // スポット表示モードでは、既存のスポットダイアグラム計算ロジックをそのまま使用し、
         // 結果を非点データ形式に詰め替えて返す
         if (spotDiagramMode) {
-            console.log(
-                `[ASTIG_DIAG][SPOT_MODE] enter=true targetSurfaceIndex=${targetSurfaceIndex} ` +
-                `fields=${Array.isArray(fieldSettings) ? fieldSettings.length : 0}`
-            );
             const { generateSpotDiagram } = await import('../spot-diagram.js');
 
             // eva-spot-diagram は面番号を1始まりで受け取る
@@ -1561,14 +3142,10 @@ export async function calculateAstigmatismData(
         
         // 絞り面を検出
         const stopSurfaceIndex = findStopSurfaceIndex(opticalSystemRows);
-        console.log(`   絞り面: Surface ${stopSurfaceIndex + 1}`);
-        
         // Calculate relative index from stop surface
         // Ray tracing starts at stop surface, so segment index 0 = stop surface
         // targetSurfaceIndex is absolute, so we need to subtract stopSurfaceIndex
         const relativeTargetIndex = targetSurfaceIndex - stopSurfaceIndex;
-        console.log(`   評価面の相対インデックス: ${relativeTargetIndex} (絞り面から${relativeTargetIndex}面後)`);
-        
         const astigmatismData = {
             targetSurface: targetSurfaceIndex,
             stopSurface: stopSurfaceIndex,
@@ -1583,12 +3160,9 @@ export async function calculateAstigmatismData(
             data: [] // { wavelength, fieldAngle, paraxialImageZ, meridionalDeviation, sagittalDeviation }
         };
         
-        console.log(`   ⭐ astigmatismData.isAngleField = ${astigmatismData.isAngleField}`);
-        
         // 主波長を特定（Sourceテーブルの Primary Wavelength を優先）
         const primaryWavelength = __pickPrimaryWavelengthMicrons(sourceRows, wavelengths[0] || 0.5876);
         astigmatismData.primaryWavelength = primaryWavelength;
-        if (verbose) console.log(`\n🎯🎯🎯 主波長設定: ${primaryWavelength}μm 🎯🎯🎯`);
 
         // 表示用/下流互換のため、wavelengths が空なら primary を入れておく
         if (wavelengths.length === 0) {
@@ -1611,11 +3185,6 @@ export async function calculateAstigmatismData(
             return axisValue < 0.001; // ほぼ0
         });
         
-        if (verbose) {
-            console.log(`   🔍 フィールド設定一覧:`, fieldSettings.map(f => `${f.displayName} (axis=${getFieldAxisValue(f)})`));
-            console.log(`   🔍 軸上フィールド検索結果: ${axialField ? axialField.displayName + ' (axis=' + getFieldAxisValue(axialField) + ')' : '見つからず'}`);
-        }
-        
         // 主波長の基準位置を計算（すべての基準0点）
         let referenceField = axialField;
         
@@ -1626,15 +3195,7 @@ export async function calculateAstigmatismData(
             console.warn(`   ⚠️ 軸上フィールドが見つからないため、最小角度/高さを基準とします: ${referenceField.displayName} (axis=${getFieldAxisValue(referenceField)})`);
         }
 
-        console.log(
-            `[ASTIG_DIAG][REFERENCE_SELECT] mode=${astigmatismData.isAngleField ? 'angle' : 'height'} ` +
-            `axial=${axialField ? axialField.displayName : 'none'} ` +
-            `reference=${referenceField ? referenceField.displayName : 'none'} ` +
-            `axis=${referenceField ? getFieldAxisValue(referenceField) : 'n/a'}`
-        );
-        
         if (referenceField) {
-            console.log(`   🎯 主波長の基準フィールドで基準像面を計算: ${referenceField.displayName}`);
             const referenceChiefResult = calculateChiefRayNewton(
                 opticalSystemRows,
                 referenceField,
@@ -1647,12 +3208,9 @@ export async function calculateAstigmatismData(
                 }
             );
             
-            console.log(`   🔍 calculateChiefRayNewton結果: convergence=${referenceChiefResult?.convergence}, ray存在=${!!referenceChiefResult?.ray}, rayData存在=${!!referenceChiefResult?.rayData}`);
-            
             if (referenceChiefResult && referenceChiefResult.convergence) {
                 // rayData または ray を使用
                 const referenceChiefRay = referenceChiefResult.rayData || referenceChiefResult.ray;
-                console.log(`   🔍 ray.segments数=${referenceChiefRay?.segments?.length}, targetSurfaceIndex=${targetSurfaceIndex}`);
 
                 const referenceTargetPointIndex = surfaceIndexToRayPathPointIndex(opticalSystemRows, targetSurfaceIndex);
                 if (referenceTargetPointIndex === null) {
@@ -1660,49 +3218,17 @@ export async function calculateAstigmatismData(
                 }
 
                 if (referenceChiefRay && referenceChiefRay.segments && referenceTargetPointIndex !== null) {
-                    const refTargetPointIndex = Math.min(referenceTargetPointIndex, referenceChiefRay.segments.length - 1);
-                    const refTargetSegment = referenceChiefRay.segments[refTargetPointIndex] || null;
-                    const toLocal = (point) => {
-                        if (!point) return point;
-                        if (!imageSurfaceInfo || !imageSurfaceInfo.origin || !imageSurfaceInfo.rotationMatrix) return point;
-                        const dx = point.x - imageSurfaceInfo.origin.x;
-                        const dy = point.y - imageSurfaceInfo.origin.y;
-                        const dz = point.z - imageSurfaceInfo.origin.z;
-                        const R = imageSurfaceInfo.rotationMatrix;
-                        return {
-                            x: R[0][0] * dx + R[1][0] * dy + R[2][0] * dz,
-                            y: R[0][1] * dx + R[1][1] * dy + R[2][1] * dz,
-                            z: R[0][2] * dx + R[1][2] * dy + R[2][2] * dz
-                        };
-                    };
-
-                    const referenceImageSurfaceZ = (refTargetSegment && Number.isFinite(refTargetSegment.x) && Number.isFinite(refTargetSegment.y) && Number.isFinite(refTargetSegment.z))
-                        ? toLocal(refTargetSegment).z
-                        : null;
-
-                    const referenceIntersection = findAxisIntersection(
+                    const referenceParaxialZ = calculateParaxialImagePosition(
                         opticalSystemRows,
-                        { segments: referenceChiefRay.segments },
+                        referenceChiefRay,
                         targetSurfaceIndex,
                         imageSurfaceInfo
                     );
-                    console.log(`   🔍 findAxisIntersection結果: ${referenceIntersection}`);
-                    console.log(`   🔍 referenceImageSurfaceZ(ローカル): ${referenceImageSurfaceZ}`);
-                    
-                    const referenceForRelative = (referenceImageSurfaceZ !== null && Number.isFinite(referenceImageSurfaceZ))
-                        ? referenceImageSurfaceZ
-                        : referenceIntersection;
 
-                    if (referenceForRelative !== null) {
-                        astigmatismData.primaryReferenceZ = referenceForRelative;
-                        console.log(`   ✅✅✅ 主波長の基準像面位置: Z = ${referenceForRelative.toFixed(4)}mm（この位置を0とする） ✅✅✅`);
-                        console.log(
-                            `[ASTIG_DIAG][REFERENCE_Z] wavelength=${primaryWavelength} ` +
-                            `field=${referenceField.displayName} axis=${getFieldAxisValue(referenceField)} ` +
-                            `primaryReferenceZ=${referenceForRelative} axisIntersection=${referenceIntersection} imageSurfaceZ=${referenceImageSurfaceZ}`
-                        );
+                    if (referenceParaxialZ !== null && Number.isFinite(referenceParaxialZ)) {
+                        astigmatismData.primaryReferenceZ = referenceParaxialZ;
                     } else {
-                        console.error(`   ❌ findAxisIntersection が null を返しました`);
+                        console.error(`   ❌ calculateParaxialImagePosition が null を返しました`);
                     }
                 } else {
                     console.error(`   ❌ 主光線セグメントが不正: segments=${referenceChiefRay?.segments?.length}, required>${referenceTargetPointIndex}`);
@@ -1716,7 +3242,6 @@ export async function calculateAstigmatismData(
         
         if (astigmatismData.primaryReferenceZ === null) {
             console.warn(`   ⚠️⚠️⚠️ 主波長の軸上フィールドで基準像面取得失敗 ⚠️⚠️⚠️`);
-            console.warn(`[ASTIG_DIAG][REFERENCE_Z] primaryReferenceZ=null`);
         }
         
         // 各波長×各フィールドについて計算
@@ -1728,7 +3253,6 @@ export async function calculateAstigmatismData(
 
         for (let w = 0; w < wavelengths.length; w++) {
             const wavelength = wavelengths[w];
-            if (verbose) console.log(`\n📊 波長 ${wavelength}μm の計算中...`);
 
             for (let i = 0; i < fieldSettings.length; i++) {
                 const fieldSetting = fieldSettings[i];
@@ -1748,7 +3272,9 @@ export async function calculateAstigmatismData(
                     imageSurfaceInfo,
                     mirrorSign,
                     requireRustWasm,
-                    chiefRayMode
+                    chiefRayMode,
+                    samplingPattern,
+                    samplingRingCount
                 );
 
                 if (result) {
@@ -1765,61 +3291,16 @@ export async function calculateAstigmatismData(
             }
         }
 
-        // 仕上げ: 主波長の軸上（最小|fieldAngle|）をゼロ基準に再調整
-        // 数値探索の微小バイアスを吸収し、表示基準を安定化する。
-        try {
-            const primaryRows = (astigmatismData.data || []).filter(d => {
-                const wl = Number(d?.wavelength);
-                return Number.isFinite(wl) && Math.abs(wl - primaryWavelength) < 1e-9;
-            });
-
-            if (primaryRows.length > 0) {
-                let referenceRow = primaryRows[0];
-                let minAbsAxis = Math.abs(Number(referenceRow?.fieldAngle ?? 0));
-                for (let i = 1; i < primaryRows.length; i++) {
-                    const a = Math.abs(Number(primaryRows[i]?.fieldAngle ?? 0));
-                    if (a < minAbsAxis) {
-                        minAbsAxis = a;
-                        referenceRow = primaryRows[i];
-                    }
-                }
-
-                const m0 = Number(referenceRow?.meridionalDeviation);
-                const s0 = Number(referenceRow?.sagittalDeviation);
-                const values: number[] = [];
-                if (Number.isFinite(m0)) values.push(m0);
-                if (Number.isFinite(s0)) values.push(s0);
-
-                if (values.length > 0) {
-                    const rezeroOffset = values.reduce((sum, v) => sum + v, 0) / values.length;
-                    if (Number.isFinite(rezeroOffset) && Math.abs(rezeroOffset) > 1e-12) {
-                        for (const row of astigmatismData.data) {
-                            if (row?.meridionalDeviation !== null && row?.meridionalDeviation !== undefined) {
-                                row.meridionalDeviation = Number(row.meridionalDeviation) - rezeroOffset;
-                            }
-                            if (row?.sagittalDeviation !== null && row?.sagittalDeviation !== undefined) {
-                                row.sagittalDeviation = Number(row.sagittalDeviation) - rezeroOffset;
-                            }
-                        }
-                        if (astigmatismData.primaryReferenceZ !== null && Number.isFinite(Number(astigmatismData.primaryReferenceZ))) {
-                            astigmatismData.primaryReferenceZ = Number(astigmatismData.primaryReferenceZ) + rezeroOffset;
-                        }
-                        console.log(
-                            `[ASTIG_DIAG][REFERENCE_REZERO] wavelength=${primaryWavelength} ` +
-                            `axis=${Number(referenceRow?.fieldAngle ?? 0)} offset=${rezeroOffset}`
-                        );
-                    }
-                }
-            }
-        } catch (rezeroError) {
-            console.warn('[ASTIG_DIAG][REFERENCE_REZERO] skipped due to error', rezeroError);
-        }
-
+        // NOTE: rezeroOffset post-processing removed.
+        // Native Rust does NOT apply any secondary re-zeroing pass — it uses
+        // (mer_focus - primary_ref) directly where primary_ref is the paraxial Z of
+        // the on-axis field at the primary wavelength.  Adding a second shift here
+        // caused a systematic Image Position offset vs native output.
         safeProgress(95, 'Finalizing...');
         await yieldToUI();
         
         const endTime = performance.now();
-        console.log(`✅ 非点収差計算完了 (${(endTime - startTime).toFixed(0)}ms, ${astigmatismData.data.length}点)`);
+        void endTime;
 
         safeProgress(100, '');
         
@@ -1849,7 +3330,9 @@ function calculateFieldData(
     imageSurfaceInfo,
     mirrorSign,
     requireRustWasm,
-    chiefRayMode = 'stopCenter'
+    chiefRayMode = 'stopCenter',
+    samplingPattern = 'annular',
+    ringCount = 10
 ) {
     // フィールド角を取得
     // Object Position Angle: 無限系として画角を使用
@@ -1873,7 +3356,6 @@ function calculateFieldData(
         fieldAngle = Math.abs(fieldSetting.yHeight || fieldSetting.y || 0);
     }
     
-    if (verbose) console.log(`   フィールド ${fieldIndex + 1}/${totalFields}: ${fieldSetting.displayName} (${fieldAngle}°)`);
     const mirrorSignValue = (mirrorSign === -1 || mirrorSign === 1) ? mirrorSign : 1;
     
     try {
@@ -1899,21 +3381,11 @@ function calculateFieldData(
             )
         );
         if (!chiefSucceeded) {
-            console.warn(
-                `[ASTIG_DEBUG][FIELD_FAIL] chief-ray-failed ` +
-                `field=${fieldSetting?.displayName ?? fieldIndex} wl=${wavelength} ` +
-                `success=${chiefRayResult?.success} convergence=${chiefRayResult?.convergence} ` +
-                `error=${chiefRayResult?.finalError ?? 'n/a'}`
-            );
             return null;
         }
         
         let chiefRay = chiefRayResult.rayData || chiefRayResult.ray;
         if (!chiefRay || !chiefRay.segments) {
-            console.warn(
-                `[ASTIG_DEBUG][FIELD_FAIL] chief-ray-invalid ` +
-                `field=${fieldSetting?.displayName ?? fieldIndex} wl=${wavelength}`
-            );
             return null;
         }
         
@@ -1934,14 +3406,7 @@ function calculateFieldData(
             );
             if (adjustedChief) {
                 chiefRay = adjustedChief;
-                if (verbose) console.log(`      ✅ 主光線を${chiefRayMode}モードで調整しました`);
             }
-        }
-        
-        if (verbose) {
-            console.log(`      🔍 主光線セグメント数: ${chiefRay.segments.length}`);
-            console.log(`      🔍 評価面絶対インデックス: ${targetSurfaceIndex}`);
-            console.log(`      🔍 絞り面インデックス: ${stopSurfaceIndex}`);
         }
         
         // 主光線の評価面（Image面）での交点Z位置を基準として使用
@@ -1950,19 +3415,11 @@ function calculateFieldData(
             ? null
             : Math.min(rawTargetPointIndex, chiefRay.segments.length - 1);
         if (targetPointIndex === null) {
-            console.warn(
-                `[ASTIG_DEBUG][FIELD_FAIL] target-index-convert-failed ` +
-                `field=${fieldSetting?.displayName ?? fieldIndex} wl=${wavelength} targetSurfaceIndex=${targetSurfaceIndex}`
-            );
             return null;
         }
 
         const chiefSegment = chiefRay.segments[targetPointIndex];
         if (!chiefSegment) {
-            console.warn(
-                `[ASTIG_DEBUG][FIELD_FAIL] chief-not-reaching-target ` +
-                `field=${fieldSetting?.displayName ?? fieldIndex} wl=${wavelength} targetPointIndex=${targetPointIndex} segLen=${chiefRay.segments.length}`
-            );
             return null;
         }
         const toLocal = (point) => {
@@ -1978,19 +3435,12 @@ function calculateFieldData(
             };
         };
         const imageSurfaceZ = toLocal(chiefSegment).z;
-        if (verbose) console.log(`      📍 主光線とImage面の交点Z位置(ローカル): ${imageSurfaceZ.toFixed(4)}mm`);
         
         // 近軸像点（理想像点）を計算（絶対インデックスを使用）
         const paraxialImageZ = calculateParaxialImagePosition(opticalSystemRows, chiefRay, targetSurfaceIndex, imageSurfaceInfo);
         if (paraxialImageZ === null) {
-            console.warn(
-                `[ASTIG_DEBUG][FIELD_FAIL] paraxial-null ` +
-                `field=${fieldSetting?.displayName ?? fieldIndex} wl=${wavelength}`
-            );
             return null;
         }
-        
-        if (verbose) console.log(`      📍 近軸像点Z位置: ${paraxialImageZ.toFixed(4)}mm`);
         
         // スポット表示モードでは非点収差計算をスキップ、通常モードでは計算
         let meridionalFocusZ = null;
@@ -2000,8 +3450,6 @@ function calculateFieldData(
         
         if (!spotDiagramMode) {
             // 非点収差図モード: メリディオナル・サジタル焦点を計算
-            if (verbose) console.log(`      🔄 メリディオナル・サジタル焦点計算中...`);
-            
             const isAngleField = (fieldType === 'angle');
 
             meridionalFocusZ = traceMeridionalMarginalRay(
@@ -2013,7 +3461,10 @@ function calculateFieldData(
                 targetSurfaceIndex,
                 imageSurfaceZ,  // Image面Z位置を基準として使用
                 imageSurfaceInfo,
-                isAngleField
+                isAngleField,
+                samplingPattern,
+                ringCount,
+                rayCount
             );
             
             sagittalFocusZ = traceSagittalMarginalRay(
@@ -2025,35 +3476,24 @@ function calculateFieldData(
                 targetSurfaceIndex,
                 imageSurfaceZ,  // Image面Z位置を基準として使用
                 imageSurfaceInfo,
-                isAngleField
+                isAngleField,
+                samplingPattern,
+                ringCount,
+                rayCount
             );
             
             if (meridionalFocusZ !== null) {
                 meridionalDeviation = meridionalFocusZ - paraxialImageZ;
-                if (verbose) console.log(`      📍 メリディオナル焦点: Z=${meridionalFocusZ.toFixed(4)}mm (偏差=${meridionalDeviation.toFixed(4)}mm)`);
             }
             
             if (sagittalFocusZ !== null) {
                 sagittalDeviation = sagittalFocusZ - paraxialImageZ;
-                if (verbose) console.log(`      📍 サジタル焦点: Z=${sagittalFocusZ.toFixed(4)}mm (偏差=${sagittalDeviation.toFixed(4)}mm)`);
             }
-        } else {
-            if (verbose) console.log(`      ⏭️  メリディオナル・サジタル焦点計算をスキップ（スポット表示モード）`);
-        }
-        
-        if (verbose) {
-            console.log(`      📍 近軸像点: Z=${paraxialImageZ.toFixed(4)}mm`);
-            console.log(`      📏 近軸像点からの差分: M=${meridionalDeviation}, S=${sagittalDeviation}`);
         }
         
         // 主波長の軸上像面位置を基準とした相対値に変換
         let meridionalDeviationRelative = meridionalDeviation;
         let sagittalDeviationRelative = sagittalDeviation;
-        
-        if (verbose) {
-            console.log(`      🔍🔍🔍 primaryReferenceZ = ${primaryReferenceZ}`);
-            console.log(`      🔍 meridionalFocusZ = ${meridionalFocusZ}, sagittalFocusZ = ${sagittalFocusZ}`);
-        }
         
         if (primaryReferenceZ !== null) {
             // メリディオナル・サジタル焦点位置を主波長軸上位置からの相対値に変換
@@ -2063,7 +3503,6 @@ function calculateFieldData(
             if (sagittalFocusZ !== null) {
                 sagittalDeviationRelative = sagittalFocusZ - primaryReferenceZ;
             }
-            if (verbose) console.log(`      📐 主波長軸上基準の相対値: M=${meridionalDeviationRelative?.toFixed(4)}mm, S=${sagittalDeviationRelative?.toFixed(4)}mm`);
         } else {
             if (verbose) console.warn(`      ⚠️⚠️⚠️ primaryReferenceZがnullのため相対値変換をスキップ ⚠️⚠️⚠️`);
         }
@@ -2081,16 +3520,9 @@ function calculateFieldData(
         let crossBeamIntersections = null;
         
         // 評価面（最終面）での実際のX, Y座標を使用（投影不要）
-        if (verbose) console.log(`      🎯 評価面: Surface ${targetSurfaceIndex + 1} (Z=${opticalSystemRows[targetSurfaceIndex].z}mm)`);
-        
         // chiefRayResult.rayGroupsから直接取得し、評価面での座標を取得
         if (chiefRayResult.rayGroups && chiefRayResult.rayGroups[0]) {
             const rayGroup = chiefRayResult.rayGroups[0];
-            
-            if (verbose) {
-                console.log(`      🔍 rayGroup光線数: ${rayGroup.rays.length}`);
-                console.log(`      🔍 rayGroup光線タイプ:`, rayGroup.rays.map(r => r.rayType));
-            }
             
             const spotPositions = []; // {x, y, rayType}の配列
             
@@ -2116,32 +3548,11 @@ function calculateFieldData(
             crossBeamIntersections = {
                 spots: spotPositions
             };
-            
-            if (verbose) console.log(`      ✅ スポット位置データ取得: ${spotPositions.length}本`);
-            
-            if (verbose && spotPositions.length > 0) {
-                const xCoords = spotPositions.map(s => s.x);
-                const yCoords = spotPositions.map(s => s.y);
-                const xMin = Math.min(...xCoords);
-                const xMax = Math.max(...xCoords);
-                const yMin = Math.min(...yCoords);
-                const yMax = Math.max(...yCoords);
-                console.log(`      🔍 スポット X範囲: ${xMin.toFixed(4)} ~ ${xMax.toFixed(4)}mm (幅=${(xMax - xMin).toFixed(4)}mm)`);
-                console.log(`      🔍 スポット Y範囲: ${yMin.toFixed(4)} ~ ${yMax.toFixed(4)}mm (高さ=${(yMax - yMin).toFixed(4)}mm)`);
-            }
         } else {
             if (verbose) console.warn(`      ⚠️ rayGroupsからのスポットデータ取得失敗`);
         }
         
         // データを返す（主波長軸上基準の相対値として保存）
-        console.log(
-            `[ASTIG_DIAG][FIELD_Z] wl=${wavelength} field=${fieldSetting.displayName} ` +
-            `type=${fieldType} axis=${fieldAngle} ` +
-            `paraxial=${paraxialImageZ} primaryRef=${primaryReferenceZ} ` +
-            `M_focus=${meridionalFocusZ} S_focus=${sagittalFocusZ} ` +
-            `M_rel=${meridionalDeviationRelative} S_rel=${sagittalDeviationRelative}`
-        );
-
         return {
             wavelength: wavelength,
             fieldAngle: fieldAngle,
@@ -2154,10 +3565,6 @@ function calculateFieldData(
         };
         
     } catch (fieldError) {
-        console.error(
-            `[ASTIG_DEBUG][FIELD_FAIL] exception field=${fieldSetting?.displayName ?? fieldIndex} wl=${wavelength}:`,
-            fieldError
-        );
         if (verbose) {
             console.error(`      ❌ フィールド ${fieldIndex + 1} (${fieldAngle}°) の計算エラー:`, fieldError);
             console.error(`      エラースタック:`, fieldError.stack);

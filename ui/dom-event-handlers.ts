@@ -59,7 +59,6 @@ import {
     saveTableData as saveSystemRequirementsTableData
 } from '../data/table-system-requirements.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
-import { runOptimizerStep } from '../src/desktop/ipc/client.ts';
 
 // Type definitions
 type BlockType = string;
@@ -1764,14 +1763,43 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
                 }
             } catch (_) {}
             try {
-                const reqData = loadSystemRequirementsTableData();
-                const reqEditor = w.systemRequirementsEditor;
-                if (reqEditor && typeof reqEditor.setData === 'function') {
-                    reqEditor.setData(reqData);
+                const runRequirementSyncSequence = async () => {
+                    const reqEditor = w.systemRequirementsEditor;
+                    if (!reqEditor) return;
+
+                    const reqData = loadSystemRequirementsTableData();
+                    if (typeof reqEditor.setData === 'function') {
+                        reqEditor.setData(reqData);
+                    }
+
+                    const evaluateNow = async (reason: string) => {
+                        try {
+                            if (typeof reqEditor.evaluateAndUpdateNow === 'function') {
+                                const p = reqEditor.evaluateAndUpdateNow({ reason, forceSilent: true, silent: true });
+                                if (p && typeof p.then === 'function') {
+                                    await p;
+                                }
+                            }
+                        } catch (_) {}
+                    };
+
+                    await evaluateNow('load-file-seq-initial');
+
                     if (typeof reqEditor.scheduleEvaluateAndUpdate === 'function') {
                         reqEditor.scheduleEvaluateAndUpdate();
                     }
-                }
+
+                    for (let i = 0; i < 4; i++) {
+                        await new Promise((resolve) => setTimeout(resolve, 120));
+                        await evaluateNow(`load-file-seq-retry-${i + 1}`);
+                    }
+
+                    try {
+                        window.dispatchEvent(new CustomEvent('coopt:requirements-updated'));
+                    } catch (_) {}
+                };
+
+                void runRequirementSyncSequence();
             } catch (_) {}
             try { refreshBlockInspector(); } catch (_) {}
             try {
@@ -2331,18 +2359,86 @@ function setupOptimizeDesignIntentButton(): void {
                     return;
                 }
 
-                const result = await runOptimizerStep({
+                const systemRequirementsRows = (() => {
+                    try {
+                        const sre = (window as any).systemRequirementsEditor;
+                        if (sre && typeof sre.getData === 'function') {
+                            const rows = sre.getData();
+                            if (Array.isArray(rows)) return rows;
+                        }
+                    } catch (_) {}
+                    return [];
+                })();
+
+                const sourceRows = (w.tableSource && typeof w.tableSource.getData === 'function')
+                    ? w.tableSource.getData()
+                    : [];
+                const objectRows = (w.tableObject && typeof w.tableObject.getData === 'function')
+                    ? w.tableObject.getData()
+                    : [];
+                const activeConfigId = (() => {
+                    try {
+                        const cfg = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
+                            ? w.loadSystemConfigurationsFromTableConfig()
+                            : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
+                        if (cfg && cfg.activeConfigId !== undefined && cfg.activeConfigId !== null) {
+                            return String(cfg.activeConfigId).trim();
+                        }
+                    } catch (_) {}
+                    return '';
+                })();
+
+                const opt = w.OptimizationMVP;
+                if (!opt || typeof opt.run !== 'function') {
+                    alert('OptimizationMVP が利用できません。');
+                    return;
+                }
+
+                const progressEvents: any[] = [];
+                const result = await opt.run({
                     opticalSystemRows,
+                    sourceRows,
+                    objectRows,
+                    activeConfigId,
+                    systemRequirementsRows,
                     maxIterations: 24,
+                    method: 'kkt',
+                    forceTs: true,
+                    onProgress: (ev: any) => {
+                        if (!ev || typeof ev !== 'object') return;
+                        progressEvents.push(ev);
+                    },
                 });
+
+                if (Array.isArray(progressEvents) && progressEvents.length > 0) {
+                    console.log('📈 [Optimize][TS][Progress]', progressEvents.slice(-8));
+                }
+
+                try {
+                    if (typeof (window as any).drawOpticalSystem === 'function') {
+                        (window as any).drawOpticalSystem();
+                    }
+                } catch (applyErr) {
+                    console.warn('⚠️ [Optimize][TS] result apply failed:', applyErr);
+                }
+
+                const modeUsed = String(result?.method || 'kkt');
+                const iterations = Number(result?.iterations ?? 0);
+                const variableCount = Number(result?.variables ?? 0);
+                const meritBefore = Number(result?.before ?? Number.NaN);
+                const meritAfter = Number(result?.best ?? Number.NaN);
+                const requirementScoreAfter = Number(result?.violationScore ?? Number.NaN);
+                const converged = !result?.aborted;
 
                 alert(
                     [
-                        'Rust optimizer step completed',
-                        `iterations: ${result.iterations}`,
-                        `variables: ${result.variableCount}`,
-                        `merit: ${result.meritBefore.toFixed(6)} -> ${result.meritAfter.toFixed(6)}`,
-                        result.converged ? 'status: converged' : 'status: in-progress',
+                        'TS optimizer step completed',
+                        `mode: ${modeUsed}`,
+                        `iterations: ${iterations}`,
+                        `variables: ${variableCount}`,
+                        `merit: ${Number.isFinite(meritBefore) ? meritBefore.toFixed(6) : 'NaN'} -> ${Number.isFinite(meritAfter) ? meritAfter.toFixed(6) : 'NaN'}`,
+                        `requirements: ${Number.isFinite(requirementScoreAfter) ? requirementScoreAfter.toFixed(6) : 'NaN'}`,
+                        converged ? 'status: converged' : 'status: in-progress',
                     ].join('\n')
                 );
                 return;
@@ -2450,11 +2546,11 @@ function setupOptimizeDesignIntentButton(): void {
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Vars</span><span id="opt-vars" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Req</span><span id="opt-req" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Res</span><span id="opt-res" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Score</span><span id="opt-cur" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">ReqScore(active)</span><span id="opt-cur" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Violation</span><span id="opt-vio" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Soft</span><span id="opt-soft" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Best</span><span id="opt-best" style="margin-left:8px;">-</span></div>
-    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Rho</span><span id="opt-rho" style="margin-left:8px;">-</span></div>
+    <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Penalty ρ</span><span id="opt-rho" style="margin-left:8px;">-</span></div>
     <div style="display:flex; align-items:baseline;"><span style="display:inline-block; width:110px; color:#555;">Issue</span><span id="opt-issue" style="margin-left:8px;">-</span></div>
 </div>
 <details style="margin-top:10px; margin-bottom:10px; font-size:12px; color:#555;">
@@ -2726,14 +2822,52 @@ function setupOptimizeDesignIntentButton(): void {
                         return [];
                     })();
 
-                    reqCount = Array.isArray(rows) ? rows.length : NaN;
-                    if (Array.isArray(rows) && rows.length > 0) {
+                    const activeConfigId = (() => {
+                        try {
+                            const cfg = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
+                                ? w.loadSystemConfigurationsFromTableConfig()
+                                : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
+                            if (cfg && cfg.activeConfigId !== undefined && cfg.activeConfigId !== null) {
+                                return String(cfg.activeConfigId).trim();
+                            }
+                        } catch (_) {}
+                        return '';
+                    })();
+
+                    const normalizeConfigId = (row: any): string => {
+                        try {
+                            if (sre && typeof sre._normalizeConfigId === 'function') {
+                                return String(sre._normalizeConfigId(row?.configId, cfg, activeConfigId) || '').trim();
+                            }
+                        } catch (_) {}
+                        const rawCfg = String(row?.configId ?? '').trim();
+                        return rawCfg || activeConfigId;
+                    };
+
+                    const isActiveRequirement = (row: any): boolean => {
+                        if (!row || typeof row !== 'object') return false;
+                        const enabled = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
+                        const operand = String(row.operand ?? '').trim();
+                        const weight = Number(row.weight ?? 1);
+                        if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) return false;
+                        const reqCfg = normalizeConfigId(row);
+                        if (!activeConfigId) return true;
+                        return reqCfg === activeConfigId;
+                    };
+
+                    const activeRows = Array.isArray(rows) ? rows.filter((r: any) => isActiveRequirement(r)) : [];
+                    reqCount = activeRows.length;
+                    if (activeRows.length > 0) {
                         let s = 0;
-                        for (const row of rows) {
+                        let finiteCount = 0;
+                        for (const row of activeRows) {
                             const c = Number(row?._contribution);
-                            if (Number.isFinite(c) && c > 0) s += c;
+                            if (Number.isFinite(c)) {
+                                if (c > 0) s += c;
+                                finiteCount += 1;
+                            }
                         }
-                        if (Number.isFinite(s)) score = s;
+                        if (finiteCount > 0 && Number.isFinite(s)) score = s;
                     }
                 } catch (_) {}
 

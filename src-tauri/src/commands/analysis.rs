@@ -2649,3 +2649,152 @@ fn compute_chromatic_lca_tca_for_surface(
     let tca = j_factor * lca;
     (lca, tca)
 }
+
+// ── Structured paraxial metrics for optimizer parity ──────────────────────
+
+/// All paraxial metrics needed by the optimizer, mirroring the TS
+/// `getPrimarySystemMetricsCached` output.
+#[derive(Debug, Clone)]
+pub(crate) struct ParaxialMetrics {
+    pub fl: f64,
+    pub efl: f64,
+    pub bfl: f64,
+    pub imd: f64,
+    pub objd: f64,
+    pub tsl: f64,
+    pub bexp: f64,
+    pub expd: f64,
+    pub expp: f64,
+    pub enpd: f64,
+    pub enpp: f64,
+    pub enpm: f64,
+    pub pmag: f64,
+    pub fno_obj: f64,
+    pub fno_img: f64,
+    pub fno_wrk: f64,
+    pub na_obj: f64,
+    pub na_img: f64,
+}
+
+/// Compute structured paraxial metrics from optical system rows,
+/// using the same paraxial ray tracing as `format_paraxial_report`.
+pub(crate) fn compute_paraxial_metrics(
+    rows: &[Value],
+    source_rows: &[Value],
+    _object_rows: &[Value],
+) -> ParaxialMetrics {
+    let zero = ParaxialMetrics {
+        fl: 0.0, efl: 0.0, bfl: 0.0, imd: 0.0, objd: 0.0, tsl: 0.0,
+        bexp: 0.0, expd: 0.0, expp: 0.0, enpd: 0.0, enpp: 0.0, enpm: 0.0,
+        pmag: 0.0, fno_obj: 0.0, fno_img: 0.0, fno_wrk: 0.0, na_obj: 0.0, na_img: 0.0,
+    };
+    if rows.is_empty() {
+        return zero;
+    }
+
+    let trace = calculate_full_system_paraxial_trace(rows);
+    let stop_index = detect_stop_surface_index(rows).unwrap_or(1);
+    let stop_diameter = rows
+        .get(stop_index)
+        .and_then(Value::as_object)
+        .and_then(|o| parse_numeric(o.get("semidia").unwrap_or(&Value::Null)))
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map(|r| r * 2.0)
+        .unwrap_or(0.0);
+    let stop_trace = trace_paraxial_ray_from_stop(rows, stop_index);
+    let entrance = estimate_entrance_pupil(rows, stop_index, stop_diameter);
+
+    let (exit_pupil_mag, exit_pupil_diameter) = if let Some(st) = stop_trace.as_ref() {
+        let beta = if st.final_alpha.abs() > 1e-10 {
+            st.initial_alpha / st.final_alpha
+        } else {
+            0.0
+        };
+        let ex_pd = (beta.abs() * stop_diameter).max(0.0);
+        (beta, ex_pd)
+    } else {
+        (1.0_f64, stop_diameter)
+    };
+
+    let Some(t) = trace else {
+        return zero;
+    };
+
+    let fl = safe0(t.focal_length_mm);
+    let bfl = safe0(t.back_focal_length_mm);
+    let imd = safe0(t.image_distance_mm);
+    let tsl = safe0(t.total_system_length_mm);
+    let objd = safe0(t.object_distance_mm.unwrap_or(0.0));
+
+    // EFL via separate infinite-object trace (same as format_paraxial_report)
+    let efl = fl; // In format_paraxial_report, EFL = FL from the same trace
+
+    let bexp = safe0(exit_pupil_mag);
+    let expd = safe0(exit_pupil_diameter);
+
+    let exit_pos_from_image = stop_trace
+        .as_ref()
+        .map(|st| st.image_distance_mm - t.image_distance_mm)
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.0);
+    let expp = safe0(exit_pos_from_image);
+
+    let entrance_diameter = entrance
+        .as_ref()
+        .map(|v| v.diameter_mm)
+        .filter(|v| v.is_finite() && *v > 1e-12)
+        .unwrap_or(stop_diameter);
+
+    let enpd = safe0(entrance.as_ref().map(|v| v.diameter_mm).unwrap_or(stop_diameter));
+    let enpp = safe0(entrance.as_ref().map(|v| v.position_mm).unwrap_or(0.0));
+    let enpm = safe0(entrance.as_ref().map(|v| v.magnification).unwrap_or(1.0));
+
+    let beta = if let Some(d0) = t.object_distance_mm {
+        if t.final_alpha.abs() > 1e-10 { (-1.0 / d0) / t.final_alpha } else { 0.0 }
+    } else {
+        0.0
+    };
+    let pmag = safe0(beta);
+
+    let fno_wrk = if expd > 0.0 && t.image_distance_mm.is_finite() {
+        safe0(t.image_distance_mm.abs() / expd)
+    } else {
+        0.0
+    };
+
+    let fno_obj = if beta.abs() > 1e-10 && fno_wrk.is_finite() {
+        safe0((fno_wrk / beta).abs())
+    } else {
+        0.0
+    };
+
+    let fno_img = if fl > 0.0 && entrance_diameter > 0.0 {
+        safe0(fl / entrance_diameter)
+    } else {
+        0.0
+    };
+
+    let na_img = if fno_wrk.is_finite() && fno_wrk.abs() > 1e-12 {
+        safe0(1.0 / (2.0 * fno_wrk))
+    } else {
+        0.0
+    };
+
+    let na_obj = if na_img.is_finite() && beta.is_finite() {
+        safe0((na_img * beta).abs())
+    } else {
+        0.0
+    };
+
+    let _ = source_rows; // consumed indirectly via detect_primary_wavelength if needed
+
+    ParaxialMetrics {
+        fl, efl, bfl, imd, objd, tsl,
+        bexp, expd, expp, enpd, enpp, enpm, pmag,
+        fno_obj, fno_img, fno_wrk, na_obj, na_img,
+    }
+}
+
+fn safe0(v: f64) -> f64 {
+    if v.is_finite() { v } else { 0.0 }
+}

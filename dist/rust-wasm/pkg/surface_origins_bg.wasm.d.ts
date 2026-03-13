@@ -3,12 +3,14 @@
 export const memory: WebAssembly.Memory;
 export const advance_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
 export const assemble_fd_jacobian: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+export const assemble_fd_jacobian_grouped: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
 export const backtracking_line_search_armijo: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: any) => number;
 export const batch_mat3_mul_vec3: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const bfgs_update: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number) => number;
 export const build_normal_equations: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
 export const calculate_surface_origins: (a: number, b: number) => [number, number, number];
 export const cholesky_factorization: (a: number, b: number, c: number) => [number, number];
+export const compute_lca_series_from_image_heights: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
 export const fft_2d_forward: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
 export const fft_2d_inverse: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
 export const free: (a: number, b: number) => void;
@@ -26,6 +28,7 @@ export const optimize_system_in_wasm: (a: number, b: number) => [number, number,
 export const qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];
 export const reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+export const run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
 export const solve_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const solve_qp_subproblem_kkt_equality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
 export const solve_qp_subproblem_unconstrained: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];

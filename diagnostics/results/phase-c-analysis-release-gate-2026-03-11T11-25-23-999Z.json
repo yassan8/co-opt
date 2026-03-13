@@ -1,0 +1,65 @@
+{
+  "timestamp": "2026-03-11T11:25:24.081Z",
+  "inputPath": "diagnostics/results/phase-c-benchmark-synthetic.json",
+  "selectedMode": "matrixFreePriority",
+  "metrics": {
+    "elapsedSpeedup": 1.6666666666666667,
+    "baselineOkRatePct": 100,
+    "selectedOkRatePct": 100,
+    "okRateDeltaPct": 0,
+    "matrixFreeCalls": 24,
+    "matrixFreeFallbacks": 0,
+    "matrixFreeFallbackRate": 0,
+    "matrixFreeUnknownFallbackRate": 0,
+    "matrixFreeHitRatePct": 100,
+    "matrixFreeCgItersAvg": 7,
+    "matrixFreeSolverItersAvg": 7,
+    "matrixFreeResidualNormAvg": 1e-10,
+    "matrixFreeMsAvg": 36,
+    "matrixFreeFallbackReasons": {}
+  },
+  "requirementGate": {
+    "enabled": true,
+    "thresholds": {
+      "minElapsedSpeedup": 1.5,
+      "minOkRateDeltaPct": 0,
+      "maxMatrixFreeFallbackRate": 0.05,
+      "maxMatrixFreeUnknownFallbackRate": 0.01,
+      "requireMatrixFreeCalls": true
+    },
+    "checks": [
+      {
+        "name": "elapsedSpeedup",
+        "actual": 1.6666666666666667,
+        "limit": 1.5,
+        "pass": true
+      },
+      {
+        "name": "okRateDeltaPct",
+        "actual": 0,
+        "limit": 0,
+        "pass": true
+      },
+      {
+        "name": "phaseC.matrixFreeFallbackRate",
+        "actual": 0,
+        "limit": 0.05,
+        "pass": true
+      },
+      {
+        "name": "phaseC.matrixFreeUnknownFallbackRate",
+        "actual": 0,
+        "limit": 0.01,
+        "pass": true
+      },
+      {
+        "name": "phaseC.matrixFreeCalls",
+        "actual": 24,
+        "limit": 1,
+        "pass": true
+      }
+    ],
+    "failedChecks": [],
+    "passed": true
+  }
+}

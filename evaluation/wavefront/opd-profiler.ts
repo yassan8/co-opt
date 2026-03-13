@@ -83,7 +83,7 @@ function buildTraceOptions(traceMode = 'js', options = {}) {
   if (traceMode === 'rust-wasm') {
     const rustMaxIter = Number.isFinite(Number(options?.rustMaxIter)) ? Number(options.rustMaxIter) : undefined;
     const rustTol = Number.isFinite(Number(options?.rustTol)) ? Number(options.rustTol) : undefined;
-    return { useRustWasm: true, requireRustWasm: false, rustMaxIter, rustTol };
+    return { useRustWasm: true, requireRustWasm: true, rustMaxIter, rustTol };
   }
   return null;
 }

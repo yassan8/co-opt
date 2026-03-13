@@ -145,6 +145,7 @@
 
 - 新規カウンタ・ベンチコマンドの追加
 - release gate に Phase C 判定を追加（任意開始）
+- `OptimizationMVP.exportMatrixFreeJson(...)` と `diagnostics/phase-c-analyze.mjs` で Phase C artifact を JSON 判定可能にする
 
 ---
 
@@ -159,7 +160,17 @@
 ```bash
 node --import tsx diagnostics/kkt-e2e-auto.mjs --rounds 7 --warmup 2 --mode both
 node --import tsx diagnostics/release-gate-auto.mjs --start-from kkt
+node --experimental-strip-types diagnostics/phase-c-analyze.mjs --input diagnostics/results/phase-c-benchmark-*.json --require true
 ```
+
+実ランタイムから Phase C artifact を作る場合:
+
+```text
+http://127.0.0.1:1420/?phasec=1&phasecRepeat=6&phasecWarmupDiscard=1
+```
+
+- 追加クエリ: `phasecLoadDefault=0|1`, `phasecDownload=0|1`, `phasecFileName=<name>.json`, `phasecMethod=kkt`, `phasecMaxIter=<n>`
+- 実行状態は `window.__cooptPhaseCAutorunStatus` と `localStorage['coopt.phaseCAutorunStatus']` に反映される
 
 ---
 
