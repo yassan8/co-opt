@@ -7699,20 +7699,14 @@ export function setupAnalysisWindows() {
         if (openDistortionWindowBtn) {
                 openDistortionWindowBtn.addEventListener('click', () => {
                 if (!isTauriRuntime()) {
-                    if (w.__distortionPopup && !w.__distortionPopup.closed) {
-                        try { w.__distortionPopup.focus(); } catch (_) {}
-                        return;
-                    }
                     try {
                         const url = new URL(window.location.href);
+                        url.searchParams.delete('coopt_render_window');
+                        url.searchParams.delete('coopt_optimize_window');
+                        url.searchParams.delete('coopt_settings_window');
                         url.searchParams.set('coopt_analysis_window', '1');
                         url.searchParams.set('coopt_analysis', 'distortion');
-                        const popup = window.open(url.toString(), 'Distortion', 'width=800,height=600');
-                        if (!popup) {
-                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
-                            return;
-                        }
-                        w.__distortionPopup = popup;
+                        window.location.assign(url.toString());
                         return;
                     } catch (_) {}
                 }
@@ -7933,20 +7927,14 @@ export function setupAnalysisWindows() {
         if (openDistortionGridWindowBtn) {
                 openDistortionGridWindowBtn.addEventListener('click', () => {
                 if (!isTauriRuntime()) {
-                    if (w.__distortionGridPopup && !w.__distortionGridPopup.closed) {
-                        try { w.__distortionGridPopup.focus(); } catch (_) {}
-                        return;
-                    }
                     try {
                         const url = new URL(window.location.href);
+                        url.searchParams.delete('coopt_render_window');
+                        url.searchParams.delete('coopt_optimize_window');
+                        url.searchParams.delete('coopt_settings_window');
                         url.searchParams.set('coopt_analysis_window', '1');
                         url.searchParams.set('coopt_analysis', 'distortion-grid');
-                        const popup = window.open(url.toString(), 'Distortion Grid', 'width=800,height=600');
-                        if (!popup) {
-                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
-                            return;
-                        }
-                        w.__distortionGridPopup = popup;
+                        window.location.assign(url.toString());
                         return;
                     } catch (_) {}
                 }
