@@ -2928,17 +2928,7 @@ function __coopt_addUltraDebugCrossOverlay(scene: any, THREE: any, viewAxis: 'XZ
 }
 
 function __coopt_getFillDebugStatusSuffix(viewAxis?: 'XZ' | 'YZ'): string {
-    try {
-        const debug = (w as any).__cooptLastFillDebug;
-        if (!debug) return '';
-        if (viewAxis && String(debug.viewAxis || '') !== viewAxis) return '';
-        const meshCount = Number(debug.createdMeshCount) || 0;
-        const sceneCount = Number(debug.sceneChildCount) || 0;
-        const source = String(debug.source || 'unknown');
-        return ` fillMesh=${meshCount} scene=${sceneCount} source=${source}`;
-    } catch (_) {
-        return '';
-    }
+    return '';
 }
 
 function __coopt_setPopupStatusWithFillDebug(popupWindow: any, baseStatus: string, viewAxis: 'XZ' | 'YZ'): void {
@@ -2960,6 +2950,9 @@ function __coopt_applyPopupCrossSectionLensFill(options: {
     opticalSystemRows: any[];
     source?: string;
 }): void {
+    // Keep cross-section rendering clean in popup windows: no debug fill overlays.
+    return;
+
     const { popupWindow, scene, viewAxis, opticalSystemRows, source = 'unknown' } = options;
     if (!scene || !Array.isArray(opticalSystemRows) || opticalSystemRows.length < 2) return;
 
@@ -4143,9 +4136,12 @@ function executeCrossSectionView(options: {
             }
         }
         
-        try {
-            w.__cooptOpticalSystemRowsOverride = null;
-        } catch (_) {}
+        // Keep override rows during optimization so Render reflects accept updates.
+        if (!isOptimizing) {
+            try {
+                w.__cooptOpticalSystemRowsOverride = null;
+            } catch (_) {}
+        }
         
         const {
             getOpticalSystemRows,
@@ -4794,7 +4790,7 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
         <button id="view-yz-btn" type="button">Y-Z View</button>
         <button id="clear-btn" type="button">Clear</button>
         <label for="draw-ray-count-input">Ray number:</label>
-        <input type="number" id="draw-ray-count-input" value="1" min="1" max="10001" step="2" />
+        <input type="number" id="draw-ray-count-input" value="5" min="1" max="10001" step="2" />
         <label>Ray colors by:</label>
         <button id="object-color-btn" type="button" class="active">Object</button>
         <button id="segment-color-btn" type="button">Segment</button>

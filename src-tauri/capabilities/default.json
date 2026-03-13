@@ -7,6 +7,9 @@
     "core:default",
     "core:window:allow-create",
     "core:window:allow-set-focus",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-close",
     "core:webview:allow-create-webview",
     "core:webview:allow-create-webview-window",
     "dialog:default"
