@@ -2681,26 +2681,42 @@ export default function App() {
         const AUTO_RENDER_THROTTLE_MS = 120;
 
         const requestRenderSync = (rowsFromProgress?: any[]) => {
-          if (!optAutoRenderOnAccept) return;
+          const hasOpenRenderTarget = (() => {
+            try {
+              const hostPopup = hostWindow?.popup3DWindow;
+              if (hostPopup && !hostPopup.closed) return true;
+            } catch (_) {}
+            try {
+              const localPopup = (window as any)?.popup3DWindow;
+              if (localPopup && !localPopup.closed) return true;
+            } catch (_) {}
+            return false;
+          })();
+
+          // Keep existing opt-in behavior for auto-opening Render window,
+          // but always sync when a render popup is already open.
+          if (!optAutoRenderOnAccept && !hasOpenRenderTarget) return;
           const now = Date.now();
           if ((now - lastAutoRenderAt) < AUTO_RENDER_THROTTLE_MS) return;
           lastAutoRenderAt = now;
           let rowsForRender: any[] = [];
 
           // Ensure Render window is opened/focused in desktop mode as auto-render target.
-          try {
-            const openRender = (hostWindow as any).__cooptOpenRenderWindow || (window as any).__cooptOpenRenderWindow;
-            if (isTauriRuntime() && typeof openRender === 'function') {
-              void Promise.resolve(openRender());
-            } else if (typeof (hostWindow as any).handleRender3D === 'function') {
-              (hostWindow as any).handleRender3D();
-            } else {
-              const openBtn = hostWindow?.document?.getElementById?.('open-3d-window-btn') as HTMLButtonElement | null;
-              if (openBtn && typeof openBtn.click === 'function') {
-                openBtn.click();
+          if (optAutoRenderOnAccept) {
+            try {
+              const openRender = (hostWindow as any).__cooptOpenRenderWindow || (window as any).__cooptOpenRenderWindow;
+              if (isTauriRuntime() && typeof openRender === 'function') {
+                void Promise.resolve(openRender());
+              } else if (typeof (hostWindow as any).handleRender3D === 'function') {
+                (hostWindow as any).handleRender3D();
+              } else {
+                const openBtn = hostWindow?.document?.getElementById?.('open-3d-window-btn') as HTMLButtonElement | null;
+                if (openBtn && typeof openBtn.click === 'function') {
+                  openBtn.click();
+                }
               }
-            }
-          } catch (_) {}
+            } catch (_) {}
+          }
 
           // Signal the main window via localStorage (works across Tauri WebviewWindows
           // where hostWindow === w and direct DOM access is impossible).
