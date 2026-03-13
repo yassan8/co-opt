@@ -8,7 +8,7 @@ const w: Record<string, any> = window;
 
 import { clearAllOpticalElements } from '../optical/system-renderer.ts';
 import * as THREE_NS from 'three';
-import { setRayEmissionPattern, setRayColorMode } from '../optical/ray-renderer.ts';
+import { generateRayStartPointsForObject, setRayEmissionPattern, setRayColorMode } from '../optical/ray-renderer.ts';
 import { calculateSurfaceOrigins } from '../raytracing/core/ray-tracing.ts';
 import { calculateOpticalSystemOffset } from '../utils/math.ts';
 import {
@@ -26,7 +26,7 @@ import { calculateFocalLength, calculateParaxialData, findStopSurfaceIndex, calc
 import { DEFAULT_STOP_SEMI_DIAMETER } from '../data/block-schema.ts';
 import { loadSystemConfigurations } from '../data/table-configuration.ts';
 import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
-import { runAnalysisCompute, runNativeFieldMtfMap, runNativeMtfMap, runNativeOpdMap, runNativePsfMap, runNativeSphericalAberration, runNativeSpotRaytrace, runNativeThroughFocusMtfMap } from '../src/desktop/ipc/client.ts';
+import { runAnalysisCompute, runNativeDistortion, runNativeFieldMtfMap, runNativeGridDistortion, runNativeMtfMap, runNativeOpdMap, runNativePsfMap, runNativeSphericalAberration, runNativeSpotRaytrace, runNativeThroughFocusMtfMap } from '../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
 import { listen } from '@tauri-apps/api/event';
 import { hideAnalysisProgressHud, showAnalysisProgressHud, updateAnalysisProgressHud } from './shared/analysis-progress-hud.ts';
@@ -71,6 +71,51 @@ function collectPopupRowsFromMainWindow(): {
     try {
         const rows = getObjectRows(w.tableObject);
         if (Array.isArray(rows)) objectRows = rows;
+    } catch (_) {}
+
+    // Keep popup analysis input aligned with the active configuration snapshot.
+    // This reduces path drift between popup-native and in-page analysis flows.
+    try {
+        let activeConfig: any = null;
+        if (typeof w.getActiveConfiguration === 'function') {
+            activeConfig = w.getActiveConfiguration();
+        }
+        if (!activeConfig) {
+            const all = loadSystemConfigurations();
+            const activeIdRaw = all?.activeConfigId;
+            const activeId = Number(activeIdRaw);
+            const list = Array.isArray(all?.configurations) ? all.configurations : [];
+            if (Number.isFinite(activeId)) {
+                activeConfig = list.find((c: any) => Number(c?.id) === activeId) || null;
+            }
+            if (!activeConfig && list.length > 0) {
+                activeConfig = list[0];
+            }
+        }
+
+        if (activeConfig) {
+            let snapshotOpticalRows: any[] = Array.isArray(activeConfig?.opticalSystem)
+                ? activeConfig.opticalSystem.map((row: any) => (row && typeof row === 'object') ? { ...row } : row)
+                : [];
+            if (Array.isArray(activeConfig?.blocks) && activeConfig.blocks.length > 0) {
+                const expanded = w.expandBlocksToOpticalSystemRows
+                    ? w.expandBlocksToOpticalSystemRows(activeConfig.blocks)
+                    : null;
+                if (Array.isArray(expanded?.rows) && expanded.rows.length > 0) {
+                    snapshotOpticalRows = expanded.rows.map((row: any) => (row && typeof row === 'object') ? { ...row } : row);
+                }
+            }
+            const snapshotObjectRows: any[] = Array.isArray(activeConfig?.object)
+                ? activeConfig.object.map((row: any) => (row && typeof row === 'object') ? { ...row } : row)
+                : [];
+
+            if (snapshotOpticalRows.length > 0) {
+                opticalSystemRows = snapshotOpticalRows;
+            }
+            if (snapshotObjectRows.length > 0) {
+                objectRows = snapshotObjectRows;
+            }
+        }
     } catch (_) {}
 
     if (!Array.isArray(objectRows) || objectRows.length === 0) {
@@ -174,14 +219,6 @@ function computePopupAiryRadiusUm(opticalSystemRows: any[], sourceRows: any[]): 
 async function runDesktopAnalysisComputeForPopup(
     payload: Omit<RunAnalysisComputeRequest, 'opticalSystemRows' | 'sourceRows' | 'objectRows'>,
 ): Promise<RunAnalysisComputeResponse> {
-    if (!isTauriRuntime()) {
-        throw new Error('Desktop runtime is not available');
-    }
-
-    if (!shouldUseDesktopRustAnalysis()) {
-        throw new Error('Desktop Rust analysis is disabled until TS parity migration is complete');
-    }
-
     const jobId = `analysis-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let unlisten: null | (() => void) = null;
 
@@ -241,10 +278,6 @@ async function runDesktopNativeOpdMapForPopup(payload: {
     wavelengthUm?: number;
     opdDisplayMode?: 'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved' | string;
 }) {
-    if (!isTauriRuntime()) {
-        throw new Error('Desktop runtime is not available');
-    }
-
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
     const jobId = `native-opd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let unlistenProgress: null | (() => void) = null;
@@ -323,10 +356,6 @@ async function runDesktopNativePsfMapForPopup(payload: {
     zeroPadTo?: number;
     recenterIfWrapped?: boolean;
 }) {
-    if (!isTauriRuntime()) {
-        throw new Error('Desktop runtime is not available');
-    }
-
     const jobId = `native-psf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let unlistenProgress: null | (() => void) = null;
 
@@ -387,10 +416,6 @@ async function runDesktopNativeMtfMapForPopup(payload: {
     maxFrequencyLpmm?: number;
     points?: number;
 }) {
-    if (!isTauriRuntime()) {
-        throw new Error('Desktop runtime is not available');
-    }
-
     const result = await runNativeMtfMap({
         psfData: Array.isArray(payload?.psfData) ? payload.psfData : [],
         pixelSizeUm: Number(payload?.pixelSizeUm),
@@ -413,12 +438,11 @@ async function runDesktopNativeThroughFocusMtfForPopup(payload: {
     samplingSize?: number;
     zeroPadTo?: number;
     opdDisplayMode?: string;
+    onProgress?: (evt: { percent?: number; message?: string }) => void;
 }) {
-    if (!isTauriRuntime()) {
-        throw new Error('Desktop runtime is not available');
-    }
-
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    const jobId = `native-tfmtf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let unlistenProgress: null | (() => void) = null;
     const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload.samplingSize))) : 256;
     const zeroPadTo = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
     const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0;
@@ -468,27 +492,63 @@ async function runDesktopNativeThroughFocusMtfForPopup(payload: {
         : Math.max(samplingSize, zeroPadTo);
     const basePixelPitchUm = (wavelengthForScale * Math.abs(Number(focalLengthMm))) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
     const pixelSizeUm = basePixelPitchUm * (samplingSize / requestedFftSize);
+    const reportProgress = (evt?: { percent?: number; message?: string }) => {
+        try {
+            const fn = payload?.onProgress;
+            if (typeof fn !== 'function') return;
+            fn({
+                percent: Number.isFinite(Number(evt?.percent)) ? Number(evt?.percent) : undefined,
+                message: (typeof evt?.message === 'string' && evt.message.trim()) ? evt.message : undefined,
+            });
+        } catch (_) {}
+    };
 
-    return runNativeThroughFocusMtfMap({
-        opticalSystemRows,
-        sourceRows,
-        objectRows,
-        objectIndex,
-        pupilSamplingMode: (payload?.pupilSamplingMode === 'stop' || payload?.pupilSamplingMode === 'entrance')
-            ? payload.pupilSamplingMode
-            : requestedPupilSamplingMode,
-        wavelengths: Array.isArray(payload?.wavelengths)
-            ? payload.wavelengths.filter((w) => Number.isFinite(Number(w)) && Number(w) > 0).map((w) => Number(w))
-            : [],
-        targetFrequencyLpmm: Number.isFinite(Number(payload?.targetFrequencyLpmm)) ? Number(payload.targetFrequencyLpmm) : 10,
-        defocusMinMm: Number.isFinite(Number(payload?.defocusMinMm)) ? Number(payload.defocusMinMm) : -0.5,
-        defocusMaxMm: Number.isFinite(Number(payload?.defocusMaxMm)) ? Number(payload.defocusMaxMm) : 0.5,
-        steps: Number.isFinite(Number(payload?.steps)) ? Math.floor(Number(payload.steps)) : 21,
-        samplingSize,
-        zeroPadTo: requestedFftSize,
-        pixelSizeUm,
-        opdDisplayMode: String(payload?.opdDisplayMode || 'pistonTiltRemoved'),
-    });
+    if (isTauriRuntime()) {
+        try {
+            unlistenProgress = await listen('analysis-progress', (event: any) => {
+                try {
+                    const data = event?.payload || {};
+                    if (!data || String(data.jobId || '') !== jobId) return;
+                    const percent = Number(data?.percent);
+                    const message = String(data?.message || data?.phase || 'Computing Through-Focus MTF...');
+                    reportProgress({
+                        percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : undefined,
+                        message,
+                    });
+                } catch (_) {}
+            });
+        } catch (_) {
+            unlistenProgress = null;
+        }
+    }
+
+    try {
+        return await runNativeThroughFocusMtfMap({
+            jobId,
+            opticalSystemRows,
+            sourceRows,
+            objectRows,
+            objectIndex,
+            pupilSamplingMode: (payload?.pupilSamplingMode === 'stop' || payload?.pupilSamplingMode === 'entrance')
+                ? payload.pupilSamplingMode
+                : requestedPupilSamplingMode,
+            wavelengths: Array.isArray(payload?.wavelengths)
+                ? payload.wavelengths.filter((w) => Number.isFinite(Number(w)) && Number(w) > 0).map((w) => Number(w))
+                : [],
+            targetFrequencyLpmm: Number.isFinite(Number(payload?.targetFrequencyLpmm)) ? Number(payload.targetFrequencyLpmm) : 10,
+            defocusMinMm: Number.isFinite(Number(payload?.defocusMinMm)) ? Number(payload.defocusMinMm) : -0.5,
+            defocusMaxMm: Number.isFinite(Number(payload?.defocusMaxMm)) ? Number(payload.defocusMaxMm) : 0.5,
+            steps: Number.isFinite(Number(payload?.steps)) ? Math.floor(Number(payload.steps)) : 21,
+            samplingSize,
+            zeroPadTo: requestedFftSize,
+            pixelSizeUm,
+            opdDisplayMode: String(payload?.opdDisplayMode || 'pistonTiltRemoved'),
+        }, reportProgress);
+    } finally {
+        try {
+            if (unlistenProgress) unlistenProgress();
+        } catch (_) {}
+    }
 }
 
 w.runDesktopNativeThroughFocusMtfForPopup = runDesktopNativeThroughFocusMtfForPopup;
@@ -1067,6 +1127,198 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
 }
 
 w.runDesktopNativeFieldMtfForPopup = runDesktopNativeFieldMtfForPopup;
+
+async function runPortableFieldMtfForPopup(payload: {
+    objectIndex?: number;
+    pupilSamplingMode?: 'stop' | 'entrance';
+    wavelengths?: number[];
+    firstFrequencyLpmm?: number;
+    secondFrequencyLpmm?: number;
+    fieldMin?: number;
+    fieldMax?: number;
+    steps?: number;
+    samplingSize?: number;
+    zeroPadTo?: number;
+    opdDisplayMode?: string;
+    fieldAxisMode?: 'angle' | 'height';
+    onProgress?: (evt: { percent?: number; message?: string }) => void;
+}) {
+    if (isTauriRuntime()) {
+        return runDesktopNativeFieldMtfForPopup(payload || {});
+    }
+
+    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    return runNativeFieldMtfMap({
+        opticalSystemRows,
+        sourceRows,
+        objectRows,
+        objectIndex: Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload?.objectIndex))) : 0,
+        pupilSamplingMode: payload?.pupilSamplingMode,
+        wavelengths: Array.isArray(payload?.wavelengths) ? payload.wavelengths : undefined,
+        firstFrequencyLpmm: Number.isFinite(Number(payload?.firstFrequencyLpmm)) ? Number(payload?.firstFrequencyLpmm) : undefined,
+        secondFrequencyLpmm: Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload?.secondFrequencyLpmm) : undefined,
+        fieldMin: Number.isFinite(Number(payload?.fieldMin)) ? Number(payload?.fieldMin) : undefined,
+        fieldMax: Number.isFinite(Number(payload?.fieldMax)) ? Number(payload?.fieldMax) : undefined,
+        steps: Number.isFinite(Number(payload?.steps)) ? Math.max(3, Math.floor(Number(payload?.steps))) : undefined,
+        samplingSize: Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : undefined,
+        zeroPadTo: Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload?.zeroPadTo)) : undefined,
+        opdDisplayMode: payload?.opdDisplayMode,
+        fieldAxisMode: payload?.fieldAxisMode,
+        onProgress: payload?.onProgress,
+    } as any);
+}
+
+w.runPortableFieldMtfForPopup = runPortableFieldMtfForPopup;
+
+function inferDistortionFieldModeForPopup(objectRows: any[]): 'angle' | 'height' {
+    const rows = Array.isArray(objectRows) ? objectRows : [];
+    const tags = rows
+        .map((o) => String(o?.position ?? o?.fieldType ?? o?.field_type ?? o?.field ?? o?.type ?? '').toLowerCase())
+        .filter(Boolean);
+    if (tags.some((t) => t.includes('rect') || t.includes('rectangle') || t.includes('height'))) return 'height';
+    if (tags.some((t) => t.includes('angle'))) return 'angle';
+    const hasNumericHeight = rows.some((o) => {
+        const h = parseFloat(o?.yHeight ?? o?.y ?? o?.height ?? o?.y_height ?? Number.NaN);
+        return Number.isFinite(h) && Math.abs(h) > 0;
+    });
+    return hasNumericHeight ? 'height' : 'angle';
+}
+
+function deriveDistortionFieldValuesForPopup(objectRows: any[]): { fieldValues: number[]; heightMode: boolean } {
+    const mode = inferDistortionFieldModeForPopup(objectRows);
+    if (mode === 'height') {
+        const heights = (Array.isArray(objectRows) ? objectRows : [])
+            .map((o) => parseFloat(o?.yHeight ?? o?.y ?? o?.height ?? o?.y_height ?? Number.NaN))
+            .filter((v) => Number.isFinite(v));
+        if (!heights.length) return { fieldValues: [0.001], heightMode: true };
+        let minH = Math.min(...heights);
+        let maxH = Math.max(...heights);
+        if (minH <= 0) {
+            minH = 0.001;
+            if (maxH < minH) maxH = minH;
+        }
+        if (minH === maxH) return { fieldValues: [minH], heightMode: true };
+        const pts = 10;
+        const fieldValues = Array.from({ length: pts }, (_, i) => {
+            const t = i / (pts - 1);
+            return parseFloat((minH + (maxH - minH) * t).toFixed(6));
+        });
+        return { fieldValues, heightMode: true };
+    }
+
+    let maxAngle = 0;
+    for (const o of (Array.isArray(objectRows) ? objectRows : [])) {
+        const candidates = [o?.yFieldAngle, o?.yAngle, o?.fieldAngle, o?.xFieldAngle, o?.xAngle, o?.xHeightAngle, o?.yHeightAngle];
+        for (const c of candidates) {
+            if (typeof c === 'number' && Number.isFinite(c)) {
+                maxAngle = Math.max(maxAngle, Math.abs(c));
+            }
+        }
+    }
+    if (!(maxAngle > 0)) maxAngle = 20;
+    let step = 1;
+    if (maxAngle <= 5) step = 0.5;
+    else if (maxAngle <= 15) step = 1;
+    else if (maxAngle <= 40) step = 2;
+    else step = Math.ceil(maxAngle / 25);
+    const minAngle = maxAngle * 0.001;
+    const fieldValues: number[] = [];
+    for (let a = minAngle; a <= maxAngle + 1e-9; a += step) fieldValues.push(parseFloat(a.toFixed(6)));
+    if (fieldValues[fieldValues.length - 1] !== maxAngle) fieldValues.push(maxAngle);
+    return { fieldValues, heightMode: false };
+}
+
+async function runPortableDistortionDataForPopup(payload: {
+    wavelengths?: number[];
+    onProgress?: (evt: { percent?: number; message?: string }) => void;
+}) {
+    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    const { fieldValues, heightMode } = deriveDistortionFieldValuesForPopup(objectRows || []);
+    const wavelengths = (() => {
+        const arr = Array.isArray(payload?.wavelengths)
+            ? payload.wavelengths.filter((w) => Number.isFinite(Number(w)) && Number(w) > 0).map((w) => Number(w))
+            : [];
+        if (arr.length) return arr;
+        const fromSource = (Array.isArray(sourceRows) ? sourceRows : [])
+            .map((s: any) => Number(s?.wavelength))
+            .filter((w: number) => Number.isFinite(w) && w > 0);
+        if (fromSource.length) return fromSource;
+        const primary = getPrimaryWavelengthMicronsFromSourceRows(sourceRows || []);
+        return [Number.isFinite(primary) && primary > 0 ? primary : 0.5876];
+    })();
+
+    const allData = [];
+    for (let i = 0; i < wavelengths.length; i++) {
+        const wl = wavelengths[i];
+        const base = (i / Math.max(1, wavelengths.length)) * 100;
+        const span = 100 / Math.max(1, wavelengths.length);
+        const resp = await runNativeDistortion({
+            opticalSystemRows,
+            sourceRows,
+            objectRows,
+            fieldSamples: fieldValues,
+            heightMode,
+            wavelength: wl,
+        });
+        allData.push({
+            fieldValues: Array.isArray(resp?.fieldValues) ? resp.fieldValues : fieldValues,
+            idealHeights: Array.isArray(resp?.idealHeights) ? resp.idealHeights : [],
+            realHeights: Array.isArray(resp?.realHeights) ? resp.realHeights : [],
+            distortion: Array.isArray(resp?.distortion) ? resp.distortion : [],
+            distortionPercent: Array.isArray(resp?.distortionPercent) ? resp.distortionPercent : [],
+            meta: { ...(resp?.meta || {}), wavelength: wl, heightMode },
+        });
+        try {
+            payload?.onProgress?.({
+                percent: base + span,
+                message: `Distortion (λ=${wl.toFixed(4)} μm)`,
+            });
+        } catch (_) {}
+    }
+    return { backend: 'portable-distortion', allData };
+}
+
+async function runPortableGridDistortionForPopup(payload: {
+    gridSize?: number;
+    wavelength?: number;
+    onProgress?: (evt: { percent?: number; message?: string }) => void;
+}) {
+    const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
+    const wavelength = Number.isFinite(Number(payload?.wavelength)) && Number(payload?.wavelength) > 0
+        ? Number(payload?.wavelength)
+        : (() => {
+            const primary = getPrimaryWavelengthMicronsFromSourceRows(sourceRows || []);
+            return Number.isFinite(primary) && primary > 0 ? primary : 0.5876;
+        })();
+
+    const resp = await runNativeGridDistortion({
+        opticalSystemRows,
+        sourceRows,
+        objectRows,
+        gridSize: Number.isFinite(Number(payload?.gridSize)) ? Number(payload?.gridSize) : 20,
+        wavelength,
+    });
+    try {
+        payload?.onProgress?.({ percent: 100, message: 'Done' });
+    } catch (_) {}
+    return {
+        backend: 'portable-grid-distortion',
+        idealGrid: {
+            x: Array.isArray(resp?.idealX) ? resp.idealX : [],
+            y: Array.isArray(resp?.idealY) ? resp.idealY : [],
+        },
+        realGrid: {
+            x: Array.isArray(resp?.realX) ? resp.realX : [],
+            y: Array.isArray(resp?.realY) ? resp.realY : [],
+        },
+        gridSize: Number.isFinite(Number(resp?.gridSize)) ? Number(resp.gridSize) : 20,
+        maxFieldAngle: Number.isFinite(Number(resp?.maxFieldAngle)) ? Number(resp.maxFieldAngle) : 0,
+        meta: { ...(resp?.meta || {}), wavelength },
+    };
+}
+
+w.runPortableDistortionDataForPopup = runPortableDistortionDataForPopup;
+w.runPortableGridDistortionForPopup = runPortableGridDistortionForPopup;
 
 async function runDesktopNativeFieldMtfDiagnosticsForPopup(payload: {
     objectIndex?: number;
@@ -1843,9 +2095,69 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
     objectRows?: any[];
     defocusMm?: number;
 }): Promise<any> {
-    if (!isTauriRuntime()) {
-        throw new Error('Desktop runtime is not available');
-    }
+    const normalizeSpotWavelengthUm = (raw: any): number | null => {
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n <= 0) return null;
+        return n > 10 ? (n / 1000) : n;
+    };
+    const isPrimarySourceRow = (raw: any): boolean => {
+        if (raw === true || raw === 1) return true;
+        const s = String(raw ?? '').trim().toLowerCase();
+        return s === '1' || s === 'true' || s === 'yes' || s.includes('primary');
+    };
+    const toSpotObjectLabel = (obj: any, index: number): string => {
+        const id = String(obj?.id ?? '').trim();
+        if (id) return id;
+        const name = String(obj?.name ?? '').trim();
+        if (name) return name;
+        const pos = String(obj?.position ?? obj?.object ?? '').trim();
+        return pos ? (`Object ${index + 1} (${pos})`) : (`Object ${index + 1}`);
+    };
+    const collectSpotWavelengths = (rows: any[], modeRaw: string | undefined): Array<{ wavelengthUm: number; label: string; color: string; isPrimary: boolean }> => {
+        const mode = String(modeRaw || 'all').trim().toLowerCase() === 'primary' ? 'primary' : 'all';
+        const palette = ['#2563eb', '#dc2626', '#16a34a', '#7c3aed', '#ea580c', '#0891b2', '#4f46e5', '#0f766e'];
+        const picked = (Array.isArray(rows) ? rows : [])
+            .map((row, idx) => {
+                const wl = normalizeSpotWavelengthUm(row?.wavelength ?? row?.Wavelength);
+                if (!Number.isFinite(wl) || wl <= 0) return null;
+                return {
+                    wavelengthUm: wl,
+                    isPrimary: isPrimarySourceRow(row?.primary ?? row?.Primary),
+                    name: String(row?.name ?? '').trim(),
+                    idx,
+                };
+            })
+            .filter((v): v is { wavelengthUm: number; isPrimary: boolean; name: string; idx: number } => !!v);
+
+        if (picked.length === 0) {
+            return [{
+                wavelengthUm: 0.5876,
+                label: 'Primary 587.6nm',
+                color: palette[0],
+                isPrimary: true,
+            }];
+        }
+
+        const dedup: Array<{ wavelengthUm: number; label: string; color: string; isPrimary: boolean }> = [];
+        for (let i = 0; i < picked.length; i++) {
+            const p = picked[i];
+            if (dedup.some((d) => Math.abs(d.wavelengthUm - p.wavelengthUm) < 1e-12)) continue;
+            const nm = p.wavelengthUm * 1000;
+            const nmText = Number.isFinite(nm) ? nm.toFixed(1) : '587.6';
+            dedup.push({
+                wavelengthUm: p.wavelengthUm,
+                label: p.isPrimary ? (`Primary ${nmText}nm`) : (p.name || `${nmText}nm`),
+                color: palette[dedup.length % palette.length],
+                isPrimary: p.isPrimary,
+            });
+        }
+
+        if (mode === 'primary') {
+            const primary = dedup.find((d) => d.isPrimary) || dedup[0];
+            return primary ? [primary] : [];
+        }
+        return dedup;
+    };
 
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
     const explicitObjectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : null;
@@ -1865,7 +2177,69 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
         ringCount: Number.isInteger(payload?.ringCount) ? payload.ringCount : undefined,
         pattern: requestedPattern,
         wavelengthMode: payload?.wavelengthMode ? String(payload.wavelengthMode) : undefined,
-    };
+    } as any;
+
+    try {
+        const safePattern = (requestedPattern === 'grid' || requestedPattern === 'annular')
+            ? requestedPattern
+            : 'annular';
+        const rayCount = Number.isInteger(payload?.rayCount) ? Math.max(1, Number(payload?.rayCount)) : 501;
+        const ringCount = Number.isInteger(payload?.ringCount) ? Math.max(1, Number(payload?.ringCount)) : 10;
+        const wavelengths = collectSpotWavelengths(sourceRows, payload?.wavelengthMode ? String(payload.wavelengthMode) : undefined);
+        const raySeries: any[] = [];
+
+        if (Array.isArray(effectiveObjectRows) && effectiveObjectRows.length > 0 && wavelengths.length > 0) {
+            for (let objIndex = 0; objIndex < effectiveObjectRows.length; objIndex++) {
+                const obj = effectiveObjectRows[objIndex];
+                for (let wlIndex = 0; wlIndex < wavelengths.length; wlIndex++) {
+                    const wl = wavelengths[wlIndex];
+                    const starts = generateRayStartPointsForObject(
+                        obj,
+                        effectiveOpticalRows,
+                        rayCount,
+                        null,
+                        {
+                            annularRingCount: ringCount,
+                            wavelengthUm: wl.wavelengthUm,
+                            pattern: safePattern,
+                        } as any,
+                    );
+                    const rays = (Array.isArray(starts) ? starts : [])
+                        .map((s: any) => ({
+                            startP: {
+                                x: Number(s?.startP?.x) || 0,
+                                y: Number(s?.startP?.y) || 0,
+                                z: Number(s?.startP?.z) || 0,
+                            },
+                            dir: {
+                                x: Number(s?.dir?.x) || 0,
+                                y: Number(s?.dir?.y) || 0,
+                                z: Number(s?.dir?.z) || 1,
+                            },
+                            wavelengthUm: wl.wavelengthUm,
+                            pupilU: Number.isFinite(Number(s?.planeCoords?.u)) ? Number(s.planeCoords.u) : undefined,
+                            pupilV: Number.isFinite(Number(s?.planeCoords?.v)) ? Number(s.planeCoords.v) : undefined,
+                            isChief: s?.isChief === true || (s?.isChief == null && (s?.rayIndex === 0 || s?.index === 0)),
+                        }))
+                        .filter((r: any) => Number.isFinite(r.startP.x) && Number.isFinite(r.startP.y) && Number.isFinite(r.startP.z));
+
+                    if (rays.length === 0) continue;
+                    raySeries.push({
+                        label: `${toSpotObjectLabel(obj, objIndex)} ${wl.label}`,
+                        color: wl.color,
+                        hasFieldAngle: String(obj?.position ?? obj?.object ?? '').trim().toLowerCase() === 'angle',
+                        rays,
+                    });
+                }
+            }
+        }
+
+        if (raySeries.length > 0) {
+            requestBody.raySeries = raySeries;
+        }
+    } catch (_) {
+        // Fall back to legacy request if explicit raySeries generation fails.
+    }
 
     let result = await runNativeSpotRaytrace(requestBody);
 
@@ -1927,10 +2301,6 @@ async function runDesktopNativeSphericalAberrationForPopup(payload: {
     referenceFocusMode?: 'primary-paraxial' | 'current-paraxial' | 'chief-ray';
     wavelengthMode?: 'all' | 'primary';
 }): Promise<any> {
-    if (!isTauriRuntime()) {
-        throw new Error('Desktop runtime is not available');
-    }
-
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
     return runNativeSphericalAberration({
         opticalSystemRows,
@@ -2159,6 +2529,9 @@ function shouldUseDesktopRustAnalysis(): boolean {
         if (typeof window !== 'undefined' && (window as any).__COOPT_DISABLE_DESKTOP_RUST_ANALYSIS === true) {
             return false;
         }
+        if (typeof window !== 'undefined' && (window as any).__COOPT_FORCE_DESKTOP_RUST_ANALYSIS === true) {
+            return true;
+        }
     } catch (_) {}
     return true;
 }
@@ -2170,6 +2543,7 @@ w.shouldUseDesktopRustAnalysis = shouldUseDesktopRustAnalysis;
 // ============================================================================
 
 const __COOPT_FORCE_INFINITE_PUPIL_MODE_KEY = 'coopt.forceInfinitePupilMode';
+const __COOPT_FORCE_INFINITE_PUPIL_MODE_EVENT = 'coopt-force-infinite-pupil-mode-changed';
 
 function __cooptSanitizeForcedInfinitePupilMode(v: any): string {
     const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
@@ -2223,12 +2597,48 @@ function __cooptInitForceInfinitePupilModeFromStorage(): void {
     }
 }
 
+function __cooptInstallDesktopForceInfinitePupilModeBridge(): void {
+    if (!isTauriRuntime()) return;
+    if (w.__cooptForceInfinitePupilModeBridgeInstalled) return;
+    w.__cooptForceInfinitePupilModeBridgeInstalled = true;
+
+    w.__cooptBroadcastForceInfinitePupilMode = (mode: any) => {
+        const m = __cooptSanitizeForcedInfinitePupilMode(mode);
+        __cooptSetForceInfinitePupilMode(m);
+        (async () => {
+            try {
+                const mod = await import('@tauri-apps/api/event');
+                if (mod && typeof (mod as any).emit === 'function') {
+                    await (mod as any).emit(__COOPT_FORCE_INFINITE_PUPIL_MODE_EVENT, { mode: m });
+                }
+                if (mod && typeof (mod as any).emitTo === 'function') {
+                    try { await (mod as any).emitTo('main', __COOPT_FORCE_INFINITE_PUPIL_MODE_EVENT, { mode: m }); } catch (_) {}
+                    try { await (mod as any).emitTo('settings-window', __COOPT_FORCE_INFINITE_PUPIL_MODE_EVENT, { mode: m }); } catch (_) {}
+                }
+            } catch (_) {}
+        })();
+    };
+
+    (async () => {
+        try {
+            const mod = await import('@tauri-apps/api/event');
+            if (!mod || typeof (mod as any).listen !== 'function') return;
+            const unlisten = await (mod as any).listen(__COOPT_FORCE_INFINITE_PUPIL_MODE_EVENT, (event: any) => {
+                const m = __cooptSanitizeForcedInfinitePupilMode(event?.payload?.mode);
+                __cooptSetForceInfinitePupilMode(m);
+            });
+            w.__cooptForceInfinitePupilModeBridgeUnlisten = unlisten;
+        } catch (_) {}
+    })();
+}
+
 // Expose globally for Settings popup
 w.__cooptGetForceInfinitePupilMode = __cooptGetForceInfinitePupilMode;
 w.__cooptSetForceInfinitePupilMode = __cooptSetForceInfinitePupilMode;
 
 // Initialize on load
 __cooptInitForceInfinitePupilModeFromStorage();
+__cooptInstallDesktopForceInfinitePupilModeBridge();
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -6261,7 +6671,7 @@ export function setupAnalysisWindows() {
                 );
                 const canUseRustSpotDiagram = canUseDesktopRust && !!(
                     typeof window !== 'undefined'
-                    && window.__COOPT_ENABLE_RUST_SPOT_DIAGRAM === true
+                    && window.__COOPT_ENABLE_RUST_SPOT_DIAGRAM !== false
                 );
 
                 if (canUseNativeRustSpot) {
@@ -6752,6 +7162,7 @@ export function setupAnalysisWindows() {
                     rayCount: popupRay && popupRay.value !== '' ? parseInt(popupRay.value, 10) : undefined,
                     ringCount: popupRing && popupRing.value !== '' ? parseInt(popupRing.value, 10) : undefined,
                     pattern: popupPattern ? String(popupPattern.value || 'annular') : 'annular',
+                    wavelengthMode: 'all',
                     forceRustWasmTrace: true,
                     requireRustWasmTrace: true,
                     onProgress: (evt) => {
@@ -6965,14 +7376,13 @@ export function setupAnalysisWindows() {
                     if (opener && typeof opener.shouldUseDesktopRustAnalysis === 'function') {
                         return !!opener.shouldUseDesktopRustAnalysis();
                     }
-                    return !!(opener && opener.__TAURI_INTERNALS__);
+                        return true;
                 } catch (_) {
                     return false;
                 }
             })();
             const canUseDesktopRust = shouldUseDesktopRust && !!(
                 opener
-                && opener.__TAURI_INTERNALS__
                 && typeof opener.runDesktopNativeSphericalAberrationForPopup === 'function'
             );
             try {
@@ -6998,26 +7408,34 @@ export function setupAnalysisWindows() {
 
             try {
                 setProgress(0, 'Starting...');
-                if (!canUseDesktopRust) {
-                    throw new Error('Rust spherical aberration is required, but desktop native Rust analysis is unavailable');
-                }
-
-                setProgress(25, 'Computing spherical aberration (Rust)...');
-                const rustResult = await opener.runDesktopNativeSphericalAberrationForPopup({
-                    rayCount: Number.isFinite(rayCount) ? rayCount : 51,
-                    referenceFocusMode: referenceFocusMode,
-                    wavelengthMode: 'all',
-                });
-
                 if (!opener || typeof opener.showLongitudinalAberrationDiagram !== 'function') {
                     throw new Error('showLongitudinalAberrationDiagram is not available on opener');
                 }
-                setProgress(80, 'Rendering...');
-                await opener.showLongitudinalAberrationDiagram({
-                    containerElement: containerEl,
-                    onProgress,
-                    precomputedAberrationData: rustResult,
-                });
+
+                if (canUseDesktopRust) {
+                    setProgress(25, 'Computing spherical aberration (Rust)...');
+                    const rustResult = await opener.runDesktopNativeSphericalAberrationForPopup({
+                        rayCount: Number.isFinite(rayCount) ? rayCount : 51,
+                        referenceFocusMode: referenceFocusMode,
+                        wavelengthMode: 'all',
+                    });
+                    setProgress(80, 'Rendering...');
+                    await opener.showLongitudinalAberrationDiagram({
+                        containerElement: containerEl,
+                        onProgress,
+                        precomputedAberrationData: rustResult,
+                    });
+                } else {
+                    // Web fallback: run the existing JS/WASM spherical aberration path.
+                    setProgress(25, 'Computing spherical aberration (Web)...');
+                    await opener.showLongitudinalAberrationDiagram({
+                        containerElement: containerEl,
+                        onProgress,
+                        rayCount: Number.isFinite(rayCount) ? rayCount : 51,
+                        referenceFocusMode,
+                    });
+                }
+
                 try {
                     if (progressWrapper) progressWrapper.style.display = 'none';
                 } catch (_) {}
@@ -7126,6 +7544,16 @@ export function setupAnalysisWindows() {
             <option value="beam-midpoint">Beam midpoint</option>
             <option value="beam-centroid">Beam centroid</option>
         </select>
+        <label for="popup-astigmatism-beam" style="font-size:12px;color:#333;white-space:nowrap;">Beam:</label>
+        <select id="popup-astigmatism-beam" style="padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;">
+            <option value="cross">Cross</option>
+            <option value="grid">Grid</option>
+            <option value="annular" selected>Annular</option>
+        </select>
+        <label for="popup-astigmatism-ray-count" style="font-size:12px;color:#333;white-space:nowrap;">Rays:</label>
+        <input id="popup-astigmatism-ray-count" type="number" min="9" max="2001" step="1" value="30" style="width:72px;padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;" />
+        <label id="popup-astigmatism-ring-label" for="popup-astigmatism-ring-count" style="font-size:12px;color:#333;white-space:nowrap;">Rings:</label>
+        <input id="popup-astigmatism-ring-count" type="number" min="1" max="64" step="1" value="32" style="width:72px;padding:5px 8px;font-size:12px;border:1px solid #bbb;border-radius:4px;background:white;" />
         <button id="popup-show-astigmatism-btn" type="button">Show</button>
     </div>
     <div id="popup-astigmatism-progress-wrapper" style="display:none; padding: 8px 12px; font-size: 12px; color: #333; border-bottom: 1px solid #eee; background: #fff;">
@@ -7145,7 +7573,50 @@ export function setupAnalysisWindows() {
             const progressBarEl = document.getElementById('popup-astigmatism-progressbar');
             const progressTextEl = document.getElementById('popup-astigmatism-progress-text');
             const chiefRaySelect = document.getElementById('popup-astigmatism-chief-ray');
+            const beamSelect = document.getElementById('popup-astigmatism-beam');
+            const rayCountInput = document.getElementById('popup-astigmatism-ray-count');
+            const ringCountInput = document.getElementById('popup-astigmatism-ring-count');
+            const ringCountLabel = document.getElementById('popup-astigmatism-ring-label');
             const chiefRayDefinition = (chiefRaySelect && chiefRaySelect.value) ? chiefRaySelect.value : 'stop-center';
+            const beamPattern = (() => {
+                const v = String((beamSelect && beamSelect.value) ? beamSelect.value : 'annular').trim().toLowerCase();
+                return (v === 'cross' || v === 'grid' || v === 'annular') ? v : 'annular';
+            })();
+            const openerRay = (window.opener && window.opener.document)
+                ? window.opener.document.getElementById('ray-count-input')
+                : null;
+            const openerRing = (window.opener && window.opener.document)
+                ? window.opener.document.getElementById('ring-count-select')
+                : null;
+            const initialRayCount = (() => {
+                const n = Number(openerRay && openerRay.value);
+                return Number.isFinite(n) ? Math.max(9, Math.min(2001, Math.round(n))) : 30;
+            })();
+            const initialRingCount = (() => {
+                const n = Number(openerRing && openerRing.value);
+                return Number.isFinite(n) ? Math.max(1, Math.min(64, Math.round(n))) : 32;
+            })();
+            if (rayCountInput && !rayCountInput.value) rayCountInput.value = String(initialRayCount);
+            if (ringCountInput && !ringCountInput.value) ringCountInput.value = String(initialRingCount);
+
+            const updateRingVisibility = () => {
+                const isAnnular = beamSelect && String(beamSelect.value || '').toLowerCase() === 'annular';
+                if (ringCountLabel) ringCountLabel.style.display = isAnnular ? '' : 'none';
+                if (ringCountInput) ringCountInput.style.display = isAnnular ? '' : 'none';
+            };
+            updateRingVisibility();
+            if (beamSelect) beamSelect.addEventListener('change', updateRingVisibility);
+
+            const rayCount = (() => {
+                const fromInput = Number(rayCountInput && rayCountInput.value);
+                if (Number.isFinite(fromInput)) return Math.max(9, Math.min(2001, Math.round(fromInput)));
+                return initialRayCount;
+            })();
+            const ringCount = (() => {
+                const fromInput = Number(ringCountInput && ringCountInput.value);
+                if (Number.isFinite(fromInput)) return Math.max(1, Math.min(64, Math.round(fromInput)));
+                return initialRingCount;
+            })();
 
             const setProgress = (value, text) => {
                 try {
@@ -7177,7 +7648,9 @@ export function setupAnalysisWindows() {
                 };
                 await window.opener.showAstigmatismDiagram({
                     containerElement: containerEl,
-                    rayCount: 100,
+                    rayCount,
+                    ringCount,
+                    pattern: beamPattern,
                     requireRustWasm: true,
                     forceRustWasmTrace: true,
                     requireRustWasmTrace: true,
@@ -7201,10 +7674,18 @@ export function setupAnalysisWindows() {
             window.renderAstigmatism();
         });
 
-        // Auto-render immediately on open
-        window.addEventListener('load', () => {
-            try { window.renderAstigmatism(); } catch (_) {}
-        });
+        const popupBeamSelect = document.getElementById('popup-astigmatism-beam');
+        const popupRingLabel = document.getElementById('popup-astigmatism-ring-label');
+        const popupRingInput = document.getElementById('popup-astigmatism-ring-count');
+        const syncAstigRingVisibility = () => {
+            const isAnnular = popupBeamSelect && String(popupBeamSelect.value || '').toLowerCase() === 'annular';
+            if (popupRingLabel) popupRingLabel.style.display = isAnnular ? '' : 'none';
+            if (popupRingInput) popupRingInput.style.display = isAnnular ? '' : 'none';
+        };
+        syncAstigRingVisibility();
+        if (popupBeamSelect) popupBeamSelect.addEventListener('change', syncAstigRingVisibility);
+
+        // Do not auto-render on open; user triggers calculation via "Show".
     </script>
 </body>
 </html>
@@ -7218,6 +7699,24 @@ export function setupAnalysisWindows() {
         const openDistortionWindowBtn = document.getElementById('open-distortion-window-btn');
         if (openDistortionWindowBtn) {
                 openDistortionWindowBtn.addEventListener('click', () => {
+                if (!isTauriRuntime()) {
+                    if (w.__distortionPopup && !w.__distortionPopup.closed) {
+                        try { w.__distortionPopup.focus(); } catch (_) {}
+                        return;
+                    }
+                    try {
+                        const url = new URL(window.location.href);
+                        url.searchParams.set('coopt_analysis_window', '1');
+                        url.searchParams.set('coopt_analysis', 'distortion');
+                        const popup = window.open(url.toString(), 'Distortion', 'width=800,height=600');
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__distortionPopup = popup;
+                        return;
+                    } catch (_) {}
+                }
                         if (w.__distortionPopup && !w.__distortionPopup.closed) {
                                 try { w.__distortionPopup.focus(); } catch (_) {}
                     try {
@@ -7240,7 +7739,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Analysis</title>
+    <title>Distortion</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -7304,6 +7803,56 @@ export function setupAnalysisWindows() {
     </div>
 
     <script>
+        function getWavelengthColorLocal(wavelength) {
+            if (wavelength < 0.45) return '#8B00FF';
+            if (wavelength < 0.495) return '#0000FF';
+            if (wavelength < 0.57) return '#00FF00';
+            if (wavelength < 0.59) return '#9ACD32';
+            if (wavelength < 0.62) return '#FF8800';
+            return '#FF0000';
+        }
+
+        function plotDistortionLocal(dataList, targetEl) {
+            if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
+                throw new Error('Plotly is not available in distortion popup');
+            }
+            const list = Array.isArray(dataList) ? dataList.filter(Boolean) : [];
+            if (!list.length) throw new Error('No distortion data to plot');
+
+            const traces = list.map((data) => {
+                const wavelength = Number(data?.meta?.wavelength || 0.5876);
+                const wavelengthNm = (wavelength * 1000).toFixed(1);
+                const color = getWavelengthColorLocal(wavelength);
+                const isHeightMode = !!data?.meta?.heightMode;
+                const label = isHeightMode ? 'h' : 'θ';
+                return {
+                    x: Array.isArray(data?.distortionPercent) ? data.distortionPercent : [],
+                    y: Array.isArray(data?.fieldValues) ? data.fieldValues : [],
+                    name: 'DIST ' + wavelengthNm + 'nm (' + label + ')',
+                    mode: 'lines',
+                    line: { color, width: 2 },
+                    type: 'scatter',
+                };
+            }).filter((trace) => Array.isArray(trace.x) && trace.x.length > 0 && Array.isArray(trace.y) && trace.y.length > 0);
+
+            if (!traces.length) throw new Error('No plottable distortion traces');
+
+            const maxFieldValue = Math.max(...list.map((data) => Array.isArray(data?.fieldValues) ? Math.max(...data.fieldValues) : 0));
+            const minFieldValue = Math.min(...list.map((data) => Array.isArray(data?.fieldValues) ? Math.min(...data.fieldValues) : 0));
+            const heightMode = list.some((d) => !!d?.meta?.heightMode);
+
+            return window.Plotly.newPlot(targetEl, traces, {
+                title: heightMode ? 'Distortion vs Object Height' : 'Distortion vs Object Angle',
+                xaxis: { title: 'Distortion (%)', range: [-5, 5], dtick: 1 },
+                yaxis: { title: heightMode ? 'Object Height (mm)' : 'Object Angle θ (deg)' },
+                showlegend: true,
+                legend: { orientation: 'v', x: 1.02, y: 1 },
+                autosize: true,
+                shapes: [{ type: 'line', x0: 0, x1: 0, y0: minFieldValue, y1: maxFieldValue, line: { color: 'black', width: 1, dash: 'dot' } }],
+                margin: { l: 60, r: 120, t: 50, b: 50 },
+            }, { responsive: true, displayModeBar: true, displaylogo: false });
+        }
+
         function resizePlots() {
             try {
                 const plotly = window.Plotly;
@@ -7331,8 +7880,8 @@ export function setupAnalysisWindows() {
             let renderSucceeded = false;
 
             try {
-                if (!window.opener || typeof window.opener.generateDistortionPlots !== 'function') {
-                    throw new Error('generateDistortionPlots is not available on opener');
+                if (!window.opener || typeof window.opener.runPortableDistortionDataForPopup !== 'function') {
+                    throw new Error('runPortableDistortionDataForPopup is not available on opener');
                 }
                 setProgress(0, 'Starting...');
                 await new Promise((resolve) => setTimeout(resolve, 0));
@@ -7344,7 +7893,9 @@ export function setupAnalysisWindows() {
                         else setProgress(undefined, msg);
                     } catch (_) {}
                 };
-                await window.opener.generateDistortionPlots({ targetElement: percentEl, onProgress });
+                const result = await window.opener.runPortableDistortionDataForPopup({ onProgress });
+                const allData = Array.isArray(result?.allData) ? result.allData : [];
+                await plotDistortionLocal(allData, percentEl);
                 renderSucceeded = true;
                 setTimeout(resizePlots, 0);
             } catch (err) {
@@ -7382,6 +7933,24 @@ export function setupAnalysisWindows() {
         const openDistortionGridWindowBtn = document.getElementById('open-distortion-grid-window-btn');
         if (openDistortionGridWindowBtn) {
                 openDistortionGridWindowBtn.addEventListener('click', () => {
+                if (!isTauriRuntime()) {
+                    if (w.__distortionGridPopup && !w.__distortionGridPopup.closed) {
+                        try { w.__distortionGridPopup.focus(); } catch (_) {}
+                        return;
+                    }
+                    try {
+                        const url = new URL(window.location.href);
+                        url.searchParams.set('coopt_analysis_window', '1');
+                        url.searchParams.set('coopt_analysis', 'distortion-grid');
+                        const popup = window.open(url.toString(), 'Distortion Grid', 'width=800,height=600');
+                        if (!popup) {
+                            alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+                            return;
+                        }
+                        w.__distortionGridPopup = popup;
+                        return;
+                    } catch (_) {}
+                }
                         if (w.__distortionGridPopup && !w.__distortionGridPopup.closed) {
                                 try { w.__distortionGridPopup.focus(); } catch (_) {}
                                 return;
@@ -7399,7 +7968,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Analysis</title>
+    <title>Distortion Grid</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -7473,6 +8042,15 @@ export function setupAnalysisWindows() {
     </div>
 
     <script>
+        function getWavelengthColorLocal(wavelength) {
+            if (wavelength < 0.45) return '#8B00FF';
+            if (wavelength < 0.495) return '#0000FF';
+            if (wavelength < 0.57) return '#00FF00';
+            if (wavelength < 0.59) return '#9ACD32';
+            if (wavelength < 0.62) return '#FF8800';
+            return '#FF0000';
+        }
+
         function getOpenerEl(id) {
             try {
                 return window.opener && window.opener.document ? window.opener.document.getElementById(id) : null;
@@ -7496,6 +8074,108 @@ export function setupAnalysisWindows() {
                 const grid = document.getElementById('popup-distortion-grid');
                 if (grid) plotly.Plots.resize(grid);
             } catch (_) {}
+        }
+
+        async function plotGridLocal(data, targetEl, onProgress) {
+            if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
+                throw new Error('Plotly is not available in distortion grid popup');
+            }
+            if (!data || !data.idealGrid || !data.realGrid) {
+                throw new Error('Invalid grid distortion data');
+            }
+
+            const progress = (typeof onProgress === 'function') ? onProgress : null;
+            const reportProgress = (percent, message) => {
+                try { progress && progress({ percent, message }); } catch (_) {}
+            };
+
+            const idealGrid = data.idealGrid;
+            const realGrid = data.realGrid;
+            const gridSize = Number(data.gridSize) || 20;
+            const meta = data.meta || {};
+            const traces = [];
+
+            for (let i = 0; i < gridSize; i++) {
+                const startIdx = i * gridSize;
+                const endIdx = startIdx + gridSize - 1;
+                traces.push({
+                    x: idealGrid.x.slice(startIdx, endIdx + 1),
+                    y: idealGrid.y.slice(startIdx, endIdx + 1),
+                    mode: 'lines',
+                    line: { color: '#888888', width: 1 },
+                    showlegend: i === 0,
+                    name: i === 0 ? 'Ideal Grid' : undefined,
+                    hoverinfo: 'skip',
+                    type: 'scatter',
+                });
+                if ((i + 1) % 10 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+
+            for (let j = 0; j < gridSize; j++) {
+                const xLine = [];
+                const yLine = [];
+                for (let i = 0; i < gridSize; i++) {
+                    const idx = i * gridSize + j;
+                    xLine.push(idealGrid.x[idx]);
+                    yLine.push(idealGrid.y[idx]);
+                }
+                traces.push({
+                    x: xLine,
+                    y: yLine,
+                    mode: 'lines',
+                    line: { color: '#888888', width: 1 },
+                    showlegend: false,
+                    hoverinfo: 'skip',
+                    type: 'scatter',
+                });
+                if ((j + 1) % 10 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+
+            const realX = [];
+            const realY = [];
+            const totalPoints = Math.max(1, Array.isArray(realGrid.x) ? realGrid.x.length : 0);
+            for (let i = 0; i < totalPoints; i++) {
+                const x = realGrid.x[i];
+                const y = realGrid.y[i];
+                const idealX = idealGrid.x[i];
+                const idealY = idealGrid.y[i];
+                if (x !== null && y !== null && x !== undefined && y !== undefined && isFinite(x) && isFinite(y) && isFinite(idealX) && isFinite(idealY)) {
+                    realX.push(x);
+                    realY.push(y);
+                }
+                reportProgress(((i + 1) / totalPoints) * 100, 'Grid distortion: ' + (i + 1) + '/' + totalPoints);
+                if ((i + 1) % 50 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+
+            traces.push({
+                x: realX,
+                y: realY,
+                mode: 'markers',
+                marker: {
+                    color: getWavelengthColorLocal(Number(meta.wavelength || 0.5876)),
+                    size: 4,
+                    symbol: 'circle',
+                    opacity: 0.8,
+                },
+                name: 'Real Positions (λ=' + Number(meta.wavelength || 0.5876).toFixed(4) + ' μm)',
+                hovertemplate: 'Real: (%{x:.3f}, %{y:.3f}) mm<extra></extra>',
+                type: 'scatter',
+            });
+
+            const maxAbsIdealX = idealGrid.x.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
+            const maxAbsIdealY = idealGrid.y.reduce((m, v) => (isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0);
+            const equalRangeHalf = Math.max(maxAbsIdealX, maxAbsIdealY, 1e-9);
+
+            return window.Plotly.newPlot(targetEl, traces, {
+                title: 'Grid Distortion (' + gridSize + '×' + gridSize + ', λ=' + Number(meta.wavelength || 0.5876).toFixed(4) + ' μm)',
+                xaxis: { title: 'Image Height X (mm)', scaleanchor: 'y', scaleratio: 1, zeroline: false, range: [-equalRangeHalf, equalRangeHalf] },
+                yaxis: { title: 'Image Height Y (mm)', zeroline: false, range: [-equalRangeHalf, equalRangeHalf] },
+                hovermode: 'closest',
+                showlegend: true,
+                legend: { x: 1.02, y: 1 },
+                autosize: true,
+                margin: { l: 60, r: 120, t: 50, b: 50 },
+            }, { responsive: true, displayModeBar: true, displaylogo: false });
         }
 
         window['renderDistortionGrid'] = async () => {
@@ -7525,8 +8205,8 @@ export function setupAnalysisWindows() {
             let renderSucceeded = false;
 
             try {
-                if (!window.opener || typeof window.opener.generateGridDistortionPlot !== 'function') {
-                    throw new Error('generateGridDistortionPlot is not available on opener');
+                if (!window.opener || typeof window.opener.runPortableGridDistortionForPopup !== 'function') {
+                    throw new Error('runPortableGridDistortionForPopup is not available on opener');
                 }
                 setProgress(0, 'Starting...');
                 await new Promise((resolve) => setTimeout(resolve, 0));
@@ -7538,7 +8218,8 @@ export function setupAnalysisWindows() {
                         else setProgress(undefined, msg);
                     } catch (_) {}
                 };
-                await window.opener.generateGridDistortionPlot({ gridSize: Number.isFinite(gridSize) ? gridSize : 20, targetElement: gridEl, onProgress });
+                const data = await window.opener.runPortableGridDistortionForPopup({ gridSize: Number.isFinite(gridSize) ? gridSize : 20, onProgress });
+                await plotGridLocal(data, gridEl, onProgress);
                 renderSucceeded = true;
                 setTimeout(resizePlot, 0);
             } catch (err) {
@@ -7597,7 +8278,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Analysis</title>
+    <title>Lateral Chromatic Aberration</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -8326,7 +9007,7 @@ export function setupAnalysisWindows() {
                         if (opener && typeof opener.shouldUseDesktopRustAnalysis === 'function') {
                             return !!opener.shouldUseDesktopRustAnalysis();
                         }
-                        return !!(opener && opener.__TAURI_INTERNALS__);
+                        return true;
                     } catch (_) {
                         return false;
                     }
@@ -8334,7 +9015,10 @@ export function setupAnalysisWindows() {
 
                 const canUseDesktopRust = shouldUseDesktopRust && !!(
                     opener
-                    && opener.__TAURI_INTERNALS__
+                    && typeof opener.showWavefrontDiagram === 'function'
+                );
+                const canUseWavefront = !!(
+                    opener
                     && typeof opener.showWavefrontDiagram === 'function'
                 );
 
@@ -8342,9 +9026,9 @@ export function setupAnalysisWindows() {
                     opdStageTrace.push('Runtime check', 'desktopRust=' + String(!!canUseDesktopRust));
                 } catch (_) {}
 
-                if (!canUseDesktopRust) {
-                    try { opdStageTrace.push('Blocked', 'Desktop Rust runtime unavailable'); } catch (_) {}
-                    throw new Error('OPD calculation is Rust-only. Desktop runtime with Rust analysis is required.');
+                if (!canUseWavefront) {
+                    try { opdStageTrace.push('Blocked', 'Wavefront renderer unavailable on opener'); } catch (_) {}
+                    throw new Error('OPD renderer is unavailable on opener window.');
                 }
 
                 try {
@@ -8399,6 +9083,7 @@ export function setupAnalysisWindows() {
                         cancelToken: popupCancelToken,
                         onProgress,
                         opdDisplayMode,
+                        forceRustWasm: true,
                         throwOnError: true,
                         showAlert: false
                     });
@@ -8747,7 +9432,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>PSF</title>
+    <title>Point Spread Function</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -9578,7 +10263,7 @@ export function setupAnalysisWindows() {
                     const preferNativeOpdMap = (typeof window !== 'undefined' && window.__PSF_POPUP_USE_NATIVE_OPD_MAP === false)
                         ? false
                         : true;
-                    const canUseNativeOpdMap = !forceJsOpdMap && preferNativeOpdMap && isPopupTauriRuntime()
+                    const canUseNativeOpdMap = !forceJsOpdMap && preferNativeOpdMap
                         && !!(window.opener && typeof window.opener.runDesktopNativeOpdMapForPopup === 'function');
 
                     if (canUseNativeOpdMap) {
@@ -10246,8 +10931,7 @@ export function setupAnalysisWindows() {
                         : (zeroPadRaw === 'auto')
                             ? 0
                             : (Number.isFinite(parseInt(zeroPadRaw)) ? parseInt(zeroPadRaw) : 0);
-                    const canUseNativePsfMap = isPopupTauriRuntime()
-                        && !!(window.opener && typeof window.opener.runDesktopNativePsfMapForPopup === 'function');
+                    const canUseNativePsfMap = !!(window.opener && typeof window.opener.runDesktopNativePsfMapForPopup === 'function');
                     if (!canUseNativePsfMap) {
                         throw new Error('Native Rust PSF map path is required but unavailable.');
                     }
@@ -10738,7 +11422,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Analysis</title>
+    <title>Modulation Transfer Function</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -10864,13 +11548,13 @@ export function setupAnalysisWindows() {
         }
 
         function getOpener() {
-            try { return window.opener || null; } catch (_) { return null; }
+            try { return window.opener || window; } catch (_) { return window; }
         }
 
         function popupLog(...args) {
             try { console.log(...args); } catch (_) {}
             try {
-                const op = getOpener();
+                const op = window.opener;
                 if (op && op.console && typeof op.console.log === 'function') {
                     op.console.log(...args);
                 }
@@ -10880,7 +11564,7 @@ export function setupAnalysisWindows() {
         function popupError(...args) {
             try { console.error(...args); } catch (_) {}
             try {
-                const op = getOpener();
+                const op = window.opener;
                 if (op && op.console && typeof op.console.error === 'function') {
                     op.console.error(...args);
                 }
@@ -11042,14 +11726,13 @@ export function setupAnalysisWindows() {
                         if (opener && typeof opener.shouldUseDesktopRustAnalysis === 'function') {
                             return !!opener.shouldUseDesktopRustAnalysis();
                         }
-                        return !!(opener && opener.__TAURI_INTERNALS__);
+                        return true;
                     } catch (_) {
                         return false;
                     }
                 })();
                 const canUseDesktopRust = shouldUseDesktopRust && !!(
-                    opener.__TAURI_INTERNALS__
-                    && typeof opener.runDesktopNativeOpdMapForPopup === 'function'
+                    typeof opener.runDesktopNativeOpdMapForPopup === 'function'
                     && typeof opener.runDesktopNativePsfMapForPopup === 'function'
                     && typeof opener.runDesktopNativeMtfMapForPopup === 'function'
                 );
@@ -11354,6 +12037,10 @@ export function setupAnalysisWindows() {
                             return;
                         }
                         w.__throughFocusSpotPopup = popup;
+                        try {
+                            // Tauri popups may not expose window.opener; keep an explicit bridge.
+                            popup.__analysisHostWindow = window;
+                        } catch (_) {}
 
                         popup.document.write(`
 <!DOCTYPE html>
@@ -11490,9 +12177,20 @@ export function setupAnalysisWindows() {
     </div>
 
     <script>
+        function getHostWindow() {
+            try {
+                if (window.opener && !window.opener.closed) return window.opener;
+            } catch (_) {}
+            try {
+                if (window.__analysisHostWindow) return window.__analysisHostWindow;
+            } catch (_) {}
+            return null;
+        }
+
         function getOpenerEl(id) {
             try {
-                return window.opener && window.opener.document ? window.opener.document.getElementById(id) : null;
+                const host = getHostWindow();
+                return host && host.document ? host.document.getElementById(id) : null;
             } catch (_) {
                 return null;
             }
@@ -11557,7 +12255,7 @@ export function setupAnalysisWindows() {
             if (openerRay && rayEl) openerRay.value = rayEl.value;
             if (openerRing && ringEl) openerRing.value = ringEl.value;
 
-            const opener = window.opener;
+            const opener = getHostWindow();
             if (!opener) {
                 if (containerEl) containerEl.textContent = 'Main window is not available.';
                 return;
@@ -11586,16 +12284,32 @@ export function setupAnalysisWindows() {
                     typeof opener.runDesktopNativeSpotRaytraceForPopup === 'function'
                 );
 
+                const toFiniteNumber = (v, fallback) => {
+                    const n = Number(v);
+                    return Number.isFinite(n) ? n : fallback;
+                };
+                const toInt = (v, fallback) => {
+                    const n = parseInt(String(v ?? ''), 10);
+                    return Number.isInteger(n) ? n : fallback;
+                };
+                const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+                const selectedSurfaceIndex = undefined;
+                const selectedRayCount = rayEl && rayEl.value !== '' ? parseInt(rayEl.value, 10) : undefined;
+                const selectedRingCount = ringEl && ringEl.value !== '' ? parseInt(ringEl.value, 10) : undefined;
+                const selectedPattern = patternEl ? String(patternEl.value || 'annular') : 'annular';
+                const selectedWavelengthMode = wlModeEl ? String(wlModeEl.value || 'all') : 'all';
+                const minDefocusMm = toFiniteNumber(minDefocusEl ? minDefocusEl.value : -0.5, -0.5);
+                const maxDefocusMm = toFiniteNumber(maxDefocusEl ? maxDefocusEl.value : 0.5, 0.5);
+                const steps = clamp(toInt(stepsEl ? stepsEl.value : 5, 5), 3, 61);
+                const scaleUm = Math.max(1, toFiniteNumber(scaleEl ? scaleEl.value : 100, 100));
+                const halfScaleUm = scaleUm * 0.5;
+
+                // TFSD is intentionally fixed to Rust backend for parity.
+                if (!canUseNativeRustSpot) {
+                    throw new Error('Through-Focus Spot requires Rust backend (runDesktopNativeSpotRaytraceForPopup unavailable).');
+                }
+
                 if (canUseNativeRustSpot) {
-                    const toFiniteNumber = (v, fallback) => {
-                        const n = Number(v);
-                        return Number.isFinite(n) ? n : fallback;
-                    };
-                    const toInt = (v, fallback) => {
-                        const n = parseInt(String(v ?? ''), 10);
-                        return Number.isInteger(n) ? n : fallback;
-                    };
-                    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
                     const toWavelengthLabel = (rawLabel) => {
                         const text = String(rawLabel || '').trim();
                         const nm = text.match(/(\d+(?:\.\d+)?)\s*nm/i);
@@ -11627,17 +12341,6 @@ export function setupAnalysisWindows() {
                         }
                         return { objectLabel: raw, wavelengthLabel: 'Wavelength Primary' };
                     };
-
-                    const selectedSurfaceIndex = undefined;
-                    const selectedRayCount = rayEl && rayEl.value !== '' ? parseInt(rayEl.value, 10) : undefined;
-                    const selectedRingCount = ringEl && ringEl.value !== '' ? parseInt(ringEl.value, 10) : undefined;
-                    const selectedPattern = patternEl ? String(patternEl.value || 'annular') : 'annular';
-                    const selectedWavelengthMode = wlModeEl ? String(wlModeEl.value || 'all') : 'all';
-                    const minDefocusMm = toFiniteNumber(minDefocusEl ? minDefocusEl.value : -0.5, -0.5);
-                    const maxDefocusMm = toFiniteNumber(maxDefocusEl ? maxDefocusEl.value : 0.5, 0.5);
-                    const steps = clamp(toInt(stepsEl ? stepsEl.value : 5, 5), 3, 61);
-                    const scaleUm = Math.max(1, toFiniteNumber(scaleEl ? scaleEl.value : 100, 100));
-                    const halfScaleUm = scaleUm * 0.5;
 
                     const objectRows = (() => {
                         try {
@@ -11674,6 +12377,7 @@ export function setupAnalysisWindows() {
 
                     const objectLabels = [];
                     const focusGrid = [];
+                    const tfTraceStatsRows = [];
                     const getObjectLabelByIndex = (index) => {
                         if (Array.isArray(objectRows) && objectRows[index]) {
                             return getObjectLabel(objectRows[index], index);
@@ -11716,6 +12420,23 @@ export function setupAnalysisWindows() {
                             objectRows,
                             defocusMm: shift,
                         });
+                        const stats = Array.isArray(result?.seriesStats) ? result.seriesStats : [];
+                        for (const stat of stats) {
+                            tfTraceStatsRows.push({
+                                backend: String(result?.backend || 'native-rust-raytrace'),
+                                defocusMm: Number(shift),
+                                label: String(stat?.label || ''),
+                                attemptedRays: Number(stat?.attemptedRays || 0),
+                                hitRays: Number(stat?.hitRays || 0),
+                                missRays: Number(stat?.missRays || 0),
+                                apertureBlockRays: Number(stat?.apertureBlockRays || 0),
+                                noIntersectionRays: Number(stat?.noIntersectionRays || 0),
+                                tirRays: Number(stat?.tirRays || 0),
+                                unknownFailRays: Number(stat?.unknownFailRays || 0),
+                                statusCounts: (stat && typeof stat.statusCounts === 'object' && !Array.isArray(stat.statusCounts)) ? stat.statusCounts : {},
+                                hitRatePercent: Number(stat?.hitRatePercent || 0),
+                            });
+                        }
                         const airyRadiusUm = Number(result?.airyRadiusUm);
                         const safeAiryRadiusUm = (Number.isFinite(airyRadiusUm) && airyRadiusUm > 0) ? airyRadiusUm : NaN;
 
@@ -11797,6 +12518,25 @@ export function setupAnalysisWindows() {
                             });
                         }
                     }
+
+                    try {
+                        window.__cooptTfSpotLastTraceStats = tfTraceStatsRows;
+                    } catch (_) {}
+                    try {
+                        if (opener && typeof opener === 'object') {
+                            opener.__cooptTfSpotLastTraceStats = tfTraceStatsRows;
+                        }
+                    } catch (_) {}
+                    try {
+                        globalThis.__cooptTfSpotLastTraceStats = tfTraceStatsRows;
+                    } catch (_) {}
+                    try {
+                        if (console.table) {
+                            console.table(tfTraceStatsRows);
+                        } else {
+                            console.log('[TFSD_TRACE_STATS]', tfTraceStatsRows);
+                        }
+                    } catch (_) {}
 
                     if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
                         throw new Error('Plotly is not available in Through-Focus Spot popup');
@@ -11922,7 +12662,7 @@ export function setupAnalysisWindows() {
                     return;
                 }
 
-                throw new Error('Native Rust Spot path is unavailable. Ensure Tauri runtime and desktop Rust analysis bridge are active.');
+                throw new Error('Through-Focus Spot web fallback is disabled (Rust backend fixed).');
             } catch (e) {
                 if (containerEl) containerEl.textContent = String(e && e.message ? e.message : e);
                 setProgress(100, 'Failed');
@@ -12096,13 +12836,13 @@ export function setupAnalysisWindows() {
         }
 
         function getOpener() {
-            try { return window.opener || null; } catch (_) { return null; }
+            try { return window.opener || window; } catch (_) { return window; }
         }
 
         function popupLog(...args) {
             try { console.log(...args); } catch (_) {}
             try {
-                const op = getOpener();
+                const op = window.opener;
                 if (op && op.console && typeof op.console.log === 'function') {
                     op.console.log(...args);
                 }
@@ -12112,7 +12852,7 @@ export function setupAnalysisWindows() {
         function popupError(...args) {
             try { console.error(...args); } catch (_) {}
             try {
-                const op = getOpener();
+                const op = window.opener;
                 if (op && op.console && typeof op.console.error === 'function') {
                     op.console.error(...args);
                 }
@@ -12301,7 +13041,8 @@ export function setupAnalysisWindows() {
                     return out;
                 })();
 
-                setProgress(20, 'Computing Through-Focus MTF (Rust native)...');
+                let lastProgress = 20;
+                setProgress(lastProgress, 'Computing Through-Focus MTF (Rust/WASM)...');
                 const nativeResp = await opener.runDesktopNativeThroughFocusMtfForPopup({
                     objectIndex: Number.isFinite(objectIndex) ? objectIndex : 0,
                     wavelengths: wavelengthList,
@@ -12312,6 +13053,18 @@ export function setupAnalysisWindows() {
                     samplingSize: Number.isFinite(sampling) ? sampling : 256,
                     zeroPadTo,
                     opdDisplayMode,
+                    onProgress: (evt) => {
+                        try {
+                            const p = Number(evt?.percent);
+                            const msg = String(evt?.message || 'Computing Through-Focus MTF...');
+                            if (Number.isFinite(p)) {
+                                lastProgress = Math.max(lastProgress, Math.max(0, Math.min(100, p)));
+                                setProgress(lastProgress, msg);
+                            } else {
+                                setProgress(lastProgress, msg);
+                            }
+                        } catch (_) {}
+                    },
                 });
 
                 if (!window.Plotly || typeof window.Plotly.newPlot !== 'function') {
@@ -12418,7 +13171,7 @@ export function setupAnalysisWindows() {
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Analysis</title>
+    <title>Object MTF</title>
     <style>
         html, body { height: 100%; }
         body {
@@ -12546,13 +13299,13 @@ export function setupAnalysisWindows() {
         }
 
         function getOpener() {
-            try { return window.opener || null; } catch (_) { return null; }
+            try { return window.opener || window; } catch (_) { return window; }
         }
 
         function popupLog(...args) {
             try { console.log(...args); } catch (_) {}
             try {
-                const op = getOpener();
+                const op = window.opener;
                 if (op && op.console && typeof op.console.log === 'function') {
                     op.console.log(...args);
                 }
@@ -12562,7 +13315,7 @@ export function setupAnalysisWindows() {
         function popupError(...args) {
             try { console.error(...args); } catch (_) {}
             try {
-                const op = getOpener();
+                const op = window.opener;
                 if (op && op.console && typeof op.console.error === 'function') {
                     op.console.error(...args);
                 }
@@ -12679,8 +13432,13 @@ export function setupAnalysisWindows() {
             const prevWl = wlSel ? wlSel.value : '';
             populateSelect(wlSel, buildWavelengthOptions());
             if (wlSel && (!prevWl || !Array.from(wlSel.options).some(o => o.value === prevWl))) {
-                const allOpt = Array.from(wlSel.options).find(o => o.value === 'all');
-                if (allOpt) wlSel.value = 'all';
+                const primary = getPrimaryWavelength();
+                if (Number.isFinite(primary) && Array.from(wlSel.options).some(o => o.value === String(primary))) {
+                    wlSel.value = String(primary);
+                } else {
+                    const firstNumeric = Array.from(wlSel.options).find(o => o.value !== 'all');
+                    if (firstNumeric) wlSel.value = firstNumeric.value;
+                }
             }
 
             const axisInfo = getAxisInfo();
@@ -12755,8 +13513,8 @@ export function setupAnalysisWindows() {
                     throw new Error('Primary wavelength is unavailable. Please set Source Primary Wavelength.');
                 }
 
-                if (typeof opener.runDesktopNativeFieldMtfForPopup !== 'function') {
-                    throw new Error('runDesktopNativeFieldMtfForPopup is not available on opener');
+                if (typeof opener.runPortableFieldMtfForPopup !== 'function') {
+                    throw new Error('runPortableFieldMtfForPopup is not available on opener');
                 }
 
                 const sourceRows = (typeof opener.getSourceRows === 'function')
@@ -12787,7 +13545,7 @@ export function setupAnalysisWindows() {
                 })();
 
                 setProgress(20, 'Computing Object MTF (Rust native)...');
-                const nativeResp = await opener.runDesktopNativeFieldMtfForPopup({
+                const nativeResp = await opener.runPortableFieldMtfForPopup({
                     objectIndex: 0,
                     wavelengths: wavelengthList,
                     firstFrequencyLpmm: Number.isFinite(meridionalFreq) ? meridionalFreq : 10,
@@ -13130,6 +13888,8 @@ export function setupAnalysisWindows() {
         // Settings popup (environment settings)
         const openSettingsBtn = document.getElementById('open-settings-btn');
         const openSettingsPopup = () => {
+                        __cooptInstallDesktopForceInfinitePupilModeBridge();
+
                         const isSettingsWindowContext = (() => {
                             try {
                                 const url = new URL(window.location.href);
@@ -13152,6 +13912,12 @@ export function setupAnalysisWindows() {
 
                                     const url = new URL(window.location.href);
                                     url.searchParams.set('coopt_settings_window', '1');
+                                    const forceMode = __cooptGetForceInfinitePupilMode();
+                                    if (forceMode) {
+                                        url.searchParams.set('coopt_force_mode', forceMode);
+                                    } else {
+                                        url.searchParams.delete('coopt_force_mode');
+                                    }
                                     new WebviewWindow(label, {
                                         title: 'Settings',
                                         url: url.toString(),
@@ -13277,6 +14043,7 @@ export function setupAnalysisWindows() {
 
     <script>
         const KEY = 'coopt.forceInfinitePupilMode';
+        const isDesktopRuntime = !!(window && (window.__TAURI_INTERNALS__ || window.__TAURI__));
         const GLASS_MAP_MFR_KEY = 'coopt.glassMap.defaultManufacturers';
         const DARK_MODE_KEY = 'coopt.darkMode';
         const sanitize = (v) => {
@@ -13306,38 +14073,110 @@ export function setupAnalysisWindows() {
             try { return window.opener || null; } catch (_) { return null; }
         }
 
-        function getCurrent() {
-            const o = getOpener();
+        async function readDesktopModeDirect() {
             try {
-                const fromOpener = o && typeof o.__cooptGetForceInfinitePupilMode === 'function'
-                    ? sanitize(o.__cooptGetForceInfinitePupilMode())
-                    : sanitize(o?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? o?.COOPT_FORCE_INFINITE_PUPIL_MODE);
-                if (fromOpener) return fromOpener;
+                const invoke = window?.__TAURI_INTERNALS__?.invoke || window?.__TAURI__?.core?.invoke;
+                if (typeof invoke !== 'function') return '';
+                const raw = await invoke('read_desktop_setting', { key: KEY });
+                return sanitize(raw);
+            } catch (_) {
+                return '';
+            }
+        }
+
+        async function writeDesktopModeDirect(mode) {
+            const m = sanitize(mode);
+            try {
+                const invoke = window?.__TAURI_INTERNALS__?.invoke || window?.__TAURI__?.core?.invoke;
+                if (typeof invoke !== 'function') return;
+                await invoke('write_desktop_setting', { key: KEY, value: m || null });
             } catch (_) {}
-            try { return sanitize(localStorage.getItem(KEY)); } catch (_) { return ''; }
+        }
+
+        function getFromWindow(target) {
+            if (!target) return '';
+            try {
+                if (typeof target.__cooptGetForceInfinitePupilMode === 'function') {
+                    const m = sanitize(target.__cooptGetForceInfinitePupilMode());
+                    if (m) return m;
+                }
+            } catch (_) {}
+            try {
+                return sanitize(target.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? target.COOPT_FORCE_INFINITE_PUPIL_MODE);
+            } catch (_) {
+                return '';
+            }
+        }
+
+        function setToWindow(target, mode) {
+            if (!target) return;
+            try {
+                if (typeof target.__cooptSetForceInfinitePupilMode === 'function') {
+                    target.__cooptSetForceInfinitePupilMode(mode);
+                    return;
+                }
+            } catch (_) {}
+            try {
+                if (mode) {
+                    target.__COOPT_FORCE_INFINITE_PUPIL_MODE = mode;
+                    target.COOPT_FORCE_INFINITE_PUPIL_MODE = mode;
+                } else {
+                    try { delete target.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { target.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+                    try { delete target.COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { target.COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+                }
+            } catch (_) {}
+        }
+
+        function getCurrent() {
+            const selfMode = getFromWindow(window);
+            if (selfMode) return selfMode;
+
+            const o = getOpener();
+            const openerMode = getFromWindow(o);
+            if (openerMode) return openerMode;
+
+            try {
+                const stored = sanitize(localStorage.getItem(KEY));
+                if (stored) return stored;
+            } catch (_) {}
+
+            try {
+                const fromUrl = sanitize(new URL(window.location.href).searchParams.get('coopt_force_mode'));
+                if (fromUrl) return fromUrl;
+            } catch (_) {}
+
+            return '';
         }
 
         function applyMode(mode) {
             const m = sanitize(mode);
+            setToWindow(window, m);
+
             const o = getOpener();
-            try {
-                if (o && typeof o.__cooptSetForceInfinitePupilMode === 'function') {
-                    o.__cooptSetForceInfinitePupilMode(m);
-                } else if (o) {
-                    if (m) {
-                        o.__COOPT_FORCE_INFINITE_PUPIL_MODE = m;
-                        o.COOPT_FORCE_INFINITE_PUPIL_MODE = m;
-                    } else {
-                        try { delete o.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { o.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
-                        try { delete o.COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { o.COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
-                    }
-                }
-            } catch (_) {}
+            setToWindow(o, m);
 
             try {
                 if (m) localStorage.setItem(KEY, m);
                 else localStorage.removeItem(KEY);
             } catch (_) {}
+
+            try {
+                if (typeof window.__cooptBroadcastForceInfinitePupilMode === 'function') {
+                    window.__cooptBroadcastForceInfinitePupilMode(m);
+                }
+            } catch (_) {}
+
+            writeDesktopModeDirect(m);
+        }
+
+        async function hydrateFromDesktopStore() {
+            const direct = await readDesktopModeDirect();
+            if (direct) {
+                setToWindow(window, direct);
+                try { localStorage.setItem(KEY, direct); } catch (_) {}
+                syncUI();
+                return;
+            }
         }
 
         function syncUI() {
@@ -13418,6 +14257,7 @@ export function setupAnalysisWindows() {
 
         window.addEventListener('focus', syncUI);
         syncUI();
+        hydrateFromDesktopStore();
     </script>
 </body>
 </html>

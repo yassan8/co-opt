@@ -1,4 +1,5 @@
-use serde_json::Value;
+use serde::Serialize;
+use serde_json::{Map, Value};
 use wasm_bindgen::prelude::*;
 use js_sys::{Float64Array, Function};
 
@@ -90,6 +91,43 @@ fn is_coord_trans_row(row: &Value) -> bool {
     false
 }
 
+fn norm_string(row: &Value, keys: &[&str]) -> String {
+    for key in keys {
+        if let Some(v) = get_field(row, key).and_then(value_to_string) {
+            let s = v.trim().to_lowercase();
+            if !s.is_empty() {
+                return s;
+            }
+        }
+    }
+    String::new()
+}
+
+fn compact(s: &str) -> String {
+    s.chars()
+        .filter(|c| *c != ' ' && *c != '_' && *c != '-')
+        .collect::<String>()
+        .to_lowercase()
+}
+
+fn is_object_row(row: &Value) -> bool {
+    let s = norm_string(row, &["object type", "objectType", "object", "Object"]);
+    let c = compact(&s);
+    c == "object" || c == "objectsurface" || s.starts_with("object")
+}
+
+fn is_gap_row(row: &Value) -> bool {
+    let candidates = [
+        norm_string(row, &["surfType", "type", "surfaceType", "object type"]),
+        norm_string(row, &["blockType", "block_type", "_blockType"]),
+        norm_string(row, &["surfaceRole", "_surfaceRole"]),
+    ];
+    candidates.iter().any(|s| {
+        let c = compact(s);
+        c == "gap" || c == "airgap" || s == "gap" || s == "air gap"
+    })
+}
+
 fn get_safe_thickness(row: &Value) -> f64 {
     if is_coord_trans_row(row) {
         if let Some(gap) = get_field(row, "__cooptGapThickness") {
@@ -121,6 +159,181 @@ fn get_safe_thickness(row: &Value) -> f64 {
         return 0.0;
     }
     thickness.and_then(value_to_f64).filter(|v| v.is_finite()).unwrap_or(0.0)
+}
+
+fn infer_refractive_index_from_material(material_raw: &str) -> Option<f64> {
+    let n = parse_refractive_index_from_material(material_raw);
+    if n > 0.0 { Some(n) } else { None }
+}
+
+fn parse_refractive_index_from_material(s: &str) -> f64 {
+    let t = s.trim();
+    if t.is_empty() {
+        return 0.0;
+    }
+    let upper = t.to_uppercase().replace(' ', "");
+    if upper == "AIR" {
+        return 1.0;
+    }
+    if let Ok(v) = t.parse::<f64>() {
+        if v.is_finite() && v > 0.0 {
+            return v;
+        }
+    }
+    0.0
+}
+
+fn estimate_refractive_index_from_nd_vd(nd: f64, vd: f64, wavelength_um: f64) -> f64 {
+    if !(nd.is_finite() && vd.is_finite()) || vd.abs() <= 1e-12 || nd <= 0.0 {
+        return nd.max(1.0);
+    }
+
+    let lambda_d = 0.587_561_8_f64;
+    let lambda_f = 0.486_132_7_f64;
+    let lambda_c = 0.656_272_5_f64;
+
+    let dispersion = (nd - 1.0) / vd;
+    let n_f = nd + dispersion / 2.0;
+    let n_c = nd - dispersion / 2.0;
+
+    if wavelength_um >= lambda_f && wavelength_um <= lambda_c {
+        if wavelength_um <= lambda_d {
+            let t = (wavelength_um - lambda_f) / (lambda_d - lambda_f);
+            return n_f + t * (nd - n_f);
+        }
+        let t = (wavelength_um - lambda_d) / (lambda_c - lambda_d);
+        return nd + t * (n_c - nd);
+    }
+
+    let lambda_d_sq = lambda_d * lambda_d;
+    let lambda_f_sq = lambda_f * lambda_f;
+    let b = (n_f - nd) / (1.0 / lambda_f_sq - 1.0 / lambda_d_sq);
+    let a = nd - b / lambda_d_sq;
+    let n_est = a + b / (wavelength_um * wavelength_um);
+    if n_est < 1.0 || n_est > 3.0 || !n_est.is_finite() {
+        nd
+    } else {
+        n_est
+    }
+}
+
+fn calculate_refractive_index_sellmeier(coeffs: &Map<String, Value>, wavelength_um: f64) -> Option<f64> {
+    if wavelength_um <= 0.0 {
+        return None;
+    }
+    let a1 = coeffs.get("A1").and_then(value_to_f64)?;
+    let a2 = coeffs.get("A2").and_then(value_to_f64)?;
+    let a3 = coeffs.get("A3").and_then(value_to_f64)?;
+    let b1 = coeffs.get("B1").and_then(value_to_f64)?;
+    let b2 = coeffs.get("B2").and_then(value_to_f64)?;
+    let b3 = coeffs.get("B3").and_then(value_to_f64)?;
+
+    let lambda2 = wavelength_um * wavelength_um;
+    let n2 = 1.0
+        + (a1 * lambda2) / (lambda2 - b1)
+        + (a2 * lambda2) / (lambda2 - b2)
+        + (a3 * lambda2) / (lambda2 - b3);
+    let n = n2.sqrt();
+    if n.is_finite() && (1.0..=3.0).contains(&n) {
+        Some(n)
+    } else {
+        None
+    }
+}
+
+fn calculate_refractive_index_schott(coeffs: &Map<String, Value>, wavelength_um: f64) -> Option<f64> {
+    if wavelength_um <= 0.0 {
+        return None;
+    }
+    let a0 = coeffs.get("A0").and_then(value_to_f64)?;
+    let a1 = coeffs.get("A1").and_then(value_to_f64)?;
+    let a2 = coeffs.get("A2").and_then(value_to_f64)?;
+    let a3 = coeffs.get("A3").and_then(value_to_f64)?;
+    let a4 = coeffs.get("A4").and_then(value_to_f64)?;
+    let a5 = coeffs.get("A5").and_then(value_to_f64)?;
+
+    let lambda2 = wavelength_um * wavelength_um;
+    if lambda2.abs() <= 1e-18 {
+        return None;
+    }
+    let lambda_minus2 = 1.0 / lambda2;
+    let lambda_minus4 = lambda_minus2 * lambda_minus2;
+    let lambda_minus6 = lambda_minus4 * lambda_minus2;
+    let lambda_minus8 = lambda_minus4 * lambda_minus4;
+
+    let n2 = a0
+        + a1 * lambda2
+        + a2 * lambda_minus2
+        + a3 * lambda_minus4
+        + a4 * lambda_minus6
+        + a5 * lambda_minus8;
+    let n = n2.sqrt();
+    if n.is_finite() && (1.0..=3.0).contains(&n) {
+        Some(n)
+    } else {
+        None
+    }
+}
+
+fn get_correct_refractive_index(row: &Value, wavelength_um: f64) -> f64 {
+    if let Some(obj) = row.as_object() {
+        if let Some(sell) = obj
+            .get("sellmeier")
+            .or_else(|| obj.get("__cooptSellmeier"))
+            .and_then(Value::as_object)
+        {
+            if let Some(n) = calculate_refractive_index_sellmeier(sell, wavelength_um) {
+                return n;
+            }
+        }
+        if let Some(schott) = obj
+            .get("schott")
+            .or_else(|| obj.get("__cooptSchott"))
+            .and_then(Value::as_object)
+        {
+            if let Some(n) = calculate_refractive_index_schott(schott, wavelength_um) {
+                return n;
+            }
+        }
+
+        let nd = obj
+            .get("__cooptActualRindex")
+            .or_else(|| obj.get("rindex"))
+            .or_else(|| obj.get("ref index"))
+            .or_else(|| obj.get("refIndex"))
+            .or_else(|| obj.get("Ref Index"))
+            .or_else(|| obj.get("refractiveIndex"))
+            .or_else(|| obj.get("index"))
+            .or_else(|| obj.get("n"))
+            .or_else(|| obj.get("nd"))
+            .and_then(value_to_f64)
+            .filter(|v| v.is_finite() && *v > 0.0);
+
+        let vd = obj
+            .get("__cooptActualAbbe")
+            .or_else(|| obj.get("abbe"))
+            .or_else(|| obj.get("Abbe"))
+            .or_else(|| obj.get("vd"))
+            .or_else(|| obj.get("Vd"))
+            .and_then(value_to_f64)
+            .filter(|v| v.is_finite() && *v > 0.0);
+
+        if let Some(nd_val) = nd {
+            if let Some(vd_val) = vd {
+                return estimate_refractive_index_from_nd_vd(nd_val, vd_val, wavelength_um);
+            }
+            return nd_val;
+        }
+    }
+
+    if let Some(m) = get_field(row, "material").and_then(value_to_string) {
+        let n = parse_refractive_index_from_material(&m);
+        if n > 0.0 {
+            return n;
+        }
+    }
+
+    0.0
 }
 
 fn parse_coord_trans_params(row: &Value) -> (f64, f64, f64, f64, f64, f64, i32) {
@@ -325,6 +538,204 @@ fn aspheric_sag_derivative(r: f64, radius: f64, conic: f64, coefs: &[f64; 10], m
     }
 
     dzdr
+}
+
+fn toric_rotate_to_local_xy(x: f64, y: f64, axis_deg: f64) -> (f64, f64, f64, f64) {
+    let axis_rad = axis_deg.to_radians();
+    let cos_a = axis_rad.cos();
+    let sin_a = axis_rad.sin();
+    let x_rot = x * cos_a + y * sin_a;
+    let y_rot = -x * sin_a + y * cos_a;
+    (x_rot, y_rot, cos_a, sin_a)
+}
+
+fn toric_surface_sag(x: f64, y: f64, radius_x: f64, radius_y: f64, conic: f64, axis_deg: f64) -> f64 {
+    if !x.is_finite() || !y.is_finite() {
+        return f64::NAN;
+    }
+
+    let (x_rot, y_rot, _cos_a, _sin_a) = toric_rotate_to_local_xy(x, y, axis_deg);
+    let x2 = x_rot * x_rot;
+    let y2 = y_rot * y_rot;
+    let k = if conic.is_finite() { conic } else { 0.0 };
+
+    let mut sag_x = 0.0_f64;
+    if radius_x.is_finite() && radius_x != 0.0 {
+        let abs_rx = radius_x.abs();
+        let sqrt_term_x = 1.0 - (1.0 + k) * x2 / (abs_rx * abs_rx);
+        if !sqrt_term_x.is_finite() || sqrt_term_x < 0.0 {
+            return f64::NAN;
+        }
+        let sag_x_abs = x2 / (abs_rx * (1.0 + sqrt_term_x.sqrt()));
+        sag_x = if radius_x > 0.0 { sag_x_abs } else { -sag_x_abs };
+    }
+
+    let mut sag_y = 0.0_f64;
+    if radius_y.is_finite() && radius_y != 0.0 {
+        let abs_ry = radius_y.abs();
+        let sqrt_term_y = 1.0 - (1.0 + k) * y2 / (abs_ry * abs_ry);
+        if !sqrt_term_y.is_finite() || sqrt_term_y < 0.0 {
+            return f64::NAN;
+        }
+        let sag_y_abs = y2 / (abs_ry * (1.0 + sqrt_term_y.sqrt()));
+        sag_y = if radius_y > 0.0 { sag_y_abs } else { -sag_y_abs };
+    }
+
+    let out = sag_x + sag_y;
+    if out.is_finite() { out } else { f64::NAN }
+}
+
+fn toric_sag_derivatives(x: f64, y: f64, radius_x: f64, radius_y: f64, conic: f64, axis_deg: f64) -> (f64, f64) {
+    if !x.is_finite() || !y.is_finite() {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let (x_rot, y_rot, cos_a, sin_a) = toric_rotate_to_local_xy(x, y, axis_deg);
+    let k = if conic.is_finite() { conic } else { 0.0 };
+
+    let mut dz_dx_rot = 0.0_f64;
+    if radius_x.is_finite() && radius_x != 0.0 {
+        let abs_rx = radius_x.abs();
+        let discr = 1.0 - (1.0 + k) * (x_rot * x_rot) / (abs_rx * abs_rx);
+        if discr.is_finite() && discr > 0.0 {
+            let sqrt_term = discr.sqrt();
+            dz_dx_rot = x_rot / (abs_rx * sqrt_term);
+            if radius_x < 0.0 {
+                dz_dx_rot = -dz_dx_rot;
+            }
+        }
+    }
+
+    let mut dz_dy_rot = 0.0_f64;
+    if radius_y.is_finite() && radius_y != 0.0 {
+        let abs_ry = radius_y.abs();
+        let discr = 1.0 - (1.0 + k) * (y_rot * y_rot) / (abs_ry * abs_ry);
+        if discr.is_finite() && discr > 0.0 {
+            let sqrt_term = discr.sqrt();
+            dz_dy_rot = y_rot / (abs_ry * sqrt_term);
+            if radius_y < 0.0 {
+                dz_dy_rot = -dz_dy_rot;
+            }
+        }
+    }
+
+    let dz_dx = dz_dx_rot * cos_a - dz_dy_rot * sin_a;
+    let dz_dy = dz_dx_rot * sin_a + dz_dy_rot * cos_a;
+    (
+        if dz_dx.is_finite() { dz_dx } else { 0.0 },
+        if dz_dy.is_finite() { dz_dy } else { 0.0 },
+    )
+}
+
+fn intersect_toric_internal(
+    ray: &[f64],
+    radius_x: f64,
+    radius_y: f64,
+    conic: f64,
+    axis_deg: f64,
+    max_iter: i32,
+    tol: f64,
+) -> f64 {
+    if ray.len() < 6 {
+        return f64::NAN;
+    }
+
+    let ox = ray[0];
+    let oy = ray[1];
+    let oz = ray[2];
+    let dx = ray[3];
+    let dy = ray[4];
+    let dz = ray[5];
+    if !ox.is_finite() || !oy.is_finite() || !oz.is_finite() || !dx.is_finite() || !dy.is_finite() || !dz.is_finite() {
+        return f64::NAN;
+    }
+
+    // If both meridians are flat-like, reduce to plane z=0 intersection.
+    let x_flat = !radius_x.is_finite() || radius_x == 0.0;
+    let y_flat = !radius_y.is_finite() || radius_y == 0.0;
+    if x_flat && y_flat {
+        return if dz.abs() < EPS_R { f64::NAN } else { -oz / dz };
+    }
+
+    let mut guesses: Vec<f64> = Vec::new();
+    if dz.abs() > 1e-10 {
+        let t_plane = -oz / dz;
+        if t_plane > 1e-10 {
+            guesses.push(t_plane);
+        }
+    }
+    if guesses.is_empty() {
+        guesses.push(0.01);
+        guesses.push(1.0);
+        guesses.push(10.0);
+    }
+
+    guesses.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    guesses.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+
+    let max_iter = if max_iter <= 0 { 20 } else { max_iter } as usize;
+    let tol = if tol.is_finite() && tol > 0.0 { tol } else { 1e-7 };
+
+    for guess in guesses.iter() {
+        let mut t = *guess;
+        let mut last_valid_t = f64::NAN;
+        let mut last_valid_f = f64::INFINITY;
+
+        for _ in 0..max_iter {
+            let px = ox + dx * t;
+            let py = oy + dy * t;
+            let pz = oz + dz * t;
+
+            let sag = toric_surface_sag(px, py, radius_x, radius_y, conic, axis_deg);
+            if !sag.is_finite() {
+                break;
+            }
+            let f = pz - sag;
+            if f.abs() < last_valid_f.abs() {
+                last_valid_t = t;
+                last_valid_f = f;
+            }
+
+            if f.abs() < tol {
+                return t;
+            }
+
+            let (dz_dx, dz_dy) = toric_sag_derivatives(px, py, radius_x, radius_y, conic, axis_deg);
+            let d_fdt = dz - (dz_dx * dx + dz_dy * dy);
+            if d_fdt.abs() < 1e-12 || !d_fdt.is_finite() {
+                break;
+            }
+
+            let delta_t = f / d_fdt;
+            let max_delta = t.abs() * 0.5 + 1.0;
+            if delta_t.abs() > max_delta {
+                t -= delta_t.signum() * max_delta;
+            } else {
+                t -= delta_t;
+            }
+
+            if t < -10000.0 || t > 10000.0 || !t.is_finite() {
+                break;
+            }
+        }
+
+        let px = ox + dx * t;
+        let py = oy + dy * t;
+        let pz = oz + dz * t;
+        let sag = toric_surface_sag(px, py, radius_x, radius_y, conic, axis_deg);
+        if sag.is_finite() {
+            let f = pz - sag;
+            if f.abs() < tol * 10.0 {
+                return t;
+            }
+        }
+
+        if last_valid_t.is_finite() && last_valid_f.abs() < tol * 50.0 {
+            return last_valid_t;
+        }
+    }
+
+    f64::NAN
 }
 
 fn normalize3(x: f64, y: f64, z: f64) -> [f64; 3] {
@@ -915,7 +1326,10 @@ pub fn calculate_surface_origins(
         current_rot = surface_rot;
     }
 
-    serde_wasm_bindgen::to_value(&surface_data)
+    // Force JSON-compatible output so JS consumers receive plain objects/arrays
+    // instead of Map/Set wrappers, which can fail re-decoding paths.
+    surface_data
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
         .map_err(|err| JsValue::from_str(&format!("serialize error: {err}")))
 }
 
@@ -1214,25 +1628,54 @@ fn trace_single_ray_hit_point_with_meta_core(
             row_params[p + 7], row_params[p + 8], row_params[p + 9], row_params[p + 10], row_params[p + 11],
         ];
         let semidia = row_params[p + 12];
+        let radius_x = row_params[p + 13];
+        let radius_y = row_params[p + 14];
+        let toric_axis = row_params[p + 15];
         let thickness = row_params[p + 16];
         let aperture_limit = row_params[p + 17];
         let rect_half_w = row_params[p + 18];
         let rect_half_h = row_params[p + 19];
         let n2 = row_params[p + 20];
 
-        // Object / Gap rows: no physical intersection but may advance by thickness.
-        if kind == 1 || kind == 2 {
-            if thickness.is_finite() && thickness != 0.0 {
-                px += dx * thickness;
-                py += dy * thickness;
-                pz += dz * thickness;
-                opl += thickness.abs() * 1000.0 * n_cur;
+        // Object row: skip entirely (kind == 1)
+        if kind == 1 {
+            if i == target_surface_index {
+                out[0] = 1.0;
+                out[1] = opl;
+                out[2] = px;
+                out[3] = py;
+                out[4] = pz;
+                return out;
             }
             continue;
         }
 
-        // CoordTrans row: medium update only (no physical advancement).
+        // Gap row: medium update only, no OPL addition from thickness (kind == 2)
+        if kind == 2 {
+            if i == target_surface_index {
+                out[0] = 1.0;
+                out[1] = opl;
+                out[2] = px;
+                out[3] = py;
+                out[4] = pz;
+                return out;
+            }
+            if n2.is_finite() && n2 > 0.0 {
+                n_cur = n2;
+            }
+            continue;
+        }
+
+        // CoordTrans row: medium update only (kind == 3)
         if kind == 3 {
+            if i == target_surface_index {
+                out[0] = 1.0;
+                out[1] = opl;
+                out[2] = px;
+                out[3] = py;
+                out[4] = pz;
+                return out;
+            }
             if n2.is_finite() && n2 > 0.0 {
                 n_cur = n2;
             }
@@ -1268,7 +1711,7 @@ fn trace_single_ray_hit_point_with_meta_core(
         let ldz = im20 * dx + im21 * dy + im22 * dz;
 
         let t = if is_toric {
-            f64::NAN
+            intersect_toric_internal(&[lpx, lpy, lpz, ldx, ldy, ldz], radius_x, radius_y, conic, toric_axis, 20, 1e-7)
         } else if is_plane {
             if ldz.abs() < EPS_R { f64::NAN } else { -lpz / ldz }
         } else {
@@ -1340,6 +1783,10 @@ fn trace_single_ray_hit_point_with_meta_core(
         // Compute local normal
         let (mut nx, mut ny, mut nz) = if is_plane {
             if ldz > 0.0 { (0.0, 0.0, -1.0) } else { (0.0, 0.0, 1.0) }
+        } else if is_toric {
+            let (dz_dx, dz_dy) = toric_sag_derivatives(hx, hy, radius_x, radius_y, conic, toric_axis);
+            let nvec = normalize3(-dz_dx, -dz_dy, 1.0);
+            (nvec[0], nvec[1], nvec[2])
         } else {
             let mut np = vec![0.0_f64; 13];
             np[0] = semidia;
@@ -1399,12 +1846,8 @@ fn trace_single_ray_hit_point_with_meta_core(
         dz = gnorm[2];
         n_cur = n_next;
 
-        if thickness.is_finite() && thickness != 0.0 {
-            px += dx * thickness;
-            py += dy * thickness;
-            pz += dz * thickness;
-            opl += thickness.abs() * 1000.0 * n_cur;
-        }
+        // Native parity: do not advance by thickness here.
+        // Surface origins already include previous thickness/coord transforms.
     }
 
     out[0] = 6.0; // not reached
@@ -1470,6 +1913,1734 @@ pub fn trace_ray_batch_hit_point_with_meta(
     }
 
     out
+}
+
+fn parse_matrix3(value: &Value) -> [[f64; 3]; 3] {
+    let mut out = [[0.0_f64; 3]; 3];
+    if let Value::Array(rows) = value {
+        for r in 0..3 {
+            if let Some(Value::Array(cols)) = rows.get(r) {
+                for c in 0..3 {
+                    out[r][c] = cols.get(c).and_then(value_to_f64).unwrap_or(if r == c { 1.0 } else { 0.0 });
+                }
+            } else {
+                out[r][r] = 1.0;
+            }
+        }
+    } else {
+        out[0][0] = 1.0;
+        out[1][1] = 1.0;
+        out[2][2] = 1.0;
+    }
+    out
+}
+
+fn get_surface_kind(row: &Value) -> i32 {
+    if is_object_row(row) {
+        1
+    } else if is_gap_row(row) {
+        2
+    } else if is_coord_trans_row(row) {
+        3
+    } else {
+        0
+    }
+}
+
+fn estimate_stop_radius_from_row(row: &Value) -> f64 {
+    let ap = get_field(row, "aperture")
+        .or_else(|| get_field(row, "Aperture"))
+        .and_then(value_to_f64)
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map(|v| v * 0.5);
+    let sd = get_field(row, "__cooptActualSemidia")
+        .or_else(|| get_field(row, "semidia"))
+        .and_then(value_to_f64)
+        .filter(|v| v.is_finite() && *v > 0.0);
+    match (ap, sd) {
+        (Some(a), Some(s)) => a.min(s),
+        (Some(a), None) => a,
+        (None, Some(s)) => s,
+        _ => 1.0,
+    }
+}
+
+fn estimate_entrance_radius_from_rows(rows: &[Value]) -> f64 {
+    for row in rows {
+        if is_object_row(row) || is_gap_row(row) || is_coord_trans_row(row) {
+            continue;
+        }
+        let semidia = get_field(row, "__cooptActualSemidia")
+            .or_else(|| get_field(row, "semidia"))
+            .and_then(value_to_f64)
+            .filter(|v| v.is_finite() && *v > 0.0);
+        if let Some(v) = semidia {
+            return v;
+        }
+        let ap = get_field(row, "aperture")
+            .and_then(value_to_f64)
+            .filter(|v| v.is_finite() && *v > 0.0);
+        if let Some(v) = ap {
+            return v * 0.5;
+        }
+    }
+    1.0
+}
+
+fn find_stop_surface_index(rows: &[Value]) -> usize {
+    for (i, row) in rows.iter().enumerate() {
+        let s = get_field(row, "object type")
+            .or_else(|| get_field(row, "object"))
+            .or_else(|| get_field(row, "Object"))
+            .and_then(value_to_string)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if s == "sto" || s == "stop" {
+            return i;
+        }
+    }
+    rows.len().saturating_sub(1)
+}
+
+fn find_eval_surface_index(rows: &[Value]) -> usize {
+    for (i, row) in rows.iter().enumerate().rev() {
+        let s = get_field(row, "object type")
+            .or_else(|| get_field(row, "object"))
+            .or_else(|| get_field(row, "Object"))
+            .and_then(value_to_string)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if s == "image" {
+            return i;
+        }
+    }
+    rows.len().saturating_sub(1)
+}
+
+fn solve_linear(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
+    let n = b.len();
+    if n == 0 || a.len() != n {
+        return None;
+    }
+    for i in 0..n {
+        let mut pivot = i;
+        let mut best = a[i][i].abs();
+        for r in (i + 1)..n {
+            let v = a[r][i].abs();
+            if v > best {
+                best = v;
+                pivot = r;
+            }
+        }
+        if !best.is_finite() || best < 1e-15 {
+            return None;
+        }
+        if pivot != i {
+            a.swap(i, pivot);
+            b.swap(i, pivot);
+        }
+        let piv = a[i][i];
+        for c in i..n {
+            a[i][c] /= piv;
+        }
+        b[i] /= piv;
+        for r in 0..n {
+            if r == i {
+                continue;
+            }
+            let f = a[r][i];
+            if !f.is_finite() || f.abs() < 1e-15 {
+                continue;
+            }
+            for c in i..n {
+                a[r][c] -= f * a[i][c];
+            }
+            b[r] -= f * b[i];
+        }
+    }
+    Some(b)
+}
+
+fn apply_display_mode_grid(raw: &[Vec<Option<f64>>], mode: &str) -> Vec<Vec<Option<f64>>> {
+    let n = raw.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let remove_defocus = mode.eq_ignore_ascii_case("pistonTiltDefocusRemoved");
+    let remove_plane = mode.eq_ignore_ascii_case("pistonTiltRemoved") || remove_defocus;
+    if !remove_plane {
+        return raw.to_vec();
+    }
+
+    let k = if remove_defocus { 4 } else { 3 };
+    let mut normal = vec![vec![0.0_f64; k]; k];
+    let mut rhs = vec![0.0_f64; k];
+    let mut count = 0usize;
+
+    for iy in 0..n {
+        for ix in 0..n {
+            let Some(z) = raw[iy][ix] else { continue; };
+            let x = if n > 1 { (2.0 * ix as f64) / ((n - 1) as f64) - 1.0 } else { 0.0 };
+            let y = if n > 1 { (2.0 * iy as f64) / ((n - 1) as f64) - 1.0 } else { 0.0 };
+            let basis = if remove_defocus {
+                [1.0, x, y, x * x + y * y]
+            } else {
+                [1.0, x, y, 0.0]
+            };
+            count += 1;
+            for r in 0..k {
+                rhs[r] += basis[r] * z;
+                for c in 0..k {
+                    normal[r][c] += basis[r] * basis[c];
+                }
+            }
+        }
+    }
+
+    if count <= k {
+        return raw.to_vec();
+    }
+    let Some(coeff) = solve_linear(normal, rhs) else {
+        return raw.to_vec();
+    };
+
+    let mut out = vec![vec![None; n]; n];
+    for iy in 0..n {
+        for ix in 0..n {
+            let Some(z) = raw[iy][ix] else { continue; };
+            let x = if n > 1 { (2.0 * ix as f64) / ((n - 1) as f64) - 1.0 } else { 0.0 };
+            let y = if n > 1 { (2.0 * iy as f64) / ((n - 1) as f64) - 1.0 } else { 0.0 };
+            let fit = if remove_defocus {
+                coeff[0] + coeff[1] * x + coeff[2] * y + coeff[3] * (x * x + y * y)
+            } else {
+                coeff[0] + coeff[1] * x + coeff[2] * y
+            };
+            out[iy][ix] = Some(z - fit);
+        }
+    }
+    out
+}
+
+#[derive(Clone)]
+struct PackedMeta {
+    row_meta: Vec<i32>,
+    row_params: Vec<f64>,
+    row_origins: Vec<f64>,
+    row_inv_rots: Vec<f64>,
+    row_rots: Vec<f64>,
+    row_count: usize,
+}
+
+fn parse_angle_like_input(s: &str) -> Option<f64> {
+    let t = s.trim().replace(',', ".");
+    if t.is_empty() {
+        return None;
+    }
+    let mut started = false;
+    let mut token = String::new();
+    for ch in t.chars() {
+        let valid = ch.is_ascii_digit() || ch == '+' || ch == '-' || ch == '.' || ch == 'e' || ch == 'E';
+        if valid {
+            started = true;
+            token.push(ch);
+        } else if started {
+            break;
+        }
+    }
+    if token.is_empty() {
+        return None;
+    }
+    token.parse::<f64>().ok()
+}
+
+fn get_object_numeric(obj: &Map<String, Value>, keys: &[&str]) -> Option<f64> {
+    for key in keys {
+        if let Some(v) = obj.get(*key) {
+            if let Some(n) = value_to_f64(v) {
+                if n.is_finite() {
+                    return Some(n);
+                }
+            }
+            if let Some(s) = value_to_string(v) {
+                if let Some(n) = parse_angle_like_input(&s) {
+                    if n.is_finite() {
+                        return Some(n);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn is_infinite_conjugate_native(rows: &[Value]) -> bool {
+    let Some(first) = rows.first() else {
+        return false;
+    };
+    let t = get_safe_thickness(first);
+    if t.is_infinite() {
+        return true;
+    }
+    t.is_finite() && t.abs() > 1.0e6
+}
+
+fn build_direction_from_field_angles_native(angle_x_deg: f64, angle_y_deg: f64) -> [f64; 3] {
+    let rad_x = angle_x_deg.to_radians();
+    let rad_y = angle_y_deg.to_radians();
+    let cos_x = rad_x.cos();
+    let cos_y = rad_y.cos();
+    let sin_x = rad_x.sin();
+    let sin_y = rad_y.sin();
+    normalize3(sin_x * cos_y, sin_y * cos_x, cos_x * cos_y)
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn mul_mat3_vec3(m: &[f64; 9], v: [f64; 3]) -> [f64; 3] {
+    [
+        m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+        m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+        m[6] * v[0] + m[7] * v[1] + m[8] * v[2],
+    ]
+}
+
+fn build_perpendicular_basis_native(dir: [f64; 3]) -> ([f64; 3], [f64; 3]) {
+    let direction = normalize3(dir[0], dir[1], dir[2]);
+    let mut reference = if direction[2].abs() < 0.99 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+
+    let mut u_axis = cross3(reference, direction);
+    let u_len = (u_axis[0] * u_axis[0] + u_axis[1] * u_axis[1] + u_axis[2] * u_axis[2]).sqrt();
+    if u_len < 1e-12 {
+        reference = [1.0, 0.0, 0.0];
+        u_axis = cross3(reference, direction);
+    }
+
+    let u = normalize3(u_axis[0], u_axis[1], u_axis[2]);
+    let v_axis = cross3(direction, u);
+    let v = normalize3(v_axis[0], v_axis[1], v_axis[2]);
+    (u, v)
+}
+
+fn resolve_infinite_object_z_native(rows: &[Value], obj: &Map<String, Value>, object_plane_z: f64) -> f64 {
+    let render_dist_from_rows = rows
+        .first()
+        .and_then(|row| get_field(row, "objectRenderDistance"))
+        .and_then(value_to_f64)
+        .unwrap_or(0.0);
+
+    let render_dist = if render_dist_from_rows.is_finite() && render_dist_from_rows.abs() > 1e-12 {
+        render_dist_from_rows
+    } else {
+        get_object_numeric(obj, &["objectRenderDistance", "renderDistance", "distance", "z"])
+            .unwrap_or(0.0)
+    };
+
+    if render_dist.is_finite() && render_dist.abs() > 1e-12 {
+        -render_dist.abs()
+    } else {
+        object_plane_z - 25.0
+    }
+}
+
+fn parse_radius_from_row_native(row: &Value) -> Option<f64> {
+    if let Some(v) = get_field(row, "radius") {
+        if let Some(s) = value_to_string(v) {
+            let t = s.trim().to_uppercase();
+            if t == "INF" || t == "INFINITY" || t == "∞" {
+                return None;
+            }
+        }
+        if let Some(r) = value_to_f64(v) {
+            if r.is_finite() && r.abs() > 1e-12 {
+                return Some(r);
+            }
+        }
+    }
+    None
+}
+
+fn compute_object_surface_sag_native(rows: &[Value], x: f64, y: f64) -> f64 {
+    let Some(first) = rows.first() else {
+        return 0.0;
+    };
+
+    let Some(radius) = parse_radius_from_row_native(first) else {
+        return 0.0;
+    };
+
+    let conic = get_field(first, "conic").and_then(value_to_f64).unwrap_or(0.0);
+    let mut coefs = [0.0_f64; 10];
+    for i in 0..10 {
+        let key = format!("coef{}", i + 1);
+        coefs[i] = get_field(first, &key).and_then(value_to_f64).unwrap_or(0.0);
+    }
+
+    let surf_type = get_field(first, "surfType")
+        .or_else(|| get_field(first, "type"))
+        .and_then(value_to_string)
+        .unwrap_or_default()
+        .to_lowercase();
+    let mode_odd = surf_type.contains("odd");
+
+    let r = (x * x + y * y).sqrt();
+    let sag = aspheric_sag(r, radius, conic, &coefs, mode_odd);
+    if sag.is_finite() { sag } else { 0.0 }
+}
+
+fn optimize_angle_object_position_native(
+    angle_x_deg: f64,
+    angle_y_deg: f64,
+    stop_origin: [f64; 3],
+    object_z: f64,
+) -> [f64; 2] {
+    let dir = build_direction_from_field_angles_native(angle_x_deg, angle_y_deg);
+    let safe_k = if dir[2].abs() > 1e-12 {
+        dir[2]
+    } else if dir[2] >= 0.0 {
+        1e-12
+    } else {
+        -1e-12
+    };
+
+    let dz = stop_origin[2] - object_z;
+    let x0 = stop_origin[0] - (dir[0] / safe_k) * dz;
+    let y0 = stop_origin[1] - (dir[1] / safe_k) * dz;
+
+    if !x0.is_finite() || !y0.is_finite() || x0.abs() > 1e8 || y0.abs() > 1e8 {
+        [0.0, 0.0]
+    } else {
+        [x0, y0]
+    }
+}
+
+fn estimate_entrance_center_origin_native(
+    rows: &[Value],
+    row_origins: &[f64],
+    stop_center: [f64; 3],
+    dir_vector: [f64; 3],
+) -> [f64; 3] {
+    let mut first_surface_z = stop_center[2] - 20.0;
+    for (i, row) in rows.iter().enumerate() {
+        if is_coord_trans_row(row) || is_object_row(row) || is_gap_row(row) {
+            continue;
+        }
+        let z_idx = i * 3 + 2;
+        if z_idx < row_origins.len() {
+            let z = row_origins[z_idx];
+            if z.is_finite() {
+                first_surface_z = z;
+                break;
+            }
+        }
+    }
+
+    let plane_z = (first_surface_z - 50.0).min(stop_center[2] - 10.0);
+    let dir = normalize3(dir_vector[0], dir_vector[1], dir_vector[2]);
+    let safe_k = if dir[2].abs() > 1e-12 {
+        dir[2]
+    } else if dir[2] >= 0.0 {
+        1e-12
+    } else {
+        -1e-12
+    };
+
+    let dz = stop_center[2] - plane_z;
+    let x = stop_center[0] - (dir[0] / safe_k) * dz;
+    let y = stop_center[1] - (dir[1] / safe_k) * dz;
+
+    if x.is_finite() && y.is_finite() && plane_z.is_finite() {
+        [x, y, plane_z]
+    } else {
+        [0.0, 0.0, plane_z]
+    }
+}
+
+fn trace_hit_xy_with_packed(
+    ray: [f64; 6],
+    stop_surface_index: usize,
+    n_start: f64,
+    packed: &PackedMeta,
+) -> Option<[f64; 2]> {
+    let hit = trace_single_ray_hit_point_with_meta_core(
+        &ray,
+        stop_surface_index,
+        n_start,
+        &packed.row_meta,
+        &packed.row_params,
+        &packed.row_origins,
+        &packed.row_inv_rots,
+        &packed.row_rots,
+        packed.row_count,
+    );
+    if (hit[0] - 1.0).abs() > f64::EPSILON {
+        return None;
+    }
+    if !hit[2].is_finite() || !hit[3].is_finite() {
+        return None;
+    }
+    Some([hit[2], hit[3]])
+}
+
+fn brent_minimize_1d_native<F>(f: F, ax: f64, bx: f64, tol: f64, max_iter: usize) -> f64
+where
+    F: Fn(f64) -> f64,
+{
+    let golden_ratio = (3.0 - 5.0_f64.sqrt()) / 2.0;
+    let mut a = ax.min(bx);
+    let mut b = ax.max(bx);
+    let mut x = a + golden_ratio * (b - a);
+    let mut w = x;
+    let mut v = x;
+    let mut fx = f(x);
+    let mut fw = fx;
+    let mut fv = fx;
+    let mut d = 0.0_f64;
+    let mut e = 0.0_f64;
+
+    for _ in 0..max_iter {
+        let m = 0.5 * (a + b);
+        let tol1 = tol * x.abs() + 1e-10;
+        let tol2 = 2.0 * tol1;
+        if (x - m).abs() <= tol2 - 0.5 * (b - a) {
+            return x;
+        }
+
+        if e.abs() > tol1 {
+            let mut p;
+            let mut q;
+            let r = (x - w) * (fx - fv);
+            q = (x - v) * (fx - fw);
+            p = (x - v) * q - (x - w) * r;
+            q = 2.0 * (q - r);
+            if q > 0.0 {
+                p = -p;
+            }
+            q = q.abs();
+            let temp = e;
+            e = d;
+            if p.abs() < (0.5 * q * temp).abs() && p > q * (a - x) && p < q * (b - x) {
+                d = p / q;
+                let u = x + d;
+                if (u - a) < tol2 || (b - u) < tol2 {
+                    d = if x < m { tol1 } else { -tol1 };
+                }
+            } else {
+                e = if x >= m { a - x } else { b - x };
+                d = golden_ratio * e;
+            }
+        } else {
+            e = if x >= m { a - x } else { b - x };
+            d = golden_ratio * e;
+        }
+
+        let u = if d.abs() >= tol1 { x + d } else { x + if d > 0.0 { tol1 } else { -tol1 } };
+        let fu = f(u);
+
+        if fu <= fx {
+            if u >= x {
+                a = x;
+            } else {
+                b = x;
+            }
+            v = w;
+            w = x;
+            x = u;
+            fv = fw;
+            fw = fx;
+            fx = fu;
+        } else {
+            if u < x {
+                a = u;
+            } else {
+                b = u;
+            }
+            if fu <= fw || (w - x).abs() <= f64::EPSILON {
+                v = w;
+                w = u;
+                fv = fw;
+                fw = fu;
+            } else if fu <= fv || (v - x).abs() <= f64::EPSILON || (v - w).abs() <= f64::EPSILON {
+                v = u;
+                fv = fu;
+            }
+        }
+    }
+
+    x
+}
+
+fn search_entrance_origin_grid_brent_native(
+    rows: &[Value],
+    row_origins: &[f64],
+    stop_center: [f64; 3],
+    dir_vector: [f64; 3],
+    stop_surface_index: usize,
+    stop_packed: &PackedMeta,
+    n_start: f64,
+    entrance_radius: f64,
+) -> Option<[f64; 3]> {
+    let dir = normalize3(dir_vector[0], dir_vector[1], dir_vector[2]);
+    if !dir[0].is_finite() || !dir[1].is_finite() || !dir[2].is_finite() {
+        return None;
+    }
+
+    let mut first_surface_z = stop_center[2] - 20.0;
+    for (i, row) in rows.iter().enumerate() {
+        if is_coord_trans_row(row) || is_object_row(row) || is_gap_row(row) {
+            continue;
+        }
+        let z_idx = i * 3 + 2;
+        if z_idx < row_origins.len() {
+            let z = row_origins[z_idx];
+            if z.is_finite() {
+                first_surface_z = z;
+                break;
+            }
+        }
+    }
+
+    let mut plane_candidates = vec![
+        first_surface_z - 10.0,
+        first_surface_z - 50.0,
+        -25.0,
+        -50.0,
+        -100.0,
+        -200.0,
+        first_surface_z - 500.0,
+        first_surface_z - 1000.0,
+        first_surface_z - 2000.0,
+    ];
+    plane_candidates.retain(|z| z.is_finite());
+    plane_candidates.sort_by(|a, b| a.abs().partial_cmp(&b.abs()).unwrap_or(std::cmp::Ordering::Equal));
+    plane_candidates.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+
+    let safe_dir_z = if dir[2].abs() > 1e-12 {
+        dir[2]
+    } else if dir[2] >= 0.0 {
+        1e-12
+    } else {
+        -1e-12
+    };
+
+    let evaluate = |x: f64, y: f64, plane_z: f64| -> Option<f64> {
+        let ray = [x, y, plane_z, dir[0], dir[1], dir[2]];
+        let hit = trace_hit_xy_with_packed(ray, stop_surface_index, n_start, stop_packed)?;
+        let ex = hit[0] - stop_center[0];
+        let ey = hit[1] - stop_center[1];
+        let err = (ex * ex + ey * ey).sqrt();
+        if err.is_finite() { Some(err) } else { None }
+    };
+
+    for plane_z in plane_candidates {
+        let dz = stop_center[2] - plane_z;
+        let guess_x = stop_center[0] - (dir[0] / safe_dir_z) * dz;
+        let guess_y = stop_center[1] - (dir[1] / safe_dir_z) * dz;
+        if !guess_x.is_finite() || !guess_y.is_finite() {
+            continue;
+        }
+
+        let dynamic_half_range = (guess_x.abs())
+            .max(guess_y.abs())
+            .max(50.0)
+            .max((guess_x.abs()).max(guess_y.abs()) + 2.0 * entrance_radius.max(1.0) + 10.0);
+
+        let grid_size = 31usize;
+        let grid_step = (2.0 * dynamic_half_range) / ((grid_size - 1) as f64);
+        let mut best_x = guess_x;
+        let mut best_y = guess_y;
+        let mut best_err = f64::INFINITY;
+        let mut found_any = false;
+
+        for i in 0..grid_size {
+            let x = (guess_x - dynamic_half_range) + (i as f64) * grid_step;
+            for j in 0..grid_size {
+                let y = (guess_y - dynamic_half_range) + (j as f64) * grid_step;
+                if let Some(err) = evaluate(x, y, plane_z) {
+                    if err < best_err {
+                        best_err = err;
+                        best_x = x;
+                        best_y = y;
+                        found_any = true;
+                    }
+                }
+            }
+        }
+
+        if !found_any {
+            continue;
+        }
+
+        let brent_range = (grid_step * 2.0).max(0.5);
+        let refined_x = brent_minimize_1d_native(
+            |x| evaluate(x, best_y, plane_z).unwrap_or(1.0e9),
+            best_x - brent_range,
+            best_x + brent_range,
+            1e-6,
+            50,
+        );
+        let refined_y = brent_minimize_1d_native(
+            |y| evaluate(refined_x, y, plane_z).unwrap_or(1.0e9),
+            best_y - brent_range,
+            best_y + brent_range,
+            1e-6,
+            50,
+        );
+
+        if evaluate(refined_x, refined_y, plane_z).is_some() {
+            return Some([refined_x, refined_y, plane_z]);
+        }
+        if best_err.is_finite() {
+            return Some([best_x, best_y, plane_z]);
+        }
+    }
+
+    None
+}
+
+fn solve_ray_origin_to_stop_point_fast_native(
+    initial_origin: [f64; 3],
+    dir_vector: [f64; 3],
+    stop_target: [f64; 3],
+    stop_surface_index: usize,
+    packed: &PackedMeta,
+    n_start: f64,
+) -> Option<[f64; 3]> {
+    let base_dir = normalize3(dir_vector[0], dir_vector[1], dir_vector[2]);
+    if !base_dir[0].is_finite() || !base_dir[1].is_finite() || !base_dir[2].is_finite() {
+        return None;
+    }
+
+    let mut origin = initial_origin;
+    if !origin[0].is_finite() || !origin[1].is_finite() || !origin[2].is_finite() {
+        return None;
+    }
+
+    let eps = 1e-3;
+    let tol_mm = 1e-3;
+    let max_iter = 20;
+    let max_step = 10.0;
+    let mut best_origin = origin;
+    let mut best_err = f64::INFINITY;
+
+    for _ in 0..max_iter {
+        let hit = trace_hit_xy_with_packed(
+            [origin[0], origin[1], origin[2], base_dir[0], base_dir[1], base_dir[2]],
+            stop_surface_index,
+            n_start,
+            packed,
+        );
+
+        let Some(hit0) = hit else {
+            origin = [
+                0.5 * (origin[0] + best_origin[0]),
+                0.5 * (origin[1] + best_origin[1]),
+                origin[2],
+            ];
+            continue;
+        };
+
+        let ex = hit0[0] - stop_target[0];
+        let ey = hit0[1] - stop_target[1];
+        if !ex.is_finite() || !ey.is_finite() {
+            return None;
+        }
+        let err = (ex * ex + ey * ey).sqrt();
+        if err < best_err {
+            best_err = err;
+            best_origin = origin;
+        }
+        if err < tol_mm {
+            return Some(origin);
+        }
+
+        let hit_x = trace_hit_xy_with_packed(
+            [origin[0] + eps, origin[1], origin[2], base_dir[0], base_dir[1], base_dir[2]],
+            stop_surface_index,
+            n_start,
+            packed,
+        );
+        let hit_y = trace_hit_xy_with_packed(
+            [origin[0], origin[1] + eps, origin[2], base_dir[0], base_dir[1], base_dir[2]],
+            stop_surface_index,
+            n_start,
+            packed,
+        );
+
+        if hit_x.is_none() || hit_y.is_none() {
+            let gain = 0.3;
+            let mut dx = -gain * ex;
+            let mut dy = -gain * ey;
+            let step_norm = (dx * dx + dy * dy).sqrt();
+            if step_norm > max_step {
+                let s = max_step / step_norm;
+                dx *= s;
+                dy *= s;
+            }
+            origin = [origin[0] + dx, origin[1] + dy, origin[2]];
+            continue;
+        }
+
+        let hx = hit_x.unwrap_or(hit0);
+        let hy = hit_y.unwrap_or(hit0);
+        let j11 = (hx[0] - hit0[0]) / eps;
+        let j21 = (hx[1] - hit0[1]) / eps;
+        let j12 = (hy[0] - hit0[0]) / eps;
+        let j22 = (hy[1] - hit0[1]) / eps;
+        if !j11.is_finite() || !j12.is_finite() || !j21.is_finite() || !j22.is_finite() {
+            origin = [origin[0] - 0.2 * ex, origin[1] - 0.2 * ey, origin[2]];
+            continue;
+        }
+
+        let det = j11 * j22 - j12 * j21;
+        if !det.is_finite() || det.abs() < 1e-14 {
+            origin = [origin[0] - 0.2 * ex, origin[1] - 0.2 * ey, origin[2]];
+            continue;
+        }
+
+        let mut dx = (-j22 * ex + j12 * ey) / det;
+        let mut dy = (j21 * ex - j11 * ey) / det;
+        let step_norm = (dx * dx + dy * dy).sqrt();
+        if step_norm > max_step {
+            let s = max_step / step_norm;
+            dx *= s;
+            dy *= s;
+        }
+        origin = [origin[0] + dx, origin[1] + dy, origin[2]];
+    }
+
+    if best_err.is_finite() {
+        Some(best_origin)
+    } else {
+        Some(origin)
+    }
+}
+
+#[wasm_bindgen]
+pub fn run_native_opd_map_wasm_json(req_json: String) -> Result<JsValue, JsValue> {
+    // Direct Rust computation of surface origins/rotations without JsValue round-trip
+    fn compute_packed_surface_origins(
+        rows: &[Value],
+        row_origins: &mut Vec<f64>,
+        row_rots: &mut Vec<f64>,
+        row_inv_rots: &mut Vec<f64>,
+    ) {
+        let ex = [1.0_f64, 0.0, 0.0];
+        let ey = [0.0_f64, 1.0, 0.0];
+        let ez = [0.0_f64, 0.0, 1.0];
+        let mut current_origin = [0.0_f64; 3];
+        let mut current_rot = create_identity_matrix();
+
+        for s in 0..rows.len() {
+            let surface = &rows[s];
+            let previous = if s > 0 { Some(&rows[s - 1]) } else { None };
+
+            let (surface_origin, surface_rot) = if is_coord_trans_row(surface) {
+                let (dx, dy, dz, tx, ty, tz, order) = parse_coord_trans_params(surface);
+                let mut thickness = previous.map(get_safe_thickness).unwrap_or(0.0);
+                if !thickness.is_finite() { thickness = 0.0; }
+                let prev_rot = current_rot;
+                let single_rot = create_rotation_matrix(tx, ty, tz, order);
+                let new_rot = multiply_matrices(single_rot, current_rot);
+                let o = if order == 0 {
+                    let tz_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ez), thickness);
+                    let dx_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ex), dx);
+                    let dy_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ey), dy);
+                    let dz_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ez), dz);
+                    vec3_add(vec3_add(vec3_add(vec3_add(current_origin, tz_term), dx_term), dy_term), dz_term)
+                } else {
+                    let tz_term = vec3_scale(apply_matrix_to_vec3(prev_rot, ez), thickness);
+                    let dx_term = vec3_scale(apply_matrix_to_vec3(new_rot, ex), dx);
+                    let dy_term = vec3_scale(apply_matrix_to_vec3(new_rot, ey), dy);
+                    let dz_term = vec3_scale(apply_matrix_to_vec3(new_rot, ez), dz);
+                    vec3_add(vec3_add(vec3_add(vec3_add(current_origin, tz_term), dx_term), dy_term), dz_term)
+                };
+                (o, new_rot)
+            } else {
+                let mut thickness = previous.map(get_safe_thickness).unwrap_or(0.0);
+                if !thickness.is_finite() { thickness = 0.0; }
+                let tz_term = vec3_scale(apply_matrix_to_vec3(current_rot, ez), thickness);
+                (vec3_add(current_origin, tz_term), current_rot)
+            };
+
+            let o = s * 3;
+            row_origins[o]     = surface_origin[0];
+            row_origins[o + 1] = surface_origin[1];
+            row_origins[o + 2] = surface_origin[2];
+
+            // Store 3×3 as row-major. Transpose = inverse for orthonormal rotation.
+            let r = s * 9;
+            for rr in 0..3 {
+                for cc in 0..3 {
+                    row_rots[r + rr * 3 + cc]     = surface_rot[rr][cc];
+                    row_inv_rots[r + rr * 3 + cc] = surface_rot[cc][rr];
+                }
+            }
+
+            current_origin = surface_origin;
+            current_rot = surface_rot;
+        }
+    }
+
+    let req: Value = serde_json::from_str(&req_json)
+        .map_err(|e| JsValue::from_str(&format!("invalid request json: {}", e)))?;
+    let req_obj = req.as_object().ok_or_else(|| JsValue::from_str("request must be an object"))?;
+
+    let rows_raw = req_obj
+        .get("opticalSystemRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .ok_or_else(|| JsValue::from_str("opticalSystemRows is required"))?;
+    if rows_raw.is_empty() {
+        return Err(JsValue::from_str("opticalSystemRows is empty"));
+    }
+    let rows: Vec<Value> = rows_raw.iter().map(normalize_coord_trans_row).collect();
+
+    let grid_size = req_obj
+        .get("gridSize")
+        .and_then(value_to_f64)
+        .map(|v| v.floor() as usize)
+        .unwrap_or(129)
+        .max(17);
+    let wavelength_um = req_obj
+        .get("wavelengthUm")
+        .and_then(value_to_f64)
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(0.5876);
+    let opd_display_mode = req_obj
+        .get("opdDisplayMode")
+        .and_then(value_to_string)
+        .unwrap_or_else(|| "pistonTiltRemoved".to_string());
+
+    let stop_surface_index = req_obj
+        .get("stopSurfaceIndex")
+        .and_then(value_to_f64)
+        .map(|v| v.max(0.0) as usize)
+        .unwrap_or_else(|| find_stop_surface_index(&rows))
+        .min(rows.len().saturating_sub(1));
+    let target_surface_index = req_obj
+        .get("surfaceIndex")
+        .and_then(value_to_f64)
+        .map(|v| v.max(0.0) as usize)
+        .unwrap_or_else(|| find_eval_surface_index(&rows))
+        .min(rows.len().saturating_sub(1));
+
+    let object_space_n = rows
+        .first()
+        .map(|r| get_correct_refractive_index(r, wavelength_um))
+        .filter(|n| n.is_finite() && *n > 0.0)
+        .unwrap_or(1.0);
+
+    let mut row_meta = vec![0_i32; rows.len() * 4];
+    let mut row_params = vec![0.0_f64; rows.len() * 24];
+    let mut row_origins = vec![0.0_f64; rows.len() * 3];
+    let mut row_inv_rots = vec![0.0_f64; rows.len() * 9];
+    let mut row_rots = vec![0.0_f64; rows.len() * 9];
+    // Compute origins/rotations directly (no JsValue round-trip)
+    compute_packed_surface_origins(&rows, &mut row_origins, &mut row_rots, &mut row_inv_rots);
+    for i in 0..rows.len() {
+        let row = &rows[i];
+
+        let m = i * 4;
+        let p = i * 24;
+
+        let kind = get_surface_kind(row);
+        row_meta[m] = kind;
+        row_meta[m + 2] = i as i32;
+        row_meta[m + 3] = 0;
+
+        let material = get_field(row, "material")
+            .and_then(value_to_string)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_uppercase();
+        let is_mirror = material == "MIRROR";
+        let surf_type = get_field(row, "surfType")
+            .or_else(|| get_field(row, "type"))
+            .and_then(value_to_string)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let image_type_raw = get_field(row, "object type")
+            .or_else(|| get_field(row, "object"))
+            .or_else(|| get_field(row, "Object"))
+            .or_else(|| get_field(row, "type"))
+            .and_then(value_to_string)
+            .unwrap_or_default();
+        let image_norm = compact(&image_type_raw);
+        let is_image_surface = image_norm == "image" || image_norm.starts_with("image");
+        let aperture_shape = get_field(row, "_apertureShape")
+            .or_else(|| get_field(row, "apertureShape"))
+            .or_else(|| get_field(row, "ApertureShape"))
+            .and_then(value_to_string)
+            .unwrap_or_default();
+        let shape_key = compact(&aperture_shape);
+        let is_square_shape = shape_key == "square" || shape_key == "sq";
+        let is_rect_shape = is_square_shape || shape_key == "rect" || shape_key == "rectangle" || shape_key == "rectangular";
+
+        let mut rect_half_w = f64::NAN;
+        let mut rect_half_h = f64::NAN;
+        if is_rect_shape {
+            let w_num = get_field(row, "_apertureWidth")
+                .or_else(|| get_field(row, "apertureWidth"))
+                .or_else(|| get_field(row, "apertureX"))
+                .or_else(|| get_field(row, "apertureWidthMm"))
+                .and_then(value_to_f64)
+                .unwrap_or(f64::NAN);
+            let h_num = get_field(row, "_apertureHeight")
+                .or_else(|| get_field(row, "apertureHeight"))
+                .or_else(|| get_field(row, "apertureY"))
+                .or_else(|| get_field(row, "apertureHeightMm"))
+                .and_then(value_to_f64)
+                .unwrap_or(f64::NAN);
+
+            if is_square_shape {
+                let side = if w_num.is_finite() { w_num } else { h_num };
+                if side.is_finite() && side > 0.0 {
+                    rect_half_w = side * 0.5;
+                    rect_half_h = side * 0.5;
+                }
+            } else {
+                if w_num.is_finite() && w_num > 0.0 {
+                    rect_half_w = w_num * 0.5;
+                }
+                if h_num.is_finite() && h_num > 0.0 {
+                    rect_half_h = h_num * 0.5;
+                }
+            }
+        }
+
+        let is_toric = surf_type.contains("toric");
+        let is_odd = surf_type.contains("odd");
+        let radius = get_field(row, "radius").and_then(value_to_f64).unwrap_or(f64::NAN);
+        let is_plane = !radius.is_finite() || radius.abs() < 1e-12 || surf_type.contains("plane");
+
+        let mut flags = 0_i32;
+        if is_mirror { flags |= 1; }
+        if is_plane { flags |= 2; }
+        if is_toric { flags |= 4; }
+        if is_image_surface { flags |= 8; }
+        if rect_half_w.is_finite() && rect_half_h.is_finite() { flags |= 16; }
+        if is_odd { flags |= 32; }
+        row_meta[m + 1] = flags;
+
+        row_params[p] = radius;
+        row_params[p + 1] = get_field(row, "conic").and_then(value_to_f64).unwrap_or(0.0);
+        for k in 0..10 {
+            let key = format!("coef{}", k + 1);
+            row_params[p + 2 + k] = get_field(row, &key).and_then(value_to_f64).unwrap_or(0.0);
+        }
+        let semidia = match get_field(row, "__cooptActualSemidia").or_else(|| get_field(row, "semidia")) {
+            Some(Value::String(s)) if s.trim().eq_ignore_ascii_case("auto") || s.trim().is_empty() => f64::INFINITY,
+            Some(v) => {
+                let n = value_to_f64(v).unwrap_or(f64::NAN);
+                if n.is_finite() && n > 0.0 { n } else { f64::INFINITY }
+            }
+            None => f64::INFINITY,
+        };
+        row_params[p + 12] = semidia;
+        row_params[p + 13] = get_field(row, "radiusX").and_then(value_to_f64).unwrap_or(f64::NAN);
+        row_params[p + 14] = get_field(row, "radiusY").and_then(value_to_f64).unwrap_or(f64::NAN);
+        row_params[p + 15] = get_field(row, "axis").and_then(value_to_f64).unwrap_or(0.0);
+        row_params[p + 16] = get_safe_thickness(row);
+        let mut ap_lim = get_field(row, "aperture")
+            .and_then(value_to_f64)
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .map(|v| v * 0.5)
+            .unwrap_or(f64::INFINITY);
+        if semidia.is_finite() {
+            ap_lim = ap_lim.min(semidia);
+        }
+        row_params[p + 17] = if i == target_surface_index || is_image_surface {
+            f64::INFINITY
+        } else {
+            ap_lim
+        };
+        row_params[p + 18] = rect_half_w;
+        row_params[p + 19] = rect_half_h;
+
+        let n2 = if kind == 0 {
+            if is_mirror {
+                0.0
+            } else {
+                let n = get_correct_refractive_index(row, wavelength_um);
+                if n.is_finite() && n > 0.0 { n } else { 0.0 }
+            }
+        } else if kind == 2 {
+            let material = get_field(row, "material").and_then(value_to_string).unwrap_or_default();
+            let n = parse_refractive_index_from_material(&material);
+            if n > 0.0 { n } else { 0.0 }
+        } else if kind == 3 {
+            let material = get_field(row, "__cooptGapMaterial").and_then(value_to_string).unwrap_or_default();
+            let n = parse_refractive_index_from_material(&material);
+            if n > 0.0 { n } else { 0.0 }
+        } else {
+            0.0
+        };
+        row_params[p + 20] = n2;
+
+    }
+    let stop_center = [
+        row_origins[stop_surface_index * 3],
+        row_origins[stop_surface_index * 3 + 1],
+        row_origins[stop_surface_index * 3 + 2],
+    ];
+    let stop_rot_base = stop_surface_index * 9;
+    let stop_plane_u = normalize3(
+        row_rots[stop_rot_base],
+        row_rots[stop_rot_base + 3],
+        row_rots[stop_rot_base + 6],
+    );
+    let stop_plane_v = normalize3(
+        row_rots[stop_rot_base + 1],
+        row_rots[stop_rot_base + 4],
+        row_rots[stop_rot_base + 7],
+    );
+
+    let packed_target = PackedMeta {
+        row_meta: row_meta.clone(),
+        row_params: row_params.clone(),
+        row_origins: row_origins.clone(),
+        row_inv_rots: row_inv_rots.clone(),
+        row_rots: row_rots.clone(),
+        row_count: rows.len(),
+    };
+    let packed_stop = PackedMeta {
+        row_meta: row_meta.clone(),
+        row_params: row_params.clone(),
+        row_origins: row_origins.clone(),
+        row_inv_rots: row_inv_rots.clone(),
+        row_rots: row_rots.clone(),
+        row_count: rows.len(),
+    };
+
+    let mut object_rows = req_obj
+        .get("objectRows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if object_rows.is_empty() {
+        object_rows.push(serde_json::json!({
+            "position": "Point",
+            "xHeightAngle": 0.0,
+            "yHeightAngle": 0.0
+        }));
+    }
+    let requested_object_index = req_obj
+        .get("objectIndex")
+        .and_then(value_to_f64)
+        .map(|v| v.max(0.0) as usize)
+        .unwrap_or(0);
+    let used_object_index = requested_object_index.min(object_rows.len().saturating_sub(1));
+    let selected_object_map = object_rows
+        .get(used_object_index)
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| JsValue::from_str("invalid objectRows entry"))?;
+
+    let used_object_position = selected_object_map
+        .get("position")
+        .or_else(|| selected_object_map.get("object"))
+        .or_else(|| selected_object_map.get("objectType"))
+        .or_else(|| selected_object_map.get("type"))
+        .and_then(value_to_string)
+        .unwrap_or_else(|| "Point".to_string());
+    let pos_lower = used_object_position.trim().to_lowercase();
+    let is_angle_object = pos_lower.contains("angle") || pos_lower == "point";
+
+    let angle_object_x = get_object_numeric(selected_object_map, &["xHeightAngle", "xFieldAngle", "xAngle", "x", "X", "xHeight"]).unwrap_or(0.0);
+    let angle_object_y = get_object_numeric(selected_object_map, &["yHeightAngle", "yFieldAngle", "fieldAngle", "yAngle", "angle", "y", "Y", "yHeight"]).unwrap_or(0.0);
+    let height_object_x = get_object_numeric(selected_object_map, &["xHeight", "x", "X"]).unwrap_or(0.0);
+    let height_object_y = get_object_numeric(selected_object_map, &["yHeight", "y", "Y", "height"]).unwrap_or(0.0);
+
+    let use_infinite_mode = is_infinite_conjugate_native(&rows);
+    let (used_object_x, used_object_y) = if use_infinite_mode {
+        if is_angle_object { (angle_object_x, angle_object_y) } else { (0.0, 0.0) }
+    } else {
+        (height_object_x, height_object_y)
+    };
+
+    let stop_radius = estimate_stop_radius_from_row(&rows[stop_surface_index]).max(0.01);
+    let entrance_radius = estimate_entrance_radius_from_rows(&rows).clamp(0.01, 500.0);
+    let sampling_radius = stop_radius.min(entrance_radius).max(0.01);
+
+    let finite_object_distance = {
+        let t0 = rows.first().map(get_safe_thickness).unwrap_or(f64::NAN).abs();
+        if t0.is_finite() && t0 > 1e-9 {
+            t0
+        } else {
+            let z0 = row_origins.get(2).copied().unwrap_or(0.0).abs();
+            if z0.is_finite() && z0 > 1e-9 {
+                z0.max(1.0)
+            } else {
+                let stop_z = stop_center[2].abs();
+                if stop_z.is_finite() { (stop_z + 25.0).max(25.0) } else { 100.0 }
+            }
+        }
+    };
+
+    let requested_pupil_sampling_mode = req_obj
+        .get("pupilSamplingMode")
+        .and_then(value_to_string)
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| s == "stop" || s == "entrance");
+    let prefer_entrance_sampling = use_infinite_mode
+        && matches!(requested_pupil_sampling_mode.as_deref(), Some("entrance"));
+    let mut effective_pupil_sampling_mode = if prefer_entrance_sampling { "entrance" } else { "stop" };
+
+    let object_plane_z = row_origins.get(2).copied().unwrap_or(0.0);
+    let infinite_direction = build_direction_from_field_angles_native(used_object_x, used_object_y);
+    let (infinite_u_axis, infinite_v_axis) = build_perpendicular_basis_native(infinite_direction);
+    let infinite_object_z = resolve_infinite_object_z_native(&rows, selected_object_map, object_plane_z);
+    let infinite_origin_xy = if used_object_x.abs() < 1e-10 && used_object_y.abs() < 1e-10 {
+        [0.0, 0.0]
+    } else {
+        optimize_angle_object_position_native(used_object_x, used_object_y, stop_center, infinite_object_z)
+    };
+    let infinite_origin_sag = compute_object_surface_sag_native(&rows, infinite_origin_xy[0], infinite_origin_xy[1]);
+    let mut infinite_emission_origin = [
+        infinite_origin_xy[0],
+        infinite_origin_xy[1],
+        infinite_object_z + infinite_origin_sag,
+    ];
+    let lock_emission_x_for_symmetry = use_infinite_mode
+        && used_object_x.abs() <= 1.0e-12
+        && used_object_y.abs() > 1.0e-12;
+    let lock_emission_y_for_symmetry = use_infinite_mode
+        && used_object_y.abs() <= 1.0e-12
+        && used_object_x.abs() > 1.0e-12;
+    let apply_symmetry_axis_lock = |origin: [f64; 3]| -> [f64; 3] {
+        let mut out = origin;
+        if lock_emission_x_for_symmetry {
+            out[0] = infinite_origin_xy[0];
+        }
+        if lock_emission_y_for_symmetry {
+            out[1] = infinite_origin_xy[1];
+        }
+        out
+    };
+    infinite_emission_origin = apply_symmetry_axis_lock(infinite_emission_origin);
+    let mut effective_emission_origin = infinite_emission_origin;
+
+    let mut effective_stop_center = stop_center;
+    if use_infinite_mode {
+        let chief_probe = [
+            infinite_emission_origin[0],
+            infinite_emission_origin[1],
+            infinite_emission_origin[2],
+            infinite_direction[0],
+            infinite_direction[1],
+            infinite_direction[2],
+        ];
+        let chief_stop_hit = trace_single_ray_hit_point_with_meta_core(
+            &chief_probe,
+            stop_surface_index,
+            object_space_n,
+            &packed_stop.row_meta,
+            &packed_stop.row_params,
+            &packed_stop.row_origins,
+            &packed_stop.row_inv_rots,
+            &packed_stop.row_rots,
+            packed_stop.row_count,
+        );
+        if (chief_stop_hit[0] - 1.0).abs() <= f64::EPSILON
+            && chief_stop_hit[2].is_finite()
+            && chief_stop_hit[3].is_finite()
+            && chief_stop_hit[4].is_finite()
+        {
+            effective_stop_center = [chief_stop_hit[2], chief_stop_hit[3], chief_stop_hit[4]];
+        }
+    }
+    let stop_center_for_sampling = if use_infinite_mode { effective_stop_center } else { stop_center };
+
+    let stop_inv = [
+        row_inv_rots[stop_rot_base],
+        row_inv_rots[stop_rot_base + 1],
+        row_inv_rots[stop_rot_base + 2],
+        row_inv_rots[stop_rot_base + 3],
+        row_inv_rots[stop_rot_base + 4],
+        row_inv_rots[stop_rot_base + 5],
+        row_inv_rots[stop_rot_base + 6],
+        row_inv_rots[stop_rot_base + 7],
+        row_inv_rots[stop_rot_base + 8],
+    ];
+
+    let build_marginal_ray = |u: f64, v: f64, sample_radius: f64, launch_origin: [f64; 3]| -> Option<[f64; 6]> {
+        if !u.is_finite() || !v.is_finite() {
+            return None;
+        }
+        let desired_local_x = u * sample_radius;
+        let desired_local_y = v * sample_radius;
+        let stop_target = [
+            stop_center_for_sampling[0] + stop_plane_u[0] * desired_local_x + stop_plane_v[0] * desired_local_y,
+            stop_center_for_sampling[1] + stop_plane_u[1] * desired_local_x + stop_plane_v[1] * desired_local_y,
+            stop_center_for_sampling[2] + stop_plane_u[2] * desired_local_x + stop_plane_v[2] * desired_local_y,
+        ];
+
+        if use_infinite_mode {
+            let start = [
+                launch_origin[0] + infinite_u_axis[0] * desired_local_x + infinite_v_axis[0] * desired_local_y,
+                launch_origin[1] + infinite_u_axis[1] * desired_local_x + infinite_v_axis[1] * desired_local_y,
+                launch_origin[2] + infinite_u_axis[2] * desired_local_x + infinite_v_axis[2] * desired_local_y,
+            ];
+            return Some([
+                start[0],
+                start[1],
+                start[2],
+                infinite_direction[0],
+                infinite_direction[1],
+                infinite_direction[2],
+            ]);
+        }
+
+        let object_pos = [used_object_x, used_object_y, -finite_object_distance];
+        let mut aimed_stop = stop_target;
+        let mut ray_dir = normalize3(
+            aimed_stop[0] - object_pos[0],
+            aimed_stop[1] - object_pos[1],
+            aimed_stop[2] - object_pos[2],
+        );
+        if !ray_dir[0].is_finite() || !ray_dir[1].is_finite() || !ray_dir[2].is_finite() {
+            return None;
+        }
+
+        let stop_tol = 0.03;
+        let max_stop_iters = 8;
+        let gain = 0.7;
+        let max_step = (sample_radius * 0.12).max(0.5);
+
+        for _ in 0..max_stop_iters {
+            let trial_ray = [
+                object_pos[0],
+                object_pos[1],
+                object_pos[2],
+                ray_dir[0],
+                ray_dir[1],
+                ray_dir[2],
+            ];
+            let stop_hit = trace_single_ray_hit_point_with_meta_core(
+                &trial_ray,
+                stop_surface_index,
+                object_space_n,
+                &packed_stop.row_meta,
+                &packed_stop.row_params,
+                &packed_stop.row_origins,
+                &packed_stop.row_inv_rots,
+                &packed_stop.row_rots,
+                packed_stop.row_count,
+            );
+            if (stop_hit[0] - 1.0).abs() > f64::EPSILON {
+                break;
+            }
+
+            let rel = [
+                stop_hit[2] - stop_center[0],
+                stop_hit[3] - stop_center[1],
+                stop_hit[4] - stop_center[2],
+            ];
+            let local = mul_mat3_vec3(&stop_inv, rel);
+            let err_lx = local[0] - desired_local_x;
+            let err_ly = local[1] - desired_local_y;
+            let err_mag = (err_lx * err_lx + err_ly * err_ly).sqrt();
+            if !err_mag.is_finite() || err_mag <= stop_tol {
+                break;
+            }
+
+            let err_vec = [
+                stop_plane_u[0] * err_lx + stop_plane_v[0] * err_ly,
+                stop_plane_u[1] * err_lx + stop_plane_v[1] * err_ly,
+                stop_plane_u[2] * err_lx + stop_plane_v[2] * err_ly,
+            ];
+            let step_mag = (err_vec[0] * err_vec[0] + err_vec[1] * err_vec[1] + err_vec[2] * err_vec[2]).sqrt();
+            let step_scale = if step_mag.is_finite() && step_mag > max_step { max_step / step_mag } else { 1.0 };
+            let step = [
+                err_vec[0] * gain * step_scale,
+                err_vec[1] * gain * step_scale,
+                err_vec[2] * gain * step_scale,
+            ];
+
+            aimed_stop = [
+                aimed_stop[0] - step[0],
+                aimed_stop[1] - step[1],
+                aimed_stop[2] - step[2],
+            ];
+            ray_dir = normalize3(
+                aimed_stop[0] - object_pos[0],
+                aimed_stop[1] - object_pos[1],
+                aimed_stop[2] - object_pos[2],
+            );
+        }
+
+        Some([
+            object_pos[0],
+            object_pos[1],
+            object_pos[2],
+            ray_dir[0],
+            ray_dir[1],
+            ray_dir[2],
+        ])
+    };
+
+    let mut chief_start_dir = build_marginal_ray(0.0, 0.0, sampling_radius, effective_emission_origin)
+        .ok_or_else(|| JsValue::from_str("run_native_opd_map_wasm_json: chief ray not found"))?;
+    let mut chief_reference_mode = "center-chief".to_string();
+    let mut chief_target_hit = trace_single_ray_hit_point_with_meta_core(
+        &chief_start_dir,
+        target_surface_index,
+        object_space_n,
+        &packed_target.row_meta,
+        &packed_target.row_params,
+        &packed_target.row_origins,
+        &packed_target.row_inv_rots,
+        &packed_target.row_rots,
+        packed_target.row_count,
+    );
+
+    if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON && use_infinite_mode {
+        let entrance_origin = search_entrance_origin_grid_brent_native(
+            &rows,
+            &row_origins,
+            stop_center_for_sampling,
+            infinite_direction,
+            stop_surface_index,
+            &packed_stop,
+            object_space_n,
+            entrance_radius,
+        )
+        .unwrap_or_else(|| {
+            estimate_entrance_center_origin_native(
+                &rows,
+                &row_origins,
+                stop_center_for_sampling,
+                infinite_direction,
+            )
+        });
+        if let Some(entrance_chief_ray) = build_marginal_ray(0.0, 0.0, entrance_radius.max(0.01), entrance_origin) {
+            let entrance_target_hit = trace_single_ray_hit_point_with_meta_core(
+                &entrance_chief_ray,
+                target_surface_index,
+                object_space_n,
+                &packed_target.row_meta,
+                &packed_target.row_params,
+                &packed_target.row_origins,
+                &packed_target.row_inv_rots,
+                &packed_target.row_rots,
+                packed_target.row_count,
+            );
+            if (entrance_target_hit[0] - 1.0).abs() <= f64::EPSILON {
+                chief_start_dir = entrance_chief_ray;
+                chief_target_hit = entrance_target_hit;
+                effective_emission_origin = apply_symmetry_axis_lock(entrance_origin);
+                chief_reference_mode = "entrance-chief-target(grid-brent)".to_string();
+            }
+        }
+    }
+
+    if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON {
+        return Err(JsValue::from_str("run_native_opd_map_wasm_json: chief ray did not reach target surface"));
+    }
+
+    let mut chief_stop_hit = trace_single_ray_hit_point_with_meta_core(
+        &chief_start_dir,
+        stop_surface_index,
+        object_space_n,
+        &packed_stop.row_meta,
+        &packed_stop.row_params,
+        &packed_stop.row_origins,
+        &packed_stop.row_inv_rots,
+        &packed_stop.row_rots,
+        packed_stop.row_count,
+    );
+    let mut stop_sampling_fallback_to_entrance = false;
+    let mut effective_sampling_radius = sampling_radius;
+
+    if (chief_stop_hit[0] - 1.0).abs() > f64::EPSILON && !prefer_entrance_sampling && use_infinite_mode {
+        if let Some(grid_brent_origin) = search_entrance_origin_grid_brent_native(
+            &rows,
+            &row_origins,
+            stop_center_for_sampling,
+            infinite_direction,
+            stop_surface_index,
+            &packed_stop,
+            object_space_n,
+            entrance_radius,
+        ) {
+            let candidate_chief = [
+                grid_brent_origin[0],
+                grid_brent_origin[1],
+                grid_brent_origin[2],
+                infinite_direction[0],
+                infinite_direction[1],
+                infinite_direction[2],
+            ];
+            let candidate_target_hit = trace_single_ray_hit_point_with_meta_core(
+                &candidate_chief,
+                target_surface_index,
+                object_space_n,
+                &packed_target.row_meta,
+                &packed_target.row_params,
+                &packed_target.row_origins,
+                &packed_target.row_inv_rots,
+                &packed_target.row_rots,
+                packed_target.row_count,
+            );
+            let candidate_stop_hit = trace_single_ray_hit_point_with_meta_core(
+                &candidate_chief,
+                stop_surface_index,
+                object_space_n,
+                &packed_stop.row_meta,
+                &packed_stop.row_params,
+                &packed_stop.row_origins,
+                &packed_stop.row_inv_rots,
+                &packed_stop.row_rots,
+                packed_stop.row_count,
+            );
+            if (candidate_target_hit[0] - 1.0).abs() <= f64::EPSILON
+                && (candidate_stop_hit[0] - 1.0).abs() <= f64::EPSILON
+            {
+                chief_target_hit = candidate_target_hit;
+                chief_stop_hit = candidate_stop_hit;
+                effective_emission_origin = grid_brent_origin;
+                chief_reference_mode = "grid-brent-stop-chief".to_string();
+            }
+        }
+
+        if (chief_stop_hit[0] - 1.0).abs() > f64::EPSILON {
+            if let Some(newton_origin) = solve_ray_origin_to_stop_point_fast_native(
+                infinite_emission_origin,
+                infinite_direction,
+                stop_center_for_sampling,
+                stop_surface_index,
+                &packed_stop,
+                object_space_n,
+            ) {
+                let candidate_chief = [
+                    newton_origin[0],
+                    newton_origin[1],
+                    newton_origin[2],
+                    infinite_direction[0],
+                    infinite_direction[1],
+                    infinite_direction[2],
+                ];
+                let candidate_target_hit = trace_single_ray_hit_point_with_meta_core(
+                    &candidate_chief,
+                    target_surface_index,
+                    object_space_n,
+                    &packed_target.row_meta,
+                    &packed_target.row_params,
+                    &packed_target.row_origins,
+                    &packed_target.row_inv_rots,
+                    &packed_target.row_rots,
+                    packed_target.row_count,
+                );
+                let candidate_stop_hit = trace_single_ray_hit_point_with_meta_core(
+                    &candidate_chief,
+                    stop_surface_index,
+                    object_space_n,
+                    &packed_stop.row_meta,
+                    &packed_stop.row_params,
+                    &packed_stop.row_origins,
+                    &packed_stop.row_inv_rots,
+                    &packed_stop.row_rots,
+                    packed_stop.row_count,
+                );
+                if (candidate_target_hit[0] - 1.0).abs() <= f64::EPSILON
+                    && (candidate_stop_hit[0] - 1.0).abs() <= f64::EPSILON
+                {
+                    chief_target_hit = candidate_target_hit;
+                    chief_stop_hit = candidate_stop_hit;
+                    chief_reference_mode = "newton-stop-chief".to_string();
+                }
+            }
+        }
+    }
+
+    if prefer_entrance_sampling || (chief_stop_hit[0] - 1.0).abs() > f64::EPSILON {
+        if !prefer_entrance_sampling {
+            stop_sampling_fallback_to_entrance = true;
+        }
+        effective_pupil_sampling_mode = "entrance";
+        let field_mag = (used_object_x * used_object_x + used_object_y * used_object_y).sqrt();
+        let entrance_radius_scale = (0.92_f64 - 0.012_f64 * field_mag).clamp(0.76, 0.92);
+        effective_sampling_radius = (entrance_radius * entrance_radius_scale).max(0.01);
+
+        if use_infinite_mode {
+            effective_emission_origin = apply_symmetry_axis_lock(
+                search_entrance_origin_grid_brent_native(
+                    &rows,
+                    &row_origins,
+                    stop_center_for_sampling,
+                    infinite_direction,
+                    stop_surface_index,
+                    &packed_stop,
+                    object_space_n,
+                    entrance_radius,
+                )
+                .unwrap_or_else(|| {
+                    estimate_entrance_center_origin_native(
+                        &rows,
+                        &row_origins,
+                        stop_center_for_sampling,
+                        infinite_direction,
+                    )
+                }),
+            );
+
+            if let Some(entrance_chief_ray) =
+                build_marginal_ray(0.0, 0.0, effective_sampling_radius, effective_emission_origin)
+            {
+                let entrance_target_hit = trace_single_ray_hit_point_with_meta_core(
+                    &entrance_chief_ray,
+                    target_surface_index,
+                    object_space_n,
+                    &packed_target.row_meta,
+                    &packed_target.row_params,
+                    &packed_target.row_origins,
+                    &packed_target.row_inv_rots,
+                    &packed_target.row_rots,
+                    packed_target.row_count,
+                );
+                if (entrance_target_hit[0] - 1.0).abs() <= f64::EPSILON {
+                    chief_target_hit = entrance_target_hit;
+                }
+            }
+        }
+
+        chief_reference_mode = if prefer_entrance_sampling {
+            format!("entrance-chief-requested(grid-brent,r={:.3})", entrance_radius_scale)
+        } else {
+            format!("entrance-chief-fallback(grid-brent,r={:.3})", entrance_radius_scale)
+        };
+    }
+
+    let chief_opl = chief_target_hit[1];
+    if !chief_opl.is_finite() {
+        return Err(JsValue::from_str("run_native_opd_map_wasm_json: chief OPL is invalid"));
+    }
+
+    let mut sample_count = 0usize;
+    let mut hit_count = 0usize;
+    let mut raw_grid = vec![vec![None::<f64>; grid_size]; grid_size];
+
+    for y in 0..grid_size {
+        for x in 0..grid_size {
+            let u = if grid_size > 1 {
+                -1.0 + 2.0 * (x as f64) / ((grid_size - 1) as f64)
+            } else {
+                0.0
+            };
+            let v = if grid_size > 1 {
+                -1.0 + 2.0 * (y as f64) / ((grid_size - 1) as f64)
+            } else {
+                0.0
+            };
+            let r2 = u * u + v * v;
+            if !r2.is_finite() || r2 > 1.0 + 1e-9 {
+                continue;
+            }
+            sample_count += 1;
+
+            let Some(ray) = build_marginal_ray(u, v, effective_sampling_radius, effective_emission_origin) else {
+                continue;
+            };
+            let target_hit = trace_single_ray_hit_point_with_meta_core(
+                &ray,
+                target_surface_index,
+                object_space_n,
+                &packed_target.row_meta,
+                &packed_target.row_params,
+                &packed_target.row_origins,
+                &packed_target.row_inv_rots,
+                &packed_target.row_rots,
+                packed_target.row_count,
+            );
+            if (target_hit[0] - 1.0).abs() > f64::EPSILON {
+                continue;
+            }
+
+            let ray_opl = target_hit[1];
+            if !ray_opl.is_finite() {
+                continue;
+            }
+            let opd_waves = (ray_opl - chief_opl) / wavelength_um;
+            if !opd_waves.is_finite() {
+                continue;
+            }
+            raw_grid[y][x] = Some(opd_waves);
+            hit_count += 1;
+        }
+    }
+
+    let hit_rate = if sample_count > 0 {
+        hit_count as f64 / sample_count as f64
+    } else {
+        0.0
+    };
+    if use_infinite_mode && effective_pupil_sampling_mode == "entrance" && hit_rate < 0.35 {
+        return Err(JsValue::from_str(&format!(
+            "No valid OPD samples for entrance mode (hit-rate={:.3}, hits={}, samples={})",
+            hit_rate,
+            hit_count,
+            sample_count
+        )));
+    }
+
+    let display_grid = apply_display_mode_grid(&raw_grid, &opd_display_mode);
+    let to_json_grid = |src: &[Vec<Option<f64>>]| -> Value {
+        Value::Array(
+            src.iter().map(|row| {
+                Value::Array(
+                    row.iter().map(|v| {
+                        match v {
+                            Some(x) if x.is_finite() => Value::from(*x),
+                            _ => Value::Null,
+                        }
+                    }).collect()
+                )
+            }).collect()
+        )
+    };
+
+    let response = serde_json::json!({
+        "backend": "web-rust-wasm-native-api",
+        "targetSurface": target_surface_index,
+        "stopSurface": stop_surface_index,
+        "requestedObjectIndex": requested_object_index,
+        "usedObjectIndex": used_object_index,
+        "usedObjectPosition": used_object_position,
+        "usedObjectX": used_object_x,
+        "usedObjectY": used_object_y,
+        "gridSize": grid_size,
+        "sampleCount": sample_count,
+        "hitCount": hit_count,
+        "wavelengthUm": wavelength_um,
+        "chiefOplUm": chief_opl,
+        "pupilSamplingMode": effective_pupil_sampling_mode,
+        "chiefReferenceMode": chief_reference_mode,
+        "rawOpdGrid": to_json_grid(&raw_grid),
+        "displayOpdGrid": to_json_grid(&display_grid),
+        "message": if prefer_entrance_sampling {
+            "Computed via Rust-WASM native OPD API (entrance requested)"
+        } else if stop_sampling_fallback_to_entrance {
+            "Computed via Rust-WASM native OPD API (stop to entrance fallback)"
+        } else {
+            "Computed via Rust-WASM native OPD API"
+        }
+    });
+
+    let serializer = serde_wasm_bindgen::Serializer::json_compatible();
+    response
+        .serialize(&serializer)
+        .map_err(|e| JsValue::from_str(&format!("serialize error: {}", e)))
 }
 
 #[wasm_bindgen]
@@ -2203,6 +4374,52 @@ pub fn assemble_fd_jacobian(
         }
 
         let base = col * m;
+        for row in 0..m {
+            let r1 = r_batches[base + row];
+            let r_base = r0[row];
+            let deriv = (r1 - r_base) / h;
+            jac[row * n + col] = if deriv.is_finite() {
+                deriv.max(-1e12).min(1e12)
+            } else {
+                0.0
+            };
+        }
+    }
+
+    jac
+}
+
+#[wasm_bindgen]
+pub fn assemble_fd_jacobian_grouped(
+    r0: &[f64],
+    r_batches: &[f64],
+    m: usize,
+    n: usize,
+    col_indices: &[u32],
+    steps: &[f64],
+) -> Vec<f64> {
+    if m == 0 || n == 0 {
+        return vec![];
+    }
+    let k = col_indices.len();
+    if r0.len() != m || steps.len() != n || r_batches.len() != m * k {
+        return vec![f64::NAN; m * n];
+    }
+
+    let mut jac = vec![0.0_f64; m * n];
+
+    for grouped_col in 0..k {
+        let col = col_indices[grouped_col] as usize;
+        if col >= n {
+            return vec![f64::NAN; m * n];
+        }
+
+        let h = steps[col];
+        if !h.is_finite() || h.abs() < 1e-30 {
+            continue;
+        }
+
+        let base = grouped_col * m;
         for row in 0..m {
             let r1 = r_batches[base + row];
             let r_base = r0[row];
@@ -3230,4 +5447,141 @@ pub fn qr_factorization(a_flat: &[f64], rows: usize, cols: usize) -> Vec<f64> {
     result.extend(r);
     
     result
+}
+
+fn lca_fill_missing_linear_rust(field_values: &[f64], values: &mut [Option<f64>]) {
+    if field_values.len() != values.len() || values.len() < 3 {
+        return;
+    }
+
+    let known_indices: Vec<usize> = values
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, v)| if v.is_some() { Some(idx) } else { None })
+        .collect();
+
+    if known_indices.len() < 2 {
+        return;
+    }
+
+    let first_known = known_indices[0];
+    let last_known = *known_indices.last().unwrap_or(&first_known);
+
+    for i in first_known..=last_known {
+        if values[i].is_some() {
+            continue;
+        }
+
+        let mut left = i as isize - 1;
+        while left >= first_known as isize && values[left as usize].is_none() {
+            left -= 1;
+        }
+        if left < first_known as isize {
+            continue;
+        }
+
+        let mut right = i + 1;
+        while right <= last_known && values[right].is_none() {
+            right += 1;
+        }
+        if right > last_known {
+            continue;
+        }
+
+        let li = left as usize;
+        let ri = right;
+        let (Some(y_left), Some(y_right)) = (values[li], values[ri]) else {
+            continue;
+        };
+
+        let x_left = field_values[li];
+        let x_right = field_values[ri];
+        let x_now = field_values[i];
+        let dx = x_right - x_left;
+        if !dx.is_finite() || dx.abs() <= 1e-15 {
+            continue;
+        }
+        let t = (x_now - x_left) / dx;
+        values[i] = Some(y_left + (y_right - y_left) * t);
+    }
+}
+
+#[wasm_bindgen]
+pub fn compute_lca_series_from_image_heights(
+    field_values: &[f64],
+    wavelengths: &[f64],
+    reference_wavelength: f64,
+    image_heights_flat: &[f64],
+) -> Result<JsValue, JsValue> {
+    let field_len = field_values.len();
+    let wl_len = wavelengths.len();
+    if field_len == 0 || wl_len == 0 {
+        return Err(JsValue::from_str("compute_lca_series_from_image_heights: empty fields or wavelengths"));
+    }
+    if image_heights_flat.len() != field_len * wl_len {
+        return Err(JsValue::from_str("compute_lca_series_from_image_heights: image_heights_flat length mismatch"));
+    }
+
+    let reference_index = wavelengths
+        .iter()
+        .position(|w| (*w - reference_wavelength).abs() < 1e-9)
+        .ok_or_else(|| JsValue::from_str("compute_lca_series_from_image_heights: reference wavelength not found"))?;
+
+    let mut reference_heights = vec![None; field_len];
+    for fi in 0..field_len {
+        let raw = image_heights_flat[reference_index * field_len + fi];
+        if raw.is_finite() {
+            reference_heights[fi] = Some(raw);
+        }
+    }
+
+    let mut data_by_wavelength = Vec::with_capacity(wl_len);
+    for wi in 0..wl_len {
+        let wl = wavelengths[wi];
+
+        let mut image_heights_opt = vec![None; field_len];
+        for fi in 0..field_len {
+            let raw = image_heights_flat[wi * field_len + fi];
+            if raw.is_finite() {
+                image_heights_opt[fi] = Some(raw);
+            }
+        }
+
+        let mut displacements = vec![None; field_len];
+        for fi in 0..field_len {
+            displacements[fi] = match (image_heights_opt[fi], reference_heights[fi]) {
+                (Some(h), Some(r)) => Some(h - r),
+                _ => None,
+            };
+        }
+
+        lca_fill_missing_linear_rust(field_values, &mut displacements);
+
+        let image_heights_json: Vec<Value> = image_heights_opt
+            .iter()
+            .map(|v| match v {
+                Some(x) => Value::from(*x),
+                None => Value::Null,
+            })
+            .collect();
+        let displacements_json: Vec<Value> = displacements
+            .iter()
+            .map(|v| match v {
+                Some(x) => Value::from(*x),
+                None => Value::Null,
+            })
+            .collect();
+
+        data_by_wavelength.push(serde_json::json!({
+            "wavelength": wl,
+            "imageHeights": image_heights_json,
+            "displacements": displacements_json,
+        }));
+    }
+
+    serde_wasm_bindgen::to_value(&serde_json::json!({
+        "referenceWavelength": reference_wavelength,
+        "dataByWavelength": data_by_wavelength,
+    }))
+    .map_err(|err| JsValue::from_str(&format!("serialize error: {}", err)))
 }

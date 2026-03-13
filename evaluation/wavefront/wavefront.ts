@@ -4157,7 +4157,7 @@ ${surfaceTypeList}
         const traceOptions = {
             ...(options?.traceOptions || {}),
             useRustWasm: preferRustMetaBatch,
-            requireRustWasm: false,
+            requireRustWasm: preferRustMetaBatch,
             disableWasmRayTracing: false
         };
 
@@ -6311,6 +6311,137 @@ export class WavefrontAberrationAnalyzer {
         this.zernikeCoefficients = new Map();
     }
 
+    _solveLinearSystemNativeLike(normal: number[][], rhs: number[]): number[] | null {
+        const n = Array.isArray(rhs) ? rhs.length : 0;
+        if (n <= 0 || !Array.isArray(normal) || normal.length !== n) return null;
+
+        const a: number[][] = Array.from({ length: n }, (_, i) => {
+            const row = Array.isArray(normal[i]) ? normal[i].slice() : [];
+            while (row.length < n) row.push(0);
+            row.push(Number(rhs[i]) || 0);
+            return row;
+        });
+
+        for (let col = 0; col < n; col++) {
+            let pivot = col;
+            let best = Math.abs(a[col][col]);
+            for (let r = col + 1; r < n; r++) {
+                const v = Math.abs(a[r][col]);
+                if (v > best) {
+                    best = v;
+                    pivot = r;
+                }
+            }
+            if (!Number.isFinite(best) || best < 1e-15) return null;
+            if (pivot !== col) {
+                const tmp = a[col];
+                a[col] = a[pivot];
+                a[pivot] = tmp;
+            }
+
+            const piv = a[col][col];
+            for (let c = col; c <= n; c++) a[col][c] /= piv;
+            for (let r = 0; r < n; r++) {
+                if (r === col) continue;
+                const f = a[r][col];
+                if (!Number.isFinite(f) || Math.abs(f) < 1e-15) continue;
+                for (let c = col; c <= n; c++) {
+                    a[r][c] -= f * a[col][c];
+                }
+            }
+        }
+
+        return a.map((row) => row[n]);
+    }
+
+    _removeBestFitGridNativeLike(wavefrontMap: any, removeDefocus = false) {
+        try {
+            const mask = Array.isArray(wavefrontMap?.validPupilMask) ? wavefrontMap.validPupilMask : null;
+            const pupilCoordinates = Array.isArray(wavefrontMap?.pupilCoordinates) ? wavefrontMap.pupilCoordinates : [];
+            const rawOpds = Array.isArray(wavefrontMap?.raw?.opds) ? wavefrontMap.raw.opds : [];
+            const wavelength = Number(this.opdCalculator?.wavelength);
+            if (!mask || mask.length < 2 || pupilCoordinates.length !== rawOpds.length) {
+                return null;
+            }
+            if (!(Number.isFinite(wavelength) && wavelength > 0)) {
+                return null;
+            }
+
+            const n = mask.length;
+            const grid: Array<Array<number | null>> = Array.from({ length: n }, () => Array.from({ length: n }, () => null));
+            for (let i = 0; i < pupilCoordinates.length; i++) {
+                const p = pupilCoordinates[i];
+                const z = Number(rawOpds[i]);
+                const ix = Number(p?.ix);
+                const iy = Number(p?.iy);
+                if (!Number.isFinite(z) || !Number.isInteger(ix) || !Number.isInteger(iy)) continue;
+                if (ix < 0 || iy < 0 || ix >= n || iy >= n) continue;
+                grid[iy][ix] = z;
+            }
+
+            const basisOrder = removeDefocus ? ['piston', 'tiltX', 'tiltY', 'defocus'] : ['piston', 'tiltX', 'tiltY'];
+            const k = basisOrder.length;
+            const normal = Array.from({ length: k }, () => Array.from({ length: k }, () => 0));
+            const rhs = Array.from({ length: k }, () => 0);
+
+            let validCount = 0;
+            for (let iy = 0; iy < n; iy++) {
+                for (let ix = 0; ix < n; ix++) {
+                    if (mask[iy][ix] !== true) continue;
+                    const z = grid[iy][ix];
+                    if (!Number.isFinite(z)) continue;
+
+                    const x = (2 * ix) / (n - 1) - 1;
+                    const y = (2 * iy) / (n - 1) - 1;
+                    const row = removeDefocus ? [1, x, y, x * x + y * y] : [1, x, y];
+
+                    validCount++;
+                    for (let r = 0; r < k; r++) {
+                        rhs[r] += row[r] * z;
+                        for (let c = 0; c < k; c++) {
+                            normal[r][c] += row[r] * row[c];
+                        }
+                    }
+                }
+            }
+
+            if (validCount <= k) return null;
+            const coeff = this._solveLinearSystemNativeLike(normal, rhs);
+            if (!Array.isArray(coeff) || coeff.length !== k) return null;
+
+            const residualMicrons = new Array(rawOpds.length).fill(NaN);
+            const residualWaves = new Array(rawOpds.length).fill(NaN);
+            for (let i = 0; i < pupilCoordinates.length; i++) {
+                const p = pupilCoordinates[i];
+                const z = Number(rawOpds[i]);
+                const ix = Number(p?.ix);
+                const iy = Number(p?.iy);
+                if (!Number.isFinite(z) || !Number.isInteger(ix) || !Number.isInteger(iy)) continue;
+                if (ix < 0 || iy < 0 || ix >= n || iy >= n) continue;
+                if (mask[iy][ix] !== true) continue;
+
+                const x = (2 * ix) / (n - 1) - 1;
+                const y = (2 * iy) / (n - 1) - 1;
+                const plane = removeDefocus
+                    ? (coeff[0] + coeff[1] * x + coeff[2] * y + coeff[3] * (x * x + y * y))
+                    : (coeff[0] + coeff[1] * x + coeff[2] * y);
+                const res = z - plane;
+                residualMicrons[i] = res;
+                residualWaves[i] = res / wavelength;
+            }
+
+            return {
+                residualMicrons,
+                residualWaves,
+                coefficientsMicrons: removeDefocus
+                    ? { a: coeff[0], b: coeff[1], c: coeff[2], d: coeff[3] }
+                    : { a: coeff[0], b: coeff[1], c: coeff[2] }
+            };
+        } catch (_) {
+            return null;
+        }
+    }
+
     _removeBestFitPlane(pupilCoordinates, opdsMicrons) {
         try {
             if (!Array.isArray(pupilCoordinates) || !Array.isArray(opdsMicrons) || pupilCoordinates.length !== opdsMicrons.length) {
@@ -7207,7 +7338,7 @@ export class WavefrontAberrationAnalyzer {
                 const batchTraceOptions = {
                     ...(traceOptionsPatch || {}),
                     useRustWasm: preferRustMetaBatch,
-                    requireRustWasm: false,
+                    requireRustWasm: preferRustMetaBatch,
                     disableWasmRayTracing: false,
                     fastMarginalRay: true,
                     returnInitialRayOnly: true
@@ -8768,7 +8899,8 @@ export class WavefrontAberrationAnalyzer {
             if (OPD_DEBUG) console.log(`🔧 [OPD Display] Processing opdDisplayMode='${opdDisplayMode}'`);
             
             if (opdDisplayMode === 'pistonTiltRemoved') {
-                const fit = this._removeBestFitPlane(wavefrontMap.pupilCoordinates, wavefrontMap.opds);
+                const fitNativeLike = this._removeBestFitGridNativeLike(wavefrontMap, false);
+                const fit = fitNativeLike || this._removeBestFitPlane(wavefrontMap.pupilCoordinates, wavefrontMap.opds);
                 if (fit && Array.isArray(fit.residualMicrons) && Array.isArray(fit.residualWaves)) {
                     display = {
                         mode: 'pistonTiltRemoved',
@@ -8786,7 +8918,8 @@ export class WavefrontAberrationAnalyzer {
                     if (OPD_DEBUG) console.log(`✅ [OPD Display] pistonTiltRemoved stats:`, displayStats.opdWavelengths);
                 }
             } else if (opdDisplayMode === 'pistonTiltDefocusRemoved') {
-                const low = this._calculateLowOrderRemovedStats(
+                const nativeLike = this._removeBestFitGridNativeLike(wavefrontMap, true);
+                const low = nativeLike || this._calculateLowOrderRemovedStats(
                     wavefrontMap.pupilCoordinates,
                     wavefrontMap.opds,
                     { removeIndices: [0, 1, 2, 4], maxOrder: 2, pupilRange: wavefrontMap.pupilRange }

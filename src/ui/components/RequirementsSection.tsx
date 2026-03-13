@@ -109,13 +109,6 @@ export default function RequirementsSection() {
         <button id="set-all-requirement-on-btn" type="button" onClick={handleSetAllRequirementOn}>All On</button>
         <button id="set-all-requirement-off-btn" type="button" onClick={handleSetAllRequirementOff}>All Off</button>
       </div>
-
-      {/* Progress bar container - will be populated by the editor */}
-      <div id="requirements-progress-wrap" className="requirements-progress-wrap" style={{ display: 'none' }}>
-        <div id="requirements-progress-label" className="merit-function-help requirements-progress-label"></div>
-        <progress id="requirements-progress" className="requirements-progress-bar" max={1} value={0}></progress>
-      </div>
-
       <div id="table-system-requirements" className="ide-table-container"></div>
 
       <div id="requirement-inspector" className="operand-inspector requirement-inspector" style={{ display: "none" }}>

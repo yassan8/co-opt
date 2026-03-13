@@ -1,0 +1,90 @@
+{
+  "timestamp": "2026-03-11T08:16:15.496Z",
+  "startedAt": "2026-03-11T08:15:47.149Z",
+  "thresholds": {
+    "raytraceMaxMismatchRate": 0,
+    "raytraceMaxSuccessMismatchRate": 0,
+    "raytraceMaxMeanOplUm": 0,
+    "raytraceMaxOplUm": 0,
+    "opdParityMaxDiffWaves": 0.001,
+    "opdParityRmsDiffWaves": 0.0005,
+    "opdParityMeanDiffWaves": 0.0005,
+    "opdParityGrid": 65,
+    "opdParityFields": "0,5,10,15",
+    "opdMinSpeedup": 1.05,
+    "opdMaxValidDiff": 0,
+    "taMinMedianOfMedianSpeedup": 0.99,
+    "taMinPerRaycountSpeedup": 0.97,
+    "taRayCounts": "21,31,51,81,101,151",
+    "taLoops": 20,
+    "taRepeat": 11,
+    "kktMinTotalSpeedup": 1.5,
+    "kktMinSolverSpeedup": 1,
+    "kktMinWasmOkRate": 1,
+    "kktMinWasmFeasibleRate": 1
+  },
+  "kktConfig": {
+    "rounds": 6,
+    "n": 24,
+    "meq": 6,
+    "mineq": 6,
+    "maxIter": 20
+  },
+  "controls": {
+    "startFrom": "perfquick",
+    "endAt": "kkt",
+    "enablePerfQuick": true,
+    "stepTimeoutMs": 0,
+    "stepIdleTimeoutMs": 0,
+    "stepRetries": 1,
+    "stepHeartbeatMs": 15000,
+    "output": "diagnostics/results/release-gate-2026-03-11T08-15-47-150Z.json",
+    "checkpoint": "diagnostics/results/release-gate-checkpoint.json"
+  },
+  "steps": {
+    "perfquick": {
+      "passed": true,
+      "skipped": false,
+      "result": "diagnostics/results/opd-full-batch-quick-release-gate-2026-03-11T08-15-47-150Z.json",
+      "raytrace": "diagnostics/results/raytrace-golden-quick-release-gate-2026-03-11T08-15-47-150Z.json",
+      "aperture": "diagnostics/results/raytrace-golden-quick-release-gate-2026-03-11T08-15-47-150Z-aperture.json"
+    },
+    "raytrace": {
+      "passed": true,
+      "skipped": false,
+      "golden": "diagnostics/results/raytrace-golden-2026-03-11T08-16-12-539Z.json",
+      "analysis": "diagnostics/results/raytrace-golden-analysis-2026-03-11T08-16-12-695Z.json"
+    },
+    "opdparity": {
+      "passed": true,
+      "skipped": false,
+      "result": "diagnostics/results/opd-js-rust-parity-release-gate-2026-03-11T08-16-12-705Z.json"
+    },
+    "nativeoperands": {
+      "passed": true,
+      "skipped": false,
+      "result": "diagnostics/results/native-operands-auto-release-gate-2026-03-11T08-16-13-157Z.json"
+    },
+    "opd": {
+      "passed": false,
+      "skipped": false,
+      "result": null,
+      "analysis": null
+    },
+    "ta": {
+      "passed": false,
+      "skipped": false,
+      "result": null,
+      "analysis": null
+    },
+    "kkt": {
+      "passed": false,
+      "skipped": false,
+      "result": null,
+      "analysis": null
+    }
+  },
+  "passed": false,
+  "failedStep": null,
+  "error": null
+}

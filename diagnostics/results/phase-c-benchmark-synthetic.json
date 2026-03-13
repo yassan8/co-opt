@@ -1,0 +1,71 @@
+{
+  "timestamp": "2026-03-11T11:25:23.255Z",
+  "baseline": {
+    "okRatePct": 100,
+    "elapsed": {
+      "avg": 150
+    }
+  },
+  "matrixFree": {
+    "elapsed": {
+      "avg": 95
+    },
+    "phaseC": {
+      "okRatePct": 100,
+      "matrixFreeCalls": 20,
+      "matrixFreeHits": 19,
+      "matrixFreeFallbacks": 1,
+      "matrixFreeHitRatePct": 95,
+      "matrixFreeFallbackRate": 0.05,
+      "matrixFreeUnknownFallbackRate": 0,
+      "matrixFreeCgItersAvg": 8,
+      "matrixFreeSolverItersAvg": 8,
+      "matrixFreeResidualNormAvg": 1e-9,
+      "matrixFreeMsAvg": 40,
+      "matrixFreeFallbackReasons": {
+        "degenerate_pap": 1
+      }
+    }
+  },
+  "matrixFreePriority": {
+    "elapsed": {
+      "avg": 90
+    },
+    "phaseC": {
+      "okRatePct": 100,
+      "matrixFreeCalls": 24,
+      "matrixFreeHits": 24,
+      "matrixFreeFallbacks": 0,
+      "matrixFreeHitRatePct": 100,
+      "matrixFreeFallbackRate": 0,
+      "matrixFreeUnknownFallbackRate": 0,
+      "matrixFreeCgItersAvg": 7,
+      "matrixFreeSolverItersAvg": 7,
+      "matrixFreeResidualNormAvg": 1e-10,
+      "matrixFreeMsAvg": 36,
+      "matrixFreeFallbackReasons": {}
+    }
+  },
+  "speedups": {
+    "matrixFreeElapsed": 1.5789473684210527,
+    "matrixFreePriorityElapsed": 1.6666666666666667
+  },
+  "phaseC": {
+    "selectedMode": "matrixFreePriority",
+    "elapsedSpeedup": 1.6666666666666667,
+    "baselineOkRatePct": 100,
+    "okRatePct": 100,
+    "okRateDeltaPct": 0,
+    "matrixFreeCalls": 24,
+    "matrixFreeHits": 24,
+    "matrixFreeFallbacks": 0,
+    "matrixFreeHitRatePct": 100,
+    "matrixFreeFallbackRate": 0,
+    "matrixFreeUnknownFallbackRate": 0,
+    "matrixFreeCgItersAvg": 7,
+    "matrixFreeSolverItersAvg": 7,
+    "matrixFreeResidualNormAvg": 1e-10,
+    "matrixFreeMsAvg": 36,
+    "matrixFreeFallbackReasons": {}
+  }
+}

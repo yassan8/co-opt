@@ -720,7 +720,7 @@ function makeBasis(direction) {
  * @param {number} objectIndex - オブジェクトインデックス
  * @returns {Array} クロスビーム光線配列
  */
-function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays, rayCount, crossType, debugMode, objectIndex) {
+function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays, rayCount, crossType, debugMode, objectIndex, wavelength = 0.5876) {
     const rays = [];
     
     // 1. 主光線を追加
@@ -730,7 +730,7 @@ function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays,
         type: 'chief',
         role: 'chief',
         objectIndex: objectIndex,
-        wavelength: 0.5876
+        wavelength
     });
 
     if (rayCount <= 1) {
@@ -766,7 +766,7 @@ function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays,
         
         if (upRay && downRay) {
             const verticalCrossRays = generateRaysBetweenBoundaries(
-                upRay, downRay, direction, verticalTargetCount, 'vertical_cross', objectIndex
+                upRay, downRay, direction, verticalTargetCount, 'vertical_cross', objectIndex, wavelength
             );
             rays.push(...verticalCrossRays);
             
@@ -783,7 +783,7 @@ function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays,
         
         if (leftRay && rightRay) {
             const horizontalCrossRays = generateRaysBetweenBoundaries(
-                leftRay, rightRay, direction, horizontalTargetCount, 'horizontal_cross', objectIndex
+                leftRay, rightRay, direction, horizontalTargetCount, 'horizontal_cross', objectIndex, wavelength
             );
             rays.push(...horizontalCrossRays);
             
@@ -1117,7 +1117,7 @@ function buildEntrancePlaneAxesLikeOPD(directionXYZ) {
  * @param {number} objectIndex - オブジェクトインデックス
  * @returns {Array} 中間光線配列
  */
-function generateRaysBetweenBoundaries(ray1, ray2, direction, count, type, objectIndex) {
+function generateRaysBetweenBoundaries(ray1, ray2, direction, count, type, objectIndex, wavelength = 0.5876) {
     const rays = [];
 
     const targetCount = Math.max(0, Math.floor(Number(count) || 0));
@@ -1136,7 +1136,7 @@ function generateRaysBetweenBoundaries(ray1, ray2, direction, count, type, objec
             type: type,
             role: `${type}_center`,
             objectIndex: objectIndex,
-            wavelength: 0.5876
+            wavelength
         });
         return rays;
     }
@@ -1148,7 +1148,7 @@ function generateRaysBetweenBoundaries(ray1, ray2, direction, count, type, objec
         type: type,
         role: ray1.direction,
         objectIndex: objectIndex,
-        wavelength: 0.5876
+        wavelength
     });
     
     rays.push({
@@ -1157,7 +1157,7 @@ function generateRaysBetweenBoundaries(ray1, ray2, direction, count, type, objec
         type: type,
         role: ray2.direction,
         objectIndex: objectIndex,
-        wavelength: 0.5876
+        wavelength
     });
     
     // 中間光線を生成
@@ -1177,7 +1177,7 @@ function generateRaysBetweenBoundaries(ray1, ray2, direction, count, type, objec
             type: type,
             role: `${type}_${i}`,
             objectIndex: objectIndex,
-            wavelength: 0.5876
+            wavelength
         });
     }
     
@@ -1650,7 +1650,8 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                     rayCount,
                     crossType,
                     debugMode,
-                    objectIndex
+                    objectIndex,
+                    wavelength
                 );
             } else {
                 crossBeamRays = generateCrossBeamFromEntrancePupil(
@@ -1699,7 +1700,8 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                 rayCount,
                 crossType,
                 debugMode,
-                objectIndex
+                objectIndex,
+                wavelength
             );
         }
 

@@ -32,11 +32,268 @@ import {
   normalEqMatvecWasm,
   getOptimizerWasmBridgeDebugInfo,
   generateFiniteDifferencePerturbationPointsWasm,
-  assembleFiniteDifferenceJacobianWasm,
+  assembleFiniteDifferenceJacobianGroupedWasm,
   optimizeSystemOneIterationWasm
 } from '../rust-wasm/ts/optimization/optimizer-wasm-bridge.ts';
+import { isTauriRuntime } from '../src/desktop/runtime.ts';
+import { runOptimizerStep, requestOptimizerStop, dropOptimizerSession, clearOptimizerStop } from '../src/desktop/ipc/client.ts';
 
 let __optimizerStopRequested = false;
+
+async function runOptimizationMvpnative(options = {}) {
+  const opts = isPlainObject(options) ? options : {};
+  const onProgress = (typeof opts.onProgress === 'function') ? opts.onProgress : null;
+  const userShouldStop = (typeof opts.shouldStop === 'function') ? opts.shouldStop : null;
+
+  // Ensure stale native stop state from previous runs does not abort immediately.
+  try { await clearOptimizerStop(); } catch (_) {}
+
+  const shouldStopNow = () => {
+    if (__optimizerStopRequested) return true;
+    try {
+      return !!(userShouldStop && userShouldStop());
+    } catch (_) {
+      return false;
+    }
+  };
+
+  if (__optimizerStopRequested) {
+    return { ok: true, aborted: true, reason: 'stopped-before-start' };
+  }
+
+  const opticalSystemRows = (() => {
+    if (Array.isArray(opts.opticalSystemRows) && opts.opticalSystemRows.length > 0) {
+      return opts.opticalSystemRows;
+    }
+    try {
+      if (typeof window !== 'undefined' && typeof (window as any).getOpticalSystemRows === 'function') {
+        return (window as any).getOpticalSystemRows((window as any).tableOpticalSystem);
+      }
+    } catch (_) {}
+    return [];
+  })();
+
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
+    return { ok: false, reason: 'No opticalSystemRows for native optimization' };
+  }
+
+  const systemRequirementsRows = (() => {
+    if (Array.isArray(opts.systemRequirementsRows) && opts.systemRequirementsRows.length > 0) {
+      return opts.systemRequirementsRows;
+    }
+    try {
+      const w = window as any;
+      const cfg = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
+        ? w.loadSystemConfigurationsFromTableConfig()
+        : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
+      if (Array.isArray(cfg?.systemRequirements) && cfg.systemRequirements.length > 0) {
+        return cfg.systemRequirements;
+      }
+    } catch (_) {}
+    try {
+      const sre = (window as any).systemRequirementsEditor;
+      if (sre && typeof sre.getData === 'function') {
+        const rows = sre.getData();
+        if (Array.isArray(rows)) return rows;
+      }
+    } catch (_) {}
+    return [];
+  })();
+
+  const sourceRows = (() => {
+    if (Array.isArray(opts.sourceRows) && opts.sourceRows.length > 0) {
+      return opts.sourceRows;
+    }
+    try {
+      const table = (window as any).tableSource;
+      if (table && typeof table.getData === 'function') {
+        const rows = table.getData();
+        if (Array.isArray(rows)) return rows;
+      }
+    } catch (_) {}
+    return [];
+  })();
+
+  const objectRows = (() => {
+    if (Array.isArray(opts.objectRows) && opts.objectRows.length > 0) {
+      return opts.objectRows;
+    }
+    try {
+      const table = (window as any).tableObject;
+      if (table && typeof table.getData === 'function') {
+        const rows = table.getData();
+        if (Array.isArray(rows)) return rows;
+      }
+    } catch (_) {}
+    return [];
+  })();
+
+  const activeConfigId = (() => {
+    if (opts.activeConfigId !== undefined && opts.activeConfigId !== null) {
+      return String(opts.activeConfigId).trim();
+    }
+    try {
+      const w = window as any;
+      const cfg = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
+        ? w.loadSystemConfigurationsFromTableConfig()
+        : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
+      if (cfg && cfg.activeConfigId !== undefined && cfg.activeConfigId !== null) {
+        return String(cfg.activeConfigId).trim();
+      }
+    } catch (_) {}
+    return '';
+  })();
+
+  const methodRaw = String(opts.method || 'kkt').trim().toLowerCase();
+  const method = (methodRaw === 'cd' || methodRaw === 'lm' || methodRaw === 'kkt') ? methodRaw : 'kkt';
+  const maxIterations = Number.isFinite(Number(opts.maxIterations))
+    ? Math.max(1, Math.floor(Number(opts.maxIterations)))
+    : 24;
+  // Smaller chunks (5) for more responsive Stop button, avoiding UI freeze
+  const chunkIterations = Number.isFinite(Number(opts.nativeChunkIterations))
+    ? Math.max(1, Math.floor(Number(opts.nativeChunkIterations)))
+    : Math.min(5, maxIterations);
+
+  const sessionId = `native-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+  let consumedIterations = 0;
+  let rowsWorking = opticalSystemRows;
+  let lastResp: any = null;
+  let aborted = false;
+  let errorMessage: string | null = null;
+
+  try {
+    while (consumedIterations < maxIterations) {
+      if (shouldStopNow()) {
+        aborted = true;
+        try { await requestOptimizerStop(); } catch (_) {}
+        break;
+      }
+
+      const iterBudget = Math.max(1, Math.min(chunkIterations, maxIterations - consumedIterations));
+      let resp: any = null;
+      
+      try {
+        resp = await runOptimizerStep({
+          opticalSystemRows: rowsWorking,
+          sourceRows,
+          objectRows,
+          activeConfigId,
+          systemRequirementsRows,
+          sessionId,
+          resetSession: consumedIterations === 0,
+          maxIterations: iterBudget,
+          method,
+          emitProgress: true,
+          penaltyParameter: 1.0,
+          penaltyIncreaseFactor: 1.5,
+          lineSearchC: 0.1,
+          lineSearchRho: 0.5,
+          lineSearchMaxBacktrack: 20,
+        });
+      } catch (err: any) {
+        const errMsg = String(err?.message || err || 'Unknown optimizer error');
+        console.error('[Optimizer Native Error]', errMsg);
+        errorMessage = errMsg;
+        if (onProgress) {
+          try {
+            onProgress({
+              phase: 'error',
+              iter: consumedIterations,
+              current: Number.NaN,
+              best: Number.NaN,
+              accepted: false,
+              variableId: undefined,
+              method: method,
+              violationScore: Number.NaN,
+            });
+          } catch (_) {}
+        }
+        aborted = true;
+        break;
+      }
+
+      lastResp = resp;
+      const iterDone = Number.isFinite(Number(resp?.iterations))
+        ? Math.max(0, Math.floor(Number(resp.iterations)))
+        : iterBudget;
+
+      if (Array.isArray(resp?.optimizedRows) && resp.optimizedRows.length > 0) {
+        rowsWorking = resp.optimizedRows;
+      }
+
+      if (onProgress && Array.isArray(resp?.progressEvents)) {
+        for (const ev of resp.progressEvents) {
+          const localIter = Number.isFinite(Number(ev?.iter)) ? Math.max(0, Number(ev.iter)) : 0;
+          const globalIter = Math.min(maxIterations, consumedIterations + localIter);
+          try {
+            onProgress({
+              phase: ev?.phase,
+              iter: globalIter,
+              current: ev?.current,
+              best: ev?.best,
+              accepted: ev?.accepted,
+              variableId: ev?.variableId,
+              method: resp?.modeUsed || method,
+              violationScore: ev?.violationScore,
+            });
+          } catch (_) {}
+        }
+      }
+
+      consumedIterations += iterDone;
+
+      const respMessage = String(resp?.message || '').toLowerCase();
+      const stoppedByRust = respMessage.includes('stopped');
+      if (stoppedByRust) {
+        aborted = true;
+        break;
+      }
+      if (!!resp?.converged || iterDone <= 0) {
+        break;
+      }
+    }
+  } finally {
+    try { await dropOptimizerSession(sessionId); } catch (_) {}
+  }
+
+  const resp = lastResp || {
+    iterations: 0,
+    variableCount: 0,
+    meritBefore: 0,
+    meritAfter: 0,
+    converged: false,
+    modeUsed: method,
+    requirementScoreAfter: Number.NaN,
+    optimizedRows: rowsWorking,
+    progressEvents: [],
+    message: errorMessage || (aborted ? 'optimizer stopped by user' : 'no native optimizer response'),
+  };
+
+  try {
+    if (Array.isArray(resp.optimizedRows) && resp.optimizedRows.length > 0) {
+      const table = (window as any).tableOpticalSystem;
+      if (table && typeof table.setData === 'function') {
+        await table.setData(resp.optimizedRows);
+      }
+    }
+  } catch (_) {}
+
+  return {
+    ok: true,
+    aborted,
+    before: Number(resp?.meritBefore) || 0,
+    best: Number(resp?.meritAfter) || 0,
+    iterations: consumedIterations > 0 ? consumedIterations : (Number(resp?.iterations) || 0),
+    variables: Number(resp?.variableCount) || 0,
+    method: String(resp?.modeUsed || method),
+    feasible: (Number(resp?.requirementScoreAfter) || 0) <= 1e-9,
+    violationScore: Number(resp?.requirementScoreAfter) || 0,
+    softPenalty: 0,
+    hardViolations: [],
+    softViolations: [],
+    nativeMessage: String(resp?.message || ''),
+  };
+}
 
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -134,6 +391,9 @@ function pickTimingMetricsFromProfile(profile) {
   const matrixFreeHits = Number(profile?.kktMatrixFreeHits ?? profile?.counts?.kktMatrixFreeHits) || 0;
   const matrixFreeFallbacks = Number(profile?.kktMatrixFreeFallbacks ?? profile?.counts?.kktMatrixFreeFallbacks) || 0;
   const matrixFreeCgIters = Number(profile?.kktMatrixFreeCgIters ?? profile?.counts?.kktMatrixFreeCgIters) || 0;
+  const matrixFreeSolverIters = Number(profile?.kktMatrixFreeSolverIters ?? profile?.counts?.kktMatrixFreeSolverIters) || 0;
+  const matrixFreeResidualNorm = Number(profile?.kktMatrixFreeResidualNorm ?? profile?.counts?.kktMatrixFreeResidualNorm);
+  const matrixFreeMs = Number(profile?.kktMatrixFreeMs ?? profile?.counts?.kktMatrixFreeMs) || 0;
 
   return {
     objectiveMs,
@@ -157,7 +417,10 @@ function pickTimingMetricsFromProfile(profile) {
     matrixFreeHits,
     matrixFreeFallbacks,
     matrixFreeHitRatePct: matrixFreeCalls > 0 ? (100 * matrixFreeHits / matrixFreeCalls) : 0,
-    matrixFreeCgIters
+    matrixFreeCgIters,
+    matrixFreeSolverIters,
+    matrixFreeResidualNorm: Number.isFinite(matrixFreeResidualNorm) ? matrixFreeResidualNorm : null,
+    matrixFreeMs
   };
 }
 
@@ -640,6 +903,7 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
   const warmupDiscard = Number.isFinite(warmupDiscardRaw) ? Math.max(0, Math.floor(warmupDiscardRaw)) : 0;
   const useOutlierFilter = source.filterOutliers !== false;
   try { delete common.kktUseMatrixFreeCore; } catch (_) {}
+  try { delete common.kktMatrixFreePriority; } catch (_) {}
   try { delete common.repeat; } catch (_) {}
   try { delete common.benchmarkRepeat; } catch (_) {}
   try { delete common.warmupDiscard; } catch (_) {}
@@ -668,7 +932,7 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
     } catch (_) {}
   };
 
-  const runOne = async (useMatrixFree, stopBestTarget = null) => {
+  const runOne = async (useMatrixFree, useMatrixFreePriority = false, stopBestTarget = null) => {
     restoreBaselineConfig();
     const targetBestRaw = Number(stopBestTarget);
     const hasTargetBest = Number.isFinite(targetBestRaw);
@@ -679,7 +943,8 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
       ...common,
       profile: true,
       method: 'kkt',
-      kktUseMatrixFreeCore: !!useMatrixFree
+      kktUseMatrixFreeCore: !!useMatrixFree,
+      kktMatrixFreePriority: !!useMatrixFree && !!useMatrixFreePriority
     };
     if (useMatrixFree && hasTargetBest) {
       options.kktStopWhenBestLeq = targetBestRaw + targetBestTol;
@@ -690,7 +955,15 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
     const elapsedMs = nowMs() - t0;
     const profile = getLastOptimizeProfile();
     const metrics = pickTimingMetricsFromProfile(profile);
-    return { useMatrixFree: !!useMatrixFree, options, result, elapsedMs, profile, metrics };
+    return {
+      useMatrixFree: !!useMatrixFree,
+      useMatrixFreePriority: !!useMatrixFree && !!useMatrixFreePriority,
+      options,
+      result,
+      elapsedMs,
+      profile,
+      metrics
+    };
   };
 
   const summarizeRuns = (runs) => {
@@ -723,6 +996,8 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
     const matrixFreeHitRatePct = pick('metrics.matrixFreeHitRatePct');
     const matrixFreeCalls = pick('metrics.matrixFreeCalls');
     const matrixFreeCgIters = pick('metrics.matrixFreeCgIters');
+    const matrixFreeSolverIters = pick('metrics.matrixFreeSolverIters');
+    const matrixFreeMs = pick('metrics.matrixFreeMs');
     const okRatePct = pick('result.ok');
 
     return {
@@ -737,6 +1012,8 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
       matrixFreeHitRatePct,
       matrixFreeCalls,
       matrixFreeCgIters,
+      matrixFreeSolverIters,
+      matrixFreeMs,
       okRatePct: okRatePct.avg * 100
     };
   };
@@ -778,9 +1055,10 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
 
   const baselineRuns = [];
   const matrixFreeRuns = [];
+  const matrixFreePriorityRuns = [];
   try {
     for (let i = 0; i < repeat; i++) {
-      const baselineRun = await runOne(false);
+      const baselineRun = await runOne(false, false);
       baselineRuns.push(baselineRun);
 
       let matrixFreeStopBestTarget = null;
@@ -788,7 +1066,8 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
         const baselineBest = Number(baselineRun?.result?.best);
         if (Number.isFinite(baselineBest)) matrixFreeStopBestTarget = baselineBest;
       }
-      matrixFreeRuns.push(await runOne(true, matrixFreeStopBestTarget));
+      matrixFreeRuns.push(await runOne(true, false, matrixFreeStopBestTarget));
+      matrixFreePriorityRuns.push(await runOne(true, true, matrixFreeStopBestTarget));
     }
   } finally {
     try {
@@ -798,9 +1077,11 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
 
   const baselineFiltered = robustFilterRuns(baselineRuns);
   const matrixFreeFiltered = robustFilterRuns(matrixFreeRuns);
+  const matrixFreePriorityFiltered = robustFilterRuns(matrixFreePriorityRuns);
 
   const baseline = summarizeRuns(baselineFiltered.filtered);
   const matrixFree = summarizeRuns(matrixFreeFiltered.filtered);
+  const matrixFreePriority = summarizeRuns(matrixFreePriorityFiltered.filtered);
 
   const delta = {
     elapsedMs: matrixFree.elapsed.avg - baseline.elapsed.avg,
@@ -812,7 +1093,24 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
     jsPct: matrixFree.jsPct.avg - baseline.jsPct.avg,
     matrixFreeHitRatePct: matrixFree.matrixFreeHitRatePct.avg - baseline.matrixFreeHitRatePct.avg,
     matrixFreeCalls: matrixFree.matrixFreeCalls.avg - baseline.matrixFreeCalls.avg,
-    matrixFreeCgIters: matrixFree.matrixFreeCgIters.avg - baseline.matrixFreeCgIters.avg
+    matrixFreeCgIters: matrixFree.matrixFreeCgIters.avg - baseline.matrixFreeCgIters.avg,
+    matrixFreeSolverIters: matrixFree.matrixFreeSolverIters.avg - baseline.matrixFreeSolverIters.avg,
+    matrixFreeMs: matrixFree.matrixFreeMs.avg - baseline.matrixFreeMs.avg
+  };
+
+  const deltaPriority = {
+    elapsedMs: matrixFreePriority.elapsed.avg - baseline.elapsed.avg,
+    objectiveMs: matrixFreePriority.objectiveMs.avg - baseline.objectiveMs.avg,
+    wasmMs: matrixFreePriority.wasmMs.avg - baseline.wasmMs.avg,
+    jsMs: matrixFreePriority.jsMs.avg - baseline.jsMs.avg,
+    objectivePct: matrixFreePriority.objectivePct.avg - baseline.objectivePct.avg,
+    wasmPct: matrixFreePriority.wasmPct.avg - baseline.wasmPct.avg,
+    jsPct: matrixFreePriority.jsPct.avg - baseline.jsPct.avg,
+    matrixFreeHitRatePct: matrixFreePriority.matrixFreeHitRatePct.avg - baseline.matrixFreeHitRatePct.avg,
+    matrixFreeCalls: matrixFreePriority.matrixFreeCalls.avg - baseline.matrixFreeCalls.avg,
+    matrixFreeCgIters: matrixFreePriority.matrixFreeCgIters.avg - baseline.matrixFreeCgIters.avg,
+    matrixFreeSolverIters: matrixFreePriority.matrixFreeSolverIters.avg - baseline.matrixFreeSolverIters.avg,
+    matrixFreeMs: matrixFreePriority.matrixFreeMs.avg - baseline.matrixFreeMs.avg
   };
 
   try {
@@ -843,6 +1141,8 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
       matrixFreeHitRatePctAvg: Math.round(baseline.matrixFreeHitRatePct.avg * 10) / 10,
       matrixFreeCallsAvg: Math.round(baseline.matrixFreeCalls.avg * 10) / 10,
       matrixFreeCgItersAvg: Math.round(baseline.matrixFreeCgIters.avg * 10) / 10,
+      matrixFreeSolverItersAvg: Math.round(baseline.matrixFreeSolverIters.avg * 10) / 10,
+      matrixFreeMsAvg: Math.round(baseline.matrixFreeMs.avg * 10) / 10,
       okRatePct: Math.round(baseline.okRatePct * 10) / 10
     });
     console.log('matrixFree(kktUseMatrixFreeCore=true)', {
@@ -862,7 +1162,30 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
       matrixFreeHitRatePctAvg: Math.round(matrixFree.matrixFreeHitRatePct.avg * 10) / 10,
       matrixFreeCallsAvg: Math.round(matrixFree.matrixFreeCalls.avg * 10) / 10,
       matrixFreeCgItersAvg: Math.round(matrixFree.matrixFreeCgIters.avg * 10) / 10,
+      matrixFreeSolverItersAvg: Math.round(matrixFree.matrixFreeSolverIters.avg * 10) / 10,
+      matrixFreeMsAvg: Math.round(matrixFree.matrixFreeMs.avg * 10) / 10,
       okRatePct: Math.round(matrixFree.okRatePct * 10) / 10
+    });
+    console.log('matrixFreePriority(kktUseMatrixFreeCore=true,kktMatrixFreePriority=true)', {
+      repeat,
+      droppedWarmup: matrixFreePriorityFiltered.droppedWarmup,
+      droppedOutliers: matrixFreePriorityFiltered.droppedOutliers,
+      usedRuns: matrixFreePriority.repeat,
+      elapsedAvgMs: Math.round(matrixFreePriority.elapsed.avg),
+      elapsedMinMs: Math.round(matrixFreePriority.elapsed.min),
+      elapsedMaxMs: Math.round(matrixFreePriority.elapsed.max),
+      objectiveAvgMs: Math.round(matrixFreePriority.objectiveMs.avg),
+      wasmAvgMs: Math.round(matrixFreePriority.wasmMs.avg),
+      jsAvgMs: Math.round(matrixFreePriority.jsMs.avg),
+      objectivePctAvg: Math.round(matrixFreePriority.objectivePct.avg * 10) / 10,
+      wasmPctAvg: Math.round(matrixFreePriority.wasmPct.avg * 10) / 10,
+      jsPctAvg: Math.round(matrixFreePriority.jsPct.avg * 10) / 10,
+      matrixFreeHitRatePctAvg: Math.round(matrixFreePriority.matrixFreeHitRatePct.avg * 10) / 10,
+      matrixFreeCallsAvg: Math.round(matrixFreePriority.matrixFreeCalls.avg * 10) / 10,
+      matrixFreeCgItersAvg: Math.round(matrixFreePriority.matrixFreeCgIters.avg * 10) / 10,
+      matrixFreeSolverItersAvg: Math.round(matrixFreePriority.matrixFreeSolverIters.avg * 10) / 10,
+      matrixFreeMsAvg: Math.round(matrixFreePriority.matrixFreeMs.avg * 10) / 10,
+      okRatePct: Math.round(matrixFreePriority.okRatePct * 10) / 10
     });
     console.log('delta(matrixFree - baseline)', {
       elapsedMs: Math.round(delta.elapsedMs),
@@ -874,7 +1197,23 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
       jsPct: Math.round(delta.jsPct * 10) / 10,
       matrixFreeHitRatePct: Math.round(delta.matrixFreeHitRatePct * 10) / 10,
       matrixFreeCalls: Math.round(delta.matrixFreeCalls * 10) / 10,
-      matrixFreeCgIters: Math.round(delta.matrixFreeCgIters * 10) / 10
+      matrixFreeCgIters: Math.round(delta.matrixFreeCgIters * 10) / 10,
+      matrixFreeSolverIters: Math.round(delta.matrixFreeSolverIters * 10) / 10,
+      matrixFreeMs: Math.round(delta.matrixFreeMs * 10) / 10
+    });
+    console.log('delta(matrixFreePriority - baseline)', {
+      elapsedMs: Math.round(deltaPriority.elapsedMs),
+      objectiveMs: Math.round(deltaPriority.objectiveMs),
+      wasmMs: Math.round(deltaPriority.wasmMs),
+      jsMs: Math.round(deltaPriority.jsMs),
+      objectivePct: Math.round(deltaPriority.objectivePct * 10) / 10,
+      wasmPct: Math.round(deltaPriority.wasmPct * 10) / 10,
+      jsPct: Math.round(deltaPriority.jsPct * 10) / 10,
+      matrixFreeHitRatePct: Math.round(deltaPriority.matrixFreeHitRatePct * 10) / 10,
+      matrixFreeCalls: Math.round(deltaPriority.matrixFreeCalls * 10) / 10,
+      matrixFreeCgIters: Math.round(deltaPriority.matrixFreeCgIters * 10) / 10,
+      matrixFreeSolverIters: Math.round(deltaPriority.matrixFreeSolverIters * 10) / 10,
+      matrixFreeMs: Math.round(deltaPriority.matrixFreeMs * 10) / 10
     });
     console.groupEnd();
   } catch (_) {}
@@ -882,7 +1221,9 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
   return {
     baseline,
     matrixFree,
+    matrixFreePriority,
     delta,
+    deltaPriority,
     filtering: {
       warmupDiscard,
       filterOutliers: useOutlierFilter,
@@ -893,12 +1234,184 @@ export async function compareMatrixFreeBenchmark(baseOptions = {}) {
       baselineDroppedWarmup: baselineFiltered.droppedWarmup,
       baselineDroppedOutliers: baselineFiltered.droppedOutliers,
       matrixFreeDroppedWarmup: matrixFreeFiltered.droppedWarmup,
-      matrixFreeDroppedOutliers: matrixFreeFiltered.droppedOutliers
+      matrixFreeDroppedOutliers: matrixFreeFiltered.droppedOutliers,
+      matrixFreePriorityDroppedWarmup: matrixFreePriorityFiltered.droppedWarmup,
+      matrixFreePriorityDroppedOutliers: matrixFreePriorityFiltered.droppedOutliers
     },
     baselineRuns,
     matrixFreeRuns,
+    matrixFreePriorityRuns,
     baselineRunsUsed: baselineFiltered.filtered,
-    matrixFreeRunsUsed: matrixFreeFiltered.filtered
+    matrixFreeRunsUsed: matrixFreeFiltered.filtered,
+    matrixFreePriorityRunsUsed: matrixFreePriorityFiltered.filtered
+  };
+}
+
+export async function compareTsVsNativeOptimizerBenchmark(baseOptions = {}) {
+  const source = isPlainObject(baseOptions) ? baseOptions : {};
+  const common = { ...source };
+  const repeatRaw = Number(source.repeat ?? source.benchmarkRepeat ?? 1);
+  const repeat = Number.isFinite(repeatRaw) ? Math.max(1, Math.floor(repeatRaw)) : 1;
+  try { delete common.repeat; } catch (_) {}
+  try { delete common.benchmarkRepeat; } catch (_) {}
+  try { delete common.forceTs; } catch (_) {}
+
+  const deepClone = (v) => {
+    try {
+      return JSON.parse(JSON.stringify(v));
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const originalSystemConfig = loadSystemConfigurationsRaw();
+  const baselineSystemConfig = deepClone(originalSystemConfig);
+
+  const restoreBaselineConfig = () => {
+    if (!baselineSystemConfig) return;
+    try {
+      saveSystemConfigurationsRaw(deepClone(baselineSystemConfig));
+    } catch (_) {}
+  };
+
+  const runOne = async (route: 'ts' | 'native') => {
+    restoreBaselineConfig();
+    const options = {
+      ...common,
+      profile: true,
+      forceTs: route === 'ts',
+      forceNative: route === 'native'
+    };
+    const t0 = nowMs();
+    const result = await runOptimizationMVP(options);
+    const elapsedMs = nowMs() - t0;
+    const profile = getLastOptimizeProfile();
+    const metrics = pickTimingMetricsFromProfile(profile);
+    return { route, options, result, elapsedMs, profile, metrics };
+  };
+
+  const tsRuns: any[] = [];
+  const nativeRuns: any[] = [];
+  try {
+    for (let i = 0; i < repeat; i++) {
+      tsRuns.push(await runOne('ts'));
+      nativeRuns.push(await runOne('native'));
+    }
+  } finally {
+    try {
+      if (originalSystemConfig) saveSystemConfigurationsRaw(originalSystemConfig);
+    } catch (_) {}
+  }
+
+  const summarizeRuns = (runs: any[]) => {
+    const nums = (path: string, fallback = 0) => {
+      return (Array.isArray(runs) ? runs : []).map((run: any) => {
+        try {
+          const parts = path.split('.');
+          let cur: any = run;
+          for (const p of parts) cur = cur?.[p];
+          const n = Number(cur);
+          return Number.isFinite(n) ? n : fallback;
+        } catch (_) {
+          return fallback;
+        }
+      });
+    };
+    const avg = (values: number[]) => {
+      if (!Array.isArray(values) || values.length === 0) return 0;
+      return values.reduce((a, b) => a + b, 0) / values.length;
+    };
+    const countTrue = (path: string) => {
+      let c = 0;
+      for (const run of (Array.isArray(runs) ? runs : [])) {
+        try {
+          const parts = path.split('.');
+          let cur: any = run;
+          for (const p of parts) cur = cur?.[p];
+          if (cur === true) c += 1;
+        } catch (_) {}
+      }
+      return c;
+    };
+
+    const elapsed = nums('elapsedMs');
+    const iterations = nums('result.iterations');
+    const best = nums('result.best', Number.NaN).filter((v: number) => Number.isFinite(v));
+    const violation = nums('result.violationScore', Number.NaN).filter((v: number) => Number.isFinite(v));
+    const objectiveMs = nums('metrics.objectiveMs');
+    const wasmMs = nums('metrics.wasmMs');
+    const jsMs = nums('metrics.jsMs');
+
+    return {
+      repeat: (Array.isArray(runs) ? runs.length : 0),
+      okCount: countTrue('result.ok'),
+      abortedCount: countTrue('result.aborted'),
+      elapsedAvgMs: avg(elapsed),
+      iterationsAvg: avg(iterations),
+      bestAvg: avg(best),
+      violationAvg: avg(violation),
+      objectiveAvgMs: avg(objectiveMs),
+      wasmAvgMs: avg(wasmMs),
+      jsAvgMs: avg(jsMs)
+    };
+  };
+
+  const ts = summarizeRuns(tsRuns);
+  const native = summarizeRuns(nativeRuns);
+  const delta = {
+    elapsedAvgMs: ts.elapsedAvgMs - native.elapsedAvgMs,
+    iterationsAvg: ts.iterationsAvg - native.iterationsAvg,
+    bestAvg: ts.bestAvg - native.bestAvg,
+    violationAvg: ts.violationAvg - native.violationAvg,
+    objectiveAvgMs: ts.objectiveAvgMs - native.objectiveAvgMs,
+    wasmAvgMs: ts.wasmAvgMs - native.wasmAvgMs,
+    jsAvgMs: ts.jsAvgMs - native.jsAvgMs
+  };
+
+  try {
+    console.groupCollapsed('[OptimizerMVP] TS(forceTs) vs Native benchmark');
+    console.log('ts(forceTs=true)', {
+      repeat: ts.repeat,
+      okCount: ts.okCount,
+      abortedCount: ts.abortedCount,
+      elapsedAvgMs: Math.round(ts.elapsedAvgMs),
+      iterationsAvg: Math.round(ts.iterationsAvg * 10) / 10,
+      bestAvg: Number.isFinite(ts.bestAvg) ? Number(ts.bestAvg.toFixed(6)) : null,
+      violationAvg: Number.isFinite(ts.violationAvg) ? Number(ts.violationAvg.toFixed(6)) : null,
+      objectiveAvgMs: Math.round(ts.objectiveAvgMs),
+      wasmAvgMs: Math.round(ts.wasmAvgMs),
+      jsAvgMs: Math.round(ts.jsAvgMs)
+    });
+    console.log('native(forceTs=false)', {
+      repeat: native.repeat,
+      okCount: native.okCount,
+      abortedCount: native.abortedCount,
+      elapsedAvgMs: Math.round(native.elapsedAvgMs),
+      iterationsAvg: Math.round(native.iterationsAvg * 10) / 10,
+      bestAvg: Number.isFinite(native.bestAvg) ? Number(native.bestAvg.toFixed(6)) : null,
+      violationAvg: Number.isFinite(native.violationAvg) ? Number(native.violationAvg.toFixed(6)) : null,
+      objectiveAvgMs: Math.round(native.objectiveAvgMs),
+      wasmAvgMs: Math.round(native.wasmAvgMs),
+      jsAvgMs: Math.round(native.jsAvgMs)
+    });
+    console.log('delta(ts - native)', {
+      elapsedAvgMs: Math.round(delta.elapsedAvgMs),
+      iterationsAvg: Math.round(delta.iterationsAvg * 10) / 10,
+      bestAvg: Number.isFinite(delta.bestAvg) ? Number(delta.bestAvg.toFixed(6)) : null,
+      violationAvg: Number.isFinite(delta.violationAvg) ? Number(delta.violationAvg.toFixed(6)) : null,
+      objectiveAvgMs: Math.round(delta.objectiveAvgMs),
+      wasmAvgMs: Math.round(delta.wasmAvgMs),
+      jsAvgMs: Math.round(delta.jsAvgMs)
+    });
+    console.groupEnd();
+  } catch (_) {}
+
+  return {
+    ts,
+    native,
+    delta,
+    tsRuns,
+    nativeRuns
   };
 }
 
@@ -1010,6 +1523,7 @@ export async function exportMatrixFreeBenchmarkCsv(options = {}) {
 
   const baselineRuns = Array.isArray(benchmark?.baselineRuns) ? benchmark.baselineRuns : [];
   const matrixFreeRuns = Array.isArray(benchmark?.matrixFreeRuns) ? benchmark.matrixFreeRuns : [];
+  const matrixFreePriorityRuns = Array.isArray(benchmark?.matrixFreePriorityRuns) ? benchmark.matrixFreePriorityRuns : [];
 
   const csvEscape = (value) => {
     const s = String(value ?? '');
@@ -1035,6 +1549,9 @@ export async function exportMatrixFreeBenchmarkCsv(options = {}) {
     'matrixFreeFallbacks',
     'matrixFreeHitRatePct',
     'matrixFreeCgIters',
+    'matrixFreeSolverIters',
+    'matrixFreeMs',
+    'matrixFreeResidualNorm',
     'ok',
     'best'
   ]);
@@ -1059,6 +1576,9 @@ export async function exportMatrixFreeBenchmarkCsv(options = {}) {
         Number(metrics.matrixFreeFallbacks) || 0,
         Number(metrics.matrixFreeHitRatePct) || 0,
         Number(metrics.matrixFreeCgIters) || 0,
+        Number(metrics.matrixFreeSolverIters) || 0,
+        Number(metrics.matrixFreeMs) || 0,
+        Number(metrics.matrixFreeResidualNorm),
         !!result.ok,
         Number(result.best)
       ]);
@@ -1067,6 +1587,7 @@ export async function exportMatrixFreeBenchmarkCsv(options = {}) {
 
   pushRuns('baseline', baselineRuns);
   pushRuns('matrixFree', matrixFreeRuns);
+  pushRuns('matrixFreePriority', matrixFreePriorityRuns);
 
   const csv = rows
     .map((row) => row.map(csvEscape).join(','))
@@ -1092,6 +1613,173 @@ export async function exportMatrixFreeBenchmarkCsv(options = {}) {
 
   return {
     csv,
+    benchmark
+  };
+}
+
+function aggregateMatrixFreeRunMetrics(runs = []) {
+  const safeRuns = Array.isArray(runs) ? runs : [];
+  const fallbackReasons = {};
+  let okCount = 0;
+  let totalCalls = 0;
+  let totalHits = 0;
+  let totalFallbacks = 0;
+  let totalCgIters = 0;
+  let totalSolverIters = 0;
+  let totalMatrixFreeMs = 0;
+  let residualNormSum = 0;
+  let residualNormCount = 0;
+
+  for (let i = 0; i < safeRuns.length; i++) {
+    const run = safeRuns[i] || {};
+    const metrics = run.metrics || {};
+    const profileCounts = run.profile?.counts || {};
+
+    if (run.result?.ok === true) okCount += 1;
+    totalCalls += Number(metrics.matrixFreeCalls) || 0;
+    totalHits += Number(metrics.matrixFreeHits) || 0;
+    totalFallbacks += Number(metrics.matrixFreeFallbacks) || 0;
+    totalCgIters += Number(metrics.matrixFreeCgIters) || 0;
+    totalSolverIters += Number(metrics.matrixFreeSolverIters) || 0;
+    totalMatrixFreeMs += Number(metrics.matrixFreeMs) || 0;
+
+    const residualNorm = Number(metrics.matrixFreeResidualNorm);
+    if (Number.isFinite(residualNorm)) {
+      residualNormSum += residualNorm;
+      residualNormCount += 1;
+    }
+
+    const histogram = (profileCounts.kktMatrixFreeFallbackReasons && typeof profileCounts.kktMatrixFreeFallbackReasons === 'object')
+      ? profileCounts.kktMatrixFreeFallbackReasons
+      : null;
+    if (!histogram) continue;
+    for (const [reason, count] of Object.entries(histogram)) {
+      const n = Number(count) || 0;
+      if (n <= 0) continue;
+      fallbackReasons[reason] = (Number(fallbackReasons[reason]) || 0) + n;
+    }
+  }
+
+  const runCount = safeRuns.length;
+  const unknownFallbacks = Number(fallbackReasons.unknown) || 0;
+  return {
+    runCount,
+    okRatePct: runCount > 0 ? (100 * okCount / runCount) : 0,
+    matrixFreeCalls: totalCalls,
+    matrixFreeHits: totalHits,
+    matrixFreeFallbacks: totalFallbacks,
+    matrixFreeHitRatePct: totalCalls > 0 ? (100 * totalHits / totalCalls) : 0,
+    matrixFreeFallbackRate: totalCalls > 0 ? (totalFallbacks / totalCalls) : null,
+    matrixFreeUnknownFallbackRate: totalFallbacks > 0 ? (unknownFallbacks / totalFallbacks) : null,
+    matrixFreeCgItersAvg: runCount > 0 ? (totalCgIters / runCount) : 0,
+    matrixFreeSolverItersAvg: runCount > 0 ? (totalSolverIters / runCount) : 0,
+    matrixFreeResidualNormAvg: residualNormCount > 0 ? (residualNormSum / residualNormCount) : null,
+    matrixFreeMsAvg: runCount > 0 ? (totalMatrixFreeMs / runCount) : 0,
+    matrixFreeFallbackReasons: fallbackReasons
+  };
+}
+
+function buildMatrixFreeBenchmarkJsonSummary(benchmark, options = {}) {
+  const safeBenchmark = (benchmark && typeof benchmark === 'object') ? benchmark : {};
+  const baselineRunsUsed = Array.isArray(safeBenchmark.baselineRunsUsed) ? safeBenchmark.baselineRunsUsed : [];
+  const matrixFreeRunsUsed = Array.isArray(safeBenchmark.matrixFreeRunsUsed) ? safeBenchmark.matrixFreeRunsUsed : [];
+  const matrixFreePriorityRunsUsed = Array.isArray(safeBenchmark.matrixFreePriorityRunsUsed) ? safeBenchmark.matrixFreePriorityRunsUsed : [];
+
+  const matrixFreePhaseC = aggregateMatrixFreeRunMetrics(matrixFreeRunsUsed);
+  const matrixFreePriorityPhaseC = aggregateMatrixFreeRunMetrics(matrixFreePriorityRunsUsed);
+  const baselineElapsedAvg = Number(safeBenchmark?.baseline?.elapsed?.avg) || 0;
+  const matrixFreeElapsedAvg = Number(safeBenchmark?.matrixFree?.elapsed?.avg) || 0;
+  const matrixFreePriorityElapsedAvg = Number(safeBenchmark?.matrixFreePriority?.elapsed?.avg) || 0;
+  const matrixFreeSpeedup = (baselineElapsedAvg > 0 && matrixFreeElapsedAvg > 0)
+    ? (baselineElapsedAvg / matrixFreeElapsedAvg)
+    : null;
+  const matrixFreePrioritySpeedup = (baselineElapsedAvg > 0 && matrixFreePriorityElapsedAvg > 0)
+    ? (baselineElapsedAvg / matrixFreePriorityElapsedAvg)
+    : null;
+
+  const hasPriorityPhaseC = matrixFreePriorityPhaseC.matrixFreeCalls > 0 || matrixFreePriorityPhaseC.matrixFreeFallbacks > 0;
+  const selectedMode = hasPriorityPhaseC ? 'matrixFreePriority' : 'matrixFree';
+  const selectedPhaseC = hasPriorityPhaseC ? matrixFreePriorityPhaseC : matrixFreePhaseC;
+  const selectedSpeedup = hasPriorityPhaseC ? matrixFreePrioritySpeedup : matrixFreeSpeedup;
+  const baselineOkRatePct = Number(safeBenchmark?.baseline?.okRatePct) || 0;
+
+  return {
+    timestamp: new Date().toISOString(),
+    config: {
+      repeat: Number(options.repeat ?? options.benchmarkRepeat ?? 1) || 1,
+      warmupDiscard: Number(options.warmupDiscard ?? options.discardWarmup ?? 0) || 0,
+      filterOutliers: options.filterOutliers !== false,
+      matchBaselineBestStop: options.matchBaselineBestStop !== false,
+      matchBaselineBestRelTol: Number(options.matchBaselineBestRelTol ?? 0) || 0,
+      matchBaselineBestAbsTol: Number(options.matchBaselineBestAbsTol ?? 0) || 0,
+      matchBaselineBestMinIter: Number(options.matchBaselineBestMinIter ?? 8) || 8
+    },
+    filtering: safeBenchmark.filtering || {},
+    baseline: safeBenchmark.baseline || {},
+    matrixFree: {
+      ...(safeBenchmark.matrixFree || {}),
+      phaseC: matrixFreePhaseC,
+      elapsedSpeedup: matrixFreeSpeedup
+    },
+    matrixFreePriority: {
+      ...(safeBenchmark.matrixFreePriority || {}),
+      phaseC: matrixFreePriorityPhaseC,
+      elapsedSpeedup: matrixFreePrioritySpeedup
+    },
+    speedups: {
+      matrixFreeElapsed: matrixFreeSpeedup,
+      matrixFreePriorityElapsed: matrixFreePrioritySpeedup
+    },
+    phaseC: {
+      selectedMode,
+      elapsedSpeedup: selectedSpeedup,
+      baselineOkRatePct,
+      okRatePct: selectedPhaseC.okRatePct,
+      okRateDeltaPct: selectedPhaseC.okRatePct - baselineOkRatePct,
+      matrixFreeCalls: selectedPhaseC.matrixFreeCalls,
+      matrixFreeHits: selectedPhaseC.matrixFreeHits,
+      matrixFreeFallbacks: selectedPhaseC.matrixFreeFallbacks,
+      matrixFreeHitRatePct: selectedPhaseC.matrixFreeHitRatePct,
+      matrixFreeFallbackRate: selectedPhaseC.matrixFreeFallbackRate,
+      matrixFreeUnknownFallbackRate: selectedPhaseC.matrixFreeUnknownFallbackRate,
+      matrixFreeCgItersAvg: selectedPhaseC.matrixFreeCgItersAvg,
+      matrixFreeSolverItersAvg: selectedPhaseC.matrixFreeSolverItersAvg,
+      matrixFreeResidualNormAvg: selectedPhaseC.matrixFreeResidualNormAvg,
+      matrixFreeMsAvg: selectedPhaseC.matrixFreeMsAvg,
+      matrixFreeFallbackReasons: selectedPhaseC.matrixFreeFallbackReasons
+    }
+  };
+}
+
+export async function exportMatrixFreeBenchmarkJson(options = {}) {
+  const source = isPlainObject(options) ? options : {};
+  const benchmark = source.benchmarkResult && typeof source.benchmarkResult === 'object'
+    ? source.benchmarkResult
+    : await compareMatrixFreeBenchmark(source);
+  const summary = buildMatrixFreeBenchmarkJsonSummary(benchmark, source);
+  const json = JSON.stringify(summary, null, 2);
+
+  const shouldDownload = source.download !== false;
+  if (shouldDownload && typeof window !== 'undefined' && typeof document !== 'undefined') {
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = String(source.fileName || `phase-c-benchmark-${stamp}.json`);
+      const blob = new Blob([`${json}\n`], { type: 'application/json;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (_) {}
+  }
+
+  return {
+    json,
+    summary,
     benchmark
   };
 }
@@ -3090,6 +3778,11 @@ function resetAsphericCoefficientsToZero({ configsById, targetConfigIds }) {
 export async function runOptimizationMVP(options = {}) {
   const opts = isPlainObject(options) ? options : {};
 
+  // TS-first migration: use Rust native optimizer only when explicitly requested.
+  if (isTauriRuntime() && opts.forceNative === true && opts.forceTs !== true) {
+    return runOptimizationMvpnative(opts);
+  }
+
   // Lightweight profiler to quickly identify bottlenecks.
   // Disabled by default; enable via { profile:true }.
   const __profileEnabled = (opts.profile === undefined) ? false : !!opts.profile;
@@ -3156,7 +3849,12 @@ export async function runOptimizationMVP(options = {}) {
       kktMatrixFreeCalls: 0,
       kktMatrixFreeHits: 0,
       kktMatrixFreeFallbacks: 0,
-      kktMatrixFreeCgIters: 0
+      kktMatrixFreeCgIters: 0,
+      kktMatrixFreeSolverIters: 0,
+      kktMatrixFreeResidualNorm: Number.NaN,
+      kktMatrixFreeMs: 0,
+      kktMatrixFreeLastFallbackReason: 'none',
+      kktMatrixFreeFallbackReasons: {}
     }
   } : null;
 
@@ -3513,7 +4211,14 @@ export async function runOptimizationMVP(options = {}) {
           kktMatrixFreeCalls: Number(__profile.counts.kktMatrixFreeCalls) || 0,
           kktMatrixFreeHits: Number(__profile.counts.kktMatrixFreeHits) || 0,
           kktMatrixFreeFallbacks: Number(__profile.counts.kktMatrixFreeFallbacks) || 0,
-          kktMatrixFreeCgIters: Number(__profile.counts.kktMatrixFreeCgIters) || 0
+          kktMatrixFreeCgIters: Number(__profile.counts.kktMatrixFreeCgIters) || 0,
+          kktMatrixFreeSolverIters: Number(__profile.counts.kktMatrixFreeSolverIters) || 0,
+          kktMatrixFreeResidualNorm: Number(__profile.counts.kktMatrixFreeResidualNorm),
+          kktMatrixFreeMs: Number(__profile.counts.kktMatrixFreeMs) || 0,
+          kktMatrixFreeLastFallbackReason: String(__profile.counts.kktMatrixFreeLastFallbackReason || 'none'),
+          kktMatrixFreeFallbackReasons: (__profile.counts.kktMatrixFreeFallbackReasons && typeof __profile.counts.kktMatrixFreeFallbackReasons === 'object')
+            ? { ...__profile.counts.kktMatrixFreeFallbackReasons }
+            : {}
         });
 
         console.log('[OptimizerMVP] timing comparison', {
@@ -3664,6 +4369,8 @@ export async function runOptimizationMVP(options = {}) {
   const lmExploreTries = Number.isFinite(Number(opts.lmExploreTries)) ? Math.max(1, Math.floor(Number(opts.lmExploreTries))) : 3;
   const useWasmLinearSolve = true;
   const kktUseMatrixFreeCore = opts?.kktUseMatrixFreeCore === true;
+  const kktMatrixFreePriority = opts?.kktMatrixFreePriority === true;
+  const phaseCDebug = opts?.phaseCDebug === true;
 
   if (useWasmLinearSolve) {
     try {
@@ -3746,21 +4453,45 @@ export async function runOptimizationMVP(options = {}) {
     return stop;
   };
 
+  const getMeritEditorHosts = (): any[] => {
+    const hosts: any[] = [];
+    const pushHost = (h: any) => {
+      if (!h || typeof h !== 'object') return;
+      if (hosts.includes(h)) return;
+      hosts.push(h);
+    };
+    try {
+      const w = (typeof window !== 'undefined') ? (window as any) : null;
+      pushHost(w);
+      try {
+        const op = w?.opener;
+        if (op && !op.closed) pushHost(op);
+      } catch (_) {}
+    } catch (_) {}
+    return hosts;
+  };
+
   const waitForMeritEditorReady = async (): Promise<any | null> => {
-    const w = (typeof window !== 'undefined') ? (window as any) : null;
     const start = Date.now();
     const maxWaitMs = Number.isFinite(Number(opts?.meritEditorWaitMs))
       ? Math.max(0, Math.min(10000, Number(opts.meritEditorWaitMs)))
       : 2500;
     const intervalMs = 50;
     while (Date.now() - start <= maxWaitMs) {
-      try {
-        if (w && typeof w.__cooptInitMeritFunctionEditor === 'function') {
-          w.__cooptInitMeritFunctionEditor();
-        }
-      } catch (_) {}
-      const ed = w ? w.meritFunctionEditor : null;
-      if (ed && typeof ed.calculateOperandValue === 'function') return ed;
+      const hosts = getMeritEditorHosts();
+      for (const h of hosts) {
+        try {
+          if (typeof h.__cooptInitMeritFunctionEditor === 'function') {
+            h.__cooptInitMeritFunctionEditor();
+          }
+        } catch (_) {}
+        try {
+          const ed = h.meritFunctionEditor;
+          if (ed && typeof ed.calculateOperandValue === 'function') {
+            return ed;
+          }
+        } catch (_) {}
+      }
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
     return null;
@@ -4195,18 +4926,64 @@ export async function runOptimizationMVP(options = {}) {
 
   const solveNormalEqMatrixFreeWithOptionalWasm = (J, r, damping, n) => {
     if (!kktUseMatrixFreeCore) return null;
-    if (!Array.isArray(J) || !Array.isArray(r) || n <= 0) return null;
+    const __mfT0 = nowMs();
+    const matrixFreeCounts = (__profile && __profile.counts) ? __profile.counts : null;
+    const completeMatrixFree = (result, fallbackReason = null) => {
+      if (matrixFreeCounts) {
+        matrixFreeCounts.kktMatrixFreeMs = (Number(matrixFreeCounts.kktMatrixFreeMs) || 0) + Math.max(0, nowMs() - __mfT0);
+      }
+      if (fallbackReason && matrixFreeCounts) {
+        const reason = String(fallbackReason || 'unknown');
+        matrixFreeCounts.kktMatrixFreeFallbacks = (Number(matrixFreeCounts.kktMatrixFreeFallbacks) || 0) + 1;
+        matrixFreeCounts.kktMatrixFreeLastFallbackReason = reason;
+        const histogram = (matrixFreeCounts.kktMatrixFreeFallbackReasons && typeof matrixFreeCounts.kktMatrixFreeFallbackReasons === 'object')
+          ? matrixFreeCounts.kktMatrixFreeFallbackReasons
+          : (matrixFreeCounts.kktMatrixFreeFallbackReasons = {});
+        histogram[reason] = (Number(histogram[reason]) || 0) + 1;
+      }
+      if (fallbackReason && phaseCDebug) {
+        try {
+          console.log('[PHASE-C][matrix-free] fallback', {
+            reason: String(fallbackReason),
+            damping: Number(damping),
+            n,
+            m: Array.isArray(J) ? J.length : null
+          });
+        } catch (_) {}
+      }
+      return result;
+    };
+
+    const completeMatrixFreeSuccess = (dx, predictedReduction, cgIters, finalResidualNorm) => {
+      if (matrixFreeCounts) {
+        matrixFreeCounts.kktMatrixFreeHits = (Number(matrixFreeCounts.kktMatrixFreeHits) || 0) + 1;
+        matrixFreeCounts.kktMatrixFreeCgIters = (Number(matrixFreeCounts.kktMatrixFreeCgIters) || 0) + (Number(cgIters) || 0);
+        matrixFreeCounts.kktMatrixFreeSolverIters = (Number(matrixFreeCounts.kktMatrixFreeSolverIters) || 0) + (Number(cgIters) || 0);
+        matrixFreeCounts.kktMatrixFreeResidualNorm = Number.isFinite(finalResidualNorm) ? finalResidualNorm : Number.NaN;
+      }
+
+      if (!Array.isArray(dx) || !dx.every((v) => Number.isFinite(v))) {
+        return completeMatrixFree(null, 'non-finite-solution');
+      }
+
+      return completeMatrixFree({
+        dx,
+        predictedReduction: Number.isFinite(predictedReduction) ? predictedReduction : Number.NaN
+      });
+    };
+
+    if (!Array.isArray(J) || !Array.isArray(r) || n <= 0) return completeMatrixFree(null, 'invalid-input-shape');
 
     const m = J.length;
-    if (m <= 0 || r.length !== m) return null;
+    if (m <= 0 || r.length !== m) return completeMatrixFree(null, 'invalid-residual-shape');
 
     const jFlat = new Float64Array(m * n);
     for (let i = 0; i < m; i++) {
-      if (!Array.isArray(J[i]) || J[i].length < n) return null;
+      if (!Array.isArray(J[i]) || J[i].length < n) return completeMatrixFree(null, 'invalid-jacobian-row');
       const rowBase = i * n;
       for (let j = 0; j < n; j++) {
         const value = Number(J[i][j]);
-        if (!Number.isFinite(value)) return null;
+        if (!Number.isFinite(value)) return completeMatrixFree(null, 'non-finite-jacobian');
         jFlat[rowBase + j] = value;
       }
     }
@@ -4277,22 +5054,29 @@ export async function runOptimizationMVP(options = {}) {
     for (let i = 0; i < n; i++) z[i] = residual[i] / diagA[i];
     let p = z.slice();
 
-    let rz = dot(residual, z);
-    if (!Number.isFinite(rz) || rz <= 0) return null;
-
     const bNorm = Math.sqrt(Math.max(0, dot(b, b)));
     const tolAbs = tolAbsOpt !== null ? tolAbsOpt : Math.max(1e-12, bNorm * tolRel);
+    let finalResidualNorm = Math.sqrt(Math.max(0, dot(residual, residual)));
+
+    let rz = dot(residual, z);
+    if (!Number.isFinite(rz) || rz <= 0) {
+      // When b is already near zero, x=0 is a valid converged solution.
+      if (finalResidualNorm <= tolAbs) {
+        return completeMatrixFreeSuccess(x, 0, 0, finalResidualNorm);
+      }
+      return completeMatrixFree(null, 'invalid-initial-rz');
+    }
 
     let cgIters = 0;
     for (let k = 0; k < maxIter; k++) {
       cgIters = k + 1;
       const Ap = matvec(p);
-      if (!Array.isArray(Ap) || Ap.length !== n) return null;
+      if (!Array.isArray(Ap) || Ap.length !== n) return completeMatrixFree(null, 'matvec-failed');
 
       const pAp = dot(p, Ap);
-      if (!Number.isFinite(pAp) || Math.abs(pAp) <= 1e-30) return null;
+      if (!Number.isFinite(pAp) || Math.abs(pAp) <= 1e-30) return completeMatrixFree(null, 'degenerate-pap');
       const alpha = rz / pAp;
-      if (!Number.isFinite(alpha)) return null;
+      if (!Number.isFinite(alpha)) return completeMatrixFree(null, 'invalid-alpha');
 
       for (let i = 0; i < n; i++) {
         x[i] += alpha * p[i];
@@ -4300,17 +5084,18 @@ export async function runOptimizationMVP(options = {}) {
       }
 
       const rNorm = Math.sqrt(Math.max(0, dot(residual, residual)));
-      if (!Number.isFinite(rNorm)) return null;
+      if (!Number.isFinite(rNorm)) return completeMatrixFree(null, 'non-finite-residual');
+      finalResidualNorm = rNorm;
       if (rNorm <= tolAbs) {
         break;
       }
 
       for (let i = 0; i < n; i++) z[i] = residual[i] / diagA[i];
       const rzNext = dot(residual, z);
-      if (!Number.isFinite(rzNext) || rzNext <= 0) return null;
+      if (!Number.isFinite(rzNext) || rzNext <= 0) return completeMatrixFree(null, 'invalid-rz-next');
 
       const beta = rzNext / Math.max(1e-30, rz);
-      if (!Number.isFinite(beta)) return null;
+      if (!Number.isFinite(beta)) return completeMatrixFree(null, 'invalid-beta');
       for (let i = 0; i < n; i++) {
         p[i] = z[i] + beta * p[i];
       }
@@ -4318,21 +5103,12 @@ export async function runOptimizationMVP(options = {}) {
     }
 
     const Adx = matvec(x);
-    if (!Array.isArray(Adx) || Adx.length !== n) return null;
+    if (!Array.isArray(Adx) || Adx.length !== n) return completeMatrixFree(null, 'post-matvec-failed');
     const linear = dot(g, x);
     const quad = 0.5 * dot(x, Adx);
     const predictedReduction = -(linear + quad);
 
-    if (__profile && __profile.counts) {
-      __profile.counts.kktMatrixFreeHits = (Number(__profile.counts.kktMatrixFreeHits) || 0) + 1;
-      __profile.counts.kktMatrixFreeCgIters = (Number(__profile.counts.kktMatrixFreeCgIters) || 0) + cgIters;
-    }
-
-    if (!x.every((v) => Number.isFinite(v))) return null;
-    return {
-      dx: x,
-      predictedReduction: Number.isFinite(predictedReduction) ? predictedReduction : Number.NaN
-    };
+    return completeMatrixFreeSuccess(x, predictedReduction, cgIters, finalResidualNorm);
   };
 
   // DLS/LM mode
@@ -4362,7 +5138,7 @@ export async function runOptimizationMVP(options = {}) {
 
     // Residuals are built from Requirements violation amounts.
     // Hard+soft are both included as residuals (soft continues to improve after feasible).
-    const evalResidualsNow = () => {
+    const evalResidualsNow = async () => {
       /** @type {number[]} */
       const residuals = [];
       const operandValueCache = new Map();
@@ -4481,7 +5257,11 @@ export async function runOptimizationMVP(options = {}) {
           rawValue = operandValueCache.get(opCacheKey);
         } else {
           if (__profile) __profile.counts.operandValueCacheMisses = (Number(__profile.counts.operandValueCacheMisses) || 0) + 1;
-          rawValue = editor.calculateOperandValue(opObj);
+          if (editor && typeof editor.calculateOperandValueAsync === 'function') {
+            rawValue = await editor.calculateOperandValueAsync(opObj);
+          } else {
+            rawValue = editor.calculateOperandValue(opObj);
+          }
           operandValueCache.set(opCacheKey, rawValue);
         }
 
@@ -4631,18 +5411,26 @@ export async function runOptimizationMVP(options = {}) {
     };
 
     const evalResidualsNowProfiled = __profile
-      ? () => {
-        return __profileBucketWrap('time_objective_eval', () => {
-          const t = nowMs();
-          try {
-            __profile.counts.evalResidualsNowCalls++;
-            return evalResidualsNow();
-          } finally {
-            const dt = nowMs() - t;
-            __profile.counts.evalResidualsNowMs += dt;
-            __profAdd('evalResidualsNow', dt);
-          }
-        });
+      ? async () => {
+        const tBucket = nowMs();
+        const t = nowMs();
+        try {
+          __profile.counts.evalResidualsNowCalls++;
+          return await evalResidualsNow();
+        } finally {
+          const dt = nowMs() - t;
+          __profile.counts.evalResidualsNowMs += dt;
+          __profAdd('evalResidualsNow', dt);
+
+          const bucketDt = Math.max(0, nowMs() - tBucket);
+          const buckets = __profile.timingBuckets || (__profile.timingBuckets = {
+            time_objective_eval: 0,
+            time_wasm_call: 0,
+            time_js_overhead: 0
+          });
+          buckets.time_objective_eval = (Number(buckets.time_objective_eval) || 0) + bucketDt;
+          __profile.counts.timeObjectiveEvalCalls = (Number(__profile.counts.timeObjectiveEvalCalls) || 0) + 1;
+        }
       }
       : evalResidualsNow;
 
@@ -4701,7 +5489,7 @@ export async function runOptimizationMVP(options = {}) {
       const ab = blocksByConfigId[String(activeConfigId)];
       if (Array.isArray(ab)) updateActiveOpticalSystemOverrideFromBlocks(ab);
     } catch (_) {}
-    const initial = evalResidualsNowProfiled();
+    const initial = await evalResidualsNowProfiled();
     const initialEval = (initial && initial.composite) ? initial.composite : evalCompositeFromRequirementsProfiled();
     recordEval(initialEval);
     before = initialEval.score;
@@ -4764,7 +5552,7 @@ export async function runOptimizationMVP(options = {}) {
       if (sweep && sweep.bestEval) {
         recordEval(sweep.bestEval);
         // Recompute residuals baseline after discrete change.
-        const re = evalResidualsNowProfiled();
+        const re = await evalResidualsNowProfiled();
         const reEval = (re && re.composite) ? re.composite : evalCompositeFromRequirementsProfiled();
         recordEval(reEval);
         before = reEval.score;
@@ -4998,7 +5786,7 @@ export async function runOptimizationMVP(options = {}) {
       const scales = curVars.map(v => getScaleForVar(v));
 
       // Evaluate base residuals
-      const base = evalResidualsNowProfiled();
+      const base = await evalResidualsNowProfiled();
       const r0 = base.residuals;
       const m = r0.length;
       const cost0 = base.cost;
@@ -5070,7 +5858,7 @@ export async function runOptimizationMVP(options = {}) {
         }
         maybeSave('jacobian');
 
-        const br = evalResidualsNowProfiled();
+        const br = await evalResidualsNowProfiled();
         const r1 = br.residuals;
         const mm = Math.min(m, r1.length);
         
@@ -5297,7 +6085,7 @@ export async function runOptimizationMVP(options = {}) {
         }
         maybeSave('candidate');
 
-        const cand = evalResidualsNowProfiled();
+        const cand = await evalResidualsNowProfiled();
         const cost1 = cand.cost;
         const candEval = (cand && cand.composite) ? cand.composite : evalCompositeFromRequirementsProfiled();
 
@@ -5490,7 +6278,7 @@ export async function runOptimizationMVP(options = {}) {
 
           if (onProgress) {
             try {
-              const rr = evalResidualsNowProfiled();
+              const rr = await evalResidualsNowProfiled();
               const ee = (rr && rr.composite) ? rr.composite : evalCompositeFromRequirementsProfiled();
               onProgress({
                 phase: 'restart',
@@ -6192,8 +6980,37 @@ export async function runOptimizationMVP(options = {}) {
           });
         }
       }
-      let analyticEqualityRowSpecs: Array<{ rowIndex: number; varIdx: number; slope: number }> = [];
+      let analyticEqualityRowSpecs: Array<{ rowIndex: number; terms: Array<{ varIdx: number; slope: number }> }> = [];
       let analyticEqualityCalibrated = false;
+
+      const collectThicknessVariableIndexesForConfig = (cfgId: string): number[] => {
+        const out: number[] = [];
+        for (let vi = 0; vi < varIds.length; vi++) {
+          const parsed = parseJointVariableId(varIds[vi]);
+          const varCfg = String(parsed.configId || activeConfigId || '');
+          const key = String(vars?.[vi]?.key || parsed.baseId || '').toLowerCase();
+          if (cfgId && varCfg && cfgId !== varCfg) continue;
+          if (!key.includes('thickness')) continue;
+          out.push(vi);
+        }
+        return out;
+      };
+
+      const buildAnalyticEqualityTermsForRequirement = (req: any, cfgId: string): Array<{ varIdx: number; slope: number }> => {
+        const operand = String(req?.operand || '').trim().toUpperCase();
+        const tol = Math.max(0, toFiniteNumber(req?.tol, 0));
+        const scale = Math.max(1, Math.abs(tol));
+        const weight = Math.max(0, toFiniteNumber(req?.weight, 1));
+        if (!(weight > 0)) return [];
+        const slopeUnit = Math.sqrt(weight) / scale;
+        if (!Number.isFinite(slopeUnit) || slopeUnit === 0) return [];
+
+        if (operand === 'TSL') {
+          return collectThicknessVariableIndexesForConfig(cfgId).map((varIdx) => ({ varIdx, slope: slopeUnit }));
+        }
+
+        return [];
+      };
 
       const applyAnalyticEqualityCtctJacobianOverlay = (
         J: number[][],
@@ -6206,13 +7023,20 @@ export async function runOptimizationMVP(options = {}) {
         let touched = 0;
         for (const spec of analyticEqualityRowSpecs) {
           const row = Number(spec?.rowIndex);
-          const col = Number(spec?.varIdx);
-          const slope = Number(spec?.slope);
           if (!(row >= 0 && row < rowCap)) continue;
-          if (!(col >= 0 && col < n)) continue;
-          if (!Number.isFinite(slope)) continue;
+          const terms = Array.isArray(spec?.terms) ? spec.terms : [];
+          if (terms.length === 0) continue;
           for (let j = 0; j < n; j++) J[row][j] = 0;
-          J[row][col] = slope;
+          let rowTouched = false;
+          for (const term of terms) {
+            const col = Number(term?.varIdx);
+            const slope = Number(term?.slope);
+            if (!(col >= 0 && col < n)) continue;
+            if (!Number.isFinite(slope)) continue;
+            J[row][col] = slope;
+            rowTouched = true;
+          }
+          if (!rowTouched) continue;
           touched++;
         }
         return touched;
@@ -6300,17 +7124,33 @@ export async function runOptimizationMVP(options = {}) {
         return groups;
       };
 
+      const collectAnalyticEqualityVariableIndexes = (nVars: number): Set<number> => {
+        const out = new Set<number>();
+        const specs = Array.isArray(analyticEqualityRowSpecs) ? analyticEqualityRowSpecs : [];
+        for (const spec of specs) {
+          const terms = Array.isArray(spec?.terms) ? spec.terms : [];
+          for (const term of terms) {
+            const col = Number(term?.varIdx);
+            if (Number.isFinite(col) && col >= 0 && col < nVars) {
+              out.add(Math.floor(col));
+            }
+          }
+        }
+        return out;
+      };
+
       const finiteDiffJacobian = (x: number[], r0: number[], lambdaVec: number[], mu: number, maxViol: number = 1.0, baseResidualCount: number = 0) => {
         const __fdT0 = nowMs();
         const n = x.length;
         const m = r0.length;
         const J = Array.from({ length: m }, () => Array(n).fill(0));
+        const analyticEqCols = collectAnalyticEqualityVariableIndexes(n);
         const useWasmBatchFd = opts?.kktUseWasmBatchFd !== false;
         const canUseGrouping = kktUseSparseFdGrouping
           && Array.isArray(jacobianColumnSupports)
           && jacobianColumnSupports.length === n;
         const fdSteps = new Array(n).fill(0);
-        const perturbedResidualsByColumn: number[][] = new Array(n);
+        const perturbedResidualsActive: number[][] = [];
 
         for (let i = 0; i < n; i++) {
           const vObj = { id: varIds[i], key: vars[i]?.key, value: x[i] };
@@ -6328,7 +7168,7 @@ export async function runOptimizationMVP(options = {}) {
         let effectiveEvals = 0;
         let groupCount = 0;
         if (canUseGrouping) {
-          const allCols = Array.from({ length: n }, (_, i) => i);
+          const allCols = Array.from({ length: n }, (_, i) => i).filter((col) => !analyticEqCols.has(col));
           const groups = buildDisjointColumnGroups(allCols, jacobianColumnSupports || [], kktFdGroupingMaxCols);
           groupCount = groups.length;
           for (const group of groups) {
@@ -6365,7 +7205,9 @@ export async function runOptimizationMVP(options = {}) {
             ? __profileBucketWrap('time_wasm_call', () => generateFiniteDifferencePerturbationPointsWasm(x, fdSteps))
             : null;
 
-          for (let i = 0; i < n; i++) {
+          const activeCols = Array.from({ length: n }, (_, i) => i).filter((col) => !analyticEqCols.has(col));
+
+          for (const i of activeCols) {
             let xp = Array.isArray(batchPoints) && Array.isArray(batchPoints[i])
               ? batchPoints[i].slice()
               : x.slice();
@@ -6375,25 +7217,27 @@ export async function runOptimizationMVP(options = {}) {
 
             const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
             const r1 = e1.residuals;
-            perturbedResidualsByColumn[i] = Array.isArray(r1) ? r1.slice(0, m) : [];
+            perturbedResidualsActive.push(Array.isArray(r1) ? r1.slice(0, m) : []);
           }
 
           const Jw = useWasmBatchFd
-            ? __profileBucketWrap('time_wasm_call', () => assembleFiniteDifferenceJacobianWasm(r0, perturbedResidualsByColumn, fdSteps))
+            ? __profileBucketWrap('time_wasm_call', () => assembleFiniteDifferenceJacobianGroupedWasm(r0, perturbedResidualsActive, fdSteps, activeCols))
             : null;
 
           if (Array.isArray(Jw) && Jw.length === m) {
             for (let rowIndex = 0; rowIndex < m; rowIndex++) {
               const row = Jw[rowIndex];
               if (!Array.isArray(row)) continue;
-              for (let colIndex = 0; colIndex < Math.min(n, row.length); colIndex++) {
+              for (const colIndex of activeCols) {
+                if (colIndex >= row.length) continue;
                 const v = Number(row[colIndex]);
                 J[rowIndex][colIndex] = Number.isFinite(v) ? v : 0;
               }
             }
           } else {
-            for (let i = 0; i < n; i++) {
-              const r1 = perturbedResidualsByColumn[i];
+            for (let pos = 0; pos < activeCols.length; pos++) {
+              const i = activeCols[pos];
+              const r1 = perturbedResidualsActive[pos];
               const eps = fdSteps[i];
               if (!Array.isArray(r1) || !Number.isFinite(eps) || eps === 0) continue;
               for (let k = 0; k < Math.min(m, r1.length); k++) {
@@ -6402,8 +7246,8 @@ export async function runOptimizationMVP(options = {}) {
               }
             }
           }
-          effectiveEvals = n;
-          groupCount = n;
+          effectiveEvals = activeCols.length;
+          groupCount = activeCols.length;
         }
 
         const analyticRows = applyAnalyticAsphereConstraintJacobianOverlay(J, x, lambdaVec, mu, maxViol, baseResidualCount);
@@ -6464,6 +7308,7 @@ export async function runOptimizationMVP(options = {}) {
         const n = x.length;
         const m = r0.length;
         const J = Array.from({ length: m }, () => Array(n).fill(0));
+        const useWasmBatchFd = opts?.kktUseWasmBatchFd !== false;
         if (Array.isArray(baseJ) && baseJ.length > 0) {
           const copyRows = Math.min(m, baseJ.length);
           for (let rowIndex = 0; rowIndex < copyRows; rowIndex++) {
@@ -6488,7 +7333,9 @@ export async function runOptimizationMVP(options = {}) {
           stepByCol[col] = eps;
         }
 
-        const validCols = refreshCols.filter((col) => col >= 0 && col < n && Number.isFinite(stepByCol[col]) && stepByCol[col] !== 0);
+        const analyticEqCols = collectAnalyticEqualityVariableIndexes(n);
+
+        const validCols = refreshCols.filter((col) => col >= 0 && col < n && !analyticEqCols.has(col) && Number.isFinite(stepByCol[col]) && stepByCol[col] !== 0);
         const canUseGrouping = kktUseSparseFdGrouping
           && Array.isArray(jacobianColumnSupports)
           && jacobianColumnSupports.length === n;
@@ -6497,30 +7344,75 @@ export async function runOptimizationMVP(options = {}) {
           : validCols.map((col) => [col]);
 
         let effectiveEvals = 0;
-        for (const group of groups) {
-          if (!Array.isArray(group) || group.length === 0) continue;
-          const xp = x.slice();
-          for (const col of group) {
-            xp[col] = x[col] + stepByCol[col];
+        if (!canUseGrouping && useWasmBatchFd && validCols.length > 0) {
+          const partialSteps = new Array(n).fill(0);
+          const perturbedResidualsActive: number[][] = [];
+          for (const col of validCols) {
+            partialSteps[col] = stepByCol[col];
           }
-          const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
-          const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
-          effectiveEvals += 1;
 
-          for (const col of group) {
-            const eps = stepByCol[col];
-            if (!Number.isFinite(eps) || eps === 0) continue;
-            const supportRows = Array.isArray(jacobianColumnSupports?.[col]) ? jacobianColumnSupports[col] : [];
-            if (supportRows.length === 0) {
-              for (let k = 0; k < Math.min(m, r1.length); k++) {
-                const deriv = (r1[k] - r0[k]) / eps;
-                J[k][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+          const batchPoints = __profileBucketWrap('time_wasm_call', () => generateFiniteDifferencePerturbationPointsWasm(x, partialSteps));
+          for (const col of validCols) {
+            let xp = Array.isArray(batchPoints) && Array.isArray(batchPoints[col])
+              ? batchPoints[col].slice()
+              : x.slice();
+            if (xp[col] === x[col]) {
+              xp[col] = x[col] + stepByCol[col];
+            }
+            const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+            const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
+            perturbedResidualsActive.push(Array.isArray(r1) ? r1.slice(0, m) : r0.slice());
+          }
+
+          const Jw = __profileBucketWrap('time_wasm_call', () => assembleFiniteDifferenceJacobianGroupedWasm(r0, perturbedResidualsActive, partialSteps, validCols));
+          if (Array.isArray(Jw) && Jw.length === m) {
+            for (const col of validCols) {
+              for (let rowIndex = 0; rowIndex < m; rowIndex++) {
+                const row = Array.isArray(Jw[rowIndex]) ? Jw[rowIndex] : null;
+                if (!row || col >= row.length) continue;
+                const value = Number(row[col]);
+                J[rowIndex][col] = Number.isFinite(value) ? value : 0;
               }
-            } else {
-              for (const row of supportRows) {
-                if (!(row >= 0 && row < m) || row >= r1.length) continue;
-                const deriv = (r1[row] - r0[row]) / eps;
-                J[row][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+            }
+          } else {
+            for (let pos = 0; pos < validCols.length; pos++) {
+              const col = validCols[pos];
+              const r1 = perturbedResidualsActive[pos];
+              const eps = stepByCol[col];
+              if (!Array.isArray(r1) || !Number.isFinite(eps) || eps === 0) continue;
+              for (let rowIndex = 0; rowIndex < Math.min(m, r1.length); rowIndex++) {
+                const deriv = (r1[rowIndex] - r0[rowIndex]) / eps;
+                J[rowIndex][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+              }
+            }
+          }
+          effectiveEvals = validCols.length;
+        } else {
+          for (const group of groups) {
+            if (!Array.isArray(group) || group.length === 0) continue;
+            const xp = x.slice();
+            for (const col of group) {
+              xp[col] = x[col] + stepByCol[col];
+            }
+            const e1 = evalAugmentedResiduals(xp, lambdaVec, mu, maxViol);
+            const r1 = Array.isArray(e1?.residuals) ? e1.residuals : [];
+            effectiveEvals += 1;
+
+            for (const col of group) {
+              const eps = stepByCol[col];
+              if (!Number.isFinite(eps) || eps === 0) continue;
+              const supportRows = Array.isArray(jacobianColumnSupports?.[col]) ? jacobianColumnSupports[col] : [];
+              if (supportRows.length === 0) {
+                for (let k = 0; k < Math.min(m, r1.length); k++) {
+                  const deriv = (r1[k] - r0[k]) / eps;
+                  J[k][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+                }
+              } else {
+                for (const row of supportRows) {
+                  if (!(row >= 0 && row < m) || row >= r1.length) continue;
+                  const deriv = (r1[row] - r0[row]) / eps;
+                  J[row][col] = Number.isFinite(deriv) ? Math.max(-1e12, Math.min(1e12, deriv)) : 0;
+                }
               }
             }
           }
@@ -6565,7 +7457,10 @@ export async function runOptimizationMVP(options = {}) {
           if (baseResiduals.length === 0) return;
 
           const candidateRows = equalityResidualMeta
-            .filter((meta) => String(meta?.req?.operand || '').trim().toUpperCase() === 'CTCT')
+            .filter((meta) => {
+              const operand = String(meta?.req?.operand || '').trim().toUpperCase();
+              return operand === 'CTCT' || operand === 'OBJD' || operand === 'TSL';
+            })
             .filter((meta) => meta.rowIndex >= 0 && meta.rowIndex < baseResiduals.length);
 
           if (__profile && __profile.counts) {
@@ -6577,15 +7472,15 @@ export async function runOptimizationMVP(options = {}) {
           for (const meta of candidateRows) {
             const row = meta.rowIndex;
             const cfgId = String(meta.configId || '');
-            const candidateVarIdxs: number[] = [];
-            for (let vi = 0; vi < varIds.length; vi++) {
-              const parsed = parseJointVariableId(varIds[vi]);
-              const varCfg = String(parsed.configId || activeConfigId || '');
-              const key = String(vars?.[vi]?.key || parsed.baseId || '').toLowerCase();
-              if (cfgId && varCfg && cfgId !== varCfg) continue;
-              if (!key.includes('thickness')) continue;
-              candidateVarIdxs.push(vi);
+            const operand = String(meta?.req?.operand || '').trim().toUpperCase();
+
+            const directTerms = buildAnalyticEqualityTermsForRequirement(meta?.req, cfgId);
+            if (directTerms.length > 0) {
+              analyticEqualityRowSpecs.push({ rowIndex: row, terms: directTerms });
+              continue;
             }
+
+            const candidateVarIdxs = collectThicknessVariableIndexesForConfig(cfgId);
 
             const limitedCandidates = candidateVarIdxs.slice(0, kktAnalyticEqCalibrationMaxCandidates);
             if (limitedCandidates.length === 0) continue;
@@ -6622,7 +7517,9 @@ export async function runOptimizationMVP(options = {}) {
             if (!best || best.absSlope < kktAnalyticEqMinAbsSlope) continue;
             const dominance = secondAbs > 0 ? (best.absSlope / secondAbs) : Number.POSITIVE_INFINITY;
             if (!(dominance >= 3)) continue;
-            analyticEqualityRowSpecs.push({ rowIndex: row, varIdx: best.idx, slope: best.slope });
+            if (operand === 'CTCT' || operand === 'OBJD') {
+              analyticEqualityRowSpecs.push({ rowIndex: row, terms: [{ varIdx: best.idx, slope: best.slope }] });
+            }
           }
 
           if (__profile && __profile.counts) {
@@ -7125,7 +8022,25 @@ export async function runOptimizationMVP(options = {}) {
         let dx: number[] | null = null;
         let predictedReductionPilot = Number.NaN;
 
-        if (useWasmPilotOptimizer) {
+        if (kktUseMatrixFreeCore && kktMatrixFreePriority) {
+          try {
+            const matrixFree = solveNormalEqMatrixFreeWithOptionalWasm(J, r0, lmDamp, n);
+            if (matrixFree && Array.isArray(matrixFree.dx) && matrixFree.dx.length === n) {
+              dx = matrixFree.dx.slice();
+              predictedReductionPilot = Number(matrixFree.predictedReduction);
+              if (iter < 3 || iter % 100 === 0) {
+                console.log(`[MATRIX-FREE] Iter ${iter}: step accepted (priority mode)`, {
+                  predictedReduction: predictedReductionPilot,
+                  damping: lmDamp
+                });
+              }
+            }
+          } catch (_) {
+            // reason classification is handled in solveNormalEqMatrixFreeWithOptionalWasm
+          }
+        }
+
+        if (useWasmPilotOptimizer && !dx) {
           if (__profile && __profile.counts) {
             __profile.counts.kktWasmPilotCalls = (Number(__profile.counts.kktWasmPilotCalls) || 0) + 1;
           }
@@ -7141,13 +8056,37 @@ export async function runOptimizationMVP(options = {}) {
               fdSteps[col] = h;
             }
 
-            const residualsPerturbedFlat = new Float64Array(m * n);
-            for (let col = 0; col < n; col++) {
-              const h = Number(fdSteps[col]);
-              const base = col * m;
-              for (let row = 0; row < m; row++) {
-                residualsPerturbedFlat[base + row] = r0[row] + J[row][col] * h;
+            // Phase B残り2: 等式行対応列のFD評価スキップ
+            const analyticEqualityUsedVarIdxs = new Set<number>();
+            for (const spec of (analyticEqualityRowSpecs || [])) {
+              const terms = Array.isArray(spec?.terms) ? spec.terms : [];
+              for (const term of terms) {
+                const col = Number(term?.varIdx);
+                if (col >= 0 && col < n) {
+                  analyticEqualityUsedVarIdxs.add(col);
+                }
               }
+            }
+
+            const residualsPerturbedFlat = new Float64Array(m * n);
+            let fdEvaluatedCols = 0;
+            for (let col = 0; col < n; col++) {
+              const base = col * m;
+              if (analyticEqualityUsedVarIdxs.has(col)) {
+                // 等式行対応列: FD予測値をスキップ（基準値のまま）
+                for (let row = 0; row < m; row++) {
+                  residualsPerturbedFlat[base + row] = r0[row];
+                }
+              } else {
+                const h = Number(fdSteps[col]);
+                for (let row = 0; row < m; row++) {
+                  residualsPerturbedFlat[base + row] = r0[row] + J[row][col] * h;
+                }
+                fdEvaluatedCols++;
+              }
+            }
+            if (__profile && __profile.counts) {
+              __profile.counts.kktFiniteDiffColumnsEvaluated = (Number(__profile.counts.kktFiniteDiffColumnsEvaluated) || 0) + fdEvaluatedCols;
             }
 
             const currentXVec = Float64Array.from(currentX);
@@ -7229,13 +8168,9 @@ export async function runOptimizationMVP(options = {}) {
                   damping: lmDamp
                 });
               }
-            } else if (__profile && __profile.counts) {
-              __profile.counts.kktMatrixFreeFallbacks = (Number(__profile.counts.kktMatrixFreeFallbacks) || 0) + 1;
             }
           } catch (_) {
-            if (__profile && __profile.counts) {
-              __profile.counts.kktMatrixFreeFallbacks = (Number(__profile.counts.kktMatrixFreeFallbacks) || 0) + 1;
-            }
+            // reason classification is handled in solveNormalEqMatrixFreeWithOptionalWasm
           }
         }
 
@@ -8655,9 +9590,11 @@ if (typeof window !== 'undefined') {
     run: runOptimizationMVP,
     compareWasmPilot: compareWasmPilotBenchmark,
     compareMatrixFree: compareMatrixFreeBenchmark,
+    compareTsVsNative: compareTsVsNativeOptimizerBenchmark,
     compareKktAnalyticEq: compareKktAnalyticEqBenchmark,
     exportBenchmarkCsv: exportWasmPilotBenchmarkCsv,
     exportMatrixFreeCsv: exportMatrixFreeBenchmarkCsv,
+    exportMatrixFreeJson: exportMatrixFreeBenchmarkJson,
     pickAnalyticCandidates: pickAnalyticDerivativeCandidates,
     stop: () => {
       __optimizerStopRequested = true;
@@ -8666,6 +9603,7 @@ if (typeof window !== 'undefined') {
           globalThis.__stopOptimization = true;
         }
       } catch (_) {}
+      try { void requestOptimizerStop(); } catch (_) {}
     }
   };
 }

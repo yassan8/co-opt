@@ -5,6 +5,8 @@ export function advance_ray_batch(pos: Float64Array, dirs: Float64Array, thickne
 
 export function assemble_fd_jacobian(r0: Float64Array, r_batches: Float64Array, m: number, n: number, steps: Float64Array): Float64Array;
 
+export function assemble_fd_jacobian_grouped(r0: Float64Array, r_batches: Float64Array, m: number, n: number, col_indices: Uint32Array, steps: Float64Array): Float64Array;
+
 /**
  * Phase 3: Armijo backtracking line search with JS merit callback
  *
@@ -35,6 +37,8 @@ export function calculate_surface_origins(optical_system_rows: any[]): any;
  * Returns empty vector on failure (not positive definite)
  */
 export function cholesky_factorization(a_flat: Float64Array, n: number): Float64Array;
+
+export function compute_lca_series_from_image_heights(field_values: Float64Array, wavelengths: Float64Array, reference_wavelength: number, image_heights_flat: Float64Array): any;
 
 /**
  *
@@ -75,10 +79,6 @@ export function malloc(size: number): number;
  */
 export function matrix_vector_multiply(a_flat: Float64Array, x: Float64Array, rows: number, cols: number): Float64Array;
 
-/**
- * Matrix-free normal equation matvec: result = (J^T J + damping * I) * v
- * J is stored in row-major order (flat array)
- */
 export function normal_eq_matvec(j_flat: Float64Array, m: number, n: number, v: Float64Array, damping: number): Float64Array;
 
 export function optimize_one_iter_from_buffers(x_ptr: number, steps_ptr: number, r0_ptr: number, r_batches_ptr: number, var_scales_ptr: number, out_dx_ptr: number, out_x_next_ptr: number, out_meta_ptr: number, n: number, m: number, damping: number, trust_radius: number): number;
@@ -96,6 +96,8 @@ export function qr_factorization(a_flat: Float64Array, rows: number, cols: numbe
 export function reflect_ray_batch(dirs: Float64Array, normals: Float64Array, count: number): Float64Array;
 
 export function refract_ray_batch(dirs: Float64Array, normals: Float64Array, n1: Float64Array, n2: Float64Array, count: number): Float64Array;
+
+export function run_native_opd_map_wasm_json(req_json: string): any;
 
 export function solve_linear_system(a_flat: Float64Array, n: number, b: Float64Array): Float64Array;
 
@@ -181,12 +183,14 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly advance_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly assemble_fd_jacobian: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+    readonly assemble_fd_jacobian_grouped: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number];
     readonly backtracking_line_search_armijo: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: any) => number;
     readonly batch_mat3_mul_vec3: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly bfgs_update: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number) => number;
     readonly build_normal_equations: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly calculate_surface_origins: (a: number, b: number) => [number, number, number];
     readonly cholesky_factorization: (a: number, b: number, c: number) => [number, number];
+    readonly compute_lca_series_from_image_heights: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
     readonly fft_2d_forward: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly fft_2d_inverse: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly free: (a: number, b: number) => void;
@@ -204,6 +208,7 @@ export interface InitOutput {
     readonly qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];
     readonly reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+    readonly run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
     readonly solve_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly solve_qp_subproblem_kkt_equality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
     readonly solve_qp_subproblem_unconstrained: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];

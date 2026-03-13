@@ -1,6 +1,7 @@
 export function isTauriRuntime(): boolean {
   if (typeof window === "undefined") return false;
-  return Boolean((window as Record<string, unknown>).__TAURI_INTERNALS__);
+  const w = window as Record<string, unknown>;
+  return Boolean(w.__TAURI_INTERNALS__ || w.__TAURI__);
 }
 
 export function basenameFromPath(path: string): string {

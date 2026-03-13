@@ -169,6 +169,7 @@ export default function MainToolbar() {
           <select
             id="analysis-select"
             style={{ minWidth: 180 }}
+            data-react-handled="1"
             onChange={(event) => {
               const value = event.currentTarget.value;
               handleAnalysisSelect(value);

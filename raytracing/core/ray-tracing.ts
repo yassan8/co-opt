@@ -9,7 +9,12 @@ if (typeof window !== 'undefined') {
 // Import functions from ray-paraxial.js without destructuring for compatibility
 import * as rayParaxial from './ray-paraxial.ts';
 import { asphericSagDerivative, toricSurfaceZ, toricSagDerivatives } from '../../optical/surface-math.ts';
-import { getWASMSystem as getWASMSystemService, isRayTracingWasmStrict } from '../../core/wasm-service.ts';
+import {
+  getWASMSystem as getWASMSystemService,
+  getLegacyWasmModule,
+  isRayTracingWasmStrict
+} from '../../core/wasm-service.ts';
+import { isTauriRuntime } from '../../src/desktop/runtime.ts';
 import { setAsphericSagImplementation } from '../../core/aspheric-sag-service.ts';
 import { getRustRayTracingWasmSync } from '../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 const getSafeThickness = rayParaxial.getSafeThickness;
@@ -136,6 +141,26 @@ function __nowMs() {
   return Date.now();
 }
 
+function __preferRustRayTracingByDefault() {
+  try {
+    const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+    if (g && g.__COOPT_DISABLE_RUST_RAYTRACE_DEFAULT === true) return false;
+    if (g && g.__COOPT_FORCE_RUST_RAYTRACE_DEFAULT === true) return true;
+    if (isTauriRuntime()) return true;
+
+    // Web runtime: enable Rust-WASM ray tracing by default unless explicitly disabled.
+    // Opt-out: globalThis.__COOPT_ENABLE_RUST_RAYTRACE_WEB = false
+    if (typeof window !== 'undefined') {
+      if (g && g.__COOPT_ENABLE_RUST_RAYTRACE_WEB === false) return false;
+      return true;
+    }
+
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
 function __getWasmTmpVec3(module) {
   if (!module) return { module: null, ptr: 0 };
   if (__wasmTmpVec3Ptr && __wasmTmpVec3Module === module) return { module, ptr: __wasmTmpVec3Ptr };
@@ -172,22 +197,23 @@ function __readWasmVec3(module, ptr) {
 }
 
 function __getWasmSystemCached() {
-  if (__wasmSystemCached?.isWASMReady && __wasmSystemCached?.wasmModule) return __wasmSystemCached;
+  if (__wasmSystemCached) return __wasmSystemCached;
   const t = __nowMs();
   if ((t - __wasmSystemLastCheckAt) < __WASM_SYSTEM_RECHECK_MS) return null;
   __wasmSystemLastCheckAt = t;
   try {
     const wasmSystem = getWASMSystemService?.();
-    if (wasmSystem?.isWASMReady && wasmSystem?.wasmModule) {
-      __wasmSystemCached = wasmSystem;
-      return wasmSystem;
+    const wasmModule = getLegacyWasmModule(wasmSystem);
+    if (wasmModule) {
+      __wasmSystemCached = wasmModule;
+      return wasmModule;
     }
   } catch (_) {}
   return null;
 }
 
 function __getWasmModuleCached() {
-  return __getWasmSystemCached()?.wasmModule ?? null;
+  return __getWasmSystemCached();
 }
 
 function __getWasmSagRt10Fn() {
@@ -1164,7 +1190,11 @@ export function intersectAsphericSurfaceBatch(rays, params, mode = "even", maxIt
     || (isRayTracingWasmStrict() && !allowNonStrict)
     || forceRustWasm
   );
-  const useRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(strictOptions && strictOptions.useRustWasm === true));
+  const useRustWasm = !disableWasmRayTracing && (
+    forceRustWasm
+    || !!(strictOptions && strictOptions.useRustWasm === true)
+    || __preferRustRayTracingByDefault()
+  );
   const requireRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(strictOptions && strictOptions.requireRustWasm === true));
   const requireForwardHit = !!(strictOptions && strictOptions.requireForwardHit === true);
   const forwardHitMinT = -1e-10;
@@ -1340,7 +1370,11 @@ function __intersectAsphericSurface_impl(ray, params, mode = "even", maxIter = 2
     || (isRayTracingWasmStrict() && !allowNonStrict)
     || forceRustWasm
   );
-  const useRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(strictOptions && strictOptions.useRustWasm === true));
+  const useRustWasm = !disableWasmRayTracing && (
+    forceRustWasm
+    || !!(strictOptions && strictOptions.useRustWasm === true)
+    || __preferRustRayTracingByDefault()
+  );
   const requireRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(strictOptions && strictOptions.requireRustWasm === true));
   const requireForwardHit = !!(strictOptions && strictOptions.requireForwardHit === true);
   const forwardHitMinT = __resolveForwardHitMinTForRay(ray, safeParams, mode, requireForwardHit);
@@ -1942,7 +1976,7 @@ export function surfaceNormal(pt, params, mode = "even", options = null) {
 }
 
 function __surfaceNormal_impl(pt, params, mode = "even", options = null) {
-  const useRustWasm = !!(options && options.useRustWasm === true);
+  const useRustWasm = !!(options && options.useRustWasm === true) || __preferRustRayTracingByDefault();
   const requireRustWasm = !!(options && options.requireRustWasm === true);
   if (useRustWasm) {
     const rust = getRustRayTracingWasmSync();
@@ -2895,7 +2929,7 @@ function __buildRustStopSolverPackedMeta(effectiveSystemRows, surfaceData, stopS
       const radius = Number(row?.radius);
       const isPlaneSurface = !Number.isFinite(radius) || radius === 0;
       const isToricSurface = surfType === 'toric';
-      if (isToricSurface) return null;
+      // Toric surfaces are now supported by rust-wasm hit-point solver path.
       const isOddAsphere = !isToricSurface && surfType.includes('odd');
       const isMirror = String(row?.material ?? '').trim().toUpperCase() === 'MIRROR';
       const imageTypeRaw = row['object type'] ?? row.object ?? row.Object ?? row.type ?? '';
@@ -3487,7 +3521,11 @@ function __traceRayHitPointBatch_lockstep(opticalSystemRows, rays, n0, targetSur
     || (isRayTracingWasmStrict() && !allowNonStrict)
     || forceRustWasm
   );
-  const useRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(options && options.useRustWasm === true));
+  const useRustWasm = !disableWasmRayTracing && (
+    forceRustWasm
+    || !!(options && options.useRustWasm === true)
+    || __preferRustRayTracingByDefault()
+  );
   const requireRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(options && options.requireRustWasm === true));
   const requireForwardHit = !!(options && options.requireForwardHit === true);
   if (useRustWasm) {
@@ -4953,6 +4991,10 @@ function __traceSingleRayHitPoint_rustMeta(opticalSystemRows, ray0, n0, targetSu
     const hx = Number((raw as any)[2]);
     const hy = Number((raw as any)[3]);
     const hz = Number((raw as any)[4]);
+    const dx = Number((raw as any)[5]);
+    const dy = Number((raw as any)[6]);
+    const dz = Number((raw as any)[7]);
+    const includeDirection = !!(options && typeof options === 'object' && options.__returnHitDirection === true);
     if (captureRustSingleMeta && g) {
       const statusLabel = (
         status === 1 ? 'ok' :
@@ -4971,10 +5013,16 @@ function __traceSingleRayHitPoint_rustMeta(opticalSystemRows, ray0, n0, targetSu
         rowCount,
         hitPoint: (status === 1 && Number.isFinite(hx) && Number.isFinite(hy) && Number.isFinite(hz))
           ? { x: hx, y: hy, z: hz }
+          : null,
+        hitDirection: (status === 1 && Number.isFinite(dx) && Number.isFinite(dy) && Number.isFinite(dz))
+          ? { x: dx, y: dy, z: dz }
           : null
       };
     }
     if (status === 1 && Number.isFinite(hx) && Number.isFinite(hy) && Number.isFinite(hz)) {
+      if (includeDirection && Number.isFinite(dx) && Number.isFinite(dy) && Number.isFinite(dz)) {
+        return { x: hx, y: hy, z: hz, dx, dy, dz };
+      }
       return { x: hx, y: hy, z: hz };
     }
     return null;
@@ -5283,7 +5331,11 @@ function __traceRayEvalBatch_lockstep(opticalSystemRows, rays, n0, targetSurface
     || (isRayTracingWasmStrict() && !allowNonStrict)
     || forceRustWasm
   );
-  const useRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(options && options.useRustWasm === true));
+  const useRustWasm = !disableWasmRayTracing && (
+    forceRustWasm
+    || !!(options && options.useRustWasm === true)
+    || __preferRustRayTracingByDefault()
+  );
   const requireRustWasm = !disableWasmRayTracing && (forceRustWasm || !!(options && options.requireRustWasm === true));
   const requireForwardHit = !!(options && options.requireForwardHit === true);
   if (useRustWasm) {

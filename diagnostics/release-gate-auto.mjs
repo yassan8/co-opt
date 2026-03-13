@@ -179,13 +179,15 @@ const normalizeStartStep = (v) => {
   if (s === 'perfquick' || s === 'perf-quick' || s === 'quick' || s === '0') return 'perfquick';
   if (s === 'raytrace' || s === 'ray' || s === '1') return 'raytrace';
   if (s === 'opdparity' || s === 'opd-parity' || s === 'opd-js-rust' || s === '2') return 'opdparity';
-  if (s === 'opd' || s === '3') return 'opd';
-  if (s === 'ta' || s === 'ta-mode' || s === 'tamode' || s === '4') return 'ta';
-  if (s === 'kkt' || s === '5') return 'kkt';
+  if (s === 'nativeoperands' || s === 'native-operands' || s === 'native' || s === '3') return 'nativeoperands';
+  if (s === 'opd' || s === '4') return 'opd';
+  if (s === 'ta' || s === 'ta-mode' || s === 'tamode' || s === '5') return 'ta';
+  if (s === 'kkt' || s === '6') return 'kkt';
+  if (s === 'phasec' || s === 'phase-c' || s === 'matrixfree' || s === 'matrix-free' || s === '7') return 'phasec';
   return 'perfquick';
 };
 
-const stepOrder = ['perfquick', 'raytrace', 'opdparity', 'opd', 'ta', 'kkt'];
+const stepOrder = ['perfquick', 'raytrace', 'opdparity', 'nativeoperands', 'opd', 'ta', 'kkt', 'phasec'];
 
 const run = async () => {
   const startedAt = new Date().toISOString();
@@ -194,6 +196,8 @@ const run = async () => {
   const endAt = normalizeStartStep(getArg('end-at', 'kkt'));
   const endIdx = stepOrder.indexOf(endAt);
   const enablePerfQuick = toBoolArg('enable-perf-quick', true);
+  const enablePhaseC = toBoolArg('phasec-enable', false);
+  const phaseCInput = toStrArg('phasec-input', '');
 
   const outDefault = `release-gate-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
   const outRel = toStrArg('out', path.join('diagnostics/results', outDefault));
@@ -229,7 +233,14 @@ const run = async () => {
     kktMinTotalSpeedup: toNumArg('kkt-min-total-speedup', 1.5),
     kktMinSolverSpeedup: toNumArg('kkt-min-solver-speedup', 1.0),
     kktMinWasmOkRate: toNumArg('kkt-min-wasm-ok-rate', 1.0),
-    kktMinWasmFeasibleRate: toNumArg('kkt-min-wasm-feasible-rate', 1.0)
+    kktMinWasmFeasibleRate: toNumArg('kkt-min-wasm-feasible-rate', 1.0),
+    kktRequirePhaseC: toBoolArg('kkt-require-phase-c', false),
+    kktMaxMatrixFreeFallbackRate: toNumArg('kkt-max-matrixfree-fallback-rate', 0.05),
+    kktMaxMatrixFreeUnknownFallbackRate: toNumArg('kkt-max-matrixfree-unknown-fallback-rate', 0.01),
+    phaseCMinElapsedSpeedup: toNumArg('phasec-min-elapsed-speedup', 1.5),
+    phaseCMinOkRateDeltaPct: toNumArg('phasec-min-ok-rate-delta-pct', 0),
+    phaseCMaxMatrixFreeFallbackRate: toNumArg('phasec-max-matrixfree-fallback-rate', 0.05),
+    phaseCMaxMatrixFreeUnknownFallbackRate: toNumArg('phasec-max-matrixfree-unknown-fallback-rate', 0.01)
   };
 
   const perfQuickConfig = {
@@ -245,7 +256,9 @@ const run = async () => {
   const kktMineq = toNumArg('kkt-mineq', 6);
   const kktMaxIter = toNumArg('kkt-maxIter', 20);
   const stepTimeoutMs = toNumArg('step-timeout-ms', 0);
-  const stepIdleTimeoutMs = toNumArg('step-idle-timeout-ms', 180000);
+  // Default to no idle timeout to avoid false "stuck" detection on long silent steps.
+  // Use --step-idle-timeout-ms N to re-enable watchdog behavior when needed.
+  const stepIdleTimeoutMs = toNumArg('step-idle-timeout-ms', 0);
   const stepRetries = Math.max(1, toNumArg('step-retries', 1));
   const stepHeartbeatMs = Math.max(1000, toNumArg('step-heartbeat-ms', 30000));
 
@@ -271,6 +284,8 @@ const run = async () => {
       startFrom,
       endAt,
       enablePerfQuick,
+      enablePhaseC,
+      phaseCInput: phaseCInput ? path.relative(projectRoot, path.resolve(projectRoot, phaseCInput)) : null,
       stepTimeoutMs,
       stepIdleTimeoutMs,
       stepRetries,
@@ -282,9 +297,11 @@ const run = async () => {
       perfquick: { passed: false, skipped: false, result: null, raytrace: null, aperture: null },
       raytrace: { passed: false, skipped: false, golden: null, analysis: null },
       opdparity: { passed: false, skipped: false, result: null },
+      nativeoperands: { passed: false, skipped: false, result: null },
       opd: { passed: false, skipped: false, result: null, analysis: null },
       ta: { passed: false, skipped: false, result: null, analysis: null },
-      kkt: { passed: false, skipped: false, result: null, analysis: null }
+      kkt: { passed: false, skipped: false, result: null, analysis: null },
+      phasec: { passed: false, skipped: false, result: null, analysis: null }
     },
     passed: false,
     failedStep: null,
@@ -379,6 +396,25 @@ const run = async () => {
     }
     await persistSummary(summary);
 
+    if (shouldRunStep('nativeoperands')) {
+      const nativeOperandStamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const nativeOperandRel = path.join('diagnostics/results', `native-operands-auto-release-gate-${nativeOperandStamp}.json`);
+      await runNode('diagnostics/native-operands-auto.mjs', [
+        '--out', nativeOperandRel,
+        '--require', 'true'
+      ], null, { ...runnerOptions, label: 'nativeoperands', idleTimeoutMs: 0 });
+
+      const nativeOperandAbs = path.resolve(projectRoot, nativeOperandRel);
+      summary.steps.nativeoperands = {
+        passed: true,
+        skipped: false,
+        result: path.relative(projectRoot, nativeOperandAbs)
+      };
+    } else {
+      summary.steps.nativeoperands = { ...summary.steps.nativeoperands, skipped: true };
+    }
+    await persistSummary(summary);
+
     const opdStamp = new Date().toISOString().replace(/[:.]/g, '-');
     const opdResultRel = path.join('diagnostics/results', `opd-full-batch-release-gate-${opdStamp}.json`);
     const opdAnalysisRel = path.join('diagnostics/results', `opd-full-batch-analysis-release-gate-${opdStamp}.json`);
@@ -394,6 +430,9 @@ const run = async () => {
         {
           ...runnerOptions,
           label: 'opd-benchmark',
+          // This step occasionally leaves a live event loop after writing the success summary.
+          // Keep a local idle watchdog so the pipeline can proceed automatically.
+          idleTimeoutMs: Math.max(20000, Number(runnerOptions.idleTimeoutMs) || 0),
           successMarker: '✅ OPD full-batch A/B benchmark summary',
           successOnMarkerIdle: true
         }
@@ -448,6 +487,9 @@ const run = async () => {
         '--min-solver-speedup', String(thresholds.kktMinSolverSpeedup),
         '--min-wasm-ok-rate', String(thresholds.kktMinWasmOkRate),
         '--min-wasm-feasible-rate', String(thresholds.kktMinWasmFeasibleRate),
+        '--require-phase-c', String(thresholds.kktRequirePhaseC),
+        '--max-matrixfree-fallback-rate', String(thresholds.kktMaxMatrixFreeFallbackRate),
+        '--max-matrixfree-unknown-fallback-rate', String(thresholds.kktMaxMatrixFreeUnknownFallbackRate),
         '--rounds', String(kktRounds),
         '--n', String(kktN),
         '--meq', String(kktMeq),
@@ -468,7 +510,32 @@ const run = async () => {
     }
     await persistSummary(summary);
 
-    summary.passed = ['perfquick', 'raytrace', 'opdparity', 'opd', 'ta', 'kkt'].every((step) => {
+    if (shouldRunStep('phasec') && enablePhaseC && phaseCInput) {
+      const phaseCAnalysisRel = path.join('diagnostics/results', `phase-c-analysis-release-gate-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+      await runNode('diagnostics/phase-c-analyze.mjs', [
+        '--input', phaseCInput,
+        '--out', phaseCAnalysisRel,
+        '--require', 'true',
+        '--min-elapsed-speedup', String(thresholds.phaseCMinElapsedSpeedup),
+        '--min-ok-rate-delta-pct', String(thresholds.phaseCMinOkRateDeltaPct),
+        '--max-matrixfree-fallback-rate', String(thresholds.phaseCMaxMatrixFreeFallbackRate),
+        '--max-matrixfree-unknown-fallback-rate', String(thresholds.phaseCMaxMatrixFreeUnknownFallbackRate)
+      ], null, { ...runnerOptions, label: 'phasec', idleTimeoutMs: 0 });
+
+      const phaseCResult = path.resolve(projectRoot, phaseCInput);
+      const phaseCAnalysis = path.resolve(projectRoot, phaseCAnalysisRel);
+      summary.steps.phasec = {
+        passed: true,
+        skipped: false,
+        result: path.relative(projectRoot, phaseCResult),
+        analysis: path.relative(projectRoot, phaseCAnalysis)
+      };
+    } else {
+      summary.steps.phasec = { ...summary.steps.phasec, skipped: true };
+    }
+    await persistSummary(summary);
+
+    summary.passed = ['perfquick', 'raytrace', 'opdparity', 'nativeoperands', 'opd', 'ta', 'kkt', 'phasec'].every((step) => {
       const s = summary.steps[step];
       return s.skipped || s.passed;
     });
@@ -478,9 +545,11 @@ const run = async () => {
     if (msg.includes('perf-quick-auto')) summary.failedStep = 'perfquick';
     else if (msg.includes('raytrace-golden-auto')) summary.failedStep = 'raytrace';
     else if (msg.includes('opd-js-rust-parity')) summary.failedStep = 'opdparity';
+    else if (msg.includes('native-operands-auto')) summary.failedStep = 'nativeoperands';
     else if (msg.includes('opd-full-batch-benchmark') || msg.includes('opd-full-batch-analyze') || msg.includes('opd-full-batch-auto')) summary.failedStep = 'opd';
     else if (msg.includes('ta-rms-lightweight-mode-auto') || msg.includes('ta-rms-lightweight-mode-analyze') || msg.includes('ta-rms-micro-benchmark')) summary.failedStep = 'ta';
     else if (msg.includes('kkt-e2e-auto')) summary.failedStep = 'kkt';
+    else if (msg.includes('phase-c-analyze')) summary.failedStep = 'phasec';
     else if (msg.includes('failed with signal')) summary.failedStep = 'interrupted';
     else summary.failedStep = 'unknown';
 
@@ -527,6 +596,17 @@ const run = async () => {
       }
     }
 
+    if (shouldRunStep('nativeoperands')) {
+      const nativeOperand = await listLatest(/^native-operands-auto-.*\.json$/i);
+      if (nativeOperand) {
+        summary.steps.nativeoperands = {
+          passed: false,
+          skipped: false,
+          result: path.relative(projectRoot, nativeOperand)
+        };
+      }
+    }
+
     if (shouldRunStep('opd')) {
       const opdResult = await listLatest(/^opd-full-batch-.*\.json$/i, /^opd-full-batch-analysis-.*\.json$/i);
       const opdAnalysis = await listLatest(/^opd-full-batch-analysis-.*\.json$/i);
@@ -562,6 +642,19 @@ const run = async () => {
           skipped: false,
           result: kktResult ? path.relative(projectRoot, kktResult) : null,
           analysis: kktAnalysis ? path.relative(projectRoot, kktAnalysis) : null
+        };
+      }
+    }
+
+    if (shouldRunStep('phasec')) {
+      const phaseCAnalysis = await listLatest(/^phase-c-analysis-.*\.json$/i);
+      const phaseCResult = phaseCInput ? path.resolve(projectRoot, phaseCInput) : null;
+      if (phaseCResult || phaseCAnalysis) {
+        summary.steps.phasec = {
+          passed: false,
+          skipped: false,
+          result: phaseCResult ? path.relative(projectRoot, phaseCResult) : null,
+          analysis: phaseCAnalysis ? path.relative(projectRoot, phaseCAnalysis) : null
         };
       }
     }

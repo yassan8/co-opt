@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { DistortionAnalysisPage } from './DistortionAnalysisPage';
+import { MtfAnalysisPage } from './MtfAnalysisPage';
 import MainToolbar from "../ui/components/MainToolbar";
 import ConfigurationSection from "../ui/components/ConfigurationSection";
 import SourceObjectSection from "../ui/components/SourceObjectSection";
@@ -8,8 +10,131 @@ import LegacyPanels from "../ui/components/LegacyPanels";
 import { SystemDataPanel } from "../ui/components/LegacyPanels";
 import { requestRefreshBlockInspector } from "../../core/window-facade.ts";
 import { handleOpenSettings } from "../../ui/toolbar-handlers";
+import { runOptimizationMVP } from "../../optimization/optimizer-mvp.ts";
+import { clearOptimizerStop, readDesktopSetting, writeDesktopSetting } from "../../src/desktop/ipc/client.ts";
+import { isTauriRuntime } from "../../src/desktop/runtime.ts";
+
+// ---- Settings window page component ----
+const FORCE_MODE_KEY = 'coopt.forceInfinitePupilMode';
+const GLASS_MAP_MFR_KEY = 'coopt.glassMap.defaultManufacturers';
+const DARK_MODE_KEY = 'coopt.darkMode';
+const ALLOWED_MFR = ['SCHOTT', 'HOYA', 'HIKARI', 'OHARA', 'Sumita', 'CDGM', 'Special'] as const;
+
+function sanitizeForceModeValue(v: any): 'stop' | 'entrance' | '' {
+  const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
+  return (s === 'stop' || s === 'entrance') ? s : '';
+}
+
+function readForceModeFromUrl(): 'stop' | 'entrance' | '' {
+  try {
+    return sanitizeForceModeValue(new URL(window.location.href).searchParams.get('coopt_force_mode'));
+  } catch (_) { return ''; }
+}
+
+function applyForceModeToWindowGlobals(m: 'stop' | 'entrance' | ''): void {
+  const w = window as any;
+  try {
+    if (typeof w.__cooptSetForceInfinitePupilMode === 'function') {
+      w.__cooptSetForceInfinitePupilMode(m);
+      return;
+    }
+  } catch (_) {}
+  try {
+    if (m) { w.__COOPT_FORCE_INFINITE_PUPIL_MODE = m; }
+    else { try { delete w.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { w.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; } }
+  } catch (_) {}
+}
+
+function DesktopSettingsPage() {
+  const [forceMode, setForceMode] = useState<'stop' | 'entrance' | ''>(readForceModeFromUrl);
+  const [mfrs, setMfrs] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(GLASS_MAP_MFR_KEY) || '[]'); } catch (_) { return []; }
+  });
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    try { return localStorage.getItem(DARK_MODE_KEY) === 'true'; } catch (_) { return false; }
+  });
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    readDesktopSetting(FORCE_MODE_KEY).then((val) => {
+      const m = sanitizeForceModeValue(val);
+      if (m) { setForceMode(m); applyForceModeToWindowGlobals(m); }
+      setLoaded(true);
+    }).catch(() => setLoaded(true));
+  }, []);
+
+  const handleForceModeChange = async (val: 'stop' | 'entrance' | '') => {
+    setForceMode(val);
+    applyForceModeToWindowGlobals(val);
+    try { if (val) localStorage.setItem(FORCE_MODE_KEY, val); else localStorage.removeItem(FORCE_MODE_KEY); } catch (_) {}
+    await writeDesktopSetting(FORCE_MODE_KEY, val || null);
+    try {
+      const w = window as any;
+      if (typeof w.__cooptBroadcastForceInfinitePupilMode === 'function') w.__cooptBroadcastForceInfinitePupilMode(val);
+    } catch (_) {}
+  };
+
+  const handleMfrChange = (mfr: string, checked: boolean) => {
+    const next = checked ? [...mfrs, mfr] : mfrs.filter(m => m !== mfr);
+    setMfrs(next);
+    try { if (next.length) localStorage.setItem(GLASS_MAP_MFR_KEY, JSON.stringify(next)); else localStorage.removeItem(GLASS_MAP_MFR_KEY); } catch (_) {}
+  };
+
+  const handleDarkModeChange = (enabled: boolean) => {
+    setDarkMode(enabled);
+    try { localStorage.setItem(DARK_MODE_KEY, enabled ? 'true' : 'false'); } catch (_) {}
+    try { document.body.classList.toggle('dark-mode', enabled); } catch (_) {}
+    const o = (window as any).opener;
+    try { if (o && typeof o.__cooptSetDarkMode === 'function') o.__cooptSetDarkMode(enabled); } catch (_) {}
+  };
+
+  const mfrSet = new Set(mfrs.map(s => String(s).toUpperCase()));
+
+  return (
+    <div style={{ height: '100vh', width: '100vw', fontFamily: 'Arial, sans-serif', background: '#f4f4f4', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '10px 12px', background: '#f8f8f8', borderBottom: '1px solid #ddd', fontWeight: 600 }} />
+      <div style={{ padding: 12, background: '#fff', flex: '1 1 auto', overflow: 'auto' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px 0' }}>Glass Map: Default Manufacturers</div>
+        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+          Choose which manufacturers are enabled by default when opening Glass Map.<br />
+          If nothing is selected, Glass Map will show all manufacturers.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 14px 0' }}>
+          {ALLOWED_MFR.map(mfr => (
+            <label key={mfr}>
+              <input type="checkbox" checked={mfrSet.has(mfr.toUpperCase())} onChange={e => handleMfrChange(mfr, e.target.checked)} />{' '}{mfr}
+            </label>
+          ))}
+        </div>
+
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px 0' }}>Dark Mode</div>
+        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>Enable VS Code-style dark mode for the entire UI.</div>
+        <label style={{ margin: '8px 0 14px 0', display: 'block' }}>
+          <input type="checkbox" checked={darkMode} onChange={e => handleDarkModeChange(e.target.checked)} />{' '}Enable Dark Mode
+        </label>
+
+        <div style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px 0' }}>Infinite Field: Pupil Sampling Mode</div>
+        <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
+          Fix the sampling mode used for infinite-field wavefront/PSF/MTF generation.<br />
+          This sets <code>__COOPT_FORCE_INFINITE_PUPIL_MODE</code> to <code>stop</code> or <code>entrance</code>.
+        </div>
+        {!loaded && <div style={{ fontSize: 12, color: '#888' }}>Loading…</div>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0 12px 0' }}>
+          {(['', 'stop', 'entrance'] as const).map(val => (
+            <label key={val}>
+              <input type="radio" name="force-mode" value={val} checked={forceMode === val} onChange={() => handleForceModeChange(val)} />
+              {' '}{val === '' ? 'Auto (default)' : val === 'stop' ? <>Force <code>stop</code></> : <>Force <code>entrance</code></>}
+            </label>
+          ))}
+        </div>
+        <div style={{ fontSize: 12, color: '#666' }}>Note: Changes take effect on the next calculation.</div>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
+  const optimizeRowsSyncKey = 'coopt.optimizeRowsSync';
   const [renderWindowStatus, setRenderWindowStatus] = useState("Initializing...");
   const [renderViewAxis, setRenderViewAxis] = useState<'YZ' | 'XZ'>('YZ');
   const [renderRayCount, setRenderRayCount] = useState(5);
@@ -39,41 +164,883 @@ export default function App() {
       return { enabled: false, analysis: '' };
     }
   })();
+  const isOptimizeWindowMode = (() => {
+    try {
+      const url = new URL(window.location.href);
+      return url.searchParams.get('coopt_optimize_window') === '1';
+    } catch (_) {
+      return false;
+    }
+  })();
+  const [optMethod, setOptMethod] = useState<'kkt' | 'lm' | 'cd'>('kkt');
+  const [optMaxIterations, setOptMaxIterations] = useState(5000);
+  const [optConvergenceProfile, setOptConvergenceProfile] = useState<'fast' | 'balanced' | 'deep'>('balanced');
+  const [optAutoRenderOnAccept, setOptAutoRenderOnAccept] = useState(false);
+  const [optRunning, setOptRunning] = useState(false);
+  const [optStopRequested, setOptStopRequested] = useState(false);
+  const [optimizeState, setOptimizeState] = useState<any>({
+    status: 'idle',
+    phase: 'ready',
+    modeUsed: 'kkt',
+    iterations: 0,
+    variableCount: 0,
+    requirementCount: 0,
+    meritBefore: NaN,
+    meritAfter: NaN,
+    requirementScoreBefore: NaN,
+    requirementScoreAfter: NaN,
+    requirementScoreTable: NaN,
+    best: NaN,
+    acceptCount: 0,
+    rejectCount: 0,
+    issue: '-',
+    percent: 0,
+    progressEvents: [],
+  });
+
+  const countOptimizeFlags = (rows: any[]): number => {
+    if (!Array.isArray(rows)) return 0;
+    return rows.reduce((acc: number, row: any) => {
+      if (!row || typeof row !== 'object') return acc;
+      let c = 0;
+      for (const k of Object.keys(row)) {
+        if (!k.startsWith('optimize')) continue;
+        const v = row[k];
+        const t = String(v ?? '').trim().toLowerCase();
+        if (v === true || v === 1 || t === 'v' || t === 'true' || t === '1') c += 1;
+      }
+      return acc + c;
+    }, 0);
+  };
 
   useEffect(() => {
-    const isTauri = !!(window as any).__TAURI_INTERNALS__;
-    if (!isTauri) return;
+    const optimizeStatus = String(optimizeState?.status || 'idle').toLowerCase();
+    // Pre-run score probing must only run in the initial idle state.
+    // Otherwise it can overwrite the final optimized score after stop/done.
+    if (!isOptimizeWindowMode || optRunning || optimizeStatus !== 'idle') return;
+    let cancelled = false;
+    let retryTimer: any = null;
 
-    const requestKey = 'coopt.windowCloseRequest';
-
-    const closeByLabel = async (label: string) => {
-      const normalized = String(label || '').trim();
-      if (!normalized) return;
+    const refreshPreRunScore = async (): Promise<boolean> => {
       try {
-        const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-        const target = await WebviewWindow.getByLabel(normalized);
-        if (target && typeof (target as any).close === 'function') {
-          await (target as any).close();
+        const w = window as any;
+        const sre = w.systemRequirementsEditor;
+        if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
+          const p = sre.evaluateAndUpdateNow({ reason: 'optimize-window-prerun', forceSilent: true, silent: true });
+          if (p && typeof p.then === 'function') await p;
+        }
+
+        const cfg = (() => {
+          try {
+            if (typeof w.loadSystemConfigurationsFromTableConfig === 'function') {
+              return w.loadSystemConfigurationsFromTableConfig();
+            }
+            if (typeof w.loadSystemConfigurations === 'function') {
+              return w.loadSystemConfigurations();
+            }
+          } catch (_) {}
+          return null;
+        })();
+        const activeConfigId = (cfg && cfg.activeConfigId !== undefined && cfg.activeConfigId !== null)
+          ? String(cfg.activeConfigId).trim()
+          : '';
+
+        const rows = (() => {
+          try {
+            if (sre && typeof sre.getData === 'function') {
+              const d = sre.getData();
+              if (Array.isArray(d)) return d;
+            }
+          } catch (_) {}
+          try {
+            if (Array.isArray(cfg?.systemRequirements)) {
+              return cfg.systemRequirements;
+            }
+          } catch (_) {}
+          return [];
+        })();
+
+        const opticalRows = await (async () => {
+          try {
+            if (typeof w.getOpticalSystemRows === 'function') {
+              const d0 = w.getOpticalSystemRows(w.tableOpticalSystem);
+              if (Array.isArray(d0) && d0.length > 0) return d0;
+            }
+            const table = w.tableOpticalSystem;
+            if (table && typeof table.getData === 'function') {
+              const d = await table.getData();
+              if (Array.isArray(d)) return d;
+            }
+          } catch (_) {}
+          try {
+            const activeId = cfg?.activeConfigId;
+            const activeCfg = Array.isArray(cfg?.configurations)
+              ? (cfg.configurations.find((c: any) => c && String(c.id) === String(activeId)) || cfg.configurations[0])
+              : null;
+            if (Array.isArray(activeCfg?.opticalSystem) && activeCfg.opticalSystem.length > 0) {
+              return activeCfg.opticalSystem;
+            }
+            if (activeCfg && Array.isArray(activeCfg.blocks) && activeCfg.blocks.length > 0 && typeof w.expandBlocksToOpticalSystemRows === 'function') {
+              const expanded = w.expandBlocksToOpticalSystemRows(activeCfg.blocks);
+              if (expanded && Array.isArray(expanded.rows) && expanded.rows.length > 0) {
+                return expanded.rows;
+              }
+            }
+          } catch (_) {}
+          return [];
+        })();
+
+        const parseLocalRows = (key: string) => {
+          try {
+            const raw = localStorage.getItem(key);
+            if (!raw) return [];
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch (_) {
+            return [];
+          }
+        };
+
+        const sourceRows = (() => {
+          try {
+            const table = w.tableSource;
+            if (table && typeof table.getData === 'function') {
+              const d = table.getData();
+              if (Array.isArray(d) && d.length > 0) return d;
+            }
+          } catch (_) {}
+          try {
+            if (Array.isArray(cfg?.source) && cfg.source.length > 0) {
+              return cfg.source;
+            }
+          } catch (_) {}
+          const v = parseLocalRows('tableData_source');
+          return Array.isArray(v) ? v : [];
+        })();
+
+        const objectRows = (() => {
+          try {
+            const table = w.tableObject;
+            if (table && typeof table.getData === 'function') {
+              const d = table.getData();
+              if (Array.isArray(d) && d.length > 0) return d;
+            }
+          } catch (_) {}
+          try {
+            const activeId = cfg?.activeConfigId;
+            const activeCfg = Array.isArray(cfg?.configurations)
+              ? (cfg.configurations.find((c: any) => c && String(c.id) === String(activeId)) || cfg.configurations[0])
+              : null;
+            if (Array.isArray(activeCfg?.object) && activeCfg.object.length > 0) {
+              return activeCfg.object;
+            }
+          } catch (_) {}
+          const v = parseLocalRows('tableData_object');
+          return Array.isArray(v) ? v : [];
+        })();
+
+        const normalizeConfigId = (row: any): string => {
+          try {
+            if (sre && typeof sre._normalizeConfigId === 'function') {
+              return String(sre._normalizeConfigId(row?.configId, cfg, activeConfigId) || '').trim();
+            }
+          } catch (_) {}
+          const rawCfg = String(row?.configId ?? '').trim();
+          return rawCfg || activeConfigId;
+        };
+
+        const enabledRows = Array.isArray(rows)
+          ? rows.filter((row: any) => {
+            const enabled = (row?.enabled === undefined || row?.enabled === null) ? true : !!row.enabled;
+            const operand = String(row?.operand ?? '').trim();
+            const weight = Number(row?.weight ?? 1);
+            return enabled && !!operand && Number.isFinite(weight) && weight > 0;
+          })
+          : [];
+
+        const activeRows = Array.isArray(enabledRows)
+          ? enabledRows.filter((row: any) => {
+            const reqCfg = normalizeConfigId(row);
+            if (!activeConfigId) return true;
+            return reqCfg === activeConfigId;
+          })
+          : [];
+
+        let tableScore = Number.NaN;
+        {
+          let sum = 0;
+          let cnt = 0;
+          for (const row of activeRows) {
+            const c = Number.isFinite(Number(row?._contribution))
+              ? Number(row?._contribution)
+              : Number(row?.score);
+            if (Number.isFinite(c)) {
+              if (c > 0) sum += c;
+              cnt += 1;
+            }
+          }
+          if (cnt > 0 && Number.isFinite(sum)) tableScore = sum;
+        }
+
+        // Use TS-side table score (same evaluation as "Update Requirement").
+        let safeScore = Number.isFinite(tableScore) ? tableScore : Number.NaN;
+        let variableCount = 0;
+        if (!Number.isFinite(safeScore)) {
+          let score = 0;
+          let finiteCount = 0;
+          for (const row of activeRows) {
+            const c = Number.isFinite(Number(row?._contribution))
+              ? Number(row?._contribution)
+              : Number(row?.score);
+            if (Number.isFinite(c)) {
+              if (c > 0) score += c;
+              finiteCount += 1;
+            }
+          }
+          if (finiteCount > 0 && Number.isFinite(score)) safeScore = score;
+        }
+        // Count optimize variables from optical system rows.
+        if (Array.isArray(opticalRows)) {
+          variableCount = countOptimizeFlags(opticalRows);
+        }
+
+        if (!cancelled) {
+          setOptimizeState((prev: any) => ({
+            ...prev,
+            requirementCount: activeRows.length,
+            variableCount: variableCount > 0 ? variableCount : prev.variableCount,
+            requirementScoreBefore: safeScore,
+            requirementScoreAfter: safeScore,
+            requirementScoreTable: tableScore,
+            meritBefore: safeScore,
+            meritAfter: safeScore,
+            best: Number.isFinite(safeScore) ? safeScore : prev.best,
+          }));
+        }
+        return Number.isFinite(safeScore) || Number.isFinite(tableScore);
+      } catch (_) {
+        return false;
+      }
+    };
+
+    let attempts = 0;
+    const maxAttempts = 50;
+    const runWithRetry = async () => {
+      if (cancelled || optRunning) return;
+      const ok = await refreshPreRunScore();
+      attempts += 1;
+      if (!ok && attempts < maxAttempts && !cancelled && !optRunning) {
+        retryTimer = setTimeout(() => {
+          void runWithRetry();
+        }, 200);
+      }
+    };
+
+    void runWithRetry();
+    return () => {
+      cancelled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+  }, [isOptimizeWindowMode, optRunning, optMethod, optimizeState?.status]);
+
+
+  useEffect(() => {
+    if (isOptimizeWindowMode || analysisWindowMode.enabled || isRenderWindowMode || isSettingsWindowMode) return;
+
+    let lastReqEvalAt = 0;
+    const REQUIREMENT_EVAL_SYNC_INTERVAL_MS = 250;
+
+    const requestRequirementReeval = async (reason: string, force = false) => {
+      const now = Date.now();
+      if (!force && (now - lastReqEvalAt) < REQUIREMENT_EVAL_SYNC_INTERVAL_MS) return;
+      lastReqEvalAt = now;
+      try {
+        const w = window as any;
+        const reqEditor = w.systemRequirementsEditor;
+        if (reqEditor && typeof reqEditor.evaluateAndUpdateNow === 'function') {
+          const p = reqEditor.evaluateAndUpdateNow({ reason, forceSilent: true, silent: true });
+          if (p && typeof p.then === 'function') await p;
         }
       } catch (_) {}
+    };
+
+    const waitRequirementEvalDone = async (startedAt: number, timeoutMs = 2000): Promise<void> => {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        try {
+          const s = (window as any).__cooptLastRequirementsEval;
+          const at = Number(s?.at ?? 0);
+          const stage = String(s?.stage ?? '').trim().toLowerCase();
+          if (at > startedAt && stage === 'done') return;
+        } catch (_) {}
+        if (Date.now() >= deadline) return;
+        await new Promise((r) => setTimeout(r, 30));
+      }
+    };
+
+    const readRequirementTableScoreFromHost = (): number => {
+      try {
+        const w = window as any;
+        const sre = w.systemRequirementsEditor;
+        if (!sre || typeof sre.getData !== 'function') return Number.NaN;
+        const rr = sre.getData();
+        if (!Array.isArray(rr) || rr.length === 0) return Number.NaN;
+
+        const cfg = (() => {
+          try {
+            if (typeof w.loadSystemConfigurationsFromTableConfig === 'function') {
+              return w.loadSystemConfigurationsFromTableConfig();
+            }
+            if (typeof w.loadSystemConfigurations === 'function') {
+              return w.loadSystemConfigurations();
+            }
+          } catch (_) {}
+          return null;
+        })();
+
+        const activeConfigId = (cfg && cfg.activeConfigId !== undefined && cfg.activeConfigId !== null)
+          ? String(cfg.activeConfigId).trim()
+          : '';
+
+        const normalizeConfigId = (row: any): string => {
+          try {
+            if (typeof sre._normalizeConfigId === 'function') {
+              return String(sre._normalizeConfigId(row?.configId, cfg, activeConfigId) || '').trim();
+            }
+          } catch (_) {}
+          const rawCfg = String(row?.configId ?? '').trim();
+          return rawCfg || activeConfigId;
+        };
+
+        let sum = 0;
+        let cnt = 0;
+        for (const row of rr) {
+          const enabled = (row?.enabled === undefined || row?.enabled === null) ? true : !!row.enabled;
+          const operand = String(row?.operand ?? '').trim();
+          const weight = Number(row?.weight ?? 1);
+          if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) continue;
+          const reqCfg = normalizeConfigId(row);
+          if (activeConfigId && reqCfg !== activeConfigId) continue;
+          const c = Number.isFinite(Number(row?._contribution))
+            ? Number(row?._contribution)
+            : Number(row?.score);
+          if (Number.isFinite(c)) {
+            if (c > 0) sum += c;
+            cnt += 1;
+          }
+        }
+
+        return (cnt > 0 && Number.isFinite(sum)) ? sum : Number.NaN;
+      } catch (_) {
+        return Number.NaN;
+      }
+    };
+
+    const parseMaybeNumber = (v: any): any => {
+      if (typeof v === 'number') return Number.isFinite(v) ? v : v;
+      const s = String(v ?? '').trim();
+      if (!s) return '';
+      if (/^[-+]?((\d+\.\d*)|(\d*\.\d+)|(\d+))(e[-+]?\d+)?$/i.test(s)) return Number(s);
+      return v;
+    };
+
+    const setParam = (block: any, key: string, value: any) => {
+      if (!block || typeof block !== 'object' || !key) return;
+      if (!block.parameters || typeof block.parameters !== 'object') block.parameters = {};
+      block.parameters[key] = parseMaybeNumber(value);
+    };
+
+    const updateBlockByRole = (block: any, role: string, row: any) => {
+      const blockType = String(block?.blockType ?? '');
+      const r = String(role || '').trim();
+      const radius = row?.radius;
+      const thickness = row?.thickness;
+      const material = row?.material;
+      const conic = row?.conic;
+      const surfType = row?.surfType;
+
+      if (blockType === 'Lens') {
+        if (r === 'front') {
+          setParam(block, 'frontRadius', radius);
+          setParam(block, 'centerThickness', thickness);
+          setParam(block, 'material', material);
+          setParam(block, 'frontConic', conic);
+          setParam(block, 'frontSurfType', surfType);
+          if (row?.radiusX !== undefined && row?.radiusX !== '') setParam(block, 'frontRadiusX', row.radiusX);
+          if (row?.axis !== undefined && row?.axis !== '') setParam(block, 'frontAxis', row.axis);
+          for (let i = 1; i <= 10; i++) {
+            const key = `coef${i}`;
+            if (Object.prototype.hasOwnProperty.call(row, key)) setParam(block, `frontCoef${i}`, (row as any)[key]);
+          }
+        } else if (r === 'back') {
+          setParam(block, 'backRadius', radius);
+          setParam(block, 'backConic', conic);
+          setParam(block, 'backSurfType', surfType);
+          if (row?.radiusX !== undefined && row?.radiusX !== '') setParam(block, 'backRadiusX', row.radiusX);
+          if (row?.axis !== undefined && row?.axis !== '') setParam(block, 'backAxis', row.axis);
+          for (let i = 1; i <= 10; i++) {
+            const key = `coef${i}`;
+            if (Object.prototype.hasOwnProperty.call(row, key)) setParam(block, `backCoef${i}`, (row as any)[key]);
+          }
+        }
+      } else if (blockType === 'SingleSurface') {
+        setParam(block, 'radius', radius);
+        setParam(block, 'thickness', thickness);
+        setParam(block, 'material', material);
+        setParam(block, 'conic', conic);
+        setParam(block, 'surfType', surfType);
+        if (row?.radiusX !== undefined && row?.radiusX !== '') setParam(block, 'radiusX', row.radiusX);
+        if (row?.radiusY !== undefined && row?.radiusY !== '') setParam(block, 'radiusY', row.radiusY);
+        if (row?.axis !== undefined && row?.axis !== '') setParam(block, 'axis', row.axis);
+        for (let i = 1; i <= 10; i++) {
+          const key = `coef${i}`;
+          if (Object.prototype.hasOwnProperty.call(row, key)) setParam(block, key, (row as any)[key]);
+        }
+      } else if (blockType === 'Mirror') {
+        setParam(block, 'radius', radius);
+        setParam(block, 'thickness', thickness);
+        setParam(block, 'conic', conic);
+        setParam(block, 'surfType', surfType);
+        for (let i = 1; i <= 10; i++) {
+          const key = `coef${i}`;
+          if (Object.prototype.hasOwnProperty.call(row, key)) setParam(block, key, (row as any)[key]);
+        }
+      } else if (blockType === 'Doublet') {
+        const idx = r === 's1' ? '1' : (r === 's2' ? '2' : (r === 's3' ? '3' : ''));
+        if (!idx) return;
+        setParam(block, `radius${idx}`, radius);
+        setParam(block, `surf${idx}Conic`, conic);
+        setParam(block, `surf${idx}SurfType`, surfType);
+        if (idx === '1') {
+          setParam(block, 'thickness1', thickness);
+          setParam(block, 'material1', material);
+        }
+        if (idx === '2') {
+          setParam(block, 'thickness2', thickness);
+          setParam(block, 'material2', material);
+        }
+        for (let i = 1; i <= 10; i++) {
+          const key = `coef${i}`;
+          if (Object.prototype.hasOwnProperty.call(row, key)) setParam(block, `surf${idx}Coef${i}`, (row as any)[key]);
+        }
+      } else if (blockType === 'Triplet') {
+        const idx = r === 's1' ? '1' : (r === 's2' ? '2' : (r === 's3' ? '3' : (r === 's4' ? '4' : '')));
+        if (!idx) return;
+        setParam(block, `radius${idx}`, radius);
+        setParam(block, `surf${idx}Conic`, conic);
+        setParam(block, `surf${idx}SurfType`, surfType);
+        if (idx === '1') {
+          setParam(block, 'thickness1', thickness);
+          setParam(block, 'material1', material);
+        }
+        if (idx === '2') {
+          setParam(block, 'thickness2', thickness);
+          setParam(block, 'material2', material);
+        }
+        if (idx === '3') {
+          setParam(block, 'thickness3', thickness);
+          setParam(block, 'material3', material);
+        }
+        for (let i = 1; i <= 10; i++) {
+          const key = `coef${i}`;
+          if (Object.prototype.hasOwnProperty.call(row, key)) setParam(block, `surf${idx}Coef${i}`, (row as any)[key]);
+        }
+      } else if (blockType === 'Stop' && (r === 'stop' || r === 'single')) {
+        setParam(block, 'semiDiameter', row?.semidia);
+      }
+
+      if (row?.semidia !== undefined && row?.semidia !== '' && r) {
+        if (!block.aperture || typeof block.aperture !== 'object') block.aperture = {};
+        block.aperture[r] = row.semidia;
+      }
+    };
+
+    const syncGapBlocksFromRows = (rows: any[], blocks: any[]) => {
+      if (!Array.isArray(rows) || !Array.isArray(blocks)) return 0;
+
+      const normalizeType = (t: any) => String(t ?? '').trim().toLowerCase();
+      const gapBlocks = blocks.filter((b: any) => {
+        const t = normalizeType(b?.blockType);
+        return t === 'gap' || t === 'airgap';
+      });
+      if (gapBlocks.length === 0) return 0;
+
+      const usedRows = new Set<number>();
+      const pickRowForGap = (gapBlockId: string): any => {
+        if (gapBlockId) {
+          for (let i = 0; i < rows.length; i++) {
+            if (usedRows.has(i)) continue;
+            const r = rows[i];
+            if (!r || typeof r !== 'object') continue;
+            if (String(r?._blockId ?? '').trim() === gapBlockId) {
+              usedRows.add(i);
+              return r;
+            }
+          }
+        }
+
+        for (let i = 0; i < rows.length; i++) {
+          if (usedRows.has(i)) continue;
+          const r = rows[i];
+          if (!r || typeof r !== 'object') continue;
+          if (r?.__cooptGapApplied === true || normalizeType(r?._blockType) === 'gap') {
+            usedRows.add(i);
+            return r;
+          }
+        }
+        return null;
+      };
+
+      let touched = 0;
+      for (const gb of gapBlocks) {
+        const gapId = String(gb?.blockId ?? '').trim();
+        const row = pickRowForGap(gapId);
+        if (!row) continue;
+        setParam(gb, 'thickness', row?.thickness);
+        if (row?.material !== undefined) setParam(gb, 'material', row?.material);
+        if (row?.abbe !== undefined && row?.abbe !== '') setParam(gb, 'abbe', row?.abbe);
+        touched += 1;
+      }
+      return touched;
+    };
+
+    const syncRowsBackToActiveBlocks = (rows: any[]) => {
+      if (!Array.isArray(rows) || rows.length === 0) return;
+      const w = window as any;
+      try {
+        const cfg = typeof w.loadSystemConfigurationsFromTableConfig === 'function'
+          ? w.loadSystemConfigurationsFromTableConfig()
+          : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
+        if (!cfg || !Array.isArray(cfg.configurations)) return;
+        const activeId = cfg.activeConfigId;
+        const active = cfg.configurations.find((c: any) => String(c?.id) === String(activeId));
+        if (!active || !Array.isArray(active.blocks) || active.blocks.length === 0) {
+          return;
+        }
+
+        const blockById = new Map<string, any>();
+        for (const b of active.blocks) {
+          const id = String(b?.blockId ?? '').trim();
+          if (id) blockById.set(id, b);
+        }
+
+        let touched = 0;
+        for (const row of rows) {
+          const blockId = String(row?._blockId ?? '').trim();
+          const role = String(row?._surfaceRole ?? '').trim();
+          if (!blockId || !role) continue;
+          const block = blockById.get(blockId);
+          if (!block) continue;
+          updateBlockByRole(block, role, row);
+          touched += 1;
+        }
+
+        touched += syncGapBlocksFromRows(rows, active.blocks);
+
+        if (touched <= 0) return;
+
+        if (typeof w.expandBlocksIntoConfiguration === 'function') {
+          w.expandBlocksIntoConfiguration(active);
+        } else if (typeof w.expandBlocksToOpticalSystemRows === 'function') {
+          const expanded = w.expandBlocksToOpticalSystemRows(active.blocks);
+          if (expanded && Array.isArray(expanded.rows)) {
+            active.opticalSystem = expanded.rows;
+          }
+        }
+        if (!active.metadata || typeof active.metadata !== 'object') active.metadata = {};
+        active.metadata.modified = new Date().toISOString();
+
+        if (typeof w.saveSystemConfigurationsFromTableConfig === 'function') {
+          w.saveSystemConfigurationsFromTableConfig(cfg);
+        } else if (typeof w.saveSystemConfigurations === 'function') {
+          w.saveSystemConfigurations(cfg);
+        }
+      } catch (_) {}
+    };
+
+    const cloneJson = (v: any) => {
+      try {
+        return JSON.parse(JSON.stringify(v));
+      } catch (_) {
+        return null;
+      }
+    };
+
+    const loadSystemConfigSnapshot = (): any => {
+      const w = window as any;
+      try {
+        const cfg = typeof w.loadSystemConfigurationsFromTableConfig === 'function'
+          ? w.loadSystemConfigurationsFromTableConfig()
+          : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
+        return cloneJson(cfg);
+      } catch (_) {
+        return null;
+      }
+    };
+
+    const loadOpticalRowsSnapshot = (): any[] => {
+      const w = window as any;
+      try {
+        const rows = typeof w.getOpticalSystemRows === 'function'
+          ? w.getOpticalSystemRows(w.tableOpticalSystem)
+          : [];
+        return Array.isArray(rows) ? (cloneJson(rows) || []) : [];
+      } catch (_) {
+        return [];
+      }
+    };
+
+    const applySystemConfigSnapshotSync = (snapshot: any): void => {
+      const w = window as any;
+      if (!snapshot || typeof snapshot !== 'object') return;
+      try {
+        const cloned = cloneJson(snapshot);
+        if (!cloned) return;
+        if (typeof w.saveSystemConfigurationsFromTableConfig === 'function') {
+          w.saveSystemConfigurationsFromTableConfig(cloned);
+        } else if (typeof w.saveSystemConfigurations === 'function') {
+          w.saveSystemConfigurations(cloned);
+        }
+        if (typeof w.loadActiveConfigurationToTables === 'function') {
+          w.loadActiveConfigurationToTables();
+        }
+        requestRefreshBlockInspector(w);
+        if (typeof w.refreshAllUI === 'function') {
+          w.refreshAllUI();
+        }
+      } catch (_) {}
+    };
+
+    const applyOpticalRowsSnapshotSync = (rowsSnapshot: any[]): void => {
+      const w = window as any;
+      if (!Array.isArray(rowsSnapshot) || rowsSnapshot.length === 0) return;
+      try {
+        const rows = cloneJson(rowsSnapshot) || [];
+        const table = w.tableOpticalSystem;
+        if (table && typeof table.replaceData === 'function') {
+          table.replaceData(rows);
+        } else if (table && typeof table.setData === 'function') {
+          table.setData(rows);
+        }
+        syncRowsBackToActiveBlocks(rows);
+        if (typeof w.loadActiveConfigurationToTables === 'function') {
+          w.loadActiveConfigurationToTables();
+        }
+      } catch (_) {}
+    };
+
+    const recordOptimizationUndoFromSnapshots = (
+      beforeSnapshot: any,
+      beforeRowsSnapshot: any[],
+      afterSnapshot: any,
+      afterRowsSnapshot: any[],
+      description = 'Optimization apply'
+    ): void => {
+      try {
+        const beforeText = beforeSnapshot ? JSON.stringify(beforeSnapshot) : '';
+        const afterText = afterSnapshot ? JSON.stringify(afterSnapshot) : '';
+        const beforeRowsText = JSON.stringify(beforeRowsSnapshot || []);
+        const afterRowsText = JSON.stringify(afterRowsSnapshot || []);
+        const configChanged = !!beforeText && !!afterText && beforeText !== afterText;
+        const rowsChanged = beforeRowsText !== afterRowsText;
+        const changed = configChanged || rowsChanged;
+        const undoHistory = (window as any).undoHistory;
+        if (!changed || !undoHistory || typeof undoHistory.record !== 'function') return;
+        const cmd = {
+          id: `opt-main-apply-${Date.now()}`,
+          description,
+          timestamp: Date.now(),
+          execute: () => {
+            applySystemConfigSnapshotSync(afterSnapshot);
+            applyOpticalRowsSnapshotSync(afterRowsSnapshot);
+          },
+          undo: () => {
+            applySystemConfigSnapshotSync(beforeSnapshot);
+            applyOpticalRowsSnapshotSync(beforeRowsSnapshot);
+          },
+        } as any;
+        undoHistory.record(cmd);
+      } catch (_) {}
+    };
+
+    (window as any).__cooptRecordOptimizationUndoFromSnapshots = (
+      beforeSnapshot: any,
+      beforeRowsSnapshot: any[],
+      afterSnapshot: any,
+      afterRowsSnapshot: any[],
+      description = 'Optimization apply'
+    ) => {
+      recordOptimizationUndoFromSnapshots(beforeSnapshot, beforeRowsSnapshot, afterSnapshot, afterRowsSnapshot, description);
+    };
+
+    let lastOptimizeApplyToken: string | null = null;
+
+    const applyOptimizedRows = async (
+      rows: any[],
+      applyToken = '',
+      undoSnapshots?: {
+        beforeConfig?: any;
+        beforeRows?: any[];
+        afterConfig?: any;
+        afterRows?: any[];
+      }
+    ) => {
+      if (!Array.isArray(rows) || rows.length === 0) return;
+      const w = window as any;
+      let beforeSnapshot: any = null;
+      let beforeRowsSnapshot: any[] = [];
+      let afterSnapshot: any = null;
+      let afterRowsSnapshot: any[] = [];
+      const undoHistory = w.undoHistory;
+      const prevIsExecuting = !!undoHistory?.isExecuting;
+      try {
+        if (applyToken && lastOptimizeApplyToken === applyToken) {
+          return;
+        }
+        if (undoHistory) {
+          undoHistory.isExecuting = true;
+        }
+        beforeSnapshot = loadSystemConfigSnapshot();
+        beforeRowsSnapshot = loadOpticalRowsSnapshot();
+        const table = w.tableOpticalSystem;
+        if (table && typeof table.setData === 'function') {
+          await table.setData(rows);
+        }
+        syncRowsBackToActiveBlocks(rows);
+        afterSnapshot = loadSystemConfigSnapshot();
+        afterRowsSnapshot = loadOpticalRowsSnapshot();
+
+        if (applyToken) {
+          lastOptimizeApplyToken = applyToken;
+        }
+
+        requestRefreshBlockInspector(w);
+        if (typeof w.refreshAllUI === 'function') {
+          w.refreshAllUI();
+        }
+        await requestRequirementReeval('optimize-storage-sync');
+        if (typeof w.drawOpticalSystem === 'function') {
+          w.drawOpticalSystem();
+        }
+      } catch (_) {}
+      finally {
+        if (undoHistory) {
+          undoHistory.isExecuting = prevIsExecuting;
+        }
+      }
+
+      try {
+        recordOptimizationUndoFromSnapshots(
+          undoSnapshots?.beforeConfig ?? beforeSnapshot,
+          Array.isArray(undoSnapshots?.beforeRows) ? undoSnapshots?.beforeRows : beforeRowsSnapshot,
+          undoSnapshots?.afterConfig ?? afterSnapshot,
+          Array.isArray(undoSnapshots?.afterRows) ? undoSnapshots?.afterRows : afterRowsSnapshot,
+          'Optimization apply'
+        );
+      } catch (_) {}
+    };
+
+    // Called by optimize popup to synchronously apply rows and get latest table score.
+    (window as any).__cooptRefreshRequirementTableScoreForOptimize = async (rows: any[], reason = 'optimize-host-refresh') => {
+      if (!Array.isArray(rows) || rows.length === 0) return Number.NaN;
+      const startedAt = Date.now();
+      await applyOptimizedRows(rows);
+      await requestRequirementReeval(reason, true);
+      await waitRequirementEvalDone(startedAt);
+      return readRequirementTableScoreFromHost();
     };
 
     const onStorage = (ev: StorageEvent) => {
-      if (ev.key !== requestKey || !ev.newValue) return;
+      // Handle live render sync from the optimize window (Tauri WebviewWindow sends rows here)
+      if (ev.key === 'coopt.renderSyncRequest' && ev.newValue && !isOptimizeWindowMode) {
+        try {
+          const payload = JSON.parse(ev.newValue);
+          const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+          const w = window as any;
+          const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+          const prevRunning = g ? !!g.__cooptOptimizerIsRunning : false;
+          if (g && rows.length > 0) g.__cooptOpticalSystemRowsOverride = rows;
+          // Set optimizer flag so draw-cross handler skips loadActiveConfigurationToTables
+          if (g) g.__cooptOptimizerIsRunning = true;
+          try { if (typeof w.drawOpticalSystem === 'function') w.drawOpticalSystem(); } catch (_) {}
+          try {
+            const popup = w.popup3DWindow;
+            if (popup && !popup.closed && typeof popup.postMessage === 'function') {
+              popup.postMessage({ action: 'request-redraw' }, '*');
+            }
+          } catch (_) {}
+          // Restore flags after popup message roundtrip (~400 ms)
+          setTimeout(() => {
+            try {
+              if (g) g.__cooptOptimizerIsRunning = prevRunning;
+              if (g) g.__cooptOpticalSystemRowsOverride = null;
+            } catch (_) {}
+          }, 400);
+        } catch (_) {}
+        return;
+      }
+      if (ev.key !== optimizeRowsSyncKey || !ev.newValue) return;
       try {
         const payload = JSON.parse(ev.newValue);
-        const label = String(payload?.label || '').trim();
-        if (label) {
-          closeByLabel(label);
-        }
+        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        const token = String(payload?.ts ?? payload?.token ?? '');
+        const undoSnapshots = {
+          beforeConfig: payload?.beforeConfigSnapshot,
+          beforeRows: Array.isArray(payload?.beforeRowsSnapshot) ? payload.beforeRowsSnapshot : [],
+          afterConfig: payload?.afterConfigSnapshot,
+          afterRows: Array.isArray(payload?.afterRowsSnapshot) ? payload.afterRowsSnapshot : [],
+        };
+        void applyOptimizedRows(rows, token, undoSnapshots);
       } catch (_) {}
     };
+
+    let tauriUnlisten: (() => void) | null = null;
+    let tauriListenerCancelled = false;
+    if (!isOptimizeWindowMode) {
+      void (async () => {
+        try {
+          const mod = await import('@tauri-apps/api/event');
+          if (tauriListenerCancelled || !mod || typeof (mod as any).listen !== 'function') return;
+          const unlisten = await (mod as any).listen('coopt-optimize-rows-sync', (ev: any) => {
+            try {
+              const rows = Array.isArray(ev?.payload?.rows) ? ev.payload.rows : [];
+              const token = String(ev?.payload?.ts ?? ev?.payload?.token ?? '');
+              const undoSnapshots = {
+                beforeConfig: ev?.payload?.beforeConfigSnapshot,
+                beforeRows: Array.isArray(ev?.payload?.beforeRowsSnapshot) ? ev.payload.beforeRowsSnapshot : [],
+                afterConfig: ev?.payload?.afterConfigSnapshot,
+                afterRows: Array.isArray(ev?.payload?.afterRowsSnapshot) ? ev.payload.afterRowsSnapshot : [],
+              };
+              void applyOptimizedRows(rows, token, undoSnapshots);
+            } catch (_) {}
+          });
+          if (tauriListenerCancelled) {
+            try { unlisten(); } catch (_) {}
+            return;
+          }
+          tauriUnlisten = unlisten;
+        } catch (_) {}
+      })();
+    }
 
     window.addEventListener('storage', onStorage);
     return () => {
       window.removeEventListener('storage', onStorage);
+      tauriListenerCancelled = true;
+      if (tauriUnlisten) {
+        try { tauriUnlisten(); } catch (_) {}
+      }
+      try { delete (window as any).__cooptRecordOptimizationUndoFromSnapshots; } catch (_) {
+        (window as any).__cooptRecordOptimizationUndoFromSnapshots = undefined;
+      }
+      try { delete (window as any).__cooptRefreshRequirementTableScoreForOptimize; } catch (_) {
+        (window as any).__cooptRefreshRequirementTableScoreForOptimize = undefined;
+      }
     };
-  }, []);
+  }, [isOptimizeWindowMode]);
   const isSettingsWindowMode = (() => {
     try {
       const url = new URL(window.location.href);
@@ -1011,6 +1978,13 @@ export default function App() {
       if (typeof (window as any).initializeAllTables === 'function') {
         (window as any).initializeAllTables();
       }
+
+      if (analysisWindowMode.enabled) {
+        if (typeof (window as any).setupAnalysisWindows === 'function') {
+          (window as any).setupAnalysisWindows();
+        }
+        return;
+      }
       
       requestRefreshBlockInspector();
       
@@ -1086,7 +2060,7 @@ export default function App() {
       window.removeEventListener("coopt:main-module-loaded", onMainModuleLoaded);
       window.removeEventListener("coopt:main-load-failed", onMainLoadFailed);
     };
-  }, []);
+  }, [analysisWindowMode.enabled, isOptimizeWindowMode, isRenderWindowMode, isSettingsWindowMode]);
 
   useEffect(() => {
     if (!isRenderWindowMode) return;
@@ -1108,67 +2082,70 @@ export default function App() {
     return () => window.removeEventListener('resize', onResize);
   }, [isRenderWindowMode, renderViewAxis]);
 
-  useEffect(() => {
-    if (!isSettingsWindowMode) return;
-
-    let disposed = false;
-    let rafId = 0;
-    let timeoutId = 0;
-    let tries = 0;
-    const maxTries = 180;
-
-    const attemptLaunch = () => {
-      if (disposed) return;
-      tries += 1;
-      try {
-        handleOpenSettings();
-        return;
-      } catch (_) {}
-      if (tries >= maxTries) return;
-      rafId = window.requestAnimationFrame(attemptLaunch);
-    };
-
-    timeoutId = window.setTimeout(() => {
-      if (disposed) return;
-      attemptLaunch();
-    }, 0);
-    rafId = window.requestAnimationFrame(attemptLaunch);
-
-    return () => {
-      disposed = true;
-      try { window.cancelAnimationFrame(rafId); } catch (_) {}
-      try { window.clearTimeout(timeoutId); } catch (_) {}
-    };
-  }, [isSettingsWindowMode]);
+  // Settings window mode is fully handled by DesktopSettingsPage React component below.
 
   useEffect(() => {
-    if (!(isSettingsWindowMode || analysisWindowMode.enabled)) return;
-
-    (window as any).__cooptCloseCurrentWindow = async (): Promise<boolean> => {
-      if (!(window as any).__TAURI_INTERNALS__) return false;
+    if (!isOptimizeWindowMode) return;
+    try {
+      const w = window as any;
+      let rows = w.getOpticalSystemRows ? w.getOpticalSystemRows(w.tableOpticalSystem) : [];
+      let reqRows: any[] = [];
       try {
-        const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-        const current = getCurrentWebviewWindow();
-        if (current && typeof (current as any).close === 'function') {
-          await (current as any).close();
-          return true;
+        const cfg = typeof w.loadSystemConfigurationsFromTableConfig === 'function'
+          ? w.loadSystemConfigurationsFromTableConfig()
+          : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
+        const activeId = cfg?.activeConfigId;
+        const activeCfg = Array.isArray(cfg?.configurations)
+          ? (cfg.configurations.find((c: any) => c && String(c.id) === String(activeId)) || cfg.configurations[0])
+          : null;
+        if (activeCfg && Array.isArray(activeCfg.blocks) && activeCfg.blocks.length > 0 && typeof w.expandBlocksToOpticalSystemRows === 'function') {
+          const expanded = w.expandBlocksToOpticalSystemRows(activeCfg.blocks);
+          if (expanded && Array.isArray(expanded.rows) && expanded.rows.length > 0) {
+            // Keep whichever representation preserves more optimize flags.
+            if (countOptimizeFlags(expanded.rows) > countOptimizeFlags(rows)) {
+              rows = expanded.rows;
+            }
+          }
+        }
+        if (Array.isArray(cfg?.systemRequirements)) {
+          reqRows = cfg.systemRequirements;
         }
       } catch (_) {}
-      return false;
-    };
-
-    return () => {
-      try { delete (window as any).__cooptCloseCurrentWindow; } catch (_) { (window as any).__cooptCloseCurrentWindow = undefined; }
-    };
-  }, [isSettingsWindowMode, analysisWindowMode.enabled]);
+      if (!Array.isArray(reqRows) || reqRows.length === 0) {
+        reqRows = (w.systemRequirementsEditor && typeof w.systemRequirementsEditor.getData === 'function')
+          ? w.systemRequirementsEditor.getData()
+          : [];
+      }
+      const variableCount = Array.isArray(rows)
+        ? rows.reduce((acc: number, row: any) => {
+            if (!row || typeof row !== 'object') return acc;
+            const keys = Object.keys(row);
+            let c = 0;
+            for (const k of keys) {
+              if (!k.startsWith('optimize')) continue;
+              const v = row[k];
+              const t = String(v ?? '').trim().toLowerCase();
+              if (v === true || v === 1 || t === 'v' || t === 'true' || t === '1') c += 1;
+            }
+            return acc + c;
+          }, 0)
+        : 0;
+      setOptimizeState((prev: any) => ({
+        ...prev,
+        variableCount,
+        requirementCount: Array.isArray(reqRows) ? reqRows.length : 0,
+      }));
+    } catch (_) {}
+    return () => {};
+  }, [isOptimizeWindowMode]);
 
   useEffect(() => {
     if (!analysisWindowMode.enabled) return;
     if (analysisWindowMode.analysis === 'astigmatism') return;
-
-    const originalOpen = window.open;
+    if (analysisWindowMode.analysis === 'mtf' || analysisWindowMode.analysis === 'through-focus-mtf' || analysisWindowMode.analysis === 'field-mtf' || analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid') return;
 
     let restoreOpener: (() => void) | null = null;
+    let tauriCloseUnlisten: (() => void) | null = null;
     try {
       const openerDescriptor = Object.getOwnPropertyDescriptor(window, 'opener');
       Object.defineProperty(window, 'opener', {
@@ -1186,13 +2163,39 @@ export default function App() {
       };
     } catch (_) {}
 
-    (window as any).open = (...args: any[]) => {
-      const first = typeof args?.[0] === 'string' ? args[0] : '';
-      if (!first || first === 'about:blank') {
-        return window as any;
-      }
-      return originalOpen.apply(window, args as any);
-    };
+    if (isTauriRuntime()) {
+      (async () => {
+        try {
+          const [{ getCurrentWindow }, { getCurrentWebviewWindow }] = await Promise.all([
+            import('@tauri-apps/api/window'),
+            import('@tauri-apps/api/webviewWindow'),
+          ]);
+          const currentWindow = getCurrentWindow();
+          const currentWebview = getCurrentWebviewWindow();
+          const bootstrapStartedAt = Date.now();
+
+          console.log('ℹ️ [Analysis][Desktop] bootstrap window:', {
+            label: currentWindow.label,
+            webviewLabel: currentWebview.label,
+            analysis: analysisWindowMode.analysis,
+          });
+
+          tauriCloseUnlisten = await currentWindow.onCloseRequested((event) => {
+            const elapsed = Date.now() - bootstrapStartedAt;
+            if (elapsed < 8000) {
+              console.warn('⚠️ [Analysis][Desktop] unexpected close requested during bootstrap', {
+                label: currentWindow.label,
+                analysis: analysisWindowMode.analysis,
+                elapsed,
+              });
+              event.preventDefault();
+            }
+          });
+        } catch (err) {
+          console.error('❌ [Analysis][Desktop] failed to attach close-request guard:', err);
+        }
+      })();
+    }
 
     const analysisButtonMap: Record<string, string> = {
       'system-data': 'open-system-data-window-btn',
@@ -1211,8 +2214,29 @@ export default function App() {
       'through-focus-mtf': 'open-through-focus-mtf-window-btn',
       'field-mtf': 'open-field-mtf-window-btn',
     };
+    const analysisPopupTitleMap: Record<string, string> = {
+      'system-data': 'System Data',
+      'spot-diagram': 'Spot Diagram',
+      'spherical-aberration': 'Spherical Aberration',
+      'astigmatism': 'Astigmatism',
+      'distortion': 'Distortion',
+      'distortion-grid': 'Distortion Grid',
+      'magnification-chromatic-aberration': 'Lateral Chromatic Aberration',
+      'integrated-aberration': 'Integrated Aberration',
+      'transverse-aberration': 'Transverse Aberration',
+      'opd': 'Optical Path Difference',
+      'psf': 'Point Spread Function',
+      'mtf': 'Modulation Transfer Function',
+      'through-focus-spot': 'Through-Focus Spot',
+      'through-focus-mtf': 'Through-Focus MTF',
+      'field-mtf': 'Object MTF',
+    };
 
     const targetButtonId = analysisButtonMap[analysisWindowMode.analysis];
+    const targetPopupTitle = analysisPopupTitleMap[analysisWindowMode.analysis];
+    if (targetPopupTitle) {
+      document.title = targetPopupTitle;
+    }
     let disposed = false;
     let rafId = 0;
     let timeoutId = 0;
@@ -1231,6 +2255,13 @@ export default function App() {
           w.setupAnalysisWindows();
         }
       } catch (_) {}
+
+      if (targetPopupTitle) {
+        try {
+          w.__preopenedAnalysisPopupMap = w.__preopenedAnalysisPopupMap || {};
+          w.__preopenedAnalysisPopupMap[targetPopupTitle] = window;
+        } catch (_) {}
+      }
 
       const button = targetButtonId ? document.getElementById(targetButtonId) : null;
       if (button) {
@@ -1265,15 +2296,621 @@ export default function App() {
       try { window.removeEventListener('coopt:main-ready', onMainReady); } catch (_) {}
       try { window.cancelAnimationFrame(rafId); } catch (_) {}
       try { window.clearTimeout(timeoutId); } catch (_) {}
-      (window as any).open = originalOpen;
+      if (targetPopupTitle) {
+        try {
+          const store = (window as any).__preopenedAnalysisPopupMap;
+          if (store && store[targetPopupTitle] === window) {
+            delete store[targetPopupTitle];
+          }
+        } catch (_) {}
+      }
+      if (tauriCloseUnlisten) {
+        try { tauriCloseUnlisten(); } catch (_) {}
+      }
       if (restoreOpener) restoreOpener();
     };
   }, [analysisWindowMode.enabled, analysisWindowMode.analysis]);
 
   if (isSettingsWindowMode) {
+    return <DesktopSettingsPage />;
+  }
+
+  if (analysisWindowMode.analysis === 'mtf' || analysisWindowMode.analysis === 'through-focus-mtf' || analysisWindowMode.analysis === 'field-mtf') {
+    return <MtfAnalysisPage type={analysisWindowMode.analysis as any} />;
+  }
+
+  if (analysisWindowMode.analysis === 'distortion' || analysisWindowMode.analysis === 'distortion-grid') {
+    return <DistortionAnalysisPage type={analysisWindowMode.analysis as any} />;
+  }
+
+  if (isOptimizeWindowMode) {
+    const percent = Number.isFinite(Number(optimizeState?.percent)) ? Math.max(0, Math.min(100, Number(optimizeState.percent))) : 0;
+
+    const maybeAutoRender = async (_rows: any[]) => {
+      if (!optAutoRenderOnAccept) return;
+      try {
+        const w = window as any;
+        if (typeof w.drawOpticalSystem === 'function') {
+          w.drawOpticalSystem();
+        }
+        const popup = w.popup3DWindow;
+        if (popup && !popup.closed && typeof popup.postMessage === 'function') {
+          popup.postMessage({ action: 'request-redraw' }, '*');
+        }
+      } catch (_) {}
+    };
+
+    const runOptimize = async () => {
+      if (optRunning) return;
+      const w = window as any;
+      const hostWindow = (() => {
+        try {
+          const op = (window as any).opener;
+          if (op && !op.closed) return op as any;
+        } catch (_) {}
+        return w;
+      })();
+
+      const cloneJsonLocal = (v: any) => {
+        try { return JSON.parse(JSON.stringify(v)); } catch (_) { return null; }
+      };
+      const captureHostOptimizeSnapshot = () => {
+        try {
+          const cfg = typeof hostWindow.loadSystemConfigurationsFromTableConfig === 'function'
+            ? hostWindow.loadSystemConfigurationsFromTableConfig()
+            : (typeof hostWindow.loadSystemConfigurations === 'function' ? hostWindow.loadSystemConfigurations() : null);
+          const rows = typeof hostWindow.getOpticalSystemRows === 'function'
+            ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem)
+            : [];
+          return {
+            config: cloneJsonLocal(cfg),
+            rows: Array.isArray(rows) ? (cloneJsonLocal(rows) || []) : [],
+          };
+        } catch (_) {
+          return { config: null, rows: [] };
+        }
+      };
+
+      // Snapshot at the exact Run-button click timing for deterministic Undo baseline.
+      const clickSnapshot = captureHostOptimizeSnapshot();
+
+      const maxIterations = Math.max(1, Math.floor(Number(optMaxIterations) || 1));
+
+      let rows = w.getOpticalSystemRows ? w.getOpticalSystemRows(w.tableOpticalSystem) : [];
+      if ((!Array.isArray(rows) || rows.length === 0) && hostWindow !== w) {
+        try {
+          rows = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
+        } catch (_) {}
+      }
+      try {
+        const cfg = typeof hostWindow.loadSystemConfigurationsFromTableConfig === 'function'
+          ? hostWindow.loadSystemConfigurationsFromTableConfig()
+          : (typeof hostWindow.loadSystemConfigurations === 'function' ? hostWindow.loadSystemConfigurations() : null);
+        const activeId = cfg?.activeConfigId;
+        const activeCfg = Array.isArray(cfg?.configurations)
+          ? (cfg.configurations.find((c: any) => c && String(c.id) === String(activeId)) || cfg.configurations[0])
+          : null;
+        if (activeCfg && Array.isArray(activeCfg.blocks) && activeCfg.blocks.length > 0 && typeof hostWindow.expandBlocksToOpticalSystemRows === 'function') {
+          const expanded = hostWindow.expandBlocksToOpticalSystemRows(activeCfg.blocks);
+          if (expanded && Array.isArray(expanded.rows) && expanded.rows.length > 0) {
+            // Keep whichever representation preserves more optimize flags.
+            if (countOptimizeFlags(expanded.rows) > countOptimizeFlags(rows)) {
+              rows = expanded.rows;
+            }
+          }
+        }
+      } catch (_) {}
+      if (!Array.isArray(rows) || rows.length === 0) {
+        setOptimizeState((prev: any) => ({ ...prev, status: 'error', issue: 'No optical system data', phase: 'error' }));
+        return;
+      }
+
+      const activeConfigId = (() => {
+        try {
+          const cfg = typeof hostWindow.loadSystemConfigurationsFromTableConfig === 'function'
+            ? hostWindow.loadSystemConfigurationsFromTableConfig()
+            : (typeof hostWindow.loadSystemConfigurations === 'function' ? hostWindow.loadSystemConfigurations() : null);
+          if (cfg && cfg.activeConfigId !== undefined && cfg.activeConfigId !== null) {
+            return String(cfg.activeConfigId).trim();
+          }
+        } catch (_) {}
+        return '';
+      })();
+
+      const normalizeRequirementConfigId = (row: any): string => {
+        try {
+          const sre = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
+          const cfg = typeof hostWindow.loadSystemConfigurationsFromTableConfig === 'function'
+            ? hostWindow.loadSystemConfigurationsFromTableConfig()
+            : (typeof hostWindow.loadSystemConfigurations === 'function' ? hostWindow.loadSystemConfigurations() : null);
+          if (sre && typeof sre._normalizeConfigId === 'function') {
+            return String(sre._normalizeConfigId(row?.configId, cfg, activeConfigId) || '').trim();
+          }
+        } catch (_) {}
+        const rawCfg = String(row?.configId ?? '').trim();
+        return rawCfg || activeConfigId;
+      };
+
+      const collectSystemRequirementsRows = (): any[] => {
+        try {
+          const cfg = typeof hostWindow.loadSystemConfigurationsFromTableConfig === 'function'
+            ? hostWindow.loadSystemConfigurationsFromTableConfig()
+            : (typeof hostWindow.loadSystemConfigurations === 'function' ? hostWindow.loadSystemConfigurations() : null);
+          if (Array.isArray(cfg?.systemRequirements) && cfg.systemRequirements.length > 0) {
+            return cfg.systemRequirements;
+          }
+        } catch (_) {}
+        try {
+          const sre = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
+          if (sre && typeof sre.getData === 'function') {
+            const req = sre.getData();
+            if (Array.isArray(req)) return req;
+          }
+        } catch (_) {}
+        // 3rd fallback: read directly from shared 'systemRequirementsData' localStorage key.
+        // This works in Tauri WebviewWindow where systemRequirementsEditor is not initialized.
+        try {
+          const rawReqs = localStorage.getItem('systemRequirementsData');
+          if (rawReqs) {
+            const parsed = JSON.parse(rawReqs);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          }
+        } catch (_) {}
+        return [];
+      };
+
+      const countActiveRequirements = (rows: any[], strictActiveConfig = true): number => {
+        if (!Array.isArray(rows) || rows.length === 0) return 0;
+        return rows.reduce((acc: number, row: any) => {
+          if (!row || typeof row !== 'object') return acc;
+          const enabled = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
+          const operand = String(row.operand ?? '').trim();
+          const weight = Number(row.weight ?? 1);
+          const reqCfg = normalizeRequirementConfigId(row);
+          if (strictActiveConfig && activeConfigId && reqCfg !== activeConfigId) return acc;
+          if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) return acc;
+          return acc + 1;
+        }, 0);
+      };
+
+      let systemRequirementsRows = collectSystemRequirementsRows();
+      let activeRequirementCount = countActiveRequirements(systemRequirementsRows, true);
+
+      if (activeRequirementCount <= 0) {
+        try {
+          const reqEditor = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
+          if (reqEditor && typeof reqEditor.evaluateAndUpdateNow === 'function') {
+            const p = reqEditor.evaluateAndUpdateNow({ reason: 'optimize-prerun-guard', forceSilent: true, silent: true });
+            if (p && typeof p.then === 'function') {
+              await p;
+            }
+          }
+        } catch (_) {}
+
+        systemRequirementsRows = collectSystemRequirementsRows();
+        activeRequirementCount = countActiveRequirements(systemRequirementsRows, true);
+      }
+
+      if (activeRequirementCount <= 0) {
+        // Fallback: allow optimization to proceed when requirements exist but configId mapping is temporarily stale.
+        activeRequirementCount = countActiveRequirements(systemRequirementsRows, false);
+      }
+
+      if (activeRequirementCount <= 0) {
+        setOptimizeState((prev: any) => ({
+          ...prev,
+          status: 'error',
+          phase: 'error',
+          issue: 'No active System Requirements (check enabled/weight/operand)',
+        }));
+        return;
+      }
+
+      const optimizeVarCount = countOptimizeFlags(rows);
+      if (optimizeVarCount <= 0) {
+        setOptimizeState((prev: any) => ({
+          ...prev,
+          status: 'error',
+          phase: 'error',
+          issue: 'No optimize variables found (check Design Intent -> Optimize flags)',
+          variableCount: 0,
+        }));
+        return;
+      }
+
+      (window as any).__cooptOptimizeStopRequested = false;
+      try { (globalThis as any).__stopOptimization = false; } catch (_) {}
+      try { await clearOptimizerStop(); } catch (_) {}
+      try {
+        const g = window as any;
+        if (g.__cooptStopPulseTimer) {
+          clearInterval(g.__cooptStopPulseTimer);
+          g.__cooptStopPulseTimer = null;
+        }
+      } catch (_) {}
+      setOptStopRequested(false);
+      setOptRunning(true);
+      setOptimizeState((prev: any) => ({
+        ...prev,
+        status: 'running',
+        phase: 'starting',
+        modeUsed: optMethod,
+        iterations: 0,
+        acceptCount: 0,
+        rejectCount: 0,
+        issue: '-',
+        percent: 0,
+        progressEvents: [],
+      }));
+
+      const sourceRows = (() => {
+        try {
+          const table = hostWindow.tableSource || w.tableSource;
+          if (table && typeof table.getData === 'function') {
+            const d = table.getData();
+            if (Array.isArray(d)) return d;
+          }
+        } catch (_) {}
+        return [];
+      })();
+
+      const objectRows = (() => {
+        try {
+          const table = hostWindow.tableObject || w.tableObject;
+          if (table && typeof table.getData === 'function') {
+            const d = table.getData();
+            if (Array.isArray(d)) return d;
+          }
+        } catch (_) {}
+        return [];
+      })();
+
+      try {
+        if (typeof hostWindow.__cooptInitMeritFunctionEditor === 'function') {
+          hostWindow.__cooptInitMeritFunctionEditor();
+        }
+      } catch (_) {}
+      try {
+        if (typeof w.__cooptInitMeritFunctionEditor === 'function') {
+          w.__cooptInitMeritFunctionEditor();
+        }
+      } catch (_) {}
+
+      try {
+        let tsAcceptCount = 0;
+        let tsRejectCount = 0;
+        let tsBestScore = Number.POSITIVE_INFINITY;
+        let lastAutoRenderAt = 0;
+        const AUTO_RENDER_THROTTLE_MS = 120;
+
+        const requestRenderSync = () => {
+          if (!optAutoRenderOnAccept) return;
+          const now = Date.now();
+          if ((now - lastAutoRenderAt) < AUTO_RENDER_THROTTLE_MS) return;
+          lastAutoRenderAt = now;
+          // Signal the main window via localStorage (works across Tauri WebviewWindows
+          // where hostWindow === w and direct DOM access is impossible).
+          try {
+            const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+            const overrideRows = g && Array.isArray(g.__cooptOpticalSystemRowsOverride) && g.__cooptOpticalSystemRowsOverride.length > 0
+              ? g.__cooptOpticalSystemRowsOverride
+              : null;
+            const currentRows = overrideRows
+              ?? (typeof w.getOpticalSystemRows === 'function' ? w.getOpticalSystemRows(w.tableOpticalSystem) : []);
+            localStorage.setItem('coopt.renderSyncRequest', JSON.stringify({ ts: now, rows: currentRows }));
+          } catch (_) {}
+          try {
+            if (typeof hostWindow.drawOpticalSystem === 'function') {
+              hostWindow.drawOpticalSystem();
+            }
+          } catch (_) {}
+          try {
+            const popup = hostWindow.popup3DWindow;
+            if (popup && !popup.closed && typeof popup.postMessage === 'function') {
+              popup.postMessage({ action: 'request-redraw' }, '*');
+            }
+          } catch (_) {}
+          try {
+            if (hostWindow !== w && typeof w.drawOpticalSystem === 'function') {
+              w.drawOpticalSystem();
+            }
+          } catch (_) {}
+        };
+
+        const loadHostConfigSnapshot = () => {
+          try {
+            const cfg = typeof hostWindow.loadSystemConfigurationsFromTableConfig === 'function'
+              ? hostWindow.loadSystemConfigurationsFromTableConfig()
+              : (typeof hostWindow.loadSystemConfigurations === 'function' ? hostWindow.loadSystemConfigurations() : null);
+            return cloneJsonLocal(cfg);
+          } catch (_) {
+            return null;
+          }
+        };
+
+        const loadHostRowsSnapshot = () => {
+          try {
+            const r = typeof hostWindow.getOpticalSystemRows === 'function'
+              ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem)
+              : [];
+            return Array.isArray(r) ? (cloneJsonLocal(r) || []) : [];
+          } catch (_) {
+            return [];
+          }
+        };
+
+        const beforeHostConfigSnapshot = clickSnapshot?.config ?? loadHostConfigSnapshot();
+        const beforeHostRowsSnapshot = clickSnapshot?.rows ?? loadHostRowsSnapshot();
+
+        const optimizerRunner = (() => {
+          try {
+            const hostOpt = hostWindow?.OptimizationMVP;
+            if (hostWindow && hostWindow !== w && hostOpt && typeof hostOpt.run === 'function') {
+              return {
+                source: 'host-window',
+                run: hostOpt.run.bind(hostOpt),
+              };
+            }
+          } catch (_) {}
+          return {
+            source: 'local-window',
+            run: runOptimizationMVP,
+          };
+        })();
+
+        const tsResult: any = await optimizerRunner.run({
+          opticalSystemRows: rows,
+          sourceRows,
+          objectRows,
+          activeConfigId,
+          systemRequirementsRows,
+          method: optMethod,
+          maxIterations,
+          forceTs: true,
+          shouldStop: () => !!(window as any).__cooptOptimizeStopRequested,
+          onProgress: (ev: any) => {
+            const phase = String(ev?.phase ?? 'running');
+            const phaseLower = phase.toLowerCase();
+            const iter = Number(ev?.iter ?? 0);
+            const current = Number(ev?.current ?? NaN);
+            const best = Number(ev?.best ?? NaN);
+            const violationScore = Number(ev?.violationScore ?? NaN);
+
+            if (phaseLower === 'accept') tsAcceptCount += 1;
+            if (phaseLower === 'reject') tsRejectCount += 1;
+            if (Number.isFinite(best)) tsBestScore = Math.min(tsBestScore, best);
+
+            if (phaseLower.includes('accept')) {
+              requestRenderSync();
+            }
+
+            setOptimizeState((prev: any) => ({
+              ...prev,
+              status: 'running',
+              phase,
+              modeUsed: optMethod,
+              iterations: iter,
+              meritBefore: Number.isFinite(current) ? current : prev.meritBefore,
+              meritAfter: Number.isFinite(current) ? current : prev.meritAfter,
+              requirementScoreBefore: Number.isFinite(violationScore) ? violationScore : prev.requirementScoreBefore,
+              requirementScoreAfter: Number.isFinite(violationScore) ? violationScore : prev.requirementScoreAfter,
+              requirementScoreTable: Number.isFinite(violationScore) ? violationScore : prev.requirementScoreTable,
+              acceptCount: tsAcceptCount,
+              rejectCount: tsRejectCount,
+              issue: '-',
+              percent: maxIterations > 0 ? Math.round((Math.max(0, iter) / maxIterations) * 100) : 0,
+              best: Number.isFinite(tsBestScore) ? tsBestScore : prev.best,
+            }));
+          },
+        });
+
+        if (!tsResult || tsResult.ok !== true) {
+          throw new Error(`[${optimizerRunner.source}] ${String(tsResult?.reason || 'TS/WASM optimizer returned non-ok result')}`);
+        }
+
+        const tsIterations = Number(tsResult?.iterations ?? NaN);
+        if (!Number.isFinite(tsIterations) || tsIterations <= 0) {
+          throw new Error(`TS/WASM optimizer produced no iterations (iterations=${String(tsResult?.iterations)})`);
+        }
+
+        let afterHostConfigSnapshot: any = null;
+        let afterHostRowsSnapshot: any[] = [];
+        try {
+          afterHostConfigSnapshot = loadHostConfigSnapshot();
+          afterHostRowsSnapshot = loadHostRowsSnapshot();
+          if (typeof hostWindow.__cooptRecordOptimizationUndoFromSnapshots === 'function') {
+            hostWindow.__cooptRecordOptimizationUndoFromSnapshots(
+              beforeHostConfigSnapshot,
+              beforeHostRowsSnapshot,
+              afterHostConfigSnapshot,
+              afterHostRowsSnapshot,
+              'Optimization run'
+            );
+          }
+        } catch (_) {}
+
+        try {
+          const rowsAfter = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
+          if (Array.isArray(rowsAfter) && rowsAfter.length > 0) {
+            await maybeAutoRender(rowsAfter);
+            const applyToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            localStorage.setItem(optimizeRowsSyncKey, JSON.stringify({
+              rows: rowsAfter,
+              token: applyToken,
+              beforeConfigSnapshot: beforeHostConfigSnapshot,
+              beforeRowsSnapshot: beforeHostRowsSnapshot,
+              afterConfigSnapshot: afterHostConfigSnapshot,
+              afterRowsSnapshot: afterHostRowsSnapshot,
+            }));
+            try {
+              const mod = await import('@tauri-apps/api/event');
+              if (mod && typeof (mod as any).emit === 'function') {
+                await (mod as any).emit('coopt-optimize-rows-sync', {
+                  rows: rowsAfter,
+                  token: applyToken,
+                  beforeConfigSnapshot: beforeHostConfigSnapshot,
+                  beforeRowsSnapshot: beforeHostRowsSnapshot,
+                  afterConfigSnapshot: afterHostConfigSnapshot,
+                  afterRowsSnapshot: afterHostRowsSnapshot,
+                });
+              }
+            } catch (_) {}
+          }
+        } catch (_) {}
+
+        try {
+          const reqEditor = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
+          if (reqEditor && typeof reqEditor.evaluateAndUpdateNow === 'function') {
+            await reqEditor.evaluateAndUpdateNow({ reason: 'optimize-finished-sync', forceSilent: true, silent: true });
+          }
+        } catch (_) {}
+
+        let finalTableScore = Number.NaN;
+        try {
+          const sre = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
+          if (sre && typeof sre.getData === 'function') {
+            const rr = sre.getData();
+            if (Array.isArray(rr)) {
+              let sum = 0;
+              let cnt = 0;
+              for (const row of rr) {
+                const c = Number.isFinite(Number(row?._contribution)) ? Number(row._contribution) : Number(row?.score);
+                if (Number.isFinite(c) && c > 0) { sum += c; cnt += 1; }
+              }
+              if (cnt > 0 && Number.isFinite(sum)) finalTableScore = sum;
+            }
+          }
+        } catch (_) {}
+
+        const finalScore = Number(tsResult?.violationScore ?? tsResult?.best ?? NaN);
+        const finalBest = Number(tsResult?.best ?? NaN);
+        const aborted = !!(tsResult?.aborted || (window as any).__cooptOptimizeStopRequested);
+
+        setOptimizeState((prev: any) => ({
+          ...prev,
+          status: aborted ? 'stopped' : 'done',
+          phase: aborted ? 'stopped' : 'done',
+          issue: aborted ? 'Stopped by user' : '-',
+          iterations: Number.isFinite(tsIterations) ? tsIterations : prev.iterations,
+          variableCount: Number.isFinite(Number(tsResult?.variables)) ? Number(tsResult.variables) : prev.variableCount,
+          requirementCount: Number.isFinite(Number(tsResult?.hardViolations?.length))
+            ? Number(tsResult.hardViolations.length)
+            : prev.requirementCount,
+          requirementScoreAfter: Number.isFinite(finalScore) ? finalScore : prev.requirementScoreAfter,
+          requirementScoreTable: Number.isFinite(finalTableScore)
+            ? finalTableScore
+            : (Number.isFinite(finalScore) ? finalScore : prev.requirementScoreTable),
+          best: Number.isFinite(finalBest) ? finalBest : prev.best,
+          percent: 100,
+        }));
+
+      } catch (tsErr) {
+        setOptimizeState((prev: any) => ({
+          ...prev,
+          status: 'error',
+          phase: 'error',
+          issue: (tsErr as any)?.message || String(tsErr),
+          percent: 100,
+        }));
+      } finally {
+        try { await clearOptimizerStop(); } catch (_) {}
+        try {
+          const g = window as any;
+          if (g.__cooptStopPulseTimer) {
+            clearInterval(g.__cooptStopPulseTimer);
+            g.__cooptStopPulseTimer = null;
+          }
+        } catch (_) {}
+        setOptRunning(false);
+        setOptStopRequested(false);
+        (window as any).__cooptOptimizeStopRequested = false;
+        try { (globalThis as any).__stopOptimization = false; } catch (_) {}
+        try {
+          (window as any).__cooptOptimizerIsRunning = false;
+          if (hostWindow && hostWindow !== w) {
+            hostWindow.__cooptOptimizerIsRunning = false;
+          }
+        } catch (_) {}
+      }
+    };
+
     return (
-      <div style={{ height: '100vh', width: '100vw', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f4f4f4', color: '#444', fontSize: 13 }}>
-        Launching settings window...
+      <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: '#f4f4f4', color: '#222', padding: 12, boxSizing: 'border-box', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, flex: '0 0 auto' }}>Optimize Progress</div>
+          <div style={{ height: 6, background: '#eceef2', borderRadius: 999, overflow: 'hidden', flex: '1 1 auto', minWidth: 120 }}>
+            <div style={{ width: `${percent}%`, height: '100%', background: '#4f8cff', transition: 'width 120ms linear' }} />
+          </div>
+          <div style={{ fontSize: 12, color: '#666', flex: '0 0 auto' }}>{optRunning ? 'Running' : String(optimizeState?.status || 'Idle')}</div>
+        </div>
+        <div style={{ fontSize: 12, color: '#555' }}>Updates per candidate evaluation (±step)</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button type="button" disabled={optRunning} onClick={() => { void runOptimize(); }} style={{ padding: '6px 10px' }}>Run</button>
+          <button type="button" disabled={!optRunning} onClick={() => {
+            (window as any).__cooptOptimizeStopRequested = true;
+            try { (globalThis as any).__stopOptimization = true; } catch (_) {}
+            setOptStopRequested(true);
+            try {
+              const wAny = window as any;
+              if (wAny.OptimizationMVP && typeof wAny.OptimizationMVP.stop === 'function') {
+                wAny.OptimizationMVP.stop();
+              }
+              const op = wAny.opener;
+              if (op && !op.closed && op.OptimizationMVP && typeof op.OptimizationMVP.stop === 'function') {
+                op.OptimizationMVP.stop();
+              }
+            } catch (_) {}
+            setOptimizeState((prev: any) => ({ ...prev, phase: 'stopping', issue: 'Stop requested...' }));
+          }} style={{ padding: '6px 10px' }}>Stop</button>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
+            Method
+            <select value={optMethod} disabled={optRunning} onChange={(e) => setOptMethod((e.target.value as 'kkt' | 'lm' | 'cd'))} style={{ padding: '4px 6px' }}>
+              <option value="kkt">Augmented Lagrangian (AL)</option>
+              <option value="lm">Levenberg-Marquardt (LM)</option>
+              <option value="cd">Coordinate Descent (CD)</option>
+            </select>
+          </label>
+          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
+            Max Iterations
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={optMaxIterations}
+              disabled={optRunning}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                setOptMaxIterations(Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
+              }}
+              style={{ width: 100, padding: '4px 6px' }}
+            />
+          </label>
+          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
+            Convergence
+            <select value={optConvergenceProfile} disabled={optRunning} onChange={(e) => setOptConvergenceProfile(e.target.value as 'fast' | 'balanced' | 'deep')} style={{ padding: '4px 6px' }}>
+              <option value="fast">Fast</option>
+              <option value="balanced">Balanced</option>
+              <option value="deep">Deep</option>
+            </select>
+          </label>
+          <label style={{ fontSize: 12, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input type="checkbox" checked={optAutoRenderOnAccept} disabled={optRunning} onChange={(e) => setOptAutoRenderOnAccept(!!e.target.checked)} style={{ width: 16, height: 16 }} />
+            Auto-render on Accept
+          </label>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Phase</span><span>{String(optimizeState?.phase || '-')}</span></div>
+          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Decision</span><span>{String(optimizeState?.phase === 'accept' ? 'ACCEPT' : optimizeState?.phase === 'reject' ? 'REJECT' : '-')}</span></div>
+          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Accept/Reject</span><span>{`${Number(optimizeState?.acceptCount || 0)} / ${Number(optimizeState?.rejectCount || 0)}`}</span></div>
+          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Iter</span><span>{String(optimizeState?.iterations ?? 0)}</span></div>
+          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Vars</span><span>{String(optimizeState?.variableCount ?? 0)}</span></div>
+          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Req</span><span>{String(optimizeState?.requirementCount ?? '-')}</span></div>
+          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Score</span><span>{Number.isFinite(Number(optimizeState?.meritAfter)) ? Number(optimizeState.meritAfter).toFixed(6) : '-'}</span></div>
+          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Best</span><span>{Number.isFinite(Number(optimizeState?.best)) ? Number(optimizeState.best).toFixed(6) : '-'}</span></div>
+          <div style={{ display: 'flex', alignItems: 'baseline' }}><span style={{ display: 'inline-block', width: 110, color: '#555' }}>Issue</span><span>{String(optimizeState?.issue || '-')}</span></div>
+        </div>
       </div>
     );
   }

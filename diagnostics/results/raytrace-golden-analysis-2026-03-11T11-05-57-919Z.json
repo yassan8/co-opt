@@ -1,0 +1,144 @@
+{
+  "timestamp": "2026-03-11T11:05:57.919Z",
+  "inputPath": "diagnostics/results/raytrace-golden-2026-03-11T11-05-57-763Z.json",
+  "normalization": {
+    "oplEpsilonUm": 0.001
+  },
+  "totals": {
+    "comparedRays": 25,
+    "mismatchCount": 0,
+    "mismatchRate": 0,
+    "successMismatch": 0,
+    "successMismatchRate": 0,
+    "oplCompared": 25,
+    "meanOplAbsDeltaUm": 0,
+    "maxOplAbsDeltaUm": 0
+  },
+  "statusPairs": [
+    {
+      "pair": "aperture_block -> aperture_block",
+      "count": 16
+    },
+    {
+      "pair": "ok -> ok",
+      "count": 9
+    }
+  ],
+  "failureDiagnostics": {
+    "js": {
+      "capturedFailure": 16,
+      "topKinds": [
+        {
+          "kind": "PHYSICAL_APERTURE_BLOCK",
+          "count": 16
+        }
+      ],
+      "topSurfaces": [
+        {
+          "surfaceIndex": "11",
+          "count": 12
+        },
+        {
+          "surfaceIndex": "6",
+          "count": 4
+        }
+      ]
+    },
+    "rust": {
+      "capturedFailure": 0,
+      "topKinds": [],
+      "topSurfaces": []
+    }
+  },
+  "radiusBins": [
+    {
+      "bin": "[0,2)",
+      "count": 1,
+      "mismatch": 0,
+      "successMismatch": 0,
+      "jsOk": 1,
+      "rustOk": 1,
+      "mismatchRate": 0,
+      "successMismatchRate": 0
+    },
+    {
+      "bin": "[12,+)",
+      "count": 4,
+      "mismatch": 0,
+      "successMismatch": 0,
+      "jsOk": 0,
+      "rustOk": 0,
+      "mismatchRate": 0,
+      "successMismatchRate": 0
+    },
+    {
+      "bin": "[2,5)",
+      "count": 4,
+      "mismatch": 0,
+      "successMismatch": 0,
+      "jsOk": 4,
+      "rustOk": 4,
+      "mismatchRate": 0,
+      "successMismatchRate": 0
+    },
+    {
+      "bin": "[5,8)",
+      "count": 4,
+      "mismatch": 0,
+      "successMismatch": 0,
+      "jsOk": 4,
+      "rustOk": 4,
+      "mismatchRate": 0,
+      "successMismatchRate": 0
+    },
+    {
+      "bin": "[8,12)",
+      "count": 12,
+      "mismatch": 0,
+      "successMismatch": 0,
+      "jsOk": 0,
+      "rustOk": 0,
+      "mismatchRate": 0,
+      "successMismatchRate": 0
+    }
+  ],
+  "mismatchSamples": [],
+  "note": "Includes failure kind/surface aggregates from diagnostics captured via traceRayHitPoint.",
+  "requirementGate": {
+    "enabled": true,
+    "passed": true,
+    "thresholds": {
+      "maxMismatchRate": 0,
+      "maxSuccessMismatchRate": 0,
+      "maxMeanOplAbsDeltaUm": 0,
+      "maxOplAbsDeltaUm": 0
+    },
+    "checks": [
+      {
+        "name": "mismatchRate",
+        "actual": 0,
+        "limit": 0,
+        "pass": true
+      },
+      {
+        "name": "successMismatchRate",
+        "actual": 0,
+        "limit": 0,
+        "pass": true
+      },
+      {
+        "name": "meanOplAbsDeltaUm",
+        "actual": 0,
+        "limit": 0,
+        "pass": true
+      },
+      {
+        "name": "maxOplAbsDeltaUm",
+        "actual": 0,
+        "limit": 0,
+        "pass": true
+      }
+    ],
+    "failedChecks": []
+  }
+}

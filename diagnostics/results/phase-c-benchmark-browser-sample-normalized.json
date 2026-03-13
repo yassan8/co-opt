@@ -1,0 +1,278 @@
+{
+  "timestamp": "2026-03-11T11:51:03.420Z",
+  "config": {
+    "repeat": 6,
+    "warmupDiscard": 1,
+    "filterOutliers": true,
+    "matchBaselineBestStop": true,
+    "matchBaselineBestRelTol": 0,
+    "matchBaselineBestAbsTol": 0,
+    "matchBaselineBestMinIter": 8
+  },
+  "filtering": {
+    "warmupDiscard": 1,
+    "filterOutliers": true,
+    "matchBaselineBestStop": true,
+    "matchBaselineBestRelTol": 0,
+    "matchBaselineBestAbsTol": 0,
+    "matchBaselineBestMinIter": 8,
+    "baselineDroppedWarmup": 1,
+    "baselineDroppedOutliers": 0,
+    "matrixFreeDroppedWarmup": 1,
+    "matrixFreeDroppedOutliers": 0,
+    "matrixFreePriorityDroppedWarmup": 1,
+    "matrixFreePriorityDroppedOutliers": 0
+  },
+  "baseline": {
+    "repeat": 5,
+    "elapsed": {
+      "avg": 1583.8600000023841,
+      "min": 1579.0999999940395,
+      "max": 1587.4000000059605
+    },
+    "objectiveMs": {
+      "avg": 50.63999999165535,
+      "min": 41.09999996423721,
+      "max": 57.89999997615814
+    },
+    "wasmMs": {
+      "avg": 9.240000027418137,
+      "min": 5.900000065565109,
+      "max": 10.499999850988388
+    },
+    "jsMs": {
+      "avg": 1520.219999986887,
+      "min": 1514.9999999701977,
+      "max": 1527.0999999642372
+    },
+    "objectivePct": {
+      "avg": 3.2043265626009174,
+      "min": 2.607206290540587,
+      "max": 3.6571500742486225
+    },
+    "wasmPct": {
+      "avg": 0.5848007563505834,
+      "min": 0.37296921837934627,
+      "max": 0.6633394308515289
+    },
+    "jsPct": {
+      "avg": 96.2108726810485,
+      "min": 95.6922688196745,
+      "max": 96.77746763949897
+    },
+    "matrixFreeHitRatePct": {
+      "avg": 0,
+      "min": 0,
+      "max": 0
+    },
+    "matrixFreeCalls": {
+      "avg": 0,
+      "min": 0,
+      "max": 0
+    },
+    "matrixFreeCgIters": {
+      "avg": 0,
+      "min": 0,
+      "max": 0
+    },
+    "matrixFreeSolverIters": {
+      "avg": 0,
+      "min": 0,
+      "max": 0
+    },
+    "matrixFreeMs": {
+      "avg": 0,
+      "min": 0,
+      "max": 0
+    },
+    "okRatePct": 100
+  },
+  "matrixFree": {
+    "repeat": 5,
+    "elapsed": {
+      "avg": 71.08000000715256,
+      "min": 69.2000000178814,
+      "max": 73.19999998807907
+    },
+    "objectiveMs": {
+      "avg": 25.74000002145767,
+      "min": 21.700000017881393,
+      "max": 27.200000017881393
+    },
+    "wasmMs": {
+      "avg": 0.27999998927116393,
+      "min": 0.09999999403953552,
+      "max": 0.5999999940395355
+    },
+    "jsMs": {
+      "avg": 42.61999998688698,
+      "min": 40.099999994039536,
+      "max": 46.79999998211861
+    },
+    "objectivePct": {
+      "avg": 37.52359757206584,
+      "min": 31.403762691393926,
+      "max": 40.29629632278725
+    },
+    "wasmPct": {
+      "avg": 0.4074193779376293,
+      "min": 0.14144270729334768,
+      "max": 0.8683067931856594
+    },
+    "jsPct": {
+      "avg": 62.06898304999653,
+      "min": 59.40740739857709,
+      "max": 67.72793051542041
+    },
+    "matrixFreeHitRatePct": {
+      "avg": 0,
+      "min": 0,
+      "max": 0
+    },
+    "matrixFreeCalls": {
+      "avg": 9,
+      "min": 9,
+      "max": 9
+    },
+    "matrixFreeCgIters": {
+      "avg": 0,
+      "min": 0,
+      "max": 0
+    },
+    "matrixFreeSolverIters": {
+      "avg": 0,
+      "min": 0,
+      "max": 0
+    },
+    "matrixFreeMs": {
+      "avg": 0.10000000596046447,
+      "min": 0,
+      "max": 0.30000004172325134
+    },
+    "okRatePct": 100,
+    "phaseC": {
+      "runCount": 5,
+      "okRatePct": 100,
+      "matrixFreeCalls": 45,
+      "matrixFreeHits": 0,
+      "matrixFreeFallbacks": 45,
+      "matrixFreeHitRatePct": 0,
+      "matrixFreeFallbackRate": 1,
+      "matrixFreeUnknownFallbackRate": 0,
+      "matrixFreeCgItersAvg": 0,
+      "matrixFreeSolverItersAvg": 0,
+      "matrixFreeResidualNormAvg": 0,
+      "matrixFreeMsAvg": 0.10000000596046447,
+      "matrixFreeFallbackReasons": {
+        "invalid-initial-rz": 45
+      }
+    },
+    "elapsedSpeedup": 22.28277996402652
+  },
+  "matrixFreePriority": {
+    "repeat": 5,
+    "elapsed": {
+      "avg": 64.66000000238418,
+      "min": 58.900000005960464,
+      "max": 67.09999999403954
+    },
+    "objectiveMs": {
+      "avg": 18.540000009536744,
+      "min": 16.799999982118607,
+      "max": 19.80000004172325
+    },
+    "wasmMs": {
+      "avg": 0.18000001311302186,
+      "min": 0.09999999403953552,
+      "max": 0.20000004768371582
+    },
+    "jsMs": {
+      "avg": 43.719999969005585,
+      "min": 39.799999952316284,
+      "max": 45.89999997615814
+    },
+    "objectivePct": {
+      "avg": 29.696321240810363,
+      "min": 28.858024726916064,
+      "max": 31.329113995977803
+    },
+    "wasmPct": {
+      "avg": 0.28944016474899914,
+      "min": 0.1579778736503998,
+      "max": 0.3521127601173917
+    },
+    "jsPct": {
+      "avg": 70.01423859444063,
+      "min": 68.35443027946663,
+      "max": 70.83333331608662
+    },
+    "matrixFreeHitRatePct": {
+      "avg": 0,
+      "min": 0,
+      "max": 0
+    },
+    "matrixFreeCalls": {
+      "avg": 18,
+      "min": 18,
+      "max": 18
+    },
+    "matrixFreeCgIters": {
+      "avg": 0,
+      "min": 0,
+      "max": 0
+    },
+    "matrixFreeSolverIters": {
+      "avg": 0,
+      "min": 0,
+      "max": 0
+    },
+    "matrixFreeMs": {
+      "avg": 0.1600000023841858,
+      "min": 0.09999999403953552,
+      "max": 0.29999998211860657
+    },
+    "okRatePct": 100,
+    "phaseC": {
+      "runCount": 5,
+      "okRatePct": 100,
+      "matrixFreeCalls": 90,
+      "matrixFreeHits": 0,
+      "matrixFreeFallbacks": 90,
+      "matrixFreeHitRatePct": 0,
+      "matrixFreeFallbackRate": 1,
+      "matrixFreeUnknownFallbackRate": 0,
+      "matrixFreeCgItersAvg": 0,
+      "matrixFreeSolverItersAvg": 0,
+      "matrixFreeResidualNormAvg": 0,
+      "matrixFreeMsAvg": 0.1600000023841858,
+      "matrixFreeFallbackReasons": {
+        "invalid-initial-rz": 90
+      }
+    },
+    "elapsedSpeedup": 24.495205690442052
+  },
+  "speedups": {
+    "matrixFreeElapsed": 22.28277996402652,
+    "matrixFreePriorityElapsed": 24.495205690442052
+  },
+  "phaseC": {
+    "selectedMode": "matrixFreePriority",
+    "elapsedSpeedup": 24.495205690442052,
+    "baselineOkRatePct": 100,
+    "okRatePct": 100,
+    "okRateDeltaPct": 0,
+    "matrixFreeCalls": 90,
+    "matrixFreeHits": 0,
+    "matrixFreeFallbacks": 90,
+    "matrixFreeHitRatePct": 0,
+    "matrixFreeFallbackRate": 1,
+    "matrixFreeUnknownFallbackRate": 0,
+    "matrixFreeCgItersAvg": 0,
+    "matrixFreeSolverItersAvg": 0,
+    "matrixFreeResidualNormAvg": 0,
+    "matrixFreeMsAvg": 0.1600000023841858,
+    "matrixFreeFallbackReasons": {
+      "invalid-initial-rz": 90
+    }
+  }
+}

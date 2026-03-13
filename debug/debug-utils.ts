@@ -4,7 +4,7 @@
  */
 
 import * as THREE from 'three';
-import { getWASMSystem } from '../main.ts';
+import { getWASMSystem } from '../core/wasm-service.ts';
 
 /**
  * Debug scene contents
