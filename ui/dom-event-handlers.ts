@@ -2901,12 +2901,45 @@ function setupOptimizeDesignIntentButton(): void {
                     const hasOpenRenderPopup = !!(renderPopup && !renderPopup.closed);
 
                     if (!hasOpenRenderPopup) {
+                        const openRender = (w as any).__cooptOpenRenderWindow || (window as any).__cooptOpenRenderWindow;
+                        if (isTauriRuntime() && typeof openRender === 'function') {
+                            void Promise.resolve(openRender());
+                        }
                         if (typeof w.handleRender3D === 'function') {
                             w.handleRender3D();
-                        } else if (typeof w.__open3DWindowLegacy === 'function') {
-                            w.__open3DWindowLegacy();
+                        } else {
+                            try {
+                                const openBtn = document.getElementById('open-3d-window-btn') as HTMLButtonElement | null;
+                                if (openBtn && typeof openBtn.click === 'function') {
+                                    openBtn.click();
+                                } else if (typeof w.__open3DWindowLegacy === 'function') {
+                                    w.__open3DWindowLegacy();
+                                }
+                            } catch (_) {}
                         }
                     }
+
+                    // Tauri render window is a separate WebviewWindow, so use storage-based redraw sync.
+                    try {
+                        const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+                        const overrideRows = g && Array.isArray(g.__cooptOpticalSystemRowsOverride) && g.__cooptOpticalSystemRowsOverride.length > 0
+                            ? g.__cooptOpticalSystemRowsOverride
+                            : null;
+                        const rows = overrideRows
+                            ?? (typeof w.getOpticalSystemRows === 'function' ? w.getOpticalSystemRows(w.tableOpticalSystem) : []);
+                        const payload = { ts: Date.now(), rows: Array.isArray(rows) ? rows : [] };
+                        localStorage.setItem('coopt.renderSyncRequest', JSON.stringify(payload));
+                        if (isTauriRuntime()) {
+                            void (async () => {
+                                try {
+                                    const mod = await import('@tauri-apps/api/event');
+                                    if (mod && typeof (mod as any).emit === 'function') {
+                                        await (mod as any).emit('coopt-render-sync-request', payload);
+                                    }
+                                } catch (_) {}
+                            })();
+                        }
+                    } catch (_) {}
 
                     const drawNow = () => {
                         try {

@@ -25,6 +25,7 @@ export interface OptimizeProgressEvent {
   current: number;
   best: number;
   accepted: boolean;
+  rows?: unknown[];
   message?: string;
   variableId?: string;
   method?: OptimizerMethod | string;

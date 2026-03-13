@@ -232,6 +232,7 @@ async function runOptimizationMvpnative(options = {}) {
               current: ev?.current,
               best: ev?.best,
               accepted: ev?.accepted,
+              rows: ev?.accepted ? rowsWorking : undefined,
               variableId: ev?.variableId,
               method: resp?.modeUsed || method,
               violationScore: ev?.violationScore,
