@@ -5579,7 +5579,10 @@ export function setupOpticalSystemChangeListeners(scene: any): void {
         try { (window as any).__open3DWindowLegacy = open3DWindowHandler; } catch (_) {}
     }
     if (open3DWindowBtn) {
-        open3DWindowBtn.addEventListener('click', open3DWindowHandler);
+        const isReactHandled = (open3DWindowBtn as HTMLElement).getAttribute('data-react-handled') === '1';
+        if (!isReactHandled) {
+            open3DWindowBtn.addEventListener('click', open3DWindowHandler);
+        }
     }
 }
 
@@ -14263,7 +14266,10 @@ export function setupAnalysisWindows() {
                 };
 
         if (openSettingsBtn && !isTauriRuntime()) {
-                openSettingsBtn.addEventListener('click', openSettingsPopup);
+                const isReactHandled = (openSettingsBtn as HTMLElement).getAttribute('data-react-handled') === '1';
+                if (!isReactHandled) {
+                        openSettingsBtn.addEventListener('click', openSettingsPopup);
+                }
         }
 
         // React toolbar can mount after this initializer, so delegate as a fallback.
@@ -14274,6 +14280,7 @@ export function setupAnalysisWindows() {
                     if (!target || typeof target.closest !== 'function') return;
                     const btn = target.closest('#open-settings-btn');
                     if (!btn) return;
+                    if ((btn as HTMLElement).getAttribute('data-react-handled') === '1') return;
                     openSettingsPopup();
                 } catch (_) {}
             });
@@ -14521,44 +14528,47 @@ export function setupTransformationControls(): void {
     // Analysis dropdown selector
     const analysisSelect = document.getElementById('analysis-select') as HTMLSelectElement | null;
     if (analysisSelect) {
-        analysisSelect.addEventListener('change', () => {
-            const selectedValue = analysisSelect.value;
-            if (!selectedValue) return;
+        const isReactHandled = (analysisSelect as HTMLElement).getAttribute('data-react-handled') === '1';
+        if (!isReactHandled) {
+            analysisSelect.addEventListener('change', () => {
+                const selectedValue = analysisSelect.value;
+                if (!selectedValue) return;
             
-            // Reset select to default after triggering
-            analysisSelect.value = '';
+                // Reset select to default after triggering
+                analysisSelect.value = '';
             
-            // Map analysis values to corresponding button IDs
-            const analysisButtonMap: Record<string, string> = {
-                'spot-diagram': 'open-spot-diagram-window-btn',
-                'spherical-aberration': 'open-spherical-aberration-window-btn',
-                'astigmatism': 'open-astigmatism-window-btn',
-                'distortion': 'open-distortion-window-btn',
-                'distortion-grid': 'open-distortion-grid-window-btn',
-                'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
-                'integrated-aberration': 'open-integrated-aberration-window-btn',
-                'transverse-aberration': 'open-transverse-aberration-window-btn',
-                'opd': 'open-opd-window-btn',
-                'psf': 'open-psf-window-btn',
-                'mtf': 'open-mtf-window-btn',
-                'through-focus-spot': 'open-through-focus-spot-window-btn',
-                'through-focus-mtf': 'open-through-focus-mtf-window-btn',
-                'field-mtf': 'open-field-mtf-window-btn'
-            };
+                // Map analysis values to corresponding button IDs
+                const analysisButtonMap: Record<string, string> = {
+                    'spot-diagram': 'open-spot-diagram-window-btn',
+                    'spherical-aberration': 'open-spherical-aberration-window-btn',
+                    'astigmatism': 'open-astigmatism-window-btn',
+                    'distortion': 'open-distortion-window-btn',
+                    'distortion-grid': 'open-distortion-grid-window-btn',
+                    'magnification-chromatic-aberration': 'open-magnification-chromatic-aberration-window-btn',
+                    'integrated-aberration': 'open-integrated-aberration-window-btn',
+                    'transverse-aberration': 'open-transverse-aberration-window-btn',
+                    'opd': 'open-opd-window-btn',
+                    'psf': 'open-psf-window-btn',
+                    'mtf': 'open-mtf-window-btn',
+                    'through-focus-spot': 'open-through-focus-spot-window-btn',
+                    'through-focus-mtf': 'open-through-focus-mtf-window-btn',
+                    'field-mtf': 'open-field-mtf-window-btn'
+                };
             
-            const buttonId = analysisButtonMap[selectedValue];
-            if (buttonId) {
-                try {
-                    if (typeof w.setupAnalysisWindows === 'function') {
-                        w.setupAnalysisWindows();
+                const buttonId = analysisButtonMap[selectedValue];
+                if (buttonId) {
+                    try {
+                        if (typeof w.setupAnalysisWindows === 'function') {
+                            w.setupAnalysisWindows();
+                        }
+                    } catch (_) {}
+                    const button = document.getElementById(buttonId);
+                    if (button) {
+                        button.click();
                     }
-                } catch (_) {}
-                const button = document.getElementById(buttonId);
-                if (button) {
-                    button.click();
                 }
-            }
-        });
+            });
+        }
     }
 }
 
