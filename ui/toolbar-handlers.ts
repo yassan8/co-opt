@@ -1518,19 +1518,30 @@ export function handleRender3D(): void {
     }
 
     try {
+      if (w.popup3DWindow && !w.popup3DWindow.closed) {
+        try { w.popup3DWindow.focus(); } catch (_) {}
+        return;
+      }
+
       const url = new URL(window.location.href);
       url.searchParams.delete('coopt_optimize_window');
       url.searchParams.delete('coopt_analysis_window');
       url.searchParams.delete('coopt_analysis');
       url.searchParams.delete('coopt_settings_window');
       url.searchParams.set('coopt_render_window', '1');
-      window.location.assign(url.toString());
+
+      const popup = window.open(url.toString(), '3D Optical System', 'width=1100,height=760,resizable=yes,scrollbars=yes');
+      if (!popup) {
+        alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+        return;
+      }
+      w.popup3DWindow = popup;
       return;
     } catch (err) {
-      console.error('❌ [Render3D] Failed to navigate to render route:', err);
+      console.error('❌ [Render3D] Failed to open popup render window:', err);
     }
 
-    alert('Failed to open Render view. Please retry.');
+    alert('Failed to open Render popup. Please retry.');
   } finally {
     w.__render3DInProgress = false;
   }
@@ -1659,6 +1670,49 @@ async function openDesktopAnalysisWindow(kind: AnalysisWindowKey): Promise<boole
   return true;
 }
 
+function isRenderWindowContext(): boolean {
+  try {
+    const url = new URL(window.location.href);
+    return url.searchParams.get('coopt_render_window') === '1';
+  } catch (_) {
+    return false;
+  }
+}
+
+function openWebAnalysisPopup(kind: AnalysisWindowKey): boolean {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('coopt_render_window');
+    url.searchParams.delete('coopt_optimize_window');
+    url.searchParams.delete('coopt_settings_window');
+    url.searchParams.set('coopt_analysis_window', '1');
+    url.searchParams.set('coopt_analysis', kind);
+
+    const cfg = ANALYSIS_WINDOW_SIZE_MAP[kind] || { width: 980, height: 760, title: 'Analysis' };
+    const left = Math.max(0, Math.floor((window.screenX || 0) + (window.outerWidth - cfg.width) / 2));
+    const top = Math.max(0, Math.floor((window.screenY || 0) + (window.outerHeight - cfg.height) / 2));
+    const features = [
+      `width=${cfg.width}`,
+      `height=${cfg.height}`,
+      `left=${left}`,
+      `top=${top}`,
+      'resizable=yes',
+      'scrollbars=yes'
+    ].join(',');
+
+    const popup = window.open(url.toString(), `coopt-analysis-${kind}`, features);
+    if (!popup) {
+      alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+      return false;
+    }
+    try { popup.focus(); } catch (_) {}
+    return true;
+  } catch (err) {
+    console.error('❌ [Analysis][Web] Failed to open popup:', err);
+    return false;
+  }
+}
+
 export function handleSystemData(): void {
   console.log('[SystemData] Button clicked');
 
@@ -1677,14 +1731,7 @@ export function handleSystemData(): void {
     return;
   }
 
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set('coopt_analysis_window', '1');
-    url.searchParams.set('coopt_analysis', 'system-data');
-    window.location.assign(url.toString());
-  } catch (err) {
-    console.error('❌ [SystemData] Failed to navigate to analysis route:', err);
-  }
+  openWebAnalysisPopup('system-data');
 }
 
 export function handleAnalysisSelect(selectedValue: string): void {
@@ -1725,25 +1772,11 @@ export function handleAnalysisSelect(selectedValue: string): void {
     return;
   }
 
-  // Web mode: route into the in-app analysis page instead of opening popups.
+  // Web mode: keep opening analysis in popup windows.
   if (!isTauriRuntime()) {
-    try {
-      const url = new URL(window.location.href);
-      if (
-        url.searchParams.get('coopt_analysis_window') === '1' &&
-        String(url.searchParams.get('coopt_analysis') || '').trim() === value
-      ) {
-        return;
-      }
-      url.searchParams.delete('coopt_render_window');
-      url.searchParams.delete('coopt_optimize_window');
-      url.searchParams.delete('coopt_settings_window');
-      url.searchParams.set('coopt_analysis_window', '1');
-      url.searchParams.set('coopt_analysis', value);
-      window.location.assign(url.toString());
+    if (mappedAnalysisKind) {
+      openWebAnalysisPopup(mappedAnalysisKind);
       return;
-    } catch (err) {
-      console.error('❌ [Analysis] Failed to navigate to analysis route:', err);
     }
   }
 
