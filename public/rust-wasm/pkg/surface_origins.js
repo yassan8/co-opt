@@ -40,6 +40,30 @@ export function assemble_fd_jacobian(r0, r_batches, m, n, steps) {
 }
 
 /**
+ * @param {Float64Array} r0
+ * @param {Float64Array} r_batches
+ * @param {number} m
+ * @param {number} n
+ * @param {Uint32Array} col_indices
+ * @param {Float64Array} steps
+ * @returns {Float64Array}
+ */
+export function assemble_fd_jacobian_grouped(r0, r_batches, m, n, col_indices, steps) {
+    const ptr0 = passArrayF64ToWasm0(r0, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(r_batches, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray32ToWasm0(col_indices, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF64ToWasm0(steps, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.assemble_fd_jacobian_grouped(ptr0, len0, ptr1, len1, m, n, ptr2, len2, ptr3, len3);
+    var v5 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+    return v5;
+}
+
+/**
  * Phase 3: Armijo backtracking line search with JS merit callback
  *
  * Finds alpha in {alpha_init, alpha_init*rho, ...} satisfying:
@@ -154,6 +178,27 @@ export function cholesky_factorization(a_flat, n) {
     var v2 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v2;
+}
+
+/**
+ * @param {Float64Array} field_values
+ * @param {Float64Array} wavelengths
+ * @param {number} reference_wavelength
+ * @param {Float64Array} image_heights_flat
+ * @returns {any}
+ */
+export function compute_lca_series_from_image_heights(field_values, wavelengths, reference_wavelength, image_heights_flat) {
+    const ptr0 = passArrayF64ToWasm0(field_values, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF64ToWasm0(wavelengths, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF64ToWasm0(image_heights_flat, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.compute_lca_series_from_image_heights(ptr0, len0, ptr1, len1, reference_wavelength, ptr2, len2);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
 }
 
 /**
@@ -339,8 +384,6 @@ export function matrix_vector_multiply(a_flat, x, rows, cols) {
 }
 
 /**
- * Matrix-free normal equation matvec: result = (J^T J + damping * I) * v
- * J is stored in row-major order (flat array)
  * @param {Float64Array} j_flat
  * @param {number} m
  * @param {number} n
@@ -461,6 +504,20 @@ export function refract_ray_batch(dirs, normals, n1, n2, count) {
     var v5 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v5;
+}
+
+/**
+ * @param {string} req_json
+ * @returns {any}
+ */
+export function run_native_opd_map_wasm_json(req_json) {
+    const ptr0 = passStringToWasm0(req_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.run_native_opd_map_wasm_json(ptr0, len0);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
 }
 
 /**

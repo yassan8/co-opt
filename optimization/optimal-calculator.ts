@@ -1,6 +1,12 @@
 // 🎯 実用的なWASM vs JavaScript ハイブリッド実装ガイド
 // Based on Advanced WASM Benchmark Suite Results
 
+import {
+    getWASMSystem,
+    getLegacyWasmAsphericSagFn,
+    getLegacyWasmAsphericSagBatchFn
+} from '../core/wasm-service.ts';
+
 /**
  * 最適化された非球面計算システム
  * 測定結果に基づく動的選択アルゴリズム
@@ -9,6 +15,8 @@
 class OptimalAsphericCalculator {
     constructor() {
         this.wasmSystem = null;
+        this.wasmForceAsphericSag = null;
+        this.wasmForceAsphericSagBatch = null;
         this.performanceThresholds = {
             wasmMinSize: 10000,     // WASM有利になる最小サイズ
             batchMinSize: 50000,    // バッチ処理推奨サイズ
@@ -31,8 +39,10 @@ class OptimalAsphericCalculator {
         
         // WASM system initialization
         try {
-            if (typeof window !== 'undefined' && typeof (window as any).getWASMSystem === 'function') {
-                this.wasmSystem = (window as any).getWASMSystem();
+            this.wasmSystem = getWASMSystem();
+            this.wasmForceAsphericSag = getLegacyWasmAsphericSagFn(this.wasmSystem);
+            this.wasmForceAsphericSagBatch = getLegacyWasmAsphericSagBatchFn(this.wasmSystem);
+            if (this.wasmForceAsphericSag) {
                 console.log('✅ Hybrid calculator: WASM system ready');
             } else {
                 console.log('⚠️ Hybrid calculator: WASM not available, using JavaScript only');
@@ -59,7 +69,7 @@ class OptimalAsphericCalculator {
     getPerformanceStats() {
         return {
             ...this.performanceStats,
-            wasmAvailable: !!(this.wasmSystem && this.wasmSystem.isWASMReady),
+            wasmAvailable: !!this.wasmForceAsphericSag,
             totalCalculations: this.performanceStats.totalCalculations,
             wasmRatio: this.performanceStats.totalCalculations > 0 ? 
                       this.performanceStats.wasmCalls / this.performanceStats.totalCalculations : 0
@@ -178,7 +188,7 @@ class OptimalAsphericCalculator {
         const { priority = 'balanced' } = options;
         
         // WASM利用不可の場合
-        if (!this.wasmSystem || !this.wasmSystem.isWASMReady) {
+        if (!this.wasmForceAsphericSag) {
             return dataSize > 50000 ? 'js-optimized' : 'js-standard';
         }
         
@@ -210,8 +220,8 @@ class OptimalAsphericCalculator {
      */
     calculateWASMBatch(data, params) {
         // TODO: バッチ処理APIの実装
-        if (this.wasmSystem.forceAsphericSagBatch) {
-            return this.wasmSystem.forceAsphericSagBatch(data, params.c, params.k, params.a4, params.a6, params.a8, params.a10);
+        if (this.wasmForceAsphericSagBatch) {
+            return this.wasmForceAsphericSagBatch(data, params.c, params.k, params.a4, params.a6, params.a8, params.a10);
         } else {
             // フォールバック: 個別処理
             return this.calculateWASMIndividual(data, params);
@@ -222,7 +232,10 @@ class OptimalAsphericCalculator {
      * WASM 個別処理 (一貫性重視)
      */
     calculateWASMIndividual(data, params) {
-        return data.map(r => this.wasmSystem.forceAsphericSag(
+        if (!this.wasmForceAsphericSag) {
+            throw new Error('WASM aspheric function is not available');
+        }
+        return data.map(r => this.wasmForceAsphericSag(
             r, 
             params.c || 0, 
             params.k || 0, 
@@ -299,7 +312,7 @@ class OptimalAsphericCalculator {
         const strategies = ['js-standard', 'js-optimized', 'wasm-individual'];
         
         for (const strategy of strategies) {
-            if (strategy.startsWith('wasm') && (!this.wasmSystem || !this.wasmSystem.isWASMReady)) {
+            if (strategy.startsWith('wasm') && !this.wasmForceAsphericSag) {
                 continue;
             }
             

@@ -96,6 +96,17 @@
         if (typeof globalScope.__COOPT_FORCE_RUST_WASM_OPD === 'undefined') {
             globalScope.__COOPT_FORCE_RUST_WASM_OPD = true;
         }
+
+        // Web default: prefer/require Rust-WASM analysis paths unless explicitly overridden.
+        const isDesktopRuntime = !!(globalScope && globalScope.__TAURI_INTERNALS__);
+        if (!isDesktopRuntime) {
+            if (typeof globalScope.__COOPT_ENABLE_RUST_RAYTRACE_WEB === 'undefined') {
+                globalScope.__COOPT_ENABLE_RUST_RAYTRACE_WEB = true;
+            }
+            if (typeof globalScope.__COOPT_REQUIRE_RUST_WASM_ANALYSIS === 'undefined') {
+                globalScope.__COOPT_REQUIRE_RUST_WASM_ANALYSIS = true;
+            }
+        }
     } catch {
         // ignore
     }
@@ -168,8 +179,10 @@ import { getActiveConfiguration } from './data/table-configuration.ts';
 import { expandBlocksToOpticalSystemRows } from './data/block-schema.ts';
 import { exposeWindowValue, installCooptWindowFacadeMarker, requestRefreshBlockInspector, requestUpdateSurfaceNumberSelect } from './core/window-facade.ts';
 import { setRenderingContext } from './core/rendering-context.ts';
+import { setRayTracingWasmStrict, setPsfWasmStrict } from './core/wasm-service.ts';
 import { preloadRustRayTracingWasm, getRustRayTracingWasmInitError } from './rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 import { isTauriRuntime } from './src/desktop/runtime.ts';
+import { getDefaultProject } from './src/desktop/ipc/client.ts';
 
 // Editor modules (must be imported to initialize)
 import './ui/editors/system-requirements-editor.ts';
@@ -215,6 +228,210 @@ window['OrbitControls'] = OrbitControls;
 // Global WASM system instance
 let wasmSystem = null;
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function getPhaseCAutorunSearchParams(): URLSearchParams | null {
+    try {
+        if (typeof window === 'undefined' || !window.location) return null;
+        return new URL(window.location.href).searchParams;
+    } catch {
+        return null;
+    }
+}
+
+function readBooleanQueryParam(params: URLSearchParams | null, key: string, fallback = false): boolean {
+    try {
+        if (!params || !params.has(key)) return fallback;
+        const raw = String(params.get(key) ?? '').trim().toLowerCase();
+        if (!raw) return true;
+        if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+        if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+        return fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function readNumberQueryParam(
+    params: URLSearchParams | null,
+    key: string,
+    fallback: number,
+    options: { integer?: boolean; min?: number; max?: number } = {}
+): number {
+    try {
+        if (!params || !params.has(key)) return fallback;
+        const raw = Number(params.get(key));
+        if (!Number.isFinite(raw)) return fallback;
+        let value = options.integer ? Math.floor(raw) : raw;
+        if (Number.isFinite(options.min)) value = Math.max(options.min as number, value);
+        if (Number.isFinite(options.max)) value = Math.min(options.max as number, value);
+        return value;
+    } catch {
+        return fallback;
+    }
+}
+
+function publishPhaseCAutorunStatus(status: Record<string, unknown>): void {
+    try {
+        if (typeof window !== 'undefined') {
+            window['__cooptPhaseCAutorunStatus'] = status;
+            window.dispatchEvent(new CustomEvent('coopt:phasec-autorun-status', { detail: status }));
+        }
+    } catch (_) {}
+    try {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('coopt.phaseCAutorunStatus', JSON.stringify(status));
+        }
+    } catch (_) {}
+    try {
+        if (typeof document !== 'undefined' && document.documentElement) {
+            document.documentElement.dataset.phasecAutorunState = String(status?.state ?? 'unknown');
+        }
+    } catch (_) {}
+}
+
+async function waitForWindowValue<T>(
+    label: string,
+    getter: () => T | null | undefined,
+    timeoutMs = 10000,
+    intervalMs = 50
+): Promise<T> {
+    const start = Date.now();
+    while (Date.now() - start <= timeoutMs) {
+        const value = getter();
+        if (value) return value;
+        await sleep(intervalMs);
+    }
+    throw new Error(`${label} was not ready within ${timeoutMs}ms`);
+}
+
+async function waitForPhaseCAutorunLoadSettled(timeoutMs = 2000): Promise<void> {
+    try {
+        await new Promise<void>((resolve) => {
+            let done = false;
+            const finish = () => {
+                if (done) return;
+                done = true;
+                try { window.removeEventListener('coopt:loaded-file-updated', onLoaded); } catch (_) {}
+                try { clearTimeout(timer); } catch (_) {}
+                resolve();
+            };
+            const onLoaded = () => finish();
+            const timer = setTimeout(() => finish(), timeoutMs);
+            window.addEventListener('coopt:loaded-file-updated', onLoaded, { once: true });
+        });
+    } catch {
+        await sleep(250);
+    }
+    await sleep(250);
+}
+
+async function loadDefaultProjectForPhaseCAutorun(): Promise<void> {
+    const loadIntoApp = await waitForWindowValue<any>(
+        '__loadAllDataObjectIntoApp',
+        () => (typeof window !== 'undefined' ? (window as any).__loadAllDataObjectIntoApp : null),
+        10000,
+        50
+    );
+
+    if (isTauriRuntime()) {
+        const { project } = await getDefaultProject();
+        await loadIntoApp(project, { filename: 'default-load.json' });
+        await waitForPhaseCAutorunLoadSettled();
+        return;
+    }
+
+    let response = await fetch('/co-opt/defaults/default-load.json');
+    if (!response.ok) {
+        response = await fetch('/defaults/default-load.json');
+    }
+    if (!response.ok) {
+        throw new Error(`Failed to load default system: ${response.statusText}`);
+    }
+    const project = await response.json();
+    await loadIntoApp(project, { filename: 'default-load.json' });
+    await waitForPhaseCAutorunLoadSettled();
+}
+
+async function runPhaseCAutorunFromUrl(): Promise<void> {
+    try {
+        if (typeof window === 'undefined') return;
+        if ((window as any).__cooptPhaseCAutorunStarted) return;
+
+        const params = getPhaseCAutorunSearchParams();
+        const enabled = readBooleanQueryParam(params, 'phasec', false)
+            || readBooleanQueryParam(params, 'phasecAutorun', false);
+        if (!enabled) return;
+
+        (window as any).__cooptPhaseCAutorunStarted = true;
+        const startedAt = new Date().toISOString();
+        publishPhaseCAutorunStatus({ state: 'starting', startedAt });
+
+        if (readBooleanQueryParam(params, 'phasecLoadDefault', true)) {
+            publishPhaseCAutorunStatus({ state: 'loading-default', startedAt });
+            await loadDefaultProjectForPhaseCAutorun();
+        }
+
+        const exportMatrixFreeJson = await waitForWindowValue<any>(
+            'OptimizationMVP.exportMatrixFreeJson',
+            () => (window as any)?.OptimizationMVP?.exportMatrixFreeJson,
+            10000,
+            50
+        );
+
+        const options: Record<string, unknown> = {
+            repeat: readNumberQueryParam(params, 'phasecRepeat', 6, { integer: true, min: 1 }),
+            warmupDiscard: readNumberQueryParam(params, 'phasecWarmupDiscard', 1, { integer: true, min: 0 }),
+            filterOutliers: readBooleanQueryParam(params, 'phasecFilterOutliers', true),
+            matchBaselineBestStop: readBooleanQueryParam(params, 'phasecMatchBaselineBestStop', true),
+            matchBaselineBestMinIter: readNumberQueryParam(params, 'phasecMatchBaselineBestMinIter', 8, { integer: true, min: 0 }),
+            download: readBooleanQueryParam(params, 'phasecDownload', true)
+        };
+
+        const fileName = params?.get('phasecFileName');
+        if (fileName) options.fileName = fileName;
+        const method = params?.get('phasecMethod');
+        if (method) options.method = method;
+        if (params?.has('phasecMaxIter')) {
+            options.maxIter = readNumberQueryParam(params, 'phasecMaxIter', 0, { integer: true, min: 1 });
+        }
+        if (params?.has('phasecMatchBaselineBestRelTol')) {
+            options.matchBaselineBestRelTol = readNumberQueryParam(params, 'phasecMatchBaselineBestRelTol', 0, { min: 0 });
+        }
+        if (params?.has('phasecMatchBaselineBestAbsTol')) {
+            options.matchBaselineBestAbsTol = readNumberQueryParam(params, 'phasecMatchBaselineBestAbsTol', 0, { min: 0 });
+        }
+
+        publishPhaseCAutorunStatus({ state: 'running', startedAt, options });
+        const result = await exportMatrixFreeJson(options);
+        try {
+            (window as any).__cooptPhaseCAutorunResult = result;
+        } catch (_) {}
+        try {
+            if (typeof localStorage !== 'undefined' && result?.summary) {
+                localStorage.setItem('coopt.phaseCLastSummary', JSON.stringify(result.summary));
+            }
+        } catch (_) {}
+
+        publishPhaseCAutorunStatus({
+            state: 'done',
+            startedAt,
+            completedAt: new Date().toISOString(),
+            selectedMode: result?.summary?.phaseC?.selectedMode ?? null,
+            elapsedSpeedup: result?.summary?.phaseC?.elapsedSpeedup ?? null,
+            fileName: fileName || null
+        });
+    } catch (error) {
+        const message = (error instanceof Error) ? error.message : String(error);
+        console.error('❌ [PhaseC Autorun] Failed:', error);
+        publishPhaseCAutorunStatus({
+            state: 'error',
+            completedAt: new Date().toISOString(),
+            error: message
+        });
+    }
+}
+
 // Note: getWASMSystem/_setWASMSystem globals are installed by core/wasm-service.ts (index.html <head>).
 // main.ts only updates the instance via window._setWASMSystem once WASM is ready.
 
@@ -227,6 +444,24 @@ let wasmSystem = null;
  */
 async function initializeApplication() {
     try {
+        // WASM strict defaults are enabled; can be overridden from DevTools globals.
+        try {
+            const g = globalThis as any;
+            const rayStrict = (typeof g.__COOPT_RAYTRACE_WASM_STRICT === 'boolean')
+                ? g.__COOPT_RAYTRACE_WASM_STRICT
+                : true;
+            const psfStrict = (typeof g.__COOPT_PSF_WASM_STRICT === 'boolean')
+                ? g.__COOPT_PSF_WASM_STRICT
+                : true;
+            setRayTracingWasmStrict(rayStrict);
+            setPsfWasmStrict(psfStrict);
+            g.__COOPT_RAYTRACE_WASM_STRICT = rayStrict;
+            g.__COOPT_PSF_WASM_STRICT = psfStrict;
+            console.log('🔒 [Init] WASM strict mode', { rayStrict, psfStrict });
+        } catch (_) {
+            // ignore strict bootstrap errors and continue initialization
+        }
+
         // Initialize WASM system (non-blocking - run in background)
         const wasmInitPromise = (async () => {
             try {
@@ -2609,6 +2844,11 @@ const startApplicationOnce = (() => {
             }
 
             emitMainReady();
+            setTimeout(() => {
+                Promise.resolve(runPhaseCAutorunFromUrl()).catch((error) => {
+                    console.error('❌ [PhaseC Autorun] Unexpected startup failure:', error);
+                });
+            }, 0);
         
         // Store references globally for backward compatibility
             if (appComponents) {
@@ -3448,7 +3688,7 @@ function getWASMSystem() {
 
 // Setup analysis dropdown to trigger existing button handlers
 const analysisSelect = document.getElementById('analysis-select');
-if (analysisSelect) {
+if (analysisSelect && (analysisSelect as HTMLElement).getAttribute('data-react-handled') !== '1') {
     analysisSelect.addEventListener('change', (e) => {
         const target = e.target as HTMLSelectElement;
         const value = target.value;

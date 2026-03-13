@@ -1,4 +1,9 @@
-type RustRayTracingWasm = {
+import {
+  REQUIRED_RUST_RAYTRACING_WASM_FUNCTIONS,
+  type RequiredRustRayTracingWasmFunction
+} from '../../../src/shared/contracts/wasm.ts';
+
+export type RustRayTracingWasm = {
   intersect_aspheric_rt10: (ray: Float64Array, params: Float64Array, modeOdd: number, maxIter: number, tol: number) => number;
   intersect_aspheric_rt10_batch: (rays: Float64Array, rayCount: number, params: Float64Array, modeOdd: number, maxIter: number, tol: number) => Float64Array;
   surface_normal_aspheric_rt10: (pt: Float64Array, params: Float64Array, modeOdd: number) => Float64Array;
@@ -20,6 +25,7 @@ type RustRayTracingWasm = {
     count: number
   ) => Float64Array | number[];
   trace_ray_batch_with_system_json: (rayArrayPtr: number, systemMetaJSON: string, rowCount: number, nStart: number) => any;
+  run_native_opd_map_wasm_json?: (reqJson: string) => any;
   trace_single_ray_hit_point_with_meta?: (
     ray: Float64Array,
     targetSurfaceIndex: number,
@@ -119,6 +125,12 @@ type RustRayTracingWasm = {
     minRadius: number,
     maxRadius: number
   ) => number;
+  compute_lca_series_from_image_heights?: (
+    fieldValues: Float64Array | number[],
+    wavelengths: Float64Array | number[],
+    referenceWavelength: number,
+    imageHeightsFlat: Float64Array | number[]
+  ) => any;
   malloc?: (size: number) => number;
   free?: (ptr: number) => void;
   memory?: { buffer: ArrayBuffer };
@@ -130,6 +142,13 @@ let rustWasmInitError: string | null = null;
 let rustWasmLastInitAttemptMs = 0;
 const RUST_WASM_RETRY_COOLDOWN_MS = 1000;
 const isNodeRuntime = typeof process !== 'undefined' && !!(process as any)?.versions?.node;
+
+export function getMissingRequiredRustRayTracingWasmFunctions(api: unknown): RequiredRustRayTracingWasmFunction[] {
+  return REQUIRED_RUST_RAYTRACING_WASM_FUNCTIONS.filter((name) => {
+    const fn = (api as any)?.[name];
+    return typeof fn !== 'function';
+  });
+}
 
 function normalizeBaseUrl(): string {
   const fromLocation = (() => {
@@ -268,6 +287,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           generate_centered_grid_offsets_flat: mod.generate_centered_grid_offsets_flat,
           generate_parallel_start_points_flat: mod.generate_parallel_start_points_flat,
           trace_ray_batch_with_system_json: mod.trace_ray_batch_with_system_json,
+          run_native_opd_map_wasm_json: mod.run_native_opd_map_wasm_json,
           trace_single_ray_hit_point_with_meta: mod.trace_single_ray_hit_point_with_meta,
           trace_ray_batch_hit_point_with_meta: mod.trace_ray_batch_hit_point_with_meta,
           solve_ray_origins_to_stop_points_with_meta_batch: mod.solve_ray_origins_to_stop_points_with_meta_batch,
@@ -294,6 +314,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           solve_qp_subproblem_kkt_equality: mod.solve_qp_subproblem_kkt_equality,
           backtracking_line_search_armijo: mod.backtracking_line_search_armijo,
           update_trust_region_radius: mod.update_trust_region_radius,
+          compute_lca_series_from_image_heights: mod.compute_lca_series_from_image_heights,
           malloc: mod.malloc,
           free: mod.free,
           memory: mod.memory || initExports?.memory

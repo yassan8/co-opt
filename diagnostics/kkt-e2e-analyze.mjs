@@ -29,6 +29,21 @@ const toNum = (v, fallback = NaN) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+const pickFirstFinite = (...values) => {
+  for (const v of values) {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return NaN;
+};
+
+const pickFirstObject = (...values) => {
+  for (const v of values) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+  }
+  return null;
+};
+
 const exists = async (p) => {
   try {
     await fs.access(p);
@@ -101,12 +116,50 @@ const run = async () => {
     }
   };
 
+  const matrixFreeCalls = pickFirstFinite(
+    raw?.phaseC?.matrixFreeCalls,
+    raw?.phaseCMetrics?.matrixFreeCalls,
+    raw?.wasm?.matrixFreeCalls,
+    raw?.metrics?.matrixFreeCalls
+  );
+  const matrixFreeFallbacks = pickFirstFinite(
+    raw?.phaseC?.matrixFreeFallbacks,
+    raw?.phaseCMetrics?.matrixFreeFallbacks,
+    raw?.wasm?.matrixFreeFallbacks,
+    raw?.metrics?.matrixFreeFallbacks
+  );
+  const matrixFreeFallbackReasons = pickFirstObject(
+    raw?.phaseC?.matrixFreeFallbackReasons,
+    raw?.phaseCMetrics?.matrixFreeFallbackReasons,
+    raw?.wasm?.matrixFreeFallbackReasons,
+    raw?.metrics?.matrixFreeFallbackReasons
+  ) || {};
+
+  const unknownFallbackCount = Number(matrixFreeFallbackReasons.unknown) || 0;
+  const matrixFreeFallbackRate = (Number.isFinite(matrixFreeCalls) && matrixFreeCalls > 0 && Number.isFinite(matrixFreeFallbacks))
+    ? (matrixFreeFallbacks / matrixFreeCalls)
+    : NaN;
+  const matrixFreeUnknownFallbackRate = (Number.isFinite(matrixFreeFallbacks) && matrixFreeFallbacks > 0)
+    ? (unknownFallbackCount / matrixFreeFallbacks)
+    : NaN;
+
+  report.phaseC = {
+    matrixFreeCalls: Number.isFinite(matrixFreeCalls) ? matrixFreeCalls : null,
+    matrixFreeFallbacks: Number.isFinite(matrixFreeFallbacks) ? matrixFreeFallbacks : null,
+    matrixFreeFallbackRate: Number.isFinite(matrixFreeFallbackRate) ? matrixFreeFallbackRate : null,
+    matrixFreeUnknownFallbackRate: Number.isFinite(matrixFreeUnknownFallbackRate) ? matrixFreeUnknownFallbackRate : null,
+    matrixFreeFallbackReasons
+  };
+
   if (requireGate) {
     const thresholds = {
       minTotalSpeedup: toNum(getArg('min-total-speedup', '1.0'), 1.0),
       minSolverSpeedup: toNum(getArg('min-solver-speedup', '1.0'), 1.0),
       minWasmOkRate: toNum(getArg('min-wasm-ok-rate', '1.0'), 1.0),
-      minWasmFeasibleRate: toNum(getArg('min-wasm-feasible-rate', '1.0'), 1.0)
+      minWasmFeasibleRate: toNum(getArg('min-wasm-feasible-rate', '1.0'), 1.0),
+      requirePhaseC: toBool(getArg('require-phase-c', 'false'), false),
+      maxMatrixFreeFallbackRate: toNum(getArg('max-matrixfree-fallback-rate', '0.05'), 0.05),
+      maxMatrixFreeUnknownFallbackRate: toNum(getArg('max-matrixfree-unknown-fallback-rate', '0.01'), 0.01)
     };
 
     const checks = [
@@ -135,6 +188,24 @@ const run = async () => {
         pass: Number.isFinite(wasmFeasibleRate) && wasmFeasibleRate >= thresholds.minWasmFeasibleRate
       }
     ];
+
+    if (thresholds.requirePhaseC) {
+      checks.push(
+        {
+          name: 'phaseC.matrixFreeFallbackRate',
+          actual: matrixFreeFallbackRate,
+          limit: thresholds.maxMatrixFreeFallbackRate,
+          pass: Number.isFinite(matrixFreeFallbackRate) && matrixFreeFallbackRate <= thresholds.maxMatrixFreeFallbackRate
+        },
+        {
+          name: 'phaseC.matrixFreeUnknownFallbackRate',
+          actual: matrixFreeUnknownFallbackRate,
+          limit: thresholds.maxMatrixFreeUnknownFallbackRate,
+          pass: Number.isFinite(matrixFreeUnknownFallbackRate)
+            && matrixFreeUnknownFallbackRate <= thresholds.maxMatrixFreeUnknownFallbackRate
+        }
+      );
+    }
 
     const failedChecks = checks.filter((c) => !c.pass);
     report.requirementGate = {

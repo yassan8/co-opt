@@ -41,6 +41,12 @@ export interface NativeSpotSeriesStats {
   attemptedRays: number;
   hitRays: number;
   hitRatePercent: number;
+  missRays?: number;
+  statusCounts?: Record<string, number>;
+  apertureBlockRays?: number;
+  noIntersectionRays?: number;
+  tirRays?: number;
+  unknownFailRays?: number;
 }
 
 export interface NativeSpotRaytraceRequest {
@@ -237,6 +243,7 @@ export interface NativeOpdMapRequest {
 
 export interface NativeOpdMapResponse {
   backend: string;
+  chiefReferenceMode?: string;
   targetSurface: number;
   stopSurface: number;
   requestedObjectIndex?: number;

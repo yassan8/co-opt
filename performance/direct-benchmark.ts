@@ -4,6 +4,9 @@
  */
 
 import { getWASMSystem } from '../core/wasm-service.ts';
+import {
+    getLegacyWasmAsphericSagFn
+} from '../core/wasm-service.ts';
 
 // 標準JavaScript版非球面SAG計算
 function standardAsphericSag(r, c, k, a4 = 0, a6 = 0, a8 = 0, a10 = 0) {
@@ -289,10 +292,12 @@ if (typeof window !== 'undefined') {
         
         // WASM system check
         let wasmSystem = null;
+        let wasmForceAsphericSag = null;
         try {
             wasmSystem = getWASMSystem();
+            wasmForceAsphericSag = getLegacyWasmAsphericSagFn(wasmSystem);
             
-            if (!wasmSystem || !wasmSystem.isWASMReady) {
+            if (!wasmForceAsphericSag) {
                 console.log('⚠️ WASM system not available, skipping WASM comparison');
                 return runDirectBenchmark();
             }
@@ -337,7 +342,7 @@ if (typeof window !== 'undefined') {
                 
                 // WASM版
                 const wasmStart = performance.now();
-                const wasmResults = testRadii.map(r => wasmSystem.forceAsphericSag(r, c, k, a4, a6, a8, a10));
+                const wasmResults = testRadii.map(r => wasmForceAsphericSag(r, c, k, a4, a6, a8, a10));
                 const wasmTime = performance.now() - wasmStart;
                 
                 // 精度検証

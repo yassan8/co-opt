@@ -1489,7 +1489,29 @@ async function showThroughFocusMTFDiagram({
         // 進捗ごとに現時点のtraceMapとサンプリング進捗テキストをonProgressで通知
         const pct = Math.floor(60 + ((i + 1) / psfResults.length) * 35);
         const tracesSnapshot = Array.from(traceMap.values()).map(t => ({ ...t, x: [...t.x], y: [...t.y] }));
-        reportProgress(pct, `Extracting MTF: ${i + 1}/${psfResults.length}`, tracesSnapshot, subMessage);
+        const wavelengthLabels = Array.from(new Set(
+            traces
+                .map((tr: any) => {
+                    const rawName = String(tr?.name ?? '');
+                    const nmMatch = rawName.match(/([0-9]+(?:\.[0-9]+)?)\s*nm/i);
+                    if (!nmMatch) return null;
+                    const nm = Number(nmMatch[1]);
+                    return Number.isFinite(nm) ? `${nm.toFixed(1)}nm` : null;
+                })
+                .filter((v: string | null) => typeof v === 'string' && v.length > 0)
+        ));
+        if (wavelengthLabels.length > 0) {
+            for (const wlLabel of wavelengthLabels) {
+                reportProgress(
+                    pct,
+                    `Extracting MTF: λ=${wlLabel}, step ${i + 1}/${psfResults.length}`,
+                    tracesSnapshot,
+                    subMessage,
+                );
+            }
+        } else {
+            reportProgress(pct, `Extracting MTF: step ${i + 1}/${psfResults.length}`, tracesSnapshot, subMessage);
+        }
     }
 
     const traces = Array.from(traceMap.values());

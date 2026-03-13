@@ -9,7 +9,7 @@ import { parseZMXArrayBufferToOpticalSystemRows } from '../import-export/zemax-i
 import { getLoadedFileName, setLoadedFileName } from './loaded-file-storage.ts';
 import { openJsonFromNativeDialog, openTextFromNativeDialog, saveJsonFromNativeDialog, saveTextFromNativeDialog } from '../src/desktop/adapters/file.ts';
 import { basenameFromPath, isTauriRuntime } from '../src/desktop/runtime.ts';
-import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText, recommendWavefrontGrid, runAnalysisPreview, runOptimizerStep } from '../src/desktop/ipc/client.ts';
+import { generateZmxText, getDefaultProject, getNewProjectTemplate, parseZmxText, readDesktopSetting, recommendWavefrontGrid, runAnalysisPreview, writeDesktopSetting } from '../src/desktop/ipc/client.ts';
 import { buildShareUrlFromCompressedString, encodeAllDataToCompressedString } from '../utils/url-share.ts';
 
 declare global {
@@ -18,6 +18,158 @@ declare global {
   }
 }
 const w: Record<string, any> = window;
+
+const FORCE_INFINITE_PUPIL_MODE_KEY = 'coopt.forceInfinitePupilMode';
+const FORCE_INFINITE_PUPIL_MODE_EVENT = 'coopt-force-infinite-pupil-mode-changed';
+
+function sanitizeForceInfinitePupilMode(v: any): 'stop' | 'entrance' | '' {
+  const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
+  return (s === 'stop' || s === 'entrance') ? s : '';
+}
+
+function readForceInfinitePupilModeFromWindow(target: any): 'stop' | 'entrance' | '' {
+  if (!target) return '';
+  try {
+    if (typeof target.__cooptGetForceInfinitePupilMode === 'function') {
+      const m = sanitizeForceInfinitePupilMode(target.__cooptGetForceInfinitePupilMode());
+      if (m) return m;
+    }
+  } catch (_) {}
+  try {
+    return sanitizeForceInfinitePupilMode(target.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? target.COOPT_FORCE_INFINITE_PUPIL_MODE);
+  } catch (_) {
+    return '';
+  }
+}
+
+function readPersistedForceInfinitePupilMode(): 'stop' | 'entrance' | '' {
+  try {
+    return sanitizeForceInfinitePupilMode(localStorage.getItem(FORCE_INFINITE_PUPIL_MODE_KEY));
+  } catch (_) {
+    return '';
+  }
+}
+
+function writePersistedForceInfinitePupilMode(mode: string): void {
+  const m = sanitizeForceInfinitePupilMode(mode);
+  try {
+    if (m) localStorage.setItem(FORCE_INFINITE_PUPIL_MODE_KEY, m);
+    else localStorage.removeItem(FORCE_INFINITE_PUPIL_MODE_KEY);
+  } catch (_) {}
+}
+
+async function readDesktopForceInfinitePupilMode(): Promise<'stop' | 'entrance' | ''> {
+  try {
+    const invoke = (window as any)?.__TAURI_INTERNALS__?.invoke || (window as any)?.__TAURI__?.core?.invoke;
+    if (typeof invoke === 'function') {
+      const raw = await invoke('read_desktop_setting', { key: FORCE_INFINITE_PUPIL_MODE_KEY });
+      return sanitizeForceInfinitePupilMode(raw);
+    }
+    const v = await readDesktopSetting(FORCE_INFINITE_PUPIL_MODE_KEY);
+    return sanitizeForceInfinitePupilMode(v);
+  } catch (_) {
+    return '';
+  }
+}
+
+async function writeDesktopForceInfinitePupilMode(mode: string): Promise<void> {
+  const m = sanitizeForceInfinitePupilMode(mode);
+  try {
+    const invoke = (window as any)?.__TAURI_INTERNALS__?.invoke || (window as any)?.__TAURI__?.core?.invoke;
+    if (typeof invoke === 'function') {
+      await invoke('write_desktop_setting', { key: FORCE_INFINITE_PUPIL_MODE_KEY, value: m || null });
+      return;
+    }
+  } catch (_) {}
+  await writeDesktopSetting(FORCE_INFINITE_PUPIL_MODE_KEY, m || null);
+}
+
+function applyForceInfinitePupilModeToWindow(target: any, mode: string): void {
+  if (!target) return;
+  const m = sanitizeForceInfinitePupilMode(mode);
+  try {
+    if (typeof target.__cooptSetForceInfinitePupilMode === 'function') {
+      target.__cooptSetForceInfinitePupilMode(m);
+      return;
+    }
+  } catch (_) {}
+  try {
+    if (m) {
+      target.__COOPT_FORCE_INFINITE_PUPIL_MODE = m;
+      target.COOPT_FORCE_INFINITE_PUPIL_MODE = m;
+    } else {
+      try { delete target.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { target.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+      try { delete target.COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { target.COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+    }
+  } catch (_) {}
+}
+
+function getCurrentForceInfinitePupilMode(): 'stop' | 'entrance' | '' {
+  const fromWindow = readForceInfinitePupilModeFromWindow(window);
+  if (fromWindow) return fromWindow;
+  return readPersistedForceInfinitePupilMode();
+}
+
+function installDesktopForceInfinitePupilModeBridge(): void {
+  if (!isTauriRuntime()) return;
+  if (w.__cooptForceInfinitePupilModeBridgeInstalled) return;
+  w.__cooptForceInfinitePupilModeBridgeInstalled = true;
+
+  w.__cooptBroadcastForceInfinitePupilMode = (mode: any) => {
+    const m = sanitizeForceInfinitePupilMode(mode);
+    applyForceInfinitePupilModeToWindow(window, m);
+    writePersistedForceInfinitePupilMode(m);
+    (async () => {
+      await writeDesktopForceInfinitePupilMode(m);
+      try {
+        const mod = await import('@tauri-apps/api/event');
+        if (mod && typeof (mod as any).emit === 'function') {
+          await (mod as any).emit(FORCE_INFINITE_PUPIL_MODE_EVENT, { mode: m });
+        }
+        if (mod && typeof (mod as any).emitTo === 'function') {
+          try { await (mod as any).emitTo('main', FORCE_INFINITE_PUPIL_MODE_EVENT, { mode: m }); } catch (_) {}
+          try { await (mod as any).emitTo('settings-window', FORCE_INFINITE_PUPIL_MODE_EVENT, { mode: m }); } catch (_) {}
+        }
+      } catch (_) {}
+    })();
+  };
+
+  w.__cooptReadDesktopSetting = async (key: string) => {
+    try {
+      return await readDesktopSetting(String(key || ''));
+    } catch (_) {
+      return null;
+    }
+  };
+
+  w.__cooptWriteDesktopSetting = async (key: string, value: string | null) => {
+    try {
+      await writeDesktopSetting(String(key || ''), value);
+    } catch (_) {}
+  };
+
+  (async () => {
+    try {
+      const mod = await import('@tauri-apps/api/event');
+      if (!mod || typeof (mod as any).listen !== 'function') return;
+      const unlisten = await (mod as any).listen(FORCE_INFINITE_PUPIL_MODE_EVENT, (event: any) => {
+        const m = sanitizeForceInfinitePupilMode(event?.payload?.mode);
+        applyForceInfinitePupilModeToWindow(window, m);
+        writePersistedForceInfinitePupilMode(m);
+        void writeDesktopForceInfinitePupilMode(m);
+      });
+      w.__cooptForceInfinitePupilModeBridgeUnlisten = unlisten;
+    } catch (_) {}
+  })();
+
+  // Hydrate from desktop-shared store for windows with isolated localStorage.
+  (async () => {
+    const m = await readDesktopForceInfinitePupilMode();
+    if (!m) return;
+    applyForceInfinitePupilModeToWindow(window, m);
+    writePersistedForceInfinitePupilMode(m);
+  })();
+}
 
 export function handleNewFile(): void {
   if (!isTauriRuntime() && !confirm('Create new file? Current data will be cleared.')) return;
@@ -981,35 +1133,303 @@ export function handleOptimize(): void {
     return;
   }
 
+  const isOptimizeWindowContext = (() => {
+    try {
+      const url = new URL(window.location.href);
+      return url.searchParams.get('coopt_optimize_window') === '1';
+    } catch (_) {
+      return false;
+    }
+  })();
+
+  const optimizeProgressStorageKey = 'coopt.optimizeProgress';
+
+  const publishOptimizeProgress = (payload: Record<string, any>) => {
+    try {
+      localStorage.setItem(
+        optimizeProgressStorageKey,
+        JSON.stringify({
+          ts: Date.now(),
+          ...payload,
+        })
+      );
+    } catch (_) {}
+  };
+
+  if (!isOptimizeWindowContext) {
+    (async () => {
+      try {
+        const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+        const label = 'optimize-progress-window';
+        const existing = await WebviewWindow.getByLabel(label);
+        if (existing) {
+          await existing.setFocus();
+          return;
+        }
+
+        const url = new URL(window.location.href);
+        url.searchParams.set('coopt_optimize_window', '1');
+
+        new WebviewWindow(label, {
+          title: 'Optimize Progress',
+          url: url.toString(),
+          width: 560,
+          height: 640,
+          resizable: true,
+          focus: true,
+        });
+      } catch (err) {
+        console.error('❌ [Optimize][Desktop] WebviewWindow error:', err);
+      }
+    })();
+    return;
+  }
+
+  const popup = (() => {
+    if (isTauriRuntime()) return null;
+    try {
+      const w = window.open('', 'coopt-optimizer-progress-react', 'width=480,height=520,resizable=yes,scrollbars=no');
+      if (!w || !w.document) return null;
+      w.document.open();
+      w.document.write(`<!doctype html>
+<html>
+<head><meta charset="utf-8" /><title>Optimize Progress</title></head>
+<body style="font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 12px;">
+  <div style="font-size:14px; font-weight:600; margin-bottom:10px;">Optimize Progress</div>
+  <div style="margin-bottom:8px; color:#666; font-size:12px;" id="opt-mode">mode: kkt</div>
+  <div style="margin-bottom:8px; color:#666; font-size:12px;" id="opt-state">state: starting...</div>
+  <div style="height:8px; background:#eceef2; border-radius:999px; overflow:hidden; margin-bottom:10px;">
+    <div id="opt-bar" style="width:8%; height:100%; background:#4f8cff; transition:width 160ms linear;"></div>
+  </div>
+  <div style="display:grid; grid-template-columns: 120px 1fr; gap:8px; font-size:12px;">
+    <div>Iterations</div><div id="opt-iter">-</div>
+    <div>Variables</div><div id="opt-vars">-</div>
+    <div>Merit</div><div id="opt-merit">-</div>
+    <div>Requirements</div><div id="opt-req">-</div>
+    <div>Status</div><div id="opt-status">running</div>
+  </div>
+  <pre id="opt-log" style="margin-top:12px; padding:8px; background:#f7f8fa; border:1px solid #eceef2; border-radius:6px; height:240px; overflow:auto; font-size:11px; white-space:pre-wrap;"></pre>
+</body>
+</html>`);
+      w.document.close();
+      return w;
+    } catch (_) {
+      return null;
+    }
+  })();
+  const hasPopup = !!(popup && !popup.closed);
+  const shouldShowMainAlert = !isTauriRuntime();
+
+  const popupSet = (id: string, text: string) => {
+    try {
+      if (!popup || popup.closed) return;
+      const el = popup.document.getElementById(id);
+      if (el) el.textContent = text;
+    } catch (_) {}
+  };
+
+  const popupBar = (pct: number) => {
+    try {
+      if (!popup || popup.closed) return;
+      const el = popup.document.getElementById('opt-bar') as HTMLElement | null;
+      if (el) el.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    } catch (_) {}
+  };
+
+  const popupLog = (line: string) => {
+    try {
+      if (!popup || popup.closed) return;
+      const el = popup.document.getElementById('opt-log');
+      if (!el) return;
+      el.textContent = `${el.textContent || ''}${line}\n`;
+      el.scrollTop = el.scrollHeight;
+    } catch (_) {}
+  };
+
   (async () => {
     try {
+      publishOptimizeProgress({
+        phase: 'starting',
+        modeUsed: 'kkt',
+        status: 'running',
+        percent: 5,
+      });
+
       const opticalSystemRows = (window as any).getOpticalSystemRows
         ? (window as any).getOpticalSystemRows((window as any).tableOpticalSystem)
         : [];
 
       if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) {
-        alert('最適化対象の光学系データがありません。');
+        publishOptimizeProgress({
+          phase: 'failed',
+          status: 'error',
+          message: 'No optical data available',
+          percent: 100,
+        });
+        if (shouldShowMainAlert) {
+          alert('最適化対象の光学系データがありません。');
+        }
         return;
       }
 
-      const result = await runOptimizerStep({
+      const systemRequirementsRows = (() => {
+        try {
+          const sre = (window as any).systemRequirementsEditor;
+          if (sre && typeof sre.getData === 'function') {
+            const rows = sre.getData();
+            if (Array.isArray(rows)) return rows;
+          }
+        } catch (_) {}
+        return [];
+      })();
+
+      const sourceRows = (window as any).tableSource && typeof (window as any).tableSource.getData === 'function'
+        ? (window as any).tableSource.getData()
+        : [];
+      const objectRows = (window as any).tableObject && typeof (window as any).tableObject.getData === 'function'
+        ? (window as any).tableObject.getData()
+        : [];
+      const activeConfigId = (() => {
+        try {
+          const cfg = (typeof (window as any).loadSystemConfigurationsFromTableConfig === 'function')
+            ? (window as any).loadSystemConfigurationsFromTableConfig()
+            : (typeof (window as any).loadSystemConfigurations === 'function' ? (window as any).loadSystemConfigurations() : null);
+          if (cfg && cfg.activeConfigId !== undefined && cfg.activeConfigId !== null) {
+            return String(cfg.activeConfigId).trim();
+          }
+        } catch (_) {}
+        return '';
+      })();
+
+      const opt = (window as any).OptimizationMVP;
+      if (!opt || typeof opt.run !== 'function') {
+        publishOptimizeProgress({
+          phase: 'failed',
+          status: 'error',
+          message: 'OptimizationMVP is not available',
+          percent: 100,
+        });
+        if (shouldShowMainAlert) {
+          alert('OptimizationMVP が利用できません。');
+        }
+        return;
+      }
+
+      const progressEvents: any[] = [];
+      const result = await opt.run({
         opticalSystemRows,
+        sourceRows,
+        objectRows,
+        activeConfigId,
+        systemRequirementsRows,
+        method: 'kkt',
         maxIterations: 24,
+        forceTs: true,
+        onProgress: (ev: any) => {
+          if (!ev || typeof ev !== 'object') return;
+          progressEvents.push(ev);
+        },
       });
 
-      console.log('✅ [Optimize][Rust]', result);
-      alert(
-        [
-          'Rust optimizer step completed',
-          `iterations: ${result.iterations}`,
-          `variables: ${result.variableCount}`,
-          `merit: ${result.meritBefore.toFixed(6)} -> ${result.meritAfter.toFixed(6)}`,
-          result.converged ? 'status: converged' : 'status: in-progress',
-        ].join('\n')
-      );
+      const modeUsed = String(result?.method || 'kkt');
+      const meritBefore = Number(result?.before ?? Number.NaN);
+      const meritAfter = Number(result?.best ?? Number.NaN);
+      const requirementScoreAfter = Number(result?.violationScore ?? Number.NaN);
+      const iterations = Number(result?.iterations ?? 0);
+      const variableCount = Number(result?.variables ?? 0);
+      const converged = !result?.aborted;
+
+      publishOptimizeProgress({
+        phase: 'computed',
+        status: 'running',
+        modeUsed,
+        iterations,
+        variableCount,
+        meritBefore,
+        meritAfter,
+        requirementScoreBefore: requirementScoreAfter,
+        requirementScoreAfter,
+        converged,
+        progressEvents,
+        percent: 75,
+      });
+
+      popupSet('opt-mode', `mode: ${modeUsed}`);
+      popupSet('opt-state', 'state: applying result...');
+      popupBar(75);
+
+      // TS optimizer applies to configuration/table internally.
+      try {
+        if (typeof (window as any).drawOpticalSystem === 'function') {
+          (window as any).drawOpticalSystem();
+        }
+      } catch (applyErr) {
+        console.warn('⚠️ [Optimize][TS] result apply failed:', applyErr);
+      }
+
+      console.log('✅ [Optimize][TS]', result);
+      if (Array.isArray(progressEvents) && progressEvents.length > 0) {
+        console.log('📈 [Optimize][TS][Progress]', progressEvents.slice(-8));
+        for (const ev of progressEvents.slice(-24)) {
+          popupLog(`${ev.phase} iter=${ev.iter} current=${Number(ev.current).toFixed(6)} best=${Number(ev.best).toFixed(6)}`);
+        }
+      }
+      popupSet('opt-iter', String(iterations));
+      popupSet('opt-vars', String(variableCount));
+      popupSet('opt-merit', `${Number.isFinite(meritBefore) ? meritBefore.toFixed(6) : 'NaN'} -> ${Number.isFinite(meritAfter) ? meritAfter.toFixed(6) : 'NaN'}`);
+      popupSet('opt-req', `${Number.isFinite(requirementScoreAfter) ? requirementScoreAfter.toFixed(6) : 'NaN'}`);
+      popupSet('opt-status', converged ? 'converged' : 'in-progress');
+      popupSet('opt-state', 'state: completed');
+      popupBar(100);
+
+      publishOptimizeProgress({
+        phase: 'completed',
+        status: converged ? 'converged' : 'in-progress',
+        modeUsed,
+        iterations,
+        variableCount,
+        meritBefore,
+        meritAfter,
+        requirementScoreBefore: requirementScoreAfter,
+        requirementScoreAfter,
+        converged,
+        progressEvents,
+        percent: 100,
+      });
+
+      if (!hasPopup && shouldShowMainAlert) {
+        alert(
+          [
+            `Rust optimizer (${result.modeUsed}) completed`,
+            `iterations: ${result.iterations}`,
+            `variables: ${result.variableCount}`,
+            `merit: ${result.meritBefore.toFixed(6)} -> ${result.meritAfter.toFixed(6)}`,
+            `requirements: ${result.requirementScoreBefore.toFixed(6)} -> ${result.requirementScoreAfter.toFixed(6)}`,
+            result.converged ? 'status: converged' : 'status: in-progress',
+            'note: progress popup was blocked/unavailable',
+          ].join('\n')
+        );
+      }
     } catch (err) {
       console.error('❌ [Optimize][Rust] failed:', err);
-      alert(`Rust optimize failed: ${(err as Error)?.message || String(err)}`);
+      publishOptimizeProgress({
+        phase: 'failed',
+        status: 'error',
+        message: (err as Error)?.message || String(err),
+        percent: 100,
+      });
+      popupSet('opt-status', 'error');
+      popupSet('opt-state', 'state: failed');
+      popupBar(100);
+      popupLog(`ERROR: ${(err as Error)?.message || String(err)}`);
+      if (shouldShowMainAlert) {
+        alert(
+          [
+            `Rust optimize failed: ${(err as Error)?.message || String(err)}`,
+            hasPopup ? '' : 'note: progress popup was blocked/unavailable',
+          ].filter(Boolean).join('\n')
+        );
+      }
     }
   })();
 }
@@ -1161,6 +1581,8 @@ function isSettingsWindowContext(): boolean {
 async function openDesktopSettingsWindow(): Promise<boolean> {
   if (!isTauriRuntime()) return false;
 
+  installDesktopForceInfinitePupilModeBridge();
+
   const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
   const label = 'settings-window';
   const existing = await WebviewWindow.getByLabel(label);
@@ -1171,6 +1593,15 @@ async function openDesktopSettingsWindow(): Promise<boolean> {
 
   const url = new URL(window.location.href);
   url.searchParams.set('coopt_settings_window', '1');
+  let forceMode = getCurrentForceInfinitePupilMode();
+  if (!forceMode) {
+    forceMode = await readDesktopForceInfinitePupilMode();
+  }
+  if (forceMode) {
+    url.searchParams.set('coopt_force_mode', forceMode);
+  } else {
+    url.searchParams.delete('coopt_force_mode');
+  }
 
   new WebviewWindow(label, {
     title: 'Settings',
@@ -1199,13 +1630,20 @@ async function openDesktopAnalysisWindow(kind: AnalysisWindowKey): Promise<boole
   url.searchParams.set('coopt_analysis', kind);
 
   const winCfg = ANALYSIS_WINDOW_SIZE_MAP[kind] || { width: 980, height: 760, title: 'Analysis' };
-  new WebviewWindow(label, {
+  const created = new WebviewWindow(label, {
     title: winCfg.title,
     url: url.toString(),
     width: winCfg.width,
     height: winCfg.height,
     resizable: true,
     focus: true,
+  });
+  created.once('tauri://created', () => {
+    console.log(`✅ [Analysis][Desktop] created ${label}`);
+  });
+  created.once('tauri://error', (error) => {
+    console.error(`❌ [Analysis][Desktop] failed to create ${label}:`, error);
+    alert(`Failed to open ${winCfg.title} window.`);
   });
   return true;
 }
@@ -1331,13 +1769,14 @@ export function handleAnalysisSelect(selectedValue: string): void {
   if (buttonId) {
     const w = window as any;
     let preopenedPopup: Window | null = null;
-    let popupConsumedByHandler = false;
+    let preopenedTitle = '';
     try {
       const cfg = analysisPopupConfigMap[value];
       if (cfg) {
         const preopened = window.open('', cfg.title, cfg.features);
         if (preopened) {
           preopenedPopup = preopened;
+          preopenedTitle = cfg.title;
           w.__preopenedAnalysisPopupMap = w.__preopenedAnalysisPopupMap || {};
           w.__preopenedAnalysisPopupMap[cfg.title] = preopened;
         }
@@ -1352,27 +1791,20 @@ export function handleAnalysisSelect(selectedValue: string): void {
 
     const button = document.getElementById(buttonId);
     if (button) {
-      const originalWindowOpen = window.open;
-      try {
-        if (preopenedPopup) {
-          (window as any).open = (...args: any[]) => {
-            if (!popupConsumedByHandler) {
-              popupConsumedByHandler = true;
-              try { preopenedPopup!.focus(); } catch (_) {}
-              return preopenedPopup;
-            }
-            return originalWindowOpen.apply(window, args as any);
-          };
-        }
+      const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+      button.dispatchEvent(clickEvent);
+    } else if (preopenedPopup) {
+      // If no target button exists, clean up the preopened blank popup.
+      try { preopenedPopup.close(); } catch (_) {}
+    }
 
-        const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
-        button.dispatchEvent(clickEvent);
-      } finally {
-        (window as any).open = originalWindowOpen;
-        if (preopenedPopup && !popupConsumedByHandler) {
-          try { preopenedPopup.close(); } catch (_) {}
+    if (preopenedPopup && preopenedTitle) {
+      try {
+        const store = w.__preopenedAnalysisPopupMap;
+        if (store && store[preopenedTitle] === preopenedPopup) {
+          delete store[preopenedTitle];
         }
-      }
+      } catch (_) {}
     }
   }
 
@@ -1421,6 +1853,8 @@ export function handleAnalysisSelect(selectedValue: string): void {
 }
 
 export function handleOpenSettings(): void {
+  installDesktopForceInfinitePupilModeBridge();
+
   if (isTauriRuntime() && !isSettingsWindowContext() && !isAnalysisWindowContext()) {
     (async () => {
       try {
@@ -1446,7 +1880,7 @@ export function handleOpenSettings(): void {
       }
     } catch (_) {}
     try {
-      return sanitizeMode(localStorage.getItem('coopt.forceInfinitePupilMode'));
+      return sanitizeMode(localStorage.getItem(FORCE_INFINITE_PUPIL_MODE_KEY));
     } catch (_) {
       return '';
     }
@@ -1468,8 +1902,14 @@ export function handleOpenSettings(): void {
       }
     } catch (_) {}
     try {
-      if (m) localStorage.setItem('coopt.forceInfinitePupilMode', m);
-      else localStorage.removeItem('coopt.forceInfinitePupilMode');
+      if (m) localStorage.setItem(FORCE_INFINITE_PUPIL_MODE_KEY, m);
+      else localStorage.removeItem(FORCE_INFINITE_PUPIL_MODE_KEY);
+    } catch (_) {}
+
+    try {
+      if (typeof window.__cooptBroadcastForceInfinitePupilMode === 'function') {
+        window.__cooptBroadcastForceInfinitePupilMode(m);
+      }
     } catch (_) {}
   };
 
@@ -1560,6 +2000,7 @@ export function handleOpenSettings(): void {
   </div>
   <script>
     const KEY = 'coopt.forceInfinitePupilMode';
+    const isDesktopRuntime = !!(window && (window.__TAURI_INTERNALS__ || window.__TAURI__));
     const GLASS_MAP_MFR_KEY = 'coopt.glassMap.defaultManufacturers';
     const DARK_MODE_KEY = 'coopt.darkMode';
     const sanitize = (v) => {
@@ -1583,36 +2024,127 @@ export function handleOpenSettings(): void {
     };
     const getOpener = () => { try { return window.opener || null; } catch (_) { return null; } };
 
-    function getCurrent() {
-      const o = getOpener();
+    async function readDesktopModeDirect() {
       try {
-        const fromOpener = (o && typeof o.__cooptGetForceInfinitePupilMode === 'function')
-          ? sanitize(o.__cooptGetForceInfinitePupilMode())
-          : sanitize(o?.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? o?.COOPT_FORCE_INFINITE_PUPIL_MODE);
-        if (fromOpener) return fromOpener;
+        const invoke = window?.__TAURI_INTERNALS__?.invoke || window?.__TAURI__?.core?.invoke;
+        if (typeof invoke !== 'function') return '';
+        const raw = await invoke('read_desktop_setting', { key: KEY });
+        return sanitize(raw);
+      } catch (_) {
+        return '';
+      }
+    }
+
+    async function writeDesktopModeDirect(mode) {
+      const m = sanitize(mode);
+      try {
+        const invoke = window?.__TAURI_INTERNALS__?.invoke || window?.__TAURI__?.core?.invoke;
+        if (typeof invoke !== 'function') return;
+        await invoke('write_desktop_setting', { key: KEY, value: m || null });
       } catch (_) {}
-      try { return sanitize(localStorage.getItem(KEY)); } catch (_) { return ''; }
+    }
+
+    function getFromWindow(target) {
+      if (!target) return '';
+      try {
+        if (typeof target.__cooptGetForceInfinitePupilMode === 'function') {
+          const m = sanitize(target.__cooptGetForceInfinitePupilMode());
+          if (m) return m;
+        }
+      } catch (_) {}
+      try {
+        return sanitize(target.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? target.COOPT_FORCE_INFINITE_PUPIL_MODE);
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function setToWindow(target, mode) {
+      if (!target) return;
+      try {
+        if (typeof target.__cooptSetForceInfinitePupilMode === 'function') {
+          target.__cooptSetForceInfinitePupilMode(mode);
+          return;
+        }
+      } catch (_) {}
+      try {
+        if (mode) {
+          target.__COOPT_FORCE_INFINITE_PUPIL_MODE = mode;
+          target.COOPT_FORCE_INFINITE_PUPIL_MODE = mode;
+        } else {
+          try { delete target.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { target.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+          try { delete target.COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { target.COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
+        }
+      } catch (_) {}
+    }
+
+    function getCurrent() {
+      const selfMode = getFromWindow(window);
+      if (selfMode) return selfMode;
+
+      const o = getOpener();
+      const openerMode = getFromWindow(o);
+      if (openerMode) return openerMode;
+
+      try {
+        const stored = sanitize(localStorage.getItem(KEY));
+        if (stored) return stored;
+      } catch (_) {}
+
+      try {
+        const fromUrl = sanitize(new URL(window.location.href).searchParams.get('coopt_force_mode'));
+        if (fromUrl) return fromUrl;
+      } catch (_) {}
+
+      return '';
     }
 
     function applyMode(mode) {
       const m = sanitize(mode);
+      setToWindow(window, m);
+
       const o = getOpener();
-      try {
-        if (o && typeof o.__cooptSetForceInfinitePupilMode === 'function') {
-          o.__cooptSetForceInfinitePupilMode(m);
-        } else if (o) {
-          if (m) {
-            o.__COOPT_FORCE_INFINITE_PUPIL_MODE = m;
-            o.COOPT_FORCE_INFINITE_PUPIL_MODE = m;
-          } else {
-            try { delete o.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { o.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
-            try { delete o.COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { o.COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
-          }
-        }
-      } catch (_) {}
+      setToWindow(o, m);
+
       try {
         if (m) localStorage.setItem(KEY, m);
         else localStorage.removeItem(KEY);
+      } catch (_) {}
+
+      try {
+        if (typeof window.__cooptBroadcastForceInfinitePupilMode === 'function') {
+          window.__cooptBroadcastForceInfinitePupilMode(m);
+        }
+      } catch (_) {}
+
+      try {
+        if (typeof window.__cooptWriteDesktopSetting === 'function') {
+          window.__cooptWriteDesktopSetting(KEY, m || null);
+        }
+      } catch (_) {}
+
+      writeDesktopModeDirect(m);
+    }
+
+    async function hydrateFromDesktopStore() {
+      const direct = await readDesktopModeDirect();
+      if (direct) {
+        setToWindow(window, direct);
+        try { localStorage.setItem(KEY, direct); } catch (_) {}
+        syncUI();
+        return;
+      }
+
+      try {
+        if (typeof window.__cooptReadDesktopSetting !== 'function') return;
+        const raw = await window.__cooptReadDesktopSetting(KEY);
+        const m = sanitize(raw);
+        setToWindow(window, m);
+        try {
+          if (m) localStorage.setItem(KEY, m);
+          else localStorage.removeItem(KEY);
+        } catch (_) {}
+        syncUI();
       } catch (_) {}
     }
 
@@ -1683,10 +2215,73 @@ export function handleOpenSettings(): void {
     }
     window.addEventListener('focus', syncUI);
     syncUI();
+    hydrateFromDesktopStore();
   </script>
 </body>
 </html>
   `);
 
   try { popup.document.close(); } catch (_) {}
+
+  // In Tauri settings window, bind persistence from host TS as a robust fallback
+  // in case the injected inline script cannot access Tauri invoke APIs.
+  if (inTauriSettingsWindow) {
+    try {
+      if (!(window as any).__cooptForceModeDelegatedListenerBound) {
+        (window as any).__cooptForceModeDelegatedListenerBound = true;
+        document.addEventListener('change', (ev: Event) => {
+          try {
+            const target = ev.target as HTMLInputElement | null;
+            if (!target) return;
+            if (target.name !== 'force-mode' || target.type !== 'radio' || !target.checked) return;
+            const m = sanitizeForceInfinitePupilMode(target.value);
+            applyMode(m);
+            void writeDesktopForceInfinitePupilMode(m);
+          } catch (_) {}
+        }, true);
+      }
+    } catch (_) {}
+
+    const bindHostSideForceMode = async (): Promise<void> => {
+      try {
+        if ((window as any).__cooptHostForceModeBound) return;
+        (window as any).__cooptHostForceModeBound = true;
+
+        const radios = Array.from(document.querySelectorAll('input[name="force-mode"]')) as HTMLInputElement[];
+        if (!radios.length) {
+          (window as any).__cooptHostForceModeBound = false;
+          return;
+        }
+
+        const syncRadios = async (): Promise<void> => {
+          const mode = sanitizeForceInfinitePupilMode(
+            (await readDesktopForceInfinitePupilMode()) || getCurrentMode()
+          );
+          for (const r of radios) {
+            const v = sanitizeForceInfinitePupilMode(r.value);
+            r.checked = (v === mode) || (mode === '' && v === '');
+          }
+        };
+
+        for (const r of radios) {
+          r.addEventListener('change', () => {
+            if (!r.checked) return;
+            const m = sanitizeForceInfinitePupilMode(r.value);
+            applyMode(m);
+            void writeDesktopForceInfinitePupilMode(m);
+          });
+        }
+
+        window.addEventListener('focus', () => {
+          void syncRadios();
+        });
+
+        await syncRadios();
+      } catch (_) {
+        try { (window as any).__cooptHostForceModeBound = false; } catch (_) {}
+      }
+    };
+
+    void bindHostSideForceMode();
+  }
 }

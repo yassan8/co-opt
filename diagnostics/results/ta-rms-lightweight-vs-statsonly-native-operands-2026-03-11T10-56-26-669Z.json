@@ -1,0 +1,123 @@
+{
+  "timestamp": "2026-03-11T10:56:28.926Z",
+  "targetSurfaceIndex": 23,
+  "loops": 8,
+  "repeat": 5,
+  "rayCounts": [
+    21,
+    51
+  ],
+  "sweep": [
+    {
+      "rayCount": 21,
+      "repeat": 5,
+      "loops": 8,
+      "medianBasePerCallMs": 6.435999999999993,
+      "medianLightweightPerCallMs": 6.293614625000004,
+      "medianSpeedup": 1.0226237835463257,
+      "runs": [
+        {
+          "basePerCall": 7.227046874999999,
+          "lightweightPerCall": 6.642223874999999,
+          "speedup": 1.0880462644749385,
+          "baseMs": 57.816374999999994,
+          "lightweightMs": 53.13779099999999,
+          "basePointsAvg": 22,
+          "lightweightPointsAvg": 22
+        },
+        {
+          "basePerCall": 6.443177125000005,
+          "lightweightPerCall": 6.202572874999994,
+          "speedup": 1.0387910395974205,
+          "baseMs": 51.54541700000004,
+          "lightweightMs": 49.620582999999954,
+          "basePointsAvg": 22,
+          "lightweightPointsAvg": 22
+        },
+        {
+          "basePerCall": 6.435999999999993,
+          "lightweightPerCall": 6.255963500000007,
+          "speedup": 1.0287783808201543,
+          "baseMs": 51.48799999999994,
+          "lightweightMs": 50.04770800000006,
+          "basePointsAvg": 22,
+          "lightweightPointsAvg": 22
+        },
+        {
+          "basePerCall": 6.432671874999997,
+          "lightweightPerCall": 6.293614625000004,
+          "speedup": 1.022094973760805,
+          "baseMs": 51.461374999999975,
+          "lightweightMs": 50.34891700000003,
+          "basePointsAvg": 22,
+          "lightweightPointsAvg": 22
+        },
+        {
+          "basePerCall": 6.4073332499999935,
+          "lightweightPerCall": 6.3325729999999965,
+          "speedup": 1.0118056673014266,
+          "baseMs": 51.25866599999995,
+          "lightweightMs": 50.66058399999997,
+          "basePointsAvg": 22,
+          "lightweightPointsAvg": 22
+        }
+      ]
+    },
+    {
+      "rayCount": 51,
+      "repeat": 5,
+      "loops": 8,
+      "medianBasePerCallMs": 8.41926562499998,
+      "medianLightweightPerCallMs": 8.163109375000005,
+      "medianSpeedup": 1.0313797400270623,
+      "runs": [
+        {
+          "basePerCall": 8.442302000000012,
+          "lightweightPerCall": 8.27097925000001,
+          "speedup": 1.0207137202042915,
+          "baseMs": 67.5384160000001,
+          "lightweightMs": 66.16783400000008,
+          "basePointsAvg": 51,
+          "lightweightPointsAvg": 51
+        },
+        {
+          "basePerCall": 8.504895750000003,
+          "lightweightPerCall": 8.072380124999995,
+          "speedup": 1.053579690042162,
+          "baseMs": 68.03916600000002,
+          "lightweightMs": 64.57904099999996,
+          "basePointsAvg": 51,
+          "lightweightPointsAvg": 51
+        },
+        {
+          "basePerCall": 8.309119750000008,
+          "lightweightPerCall": 8.100458250000003,
+          "speedup": 1.0257592217082292,
+          "baseMs": 66.47295800000006,
+          "lightweightMs": 64.80366600000002,
+          "basePointsAvg": 51,
+          "lightweightPointsAvg": 51
+        },
+        {
+          "basePerCall": 8.41926562499998,
+          "lightweightPerCall": 8.163109375000005,
+          "speedup": 1.0313797400270623,
+          "baseMs": 67.35412499999984,
+          "lightweightMs": 65.30487500000004,
+          "basePointsAvg": 51,
+          "lightweightPointsAvg": 51
+        },
+        {
+          "basePerCall": 8.323229249999997,
+          "lightweightPerCall": 8.218734374999968,
+          "speedup": 1.0127142294947364,
+          "baseMs": 66.58583399999998,
+          "lightweightMs": 65.74987499999975,
+          "basePointsAvg": 51,
+          "lightweightPointsAvg": 51
+        }
+      ]
+    }
+  ],
+  "medianOfMedianSpeedup": 1.027001761786694
+}

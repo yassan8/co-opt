@@ -2,7 +2,7 @@
 // Lightweight, dependency-free surface sag helpers used by core ray tracing.
 // This file intentionally avoids importing browser/UI modules (three.js, main.js, etc.).
 
-import { getWASMSystem } from '../core/wasm-service.ts';
+import { getLegacyWasmAsphericSagFn } from '../core/wasm-service.ts';
 
 export function asphericSurfaceZ(r, params, mode = "even") {
   const {
@@ -22,8 +22,8 @@ export function asphericSurfaceZ(r, params, mode = "even") {
 
   // Try optional WASM acceleration if the host app exposed it on globalThis.
   try {
-    const wasmSystem = getWASMSystem();
-    if (wasmSystem && wasmSystem.isWASMReady && typeof wasmSystem.forceAsphericSag === 'function') {
+    const forceAsphericSag = getLegacyWasmAsphericSagFn();
+    if (forceAsphericSag) {
       // Prefer WASM for even mode. We pass coef1..coef10 (A4..A22).
       // If the loaded WASM module doesn't have the extended entrypoint yet,
       // ForceWASMSystem falls back to legacy + JS add.
@@ -44,7 +44,7 @@ export function asphericSurfaceZ(r, params, mode = "even") {
         const a20 = Number(coef9) || 0;
         const a22 = Number(coef10) || 0;
 
-        const out = wasmSystem.forceAsphericSag(rr, c, k, a4, a6, a8, a10, a12, a14, a16, a18, a20, a22);
+        const out = forceAsphericSag(rr, c, k, a4, a6, a8, a10, a12, a14, a16, a18, a20, a22);
         if (isFinite(out)) return out;
       }
     }

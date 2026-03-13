@@ -1,0 +1,69 @@
+{
+  "timestamp": "2026-03-11T10:56:28.933Z",
+  "output": "diagnostics/results/native-operands-auto-release-gate-2026-03-11T10-56-26-603Z.json",
+  "staticRouting": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "merit_async_spot_annular_case",
+        "pass": true
+      },
+      {
+        "name": "merit_async_zern_native_case",
+        "pass": true
+      },
+      {
+        "name": "merit_async_ta_native_case",
+        "pass": true
+      },
+      {
+        "name": "merit_async_sa_native_case",
+        "pass": true
+      },
+      {
+        "name": "merit_native_spot_helper_uses_ipc",
+        "pass": true
+      },
+      {
+        "name": "optimizer_awaits_async_operand_eval",
+        "pass": true
+      },
+      {
+        "name": "tauri_optimizer_spot_ta_native_mapping",
+        "pass": true
+      },
+      {
+        "name": "ipc_client_native_endpoints_present",
+        "pass": true
+      }
+    ]
+  },
+  "runtime": {
+    "opdParity": {
+      "pass": true,
+      "output": "diagnostics/results/opd-js-rust-parity-native-operands-2026-03-11T10-56-26-669Z.json",
+      "error": null
+    },
+    "taMode": {
+      "pass": true,
+      "output": "diagnostics/results/ta-rms-lightweight-vs-statsonly-native-operands-2026-03-11T10-56-26-669Z.json",
+      "analysis": "diagnostics/results/ta-rms-lightweight-vs-statsonly-analysis-native-operands-2026-03-11T10-56-26-669Z.json",
+      "error": null
+    },
+    "spotSmoke": {
+      "skipped": true,
+      "reason": "covered by static routing checks",
+      "pass": true
+    },
+    "saSmoke": {
+      "skipped": true,
+      "reason": "covered by static routing checks",
+      "pass": true
+    }
+  },
+  "requirementGate": {
+    "enabled": true,
+    "failedChecks": [],
+    "passed": true
+  }
+}

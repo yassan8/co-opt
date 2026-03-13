@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'OrbitControls';
-import { getWASMSystem } from '../main.ts';
+import { getLegacyWasmAsphericSagFn } from '../core/wasm-service.ts';
 import { toricSurfaceZ, toricSagDerivatives } from './surface-math.ts';
 
 // Debug control: Set to true to enable all 🔸 debug logs
@@ -357,8 +357,8 @@ export function asphericSurfaceZ(r, params, mode = "even") {
   
   // Try WASM first for performance
   try {
-    const wasmSystem = getWASMSystem();
-    if (wasmSystem && wasmSystem.isWASMReady) {
+    const forceAsphericSag = getLegacyWasmAsphericSagFn();
+    if (forceAsphericSag) {
       // Prefer WASM for even mode. Pass coef1..coef10 (A4..A22).
       // If the loaded WASM module doesn't have the extended entrypoint yet,
       // ForceWASMSystem falls back to legacy + JS add.
@@ -379,7 +379,7 @@ export function asphericSurfaceZ(r, params, mode = "even") {
         const a18 = Number(coef8) || 0;
         const a20 = Number(coef9) || 0;
         const a22 = Number(coef10) || 0;
-        const out = wasmSystem.forceAsphericSag(Number(r), c, k, a4, a6, a8, a10, a12, a14, a16, a18, a20, a22);
+        const out = forceAsphericSag(Number(r), c, k, a4, a6, a8, a10, a12, a14, a16, a18, a20, a22);
         if (isFinite(out)) {
           return out;
         }

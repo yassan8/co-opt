@@ -1,0 +1,71 @@
+{
+  "timestamp": "2026-03-11T07:42:37.904Z",
+  "output": "diagnostics/results/native-operands-auto-2026-03-11T07-42-37-568Z.json",
+  "staticRouting": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "merit_async_spot_annular_case",
+        "pass": true
+      },
+      {
+        "name": "merit_async_zern_native_case",
+        "pass": true
+      },
+      {
+        "name": "merit_async_ta_native_case",
+        "pass": true
+      },
+      {
+        "name": "merit_async_sa_native_case",
+        "pass": true
+      },
+      {
+        "name": "merit_native_spot_helper_uses_ipc",
+        "pass": true
+      },
+      {
+        "name": "optimizer_awaits_async_operand_eval",
+        "pass": true
+      },
+      {
+        "name": "tauri_optimizer_spot_ta_native_mapping",
+        "pass": true
+      },
+      {
+        "name": "ipc_client_native_endpoints_present",
+        "pass": true
+      }
+    ]
+  },
+  "runtime": {
+    "opdParity": {
+      "pass": true,
+      "output": "diagnostics/results/opd-js-rust-parity-native-operands-2026-03-11T07-42-37-568Z.json",
+      "error": null
+    },
+    "taMode": {
+      "pass": false,
+      "output": null,
+      "analysis": null,
+      "error": "ta-rms-lightweight-mode-auto(native-operands) failed with code 1: file:///Users/masanori/Desktop/co-opt-pro/data/table-source.ts:7\nconst w                      = window;\n                               ^\n\nReferenceError: window is not defined\n    at file:///Users/masanori/Desktop/co-opt-pro/data/table-source.ts:7:32\n    at ModuleJob.run (node:internal/modules/esm/module_job:413:25)\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:660"
+    },
+    "spotSmoke": {
+      "pass": false,
+      "error": "spot-smoke(cb-offaxis-diagnose) failed with code 1: node:internal/modules/esm/resolve:274\n    throw new ERR_MODULE_NOT_FOUND(\n          ^\n\nError [ERR_MODULE_NOT_FOUND]: Cannot find module '/Users/masanori/Desktop/co-opt-pro/evaluation/spot-diagram.js' imported from /Users/masanori/Desktop/co-opt-pro/diagnostics/cb-offaxis-diagnose.mjs\n    at finalizeResolution (node:internal/modules/esm/resolve:274:11)\n    at moduleResolve (node:internal/modules/es"
+    },
+    "saSmoke": {
+      "pass": false,
+      "error": "sa-smoke(diagnose-sa-cb) failed with code 1: node:internal/modules/esm/resolve:274\n    throw new ERR_MODULE_NOT_FOUND(\n          ^\n\nError [ERR_MODULE_NOT_FOUND]: Cannot find module '/Users/masanori/Desktop/co-opt-pro/evaluation/aberrations/longitudinal-aberration.js' imported from /Users/masanori/Desktop/co-opt-pro/diagnostics/diagnose-sa-cb.mjs\n    at finalizeResolution (node:internal/modules/esm/resolve:274:11)\n    at moduleResolve (node:i"
+    }
+  },
+  "requirementGate": {
+    "enabled": true,
+    "failedChecks": [
+      "taMode",
+      "spotSmoke",
+      "saSmoke"
+    ],
+    "passed": false
+  }
+}

@@ -1423,9 +1423,11 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
         .as_ref()
         .map(|s| s.trim().to_ascii_lowercase())
         .filter(|s| s == "stop" || s == "entrance");
-    let prefer_entrance_sampling = use_infinite_mode
+    let force_entrance_sampling = use_infinite_mode
         && matches!(requested_pupil_sampling_mode.as_deref(), Some("entrance"));
-    let mut effective_pupil_sampling_mode = if prefer_entrance_sampling {
+    let force_stop_sampling = use_infinite_mode
+        && matches!(requested_pupil_sampling_mode.as_deref(), Some("stop"));
+    let mut effective_pupil_sampling_mode = if force_entrance_sampling {
         "entrance"
     } else {
         "stop"
@@ -1740,7 +1742,7 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
     );
     let mut stop_sampling_fallback_to_entrance = false;
     let mut effective_sampling_radius = sampling_radius;
-    if (chief_stop_hit[0] - 1.0).abs() > f64::EPSILON && !prefer_entrance_sampling {
+    if (chief_stop_hit[0] - 1.0).abs() > f64::EPSILON && !force_entrance_sampling {
         // Web parity: before switching to entrance best-effort, try a Newton-like
         // chief ray origin solve that enforces stop-center crossing.
         if use_infinite_mode {
@@ -1845,8 +1847,8 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
         }
     }
 
-    if prefer_entrance_sampling || (chief_stop_hit[0] - 1.0).abs() > f64::EPSILON {
-        if !prefer_entrance_sampling {
+    if force_entrance_sampling || ((chief_stop_hit[0] - 1.0).abs() > f64::EPSILON && !force_stop_sampling) {
+        if !force_entrance_sampling {
             stop_sampling_fallback_to_entrance = true;
         }
         effective_pupil_sampling_mode = "entrance";
@@ -1897,7 +1899,7 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
                 }
             }
         }
-        chief_reference_mode = if prefer_entrance_sampling {
+        chief_reference_mode = if force_entrance_sampling {
             format!("entrance-chief-requested(grid-brent,r={:.3})", entrance_radius_scale)
         } else {
             format!("entrance-chief-fallback(grid-brent,r={:.3})", entrance_radius_scale)
@@ -1906,6 +1908,10 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
         // Keep a fixed entrance radius in strict mode to avoid field-by-field
         // radius changes that can introduce Object MTF discontinuities.
     }
+    if force_stop_sampling && (chief_stop_hit[0] - 1.0).abs() > f64::EPSILON {
+        return Err("run_native_opd_map: force stop requested, but chief ray did not reach stop surface".to_string());
+    }
+
     let chief_opl = chief_target_hit[1];
     if !chief_opl.is_finite() {
         return Err("run_native_opd_map: chief OPL is invalid".to_string());
@@ -2023,8 +2029,10 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
                     target_surface_index
                 ));
             }
-            if prefer_entrance_sampling {
+            if force_entrance_sampling {
                 notes.push("pupil sampling mode=entrance(requested)".to_string());
+            } else if force_stop_sampling {
+                notes.push("pupil sampling mode=stop(requested)".to_string());
             } else if stop_sampling_fallback_to_entrance {
                 notes.push("pupil sampling fallback stop -> entrance".to_string());
             }
@@ -3096,7 +3104,7 @@ pub fn run_native_through_focus_mtf_map(
         let mut completed = 0usize;
 
         let mut series = Vec::<NativeThroughFocusMtfSeries>::with_capacity(wavelengths.len());
-        for wl in wavelengths {
+        for (wi, wl) in wavelengths.iter().copied().enumerate() {
             let mut tan_vec = Vec::<f64>::with_capacity(x_axis.len());
             let mut sag_vec = Vec::<f64>::with_capacity(x_axis.len());
 
@@ -3201,8 +3209,10 @@ pub fn run_native_through_focus_mtf_map(
                     kind,
                     "compute",
                     &format!(
-                        "Computing TF-MTF: λ={:.1}nm, step {}/{}",
+                        "Computing TF-MTF: λ={:.1}nm ({}/{}), step {}/{}",
                         wl * 1000.0,
+                        wi + 1,
+                        wavelengths.len(),
                         si + 1,
                         x_axis.len()
                     ),
@@ -8410,7 +8420,7 @@ fn build_packed_meta(
     })
 }
 
-fn aspheric_sag(r: f64, radius: f64, conic: f64, coefs: &[f64; 10], mode_odd: bool) -> f64 {
+pub(crate) fn aspheric_sag(r: f64, radius: f64, conic: f64, coefs: &[f64; 10], mode_odd: bool) -> f64 {
     if !radius.is_finite() || radius == 0.0 {
         return 0.0;
     }

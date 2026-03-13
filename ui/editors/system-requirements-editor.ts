@@ -100,13 +100,11 @@ class SystemRequirementsEditor {
   _operandKeys: string[];
   _isEvaluating: boolean;
   _pendingEvalRequested: boolean;
-  _progressEls: any;
   inspector: InspectorManager;
   _renderBody: any;
   _renderRow: any;
   _paramsExpanded: boolean;
   _paramToggleBtn: HTMLButtonElement | null;
-  _progressThrottleState: { label: string; value: number; max: number; at: number } | null;
 
   constructor() {
     this.requirements = [];
@@ -123,15 +121,12 @@ class SystemRequirementsEditor {
     this._operandKeys = [];
     this._isEvaluating = false;
     this._pendingEvalRequested = false;
-    this._progressEls = null;
     this._paramsExpanded = true;
     this._paramToggleBtn = null;
-    this._progressThrottleState = null;
     this.inspector = new InspectorManager('requirement-inspector', 'requirement-inspector-content');
 
     this.loadFromStorage();
     this.initializeTable();
-    this._ensureProgressUI();
 
     // Auto-update status when Merit is recalculated
     this.installMeritHook();
@@ -1753,104 +1748,6 @@ class SystemRequirementsEditor {
     }
   }
 
-  _ensureProgressUI(): any {
-    try {
-      if (this._progressEls) {
-        return this._progressEls;
-      }
-      
-      // First, try to use existing progress elements from React component
-      const existingWrap = document.getElementById('requirements-progress-wrap');
-      const existingLabel = document.getElementById('requirements-progress-label');
-      const existingProg = document.getElementById('requirements-progress');
-      
-      if (existingWrap && existingLabel && existingProg) {
-        this._progressEls = { wrap: existingWrap, label: existingLabel, prog: existingProg };
-        return this._progressEls;
-      }
-      
-      // Fallback: create progress elements dynamically (legacy approach)
-      const btns = document.querySelector('.merit-function-buttons-container');
-      if (!btns || !btns.parentElement) {
-        console.warn('[Requirements] Could not find buttons container for progress bar');
-        return null;
-      }
-
-      const wrap = document.createElement('div');
-      wrap.id = 'requirements-progress-wrap';
-      wrap.className = 'requirements-progress-wrap';
-      wrap.style.display = 'none';
-
-      const label = document.createElement('div');
-      label.id = 'requirements-progress-label';
-      label.className = 'merit-function-help requirements-progress-label';
-      label.textContent = '';
-
-      const prog = document.createElement('progress');
-      prog.id = 'requirements-progress';
-      prog.className = 'requirements-progress-bar';
-      prog.max = 1;
-      prog.value = 0;
-
-      wrap.appendChild(label);
-      wrap.appendChild(prog);
-
-      btns.parentElement.insertBefore(wrap, btns.nextSibling);
-      this._progressEls = { wrap, label, prog };
-      return this._progressEls;
-    } catch (err) {
-      console.error('[Requirements] Error in _ensureProgressUI:', err);
-      return null;
-    }
-  }
-
-  _setProgressVisible(visible: boolean): void {
-    try {
-      const els = this._ensureProgressUI();
-      if (!els || !els.wrap) {
-        console.error('[Requirements] ❌ No progress elements available');
-        return;
-      }
-      els.wrap.style.display = visible ? 'block' : 'none';
-    } catch (err) {
-      console.error('[Requirements] Error in _setProgressVisible:', err);
-    }
-  }
-
-  _setProgress(labelText: string, value: number, max: number): void {
-    try {
-      const els = this._ensureProgressUI();
-      if (!els) {
-        console.error('[Requirements] ❌ No progress elements in _setProgress');
-        return;
-      }
-      const nextLabel = String(labelText ?? '');
-      const nextMax = Number(max);
-      const normalizedMax = (Number.isFinite(nextMax) && nextMax > 0) ? nextMax : 1;
-      const nextValueRaw = Number(value);
-      const normalizedValue = (Number.isFinite(nextValueRaw) && nextValueRaw >= 0) ? nextValueRaw : 0;
-      const now = Date.now();
-      const prev = this._progressThrottleState;
-      if (prev) {
-        const sameLabel = prev.label === nextLabel;
-        const sameMax = prev.max === normalizedMax;
-        const sameValue = prev.value === normalizedValue;
-        const progressRateLimited = sameLabel && sameMax && !sameValue && (now - prev.at) < 120;
-        if ((sameLabel && sameMax && sameValue) || progressRateLimited) {
-          return;
-        }
-      }
-      if (els.label) els.label.textContent = String(labelText ?? '');
-      if (els.prog) {
-        els.prog.max = normalizedMax;
-        els.prog.value = normalizedValue;
-      }
-      this._progressThrottleState = { label: nextLabel, value: normalizedValue, max: normalizedMax, at: now };
-    } catch (err) {
-      console.error('[Requirements] Error in _setProgress:', err);
-    }
-  }
-
   async _yieldToUI(): Promise<void> {
     try {
       await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
@@ -2071,17 +1968,6 @@ class SystemRequirementsEditor {
     const updateBtn = document.getElementById('update-requirement-btn') as HTMLButtonElement | null;
     try { if (updateBtn) updateBtn.disabled = true; } catch (_) {}
 
-    // Show progress during the refresh, then reuse the same bar for evaluation.
-    let showTimer: any = null;
-    try {
-      showTimer = setTimeout(() => {
-        try {
-          this._setProgressVisible(true);
-          this._setProgress('Updating config snapshots…', 0, Math.max(1, configs.length));
-        } catch (_) {}
-      }, 180);
-    } catch (_) {}
-
     try {
       let globalSourceRows: any[] = [];
       try {
@@ -2187,10 +2073,6 @@ class SystemRequirementsEditor {
           globalSourceRows
         );
 
-        try {
-          this._setProgress('Updating config snapshots…', i + 1, Math.max(1, configs.length));
-        } catch (_) {}
-
         if (i % 2 === 0) await this._yieldToUI();
       }
 
@@ -2242,7 +2124,6 @@ class SystemRequirementsEditor {
         }
       } catch (_) {}
     } finally {
-      try { if (showTimer) clearTimeout(showTimer); } catch (_) {}
       try { if (updateBtn) updateBtn.disabled = false; } catch (_) {}
     }
 
@@ -2513,22 +2394,6 @@ class SystemRequirementsEditor {
       }
     })();
     const yieldEvery = isOptimizerRunning ? 32 : 2;
-    const enableProgressUI = !isOptimizerRunning;
-
-    // Progress bar (only show if evaluation takes noticeable time)
-    let showTimer: any = null;
-    let progressVisible = false;
-    try {
-      if (enableProgressUI) {
-        showTimer = setTimeout(() => {
-          try {
-            progressVisible = true;
-            this._setProgressVisible(true);
-            this._setProgress('Evaluating requirements…', 0, Math.max(1, live.length));
-          } catch (_) {}
-        }, 180);
-      }
-    } catch (_) {}
 
     // Requirements are a pass/fail spec. They should reflect the same semantics as the UI analyses
     // (e.g., Spot Diagram) rather than any optimization/fast-mode heuristics.
@@ -2646,11 +2511,6 @@ class SystemRequirementsEditor {
       // _violation/_contribution are available for debugging/consistency checks.
       updates.push({ id: row.id, current, status, _violation: sanitized.ok ? amount : null, _contribution: sanitized.ok ? contribution : null });
 
-      if (enableProgressUI && progressVisible) {
-        try {
-          this._setProgress('Evaluating requirements…', i + 1, Math.max(1, live.length));
-        } catch (_) {}
-      }
       if (yieldEvery > 0 && i % yieldEvery === 0) await this._yieldToUI();
     }
     } finally {
@@ -2659,10 +2519,6 @@ class SystemRequirementsEditor {
         if (g) g.__COOPT_EVALUATING_REQUIREMENTS = prevReqFlag;
       } catch (_) {}
 
-      try { if (showTimer) clearTimeout(showTimer); } catch (_) {}
-      if (enableProgressUI) {
-        try { this._setProgressVisible(false); } catch (_) {}
-      }
     }
 
     try {
@@ -2973,15 +2829,12 @@ const __cooptInitSystemRequirementsEditor = (): boolean => {
     
     if (w.systemRequirementsEditor) {
       // Clear cached elements
-      w.systemRequirementsEditor._progressEls = null;
       w.systemRequirementsEditor._tableRoot = null;
       w.systemRequirementsEditor._tbody = null;
       
       // Re-initialize table to render content
       w.systemRequirementsEditor.initializeTable();
       
-      // Ensure progress UI
-      w.systemRequirementsEditor._ensureProgressUI();
       return true;
     }
     
@@ -3446,6 +3299,143 @@ try {
       } catch (_) {}
 
       try { (window as any).__cooptLastRustVsJsRequirementCompare = out; } catch (_) {}
+      return out;
+    };
+
+    (window as any).__cooptDiagnoseTaComponentSwitch = async (options: any = null) => {
+      const ed = (window as any).systemRequirementsEditor;
+      const merit = (window as any).meritFunctionEditor;
+      if (!ed || typeof ed.evaluateAndUpdateNow !== 'function' || !merit || typeof merit.calculateOperandValue !== 'function') {
+        const out = { ok: false, reason: 'required editors/methods are not ready' };
+        try { (window as any).__cooptLastTaComponentSwitchDiagnosis = out; } catch (_) {}
+        return out;
+      }
+
+      const modeRaw = String(options?.mode || 'rust-first').trim().toLowerCase();
+      const mode = modeRaw === 'js-only' ? 'js-only' : 'rust-first';
+
+      let prevDisableRustFirst: any;
+      try {
+        prevDisableRustFirst = (window as any).__cooptDisableRequirementRustFirst;
+        (window as any).__cooptDisableRequirementRustFirst = (mode === 'js-only');
+      } catch (_) {}
+
+      try { await ed.evaluateAndUpdateNow({ reason: 'ta-component-switch-diagnose' }); } catch (_) {}
+
+      const rows = (typeof ed.getData === 'function') ? ed.getData() : (Array.isArray(ed.requirements) ? ed.requirements : []);
+      const taRows = (Array.isArray(rows) ? rows : []).filter((r: any) => {
+        if (!r || (r.enabled !== undefined && r.enabled !== null && !r.enabled)) return false;
+        return String(r.operand || '').trim() === 'TA_RMS_UM';
+      });
+
+      const requestedRowId = (options?.rowId !== undefined && options?.rowId !== null)
+        ? String(options.rowId)
+        : '';
+      const requestedConfigId = (options?.configId !== undefined && options?.configId !== null)
+        ? String(options.configId)
+        : '';
+
+      const targetRows = taRows.filter((r: any) => {
+        if (requestedRowId && String(r.id) !== requestedRowId) return false;
+        if (requestedConfigId && String(r.configId || '') !== requestedConfigId) return false;
+        return true;
+      });
+
+      const opticalSystemRows = getOpticalSystemRows(null);
+      const components = ['total', 'meridional', 'sagittal'];
+      const diagnostics: any[] = [];
+
+      for (const row of targetRows) {
+        const valuesByComponent: Record<string, number> = {};
+        const errorsByComponent: Record<string, string> = {};
+
+        for (const comp of components) {
+          const opObj = {
+            operand: 'TA_RMS_UM',
+            configId: row.configId,
+            param1: row.param1,
+            param2: row.param2,
+            param3: comp,
+            param4: row.param4,
+            param5: row.param5,
+            target: row.target,
+            weight: row.weight,
+            __reqRowId: row.id,
+          };
+
+          try {
+            const v = merit.calculateOperandValue(opObj, opticalSystemRows);
+            const n = Number(v);
+            valuesByComponent[comp] = Number.isFinite(n) ? n : Number.NaN;
+          } catch (e: any) {
+            valuesByComponent[comp] = Number.NaN;
+            errorsByComponent[comp] = String(e?.message || e || 'calculateOperandValue failed');
+          }
+        }
+
+        const totalVal = valuesByComponent.total;
+        const meridionalVal = valuesByComponent.meridional;
+        const sagittalVal = valuesByComponent.sagittal;
+
+        const deltas = {
+          totalMinusMeridional: (Number.isFinite(totalVal) && Number.isFinite(meridionalVal)) ? (totalVal - meridionalVal) : Number.NaN,
+          totalMinusSagittal: (Number.isFinite(totalVal) && Number.isFinite(sagittalVal)) ? (totalVal - sagittalVal) : Number.NaN,
+          meridionalMinusSagittal: (Number.isFinite(meridionalVal) && Number.isFinite(sagittalVal)) ? (meridionalVal - sagittalVal) : Number.NaN,
+        };
+
+        const componentSwitchEffective = Object.values(deltas).some((d: any) => Number.isFinite(d) && Math.abs(Number(d)) > 1e-12);
+
+        diagnostics.push({
+          id: row.id,
+          configId: row.configId,
+          params: {
+            param1: row.param1,
+            param2: row.param2,
+            param4: row.param4,
+            param5: row.param5,
+          },
+          valuesByComponent,
+          deltas,
+          componentSwitchEffective,
+          errorsByComponent,
+        });
+      }
+
+      const out = {
+        ok: true,
+        mode,
+        totalTaRows: taRows.length,
+        checkedRows: diagnostics.length,
+        unchangedRows: diagnostics.filter((d: any) => d.componentSwitchEffective === false).length,
+        diagnostics,
+      };
+
+      try {
+        if (typeof console !== 'undefined' && typeof console.table === 'function') {
+          console.table(diagnostics.map((d: any) => ({
+            id: d.id,
+            configId: d.configId,
+            total: d.valuesByComponent?.total,
+            meridional: d.valuesByComponent?.meridional,
+            sagittal: d.valuesByComponent?.sagittal,
+            d_tm: d.deltas?.totalMinusMeridional,
+            d_ts: d.deltas?.totalMinusSagittal,
+            d_ms: d.deltas?.meridionalMinusSagittal,
+            effective: d.componentSwitchEffective,
+          })));
+        }
+      } catch (_) {}
+
+      try { (window as any).__cooptLastTaComponentSwitchDiagnosis = out; } catch (_) {}
+
+      try {
+        if (prevDisableRustFirst === undefined) {
+          delete (window as any).__cooptDisableRequirementRustFirst;
+        } else {
+          (window as any).__cooptDisableRequirementRustFirst = prevDisableRustFirst;
+        }
+      } catch (_) {}
+
       return out;
     };
   }

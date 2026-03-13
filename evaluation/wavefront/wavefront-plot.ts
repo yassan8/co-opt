@@ -379,11 +379,7 @@ export class WavefrontPlotter {
             } catch (_) {}
         };
 
-        emitProgress(5, 'Checking desktop Rust runtime...');
-        const runtime = await import('../../src/desktop/runtime.ts');
-        if (!runtime?.isTauriRuntime || !runtime.isTauriRuntime()) {
-            throw new Error('OPD is native-Rust only and requires desktop (Tauri) runtime.');
-        }
+        emitProgress(5, 'Checking Rust/WASM OPD runtime...');
 
         emitProgress(10, 'Loading native OPD bridge...');
         const { runNativeOpdMap } = await import('../../src/desktop/ipc/client.ts');
@@ -462,12 +458,14 @@ export class WavefrontPlotter {
         }
         let response;
         try {
+            const reqWavelengthUm = Number(fieldSetting?.wavelength);
             response = await runNativeOpdMap({
                 jobId,
                 opticalSystemRows: Array.isArray(opticalSystemRows) ? opticalSystemRows : [],
                 sourceRows: Array.isArray(sourceRows) ? sourceRows : [],
                 objectRows: Array.isArray(objectRows) ? objectRows : [],
                 objectIndex,
+                wavelengthUm: Number.isFinite(reqWavelengthUm) && reqWavelengthUm > 0 ? reqWavelengthUm : undefined,
                 gridSize: normalizedGridSize,
                 pupilSamplingMode: requestedPupilSamplingMode,
                 opdDisplayMode: options?.opdDisplayMode || 'pistonTiltRemoved',
@@ -515,26 +513,50 @@ export class WavefrontPlotter {
             throw new Error('Native OPD map is empty');
         }
 
-        const { analyzer } = this._createWavefrontEngine(opticalSystemRows, Number(fieldSetting?.wavelength) || 0.5876);
         const wavelength = Number(fieldSetting?.wavelength) || 0.5876;
-        const map = this._buildWavefrontMapFromOpdGrid(grid, wavelength);
-        this._applyNativeZernikePostProcess(map, analyzer, {
-            wavelength,
-            opdDisplayMode: options?.opdDisplayMode || 'pistonTiltRemoved',
-            skipZernikeFit: !!options?.skipZernikeFit,
-            zernikeMaxNoll: Number.isFinite(Number(options?.zernikeMaxNoll)) ? Number(options.zernikeMaxNoll) : 37,
-        });
+        const rawGridForMap = hasFiniteInGrid(rawGrid) ? rawGrid : grid;
+
+        // Important parity rule:
+        // - Native OPD already returns display-space and raw-space grids.
+        // - Re-applying TS-side Zernike/plane removal changes numerics and drifts from native.
+        // So we only remap native grids into the wavefront map schema here.
+        const rawMap = this._buildWavefrontMapFromOpdGrid(rawGridForMap, wavelength);
+        const displayMap = this._buildWavefrontMapFromOpdGrid(grid, wavelength);
+
+        const map = {
+            ...displayMap,
+            raw: {
+                ...(rawMap?.raw || {}),
+                opdGrid: rawGridForMap,
+            },
+            display: {
+                ...(displayMap?.display || {}),
+                mode: options?.opdDisplayMode || 'pistonTiltRemoved',
+                opdGrid: grid,
+            },
+            statistics: {
+                ...(displayMap?.statistics || {}),
+                raw: {
+                    ...(rawMap?.statistics?.raw || {}),
+                },
+                display: {
+                    ...(displayMap?.statistics?.display || {}),
+                    opdDisplayMode: options?.opdDisplayMode || 'pistonTiltRemoved',
+                },
+            },
+            zernike: null,
+            opdMode: 'native-grid',
+            opdDisplayModeRequested: options?.opdDisplayMode || 'pistonTiltRemoved',
+            skipZernikeFit: true,
+        };
         try {
             const mode = options?.opdDisplayMode || 'pistonTiltRemoved';
             const responseMode = String(response?.pupilSamplingMode || '').toLowerCase();
             const pupilSamplingMode = (responseMode === 'stop' || responseMode === 'entrance')
                 ? responseMode
                 : (String(response?.message || '').includes('stop -> entrance') ? 'entrance' : 'stop');
-            const chiefReferenceMode = (() => {
-                const msg = String(response?.message || '');
-                const m = msg.match(/chief reference mode=([^,\)]+)/i);
-                return m && m[1] ? String(m[1]).trim() : '';
-            })();
+            const chiefReferenceMode = String(response?.chiefReferenceMode || '').trim();
+            const backend = String(response?.backend || '').trim();
             map.pupilSamplingMode = pupilSamplingMode;
             const statsTargets = [
                 map?.statistics?.wavefront,
@@ -551,18 +573,49 @@ export class WavefrontPlotter {
                 st.pupilSamplingMode = pupilSamplingMode;
                 st.opdDisplayMode = mode;
                 if (chiefReferenceMode) st.chiefReferenceMode = chiefReferenceMode;
+                if (backend) st.backend = backend;
+                // Add diagnostic metadata from WASM response
+                if (Number.isFinite(Number(response?.wavelengthUm))) {
+                    st.wavelengthUm = Number(response.wavelengthUm);
+                    st.wavelengthNm = Number(response.wavelengthUm) * 1000;
+                }
+                if (Number.isFinite(Number(response?.gridSize))) {
+                    st.gridSize = Number(response.gridSize);
+                }
+                if (Number.isInteger(Number(response?.targetSurface))) {
+                    st.targetSurface = Number(response.targetSurface);
+                }
+                if (Number.isInteger(Number(response?.stopSurface))) {
+                    st.stopSurface = Number(response.stopSurface);
+                }
+                if (Number.isFinite(Number(response?.usedObjectX))) {
+                    st.usedObjectX = Number(response.usedObjectX);
+                }
+                if (Number.isFinite(Number(response?.usedObjectY))) {
+                    st.usedObjectY = Number(response.usedObjectY);
+                }
+                if (response?.usedObjectPosition) {
+                    st.usedObjectPosition = String(response.usedObjectPosition);
+                }
+                st.hitCount = Number(response?.hitCount ?? 0);
+                st.sampleCount = Number(response?.sampleCount ?? 0);
             }
             map.nativeMeta = {
-                backend: response?.backend || 'run_native_opd_map',
+                backend: backend || 'run_native_opd_map',
                 message: response?.message || null,
                 gridSource: usingDisplayGrid ? 'displayOpdGrid' : 'rawOpdGrid',
                 hitCount: Number(response?.hitCount ?? 0),
                 sampleCount: Number(response?.sampleCount ?? 0),
                 pupilSamplingMode,
                 chiefReferenceMode: chiefReferenceMode || null,
+                wavelengthUm: Number(response?.wavelengthUm ?? 0),
+                gridSize: Number(response?.gridSize ?? 0),
+                targetSurface: Number(response?.targetSurface ?? 0),
+                stopSurface: Number(response?.stopSurface ?? 0),
             };
             try {
                 console.log('🧭 [OPD Native] reference policy', {
+                    backend: backend || '(unknown)',
                     chiefReferenceMode: chiefReferenceMode || '(unknown)',
                     message: response?.message || null,
                     hitCount: response?.hitCount,
@@ -2073,6 +2126,11 @@ export class WavefrontPlotter {
             ? `<div class="stats-note"><strong>OPD display mode:</strong> ${String(opdDisplayMode)}</div>`
             : '';
 
+        const backend = statistics?.backend;
+        const backendNote = backend
+            ? `<div class="stats-note"><strong>Backend:</strong> ${String(backend)}</div>`
+            : '';
+
         const chiefReferenceMode = statistics?.chiefReferenceMode;
         const chiefReferenceModeNote = chiefReferenceMode
             ? `<div class="stats-note"><strong>Chief reference mode:</strong> ${String(chiefReferenceMode)}</div>`
@@ -2089,6 +2147,51 @@ export class WavefrontPlotter {
         const removalNote = (Array.isArray(statistics?.removeIndices) && statistics.removeIndices.length)
             ? `<div class="stats-note"><strong>Stats removal (OSA):</strong> [${statistics.removeIndices.join(', ')}] (piston/tilt/defocus)</div>`
             : '';
+        
+        // Diagnostic metadata from WASM response
+        const wavelengthNote = (Number.isFinite(statistics?.wavelengthUm))
+            ? `<div class="stats-note"><strong>Wavelength:</strong> ${(statistics.wavelengthUm * 1000).toFixed(2)} nm (${statistics.wavelengthUm.toFixed(6)} μm)</div>`
+            : '';
+        
+        const gridSizeNote = (Number.isFinite(statistics?.gridSize))
+            ? `<div class="stats-note"><strong>Grid size:</strong> ${Math.floor(statistics.gridSize)} × ${Math.floor(statistics.gridSize)}</div>`
+            : '';
+        
+        const surfacesNote = (() => {
+            const stop = Number.isInteger(statistics?.stopSurface) ? Number(statistics.stopSurface) : null;
+            const target = Number.isInteger(statistics?.targetSurface) ? Number(statistics.targetSurface) : null;
+            if (stop !== null || target !== null) {
+                const parts = [];
+                if (stop !== null) parts.push(`stop=${stop}`);
+                if (target !== null) parts.push(`target=${target}`);
+                return `<div class="stats-note"><strong>Surfaces:</strong> ${parts.join(', ')}</div>`;
+            }
+            return '';
+        })();
+        
+        const objectPositionNote = (() => {
+            const pos = statistics?.usedObjectPosition;
+            const x = Number.isFinite(statistics?.usedObjectX) ? Number(statistics.usedObjectX) : null;
+            const y = Number.isFinite(statistics?.usedObjectY) ? Number(statistics.usedObjectY) : null;
+            if (pos || x !== null || y !== null) {
+                let desc = '';
+                if (pos) desc += String(pos);
+                if (x !== null) desc += ` x=${x.toFixed(2)}`;
+                if (y !== null) desc += ` y=${y.toFixed(2)}`;
+                return `<div class="stats-note"><strong>Object:</strong> ${desc.trim()}</div>`;
+            }
+            return '';
+        })();
+        
+        const hitRateNote = (() => {
+            const hits = Number(statistics?.hitCount);
+            const samples = Number(statistics?.sampleCount);
+            if (Number.isFinite(hits) && Number.isFinite(samples) && samples > 0) {
+                const rate = (hits / samples * 100).toFixed(1);
+                return `<div class="stats-note"><strong>Ray hits:</strong> ${hits}/${samples} (${rate}%)</div>`;
+            }
+            return '';
+        })();
         
         const formatStat = (value: any, digits = 4): string => {
             const n = Number(value);
@@ -2113,10 +2216,16 @@ export class WavefrontPlotter {
                 ${modeNote}
                 ${opdModeNote}
                 ${opdDisplayModeNote}
+                ${backendNote}
                 ${chiefReferenceModeNote}
                 ${zernikeNote}
                 ${rawMeanNote}
                 ${removalNote}
+                ${wavelengthNote}
+                ${gridSizeNote}
+                ${surfacesNote}
+                ${objectPositionNote}
+                ${hitRateNote}
                 <div class="stats-grid">
                     <div><strong>Data points:</strong> ${Number.isFinite(Number(statistics?.count)) ? Number(statistics.count) : 'n/a'}</div>
                     <div><strong>Mean:</strong> ${formatStat(statistics?.mean, 4)} ${unit}</div>
