@@ -1513,26 +1513,24 @@ export function handleRender3D(): void {
       return;
     }
 
-    const existingPopup = w.popup3DWindow;
-    if (existingPopup && !existingPopup.closed) {
-      try {
-        existingPopup.focus();
-        return;
-      } catch (_) {}
-    }
-
-    // Ensure legacy popup infrastructure is bound first
-    if (typeof w.setupOpticalSystemChangeListeners === 'function' && !w.__opticalSystemChangeListenersBound) {
-      w.setupOpticalSystemChangeListeners(w.scene || null);
-    }
-
-    // Delegate popup creation to legacy handler directly to avoid extra about:blank windows.
-    if (typeof w.__open3DWindowLegacy === 'function') {
-      w.__open3DWindowLegacy();
+    if (isRenderWindowContext()) {
       return;
     }
 
-    alert('Failed to initialize Render window. Please retry after app startup finishes.');
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('coopt_optimize_window');
+      url.searchParams.delete('coopt_analysis_window');
+      url.searchParams.delete('coopt_analysis');
+      url.searchParams.delete('coopt_settings_window');
+      url.searchParams.set('coopt_render_window', '1');
+      window.location.assign(url.toString());
+      return;
+    } catch (err) {
+      console.error('❌ [Render3D] Failed to navigate to render route:', err);
+    }
+
+    alert('Failed to open Render view. Please retry.');
   } finally {
     w.__render3DInProgress = false;
   }
@@ -1663,7 +1661,6 @@ async function openDesktopAnalysisWindow(kind: AnalysisWindowKey): Promise<boole
 
 export function handleSystemData(): void {
   console.log('[SystemData] Button clicked');
-  const w = window as any;
 
   if (isTauriRuntime() && !isAnalysisWindowContext()) {
     (async () => {
@@ -1675,75 +1672,24 @@ export function handleSystemData(): void {
     })();
     return;
   }
-  
-  // Ensure event listeners are set up first
-  if (typeof w.setupAnalysisWindows === 'function' && typeof w.setupOpticalSystemChangeListeners === 'function') {
-    if (!w.__opticalSystemChangeListenersBound) {
-      console.log('[SystemData] Setting up optical system change listeners');
-      w.setupOpticalSystemChangeListeners(w.scene || null);
-    }
-  }
-  
-  if (w.__systemDataPopup && !w.__systemDataPopup.closed) {
-    try { 
-      console.log('[SystemData] Existing popup found, focusing');
-      w.__systemDataPopup.focus(); 
-    } catch (_) {}
+
+  if (isAnalysisWindowContext()) {
     return;
   }
-  
-  // Open popup directly
-  const popup = window.open('', 'System Data', 'width=1200,height=600');
-  if (!popup) {
-    alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
-    return;
-  }
-  
-  w.__systemDataPopup = popup;
-  
-  // Initialize the popup
-  if (typeof w.initializeSystemDataPopup === 'function') {
-    w.initializeSystemDataPopup(popup);
-  } else {
-    // Fallback: trigger the button's event listener
-    const btn = document.getElementById('open-system-data-window-btn');
-    if (btn) {
-      const clickEvent = new MouseEvent('click', {
-        bubbles: true,
-        cancelable: true,
-        view: window
-      });
-      // Temporarily remove React's onClick to avoid recursion
-      const reactOnClick = (btn as any).onclick;
-      (btn as any).onclick = null;
-      btn.dispatchEvent(clickEvent);
-      setTimeout(() => {
-        (btn as any).onclick = reactOnClick;
-      }, 0);
-    }
+
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('coopt_analysis_window', '1');
+    url.searchParams.set('coopt_analysis', 'system-data');
+    window.location.assign(url.toString());
+  } catch (err) {
+    console.error('❌ [SystemData] Failed to navigate to analysis route:', err);
   }
 }
 
 export function handleAnalysisSelect(selectedValue: string): void {
   const value = String(selectedValue || '').trim();
   if (!value) return;
-
-  const analysisPopupConfigMap: Record<string, { key: string; title: string; features: string }> = {
-    'spot-diagram': { key: 'spot-diagram', title: 'Spot Diagram', features: 'width=800,height=600' },
-    'spherical-aberration': { key: 'spherical-aberration', title: 'Spherical Aberration', features: 'width=800,height=600' },
-    'astigmatism': { key: 'astigmatism', title: 'Astigmatism', features: 'width=800,height=600' },
-    'distortion': { key: 'distortion', title: 'Distortion', features: 'width=800,height=600' },
-    'distortion-grid': { key: 'distortion-grid', title: 'Distortion Grid', features: 'width=800,height=600' },
-    'magnification-chromatic-aberration': { key: 'magnification-chromatic-aberration', title: 'Lateral Chromatic Aberration', features: 'width=800,height=600' },
-    'integrated-aberration': { key: 'integrated-aberration', title: 'Integrated Aberration', features: 'width=800,height=600' },
-    'transverse-aberration': { key: 'transverse-aberration', title: 'Transverse Aberration', features: 'width=800,height=600' },
-    'opd': { key: 'opd', title: 'Optical Path Difference', features: 'width=800,height=600' },
-    'psf': { key: 'psf', title: 'Point Spread Function', features: 'width=800,height=600' },
-    'mtf': { key: 'mtf', title: 'Modulation Transfer Function', features: 'width=800,height=600' },
-    'through-focus-spot': { key: 'through-focus-spot', title: 'Through-Focus Spot', features: 'width=980,height=700' },
-    'through-focus-mtf': { key: 'through-focus-mtf', title: 'Through-Focus MTF', features: 'width=900,height=680' },
-    'field-mtf': { key: 'field-mtf', title: 'Object MTF', features: 'width=900,height=650' }
-  };
 
   const analysisButtonMap: Record<string, string> = {
     'spot-diagram': 'open-spot-diagram-window-btn',
@@ -1779,45 +1725,33 @@ export function handleAnalysisSelect(selectedValue: string): void {
     return;
   }
 
+  // Web mode: route into the in-app analysis page instead of opening popups.
+  if (!isTauriRuntime()) {
+    try {
+      const url = new URL(window.location.href);
+      if (
+        url.searchParams.get('coopt_analysis_window') === '1' &&
+        String(url.searchParams.get('coopt_analysis') || '').trim() === value
+      ) {
+        return;
+      }
+      url.searchParams.delete('coopt_render_window');
+      url.searchParams.delete('coopt_optimize_window');
+      url.searchParams.delete('coopt_settings_window');
+      url.searchParams.set('coopt_analysis_window', '1');
+      url.searchParams.set('coopt_analysis', value);
+      window.location.assign(url.toString());
+      return;
+    } catch (err) {
+      console.error('❌ [Analysis] Failed to navigate to analysis route:', err);
+    }
+  }
+
   if (buttonId) {
-    const w = window as any;
-    let preopenedPopup: Window | null = null;
-    let preopenedTitle = '';
-    try {
-      const cfg = analysisPopupConfigMap[value];
-      if (cfg) {
-        const preopened = window.open('', cfg.title, cfg.features);
-        if (preopened) {
-          preopenedPopup = preopened;
-          preopenedTitle = cfg.title;
-          w.__preopenedAnalysisPopupMap = w.__preopenedAnalysisPopupMap || {};
-          w.__preopenedAnalysisPopupMap[cfg.title] = preopened;
-        }
-      }
-    } catch (_) {}
-
-    try {
-      if (typeof w.setupAnalysisWindows === 'function') {
-        w.setupAnalysisWindows();
-      }
-    } catch (_) {}
-
     const button = document.getElementById(buttonId);
     if (button) {
       const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
       button.dispatchEvent(clickEvent);
-    } else if (preopenedPopup) {
-      // If no target button exists, clean up the preopened blank popup.
-      try { preopenedPopup.close(); } catch (_) {}
-    }
-
-    if (preopenedPopup && preopenedTitle) {
-      try {
-        const store = w.__preopenedAnalysisPopupMap;
-        if (store && store[preopenedTitle] === preopenedPopup) {
-          delete store[preopenedTitle];
-        }
-      } catch (_) {}
     }
   }
 
@@ -1880,6 +1814,10 @@ export function handleOpenSettings(): void {
     return;
   }
 
+  if (isSettingsWindowContext()) {
+    return;
+  }
+
   const sanitizeMode = (v: any): string => {
     const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
     return (s === 'stop' || s === 'entrance') ? s : '';
@@ -1899,402 +1837,17 @@ export function handleOpenSettings(): void {
     }
   };
 
-  const applyMode = (mode: string): void => {
-    const m = sanitizeMode(mode);
-    try {
-      if (typeof window.__cooptSetForceInfinitePupilMode === 'function') {
-        window.__cooptSetForceInfinitePupilMode(m);
-      } else {
-        if (m) {
-          window.__COOPT_FORCE_INFINITE_PUPIL_MODE = m;
-          window.COOPT_FORCE_INFINITE_PUPIL_MODE = m;
-        } else {
-          try { delete window.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { window.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
-          try { delete window.COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { window.COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
-        }
-      }
-    } catch (_) {}
-    try {
-      if (m) localStorage.setItem(FORCE_INFINITE_PUPIL_MODE_KEY, m);
-      else localStorage.removeItem(FORCE_INFINITE_PUPIL_MODE_KEY);
-    } catch (_) {}
-
-    try {
-      if (typeof window.__cooptBroadcastForceInfinitePupilMode === 'function') {
-        window.__cooptBroadcastForceInfinitePupilMode(m);
-      }
-    } catch (_) {}
-  };
-
-  const showFallbackModal = (): void => {
-    alert('Settings popup was blocked. Please allow popups for this app and try again.');
-  };
-
   try {
-    const existing = window.__settingsPopup;
-    if (existing && !existing.closed) {
-      try { existing.focus(); } catch (_) {}
-      return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('coopt_settings_window', '1');
+    const mode = getCurrentMode();
+    if (mode) {
+      url.searchParams.set('coopt_force_mode', mode);
+    } else {
+      url.searchParams.delete('coopt_force_mode');
     }
-  } catch (_) {}
-
-  const inTauriSettingsWindow = isTauriRuntime() && isSettingsWindowContext();
-  const popup = inTauriSettingsWindow
-    ? window
-    : window.open('about:blank', 'Settings', 'width=520,height=560');
-  if (!popup) {
-    if (!isTauriRuntime()) {
-      try {
-        const url = new URL(window.location.href);
-        url.searchParams.set('coopt_settings_window', '1');
-        window.location.assign(url.toString());
-        return;
-      } catch (_) {}
-    }
-    showFallbackModal();
-    return;
-  }
-  if (!inTauriSettingsWindow) {
-    window.__settingsPopup = popup;
-  }
-
-  popup.document.write(`
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8" />
-  <title></title>
-  <style>
-    html, body { height: 100%; }
-    body { margin: 0; font-family: Arial, sans-serif; background: #f4f4f4; display:flex; flex-direction:column; }
-    .header { padding: 10px 12px; background: #f8f8f8; border-bottom: 1px solid #ddd; font-weight: 600; }
-    .content { padding: 12px; background: #fff; flex:1 1 auto; overflow:auto; }
-    .section-title { font-size: 13px; font-weight: 600; margin: 0 0 8px 0; }
-    .help { font-size: 12px; color: #666; line-height: 1.35; margin: 0 0 10px 0; }
-    .radio-group { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px 0; }
-  </style>
-</head>
-<body>
-  <div class="header"></div>
-  <div class="content">
-    <div class="section-title">Glass Map: Default Manufacturers</div>
-    <div class="help">
-      Choose which manufacturers are enabled by default when opening Glass Map.
-      <br />If nothing is selected, Glass Map will show all manufacturers.
-    </div>
-    <div style="display:flex;flex-direction:column;gap:8px;margin:8px 0 14px 0;">
-      <label><input type="checkbox" class="glassmap-mfr-cb" value="SCHOTT" /> SCHOTT</label>
-      <label><input type="checkbox" class="glassmap-mfr-cb" value="HOYA" /> HOYA</label>
-      <label><input type="checkbox" class="glassmap-mfr-cb" value="HIKARI" /> HIKARI</label>
-      <label><input type="checkbox" class="glassmap-mfr-cb" value="OHARA" /> OHARA</label>
-      <label><input type="checkbox" class="glassmap-mfr-cb" value="Sumita" /> Sumita</label>
-      <label><input type="checkbox" class="glassmap-mfr-cb" value="CDGM" /> CDGM</label>
-      <label><input type="checkbox" class="glassmap-mfr-cb" value="Special" /> Special</label>
-    </div>
-
-    <div class="section-title">Dark Mode</div>
-    <div class="help">Enable VS Code-style dark mode for the entire UI.</div>
-    <label style="margin: 8px 0 14px 0; display: block;">
-      <input type="checkbox" id="dark-mode-cb" /> Enable Dark Mode
-    </label>
-
-    <div class="section-title">Infinite Field: Pupil Sampling Mode</div>
-    <div class="help">
-      Fix the sampling mode used for infinite-field wavefront/PSF/MTF generation.
-      <br />
-      This sets <code>__COOPT_FORCE_INFINITE_PUPIL_MODE</code> to <code>stop</code> or <code>entrance</code>.
-    </div>
-    <div class="radio-group">
-      <label><input type="radio" name="force-mode" value="" /> Auto (default)</label>
-      <label><input type="radio" name="force-mode" value="stop" /> Force stop</label>
-      <label><input type="radio" name="force-mode" value="entrance" /> Force entrance</label>
-    </div>
-    <div class="help">Note: Changes take effect on the next calculation.</div>
-  </div>
-  <script>
-    const KEY = 'coopt.forceInfinitePupilMode';
-    const isDesktopRuntime = !!(window && (window.__TAURI_INTERNALS__ || window.__TAURI__));
-    const GLASS_MAP_MFR_KEY = 'coopt.glassMap.defaultManufacturers';
-    const DARK_MODE_KEY = 'coopt.darkMode';
-    const sanitize = (v) => {
-      const s = (typeof v === 'string') ? v.trim().toLowerCase() : '';
-      return (s === 'stop' || s === 'entrance') ? s : '';
-    };
-    const sanitizeMfrList = (list) => {
-      if (!Array.isArray(list)) return [];
-      const allow = new Set(['SCHOTT', 'HOYA', 'HIKARI', 'OHARA', 'SUMITA', 'CDGM', 'SPECIAL']);
-      const out = [];
-      for (const v of list) {
-        const s = String(v ?? '').trim();
-        if (!s) continue;
-        const upper = s.toUpperCase();
-        if (!allow.has(upper)) continue;
-        if (upper === 'SUMITA') out.push('Sumita');
-        else if (upper === 'SPECIAL') out.push('Special');
-        else out.push(upper);
-      }
-      return Array.from(new Set(out));
-    };
-    const getOpener = () => { try { return window.opener || null; } catch (_) { return null; } };
-
-    async function readDesktopModeDirect() {
-      try {
-        const invoke = window?.__TAURI_INTERNALS__?.invoke || window?.__TAURI__?.core?.invoke;
-        if (typeof invoke !== 'function') return '';
-        const raw = await invoke('read_desktop_setting', { key: KEY });
-        return sanitize(raw);
-      } catch (_) {
-        return '';
-      }
-    }
-
-    async function writeDesktopModeDirect(mode) {
-      const m = sanitize(mode);
-      try {
-        const invoke = window?.__TAURI_INTERNALS__?.invoke || window?.__TAURI__?.core?.invoke;
-        if (typeof invoke !== 'function') return;
-        await invoke('write_desktop_setting', { key: KEY, value: m || null });
-      } catch (_) {}
-    }
-
-    function getFromWindow(target) {
-      if (!target) return '';
-      try {
-        if (typeof target.__cooptGetForceInfinitePupilMode === 'function') {
-          const m = sanitize(target.__cooptGetForceInfinitePupilMode());
-          if (m) return m;
-        }
-      } catch (_) {}
-      try {
-        return sanitize(target.__COOPT_FORCE_INFINITE_PUPIL_MODE ?? target.COOPT_FORCE_INFINITE_PUPIL_MODE);
-      } catch (_) {
-        return '';
-      }
-    }
-
-    function setToWindow(target, mode) {
-      if (!target) return;
-      try {
-        if (typeof target.__cooptSetForceInfinitePupilMode === 'function') {
-          target.__cooptSetForceInfinitePupilMode(mode);
-          return;
-        }
-      } catch (_) {}
-      try {
-        if (mode) {
-          target.__COOPT_FORCE_INFINITE_PUPIL_MODE = mode;
-          target.COOPT_FORCE_INFINITE_PUPIL_MODE = mode;
-        } else {
-          try { delete target.__COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { target.__COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
-          try { delete target.COOPT_FORCE_INFINITE_PUPIL_MODE; } catch (_) { target.COOPT_FORCE_INFINITE_PUPIL_MODE = undefined; }
-        }
-      } catch (_) {}
-    }
-
-    function getCurrent() {
-      const selfMode = getFromWindow(window);
-      if (selfMode) return selfMode;
-
-      const o = getOpener();
-      const openerMode = getFromWindow(o);
-      if (openerMode) return openerMode;
-
-      try {
-        const stored = sanitize(localStorage.getItem(KEY));
-        if (stored) return stored;
-      } catch (_) {}
-
-      try {
-        const fromUrl = sanitize(new URL(window.location.href).searchParams.get('coopt_force_mode'));
-        if (fromUrl) return fromUrl;
-      } catch (_) {}
-
-      return '';
-    }
-
-    function applyMode(mode) {
-      const m = sanitize(mode);
-      setToWindow(window, m);
-
-      const o = getOpener();
-      setToWindow(o, m);
-
-      try {
-        if (m) localStorage.setItem(KEY, m);
-        else localStorage.removeItem(KEY);
-      } catch (_) {}
-
-      try {
-        if (typeof window.__cooptBroadcastForceInfinitePupilMode === 'function') {
-          window.__cooptBroadcastForceInfinitePupilMode(m);
-        }
-      } catch (_) {}
-
-      try {
-        if (typeof window.__cooptWriteDesktopSetting === 'function') {
-          window.__cooptWriteDesktopSetting(KEY, m || null);
-        }
-      } catch (_) {}
-
-      writeDesktopModeDirect(m);
-    }
-
-    async function hydrateFromDesktopStore() {
-      const direct = await readDesktopModeDirect();
-      if (direct) {
-        setToWindow(window, direct);
-        try { localStorage.setItem(KEY, direct); } catch (_) {}
-        syncUI();
-        return;
-      }
-
-      try {
-        if (typeof window.__cooptReadDesktopSetting !== 'function') return;
-        const raw = await window.__cooptReadDesktopSetting(KEY);
-        const m = sanitize(raw);
-        setToWindow(window, m);
-        try {
-          if (m) localStorage.setItem(KEY, m);
-          else localStorage.removeItem(KEY);
-        } catch (_) {}
-        syncUI();
-      } catch (_) {}
-    }
-
-    function syncUI() {
-      const cur = getCurrent();
-      document.querySelectorAll('input[name="force-mode"]').forEach((r) => {
-        const v = sanitize(r.value);
-        r.checked = (v === cur) || (cur === '' && v === '');
-      });
-
-      let stored = [];
-      try {
-        stored = sanitizeMfrList(JSON.parse(localStorage.getItem(GLASS_MAP_MFR_KEY) || '[]'));
-      } catch (_) {
-        stored = [];
-      }
-      const set = new Set(stored.map((s) => String(s).toUpperCase()));
-      document.querySelectorAll('.glassmap-mfr-cb').forEach((cb) => {
-        const c = cb;
-        c.checked = set.has(String(c.value || '').toUpperCase());
-      });
-
-      const darkModeCb = document.getElementById('dark-mode-cb');
-      if (darkModeCb) {
-        let isDark = false;
-        try { isDark = localStorage.getItem(DARK_MODE_KEY) === 'true'; } catch (_) {}
-        darkModeCb.checked = isDark;
-      }
-    }
-
-    function saveGlassMapMfrSelection() {
-      const selected = [];
-      document.querySelectorAll('.glassmap-mfr-cb').forEach((cb) => {
-        if (cb.checked) selected.push(cb.value);
-      });
-      const sanitized = sanitizeMfrList(selected);
-      try {
-        if (sanitized.length) localStorage.setItem(GLASS_MAP_MFR_KEY, JSON.stringify(sanitized));
-        else localStorage.removeItem(GLASS_MAP_MFR_KEY);
-      } catch (_) {}
-    }
-
-    function applyDarkMode(enabled) {
-      const o = getOpener();
-      try {
-        if (o && typeof o.__cooptSetDarkMode === 'function') {
-          o.__cooptSetDarkMode(enabled);
-        }
-      } catch (_) {}
-      try { localStorage.setItem(DARK_MODE_KEY, enabled ? 'true' : 'false'); } catch (_) {}
-    }
-
-    document.querySelectorAll('input[name="force-mode"]').forEach((r) => {
-      r.addEventListener('change', () => {
-        if (r.checked) applyMode(r.value);
-      });
-    });
-    document.querySelectorAll('.glassmap-mfr-cb').forEach((cb) => {
-      cb.addEventListener('change', () => {
-        saveGlassMapMfrSelection();
-      });
-    });
-    const darkModeCb = document.getElementById('dark-mode-cb');
-    if (darkModeCb) {
-      darkModeCb.addEventListener('change', () => {
-        applyDarkMode(!!darkModeCb.checked);
-      });
-    }
-    window.addEventListener('focus', syncUI);
-    syncUI();
-    hydrateFromDesktopStore();
-  </script>
-</body>
-</html>
-  `);
-
-  try { popup.document.close(); } catch (_) {}
-
-  // In Tauri settings window, bind persistence from host TS as a robust fallback
-  // in case the injected inline script cannot access Tauri invoke APIs.
-  if (inTauriSettingsWindow) {
-    try {
-      if (!(window as any).__cooptForceModeDelegatedListenerBound) {
-        (window as any).__cooptForceModeDelegatedListenerBound = true;
-        document.addEventListener('change', (ev: Event) => {
-          try {
-            const target = ev.target as HTMLInputElement | null;
-            if (!target) return;
-            if (target.name !== 'force-mode' || target.type !== 'radio' || !target.checked) return;
-            const m = sanitizeForceInfinitePupilMode(target.value);
-            applyMode(m);
-            void writeDesktopForceInfinitePupilMode(m);
-          } catch (_) {}
-        }, true);
-      }
-    } catch (_) {}
-
-    const bindHostSideForceMode = async (): Promise<void> => {
-      try {
-        if ((window as any).__cooptHostForceModeBound) return;
-        (window as any).__cooptHostForceModeBound = true;
-
-        const radios = Array.from(document.querySelectorAll('input[name="force-mode"]')) as HTMLInputElement[];
-        if (!radios.length) {
-          (window as any).__cooptHostForceModeBound = false;
-          return;
-        }
-
-        const syncRadios = async (): Promise<void> => {
-          const mode = sanitizeForceInfinitePupilMode(
-            (await readDesktopForceInfinitePupilMode()) || getCurrentMode()
-          );
-          for (const r of radios) {
-            const v = sanitizeForceInfinitePupilMode(r.value);
-            r.checked = (v === mode) || (mode === '' && v === '');
-          }
-        };
-
-        for (const r of radios) {
-          r.addEventListener('change', () => {
-            if (!r.checked) return;
-            const m = sanitizeForceInfinitePupilMode(r.value);
-            applyMode(m);
-            void writeDesktopForceInfinitePupilMode(m);
-          });
-        }
-
-        window.addEventListener('focus', () => {
-          void syncRadios();
-        });
-
-        await syncRadios();
-      } catch (_) {
-        try { (window as any).__cooptHostForceModeBound = false; } catch (_) {}
-      }
-    };
-
-    void bindHostSideForceMode();
+    window.location.assign(url.toString());
+  } catch (_) {
+    alert('Failed to open Settings page.');
   }
 }

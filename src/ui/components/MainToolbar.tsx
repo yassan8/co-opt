@@ -82,7 +82,7 @@ export default function MainToolbar() {
         <span id="loaded-file-name" className="top-file-name" style={{ color: loadedFileColor }}>
           {loadedFileText}
         </span>
-        <button id="open-settings-btn" className="top-settings-btn" title="Settings" onClick={handleOpenSettings} type="button">
+        <button id="open-settings-btn" className="top-settings-btn" title="Settings" onClick={handleOpenSettings} data-react-handled="1" type="button">
           ⚙️
         </button>
         <button
@@ -132,12 +132,12 @@ export default function MainToolbar() {
 
         <div className="button-group">
           <span className="button-group-label">View</span>
-          <button id="open-3d-window-btn" title="Render 3D view in popup window" onClick={handleRender3D} data-react-handled="1">
+          <button id="open-3d-window-btn" title="Open Render view" onClick={handleRender3D} data-react-handled="1">
             Open Render
           </button>
           <button
             id="open-system-data-window-btn"
-            title="Open System Data in popup window"
+            title="Open System Data view"
             onClick={handleSystemData}
             data-react-handled="1"
             type="button"
@@ -198,85 +198,85 @@ export default function MainToolbar() {
       <div style={{ display: "none" }}>
         <button
           id="open-spot-diagram-window-btn"
-          title="Open Spot Diagram in popup window"
+          title="Open Spot Diagram view"
         >
           Spot Diagram
         </button>
         <button
           id="open-spherical-aberration-window-btn"
-          title="Open Spherical Aberration in popup window"
+          title="Open Spherical Aberration view"
         >
           Spherical Aberration
         </button>
         <button
           id="open-through-focus-spot-window-btn"
-          title="Open Through-Focus Spot in popup window"
+          title="Open Through-Focus Spot view"
         >
           Through-Focus Spot
         </button>
         <button
           id="open-through-focus-mtf-window-btn"
-          title="Open Through-Focus MTF in popup window"
+          title="Open Through-Focus MTF view"
         >
           Through-Focus MTF
         </button>
         <button
           id="open-field-mtf-window-btn"
-          title="Open Object MTF in popup window"
+          title="Open Object MTF view"
         >
           Object MTF
         </button>
         <button
           id="open-astigmatism-window-btn"
-          title="Open Astigmatism in popup window"
+          title="Open Astigmatism view"
         >
           Astigmatism
         </button>
         <button
           id="open-distortion-window-btn"
-          title="Open Distortion in popup window"
+          title="Open Distortion view"
         >
           Distortion
         </button>
         <button
           id="open-distortion-grid-window-btn"
-          title="Open Distortion Grid in popup window"
+          title="Open Distortion Grid view"
         >
           Distortion Grid
         </button>
         <button
           id="open-magnification-chromatic-aberration-window-btn"
-          title="Open Lateral Chromatic Aberration in popup window"
+          title="Open Lateral Chromatic Aberration view"
         >
           Lateral Chromatic Aberration
         </button>
         <button
           id="open-integrated-aberration-window-btn"
-          title="Open Integrated Aberration in popup window"
+          title="Open Integrated Aberration view"
         >
           Integrated Aberration
         </button>
         <button
           id="open-transverse-aberration-window-btn"
-          title="Open Transverse Aberration in popup window"
+          title="Open Transverse Aberration view"
         >
           Transverse Aberration
         </button>
         <button
           id="open-opd-window-btn"
-          title="Open Optical Path Difference in popup window"
+          title="Open Optical Path Difference view"
         >
           Optical Path Difference
         </button>
         <button
           id="open-psf-window-btn"
-          title="Open Point Spread Function in popup window"
+          title="Open Point Spread Function view"
         >
           Point Spread Function
         </button>
         <button
           id="open-mtf-window-btn"
-          title="Open Modulation Transfer Function in popup window"
+          title="Open Modulation Transfer Function view"
         >
           Modulation Transfer Function
         </button>
