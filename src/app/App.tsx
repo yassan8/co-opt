@@ -46,6 +46,7 @@ function applyForceModeToWindowGlobals(m: 'stop' | 'entrance' | ''): void {
 }
 
 function DesktopSettingsPage() {
+  const isBrowserSettingsPage = !isTauriRuntime();
   const [forceMode, setForceMode] = useState<'stop' | 'entrance' | ''>(readForceModeFromUrl);
   const [mfrs, setMfrs] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem(GLASS_MAP_MFR_KEY) || '[]'); } catch (_) { return []; }
@@ -88,11 +89,25 @@ function DesktopSettingsPage() {
     try { if (o && typeof o.__cooptSetDarkMode === 'function') o.__cooptSetDarkMode(enabled); } catch (_) {}
   };
 
+  const handleBackToApp = () => {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('coopt_settings_window');
+      url.searchParams.delete('coopt_force_mode');
+      window.location.assign(url.toString());
+    } catch (_) {}
+  };
+
   const mfrSet = new Set(mfrs.map(s => String(s).toUpperCase()));
 
   return (
     <div style={{ height: '100vh', width: '100vw', fontFamily: 'Arial, sans-serif', background: '#f4f4f4', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '10px 12px', background: '#f8f8f8', borderBottom: '1px solid #ddd', fontWeight: 600 }} />
+      <div style={{ padding: '10px 12px', background: '#f8f8f8', borderBottom: '1px solid #ddd', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <span>Settings</span>
+        {isBrowserSettingsPage && (
+          <button type="button" onClick={handleBackToApp}>Back to App</button>
+        )}
+      </div>
       <div style={{ padding: 12, background: '#fff', flex: '1 1 auto', overflow: 'auto' }}>
         <div style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px 0' }}>Glass Map: Default Manufacturers</div>
         <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
@@ -131,6 +146,17 @@ function DesktopSettingsPage() {
       </div>
     </div>
   );
+}
+
+function handleBackToMainApp(): void {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('coopt_render_window');
+    url.searchParams.delete('coopt_analysis_window');
+    url.searchParams.delete('coopt_analysis');
+    url.searchParams.delete('coopt_force_mode');
+    window.location.assign(url.toString());
+  } catch (_) {}
 }
 
 export default function App() {
@@ -3066,10 +3092,20 @@ export default function App() {
   }, [analysisWindowMode.enabled, analysisWindowMode.analysis]);
 
   if (analysisWindowMode.enabled && analysisWindowMode.analysis === 'system-data') {
+    const isBrowserSystemDataPage = !isTauriRuntime();
+
     return (
       <>
-        <div style={{ height: '100vh', width: '100vw', overflow: 'hidden', display: 'flex' }}>
-          <SystemDataPanel visible />
+        <div style={{ height: '100vh', width: '100vw', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#f4f4f4' }}>
+          {isBrowserSystemDataPage && (
+            <div style={{ padding: '10px 12px', background: '#f8f8f8', borderBottom: '1px solid #ddd', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <span>System Data</span>
+              <button type="button" onClick={handleBackToMainApp}>Back to App</button>
+            </div>
+          )}
+          <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex' }}>
+            <SystemDataPanel visible />
+          </div>
         </div>
         <div style={{ display: 'none' }}>
           <MainToolbar />
@@ -3240,6 +3276,8 @@ export default function App() {
   }
 
   if (isRenderWindowMode) {
+    const isBrowserRenderPage = !isTauriRuntime();
+
     const handleRenderDraw = async () => {
       try {
         const w = window as any;
@@ -3307,6 +3345,9 @@ export default function App() {
             <button type="button" onClick={handleRenderDraw}>Render</button>
             <button type="button" onClick={handleViewXZ}>X-Z View</button>
             <button type="button" onClick={handleViewYZ}>Y-Z View</button>
+            {isBrowserRenderPage && (
+              <button type="button" onClick={handleBackToMainApp} style={{ marginLeft: 12 }}>Back to App</button>
+            )}
             <label htmlFor="render-ray-count-input" style={{ marginLeft: 12, fontSize: 12, fontWeight: 500 }}>Raynum</label>
             <input
               id="render-ray-count-input"
