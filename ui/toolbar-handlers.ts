@@ -1128,11 +1128,6 @@ export function handleExportZemax(): void {
 // Note: Optimize button handler is very complex and should remain in dom-event-handlers.ts
 // We'll trigger it through a window function
 export function handleOptimize(): void {
-  if (!isTauriRuntime()) {
-    alert('Desktop Rust optimizer is required. Please run in Tauri desktop mode.');
-    return;
-  }
-
   const isOptimizeWindowContext = (() => {
     try {
       const url = new URL(window.location.href);
@@ -1159,64 +1154,50 @@ export function handleOptimize(): void {
   if (!isOptimizeWindowContext) {
     (async () => {
       try {
-        const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-        const label = 'optimize-progress-window';
-        const existing = await WebviewWindow.getByLabel(label);
-        if (existing) {
-          await existing.setFocus();
+        const url = new URL(window.location.href);
+        url.searchParams.set('coopt_optimize_window', '1');
+        if (isTauriRuntime()) {
+          const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+          const label = 'optimize-progress-window';
+          const existing = await WebviewWindow.getByLabel(label);
+          if (existing) {
+            await existing.setFocus();
+            return;
+          }
+
+          new WebviewWindow(label, {
+            title: 'Optimize Progress',
+            url: url.toString(),
+            width: 560,
+            height: 640,
+            resizable: true,
+            focus: true,
+          });
           return;
         }
 
-        const url = new URL(window.location.href);
-        url.searchParams.set('coopt_optimize_window', '1');
+        const webPopup = window.open(
+          url.toString(),
+          'coopt-optimize-progress-window',
+          'width=560,height=640,resizable=yes,scrollbars=yes'
+        );
+        if (webPopup && !webPopup.closed) {
+          try { webPopup.focus(); } catch (_) {}
+          return;
+        }
 
-        new WebviewWindow(label, {
-          title: 'Optimize Progress',
-          url: url.toString(),
-          width: 560,
-          height: 640,
-          resizable: true,
-          focus: true,
-        });
+        // Popup blocked fallback: run in current tab.
+        window.location.href = url.toString();
       } catch (err) {
-        console.error('❌ [Optimize][Desktop] WebviewWindow error:', err);
+        console.error('❌ [Optimize] failed to open optimize progress window:', err);
       }
     })();
     return;
   }
 
-  const popup = (() => {
-    if (isTauriRuntime()) return null;
-    try {
-      const w = window.open('', 'coopt-optimizer-progress-react', 'width=480,height=520,resizable=yes,scrollbars=no');
-      if (!w || !w.document) return null;
-      w.document.open();
-      w.document.write(`<!doctype html>
-<html>
-<head><meta charset="utf-8" /><title>Optimize Progress</title></head>
-<body style="font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 12px;">
-  <div style="font-size:14px; font-weight:600; margin-bottom:10px;">Optimize Progress</div>
-  <div style="margin-bottom:8px; color:#666; font-size:12px;" id="opt-mode">mode: kkt</div>
-  <div style="margin-bottom:8px; color:#666; font-size:12px;" id="opt-state">state: starting...</div>
-  <div style="height:8px; background:#eceef2; border-radius:999px; overflow:hidden; margin-bottom:10px;">
-    <div id="opt-bar" style="width:8%; height:100%; background:#4f8cff; transition:width 160ms linear;"></div>
-  </div>
-  <div style="display:grid; grid-template-columns: 120px 1fr; gap:8px; font-size:12px;">
-    <div>Iterations</div><div id="opt-iter">-</div>
-    <div>Variables</div><div id="opt-vars">-</div>
-    <div>Merit</div><div id="opt-merit">-</div>
-    <div>Requirements</div><div id="opt-req">-</div>
-    <div>Status</div><div id="opt-status">running</div>
-  </div>
-  <pre id="opt-log" style="margin-top:12px; padding:8px; background:#f7f8fa; border:1px solid #eceef2; border-radius:6px; height:240px; overflow:auto; font-size:11px; white-space:pre-wrap;"></pre>
-</body>
-</html>`);
-      w.document.close();
-      return w;
-    } catch (_) {
-      return null;
-    }
-  })();
+  // In web mode, optimize progress already runs in its own window/context.
+  // Avoid opening an additional about:blank helper popup.
+  const popup = null;
   const hasPopup = !!(popup && !popup.closed);
   const shouldShowMainAlert = !isTauriRuntime();
 
@@ -1400,7 +1381,7 @@ export function handleOptimize(): void {
       if (!hasPopup && shouldShowMainAlert) {
         alert(
           [
-            `Rust optimizer (${result.modeUsed}) completed`,
+            `Optimizer (${result.modeUsed}) completed`,
             `iterations: ${result.iterations}`,
             `variables: ${result.variableCount}`,
             `merit: ${result.meritBefore.toFixed(6)} -> ${result.meritAfter.toFixed(6)}`,
@@ -1411,7 +1392,7 @@ export function handleOptimize(): void {
         );
       }
     } catch (err) {
-      console.error('❌ [Optimize][Rust] failed:', err);
+      console.error('❌ [Optimize] failed:', err);
       publishOptimizeProgress({
         phase: 'failed',
         status: 'error',
@@ -1425,7 +1406,7 @@ export function handleOptimize(): void {
       if (shouldShowMainAlert) {
         alert(
           [
-            `Rust optimize failed: ${(err as Error)?.message || String(err)}`,
+            `Optimize failed: ${(err as Error)?.message || String(err)}`,
             hasPopup ? '' : 'note: progress popup was blocked/unavailable',
           ].filter(Boolean).join('\n')
         );
@@ -1433,6 +1414,77 @@ export function handleOptimize(): void {
     }
   })();
 }
+
+async function openRenderWindowDesktop(): Promise<void> {
+  if (!isTauriRuntime()) return;
+
+  console.log('[Render3D][Desktop] openRenderWindowDesktop() called');
+
+  const url = new URL(window.location.href);
+  url.searchParams.delete('coopt_optimize_window');
+  url.searchParams.delete('coopt_analysis_window');
+  url.searchParams.delete('coopt_analysis');
+  url.searchParams.delete('coopt_settings_window');
+  url.searchParams.set('coopt_render_window', '1');
+  const finalUrl = url.toString();
+
+  console.log('[Render3D][Desktop] render URL:', finalUrl);
+
+  // Primary: use Rust backend command (bypasses frontend IPC issues)
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_render_window', { url: finalUrl });
+    console.log('✅ [Render3D][Desktop] open_render_window invoke succeeded');
+    return;
+  } catch (invokeErr) {
+    console.warn('[Render3D][Desktop] Rust invoke failed, falling back to WebviewWindow:', invokeErr);
+  }
+
+  // Fallback: JS-side WebviewWindow API
+  try {
+    const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+    const label = 'render-window';
+    let existing: any = null;
+    try { existing = await WebviewWindow.getByLabel(label); } catch (_) {}
+    console.log('[Render3D][Desktop] existing window:', existing);
+
+    if (existing) {
+      try {
+        if (typeof existing.show === 'function') await existing.show();
+        if (typeof existing.unminimize === 'function') await existing.unminimize();
+        await existing.setFocus();
+        return;
+      } catch (e) {
+        console.warn('[Render3D][Desktop] focus existing failed:', e);
+        try { await existing.close(); } catch (_) {}
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+
+    const created = new WebviewWindow(label, {
+      title: 'Render Optical System',
+      url: finalUrl,
+      width: 1100,
+      height: 760,
+      resizable: true,
+      focus: true,
+    });
+    created.once('tauri://created', () => {
+      console.log('✅ [Render3D][Desktop] render window created via WebviewWindow');
+    });
+    created.once('tauri://error', (error) => {
+      console.error('❌ [Render3D][Desktop] WebviewWindow creation error:', error);
+      alert('Failed to open Render window. See console for details.');
+    });
+  } catch (fbErr) {
+    console.error('[Render3D][Desktop] fallback WebviewWindow error:', fbErr);
+    alert('Failed to open Render window.');
+  }
+}
+
+try {
+  (window as any).__cooptOpenRenderWindow = openRenderWindowDesktop;
+} catch (_) {}
 
 export function handleRender3D(): void {
   const w = window as any;
@@ -1452,30 +1504,7 @@ export function handleRender3D(): void {
             }
           } catch (_) {}
 
-          const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-          const label = 'render-window';
-          const existing = await WebviewWindow.getByLabel(label);
-          if (existing) {
-            await existing.setFocus();
-            return;
-          }
-
-          const url = new URL(window.location.href);
-          url.searchParams.set('coopt_render_window', '1');
-
-          const created = new WebviewWindow(label, {
-            title: 'Render Optical System',
-            url: url.toString(),
-            width: 1100,
-            height: 760,
-            resizable: true,
-            focus: true,
-          });
-
-          created.once('tauri://error', (error) => {
-            console.error('❌ [Render3D][Desktop] failed to create render window:', error);
-            alert('Failed to open Render window.');
-          });
+          await openRenderWindowDesktop();
         } catch (err) {
           console.error('❌ [Render3D][Desktop] WebviewWindow error:', err);
           alert('Failed to open Render window.');
@@ -1492,33 +1521,17 @@ export function handleRender3D(): void {
       } catch (_) {}
     }
 
-    const preopenedPopup = window.open('', 'popup-3d-optical-system', 'width=800,height=600')
-      || window.open('about:blank', '_blank', 'width=800,height=600');
-
-    if (!preopenedPopup) {
-      alert('Popup blocked. Please allow popups for this site.');
-      return;
-    }
-    w.popup3DWindow = preopenedPopup;
-
     // Ensure legacy popup infrastructure is bound first
     if (typeof w.setupOpticalSystemChangeListeners === 'function' && !w.__opticalSystemChangeListenersBound) {
       w.setupOpticalSystemChangeListeners(w.scene || null);
     }
 
-    // Delegate to the proven legacy popup renderer path
+    // Delegate popup creation to legacy handler directly to avoid extra about:blank windows.
     if (typeof w.__open3DWindowLegacy === 'function') {
-      w.__open3DWindowLegacy(preopenedPopup);
+      w.__open3DWindowLegacy();
       return;
     }
 
-    // Safety fallback if legacy bridge is unavailable
-    if (typeof w.initialize3DPopup === 'function') {
-      w.initialize3DPopup(preopenedPopup);
-      return;
-    }
-
-    try { preopenedPopup.close(); } catch (_) {}
     alert('Failed to initialize Render window. Please retry after app startup finishes.');
   } finally {
     w.__render3DInProgress = false;

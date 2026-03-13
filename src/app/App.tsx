@@ -953,32 +953,55 @@ export default function App() {
       return readRequirementTableScoreFromHost();
     };
 
+    const applyRenderSync = (rows: any[]) => {
+      try {
+        const w = window as any;
+        const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+        const prevRunning = g ? !!g.__cooptOptimizerIsRunning : false;
+        if (g && rows.length > 0) g.__cooptOpticalSystemRowsOverride = rows;
+        // Set optimizer flag so draw-cross handler skips loadActiveConfigurationToTables
+        if (g) g.__cooptOptimizerIsRunning = true;
+        try {
+          if (typeof w.__cooptRenderWindowRedraw === 'function') {
+            void Promise.resolve(w.__cooptRenderWindowRedraw(rows));
+          } else if (typeof w.drawOpticalSystem === 'function') {
+            w.drawOpticalSystem();
+          }
+        } catch (_) {}
+        try {
+          const popup = w.popup3DWindow;
+          if (popup && !popup.closed && typeof popup.postMessage === 'function') {
+            popup.postMessage({ action: 'request-redraw' }, '*');
+          }
+        } catch (_) {}
+        // Restore flags after popup message roundtrip (~400 ms)
+        setTimeout(() => {
+          try {
+            if (g) g.__cooptOptimizerIsRunning = prevRunning;
+            if (g) g.__cooptOpticalSystemRowsOverride = null;
+          } catch (_) {}
+        }, 400);
+      } catch (_) {}
+    };
+
+    let lastRenderSyncStamp = '';
+    const applyRenderSyncPayload = (payload: any) => {
+      try {
+        const stamp = String(payload?.ts ?? payload?.token ?? '');
+        if (stamp && stamp === lastRenderSyncStamp) return;
+        if (stamp) lastRenderSyncStamp = stamp;
+        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        applyRenderSync(rows);
+      } catch (_) {}
+    };
+
     const onStorage = (ev: StorageEvent) => {
+
       // Handle live render sync from the optimize window (Tauri WebviewWindow sends rows here)
       if (ev.key === 'coopt.renderSyncRequest' && ev.newValue && !isOptimizeWindowMode) {
         try {
           const payload = JSON.parse(ev.newValue);
-          const rows = Array.isArray(payload?.rows) ? payload.rows : [];
-          const w = window as any;
-          const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
-          const prevRunning = g ? !!g.__cooptOptimizerIsRunning : false;
-          if (g && rows.length > 0) g.__cooptOpticalSystemRowsOverride = rows;
-          // Set optimizer flag so draw-cross handler skips loadActiveConfigurationToTables
-          if (g) g.__cooptOptimizerIsRunning = true;
-          try { if (typeof w.drawOpticalSystem === 'function') w.drawOpticalSystem(); } catch (_) {}
-          try {
-            const popup = w.popup3DWindow;
-            if (popup && !popup.closed && typeof popup.postMessage === 'function') {
-              popup.postMessage({ action: 'request-redraw' }, '*');
-            }
-          } catch (_) {}
-          // Restore flags after popup message roundtrip (~400 ms)
-          setTimeout(() => {
-            try {
-              if (g) g.__cooptOptimizerIsRunning = prevRunning;
-              if (g) g.__cooptOpticalSystemRowsOverride = null;
-            } catch (_) {}
-          }, 400);
+          applyRenderSyncPayload(payload);
         } catch (_) {}
         return;
       }
@@ -1004,6 +1027,11 @@ export default function App() {
         try {
           const mod = await import('@tauri-apps/api/event');
           if (tauriListenerCancelled || !mod || typeof (mod as any).listen !== 'function') return;
+          const renderUnlisten = await (mod as any).listen('coopt-render-sync-request', (ev: any) => {
+            try {
+              applyRenderSyncPayload(ev?.payload);
+            } catch (_) {}
+          });
           const unlisten = await (mod as any).listen('coopt-optimize-rows-sync', (ev: any) => {
             try {
               const rows = Array.isArray(ev?.payload?.rows) ? ev.payload.rows : [];
@@ -1019,16 +1047,33 @@ export default function App() {
           });
           if (tauriListenerCancelled) {
             try { unlisten(); } catch (_) {}
+            try { renderUnlisten(); } catch (_) {}
             return;
           }
-          tauriUnlisten = unlisten;
+          tauriUnlisten = () => {
+            try { unlisten(); } catch (_) {}
+            try { renderUnlisten(); } catch (_) {}
+          };
         } catch (_) {}
       })();
     }
 
     window.addEventListener('storage', onStorage);
+    const renderSyncPollTimer = !isOptimizeWindowMode
+      ? window.setInterval(() => {
+          try {
+            const raw = localStorage.getItem('coopt.renderSyncRequest');
+            if (!raw) return;
+            const payload = JSON.parse(raw);
+            applyRenderSyncPayload(payload);
+          } catch (_) {}
+        }, 180)
+      : null;
     return () => {
       window.removeEventListener('storage', onStorage);
+      if (renderSyncPollTimer !== null) {
+        try { window.clearInterval(renderSyncPollTimer); } catch (_) {}
+      }
       tauriListenerCancelled = true;
       if (tauriUnlisten) {
         try { tauriUnlisten(); } catch (_) {}
@@ -1755,11 +1800,8 @@ export default function App() {
 
       let fillCount = 0;
 
-      try {
-        fillCount = applyRenderWindowDirectCrossFill(sceneForDraw, axis, rows);
-      } catch (e) {
-        console.warn('[RenderWindow] Direct cross fill failed:', e);
-      }
+      // Disable debug lens-fill overlay to avoid magenta cross-section artifacts.
+      fillCount = 0;
 
       if (axis === 'XZ' && typeof w.setCameraForXZCrossSection === 'function') {
         w.setCameraForXZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true });
@@ -1879,6 +1921,35 @@ export default function App() {
       return false;
     }
   };
+
+  useEffect(() => {
+    if (!isRenderWindowMode) return;
+    const w = window as any;
+    w.__cooptRenderWindowRedraw = async (rows?: any[]) => {
+      try {
+        const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+        const prevRunning = g ? !!g.__cooptOptimizerIsRunning : false;
+        const prevOverride = g ? g.__cooptOpticalSystemRowsOverride : null;
+        if (g && Array.isArray(rows) && rows.length > 0) {
+          g.__cooptOpticalSystemRowsOverride = rows;
+        }
+        if (g) g.__cooptOptimizerIsRunning = true;
+        try {
+          await drawRender3DView();
+        } finally {
+          if (g) {
+            g.__cooptOptimizerIsRunning = prevRunning;
+            g.__cooptOpticalSystemRowsOverride = prevOverride;
+          }
+        }
+      } catch (_) {}
+    };
+    return () => {
+      try { delete (w as any).__cooptRenderWindowRedraw; } catch (_) {
+        (w as any).__cooptRenderWindowRedraw = undefined;
+      }
+    };
+  }, [isRenderWindowMode]);
 
   useEffect(() => {
     // FIRST: Signal that React is mounted so main.ts can start initializing
@@ -2583,22 +2654,85 @@ export default function App() {
         let lastAutoRenderAt = 0;
         const AUTO_RENDER_THROTTLE_MS = 120;
 
-        const requestRenderSync = () => {
+        const requestRenderSync = (rowsFromProgress?: any[]) => {
           if (!optAutoRenderOnAccept) return;
           const now = Date.now();
           if ((now - lastAutoRenderAt) < AUTO_RENDER_THROTTLE_MS) return;
           lastAutoRenderAt = now;
+          let rowsForRender: any[] = [];
+
+          // Ensure Render window is opened/focused in desktop mode as auto-render target.
+          try {
+            const openRender = (hostWindow as any).__cooptOpenRenderWindow || (window as any).__cooptOpenRenderWindow;
+            if (isTauriRuntime() && typeof openRender === 'function') {
+              void Promise.resolve(openRender());
+            } else if (typeof (hostWindow as any).handleRender3D === 'function') {
+              (hostWindow as any).handleRender3D();
+            } else {
+              const openBtn = hostWindow?.document?.getElementById?.('open-3d-window-btn') as HTMLButtonElement | null;
+              if (openBtn && typeof openBtn.click === 'function') {
+                openBtn.click();
+              }
+            }
+          } catch (_) {}
+
           // Signal the main window via localStorage (works across Tauri WebviewWindows
           // where hostWindow === w and direct DOM access is impossible).
           try {
             const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
-            const overrideRows = g && Array.isArray(g.__cooptOpticalSystemRowsOverride) && g.__cooptOpticalSystemRowsOverride.length > 0
+            const localOverride = g && Array.isArray(g.__cooptOpticalSystemRowsOverride) && g.__cooptOpticalSystemRowsOverride.length > 0
               ? g.__cooptOpticalSystemRowsOverride
               : null;
-            const currentRows = overrideRows
-              ?? (typeof w.getOpticalSystemRows === 'function' ? w.getOpticalSystemRows(w.tableOpticalSystem) : []);
-            localStorage.setItem('coopt.renderSyncRequest', JSON.stringify({ ts: now, rows: currentRows }));
+            const hostOverride = hostWindow && Array.isArray((hostWindow as any).__cooptOpticalSystemRowsOverride) && (hostWindow as any).__cooptOpticalSystemRowsOverride.length > 0
+              ? (hostWindow as any).__cooptOpticalSystemRowsOverride
+              : null;
+            const tableRows = (typeof w.getOpticalSystemRows === 'function') ? w.getOpticalSystemRows(w.tableOpticalSystem) : [];
+            const hostTableRows = (hostWindow !== w && typeof hostWindow.getOpticalSystemRows === 'function')
+              ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem)
+              : [];
+            const progressRows = Array.isArray(rowsFromProgress) && rowsFromProgress.length > 0
+              ? rowsFromProgress
+              : null;
+            const currentRows = progressRows ?? localOverride ?? hostOverride ?? tableRows ?? hostTableRows ?? [];
+            rowsForRender = Array.isArray(currentRows) ? currentRows : [];
+            const payload = { ts: now, rows: rowsForRender };
+            localStorage.setItem('coopt.renderSyncRequest', JSON.stringify(payload));
+            if (isTauriRuntime()) {
+              void (async () => {
+                try {
+                  const core = await import('@tauri-apps/api/core');
+                  if (core && typeof (core as any).invoke === 'function') {
+                    await (core as any).invoke('sync_render_rows', { rows: rowsForRender });
+                  }
+                } catch (_) {}
+                try {
+                  const mod = await import('@tauri-apps/api/event');
+                  if (mod && typeof (mod as any).emit === 'function') {
+                    await (mod as any).emit('coopt-render-sync-request', payload);
+                  }
+                } catch (_) {}
+              })();
+            }
           } catch (_) {}
+
+          // Guard the draw path so it prefers accepted rows during optimize progress sync.
+          let prevHostRunning: any;
+          let prevHostRowsOverride: any;
+          let prevLocalRunning: any;
+          let prevLocalRowsOverride: any;
+          try {
+            prevHostRunning = (hostWindow as any).__cooptOptimizerIsRunning;
+            prevHostRowsOverride = (hostWindow as any).__cooptOpticalSystemRowsOverride;
+            prevLocalRunning = (w as any).__cooptOptimizerIsRunning;
+            prevLocalRowsOverride = (w as any).__cooptOpticalSystemRowsOverride;
+            if (rowsForRender.length > 0) {
+              (hostWindow as any).__cooptOpticalSystemRowsOverride = rowsForRender;
+              (w as any).__cooptOpticalSystemRowsOverride = rowsForRender;
+            }
+            (hostWindow as any).__cooptOptimizerIsRunning = true;
+            (w as any).__cooptOptimizerIsRunning = true;
+          } catch (_) {}
+
           try {
             if (typeof hostWindow.drawOpticalSystem === 'function') {
               hostWindow.drawOpticalSystem();
@@ -2615,6 +2749,14 @@ export default function App() {
               w.drawOpticalSystem();
             }
           } catch (_) {}
+          setTimeout(() => {
+            try {
+              (hostWindow as any).__cooptOptimizerIsRunning = prevHostRunning;
+              (hostWindow as any).__cooptOpticalSystemRowsOverride = prevHostRowsOverride;
+              (w as any).__cooptOptimizerIsRunning = prevLocalRunning;
+              (w as any).__cooptOpticalSystemRowsOverride = prevLocalRowsOverride;
+            } catch (_) {}
+          }, 400);
         };
 
         const loadHostConfigSnapshot = () => {
@@ -2680,8 +2822,8 @@ export default function App() {
             if (phaseLower === 'reject') tsRejectCount += 1;
             if (Number.isFinite(best)) tsBestScore = Math.min(tsBestScore, best);
 
-            if (phaseLower.includes('accept')) {
-              requestRenderSync();
+            if (phaseLower.includes('accept') || (ev as any)?.accepted === true) {
+              requestRenderSync(Array.isArray((ev as any)?.rows) ? (ev as any).rows : undefined);
             }
 
             setOptimizeState((prev: any) => ({

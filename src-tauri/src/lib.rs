@@ -40,6 +40,8 @@ pub fn run() {
             commands::settings::read_desktop_setting,
             commands::settings::write_desktop_setting,
             commands::settings::get_desktop_settings_path,
+            commands::window::open_render_window,
+            commands::window::sync_render_rows,
             commands::zemax::generate_zmx_text,
             commands::zemax::parse_zmx_text,
         ])
