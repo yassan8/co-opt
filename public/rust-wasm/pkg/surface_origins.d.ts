@@ -63,6 +63,8 @@ export function generate_annular_offsets_flat(ray_count: number, max_radius: num
 
 export function generate_centered_grid_offsets_flat(ray_count: number, half_extent: number): Float64Array;
 
+export function generate_cross_offsets_flat(ray_count: number, max_radius: number): Float64Array;
+
 export function generate_fd_perturbation_points(x: Float64Array, steps: Float64Array, n: number): Float64Array;
 
 export function generate_parallel_start_points_flat(origin: Float64Array, u_axis: Float64Array, v_axis: Float64Array, offsets: Float64Array, count: number): Float64Array;
@@ -96,6 +98,10 @@ export function qr_factorization(a_flat: Float64Array, rows: number, cols: numbe
 export function reflect_ray_batch(dirs: Float64Array, normals: Float64Array, count: number): Float64Array;
 
 export function refract_ray_batch(dirs: Float64Array, normals: Float64Array, n1: Float64Array, n2: Float64Array, count: number): Float64Array;
+
+export function run_native_distortion_wasm_json(req_json: string): any;
+
+export function run_native_magnification_chromatic_aberration_wasm_json(req_json: string): any;
 
 export function run_native_opd_map_wasm_json(req_json: string): any;
 
@@ -196,6 +202,7 @@ export interface InitOutput {
     readonly free: (a: number, b: number) => void;
     readonly generate_annular_offsets_flat: (a: number, b: number, c: number) => [number, number];
     readonly generate_centered_grid_offsets_flat: (a: number, b: number) => [number, number];
+    readonly generate_cross_offsets_flat: (a: number, b: number) => [number, number];
     readonly generate_fd_perturbation_points: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly generate_parallel_start_points_flat: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
     readonly intersect_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
@@ -208,6 +215,8 @@ export interface InitOutput {
     readonly qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];
     readonly reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+    readonly run_native_distortion_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_magnification_chromatic_aberration_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
     readonly solve_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly solve_qp_subproblem_kkt_equality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];

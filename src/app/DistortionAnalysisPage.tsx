@@ -1,11 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { plotDistortionPercent, plotGridDistortion } from '../../evaluation/aberrations/distortion-plot.ts';
 import { runNativeDistortion, runNativeGridDistortion } from '../../src/desktop/ipc/client.ts';
+import { isTauriRuntime } from '../../src/desktop/runtime.ts';
 
 export type DistortionAnalysisType = 'distortion' | 'distortion-grid';
 
 function safeCall<T>(fn: () => T, fallback: T): T {
   try { return fn(); } catch (_) { return fallback; }
+}
+
+function formatRuntimeInfo(runtimeLabel: 'tauri' | 'web', backendLabel?: string): string {
+  const base = backendLabel
+    ? `runtime=${runtimeLabel}, backend=${backendLabel}`
+    : `runtime=${runtimeLabel}`;
+  if (runtimeLabel === 'web') {
+    return `${base} (native backend unavailable in browser mode)`;
+  }
+  return base;
 }
 
 let plotlyLoadPromise: Promise<void> | null = null;
@@ -149,20 +160,54 @@ function sanitizeDistortionData(dataList: any[]): any[] {
   return (Array.isArray(dataList) ? dataList : []).map((data) => {
     const xs = Array.isArray(data?.distortionPercent) ? data.distortionPercent : [];
     const ys = Array.isArray(data?.fieldValues) ? data.fieldValues : [];
-    const filteredX: number[] = [];
-    const filteredY: number[] = [];
+    const pairs: Array<{ x: number; y: number }> = [];
     const n = Math.min(xs.length, ys.length);
     for (let i = 0; i < n; i++) {
       const x = Number(xs[i]);
       const y = Number(ys[i]);
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-      filteredX.push(x);
-      filteredY.push(y);
+      if (Math.abs(x) > 50) continue;
+      pairs.push({ x, y });
     }
+
+    const sorted = pairs.sort((a, b) => a.y - b.y);
+
+    // Merge duplicate/near-duplicate field angles into one representative point.
+    const merged: Array<{ x: number; y: number }> = [];
+    const yTol = 1e-6;
+    let i = 0;
+    while (i < sorted.length) {
+      const bucket = [sorted[i]];
+      let j = i + 1;
+      while (j < sorted.length && Math.abs(sorted[j].y - sorted[i].y) <= yTol) {
+        bucket.push(sorted[j]);
+        j += 1;
+      }
+      const xsBucket = bucket.map((p) => p.x).sort((a, b) => a - b);
+      const medianX = xsBucket[Math.floor(xsBucket.length / 2)];
+      const meanY = bucket.reduce((acc, p) => acc + p.y, 0) / bucket.length;
+      merged.push({ x: medianX, y: meanY });
+      i = j;
+    }
+
+    // Suppress isolated spikes that create artificial zig-zag or horizontal artifacts.
+    const denoised = merged.map((p) => ({ ...p }));
+    const spikeDx = 1.0;
+    for (let k = 1; k + 1 < denoised.length; k++) {
+      const prev = denoised[k - 1].x;
+      const cur = denoised[k].x;
+      const next = denoised[k + 1].x;
+      const leftJump = Math.abs(cur - prev);
+      const rightJump = Math.abs(cur - next);
+      if (leftJump > spikeDx && rightJump > spikeDx) {
+        denoised[k].x = (prev + next) * 0.5;
+      }
+    }
+
     return {
       ...data,
-      distortionPercent: filteredX,
-      fieldValues: filteredY,
+      distortionPercent: denoised.map((p) => p.x),
+      fieldValues: denoised.map((p) => p.y),
     };
   }).filter((d) => Array.isArray(d?.fieldValues) && d.fieldValues.length > 0);
 }
@@ -232,6 +277,11 @@ const CSS = `
   color: #333;
 }
 .dist-controls button:hover { background: #e9e9e9; }
+.dist-backend {
+  font-size: 12px;
+  color: #444;
+  margin-left: 8px;
+}
 .dist-progress {
   padding: 8px 12px;
   font-size: 12px;
@@ -262,6 +312,7 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
   const [progressText, setProgressText] = useState(type === 'distortion' ? 'Calculating distortion...' : 'Calculating grid distortion...');
   const [errorMsg, setErrorMsg] = useState('');
   const [gridSize, setGridSize] = useState('20');
+  const [backendInfo, setBackendInfo] = useState('');
 
   useEffect(() => {
     document.title = type === 'distortion' ? 'Distortion' : 'Distortion Grid';
@@ -288,9 +339,12 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
       const { opticalSystemRows, sourceRows, objectRows } = getRows();
       const { fieldValues, heightMode } = deriveFieldValues(objectRows);
       const wavelengths = deriveDistortionWavelengths(sourceRows);
+      const runtimeLabel = isTauriRuntime() ? 'tauri' : 'web';
+      setBackendInfo(formatRuntimeInfo(runtimeLabel));
       const scales = [1.0, 0.7, 0.5, 0.35, 0.2];
       let bestData: any[] = [];
       let bestFinite = 0;
+      const totalExpected = fieldValues.length * Math.max(1, wavelengths.length);
       for (let si = 0; si < scales.length; si++) {
         const scale = scales[si];
         const scaledFields = scaleFieldValues(fieldValues, scale);
@@ -307,6 +361,8 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
             heightMode,
             wavelength: wl,
           });
+          const backendLabel = String(resp?.backend || "unknown");
+          setBackendInfo(formatRuntimeInfo(runtimeLabel, backendLabel));
           allData.push({
             fieldValues: Array.isArray(resp?.fieldValues) ? resp.fieldValues : scaledFields,
             idealHeights: Array.isArray(resp?.idealHeights) ? resp.idealHeights : [],
@@ -315,7 +371,7 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
             distortionPercent: Array.isArray(resp?.distortionPercent) ? resp.distortionPercent : [],
             meta: { ...(resp?.meta || {}), wavelength: wl, heightMode },
           });
-          setProgress(base + span, `Distortion (λ=${wl.toFixed(4)} μm, scale=${scale.toFixed(2)})`);
+          setProgress(base + span, `Distortion (λ=${wl.toFixed(4)} um, scale=${scale.toFixed(2)}, backend=${backendLabel})`);
         }
         const sanitized = sanitizeDistortionData(allData);
         const finiteCount = countFiniteDistortionPoints(sanitized);
@@ -323,7 +379,7 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
           bestFinite = finiteCount;
           bestData = sanitized;
         }
-        if (finiteCount > 0) break;
+        if (finiteCount >= totalExpected) break;
       }
       if (!bestData.length) {
         throw new Error('Distortion returned no plottable points (all chief rays failed).');
@@ -344,41 +400,70 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
       if (!plotlyReady) throw new Error('Plotly is not loaded yet');
       const { opticalSystemRows, sourceRows, objectRows } = getRows();
       const wavelength = getPrimaryWavelength();
+      const runtimeLabel = isTauriRuntime() ? 'tauri' : 'web';
+      setBackendInfo(formatRuntimeInfo(runtimeLabel));
+      setProgress(5, `Grid distortion (${runtimeLabel}): preparing`);
       const scales = [1.0, 0.7, 0.5, 0.35, 0.2];
       let data: any = null;
       let bestValid = -1;
+      let lastScaleError: string | null = null;
+      const expectedGridPoints = (Number(gridSize) || 20) * (Number(gridSize) || 20);
       for (let si = 0; si < scales.length; si++) {
         const scale = scales[si];
         const scaledObjects = scaleObjectRowsForGrid(objectRows, scale);
-        const resp = await runNativeGridDistortion({
-          opticalSystemRows,
-          sourceRows,
-          objectRows: scaledObjects,
-          gridSize: Number(gridSize) || 20,
-          wavelength,
-        });
-        const candidate = {
-          idealGrid: {
-            x: Array.isArray(resp?.idealX) ? resp.idealX : [],
-            y: Array.isArray(resp?.idealY) ? resp.idealY : [],
-          },
-          realGrid: {
-            x: Array.isArray(resp?.realX) ? resp.realX : [],
-            y: Array.isArray(resp?.realY) ? resp.realY : [],
-          },
-          gridSize: Number.isFinite(Number(resp?.gridSize)) ? Number(resp.gridSize) : (Number(gridSize) || 20),
-          maxFieldAngle: Number.isFinite(Number(resp?.maxFieldAngle)) ? Number(resp.maxFieldAngle) : 0,
-          meta: { ...(resp?.meta || {}), wavelength },
-        };
-        const valid = countFiniteGridPoints(candidate);
-        if (valid > bestValid) {
-          bestValid = valid;
-          data = candidate;
+        let pulseTimer: number | null = null;
+        try {
+          const stageBase = 8 + Math.floor((si / Math.max(1, scales.length)) * 30);
+          const stageCap = Math.min(38, stageBase + 10);
+          let pulseValue = stageBase;
+          setProgress(pulseValue, `Grid distortion calculating... scale=${scale.toFixed(2)} (${runtimeLabel})`);
+          pulseTimer = window.setInterval(() => {
+            pulseValue = Math.min(stageCap, pulseValue + 1);
+            setProgress(pulseValue, `Grid distortion calculating... scale=${scale.toFixed(2)} (${runtimeLabel})`);
+          }, 350);
+
+          const resp = await runNativeGridDistortion({
+            opticalSystemRows,
+            sourceRows,
+            objectRows: scaledObjects,
+            gridSize: Number(gridSize) || 20,
+            wavelength,
+          });
+          const candidate = {
+            idealGrid: {
+              x: Array.isArray(resp?.idealX) ? resp.idealX : [],
+              y: Array.isArray(resp?.idealY) ? resp.idealY : [],
+            },
+            realGrid: {
+              x: Array.isArray(resp?.realX) ? resp.realX : [],
+              y: Array.isArray(resp?.realY) ? resp.realY : [],
+            },
+            gridSize: Number.isFinite(Number(resp?.gridSize)) ? Number(resp.gridSize) : (Number(gridSize) || 20),
+            maxFieldAngle: Number.isFinite(Number(resp?.maxFieldAngle)) ? Number(resp.maxFieldAngle) : 0,
+            meta: { ...(resp?.meta || {}), wavelength },
+          };
+          const backendLabel = String(resp?.backend || 'unknown');
+          setBackendInfo(formatRuntimeInfo(runtimeLabel, backendLabel));
+          const valid = countFiniteGridPoints(candidate);
+          if (valid > bestValid) {
+            bestValid = valid;
+            data = candidate;
+          }
+          setProgress(20 + Math.floor((si / Math.max(1, scales.length)) * 20), `Grid distortion scale=${scale.toFixed(2)} (valid=${valid}, backend=${backendLabel})`);
+          if (valid >= expectedGridPoints) break;
+        } catch (err: any) {
+          lastScaleError = String(err?.message ?? err ?? 'Unknown grid distortion error');
+          setProgress(20 + Math.floor((si / Math.max(1, scales.length)) * 20), `Grid distortion retry scale=${scale.toFixed(2)} failed`);
+          continue;
+        } finally {
+          if (pulseTimer !== null) {
+            window.clearInterval(pulseTimer);
+          }
         }
-        setProgress(20 + Math.floor((si / Math.max(1, scales.length)) * 20), `Grid distortion retry scale=${scale.toFixed(2)} (valid=${valid})`);
-        if (valid > 0) break;
       }
-      if (!data) throw new Error('Grid distortion returned no data');
+      if (!data) {
+        throw new Error(lastScaleError || 'Grid distortion returned no data');
+      }
       setProgress(40, `Grid distortion ${data.gridSize}×${data.gridSize}`);
       await plotGridDistortion(data, chartRef.current as any, (evt: any) => {
         const p = Number(evt?.percent);
@@ -417,6 +502,7 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
         <button type="button" onClick={type === 'distortion' ? handleRenderDistortion : handleRenderGrid}>
           {type === 'distortion' ? 'Show distortion diagram' : 'Show distortion grid'}
         </button>
+        {backendInfo ? <span className="dist-backend">{backendInfo}</span> : null}
       </div>
       {progressVisible ? (
         <div className="dist-progress">

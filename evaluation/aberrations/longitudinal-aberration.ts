@@ -53,7 +53,7 @@ function getStopLocalOffsets(stopPoint3d, stopPlaneCenter3d, stopPlaneU, stopPla
     };
 }
 
-function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm) {
+function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm, traceOptions = null) {
     const stopIdx = Number(stopSurfaceIndex);
     if (!Number.isInteger(stopIdx) || stopIdx < 0) return null;
     if (!centerPoint || !stopTarget3d) return null;
@@ -84,7 +84,7 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
 
         const dir = buildDirFromSlopes(u, v);
         const ray = { wavelength: wavelengthUm, pos: { ...centerPoint }, dir };
-        const hit = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopIdx);
+        const hit = traceRayHitPoint(opticalSystemRows, ray, 1.0, stopIdx, traceOptions);
         if (!hit) return null;
 
         const ex = Number(hit.x) - Number(stopTarget3d.x);
@@ -97,13 +97,15 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
             opticalSystemRows,
             { wavelength: wavelengthUm, pos: { ...centerPoint }, dir: buildDirFromSlopes(u + eps, v) },
             1.0,
-            stopIdx
+            stopIdx,
+            traceOptions
         );
         const hitV = traceRayHitPoint(
             opticalSystemRows,
             { wavelength: wavelengthUm, pos: { ...centerPoint }, dir: buildDirFromSlopes(u, v + eps) },
             1.0,
-            stopIdx
+            stopIdx,
+            traceOptions
         );
         if (!hitU || !hitV) return null;
 
@@ -135,11 +137,11 @@ function solveRayDirectionToStopPointFast(centerPoint, stopTarget3d, stopSurface
     return buildDirFromSlopes(u, v);
 }
 
-function solveChiefRayDirectionToStopCenterFast(centerPoint, stopCenter3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm) {
-    return solveRayDirectionToStopPointFast(centerPoint, stopCenter3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm);
+function solveChiefRayDirectionToStopCenterFast(centerPoint, stopCenter3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm, traceOptions = null) {
+    return solveRayDirectionToStopPointFast(centerPoint, stopCenter3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm, traceOptions);
 }
 
-function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm) {
+function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, stopSurfaceIndex, opticalSystemRows, wavelengthUm, traceOptions = null) {
     const stopIdx = Number(stopSurfaceIndex);
     if (!Number.isInteger(stopIdx) || stopIdx < 0) return null;
     if (!initialOrigin || !dirVector || !stopTarget3d) return null;
@@ -158,7 +160,8 @@ function solveRayOriginToStopPointFast(initialOrigin, dirVector, stopTarget3d, s
         opticalSystemRows,
         { wavelength: wavelengthUm, pos: { ...o }, dir: { ...baseDir } },
         1.0,
-        stopIdx
+        stopIdx,
+        traceOptions
     );
 
     for (let iter = 0; iter < maxIter; iter++) {
@@ -385,9 +388,9 @@ function buildNormalizedPupilSamples(rayCount) {
     return unique;
 }
 
-function traceRayWrapped(opticalSystemRows, ray0, targetSurfaceIndex, originalRayMeta) {
+function traceRayWrapped(opticalSystemRows, ray0, targetSurfaceIndex, originalRayMeta, traceOptions = null) {
     try {
-        const rayPath = traceRay(opticalSystemRows, ray0, 1.0, null, targetSurfaceIndex);
+        const rayPath = traceRay(opticalSystemRows, ray0, 1.0, null, targetSurfaceIndex, traceOptions);
         const success = Array.isArray(rayPath) && rayPath.length > 1;
         return {
             success,
@@ -767,6 +770,16 @@ export function calculateLongitudinalAberration(
     rayCount = 51,
     options = null
 ) {
+    const traceOptions = (() => {
+        if (!options || typeof options !== 'object') return null;
+        const out = {};
+        if (options.requireRustWasm === true) out.requireRustWasm = true;
+        if (options.requireWasmRayTracing === true || options.requireRustWasm === true) out.requireWasmRayTracing = true;
+        if (options.useRustWasm === true || options.requireRustWasm === true) out.useRustWasm = true;
+        if (options.__forceRustWasmOpd === true || options.requireRustWasm === true) out.__forceRustWasmOpd = true;
+        return Object.keys(out).length > 0 ? out : null;
+    })();
+
     const isMirrorRow = (row) => {
         if (!row) return false;
         if (row.material === 'MIRROR') return true;
@@ -1087,7 +1100,7 @@ export function calculateLongitudinalAberration(
                             y: stopPlaneCenter3d.y + axisVec.y * targetStop,
                             z: stopPlaneCenter3d.z + axisVec.z * targetStop
                         };
-                        const solvedDir = solveRayDirectionToStopPointFast(originFallback, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength);
+                        const solvedDir = solveRayDirectionToStopPointFast(originFallback, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength, traceOptions);
                         if (!solvedDir) {
                             if (diag) {
                                 diag.stopSolveNull++;
@@ -1106,7 +1119,8 @@ export function calculateLongitudinalAberration(
                                 wavelength,
                                 pupilCoordinateRequested: pNorm,
                                 aimParameter: 'stop-solve'
-                            }
+                            },
+                            traceOptions
                         );
                         if (trSolved.success) {
                             if (diag) diag.stopSolveTraceOk++;
@@ -1130,7 +1144,7 @@ export function calculateLongitudinalAberration(
                 const canStopSolve = !!(stopPlaneCenter3d && Number.isInteger(stopSurfaceIndex) && axisVec);
 
                 const chiefDir = canStopSolve
-                    ? (solveChiefRayDirectionToStopCenterFast(origin, stopPlaneCenter3d, stopSurfaceIndex, opticalSystemRows, wavelength) || chief.direction)
+                    ? (solveChiefRayDirectionToStopCenterFast(origin, stopPlaneCenter3d, stopSurfaceIndex, opticalSystemRows, wavelength, traceOptions) || chief.direction)
                     : chief.direction;
 
                 const boundaryTarget = (canStopSolve && Number.isFinite(stopRadius))
@@ -1141,7 +1155,7 @@ export function calculateLongitudinalAberration(
                     }
                     : null;
                 const boundaryDir = (canStopSolve && boundaryTarget)
-                    ? (solveRayDirectionToStopPointFast(origin, boundaryTarget, stopSurfaceIndex, opticalSystemRows, wavelength) || boundary.direction)
+                    ? (solveRayDirectionToStopPointFast(origin, boundaryTarget, stopSurfaceIndex, opticalSystemRows, wavelength, traceOptions) || boundary.direction)
                     : boundary.direction;
 
                 // 最大絞り面高さ（境界光線の stop 通過高さ）を実測
@@ -1149,7 +1163,8 @@ export function calculateLongitudinalAberration(
                     opticalSystemRows,
                     { pos: origin, dir: boundaryDir, wavelength },
                     targetSurfaceIndex,
-                    { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: 'boundary', wavelength }
+                    { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: 'boundary', wavelength },
+                    traceOptions
                 );
                 if (!boundaryTr.success || !boundaryTr.rayPath || boundaryTr.rayPath.length <= stopPointIndex) return null;
                 const bStop = boundaryTr.rayPath[stopPointIndex];
@@ -1164,7 +1179,8 @@ export function calculateLongitudinalAberration(
                     opticalSystemRows,
                     { pos: origin, dir: chiefDir, wavelength },
                     targetSurfaceIndex,
-                    { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: 'chief', wavelength }
+                    { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: 'chief', wavelength },
+                    traceOptions
                 );
 
                 const aimed = [];
@@ -1180,7 +1196,7 @@ export function calculateLongitudinalAberration(
                             y: stopPlaneCenter3d.y + axisVec.y * targetStop,
                             z: stopPlaneCenter3d.z + axisVec.z * targetStop
                         };
-                        const solvedDir = solveRayDirectionToStopPointFast(origin, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength);
+                        const solvedDir = solveRayDirectionToStopPointFast(origin, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength, traceOptions);
                         if (!solvedDir) {
                             if (diag) {
                                 diag.stopSolveNull++;
@@ -1198,7 +1214,8 @@ export function calculateLongitudinalAberration(
                                     wavelength,
                                     pupilCoordinateRequested: pNorm,
                                     aimParameter: 'stop-solve'
-                                }
+                                },
+                                traceOptions
                             );
                             if (trSolved.success) {
                                 if (diag) diag.stopSolveTraceOk++;
@@ -1224,7 +1241,8 @@ export function calculateLongitudinalAberration(
                             opticalSystemRows,
                             { pos: origin, dir, wavelength },
                             targetSurfaceIndex,
-                            { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: `aim_${pNorm}`, wavelength }
+                            { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: `aim_${pNorm}`, wavelength },
+                            traceOptions
                         );
                         if (!tr.success || !tr.rayPath || tr.rayPath.length <= stopPointIndex) return NaN;
                         const s = tr.rayPath[stopPointIndex];
@@ -1261,7 +1279,8 @@ export function calculateLongitudinalAberration(
                             wavelength,
                             pupilCoordinateRequested: pNorm,
                             aimParameter: tSolved
-                        }
+                        },
+                        traceOptions
                     );
                     if (trSolved.success) aimed.push(trSolved);
                 }
@@ -1307,7 +1326,7 @@ export function calculateLongitudinalAberration(
                             y: Number(chiefOrigin.y) + axisVec.y * targetStop,
                             z: baseZ
                         };
-                        const refined = solveRayOriginToStopPointFast(guess, direction, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength);
+                        const refined = solveRayOriginToStopPointFast(guess, direction, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength, traceOptions);
                         if (!refined) {
                             if (diag) {
                                 diag.stopSolveNull++;
@@ -1327,7 +1346,8 @@ export function calculateLongitudinalAberration(
                                 wavelength,
                                 pupilCoordinateRequested: pNorm,
                                 aimParameter: 'stop-solve'
-                            }
+                            },
+                            traceOptions
                         );
                         if (trSolved.success) {
                             if (diag) diag.stopSolveTraceOk++;
@@ -1364,7 +1384,8 @@ export function calculateLongitudinalAberration(
                     opticalSystemRows,
                     { pos: boundaryRay.origin, dir: direction, wavelength },
                     targetSurfaceIndex,
-                    { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: 'boundary', wavelength }
+                    { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: 'boundary', wavelength },
+                    traceOptions
                 );
                 if (!boundaryTr.success || !boundaryTr.rayPath || boundaryTr.rayPath.length <= stopPointIndex) return null;
                 const bStop = boundaryTr.rayPath[stopPointIndex];
@@ -1392,7 +1413,7 @@ export function calculateLongitudinalAberration(
                             y: chiefOrigin.y + deltaUnit.y * (pNorm * deltaLen),
                             z: chiefOrigin.z + deltaUnit.z * (pNorm * deltaLen)
                         };
-                        const refined = solveRayOriginToStopPointFast(guess, direction, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength);
+                        const refined = solveRayOriginToStopPointFast(guess, direction, stopTarget, stopSurfaceIndex, opticalSystemRows, wavelength, traceOptions);
                         if (diag) {
                             if (!refined) {
                                 diag.stopSolveNull++;
@@ -1412,7 +1433,8 @@ export function calculateLongitudinalAberration(
                                 wavelength,
                                 pupilCoordinateRequested: pNorm,
                                 aimParameter: 'stop-solve'
-                            }
+                            },
+                            traceOptions
                         );
                         if (trSolved.success) {
                             if (diag) diag.stopSolveTraceOk++;
@@ -1436,7 +1458,8 @@ export function calculateLongitudinalAberration(
                             opticalSystemRows,
                             { pos, dir: direction, wavelength },
                             targetSurfaceIndex,
-                            { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: `aim_${pNorm}`, wavelength }
+                            { type: axis === 'meridional' ? 'vertical_cross' : 'horizontal_cross', role: `aim_${pNorm}`, wavelength },
+                            traceOptions
                         );
                         if (!tr.success || !tr.rayPath || tr.rayPath.length <= stopPointIndex) return NaN;
                         const s = tr.rayPath[stopPointIndex];
@@ -1470,7 +1493,8 @@ export function calculateLongitudinalAberration(
                             wavelength,
                             pupilCoordinateRequested: pNorm,
                             aimParameter: tSolved
-                        }
+                        },
+                        traceOptions
                     );
                     if (trSolved.success) aimed.push(trSolved);
                 }
