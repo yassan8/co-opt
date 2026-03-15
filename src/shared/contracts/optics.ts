@@ -25,11 +25,16 @@ export interface RaytracePreviewResponse {
 export interface NativeSpotPoint {
   xUm: number;
   yUm: number;
+  rayIndex?: number;
+  isChiefRay?: boolean;
+  pupilU?: number;
+  pupilV?: number;
 }
 
 export interface NativeSpotSeries {
   label: string;
   color: string;
+  objectIndex?: number;
   wavelengthUm?: number;
   points: NativeSpotPoint[];
   chiefPointUm?: NativeSpotPoint;
@@ -58,6 +63,7 @@ export interface NativeSpotRaytraceRequest {
   ringCount?: number;
   pattern?: string;
   wavelengthMode?: string;
+  forceRustWasm?: boolean;
   raySeries?: NativeSpotInputSeries[];
 }
 

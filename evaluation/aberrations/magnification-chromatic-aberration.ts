@@ -1,4 +1,3 @@
-import { calculateChiefRayNewton } from './transverse-aberration.ts';
 import { preloadRustRayTracingWasm } from '../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
 
 function isCoordTransRowForLca(row: any): boolean {
@@ -156,6 +155,14 @@ function withWebRustWasmTraceOverride<T>(callback: () => Promise<T> | T, require
     }
 }
 
+function normalizeChiefRayMode(mode: any): string {
+    return String(mode || 'stop-center')
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_]+/g, '-')
+        .replace(/-+/g, '-');
+}
+
 export async function calculateMagnificationChromaticAberrationData(
     opticalSystemRows,
     fieldValues,
@@ -175,6 +182,7 @@ export async function calculateMagnificationChromaticAberrationData(
         ? Number(options.referenceWavelength)
         : 0.5876;
     const requireRustWasm = options?.requireRustWasm !== false;
+    const forceWasmInTauri = options?.forceWasmInTauri === true;
     const heightMode = !!options.heightMode;
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
@@ -182,6 +190,7 @@ export async function calculateMagnificationChromaticAberrationData(
     const chiefRayDefinition = (options && typeof options === 'object' && typeof options.chiefRayDefinition === 'string')
         ? options.chiefRayDefinition
         : 'stop-center';
+    const chiefRayMode = normalizeChiefRayMode(chiefRayDefinition);
     const sourceRows = (options && typeof options === 'object' && Array.isArray(options.sourceRows))
         ? options.sourceRows
         : [];
@@ -219,49 +228,235 @@ export async function calculateMagnificationChromaticAberrationData(
     };
 
     const imageSurfaceIndex = pickImageSurfaceIndex();
+    const finiteSystem = (() => {
+        const row0 = Array.isArray(opticalSystemRows) ? opticalSystemRows[0] : null;
+        const raw = row0?.thickness ?? row0?.Thickness ?? row0?.distance;
+        if (raw === Infinity || raw === -Infinity) return false;
+        const txt = String(raw ?? '').trim().toUpperCase();
+        return txt !== 'INF' && txt !== 'INFINITY' && txt !== '∞';
+    })();
+    const objectDistance = (() => {
+        const row0 = Array.isArray(opticalSystemRows) ? opticalSystemRows[0] : null;
+        const raw = row0?.thickness ?? row0?.Thickness ?? row0?.distance;
+        const v = Number(raw);
+        return Number.isFinite(v) ? v : 0;
+    })();
+    const mirrorSign = (() => {
+        const isMirrorRow = (row: any) => {
+            const mat = String(row?.material ?? '').trim().toLowerCase();
+            const rowType = String(row?.type ?? row?.rowType ?? '').trim().toLowerCase();
+            const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+            const surfType = String(row?.surfType ?? row?.surfaceType ?? row?.type ?? '').trim().toLowerCase();
+            return mat === 'mirror' || rowType === 'mirror' || blockType === 'mirror' || surfType === 'mirror';
+        };
+        const count = (Array.isArray(opticalSystemRows) ? opticalSystemRows : []).filter((r) => isMirrorRow(r)).length;
+        return (count % 2 === 1) ? -1 : 1;
+    })();
 
-    const calcImageHeightFor = (fieldValue: number, wavelengthUm: number) => {
-        const fieldSetting = heightMode
-            ? {
-                position: 'height',
-                fieldType: 'height',
+    const objectRowsNativeLike = sortedFieldValues.map((sample, index) => {
+        if (heightMode) {
+            return {
+                id: `Field-${index}`,
+                name: `Field-${index}`,
+                position: 'Rectangle',
                 xHeight: 0,
-                yHeight: fieldValue,
+                yHeight: sample,
                 x: 0,
-                y: fieldValue,
-                displayName: `h=${fieldValue.toFixed(6)}mm`
-            }
-            : {
-                position: 'angle',
-                fieldType: 'angle',
-                xFieldAngle: 0,
-                yFieldAngle: fieldValue,
-                xHeightAngle: 0,
-                yHeightAngle: fieldValue,
-                x: 0,
-                y: fieldValue,
-                displayName: `θ=${fieldValue.toFixed(6)}deg`
+                y: sample,
             };
+        }
+        if (finiteSystem) {
+            const thetaRad = sample * Math.PI / 180;
+            const hObj = objectDistance * Math.tan(thetaRad);
+            return {
+                id: `Field-${index}`,
+                name: `Field-${index}`,
+                position: 'Rectangle',
+                xHeight: 0,
+                yHeight: hObj,
+                x: 0,
+                y: hObj,
+            };
+        }
+        return {
+            id: `Field-${index}`,
+            name: `Field-${index}`,
+            position: 'Angle',
+            xHeightAngle: 0,
+            yHeightAngle: sample,
+            x: 0,
+            y: sample,
+        };
+    });
 
-        const chief = calculateChiefRayNewton(opticalSystemRows, fieldSetting, wavelengthUm, 'unified', {
-            targetSurfaceIndex: imageSurfaceIndex,
-            chiefRayDefinition,
-            requireRustWasm,
-        });
-        const segs = extractChiefRaySegmentsForLca(chief);
-        if (!segs.length) return null;
-        const mappedPointIndex = surfaceIndexToRayPathPointIndexForLca(opticalSystemRows, imageSurfaceIndex);
-        const idx = Number.isInteger(mappedPointIndex)
-            ? Math.max(0, Math.min(Number(mappedPointIndex), segs.length - 1))
-            : Math.max(0, Math.min(imageSurfaceIndex, segs.length - 1));
-        const p = segs[idx] || segs[segs.length - 1] || null;
-        const y = Number(p?.y);
-        return Number.isFinite(y) ? y : null;
+    const defaultLcaSourceRows = (wavelength: number) => [{
+        id: 'NativeDistortionSource',
+        name: 'NativeDistortionSource',
+        wavelength,
+        color: '#22c55e',
+        isPrimary: true,
+        intensity: 1,
+    }];
+
+    const parseFieldIndex = (label: string) => {
+        const m = String(label || '').match(/Field-(\d+)/);
+        if (!m) return null;
+        const idx = Number(m[1]);
+        return Number.isInteger(idx) ? idx : null;
+    };
+
+    const selectImageHeightMm = (series: any) => {
+        const mode = chiefRayMode;
+        const points = Array.isArray(series?.points) ? series.points : [];
+        if (mode.startsWith('beam-midpoint')) {
+            const ys = points
+                .map((p: any) => Number(p?.yUm))
+                .filter((v: number) => Number.isFinite(v));
+            if (ys.length === 0) return null;
+            const minY = Math.min(...ys);
+            const maxY = Math.max(...ys);
+            return ((minY + maxY) * 0.5 / 1000) * mirrorSign;
+        }
+        if (mode.startsWith('beam-centroid')) {
+            const ys = points
+                .map((p: any) => Number(p?.yUm))
+                .filter((v: number) => Number.isFinite(v));
+            if (ys.length === 0) return null;
+            const mean = ys.reduce((a: number, b: number) => a + b, 0) / ys.length;
+            return (mean / 1000) * mirrorSign;
+        }
+        // Native-like stop-center: prefer ray closest to pupil center (u,v) when available.
+        const centerByPupil = points
+            .map((p: any) => {
+                const u = Number(p?.pupilU);
+                const v = Number(p?.pupilV);
+                const y = Number(p?.yUm);
+                if (!Number.isFinite(u) || !Number.isFinite(v) || !Number.isFinite(y)) return null;
+                return { y, r2: u * u + v * v };
+            })
+            .filter((x: any) => !!x)
+            .sort((a: any, b: any) => a.r2 - b.r2)[0];
+        if (centerByPupil && Number.isFinite(Number(centerByPupil.y))) {
+            return (Number(centerByPupil.y) / 1000) * mirrorSign;
+        }
+
+        // Secondary fallback: center-pupil hit by deterministic ray index.
+        const centerHit = points.find((p: any) => Number(p?.rayIndex) === 0);
+        const centerYUm = Number(centerHit?.yUm);
+        if (Number.isFinite(centerYUm)) return (centerYUm / 1000) * mirrorSign;
+
+        const chiefYUm = Number(series?.chiefPointUm?.yUm);
+        if (Number.isFinite(chiefYUm)) return (chiefYUm / 1000) * mirrorSign;
+        return null;
+    };
+
+    const fillMissingLinear = (xs: number[], values: Array<number | null>) => {
+        if (!Array.isArray(xs) || !Array.isArray(values) || xs.length !== values.length || values.length < 3) return;
+        const known = values
+            .map((v, i) => (Number.isFinite(Number(v)) ? i : -1))
+            .filter((i) => i >= 0);
+        if (known.length < 2) return;
+        const first = known[0];
+        const last = known[known.length - 1];
+
+        for (let i = first; i <= last; i++) {
+            if (Number.isFinite(Number(values[i]))) continue;
+            let li = i - 1;
+            while (li >= first && !Number.isFinite(Number(values[li]))) li -= 1;
+            if (li < first) continue;
+            let ri = i + 1;
+            while (ri <= last && !Number.isFinite(Number(values[ri]))) ri += 1;
+            if (ri > last) continue;
+            const xLeft = xs[li];
+            const xRight = xs[ri];
+            const yLeft = Number(values[li]);
+            const yRight = Number(values[ri]);
+            const xNow = xs[i];
+            const dx = xRight - xLeft;
+            if (!Number.isFinite(dx) || Math.abs(dx) <= 1e-15) continue;
+            const t = (xNow - xLeft) / dx;
+            values[i] = yLeft + (yRight - yLeft) * t;
+        }
+    };
+
+    const sanitizeDisplacementOutliers = (xs: number[], values: Array<number | null>) => {
+        if (!Array.isArray(xs) || !Array.isArray(values) || xs.length !== values.length || values.length < 3) return;
+
+        const finiteAbs = values
+            .map((v) => Math.abs(Number(v)))
+            .filter((v) => Number.isFinite(v))
+            .sort((a, b) => a - b);
+        if (finiteAbs.length < 3) return;
+
+        const medianAbs = finiteAbs[Math.floor(finiteAbs.length / 2)] || 0;
+        // LCA is typically um-order; treat very large mm-scale excursions as invalid points.
+        const absCap = Math.max(0.5, medianAbs * 50);
+
+        for (let i = 0; i < values.length; i++) {
+            const v = Number(values[i]);
+            if (!Number.isFinite(v)) continue;
+            if (Math.abs(v) > absCap) values[i] = null;
+        }
+
+        for (let i = 1; i + 1 < values.length; i++) {
+            const prev = Number(values[i - 1]);
+            const cur = Number(values[i]);
+            const next = Number(values[i + 1]);
+            if (!Number.isFinite(prev) || !Number.isFinite(cur) || !Number.isFinite(next)) continue;
+            const left = cur - prev;
+            const right = next - cur;
+            const localScale = Math.max(1e-6, Math.abs(prev), Math.abs(next), medianAbs);
+            const jumpCap = localScale * 8;
+            if (Math.sign(left) !== 0 && Math.sign(right) !== 0 && Math.sign(left) !== Math.sign(right)) {
+                if (Math.abs(left) > jumpCap && Math.abs(right) > jumpCap) {
+                    values[i] = null;
+                }
+            }
+        }
+
+        fillMissingLinear(xs, values);
+
+        // Edge fallback: if endpoint is missing, hold nearest finite value.
+        let firstFinite = -1;
+        for (let i = 0; i < values.length; i++) {
+            if (Number.isFinite(Number(values[i]))) {
+                firstFinite = i;
+                break;
+            }
+        }
+        if (firstFinite > 0) {
+            const v = Number(values[firstFinite]);
+            for (let i = 0; i < firstFinite; i++) values[i] = v;
+        }
+        let lastFinite = -1;
+        for (let i = values.length - 1; i >= 0; i--) {
+            if (Number.isFinite(Number(values[i]))) {
+                lastFinite = i;
+                break;
+            }
+        }
+        if (lastFinite >= 0 && lastFinite < values.length - 1) {
+            const v = Number(values[lastFinite]);
+            for (let i = lastFinite + 1; i < values.length; i++) values[i] = v;
+        }
+    };
+
+    const smoothDisplacementSeries = (values: Array<number | null>) => {
+        if (!Array.isArray(values) || values.length < 5) return;
+        const src = values.map((v) => (Number.isFinite(Number(v)) ? Number(v) : Number.NaN));
+        for (let i = 1; i + 1 < values.length; i++) {
+            const a = src[i - 1];
+            const b = src[i];
+            const c = src[i + 1];
+            if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) continue;
+            // [1,2,1]/4 kernel: gentle denoise for visual continuity.
+            values[i] = (a + 2 * b + c) * 0.25;
+        }
     };
 
     try {
         const runtime = await import('../../src/desktop/runtime.ts');
-        const useNative = runtime?.isTauriRuntime && runtime.isTauriRuntime();
+        const useNative = runtime?.isTauriRuntime && runtime.isTauriRuntime() && !forceWasmInTauri;
 
         if (useNative) {
             try { onProgress?.({ percent: 5, message: 'Running native LCA...' }); } catch (_) {}
@@ -290,56 +485,138 @@ export async function calculateMagnificationChromaticAberrationData(
 
         try { onProgress?.({ percent: 5, message: 'Running Web LCA...' }); } catch (_) {}
 
+        await preloadRustRayTracingWasm();
+        const { runNativeSpotRaytrace } = await import('../../src/desktop/ipc/client.ts');
+        const { generateRayStartPointsForObject } = await import('../../optical/ray-renderer.ts');
+
         const perWavelengthHeights = new Map<number, Array<number | null>>();
-        await withWebRustWasmTraceOverride(async () => {
-            for (let wi = 0; wi < wavelengthCandidates.length; wi++) {
-                const wl = wavelengthCandidates[wi];
-                const heights: Array<number | null> = [];
-                for (let fi = 0; fi < sortedFieldValues.length; fi++) {
-                    const fv = sortedFieldValues[fi];
-                    heights.push(calcImageHeightFor(fv, wl));
-                }
-                perWavelengthHeights.set(wl, heights);
-                const p = 10 + (70 * (wi + 1)) / Math.max(1, wavelengthCandidates.length);
-                try { onProgress?.({ percent: p, message: `Tracing λ=${(wl * 1000).toFixed(1)}nm (Rust/WASM)...` }); } catch (_) {}
-            }
-        }, requireRustWasm);
-
-        const rustWasm = await preloadRustRayTracingWasm();
-        const rustLcaReducer = rustWasm?.compute_lca_series_from_image_heights;
-        if (typeof rustLcaReducer !== 'function') {
-            throw new Error('Rust/WASM LCA reducer not available: compute_lca_series_from_image_heights');
-        }
-
-        const imageHeightsFlat = new Float64Array(wavelengthCandidates.length * sortedFieldValues.length);
+        const stopCenterMode = chiefRayMode.startsWith('stop-center');
+        const lcaRayCount = stopCenterMode ? 1 : 101;
         for (let wi = 0; wi < wavelengthCandidates.length; wi++) {
             const wl = wavelengthCandidates[wi];
-            const heights = perWavelengthHeights.get(wl) || new Array(sortedFieldValues.length).fill(null);
-            for (let fi = 0; fi < sortedFieldValues.length; fi++) {
-                const raw = heights[fi];
-                const value = (typeof raw === 'number') ? raw : Number.NaN;
-                imageHeightsFlat[wi * sortedFieldValues.length + fi] = Number.isFinite(value) ? value : Number.NaN;
+            const imageHeights = new Array<number | null>(sortedFieldValues.length).fill(null);
+            if (stopCenterMode) {
+                const raySeries: any[] = [];
+                for (let fi = 0; fi < sortedFieldValues.length; fi++) {
+                    const obj = objectRowsNativeLike[fi] || {
+                        id: `Field-${fi}`,
+                        name: `Field-${fi}`,
+                        position: 'Angle',
+                        xHeightAngle: 0,
+                        yHeightAngle: sortedFieldValues[fi],
+                    };
+                    const starts = generateRayStartPointsForObject(
+                        obj,
+                        opticalSystemRows,
+                        1,
+                        null,
+                        {
+                            wavelengthUm: wl,
+                            useChiefRayAnalysis: true,
+                            chiefRaySolveMode: 'fast',
+                            aimThroughStop: true,
+                            allowStopBasedOriginSolve: true,
+                            disableCrossExtent: true,
+                            originSolveTraceBackend: 'rust',
+                            pattern: 'annular',
+                        },
+                    );
+                    const s0 = Array.isArray(starts) ? starts[0] : null;
+                    if (!s0?.startP || !s0?.dir) continue;
+                    raySeries.push({
+                        label: `Field-${fi}`,
+                        hasFieldAngle: true,
+                        rays: [{
+                            startP: {
+                                x: Number(s0.startP.x),
+                                y: Number(s0.startP.y),
+                                z: Number(s0.startP.z),
+                            },
+                            dir: {
+                                x: Number(s0.dir.x),
+                                y: Number(s0.dir.y),
+                                z: Number(s0.dir.z),
+                            },
+                            wavelengthUm: wl,
+                            isChief: true,
+                            pupilU: 0,
+                            pupilV: 0,
+                        }],
+                    });
+                }
+
+                const spotResponse = await runNativeSpotRaytrace({
+                    opticalSystemRows,
+                    surfaceIndex: imageSurfaceIndex,
+                    raySeries,
+                    forceRustWasm: true,
+                } as any);
+
+                const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
+                for (const s of series) {
+                    const idx = parseFieldIndex(String(s?.label || ''));
+                    if (!Number.isInteger(idx) || idx < 0 || idx >= imageHeights.length) continue;
+                    const yUm = Number(s?.chiefPointUm?.yUm);
+                    imageHeights[idx] = Number.isFinite(yUm) ? ((yUm / 1000) * mirrorSign) : null;
+                }
+            } else {
+                const sourceRowsForWl = defaultLcaSourceRows(wl);
+                const spotResponse = await runNativeSpotRaytrace({
+                    opticalSystemRows,
+                    sourceRows: sourceRowsForWl,
+                    objectRows: objectRowsNativeLike,
+                    surfaceIndex: imageSurfaceIndex,
+                    rayCount: lcaRayCount,
+                    ringCount: 1,
+                    pattern: 'cross',
+                    wavelengthMode: 'primary',
+                    forceRustWasm: true,
+                });
+                const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
+                for (const s of series) {
+                    const objectIndex = Number(s?.objectIndex);
+                    const idx = Number.isInteger(objectIndex)
+                        ? objectIndex
+                        : parseFieldIndex(String(s?.label || ''));
+                    if (!Number.isInteger(idx) || idx < 0 || idx >= imageHeights.length) continue;
+                    imageHeights[idx] = selectImageHeightMm(s);
+                }
+            }
+            perWavelengthHeights.set(wl, imageHeights);
+
+            const p = 10 + (70 * (wi + 1)) / Math.max(1, wavelengthCandidates.length);
+            try { onProgress?.({ percent: p, message: `Tracing λ=${(wl * 1000).toFixed(1)}nm (Rust/WASM)...` }); } catch (_) {}
+        }
+
+        let referenceHeights: Array<number | null> | null = null;
+        for (const wl of wavelengthCandidates) {
+            if (Math.abs(wl - referenceWavelength) < 1e-9) {
+                referenceHeights = perWavelengthHeights.get(wl) || null;
+                break;
             }
         }
-
-        const rustReduced = rustLcaReducer(
-            new Float64Array(sortedFieldValues),
-            new Float64Array(wavelengthCandidates),
-            referenceWavelength,
-            imageHeightsFlat,
-        ) as any;
-
-        const dataByWavelength = normalizeRustLcaReducerResult(rustReduced);
-        if (!dataByWavelength.length) {
-            throw new Error('Rust/WASM LCA reducer returned empty dataByWavelength');
+        if (!referenceHeights) {
+            throw new Error('Failed to compute LCA reference wavelength heights');
         }
-        const nonRefCount = dataByWavelength.filter((entry) => {
-            const wl = Number(entry?.wavelength);
-            return Number.isFinite(wl) && Math.abs(wl - referenceWavelength) >= 1e-6;
-        }).length;
-        if (nonRefCount === 0) {
-            console.warn('⚠️ LCA reducer returned no non-reference wavelength entries');
-        }
+
+        const dataByWavelength = wavelengthCandidates.map((wl) => {
+            const imageHeights = perWavelengthHeights.get(wl) || new Array<number | null>(sortedFieldValues.length).fill(null);
+            const displacements = imageHeights.map((h, i) => {
+                const ref = referenceHeights?.[i];
+                return (Number.isFinite(Number(h)) && Number.isFinite(Number(ref))) ? (Number(h) - Number(ref)) : null;
+            });
+            fillMissingLinear(sortedFieldValues, displacements);
+            sanitizeDisplacementOutliers(sortedFieldValues, displacements);
+            // Skip smoothing for the reference wavelength to keep zero line exact.
+            if (Math.abs(wl - referenceWavelength) >= 1e-6) {
+                smoothDisplacementSeries(displacements);
+            }
+            return {
+                wavelength: wl,
+                displacements,
+                imageHeights,
+            };
+        });
 
         const displacementStats = dataByWavelength.map((entry) => {
             const wl = Number(entry?.wavelength);
@@ -373,9 +650,11 @@ export async function calculateMagnificationChromaticAberrationData(
             imageSurfaceIndex,
             dataByWavelength,
             meta: {
-                source: 'typescript-raytrace-plus-rust-wasm-lca-reducer',
+                source: 'typescript-spot-series-native-like',
                 requireRustWasm,
                 sourceRowCount: Array.isArray(sourceRows) ? sourceRows.length : 0,
+                finiteSystem,
+                mirrorSign,
                 displacementStats,
             },
             message: 'Computed via Rust/WASM ray tracing + Rust/WASM LCA reduction on Web'

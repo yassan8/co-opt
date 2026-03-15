@@ -653,7 +653,12 @@ export function generateSpotDiagram(opticalSystemRows, sourceRows, objectRows, s
                         const hitPointLocal = surfaceInfo ? transformPointToLocal(hitPointGlobal, surfaceInfo) : hitPointGlobal;
                         
                         if (hitPointLocal && typeof hitPointLocal.x === 'number' && typeof hitPointLocal.y === 'number') {
-                            const isChief = rayStart.isChief === true || (rayStart.isChief === undefined && i === 0);
+                            const centerByPlaneCoords = (() => {
+                                const u = Number(rayStart?.planeCoords?.u);
+                                const v = Number(rayStart?.planeCoords?.v);
+                                return Number.isFinite(u) && Number.isFinite(v) && Math.abs(u) <= 1e-12 && Math.abs(v) <= 1e-12;
+                            })();
+                            const isChief = rayStart.isChief === true || centerByPlaneCoords || (rayStart.isChief === undefined && i === 0);
                             
                             // For spot diagram, use local coordinates on the target surface.
                             // Using global XY distorts the pattern when CoordTrans/tilt/decenter exists.
@@ -1530,6 +1535,7 @@ export async function generateSpotDiagramAsync(
     const onProgress = (options && typeof options === 'object' && typeof options.onProgress === 'function')
         ? options.onProgress
         : null;
+    const strictChiefRayMarker = options?.strictChiefRayMarker === true;
     const yieldEvery = Number.isInteger(options?.yieldEvery) ? options.yieldEvery : 25;
     const yieldToUI = async () => new Promise(resolve => setTimeout(resolve, 0));
     const safeProgress = (percent, message) => {
@@ -1956,7 +1962,14 @@ export async function generateSpotDiagramAsync(
                             const startPointClone = rayStart?.startP && typeof rayStart.startP === 'object'
                                 ? { x: rayStart.startP.x, y: rayStart.startP.y, z: rayStart.startP.z }
                                 : null;
-                            const isChief = rayStart.isChief === true || (rayStart.isChief === undefined && i === 0);
+                            const centerByPlaneCoords = (() => {
+                                const u = Number(rayStart?.planeCoords?.u);
+                                const v = Number(rayStart?.planeCoords?.v);
+                                return Number.isFinite(u) && Number.isFinite(v) && Math.abs(u) <= 1e-12 && Math.abs(v) <= 1e-12;
+                            })();
+                            const isChief = rayStart.isChief === true
+                                || centerByPlaneCoords
+                                || (!strictChiefRayMarker && rayStart.isChief === undefined && i === 0);
                             
                             // For spot diagram, use global coordinates at the target surface.
                             // The chief-ray-relative centering is done later in drawSpotDiagram.
@@ -1972,7 +1985,9 @@ export async function generateSpotDiagramAsync(
                                 isPrimary: true,
                                 objectId: obj.id,
                                 rayIndex: i,
-                                isChiefRay: isChief
+                                isChiefRay: isChief,
+                                pupilU: Number.isFinite(Number(rayStart?.planeCoords?.u)) ? Number(rayStart.planeCoords.u) : undefined,
+                                pupilV: Number.isFinite(Number(rayStart?.planeCoords?.v)) ? Number(rayStart.planeCoords.v) : undefined,
                             };
                             
                             pts.push(spotPoint);

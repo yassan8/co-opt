@@ -23,6 +23,87 @@ function getWavelengthColor(wavelength) {
     return '#FF0000';
 }
 
+function sanitizeLcaSeries(displacements: any[], fieldValues: any[]) {
+    const n = Math.min(Array.isArray(displacements) ? displacements.length : 0, Array.isArray(fieldValues) ? fieldValues.length : 0);
+    const pairs: Array<{ x: number | null; y: number }> = [];
+    for (let i = 0; i < n; i++) {
+        const y = Number(fieldValues[i]);
+        if (!Number.isFinite(y)) continue;
+        const xRaw = displacements[i];
+        const x = (typeof xRaw === 'number' && Number.isFinite(xRaw)) ? xRaw : null;
+        pairs.push({ x, y });
+    }
+    if (pairs.length < 2) return { x: [] as number[], y: [] as number[] };
+
+    // Keep deterministic ordering on the vertical axis.
+    pairs.sort((a, b) => a.y - b.y);
+
+    // Fill missing displacement values by linear interpolation on field axis.
+    for (let i = 0; i < pairs.length; i++) {
+        if (pairs[i].x !== null) continue;
+        let li = i - 1;
+        while (li >= 0 && pairs[li].x === null) li -= 1;
+        let ri = i + 1;
+        while (ri < pairs.length && pairs[ri].x === null) ri += 1;
+
+        if (li >= 0 && ri < pairs.length) {
+            const lx = Number(pairs[li].x);
+            const rx = Number(pairs[ri].x);
+            const ly = pairs[li].y;
+            const ry = pairs[ri].y;
+            const y = pairs[i].y;
+            const dy = ry - ly;
+            if (Number.isFinite(lx) && Number.isFinite(rx) && Number.isFinite(dy) && Math.abs(dy) > 1e-12) {
+                const t = (y - ly) / dy;
+                pairs[i].x = lx + (rx - lx) * t;
+                continue;
+            }
+        }
+
+        if (li >= 0 && Number.isFinite(Number(pairs[li].x))) {
+            pairs[i].x = Number(pairs[li].x);
+        } else if (ri < pairs.length && Number.isFinite(Number(pairs[ri].x))) {
+            pairs[i].x = Number(pairs[ri].x);
+        }
+    }
+
+    // Suppress isolated zig-zag spikes while preserving the overall trend.
+    const xs = pairs.map((p) => (p.x === null ? Number.NaN : Number(p.x)));
+    const deltas: number[] = [];
+    for (let i = 1; i < xs.length; i++) {
+        const d = Math.abs(xs[i] - xs[i - 1]);
+        if (Number.isFinite(d)) deltas.push(d);
+    }
+    deltas.sort((a, b) => a - b);
+    const medianDelta = deltas.length > 0 ? deltas[Math.floor(deltas.length / 2)] : 0;
+    const spikeThreshold = Math.max(5e-4, medianDelta * 6);
+
+    for (let i = 1; i + 1 < xs.length; i++) {
+        const prev = xs[i - 1];
+        const cur = xs[i];
+        const next = xs[i + 1];
+        if (!Number.isFinite(prev) || !Number.isFinite(cur) || !Number.isFinite(next)) continue;
+        const leftJump = cur - prev;
+        const rightJump = next - cur;
+        if (Math.sign(leftJump) !== 0 && Math.sign(rightJump) !== 0 && Math.sign(leftJump) !== Math.sign(rightJump)) {
+            if (Math.abs(leftJump) > spikeThreshold && Math.abs(rightJump) > spikeThreshold) {
+                xs[i] = (prev + next) * 0.5;
+            }
+        }
+    }
+
+    const outX: number[] = [];
+    const outY: number[] = [];
+    for (let i = 0; i < pairs.length; i++) {
+        const x = xs[i];
+        const y = pairs[i].y;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        outX.push(x);
+        outY.push(y);
+    }
+    return { x: outX, y: outY };
+}
+
 export function plotMagnificationChromaticAberration(data, targetDivId = 'magnification-chromatic-aberration-container', options: any = {}) {
     if (!data || !Array.isArray(data.fieldValues) || data.fieldValues.length === 0) {
         console.warn('No valid data for magnification chromatic aberration plot');
@@ -73,7 +154,7 @@ export function plotMagnificationChromaticAberration(data, targetDivId = 'magnif
         if (Math.abs(wavelength - referenceWavelength) < 1e-6) return;
         const displacements = Array.isArray(entry?.displacements) ? entry.displacements : [];
         if (displacements.length === 0) return;
-        const pairs = finitePairs(displacements, fieldValues);
+        const pairs = sanitizeLcaSeries(displacements, fieldValues);
         if (pairs.x.length < 2) return;
         for (const x of pairs.x) {
             const a = Math.abs(Number(x));

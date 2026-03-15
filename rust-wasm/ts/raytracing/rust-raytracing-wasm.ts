@@ -131,6 +131,7 @@ export type RustRayTracingWasm = {
     referenceWavelength: number,
     imageHeightsFlat: Float64Array | number[]
   ) => any;
+  run_native_distortion_wasm_json?: (reqJson: string) => any;
   malloc?: (size: number) => number;
   free?: (ptr: number) => void;
   memory?: { buffer: ArrayBuffer };
@@ -315,6 +316,7 @@ export async function preloadRustRayTracingWasm(): Promise<RustRayTracingWasm | 
           backtracking_line_search_armijo: mod.backtracking_line_search_armijo,
           update_trust_region_radius: mod.update_trust_region_radius,
           compute_lca_series_from_image_heights: mod.compute_lca_series_from_image_heights,
+          run_native_distortion_wasm_json: mod.run_native_distortion_wasm_json,
           malloc: mod.malloc,
           free: mod.free,
           memory: mod.memory || initExports?.memory

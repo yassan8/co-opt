@@ -117,6 +117,10 @@ function isOpdDebugEnabled(): boolean {
   return false;
 }
 
+// Session-scoped guard: once direct distortion WASM export is known-missing,
+// skip repeated attempts to reduce console noise and extra overhead.
+let directDistortionWasmUnavailableInSession = false;
+
 function validateAnalysisPreviewRequest(payload: RunAnalysisPreviewRequest): void {
   if (!payload || typeof payload !== "object") {
     throw new Error("run_analysis_preview requires a request payload");
@@ -599,7 +603,7 @@ export async function runRaytracePreview(
 export async function runNativeSpotRaytrace(
   payload: NativeSpotRaytraceRequest,
 ): Promise<NativeSpotRaytraceResponse> {
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() || payload?.forceRustWasm === true) {
     const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
     if (opticalSystemRows.length === 0) {
       throw new Error("runNativeSpotRaytrace(web): opticalSystemRows is empty");
@@ -641,11 +645,21 @@ export async function runNativeSpotRaytrace(
 
         const summaries = traceRayEvalBatchSummary(opticalSystemRows, batch, 1.0, targetSurface, traceOptions);
         const normalizedSummaries = Array.isArray(summaries) ? summaries : [];
-        const points = normalizedSummaries
-          .filter((s: any) => !!s?.success && s?.hitPoint)
-          .map((s: any) => ({ xUm: Number(s?.hitPoint?.x) * 1000, yUm: Number(s?.hitPoint?.y) * 1000 }))
-          .filter((p: any) => Number.isFinite(p.xUm) && Number.isFinite(p.yUm));
         const chiefIdx = rays.findIndex((r: any) => r?.isChief === true);
+        const points = normalizedSummaries
+          .map((s: any, rayIndex: number) => {
+            if (!s?.success || !s?.hitPoint) return null;
+            const xUm = Number(s?.hitPoint?.x) * 1000;
+            const yUm = Number(s?.hitPoint?.y) * 1000;
+            if (!Number.isFinite(xUm) || !Number.isFinite(yUm)) return null;
+            return {
+              xUm,
+              yUm,
+              rayIndex,
+              isChiefRay: rayIndex === chiefIdx,
+            };
+          })
+          .filter((p: any) => !!p);
         const chiefSummary = (chiefIdx >= 0 && chiefIdx < normalizedSummaries.length)
           ? normalizedSummaries[chiefIdx]
           : normalizedSummaries.find((s: any) => !!s?.success && s?.hitPoint);
@@ -662,6 +676,7 @@ export async function runNativeSpotRaytrace(
         return {
           label: String(entry?.label || `Series ${idx + 1}`),
           color: String(entry?.color || toSeriesColor(idx)),
+          objectIndex: idx,
           wavelengthUm: Number(wl) > 0 ? Number(wl) : undefined,
           points,
           chiefPointUm,
@@ -739,6 +754,9 @@ export async function runNativeSpotRaytrace(
         {
           useRustWasm: true,
           requireRustWasm: true,
+          strictChiefRayMarker: payload?.forceRustWasm === true,
+          // Keep LCA parity deterministic: avoid field-wise adaptive pupil scaling/retry behavior.
+          physicalVignetting: payload?.forceRustWasm === true ? false : undefined,
           traceOptions: {
             useRustWasm: true,
             requireRustWasm: true,
@@ -756,9 +774,18 @@ export async function runNativeSpotRaytrace(
     const series = spotData.map((obj: any, idx: number) => {
       const pointsRaw = Array.isArray(obj?.spotPoints) ? obj.spotPoints : [];
       const points = pointsRaw
-        .map((p: any) => ({ xUm: Number(p?.x) * 1000, yUm: Number(p?.y) * 1000 }))
+        .map((p: any) => ({
+          xUm: Number(p?.x) * 1000,
+          yUm: Number(p?.y) * 1000,
+          rayIndex: Number.isInteger(p?.rayIndex) ? Number(p.rayIndex) : undefined,
+          isChiefRay: p?.isChiefRay === true,
+          pupilU: Number.isFinite(Number(p?.pupilU)) ? Number(p.pupilU) : undefined,
+          pupilV: Number.isFinite(Number(p?.pupilV)) ? Number(p.pupilV) : undefined,
+        }))
         .filter((p: any) => Number.isFinite(p.xUm) && Number.isFinite(p.yUm));
-      const chiefSrc = pointsRaw.find((p: any) => p?.isChiefRay === true) || pointsRaw[0];
+      const chiefSrc = pointsRaw.find((p: any) => p?.isChiefRay === true)
+        || pointsRaw.find((p: any) => Number(p?.rayIndex) === 0)
+        || (payload?.forceRustWasm === true ? undefined : pointsRaw[0]);
       const chiefPointUm = chiefSrc
         ? { xUm: Number(chiefSrc?.x) * 1000, yUm: Number(chiefSrc?.y) * 1000 }
         : undefined;
@@ -767,6 +794,7 @@ export async function runNativeSpotRaytrace(
       return {
         label: String(obj?.objectId || obj?.objectType || `Object ${idx + 1}`),
         color: toSeriesColor(idx),
+        objectIndex: idx,
         wavelengthUm: Number.isFinite(wl) && wl > 0 ? wl : undefined,
         points,
         chiefPointUm: chiefPointUm && Number.isFinite(chiefPointUm.xUm) && Number.isFinite(chiefPointUm.yUm)
@@ -820,6 +848,29 @@ export async function runNativeSphericalAberration(
   payload: NativeSphericalAberrationRequest,
 ): Promise<NativeSphericalAberrationResponse> {
   if (!isTauriRuntime()) {
+    const {
+      preloadRustRayTracingWasm,
+      getRustRayTracingWasmSync,
+      getRustRayTracingWasmInitError,
+    } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+
+    // In strict mode, spherical aberration tracing must not start before Rust-WASM is ready.
+    const rustApi = getRustRayTracingWasmSync() || await preloadRustRayTracingWasm();
+    if (!rustApi) {
+      const initError = getRustRayTracingWasmInitError?.() || "Rust-WASM backend is unavailable";
+      throw new Error(`Web spherical aberration requires Rust-WASM, but initialization failed: ${initError}`);
+    }
+
+    // Keep the global WASM service synchronized for code paths that read getWASMSystem().
+    try {
+      const g = (typeof globalThis !== "undefined") ? (globalThis as any) : null;
+      if (g && typeof g._setWASMSystem === "function") {
+        g._setWASMSystem({ backend: "rust-wasm", isWASMReady: true, api: rustApi });
+      }
+    } catch {
+      // Ignore global wiring failures and continue with direct Rust API path.
+    }
+
     const { calculateLongitudinalAberrationAsync } = await import("../../../evaluation/aberrations/longitudinal-aberration.ts");
     const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
     const targetSurfaceIndex = Number.isInteger(payload?.surfaceIndex)
@@ -1874,6 +1925,63 @@ export async function runNativeDistortion(
     const sourceRows = Array.isArray(payload?.sourceRows) && payload.sourceRows.length > 0
       ? payload.sourceRows
       : buildDefaultDistortionSourceRows(wavelength);
+
+    // Prefer direct distortion WASM export when available.
+    let directWasmError: string | null = null;
+    try {
+      if (!directDistortionWasmUnavailableInSession) {
+        const { preloadRustRayTracingWasm } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
+        const wasmApi = await preloadRustRayTracingWasm();
+        if (wasmApi && typeof wasmApi.run_native_distortion_wasm_json === "function") {
+          const wasmReq = {
+            opticalSystemRows,
+            sourceRows,
+            fieldSamples,
+            surfaceIndex,
+            heightMode,
+            wavelength,
+          };
+          const wasmRaw = wasmApi.run_native_distortion_wasm_json(JSON.stringify(wasmReq));
+          const wasmResp = (typeof wasmRaw === "string") ? JSON.parse(wasmRaw) : wasmRaw;
+          if (wasmResp && typeof wasmResp === "object") {
+            return {
+              backend: String((wasmResp as any).backend || "web-rust-wasm"),
+              fieldValues: Array.isArray((wasmResp as any).fieldValues)
+                ? (wasmResp as any).fieldValues.map((v: any) => Number(v)).filter((v: number) => Number.isFinite(v))
+                : fieldSamples,
+              idealHeights: Array.isArray((wasmResp as any).idealHeights)
+                ? (wasmResp as any).idealHeights.map((v: any) => Number(v))
+                : [],
+              realHeights: Array.isArray((wasmResp as any).realHeights)
+                ? (wasmResp as any).realHeights.map((v: any) => (Number.isFinite(Number(v)) ? Number(v) : null))
+                : [],
+              distortion: Array.isArray((wasmResp as any).distortion)
+                ? (wasmResp as any).distortion.map((v: any) => (Number.isFinite(Number(v)) ? Number(v) : null))
+                : [],
+              distortionPercent: Array.isArray((wasmResp as any).distortionPercent)
+                ? (wasmResp as any).distortionPercent.map((v: any) => (Number.isFinite(Number(v)) ? Number(v) : null))
+                : [],
+              meta: ((wasmResp as any).meta && typeof (wasmResp as any).meta === "object")
+                ? (wasmResp as any).meta
+                : {},
+              message: String((wasmResp as any).message || "Computed via Web Rust/WASM distortion API"),
+            };
+          }
+        }
+      }
+    } catch (_) {
+      // Keep parity fallback below for environments without direct distortion export.
+      directWasmError = (_ instanceof Error) ? (_.message || String(_)) : String(_);
+      if (directWasmError.includes("run_native_distortion_wasm_json") && directWasmError.includes("not a function")) {
+        directDistortionWasmUnavailableInSession = true;
+      }
+      try {
+        console.warn("runNativeDistortion(web): direct WASM path failed, using spot fallback", { error: directWasmError });
+      } catch {
+        // Ignore logging failures in restricted runtimes.
+      }
+    }
+
     const finiteSystem = isFiniteConjugateNativeLike(opticalSystemRows);
     const objectDistance = getObjectDistanceMmNativeLike(opticalSystemRows);
     const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
@@ -1943,6 +2051,35 @@ export async function runNativeDistortion(
       }
     }
 
+    // Keep distortion curves continuous when a few chief rays fail in web fallback mode.
+    const filledRealHeights = realHeights.slice();
+    for (let i = 0; i < filledRealHeights.length; i++) {
+      if (Number.isFinite(Number(filledRealHeights[i]))) continue;
+      let li = i - 1;
+      while (li >= 0 && !Number.isFinite(Number(filledRealHeights[li]))) li -= 1;
+      let ri = i + 1;
+      while (ri < filledRealHeights.length && !Number.isFinite(Number(filledRealHeights[ri]))) ri += 1;
+
+      if (li >= 0 && ri < filledRealHeights.length) {
+        const leftY = Number(filledRealHeights[li]);
+        const rightY = Number(filledRealHeights[ri]);
+        const leftX = Number(fieldSamples[li]);
+        const rightX = Number(fieldSamples[ri]);
+        const nowX = Number(fieldSamples[i]);
+        const dx = rightX - leftX;
+        if (Number.isFinite(leftY) && Number.isFinite(rightY) && Number.isFinite(dx) && Math.abs(dx) > 1e-12) {
+          const t = (nowX - leftX) / dx;
+          filledRealHeights[i] = leftY + (rightY - leftY) * t;
+          continue;
+        }
+      }
+      if (li >= 0 && Number.isFinite(Number(filledRealHeights[li]))) {
+        filledRealHeights[i] = Number(filledRealHeights[li]);
+      } else if (ri < filledRealHeights.length && Number.isFinite(Number(filledRealHeights[ri]))) {
+        filledRealHeights[i] = Number(filledRealHeights[ri]);
+      }
+    }
+
     const idealHeights = fieldSamples.map((sample) => {
       if (heightMode) {
         return finiteSystem ? magnification * sample : sample;
@@ -1950,7 +2087,7 @@ export async function runNativeDistortion(
       const thetaRad = sample * Math.PI / 180;
       return Number.isFinite(focalLength) ? focalLength * Math.tan(thetaRad) : Math.tan(thetaRad);
     });
-    const distortion = realHeights.map((height, index) => {
+    const distortion = filledRealHeights.map((height, index) => {
       const ideal = Number(idealHeights[index]);
       if (!Number.isFinite(ideal)) return null;
       if (Math.abs(ideal) < 1e-12) return 0;
@@ -1960,10 +2097,10 @@ export async function runNativeDistortion(
     const distortionPercent = distortion.map((value) => (Number.isFinite(Number(value)) ? Number(value) * 100 : null));
 
     return {
-      backend: "web-rust-wasm",
+      backend: "web-rust-wasm-spot-fallback",
       fieldValues: fieldSamples,
       idealHeights,
-      realHeights,
+      realHeights: filledRealHeights,
       distortion,
       distortionPercent,
       meta: {
@@ -1973,6 +2110,12 @@ export async function runNativeDistortion(
         heightMode,
         magnification: Number.isFinite(magnification) ? magnification : -1,
         surfaceIndex,
+        directWasmError,
+        interpolationFilledCount: filledRealHeights.reduce((acc, v, idx) => {
+          const original = realHeights[idx];
+          if (!Number.isFinite(Number(original)) && Number.isFinite(Number(v))) return acc + 1;
+          return acc;
+        }, 0),
       },
       message: "Computed via Web Rust/WASM distortion API",
     };
@@ -2005,10 +2148,10 @@ export async function runNativeGridDistortion(
     const maxFieldAngle = deriveMaxFieldAngleNativeLike(Array.isArray(payload?.objectRows) ? payload.objectRows : []);
     const paraxial = calculateParaxialData(opticalSystemRows, wavelength);
     const focalLength = Number(paraxial?.focalLength);
-    if (!(Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12)) {
-      throw new Error("Web grid distortion calculation failed: focal length is unavailable");
-    }
-    const maxImageHeight = focalLength * Math.tan((maxFieldAngle * Math.PI) / 180);
+    const hasFiniteFocalLength = Number.isFinite(focalLength) && Math.abs(focalLength) > 1e-12;
+    // Match distortion behavior: continue with a normalized focal length instead of hard-failing.
+    const focalLengthForGrid = hasFiniteFocalLength ? focalLength : 1.0;
+    const maxImageHeight = focalLengthForGrid * Math.tan((maxFieldAngle * Math.PI) / 180);
     const step = (2 * maxImageHeight) / Math.max(1, gridSize - 1);
 
     const idealX: number[] = [];
@@ -2016,11 +2159,11 @@ export async function runNativeGridDistortion(
     const objectRows: any[] = [];
     for (let yi = 0; yi < gridSize; yi++) {
       const imageY = -maxImageHeight + yi * step;
-      const thetaYRad = Math.atan(imageY / focalLength);
+      const thetaYRad = Math.atan(imageY / focalLengthForGrid);
       const thetaY = (thetaYRad * 180) / Math.PI;
       for (let xi = 0; xi < gridSize; xi++) {
         const imageX = -maxImageHeight + xi * step;
-        const thetaXRad = Math.atan(imageX / focalLength);
+        const thetaXRad = Math.atan(imageX / focalLengthForGrid);
         const thetaX = (thetaXRad * 180) / Math.PI;
         const index = yi * gridSize + xi;
         idealX.push(imageX);
@@ -2087,7 +2230,9 @@ export async function runNativeGridDistortion(
       maxFieldAngle,
       meta: {
         wavelength,
-        focalLength,
+        focalLength: hasFiniteFocalLength ? focalLength : NaN,
+        focalLengthFallbackUsed: !hasFiniteFocalLength,
+        focalLengthForGrid,
         finiteSystem,
         surfaceIndex,
       },
@@ -2100,31 +2245,35 @@ export async function runNativeGridDistortion(
 export async function runNativeMagnificationChromaticAberration(
   payload: NativeMagnificationChromaticAberrationRequest,
 ): Promise<NativeMagnificationChromaticAberrationResponse> {
-  if (!isTauriRuntime()) {
-    const { calculateMagnificationChromaticAberrationData } = await import(
-      "../../../evaluation/aberrations/magnification-chromatic-aberration.ts"
-    );
-    const result = await calculateMagnificationChromaticAberrationData(
-      Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [],
-      Array.isArray(payload?.fieldSamples) ? payload.fieldSamples : [],
-      Array.isArray(payload?.wavelengths) ? payload.wavelengths : [],
-      {
-        sourceRows: Array.isArray(payload?.sourceRows) ? payload.sourceRows : [],
-        referenceWavelength: Number.isFinite(Number(payload?.referenceWavelength))
-          ? Number(payload.referenceWavelength)
-          : 0.5876,
-        heightMode: payload?.heightMode === true,
-        chiefRayDefinition: payload?.chiefRayDefinition || 'stop-center',
-        requireRustWasm: true,
-      },
-    );
-    if (!result) throw new Error("Web LCA calculation failed");
-    return result as NativeMagnificationChromaticAberrationResponse;
-  }
-  return invokeCommand<NativeMagnificationChromaticAberrationRequest, NativeMagnificationChromaticAberrationResponse>(
-    "run_native_magnification_chromatic_aberration",
-    payload,
+  const tauriRuntime = isTauriRuntime();
+  const { calculateMagnificationChromaticAberrationData } = await import(
+    "../../../evaluation/aberrations/magnification-chromatic-aberration.ts"
   );
+  const result = await calculateMagnificationChromaticAberrationData(
+    Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [],
+    Array.isArray(payload?.fieldSamples) ? payload.fieldSamples : [],
+    Array.isArray(payload?.wavelengths) ? payload.wavelengths : [],
+    {
+      sourceRows: Array.isArray(payload?.sourceRows) ? payload.sourceRows : [],
+      referenceWavelength: Number.isFinite(Number(payload?.referenceWavelength))
+        ? Number(payload.referenceWavelength)
+        : 0.5876,
+      heightMode: payload?.heightMode === true,
+      chiefRayDefinition: payload?.chiefRayDefinition || "stop-center",
+      requireRustWasm: true,
+      forceWasmInTauri: true,
+    },
+  );
+  if (!result) throw new Error("LCA WASM calculation failed");
+
+  const normalized = result as NativeMagnificationChromaticAberrationResponse & { meta?: any };
+  normalized.backend = tauriRuntime ? "tauri-rust-wasm" : "web-rust-wasm";
+  normalized.meta = {
+    ...(normalized.meta || {}),
+    executionMode: tauriRuntime ? "tauri-wasm" : "web-wasm",
+    nativeTauriInvokeDisabled: true,
+  };
+  return normalized;
 }
 
 export async function readTextFile(payload: ReadTextFileRequest): Promise<ReadTextFileResponse> {

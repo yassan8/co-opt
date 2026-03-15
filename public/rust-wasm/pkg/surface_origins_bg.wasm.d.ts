@@ -16,6 +16,7 @@ export const fft_2d_inverse: (a: number, b: number, c: number, d: number, e: num
 export const free: (a: number, b: number) => void;
 export const generate_annular_offsets_flat: (a: number, b: number, c: number) => [number, number];
 export const generate_centered_grid_offsets_flat: (a: number, b: number) => [number, number];
+export const generate_cross_offsets_flat: (a: number, b: number) => [number, number];
 export const generate_fd_perturbation_points: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const generate_parallel_start_points_flat: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
 export const intersect_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
@@ -28,6 +29,8 @@ export const optimize_system_in_wasm: (a: number, b: number) => [number, number,
 export const qr_factorization: (a: number, b: number, c: number, d: number) => [number, number];
 export const reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+export const run_native_distortion_wasm_json: (a: number, b: number) => [number, number, number];
+export const run_native_magnification_chromatic_aberration_wasm_json: (a: number, b: number) => [number, number, number];
 export const run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
 export const solve_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const solve_qp_subproblem_kkt_equality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
