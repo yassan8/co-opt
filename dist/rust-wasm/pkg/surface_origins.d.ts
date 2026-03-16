@@ -63,8 +63,6 @@ export function generate_annular_offsets_flat(ray_count: number, max_radius: num
 
 export function generate_centered_grid_offsets_flat(ray_count: number, half_extent: number): Float64Array;
 
-export function generate_cross_offsets_flat(ray_count: number, max_radius: number): Float64Array;
-
 export function generate_fd_perturbation_points(x: Float64Array, steps: Float64Array, n: number): Float64Array;
 
 export function generate_parallel_start_points_flat(origin: Float64Array, u_axis: Float64Array, v_axis: Float64Array, offsets: Float64Array, count: number): Float64Array;
@@ -101,9 +99,51 @@ export function refract_ray_batch(dirs: Float64Array, normals: Float64Array, n1:
 
 export function run_native_distortion_wasm_json(req_json: string): any;
 
-export function run_native_magnification_chromatic_aberration_wasm_json(req_json: string): any;
+/**
+ * Compute sagittal & tangential MTF from a (fft-shifted) PSF grid.
+ * Matches the Tauri-native `run_native_mtf_map` logic.
+ *
+ * Input JSON:
+ * ```json
+ * {
+ *   "psfData":             number[][],
+ *   "pixelSizeUm":         number,
+ *   "maxFrequencyLpmm":    number,    // optional; default = Nyquist
+ *   "targetFrequencyLpmm": number,    // optional; if given, interpolated values are included
+ *   "points":              number     // default 121
+ * }
+ * ```
+ * Output JSON:
+ * ```json
+ * {
+ *   "frequencyAxis": number[], "mtfTangential": number[], "mtfSagittal": number[],
+ *   "nyquistLpmm": number,
+ *   "targetMtfTangential": number|null, "targetMtfSagittal": number|null
+ * }
+ * ```
+ */
+export function run_native_mtf_from_psf_wasm_json(req_json: string): any;
 
 export function run_native_opd_map_wasm_json(req_json: string): any;
+
+/**
+ * Compute PSF from an OPD map grid (grids are in *waves*, nulls = outside pupil).
+ * Matches the Tauri-native `run_native_psf_map` logic.
+ *
+ * Input JSON:
+ * ```json
+ * {
+ *   "rawOpdGrid":     (number|null)[][],  // OPD in waves; null = outside pupil
+ *   "displayOpdGrid": (number|null)[][],  // preferred display OPD (same units)
+ *   "wavelengthUm":   number,
+ *   "pixelSizeUm":    number,
+ *   "zeroPadTo":      number,             // 0 = use grid size
+ *   "removeTilt":     bool               // default false
+ * }
+ * ```
+ * Output JSON: `{ backend, gridSize, fftSize, psfData: number[][], message }`
+ */
+export function run_native_psf_from_opd_wasm_json(req_json: string): any;
 
 export function solve_linear_system(a_flat: Float64Array, n: number, b: Float64Array): Float64Array;
 
@@ -202,7 +242,6 @@ export interface InitOutput {
     readonly free: (a: number, b: number) => void;
     readonly generate_annular_offsets_flat: (a: number, b: number, c: number) => [number, number];
     readonly generate_centered_grid_offsets_flat: (a: number, b: number) => [number, number];
-    readonly generate_cross_offsets_flat: (a: number, b: number) => [number, number];
     readonly generate_fd_perturbation_points: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly generate_parallel_start_points_flat: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
     readonly intersect_aspheric_rt10: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
@@ -216,8 +255,9 @@ export interface InitOutput {
     readonly reflect_ray_batch: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly refract_ray_batch: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
     readonly run_native_distortion_wasm_json: (a: number, b: number) => [number, number, number];
-    readonly run_native_magnification_chromatic_aberration_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_mtf_from_psf_wasm_json: (a: number, b: number) => [number, number, number];
     readonly run_native_opd_map_wasm_json: (a: number, b: number) => [number, number, number];
+    readonly run_native_psf_from_opd_wasm_json: (a: number, b: number) => [number, number, number];
     readonly solve_linear_system: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly solve_qp_subproblem_kkt_equality: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number];
     readonly solve_qp_subproblem_unconstrained: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];

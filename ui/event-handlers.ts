@@ -21,12 +21,11 @@ import { derivePupilAndFocalLengthMmFromParaxial, generateSurfaceOptions } from 
 import { PSFPlotter } from '../evaluation/psf/psf-plot.ts';
 import { createOPDCalculator, createWavefrontAnalyzer, WavefrontAberrationAnalyzer } from '../evaluation/wavefront/wavefront.ts';
 import { PSFCalculator } from '../evaluation/psf/psf-calculator.ts';
-import { getLastWavefrontMap, getLastWavefrontMeta, patchLastWavefrontMap } from '../evaluation/wavefront/last-wavefront-runtime.ts';
 import { calculateFocalLength, calculateParaxialData, findStopSurfaceIndex, calculateImageSpaceDiffractionParams } from '../raytracing/core/ray-paraxial.ts';
 import { DEFAULT_STOP_SEMI_DIAMETER } from '../data/block-schema.ts';
 import { loadSystemConfigurations } from '../data/table-configuration.ts';
 import { requestUpdateSurfaceNumberSelect } from '../core/window-facade.ts';
-import { runAnalysisCompute, runNativeDistortion, runNativeFieldMtfMap, runNativeGridDistortion, runNativeMtfMap, runNativeOpdMap, runNativePsfMap, runNativeSphericalAberration, runNativeSpotRaytrace, runNativeThroughFocusMtfMap } from '../src/desktop/ipc/client.ts';
+import { readDesktopSetting, runAnalysisCompute, runNativeDistortion, runNativeFieldMtfMap, runNativeGridDistortion, runNativeMtfMap, runNativeOpdMap, runNativePsfMap, runNativeSphericalAberration, runNativeSpotRaytrace, runNativeThroughFocusMtfMap } from '../src/desktop/ipc/client.ts';
 import { isTauriRuntime } from '../src/desktop/runtime.ts';
 import { listen } from '@tauri-apps/api/event';
 import { hideAnalysisProgressHud, showAnalysisProgressHud, updateAnalysisProgressHud } from './shared/analysis-progress-hud.ts';
@@ -800,9 +799,17 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
     const zeroPadTo = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload.zeroPadTo)) : 0;
     const objectIndex = Number.isFinite(Number(payload?.objectIndex)) ? Math.max(0, Math.floor(Number(payload.objectIndex))) : 0;
     const forcedInfinitePupilMode = __cooptGetForceInfinitePupilMode();
-    const requestedPupilSamplingMode = (payload?.pupilSamplingMode === 'stop' || payload?.pupilSamplingMode === 'entrance')
+    let requestedPupilSamplingMode = (payload?.pupilSamplingMode === 'stop' || payload?.pupilSamplingMode === 'entrance')
         ? payload.pupilSamplingMode
         : ((forcedInfinitePupilMode === 'stop' || forcedInfinitePupilMode === 'entrance') ? forcedInfinitePupilMode : undefined);
+    if (!(requestedPupilSamplingMode === 'stop' || requestedPupilSamplingMode === 'entrance')) {
+        try {
+            const storedMode = String(await readDesktopSetting('coopt.forceInfinitePupilMode') || '').trim().toLowerCase();
+            if (storedMode === 'stop' || storedMode === 'entrance') {
+                requestedPupilSamplingMode = storedMode as ('stop' | 'entrance');
+            }
+        } catch (_) {}
+    }
 
     const isPowerOfTwo = (n: number) => Number.isInteger(n) && n > 0 && (n & (n - 1)) === 0;
     const nextPowerOfTwo = (n: number) => {
@@ -859,6 +866,29 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
         } catch (_) {}
     };
 
+    // Prefer direct Rust/WASM OPD->PSF->MTF for Object MTF in desktop as well,
+    // so Tauri and Web share the same numerical route.
+    let runNativeOpdWasm: ((reqJson: string) => any) | null = null;
+    let runNativePsfWasm: ((reqJson: string) => any) | null = null;
+    let runNativeMtfWasm: ((reqJson: string) => any) | null = null;
+    try {
+        const { preloadRustRayTracingWasm } = await import('../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts');
+        const rust = await preloadRustRayTracingWasm();
+        runNativeOpdWasm = (typeof (rust as any)?.run_native_opd_map_wasm_json === 'function')
+            ? (rust as any).run_native_opd_map_wasm_json
+            : null;
+        runNativePsfWasm = (typeof (rust as any)?.run_native_psf_from_opd_wasm_json === 'function')
+            ? (rust as any).run_native_psf_from_opd_wasm_json
+            : null;
+        runNativeMtfWasm = (typeof (rust as any)?.run_native_mtf_from_psf_wasm_json === 'function')
+            ? (rust as any).run_native_mtf_from_psf_wasm_json
+            : null;
+    } catch (_) {
+        runNativeOpdWasm = null;
+        runNativePsfWasm = null;
+        runNativeMtfWasm = null;
+    }
+
     const interpolateAxis = (axis: any[], values: any[], targetX: number): number => {
         if (!Array.isArray(axis) || !Array.isArray(values) || axis.length !== values.length) return 0;
         const pts = axis
@@ -890,6 +920,47 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
             if (targetX <= pts[i]) return [pts[i - 1], pts[i]];
         }
         return [pts[pts.length - 1], pts[pts.length - 1]];
+    };
+
+    const fillNaNGapsInPlace = (arr: number[]) => {
+        if (!Array.isArray(arr) || arr.length === 0) return;
+        const n = arr.length;
+        let firstValid = -1;
+        for (let i = 0; i < n; i++) {
+            if (Number.isFinite(arr[i])) {
+                firstValid = i;
+                break;
+            }
+        }
+        if (firstValid < 0) {
+            for (let i = 0; i < n; i++) arr[i] = 0;
+            return;
+        }
+        for (let i = 0; i < firstValid; i++) arr[i] = arr[firstValid];
+        let lastValid = firstValid;
+        let i = firstValid + 1;
+        while (i < n) {
+            if (Number.isFinite(arr[i])) {
+                lastValid = i;
+                i += 1;
+                continue;
+            }
+            const gapStart = i;
+            while (i < n && !Number.isFinite(arr[i])) i += 1;
+            const gapEnd = i - 1;
+            if (i < n) {
+                const leftV = arr[lastValid];
+                const rightV = arr[i];
+                const span = i - lastValid;
+                for (let k = gapStart; k <= gapEnd; k++) {
+                    const t = (k - lastValid) / span;
+                    arr[k] = leftV + t * (rightV - leftV);
+                }
+                lastValid = i;
+            } else {
+                for (let k = gapStart; k <= gapEnd; k++) arr[k] = arr[lastValid];
+            }
+        }
     };
 
     const cloneObjectRowsForField = (fieldValue: number): any[] => {
@@ -996,6 +1067,53 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
         const fieldDiagnostics: any[] = [];
         const pixelSizeUm = computePixelSizeUm(wl);
 
+        // Build one on-axis OPD anchor per wavelength to obtain a stable entrance
+        // pupil radius AND preferred evaluation surface.  Both are reused for all
+        // field points:
+        //   - fixedPupilRadiusMm: prevents per-angle aperture re-estimation which
+        //     shifts the MTF frequency axis and causes periodic drops.
+        //   - fixedTargetSurfaceIndex: prevents the auto-selection from jumping to
+        //     a different surface at some field angles, causing MTF level jumps.
+        //     The Rust backend now treats this as a *preferred* surface and falls
+        //     back gracefully when the chief ray cannot reach it.
+        let fixedTargetSurfaceIndex: number | undefined = undefined;
+        let fixedPupilRadiusMm: number | undefined = undefined;
+        const shouldAnchorEntranceRadius = axisMode === 'angle' && requestedPupilSamplingMode !== 'stop';
+        try {
+            const anchorFieldValue = (xAxis.length > 0 && Number.isFinite(Number(xAxis[0]))) ? Number(xAxis[0]) : 0;
+            const anchorObjectRows = cloneObjectRowsForField(anchorFieldValue);
+            const anchorAutoMode = axisMode === 'angle' ? 'entrance' : undefined;
+            const anchorPupilSamplingMode = requestedPupilSamplingMode || anchorAutoMode;
+            const anchorReq = {
+                opticalSystemRows,
+                sourceRows,
+                objectRows: anchorObjectRows,
+                objectIndex,
+                surfaceIndex: undefined,
+                gridSize: samplingSize,
+                wavelengthUm: wl,
+                pupilSamplingMode: anchorPupilSamplingMode,
+                opdDisplayMode,
+            };
+            const anchorOpdResp = (() => {
+                if (runNativeOpdWasm) {
+                    const raw = runNativeOpdWasm(JSON.stringify(anchorReq));
+                    return (typeof raw === 'string') ? JSON.parse(raw) : raw;
+                }
+                return null;
+            })() || await runNativeOpdMap(anchorReq as any);
+            const anchorTargetSurface = Number((anchorOpdResp as any)?.targetSurface);
+            if (Number.isFinite(anchorTargetSurface)) {
+                fixedTargetSurfaceIndex = anchorTargetSurface;
+            }
+            const anchorEffectiveRadius = Number((anchorOpdResp as any)?.effectivePupilRadiusMm);
+            if (shouldAnchorEntranceRadius && Number.isFinite(anchorEffectiveRadius) && anchorEffectiveRadius > 0) {
+                fixedPupilRadiusMm = anchorEffectiveRadius;
+            }
+        } catch (_anchorErr) {
+            // Anchor failed — proceed without fixed surface/radius anchoring.
+        }
+
         for (let fieldIndex = 0; fieldIndex < xAxis.length; fieldIndex++) {
             const fieldValue = xAxis[fieldIndex];
             const overallIndex = completedPoints + 1;
@@ -1011,86 +1129,137 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
             const autoMode = axisMode === 'angle' ? 'entrance' : undefined;
             const pupilSamplingMode = requestedPupilSamplingMode || autoMode;
 
-            const opdResp = await runNativeOpdMap({
-                opticalSystemRows,
-                sourceRows,
-                objectRows: stepObjectRows,
-                objectIndex,
-                surfaceIndex: undefined,
-                gridSize: samplingSize,
-                wavelengthUm: wl,
-                pupilSamplingMode,
-                opdDisplayMode,
-            });
+            let firstM = NaN, firstS = NaN, secondM = NaN, secondS = NaN;
+            let firstLo: number | null = null, firstHi: number | null = null;
+            let secondLo: number | null = null, secondHi: number | null = null;
+            let opdRespAny: any = {};
+            try {
+                // Sampling radius is fixed at the on-axis anchor value for all field
+                // angles so the frequency axis remains consistent across the sweep.
+                // Vignetting at high fields is handled physically: marginal rays that
+                // miss the target surface contribute None to the OPD grid (zero
+                // amplitude in the pupil function), which is the correct apodisation.
+                const opdReq = {
+                    opticalSystemRows,
+                    sourceRows,
+                    objectRows: stepObjectRows,
+                    objectIndex,
+                    surfaceIndex: fixedTargetSurfaceIndex,
+                    gridSize: samplingSize,
+                    wavelengthUm: wl,
+                    pupilRadiusMm: fixedPupilRadiusMm,
+                    pupilSamplingMode,
+                    opdDisplayMode,
+                };
+                const opdResp = (() => {
+                    if (runNativeOpdWasm) {
+                        const raw = runNativeOpdWasm(JSON.stringify(opdReq));
+                        return (typeof raw === 'string') ? JSON.parse(raw) : raw;
+                    }
+                    return null;
+                })() || await runNativeOpdMap(opdReq as any);
 
-            const s = samplingSize;
-            const gridOpd = Array.from({ length: s }, () => Array.from({ length: s }, () => 0));
-            const pupilMask = Array.from({ length: s }, () => Array.from({ length: s }, () => false));
-            const displayOpdGrid = Array.isArray((opdResp as any)?.displayOpdGrid) ? (opdResp as any).displayOpdGrid : [];
-            const rawOpdGrid = Array.isArray((opdResp as any)?.rawOpdGrid) ? (opdResp as any).rawOpdGrid : [];
-            for (let iy = 0; iy < s; iy++) {
-                const rowDisplay = displayOpdGrid[iy] || [];
-                const rowRaw = rawOpdGrid[iy] || [];
-                for (let ix = 0; ix < s; ix++) {
-                    const rawCell = rowRaw[ix];
-                    if (rawCell === null || rawCell === undefined || rawCell === '') continue;
-                    const vRawWaves = Number(rawCell);
-                    if (!Number.isFinite(vRawWaves)) continue;
-                    const displayCell = rowDisplay[ix];
-                    const vDisplayWaves = (displayCell === null || displayCell === undefined || displayCell === '') ? NaN : Number(displayCell);
-                    const vWaves = Number.isFinite(vDisplayWaves) ? vDisplayWaves : vRawWaves;
-                    gridOpd[iy][ix] = vWaves * wl;
-                    pupilMask[iy][ix] = true;
+                opdRespAny = opdResp as any;
+
+                const s = samplingSize;
+                const gridOpd = Array.from({ length: s }, () => Array.from({ length: s }, () => 0));
+                const pupilMask = Array.from({ length: s }, () => Array.from({ length: s }, () => false));
+                const displayOpdGrid = Array.isArray((opdResp as any)?.displayOpdGrid) ? (opdResp as any).displayOpdGrid : [];
+                const rawOpdGrid = Array.isArray((opdResp as any)?.rawOpdGrid) ? (opdResp as any).rawOpdGrid : [];
+                for (let iy = 0; iy < s; iy++) {
+                    const rowDisplay = displayOpdGrid[iy] || [];
+                    const rowRaw = rawOpdGrid[iy] || [];
+                    for (let ix = 0; ix < s; ix++) {
+                        const rawCell = rowRaw[ix];
+                        if (rawCell === null || rawCell === undefined || rawCell === '') continue;
+                        const vRawWaves = Number(rawCell);
+                        if (!Number.isFinite(vRawWaves)) continue;
+                        const displayCell = rowDisplay[ix];
+                        const vDisplayWaves = (displayCell === null || displayCell === undefined || displayCell === '') ? NaN : Number(displayCell);
+                        const vWaves = Number.isFinite(vDisplayWaves) ? vDisplayWaves : vRawWaves;
+                        gridOpd[iy][ix] = vWaves * wl;
+                        pupilMask[iy][ix] = true;
+                    }
                 }
+
+                const psfResp = (() => {
+                    if (runNativePsfWasm) {
+                        const raw = runNativePsfWasm(JSON.stringify({
+                            rawOpdGrid: (opdResp as any)?.rawOpdGrid,
+                            displayOpdGrid: (opdResp as any)?.displayOpdGrid,
+                            wavelengthUm: wl,
+                            pixelSizeUm,
+                            removeTilt: false,
+                            zeroPadTo: requestedFftSize,
+                        }));
+                        return (typeof raw === 'string') ? JSON.parse(raw) : raw;
+                    }
+                    return null;
+                })() || await runNativePsfMap({
+                    gridOpd,
+                    pupilMask,
+                    wavelengthUm: wl,
+                    pixelSizeUm,
+                    removeTilt: false,
+                    zeroPadTo: requestedFftSize,
+                    recenterIfWrapped: false,
+                });
+
+                const mtfResp = (() => {
+                    if (runNativeMtfWasm) {
+                        const raw = runNativeMtfWasm(JSON.stringify({
+                            psfData: (psfResp as any)?.psfData,
+                            pixelSizeUm,
+                            maxFrequencyLpmm: Math.max(1, Math.max(firstFrequencyLpmm, secondFrequencyLpmm) * 2),
+                            points: 121,
+                        }));
+                        return (typeof raw === 'string') ? JSON.parse(raw) : raw;
+                    }
+                    return null;
+                })() || await runNativeMtfMap({
+                    psfData: (psfResp as any)?.psfData,
+                    pixelSizeUm,
+                    maxFrequencyLpmm: Math.max(1, Math.max(firstFrequencyLpmm, secondFrequencyLpmm) * 2),
+                    points: 121,
+                });
+
+                const freqAxis = Array.isArray((mtfResp as any)?.frequencyAxis) ? (mtfResp as any).frequencyAxis : [];
+                const mtfTangential = Array.isArray((mtfResp as any)?.mtfTangential) ? (mtfResp as any).mtfTangential : [];
+                const mtfSagittal = Array.isArray((mtfResp as any)?.mtfSagittal) ? (mtfResp as any).mtfSagittal : [];
+                const tanAxis = inferTanAxis(fieldValue);
+                const tanVals = tanAxis === 'x' ? mtfSagittal : mtfTangential;
+                const sagVals = tanAxis === 'x' ? mtfTangential : mtfSagittal;
+
+                firstM = interpolateAxis(freqAxis, tanVals, firstFrequencyLpmm);
+                firstS = interpolateAxis(freqAxis, sagVals, firstFrequencyLpmm);
+                secondM = interpolateAxis(freqAxis, tanVals, secondFrequencyLpmm);
+                secondS = interpolateAxis(freqAxis, sagVals, secondFrequencyLpmm);
+                [firstLo, firstHi] = findBracket(freqAxis, firstFrequencyLpmm);
+                [secondLo, secondHi] = findBracket(freqAxis, secondFrequencyLpmm);
+            } catch (_fieldErr) {
+                // This field angle failed — record NaN so the plot shows a gap
+                // rather than stopping the entire sweep.
+                opdRespAny = { error: String(_fieldErr) };
             }
 
-            const psfResp = await runNativePsfMap({
-                gridOpd,
-                pupilMask,
-                wavelengthUm: wl,
-                pixelSizeUm,
-                removeTilt: false,
-                zeroPadTo: requestedFftSize,
-                recenterIfWrapped: false,
-            });
+            meridionalFirst.push(Number.isFinite(firstM) ? firstM : NaN);
+            sagittalFirst.push(Number.isFinite(firstS) ? firstS : NaN);
+            meridionalSecond.push(Number.isFinite(secondM) ? secondM : NaN);
+            sagittalSecond.push(Number.isFinite(secondS) ? secondS : NaN);
 
-            const mtfResp = await runNativeMtfMap({
-                psfData: (psfResp as any)?.psfData,
-                pixelSizeUm,
-                maxFrequencyLpmm: Math.max(1, Math.max(firstFrequencyLpmm, secondFrequencyLpmm) * 2),
-                points: 121,
-            });
-
-            const freqAxis = Array.isArray((mtfResp as any)?.frequencyAxis) ? (mtfResp as any).frequencyAxis : [];
-            const mtfTangential = Array.isArray((mtfResp as any)?.mtfTangential) ? (mtfResp as any).mtfTangential : [];
-            const mtfSagittal = Array.isArray((mtfResp as any)?.mtfSagittal) ? (mtfResp as any).mtfSagittal : [];
-            const tanAxis = inferTanAxis(fieldValue);
-            const tanVals = tanAxis === 'x' ? mtfSagittal : mtfTangential;
-            const sagVals = tanAxis === 'x' ? mtfTangential : mtfSagittal;
-
-            const firstM = interpolateAxis(freqAxis, tanVals, firstFrequencyLpmm);
-            const firstS = interpolateAxis(freqAxis, sagVals, firstFrequencyLpmm);
-            const secondM = interpolateAxis(freqAxis, tanVals, secondFrequencyLpmm);
-            const secondS = interpolateAxis(freqAxis, sagVals, secondFrequencyLpmm);
-
-            meridionalFirst.push(firstM);
-            sagittalFirst.push(firstS);
-            meridionalSecond.push(secondM);
-            sagittalSecond.push(secondS);
-
-            const [firstLo, firstHi] = findBracket(freqAxis, firstFrequencyLpmm);
-            const [secondLo, secondHi] = findBracket(freqAxis, secondFrequencyLpmm);
-            const sampleCount = Number((opdResp as any)?.sampleCount || 0);
-            const hitCount = Number((opdResp as any)?.hitCount || 0);
+            const sampleCount = Number(opdRespAny?.sampleCount || 0);
+            const hitCount = Number(opdRespAny?.hitCount || 0);
             fieldDiagnostics.push({
                 fieldValue,
-                effectivePupilSamplingMode: String((opdResp as any)?.pupilSamplingMode || ''),
-                usedObjectPosition: String((opdResp as any)?.usedObjectPosition || ''),
-                targetSurfaceIndex: Number((opdResp as any)?.targetSurface),
-                usedObjectIndex: Number((opdResp as any)?.usedObjectIndex),
+                effectivePupilSamplingMode: String(opdRespAny?.pupilSamplingMode || ''),
+                effectivePupilRadiusMm: Number(opdRespAny?.effectivePupilRadiusMm),
+                usedObjectPosition: String(opdRespAny?.usedObjectPosition || ''),
+                targetSurfaceIndex: Number(opdRespAny?.targetSurface),
+                usedObjectIndex: Number(opdRespAny?.usedObjectIndex),
                 opdSampleCount: sampleCount,
                 opdHitCount: hitCount,
                 opdHitRate: sampleCount > 0 ? (hitCount / sampleCount) : 0,
+                opdMessage: String(opdRespAny?.message || opdRespAny?.error || ''),
                 firstFrequencyLpmm,
                 firstBracketLowLpmm: firstLo,
                 firstBracketHighLpmm: firstHi,
@@ -1115,6 +1284,12 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
             sagittalSecond,
             fieldDiagnostics,
         });
+
+        // Keep plot continuity even when some field points fail internally.
+        fillNaNGapsInPlace(meridionalFirst);
+        fillNaNGapsInPlace(sagittalFirst);
+        fillNaNGapsInPlace(meridionalSecond);
+        fillNaNGapsInPlace(sagittalSecond);
     }
 
     return {
@@ -2950,16 +3125,13 @@ function __coopt_applyPopupCrossSectionLensFill(options: {
     opticalSystemRows: any[];
     source?: string;
 }): void {
-    // Keep cross-section rendering clean in popup windows: no debug fill overlays.
-    return;
-
     const { popupWindow, scene, viewAxis, opticalSystemRows, source = 'unknown' } = options;
     if (!scene || !Array.isArray(opticalSystemRows) || opticalSystemRows.length < 2) return;
 
     const THREE = popupWindow?.THREE || w.THREE || THREE_NS;
     if (!THREE) return;
 
-    const FORCE_DEBUG_FILL = true;
+    const FORCE_DEBUG_FILL = false;
 
     __coopt_clearPopupLensFillMeshes(scene);
 
@@ -5763,12 +5935,24 @@ export function setupAnalysisWindows() {
             const src = getOpenerEl('system-data');
             const popupRef = document.getElementById('popup-reference-focal-length');
             const popupText = document.getElementById('popup-system-data');
+            let cached = '';
+            try {
+                cached = (window.opener && typeof window.opener.__cooptSystemDataText === 'string')
+                    ? window.opener.__cooptSystemDataText
+                    : '';
+            } catch (_) {
+                cached = '';
+            }
 
             if (popupRef && ref && popupRef.value !== ref.value) {
                 popupRef.value = ref.value;
             }
-            if (popupText && src && popupText.value !== src.value) {
-                popupText.value = src.value;
+            if (popupText) {
+                if (src && popupText.value !== src.value) {
+                    popupText.value = src.value;
+                } else if (!src && cached.length > 0 && popupText.value !== cached) {
+                    popupText.value = cached;
+                }
             }
         }
 
@@ -9117,8 +9301,17 @@ export function setupAnalysisWindows() {
                                 setProgress(98, 'Zernike fitting...');
 
                                 const opener = window.opener;
-                                const map = opener ? getLastWavefrontMap(opener) : null;
-                                const meta = opener ? getLastWavefrontMeta(opener) : null;
+                                const runtimeState = (() => {
+                                    try {
+                                        const key = '__cooptLastWavefrontRuntime';
+                                        const s = opener ? opener[key] : null;
+                                        return (s && typeof s === 'object') ? s : null;
+                                    } catch (_) {
+                                        return null;
+                                    }
+                                })();
+                                const map = runtimeState && runtimeState.map ? runtimeState.map : null;
+                                const meta = runtimeState && runtimeState.meta ? runtimeState.meta : null;
                                 if (!map || map?.error) {
                                     throw new Error('No valid wavefrontMap to fit');
                                 }
@@ -9181,11 +9374,16 @@ export function setupAnalysisWindows() {
 
                                 // Store coefficients for the main window Zernike Fit button
                                 try {
-                                    patchLastWavefrontMap((current) => {
-                                        current.zernike = fit;
-                                        current.statistics = current.statistics || (map.statistics || {});
-                                        current.statistics.skipZernikeFit = false;
-                                    }, { host: opener, fallbackMap: map });
+                                    const key = '__cooptLastWavefrontRuntime';
+                                    const base = (runtimeState && typeof runtimeState === 'object')
+                                        ? runtimeState
+                                        : { map: (map && typeof map === 'object') ? map : {}, meta: meta || null };
+                                    const current = (base.map && typeof base.map === 'object') ? base.map : {};
+                                    current.zernike = fit;
+                                    current.statistics = current.statistics || (map?.statistics || {});
+                                    current.statistics.skipZernikeFit = false;
+                                    base.map = current;
+                                    if (opener) opener[key] = base;
                                 } catch (_) {}
 
                                 // Build a lightweight report map so formatting can rely on aligned sample arrays
@@ -9200,21 +9398,71 @@ export function setupAnalysisWindows() {
                                 const reportText = analyzer.formatZernikeReportText(reportMap, { maxNoll });
 
                                 const pushSystemData = (text) => {
+                                    const value = String(text || '');
+                                    let wrote = false;
+
+                                    const tryWriteTextarea = (doc, id) => {
+                                        try {
+                                            const ta = doc?.getElementById?.(id);
+                                            if (!ta || typeof ta.value !== 'string') return false;
+                                            ta.value = value;
+                                            return true;
+                                        } catch (_) {
+                                            return false;
+                                        }
+                                    };
+
                                     try {
-                                        const ta = opener?.document?.getElementById?.('system-data');
-                                        if (!ta || typeof ta.value !== 'string') return false;
-                                        // Replace (clear then push) so each run shows only the latest report.
-                                        ta.value = String(text || '');
-                                        return true;
-                                    } catch (_) {
-                                        return false;
-                                    }
+                                        // Keep a fallback cache so System Data windows can read latest text
+                                        // even when opener's hidden textarea is not mounted in this route.
+                                        if (opener) {
+                                            opener.__cooptSystemDataText = value;
+                                            if (typeof opener.__cooptPushSystemDataText === 'function') {
+                                                opener.__cooptPushSystemDataText(value);
+                                                wrote = true;
+                                            }
+                                        }
+                                        wrote = true;
+                                    } catch (_) {}
+
+                                    wrote = tryWriteTextarea(opener?.document, 'system-data') || wrote;
+                                    wrote = tryWriteTextarea(opener?.__systemDataPopup?.document, 'system-data') || wrote;
+                                    wrote = tryWriteTextarea(opener?.__systemDataPopup?.document, 'popup-system-data') || wrote;
+                                    try {
+                                        if (typeof opener?.__systemDataPopup?.__cooptPushSystemDataText === 'function') {
+                                            opener.__systemDataPopup.__cooptPushSystemDataText(value);
+                                            wrote = true;
+                                        }
+                                    } catch (_) {}
+
+                                    return wrote;
                                 };
 
-                                const tryOpenSystemDataWindow = () => {
+                                const tryOpenSystemDataWindow = (text) => {
+                                    const value = String(text || '');
+                                    const tryWriteTextarea = (doc, id) => {
+                                        try {
+                                            const ta = doc?.getElementById?.(id);
+                                            if (!ta || typeof ta.value !== 'string') return false;
+                                            ta.value = value;
+                                            return true;
+                                        } catch (_) {
+                                            return false;
+                                        }
+                                    };
+
                                     try {
                                         const w = opener?.__systemDataPopup;
                                         if (w && !w.closed) {
+                                            // Existing popup may use either legacy (#popup-system-data)
+                                            // or app route (#system-data) textarea id.
+                                            tryWriteTextarea(w.document, 'popup-system-data');
+                                            tryWriteTextarea(w.document, 'system-data');
+                                            try {
+                                                if (typeof w.__cooptPushSystemDataText === 'function') {
+                                                    w.__cooptPushSystemDataText(value);
+                                                }
+                                            } catch (_) {}
                                             try { w.focus(); } catch (_) {}
                                             return true;
                                         }
@@ -9231,6 +9479,13 @@ export function setupAnalysisWindows() {
                                             try {
                                                 const w = opener?.__systemDataPopup;
                                                 if (w && !w.closed) {
+                                                    tryWriteTextarea(w.document, 'popup-system-data');
+                                                    tryWriteTextarea(w.document, 'system-data');
+                                                    try {
+                                                        if (typeof w.__cooptPushSystemDataText === 'function') {
+                                                            w.__cooptPushSystemDataText(value);
+                                                        }
+                                                    } catch (_) {}
                                                     try { w.focus(); } catch (_) {}
                                                     return true;
                                                 }
@@ -9270,6 +9525,14 @@ export function setupAnalysisWindows() {
 
                                         popup.document.write(html);
                                         try { popup.document.close(); } catch (_) {}
+                                        // Prime the fallback popup immediately without waiting for sync tick.
+                                        tryWriteTextarea(popup.document, 'popup-system-data');
+                                        tryWriteTextarea(popup.document, 'system-data');
+                                        try {
+                                            if (typeof popup.__cooptPushSystemDataText === 'function') {
+                                                popup.__cooptPushSystemDataText(value);
+                                            }
+                                        } catch (_) {}
                                         try { popup.focus(); } catch (_) {}
                                         return true;
                                     } catch (_) {}
@@ -9278,7 +9541,7 @@ export function setupAnalysisWindows() {
                                 };
 
                                 const pushed = pushSystemData(reportText);
-                                const opened = tryOpenSystemDataWindow();
+                                const opened = tryOpenSystemDataWindow(reportText);
                                 if (pushed && opened) {
                                     try { opdStageTrace.push('Zernike completed', 'Report pushed to System Data'); } catch (_) {}
                                     setProgress(100, 'Zernike report pushed to System Data');

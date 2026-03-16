@@ -1,10 +1,54 @@
 import { useEffect } from 'react';
 
 export function SystemDataPanel({ visible = false }: { visible?: boolean }) {
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const w = window as any;
+    const storageKey = 'coopt.systemDataText';
+
+    const applySystemDataText = (text: any) => {
+      const next = String(text ?? '');
+      try {
+        w.__cooptSystemDataText = next;
+      } catch (_) {}
+      try {
+        localStorage.setItem(storageKey, next);
+      } catch (_) {}
+      try {
+        const ta = document.getElementById('system-data') as HTMLTextAreaElement | null;
+        if (ta && ta.value !== next) ta.value = next;
+      } catch (_) {}
+    };
+
+    const prev = w.__cooptPushSystemDataText;
+    w.__cooptPushSystemDataText = applySystemDataText;
+
+    // Bootstrap from runtime cache, then localStorage as a fallback.
+    let initial = '';
+    try {
+      if (typeof w.__cooptSystemDataText === 'string') initial = w.__cooptSystemDataText;
+    } catch (_) {}
+    if (!initial) {
+      try {
+        const cached = localStorage.getItem(storageKey);
+        if (typeof cached === 'string') initial = cached;
+      } catch (_) {}
+    }
+    if (initial) applySystemDataText(initial);
+
+    return () => {
+      try {
+        if (w.__cooptPushSystemDataText === applySystemDataText) {
+          if (typeof prev === 'function') w.__cooptPushSystemDataText = prev;
+          else delete w.__cooptPushSystemDataText;
+        }
+      } catch (_) {}
+    };
+  }, []);
+
   return (
     <div className={`system-section ${visible ? 'system-section-window-fit' : ''}`} style={{ display: visible ? 'flex' : 'none' }}>
-      <h2>System Data</h2>
-
       <div
         id="transform-error-bar"
         className="merit-function-help"

@@ -160,56 +160,35 @@ function sanitizeDistortionData(dataList: any[]): any[] {
   return (Array.isArray(dataList) ? dataList : []).map((data) => {
     const xs = Array.isArray(data?.distortionPercent) ? data.distortionPercent : [];
     const ys = Array.isArray(data?.fieldValues) ? data.fieldValues : [];
-    const pairs: Array<{ x: number; y: number }> = [];
     const n = Math.min(xs.length, ys.length);
+    const outX: Array<number | null> = [];
+    const outY: Array<number | null> = [];
     for (let i = 0; i < n; i++) {
-      const x = Number(xs[i]);
       const y = Number(ys[i]);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-      if (Math.abs(x) > 50) continue;
-      pairs.push({ x, y });
-    }
-
-    const sorted = pairs.sort((a, b) => a.y - b.y);
-
-    // Merge duplicate/near-duplicate field angles into one representative point.
-    const merged: Array<{ x: number; y: number }> = [];
-    const yTol = 1e-6;
-    let i = 0;
-    while (i < sorted.length) {
-      const bucket = [sorted[i]];
-      let j = i + 1;
-      while (j < sorted.length && Math.abs(sorted[j].y - sorted[i].y) <= yTol) {
-        bucket.push(sorted[j]);
-        j += 1;
-      }
-      const xsBucket = bucket.map((p) => p.x).sort((a, b) => a - b);
-      const medianX = xsBucket[Math.floor(xsBucket.length / 2)];
-      const meanY = bucket.reduce((acc, p) => acc + p.y, 0) / bucket.length;
-      merged.push({ x: medianX, y: meanY });
-      i = j;
-    }
-
-    // Suppress isolated spikes that create artificial zig-zag or horizontal artifacts.
-    const denoised = merged.map((p) => ({ ...p }));
-    const spikeDx = 1.0;
-    for (let k = 1; k + 1 < denoised.length; k++) {
-      const prev = denoised[k - 1].x;
-      const cur = denoised[k].x;
-      const next = denoised[k + 1].x;
-      const leftJump = Math.abs(cur - prev);
-      const rightJump = Math.abs(cur - next);
-      if (leftJump > spikeDx && rightJump > spikeDx) {
-        denoised[k].x = (prev + next) * 0.5;
-      }
+      const xRaw = xs[i];
+      const x = (typeof xRaw === 'number' && Number.isFinite(xRaw) && Math.abs(xRaw) <= 50)
+        ? xRaw
+        : null;
+      if (!Number.isFinite(y)) continue;
+      // Skip fields where distortion could not be computed (null chief ray).
+      // These create visual gaps/breaks in the Plotly line; genuine missing
+      // hardware data is better omitted than shown as a disconnected segment.
+      if (x === null) continue;
+      outX.push(x);
+      outY.push(y);
     }
 
     return {
       ...data,
-      distortionPercent: denoised.map((p) => p.x),
-      fieldValues: denoised.map((p) => p.y),
+      distortionPercent: outX,
+      fieldValues: outY,
     };
-  }).filter((d) => Array.isArray(d?.fieldValues) && d.fieldValues.length > 0);
+  }).filter((d) => {
+    const ys = Array.isArray(d?.fieldValues) ? d.fieldValues : [];
+    const xs = Array.isArray(d?.distortionPercent) ? d.distortionPercent : [];
+    if (ys.length === 0 || xs.length === 0) return false;
+    return xs.some((v: any) => typeof v === 'number' && Number.isFinite(v));
+  });
 }
 
 function scaleFieldValues(values: number[], scale: number): number[] {
@@ -341,46 +320,32 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
       const wavelengths = deriveDistortionWavelengths(sourceRows);
       const runtimeLabel = isTauriRuntime() ? 'tauri' : 'web';
       setBackendInfo(formatRuntimeInfo(runtimeLabel));
-      const scales = [1.0, 0.7, 0.5, 0.35, 0.2];
-      let bestData: any[] = [];
-      let bestFinite = 0;
-      const totalExpected = fieldValues.length * Math.max(1, wavelengths.length);
-      for (let si = 0; si < scales.length; si++) {
-        const scale = scales[si];
-        const scaledFields = scaleFieldValues(fieldValues, scale);
-        const allData = [];
-        for (let i = 0; i < wavelengths.length; i++) {
-          const wl = wavelengths[i];
-          const base = (i / Math.max(1, wavelengths.length)) * 100;
-          const span = 100 / Math.max(1, wavelengths.length);
-          const resp = await runNativeDistortion({
-            opticalSystemRows,
-            sourceRows,
-            objectRows,
-            fieldSamples: scaledFields,
-            heightMode,
-            wavelength: wl,
-          });
-          const backendLabel = String(resp?.backend || "unknown");
-          setBackendInfo(formatRuntimeInfo(runtimeLabel, backendLabel));
-          allData.push({
-            fieldValues: Array.isArray(resp?.fieldValues) ? resp.fieldValues : scaledFields,
-            idealHeights: Array.isArray(resp?.idealHeights) ? resp.idealHeights : [],
-            realHeights: Array.isArray(resp?.realHeights) ? resp.realHeights : [],
-            distortion: Array.isArray(resp?.distortion) ? resp.distortion : [],
-            distortionPercent: Array.isArray(resp?.distortionPercent) ? resp.distortionPercent : [],
-            meta: { ...(resp?.meta || {}), wavelength: wl, heightMode },
-          });
-          setProgress(base + span, `Distortion (λ=${wl.toFixed(4)} um, scale=${scale.toFixed(2)}, backend=${backendLabel})`);
-        }
-        const sanitized = sanitizeDistortionData(allData);
-        const finiteCount = countFiniteDistortionPoints(sanitized);
-        if (finiteCount > bestFinite) {
-          bestFinite = finiteCount;
-          bestData = sanitized;
-        }
-        if (finiteCount >= totalExpected) break;
+      const allData = [];
+      for (let i = 0; i < wavelengths.length; i++) {
+        const wl = wavelengths[i];
+        const base = (i / Math.max(1, wavelengths.length)) * 100;
+        const span = 100 / Math.max(1, wavelengths.length);
+        const resp = await runNativeDistortion({
+          opticalSystemRows,
+          sourceRows,
+          objectRows,
+          fieldSamples: fieldValues,
+          heightMode,
+          wavelength: wl,
+        });
+        const backendLabel = String(resp?.backend || "unknown");
+        setBackendInfo(formatRuntimeInfo(runtimeLabel, backendLabel));
+        allData.push({
+          fieldValues: Array.isArray(resp?.fieldValues) ? resp.fieldValues : fieldValues,
+          idealHeights: Array.isArray(resp?.idealHeights) ? resp.idealHeights : [],
+          realHeights: Array.isArray(resp?.realHeights) ? resp.realHeights : [],
+          distortion: Array.isArray(resp?.distortion) ? resp.distortion : [],
+          distortionPercent: Array.isArray(resp?.distortionPercent) ? resp.distortionPercent : [],
+          meta: { ...(resp?.meta || {}), wavelength: wl, heightMode },
+        });
+        setProgress(base + span, `Distortion (λ=${wl.toFixed(4)} um, backend=${backendLabel})`);
       }
+      const bestData = sanitizeDistortionData(allData);
       if (!bestData.length) {
         throw new Error('Distortion returned no plottable points (all chief rays failed).');
       }

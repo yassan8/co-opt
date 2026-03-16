@@ -1154,6 +1154,39 @@ export function handleOptimize(): void {
   if (!isOptimizeWindowContext) {
     (async () => {
       try {
+        // Keep Optimize Progress score aligned with the main UI by forcing
+        // one explicit "Update Requirement" evaluation before opening.
+        const runRequirementUpdateBeforeOpen = async (): Promise<void> => {
+          const startedAt = Date.now();
+          try {
+            const reqEditor = (window as any).systemRequirementsEditor;
+            if (reqEditor && typeof reqEditor.evaluateAndUpdateNow === 'function') {
+              const r = reqEditor.evaluateAndUpdateNow({
+                reason: 'optimize-open-prerun',
+                forceSilent: true,
+                silent: true,
+              });
+              if (r && typeof r.then === 'function') {
+                await r;
+              }
+            }
+          } catch (_) {}
+
+          // Wait briefly for async table writes that finish after the Promise resolves.
+          const deadline = Date.now() + 2500;
+          while (Date.now() < deadline) {
+            try {
+              const s = (window as any).__cooptLastRequirementsEval;
+              const at = Number(s?.at ?? 0);
+              const stage = String(s?.stage ?? '').trim().toLowerCase();
+              if (at >= startedAt && stage === 'done') break;
+            } catch (_) {}
+            await new Promise((resolve) => setTimeout(resolve, 30));
+          }
+        };
+
+        await runRequirementUpdateBeforeOpen();
+
         const url = new URL(window.location.href);
         url.searchParams.set('coopt_optimize_window', '1');
         if (isTauriRuntime()) {
@@ -1879,7 +1912,26 @@ export function handleOpenSettings(): void {
     } else {
       url.searchParams.delete('coopt_force_mode');
     }
-    window.location.assign(url.toString());
+
+    const width = 520;
+    const height = 620;
+    const left = Math.max(0, Math.floor((window.screenX || 0) + (window.outerWidth - width) / 2));
+    const top = Math.max(0, Math.floor((window.screenY || 0) + (window.outerHeight - height) / 2));
+    const features = [
+      `width=${width}`,
+      `height=${height}`,
+      `left=${left}`,
+      `top=${top}`,
+      'resizable=yes',
+      'scrollbars=yes',
+    ].join(',');
+
+    const popup = window.open(url.toString(), 'coopt-settings', features);
+    if (!popup) {
+      alert('ポップアップがブロックされました。ブラウザのポップアップブロッカーを無効にしてください。\n\nPopup was blocked. Please disable your browser\'s popup blocker.');
+      return;
+    }
+    try { popup.focus(); } catch (_) {}
   } catch (_) {
     alert('Failed to open Settings page.');
   }

@@ -3681,15 +3681,17 @@ export async function showIntegratedAberrationDiagram(options: any = {}): Promis
         
         // 1. 球面収差データを計算
         console.log('📊 Calculating spherical aberration...');
-        const { calculateLongitudinalAberrationAsync } = await import('../evaluation/aberrations/longitudinal-aberration.js');
-        
-        const longitudinalData = await calculateLongitudinalAberrationAsync(
+        try { onProgress?.({ percent: 5, message: 'Spherical: Preparing Rust/WASM...' }); } catch (_) {}
+        const { runNativeSphericalAberration } = await import('../src/desktop/ipc/client.ts');
+        const longitudinalData = await runNativeSphericalAberration({
             opticalSystemRows,
+            sourceRows: sourceRows || [],
             surfaceIndex,
-            wavelengths as any,
-            rayCountSpherical,
-            { onProgress: mapProgress(5, 30, 'Spherical'), referenceFocusMode: 'current-paraxial' } as any
-        );
+            rayCount: rayCountSpherical,
+            referenceFocusMode: 'current-paraxial',
+            wavelengthMode: 'all',
+        });
+        try { onProgress?.({ percent: 35, message: 'Spherical: Done' }); } catch (_) {}
         
         if (!longitudinalData) {
             throw new Error('Failed to calculate longitudinal aberration');

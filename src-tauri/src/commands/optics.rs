@@ -394,6 +394,7 @@ pub struct NativeOpdMapResponse {
     pub pupil_sampling_mode: String,
     pub raw_opd_grid: Vec<Vec<Option<f64>>>,
     pub display_opd_grid: Vec<Vec<Option<f64>>>,
+    pub effective_pupil_radius_mm: f64,
     pub message: String,
 }
 
@@ -560,12 +561,14 @@ pub struct NativeFieldMtfSeries {
 pub struct NativeFieldMtfPointDiagnostic {
     pub field_value: f64,
     pub effective_pupil_sampling_mode: String,
+    pub effective_pupil_radius_mm: f64,
     pub used_object_position: Option<String>,
     pub target_surface_index: usize,
     pub used_object_index: usize,
     pub opd_sample_count: usize,
     pub opd_hit_count: usize,
     pub opd_hit_rate: f64,
+    pub opd_message: String,
     pub first_frequency_lpmm: f64,
     pub first_bracket_low_lpmm: Option<f64>,
     pub first_bracket_high_lpmm: Option<f64>,
@@ -1255,17 +1258,25 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
         .copied()
         .unwrap_or(surface_data[surface_data.len().saturating_sub(1)]);
 
+    let explicit_pupil_radius = req.pupil_radius_mm.filter(|r| r.is_finite() && *r > 0.0);
+    let requested_pupil_sampling_mode_for_radius = req
+        .pupil_sampling_mode
+        .as_ref()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| s == "stop" || s == "entrance");
     let mut stop_radius = estimate_stop_radius_mm(&rows);
-    if let Some(req_r) = req.pupil_radius_mm {
-        if req_r.is_finite() && req_r > 0.0 {
+    if matches!(requested_pupil_sampling_mode_for_radius.as_deref(), Some("stop")) {
+        if let Some(req_r) = explicit_pupil_radius {
             stop_radius = req_r;
         }
     }
     let entrance_radius = estimate_entrance_radius_mm(&rows).clamp(0.01, 500.0);
-    let sampling_radius = if stop_radius.is_finite() && stop_radius > 0.0 {
-        stop_radius.min(entrance_radius).max(0.01)
-    } else {
-        entrance_radius
+    let sampling_radius = match requested_pupil_sampling_mode_for_radius.as_deref() {
+        Some("stop") if stop_radius.is_finite() && stop_radius > 0.0 => stop_radius.max(0.01),
+        Some("stop") => entrance_radius,
+        Some("entrance") => explicit_pupil_radius.unwrap_or(entrance_radius).max(0.01),
+        _ if stop_radius.is_finite() && stop_radius > 0.0 => stop_radius.min(entrance_radius).max(0.01),
+        _ => entrance_radius,
     };
 
     let mut source_rows = req.source_rows.clone();
@@ -1628,9 +1639,69 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
         ])
     };
 
-    let mut chief_start_dir = build_marginal_ray(0.0, 0.0, sampling_radius, effective_emission_origin)
-        .ok_or_else(|| "run_native_opd_map: chief ray not found".to_string())?;
+    // Prefer the same chief-ray construction path used by the native render/spot
+    // pipeline so OPD/PSF/MTF share a consistent launch model at difficult fields.
+    let mut chief_start_dir: Option<[f64; 6]> = None;
     let mut chief_reference_mode = "center-chief".to_string();
+    if let Some(obj) = selected_object_map {
+        let target_surface_origin = surface_data
+            .get(target_surface_index)
+            .map(|s| s.origin)
+            .unwrap_or(stop_surface.origin);
+        let (_has_field_angle, render_rays, refined_origin) = generate_ray_start_points_for_object_native(
+            &rows,
+            obj,
+            "NativeOpdObject",
+            5,
+            "annular",
+            1,
+            wavelength_um,
+            infinite_conjugate,
+            object_plane_z,
+            stop_surface_index,
+            target_surface_index,
+            target_surface_origin,
+            stop_surface.origin,
+            stop_plane_u,
+            stop_plane_v,
+            sampling_radius,
+            Some(&packed_stop),
+            Some(&packed_target),
+            None,
+            true,
+        );
+        let chief_render = render_rays
+            .iter()
+            .find(|r| r.is_chief)
+            .or_else(|| render_rays.first());
+        if let Some(chief) = chief_render {
+            let candidate = [
+                chief.start_p.x,
+                chief.start_p.y,
+                chief.start_p.z,
+                chief.dir.x,
+                chief.dir.y,
+                chief.dir.z,
+            ];
+            if candidate.iter().all(|v| v.is_finite()) {
+                chief_start_dir = Some(candidate);
+                if let Some(origin) = refined_origin {
+                    effective_emission_origin = apply_symmetry_axis_lock(origin);
+                }
+                chief_reference_mode = "render-chief".to_string();
+            }
+        }
+    }
+
+    if chief_start_dir.is_none() {
+        chief_start_dir = build_marginal_ray(0.0, 0.0, sampling_radius, effective_emission_origin);
+    }
+    let mut chief_start_dir = chief_start_dir
+        .ok_or_else(|| "run_native_opd_map: chief ray not found".to_string())?;
+    let target_surface_origin = surface_data
+        .get(target_surface_index)
+        .map(|s| s.origin)
+        .unwrap_or(stop_surface.origin);
     let mut chief_target_hit = trace_single_ray_hit_point_with_meta_core(
         &chief_start_dir,
         target_surface_index,
@@ -1682,6 +1753,52 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
                 }
             }
 
+            // Render parity: when the entrance-grid chief still misses, try the
+            // same high-field origin refinement used by render/spot ray generation.
+            if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON {
+                let mut candidate_origin = effective_emission_origin;
+                if let Some(refined) = search_high_field_origin_for_target_native(
+                    candidate_origin,
+                    infinite_direction,
+                    target_surface_index,
+                    target_surface_origin,
+                    &packed_target,
+                    entrance_radius,
+                ) {
+                    candidate_origin = refined;
+                } else if let Some((bundle_refined, _bundle_hits)) = search_high_field_origin_by_bundle_native(
+                    candidate_origin,
+                    infinite_direction,
+                    infinite_u_axis,
+                    infinite_v_axis,
+                    target_surface_index,
+                    &packed_target,
+                    entrance_radius,
+                ) {
+                    candidate_origin = bundle_refined;
+                }
+
+                if let Some(candidate_chief_ray) = build_marginal_ray(0.0, 0.0, entrance_radius_try, candidate_origin) {
+                    let candidate_target_hit = trace_single_ray_hit_point_with_meta_core(
+                        &candidate_chief_ray,
+                        target_surface_index,
+                        object_space_n,
+                        &packed_target.row_meta,
+                        &packed_target.row_params,
+                        &packed_target.row_origins,
+                        &packed_target.row_inv_rots,
+                        &packed_target.row_rots,
+                        packed_target.row_count,
+                    );
+                    if (candidate_target_hit[0] - 1.0).abs() <= f64::EPSILON {
+                        chief_start_dir = candidate_chief_ray;
+                        chief_target_hit = candidate_target_hit;
+                        effective_emission_origin = apply_symmetry_axis_lock(candidate_origin);
+                        chief_reference_mode = "entrance-chief-target(high-field-search)".to_string();
+                    }
+                }
+            }
+
             // NOTE: keep a safe fallback path to avoid hard failures in extreme fields.
             // We still annotate the mode so parity diagnostics can detect this branch.
             if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON {
@@ -1689,11 +1806,24 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
             }
         }
 
+        // Only allow target-surface fallback when the caller did NOT supply an explicit
+        // surface index.  When the caller fixes the surface (e.g. field-sweep anchor),
+        // falling back to an adjacent surface changes the reference plane per-field and
+        // produces artificial MTF spikes (the fallback surface happens to be better-focused
+        // at that angle).  Missing rays on a fixed surface are physically correct: that
+        // field angle is outside the valid image circle for this surface.
         let allow_target_surface_fallback = req.surface_index.is_none();
+        const MAX_FALLBACK_DISTANCE: usize = 5;
         if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON && allow_target_surface_fallback {
             let mut found = false;
             let fallback_from = target_surface_index;
             for candidate_surface in (0..target_surface_index).rev() {
+                // Do not descend more than MAX_FALLBACK_DISTANCE surfaces below
+                // the original target: a large backwards jump means we have left
+                // the image region and entered the lens body.
+                if fallback_from.saturating_sub(candidate_surface) > MAX_FALLBACK_DISTANCE {
+                    break;
+                }
                 let candidate_packed = build_packed_meta(&rows, &surface_data, candidate_surface, wavelength_um)?;
                 let candidate_hit = trace_single_ray_hit_point_with_meta_core(
                     &chief_start_dir,
@@ -1722,11 +1852,27 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
                 }
             }
             if !found {
-                return Err("run_native_opd_map: chief ray did not reach target surface".to_string());
+                return Err(format!(
+                    "run_native_opd_map: chief ray did not reach target surface (requestedSurface={}, usedSurface={}, objectMode={}, field=({:.6},{:.6}), chiefMode={})",
+                    requested_target_surface_index,
+                    target_surface_index,
+                    used_object_position,
+                    used_object_x,
+                    used_object_y,
+                    chief_reference_mode
+                ));
             }
         }
         if (chief_target_hit[0] - 1.0).abs() > f64::EPSILON {
-            return Err("run_native_opd_map: chief ray did not reach target surface".to_string());
+            return Err(format!(
+                "run_native_opd_map: chief ray did not reach target surface (requestedSurface={}, usedSurface={}, objectMode={}, field=({:.6},{:.6}), chiefMode={})",
+                requested_target_surface_index,
+                target_surface_index,
+                used_object_position,
+                used_object_x,
+                used_object_y,
+                chief_reference_mode
+            ));
         }
     }
     let mut chief_stop_hit = trace_single_ray_hit_point_with_meta_core(
@@ -1854,9 +2000,15 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
         effective_pupil_sampling_mode = "entrance";
         // Use a smooth, deterministic scale vs field magnitude so adjacent
         // field points do not flip effective ray coverage abruptly.
-        let field_mag = (used_object_x * used_object_x + used_object_y * used_object_y).sqrt();
-        let entrance_radius_scale = (0.92_f64 - 0.012_f64 * field_mag).clamp(0.76, 0.92);
-        effective_sampling_radius = (entrance_radius * entrance_radius_scale).max(0.01);
+        // When the caller has pre-supplied an explicit entrance radius (fixed across the
+        // field sweep by run_native_field_mtf_map), use it directly to preserve continuity.
+        if let Some(fixed_r) = explicit_pupil_radius {
+            effective_sampling_radius = fixed_r;
+        } else {
+            let field_mag = (used_object_x * used_object_x + used_object_y * used_object_y).sqrt();
+            let entrance_radius_scale = (0.92_f64 - 0.012_f64 * field_mag).clamp(0.76, 0.92);
+            effective_sampling_radius = (entrance_radius * entrance_radius_scale).max(0.01);
+        }
 
         if use_infinite_mode {
             effective_emission_origin = apply_symmetry_axis_lock(search_entrance_origin_grid_brent_native(
@@ -1900,19 +2052,211 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
             }
         }
         chief_reference_mode = if force_entrance_sampling {
-            format!("entrance-chief-requested(grid-brent,r={:.3})", entrance_radius_scale)
+            format!("entrance-chief-requested(grid-brent,r={:.3})", effective_sampling_radius)
         } else {
-            format!("entrance-chief-fallback(grid-brent,r={:.3})", entrance_radius_scale)
+            format!("entrance-chief-fallback(grid-brent,r={:.3})", effective_sampling_radius)
         };
 
         // Keep a fixed entrance radius in strict mode to avoid field-by-field
         // radius changes that can introduce Object MTF discontinuities.
     }
     if force_stop_sampling && (chief_stop_hit[0] - 1.0).abs() > f64::EPSILON {
-        return Err("run_native_opd_map: force stop requested, but chief ray did not reach stop surface".to_string());
+        // High-field fallback parity with astigmatism path:
+        // try target-centric origin search, then bundle search, then stop-point solve.
+        // This keeps forced-stop mode from failing abruptly at large field angles.
+        if use_infinite_mode {
+            let target_surface_origin = surface_data
+                .get(target_surface_index)
+                .map(|s| s.origin)
+                .unwrap_or([0.0, 0.0, 0.0]);
+
+            let mut candidate_origin = effective_emission_origin;
+            let mut recovered = false;
+
+            if let Some(refined) = search_high_field_origin_for_target_native(
+                candidate_origin,
+                infinite_direction,
+                target_surface_index,
+                target_surface_origin,
+                &packed_target,
+                sampling_radius,
+            ) {
+                candidate_origin = refined;
+            } else if let Some((bundle_refined, _bundle_hits)) = search_high_field_origin_by_bundle_native(
+                candidate_origin,
+                infinite_direction,
+                infinite_u_axis,
+                infinite_v_axis,
+                target_surface_index,
+                &packed_target,
+                sampling_radius,
+            ) {
+                candidate_origin = bundle_refined;
+            }
+
+            if let Some(solved_origin) = solve_ray_origin_to_stop_point_fast_native(
+                candidate_origin,
+                infinite_direction,
+                stop_center_for_sampling,
+                stop_surface_index,
+                &packed_stop,
+            ) {
+                let candidate_chief = [
+                    solved_origin[0],
+                    solved_origin[1],
+                    solved_origin[2],
+                    infinite_direction[0],
+                    infinite_direction[1],
+                    infinite_direction[2],
+                ];
+                let candidate_target_hit = trace_single_ray_hit_point_with_meta_core(
+                    &candidate_chief,
+                    target_surface_index,
+                    object_space_n,
+                    &packed_target.row_meta,
+                    &packed_target.row_params,
+                    &packed_target.row_origins,
+                    &packed_target.row_inv_rots,
+                    &packed_target.row_rots,
+                    packed_target.row_count,
+                );
+                let candidate_stop_hit = trace_single_ray_hit_point_with_meta_core(
+                    &candidate_chief,
+                    stop_surface_index,
+                    object_space_n,
+                    &packed_stop.row_meta,
+                    &packed_stop.row_params,
+                    &packed_stop.row_origins,
+                    &packed_stop.row_inv_rots,
+                    &packed_stop.row_rots,
+                    packed_stop.row_count,
+                );
+
+                if (candidate_target_hit[0] - 1.0).abs() <= f64::EPSILON
+                    && (candidate_stop_hit[0] - 1.0).abs() <= f64::EPSILON
+                {
+                    effective_emission_origin = apply_symmetry_axis_lock(solved_origin);
+                    chief_target_hit = candidate_target_hit;
+                    chief_reference_mode = "high-field-force-stop-chief".to_string();
+                    recovered = true;
+                }
+            }
+
+            if !recovered {
+                return Err("run_native_opd_map: force stop requested, but chief ray did not reach stop surface".to_string());
+            }
+        } else {
+            return Err("run_native_opd_map: force stop requested, but chief ray did not reach stop surface".to_string());
+        }
     }
 
     let chief_opl = chief_target_hit[1];
+
+        // Refine effective_sampling_radius for entrance mode by bisecting along the 4
+        // principal directions in the entrance pupil plane.  This mirrors the
+        // TS/WASM _getOrBuildEntrancePupilConfig radius refinement that prevents the
+        // sampling disc from being wildly oversized when estimate_entrance_radius_mm
+        // (first-surface semidia) is much larger than the actual entrance pupil radius,
+        // which otherwise causes near-zero hit rates and the
+        // "No valid OPD samples for entrance mode" error in Object MTF.
+        // Skip bisection when the caller has pre-supplied a fixed reference radius
+        // (e.g. from run_native_field_mtf_map) to ensure all field points use the
+        // same sampling radius and produce a continuous Object MTF curve.
+        if effective_pupil_sampling_mode == "entrance" && use_infinite_mode && explicit_pupil_radius.is_none() {
+            // Confirm that the chief ray (zero offset) still reaches the target.
+            let chief_ok = build_marginal_ray(0.0, 0.0, effective_sampling_radius, effective_emission_origin)
+                .map(|cr| {
+                    let hit = trace_single_ray_hit_point_with_meta_core(
+                        &cr,
+                        target_surface_index,
+                        object_space_n,
+                        &packed_target.row_meta,
+                        &packed_target.row_params,
+                        &packed_target.row_origins,
+                        &packed_target.row_inv_rots,
+                        &packed_target.row_rots,
+                        packed_target.row_count,
+                    );
+                    (hit[0] - 1.0).abs() <= f64::EPSILON
+                })
+                .unwrap_or(false);
+
+            if chief_ok {
+                let hi = effective_sampling_radius;
+                // Sample 4 principal directions: +u, -u, +v, -v in the entrance plane.
+                let probe_dirs: [(f64, f64); 4] = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
+                let mut best_radii = [hi; 4];
+
+                for (i, &(pu, pv)) in probe_dirs.iter().enumerate() {
+                    // Check whether the full estimated radius is usable in this direction.
+                    let full_ok = build_marginal_ray(pu, pv, hi, effective_emission_origin)
+                        .map(|ray| {
+                            let hit = trace_single_ray_hit_point_with_meta_core(
+                                &ray,
+                                target_surface_index,
+                                object_space_n,
+                                &packed_target.row_meta,
+                                &packed_target.row_params,
+                                &packed_target.row_origins,
+                                &packed_target.row_inv_rots,
+                                &packed_target.row_rots,
+                                packed_target.row_count,
+                            );
+                            (hit[0] - 1.0).abs() <= f64::EPSILON
+                        })
+                        .unwrap_or(false);
+
+                    if full_ok {
+                        continue; // full radius reachable in this direction – no narrowing needed
+                    }
+
+                    // Bisect to find the largest radius where this direction still reaches target.
+                    let mut lo = 0.0_f64;
+                    let mut h = hi;
+                    for _ in 0..12 {
+                        let mid = 0.5 * (lo + h);
+                        let mid_ok = build_marginal_ray(pu, pv, mid, effective_emission_origin)
+                            .map(|ray| {
+                                let hit = trace_single_ray_hit_point_with_meta_core(
+                                    &ray,
+                                    target_surface_index,
+                                    object_space_n,
+                                    &packed_target.row_meta,
+                                    &packed_target.row_params,
+                                    &packed_target.row_origins,
+                                    &packed_target.row_inv_rots,
+                                    &packed_target.row_rots,
+                                    packed_target.row_count,
+                                );
+                                (hit[0] - 1.0).abs() <= f64::EPSILON
+                            })
+                            .unwrap_or(false);
+                        if mid_ok {
+                            lo = mid;
+                        } else {
+                            h = mid;
+                        }
+                    }
+                    best_radii[i] = lo;
+                }
+
+                // Use the minimum reachable radius across all directions (conservative).
+                // If vignetting kills one axis entirely, fall back to the maximum so the
+                // OPD map is still computable over the reachable region.
+                let r_min = best_radii.iter().cloned().fold(f64::INFINITY, f64::min);
+                let r_max = best_radii.iter().cloned().fold(0.0_f64, f64::max);
+                const REFINE_EPS: f64 = 1e-9;
+                let refined = if r_min.is_finite() && r_min > REFINE_EPS {
+                    r_min
+                } else if r_max.is_finite() && r_max > REFINE_EPS {
+                    r_max
+                } else {
+                    hi
+                };
+                effective_sampling_radius = refined.max(0.01);
+            }
+        }
+
     if !chief_opl.is_finite() {
         return Err("run_native_opd_map: chief OPL is invalid".to_string());
     }
@@ -1987,9 +2331,16 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
     } else {
         0.0
     };
+    // Reject near-empty OPD maps only when the sampling radius was auto-estimated
+    // (explicit_pupil_radius.is_none()). When the caller supplies a pre-validated
+    // radius from an on-axis anchor, a hit-rate below 0.35 simply reflects legitimate
+    // vignetting at that field angle — the None cells become zero-amplitude pupil
+    // samples, which is the correct physical apodisation. Rejecting them would cause
+    // high-field Object MTF angles (where vignetting is large) to appear as NaN gaps.
     if use_infinite_mode
         && effective_pupil_sampling_mode == "entrance"
         && hit_rate < 0.35
+        && explicit_pupil_radius.is_none()
     {
         return Err(format!(
             "No valid OPD samples for entrance mode (hit-rate={:.3}, hits={}, samples={})",
@@ -2020,6 +2371,7 @@ pub fn run_native_opd_map(req: NativeOpdMapRequest, app: AppHandle) -> Result<Na
         pupil_sampling_mode: effective_pupil_sampling_mode.to_string(),
         raw_opd_grid: raw_grid,
         display_opd_grid: display_grid,
+        effective_pupil_radius_mm: effective_sampling_radius,
         message: {
             let mut notes: Vec<String> = Vec::new();
             if let Some(from_surface) = chief_target_fallback_from {
@@ -3285,6 +3637,8 @@ pub fn run_native_field_mtf_map(
             object_index,
             req.field_axis_mode.as_deref(),
         );
+        let fixed_eval_surface_index = find_evaluation_surface_index_native(&normalized_optical_rows)
+            .min(normalized_optical_rows.len().saturating_sub(1));
         let requested_pupil_sampling_mode = req
             .pupil_sampling_mode
             .as_ref()
@@ -3334,6 +3688,46 @@ pub fn run_native_field_mtf_map(
         let total_runs = (wavelengths.len() * x_axis.len()).max(1);
         let mut completed = 0usize;
 
+        // Pre-compute reference entrance pupil radius at on-axis (angle=0) before the
+        // field sweep.  All field OPD calls are then given this fixed radius via
+        // `pupil_radius_mm` so that `run_native_opd_map` skips the per-field bisection
+        // refinement and uses a consistent sampling radius across every field point.
+        // This eliminates the periodic MTF discontinuities caused by the bisected radius
+        // changing abruptly as vignetting boundaries or other optical transitions are
+        // crossed during the sweep.
+        let fixed_entrance_pupil_radius_mm: Option<f64> = if axis_mode.eq_ignore_ascii_case("angle") {
+            let ref_wl = wavelengths.first().copied().unwrap_or(0.5876);
+            let ref_object_rows = clone_object_rows_with_field_axis_native(
+                &req.object_rows,
+                object_index,
+                &axis_mode,
+                0.0, // on-axis
+            );
+            let ref_req = NativeOpdMapRequest {
+                job_id:                  Some(format!("{}-ref-radius", job_id)),
+                optical_system_rows:     req.optical_system_rows.clone(),
+                source_rows:             req.source_rows.clone(),
+                object_rows:             ref_object_rows,
+                object_index:            Some(object_index),
+                surface_index:           None,
+                grid_size:               Some(32), // small grid for speed; only need radius
+                wavelength_um:           Some(ref_wl),
+                pupil_radius_mm:         None,     // let bisection run freely for reference field
+                pupil_sampling_mode:     Some("entrance".to_string()),
+                opd_display_mode:        Some("pistonTiltRemoved".to_string()),
+            };
+            match run_native_opd_map(ref_req, app.clone()) {
+                Ok(ref_resp) if ref_resp.effective_pupil_radius_mm.is_finite()
+                    && ref_resp.effective_pupil_radius_mm > 0.0 =>
+                {
+                    Some(ref_resp.effective_pupil_radius_mm)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         let mut series = Vec::<NativeFieldMtfSeries>::with_capacity(wavelengths.len());
         for wl in wavelengths {
             let mut meridional_first = Vec::<f64>::with_capacity(x_axis.len());
@@ -3374,10 +3768,15 @@ pub fn run_native_field_mtf_map(
                     source_rows: req.source_rows.clone(),
                     object_rows: object_rows.clone(),
                     object_index: Some(object_index),
-                    surface_index: None,
+                    // Keep evaluation surface fixed across all field points to avoid
+                    // discontinuities when chief-target fallback picks different surfaces.
+                    surface_index: Some(fixed_eval_surface_index),
                     grid_size: Some(sampling_size as u32),
                     wavelength_um: Some(wl),
-                    pupil_radius_mm: None,
+                    // Pass the pre-computed on-axis entrance radius to suppress per-field
+                    // bisection refinement in run_native_opd_map and keep sampling radius
+                    // constant across all field points.
+                    pupil_radius_mm: fixed_entrance_pupil_radius_mm,
                     pupil_sampling_mode: primary_mode.map(|m| m.to_string()),
                     opd_display_mode: Some(opd_display_mode.clone()),
                 };
@@ -3573,6 +3972,7 @@ pub fn run_native_field_mtf_map(
                 field_diagnostics.push(NativeFieldMtfPointDiagnostic {
                     field_value: *field_axis_value,
                     effective_pupil_sampling_mode: chosen_opd.pupil_sampling_mode.clone(),
+                    effective_pupil_radius_mm: chosen_opd.effective_pupil_radius_mm,
                     used_object_position: Some(chosen_opd.used_object_position.clone()),
                     target_surface_index: chosen_opd.target_surface,
                     used_object_index: chosen_opd.used_object_index,
@@ -3583,6 +3983,7 @@ pub fn run_native_field_mtf_map(
                     } else {
                         0.0
                     },
+                    opd_message: chosen_opd.message.clone(),
                     first_frequency_lpmm,
                     first_bracket_low_lpmm: first_lo,
                     first_bracket_high_lpmm: first_hi,
@@ -5630,7 +6031,7 @@ fn distortion_estimate_focal_length_mm(
         source_rows: source_rows.to_vec(),
         object_rows,
         surface_index: Some(surface_index),
-        ray_count: Some(11),
+        ray_count: Some(51),
         ring_count: Some(1),
         pattern: Some("cross".to_string()),
         wavelength_mode: Some("primary".to_string()),
@@ -5672,7 +6073,7 @@ fn distortion_estimate_height_magnification(
         source_rows: source_rows.to_vec(),
         object_rows,
         surface_index: Some(surface_index),
-        ray_count: Some(11),
+        ray_count: Some(51),
         ring_count: Some(1),
         pattern: Some("cross".to_string()),
         wavelength_mode: Some("primary".to_string()),
@@ -5792,7 +6193,7 @@ fn run_native_distortion_impl(
         source_rows,
         object_rows,
         surface_index: Some(surface_index),
-        ray_count: Some(11),
+        ray_count: Some(51),
         ring_count: Some(1),
         pattern: Some("cross".to_string()),
         wavelength_mode: Some("primary".to_string()),
@@ -5999,7 +6400,7 @@ fn run_native_grid_distortion_impl(
         source_rows,
         object_rows,
         surface_index: Some(surface_index),
-        ray_count: Some(11),
+        ray_count: Some(51),
         ring_count: Some(1),
         pattern: Some("cross".to_string()),
         wavelength_mode: Some("primary".to_string()),

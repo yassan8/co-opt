@@ -152,6 +152,7 @@ export function plotDistortionPercent(dataArray, targetDivId = 'distortion-perce
       y: data.fieldValues,        // Vertical axis
       name: `DIST ${wavelengthNm}nm (${label})`,
       mode: 'lines',
+      connectgaps: true,
       line: { color, width: 2 }
     };
   }).filter(trace => trace !== null);

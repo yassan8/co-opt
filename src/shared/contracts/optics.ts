@@ -370,12 +370,14 @@ export interface NativeFieldMtfSeries {
 export interface NativeFieldMtfPointDiagnostic {
   fieldValue: number;
   effectivePupilSamplingMode: string;
+  effectivePupilRadiusMm?: number;
   usedObjectPosition?: string;
   targetSurfaceIndex: number;
   usedObjectIndex: number;
   opdSampleCount: number;
   opdHitCount: number;
   opdHitRate: number;
+  opdMessage?: string;
   firstFrequencyLpmm: number;
   firstBracketLowLpmm?: number;
   firstBracketHighLpmm?: number;

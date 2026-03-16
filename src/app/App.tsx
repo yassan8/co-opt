@@ -14,6 +14,178 @@ import { runOptimizationMVP } from "../../optimization/optimizer-mvp.ts";
 import { clearOptimizerStop, readDesktopSetting, writeDesktopSetting } from "../../src/desktop/ipc/client.ts";
 import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 
+const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
+const RENDER_SURFACE_COLOR_PALETTE: Array<{ name: string; hex: string }> = [
+  { name: 'Light Pink', hex: '#FFB6C1' },
+  { name: 'Light Red', hex: '#FF6B6B' },
+  { name: 'Light Orange', hex: '#FFA07A' },
+  { name: 'Light Amber', hex: '#FFBF00' },
+  { name: 'Light Yellow', hex: '#FFFF99' },
+  { name: 'Light Lime', hex: '#CCFF66' },
+  { name: 'Light Green', hex: '#90EE90' },
+  { name: 'Light Mint', hex: '#98FF98' },
+  { name: 'Light Cyan', hex: '#AFEEEE' },
+  { name: 'Light Sky', hex: '#87CEEB' },
+  { name: 'Light Blue', hex: '#ADD8E6' },
+  { name: 'Light Indigo', hex: '#9FA8DA' },
+  { name: 'Light Purple', hex: '#DDA0DD' },
+  { name: 'Light Lavender', hex: '#E6E6FA' },
+  { name: 'Light Peach', hex: '#FFDAB9' },
+  { name: 'Light Gray', hex: '#D3D3D3' },
+];
+
+type RenderLensColorTarget = {
+  label: string;
+  key: string;
+  keys: string[];
+  frontSurfaceIndex0: number;
+};
+
+function isPlainObject(v: any): boolean {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function parseColorToInt(value: any): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.min(0xffffff, Math.floor(value)));
+  const s = String(value ?? '').trim();
+  if (!s) return null;
+  if (s.startsWith('#')) {
+    const hex = s.slice(1);
+    if (hex.length === 3) {
+      const expanded = hex.split('').map((ch) => ch + ch).join('');
+      const n = Number.parseInt(expanded, 16);
+      return Number.isFinite(n) ? n : null;
+    }
+    if (hex.length === 6) {
+      const n = Number.parseInt(hex, 16);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  }
+  if (/^0x[0-9a-f]+$/i.test(s)) {
+    const n = Number.parseInt(s.slice(2), 16);
+    return Number.isFinite(n) ? n : null;
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? Math.max(0, Math.min(0xffffff, Math.floor(n))) : null;
+}
+
+function colorIntToHexString(value: number | null, fallback = '#00CCFF'): string {
+  if (!Number.isFinite(Number(value))) return fallback;
+  const safe = Math.max(0, Math.min(0xffffff, Math.floor(Number(value))));
+  return `#${safe.toString(16).padStart(6, '0').toUpperCase()}`;
+}
+
+function surfaceColorKeyStable(surface: any, index0: number): string {
+  try {
+    const bid = String(surface?._blockId ?? '').trim();
+    const role = String(surface?._surfaceRole ?? '').trim();
+    if (bid && role) return `p:${bid}|${role}`;
+  } catch (_) {}
+  try {
+    const sid = Number(surface?.id);
+    if (Number.isFinite(sid)) return `id:${Math.floor(sid)}`;
+  } catch (_) {}
+  return `i:${Math.floor(Number(index0) || 0)}`;
+}
+
+function surfaceColorKeysAll(surface: any, index0: number): string[] {
+  const keys: string[] = [];
+  try {
+    const bid = String(surface?._blockId ?? '').trim();
+    const role = String(surface?._surfaceRole ?? '').trim();
+    if (bid && role) keys.push(`p:${bid}|${role}`);
+  } catch (_) {}
+  try {
+    const sid = Number(surface?.id);
+    if (Number.isFinite(sid)) keys.push(`id:${Math.floor(sid)}`);
+  } catch (_) {}
+  keys.push(`i:${Math.floor(Number(index0) || 0)}`);
+  return [...new Set(keys.map((k) => String(k || '').trim()).filter(Boolean))];
+}
+
+function resolveOverrideColorHex(overrides: Record<string, any>, keys: string[]): string | null {
+  for (const key of keys) {
+    const parsed = parseColorToInt(overrides?.[key]);
+    if (parsed !== null) return colorIntToHexString(parsed);
+  }
+  return null;
+}
+
+function loadSurfaceColorOverridesSafe(): Record<string, any> {
+  try {
+    const raw = localStorage.getItem(SURFACE_COLOR_OVERRIDES_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return isPlainObject(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveSurfaceColorOverridesSafe(overrides: Record<string, any>): void {
+  try {
+    localStorage.setItem(SURFACE_COLOR_OVERRIDES_STORAGE_KEY, JSON.stringify(overrides));
+  } catch (_) {}
+}
+
+function isCoordBreakSurface(surface: any): boolean {
+  const surfType = String(surface?.surfType || surface?.type || '').trim().toLowerCase();
+  const objType = String(surface?.['object type'] || '').trim().toLowerCase();
+  return (
+    surfType === 'coord break' || surfType === 'coordinate break' ||
+    surfType === 'cb' || surfType === 'coordtrans' ||
+    surfType === 'coordinatebreak' || surfType === 'coord trans' ||
+    surfType === 'coordinate transform' || surfType === 'ct' ||
+    objType === 'coord break' || objType === 'coordinate break' ||
+    objType === 'cb' || objType === 'coordtrans' ||
+    objType === 'coordinatebreak'
+  );
+}
+
+function isGapSurface(surface: any): boolean {
+  const blockType = String(surface?._blockType ?? surface?.blockType ?? '').trim().toLowerCase();
+  if (blockType === 'gap' || blockType === 'airgap') return true;
+  const objType = String(surface?.['object type'] ?? surface?.type ?? '').trim().toLowerCase();
+  if (objType === 'gap' || objType === 'air gap' || objType === 'airgap') return true;
+  const role = String(surface?._surfaceRole ?? '').trim().toLowerCase();
+  if (role === 'gap' || role === 'airgap') return true;
+  return false;
+}
+
+function isGlassMaterial(materialValue: any): boolean {
+  const material = String(materialValue ?? '').trim().toUpperCase();
+  if (!material) return false;
+  return !(material === 'AIR' || material === '0' || material === 'MIRROR');
+}
+
+function isLensInterval(front: any, back: any): boolean {
+  if (!front || !back) return false;
+  if (String(front?.['object type'] ?? '').trim().toLowerCase() === 'object') return false;
+  if (isGapSurface(front) || isGapSurface(back)) return false;
+  if (isCoordBreakSurface(front) || isCoordBreakSurface(back)) return false;
+  return isGlassMaterial(front?.material);
+}
+
+function buildRenderLensColorTargets(opticalSystemRows: any[]): RenderLensColorTarget[] {
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length < 2) return [];
+  const targets: RenderLensColorTarget[] = [];
+  let lensNo = 0;
+  for (let i = 0; i < opticalSystemRows.length - 1; i++) {
+    const front = opticalSystemRows[i];
+    const back = opticalSystemRows[i + 1];
+    if (!isLensInterval(front, back)) continue;
+    lensNo += 1;
+    targets.push({
+      label: `Lens ${lensNo} (S${i + 1}-S${i + 2})`,
+      key: surfaceColorKeyStable(front, i),
+      keys: surfaceColorKeysAll(front, i),
+      frontSurfaceIndex0: i,
+    });
+  }
+  return targets;
+}
+
 // ---- Settings window page component ----
 const FORCE_MODE_KEY = 'coopt.forceInfinitePupilMode';
 const GLASS_MAP_MFR_KEY = 'coopt.glassMap.defaultManufacturers';
@@ -148,22 +320,15 @@ function DesktopSettingsPage() {
   );
 }
 
-function handleBackToMainApp(): void {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.delete('coopt_render_window');
-    url.searchParams.delete('coopt_analysis_window');
-    url.searchParams.delete('coopt_analysis');
-    url.searchParams.delete('coopt_force_mode');
-    window.location.assign(url.toString());
-  } catch (_) {}
-}
-
 export default function App() {
   const optimizeRowsSyncKey = 'coopt.optimizeRowsSync';
   const [renderWindowStatus, setRenderWindowStatus] = useState("Initializing...");
   const [renderViewAxis, setRenderViewAxis] = useState<'YZ' | 'XZ'>('YZ');
+  const [renderViewMode, setRenderViewMode] = useState<'3D' | 'XZ' | 'YZ'>('3D');
   const [renderRayCount, setRenderRayCount] = useState(5);
+  const [renderSurfaceColorsCollapsed, setRenderSurfaceColorsCollapsed] = useState(true);
+  const [renderLensColorTargets, setRenderLensColorTargets] = useState<RenderLensColorTarget[]>([]);
+  const [renderColorUiRevision, setRenderColorUiRevision] = useState(0);
   const [astigChiefRayDefinition, setAstigChiefRayDefinition] = useState('stop-center');
   const [astigBeamPattern, setAstigBeamPattern] = useState<'cross' | 'grid' | 'annular'>('annular');
   const [astigRayCount, setAstigRayCount] = useState(30);
@@ -996,8 +1161,12 @@ export default function App() {
         } catch (_) {}
         try {
           const popup = w.popup3DWindow;
-          if (popup && !popup.closed && typeof popup.postMessage === 'function') {
-            popup.postMessage({ action: 'request-redraw' }, '*');
+          if (popup && !popup.closed) {
+            if (typeof popup.__cooptRenderWindowRedraw === 'function') {
+              void Promise.resolve(popup.__cooptRenderWindowRedraw(rows));
+            } else if (typeof popup.postMessage === 'function') {
+              popup.postMessage({ action: 'request-redraw' }, '*');
+            }
           }
         } catch (_) {}
         // Restore flags after popup message roundtrip (~400 ms)
@@ -1401,36 +1570,6 @@ export default function App() {
       }
     });
 
-    const isCoordBreak = (surface: any): boolean => {
-      const surfType = String(surface?.surfType || surface?.type || '').trim().toLowerCase();
-      const objType = String(surface?.['object type'] || '').trim().toLowerCase();
-      return (
-        surfType === 'coord break' || surfType === 'coordinate break' ||
-        surfType === 'cb' || surfType === 'coordtrans' ||
-        surfType === 'coordinatebreak' || surfType === 'coord trans' ||
-        surfType === 'coordinate transform' || surfType === 'ct' ||
-        objType === 'coord break' || objType === 'coordinate break' ||
-        objType === 'cb' || objType === 'coordtrans' ||
-        objType === 'coordinatebreak'
-      );
-    };
-
-    const isGap = (surface: any): boolean => {
-      const blockType = String(surface?._blockType ?? surface?.blockType ?? '').trim().toLowerCase();
-      if (blockType === 'gap' || blockType === 'airgap') return true;
-      const objType = String(surface?.['object type'] ?? surface?.type ?? '').trim().toLowerCase();
-      if (objType === 'gap' || objType === 'air gap' || objType === 'airgap') return true;
-      const role = String(surface?._surfaceRole ?? '').trim().toLowerCase();
-      if (role === 'gap' || role === 'airgap') return true;
-      return false;
-    };
-
-    const isGlassMaterial = (materialValue: any): boolean => {
-      const material = String(materialValue ?? '').trim().toUpperCase();
-      if (!material) return false;
-      return !(material === 'AIR' || material === '0' || material === 'MIRROR');
-    };
-
     const getSemidia = (surface: any): number | null => {
       const candidates: Array<{ value: any; isDiameter: boolean }> = [
         { value: surface?.semidia, isDiameter: false },
@@ -1449,15 +1588,6 @@ export default function App() {
         }
       }
       return null;
-    };
-
-    const isLensInterval = (front: any, back: any): boolean => {
-      if (!front || !back) return false;
-      if (String(front?.['object type'] ?? '').trim().toLowerCase() === 'object') return false;
-      if (isGap(front) || isGap(back)) return false;
-      if (isCoordBreak(front) || isCoordBreak(back)) return false;
-      // Fill only the medium AFTER the front surface. If it's AIR, do not paint.
-      return isGlassMaterial(front?.material);
     };
 
     const readWorldPolylinePoints = (lineObj: any): any[] => {
@@ -1506,6 +1636,14 @@ export default function App() {
     }
 
     const fillColor = 0x00ccff;
+    const isWhiteLike = (value: number | null): boolean => {
+      if (value === null || !Number.isFinite(value)) return false;
+      const r = (value >> 16) & 0xff;
+      const g = (value >> 8) & 0xff;
+      const b = value & 0xff;
+      return r >= 245 && g >= 245 && b >= 245;
+    };
+    const colorOverrides = loadSurfaceColorOverridesSafe();
     let createdCount = 0;
 
     const profileMap = new Map<number, any>();
@@ -1648,8 +1786,19 @@ export default function App() {
         }
       }
 
+      const overrideKeys = surfaceColorKeysAll(front, i);
+      let colorOverride: number | null = null;
+      for (const key of overrideKeys) {
+        const parsed = parseColorToInt(colorOverrides?.[key]);
+        if (parsed !== null) {
+          colorOverride = parsed;
+          break;
+        }
+      }
+      const lensColor = (colorOverride !== null && !isWhiteLike(colorOverride)) ? colorOverride : fillColor;
+
       const material = new THREE.MeshBasicMaterial({
-        color: fillColor,
+        color: lensColor,
         transparent: true,
         opacity: 0.52,
         side: THREE.DoubleSide,
@@ -1706,7 +1855,7 @@ export default function App() {
         sideGeometry.computeVertexNormals();
 
         const sideMaterial = new THREE.MeshBasicMaterial({
-          color: fillColor,
+          color: lensColor,
           transparent: true,
           opacity: 0.52,
           side: THREE.DoubleSide,
@@ -1825,9 +1974,12 @@ export default function App() {
       }
 
       let fillCount = 0;
-
-      // Disable debug lens-fill overlay to avoid magenta cross-section artifacts.
-      fillCount = 0;
+      try {
+        fillCount = applyRenderWindowDirectCrossFill(sceneForDraw, axis, rows);
+      } catch (fillErr) {
+        console.warn('[RenderWindow] Cross-section lens fill failed:', fillErr);
+        fillCount = 0;
+      }
 
       if (axis === 'XZ' && typeof w.setCameraForXZCrossSection === 'function') {
         w.setCameraForXZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true });
@@ -1948,6 +2100,35 @@ export default function App() {
     }
   };
 
+  const refreshRenderLensTargets = (rowsMaybe?: any[]): RenderLensColorTarget[] => {
+    let rows = Array.isArray(rowsMaybe) ? rowsMaybe : [];
+    if (!rows.length) {
+      try {
+        const w = window as any;
+        if (typeof w.getOpticalSystemRows === 'function') {
+          const fetched = w.getOpticalSystemRows(w.tableOpticalSystem);
+          rows = Array.isArray(fetched) ? fetched : [];
+        }
+      } catch (_) {
+        rows = [];
+      }
+    }
+    const targets = buildRenderLensColorTargets(rows);
+    setRenderLensColorTargets(targets);
+    return targets;
+  };
+
+  const redrawCurrentRenderView = async () => {
+    if (isTauriRuntime()) {
+      console.log('[RenderColor][Tauri] redrawCurrentRenderView', { renderViewMode, renderViewAxis });
+    }
+    if (renderViewMode === 'XZ' || renderViewMode === 'YZ') {
+      await drawCrossSectionView(renderViewMode);
+      return;
+    }
+    await drawRender3DView();
+  };
+
   useEffect(() => {
     if (!isRenderWindowMode) return;
     const w = window as any;
@@ -2021,7 +2202,17 @@ export default function App() {
 
           if (rowCount === 0) {
             setRenderWindowStatus('No optical data');
+            setRenderLensColorTargets([]);
             return false;
+          }
+
+          try {
+            if (typeof w.getOpticalSystemRows === 'function') {
+              const rows = w.getOpticalSystemRows(w.tableOpticalSystem);
+              refreshRenderLensTargets(rows);
+            }
+          } catch (_) {
+            refreshRenderLensTargets([]);
           }
 
           try {
@@ -2038,6 +2229,7 @@ export default function App() {
 
           const hasCanvas = ensureRenderCanvasAttached() || !!document.querySelector('#threejs-canvas-container canvas');
           if (hasCanvas) {
+            setRenderViewMode('3D');
             setRenderWindowStatus('Ready (3D)');
             return true;
           }
@@ -2782,8 +2974,12 @@ export default function App() {
           } catch (_) {}
           try {
             const popup = hostWindow.popup3DWindow;
-            if (popup && !popup.closed && typeof popup.postMessage === 'function') {
-              popup.postMessage({ action: 'request-redraw' }, '*');
+            if (popup && !popup.closed) {
+              if (typeof popup.__cooptRenderWindowRedraw === 'function') {
+                void Promise.resolve(popup.__cooptRenderWindowRedraw(rowsForRender));
+              } else if (typeof popup.postMessage === 'function') {
+                popup.postMessage({ action: 'request-redraw' }, '*');
+              }
             }
           } catch (_) {}
           try {
@@ -3113,12 +3309,6 @@ export default function App() {
     return (
       <>
         <div style={{ height: '100vh', width: '100vw', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#f4f4f4' }}>
-          {isBrowserSystemDataPage && (
-            <div style={{ padding: '10px 12px', background: '#f8f8f8', borderBottom: '1px solid #ddd', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-              <span>System Data</span>
-              <button type="button" onClick={handleBackToMainApp}>Back to App</button>
-            </div>
-          )}
           <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex' }}>
             <SystemDataPanel visible />
           </div>
@@ -3292,7 +3482,6 @@ export default function App() {
   }
 
   if (isRenderWindowMode) {
-    const isBrowserRenderPage = !isTauriRuntime();
 
     const handleRenderDraw = async () => {
       try {
@@ -3326,13 +3515,24 @@ export default function App() {
 
         if (rowCount === 0) {
           setRenderWindowStatus('No optical data');
+          setRenderLensColorTargets([]);
           return;
+        }
+
+        try {
+          if (typeof w.getOpticalSystemRows === 'function') {
+            const rows = w.getOpticalSystemRows(w.tableOpticalSystem);
+            refreshRenderLensTargets(rows);
+          }
+        } catch (_) {
+          refreshRenderLensTargets([]);
         }
 
         const ok = await drawRender3DView();
         if (!ok) return;
 
         ensureRenderCanvasAttached();
+        setRenderViewMode('3D');
         setRenderWindowStatus('Ready (3D)');
       } catch (err) {
         console.error('[RenderWindow] Manual draw failed:', err);
@@ -3342,6 +3542,8 @@ export default function App() {
 
     const handleViewXZ = () => {
       setRenderViewAxis('XZ');
+      setRenderViewMode('XZ');
+      refreshRenderLensTargets();
       drawCrossSectionView('XZ').catch(() => {
         setRenderWindowStatus('Draw failed');
       });
@@ -3349,7 +3551,59 @@ export default function App() {
 
     const handleViewYZ = () => {
       setRenderViewAxis('YZ');
+      setRenderViewMode('YZ');
+      refreshRenderLensTargets();
       drawCrossSectionView('YZ').catch(() => {
+        setRenderWindowStatus('Draw failed');
+      });
+    };
+
+    const handleSetLensColor = (target: RenderLensColorTarget, colorHex: string | null) => {
+      const keys = Array.isArray(target?.keys) ? target.keys : [target?.key];
+      const validKeys = [...new Set(keys.map((k) => String(k || '').trim()).filter(Boolean))];
+      if (validKeys.length === 0) return;
+      if (isTauriRuntime()) {
+        console.log('[RenderColor][Tauri] handleSetLensColor:start', {
+          label: target?.label,
+          colorHex,
+          validKeys,
+        });
+      }
+      const next = { ...loadSurfaceColorOverridesSafe() };
+      if (!colorHex) {
+        for (const k of validKeys) delete next[k];
+      } else {
+        for (const k of validKeys) next[k] = colorHex;
+      }
+      saveSurfaceColorOverridesSafe(next);
+      if (isTauriRuntime()) {
+        const probe = validKeys.reduce((acc: Record<string, any>, k) => {
+          acc[k] = next[k];
+          return acc;
+        }, {});
+        console.log('[RenderColor][Tauri] handleSetLensColor:saved', {
+          probe,
+          overrideCount: Object.keys(next).length,
+        });
+      }
+      setRenderColorUiRevision((v) => v + 1);
+      redrawCurrentRenderView().catch(() => {
+        setRenderWindowStatus('Draw failed');
+      });
+    };
+
+    const handleResetAllLensColors = () => {
+      const next = { ...loadSurfaceColorOverridesSafe() };
+      for (const target of renderLensColorTargets) {
+        const keys = Array.isArray(target?.keys) ? target.keys : [target?.key];
+        for (const k of keys) {
+          const kk = String(k || '').trim();
+          if (kk) delete next[kk];
+        }
+      }
+      saveSurfaceColorOverridesSafe(next);
+      setRenderColorUiRevision((v) => v + 1);
+      redrawCurrentRenderView().catch(() => {
         setRenderWindowStatus('Draw failed');
       });
     };
@@ -3361,9 +3615,6 @@ export default function App() {
             <button type="button" onClick={handleRenderDraw}>Render</button>
             <button type="button" onClick={handleViewXZ}>X-Z View</button>
             <button type="button" onClick={handleViewYZ}>Y-Z View</button>
-            {isBrowserRenderPage && (
-              <button type="button" onClick={handleBackToMainApp} style={{ marginLeft: 12 }}>Back to App</button>
-            )}
             <label htmlFor="render-ray-count-input" style={{ marginLeft: 12, fontSize: 12, fontWeight: 500 }}>Raynum</label>
             <input
               id="render-ray-count-input"
@@ -3384,7 +3635,94 @@ export default function App() {
             />
             <span style={{ marginLeft: 'auto', fontWeight: 400, fontSize: 12, color: '#666' }}>{renderWindowStatus}</span>
           </div>
-          <div id="threejs-canvas-container" aria-label="Optical system 3D canvas" style={{ flex: 1, minHeight: 0 }} />
+          <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+            <div id="threejs-canvas-container" aria-label="Optical system 3D canvas" style={{ flex: 1, minHeight: 0 }} />
+            <div
+              style={{
+                width: renderSurfaceColorsCollapsed ? 34 : 274,
+                borderLeft: '1px solid #ddd',
+                background: '#fafafa',
+                display: 'flex',
+                flexDirection: 'column',
+                transition: 'width 120ms ease',
+                overflow: 'hidden',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setRenderSurfaceColorsCollapsed((prev) => {
+                    const next = !prev;
+                    if (!next) refreshRenderLensTargets();
+                    return next;
+                  });
+                }}
+                title={renderSurfaceColorsCollapsed ? 'Open surface colors' : 'Collapse surface colors'}
+                style={{
+                  width: '100%',
+                  border: 0,
+                  borderBottom: '1px solid #e3e3e3',
+                  background: '#f0f0f0',
+                  textAlign: 'left',
+                  padding: renderSurfaceColorsCollapsed ? '10px 8px' : '10px 10px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {renderSurfaceColorsCollapsed ? '▶' : '▼ Surface Colors'}
+              </button>
+
+              {!renderSurfaceColorsCollapsed && (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: '1px solid #ececec' }}>
+                    <button type="button" onClick={() => { refreshRenderLensTargets(); }} style={{ fontSize: 11, padding: '4px 8px' }}>Refresh</button>
+                    <button type="button" onClick={handleResetAllLensColors} style={{ fontSize: 11, padding: '4px 8px' }}>Reset All</button>
+                  </div>
+                  <div style={{ padding: 8, overflow: 'auto', flex: 1, minHeight: 0 }}>
+                    {renderLensColorTargets.length === 0 ? (
+                      <div style={{ fontSize: 12, color: '#777' }}>No lens intervals detected.</div>
+                    ) : (
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: 'left', padding: '4px 2px', borderBottom: '1px solid #ddd' }}>Lens</th>
+                            <th style={{ textAlign: 'left', padding: '4px 2px', borderBottom: '1px solid #ddd' }}>Color</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {renderLensColorTargets.map((target) => {
+                            const overrides = loadSurfaceColorOverridesSafe();
+                            const selectedHex = resolveOverrideColorHex(overrides, target.keys) || '#00CCFF';
+                            return (
+                              <tr key={`${target.key}-${target.frontSurfaceIndex0}`}>
+                                <td style={{ padding: '5px 2px', borderBottom: '1px solid #eee' }}>{target.label}</td>
+                                <td style={{ padding: '5px 2px', borderBottom: '1px solid #eee' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <select
+                                      value={resolveOverrideColorHex(loadSurfaceColorOverridesSafe(), target.keys) ?? ''}
+                                      onChange={(e) => handleSetLensColor(target, e.target.value || null)}
+                                      style={{ flex: 1, minWidth: 0, fontSize: 11, backgroundColor: selectedHex }}
+                                    >
+                                      <option value="">Default</option>
+                                      {RENDER_SURFACE_COLOR_PALETTE.map((entry) => (
+                                        <option key={entry.hex} value={entry.hex}>{entry.name}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
         <div style={{ display: 'none' }}>
           <MainToolbar />
