@@ -1,3 +1,25 @@
+# co-opt
+
+## GitHub Pages
+
+Web公開URL: https://yassan8.github.io/co-opt/
+
+### デプロイ・運用フロー
+
+- `main`ブランチへpushで自動ビルド＆公開（GitHub Actions）
+- Vite+Rust+WASM構成、`dist/`配下を`gh-pages`ブランチへデプロイ
+- `src-tauri/target/`や`dist/`はリポジトリに含めない
+
+### WASMビルドについて
+
+- Rust+wasm-packでWASMをビルドし、Viteの`public/`または`dist/`に配置
+- WASMビルドエラー時はCIで検知
+
+### その他
+
+- 不要な`.md`ファイルは`.gitignore`で除外
+- PR時はCIでtypecheck/buildチェック
+
 # co-opt (Collaborative Optical Tool)
 
 `co-opt` is a web-based application designed to visualize and prototype optical systems. It provides an intuitive interface to manage lens parameters and evaluate optical configurations in the browser.

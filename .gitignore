@@ -18,6 +18,15 @@ node_modules/
 *.pdf
 
 # Local data directory (not required to run)
+
+# Vite build output (do not commit)
+dist/
+
+# Exclude all Markdown files except README.md and essential docs
+*.md
+!README.md
+!documentation/**
+!KKT_USAGE_GUIDE.md
 glass data/
 glass data/
 *.xls
