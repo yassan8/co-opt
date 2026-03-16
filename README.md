@@ -1,85 +1,42 @@
-# co-opt
-
-## GitHub Pages
-
-Web公開URL: https://yassan8.github.io/co-opt/
-
-### デプロイ・運用フロー
-
-- `main`ブランチへpushで自動ビルド＆公開（GitHub Actions）
-- Vite+Rust+WASM構成、`dist/`配下を`gh-pages`ブランチへデプロイ
-- `src-tauri/target/`や`dist/`はリポジトリに含めない
-
-### WASMビルドについて
-
-- Rust+wasm-packでWASMをビルドし、Viteの`public/`または`dist/`に配置
-- WASMビルドエラー時はCIで検知
-
-### その他
-
-- 不要な`.md`ファイルは`.gitignore`で除外
-- PR時はCIでtypecheck/buildチェック
-
 # co-opt (Collaborative Optical Tool)
 
-`co-opt` is a web-based application designed to visualize and prototype optical systems. It provides an intuitive interface to manage lens parameters and evaluate optical configurations in the browser.
+co-opt is a browser-based optical design tool for editing lens data, visualizing ray paths, and iterating on optical systems with plain JSON data.
 
-## 🚀 Overview
-The goal of `co-opt` is to make optical design more accessible and collaborative. Unlike traditional proprietary software, `co-opt` runs entirely in the browser and uses an open data format, making it easy to share and iterate on designs.
+## Overview
+The app is published at https://yassan8.github.io/co-opt/ and built with Vite, React, and a Rust+WASM backend used by the web runtime.
 
-## 🛠 Hackable JSON Data Format
-One of the core philosophies of `co-opt` is its **"Hackability."** All optical systems are handled as simple **JSON files**. This design choice provides several advantages for engineers:
-- **Version Control:** Since designs are plain text, you can easily track changes and manage your lens configurations using **Git**.
-- **Script Integration:** You can programmatically generate, modify, or analyze lens data using your favorite languages like **Python** or **JavaScript**.
-- **Portability:** Effortlessly share configurations by simply copying the JSON string or sharing a URL.
+## Usage
+1. Open https://yassan8.github.io/co-opt/ in a browser.
+2. If no sample appears on startup, use Clear Cache once to reload the default data.
+3. Edit the table rows and inspect the rendered optical system in the browser.
 
-## 🕹 Usage
-1. Open [https://yassan8.github.io/co-opt/](https://yassan8.github.io/co-opt/) in a web browser.
-2. **Note:** If you don't see any data on startup, click the **"Clear Cache"** button to load the default sample lens data.
-3. Use the table interface to add, delete, and modify lens parameters (radius, thickness, material, etc.) and visualize the resulting light paths.
+## Local development
+- Start the web app: `npm run dev`
+- Start the desktop app: `npm run dev:desktop`
+- Rebuild the Rust+WASM package: `npm run wasm:rebuild`
+- Build the web app: `npm run build`
+- Preview the built web app: `npm run preview`
 
-## 📦 GitHub Pages (dist/)
-This repo publishes the web app via GitHub Pages from the Vite build output (`dist/`).
+## GitHub Pages deployment
+- Deployment workflow: `.github/workflows/pages.yml`
+- Deploy target: https://yassan8.github.io/co-opt/
+- Pages build path: `dist/`
+- The workflow rebuilds `public/rust-wasm/pkg` with `npm run wasm:rebuild` before the Vite build.
+- Generated folders such as `dist/`, `src-tauri/target/`, and `rust-wasm/target/` are excluded from git.
 
-- CI build + deploy is defined in `.github/workflows/pages.yml`.
-- Local build:
-	- `npm run build`
-	- `npm run preview`
-
-## 🔁 One-command PR flow
-If you want to run **branch creation → commit all files → PR creation → merge** in one command:
-
-Maintenance note: commit/merge automation path validated on 2026-03-09.
+## Repository workflow
+For the existing automation that creates a branch, commits, opens a PR, and merges:
 
 - `npm run pr:all`
 
 Optional environment variables:
 
-- `BASE_BRANCH` (default: `main`)
-- `BRANCH_NAME` (default: `chore/all-files-pr-<timestamp>`)
-- `COMMIT_MESSAGE` (default: `chore: update all pending files`)
-- `PR_TITLE` / `PR_BODY`
-- `MERGE_METHOD` (`merge` / `squash` / `rebase`, default: `merge`)
-- `ALLOW_ADMIN_MERGE` (`1` or `0`, default: `1`)
+- `BASE_BRANCH` default `main`
+- `BRANCH_NAME` default `chore/all-files-pr-<timestamp>`
+- `COMMIT_MESSAGE` default `chore: update all pending files`
+- `PR_TITLE` and `PR_BODY`
+- `MERGE_METHOD` values: `merge`, `squash`, `rebase`
+- `ALLOW_ADMIN_MERGE` values: `1`, `0`
 
-Example:
-
-- `BASE_BRANCH=main MERGE_METHOD=squash npm run pr:all`
-
-## ✨ Features
-- **Dynamic Lens Management:** Add and delete lens blocks as needed.
-- **Parameter Control:** Modify curvature, thickness, and glass materials via a table interface.
-- **Ray Tracing Visualization:** Visual representation of light paths based on the current lens data.
-- **Optimization:** Includes a basic solver to refine lens parameters.
-
-## 🤝 Contributing
-Contributions are welcome! Whether it's adding more glass data, improving the ray tracing engine, or enhancing the UI, please feel free to:
-1. Submit a **Pull Request**.
-2. Open an **Issue** for bug reports or feature requests.
-3. Join the discussion in the **GitHub Discussions** tab.
-
-## � Privacy Policy
-This website uses Google Analytics to analyze traffic and improve user experience. Google Analytics uses cookies to collect data anonymously. This data does not identify individual users.
-
-## �📄 License
-This project is licensed under the MIT License.
+## License
+MIT
