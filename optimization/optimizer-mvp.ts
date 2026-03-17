@@ -236,6 +236,8 @@ async function runOptimizationMvpnative(options = {}) {
               variableId: ev?.variableId,
               method: resp?.modeUsed || method,
               violationScore: ev?.violationScore,
+              feasible: ev?.feasible,
+              softPenalty: ev?.softPenalty,
             });
           } catch (_) {}
         }
@@ -5651,20 +5653,33 @@ export async function runOptimizationMVP(options = {}) {
 
       const aborted0 = shouldStop ? !!shouldStop() : false;
       const finalEval = getBestEvalSoFar();
+      const finalCompositeEval0 = evalCompositeFromRequirementsProfiled();
+      const finalViolationScore0 = Number.isFinite(finalCompositeEval0?.violationScore)
+        ? finalCompositeEval0.violationScore
+        : (finalEval ? finalEval.violationScore : 0);
+      const finalSoftPenalty0 = Number.isFinite(finalCompositeEval0?.softPenalty)
+        ? finalCompositeEval0.softPenalty
+        : (finalEval ? finalEval.softPenalty : 0);
+      const finalFeasible0 = (finalCompositeEval0?.feasible !== undefined)
+        ? !!finalCompositeEval0.feasible
+        : (finalEval ? finalEval.feasible : true);
+      const finalObjectiveScore0 = Number.isFinite(finalCompositeEval0?.score)
+        ? finalCompositeEval0.score
+        : best0;
       if (onProgress) {
         try {
           onProgress({
             phase: 'done',
             iter: completed0,
-            current: best0,
-            best: best0,
+            current: finalViolationScore0,
+            best: finalViolationScore0,
             method: 'lm',
             multiScenario,
             requirementCount,
             ms: Math.round(nowMs() - t0),
-            feasible: finalEval ? finalEval.feasible : true,
-            violationScore: finalEval ? finalEval.violationScore : 0,
-            softPenalty: finalEval ? finalEval.softPenalty : 0
+            feasible: finalFeasible0,
+            violationScore: finalViolationScore0,
+            softPenalty: finalSoftPenalty0
           });
         } catch (_) {}
         await nextFrame();
@@ -5674,13 +5689,14 @@ export async function runOptimizationMVP(options = {}) {
         ok: true,
         aborted: aborted0,
         before: before0,
-        best: best0,
+        best: finalViolationScore0,
         iterations: completed0,
         variables: 0,
         method: 'lm',
-        feasible: finalEval ? finalEval.feasible : true,
-        violationScore: finalEval ? finalEval.violationScore : 0,
-        softPenalty: finalEval ? finalEval.softPenalty : 0,
+        feasible: finalFeasible0,
+        violationScore: finalViolationScore0,
+        softPenalty: finalSoftPenalty0,
+        objectiveScore: finalObjectiveScore0,
         hardViolations: finalEval ? finalEval.hardViolations : [],
         softViolations: finalEval ? finalEval.softViolations : []
       };
@@ -6391,39 +6407,53 @@ export async function runOptimizationMVP(options = {}) {
       ms: Math.round(t1 - t0) 
     });
 
+    const finalEval = getBestEvalSoFar();
+    const finalCompositeEval = evalCompositeFromRequirementsProfiled();
+    const finalViolationScore = Number.isFinite(finalCompositeEval?.violationScore)
+      ? finalCompositeEval.violationScore
+      : (finalEval ? finalEval.violationScore : 0);
+    const finalSoftPenalty = Number.isFinite(finalCompositeEval?.softPenalty)
+      ? finalCompositeEval.softPenalty
+      : (finalEval ? finalEval.softPenalty : 0);
+    const finalFeasible = (finalCompositeEval?.feasible !== undefined)
+      ? !!finalCompositeEval.feasible
+      : (finalEval ? finalEval.feasible : true);
+    const finalObjectiveScore = Number.isFinite(finalCompositeEval?.score)
+      ? finalCompositeEval.score
+      : best;
+
     if (onProgress) {
-      const finalEval = getBestEvalSoFar();
       try {
         onProgress({
           phase: 'done',
           iter: completedIterations,
-          current: best,
-          best,
+          current: finalViolationScore,
+          best: finalViolationScore,
           method: 'lm',
           multiScenario,
           requirementCount,
           ms: Math.round(t1 - t0),
-          feasible: finalEval ? finalEval.feasible : true,
-          violationScore: finalEval ? finalEval.violationScore : 0,
-          softPenalty: finalEval ? finalEval.softPenalty : 0
+          feasible: finalFeasible,
+          violationScore: finalViolationScore,
+          softPenalty: finalSoftPenalty
         });
       } catch (_) {}
       await nextFrame();
     }
 
     const aborted = shouldStop ? !!shouldStop() : false;
-    const finalEval = getBestEvalSoFar();
     return {
       ok: true,
       aborted,
       before,
-      best,
+      best: finalViolationScore,
       iterations: completedIterations,
       variables: vars.length,
       method: 'lm',
-      feasible: finalEval ? finalEval.feasible : true,
-      violationScore: finalEval ? finalEval.violationScore : 0,
-      softPenalty: finalEval ? finalEval.softPenalty : 0,
+      feasible: finalFeasible,
+      violationScore: finalViolationScore,
+      softPenalty: finalSoftPenalty,
+      objectiveScore: finalObjectiveScore,
       hardViolations: finalEval ? finalEval.hardViolations : [],
       softViolations: finalEval ? finalEval.softViolations : []
     };
@@ -6630,7 +6660,9 @@ export async function runOptimizationMVP(options = {}) {
               method: 'kkt',
               multiScenario,
               requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
-              feasible: p.feasible ?? false
+              feasible: p.feasible ?? false,
+              violationScore: p.violationScore,
+              softPenalty: p.softPenalty
             });
           } catch (_) {}
         }
@@ -6860,10 +6892,9 @@ export async function runOptimizationMVP(options = {}) {
         const adaptiveBeta = maxViolContext < 0.01 ? 10 : (maxViolContext < 0.1 ? 30 : 100);
         
         for (let i = 0; i < c.length; i++) {
-          const li = Number.isFinite(lambdaVec[i]) ? lambdaVec[i] : 0;
-          // 【修正】純粋な制約違反量を使用（scale による割り算を削除）
-          const adj = c[i] + li / Math.max(1e-12, mu);
-          rConstr[i] = muScale * smoothMax(adj, adaptiveBeta);
+          // 【修正】lambdaVec 補正を除去。AL 内部バイアスを取り除き、ステップ方向を
+          // Requirement スコア勾配と揃える（現在の違反量のみを直接反映）
+          rConstr[i] = muScale * smoothMax(c[i], adaptiveBeta);
         }
         return { base, residuals: res.concat(rConstr) };
       };
@@ -7442,6 +7473,7 @@ export async function runOptimizationMVP(options = {}) {
       let bestScore = initialScore;
       let bestEval = initialStateEval || null;
       let currentX = bestX.slice();
+      let completedIterations = 0;
 
       const calibrateAnalyticEqualityCtctRows = (xRef: number[]) => {
         if (!kktUseAnalyticEqualityCtctJacobian) {
@@ -7846,6 +7878,7 @@ export async function runOptimizationMVP(options = {}) {
       let poorModelStreak = 0;
 
       for (let iter = 0; iter < maxIterations; iter++) {
+        completedIterations = iter + 1;
         const __iterT0 = nowMs();
         let postEvalCached: any = null;
         try {
@@ -7877,6 +7910,7 @@ export async function runOptimizationMVP(options = {}) {
         const aug0 = evalAugmentedResiduals(currentX, lambdaVec, mu, currentMaxViol);
         const r0 = aug0.residuals;
         const cost0 = r0.reduce((acc, v) => acc + v * v, 0);
+        const score0 = objectiveForKKT(currentX);
         if (!Number.isFinite(cost0)) break;
 
         const n = currentX.length;
@@ -8384,17 +8418,19 @@ export async function runOptimizationMVP(options = {}) {
           const aug1 = evalAugmentedResiduals(trialX, lambdaVec, mu, currentMaxViol);
           const r1 = aug1.residuals;
           const cost1 = r1.reduce((acc, v) => acc + v * v, 0);
+          const score1 = objectiveForKKT(trialX);
           
           lastAlpha = alpha; // Track for progress report
           
-          if (Number.isFinite(cost1) && cost1 < cost0) {
+          const improvedScore = Number.isFinite(score1) && Number.isFinite(score0) && score1 < (score0 - 1e-12);
+          if (improvedScore) {
             accepted = true;
             nextX = trialX;
             acceptedCost = cost1;
             
             // 【追加】予測と実際の減少量の比 (rho) を計算
             const pred = predictedReductionForStep(dxStep);
-            const act = cost0 - cost1;
+            const act = score0 - score1;
             acceptedRho = (Number.isFinite(act) && Number.isFinite(pred) && pred > 1e-30) ? (act / pred) : 0;
             
             // Broyden状態の更新：次回のイテレーションで使用
@@ -8552,7 +8588,20 @@ export async function runOptimizationMVP(options = {}) {
               
               if (onProgress) {
                 try {
-                  onProgress({ phase: 'accept', iter, current: bestScore, best: bestScore, method: 'kkt', feasible: currentEval.feasible, alpha: lastAlpha, rho: acceptedRho });
+                  onProgress({
+                    phase: 'accept',
+                    iter,
+                    current: currentScore,
+                    best: bestScore,
+                    method: 'kkt',
+                    multiScenario,
+                    requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
+                    feasible: currentEval.feasible,
+                    violationScore: currentEval.violationScore,
+                    softPenalty: currentEval.softPenalty,
+                    alpha: lastAlpha,
+                    rho: acceptedRho
+                  });
                 } catch (_) {}
               }
             }
@@ -8971,13 +9020,18 @@ export async function runOptimizationMVP(options = {}) {
           }
         }
 
+        const iterCompositeEval = evalCompositeFromRequirementsProfiled();
+
         if (onProgressKKT) {
           const displayScore = accepted ? lastAcceptedScore : bestScore;
+          const currentDisplayScore = iterCompositeEval?.score ?? displayScore;
           await onProgressKKT({
             iter: iter,
-            current: displayScore,
+            current: currentDisplayScore,
             best: bestScore,
-            feasible: post.feasible,
+            feasible: iterCompositeEval?.feasible ?? post.feasible,
+            violationScore: iterCompositeEval?.violationScore,
+            softPenalty: iterCompositeEval?.softPenalty,
             alpha: lastAlpha,
             rho: acceptedRho,
             mu: mu,
@@ -8989,15 +9043,18 @@ export async function runOptimizationMVP(options = {}) {
         // Report progress for UI update
         if (onProgress) {
           try {
+            const progressCurrentScore = iterCompositeEval?.score ?? bestScore;
             onProgress({
               phase: 'iter',
               iter: iter,
-              current: lastAcceptedScore,
+              current: progressCurrentScore,
               best: bestScore,
               method: 'kkt',
               multiScenario,
               requirementCount: Array.isArray(expandedRequirements) ? expandedRequirements.length : 0,
-              feasible: post.feasible,
+              feasible: iterCompositeEval?.feasible ?? post.feasible,
+              violationScore: iterCompositeEval?.violationScore,
+              softPenalty: iterCompositeEval?.softPenalty,
               activeViolations: activeViolations,
               maxViolation: maxViol,
               alpha: lastAlpha,
@@ -9079,33 +9136,80 @@ export async function runOptimizationMVP(options = {}) {
         }
       } catch (_) {}
 
-      // Get final best evaluation for progress reporting
+      // Get final best evaluation for fallback decision (objective-space)
       const bestFinalEval = getBestEvalSoFar();
       const finalScore = bestFinalEval ? bestFinalEval.score : bestScore;
+      const fallbackDepth = Number.isFinite(Number((opts as any)?.__kktFallbackDepth))
+        ? Math.max(0, Math.floor(Number((opts as any).__kktFallbackDepth)))
+        : 0;
+      const allowLmFallbackOnNoImprove = opts?.kktFallbackToLmOnNoImprove !== false;
+      const noKktImprovement = Number.isFinite(finalScore)
+        && Number.isFinite(initialScore)
+        && finalScore >= (initialScore - 1e-12);
+
+      if (!shouldStopKKT() && allowLmFallbackOnNoImprove && fallbackDepth < 1 && noKktImprovement) {
+        console.warn('⚠️ [AL] No improvement detected in KKT path. Falling back to LM warm rescue pass.');
+        const lmFallback = await runOptimizationMVP({
+          ...opts,
+          method: 'lm',
+          maxIterations: Math.max(8, Math.min(maxIterations, 48)),
+          __kktFallbackDepth: fallbackDepth + 1,
+        } as any);
+        if (lmFallback && lmFallback.ok) {
+          return {
+            ...lmFallback,
+            method: 'kkt',
+            kktFallbackToLm: true,
+          };
+        }
+      }
+
+      // Re-evaluate after best snapshot restore to keep final reporting consistent with requirement table.
+      const finalCompositeEval = evalCompositeFromRequirementsProfiled();
+      const finalViolationScore = Number.isFinite(finalCompositeEval?.violationScore)
+        ? finalCompositeEval.violationScore
+        : (bestFinalEval?.violationScore ?? 0);
+      const finalSoftPenalty = Number.isFinite(finalCompositeEval?.softPenalty)
+        ? finalCompositeEval.softPenalty
+        : (bestFinalEval?.softPenalty ?? 0);
+      const finalFeasible = (finalCompositeEval?.feasible !== undefined)
+        ? !!finalCompositeEval.feasible
+        : (bestFinalEval?.feasible ?? false);
+      const finalObjectiveScore = Number.isFinite(finalCompositeEval?.score)
+        ? finalCompositeEval.score
+        : finalScore;
 
       if (onProgress) {
         try {
           onProgress({
             phase: 'done',
-            iter: maxIterations,
-            current: finalScore,
-            best: finalScore,
+            iter: completedIterations,
+            current: finalObjectiveScore,
+            best: finalObjectiveScore,
             ms: Math.round(t1 - t0),
             method: 'kkt',
             multiScenario,
-            feasible: bestFinalEval?.feasible ?? false,
-            violationScore: bestFinalEval?.violationScore ?? 0,
-            softPenalty: bestFinalEval?.softPenalty ?? 0
+            feasible: finalFeasible,
+            violationScore: finalViolationScore,
+            softPenalty: finalSoftPenalty
           });
         } catch (_) {}
       }
 
       return {
         ok: true,
+        aborted: shouldStopKKT(),
         before: initialScore,
-        best: finalScore,
-        iterations: maxIterations,
-        variables: vars.length
+        best: finalViolationScore,
+        iterations: completedIterations,
+        variables: vars.length,
+        method: 'kkt',
+        feasible: finalFeasible,
+        violationScore: finalViolationScore,
+        softPenalty: finalSoftPenalty,
+        objectiveScore: finalObjectiveScore,
+        hardViolations: bestFinalEval?.hardViolations ?? [],
+        softViolations: bestFinalEval?.softViolations ?? []
       };
     } catch (e) {
       console.error('❌ [AL Optimizer] Fatal error:', e);
@@ -9484,27 +9588,41 @@ export async function runOptimizationMVP(options = {}) {
   const t1 = nowMs();
   console.log('✅ [OptimizerMVP] done', { method: 'cd', before, best, ms: Math.round(t1 - t0) });
 
+  const finalEval = getBestEvalSoFar();
+  const finalCompositeEval = evalCompositeFromRequirementsProfiled();
+  const finalViolationScore = Number.isFinite(finalCompositeEval?.violationScore)
+    ? finalCompositeEval.violationScore
+    : (finalEval ? finalEval.violationScore : 0);
+  const finalSoftPenalty = Number.isFinite(finalCompositeEval?.softPenalty)
+    ? finalCompositeEval.softPenalty
+    : (finalEval ? finalEval.softPenalty : 0);
+  const finalFeasible = (finalCompositeEval?.feasible !== undefined)
+    ? !!finalCompositeEval.feasible
+    : (finalEval ? finalEval.feasible : true);
+  const finalObjectiveScore = Number.isFinite(finalCompositeEval?.score)
+    ? finalCompositeEval.score
+    : best;
+
   if (onProgress) {
     try {
-      const finalEval = getBestEvalSoFar();
-      onProgress({ phase: 'done', iter: completedIterations, current: best, best, multiScenario, ms: Math.round(t1 - t0), feasible: finalEval ? finalEval.feasible : true, violationScore: finalEval ? finalEval.violationScore : 0, softPenalty: finalEval ? finalEval.softPenalty : 0 });
+      onProgress({ phase: 'done', iter: completedIterations, current: finalViolationScore, best: finalViolationScore, multiScenario, ms: Math.round(t1 - t0), feasible: finalFeasible, violationScore: finalViolationScore, softPenalty: finalSoftPenalty });
     } catch (_) {}
     await nextFrame();
   }
 
   const aborted = shouldStop ? !!shouldStop() : false;
-  const finalEval = getBestEvalSoFar();
   return {
     ok: true,
     aborted,
     before,
-    best,
+    best: finalViolationScore,
     iterations: completedIterations,
     variables: vars.length,
     method: 'cd',
-    feasible: finalEval ? finalEval.feasible : true,
-    violationScore: finalEval ? finalEval.violationScore : 0,
-    softPenalty: finalEval ? finalEval.softPenalty : 0,
+    feasible: finalFeasible,
+    violationScore: finalViolationScore,
+    softPenalty: finalSoftPenalty,
+    objectiveScore: finalObjectiveScore,
     hardViolations: finalEval ? finalEval.hardViolations : [],
     softViolations: finalEval ? finalEval.softViolations : []
   };

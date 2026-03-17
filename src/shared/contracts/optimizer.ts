@@ -34,6 +34,7 @@ export interface OptimizeProgressEvent {
   requirementCount?: number;
   residualCount?: number;
   rho?: number;
+  feasible?: boolean;
 }
 
 export interface OptimizeStepResponse {

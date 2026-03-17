@@ -2426,8 +2426,10 @@ function setupOptimizeDesignIntentButton(): void {
                 const iterations = Number(result?.iterations ?? 0);
                 const variableCount = Number(result?.variables ?? 0);
                 const meritBefore = Number(result?.before ?? Number.NaN);
-                const meritAfter = Number(result?.best ?? Number.NaN);
                 const requirementScoreAfter = Number(result?.violationScore ?? Number.NaN);
+                const meritAfter = Number.isFinite(requirementScoreAfter)
+                    ? requirementScoreAfter
+                    : Number(result?.best ?? Number.NaN);
                 const converged = !result?.aborted;
 
                 alert(
@@ -2761,6 +2763,7 @@ function setupOptimizeDesignIntentButton(): void {
             let lastVioText = '-';
             let lastSoftText = '-';
             let lastDecisionText = '-';
+            let bestRequirementScore = Number.POSITIVE_INFINITY;
             let acceptCount = 0;
             let rejectCount = 0;
             let currentConvergenceProfile = 'balanced';
@@ -2795,18 +2798,9 @@ function setupOptimizeDesignIntentButton(): void {
                 window.setTimeout(() => warmupOptimizerStartup(false), 0);
             } catch (_) {}
 
-            const refreshPreRunScore = async () => {
-                let score = NaN;
-                let reqCount = NaN;
+            const getRequirementScoreSnapshot = () => {
                 try {
                     const sre = w.systemRequirementsEditor;
-                    if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
-                        const r = sre.evaluateAndUpdateNow({ reason: 'optimize-progress-prerun' });
-                        if (r && typeof (r as any).then === 'function') {
-                            await r;
-                        }
-                    }
-
                     const rows = (() => {
                         try {
                             if (sre && typeof sre.getData === 'function') {
@@ -2822,45 +2816,21 @@ function setupOptimizeDesignIntentButton(): void {
                         return [];
                     })();
 
-                    const activeConfigId = (() => {
-                        try {
-                            const cfg = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
-                                ? w.loadSystemConfigurationsFromTableConfig()
-                                : (typeof w.loadSystemConfigurations === 'function' ? w.loadSystemConfigurations() : null);
-                            if (cfg && cfg.activeConfigId !== undefined && cfg.activeConfigId !== null) {
-                                return String(cfg.activeConfigId).trim();
-                            }
-                        } catch (_) {}
-                        return '';
-                    })();
-
-                    const normalizeConfigId = (row: any): string => {
-                        try {
-                            if (sre && typeof sre._normalizeConfigId === 'function') {
-                                return String(sre._normalizeConfigId(row?.configId, cfg, activeConfigId) || '').trim();
-                            }
-                        } catch (_) {}
-                        const rawCfg = String(row?.configId ?? '').trim();
-                        return rawCfg || activeConfigId;
-                    };
-
-                    const isActiveRequirement = (row: any): boolean => {
+                    const isScoreRequirement = (row: any): boolean => {
                         if (!row || typeof row !== 'object') return false;
                         const enabled = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
                         const operand = String(row.operand ?? '').trim();
                         const weight = Number(row.weight ?? 1);
                         if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) return false;
-                        const reqCfg = normalizeConfigId(row);
-                        if (!activeConfigId) return true;
-                        return reqCfg === activeConfigId;
+                        return true;
                     };
 
-                    const activeRows = Array.isArray(rows) ? rows.filter((r: any) => isActiveRequirement(r)) : [];
-                    reqCount = activeRows.length;
-                    if (activeRows.length > 0) {
+                    const scoreRows = Array.isArray(rows) ? rows.filter((r: any) => isScoreRequirement(r)) : [];
+                    let score = Number.NaN;
+                    if (scoreRows.length > 0) {
                         let s = 0;
                         let finiteCount = 0;
-                        for (const row of activeRows) {
+                        for (const row of scoreRows) {
                             const c = Number(row?._contribution);
                             if (Number.isFinite(c)) {
                                 if (c > 0) s += c;
@@ -2869,6 +2839,30 @@ function setupOptimizeDesignIntentButton(): void {
                         }
                         if (finiteCount > 0 && Number.isFinite(s)) score = s;
                     }
+                    return {
+                        score,
+                        reqCount: scoreRows.length,
+                    };
+                } catch (_) {
+                    return { score: Number.NaN, reqCount: Number.NaN };
+                }
+            };
+
+            const refreshPreRunScore = async () => {
+                let score = NaN;
+                let reqCount = NaN;
+                try {
+                    const sre = w.systemRequirementsEditor;
+                    if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
+                        const r = sre.evaluateAndUpdateNow({ reason: 'optimize-progress-prerun' });
+                        if (r && typeof (r as any).then === 'function') {
+                            await r;
+                        }
+                    }
+
+                    const snap = getRequirementScoreSnapshot();
+                    score = snap.score;
+                    reqCount = snap.reqCount;
                 } catch (_) {}
 
                 if (!Number.isFinite(score)) {
@@ -3045,8 +3039,20 @@ function setupOptimizeDesignIntentButton(): void {
 
                 const cur = Number(p?.current);
                 const best = Number(p?.best);
-                if (totalMeritEl && Number.isFinite(cur)) {
-                    totalMeritEl.textContent = cur.toFixed(6);
+                const progressViolationScore = Number(p?.violationScore);
+                const snap = getRequirementScoreSnapshot();
+                const tableRequirementScore = Number(snap.score);
+                const displayCurrentScore = Number.isFinite(tableRequirementScore)
+                    ? tableRequirementScore
+                    : Number.NaN;
+                if (Number.isFinite(tableRequirementScore)) {
+                    bestRequirementScore = Math.min(bestRequirementScore, tableRequirementScore);
+                }
+                const displayBestScore = Number.isFinite(bestRequirementScore)
+                    ? bestRequirementScore
+                    : Number.NaN;
+                if (totalMeritEl && Number.isFinite(displayCurrentScore)) {
+                    totalMeritEl.textContent = displayCurrentScore.toFixed(6);
                 }
 
                 try {
@@ -3139,6 +3145,9 @@ function setupOptimizeDesignIntentButton(): void {
                 if (p?.requirementCount !== undefined) {
                     lastReqText = String(p.requirementCount);
                 }
+                if (Number.isFinite(Number(snap.reqCount))) {
+                    lastReqText = String(Math.max(0, Math.floor(Number(snap.reqCount))));
+                }
                 if (p?.residualCount !== undefined) {
                     lastResText = String(p.residualCount);
                 }
@@ -3146,9 +3155,8 @@ function setupOptimizeDesignIntentButton(): void {
                     const r = Number(p.rho);
                     lastRhoText = Number.isFinite(r) ? r.toFixed(6) : '-';
                 }
-                if (p && ('violationScore' in p)) {
-                    const v = Number(p.violationScore);
-                    lastVioText = Number.isFinite(v) ? v.toFixed(6) : '-';
+                if (Number.isFinite(tableRequirementScore)) {
+                    lastVioText = tableRequirementScore.toFixed(6);
                 }
                 if (p && ('softPenalty' in p)) {
                     const s = Number(p.softPenalty);
@@ -3168,10 +3176,10 @@ function setupOptimizeDesignIntentButton(): void {
                         setText('opt-iter', String(p?.iter ?? '-'));
                         setText('opt-req', lastReqText);
                         setText('opt-res', lastResText);
-                        setText('opt-cur', Number.isFinite(cur) ? cur.toFixed(6) : String(p?.current ?? '-'));
+                        setText('opt-cur', Number.isFinite(displayCurrentScore) ? displayCurrentScore.toFixed(6) : '-');
                         setText('opt-vio', lastVioText);
                         setText('opt-soft', lastSoftText);
-                        setText('opt-best', Number.isFinite(best) ? best.toFixed(6) : String(p?.best ?? '-'));
+                        setText('opt-best', Number.isFinite(displayBestScore) ? displayBestScore.toFixed(6) : '-');
                         setText('opt-rho', lastRhoText);
                         setText('opt-issue', lastIssueText);
 
@@ -3203,6 +3211,36 @@ function setupOptimizeDesignIntentButton(): void {
                             setText('opt-stop-state', 'Stopping...');
                         }
                     } catch (_) {}
+                }
+
+                if (phaseStr === 'done' || phaseStr === 'stopped') {
+                    void (async () => {
+                        try {
+                            const sre = w.systemRequirementsEditor;
+                            if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
+                                const r = sre.evaluateAndUpdateNow({ reason: 'optimize-progress-final-sync' });
+                                if (r && typeof (r as any).then === 'function') {
+                                    await r;
+                                }
+                            }
+                            const finalSnap = getRequirementScoreSnapshot();
+                            const finalScore = Number(finalSnap.score);
+                            if (!Number.isFinite(finalScore)) return;
+                            bestRequirementScore = Math.min(bestRequirementScore, finalScore);
+                            if (!popup || popup.closed) return;
+                            const doc = popup.document;
+                            const setText = (id: string, v: string) => {
+                                const el = doc.getElementById(id);
+                                if (el) el.textContent = v;
+                            };
+                            setText('opt-cur', finalScore.toFixed(6));
+                            setText('opt-vio', finalScore.toFixed(6));
+                            setText('opt-best', bestRequirementScore.toFixed(6));
+                            if (Number.isFinite(Number(finalSnap.reqCount))) {
+                                setText('opt-req', String(Math.max(0, Math.floor(Number(finalSnap.reqCount)))));
+                            }
+                        } catch (_) {}
+                    })();
                 }
             };
 
@@ -3249,6 +3287,7 @@ function setupOptimizeDesignIntentButton(): void {
                     try { (globalThis as any).__cooptLastUiStopReason = null; } catch (_) {}
                     acceptCount = 0;
                     rejectCount = 0;
+                    bestRequirementScore = Number.POSITIVE_INFINITY;
                     lastIssueText = '-';
                     lastReqText = '-';
                     lastResText = '-';
