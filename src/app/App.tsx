@@ -2869,8 +2869,12 @@ export default function App() {
         let tsAcceptCount = 0;
         let tsRejectCount = 0;
         let tsBestScore = Number.POSITIVE_INFINITY;
+        let tsBestRequirementScore = Number.POSITIVE_INFINITY;
         let lastAutoRenderAt = 0;
         const AUTO_RENDER_THROTTLE_MS = 120;
+        let reqEvalInFlight = false;
+        let lastReqEvalAt = 0;
+        const REQ_EVAL_THROTTLE_MS = 220;
 
         const requestRenderSync = (rowsFromProgress?: any[]) => {
           const hasOpenRenderTarget = (() => {
@@ -3022,6 +3026,74 @@ export default function App() {
         const beforeHostConfigSnapshot = clickSnapshot?.config ?? loadHostConfigSnapshot();
         const beforeHostRowsSnapshot = clickSnapshot?.rows ?? loadHostRowsSnapshot();
 
+        const getRequirementTableScoreSnapshot = () => {
+          try {
+            const sre = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
+            if (sre && typeof sre.getData === 'function') {
+              const rr = sre.getData();
+              if (Array.isArray(rr)) {
+                let sum = 0;
+                let cnt = 0;
+                for (const row of rr) {
+                  const weight = Number(row?.weight ?? 1);
+                  const enabled = (row?.enabled === undefined || row?.enabled === null) ? true : !!row.enabled;
+                  const operand = String(row?.operand ?? '').trim();
+                  if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) continue;
+                  const c = Number.isFinite(Number(row?._contribution)) ? Number(row._contribution) : Number(row?.score);
+                  if (Number.isFinite(c) && c > 0) {
+                    sum += c;
+                    cnt += 1;
+                  }
+                }
+                return {
+                  score: (cnt > 0 && Number.isFinite(sum)) ? sum : Number.NaN,
+                  reqCount: cnt,
+                };
+              }
+            }
+          } catch (_) {}
+          return { score: Number.NaN, reqCount: Number.NaN };
+        };
+
+        const scheduleRequirementRefresh = () => {
+          const now = Date.now();
+          if (reqEvalInFlight) return;
+          if ((now - lastReqEvalAt) < REQ_EVAL_THROTTLE_MS) return;
+          lastReqEvalAt = now;
+          reqEvalInFlight = true;
+
+          void (async () => {
+            try {
+              const sre = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
+              if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
+                const p = sre.evaluateAndUpdateNow({ reason: 'optimize-progress-live', forceSilent: true, silent: true });
+                if (p && typeof (p as any).then === 'function') {
+                  await p;
+                }
+              }
+
+              const snap = getRequirementTableScoreSnapshot();
+              const tableScore = Number(snap.score);
+              if (!Number.isFinite(tableScore)) return;
+              tsBestRequirementScore = Math.min(tsBestRequirementScore, tableScore);
+
+              setOptimizeState((prev: any) => ({
+                ...prev,
+                meritAfter: tableScore,
+                requirementScoreAfter: tableScore,
+                requirementScoreTable: tableScore,
+                best: Number.isFinite(tsBestRequirementScore)
+                  ? tsBestRequirementScore
+                  : prev.best,
+              }));
+            } catch (_) {
+              // ignore live refresh failures and keep progress loop running
+            } finally {
+              reqEvalInFlight = false;
+            }
+          })();
+        };
+
         const optimizerRunner = (() => {
           try {
             const hostOpt = hostWindow?.OptimizationMVP;
@@ -3052,13 +3124,24 @@ export default function App() {
             const phase = String(ev?.phase ?? 'running');
             const phaseLower = phase.toLowerCase();
             const iter = Number(ev?.iter ?? 0);
-            const current = Number(ev?.current ?? NaN);
-            const best = Number(ev?.best ?? NaN);
-            const violationScore = Number(ev?.violationScore ?? NaN);
+            scheduleRequirementRefresh();
+            const snap = getRequirementTableScoreSnapshot();
+            const progressCurrentScore = Number(ev?.current);
+            const progressViolationScore = Number(ev?.violationScore);
+            const tableScore = Number(snap.score);
+            // ev.current = violationScore + softPenalty (total Requirement score)
+            // ev.violationScore = hard violations only (fall back)
+            const displayScore = Number.isFinite(progressCurrentScore)
+              ? progressCurrentScore
+              : (Number.isFinite(progressViolationScore)
+                ? progressViolationScore
+                : (Number.isFinite(tableScore) ? tableScore : Number.NaN));
 
             if (phaseLower === 'accept') tsAcceptCount += 1;
             if (phaseLower === 'reject') tsRejectCount += 1;
-            if (Number.isFinite(best)) tsBestScore = Math.min(tsBestScore, best);
+            if (Number.isFinite(displayScore)) {
+              tsBestRequirementScore = Math.min(tsBestRequirementScore, displayScore);
+            }
 
             if (phaseLower.includes('accept') || (ev as any)?.accepted === true) {
               requestRenderSync(Array.isArray((ev as any)?.rows) ? (ev as any).rows : undefined);
@@ -3070,16 +3153,18 @@ export default function App() {
               phase,
               modeUsed: optMethod,
               iterations: iter,
-              meritBefore: Number.isFinite(current) ? current : prev.meritBefore,
-              meritAfter: Number.isFinite(current) ? current : prev.meritAfter,
-              requirementScoreBefore: Number.isFinite(violationScore) ? violationScore : prev.requirementScoreBefore,
-              requirementScoreAfter: Number.isFinite(violationScore) ? violationScore : prev.requirementScoreAfter,
-              requirementScoreTable: Number.isFinite(violationScore) ? violationScore : prev.requirementScoreTable,
+              meritBefore: prev.meritBefore,
+              meritAfter: Number.isFinite(displayScore) ? displayScore : prev.meritAfter,
+              requirementScoreBefore: prev.requirementScoreBefore,
+              requirementScoreAfter: Number.isFinite(displayScore) ? displayScore : prev.requirementScoreAfter,
+              requirementScoreTable: Number.isFinite(displayScore) ? displayScore : prev.requirementScoreTable,
               acceptCount: tsAcceptCount,
               rejectCount: tsRejectCount,
               issue: '-',
               percent: maxIterations > 0 ? Math.round((Math.max(0, iter) / maxIterations) * 100) : 0,
-              best: Number.isFinite(tsBestScore) ? tsBestScore : prev.best,
+              best: Number.isFinite(tsBestRequirementScore)
+                ? tsBestRequirementScore
+                : prev.best,
             }));
           },
         });
@@ -3162,8 +3247,15 @@ export default function App() {
           }
         } catch (_) {}
 
-        const finalScore = Number(tsResult?.violationScore ?? tsResult?.best ?? NaN);
-        const finalBest = Number(tsResult?.best ?? NaN);
+        const finalScore = Number.isFinite(finalTableScore)
+          ? finalTableScore
+          : Number.NaN;
+        const finalBest = Number.isFinite(finalScore)
+          ? Math.min(
+            Number.isFinite(tsBestRequirementScore) ? tsBestRequirementScore : finalScore,
+            finalScore
+          )
+          : (Number.isFinite(tsBestRequirementScore) ? tsBestRequirementScore : Number.NaN);
         const aborted = !!(tsResult?.aborted || (window as any).__cooptOptimizeStopRequested);
 
         setOptimizeState((prev: any) => ({
@@ -3180,6 +3272,8 @@ export default function App() {
           requirementScoreTable: Number.isFinite(finalTableScore)
             ? finalTableScore
             : (Number.isFinite(finalScore) ? finalScore : prev.requirementScoreTable),
+          meritAfter: Number.isFinite(finalTableScore) ? finalTableScore
+            : (Number.isFinite(finalScore) ? finalScore : prev.meritAfter),
           best: Number.isFinite(finalBest) ? finalBest : prev.best,
           percent: 100,
         }));

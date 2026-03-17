@@ -1347,8 +1347,10 @@ export function handleOptimize(): void {
 
       const modeUsed = String(result?.method || 'kkt');
       const meritBefore = Number(result?.before ?? Number.NaN);
-      const meritAfter = Number(result?.best ?? Number.NaN);
       const requirementScoreAfter = Number(result?.violationScore ?? Number.NaN);
+      const meritAfter = Number.isFinite(requirementScoreAfter)
+        ? requirementScoreAfter
+        : Number(result?.best ?? Number.NaN);
       const iterations = Number(result?.iterations ?? 0);
       const variableCount = Number(result?.variables ?? 0);
       const converged = !result?.aborted;

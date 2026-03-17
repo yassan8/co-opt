@@ -134,6 +134,7 @@ pub struct OptimizeProgressEvent {
     pub requirement_count: Option<usize>,
     pub residual_count: Option<usize>,
     pub rho: Option<f64>,
+    pub feasible: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -292,6 +293,7 @@ pub fn run_optimizer_step(req: OptimizeStepRequest) -> Result<OptimizeStepRespon
             requirement_count: Some(requirements.len()),
             residual_count: Some(requirements.len()),
             rho: None,
+            feasible: Some(before_eval.violation_score.is_finite() && before_eval.violation_score <= 1e-9),
         });
     }
 
@@ -311,6 +313,7 @@ pub fn run_optimizer_step(req: OptimizeStepRequest) -> Result<OptimizeStepRespon
                 requirement_count: Some(requirements.len()),
                 residual_count: Some(requirements.len()),
                 rho: None,
+                feasible: Some(before_eval.violation_score.is_finite() && before_eval.violation_score <= 1e-9),
             });
         }
         return Ok(OptimizeStepResponse {
@@ -443,6 +446,7 @@ pub fn run_optimizer_step(req: OptimizeStepRequest) -> Result<OptimizeStepRespon
             requirement_count: Some(requirements.len()),
             residual_count: Some(requirements.len()),
             rho: None,
+            feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
         });
     }
 
@@ -565,6 +569,7 @@ fn run_cd(
                         requirement_count: Some(requirements.len()),
                         residual_count: Some(requirements.len()),
                         rho: None,
+                        feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
                     });
                 }
             } else {
@@ -585,6 +590,7 @@ fn run_cd(
                         requirement_count: Some(requirements.len()),
                         residual_count: Some(requirements.len()),
                         rho: None,
+                        feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
                     });
                 }
             }
@@ -665,6 +671,7 @@ fn run_lm(
                     requirement_count: Some(requirements.len()),
                     residual_count: Some(requirements.len()),
                     rho: None,
+                    feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
                 });
             }
         } else {
@@ -686,6 +693,7 @@ fn run_lm(
                     requirement_count: Some(requirements.len()),
                     residual_count: Some(requirements.len()),
                     rho: None,
+                    feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
                 });
             }
             if stall_count >= STALL_LIMIT {
@@ -857,6 +865,7 @@ fn run_kkt(
                     requirement_count: Some(requirements.len()),
                     residual_count: Some(requirements.len()),
                     rho: Some(rho),
+                    feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
                 });
             }
         } else {
@@ -890,6 +899,7 @@ fn run_kkt(
                         requirement_count: Some(requirements.len()),
                         residual_count: Some(requirements.len()),
                         rho: Some(rho),
+                        feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
                     });
                 }
             } else {
@@ -912,6 +922,7 @@ fn run_kkt(
                         requirement_count: Some(requirements.len()),
                         residual_count: Some(requirements.len()),
                         rho: Some(rho),
+                        feasible: Some(best_eval.violation_score.is_finite() && best_eval.violation_score <= 1e-9),
                     });
                 }
                 if stall_count >= STALL_LIMIT {
