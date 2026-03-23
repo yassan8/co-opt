@@ -9284,6 +9284,13 @@ export async function runOptimizationMVP(options = {}) {
       }
     }
 
+    const aborted0 = shouldStop ? !!shouldStop() : false;
+    const finalEval = getBestEvalSoFar();
+    // Ensure final state first, then sync UI/tables from restored best snapshot.
+    try {
+      restoreBestSnapshotAndPersist({ finalEval, jointState, systemConfig, configsById, targetConfigIds });
+    } catch (_) {}
+
     // Final sync to tables
     try {
       if (window.ConfigurationManager && typeof window.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
@@ -9307,13 +9314,6 @@ export async function runOptimizationMVP(options = {}) {
       if (window.systemRequirementsEditor && typeof window.systemRequirementsEditor.evaluateAndUpdateNow === 'function') {
         window.systemRequirementsEditor.evaluateAndUpdateNow();
       }
-    } catch (_) {}
-
-    const aborted0 = shouldStop ? !!shouldStop() : false;
-    const finalEval = getBestEvalSoFar();
-    // Ensure final state
-    try {
-      restoreBestSnapshotAndPersist({ finalEval, jointState, systemConfig, configsById, targetConfigIds });
     } catch (_) {}
     return {
       ok: true,
