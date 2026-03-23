@@ -11,6 +11,7 @@ import { SystemDataPanel } from "../ui/components/LegacyPanels";
 import { requestRefreshBlockInspector } from "../../core/window-facade.ts";
 import { handleOpenSettings } from "../../ui/toolbar-handlers";
 import { runOptimizationMVP } from "../../optimization/optimizer-mvp.ts";
+import { listDesignVariablesFromBlocks } from "../../optimization/design-variables.ts";
 import { clearOptimizerStop, readDesktopSetting, writeDesktopSetting } from "../../src/desktop/ipc/client.ts";
 import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 
@@ -404,6 +405,37 @@ export default function App() {
     }, 0);
   };
 
+  const getSystemConfigFromWindow = (targetWindow: any): any => {
+    try {
+      if (targetWindow && typeof targetWindow.loadSystemConfigurationsFromTableConfig === 'function') {
+        return targetWindow.loadSystemConfigurationsFromTableConfig();
+      }
+      if (targetWindow && typeof targetWindow.loadSystemConfigurations === 'function') {
+        return targetWindow.loadSystemConfigurations();
+      }
+    } catch (_) {}
+    return null;
+  };
+
+  const getActiveConfigFromSystemConfig = (systemConfig: any): any => {
+    if (!systemConfig || !Array.isArray(systemConfig.configurations)) return null;
+    const activeId = systemConfig.activeConfigId;
+    return systemConfig.configurations.find((c: any) => c && String(c.id) === String(activeId))
+      || systemConfig.configurations[0]
+      || null;
+  };
+
+  const countBlockOptimizeVariables = (targetWindow: any): number => {
+    try {
+      const systemConfig = getSystemConfigFromWindow(targetWindow);
+      const activeCfg = getActiveConfigFromSystemConfig(systemConfig);
+      const allVars = listDesignVariablesFromBlocks(activeCfg || {});
+      return Array.isArray(allVars) ? allVars.length : 0;
+    } catch (_) {
+      return 0;
+    }
+  };
+
   useEffect(() => {
     const optimizeStatus = String(optimizeState?.status || 'idle').toLowerCase();
     // Pre-run score probing must only run in the initial idle state.
@@ -590,10 +622,7 @@ export default function App() {
           }
           if (finiteCount > 0 && Number.isFinite(score)) safeScore = score;
         }
-        // Count optimize variables from optical system rows.
-        if (Array.isArray(opticalRows)) {
-          variableCount = countOptimizeFlags(opticalRows);
-        }
+        variableCount = countBlockOptimizeVariables(w);
 
         if (!cancelled) {
           setOptimizeState((prev: any) => ({
@@ -2405,20 +2434,7 @@ export default function App() {
           ? w.systemRequirementsEditor.getData()
           : [];
       }
-      const variableCount = Array.isArray(rows)
-        ? rows.reduce((acc: number, row: any) => {
-            if (!row || typeof row !== 'object') return acc;
-            const keys = Object.keys(row);
-            let c = 0;
-            for (const k of keys) {
-              if (!k.startsWith('optimize')) continue;
-              const v = row[k];
-              const t = String(v ?? '').trim().toLowerCase();
-              if (v === true || v === 1 || t === 'v' || t === 'true' || t === '1') c += 1;
-            }
-            return acc + c;
-          }, 0)
-        : 0;
+      const variableCount = countBlockOptimizeVariables(w);
       setOptimizeState((prev: any) => ({
         ...prev,
         variableCount,
@@ -2795,7 +2811,7 @@ export default function App() {
         return;
       }
 
-      const optimizeVarCount = countOptimizeFlags(rows);
+      const optimizeVarCount = countBlockOptimizeVariables(hostWindow);
       if (optimizeVarCount <= 0) {
         setOptimizeState((prev: any) => ({
           ...prev,
@@ -3174,7 +3190,9 @@ export default function App() {
         }
 
         const tsIterations = Number(tsResult?.iterations ?? NaN);
-        if (!Number.isFinite(tsIterations) || tsIterations <= 0) {
+        const tsAborted = !!(tsResult?.aborted || (window as any).__cooptOptimizeStopRequested);
+        // Stop 時は iterations=0 でも正常系として扱い、Best 復元・同期処理を継続する。
+        if ((!Number.isFinite(tsIterations) || tsIterations <= 0) && !tsAborted) {
           throw new Error(`TS/WASM optimizer produced no iterations (iterations=${String(tsResult?.iterations)})`);
         }
 
@@ -3256,7 +3274,7 @@ export default function App() {
             finalScore
           )
           : (Number.isFinite(tsBestRequirementScore) ? tsBestRequirementScore : Number.NaN);
-        const aborted = !!(tsResult?.aborted || (window as any).__cooptOptimizeStopRequested);
+        const aborted = tsAborted;
 
         setOptimizeState((prev: any) => ({
           ...prev,
