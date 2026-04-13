@@ -4482,7 +4482,6 @@ Popup was blocked. Please disable your browser's popup blocker.`);return}U.__opd
                         cancelToken: popupCancelToken,
                         onProgress,
                         opdDisplayMode,
-                        forceRustWasm: true,
                         throwOnError: true,
                         showAlert: false
                     });
@@ -4532,30 +4531,6 @@ Popup was blocked. Please disable your browser's popup blocker.`);return}U.__opd
                                     throw new Error('No valid wavefrontMap to fit');
                                 }
 
-                                const coordsAll = Array.isArray(map?.pupilCoordinates) ? map.pupilCoordinates : [];
-                                const opdsAll = Array.isArray(map?.raw?.opds) ? map.raw.opds : (Array.isArray(map?.opds) ? map.opds : []);
-                                const n = Math.min(coordsAll.length, opdsAll.length);
-                                if (!n) {
-                                    throw new Error('No OPD samples found');
-                                }
-
-                                // Filter out invalid samples for fitting
-                                const coords = [];
-                                const opds = [];
-                                for (let i = 0; i < n; i++) {
-                                    const c = coordsAll[i];
-                                    const v = opdsAll[i];
-                                    const x = Number(c?.x);
-                                    const y = Number(c?.y);
-                                    const opd = Number(v);
-                                    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(opd)) continue;
-                                    coords.push({ x, y });
-                                    opds.push(opd);
-                                }
-                                if (coords.length < 5) {
-                                    throw new Error('Not enough valid samples for Zernike fitting');
-                                }
-
                                 const wavelength = (() => {
                                     const fromMeta = Number(meta?.wavelength);
                                     if (Number.isFinite(fromMeta) && fromMeta > 0) return fromMeta;
@@ -4581,12 +4556,71 @@ Popup was blocked. Please disable your browser's popup blocker.`);return}U.__opd
                                 const calculator = calculatorFactory ? calculatorFactory(opticalSystemRows, wavelength) : null;
                                 const analyzer = (calculator && analyzerFactory) ? analyzerFactory(calculator) : null;
 
-                                if (!analyzer || typeof analyzer.fitZernikePolynomials !== 'function' || typeof analyzer.formatZernikeReportText !== 'function') {
+                                if (!analyzer || typeof analyzer.generateWavefrontMap !== 'function' || typeof analyzer.formatZernikeReportText !== 'function') {
                                     throw new Error('Wavefront analyzer is not available for Zernike fitting');
                                 }
 
-                                const maxNoll = Math.max(1, Math.min(37, opds.length));
-                                const fit = analyzer.fitZernikePolynomials({ pupilCoordinates: coords, opds }, maxNoll);
+                                const objectRows = (typeof opener?.getObjectRows === 'function')
+                                    ? opener.getObjectRows()
+                                    : [];
+                                const fitObjectIndex = Number.isFinite(Number(objectIndex))
+                                    ? Math.max(0, Math.floor(Number(objectIndex)))
+                                    : 0;
+                                const selectedObject = Array.isArray(objectRows) && objectRows[fitObjectIndex]
+                                    ? objectRows[fitObjectIndex]
+                                    : null;
+                                const fitFieldSetting = (() => {
+                                    if (meta?.fieldSetting && typeof meta.fieldSetting === 'object') {
+                                        return {
+                                            ...meta.fieldSetting,
+                                            objectIndex: fitObjectIndex,
+                                            wavelength
+                                        };
+                                    }
+
+                                    const pos = String(
+                                        selectedObject?.position
+                                        ?? selectedObject?.Position
+                                        ?? selectedObject?.type
+                                        ?? ''
+                                    ).toLowerCase();
+                                    const xVal = Number(selectedObject?.xHeightAngle ?? selectedObject?.x ?? 0) || 0;
+                                    const yVal = Number(selectedObject?.yHeightAngle ?? selectedObject?.y ?? 0) || 0;
+                                    const isAngleMode = pos === 'angle' || pos === 'field angle' || pos === 'angles' || pos === 'point';
+
+                                    return {
+                                        id: selectedObject?.id || fitObjectIndex + 1,
+                                        displayName: 'Object ' + String(fitObjectIndex + 1),
+                                        type: isAngleMode ? 'Angle' : 'Rectangle',
+                                        fieldAngle: isAngleMode ? { x: xVal, y: yVal } : { x: 0, y: 0 },
+                                        xHeight: isAngleMode ? 0 : xVal,
+                                        yHeight: isAngleMode ? 0 : yVal,
+                                        objectIndex: fitObjectIndex,
+                                        wavelength
+                                    };
+                                })();
+
+                                const fitGridSize = Number.isFinite(Number(gridSize))
+                                    ? Math.max(16, Math.floor(Number(gridSize)))
+                                    : 256;
+                                const maxNoll = 37;
+                                const legacyWavefrontMap = await analyzer.generateWavefrontMap(fitFieldSetting, fitGridSize, 'circular', {
+                                    recordRays: false,
+                                    progressEvery: 0,
+                                    opdMode: 'simple',
+                                    opdDisplayMode,
+                                    renderFromZernike: false,
+                                    skipZernikeFit: false,
+                                    zernikeMaxNoll: maxNoll
+                                });
+                                if (!legacyWavefrontMap || legacyWavefrontMap?.error) {
+                                    throw new Error(String(legacyWavefrontMap?.error?.message || 'Legacy Zernike wavefront generation failed'));
+                                }
+
+                                const fit = legacyWavefrontMap?.zernike;
+                                if (!fit || !fit.coefficientsMicrons) {
+                                    throw new Error('Legacy Zernike fit did not produce coefficients');
+                                }
 
                                 // Store coefficients for the main window Zernike Fit button
                                 try {
@@ -4596,22 +4630,14 @@ Popup was blocked. Please disable your browser's popup blocker.`);return}U.__opd
                                         : { map: (map && typeof map === 'object') ? map : {}, meta: meta || null };
                                     const current = (base.map && typeof base.map === 'object') ? base.map : {};
                                     current.zernike = fit;
-                                    current.statistics = current.statistics || (map?.statistics || {});
+                                    current.statistics = legacyWavefrontMap.statistics || current.statistics || (map?.statistics || {});
+                                    current.raw = legacyWavefrontMap.raw || current.raw || (map?.raw || {});
                                     current.statistics.skipZernikeFit = false;
                                     base.map = current;
                                     if (opener) opener[key] = base;
                                 } catch (_) {}
 
-                                // Build a lightweight report map so formatting can rely on aligned sample arrays
-                                const reportMap = {
-                                    ...map,
-                                    pupilCoordinates: coords,
-                                    raw: { ...(map.raw || {}), opds },
-                                    opds,
-                                    zernike: fit
-                                };
-
-                                const reportText = analyzer.formatZernikeReportText(reportMap, { maxNoll });
+                                const reportText = analyzer.formatZernikeReportText(legacyWavefrontMap, { maxNoll });
 
                                 const pushSystemData = (text) => {
                                     const value = String(text || '');
