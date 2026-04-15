@@ -13,6 +13,7 @@ import { drawAsphericProfile, drawPlaneProfile, drawLensSurface, drawLensSurface
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const COORD_BREAK_DEBUG_STORAGE_KEY = 'coopt.debug.coordTrans';
+const RENDER_LABEL_TOGGLE_STORAGE_KEY = 'coopt.render.showDesignIntentLabels';
 
 function __coopt_isCoordTransDebugEnabled() {
     try {
@@ -225,6 +226,295 @@ function __coopt_loadSurfaceColorOverrides() {
     }
 }
 
+function __coopt_shouldShowDesignIntentLabels(value) {
+    if (typeof value === 'boolean') return value;
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const raw = String(localStorage.getItem(RENDER_LABEL_TOGGLE_STORAGE_KEY) ?? '').trim().toLowerCase();
+            if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
+            if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
+        }
+    } catch (_) {}
+    return false;
+}
+
+function __coopt_normalizeBlockDisplayType(blockType) {
+    const raw = String(blockType ?? '').trim();
+    if (!raw) return '';
+    if (raw === 'PositiveLens') return 'Lens';
+    if (raw === 'ObjectPlane') return 'ObjectSurface';
+    return raw;
+}
+
+function __coopt_isRenderableDesignIntentBlockType(blockType) {
+    const t = __coopt_normalizeBlockDisplayType(blockType).toLowerCase();
+    if (!t) return false;
+    return !(t === 'coordtrans' || t === 'coord trans' || t === 'coordinate transform' || t === 'coordinatebreak' || t === 'coordinate break');
+}
+
+function __coopt_getActiveDesignIntentBlocks() {
+    try {
+        const w = (typeof window !== 'undefined') ? window : null;
+        if (!w) return [];
+        const systemConfig = (typeof w.loadSystemConfigurationsFromTableConfig === 'function')
+            ? w.loadSystemConfigurationsFromTableConfig()
+            : ((typeof w.loadSystemConfigurations === 'function') ? w.loadSystemConfigurations() : null);
+        const activeId = systemConfig?.activeConfigId;
+        const activeCfg = Array.isArray(systemConfig?.configurations)
+            ? (systemConfig.configurations.find((cfg) => cfg && String(cfg.id) === String(activeId)) || systemConfig.configurations[0])
+            : null;
+        const blocks = Array.isArray(activeCfg?.blocks) ? activeCfg.blocks : [];
+        return blocks.filter((block) => block && __coopt_isRenderableDesignIntentBlockType(block.blockType));
+    } catch (_) {
+        return [];
+    }
+}
+
+function __coopt_vectorFromOriginEntry(entry) {
+    const origin = entry?.origin || entry || {};
+    return new THREE.Vector3(
+        Number(origin?.x) || 0,
+        Number(origin?.y) || 0,
+        Number(origin?.z) || 0
+    );
+}
+
+function __coopt_averageOriginForRange(surfaceOrigins, minIdx, maxIdx) {
+    if (!Array.isArray(surfaceOrigins) || surfaceOrigins.length === 0) return null;
+    const start = Math.max(0, Math.min(surfaceOrigins.length - 1, Number(minIdx) || 0));
+    const end = Math.max(start, Math.min(surfaceOrigins.length - 1, Number(maxIdx) || start));
+    const acc = new THREE.Vector3(0, 0, 0);
+    let count = 0;
+    for (let i = start; i <= end; i += 1) {
+        const v = __coopt_vectorFromOriginEntry(surfaceOrigins[i]);
+        acc.add(v);
+        count += 1;
+    }
+    return count > 0 ? acc.multiplyScalar(1 / count) : null;
+}
+
+function __coopt_buildSurfRangeByBlockId(opticalSystemData) {
+    const surfRangeByBlockId = new Map();
+    if (!Array.isArray(opticalSystemData)) return surfRangeByBlockId;
+    for (let i = 0; i < opticalSystemData.length; i += 1) {
+        const row = opticalSystemData[i];
+        const blockId = String(row?._blockId ?? '').trim();
+        if (!blockId) continue;
+        const prev = surfRangeByBlockId.get(blockId);
+        if (!prev) surfRangeByBlockId.set(blockId, { min: i, max: i });
+        else {
+            if (i < prev.min) prev.min = i;
+            if (i > prev.max) prev.max = i;
+        }
+    }
+    return surfRangeByBlockId;
+}
+
+function __coopt_formatSurfRangeText(range) {
+    if (!range || !Number.isFinite(Number(range.min)) || !Number.isFinite(Number(range.max))) return '';
+    return (range.min === range.max)
+        ? `Surf ${range.min}`
+        : `Surf ${range.min}–${range.max}`;
+}
+
+function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOrigins) {
+    const descriptors = [];
+    const blocks = __coopt_getActiveDesignIntentBlocks();
+    const surfRangeByBlockId = __coopt_buildSurfRangeByBlockId(opticalSystemData);
+    const seenIds = new Set();
+
+    const objectAnchor = Array.isArray(surfaceOrigins) && surfaceOrigins.length > 0 ? __coopt_vectorFromOriginEntry(surfaceOrigins[0]) : null;
+    const imageAnchor = Array.isArray(surfaceOrigins) && surfaceOrigins.length > 0 ? __coopt_vectorFromOriginEntry(surfaceOrigins[surfaceOrigins.length - 1]) : null;
+
+    const pushDescriptor = (id, text, anchor) => {
+        const safeId = String(id ?? '').trim();
+        if (!safeId || !text || !anchor || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y) || !Number.isFinite(anchor.z)) return;
+        if (seenIds.has(safeId)) return;
+        seenIds.add(safeId);
+        descriptors.push({ id: safeId, text: String(text), anchor });
+    };
+
+    if (blocks.length > 0) {
+        const findNeighborAnchor = (startIndex, direction) => {
+            for (let i = startIndex + direction; i >= 0 && i < blocks.length; i += direction) {
+                const block = blocks[i];
+                const blockType = __coopt_normalizeBlockDisplayType(block?.blockType);
+                const blockId = String(block?.blockId ?? '').trim();
+                if (blockType === 'ObjectSurface' && objectAnchor) return objectAnchor.clone();
+                if (blockType === 'ImageSurface' && imageAnchor) return imageAnchor.clone();
+                const range = blockId ? surfRangeByBlockId.get(blockId) : null;
+                if (range) {
+                    const idx = direction < 0 ? range.max : range.min;
+                    return __coopt_vectorFromOriginEntry(surfaceOrigins[idx]);
+                }
+            }
+            return null;
+        };
+
+        for (let i = 0; i < blocks.length; i += 1) {
+            const block = blocks[i];
+            const blockType = __coopt_normalizeBlockDisplayType(block?.blockType);
+            const blockId = String(block?.blockId ?? '').trim() || blockType || `Block-${i + 1}`;
+            let anchor = null;
+
+            if (blockType === 'ObjectSurface') {
+                continue;
+            } else if (blockType === 'ImageSurface') {
+                anchor = imageAnchor ? imageAnchor.clone() : null;
+            } else {
+                const range = surfRangeByBlockId.get(blockId);
+                if (range) {
+                    anchor = __coopt_averageOriginForRange(surfaceOrigins, range.min, range.max);
+                } else if (blockType === 'Gap' || blockType === 'AirGap') {
+                    const prevAnchor = findNeighborAnchor(i, -1);
+                    const nextAnchor = findNeighborAnchor(i, 1);
+                    if (prevAnchor && nextAnchor) anchor = prevAnchor.clone().lerp(nextAnchor, 0.5);
+                    else anchor = prevAnchor || nextAnchor;
+                }
+            }
+
+            pushDescriptor(blockId, blockId, anchor);
+        }
+    }
+
+    if (descriptors.length > 0) return descriptors;
+
+    for (const [blockId, range] of surfRangeByBlockId.entries()) {
+        const anchor = __coopt_averageOriginForRange(surfaceOrigins, range.min, range.max);
+        if (/^Object(Surface|Plane)?/i.test(String(blockId))) continue;
+        pushDescriptor(blockId, blockId, anchor);
+    }
+
+    return descriptors;
+}
+
+function __coopt_addDesignIntentLabelPolyline(scene, points, color = 0x475569) {
+    if (!scene || !Array.isArray(points) || points.length < 2) return;
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.85,
+        depthTest: false,
+        depthWrite: false,
+    });
+    const line = new THREE.Line(geometry, material);
+    line.renderOrder = 65000;
+    line.frustumCulled = false;
+    line.userData = { type: 'design-intent-label-line', isOpticalElement: true };
+    scene.add(line);
+}
+
+function __coopt_addDesignIntentLabelSprite(scene, text, position) {
+    if (!scene || !text || !position) return;
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) return;
+
+    const fontPt = 25;
+    const paddingX = 10;
+    const paddingY = 5;
+    context.font = `600 ${fontPt}pt Arial, sans-serif`;
+    const metrics = context.measureText(String(text));
+    const textHeight = Math.ceil(fontPt * 1.55);
+    canvas.width = Math.ceil(metrics.width + paddingX * 2);
+    canvas.height = Math.ceil(textHeight + paddingY * 2);
+
+    context.font = `600 ${fontPt}pt Arial, sans-serif`;
+    context.fillStyle = 'rgba(255,255,255,0.94)';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.strokeStyle = '#475569';
+    context.lineWidth = 1;
+    context.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
+    context.fillStyle = '#111827';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(String(text), canvas.width / 2, canvas.height / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const spriteMaterial = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+    });
+    const sprite = new THREE.Sprite(spriteMaterial);
+    sprite.center.set(0.5, 0.5);
+    sprite.scale.set(canvas.width / 13, canvas.height / 13, 1);
+    sprite.position.copy(position);
+    sprite.renderOrder = 65010;
+    sprite.frustumCulled = false;
+    sprite.userData = { type: 'design-intent-label', isOpticalElement: true, labelText: String(text) };
+    scene.add(sprite);
+}
+
+function __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceOrigins, options = {}) {
+    if (!scene || !Array.isArray(opticalSystemData) || opticalSystemData.length === 0) return;
+    if (!Array.isArray(surfaceOrigins) || surfaceOrigins.length === 0) return;
+
+    const descriptors = __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOrigins);
+    if (!descriptors.length) return;
+
+    const axis = (String(options?.axis ?? 'YZ').trim().toUpperCase() === 'XZ') ? 'XZ' : 'YZ';
+    const getVerticalCoord = (vec) => axis === 'XZ' ? vec.x : vec.y;
+    const getDepthCoord = (vec) => axis === 'XZ' ? vec.y : vec.x;
+    const makePoint = (vertical, depth, z) => {
+        return axis === 'XZ'
+            ? new THREE.Vector3(vertical, depth, z)
+            : new THREE.Vector3(depth, vertical, z);
+    };
+    const makeMostlyVerticalLabelPoint = (anchor, labelVertical, zShift) => {
+        const anchorVertical = getVerticalCoord(anchor);
+        const vertical = Math.abs(labelVertical - anchorVertical) < 0.5 ? (anchorVertical + (labelVertical >= anchorVertical ? 0.5 : -0.5)) : labelVertical;
+        return makePoint(vertical, getDepthCoord(anchor), Number(anchor?.z || 0) + zShift);
+    };
+
+    let surfaceTop = Number.NEGATIVE_INFINITY;
+    let surfaceBottom = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < opticalSystemData.length; i += 1) {
+        const surface = opticalSystemData[i];
+        if (!surface || __coopt_isGapSurface(surface)) continue;
+        const originVec = __coopt_vectorFromOriginEntry(surfaceOrigins[i]);
+        const semidia = __coopt_getRenderSemidiaMm(surface);
+        const cross = __coopt_getCrosshairHalfExtents(surface, semidia ?? 0);
+        const halfExtent = axis === 'XZ'
+            ? Math.max(Number(cross?.halfX) || 0, Number(semidia) || 0)
+            : Math.max(Number(cross?.halfY) || 0, Number(semidia) || 0);
+        surfaceTop = Math.max(surfaceTop, getVerticalCoord(originVec) + halfExtent);
+        surfaceBottom = Math.min(surfaceBottom, getVerticalCoord(originVec) - halfExtent);
+    }
+    if (!Number.isFinite(surfaceTop)) {
+        surfaceTop = Math.max(...descriptors.map((d) => getVerticalCoord(d.anchor)));
+    }
+    if (!Number.isFinite(surfaceBottom)) {
+        surfaceBottom = Math.min(...descriptors.map((d) => getVerticalCoord(d.anchor)));
+    }
+
+    const primaryEntries = descriptors.filter((entry) => !/^(Gap|AirGap)/i.test(String(entry.id)));
+    const gapEntries = descriptors.filter((entry) => /^(Gap|AirGap)/i.test(String(entry.id)));
+
+    const layoutGroup = (entries, baseVertical, verticalDir = 1) => {
+        const ordered = [...entries];
+        const center = (ordered.length - 1) / 2;
+        for (let i = 0; i < ordered.length; i += 1) {
+            const entry = ordered[i];
+            const zShift = (i - center) * 4;
+            const verticalOffset = ordered.length > 6 ? Math.floor(i / 6) * 6 : 0;
+            const labelVertical = baseVertical + verticalDir * verticalOffset;
+            const labelAnchor = makeMostlyVerticalLabelPoint(entry.anchor, labelVertical, zShift);
+
+            __coopt_addDesignIntentLabelPolyline(scene, [entry.anchor.clone(), labelAnchor.clone()]);
+            __coopt_addDesignIntentLabelSprite(scene, entry.text, labelAnchor);
+        }
+    };
+
+    const primaryBase = surfaceTop + 20;
+    const gapBase = surfaceBottom - 18;
+
+    layoutGroup(primaryEntries, primaryBase, 1);
+    layoutGroup(gapEntries, gapBase, -1);
+}
+
 /**
  * Draw optical system surfaces
  * @param {Object} options - Drawing options
@@ -245,6 +535,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
         showSurfaceOrigins = false,
         showSemidiaRing = false,
         showMirrorBackText = false,
+        showDesignIntentLabels = false,
         crossSectionDirection = 'YZ',
         viewPlane = null,
         crossSectionCenterOffset = 0,
@@ -972,6 +1263,17 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
             opticalSystemData, 
             surfaceOrigins
         );
+    }
+
+    if (__coopt_shouldShowDesignIntentLabels(showDesignIntentLabels)) {
+        try {
+            __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceOrigins, {
+                axis: actualCrossSectionDirection,
+                crossSectionOnly,
+            });
+        } catch (labelErr) {
+            console.warn('⚠️ Failed to draw design intent labels:', labelErr);
+        }
     }
 }
 

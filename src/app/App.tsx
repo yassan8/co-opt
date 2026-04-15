@@ -16,6 +16,7 @@ import { clearOptimizerStop, readDesktopSetting, writeDesktopSetting } from "../
 import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
+const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
 const RENDER_SURFACE_COLOR_PALETTE: Array<{ name: string; hex: string }> = [
   { name: 'Light Pink', hex: '#FFB6C1' },
   { name: 'Light Red', hex: '#FF6B6B' },
@@ -314,6 +315,13 @@ export default function App() {
   const [renderSurfaceColorsCollapsed, setRenderSurfaceColorsCollapsed] = useState(true);
   const [renderLensColorTargets, setRenderLensColorTargets] = useState<RenderLensColorTarget[]>([]);
   const [renderColorUiRevision, setRenderColorUiRevision] = useState(0);
+  const [renderShowDesignIntentLabels, setRenderShowDesignIntentLabels] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(RENDER_SHOW_LABELS_KEY) !== 'false';
+    } catch (_) {
+      return true;
+    }
+  });
   const [astigChiefRayDefinition, setAstigChiefRayDefinition] = useState('stop-center');
   const [astigBeamPattern, setAstigBeamPattern] = useState<'cross' | 'grid' | 'annular'>('annular');
   const [astigRayCount, setAstigRayCount] = useState(30);
@@ -1962,6 +1970,7 @@ export default function App() {
           showSurfaceOrigins: false,
           showSemidiaRing: false,
           showMirrorBackText: false,
+          showDesignIntentLabels: renderShowDesignIntentLabels,
           crossSectionDirection: axis,
           crossSectionCenterOffset: 0
         });
@@ -2074,6 +2083,7 @@ export default function App() {
           showSurfaceOrigins: false,
           showSemidiaRing: true,
           showMirrorBackText: false,
+          showDesignIntentLabels: renderShowDesignIntentLabels,
           crossSectionDirection: 'YZ',
           crossSectionCenterOffset: 0
         });
@@ -2141,6 +2151,16 @@ export default function App() {
     }
     await drawRender3DView();
   };
+
+  useEffect(() => {
+    if (!isRenderWindowMode) return;
+    try {
+      localStorage.setItem(RENDER_SHOW_LABELS_KEY, renderShowDesignIntentLabels ? 'true' : 'false');
+    } catch (_) {}
+    redrawCurrentRenderView().catch(() => {
+      setRenderWindowStatus('Draw failed');
+    });
+  }, [renderShowDesignIntentLabels]);
 
   useEffect(() => {
     if (!isRenderWindowMode) return;
@@ -3704,6 +3724,13 @@ export default function App() {
       });
     };
 
+    const handleToggleRenderLabels = (enabled: boolean) => {
+      setRenderShowDesignIntentLabels(enabled);
+      try {
+        localStorage.setItem(RENDER_SHOW_LABELS_KEY, enabled ? 'true' : 'false');
+      } catch (_) {}
+    };
+
     return (
       <>
         <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', margin: 0 }}>
@@ -3729,6 +3756,14 @@ export default function App() {
               }}
               style={{ width: 84 }}
             />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 500 }}>
+              <input
+                type="checkbox"
+                checked={renderShowDesignIntentLabels}
+                onChange={(e) => handleToggleRenderLabels(e.target.checked)}
+              />
+              Labels
+            </label>
             <span style={{ marginLeft: 'auto', fontWeight: 400, fontSize: 12, color: '#666' }}>{renderWindowStatus}</span>
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
