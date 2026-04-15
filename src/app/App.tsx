@@ -219,7 +219,6 @@ function applyForceModeToWindowGlobals(m: 'stop' | 'entrance' | ''): void {
 }
 
 function DesktopSettingsPage() {
-  const isBrowserSettingsPage = !isTauriRuntime();
   const [forceMode, setForceMode] = useState<'stop' | 'entrance' | ''>(readForceModeFromUrl);
   const [mfrs, setMfrs] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem(GLASS_MAP_MFR_KEY) || '[]'); } catch (_) { return []; }
@@ -262,25 +261,10 @@ function DesktopSettingsPage() {
     try { if (o && typeof o.__cooptSetDarkMode === 'function') o.__cooptSetDarkMode(enabled); } catch (_) {}
   };
 
-  const handleBackToApp = () => {
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.delete('coopt_settings_window');
-      url.searchParams.delete('coopt_force_mode');
-      window.location.assign(url.toString());
-    } catch (_) {}
-  };
-
   const mfrSet = new Set(mfrs.map(s => String(s).toUpperCase()));
 
   return (
     <div style={{ height: '100vh', width: '100vw', fontFamily: 'Arial, sans-serif', background: '#f4f4f4', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '10px 12px', background: '#f8f8f8', borderBottom: '1px solid #ddd', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-        <span>Settings</span>
-        {isBrowserSettingsPage && (
-          <button type="button" onClick={handleBackToApp}>Back to App</button>
-        )}
-      </div>
       <div style={{ padding: 12, background: '#fff', flex: '1 1 auto', overflow: 'auto' }}>
         <div style={{ fontSize: 13, fontWeight: 600, margin: '0 0 8px 0' }}>Glass Map: Default Manufacturers</div>
         <div style={{ fontSize: 12, color: '#666', lineHeight: 1.35, margin: '0 0 10px 0' }}>
