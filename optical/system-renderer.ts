@@ -317,11 +317,38 @@ function __coopt_formatSurfRangeText(range) {
         : `Surf ${range.min}–${range.max}`;
 }
 
+function __coopt_getDesignIntentDisplayBase(blockType, blockId) {
+    const normalized = __coopt_normalizeBlockDisplayType(blockType);
+    if (normalized === 'PositiveLens' || normalized === 'Lens') return 'Lens';
+    if (normalized === 'AirGap' || normalized === 'Gap') return 'Gap';
+    if (normalized === 'Doublet' || normalized === 'Triplet' || normalized === 'Mirror' || normalized === 'Stop' || normalized === 'SingleSurface') return normalized;
+
+    const id = String(blockId ?? '').trim();
+    if (/^Lens-/i.test(id)) return 'Lens';
+    if (/^(Gap|AirGap)-/i.test(id)) return 'Gap';
+    if (/^Doublet-/i.test(id)) return 'Doublet';
+    if (/^Triplet-/i.test(id)) return 'Triplet';
+    if (/^Mirror-/i.test(id)) return 'Mirror';
+    if (/^Stop-/i.test(id)) return 'Stop';
+    if (/^Surf-/i.test(id)) return 'SingleSurface';
+
+    return '';
+}
+
+function __coopt_makeSequentialDesignIntentLabel(displayCounts, blockType, blockId) {
+    const base = __coopt_getDesignIntentDisplayBase(blockType, blockId);
+    if (!base) return String(blockId ?? '').trim() || String(blockType ?? '').trim();
+    const next = (displayCounts.get(base) || 0) + 1;
+    displayCounts.set(base, next);
+    return `${base}-${next}`;
+}
+
 function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOrigins) {
     const descriptors = [];
     const blocks = __coopt_getActiveDesignIntentBlocks();
     const surfRangeByBlockId = __coopt_buildSurfRangeByBlockId(opticalSystemData);
     const seenIds = new Set();
+    const displayCounts = new Map();
 
     const objectAnchor = Array.isArray(surfaceOrigins) && surfaceOrigins.length > 0 ? __coopt_vectorFromOriginEntry(surfaceOrigins[0]) : null;
     const imageAnchor = Array.isArray(surfaceOrigins) && surfaceOrigins.length > 0 ? __coopt_vectorFromOriginEntry(surfaceOrigins[surfaceOrigins.length - 1]) : null;
@@ -373,7 +400,8 @@ function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOri
                 }
             }
 
-            pushDescriptor(blockId, blockId, anchor);
+            const displayText = __coopt_makeSequentialDesignIntentLabel(displayCounts, blockType, blockId);
+            pushDescriptor(blockId, displayText, anchor);
         }
     }
 
@@ -382,7 +410,8 @@ function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOri
     for (const [blockId, range] of surfRangeByBlockId.entries()) {
         const anchor = __coopt_averageOriginForRange(surfaceOrigins, range.min, range.max);
         if (/^Object(Surface|Plane)?/i.test(String(blockId))) continue;
-        pushDescriptor(blockId, blockId, anchor);
+        const displayText = __coopt_makeSequentialDesignIntentLabel(displayCounts, '', blockId);
+        pushDescriptor(blockId, displayText, anchor);
     }
 
     return descriptors;
