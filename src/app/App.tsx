@@ -3916,10 +3916,9 @@ export default function App() {
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 4,
-                  alignItems: 'flex-end',
+                  alignItems: 'center',
                 }}
               >
-                <span style={{ fontSize: 11, lineHeight: 1, color: '#111827', fontWeight: 600, textShadow: '0 0 2px rgba(255,255,255,0.95)', textAlign: 'right' }}>{renderScaleLabel}</span>
                 <div style={{ position: 'relative', width: `${renderScaleBarWidthPx}px`, height: 14 }}>
                   <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, borderTop: '2px solid #111827' }} />
                   {Array.from({ length: 11 }).map((_, idx) => {
@@ -3941,6 +3940,7 @@ export default function App() {
                     );
                   })}
                 </div>
+                <span style={{ width: `${renderScaleBarWidthPx}px`, fontSize: 11, lineHeight: 1, color: '#111827', fontWeight: 600, textShadow: '0 0 2px rgba(255,255,255,0.95)', textAlign: 'right' }}>{renderScaleLabel}</span>
               </div>
             </div>
             <div
