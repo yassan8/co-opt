@@ -18,8 +18,6 @@ import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
 const RENDER_SCALE_BAR_TARGET_WIDTH_PX = 240;
-const RENDER_SCALE_BAR_MIN_WIDTH_PX = 144;
-const RENDER_SCALE_BAR_MAX_WIDTH_PX = 320;
 const RENDER_SURFACE_COLOR_PALETTE: Array<{ name: string; hex: string }> = [
   { name: 'Light Pink', hex: '#FFB6C1' },
   { name: 'Light Red', hex: '#FF6B6B' },
@@ -160,35 +158,12 @@ function chooseRenderScaleBar(mmPerPixel: number): { label: string; widthPx: num
 
   const minDistanceMm = 0.001; // 1 μm
   const targetDistanceMm = Math.max(minDistanceMm, mmpp * RENDER_SCALE_BAR_TARGET_WIDTH_PX);
-  const centerExp = Math.log10(targetDistanceMm);
-  const candidates = new Set<number>([minDistanceMm]);
-  for (let exp = Math.floor(centerExp) - 2; exp <= Math.ceil(centerExp) + 2; exp += 1) {
-    candidates.add(Math.max(minDistanceMm, 10 ** exp));
-  }
-
-  let bestDistanceMm = targetDistanceMm;
-  let bestWidthPx = RENDER_SCALE_BAR_TARGET_WIDTH_PX;
-  let bestScore = Number.POSITIVE_INFINITY;
-
-  for (const distanceMm of candidates) {
-    const widthPx = distanceMm / mmpp;
-    const targetPenalty = Math.abs(widthPx - RENDER_SCALE_BAR_TARGET_WIDTH_PX);
-    const rangePenalty = widthPx < RENDER_SCALE_BAR_MIN_WIDTH_PX
-      ? (RENDER_SCALE_BAR_MIN_WIDTH_PX - widthPx) * 3
-      : widthPx > RENDER_SCALE_BAR_MAX_WIDTH_PX
-        ? (widthPx - RENDER_SCALE_BAR_MAX_WIDTH_PX) * 3
-        : 0;
-    const score = targetPenalty + rangePenalty;
-    if (score < bestScore) {
-      bestScore = score;
-      bestDistanceMm = distanceMm;
-      bestWidthPx = widthPx;
-    }
-  }
+  const exponent = Math.round(Math.log10(targetDistanceMm));
+  const snappedDistanceMm = Math.max(minDistanceMm, 10 ** exponent);
 
   return {
-    label: formatRenderScaleLabelMm(bestDistanceMm),
-    widthPx: Math.max(24, bestWidthPx),
+    label: formatRenderScaleLabelMm(snappedDistanceMm),
+    widthPx: RENDER_SCALE_BAR_TARGET_WIDTH_PX,
   };
 }
 
@@ -3934,15 +3909,17 @@ export default function App() {
                 aria-hidden="true"
                 style={{
                   position: 'absolute',
-                  left: 14,
+                  left: '50%',
                   bottom: 14,
+                  transform: 'translateX(-50%)',
                   pointerEvents: 'none',
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 4,
+                  alignItems: 'flex-end',
                 }}
               >
-                <span style={{ fontSize: 11, lineHeight: 1, color: '#111827', fontWeight: 600, textShadow: '0 0 2px rgba(255,255,255,0.95)' }}>{renderScaleLabel}</span>
+                <span style={{ fontSize: 11, lineHeight: 1, color: '#111827', fontWeight: 600, textShadow: '0 0 2px rgba(255,255,255,0.95)', textAlign: 'right' }}>{renderScaleLabel}</span>
                 <div style={{ position: 'relative', width: `${renderScaleBarWidthPx}px`, height: 14 }}>
                   <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, borderTop: '2px solid #111827' }} />
                   {Array.from({ length: 11 }).map((_, idx) => {
