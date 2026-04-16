@@ -537,8 +537,8 @@ function __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceO
         }
     };
 
-    const primaryBase = surfaceTop + 20;
-    const gapBase = surfaceBottom - 18;
+    const primaryBase = surfaceTop + 10;
+    const gapBase = surfaceBottom - 9;
 
     layoutGroup(primaryEntries, primaryBase, 1);
     layoutGroup(gapEntries, gapBase, -1);
