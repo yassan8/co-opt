@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DistortionAnalysisPage } from './DistortionAnalysisPage';
 import { MtfAnalysisPage } from './MtfAnalysisPage';
 import MainToolbar from "../ui/components/MainToolbar";
@@ -17,6 +17,9 @@ import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
+const RENDER_SCALE_BAR_TARGET_WIDTH_PX = 240;
+const RENDER_SCALE_BAR_MIN_WIDTH_PX = 144;
+const RENDER_SCALE_BAR_MAX_WIDTH_PX = 320;
 const RENDER_SURFACE_COLOR_PALETTE: Array<{ name: string; hex: string }> = [
   { name: 'Light Pink', hex: '#FFB6C1' },
   { name: 'Light Red', hex: '#FF6B6B' },
@@ -129,6 +132,64 @@ function saveSurfaceColorOverridesSafe(overrides: Record<string, any>): void {
   try {
     localStorage.setItem(SURFACE_COLOR_OVERRIDES_STORAGE_KEY, JSON.stringify(overrides));
   } catch (_) {}
+}
+
+function formatRenderScaleLabelMm(distanceMm: number): string {
+  const mm = Number(distanceMm);
+  if (!Number.isFinite(mm) || mm <= 0) return 'Scale unavailable';
+  if (mm >= 1000) {
+    const m = mm / 1000;
+    return m >= 10 ? `${Math.round(m)} m` : `${m.toFixed(1)} m`;
+  }
+  if (mm >= 1) {
+    if (mm >= 100) return `${Math.round(mm)} mm`;
+    if (mm >= 10) return `${mm.toFixed(1)} mm`;
+    return `${mm.toFixed(2)} mm`;
+  }
+  const um = mm * 1000;
+  if (um >= 100) return `${Math.round(um)} μm`;
+  if (um >= 10) return `${um.toFixed(1)} μm`;
+  return `${um.toFixed(2)} μm`;
+}
+
+function chooseRenderScaleBar(mmPerPixel: number): { label: string; widthPx: number } {
+  const mmpp = Number(mmPerPixel);
+  if (!Number.isFinite(mmpp) || mmpp <= 0) {
+    return { label: 'Scale unavailable', widthPx: RENDER_SCALE_BAR_TARGET_WIDTH_PX };
+  }
+
+  const minDistanceMm = 0.001; // 1 μm
+  const targetDistanceMm = Math.max(minDistanceMm, mmpp * RENDER_SCALE_BAR_TARGET_WIDTH_PX);
+  const centerExp = Math.log10(targetDistanceMm);
+  const candidates = new Set<number>([minDistanceMm]);
+  for (let exp = Math.floor(centerExp) - 2; exp <= Math.ceil(centerExp) + 2; exp += 1) {
+    candidates.add(Math.max(minDistanceMm, 10 ** exp));
+  }
+
+  let bestDistanceMm = targetDistanceMm;
+  let bestWidthPx = RENDER_SCALE_BAR_TARGET_WIDTH_PX;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const distanceMm of candidates) {
+    const widthPx = distanceMm / mmpp;
+    const targetPenalty = Math.abs(widthPx - RENDER_SCALE_BAR_TARGET_WIDTH_PX);
+    const rangePenalty = widthPx < RENDER_SCALE_BAR_MIN_WIDTH_PX
+      ? (RENDER_SCALE_BAR_MIN_WIDTH_PX - widthPx) * 3
+      : widthPx > RENDER_SCALE_BAR_MAX_WIDTH_PX
+        ? (widthPx - RENDER_SCALE_BAR_MAX_WIDTH_PX) * 3
+        : 0;
+    const score = targetPenalty + rangePenalty;
+    if (score < bestScore) {
+      bestScore = score;
+      bestDistanceMm = distanceMm;
+      bestWidthPx = widthPx;
+    }
+  }
+
+  return {
+    label: formatRenderScaleLabelMm(bestDistanceMm),
+    widthPx: Math.max(24, bestWidthPx),
+  };
 }
 
 function isCoordBreakSurface(surface: any): boolean {
@@ -315,6 +376,9 @@ export default function App() {
   const [renderSurfaceColorsCollapsed, setRenderSurfaceColorsCollapsed] = useState(true);
   const [renderLensColorTargets, setRenderLensColorTargets] = useState<RenderLensColorTarget[]>([]);
   const [renderColorUiRevision, setRenderColorUiRevision] = useState(0);
+  const [renderScaleLabel, setRenderScaleLabel] = useState('Scale unavailable');
+  const [renderScaleBarWidthPx, setRenderScaleBarWidthPx] = useState(RENDER_SCALE_BAR_TARGET_WIDTH_PX);
+  const renderScaleRafRef = useRef<number | null>(null);
   const [renderShowDesignIntentLabels, setRenderShowDesignIntentLabels] = useState<boolean>(() => {
     try {
       return localStorage.getItem(RENDER_SHOW_LABELS_KEY) !== 'false';
@@ -2016,6 +2080,7 @@ export default function App() {
       if (renderer && scene && camera && typeof renderer.render === 'function') {
         renderer.render(scene, camera);
       }
+      scheduleRenderScaleOverlayUpdate();
 
       setRenderWindowStatus(`Ready (${axis} section) fill=${fillCount} source=renderwindow-app`);
       return true;
@@ -2113,6 +2178,7 @@ export default function App() {
       if (renderer && scene && camera && typeof renderer.render === 'function') {
         renderer.render(scene, camera);
       }
+      scheduleRenderScaleOverlayUpdate();
 
       setRenderWindowStatus('Ready (3D)');
       return true;
@@ -2141,6 +2207,55 @@ export default function App() {
     return targets;
   };
 
+  const updateRenderScaleOverlay = () => {
+    try {
+      const w = window as any;
+      const camera = w.camera || (typeof w.getCamera === 'function' ? w.getCamera() : null);
+      const renderer = w.renderer || (typeof w.getRenderer === 'function' ? w.getRenderer() : null);
+      if (!camera?.isOrthographicCamera || !renderer) {
+        setRenderScaleLabel((prev) => prev === 'Scale unavailable' ? prev : 'Scale unavailable');
+        setRenderScaleBarWidthPx(RENDER_SCALE_BAR_TARGET_WIDTH_PX);
+        return;
+      }
+
+      const widthPx = Math.max(
+        1,
+        Number(renderer?.domElement?.clientWidth) || 0,
+        Number(renderer?.domElement?.width) || 0
+      );
+      const baseWorldWidth = Math.abs((Number(camera.right) || 0) - (Number(camera.left) || 0));
+      const zoom = Math.max(0.0001, Number(camera.zoom) || 1);
+      const worldWidth = baseWorldWidth / zoom;
+      if (!Number.isFinite(worldWidth) || worldWidth <= 0 || widthPx <= 0) {
+        setRenderScaleLabel((prev) => prev === 'Scale unavailable' ? prev : 'Scale unavailable');
+        setRenderScaleBarWidthPx(RENDER_SCALE_BAR_TARGET_WIDTH_PX);
+        return;
+      }
+
+      const mmPerPixel = worldWidth / widthPx;
+      const scaleInfo = chooseRenderScaleBar(mmPerPixel);
+      setRenderScaleLabel((prev) => prev === scaleInfo.label ? prev : scaleInfo.label);
+      setRenderScaleBarWidthPx((prev) => Math.abs(prev - scaleInfo.widthPx) < 0.5 ? prev : scaleInfo.widthPx);
+    } catch (_) {
+      setRenderScaleLabel((prev) => prev === 'Scale unavailable' ? prev : 'Scale unavailable');
+      setRenderScaleBarWidthPx(RENDER_SCALE_BAR_TARGET_WIDTH_PX);
+    }
+  };
+
+  const scheduleRenderScaleOverlayUpdate = () => {
+    try {
+      if (renderScaleRafRef.current !== null) {
+        cancelAnimationFrame(renderScaleRafRef.current);
+      }
+      renderScaleRafRef.current = requestAnimationFrame(() => {
+        renderScaleRafRef.current = null;
+        updateRenderScaleOverlay();
+      });
+    } catch (_) {
+      updateRenderScaleOverlay();
+    }
+  };
+
   const redrawCurrentRenderView = async () => {
     if (isTauriRuntime()) {
       console.log('[RenderColor][Tauri] redrawCurrentRenderView', { renderViewMode, renderViewAxis });
@@ -2161,6 +2276,52 @@ export default function App() {
       setRenderWindowStatus('Draw failed');
     });
   }, [renderShowDesignIntentLabels]);
+
+  useEffect(() => {
+    if (!isRenderWindowMode) return;
+
+    let boundControls: any = null;
+    const onViewChange = () => {
+      scheduleRenderScaleOverlayUpdate();
+    };
+    const bindControls = () => {
+      try {
+        const w = window as any;
+        const controls = w.controls || (typeof w.getControls === 'function' ? w.getControls() : null);
+        if (controls === boundControls) return;
+        if (boundControls && typeof boundControls.removeEventListener === 'function') {
+          boundControls.removeEventListener('change', onViewChange);
+        }
+        boundControls = controls;
+        if (boundControls && typeof boundControls.addEventListener === 'function') {
+          boundControls.addEventListener('change', onViewChange);
+        }
+      } catch (_) {}
+    };
+
+    bindControls();
+    const rebindTimer = window.setInterval(bindControls, 800);
+    window.addEventListener('resize', onViewChange);
+    window.addEventListener('wheel', onViewChange, { passive: true });
+    scheduleRenderScaleOverlayUpdate();
+
+    return () => {
+      try { window.clearInterval(rebindTimer); } catch (_) {}
+      try { window.removeEventListener('resize', onViewChange); } catch (_) {}
+      try { window.removeEventListener('wheel', onViewChange as EventListener); } catch (_) {}
+      try {
+        if (boundControls && typeof boundControls.removeEventListener === 'function') {
+          boundControls.removeEventListener('change', onViewChange);
+        }
+      } catch (_) {}
+      try {
+        if (renderScaleRafRef.current !== null) {
+          cancelAnimationFrame(renderScaleRafRef.current);
+          renderScaleRafRef.current = null;
+        }
+      } catch (_) {}
+    };
+  }, [isRenderWindowMode, renderViewMode, renderViewAxis]);
 
   useEffect(() => {
     if (!isRenderWindowMode) return;
@@ -3767,7 +3928,44 @@ export default function App() {
             <span style={{ marginLeft: 'auto', fontWeight: 400, fontSize: 12, color: '#666' }}>{renderWindowStatus}</span>
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-            <div id="threejs-canvas-container" aria-label="Optical system 3D canvas" style={{ flex: 1, minHeight: 0 }} />
+            <div style={{ flex: 1, minHeight: 0, position: 'relative', background: '#fff' }}>
+              <div id="threejs-canvas-container" aria-label="Optical system 3D canvas" style={{ width: '100%', height: '100%', minHeight: 0 }} />
+              <div
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  left: 14,
+                  bottom: 14,
+                  pointerEvents: 'none',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                }}
+              >
+                <span style={{ fontSize: 11, lineHeight: 1, color: '#111827', fontWeight: 600, textShadow: '0 0 2px rgba(255,255,255,0.95)' }}>{renderScaleLabel}</span>
+                <div style={{ position: 'relative', width: `${renderScaleBarWidthPx}px`, height: 14 }}>
+                  <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, borderTop: '2px solid #111827' }} />
+                  {Array.from({ length: 11 }).map((_, idx) => {
+                    const isMajor = idx === 0 || idx === 10;
+                    const isMid = idx === 5;
+                    return (
+                      <div
+                        key={idx}
+                        style={{
+                          position: 'absolute',
+                          left: `${(idx / 10) * 100}%`,
+                          bottom: 0,
+                          width: 0,
+                          height: isMajor ? 12 : (isMid ? 9 : 6),
+                          borderLeft: '2px solid #111827',
+                          transform: idx === 10 ? 'translateX(-2px)' : 'none',
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
             <div
               style={{
                 width: renderSurfaceColorsCollapsed ? 34 : 274,
