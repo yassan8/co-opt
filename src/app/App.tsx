@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import * as THREE from 'three';
 import { DistortionAnalysisPage } from './DistortionAnalysisPage';
 import { MtfAnalysisPage } from './MtfAnalysisPage';
 import MainToolbar from "../ui/components/MainToolbar";
@@ -215,13 +216,146 @@ function buildRenderLensColorTargets(opticalSystemRows: any[]): RenderLensColorT
     if (!isLensInterval(front, back)) continue;
     lensNo += 1;
     targets.push({
-      label: `Lens ${lensNo} (S${i + 1}-S${i + 2})`,
+      label: `Object ${lensNo} (S${i + 1}-S${i + 2})`,
       key: surfaceColorKeyStable(front, i),
       keys: surfaceColorKeysAll(front, i),
       frontSurfaceIndex0: i,
     });
   }
   return targets;
+}
+
+function RenderUcsIcon() {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+
+    const size = 128;
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-1.35, 1.35, 1.35, -1.35, 0.1, 10);
+    camera.position.set(0, 0, 3.2);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(size, size, false);
+    renderer.setClearColor(0x000000, 0);
+    renderer.domElement.style.width = '100%';
+    renderer.domElement.style.height = '100%';
+    renderer.domElement.style.display = 'block';
+    host.replaceChildren(renderer.domElement);
+
+    const group = new THREE.Group();
+    scene.add(group);
+
+    const createTextSprite = (text: string, color: string) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.font = 'bold 56px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+      ctx.strokeText(text, 64, 64);
+      ctx.fillStyle = color;
+      ctx.fillText(text, 64, 64);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.needsUpdate = true;
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(0.68, 0.68, 1);
+      return sprite;
+    };
+
+    const makeAxis = (dir: THREE.Vector3, color: number, label: string, cssColor: string) => {
+      const material = new THREE.MeshBasicMaterial({ color });
+      const axis = new THREE.Group();
+      const shaftLength = 0.72;
+      const headLength = 0.26;
+      const shaftRadius = 0.055;
+      const headRadius = 0.14;
+
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(shaftRadius, shaftRadius, shaftLength, 16),
+        material,
+      );
+      shaft.position.y = shaftLength / 2;
+
+      const head = new THREE.Mesh(
+        new THREE.ConeGeometry(headRadius, headLength, 20),
+        material,
+      );
+      head.position.y = shaftLength + headLength / 2;
+
+      axis.add(shaft, head);
+      const sprite = createTextSprite(label, cssColor);
+      if (sprite) {
+        sprite.position.y = shaftLength + headLength + 0.16;
+        axis.add(sprite);
+      }
+      axis.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      return axis;
+    };
+
+    group.add(
+      makeAxis(new THREE.Vector3(1, 0, 0), 0xD32F2F, 'X', '#D32F2F'),
+      makeAxis(new THREE.Vector3(0, 1, 0), 0x111111, 'Y', '#111111'),
+      makeAxis(new THREE.Vector3(0, 0, 1), 0x16A34A, 'Z', '#16A34A'),
+      new THREE.Mesh(new THREE.SphereGeometry(0.05, 16, 16), new THREE.MeshBasicMaterial({ color: 0x4B5563 })),
+    );
+
+    let rafId: number | null = null;
+    const tick = () => {
+      try {
+        const w = window as any;
+        const mainCamera = w.camera || (typeof w.getCamera === 'function' ? w.getCamera() : null);
+        if (mainCamera?.quaternion) {
+          if (typeof mainCamera.updateMatrixWorld === 'function') {
+            mainCamera.updateMatrixWorld(true);
+          }
+          group.quaternion.copy(mainCamera.quaternion).invert();
+        }
+        renderer.render(scene, camera);
+      } catch (_) {}
+      try {
+        rafId = requestAnimationFrame(tick);
+      } catch (_) {
+        rafId = null;
+      }
+    };
+
+    tick();
+
+    return () => {
+      try { if (rafId !== null) cancelAnimationFrame(rafId); } catch (_) {}
+      try { renderer.dispose(); } catch (_) {}
+      try { host.replaceChildren(); } catch (_) {}
+    };
+  }, []);
+
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        position: 'absolute',
+        left: 12,
+        bottom: 12,
+        width: 128,
+        height: 128,
+        pointerEvents: 'none',
+        zIndex: 2,
+        overflow: 'visible',
+      }}
+    >
+      <div ref={hostRef} style={{ width: '100%', height: '100%', overflow: 'visible' }} />
+    </div>
+  );
 }
 
 // ---- Settings window page component ----
@@ -2034,12 +2168,10 @@ export default function App() {
         w.drawCrossBeamRays(legacyCrossRays, sceneForDraw);
       }
 
-      let fillCount = 0;
       try {
-        fillCount = applyRenderWindowDirectCrossFill(sceneForDraw, axis, rows);
+        applyRenderWindowDirectCrossFill(sceneForDraw, axis, rows);
       } catch (fillErr) {
         console.warn('[RenderWindow] Cross-section lens fill failed:', fillErr);
-        fillCount = 0;
       }
 
       if (axis === 'XZ' && typeof w.setCameraForXZCrossSection === 'function') {
@@ -2057,7 +2189,7 @@ export default function App() {
       }
       scheduleRenderScaleOverlayUpdate();
 
-      setRenderWindowStatus(`Ready (${axis} section) fill=${fillCount} source=renderwindow-app`);
+      setRenderWindowStatus(`Ready (${axis} section)`);
       return true;
     } catch (err) {
       console.error('[RenderWindow] Cross-section draw failed:', err);
@@ -3903,8 +4035,9 @@ export default function App() {
             <span style={{ marginLeft: 'auto', fontWeight: 400, fontSize: 12, color: '#666' }}>{renderWindowStatus}</span>
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-            <div style={{ flex: 1, minHeight: 0, position: 'relative', background: '#fff' }}>
+            <div style={{ flex: 1, minHeight: 0, position: 'relative', background: '#fff', overflow: 'hidden' }}>
               <div id="threejs-canvas-container" aria-label="Optical system 3D canvas" style={{ width: '100%', height: '100%', minHeight: 0 }} />
+              <RenderUcsIcon />
               <div
                 aria-hidden="true"
                 style={{
@@ -3942,91 +4075,97 @@ export default function App() {
                 </div>
                 <span style={{ width: `${renderScaleBarWidthPx}px`, fontSize: 11, lineHeight: 1, color: '#111827', fontWeight: 600, textShadow: '0 0 2px rgba(255,255,255,0.95)', textAlign: 'right' }}>{renderScaleLabel}</span>
               </div>
-            </div>
-            <div
-              style={{
-                width: renderSurfaceColorsCollapsed ? 34 : 274,
-                borderLeft: '1px solid #ddd',
-                background: '#fafafa',
-                display: 'flex',
-                flexDirection: 'column',
-                transition: 'width 120ms ease',
-                overflow: 'hidden',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  setRenderSurfaceColorsCollapsed((prev) => {
-                    const next = !prev;
-                    if (!next) refreshRenderLensTargets();
-                    return next;
-                  });
-                }}
-                title={renderSurfaceColorsCollapsed ? 'Open surface colors' : 'Collapse surface colors'}
+              <div
                 style={{
-                  width: '100%',
-                  border: 0,
-                  borderBottom: '1px solid #e3e3e3',
-                  background: '#f0f0f0',
-                  textAlign: 'left',
-                  padding: renderSurfaceColorsCollapsed ? '10px 8px' : '10px 10px',
-                  fontSize: 12,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
+                  position: 'absolute',
+                  top: 0,
+                  right: 0,
+                  bottom: 0,
+                  width: renderSurfaceColorsCollapsed ? 34 : 274,
+                  borderLeft: '1px solid #ddd',
+                  background: '#fafafa',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  transition: 'width 120ms ease',
+                  overflow: 'hidden',
+                  zIndex: 2,
+                  boxShadow: renderSurfaceColorsCollapsed ? 'none' : '-4px 0 12px rgba(0,0,0,0.08)',
                 }}
               >
-                {renderSurfaceColorsCollapsed ? '▶' : '▼ Surface Colors'}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRenderSurfaceColorsCollapsed((prev) => {
+                      const next = !prev;
+                      if (!next) refreshRenderLensTargets();
+                      return next;
+                    });
+                  }}
+                  title={renderSurfaceColorsCollapsed ? 'Open surface colors' : 'Collapse surface colors'}
+                  style={{
+                    width: '100%',
+                    border: 0,
+                    borderBottom: '1px solid #e3e3e3',
+                    background: '#f0f0f0',
+                    textAlign: 'left',
+                    padding: renderSurfaceColorsCollapsed ? '10px 8px' : '10px 10px',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {renderSurfaceColorsCollapsed ? '▶' : '▼ Surface Colors'}
+                </button>
 
-              {!renderSurfaceColorsCollapsed && (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: '1px solid #ececec' }}>
-                    <button type="button" onClick={() => { refreshRenderLensTargets(); }} style={{ fontSize: 11, padding: '4px 8px' }}>Refresh</button>
-                    <button type="button" onClick={handleResetAllLensColors} style={{ fontSize: 11, padding: '4px 8px' }}>Reset All</button>
-                  </div>
-                  <div style={{ padding: 8, overflow: 'auto', flex: 1, minHeight: 0 }}>
-                    {renderLensColorTargets.length === 0 ? (
-                      <div style={{ fontSize: 12, color: '#777' }}>No lens intervals detected.</div>
-                    ) : (
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-                        <thead>
-                          <tr>
-                            <th style={{ textAlign: 'left', padding: '4px 2px', borderBottom: '1px solid #ddd' }}>Lens</th>
-                            <th style={{ textAlign: 'left', padding: '4px 2px', borderBottom: '1px solid #ddd' }}>Color</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {renderLensColorTargets.map((target) => {
-                            const overrides = loadSurfaceColorOverridesSafe();
-                            const selectedHex = resolveOverrideColorHex(overrides, target.keys) || '#00CCFF';
-                            return (
-                              <tr key={`${target.key}-${target.frontSurfaceIndex0}`}>
-                                <td style={{ padding: '5px 2px', borderBottom: '1px solid #eee' }}>{target.label}</td>
-                                <td style={{ padding: '5px 2px', borderBottom: '1px solid #eee' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                    <select
-                                      value={resolveOverrideColorHex(loadSurfaceColorOverridesSafe(), target.keys) ?? ''}
-                                      onChange={(e) => handleSetLensColor(target, e.target.value || null)}
-                                      style={{ flex: 1, minWidth: 0, fontSize: 11, backgroundColor: selectedHex }}
-                                    >
-                                      <option value="">Default</option>
-                                      {RENDER_SURFACE_COLOR_PALETTE.map((entry) => (
-                                        <option key={entry.hex} value={entry.hex}>{entry.name}</option>
-                                      ))}
-                                    </select>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                </>
-              )}
+                {!renderSurfaceColorsCollapsed && (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: '1px solid #ececec' }}>
+                      <button type="button" onClick={() => { refreshRenderLensTargets(); }} style={{ fontSize: 11, padding: '4px 8px' }}>Refresh</button>
+                      <button type="button" onClick={handleResetAllLensColors} style={{ fontSize: 11, padding: '4px 8px' }}>Reset All</button>
+                    </div>
+                    <div style={{ padding: 8, overflow: 'auto', flex: 1, minHeight: 0 }}>
+                      {renderLensColorTargets.length === 0 ? (
+                        <div style={{ fontSize: 12, color: '#777' }}>No object intervals detected.</div>
+                      ) : (
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                          <thead>
+                            <tr>
+                              <th style={{ textAlign: 'left', padding: '4px 2px', borderBottom: '1px solid #ddd' }}>Object</th>
+                              <th style={{ textAlign: 'left', padding: '4px 2px', borderBottom: '1px solid #ddd' }}>Color</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {renderLensColorTargets.map((target) => {
+                              const overrides = loadSurfaceColorOverridesSafe();
+                              const selectedHex = resolveOverrideColorHex(overrides, target.keys) || '#00CCFF';
+                              return (
+                                <tr key={`${target.key}-${target.frontSurfaceIndex0}`}>
+                                  <td style={{ padding: '5px 2px', borderBottom: '1px solid #eee' }}>{target.label}</td>
+                                  <td style={{ padding: '5px 2px', borderBottom: '1px solid #eee' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                      <select
+                                        value={resolveOverrideColorHex(loadSurfaceColorOverridesSafe(), target.keys) ?? ''}
+                                        onChange={(e) => handleSetLensColor(target, e.target.value || null)}
+                                        style={{ flex: 1, minWidth: 0, fontSize: 11, backgroundColor: selectedHex }}
+                                      >
+                                        <option value="">Default</option>
+                                        {RENDER_SURFACE_COLOR_PALETTE.map((entry) => (
+                                          <option key={entry.hex} value={entry.hex}>{entry.name}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>

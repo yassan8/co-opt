@@ -40,27 +40,6 @@
 //         }
 //     };
 
-//     const shouldAllow = (args: unknown[]): boolean => {
-//         try {
-//             return args.some(arg => containsMTF(arg));
-//         } catch {
-//             return false;
-//         }
-//     };
-
-//     for (const method of methods) {
-//         const original = console[method].bind(console);
-//         originalConsole[method] = original;
-//         console[method] = (...args: any[]) => {
-//             try {
-//                 if (shouldAllow(args)) {
-//                     original(...args);
-//                 }
-//             } catch {
-//             }
-//         };
-//     }
-
 //     globalScope.__mtfOriginalConsole = originalConsole;
 // })();
 
