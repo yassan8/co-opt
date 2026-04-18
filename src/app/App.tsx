@@ -18,7 +18,9 @@ import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
-const RENDER_SCALE_BAR_TARGET_WIDTH_PX = 240;
+const RENDER_SCALE_BAR_MIN_WIDTH_PX = 72;
+const RENDER_SCALE_BAR_TARGET_WIDTH_PX = 160;
+const RENDER_SCALE_BAR_MAX_WIDTH_PX = 240;
 const RENDER_SURFACE_COLOR_PALETTE: Array<{ name: string; hex: string }> = [
   { name: 'Light Pink', hex: '#FFB6C1' },
   { name: 'Light Red', hex: '#FF6B6B' },
@@ -158,13 +160,37 @@ function chooseRenderScaleBar(mmPerPixel: number): { label: string; widthPx: num
   }
 
   const minDistanceMm = 0.001; // 1 μm
+  const niceSteps = [1, 2, 5];
   const targetDistanceMm = Math.max(minDistanceMm, mmpp * RENDER_SCALE_BAR_TARGET_WIDTH_PX);
-  const exponent = Math.round(Math.log10(targetDistanceMm));
-  const snappedDistanceMm = Math.max(minDistanceMm, 10 ** exponent);
+  const exponent = Math.floor(Math.log10(targetDistanceMm));
+
+  let bestDistanceMm = targetDistanceMm;
+  let bestWidthPx = targetDistanceMm / mmpp;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (let exp = exponent - 1; exp <= exponent + 1; exp += 1) {
+    for (const step of niceSteps) {
+      const distanceMm = Math.max(minDistanceMm, step * (10 ** exp));
+      const widthPx = distanceMm / mmpp;
+      if (!Number.isFinite(widthPx) || widthPx <= 0) continue;
+
+      const clampedWidthPx = Math.max(
+        RENDER_SCALE_BAR_MIN_WIDTH_PX,
+        Math.min(RENDER_SCALE_BAR_MAX_WIDTH_PX, widthPx),
+      );
+      const penalty = widthPx < RENDER_SCALE_BAR_MIN_WIDTH_PX || widthPx > RENDER_SCALE_BAR_MAX_WIDTH_PX ? 1000 : 0;
+      const score = penalty + Math.abs(clampedWidthPx - RENDER_SCALE_BAR_TARGET_WIDTH_PX);
+      if (score < bestScore) {
+        bestScore = score;
+        bestDistanceMm = distanceMm;
+        bestWidthPx = clampedWidthPx;
+      }
+    }
+  }
 
   return {
-    label: formatRenderScaleLabelMm(snappedDistanceMm),
-    widthPx: RENDER_SCALE_BAR_TARGET_WIDTH_PX,
+    label: formatRenderScaleLabelMm(bestDistanceMm),
+    widthPx: bestWidthPx,
   };
 }
 
