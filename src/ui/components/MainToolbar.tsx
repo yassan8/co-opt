@@ -17,7 +17,7 @@ import {
 import { getLoadedFileName, getLoadedFileWarn } from '../../../ui/loaded-file-storage';
 import { getToolbarCollapsed, setToolbarCollapsed } from '../../../ui/toolbar-collapsed-storage';
 
-export default function MainToolbar() {
+export default function MainToolbar({ minimal = false }: { minimal?: boolean }) {
   const resolveToolbarCollapsed = () => {
     return getToolbarCollapsed();
   };
@@ -78,24 +78,27 @@ export default function MainToolbar() {
   return (
     <div className="top-buttons-container">
       <div className="top-file-row" id="loaded-file-display">
-        <span className="top-file-icon">📁</span>
+        <span className="top-file-icon">�</span>
         <span id="loaded-file-name" className="top-file-name" style={{ color: loadedFileColor }}>
           {loadedFileText}
         </span>
         <button id="open-settings-btn" className="top-settings-btn" title="Settings" onClick={handleOpenSettings} data-react-handled="1" type="button">
           ⚙️
         </button>
-        <button
-          id="toggle-toolbar-btn"
-          className={`top-toggle-btn${isToolbarCollapsed ? ' collapsed' : ''}`}
-          title="Toggle toolbar"
-          onClick={handleToggleToolbar}
-          data-toggle-handled="react"
-          type="button"
-        >
-          ▼
-        </button>
+        {!minimal && (
+          <button
+            id="toggle-toolbar-btn"
+            className={`top-toggle-btn${isToolbarCollapsed ? ' collapsed' : ''}`}
+            title="Toggle toolbar"
+            onClick={handleToggleToolbar}
+            data-toggle-handled="react"
+            type="button"
+          >
+            ▼
+          </button>
+        )}
       </div>
+      {!minimal && (
       <div
         className={`top-buttons-row${isToolbarCollapsed ? ' collapsed' : ''}`}
         id="top-buttons-row"
@@ -194,6 +197,7 @@ export default function MainToolbar() {
           </select>
         </div>
       </div>
+      )}
 
       <div style={{ display: "none" }}>
         <button

@@ -9,8 +9,21 @@ import DesignIntentSection from "../ui/components/DesignIntentSection";
 import RequirementsSection from "../ui/components/RequirementsSection";
 import LegacyPanels from "../ui/components/LegacyPanels";
 import { SystemDataPanel } from "../ui/components/LegacyPanels";
-import { requestRefreshBlockInspector } from "../../core/window-facade.ts";
-import { handleOpenSettings } from "../../ui/toolbar-handlers";
+import {
+  handleAnalysisSelect,
+  handleClearStorage,
+  handleExportZemax,
+  handleImportZemax,
+  handleLoad,
+  handleLoadDefault,
+  handleNewFile,
+  handleOpenSettings,
+  handleOptimize,
+  handleRender3D,
+  handleSave,
+  handleShareUrl,
+  handleSystemData,
+} from "../../ui/toolbar-handlers";
 import { runOptimizationMVP } from "../../optimization/optimizer-mvp.ts";
 import { listDesignVariablesFromBlocks } from "../../optimization/design-variables.ts";
 import { clearOptimizerStop, readDesktopSetting, writeDesktopSetting } from "../../src/desktop/ipc/client.ts";
@@ -513,6 +526,7 @@ export default function App() {
   const [renderColorUiRevision, setRenderColorUiRevision] = useState(0);
   const [renderScaleLabel, setRenderScaleLabel] = useState('Scale unavailable');
   const [renderScaleBarWidthPx, setRenderScaleBarWidthPx] = useState(RENDER_SCALE_BAR_TARGET_WIDTH_PX);
+  const [workspaceFocus, setWorkspaceFocus] = useState<'configuration' | 'source' | 'intent' | 'requirements'>('configuration');
   const renderScaleRafRef = useRef<number | null>(null);
   const [renderShowDesignIntentLabels, setRenderShowDesignIntentLabels] = useState<boolean>(() => {
     try {
@@ -4207,14 +4221,250 @@ export default function App() {
     );
   }
 
+  const selectWorkspaceTab = (
+    focus: 'configuration' | 'source' | 'intent' | 'requirements',
+  ) => {
+    setWorkspaceFocus(focus);
+    try {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (_) {}
+    try {
+      window.setTimeout(() => {
+        try { window.dispatchEvent(new Event('resize')); } catch (_) {}
+        try {
+          const w = window as any;
+          w.tableSource?.redraw?.(true);
+          w.tableObject?.redraw?.(true);
+          w.tableOpticalSystem?.redraw?.(true);
+        } catch (_) {}
+      }, 0);
+    } catch (_) {}
+  };
+
+  const workspaceSections: Array<{
+    key: 'configuration' | 'source' | 'intent' | 'requirements';
+    label: string;
+    icon: string;
+  }> = [
+    { key: 'configuration', label: 'System', icon: '🧭' },
+    { key: 'source', label: 'Sources / Objects', icon: '🔎' },
+    { key: 'intent', label: 'Design Intent', icon: '🧩' },
+    { key: 'requirements', label: 'Requirements', icon: '📏' },
+  ];
+
+  const variableCountSummary = (() => {
+    try {
+      const vars = listDesignVariablesFromBlocks();
+      return Array.isArray(vars) ? vars.length : 0;
+    } catch (_) {
+      return 0;
+    }
+  })();
+
+  const optimizeStatusText = optRunning ? 'Running' : String(optimizeState?.status || 'Idle');
+  const optimizeTone = optRunning
+    ? '#2563eb'
+    : (String(optimizeState?.status || '').toLowerCase() === 'error' ? '#b91c1c' : '#4b5563');
+  const activeWorkspaceLabel = workspaceSections.find((s) => s.key === workspaceFocus)?.label || 'System';
+  const [openMenu, setOpenMenu] = useState<null | 'file' | 'data' | 'edit' | 'view' | 'run' | 'analysis' | 'settings'>(null);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const menuHost = document.querySelector('.app-shell__menubar');
+      if (menuHost && !menuHost.contains(target)) {
+        setOpenMenu(null);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpenMenu(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  const closeWorkspaceMenus = () => {
+    setOpenMenu(null);
+  };
+
+  const toggleWorkspaceMenu = (menu: 'file' | 'data' | 'edit' | 'view' | 'run' | 'analysis' | 'settings') => () => {
+    setOpenMenu((current) => (current === menu ? null : menu));
+  };
+
+  const handleMenuMouseEnter = (menu: 'file' | 'data' | 'edit' | 'view' | 'run' | 'analysis' | 'settings') => {
+    setOpenMenu(menu);
+  };
+
+  const handleMenuMouseLeave = () => {
+    setOpenMenu(null);
+  };
+
+  const runMenuAction = (action: () => void) => () => {
+    closeWorkspaceMenus();
+    action();
+  };
+
+  const runAnalysisAction = (value: string) => () => {
+    closeWorkspaceMenus();
+    handleAnalysisSelect(value);
+  };
+
+  const handleUndoMenu = () => {
+    try {
+      (window as any).undoHistory?.undo?.();
+    } catch (_) {}
+  };
+
+  const handleRedoMenu = () => {
+    try {
+      (window as any).undoHistory?.redo?.();
+    } catch (_) {}
+  };
+
+  const renderWorkspaceTabContent = () => {
+    return (
+      <>
+        <div className={`app-shell__tabBody${workspaceFocus === 'configuration' ? '' : ' is-hidden'}`}>
+          <ConfigurationSection />
+        </div>
+        <div className={`app-shell__tabBody${workspaceFocus === 'source' ? '' : ' is-hidden'}`}>
+          <SourceObjectSection />
+        </div>
+        <div className={`app-shell__tabBody${workspaceFocus === 'intent' ? '' : ' is-hidden'}`}>
+          <DesignIntentSection />
+        </div>
+        <div className={`app-shell__tabBody${workspaceFocus === 'requirements' ? '' : ' is-hidden'}`}>
+          <RequirementsSection />
+        </div>
+      </>
+    );
+  };
+
   return (
-    <>
-      <MainToolbar />
-      <ConfigurationSection />
-      <SourceObjectSection />
-      <DesignIntentSection />
-      <RequirementsSection />
-      <LegacyPanels />
-    </>
+    <div className="app-shell">
+      <div className="app-shell__header">
+        <MainToolbar minimal />
+      </div>
+
+      <div className="app-shell__menubar" role="menubar" aria-label="Application menu" onMouseLeave={handleMenuMouseLeave}>
+        <div className={`app-shell__menu${openMenu === 'file' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('file')}>
+          <button type="button" className="app-shell__menuSummary" aria-haspopup="menu" aria-expanded={openMenu === 'file'} onClick={toggleWorkspaceMenu('file')}>File</button>
+          <div className="app-shell__menuPanel" role="menu">
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleNewFile)}>New</button>
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleLoad)}>Load…</button>
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleLoadDefault)}>Load Default</button>
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleSave)}>Save</button>
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleShareUrl)}>Share URL</button>
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleClearStorage)}>Clear Cache</button>
+          </div>
+        </div>
+
+        <div className={`app-shell__menu${openMenu === 'data' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('data')}>
+          <button type="button" className="app-shell__menuSummary" aria-haspopup="menu" aria-expanded={openMenu === 'data'} onClick={toggleWorkspaceMenu('data')}>Data</button>
+          <div className="app-shell__menuPanel" role="menu">
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleImportZemax)}>Import Zemax</button>
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleExportZemax)}>Export Zemax</button>
+          </div>
+        </div>
+
+        <div className={`app-shell__menu${openMenu === 'edit' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('edit')}>
+          <button type="button" className="app-shell__menuSummary" aria-haspopup="menu" aria-expanded={openMenu === 'edit'} onClick={toggleWorkspaceMenu('edit')}>Edit</button>
+          <div className="app-shell__menuPanel" role="menu">
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleUndoMenu)}>Undo</button>
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleRedoMenu)}>Redo</button>
+          </div>
+        </div>
+
+        <div className={`app-shell__menu${openMenu === 'view' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('view')}>
+          <button type="button" className="app-shell__menuSummary" aria-haspopup="menu" aria-expanded={openMenu === 'view'} onClick={toggleWorkspaceMenu('view')}>View</button>
+          <div className="app-shell__menuPanel" role="menu">
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleRender3D)}>Open Render</button>
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleSystemData)}>Open System Data</button>
+          </div>
+        </div>
+
+        <div className={`app-shell__menu${openMenu === 'run' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('run')}>
+          <button type="button" className="app-shell__menuSummary" aria-haspopup="menu" aria-expanded={openMenu === 'run'} onClick={toggleWorkspaceMenu('run')}>Run</button>
+          <div className="app-shell__menuPanel" role="menu">
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleOptimize)}>Optimize</button>
+          </div>
+        </div>
+
+        <div className={`app-shell__menu${openMenu === 'analysis' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('analysis')}>
+          <button type="button" className="app-shell__menuSummary" aria-haspopup="menu" aria-expanded={openMenu === 'analysis'} onClick={toggleWorkspaceMenu('analysis')}>Analysis</button>
+          <div className="app-shell__menuPanel" role="menu">
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('spot-diagram')}>Spot Diagram</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('spherical-aberration')}>Spherical Aberration</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('astigmatism')}>Astigmatism</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('distortion')}>Distortion</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('distortion-grid')}>Distortion Grid</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('magnification-chromatic-aberration')}>Lateral Chromatic Aberration</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('integrated-aberration')}>Integrated Aberration</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('transverse-aberration')}>Transverse Aberration</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('opd')}>Optical Path Difference</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('psf')}>Point Spread Function</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('mtf')}>Modulation Transfer Function</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('through-focus-spot')}>Through-Focus Spot</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('through-focus-mtf')}>Through-Focus MTF</button>
+            <button type="button" className="app-shell__menuAction" onClick={runAnalysisAction('field-mtf')}>Object MTF</button>
+          </div>
+        </div>
+
+        <div className={`app-shell__menu${openMenu === 'settings' ? ' is-open' : ''}`} onMouseEnter={() => handleMenuMouseEnter('settings')}>
+          <button type="button" className="app-shell__menuSummary" aria-haspopup="menu" aria-expanded={openMenu === 'settings'} onClick={toggleWorkspaceMenu('settings')}>Settings</button>
+          <div className="app-shell__menuPanel" role="menu">
+            <button type="button" className="app-shell__menuAction" onClick={runMenuAction(handleOpenSettings)}>Open Settings</button>
+          </div>
+        </div>
+      </div>
+
+      <div className="app-shell__body app-shell__body--tabs">
+        <main className="app-shell__workspace">
+          <section className="app-shell__workspacePane">
+            <div className="app-shell__tabbar" role="tablist" aria-label="Workspace tabs">
+              {workspaceSections.map((section) => (
+                <button
+                  key={section.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={workspaceFocus === section.key}
+                  className={`app-shell__tabButton${workspaceFocus === section.key ? ' is-active' : ''}`}
+                  onClick={() => selectWorkspaceTab(section.key)}
+                >
+                  <span>{section.label}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="app-shell__tabPanel">
+              {renderWorkspaceTabContent()}
+            </div>
+          </section>
+        </main>
+      </div>
+
+      <div className="app-shell__statusbar">
+        <span>Ready</span>
+        <span>•</span>
+        <span>View: {activeWorkspaceLabel}</span>
+        <span>•</span>
+        <span>Variables: {variableCountSummary}</span>
+        <span>•</span>
+        <span>Optimizer: {optimizeStatusText}</span>
+      </div>
+
+      <div style={{ display: 'none' }}>
+        <LegacyPanels />
+      </div>
+    </div>
   );
 }

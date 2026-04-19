@@ -121,7 +121,7 @@ class SystemRequirementsEditor {
     this._operandKeys = [];
     this._isEvaluating = false;
     this._pendingEvalRequested = false;
-    this._paramsExpanded = true;
+    this._paramsExpanded = false;
     this._paramToggleBtn = null;
     this.inspector = new InspectorManager('requirement-inspector', 'requirement-inspector-content');
 
@@ -352,7 +352,8 @@ class SystemRequirementsEditor {
 
     const wrap = document.createElement('div');
     wrap.className = 'sr-table-wrap';
-    wrap.style.height = '100%';
+    wrap.style.height = 'auto';
+    wrap.style.minHeight = '100%';
     wrap.style.maxHeight = 'none';
     wrap.style.overflowX = 'auto';
     wrap.style.overflowY = 'auto';
@@ -363,6 +364,7 @@ class SystemRequirementsEditor {
     table.style.borderCollapse = 'collapse';
     table.style.width = 'max-content';
     table.style.minWidth = '100%';
+    table.style.height = 'auto';
 
     const thead = document.createElement('thead');
     const headRow = document.createElement('tr');
@@ -395,9 +397,9 @@ class SystemRequirementsEditor {
       id: 30,
       enabled: 60,
       operand: 200,
-      spec: 120,
-      current: 120,
-      status: 90,
+      spec: 88,
+      current: 96,
+      status: 72,
       rationale: 220,
       configId: 120,
       param: 100,
@@ -422,33 +424,14 @@ class SystemRequirementsEditor {
       headRow.appendChild(mkTh(c.label, c.width, left));
       left += c.width;
     }
-    headRow.appendChild(mkTh('Config', widths.configId, null));
-    
-    // Parameters column with toggle button (support up to 5 params)
-    const thParams = mkTh('Parameters', widths.param * 5 + widths.param2, null);
-    const paramsExpanded = !!this._paramsExpanded;
-    const toggleBtn = document.createElement('button');
-    toggleBtn.textContent = paramsExpanded ? '▼' : '▶';
-    toggleBtn.style.marginLeft = '8px';
-    toggleBtn.style.fontSize = '10px';
-    toggleBtn.style.padding = '2px 6px';
-    toggleBtn.style.cursor = 'pointer';
-    toggleBtn.style.border = '1px solid #ccc';
-    toggleBtn.style.borderRadius = '3px';
-    toggleBtn.style.background = '#f5f5f5';
-    toggleBtn.setAttribute('aria-expanded', paramsExpanded ? 'true' : 'false');
-    toggleBtn.title = 'Toggle parameter visibility';
-    thParams.appendChild(toggleBtn);
-    headRow.appendChild(thParams);
+    const detailsColumnWidth = 320;
 
-    this._paramToggleBtn = toggleBtn;
-    
-    headRow.appendChild(mkTh('Op', widths.op, null));
-    headRow.appendChild(mkTh('Tol', widths.tol, null));
-    headRow.appendChild(mkTh('Target', widths.target, null));
-    headRow.appendChild(mkTh('Weight', widths.weight, null));
+    // Collapse the wide right-side controls into one compact summary column.
+    const thDetails = mkTh('Details', detailsColumnWidth, null);
+    headRow.appendChild(thDetails);
     headRow.appendChild(mkTh('Score', widths.score, null));
-    headRow.appendChild(mkTh('Rationale', widths.rationale, null));
+
+    this._paramToggleBtn = null as any;
 
     thead.appendChild(headRow);
 
@@ -495,12 +478,12 @@ class SystemRequirementsEditor {
       const row = this.requirements.find((r: any) => r && String(r.id) === String(rowId)) || null;
       if (row) {
         try {
-          if (this.inspector && typeof this.inspector.show === 'function') this.inspector.show(row);
+          if (this.inspector && typeof this.inspector.hide === 'function') this.inspector.hide();
         } catch (_) {}
       }
     };
 
-    const renderRow = (row: any): HTMLTableRowElement => {
+    const renderRow = (row: any): { tr: HTMLTableRowElement; editorTr: HTMLTableRowElement | null } => {
       const tr = document.createElement('tr');
       tr.dataset.id = String(row.id);
       if (String(this._selectedId) === String(row.id)) tr.classList.add('sr-selected');
@@ -526,13 +509,26 @@ class SystemRequirementsEditor {
       };
 
       tr.addEventListener('click', (e) => {
-        // Keep selection behavior but don't break inline edits.
         const t = e?.target as HTMLElement | null;
-        if (t && typeof t.closest === 'function' && t.closest('input,select,textarea')) {
-          if (String(this._selectedId) !== String(row.id)) setSelectedRow(row.id);
+        const selectionChanged = String(this._selectedId) !== String(row.id);
+        const clickedControl = !!(t && typeof t.closest === 'function' && t.closest('input,select,textarea,button'));
+
+        if (clickedControl) {
+          if (selectionChanged) {
+            this._paramsExpanded = true;
+            setSelectedRow(row.id);
+            this.renderTable();
+          }
           return;
         }
-        setSelectedRow(row.id);
+
+        if (selectionChanged) {
+          this._paramsExpanded = true;
+          setSelectedRow(row.id);
+        } else {
+          this._paramsExpanded = !this._paramsExpanded;
+        }
+        this.renderTable();
       });
 
       // Sticky cells
@@ -655,19 +651,19 @@ class SystemRequirementsEditor {
       tr.appendChild(tdSt);
       leftPx += widths.status;
 
-      // Non-sticky cells
-      const tdCfg = mkTd(widths.configId, null);
-      tdCfg.style.textAlign = 'center';
+      // Collapsed summary + inline details editor
+      let editorTr: HTMLTableRowElement | null = null;
+
+      const cfgValues = this.getConfigurationList();
       const cfgSel = document.createElement('select');
       cfgSel.style.width = '100%';
       cfgSel.style.fontSize = '12px';
-      cfgSel.style.height = '24px';
-      cfgSel.style.lineHeight = '24px';
-      cfgSel.style.padding = '2px 4px';
+      cfgSel.style.height = '28px';
+      cfgSel.style.lineHeight = '28px';
+      cfgSel.style.padding = '4px 8px';
       cfgSel.style.boxSizing = 'border-box';
       cfgSel.addEventListener('focus', onCellFocus);
       cfgSel.addEventListener('blur', onCellBlur);
-      const cfgValues = this.getConfigurationList();
       for (const [val, label] of Object.entries(cfgValues || {})) {
         const opt = document.createElement('option');
         opt.value = val;
@@ -690,43 +686,6 @@ class SystemRequirementsEditor {
           selectEl.value = prev;
         }
       };
-
-      cfgSel.addEventListener('change', () => {
-        const oldValue = row.configId;
-        row.configId = cfgSel.value;
-        
-        // Record undo command
-        if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== row.configId) {
-          const command = new w.SetRequirementCommand(
-            row.id,
-            'configId',
-            oldValue,
-            row.configId
-          );
-          w.undoHistory.record(command);
-        }
-        
-        this.saveToStorage();
-
-        // If operand is EFL, refresh param2 datalist options.
-        try {
-          if (String(row?.operand ?? '').trim() === 'EFL') {
-            const blocks = this._getBlocksForConfigHint(row?.configId);
-            const dlId = ensureEflBlocksDatalist(blocks);
-            const p2Input = tr.querySelector('input[data-role="param2"]') as HTMLInputElement | null;
-            if (p2Input && dlId) p2Input.setAttribute('list', dlId);
-          }
-        } catch (_) {}
-        // Refresh Object idx dropdowns for this row
-        try {
-          const objSelects = tr.querySelectorAll('select[data-is-object-param="1"]');
-          for (const sel of objSelects) populateObjectSelect(sel as HTMLSelectElement, row.configId);
-        } catch (_) {}
-
-        this.scheduleEvaluateAndUpdate();
-      });
-      tdCfg.appendChild(cfgSel);
-      tr.appendChild(tdCfg);
 
       const mkInput = (field: string, widthPx: number, placeholder = '', paramDef: any = null): { td: HTMLTableCellElement; input: HTMLInputElement | HTMLSelectElement } => {
         const td = mkTd(widthPx, null);
@@ -1350,19 +1309,18 @@ class SystemRequirementsEditor {
       const paramCount = (definition && Array.isArray(definition.parameters)) ? definition.parameters.length : 4;
       const paramDefs = (definition && Array.isArray(definition.parameters)) ? definition.parameters : [];
 
-      // Parameters cell (combined, collapsible) - support up to 5 params
-      const tdParams = mkTd(widths.param * 5 + widths.param2, null);
-      tdParams.dataset.role = 'params-container';
-      
-      // Collapsed view: summary
+      const tdDetails = mkTd(detailsColumnWidth, null);
+      tdDetails.dataset.role = 'details-container';
+
       const paramsSummary = document.createElement('div');
       paramsSummary.className = 'params-summary';
-      paramsSummary.style.display = this._paramsExpanded ? 'none' : 'block';
+      paramsSummary.style.display = 'block';
       paramsSummary.style.fontSize = '11px';
       paramsSummary.style.color = '#666';
       paramsSummary.style.cursor = 'pointer';
       paramsSummary.style.padding = '4px';
-      
+      paramsSummary.title = 'Select row to expand details below';
+
       const updateSummary = (): void => {
         const values = [];
         const operandName = String(row?.operand ?? '').trim();
@@ -1378,40 +1336,98 @@ class SystemRequirementsEditor {
             values.push(`${label}=${displayVal}`);
           }
         }
-        paramsSummary.textContent = values.length > 0 ? values.join(', ') : `${paramCount} param${paramCount !== 1 ? 's' : ''}`;
+        const configLabel = String((cfgValues as any)?.[String(row?.configId ?? '')] ?? row?.configId ?? '').trim();
+        const targetSummary = String(row?.target ?? '').trim();
+        const weightSummary = String(row?.weight ?? '').trim();
+        const opSummary = String(row?.op || '=').trim() || '=';
+        const pieces = [];
+        if (configLabel) pieces.push(configLabel);
+        if (values.length > 0) pieces.push(values.join(', '));
+        if (targetSummary) pieces.push(`${opSummary} ${targetSummary}`);
+        if (weightSummary) pieces.push(`w=${weightSummary}`);
+        paramsSummary.textContent = pieces.length > 0 ? pieces.join(' • ') : 'Click to edit details';
       };
       updateSummary();
-      
-      // Expanded view: individual inputs
+      paramsSummary.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const selectionChanged = String(this._selectedId) !== String(row.id);
+        setSelectedRow(row.id);
+        if (selectionChanged || !this._paramsExpanded) {
+          this._paramsExpanded = true;
+          this.renderTable();
+        }
+      });
+
+      cfgSel.addEventListener('change', () => {
+        const oldValue = row.configId;
+        row.configId = cfgSel.value;
+
+        if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== row.configId) {
+          const command = new w.SetRequirementCommand(
+            row.id,
+            'configId',
+            oldValue,
+            row.configId
+          );
+          w.undoHistory.record(command);
+        }
+
+        this.saveToStorage();
+        updateSummary();
+
+        try {
+          if (String(row?.operand ?? '').trim() === 'EFL') {
+            const blocks = this._getBlocksForConfigHint(row?.configId);
+            const dlId = ensureEflBlocksDatalist(blocks);
+            const detailScope = editorTr || tr.parentElement || tr;
+            const p2Input = detailScope.querySelector('input[data-role="param2"]') as HTMLInputElement | null;
+            if (p2Input && dlId) p2Input.setAttribute('list', dlId);
+          }
+        } catch (_) {}
+        try {
+          const detailScope = editorTr || tr.parentElement || tr;
+          const objSelects = detailScope.querySelectorAll('select[data-is-object-param="1"]');
+          for (const sel of objSelects) populateObjectSelect(sel as HTMLSelectElement, row.configId);
+        } catch (_) {}
+
+        this.scheduleEvaluateAndUpdate();
+      });
+
       const paramsExpanded = document.createElement('div');
       paramsExpanded.className = 'params-expanded';
-      paramsExpanded.style.display = this._paramsExpanded ? 'flex' : 'none';
-      paramsExpanded.style.gap = '4px';
-      
-      const paramInputs = [];
+      paramsExpanded.style.display = 'flex';
+      paramsExpanded.style.flexDirection = 'column';
+      paramsExpanded.style.alignItems = 'stretch';
+      paramsExpanded.style.width = '100%';
+      paramsExpanded.style.gap = '8px';
+
       for (let i = 1; i <= 5; i++) {
         const field = `param${i}`;
         const paramDef = paramDefs[i - 1];
         const container = document.createElement('div');
         container.className = 'param-input-container';
-        container.style.flex = i === 2 ? '1.2' : '1';
-        container.style.display = i <= paramCount ? '' : 'none';
-        
-        // Label (always reserve height for alignment)
+        container.style.flex = '0 0 auto';
+        container.style.display = i <= paramCount ? 'grid' : 'none';
+        container.style.gridTemplateColumns = '88px minmax(0, 1fr)';
+        container.style.columnGap = '8px';
+        container.style.alignItems = 'center';
+        container.style.width = '100%';
+
         const label = document.createElement('div');
         label.className = 'param-input-label';
         label.textContent = (paramDef && paramDef.label) ? paramDef.label : '';
         container.appendChild(label);
-        
-        const { td: _, input: control } = mkInput(field, i === 2 ? widths.param2 : widths.param, '', paramDef);
+
+        const { input: control } = mkInput(field, i === 2 ? widths.param2 : widths.param, '', paramDef);
         control.style.width = '100%';
-        
-        // Override blur to update summary
         control.addEventListener('blur', () => {
           updateSummary();
         });
-        
-        // For EFL param2
+        control.addEventListener('change', () => {
+          updateSummary();
+        });
+
         if (operand === 'EFL' && i === 2 && control.tagName === 'INPUT') {
           try {
             const configIdHint = row?.configId;
@@ -1421,21 +1437,15 @@ class SystemRequirementsEditor {
             (control as HTMLInputElement).placeholder = 'ALL or blockId (comma separated allowed)';
           } catch (_) {}
         }
-        
+
         container.appendChild(control);
         paramsExpanded.appendChild(container);
-        paramInputs.push({ container, control });
       }
-      
-      tdParams.appendChild(paramsSummary);
-      tdParams.appendChild(paramsExpanded);
-      tr.appendChild(tdParams);
 
-      const tdOp = mkTd(widths.op, null);
-      tdOp.style.textAlign = 'center';
       const opSel = document.createElement('select');
       opSel.style.width = '100%';
       opSel.style.fontSize = '12px';
+      opSel.style.height = '28px';
       for (const v of ['=', '<=', '>=']) {
         const opt = document.createElement('option');
         opt.value = v;
@@ -1448,8 +1458,7 @@ class SystemRequirementsEditor {
       opSel.addEventListener('change', () => {
         const oldValue = row.op;
         row.op = opSel.value;
-        
-        // Record undo command
+
         if (w.undoHistory && w.SetRequirementCommand && !w.undoHistory.isExecuting && oldValue !== row.op) {
           const command = new w.SetRequirementCommand(
             row.id,
@@ -1459,36 +1468,23 @@ class SystemRequirementsEditor {
           );
           w.undoHistory.record(command);
         }
-        
+
         this.saveToStorage();
+        updateSummary();
         const specEl = tr.querySelector('td[data-role="spec"]');
         if (specEl) specEl.textContent = makeSpecSummary(row);
         this.scheduleEvaluateAndUpdate();
       });
-      tdOp.appendChild(opSel);
-      tr.appendChild(tdOp);
 
-      tr.appendChild(mkInput('tol', widths.tol).td);
-      tr.appendChild(mkInput('target', widths.target).td);
-      tr.appendChild(mkInput('weight', widths.weight).td);
-
-      const tdScore = mkTd(widths.score, null);
-      tdScore.style.textAlign = 'center';
-      tdScore.textContent = formatScoreCell(row._contribution);
-      tdScore.dataset.role = 'score';
-      tr.appendChild(tdScore);
-
-      // Rationale is the right-most column
-      const tdRat = mkTd(widths.rationale, null);
-
-      const ratPreview = document.createElement('div');
-      ratPreview.textContent = rationalePreview(row.rationale);
-      ratPreview.title = (row.rationale === undefined || row.rationale === null) ? '' : String(row.rationale);
-      ratPreview.style.cursor = 'text';
-      ratPreview.style.height = '22px';
-      ratPreview.style.display = 'flex';
-      ratPreview.style.alignItems = 'center';
-      ratPreview.style.overflow = 'hidden';
+      const { input: tolInput } = mkInput('tol', widths.tol);
+      tolInput.addEventListener('blur', () => updateSummary());
+      tolInput.addEventListener('change', () => updateSummary());
+      const { input: targetInput } = mkInput('target', widths.target);
+      targetInput.addEventListener('blur', () => updateSummary());
+      targetInput.addEventListener('change', () => updateSummary());
+      const { input: weightInput } = mkInput('weight', widths.weight);
+      weightInput.addEventListener('blur', () => updateSummary());
+      weightInput.addEventListener('change', () => updateSummary());
 
       const ratTa = document.createElement('textarea');
       ratTa.rows = 4;
@@ -1496,10 +1492,9 @@ class SystemRequirementsEditor {
       ratTa.style.width = '100%';
       ratTa.style.fontSize = '12px';
       ratTa.style.boxSizing = 'border-box';
-      ratTa.style.minHeight = '72px';
+      ratTa.style.minHeight = '88px';
       ratTa.style.resize = 'vertical';
       ratTa.style.overflow = 'auto';
-      ratTa.style.display = 'none';
       const normalizeRationaleHeight = (v: any): string => {
         const n = Number(v);
         return Number.isFinite(n) && n >= 40 ? `${Math.round(n)}px` : '';
@@ -1520,28 +1515,61 @@ class SystemRequirementsEditor {
       ratTa.addEventListener('blur', () => {
         persistRationaleHeight();
         row.rationale = ratTa.value;
-        ratPreview.textContent = rationalePreview(row.rationale);
-        ratPreview.title = (row.rationale === undefined || row.rationale === null) ? '' : String(row.rationale);
-        ratTa.style.display = 'none';
-        ratPreview.style.display = 'flex';
         this.saveToStorage();
         onCellBlur();
       });
 
-      ratPreview.addEventListener('click', () => {
-        setSelectedRow(row.id);
-        ratTa.value = (row.rationale === undefined || row.rationale === null) ? '' : String(row.rationale);
-        applyRationaleHeight();
-        ratPreview.style.display = 'none';
-        ratTa.style.display = 'block';
-        try { ratTa.focus(); } catch (_) {}
-      });
+      tdDetails.appendChild(paramsSummary);
+      tr.appendChild(tdDetails);
 
-      tdRat.appendChild(ratPreview);
-      tdRat.appendChild(ratTa);
-      tr.appendChild(tdRat);
+      const tdScore = mkTd(widths.score, null);
+      tdScore.style.textAlign = 'center';
+      tdScore.textContent = formatScoreCell(row._contribution);
+      tdScore.dataset.role = 'score';
+      tr.appendChild(tdScore);
 
-      return tr;
+      if (this._paramsExpanded && String(this._selectedId) === String(row.id)) {
+        const makeEditorField = (labelText: string, control: HTMLElement, wide = false): HTMLDivElement => {
+          const field = document.createElement('div');
+          field.className = `sr-inline-field${wide ? ' sr-inline-field--wide' : ''}`;
+          const label = document.createElement('div');
+          label.className = 'sr-inline-field-label';
+          label.textContent = labelText;
+          const body = document.createElement('div');
+          body.className = 'sr-inline-field-control';
+          body.appendChild(control);
+          field.appendChild(label);
+          field.appendChild(body);
+          return field;
+        };
+
+        editorTr = document.createElement('tr');
+        editorTr.className = 'sr-inline-editor-row';
+        const editorTd = document.createElement('td');
+        editorTd.colSpan = 100;
+        editorTd.className = 'sr-inline-editor-cell';
+        const editorWrap = document.createElement('div');
+        editorWrap.className = 'sr-inline-editor';
+        const editorTitle = document.createElement('div');
+        editorTitle.className = 'sr-inline-editor-title';
+        editorTitle.textContent = 'Details';
+        editorWrap.appendChild(editorTitle);
+        editorWrap.appendChild(makeEditorField('Config', cfgSel));
+        editorWrap.appendChild(makeEditorField('Parameters', paramsExpanded, true));
+
+        const constraintsGrid = document.createElement('div');
+        constraintsGrid.className = 'sr-inline-editor-grid';
+        constraintsGrid.appendChild(makeEditorField('Operand', opSel));
+        constraintsGrid.appendChild(makeEditorField('Tolerance', tolInput as HTMLElement));
+        constraintsGrid.appendChild(makeEditorField('Target', targetInput as HTMLElement));
+        constraintsGrid.appendChild(makeEditorField('Weight', weightInput as HTMLElement));
+        editorWrap.appendChild(constraintsGrid);
+        editorWrap.appendChild(makeEditorField('Rationale', ratTa, true));
+        editorTd.appendChild(editorWrap);
+        editorTr.appendChild(editorTd);
+      }
+
+      return { tr, editorTr };
     };
 
     this._renderBody = (specFn: any, ratPrevFn: any, ensureDl: any): void => {
@@ -1565,8 +1593,9 @@ class SystemRequirementsEditor {
       
       // Render all requirements
       for (const r of this.requirements) {
-        const tr = renderRow(r);
-        this._tbody.appendChild(tr);
+        const rendered = renderRow(r) as { tr: HTMLTableRowElement; editorTr: HTMLTableRowElement | null };
+        this._tbody.appendChild(rendered.tr);
+        if (rendered.editorTr) this._tbody.appendChild(rendered.editorTr);
       }
 
       // Update header labels for selected operand if any.
@@ -1586,46 +1615,17 @@ class SystemRequirementsEditor {
 
     const applyParamsExpandedLayout = (): void => {
       if (!this._tbody) return;
-      const expanded = !!this._paramsExpanded;
       const rows = this._tbody.querySelectorAll('tr');
       for (const row of rows) {
+        if ((row as HTMLElement).classList.contains('sr-inline-editor-row')) continue;
         const cells = row.querySelectorAll('td');
         for (const td of cells) {
-          if (expanded) {
-            (td as HTMLTableCellElement).style.paddingTop = '12px';
-            (td as HTMLTableCellElement).style.paddingBottom = '3px';
-            (td as HTMLTableCellElement).style.verticalAlign = 'top';
-          } else {
-            (td as HTMLTableCellElement).style.paddingTop = '3px';
-            (td as HTMLTableCellElement).style.paddingBottom = '3px';
-            (td as HTMLTableCellElement).style.verticalAlign = 'middle';
-          }
+          (td as HTMLTableCellElement).style.paddingTop = '2px';
+          (td as HTMLTableCellElement).style.paddingBottom = '2px';
+          (td as HTMLTableCellElement).style.verticalAlign = 'middle';
         }
       }
     };
-
-    // Parameter toggle functionality
-    if (toggleBtn) {
-      toggleBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._paramsExpanded = !this._paramsExpanded;
-        toggleBtn.textContent = this._paramsExpanded ? '▼' : '▶';
-        toggleBtn.setAttribute('aria-expanded', this._paramsExpanded ? 'true' : 'false');
-        table.classList.toggle('sr-params-expanded', this._paramsExpanded);
-        applyParamsExpandedLayout();
-        
-        // Toggle all parameter containers
-        const allParamContainers = this._tbody!.querySelectorAll('[data-role="params-container"]');
-        for (const container of allParamContainers) {
-          const summary = container.querySelector('.params-summary') as HTMLElement | null;
-          const expanded = container.querySelector('.params-expanded') as HTMLElement | null;
-          if (summary && expanded) {
-            summary.style.display = this._paramsExpanded ? 'none' : 'block';
-            expanded.style.display = this._paramsExpanded ? 'flex' : 'none';
-          }
-        }
-      });
-    }
 
     // Initial render
     this._renderBody(makeSpecSummary, rationalePreview, ensureEflBlocksDatalist);

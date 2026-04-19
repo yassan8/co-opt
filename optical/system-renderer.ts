@@ -343,6 +343,24 @@ function __coopt_makeSequentialDesignIntentLabel(displayCounts, blockType, block
     return `${base}-${next}`;
 }
 
+function __coopt_getDesignIntentLabelStyle(blockType, blockId) {
+    const base = __coopt_getDesignIntentDisplayBase(blockType, blockId);
+    if (base === 'Lens' || base === 'Doublet' || base === 'Triplet') {
+        return {
+            fillStyle: 'rgba(223,241,255,0.96)',
+            strokeStyle: '#bfdbfe',
+            textStyle: '#1d4ed8',
+            lineColor: 0x93c5fd,
+        };
+    }
+    return {
+        fillStyle: 'rgba(255,255,255,0.94)',
+        strokeStyle: '#475569',
+        textStyle: '#111827',
+        lineColor: 0x475569,
+    };
+}
+
 function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOrigins) {
     const descriptors = [];
     const blocks = __coopt_getActiveDesignIntentBlocks();
@@ -353,12 +371,12 @@ function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOri
     const objectAnchor = Array.isArray(surfaceOrigins) && surfaceOrigins.length > 0 ? __coopt_vectorFromOriginEntry(surfaceOrigins[0]) : null;
     const imageAnchor = Array.isArray(surfaceOrigins) && surfaceOrigins.length > 0 ? __coopt_vectorFromOriginEntry(surfaceOrigins[surfaceOrigins.length - 1]) : null;
 
-    const pushDescriptor = (id, text, anchor) => {
+    const pushDescriptor = (id, text, anchor, style = null) => {
         const safeId = String(id ?? '').trim();
         if (!safeId || !text || !anchor || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y) || !Number.isFinite(anchor.z)) return;
         if (seenIds.has(safeId)) return;
         seenIds.add(safeId);
-        descriptors.push({ id: safeId, text: String(text), anchor });
+        descriptors.push({ id: safeId, text: String(text), anchor, style: style || __coopt_getDesignIntentLabelStyle('', safeId) });
     };
 
     if (blocks.length > 0) {
@@ -401,7 +419,8 @@ function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOri
             }
 
             const displayText = __coopt_makeSequentialDesignIntentLabel(displayCounts, blockType, blockId);
-            pushDescriptor(blockId, displayText, anchor);
+            const labelStyle = __coopt_getDesignIntentLabelStyle(blockType, blockId);
+            pushDescriptor(blockId, displayText, anchor, labelStyle);
         }
     }
 
@@ -411,7 +430,7 @@ function __coopt_buildDesignIntentLabelDescriptors(opticalSystemData, surfaceOri
         const anchor = __coopt_averageOriginForRange(surfaceOrigins, range.min, range.max);
         if (/^Object(Surface|Plane)?/i.test(String(blockId))) continue;
         const displayText = __coopt_makeSequentialDesignIntentLabel(displayCounts, '', blockId);
-        pushDescriptor(blockId, displayText, anchor);
+        pushDescriptor(blockId, displayText, anchor, __coopt_getDesignIntentLabelStyle('', blockId));
     }
 
     return descriptors;
@@ -434,7 +453,7 @@ function __coopt_addDesignIntentLabelPolyline(scene, points, color = 0x475569) {
     scene.add(line);
 }
 
-function __coopt_addDesignIntentLabelSprite(scene, text, position) {
+function __coopt_addDesignIntentLabelSprite(scene, text, position, style = {}) {
     if (!scene || !text || !position) return;
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
@@ -443,6 +462,9 @@ function __coopt_addDesignIntentLabelSprite(scene, text, position) {
     const fontPt = 25;
     const paddingX = 10;
     const paddingY = 5;
+    const fillStyle = String(style?.fillStyle || 'rgba(255,255,255,0.94)');
+    const strokeStyle = String(style?.strokeStyle || '#475569');
+    const textStyle = String(style?.textStyle || '#111827');
     context.font = `600 ${fontPt}pt Arial, sans-serif`;
     const metrics = context.measureText(String(text));
     const textHeight = Math.ceil(fontPt * 1.55);
@@ -450,12 +472,12 @@ function __coopt_addDesignIntentLabelSprite(scene, text, position) {
     canvas.height = Math.ceil(textHeight + paddingY * 2);
 
     context.font = `600 ${fontPt}pt Arial, sans-serif`;
-    context.fillStyle = 'rgba(255,255,255,0.94)';
+    context.fillStyle = fillStyle;
     context.fillRect(0, 0, canvas.width, canvas.height);
-    context.strokeStyle = '#475569';
+    context.strokeStyle = strokeStyle;
     context.lineWidth = 1;
     context.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
-    context.fillStyle = '#111827';
+    context.fillStyle = textStyle;
     context.textAlign = 'center';
     context.textBaseline = 'middle';
     context.fillText(String(text), canvas.width / 2, canvas.height / 2);
@@ -532,8 +554,8 @@ function __coopt_addDesignIntentLabelsToScene(scene, opticalSystemData, surfaceO
             const labelVertical = baseVertical + verticalDir * verticalOffset;
             const labelAnchor = makeMostlyVerticalLabelPoint(entry.anchor, labelVertical, zShift);
 
-            __coopt_addDesignIntentLabelPolyline(scene, [entry.anchor.clone(), labelAnchor.clone()]);
-            __coopt_addDesignIntentLabelSprite(scene, entry.text, labelAnchor);
+            __coopt_addDesignIntentLabelPolyline(scene, [entry.anchor.clone(), labelAnchor.clone()], Number(entry?.style?.lineColor ?? 0x475569));
+            __coopt_addDesignIntentLabelSprite(scene, entry.text, labelAnchor, entry?.style || {});
         }
     };
 

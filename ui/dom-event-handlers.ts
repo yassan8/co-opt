@@ -5529,6 +5529,40 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         }
     } catch (_) {}
 
+    const unifiedLensToneTypes = new Set(['lens', 'doublet', 'triplet']);
+    const buildBlockInspectorLabelText = (blockLike: any) => {
+        const rawId = String(blockLike?.blockId ?? '(none)');
+        const label = displayLabelByBlockId.get(rawId) || formatSingletonBlockLabel(blockLike?.blockType, rawId);
+        const bt = String(blockLike?.blockType ?? '').trim();
+        if (bt === 'ObjectSurface' || bt === 'ObjectPlane') {
+            return `${label} → Surf 0`;
+        }
+        const range = surfRangeByBlockId.get(String(blockLike?.blockId ?? '').trim());
+        if (range && Number.isFinite(range.min) && Number.isFinite(range.max)) {
+            const surfText = (range.min === range.max)
+                ? `Surf ${range.min}`
+                : `Surf ${range.min}–${range.max}`;
+            return `${label} → ${surfText}`;
+        }
+        return label;
+    };
+
+    const unifiedLensBadgeWidthCh = (() => {
+        let maxChars = 0;
+        for (const item of list) {
+            const rawType = String(item?.blockType ?? '').trim();
+            const normalized = (() => {
+                const t = (rawType === 'ObjectPlane') ? 'ObjectSurface' : rawType;
+                if (t === 'PositiveLens') return 'lens';
+                if (t === 'AirGap') return 'gap';
+                return String(t || 'unknown').trim().toLowerCase();
+            })();
+            if (!unifiedLensToneTypes.has(normalized)) continue;
+            maxChars = Math.max(maxChars, buildBlockInspectorLabelText(item).length);
+        }
+        return Math.max(14, maxChars + 1);
+    })();
+
     for (const b of list) {
         const blockId = String(b.blockId ?? '').trim();
         const row = document.createElement('div');
@@ -5537,29 +5571,26 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
         const colId = document.createElement('div');
         colId.className = 'block-inspector-col-id';
-        {
-            const rawId = String(b.blockId ?? '(none)');
-            const label = displayLabelByBlockId.get(rawId) || formatSingletonBlockLabel(b.blockType, rawId);
-            const bt = String(b.blockType ?? '').trim();
-            if (bt === 'ObjectSurface' || bt === 'ObjectPlane') {
-                colId.textContent = `${label} → Surf 0`;
-            } else {
-                const range = surfRangeByBlockId.get(String(b.blockId ?? '').trim());
-                if (range && Number.isFinite(range.min) && Number.isFinite(range.max)) {
-                    const surfText = (range.min === range.max)
-                        ? `Surf ${range.min}`
-                        : `Surf ${range.min}–${range.max}`;
-                    colId.textContent = `${label} → ${surfText}`;
-                } else {
-                    colId.textContent = label;
-                }
-            }
-        }
+        colId.textContent = buildBlockInspectorLabelText(b);
 
-        const colType = document.createElement('div');
-        colType.className = 'block-inspector-col-type';
-        const displayType = (String(b.blockType ?? '').trim() === 'ObjectPlane') ? 'ObjectSurface' : String(b.blockType ?? '(none)');
-        colType.textContent = displayType;
+        const rawType = String(b.blockType ?? '').trim();
+        const displayType = (rawType === 'ObjectPlane') ? 'ObjectSurface' : String(b.blockType ?? '(none)');
+        const toneType = (() => {
+            const normalized = (rawType === 'ObjectPlane') ? 'ObjectSurface' : rawType;
+            if (normalized === 'PositiveLens') return 'lens';
+            if (normalized === 'AirGap') return 'gap';
+            return String(normalized || 'unknown').trim().toLowerCase();
+        })();
+        row.dataset.blockType = toneType;
+        colId.dataset.blockType = toneType;
+        colId.title = displayType;
+        if (unifiedLensToneTypes.has(toneType)) {
+            const unifiedWidth = `${unifiedLensBadgeWidthCh}ch`;
+            colId.style.width = unifiedWidth;
+            colId.style.minWidth = unifiedWidth;
+            colId.style.maxWidth = unifiedWidth;
+            colId.style.flex = `0 0 ${unifiedWidth}`;
+        }
 
         const colParams = document.createElement('div');
         colParams.className = 'block-inspector-col-params';
@@ -5571,7 +5602,6 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         colCount.textContent = `→ ${Number.isFinite(n) ? n : 0} surfaces`;
 
         row.appendChild(colId);
-        row.appendChild(colType);
         row.appendChild(colParams);
         row.appendChild(colCount);
 
@@ -5586,7 +5616,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         const realBlock = blockById && typeof blockById.get === 'function' ? blockById.get(blockId) : null;
         if (realBlock && __blockInspectorExpandedBlockId === blockId) {
             const panel = document.createElement('div');
-            panel.style.padding = '6px 8px 10px 8px';
+            panel.className = 'block-inspector-expanded-panel';
+            panel.style.padding = '8px 10px';
+            panel.style.margin = '0';
             const isDarkMode = document.body.classList.contains('dark-mode');
             panel.style.borderTop = isDarkMode ? '1px solid #333' : '1px solid #eee';
             panel.style.fontSize = '12px';
@@ -5837,36 +5869,62 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const aIndex = isEven ? (2 * idx + 2) : (2 * idx + 1);
                 const lower = String(key).toLowerCase();
                 let prefix = '';
-                if (lower.startsWith('frontcoef')) prefix = 'front ';
-                else if (lower.startsWith('backcoef')) prefix = 'back ';
-                else if (lower.startsWith('surf1coef')) prefix = 'surf1 ';
-                else if (lower.startsWith('surf2coef')) prefix = 'surf2 ';
-                else if (lower.startsWith('surf3coef')) prefix = 'surf3 ';
+                if (lower.startsWith('frontcoef')) prefix = 's1 ';
+                else if (lower.startsWith('backcoef')) prefix = 's2 ';
+                else if (lower.startsWith('surf1coef')) prefix = 's1 ';
+                else if (lower.startsWith('surf2coef')) prefix = 's2 ';
+                else if (lower.startsWith('surf3coef')) prefix = 's3 ';
+                else if (lower.startsWith('surf4coef')) prefix = 's4 ';
                 return `${prefix}A${aIndex}`.trim();
+            };
+
+            const getDisplayLabelForKey = (rawLabel: string): string => {
+                const label = String(rawLabel ?? '').trim();
+                if (label === 'frontSurfType') return 's1 Surf Type';
+                if (label === 'backSurfType') return 's2 Surf Type';
+                if (label === 'surf1SurfType') return 's1 Surf Type';
+                if (label === 'surf2SurfType') return 's2 Surf Type';
+                if (label === 'surf3SurfType') return 's3 Surf Type';
+                if (label === 'surf4SurfType') return 's4 Surf Type';
+                if (label === 'frontConic') return 's1 Conic';
+                if (label === 'backConic') return 's2 Conic';
+                if (label === 'surf1Conic') return 's1 Conic';
+                if (label === 'surf2Conic') return 's2 Conic';
+                if (label === 'surf3Conic') return 's3 Conic';
+                if (label === 'surf4Conic') return 's4 Conic';
+                return label;
             };
 
             const createSectionTitle = (label: string) => {
                 const title = document.createElement('div');
+                title.className = 'block-inspector-section-title';
                 title.textContent = label;
                 title.style.fontWeight = '600';
-                title.style.margin = '8px 0 4px 0';
+                title.style.margin = '6px 0';
                 title.style.fontSize = '12px';
                 return title;
             };
 
             const createRow = (label: string, value: any, path: string, badge?: string, paramType?: string) => {
                 const row = document.createElement('div');
+                row.className = 'block-inspector-detail-row';
                 row.style.display = 'flex';
                 row.style.gap = '8px';
                 row.style.alignItems = 'center';
-                row.style.marginBottom = '6px';
+                row.style.marginBottom = '4px';
 
                 const name = document.createElement('div');
                 const coefLabel = getCoefDisplayLabel(label);
-                name.textContent = coefLabel || label;
+                const displayLabel = getDisplayLabelForKey(label);
+                name.textContent = coefLabel || displayLabel;
+                name.title = coefLabel || displayLabel;
                 name.style.fontSize = '12px';
                 name.style.color = isDarkMode ? '#d1d5db' : '#374151';
                 name.style.flex = '0 0 140px';
+                name.style.whiteSpace = 'nowrap';
+                name.style.overflow = 'hidden';
+                name.style.textOverflow = 'ellipsis';
+                name.style.lineHeight = '1.2';
 
                 // Check parameter type - surfType uses exact match (case-sensitive key)
                 const isSurfType = label === 'surfType' || label === 'frontSurfType' || label === 'backSurfType' || 
@@ -6553,29 +6611,25 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     input.style.boxSizing = 'border-box';
 
                     const glassBtn = document.createElement('button');
+                    glassBtn.type = 'button';
+                    glassBtn.className = 'block-inspector-icon-btn';
                     glassBtn.textContent = '🔍';
                     glassBtn.title = 'Find Glass';
                     glassBtn.style.fontSize = '14px';
-                    glassBtn.style.padding = '2px 8px';
-                    glassBtn.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
-                    glassBtn.style.background = isDarkMode ? '#1f2937' : '#f9fafb';
-                    glassBtn.style.cursor = 'pointer';
-                    glassBtn.style.borderRadius = '4px';
-                    glassBtn.style.height = '28px';
+                    glassBtn.style.padding = '0 8px';
                     glassBtn.style.boxSizing = 'border-box';
+                    glassBtn.style.height = '28px';
 
                     // Glass Map button
                     const glassMapBtn = document.createElement('button');
+                    glassMapBtn.type = 'button';
+                    glassMapBtn.className = 'block-inspector-icon-btn';
                     glassMapBtn.textContent = '🗺️';
                     glassMapBtn.title = 'Open Glass Map';
                     glassMapBtn.style.fontSize = '14px';
-                    glassMapBtn.style.padding = '2px 8px';
-                    glassMapBtn.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
-                    glassMapBtn.style.background = isDarkMode ? '#1f2937' : '#f9fafb';
-                    glassMapBtn.style.cursor = 'pointer';
-                    glassMapBtn.style.borderRadius = '4px';
-                    glassMapBtn.style.height = '28px';
+                    glassMapBtn.style.padding = '0 8px';
                     glassMapBtn.style.boxSizing = 'border-box';
+                    glassMapBtn.style.height = '28px';
 
                     glassMapBtn.onclick = (e) => {
                         e.preventDefault();
@@ -6968,7 +7022,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     paramRow.style.display = 'flex';
                     paramRow.style.alignItems = 'center';
                     paramRow.style.gap = '6px';
-                    paramRow.style.marginBottom = '6px';
+                    paramRow.style.marginBottom = '4px';
 
                     // Optimize checkbox
                     const cb = document.createElement('input');
@@ -7078,35 +7132,48 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
             // Add aperture section for blocks that have aperture data
             const aperture = (realBlock.aperture && typeof realBlock.aperture === 'object') ? realBlock.aperture : null;
+            const renderedApertureKeys = new Set<string>();
             if (aperture && Object.keys(aperture).length > 0) {
                 panel.appendChild(createSectionTitle('Aperture (Semidiameter)'));
-                
-                // Sort aperture keys with Lens compatibility:
-                // internal keys may be front/back, but UI should show s1/s2 and keep front->back order.
-                const apertureKeys = Object.keys(aperture).sort((a, b) => {
-                    const rank = (k: string): number => {
-                        const key = String(k ?? '').trim().toLowerCase();
-                        if (key === 'front') return 1;
-                        if (key === 'back') return 2;
-                        const m = key.match(/^s(\d+)$/);
-                        if (m) return 100 + parseInt(m[1], 10);
-                        return 1000;
-                    };
-                    const ra = rank(a);
-                    const rb = rank(b);
-                    if (ra !== rb) return ra - rb;
-                    return a.localeCompare(b);
-                });
-                for (const key of apertureKeys) {
-                    const value = (aperture as any)[key];
-                    const displayKey = key === 'front' ? 's1' : (key === 'back' ? 's2' : key);
+
+                const apertureEntries: Array<{ rawKey: string; displayKey: string; value: any }> = [];
+                const pickApertureEntry = (displayKey: string, aliases: string[]) => {
+                    for (const alias of aliases) {
+                        if (Object.prototype.hasOwnProperty.call(aperture, alias)) {
+                            apertureEntries.push({ rawKey: alias, displayKey, value: (aperture as any)[alias] });
+                            renderedApertureKeys.add(displayKey.toLowerCase());
+                            return;
+                        }
+                    }
+                };
+
+                if (blockType === 'Lens' || blockType === 'PositiveLens') {
+                    pickApertureEntry('s1', ['s1', 'front', 'surf1']);
+                    pickApertureEntry('s2', ['s2', 'back', 'surf2']);
+                } else if (blockType === 'Doublet') {
+                    pickApertureEntry('s1', ['s1', 'front', 'surf1']);
+                    pickApertureEntry('s2', ['s2', 'middle', 'mid', 'center', 'surf2']);
+                    pickApertureEntry('s3', ['s3', 'back', 'rear', 'surf3']);
+                } else if (blockType === 'Triplet') {
+                    pickApertureEntry('s1', ['s1', 'front', 'surf1']);
+                    pickApertureEntry('s2', ['s2', 'surf2']);
+                    pickApertureEntry('s3', ['s3', 'surf3']);
+                    pickApertureEntry('s4', ['s4', 'back', 'rear', 'surf4']);
+                } else {
+                    for (const key of Object.keys(aperture)) {
+                        apertureEntries.push({ rawKey: key, displayKey: key, value: (aperture as any)[key] });
+                        renderedApertureKeys.add(String(key).toLowerCase());
+                    }
+                }
+
+                for (const { rawKey, displayKey, value } of apertureEntries) {
                     
                     // Create row with optimize checkbox and scope selector
                     const apertureRow = document.createElement('div');
                     apertureRow.style.display = 'flex';
                     apertureRow.style.alignItems = 'center';
                     apertureRow.style.gap = '6px';
-                    apertureRow.style.marginBottom = '6px';
+                    apertureRow.style.marginBottom = '4px';
 
                     // Optimize checkbox
                     const cb = document.createElement('input');
@@ -7133,7 +7200,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         try { scopeSel.disabled = !cb.checked; } catch (_) {}
                     });
 
-                    const innerRow = createRow(displayKey, value, `aperture.${key}`);
+                    const innerRow = createRow(displayKey, value, `aperture.${rawKey}`);
                     innerRow.style.flex = '1';
                     innerRow.style.marginBottom = '0';
 
@@ -7146,8 +7213,15 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
             if (varKeys.length > 0) {
                 for (const key of varKeys) {
-                    // Skip if this key is already shown in Parameters
-                    if (paramKeys.includes(key)) {
+                    const normalizedVarKey = String(key ?? '').trim().toLowerCase()
+                        .replace(/^front$/, 's1')
+                        .replace(/^back$/, blockType === 'Lens' || blockType === 'PositiveLens' ? 's2' : 's3')
+                        .replace(/^surf1$/, 's1')
+                        .replace(/^surf2$/, 's2')
+                        .replace(/^surf3$/, 's3')
+                        .replace(/^surf4$/, 's4');
+                    // Skip if this key is already shown in Parameters or Aperture
+                    if (paramKeys.includes(key) || renderedApertureKeys.has(normalizedVarKey)) {
                         continue;
                     }
                     
@@ -7159,7 +7233,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     varRow.style.display = 'flex';
                     varRow.style.alignItems = 'center';
                     varRow.style.gap = '6px';
-                    varRow.style.marginBottom = '6px';
+                    varRow.style.marginBottom = '4px';
 
                     // Optimize checkbox
                     const cb = document.createElement('input');

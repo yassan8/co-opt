@@ -109,11 +109,20 @@ export default function RequirementsSection() {
         <button id="set-all-requirement-on-btn" type="button" onClick={handleSetAllRequirementOn}>All On</button>
         <button id="set-all-requirement-off-btn" type="button" onClick={handleSetAllRequirementOff}>All Off</button>
       </div>
-      <div id="table-system-requirements" className="ide-table-container"></div>
 
-      <div id="requirement-inspector" className="operand-inspector requirement-inspector" style={{ display: "none" }}>
-        <h3>Requirement Detail / Inspector</h3>
-        <div id="requirement-inspector-content"></div>
+      <div className="requirements-layout">
+        <div className="requirements-list-panel" aria-label="Requirements list">
+          <div className="requirements-list-header">
+            <span>Requirement List</span>
+            <span className="requirements-list-meta">Always visible</span>
+          </div>
+          <div id="table-system-requirements" className="ide-table-container"></div>
+        </div>
+
+        <div id="requirement-inspector" className="operand-inspector requirement-inspector" style={{ display: "none" }}>
+          <h3>Requirement Detail / Inspector</h3>
+          <div id="requirement-inspector-content"></div>
+        </div>
       </div>
     </section>
   );
