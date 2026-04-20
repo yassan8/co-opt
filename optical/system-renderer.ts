@@ -168,6 +168,32 @@ function __coopt_isGapSurface(surface) {
     return false;
 }
 
+function __coopt_isThinLensSurface(surface) {
+    if (!surface || typeof surface !== 'object') return false;
+    const blockType = String(surface._blockType ?? surface.blockType ?? '').trim().toLowerCase();
+    return blockType === 'thinlens' || blockType === 'paraxial';
+}
+
+function __coopt_isThinLensBackSurface(surface) {
+    return __coopt_isThinLensSurface(surface)
+        && String(surface._surfaceRole ?? '').trim().toLowerCase() === 'back';
+}
+
+function __coopt_makeFlatThinLensSurface(surface) {
+    if (!__coopt_isThinLensSurface(surface)) return surface;
+    return {
+        ...surface,
+        surfType: 'Spherical',
+        radius: 'INF',
+        radiusX: 'INF',
+        radiusY: 'INF',
+        conic: '',
+        axis: '',
+        coef1: '', coef2: '', coef3: '', coef4: '', coef5: '',
+        coef6: '', coef7: '', coef8: '', coef9: '', coef10: ''
+    };
+}
+
 function __coopt_isStopSurface(surface) {
     if (!surface || typeof surface !== 'object') return false;
 
@@ -242,6 +268,7 @@ function __coopt_normalizeBlockDisplayType(blockType) {
     const raw = String(blockType ?? '').trim();
     if (!raw) return '';
     if (raw === 'PositiveLens') return 'Lens';
+    if (raw === 'Paraxial') return 'Paraxial';
     if (raw === 'ObjectPlane') return 'ObjectSurface';
     return raw;
 }
@@ -320,6 +347,7 @@ function __coopt_formatSurfRangeText(range) {
 function __coopt_getDesignIntentDisplayBase(blockType, blockId) {
     const normalized = __coopt_normalizeBlockDisplayType(blockType);
     if (normalized === 'PositiveLens' || normalized === 'Lens') return 'Lens';
+    if (normalized === 'Paraxial') return 'Paraxial';
     if (normalized === 'AirGap' || normalized === 'Gap') return 'Gap';
     if (normalized === 'Doublet' || normalized === 'Triplet' || normalized === 'Mirror' || normalized === 'Stop' || normalized === 'SingleSurface') return normalized;
 
@@ -1172,6 +1200,10 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
             if (isCB) {
                 continue;
             }
+
+            if (__coopt_isThinLensBackSurface(surface)) {
+                continue;
+            }
             
             try {
                 if (isStopSurface) {
@@ -1220,7 +1252,7 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                             surfaceOrigins[i].rotationMatrix
                         );
                     }
-                } else if (surface.surfType === 'Toric') {
+                } else if (surface.surfType === 'Toric' && !__coopt_isThinLensSurface(surface)) {
                     // Toric surface rendering
                     
                     const toricDefaultColor = 0x00ccff;
@@ -1241,20 +1273,22 @@ export function drawOpticalSystemSurfaces(options: any = {}) {
                     // 通常のレンズ面の処理
                     
                     // 3D表面を描画
-                    const lensDefaultColor = 0x00ccff;
+                    const isThinLens = __coopt_isThinLensSurface(surface);
+                    const renderSurface = isThinLens ? __coopt_makeFlatThinLensSurface(surface) : surface;
+                    const lensDefaultColor = isThinLens ? 0x66ccff : 0x00ccff;
                     const lensKey = __coopt_surfaceColorKey(surface, i);
                     const lensOverride = __coopt_parseColorToInt(surfaceColorOverrides?.[lensKey]);
                     const lensColor = (lensOverride !== null) ? lensOverride : lensDefaultColor;
                     drawLensSurfaceWithOrigin(
                         scene, 
-                        surface,                     // params オブジェクト全体
+                        renderSurface,                // params オブジェクト全体
                         surfaceOrigins[i].origin,    // origin から .origin プロパティを使用
                         surfaceOrigins[i].rotationMatrix, // rotation matrix
                         "even",                      // mode
                         100,                         // segments
                         lensColor,                  // color
-                        0.5,                        // opacity
-                        surface.type                 // surfaceType
+                        isThinLens ? 0.25 : 0.5,    // opacity
+                        renderSurface.type          // surfaceType
                     );
                 }
                 

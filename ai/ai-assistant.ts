@@ -214,7 +214,7 @@ function findNthLensBlockId(cfg, lensIndex1Based) {
     if (!Number.isInteger(n) || n <= 0) return null;
     const blocks = cfg?.blocks;
     if (!Array.isArray(blocks) || blocks.length === 0) return null;
-    const lensBlocks = blocks.filter(b => b && (b.blockType === 'Lens' || b.blockType === 'PositiveLens'));
+    const lensBlocks = blocks.filter(b => b && (b.blockType === 'Lens' || b.blockType === 'PositiveLens' || b.blockType === 'Paraxial'));
     const b = lensBlocks[n - 1];
     const id = typeof b?.blockId === 'string' ? b.blockId.trim() : '';
     return id || null;
@@ -2209,6 +2209,13 @@ const LENS_KEYS = new Set([
     ...buildRangeKeys('backCoef', 1, 10),
 ]);
 
+const THIN_LENS_KEYS = new Set([
+    'surfType',
+    'focalLengthX',
+    'focalLengthY',
+    'focalLength',
+]);
+
 const DOUBLET_KEYS = new Set([
     'radius1', 'radius2', 'radius3',
     'thickness1', 'thickness2',
@@ -2237,6 +2244,7 @@ const STOP_KEYS = new Set(['semiDiameter']);
 
 function getAllowedKeysForBlockType(blockType) {
     const t = String(blockType || '').trim();
+    if (t === 'Paraxial') return THIN_LENS_KEYS;
     if (t === 'Lens' || t === 'PositiveLens') return LENS_KEYS;
     if (t === 'Doublet') return DOUBLET_KEYS;
     if (t === 'Triplet') return TRIPLET_KEYS;

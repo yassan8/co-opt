@@ -2310,6 +2310,67 @@ function __rtIsGapRow(row) {
   return fields.some(isGap);
 }
 
+function __rtIsThinLensRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  const fields = [row._blockType, row.blockType, row.block_type, row.blockTypeName];
+  return fields.some((v) => { const s = String(v ?? '').trim().toLowerCase(); return s === 'thinlens' || s === 'paraxial'; });
+}
+
+function __rtIsThinLensBackRow(row) {
+  if (!__rtIsThinLensRow(row)) return false;
+  return String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase() === 'back';
+}
+
+function __rtSystemHasThinLens(rows, targetSurfaceIndex = null) {
+  if (!Array.isArray(rows) || rows.length === 0) return false;
+  const maxIdx = Number.isFinite(Number(targetSurfaceIndex))
+    ? Math.min(rows.length - 1, Math.max(0, Number(targetSurfaceIndex)))
+    : (rows.length - 1);
+  for (let i = 0; i <= maxIdx; i++) {
+    if (__rtIsThinLensRow(rows[i])) return true;
+  }
+  return false;
+}
+
+function __rtParseThinLensFocalValue(value) {
+  const s = String(value ?? '').trim();
+  if (!s) return Infinity;
+  if (/^inf(inity)?$/i.test(s)) return Infinity;
+  const n = Number(s);
+  if (!Number.isFinite(n) || Math.abs(n) < 1e-12) return Infinity;
+  return n;
+}
+
+function __rtGetThinLensFocalPair(row) {
+  return {
+    fx: __rtParseThinLensFocalValue(row?._thinLensFocalLengthX ?? row?.focalLengthX ?? row?.focalLength ?? row?._thinLensFocalLengthY ?? row?.focalLengthY),
+    fy: __rtParseThinLensFocalValue(row?._thinLensFocalLengthY ?? row?.focalLengthY ?? row?.focalLength ?? row?._thinLensFocalLengthX ?? row?.focalLengthX)
+  };
+}
+
+function __rtApplyIdealThinLens(localRay, hitPoint, row) {
+  const dir = localRay?.dir || { x: 0, y: 0, z: 1 };
+  const zSign = (Number(dir.z) || 0) >= 0 ? 1 : -1;
+  if (!Number.isFinite(dir.z) || Math.abs(dir.z) < 1e-12) {
+    return norm({ x: Number(dir.x) || 0, y: Number(dir.y) || 0, z: zSign });
+  }
+
+  const { fx, fy } = __rtGetThinLensFocalPair(row);
+  let slopeX = (Number(dir.x) || 0) / dir.z;
+  let slopeY = (Number(dir.y) || 0) / dir.z;
+  const hitX = Number(hitPoint?.x) || 0;
+  const hitY = Number(hitPoint?.y) || 0;
+
+  if (Number.isFinite(fx)) slopeX -= hitX / fx;
+  if (Number.isFinite(fy)) slopeY -= hitY / fy;
+
+  return norm({
+    x: slopeX * zSign,
+    y: slopeY * zSign,
+    z: zSign
+  });
+}
+
 // Normalize legacy CoordTrans rows into explicit fields (one-time in-memory migration).
 function normalizeCoordTransRows(rows) {
   if (!Array.isArray(rows)) return rows;
@@ -3463,6 +3524,7 @@ function __getLockstepBatchIncompatReason(effectiveSystemRows, targetSurfaceInde
   for (let i = 0; i <= maxIdx; i++) {
     const row = effectiveSystemRows[i] || {};
 
+    if (__rtIsThinLensRow(row)) return 'thin_lens_requires_scalar';
     if (isObjectRow(row) || __rtIsGapRow(row) || __rtIsCoordTransRow(row)) continue;
     // Plane surfaces (radius=0/INF) are supported in lockstep via local z=0 intersection.
   }
@@ -6071,6 +6133,7 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
     maxSurfaceIndex !== undefined &&
     Number.isFinite(Number(maxSurfaceIndex)) &&
     Number(maxSurfaceIndex) >= 0 &&
+    !__rtSystemHasThinLens(opticalSystemRows, maxSurfaceIndex) &&
     !(options && typeof options === 'object' && options.__disableRustSingleHitFastPath === true)
   );
   if (canTryRustSingleHitFastPath) {
@@ -6286,6 +6349,9 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
     const materialType = (typeof row.material === 'string' && row.material === "MIRROR") ? "MIRROR" : "REFRACTIVE";
     const rowObjectTypeNorm = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
     const rowIsStopSurface = rowObjectTypeNorm === 'stop' || rowObjectTypeNorm === 'sto';
+    const isThinLensSurface = __rtIsThinLensRow(row);
+    const isThinLensBackSurface = __rtIsThinLensBackRow(row);
+    const isIdealThinLensFront = isThinLensSurface && !isThinLensBackSurface;
 
     // 各面の詳細デバッグ情報を出力
     if (isDetailedDebug && i >= 0) { // 第1面から出力するように変更
@@ -6334,6 +6400,16 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
         debugLog.push(`  Surface 3 origin: (${surface3Origin.x.toFixed(6)}, ${surface3Origin.y.toFixed(6)}, ${surface3Origin.z.toFixed(6)})`);
         debugLog.push(`  Distance between surface origins: ${(surface3Origin.z - surface2Origin.z).toFixed(6)}mm`);
       }
+    }
+
+    if (isThinLensBackSurface) {
+      if (isDetailedDebug) {
+        debugLog.push(`ThinLens back face skipped: ideal lens already applied on the front plane`);
+      }
+      if (returnHitPointOnly && maxSurfaceIndex !== null && i === maxSurfaceIndex) {
+        return __traceReturn({ x: safeRay0.pos.x, y: safeRay0.pos.y, z: safeRay0.pos.z });
+      }
+      continue;
     }
 
     // Coordinate Break面の特別処理
@@ -6443,7 +6519,7 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       debugLog.push(`Global ray before transform: pos=(${ray.pos.x.toFixed(6)}, ${ray.pos.y.toFixed(6)}, ${ray.pos.z.toFixed(6)}), dir=(${ray.dir.x.toFixed(6)}, ${ray.dir.y.toFixed(6)}, ${ray.dir.z.toFixed(6)})`);
     }
     
-    if (!isFinite(row.radius) || row.radius === 0) {
+    if (isIdealThinLensFront || !isFinite(row.radius) || row.radius === 0) {
       // 平面処理（Z=0平面との交点）
       const epsilon = 1e-9;
       let t;
@@ -7030,7 +7106,17 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
     }
 
     // 反射・屈折処理（materialTypeは既にループの最初で定義済み）
-    if (materialType === "MIRROR") {
+    if (isIdealThinLensFront) {
+      const oldDir = { ...safeRay0.dir };
+      const localOutDir = __rtApplyIdealThinLens(localRay, hitPoint, row);
+      const globalOutDir = norm(applyMatrixToVector(surfaceInfo.rotationMatrix, localOutDir));
+      safeRay0.dir = globalOutDir;
+      if (isDetailedDebug) {
+        const { fx, fy } = __rtGetThinLensFocalPair(row);
+        debugLog.push(`Ideal ThinLens: fx=${Number.isFinite(fx) ? fx.toFixed(6) : 'INF'}mm, fy=${Number.isFinite(fy) ? fy.toFixed(6) : 'INF'}mm`);
+        debugLog.push(`Ideal ThinLens bend: oldDir=(${oldDir.x.toFixed(6)}, ${oldDir.y.toFixed(6)}, ${oldDir.z.toFixed(6)}) → newDir=(${safeRay0.dir.x.toFixed(6)}, ${safeRay0.dir.y.toFixed(6)}, ${safeRay0.dir.z.toFixed(6)})`);
+      }
+    } else if (materialType === "MIRROR") {
       // ミラーは表面からの光線のみ反射（裏面は透過）
       const dotProduct = dot(localRay.dir, normal);
       

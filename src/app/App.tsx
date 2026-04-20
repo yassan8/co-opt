@@ -1689,7 +1689,13 @@ export default function App() {
         });
       }
 
+      console.log('[RAY-DEBUG] crossBeamResult keys:', crossBeamResult ? Object.keys(crossBeamResult) : 'null');
+      console.log('[RAY-DEBUG] crossBeamResult.success:', crossBeamResult?.success);
+      if (crossBeamResult?.allTracedRays) console.log('[RAY-DEBUG] allTracedRays count:', crossBeamResult.allTracedRays.length, 'success:', crossBeamResult.allTracedRays.filter((r:any)=>r.success).length);
+      if (crossBeamResult?.allCrossBeamRays) console.log('[RAY-DEBUG] allCrossBeamRays count:', crossBeamResult.allCrossBeamRays.length, 'types:', [...new Set(crossBeamResult.allCrossBeamRays.map((r:any)=>r.type))].join(','));
+
       if (!crossBeamResult || crossBeamResult.success === false) {
+        console.warn('[RAY-DEBUG] crossBeamResult failed or null');
         return [];
       }
 
@@ -1705,6 +1711,8 @@ export default function App() {
               objectIndex: Number.isFinite(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : objectIndex,
               originalRay: {
                 ...(ray?.originalRay || {}),
+                type: ray?.originalRay?.type || ray?.type,
+                side: ray?.originalRay?.side || ray?.side,
                 objectIndex: Number.isFinite(Number(ray?.originalRay?.objectIndex))
                   ? Number(ray.originalRay.objectIndex)
                   : (Number.isFinite(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : objectIndex)
@@ -1720,10 +1728,17 @@ export default function App() {
         allRays = crossBeamResult.allTracedRays.map((tracedRay: any, index: number) => {
           const crossRay = crossBeamResult.allCrossBeamRays[index];
           if (crossRay) {
-            tracedRay.type = crossRay.type;
-            tracedRay.beamType = crossRay.beamType;
+            tracedRay.type = tracedRay.type ?? crossRay.type;
+            tracedRay.beamType = tracedRay.beamType ?? crossRay.beamType;
+            tracedRay.side = tracedRay.side ?? crossRay.side;
             tracedRay.objectIndex = tracedRay.objectIndex ?? crossRay.objectIndex;
-            tracedRay.originalRay = tracedRay.originalRay || crossRay;
+            tracedRay.originalRay = {
+              ...(crossRay || {}),
+              ...(tracedRay.originalRay || {}),
+              type: tracedRay.originalRay?.type || crossRay.type,
+              side: tracedRay.originalRay?.side || crossRay.side,
+              objectIndex: tracedRay.originalRay?.objectIndex ?? tracedRay.objectIndex ?? crossRay.objectIndex
+            };
           }
           return tracedRay;
         });
@@ -1747,6 +1762,8 @@ export default function App() {
           objectIndex: inferredObjectIndex,
           originalRay: {
             ...(ray?.originalRay || {}),
+            type: ray?.originalRay?.type || ray?.type,
+            side: ray?.originalRay?.side || ray?.side,
             objectIndex: inferredObjectIndex
           }
         };
@@ -1770,6 +1787,8 @@ export default function App() {
           objectIndex,
           originalRay: {
             ...(r?.originalRay || {}),
+            type: r?.originalRay?.type || r?.type,
+            side: r?.originalRay?.side || r?.side,
             objectIndex
           }
         }));
@@ -1777,6 +1796,7 @@ export default function App() {
         limitedRays.push(...ordered.slice(0, desiredCount));
       });
 
+      console.log('[RAY-DEBUG] collectLegacyCrossRays returning', limitedRays.length, 'rays. Sample type:', limitedRays[0]?.originalRay?.type, 'success:', limitedRays[0]?.success);
       return limitedRays;
     } catch (error) {
       console.error('[RenderWindow] Legacy cross-beam generation failed:', error);
@@ -2204,6 +2224,7 @@ export default function App() {
       }
 
       const legacyCrossRays = await collectLegacyCrossRays(rows, axis);
+      console.log('[RAY-DEBUG] drawCrossSectionView: legacyCrossRays.length=', legacyCrossRays.length, 'drawCrossBeamRays defined=', typeof w.drawCrossBeamRays === 'function', 'sceneForDraw=', !!sceneForDraw);
       if (legacyCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
         w.drawCrossBeamRays(legacyCrossRays, sceneForDraw);
       }
@@ -2302,6 +2323,7 @@ export default function App() {
       }
 
       const legacyCrossRays = await collectLegacyCrossRays(rows, 'BOTH');
+      console.log('[RAY-DEBUG] drawRender3DView: legacyCrossRays.length=', legacyCrossRays.length, 'drawCrossBeamRays defined=', typeof w.drawCrossBeamRays === 'function', 'sceneForDraw=', !!sceneForDraw);
       if (legacyCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
         w.drawCrossBeamRays(legacyCrossRays, sceneForDraw);
       }

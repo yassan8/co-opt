@@ -2122,9 +2122,15 @@ function drawOptimizedRaysFromObjects(opticalSystemRows) {
                         const points = rayPath.map(point => new window.THREE.Vector3(point.x, point.y, point.z));
                         const geometry = new window.THREE.BufferGeometry().setFromPoints(points);
                         const material = new window.THREE.LineBasicMaterial({
-                            color: 0x00ff00 + objIndex * 0x003300  // オブジェクト別に色分け
+                            color: 0x00ff00 + objIndex * 0x003300,  // オブジェクト別に色分け
+                            depthTest: false,
+                            depthWrite: false,
+                            transparent: true,
+                            opacity: 1.0
                         });
                         const line = new window.THREE.Line(geometry, material);
+                        line.renderOrder = 2000;
+                        line.frustumCulled = false;
                         line.userData = {
                             type: 'optical-ray',  // 正確な光線追跡識別子
                             objectId: objIndex,
@@ -3320,17 +3326,19 @@ function drawCrossBeamRays(tracedRays, targetScene) {
     ]);
     // 無限系では周辺光線が 'boundary' として来るケースに対応し事前に型マッピング
     tracedRays.forEach(r => {
-        if (r?.originalRay?.type === 'boundary') {
-            const side = r.originalRay.side || r.side;
-            if (side === 'left') r.originalRay.type = 'left_marginal';
-            else if (side === 'right') r.originalRay.type = 'right_marginal';
-            else if (side === 'upper' || side === 'top') r.originalRay.type = 'upper_marginal';
-            else if (side === 'lower' || side === 'bottom') r.originalRay.type = 'lower_marginal';
+        const originalRay = r?.originalRay || r;
+        if (originalRay?.type === 'boundary') {
+            const side = originalRay.side || r?.side;
+            if (side === 'left') originalRay.type = 'left_marginal';
+            else if (side === 'right') originalRay.type = 'right_marginal';
+            else if (side === 'upper' || side === 'top') originalRay.type = 'upper_marginal';
+            else if (side === 'lower' || side === 'bottom') originalRay.type = 'lower_marginal';
         }
     });
     const filteredRays = tracedRays.filter(r => {
-        const t = r?.originalRay?.type;
-        if (!(r && r.success && t && allowedTypes.has(t))) {
+        const t = String(r?.originalRay?.type || r?.type || '').trim().toLowerCase();
+        const hasUsableTrace = !!(r && (r.success || Array.isArray(r.rayPath) || Array.isArray(r.rayPathToTarget)));
+        if (!(hasUsableTrace && t && allowedTypes.has(t))) {
             return false;
         }
         if (r.fallback) {
@@ -3350,7 +3358,9 @@ function drawCrossBeamRays(tracedRays, targetScene) {
         }
         return true;
     });
+    console.log(`[RAY-DEBUG] drawCrossBeamRays: input=${tracedRays.length}, filtered=${filteredRays.length}`);
     if (filteredRays.length !== tracedRays.length) {
+        console.warn(`[RAY-DEBUG] ${tracedRays.length - filteredRays.length} rays dropped. Dropped types:`, tracedRays.filter(r => !filteredRays.includes(r)).map(r => r?.originalRay?.type || r?.type || 'NO_TYPE').slice(0, 10));
     }
     const fallbackCount = filteredRays.filter(r => r.fallback).length;
     if (fallbackCount > 0) {
@@ -3390,12 +3400,22 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             !rawObjectIndices.includes(0) &&
             rawObjectIndices.every((value) => value >= 1);
 
+        const successRays = tracedRays.filter(r => r.success);
+        console.log(`[RAY-DEBUG] drawCrossBeamRays draw loop: total=${tracedRays.length}, success=${successRays.length}, no-success=${tracedRays.length - successRays.length}`);
+        if (tracedRays.length > 0 && successRays.length === 0) {
+            console.warn('[RAY-DEBUG] ALL rays have success=false! Sample:', JSON.stringify(tracedRays[0]).slice(0, 200));
+        }
         tracedRays.forEach((rayData, index) => {
-            if (!rayData.success) {
+            // success: false でも rayPath が2点以上あれば描画（到達したがフラグが立っていないケース対応）
+            const hasPath = (Array.isArray(rayData.rayPath) && rayData.rayPath.length >= 2) ||
+                            (Array.isArray(rayData.rayPathToTarget) && rayData.rayPathToTarget.length >= 2);
+            if (!rayData.success && !hasPath) {
                 return;
             }
             
-            const rayPath = rayData.rayPath;
+            const rayPath = Array.isArray(rayData.rayPath)
+                ? rayData.rayPath
+                : (Array.isArray(rayData.rayPathToTarget) ? rayData.rayPathToTarget : []);
             if (!rayPath || rayPath.length === 0) {
                 return;
             }
@@ -3414,7 +3434,11 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             const objectPosition = rayData.objectPosition;
 
             // beamType/side の正規化（generator由来の originalRay を尊重）
-            const original = rayData.originalRay || {};
+            const original = {
+                ...(rayData.originalRay || {}),
+                type: rayData.originalRay?.type || rayData.type,
+                side: rayData.originalRay?.side || rayData.side
+            };
             const origType = (original.type || '').toString();
             const origSide = (original.side || '').toString();
             // 既存のbeamTypeが無い場合は推定する

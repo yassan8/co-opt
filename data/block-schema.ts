@@ -50,7 +50,7 @@ function normalizeSurfTypeValue(value: any): string {
   if (key === 'spherical' || key === 'sphere' || key === 'sph') return 'Spherical';
   if (key === 'asphericaleven' || key === 'asphericeven' || key === 'evenasphere' || key === 'evenaspheric') return 'Aspheric even';
   if (key === 'asphericalodd' || key === 'asphericodd' || key === 'oddasphere' || key === 'oddaspheric') return 'Aspheric odd';
-  if (key === 'toric' || key === 'toroidal') return 'Toric';
+  if (key === 'toric' || key === 'toroidal' || key === 'astigmatic' || key === 'anamorphic' || key === 'xypower' || key === 'x-y-power') return 'Toric';
 
   // Fuzzy matches
   if (key.includes('aspher') && key.includes('even')) return 'Aspheric even';
@@ -70,6 +70,57 @@ function normalizeOptionalNumberToRowValue(value: any): string {
     return Number.isFinite(n) ? String(n) : '';
   }
   return '';
+}
+
+function inferThinLensReferenceIndex(material: any, rindex: any): number {
+  const explicitRindex = Number(String(rindex ?? '').trim());
+  if (Number.isFinite(explicitRindex) && explicitRindex > 1.0) return explicitRindex;
+
+  const materialStr = String(material ?? '').trim();
+  if (materialStr !== '') {
+    const numericMaterial = Number(materialStr);
+    if (Number.isFinite(numericMaterial) && numericMaterial > 1.0) return numericMaterial;
+
+    const glass = getGlassDataWithSellmeier(materialStr);
+    if (glass && typeof glass.nd === 'number' && Number.isFinite(glass.nd) && glass.nd > 1.0) {
+      return glass.nd;
+    }
+  }
+
+  // N-BK7 fallback keeps ThinLens numerically useful even before the user chooses a glass.
+  return 1.5168;
+}
+
+function computeThinLensSurfaceRadii({ focalLength, focalLengthX, focalLengthY, material, rindex }: any): { frontRadius: string | number; backRadius: string | number; frontRadiusX: string | number; backRadiusX: string | number; effectiveIndex: number } {
+  const fyNorm = normalizeThicknessToRowValue(focalLengthY ?? focalLength ?? focalLengthX);
+  const fxNorm = normalizeThicknessToRowValue(focalLengthX ?? focalLengthY ?? focalLength);
+  const nd = inferThinLensReferenceIndex(material, rindex);
+
+  const buildRadiusPair = (fNorm: any) => {
+    if (fNorm === 'INF') {
+      return { frontRadius: 'INF', backRadius: 'INF' };
+    }
+    if (typeof fNorm !== 'number' || !Number.isFinite(fNorm) || Math.abs(fNorm) < 1e-12 || !Number.isFinite(nd) || nd <= 1.0) {
+      return { frontRadius: 'INF', backRadius: 'INF' };
+    }
+
+    const curvature = 1 / (2 * (nd - 1.0) * fNorm);
+    return {
+      frontRadius: Math.abs(curvature) < 1e-12 ? 'INF' : String(1 / curvature),
+      backRadius: Math.abs(curvature) < 1e-12 ? 'INF' : String(-1 / curvature),
+    };
+  };
+
+  const yPair = buildRadiusPair(fyNorm);
+  const xPair = buildRadiusPair(fxNorm);
+
+  return {
+    frontRadius: yPair.frontRadius,
+    backRadius: yPair.backRadius,
+    frontRadiusX: xPair.frontRadius,
+    backRadiusX: xPair.backRadius,
+    effectiveIndex: nd
+  };
 }
 
 function blockAsphereLooksNonZero({ surfType, conic, coefs }: any): boolean {
@@ -435,12 +486,13 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
       continue;
     }
 
-    const blockType = block.blockType;
-    if (blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordTrans' && blockType !== 'Mirror' && blockType !== 'SingleSurface' && blockType !== 'ImageSurface') {
+    const blockType = block.blockType === 'ThinLens' ? 'Paraxial' : block.blockType;
+    if (block.blockType === 'ThinLens') block.blockType = 'Paraxial';
+    if (blockType !== 'ObjectSurface' && blockType !== 'ObjectPlane' && blockType !== 'Lens' && blockType !== 'PositiveLens' && blockType !== 'Paraxial' && blockType !== 'Doublet' && blockType !== 'Triplet' && blockType !== 'Gap' && blockType !== 'AirGap' && blockType !== 'Stop' && blockType !== 'CoordTrans' && blockType !== 'Mirror' && blockType !== 'SingleSurface' && blockType !== 'ImageSurface') {
       issues.push({
         severity: 'fatal',
         phase: 'validate',
-        message: `Unsupported blockType: ${blockType} (MVP supports ObjectSurface, ObjectPlane, Lens, SingleSurface, Doublet, Triplet, Gap, Stop, CoordTrans, Mirror, ImageSurface only).`,
+        message: `Unsupported blockType: ${blockType} (MVP supports ObjectSurface, ObjectPlane, Lens, ThinLens, SingleSurface, Doublet, Triplet, Gap, Stop, CoordTrans, Mirror, ImageSurface only).`,
         blockId: block.blockId
       });
       continue;
@@ -597,67 +649,110 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
       }
     }
 
-    if (blockType === 'Lens' || blockType === 'PositiveLens') {
+    if (blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'Paraxial') {
+      const isThinLens = blockType === 'Paraxial';
+      const lensFamilyName = isThinLens ? 'Paraxial' : 'Lens';
+
       const frontRadius = getParamOrVarValue(parameters, variables, 'frontRadius');
       const backRadius = getParamOrVarValue(parameters, variables, 'backRadius');
       const centerThickness = getParamOrVarValue(parameters, variables, 'centerThickness');
+      const focalLength = getParamOrVarValue(parameters, variables, 'focalLength');
+      const focalLengthX = getParamOrVarValue(parameters, variables, 'focalLengthX');
+      const focalLengthY = getParamOrVarValue(parameters, variables, 'focalLengthY');
       const material = getParamOrVarValue(parameters, variables, 'material');
 
-      // Optional asphere parameters (canonical): front/back surfType + conic + coef1..coef10.
-      // These are not required, but when provided they must be well-formed.
-      const frontSurfType = normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, 'frontSurfType'));
-      const backSurfType = normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, 'backSurfType'));
+      // ThinLens now uses X/Y focal lengths and defaults to X/Y power behavior.
+      const thinLensHasXYPower = isThinLens && (
+        (focalLengthX !== undefined && String(focalLengthX ?? '').trim() !== '') ||
+        (focalLengthY !== undefined && String(focalLengthY ?? '').trim() !== '')
+      );
+      const thinLensSurfType = isThinLens
+        ? (normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, 'surfType')) || (thinLensHasXYPower ? 'Toric' : 'Toric'))
+        : '';
+      const frontSurfType = (isThinLens && thinLensSurfType)
+        ? thinLensSurfType
+        : normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, 'frontSurfType'));
+      const backSurfType = isThinLens
+        ? normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, 'backSurfType') || '')
+        : normalizeSurfTypeValue(getParamOrVarValue(parameters, variables, 'backSurfType'));
 
       if (frontSurfType && !ALLOWED_SURF_TYPES.has(frontSurfType)) {
-        issues.push({ severity: 'fatal', phase: 'validate', message: `Lens.frontSurfType must be one of: Spherical, Aspheric even, Aspheric odd, Toric. Got: ${frontSurfType}`, blockId: block.blockId });
+        issues.push({ severity: 'fatal', phase: 'validate', message: `${lensFamilyName}.frontSurfType must be one of: Spherical, Aspheric even, Aspheric odd, Toric. Got: ${frontSurfType}`, blockId: block.blockId });
       }
       if (backSurfType && !ALLOWED_SURF_TYPES.has(backSurfType)) {
-        issues.push({ severity: 'fatal', phase: 'validate', message: `Lens.backSurfType must be one of: Spherical, Aspheric even, Aspheric odd, Toric. Got: ${backSurfType}`, blockId: block.blockId });
+        issues.push({ severity: 'fatal', phase: 'validate', message: `${lensFamilyName}.backSurfType must be one of: Spherical, Aspheric even, Aspheric odd, Toric. Got: ${backSurfType}`, blockId: block.blockId });
+      }
+
+      const hasFrontRadius = !(frontRadius === undefined || String(frontRadius ?? '').trim() === '');
+      const hasBackRadius = !(backRadius === undefined || String(backRadius ?? '').trim() === '');
+      const needsDerivedRadii = isThinLens && (!hasFrontRadius || !hasBackRadius);
+
+      if (needsDerivedRadii) {
+        const focalBase = focalLengthY ?? focalLength ?? focalLengthX;
+        if (focalBase === undefined || String(focalBase ?? '').trim() === '') {
+          issues.push({ severity: 'fatal', phase: 'validate', message: 'ThinLens.focalLengthX or ThinLens.focalLengthY is required when radii are not given.', blockId: block.blockId });
+        } else {
+          const f = normalizeThicknessToRowValue(focalBase);
+          if (typeof f !== 'number' && f !== 'INF') {
+            issues.push({ severity: 'fatal', phase: 'validate', message: `ThinLens focal length must be numeric or INF (got: ${String(focalBase)})`, blockId: block.blockId });
+          } else if (typeof f === 'number' && Math.abs(f) < 1e-12) {
+            issues.push({ severity: 'fatal', phase: 'validate', message: 'ThinLens focal length must be non-zero.', blockId: block.blockId });
+          }
+        }
       }
 
       // Toric front surface validation
       if (frontSurfType === 'Toric') {
-        const frontRadiusX = getParamOrVarValue(parameters, variables, 'frontRadiusX');
-        if (frontRadiusX === undefined) {
-          issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.frontRadiusX is required for Toric front surface.', blockId: block.blockId });
+        const frontRadiusX = isThinLens
+          ? (getParamOrVarValue(parameters, variables, 'radiusX') ?? getParamOrVarValue(parameters, variables, 'frontRadiusX'))
+          : getParamOrVarValue(parameters, variables, 'frontRadiusX');
+        if (!isThinLens && (frontRadiusX === undefined || String(frontRadiusX ?? '').trim() === '')) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: `${lensFamilyName}.radiusX is required for Astigmatic (X/Y power).`, blockId: block.blockId });
         }
-        if (frontRadius === undefined) {
-          issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.frontRadius is required for Toric front surface.', blockId: block.blockId });
+        if (!hasFrontRadius && !needsDerivedRadii) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: `${lensFamilyName}.frontRadius is required for Toric front surface.`, blockId: block.blockId });
         }
-      } else {
-        if (frontRadius === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.frontRadius is required.', blockId: block.blockId });
+      } else if (!hasFrontRadius && !needsDerivedRadii) {
+        issues.push({ severity: 'fatal', phase: 'validate', message: `${lensFamilyName}.frontRadius is required.`, blockId: block.blockId });
       }
 
       // Toric back surface validation
       if (backSurfType === 'Toric') {
-        const backRadiusX = getParamOrVarValue(parameters, variables, 'backRadiusX');
-        if (backRadiusX === undefined) {
-          issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.backRadiusX is required for Toric back surface.', blockId: block.blockId });
+        const backRadiusX = isThinLens
+          ? (getParamOrVarValue(parameters, variables, 'radiusX') ?? getParamOrVarValue(parameters, variables, 'backRadiusX'))
+          : getParamOrVarValue(parameters, variables, 'backRadiusX');
+        if (!isThinLens && (backRadiusX === undefined || String(backRadiusX ?? '').trim() === '')) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: `${lensFamilyName}.backRadiusX is required for Toric back surface.`, blockId: block.blockId });
         }
-        if (backRadius === undefined) {
-          issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.backRadius is required for Toric back surface.', blockId: block.blockId });
+        if (!hasBackRadius && !needsDerivedRadii) {
+          issues.push({ severity: 'fatal', phase: 'validate', message: `${lensFamilyName}.backRadius is required for Toric back surface.`, blockId: block.blockId });
         }
-      } else {
-        if (backRadius === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.backRadius is required.', blockId: block.blockId });
+      } else if (!hasBackRadius && !needsDerivedRadii) {
+        issues.push({ severity: 'fatal', phase: 'validate', message: `${lensFamilyName}.backRadius is required.`, blockId: block.blockId });
       }
-      if (centerThickness === undefined) issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.centerThickness is required.', blockId: block.blockId });
 
-      if (typeof material !== 'string' || material.trim() === '') {
-        issues.push({ severity: 'warning', phase: 'validate', message: 'Lens.material is empty; will default to N-BK7 in expansion.', blockId: block.blockId });
-      } else if (__isNumericMaterialName(material)) {
-        issues.push({
-          severity: 'warning',
-          phase: 'validate',
-          message: `Lens.material is numeric (${material}). Treated as synthetic glass; dispersion may be inaccurate.`,
-          blockId: block.blockId
-        });
-      } else if (!isKnownGlassNameOnly(material)) {
-        issues.push({
-          severity: 'warning',
-          phase: 'validate',
-          message: `Unknown glass name (allowed for imported/legacy designs): ${material}`,
-          blockId: block.blockId
-        });
+      if (!isThinLens && centerThickness === undefined) {
+        issues.push({ severity: 'fatal', phase: 'validate', message: 'Lens.centerThickness is required.', blockId: block.blockId });
+      }
+
+      if (!isThinLens) {
+        if (typeof material !== 'string' || material.trim() === '') {
+          issues.push({ severity: 'warning', phase: 'validate', message: `${lensFamilyName}.material is empty; will default to N-BK7 in expansion.`, blockId: block.blockId });
+        } else if (__isNumericMaterialName(material)) {
+          issues.push({
+            severity: 'warning',
+            phase: 'validate',
+            message: `${lensFamilyName}.material is numeric (${material}). Treated as synthetic glass; dispersion may be inaccurate.`,
+            blockId: block.blockId
+          });
+        } else if (!isKnownGlassNameOnly(material)) {
+          issues.push({
+            severity: 'warning',
+            phase: 'validate',
+            message: `Unknown glass name (allowed for imported/legacy designs): ${material}`,
+            blockId: block.blockId
+          });
+        }
       }
 
       // Future modes: warn but do not fail.
@@ -678,7 +773,7 @@ export function validateBlocksConfiguration(config: any): LoadIssue[] {
       }
 
       // Numeric sanity checks (non-fatal: allow 0/INF mapping later)
-      if (centerThickness !== undefined) {
+      if (!isThinLens && centerThickness !== undefined) {
         const t = normalizeThicknessToRowValue(centerThickness);
         if (t === 'INF') {
           issues.push({
@@ -1428,13 +1523,14 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       return s;
     };
 
-    if (type === 'Lens' || type === 'PositiveLens') {
+    if (type === 'Lens' || type === 'PositiveLens' || type === 'Paraxial') {
+      const isThinLens = type === 'Paraxial';
       const front = createBlankSurfaceRow(rows.length, getLastNonStopRow());
       const back = createBlankSurfaceRow(rows.length + 1, front);
 
-      front._blockType = 'Lens';
+      front._blockType = isThinLens ? 'Paraxial' : 'Lens';
       front._blockId = blockId || null;
-      back._blockType = 'Lens';
+      back._blockType = isThinLens ? 'Paraxial' : 'Lens';
       back._blockId = blockId || null;
 
       // Stable role tags for Surface -> Block reverse mapping (Apply to Design Intent)
@@ -1444,8 +1540,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       // Persisted aperture (semidia) stored in Design Intent.
       // If aperture is not defined, clear inherited semidia to match Design Intent.
       try {
-        const vFront = aperture ? aperture.front : null;
-        const vBack = aperture ? aperture.back : null;
+        const vFront = aperture ? (aperture.front ?? aperture.s1 ?? aperture.semidia) : null;
+        const vBack = aperture ? (isThinLens ? (aperture.back ?? aperture.front ?? aperture.s1 ?? aperture.semidia) : aperture.back) : null;
         if (vFront !== null && vFront !== undefined && String(vFront).trim() !== '') {
           front.semidia = vFront;
         } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 'front')) {
@@ -1453,31 +1549,71 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
         }
         if (vBack !== null && vBack !== undefined && String(vBack).trim() !== '') {
           back.semidia = vBack;
-        } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 'back')) {
+        } else if (!aperture || (!Object.prototype.hasOwnProperty.call(aperture, 'back') && !isThinLens)) {
           back.semidia = '';
         }
       } catch (_) {}
 
-      const frontRadius = getParamOrVarValue(params, vars, 'frontRadius');
-      const backRadius = getParamOrVarValue(params, vars, 'backRadius');
-      const centerThickness = getParamOrVarValue(params, vars, 'centerThickness');
       const material = getParamOrVarValue(params, vars, 'material');
       const rindex = getParamOrVarValue(params, vars, 'rindex');
       const abbe = getParamOrVarValue(params, vars, 'abbe');
+      const focalLength = getParamOrVarValue(params, vars, 'focalLength');
+      const focalLengthX = getParamOrVarValue(params, vars, 'focalLengthX');
+      const focalLengthY = getParamOrVarValue(params, vars, 'focalLengthY');
 
-      // Optional asphere (canonical, per-surface)
-      const frontSurfTypeRaw = getParamOrVarValue(params, vars, 'frontSurfType');
-      const backSurfTypeRaw = getParamOrVarValue(params, vars, 'backSurfType');
-      const frontConicRaw = getParamOrVarValue(params, vars, 'frontConic');
-      const backConicRaw = getParamOrVarValue(params, vars, 'backConic');
-      const frontCoefsRaw = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `frontCoef${i + 1}`));
-      const backCoefsRaw = Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `backCoef${i + 1}`));
+      if (isThinLens) {
+        const thinLensFx = normalizeThicknessToRowValue(focalLengthX ?? focalLength ?? focalLengthY);
+        const thinLensFy = normalizeThicknessToRowValue(focalLengthY ?? focalLength ?? focalLengthX);
+        front._idealThinLens = true;
+        back._idealThinLens = true;
+        front._thinLensFocalLengthX = thinLensFx;
+        front._thinLensFocalLengthY = thinLensFy;
+        back._thinLensFocalLengthX = thinLensFx;
+        back._thinLensFocalLengthY = thinLensFy;
+      }
+
+      let frontRadius = getParamOrVarValue(params, vars, 'frontRadius');
+      let backRadius = getParamOrVarValue(params, vars, 'backRadius');
+      let centerThickness = getParamOrVarValue(params, vars, 'centerThickness');
+      let derivedThinLens: any = null;
+
+      if (isThinLens) {
+        derivedThinLens = computeThinLensSurfaceRadii({ focalLength, focalLengthX, focalLengthY, material, rindex });
+        const hasFrontRadius = !(frontRadius === undefined || String(frontRadius ?? '').trim() === '');
+        const hasBackRadius = !(backRadius === undefined || String(backRadius ?? '').trim() === '');
+        if (!hasFrontRadius) frontRadius = derivedThinLens.frontRadius;
+        if (!hasBackRadius) backRadius = derivedThinLens.backRadius;
+        centerThickness = 0;
+      }
+
+      // ThinLens no longer exposes conic/axis/coef inputs.
+      const thinLensHasXYInputs = isThinLens && (
+        (focalLengthX !== undefined && String(focalLengthX ?? '').trim() !== '') ||
+        (focalLengthY !== undefined && String(focalLengthY ?? '').trim() !== '') ||
+        (getParamOrVarValue(params, vars, 'radiusX') !== undefined && String(getParamOrVarValue(params, vars, 'radiusX') ?? '').trim() !== '')
+      );
+      const thinSurfTypeRaw = isThinLens ? (getParamOrVarValue(params, vars, 'surfType') || (thinLensHasXYInputs ? 'Toric' : 'Toric')) : getParamOrVarValue(params, vars, 'surfType');
+      const thinConicRaw = isThinLens ? '' : getParamOrVarValue(params, vars, 'conic');
+      const thinCoefsRaw = isThinLens ? Array.from({ length: 10 }, () => '') : Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `coef${i + 1}`));
+
+      const frontSurfTypeRaw = isThinLens ? thinSurfTypeRaw : getParamOrVarValue(params, vars, 'frontSurfType');
+      const backSurfTypeRaw = isThinLens
+        ? (normalizeSurfTypeValue(thinSurfTypeRaw) === 'Toric' ? thinSurfTypeRaw : getParamOrVarValue(params, vars, 'backSurfType'))
+        : getParamOrVarValue(params, vars, 'backSurfType');
+      const frontConicRaw = isThinLens ? thinConicRaw : getParamOrVarValue(params, vars, 'frontConic');
+      const backConicRaw = isThinLens ? thinConicRaw : getParamOrVarValue(params, vars, 'backConic');
+      const frontCoefsRaw = isThinLens
+        ? thinCoefsRaw
+        : Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `frontCoef${i + 1}`));
+      const backCoefsRaw = isThinLens
+        ? (normalizeSurfTypeValue(thinSurfTypeRaw) === 'Toric' ? thinCoefsRaw : Array.from({ length: 10 }, () => ''))
+        : Array.from({ length: 10 }, (_, i) => getParamOrVarValue(params, vars, `backCoef${i + 1}`));
       
       // Toric parameters (radiusX for tangential, regular radius used for sagittal)
-      const frontRadiusXRaw = getParamOrVarValue(params, vars, 'frontRadiusX');
-      const frontAxisRaw = getParamOrVarValue(params, vars, 'frontAxis');
-      const backRadiusXRaw = getParamOrVarValue(params, vars, 'backRadiusX');
-      const backAxisRaw = getParamOrVarValue(params, vars, 'backAxis');
+      const frontRadiusXRaw = isThinLens ? (getParamOrVarValue(params, vars, 'radiusX') ?? derivedThinLens?.frontRadiusX) : getParamOrVarValue(params, vars, 'frontRadiusX');
+      const frontAxisRaw = isThinLens ? 0 : getParamOrVarValue(params, vars, 'frontAxis');
+      const backRadiusXRaw = isThinLens ? (getParamOrVarValue(params, vars, 'radiusX') ?? derivedThinLens?.backRadiusX) : getParamOrVarValue(params, vars, 'backRadiusX');
+      const backAxisRaw = isThinLens ? 0 : getParamOrVarValue(params, vars, 'backAxis');
 
 
 
@@ -1489,12 +1625,14 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
       const usedDefaultMaterial = !materialStr;
       if (usedDefaultMaterial) {
         front.material = 'N-BK7';
-        issues.push({
-          severity: 'warning',
-          phase: 'expand',
-          message: 'Lens.material was empty; defaulting to N-BK7.',
-          blockId
-        });
+        if (!isThinLens) {
+          issues.push({
+            severity: 'warning',
+            phase: 'expand',
+            message: 'Lens.material was empty; defaulting to N-BK7.',
+            blockId
+          });
+        }
       } else {
         front.material = materialStr;
       }
@@ -1512,8 +1650,8 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
 
       applyDerivedGlassDisplay(front);
 
-      const frontForceAsphere = hasVFlag(vars, 'frontConic') || hasAnyCoefV(vars, 'frontCoef');
-      const backForceAsphere = hasVFlag(vars, 'backConic') || hasAnyCoefV(vars, 'backCoef');
+      const frontForceAsphere = isThinLens ? false : (hasVFlag(vars, 'frontConic') || hasAnyCoefV(vars, 'frontCoef'));
+      const backForceAsphere = isThinLens ? false : (hasVFlag(vars, 'backConic') || hasAnyCoefV(vars, 'backCoef'));
 
       applyAsphereFieldsFromParams(front, frontSurfTypeRaw, frontConicRaw, frontCoefsRaw, frontRadiusXRaw, undefined, frontAxisRaw, frontForceAsphere);
 

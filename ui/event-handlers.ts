@@ -3180,8 +3180,8 @@ function __coopt_applyPopupCrossSectionLensFill(options: {
             return;
         }
 
-        if (ud.isRayLine || ud.type === 'ray') {
-            child.renderOrder = Math.max(Number(child.renderOrder) || 0, 1300);
+        if (ud.isRayLine || ud.type === 'ray' || ud.type === 'optical-ray') {
+            child.renderOrder = Math.max(Number(child.renderOrder) || 0, 100000);
             if (child.material) {
                 const materials = Array.isArray(child.material) ? child.material : [child.material];
                 materials.forEach((mat: any) => {

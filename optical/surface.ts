@@ -566,10 +566,11 @@ export function drawLensSurface(scene, params, mode = "even", segments = 100, zO
   }
 
   // すべてのパラメータを数値型で渡す（ここが重要！）
+  const isIdealThinLens = __coopt_isIdealThinLensSurface(params);
   const paramsForZ = {
     ...params,
-    radius: radiusNum,
-    conic: Number(params.conic) || 0,
+    radius: isIdealThinLens ? 1e18 : radiusNum,
+    conic: isIdealThinLens ? 0 : (Number(params.conic) || 0),
     coef1: Number(params.coef1) || 0,
     coef2: Number(params.coef2) || 0,
     coef3: Number(params.coef3) || 0,
@@ -594,7 +595,7 @@ export function drawLensSurface(scene, params, mode = "even", segments = 100, zO
       const r = (semidia * j) / segments;
       const x = r * Math.cos(theta);
       const y = r * Math.sin(theta);
-      let z = asphericSurfaceZ(r, paramsForZ, mode);
+      let z = isIdealThinLens ? 0 : asphericSurfaceZ(r, paramsForZ, mode);
       if (!isFinite(z)) z = 0;
       
       // 座標ブレーク変換を適用（{0,0,0}中心で回転）
@@ -745,10 +746,11 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
   }
 
   // すべてのパラメータを数値型で渡す
+  const isIdealThinLens = __coopt_isIdealThinLensSurface(params);
   const paramsForZ = {
     ...params,
-    radius: radiusNum,
-    conic: Number(params.conic) || 0,
+    radius: isIdealThinLens ? 1e18 : radiusNum,
+    conic: isIdealThinLens ? 0 : (Number(params.conic) || 0),
     coef1: Number(params.coef1) || 0,
     coef2: Number(params.coef2) || 0,
     coef3: Number(params.coef3) || 0,
@@ -784,7 +786,7 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
       for (let ix = 0; ix <= segments; ix++) {
         const x = -halfW + (2 * halfW * ix / segments);
         const r = Math.sqrt(x * x + y * y);
-        let z = asphericSurfaceZ(r, paramsForZ, mode);
+        let z = isIdealThinLens ? 0 : asphericSurfaceZ(r, paramsForZ, mode);
         if (!isFinite(z)) z = 0;
 
         let vertex = new THREE_CTX.Vector3(x, y, z);
@@ -816,7 +818,7 @@ export function drawLensSurfaceWithOrigin(scene, params, origin = {x: 0, y: 0, z
         const r = (semidia * j) / segments;
         const x = r * Math.cos(theta);
         const y = r * Math.sin(theta);
-        let z = asphericSurfaceZ(r, paramsForZ, mode);
+        let z = isIdealThinLens ? 0 : asphericSurfaceZ(r, paramsForZ, mode);
         if (!isFinite(z)) z = 0;
         
         // 座標変換を適用（回転行列と原点オフセット）
@@ -1067,7 +1069,8 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
   // 非球面・トーリック面パラメータを準備
   let asphericParams = null;
   let toricParams = null;
-  const isToric = surf && surf.surfType === 'Toric';
+  const isIdealThinLens = __coopt_isIdealThinLensSurface(surf);
+  const isToric = surf && surf.surfType === 'Toric' && !isIdealThinLens;
   
   if (isToric) {
     // Toric surface parameters
@@ -1114,7 +1117,9 @@ export function drawSemidiaRingWithOriginAndSurface(scene, semidia = 20, segment
     
     // 各点でsagを計算
     let sagZ = 0;
-    if (toricParams) {
+    if (isIdealThinLens) {
+      sagZ = 0;
+    } else if (toricParams) {
       // Toric surface: use x, y coordinates directly
       sagZ = toricSurfaceZ(x, y, toricParams);
       if (!isFinite(sagZ)) {
@@ -1208,7 +1213,8 @@ export function drawRectApertureWithOriginAndSurface(scene, width = 20, height =
   let asphericParams = null;
   let toricParams = null;
   let asphereMode = 'even';
-  const isToric = surf && surf.surfType === 'Toric';
+  const isIdealThinLens = __coopt_isIdealThinLensSurface(surf);
+  const isToric = surf && surf.surfType === 'Toric' && !isIdealThinLens;
   
   if (isToric) {
     // Toric surface parameters
@@ -1253,7 +1259,9 @@ export function drawRectApertureWithOriginAndSurface(scene, width = 20, height =
   const positions = [];
   const pushPoint = (x, y) => {
     let sagZ = 0;
-    if (toricParams) {
+    if (isIdealThinLens) {
+      sagZ = 0;
+    } else if (toricParams) {
       // Toric surface: use x, y coordinates directly
       sagZ = toricSurfaceZ(x, y, toricParams);
       if (!isFinite(sagZ)) sagZ = 0;
@@ -1518,6 +1526,25 @@ function applyMatrixToVector(matrix, vector) {
   );
 }
 
+function __coopt_isThinLensProfileSurface(surf) {
+  if (!surf || typeof surf !== 'object') return false;
+  const raw = String(
+    surf._blockType ?? surf.blockType ?? surf.block_type ??
+    surf.params?._blockType ?? surf.params?.blockType ?? surf.params?.block_type ?? ''
+  ).trim().toLowerCase();
+  return raw === 'thinlens' || raw === 'paraxial';
+}
+
+function __coopt_isThinLensProfileBackSurface(surf) {
+  if (!__coopt_isThinLensProfileSurface(surf)) return false;
+  const raw = String(surf._surfaceRole ?? surf.surfaceRole ?? surf.params?._surfaceRole ?? '').trim().toLowerCase();
+  return raw === 'back';
+}
+
+function __coopt_isIdealThinLensSurface(surf) {
+  return !!(surf && (surf._idealThinLens === true || __coopt_isThinLensProfileSurface(surf)));
+}
+
 // surfaces: 面データ配列（各要素に material, params, zOffset などがある想定）
 export function drawLensCrossSection(scene, surfaces, coordinateTransforms = [], mode = "even", segments = 100) {
   // 既存のレンズグループを削除
@@ -1569,6 +1596,15 @@ export function drawLensCrossSection(scene, surfaces, coordinateTransforms = [],
       continue;
     }
     
+    const isThinLens = __coopt_isThinLensProfileSurface(s);
+    const isThinLensBack = __coopt_isThinLensProfileBackSurface(s);
+    if (isThinLensBack) {
+      profilesYZ.push(null);
+      profilesXZ.push(null);
+      zOffsets.push(s.zOffset);
+      continue;
+    }
+
     const mat = String(s.material ?? "").trim().toUpperCase();
     const pointsYZ = [];
     const pointsXZ = [];
@@ -1577,6 +1613,7 @@ export function drawLensCrossSection(scene, surfaces, coordinateTransforms = [],
     const radiusNum = Number(radiusRaw);
     // radiusがINF文字列または数値的に無効なら平面扱い
     const isPlane = (
+      isThinLens ||
       !isFinite(radiusNum) ||
       radiusNum === 0 ||
       String(radiusRaw).toUpperCase() === "INF" ||
@@ -2061,6 +2098,7 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
 
     const __coopt_calculateSurfaceSag = (surf, x, y) => {
       if (!surf) return 0;
+      if (__coopt_isThinLensProfileSurface(surf)) return 0;
 
       const surfTypeNorm = String(surf?.surfType ?? surf?.type ?? '').trim().toLowerCase();
       if (surfTypeNorm === 'toric') {
@@ -2125,6 +2163,11 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
 
         // Stop面は接続線描画の対象外
         if (__coopt_isStopSurface(currentSurf) || __coopt_isStopSurface(nextSurf)) {
+          continue;
+        }
+
+        // ThinLens は理想レンズとして 1 枚の平面のみ表示する
+        if (__coopt_isThinLensProfileSurface(currentSurf) || __coopt_isThinLensProfileSurface(nextSurf)) {
           continue;
         }
         
@@ -2417,6 +2460,10 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
         if (isCB) {
             continue;
         }
+
+        if (__coopt_isThinLensProfileBackSurface(surf)) {
+            continue;
+        }
         
         const semidia = __coopt_getSemidiaMm(surf);
         if (!semidia) {
@@ -2607,6 +2654,7 @@ export function drawConnectionCornerRings3D(scene, rows, surfaceOrigins) {
 
     const currentObjectType = currentSurf?.["object type"] || "";
     if (currentObjectType === "Object") continue;
+    if (__coopt_isThinLensProfileSurface(currentSurf) || __coopt_isThinLensProfileSurface(nextSurf)) continue;
 
     const currentSurfType = String(currentSurf?.surfType || currentSurf?.type || '').trim().toLowerCase();
     const currentObjType = String(currentSurf?.['object type'] || '').trim().toLowerCase();

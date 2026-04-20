@@ -7,6 +7,7 @@ export default function DesignIntentSection() {
           <option value="ObjectPlane">ObjectSurface</option>
           <option value="SingleSurface">SingleSurface</option>
           <option value="Lens">Lens</option>
+          <option value="Paraxial">Paraxial</option>
           <option value="Doublet">Doublet</option>
           <option value="Triplet">Triplet</option>
           <option value="CoordTrans">CoordTrans</option>

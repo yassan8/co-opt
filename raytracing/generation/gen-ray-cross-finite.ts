@@ -19,28 +19,18 @@ const RENDER_RUST_TRACE_OPTIONS = {
     allowNonStrict: true,
     requireWasmRayTracing: false,
     useRustWasm: true,
-    requireRustWasm: true,
+    requireRustWasm: false,
     disableWasmRayTracing: false,
     __renderRayTracingRustPreferred: true
 };
 
-function assertRustRenderTracingAvailable() {
-    try {
-        const rustReady = !!getRustRayTracingWasmSync();
-        if (rustReady) return;
-    } catch (_) {}
-    throw new Error('Rust ray tracing WASM is unavailable for finite cross-beam generation.');
-}
-
 function traceRayForRenderTs(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, maxSurfaceIndex = null) {
-    assertRustRenderTracingAvailable();
     return traceRay(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, RENDER_RUST_TRACE_OPTIONS);
 }
 
 function traceRayHitPointBatchForRenderTs(opticalSystemRows, rays, n0 = 1.0, targetSurfaceIndex = null) {
     const list = Array.isArray(rays) ? rays : [];
     if (!list.length) return [];
-    assertRustRenderTracingAvailable();
     return traceRayHitPointBatch(opticalSystemRows, list, n0, targetSurfaceIndex, RENDER_RUST_TRACE_OPTIONS);
 }
 
@@ -97,6 +87,35 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
     if (!opticalSystemRows || opticalSystemRows.length === 0) {
         return null;
     }
+
+    const radiusFields = [
+        'semidia', 'semiDiameter', 'semi-diameter', 'semi_diameter',
+        'radius', 'aperture', 'diameter', 'semi-dia',
+        'semiDia', 'aper', 'halfDiameter', 'half-diameter',
+        'Clear_Aperture', 'clearAperture', 'clear_aperture'
+    ];
+
+    const readSurfaceCenter = (entry) => {
+        const origin = entry?.origin ?? entry ?? null;
+        return {
+            x: Number.isFinite(Number(origin?.x)) ? Number(origin.x) : 0,
+            y: Number.isFinite(Number(origin?.y)) ? Number(origin.y) : 0,
+            z: Number.isFinite(Number(origin?.z)) ? Number(origin.z) : 0
+        };
+    };
+
+    const readApertureRadius = (surface) => {
+        for (const field of radiusFields) {
+            const value = surface?.[field];
+            if (value !== undefined && value !== null && value !== '') {
+                const numValue = parseFloat(value);
+                if (!isNaN(numValue) && numValue > 0) {
+                    return numValue;
+                }
+            }
+        }
+        return null;
+    };
     
     console.log(`🔍 [findStopSurface] ${opticalSystemRows.length}面から絞りを検索`);
     
@@ -107,31 +126,8 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
             console.log(`✅ [findStopSurface] Surface ${i}: object="${surface.object ?? surface['object type'] ?? surface.type}", semidia="${surface.semidia}"`);
 
             const o = (surfaceOrigins && surfaceOrigins[i]) ? surfaceOrigins[i] : null;
-            const stopCenter = {
-                x: (o && Number.isFinite(o.x)) ? o.x : 0,
-                y: (o && Number.isFinite(o.y)) ? o.y : 0,
-                z: (o && Number.isFinite(o.z)) ? o.z : 0
-            };
-            
-            // Stop面の半径を取得
-            let stopRadius = 10; // デフォルト値
-            const radiusFields = [
-                'semidia', 'semiDiameter', 'semi-diameter', 'semi_diameter',
-                'radius', 'aperture', 'diameter', 'semi-dia',
-                'semiDia', 'aper', 'halfDiameter', 'half-diameter',
-                'Clear_Aperture', 'clearAperture', 'clear_aperture'
-            ];
-            
-            for (const field of radiusFields) {
-                const value = surface[field];
-                if (value !== undefined && value !== null && value !== '') {
-                    const numValue = parseFloat(value);
-                    if (!isNaN(numValue)) {
-                        stopRadius = numValue;
-                        break;
-                    }
-                }
-            }
+            const stopCenter = readSurfaceCenter(o);
+            let stopRadius = readApertureRadius(surface) ?? 10;
             
             if (isNaN(stopRadius)) {
                 stopRadius = 10;
@@ -146,6 +142,32 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
                 origin: o
             };
         }
+    }
+
+    // Fallback for ThinLens or simple systems without an explicit Stop row:
+    // use the first physical aperture-bearing surface as a pseudo-stop so render rays still appear.
+    for (let i = 0; i < opticalSystemRows.length; i++) {
+        const surface = opticalSystemRows[i];
+        if (!surface || isObjectRow(surface) || isCoordTransRow(surface)) continue;
+
+        const objType = String(surface?.['object type'] ?? surface?.object ?? surface?.Object ?? '').trim().toLowerCase();
+        if (objType === 'image') continue;
+
+        const stopRadius = readApertureRadius(surface);
+        if (!(Number.isFinite(stopRadius) && stopRadius > 0)) continue;
+
+        const o = (surfaceOrigins && surfaceOrigins[i]) ? surfaceOrigins[i] : null;
+        const stopCenter = readSurfaceCenter(o);
+        console.warn(`⚠️ [findStopSurface] 明示的なStop面が無いため、Surface ${i} を擬似Stopとして使用します`);
+        return {
+            surface,
+            index: i,
+            center: stopCenter,
+            position: stopCenter,
+            radius: stopRadius,
+            origin: o,
+            pseudoStop: true
+        };
     }
     
     return null;
@@ -2120,6 +2142,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
  * 下位互換性のためのalias
  */
 export function generateCrossBeam(opticalSystemRows, objectPositions, options: any = {}) {
+    console.log('[RAY-DEBUG] generateCrossBeam called. rows:', opticalSystemRows?.length, 'objects:', objectPositions?.length, 'options:', JSON.stringify(options).slice(0, 100));
     return generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions, options);
 }
 

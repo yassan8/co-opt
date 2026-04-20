@@ -59,6 +59,7 @@ function normalizeBlockType(rawType) {
     .replace(/[_-]+/g, '')
     .toLowerCase();
 
+  if (key === 'thinlens' || key === 'thin' || key === 'thin-lens' || key === 'thin_lens') return 'Paraxial';
   if (key === 'positivelens' || key === 'lens' || key === 'singlet') return 'Lens';
   // Gap (legacy alias: AirGap)
   if (key === 'gap' || key === 'airgap' || key === 'air' || key === 'space' || key === 'freespace') return 'Gap';

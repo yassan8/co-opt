@@ -174,7 +174,20 @@ function mutateLensParams(blocks, { radiusScale = 1.0, thicknessScale = 1.0, gap
     const p = isPlainObject(b.parameters) ? b.parameters : null;
     if (!p) continue;
 
-    if (type === 'Lens' || type === 'PositiveLens') {
+    if (type === 'Paraxial') {
+      const f = toNumberOrNull(p.focalLength);
+      const fx = toNumberOrNull(p.focalLengthX);
+      const fy = toNumberOrNull(p.focalLengthY);
+      if (f !== null && Number.isFinite(radiusScale) && Math.abs(radiusScale) > 1e-12) {
+        p.focalLength = f / radiusScale;
+      }
+      if (fx !== null && Number.isFinite(radiusScale) && Math.abs(radiusScale) > 1e-12) {
+        p.focalLengthX = fx / radiusScale;
+      }
+      if (fy !== null && Number.isFinite(radiusScale) && Math.abs(radiusScale) > 1e-12) {
+        p.focalLengthY = fy / radiusScale;
+      }
+    } else if (type === 'Lens' || type === 'PositiveLens') {
       const fr = toNumberOrNull(p.frontRadius);
       const br = toNumberOrNull(p.backRadius);
       const ct = toNumberOrNull(p.centerThickness);
@@ -409,7 +422,7 @@ function estimateCurvatureStepFromBlocks(blocks) {
   for (const b of (Array.isArray(blocks) ? blocks : [])) {
     if (!isPlainObject(b)) continue;
     const type = String(b.blockType ?? '').trim();
-    if (!(type === 'Lens' || type === 'PositiveLens')) continue;
+    if (!(type === 'Lens' || type === 'PositiveLens' || type === 'Paraxial')) continue;
     const p = isPlainObject(b.parameters) ? b.parameters : null;
     if (!p) continue;
     const fr = toNumberOrNull(p.frontRadius);

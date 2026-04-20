@@ -12,6 +12,7 @@ export type BlockType =
   | 'ObjectPlane'
   | 'Lens'
   | 'PositiveLens'
+  | 'Paraxial'
   | 'Doublet'
   | 'Triplet'
   | 'Gap'
@@ -44,11 +45,18 @@ export interface ObjectSurfaceBlock extends BaseBlock {
 }
 
 export interface LensBlock extends BaseBlock {
-  blockType: 'Lens' | 'PositiveLens';
-  frontRadius: number;
-  backRadius: number;
-  centerThickness: number;
-  material: string;
+  blockType: 'Lens' | 'PositiveLens' | 'Paraxial';
+  frontRadius?: number;
+  backRadius?: number;
+  centerThickness?: number;
+  material?: string;
+  focalLength?: number;
+  focalLengthX?: number;
+  focalLengthY?: number;
+  surfType?: SurfaceType;
+  radiusX?: number;
+  conic?: number;
+  axis?: number;
   frontSurfType?: SurfaceType;
   backSurfType?: SurfaceType;
   frontConic?: number;

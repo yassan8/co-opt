@@ -18,10 +18,10 @@ import { setWindowDebugBagValue } from '../../utils/window-debug-bag.ts';
 const RENDER_RUST_TRACE_OPTIONS = {
     allowNonStrict: true,
     requireWasmRayTracing: false,
-    useRustWasm: true,
+    useRustWasm: false,
     requireRustWasm: false,
-    disableWasmRayTracing: false,
-    __renderRayTracingRustPreferred: true
+    disableWasmRayTracing: true,  // レンダリング用: JS実装で確実に追跡
+    __renderRayTracingRustPreferred: false
 };
 
 const REQUIRE_RUST_CROSS_BEAM = (() => {
@@ -44,7 +44,13 @@ function assertRustRenderTracingAvailable() {
 
 function traceRayForRenderTs(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, maxSurfaceIndex = null) {
     assertRustRenderTracingAvailable();
-    return traceRay(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, RENDER_RUST_TRACE_OPTIONS);
+    const __result = traceRay(opticalSystemRows, ray0, n0, debugLog, maxSurfaceIndex, RENDER_RUST_TRACE_OPTIONS);
+    // 一時診断ログ（光線追跡の直接確認）
+    if (debugLog === null && maxSurfaceIndex === null) {
+        const len = Array.isArray(__result) ? __result.length : (__result ? 'obj' : 'null');
+        console.log(`[RAY-DEBUG] traceRayForRenderTs: rows=${opticalSystemRows?.length} result.length=${len}`);
+    }
+    return __result;
 }
 
 function traceRayHitPointForRenderTs(opticalSystemRows, ray0, n0 = 1.0, targetSurfaceIndex = null) {
@@ -657,7 +663,6 @@ function canTraceToFinalSurface(origin, direction, opticalSystemRows, wavelength
             ? targetSurfaceIndex
             : Math.max(0, (opticalSystemRows?.length ?? 1) - 1);
         const effectiveTargetPointIndex = getRayPathPointIndexForSurfaceIndex(opticalSystemRows, effectiveTargetIndex);
-        if (effectiveTargetPointIndex === null) return false;
 
         const rayPath = traceRayForRenderTs(
             opticalSystemRows,
@@ -667,7 +672,11 @@ function canTraceToFinalSurface(origin, direction, opticalSystemRows, wavelength
             effectiveTargetIndex
         );
 
-        return Array.isArray(rayPath) && rayPath.length > effectiveTargetPointIndex;
+        if (!Array.isArray(rayPath) || rayPath.length < 2) return false;
+        // effectiveTargetPointIndex はスキップ行カウントのズレで1ずれることがある。
+        // traceCrossBeamRaysのreachedTarget条件と一致させる: >= で判定（strict > ではなく）
+        if (effectiveTargetPointIndex === null) return true;
+        return rayPath.length >= effectiveTargetPointIndex;
     } catch (error) {
         return false;
     }
@@ -1286,6 +1295,7 @@ function brent(f, a, b, tol = 1e-8, maxIter = 100) {
  * @returns {Object} 生成結果
  */
 export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, options: any = {}) {
+    console.log('[RAY-DEBUG] generateInfiniteSystemCrossBeam called. rows:', opticalSystemRows?.length, 'angles:', objectAngles?.length, 'options:', JSON.stringify(options).slice(0, 100));
     opticalSystemRows = cooptNormalizeOpticalSystemRows(opticalSystemRows);
     
     const {
@@ -1706,6 +1716,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         }
 
         // 7. 光線追跡の実行
+        console.log(`[RAY-DEBUG] Object${objectIndex}: pupilSamplingMode=${pupilSamplingMode} apertureBoundaryRays=${apertureBoundaryRays.length} crossBeamRays=${crossBeamRays.length} types=${crossBeamRays.map(r=>r.type).join(',')}`);
         const tracedRays = traceCrossBeamRays(
             opticalSystemRows,
             crossBeamRays,
@@ -3825,20 +3836,75 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
             }
             
             // 全面まで追跡（描画・評価を兼用）
+            console.log(`[RAY-DEBUG] traceCrossBeamRays ray[${i}] type=${ray.type} pos=(${rayPosition?.x?.toFixed(2)},${rayPosition?.y?.toFixed(2)},${rayPosition?.z?.toFixed(2)}) dir=(${rayDirection?.x?.toFixed(3)},${rayDirection?.y?.toFixed(3)},${rayDirection?.z?.toFixed(3)})`);
             const rayPathFull = traceRayForRenderTs(systemRowsForTrace, {
                 pos: rayPosition,
                 dir: rayDirection,
                 wavelength: wavelength  // 波長を追加
             }, 1.0);  // 全面追跡
 
+            console.log(`[RAY-DEBUG] traceCrossBeamRays ray[${i}] type=${ray.type} rayPathFull=${rayPathFull ? rayPathFull.length : 'null'} effectiveTargetPointIndex=${effectiveTargetPointIndex} effectiveTargetIndex=${effectiveTargetIndex}`);
+
+            // rayPathFull が null なら詳細デバッグモードで再追跡して失敗原因を調べる
+            if (!rayPathFull) {
+                const diagLog: string[] = [];
+                try {
+                    traceRay(systemRowsForTrace, {
+                        pos: rayPosition,
+                        dir: rayDirection,
+                        wavelength: wavelength
+                    }, 1.0, diagLog, null, { ...RENDER_RUST_TRACE_OPTIONS, isDetailedDebug: true });
+                } catch (_) {}
+                const failLines = diagLog.filter(l => l.includes('❌') || l.includes('BLOCK') || l.includes('INTERSECT') || l.includes('APERTURE') || l.includes('NO_INT'));
+                console.warn(`[RAY-DEBUG] ray[${i}] traceRay=null diagLines:`, failLines.length > 0 ? failLines : diagLog.slice(-5));
+
+                // フォールバック: Rust WASM なしで再追跡
+                try {
+                    const fallbackPath = traceRay(systemRowsForTrace, {
+                        pos: rayPosition,
+                        dir: rayDirection,
+                        wavelength: wavelength
+                    }, 1.0, null, null, { allowNonStrict: true, requireWasmRayTracing: false, disableWasmRayTracing: true });
+                    if (Array.isArray(fallbackPath) && fallbackPath.length >= 2) {
+                        console.warn(`[RAY-DEBUG] ray[${i}] fallback (no-WASM) succeeded! length=${fallbackPath.length}`);
+                        // フォールバック成功: このパスを使用
+                        const tracedRayEntry = {
+                            success: true,
+                            rayIndex: i,
+                            originalRay: ray,
+                            rayPath: fallbackPath,
+                            rayPathToTarget: fallbackPath,
+                            beamType: (() => {
+                                const t = ray.type || '';
+                                const s = ray.side || '';
+                                if (t.includes('horizontal') || s === 'left' || s === 'right') return 'horizontal';
+                                if (t.includes('vertical') || s === 'upper' || s === 'lower') return 'vertical';
+                                if (t === 'chief') return 'chief';
+                                return undefined;
+                            })(),
+                            side: ray.side || undefined,
+                            segments: fallbackPath.length - 1
+                        };
+                        tracedRays.push(tracedRayEntry);
+                        continue;
+                    }
+                } catch (_) {}
+            }
+
             const rayPathToTarget = (Array.isArray(rayPathFull) && effectiveTargetPointIndex !== null)
                 ? rayPathFull.slice(0, effectiveTargetPointIndex + 1)
                 : rayPathFull;
             
-            // NOTE: 「何か返った」ではなく「指定面まで到達」を成功とする
-            const reachedTarget = Array.isArray(rayPathFull)
-                && effectiveTargetPointIndex !== null
-                && rayPathFull.length > effectiveTargetPointIndex;
+            // NOTE: 描画用途では、rayPathが2点以上あれば「成功」として扱う。
+            // effectiveTargetPointIndex は理論上の到達点インデックスだが、
+            // Object行/Gap行のスキップカウントのズレで false negative になることがあるため、
+            // 「rayPathFull が2点以上」を主条件とし、ターゲット面判定は補助として使用する。
+            const hasAnyPath = Array.isArray(rayPathFull) && rayPathFull.length >= 2;
+            const reachedTarget = hasAnyPath && (
+                effectiveTargetPointIndex === null ||
+                rayPathFull.length > effectiveTargetPointIndex ||
+                rayPathFull.length >= 2  // 少なくとも2点あれば描画に使用
+            );
 
             if (reachedTarget) {
                 // メタデータ正規化（描画・集計向け）
@@ -3920,6 +3986,7 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
                 }
             }
         } catch (error) {
+            console.error(`[RAY-DEBUG] traceCrossBeamRays ray[${i}] THREW:`, error?.message || error, error?.stack?.split('\n').slice(0,3));
             tracedRays.push({
                 success: false,
                 rayIndex: i,

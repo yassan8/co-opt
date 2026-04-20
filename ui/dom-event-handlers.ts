@@ -823,6 +823,7 @@ function __zmxReadPositiveFiniteSemidiaMm(row: any): number | null {
 
 function __zmxGetApertureKeysByBlockType(blockType: any): string[] {
     const t = String(blockType ?? '').trim();
+    if (t === 'Paraxial') return ['front'];
     if (t === 'Lens' || t === 'PositiveLens') return ['front', 'back'];
     if (t === 'Doublet') return ['s1', 's2', 's3'];
     if (t === 'Triplet') return ['s1', 's2', 's3', 's4'];
@@ -5234,6 +5235,17 @@ function formatBlockPreview(block: any): string {
         return s.includes('aspheric');
     };
     
+    if (type === 'Paraxial') {
+        const flx = pick('focalLengthX') || pick('focalLength');
+        const fly = pick('focalLengthY') || pick('focalLength');
+        const parts = [];
+        if (String(flx) !== '' || String(fly) !== '') {
+            parts.push(`Fx=${String(flx || fly)}`);
+            parts.push(`Fy=${String(fly || flx)}`);
+        }
+        return parts.join(' ');
+    }
+
     if (type === 'Lens' || type === 'PositiveLens') {
         const r1 = pick('frontRadius');
         const r2 = pick('backRadius');
@@ -5553,7 +5565,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             const rawType = String(item?.blockType ?? '').trim();
             const normalized = (() => {
                 const t = (rawType === 'ObjectPlane') ? 'ObjectSurface' : rawType;
-                if (t === 'PositiveLens') return 'lens';
+                if (t === 'PositiveLens' || t === 'Paraxial') return 'lens';
                 if (t === 'AirGap') return 'gap';
                 return String(t || 'unknown').trim().toLowerCase();
             })();
@@ -5577,7 +5589,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         const displayType = (rawType === 'ObjectPlane') ? 'ObjectSurface' : String(b.blockType ?? '(none)');
         const toneType = (() => {
             const normalized = (rawType === 'ObjectPlane') ? 'ObjectSurface' : rawType;
-            if (normalized === 'PositiveLens') return 'lens';
+            if (normalized === 'PositiveLens' || normalized === 'Paraxial') return 'lens';
             if (normalized === 'AirGap') return 'gap';
             return String(normalized || 'unknown').trim().toLowerCase();
         })();
@@ -5804,6 +5816,14 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 // chiefRayShiftX/Y/Z は廃止フィールド。表示しない
                 const kl = k.toLowerCase();
                 if (kl === 'chiefrayshiftx' || kl === 'chiefrayshifty' || kl === 'chiefrayshiftz') return false;
+                if (blockType === 'Paraxial') {
+                    if (kl === 'material' || kl === 'abbe' || kl === 'vd' || kl === 'nd' || kl === 'rindex' || kl === 'bending') return false;
+                    if (kl === 'frontradius' || kl === 'backradius' || kl === 'centerthickness' || kl === 'radiusx') return false;
+                    if (kl === 'focallength') return false;
+                    if (kl === 'conic' || kl === 'axis' || /^coef\d+$/.test(kl)) return false;
+                    if (kl === 'backsurftype' || kl === 'backconic' || /^backcoef\d+$/.test(kl)) return false;
+                    if (kl === 'frontsurftype' || kl === 'frontconic' || /^frontcoef\d+$/.test(kl)) return false;
+                }
                 return true;
             });
             if ((blockType === 'Gap' || blockType === 'AirGap') && !allParamKeys.includes('material')) {
@@ -5825,6 +5845,11 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     const coefKey = `coef${i}`;
                     if (!allParamKeys.includes(coefKey)) allParamKeys.push(coefKey);
                 }
+            }
+            if (blockType === 'Paraxial') {
+                if (!allParamKeys.includes('surfType')) allParamKeys.push('surfType');
+                if (!allParamKeys.includes('focalLengthX')) allParamKeys.push('focalLengthX');
+                if (!allParamKeys.includes('focalLengthY')) allParamKeys.push('focalLengthY');
             }
             // For Lens and other blocks with front/back surfaces, ensure coefficient fields are present
             if (blockType === 'Lens' || blockType === 'PositiveLens' || blockType === 'SingleSurface' || blockType === 'Mirror') {
@@ -5880,6 +5905,11 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
             const getDisplayLabelForKey = (rawLabel: string): string => {
                 const label = String(rawLabel ?? '').trim();
+                if (blockType === 'Paraxial') {
+                    if (label === 'surfType' || label === 'frontSurfType') return 'X/Y Power';
+                    if (label === 'focalLengthX') return 'Focal Length X';
+                    if (label === 'focalLengthY' || label === 'focalLength') return 'Focal Length Y';
+                }
                 if (label === 'frontSurfType') return 's1 Surf Type';
                 if (label === 'backSurfType') return 's2 Surf Type';
                 if (label === 'surf1SurfType') return 's1 Surf Type';
@@ -5964,13 +5994,20 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     select.style.height = '28px';
                     select.style.boxSizing = 'border-box';
 
-                    const options = ['Spherical', 'Aspherical even', 'Aspherical odd', 'Toric'];
+                    const options = (blockType === 'Paraxial' && label === 'surfType')
+                        ? [{ value: 'Toric', label: 'X/Y power' }]
+                        : [
+                            { value: 'Spherical', label: 'Spherical' },
+                            { value: 'Aspherical even', label: 'Aspherical even' },
+                            { value: 'Aspherical odd', label: 'Aspherical odd' },
+                            { value: 'Toric', label: 'Astigmatic (X/Y power)' }
+                        ];
                     const currentValue = String(value || 'Spherical');
 
-                    options.forEach(optionValue => {
+                    options.forEach(({ value: optionValue, label: optionLabel }) => {
                         const option = document.createElement('option');
                         option.value = optionValue;
-                        option.textContent = optionValue;
+                        option.textContent = optionLabel;
                         if (optionValue === currentValue) {
                             option.selected = true;
                         }
@@ -7007,6 +7044,15 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     }
                     
                     let value = (params as any)[key];
+                    if (blockType === 'Paraxial' && key === 'focalLengthX' && (value === undefined || value === null || String(value).trim() === '')) {
+                        value = (params as any).focalLengthY ?? (params as any).focalLength ?? 100;
+                    }
+                    if (blockType === 'Paraxial' && (key === 'focalLengthY' || key === 'focalLength') && (value === undefined || value === null || String(value).trim() === '')) {
+                        value = (params as any).focalLengthX ?? (params as any).focalLength ?? 100;
+                    }
+                    if (blockType === 'Paraxial' && key === 'surfType' && (value === undefined || value === null || String(value).trim() === '')) {
+                        value = 'Toric';
+                    }
                     if (blockType === 'ImageSurface' && key === 'semidiaMode' && (value === undefined || value === null || String(value).trim() === '')) {
                         const opt = String((params as any)?.optimizeSemiDia ?? '').trim().toUpperCase();
                         value = (opt === 'A' || opt === 'AUTO') ? 'Auto' : 'Manual';
@@ -7147,7 +7193,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     }
                 };
 
-                if (blockType === 'Lens' || blockType === 'PositiveLens') {
+                if (blockType === 'Paraxial') {
+                    pickApertureEntry('s1', ['s1', 'front', 'surf1']);
+                } else if (blockType === 'Lens' || blockType === 'PositiveLens') {
                     pickApertureEntry('s1', ['s1', 'front', 'surf1']);
                     pickApertureEntry('s2', ['s2', 'back', 'surf2']);
                 } else if (blockType === 'Doublet') {
@@ -7330,6 +7378,10 @@ export function refreshBlockInspector(): void {
                         const rowBlockType = String(r?._blockType ?? '').trim();
                         if (rowBlockType === 'Gap' || rowBlockType === 'CoordTrans') continue;
                         if (rowBlockType === 'ObjectSurface' || rowBlockType === 'ObjectPlane' || rowBlockType === 'Object') continue;
+                        if (rowBlockType === 'Paraxial') {
+                            if (!countById.has(id)) countById.set(id, 1);
+                            continue;
+                        }
                         countById.set(id, (countById.get(id) || 0) + 1);
                     }
                 }
@@ -7482,6 +7534,7 @@ function __blocks_normalizeBlockType(raw: any): string {
     if (t === 'ObjectPlane') return 'ObjectSurface';
     if (t === 'ImagePlane') return 'ImageSurface';
     if (t === 'AirGap') return 'Gap';
+    if (t === 'ThinLens') return 'Paraxial';
     return t;
 }
 
@@ -7512,6 +7565,18 @@ function __blocks_makeDefaultBlock(blockType: string, blockId: string): any {
         variables: {},
         metadata: { source: 'ui-add' }
     };
+
+    if (type === 'Paraxial') {
+        base.parameters = {
+            surfType: 'Toric',
+            focalLengthX: 100,
+            focalLengthY: 100
+        };
+        base.aperture = {
+            front: 10
+        };
+        return base;
+    }
 
     if (type === 'Lens' || type === 'PositiveLens') {
         base.parameters = {

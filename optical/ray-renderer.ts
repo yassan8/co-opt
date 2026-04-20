@@ -1423,10 +1423,14 @@ export function drawRayWithSegmentColors(rayPath, objectId, rayNumber, scene) {
             color: color,
             linewidth: 2,       // 線の太さを2に調整
             transparent: false, // 透明度を無効にして色を濃く表示
-            opacity: 1.0       // 完全不透明
+            opacity: 1.0,       // 完全不透明
+            depthTest: false,
+            depthWrite: false
         });
         
         const line = new THREE.Line(geometry, material);
+        line.renderOrder = 100000;
+        line.frustumCulled = false;
         line.userData = { 
             type: 'optical-ray',  // Draw Cross光線を識別 
             objectId: objectId, 

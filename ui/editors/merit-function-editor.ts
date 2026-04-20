@@ -3444,6 +3444,8 @@ class MeritFunctionEditor {
                     case 'Lens':
                     case 'PositiveLens':
                         return 2; // front + back
+                    case 'Paraxial':
+                        return 1; // single logical thin-lens surface
                     case 'Doublet':
                         return 3; // front + middle + back
                     case 'Gap':
