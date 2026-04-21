@@ -2569,16 +2569,30 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
         const effectiveTotalLength = effectiveMaxZ - effectiveMinZ;
         const effectiveCenterZ = (effectiveMinZ + effectiveMaxZ) / 2;
 
-        // Use cameraBoundsOverride if provided (from drawn rays)
+        // Use actual Y bounds so the system stays vertically centered.
+        let minY = -systemMaxY;
         let maxY = systemMaxY;
-        let minY = 0;
+        let targetCenterY = 0;
         if (options.cameraBoundsOverride) {
             const cbo = options.cameraBoundsOverride as any;
             if (Number.isFinite(cbo.minY) && Number.isFinite(cbo.maxY)) {
                 minY = cbo.minY;
-                maxY = Math.max(Math.abs(cbo.minY), Math.abs(cbo.maxY));
+                maxY = cbo.maxY;
+                targetCenterY = (cbo.minY + cbo.maxY) / 2;
                 console.log(`[RAY-DEBUG] Using camera bounds override: minY=${minY.toFixed(1)}, maxY=${maxY.toFixed(1)}`);
             }
+        }
+
+        if (!(Number.isFinite(minY) && Number.isFinite(maxY))) {
+            minY = -systemMaxY;
+            maxY = systemMaxY;
+            targetCenterY = 0;
+        }
+
+        if (maxY < minY) {
+            const swap = minY;
+            minY = maxY;
+            maxY = swap;
         }
 
         const savedBounds = camera?.userData?.__drawCrossOrthoBounds;
@@ -2601,7 +2615,7 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
         }
 
         const marginFactor = 1.1;
-        const visibleHeight = maxY * 2 * marginFactor;
+        const visibleHeight = Math.max((maxY - minY) * marginFactor, 1e-6);
         const visibleWidth = effectiveTotalLength * marginFactor;
 
         if (camera.isOrthographicCamera) {
@@ -2631,7 +2645,7 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
 
         const cameraDistance = 300;
         const targetX = targetOverride ? targetOverride.x : 0;
-        const targetY = targetOverride ? targetOverride.y : (minY + maxY) / 2;
+        const targetY = targetOverride ? targetOverride.y : targetCenterY;
         const targetZ = targetOverride ? targetOverride.z : systemCenterZ;
 
         camera.position.set(targetX - cameraDistance, targetY, targetZ);

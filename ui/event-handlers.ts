@@ -5,6 +5,30 @@ declare global {
   }
 }
 const w: Record<string, any> = window;
+const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
+
+function readRenderShowDesignIntentLabelsEnabled(): boolean {
+    try {
+        const raw = String(localStorage.getItem(RENDER_SHOW_LABELS_KEY) ?? '').trim().toLowerCase();
+        if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
+        if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
+    } catch (_) {}
+
+    try {
+        const openerRef = window.opener as any;
+        const raw = String(openerRef?.localStorage?.getItem?.(RENDER_SHOW_LABELS_KEY) ?? '').trim().toLowerCase();
+        if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
+        if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
+    } catch (_) {}
+
+    try {
+        if (typeof w.__cooptRenderShowDesignIntentLabels === 'boolean') {
+            return !!w.__cooptRenderShowDesignIntentLabels;
+        }
+    } catch (_) {}
+
+    return false;
+}
 
 import { clearAllOpticalElements } from '../optical/system-renderer.ts';
 import * as THREE_NS from 'three';
@@ -3809,7 +3833,8 @@ function ensurePopupMessageHandler(): void {
                         scene: popupScene,
                         showSemidiaRing: true,
                         showSurfaceOrigins: false,
-                        crossSectionOnly: false
+                        crossSectionOnly: false,
+                        showDesignIntentLabels: readRenderShowDesignIntentLabelsEnabled()
                     });
                 }
                 if (typeof harmonizeSceneGeometry === 'function') {
@@ -4208,7 +4233,8 @@ function ensurePopupMessageHandler(): void {
                                 showSemidiaRing: false,
                                 showSurfaceOrigins: false,
                                 crossSectionOnly: true,
-                                crossSectionDirection: viewAxis
+                                crossSectionDirection: viewAxis,
+                                showDesignIntentLabels: readRenderShowDesignIntentLabelsEnabled()
                             });
                             harmonizeSceneGeometry(popupScene);
                         }
@@ -4418,7 +4444,8 @@ function executeCrossSectionView(options: {
                 scene: sceneRef,
                 opticalSystemData: opticalSystemRows,
                 crossSectionOnly: true,
-                crossSectionDirection: viewAxis
+                crossSectionDirection: viewAxis,
+                showDesignIntentLabels: readRenderShowDesignIntentLabelsEnabled()
             });
         }
 
