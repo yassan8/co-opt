@@ -275,6 +275,7 @@ async function runDesktopNativeOpdMapForPopup(payload: {
     objectIndex?: number;
     gridSize?: number;
     wavelengthUm?: number;
+    surfaceIndex?: number;
     opdDisplayMode?: 'raw' | 'pistonTiltRemoved' | 'pistonTiltDefocusRemoved' | string;
 }) {
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
@@ -315,6 +316,18 @@ async function runDesktopNativeOpdMapForPopup(payload: {
             ? forcedInfinitePupilMode
             : ((String(fieldSetting?.type || '').toLowerCase() === 'angle' && isNonZeroAngleField) ? 'entrance' : undefined);
 
+        const evaluationSurfaceIndex = (() => {
+            const explicit = Number(payload?.surfaceIndex);
+            if (Number.isInteger(explicit) && explicit >= 0) return explicit;
+            let imageIndex = -1;
+            for (let i = 0; i < opticalSystemRows.length; i++) {
+                const row = opticalSystemRows[i] || {};
+                const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+                if (objectType === 'image') imageIndex = i;
+            }
+            return imageIndex >= 0 ? imageIndex : Math.max(0, opticalSystemRows.length - 1);
+        })();
+
         const result = await runNativeOpdMap({
             jobId,
             opticalSystemRows,
@@ -323,6 +336,7 @@ async function runDesktopNativeOpdMapForPopup(payload: {
             objectIndex: Number.isFinite(Number(payload?.objectIndex)) ? Number(payload.objectIndex) : 0,
             gridSize: Number.isFinite(Number(payload?.gridSize)) ? Number(payload.gridSize) : 129,
             wavelengthUm: Number.isFinite(Number(payload?.wavelengthUm)) ? Number(payload.wavelengthUm) : undefined,
+            surfaceIndex: evaluationSurfaceIndex,
             pupilSamplingMode: requestedPupilSamplingMode,
             opdDisplayMode: (payload?.opdDisplayMode as any) || 'pistonTiltRemoved',
         });
@@ -1013,6 +1027,16 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
             }
         } catch (_) {}
 
+        const derived = derivePupilAndFocalLengthMmForAiry(opticalSystemRows || [], wl);
+        const derivedPupilDiameterMm = Number(derived?.pupilDiameterMm);
+        const derivedFocalLengthMm = Number(derived?.focalLengthMm);
+        if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0) && Number.isFinite(derivedPupilDiameterMm) && derivedPupilDiameterMm > 0) {
+            pupilDiameterMm = Math.abs(derivedPupilDiameterMm);
+        }
+        if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0) && Number.isFinite(derivedFocalLengthMm) && derivedFocalLengthMm > 0) {
+            focalLengthMm = Math.abs(derivedFocalLengthMm);
+        }
+
         if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0)) {
             try {
                 const si = Number(findStopSurfaceIndex(opticalSystemRows || []));
@@ -1036,12 +1060,6 @@ async function runDesktopNativeFieldMtfForPopup(payload: {
                     focalLengthMm = Math.abs(fl);
                 }
             } catch (_) {}
-        }
-
-        if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0) || !(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
-            const derived = derivePupilAndFocalLengthMmForAiry(opticalSystemRows || [], wl);
-            if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0)) pupilDiameterMm = Number(derived?.pupilDiameterMm);
-            if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) focalLengthMm = Number(derived?.focalLengthMm);
         }
 
         if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
@@ -1318,10 +1336,8 @@ async function runPortableFieldMtfForPopup(payload: {
     fieldAxisMode?: 'angle' | 'height';
     onProgress?: (evt: { percent?: number; message?: string }) => void;
 }) {
-    if (isTauriRuntime()) {
-        return runDesktopNativeFieldMtfForPopup(payload || {});
-    }
-
+    // Always use the shared field-MTF implementation so the React analysis
+    // page, popup flow, and desktop runtime cannot drift onto different math.
     const { opticalSystemRows, sourceRows, objectRows } = collectPopupRowsFromMainWindow();
     return runNativeFieldMtfMap({
         opticalSystemRows,
@@ -2338,7 +2354,18 @@ async function runDesktopNativeSpotRaytraceForPopup(payload: {
     const explicitObjectRows = Array.isArray(payload?.objectRows) ? payload.objectRows : null;
     const effectiveObjectRows = (explicitObjectRows && explicitObjectRows.length > 0) ? explicitObjectRows : objectRows;
     const effectiveOpticalRows = clonePopupOpticalRowsWithDefocusShift(opticalSystemRows, payload?.defocusMm);
-    const targetSurfaceIndex = Number.isInteger(payload?.surfaceIndex) ? Number(payload.surfaceIndex) : undefined;
+    const findImageSurfaceIndex = (rows: any[]): number | undefined => {
+        if (!Array.isArray(rows) || rows.length === 0) return undefined;
+        for (let i = rows.length - 1; i >= 0; i--) {
+            const row = rows[i] || {};
+            const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+            if (objectType === 'image') return i;
+        }
+        return Math.max(0, rows.length - 1);
+    };
+    const targetSurfaceIndex = Number.isInteger(payload?.surfaceIndex)
+        ? Number(payload.surfaceIndex)
+        : findImageSurfaceIndex(effectiveOpticalRows);
     const tStart = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
     const requestedPattern = payload?.pattern ? String(payload.pattern) : 'annular';
     const airyRadiusUm = computePopupAiryRadiusUm(effectiveOpticalRows, sourceRows);
@@ -6453,13 +6480,14 @@ export function setupAnalysisWindows() {
                         const objTypeRaw = row && (row['object type'] ?? row.objectType ?? row.object ?? '');
                         const surfTypeRaw = row && (row.surfType ?? row['surf type'] ?? row.type ?? '');
                         const surfaceType = objTypeRaw || surfTypeRaw || 'Standard';
-                        const blockType = row && (row._blockType ?? row.blockType ?? '');
-                        const blockRole = row && (row._surfaceRole ?? row.surfaceRole ?? '');
+                        const blockType = String(row && (row._blockType ?? row.blockType ?? '')).trim().toLowerCase();
+                        const blockRole = String(row && (row._surfaceRole ?? row.surfaceRole ?? '')).trim().toLowerCase();
+                        const isParaxialBack = (blockType === 'paraxial' || blockType === 'thinlens') && blockRole === 'back';
                         return (
-                            isObjectType(objTypeRaw) || isObjectType(surfTypeRaw) || isObjectType(surfaceType) ||
+                            isObjectType(objTypeRaw) || isObjectType(surfTypeRaw) || isObjectType(surfaceType) || isObjectType(blockType) ||
                             isCoordTransType(objTypeRaw) || isCoordTransType(surfTypeRaw) || isCoordTransType(surfaceType) ||
                             isGapType(objTypeRaw) || isGapType(surfTypeRaw) || isGapType(surfaceType) ||
-                            isGapType(blockType) || isGapType(blockRole)
+                            isGapType(blockType) || isGapType(blockRole) || isParaxialBack
                         );
                     };
 
@@ -6476,6 +6504,8 @@ export function setupAnalysisWindows() {
                         const objTypeRaw = row && (row['object type'] ?? row.objectType ?? row.object ?? '');
                         const surfTypeRaw = row && (row.surfType ?? row['surf type'] ?? row.type ?? '');
                         const surfaceType = objTypeRaw || surfTypeRaw || 'Standard';
+                        const blockType = String(row && (row._blockType ?? row.blockType ?? '')).trim();
+                        const isParaxialLike = /^(paraxial|thinlens)$/i.test(blockType);
 
                         if (isSkippableRow(row)) continue;
                         surfaceId++;
@@ -6488,6 +6518,7 @@ export function setupAnalysisWindows() {
                         let label = 'Surf ' + surfaceId;
                         if (isStop) label += ' (Stop)';
                         else if (isImage) label += ' (Image)';
+                        else if (isParaxialLike) label += ' (' + (blockType.toLowerCase() === 'paraxial' ? 'Paraxial' : 'ThinLens') + ')';
                         else label += ' (' + surfaceType + ')';
 
                         const opt = document.createElement('option');
@@ -6585,13 +6616,14 @@ export function setupAnalysisWindows() {
                 popupSelect.appendChild(opt);
             }
 
-            // Preserve selection robustly across insert/delete (e.g., Image surface shifts index).
+            // Preserve selection only when the user explicitly changed Surf in the popup.
             const hasValue = (v) => Array.from(popupSelect.options || []).some((opt) => String(opt.value) === String(v));
-            if (prevValue !== '' && hasValue(prevValue)) {
+            const userLockedSurface = !!(popupSelect.dataset && popupSelect.dataset.userLocked === '1');
+            if (userLockedSurface && prevValue !== '' && hasValue(prevValue)) {
                 popupSelect.value = prevValue;
                 return;
             }
-            if (prevKey) {
+            if (userLockedSurface && prevKey) {
                 const opts = Array.from(popupSelect.options || []);
                 const match = opts.find((opt) => normalizeLabel(opt.textContent) === prevKey);
                 if (match) {
@@ -6599,22 +6631,33 @@ export function setupAnalysisWindows() {
                     return;
                 }
             }
-            if (prevWasLast && popupSelect.options && popupSelect.options.length > 0) {
+            if (userLockedSurface && prevWasLast && popupSelect.options && popupSelect.options.length > 0) {
                 popupSelect.selectedIndex = popupSelect.options.length - 1;
                 return;
             }
-            // Fallback: mirror opener selection.
-            popupSelect.value = openerSelect.value;
-            if (String(popupSelect.value || '').trim() === '') {
-                const opts = Array.from(popupSelect.options || []);
-                const image = opts.find((opt) => String(opt.textContent || '').includes('(Image)') && String(opt.value || '').trim() !== '');
-                if (image) popupSelect.value = String(image.value);
-                else {
-                    const last = opts.filter((opt) => String(opt.value || '').trim() !== '').pop();
-                    if (last) popupSelect.value = String(last.value);
-                }
+            // Default Spot Diagram to the Image plane unless the user explicitly locked a
+            // different surface in this popup, or the opener is explicitly on an Image surface.
+            const openerSelectedOption = (openerSelect.selectedOptions && openerSelect.selectedOptions.length > 0)
+                ? openerSelect.selectedOptions[0]
+                : null;
+            const openerIsImage = !!(openerSelectedOption && (
+                (openerSelectedOption.dataset && String(openerSelectedOption.dataset.isImage || '') === '1') ||
+                String(openerSelectedOption.textContent || '').toLowerCase().includes('(image)')
+            ));
+
+            const opts = Array.from(popupSelect.options || []);
+            const image = opts.find((opt) => String(opt.textContent || '').includes('(Image)') && String(opt.value || '').trim() !== '');
+            if (openerIsImage && String(openerSelect.value || '').trim() !== '' && hasValue(openerSelect.value)) {
+                popupSelect.value = openerSelect.value;
+            } else if (image) {
+                popupSelect.value = String(image.value);
+            } else if (String(openerSelect.value || '').trim() !== '' && hasValue(openerSelect.value)) {
+                popupSelect.value = openerSelect.value;
+            } else {
+                const last = opts.filter((opt) => String(opt.value || '').trim() !== '').pop();
+                if (last) popupSelect.value = String(last.value);
             }
-            setPopupDebug('Surf sync: mirrored opener select. openerOptions=' + openerSelect.options.length + ', popupOptions=' + Math.max(0, popupSelect.options.length - 1) + ', selected=' + String(popupSelect.value || '(none)'));
+            setPopupDebug('Surf sync: preferred image/default selection. openerOptions=' + openerSelect.options.length + ', popupOptions=' + Math.max(0, popupSelect.options.length - 1) + ', selected=' + String(popupSelect.value || '(none)'));
         }
 
         function resolvePopupSurfaceRowIndexForNative(popupSelect, selectedOption) {
@@ -6677,13 +6720,14 @@ export function setupAnalysisWindows() {
                     const objTypeRaw = row && (row['object type'] ?? row.objectType ?? row.object ?? '');
                     const surfTypeRaw = row && (row.surfType ?? row['surf type'] ?? row.type ?? '');
                     const surfaceType = objTypeRaw || surfTypeRaw || 'Standard';
-                    const blockType = row && (row._blockType ?? row.blockType ?? '');
-                    const blockRole = row && (row._surfaceRole ?? row.surfaceRole ?? '');
+                    const blockType = String(row && (row._blockType ?? row.blockType ?? '')).trim().toLowerCase();
+                    const blockRole = String(row && (row._surfaceRole ?? row.surfaceRole ?? '')).trim().toLowerCase();
+                    const isParaxialBack = (blockType === 'paraxial' || blockType === 'thinlens') && blockRole === 'back';
                     return (
-                        isObjectType(objTypeRaw) || isObjectType(surfTypeRaw) || isObjectType(surfaceType) ||
+                        isObjectType(objTypeRaw) || isObjectType(surfTypeRaw) || isObjectType(surfaceType) || isObjectType(blockType) ||
                         isCoordTransType(objTypeRaw) || isCoordTransType(surfTypeRaw) || isCoordTransType(surfaceType) ||
                         isGapType(objTypeRaw) || isGapType(surfTypeRaw) || isGapType(surfaceType) ||
-                        isGapType(blockType) || isGapType(blockRole)
+                        isGapType(blockType) || isGapType(blockRole) || isParaxialBack
                     );
                 };
 
@@ -6723,6 +6767,7 @@ export function setupAnalysisWindows() {
 
         function setPopupPattern(pattern) {
             const isAnnular = String(pattern || 'annular') !== 'grid';
+            const normalizedPattern = isAnnular ? 'annular' : 'grid';
 
             const openerAnnular = getOpenerEl('annular-pattern-btn');
             const openerGrid = getOpenerEl('grid-pattern-btn');
@@ -6730,11 +6775,15 @@ export function setupAnalysisWindows() {
             if (!isAnnular && openerGrid) openerGrid.click();
 
             try {
-                import('./spot-diagram-settings-storage.ts').then(({ setSpotDiagramPattern }) => {
-                    try {
-                        setSpotDiagramPattern(isAnnular ? 'annular' : 'grid', { preferOpener: true });
-                    } catch (_) {}
-                });
+                if (window.opener) {
+                    window.opener.__cooptSpotPattern = normalizedPattern;
+                }
+            } catch (_) {}
+            try {
+                window.__cooptSpotPattern = normalizedPattern;
+            } catch (_) {}
+            try {
+                localStorage.setItem('spotDiagramPattern', normalizedPattern);
             } catch (_) {}
         }
 
@@ -6745,6 +6794,13 @@ export function setupAnalysisWindows() {
                 if (popupPattern && popupPattern.dataset) popupPattern.dataset.userLocked = '1';
             } catch (_) {}
             setPopupPattern(v);
+        });
+
+        document.getElementById('popup-surface-number-select').addEventListener('change', () => {
+            try {
+                const popupSurface = document.getElementById('popup-surface-number-select');
+                if (popupSurface && popupSurface.dataset) popupSurface.dataset.userLocked = '1';
+            } catch (_) {}
         });
 
         document.getElementById('popup-show-spot-diagram-btn').addEventListener('click', async () => {
@@ -8314,6 +8370,53 @@ export function setupAnalysisWindows() {
                 if ((j + 1) % 10 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
             }
 
+            const realGridColor = getWavelengthColorLocal(Number(meta.wavelength || 0.5876));
+
+            for (let i = 0; i < gridSize; i++) {
+                const rowX = [];
+                const rowY = [];
+                for (let j = 0; j < gridSize; j++) {
+                    const idx = i * gridSize + j;
+                    const x = realGrid.x[idx];
+                    const y = realGrid.y[idx];
+                    rowX.push((x !== null && x !== undefined && isFinite(x)) ? x : null);
+                    rowY.push((y !== null && y !== undefined && isFinite(y)) ? y : null);
+                }
+                traces.push({
+                    x: rowX,
+                    y: rowY,
+                    mode: 'lines',
+                    line: { color: realGridColor, width: 1.2 },
+                    showlegend: i === 0,
+                    name: i === 0 ? 'Real Grid (λ=' + Number(meta.wavelength || 0.5876).toFixed(4) + ' μm)' : undefined,
+                    hoverinfo: 'skip',
+                    connectgaps: false,
+                    type: 'scatter',
+                });
+            }
+
+            for (let j = 0; j < gridSize; j++) {
+                const colX = [];
+                const colY = [];
+                for (let i = 0; i < gridSize; i++) {
+                    const idx = i * gridSize + j;
+                    const x = realGrid.x[idx];
+                    const y = realGrid.y[idx];
+                    colX.push((x !== null && x !== undefined && isFinite(x)) ? x : null);
+                    colY.push((y !== null && y !== undefined && isFinite(y)) ? y : null);
+                }
+                traces.push({
+                    x: colX,
+                    y: colY,
+                    mode: 'lines',
+                    line: { color: realGridColor, width: 1.2 },
+                    showlegend: false,
+                    hoverinfo: 'skip',
+                    connectgaps: false,
+                    type: 'scatter',
+                });
+            }
+
             const realX = [];
             const realY = [];
             const totalPoints = Math.max(1, Array.isArray(realGrid.x) ? realGrid.x.length : 0);
@@ -8335,11 +8438,16 @@ export function setupAnalysisWindows() {
                 y: realY,
                 mode: 'markers',
                 marker: {
-                    color: getWavelengthColorLocal(Number(meta.wavelength || 0.5876)),
-                    size: 4,
+                    color: realGridColor,
+                    size: 6,
                     symbol: 'circle',
-                    opacity: 0.8,
+                    opacity: 0.9,
+                    line: {
+                        width: 0.8,
+                        color: '#333333'
+                    },
                 },
+                showlegend: false,
                 name: 'Real Positions (λ=' + Number(meta.wavelength || 0.5876).toFixed(4) + ' μm)',
                 hovertemplate: 'Real: (%{x:.3f}, %{y:.3f}) mm<extra></extra>',
                 type: 'scatter',
@@ -9000,6 +9108,61 @@ export function setupAnalysisWindows() {
             if (popupRemovePtd) popupRemovePtd.checked = !!(openerRemovePtd && openerRemovePtd.checked);
         }
 
+        function isIdealParaxialOnlySystem() {
+            try {
+                const opener = window.opener || null;
+                const rows = (opener && typeof opener.getOpticalSystemRows === 'function')
+                    ? opener.getOpticalSystemRows()
+                    : [];
+                if (!Array.isArray(rows) || rows.length === 0) return false;
+
+                const normalize = (value) => String(value ?? '').trim().toLowerCase();
+                const compact = (value) => normalize(value).replace(/[\s_-]+/g, '');
+                let hasIdealParaxial = false;
+
+                for (const row of rows) {
+                    if (!row || typeof row !== 'object') continue;
+
+                    const objectType = compact(row['object type'] ?? row.objectType ?? row.object ?? '');
+                    const surfType = compact(row.surfType ?? row['surf type'] ?? row.type ?? row.surfaceType ?? '');
+                    const blockType = compact(row._blockType ?? row.blockType ?? '');
+                    const kind = compact(row.kind ?? '');
+
+                    const isIdealParaxial = (
+                        blockType === 'paraxial'
+                        || blockType === 'thinlens'
+                        || surfType === 'thinlens'
+                        || Number.isFinite(Number(row._thinLensFocalLengthX))
+                        || Number.isFinite(Number(row._thinLensFocalLengthY))
+                    );
+
+                    if (isIdealParaxial) {
+                        hasIdealParaxial = true;
+                        continue;
+                    }
+
+                    const isPassiveRow = (
+                        objectType === 'object'
+                        || objectType === 'image'
+                        || objectType === 'stop'
+                        || surfType === 'stop'
+                        || surfType === 'gap'
+                        || surfType === 'airgap'
+                        || blockType === 'gap'
+                        || blockType === 'coordbreak'
+                        || kind === 'gap'
+                    );
+
+                    if (isPassiveRow) continue;
+                    return false;
+                }
+
+                return hasIdealParaxial;
+            } catch (_) {
+                return false;
+            }
+        }
+
         function resizePlot() {
             try {
                 const plotly = window.Plotly;
@@ -9092,6 +9255,12 @@ export function setupAnalysisWindows() {
             const popupGrid = document.getElementById('popup-wavefront-grid-size-select');
             const popupZernikeFit = document.getElementById('popup-zernike-fit-checkbox');
             const popupRemovePtd = document.getElementById('popup-opd-remove-ptd-checkbox');
+
+            try {
+                if (popupRemovePtd && isIdealParaxialOnlySystem()) {
+                    opdStageTrace.push('Ideal Paraxial detected', 'Keeping the selected OPD mode so image-plane defocus remains visible.');
+                }
+            } catch (_) {}
 
             try {
                 if (!popupObject) {
@@ -12076,6 +12245,52 @@ export function setupAnalysisWindows() {
                     let nyquistGlobal = 0;
                     const selectedObjectIndex = Number.isFinite(objectIndex) ? objectIndex : 0;
 
+                    const isIdealParaxialOnlyPopup = (rows: any[]) => {
+                        if (!Array.isArray(rows) || rows.length === 0) return false;
+                        let hasIdeal = false;
+                        for (const row of rows) {
+                            if (!row || typeof row !== 'object') continue;
+                            const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+                            const surfType = String(row?.surfType ?? row?.type ?? row?.surfaceType ?? '').trim().toLowerCase();
+                            const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+                            const isIdeal = (
+                                blockType === 'paraxial' || blockType === 'thinlens' || surfType === 'thinlens'
+                                || Number.isFinite(Number(row?._thinLensFocalLengthX))
+                                || Number.isFinite(Number(row?._thinLensFocalLengthY))
+                            );
+                            if (isIdeal) { hasIdeal = true; continue; }
+                            const isPassive = (
+                                objectType === '' || objectType === 'object' || objectType === 'image' || objectType === 'stop'
+                                || surfType === 'gap' || surfType === 'air gap'
+                                || blockType === 'gap' || blockType === 'air gap'
+                                || surfType === 'coordinate break' || surfType === 'coordbrk'
+                                || blockType === 'coordinate break' || blockType === 'coordbrk'
+                            );
+                            if (isPassive) continue;
+                            return false;
+                        }
+                        return hasIdeal;
+                    };
+                    const estimateFiniteGridRms = (grid) => {
+                        if (!Array.isArray(grid) || grid.length === 0) return NaN;
+                        let sumSq = 0;
+                        let count = 0;
+                        for (const row of grid) {
+                            if (!Array.isArray(row)) continue;
+                            for (const value of row) {
+                                const n = Number(value);
+                                if (!Number.isFinite(n)) continue;
+                                sumSq += n * n;
+                                count += 1;
+                            }
+                        }
+                        return count > 0 ? Math.sqrt(sumSq / count) : NaN;
+                    };
+                    const opticalRowsForIdealCheck = (typeof opener.getOpticalSystemRows === 'function')
+                        ? (opener.getOpticalSystemRows(opener.tableOpticalSystem) || [])
+                        : [];
+                    const idealParaxialSystem = isIdealParaxialOnlyPopup(opticalRowsForIdealCheck);
+
                     for (let wli = 0; wli < wavelengthList.length; wli++) {
                         const wl = wavelengthList[wli];
                         const titleNm = (wl * 1000).toFixed(1);
@@ -12117,6 +12332,12 @@ export function setupAnalysisWindows() {
                                 ampGrid[iy][ix] = 1.0;
                             }
                         }
+
+                        const currentWavefrontRms = estimateFiniteGridRms(displayOpdGrid);
+                        const forceIdealParaxialMtf = idealParaxialSystem
+                            && opdDisplayMode !== 'pistonTiltDefocusRemoved'
+                            && Number.isFinite(currentWavefrontRms)
+                            && currentWavefrontRms <= 2e-2;
 
                         const opticalRows = (typeof opener.getOpticalSystemRows === 'function')
                             ? (opener.getOpticalSystemRows(opener.tableOpticalSystem) || [])
@@ -12198,10 +12419,92 @@ export function setupAnalysisWindows() {
                         });
 
                         const freq = Array.isArray(mtfResp?.frequencyAxis) ? mtfResp.frequencyAxis : [];
-                        const tan = Array.isArray(mtfResp?.mtfTangential) ? mtfResp.mtfTangential : [];
-                        const sag = Array.isArray(mtfResp?.mtfSagittal) ? mtfResp.mtfSagittal : [];
+                        let tan = Array.isArray(mtfResp?.mtfTangential) ? mtfResp.mtfTangential : [];
+                        let sag = Array.isArray(mtfResp?.mtfSagittal) ? mtfResp.mtfSagittal : [];
                         if (!freq.length || !tan.length || !sag.length) {
                             throw new Error('Native Rust MTF result does not contain valid curves');
+                        }
+
+                        // Build the diffraction-limit reference from the same native FFT path
+                        // using a zero-OPD pupil. This keeps the dashed curve consistent with
+                        // the plotted T/S MTF and avoids mismatches from simplified F/# formulas.
+                        let idealDiffCurveForPopup: number[] | null = null;
+                        if (showDiffractionLimit || forceIdealParaxialMtf) {
+                            try {
+                                const zeroOpdGrid = Array.from({ length: s }, () => Array(s).fill(0));
+                                const idealNativePsfResp = await opener.runDesktopNativePsfMapForPopup({
+                                    gridOpd: zeroOpdGrid,
+                                    gridAmplitude: Array.from({ length: s }, (_, iy) => Array.from(ampGrid[iy] || [])),
+                                    pupilMask: Array.from({ length: s }, (_, iy) => Array.from(maskGrid[iy] || [])),
+                                    wavelengthUm: wl,
+                                    pixelSizeUm,
+                                    removeTilt: false,
+                                    zeroPadTo: requestedFftSize,
+                                    recenterIfWrapped: false,
+                                });
+                                const idealMtfResp = await opener.runDesktopNativeMtfMapForPopup({
+                                    psfData: idealNativePsfResp?.psfData,
+                                    pixelSizeUm,
+                                    maxFrequencyLpmm: Number.isFinite(maxFreq) ? maxFreq : undefined,
+                                    points: 121,
+                                });
+                                const idealTan = Array.isArray(idealMtfResp?.mtfTangential) ? idealMtfResp.mtfTangential : [];
+                                const idealSag = Array.isArray(idealMtfResp?.mtfSagittal) ? idealMtfResp.mtfSagittal : [];
+                                if ((idealTan.length === freq.length) || (idealSag.length === freq.length)) {
+                                    idealDiffCurveForPopup = freq.map((_, i) => {
+                                        const tv = Number(idealTan[i]);
+                                        const sv = Number(idealSag[i]);
+                                        if (Number.isFinite(tv) && Number.isFinite(sv)) return Math.max(0, Math.min(1, 0.5 * (tv + sv)));
+                                        if (Number.isFinite(tv)) return Math.max(0, Math.min(1, tv));
+                                        if (Number.isFinite(sv)) return Math.max(0, Math.min(1, sv));
+                                        return null;
+                                    });
+                                    if (idealDiffCurveForPopup.length > 0 && idealDiffCurveForPopup[0] !== null) {
+                                        idealDiffCurveForPopup[0] = 1.0;
+                                    }
+                                }
+                            } catch (_) {
+                                idealDiffCurveForPopup = null;
+                            }
+                        }
+
+                        const clampToIdealEnvelope = (vals: any[]) => vals.map((v, i) => {
+                            const raw = Number(v);
+                            if (!Number.isFinite(raw)) return null;
+                            let clamped = Math.max(0, Math.min(1, raw));
+                            const lim = Number(idealDiffCurveForPopup?.[i]);
+                            if (Number.isFinite(lim)) {
+                                clamped = Math.min(clamped, Math.max(0, Math.min(1, lim)));
+                            }
+                            return clamped;
+                        });
+
+                        if (Array.isArray(idealDiffCurveForPopup) && idealDiffCurveForPopup.length === freq.length) {
+                            tan = clampToIdealEnvelope(tan);
+                            sag = clampToIdealEnvelope(sag);
+                        }
+
+                        if (forceIdealParaxialMtf) {
+                            if (Array.isArray(idealDiffCurveForPopup) && idealDiffCurveForPopup.length === freq.length) {
+                                tan = idealDiffCurveForPopup.slice();
+                                sag = idealDiffCurveForPopup.slice();
+                            } else {
+                                const sym: number[] = [];
+                                for (let i = 0; i < freq.length; i++) {
+                                    const tv = Number(tan[i]);
+                                    const sv = Number(sag[i]);
+                                    let v: number;
+                                    if (Number.isFinite(tv) && Number.isFinite(sv)) v = 0.5 * (tv + sv);
+                                    else if (Number.isFinite(tv)) v = tv;
+                                    else if (Number.isFinite(sv)) v = sv;
+                                    else v = 0;
+                                    sym.push(Math.max(0, Math.min(1, v)));
+                                }
+                                if (sym.length > 0) sym[0] = 1.0;
+                                tan = sym.slice();
+                                sag = sym.slice();
+                                idealDiffCurveForPopup = sym.slice();
+                            }
                         }
 
                         const color = getColorForWavelengthPopup(wl);
@@ -12229,22 +12532,29 @@ export function setupAnalysisWindows() {
 
                         if (showDiffractionLimit) {
                             try {
-                                const fNumber = Math.abs(Number(focalLengthMm)) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
-                                if (Number.isFinite(fNumber) && fNumber > 0) {
-                                    const diffY = [];
-                                    for (let i = 0; i < freq.length; i++) {
-                                        const f = Number(freq[i]);
-                                        const cutoff = 1000.0 / (Math.max(1e-12, wl) * fNumber);
-                                        const nu = f / Math.max(1e-12, cutoff);
-                                        let val = 0;
-                                        if (nu <= 0) val = 1;
-                                        else if (nu >= 1) val = 0;
-                                        else {
-                                            const c = Math.max(-1, Math.min(1, nu));
-                                            val = (2 / Math.PI) * (Math.acos(c) - c * Math.sqrt(Math.max(0, 1 - c * c)));
+                                let diffY: number[] | null = null;
+                                if (Array.isArray(idealDiffCurveForPopup) && idealDiffCurveForPopup.length === freq.length) {
+                                    diffY = idealDiffCurveForPopup.slice();
+                                } else {
+                                    const fNumber = Math.abs(Number(focalLengthMm)) / Math.max(1e-12, Math.abs(Number(pupilDiameterMm)));
+                                    if (Number.isFinite(fNumber) && fNumber > 0) {
+                                        diffY = [];
+                                        for (let i = 0; i < freq.length; i++) {
+                                            const f = Number(freq[i]);
+                                            const cutoff = 1000.0 / (Math.max(1e-12, wl) * fNumber);
+                                            const nu = f / Math.max(1e-12, cutoff);
+                                            let val = 0;
+                                            if (nu <= 0) val = 1;
+                                            else if (nu >= 1) val = 0;
+                                            else {
+                                                const c = Math.max(-1, Math.min(1, nu));
+                                                val = (2 / Math.PI) * (Math.acos(c) - c * Math.sqrt(Math.max(0, 1 - c * c)));
+                                            }
+                                            diffY.push(Number.isFinite(val) ? Math.max(0, Math.min(1, val)) : 0);
                                         }
-                                        diffY.push(Number.isFinite(val) ? Math.max(0, Math.min(1, val)) : 0);
                                     }
+                                }
+                                if (Array.isArray(diffY)) {
                                     traces.push({
                                         x: freq,
                                         y: diffY,
@@ -12581,7 +12891,21 @@ export function setupAnalysisWindows() {
                     return Number.isInteger(n) ? n : fallback;
                 };
                 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-                const selectedSurfaceIndex = undefined;
+                const selectedSurfaceIndex = (() => {
+                    try {
+                        const opticalRows = (typeof opener.getOpticalSystemRows === 'function')
+                            ? (opener.getOpticalSystemRows(opener.tableOpticalSystem) || [])
+                            : [];
+                        for (let i = opticalRows.length - 1; i >= 0; i--) {
+                            const row = opticalRows[i] || {};
+                            const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+                            if (objectType === 'image') return i;
+                        }
+                        return opticalRows.length > 0 ? Math.max(0, opticalRows.length - 1) : undefined;
+                    } catch (_) {
+                        return undefined;
+                    }
+                })();
                 const selectedRayCount = rayEl && rayEl.value !== '' ? parseInt(rayEl.value, 10) : undefined;
                 const selectedRingCount = ringEl && ringEl.value !== '' ? parseInt(ringEl.value, 10) : undefined;
                 const selectedPattern = patternEl ? String(patternEl.value || 'annular') : 'annular';
@@ -12922,6 +13246,14 @@ export function setupAnalysisWindows() {
                                 });
                             }
                         }
+                    }
+
+                    const renderablePointCount = traces.reduce((sum, trace) => {
+                        const xs = Array.isArray(trace?.x) ? trace.x : [];
+                        return sum + xs.filter((v) => Number.isFinite(Number(v))).length;
+                    }, 0);
+                    if (renderablePointCount <= 0) {
+                        throw new Error('Through-Focus Spot produced no plottable spot points on the image surface.');
                     }
 
                     for (const [groupKey, entry] of legendEntries.entries()) {

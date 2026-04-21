@@ -495,8 +495,24 @@ export class WavefrontPlotter {
             return false;
         };
 
-        const displayGrid = Array.isArray(response?.displayOpdGrid) ? response.displayOpdGrid : [];
-        const rawGrid = Array.isArray(response?.rawOpdGrid) ? response.rawOpdGrid : [];
+        const displayGridRaw = Array.isArray(response?.displayOpdGrid) ? response.displayOpdGrid : [];
+        const rawGridRaw = Array.isArray(response?.rawOpdGrid) ? response.rawOpdGrid : [];
+
+        const zeroFiniteInGrid = (src) => {
+            if (!Array.isArray(src)) return src;
+            return src.map((row) => {
+                if (!Array.isArray(row)) return row;
+                return row.map((v) => (Number.isFinite(Number(v)) ? 0 : v));
+            });
+        };
+        const forceIdealZero = !!options?.forceIdealParaxialZero;
+        const displayGrid = forceIdealZero ? zeroFiniteInGrid(displayGridRaw) : displayGridRaw;
+        const rawGrid = forceIdealZero ? zeroFiniteInGrid(rawGridRaw) : rawGridRaw;
+        if (forceIdealZero) {
+            try {
+                console.log('ℹ️ [OPD] Ideal Paraxial/ThinLens-only system: OPD forced to 0 (diffraction limit).');
+            } catch (_) {}
+        }
         const usingDisplayGrid = hasFiniteInGrid(displayGrid);
         const grid = usingDisplayGrid ? displayGrid : rawGrid;
         if (!usingDisplayGrid) {
@@ -782,6 +798,7 @@ export class WavefrontPlotter {
             const wavefrontMap = await this._computeNativeOpdWavefrontMap(opticalSystemRows, fieldSetting, gridSize, {
                 opdDisplayMode: displayMode,
                 onProgress: options?.onProgress || null,
+                forceIdealParaxialZero: !!options?.forceIdealParaxialZero,
             });
 
             if (wavefrontMap?.error) {
@@ -1250,6 +1267,7 @@ export class WavefrontPlotter {
             const wavefrontMap = await this._computeNativeOpdWavefrontMap(opticalSystemRows, fieldSetting, gridSize, {
                 opdDisplayMode: displayMode,
                 onProgress: options?.onProgress || null,
+                forceIdealParaxialZero: !!options?.forceIdealParaxialZero,
             });
             // NOTE: wavefrontMap is large (arrays). Dumping it to console can freeze the UI.
             if (typeof globalThis !== 'undefined' && globalThis.__WAVEFRONT_DEBUG_DUMP === true) {
@@ -1485,14 +1503,15 @@ export class WavefrontPlotter {
         }
     }
 
-    async plotOPDMultiFieldComparisonRust(opticalSystemRows, fieldSettings, wavelength = 0.5876, gridSize = 16) {
+    async plotOPDMultiFieldComparisonRust(opticalSystemRows, fieldSettings, wavelength = 0.5876, gridSize = 16, options = {}) {
         try {
             console.log('🌊 マルチフィールド OPD 比較プロット生成開始... (Rust)');
 
             const traces = [];
             for (const fieldSetting of fieldSettings) {
                 const wavefrontMap = await this._computeNativeOpdWavefrontMap(opticalSystemRows, fieldSetting, gridSize, {
-                    opdDisplayMode: 'pistonTiltRemoved'
+                    opdDisplayMode: 'pistonTiltRemoved',
+                    forceIdealParaxialZero: !!options?.forceIdealParaxialZero,
                 });
 
                 const mapForPlot = wavefrontMap?.display?.opdsInWavelengths
@@ -2447,6 +2466,55 @@ export class WavefrontPlotter {
     }
 }
 
+function isIdealParaxialOnlySystem(opticalSystemRows: any[] = []) {
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
+
+    const normalize = (value: any) => String(value ?? '').trim().toLowerCase();
+    const compact = (value: any) => normalize(value).replace(/[\s_-]+/g, '');
+
+    let hasIdealParaxial = false;
+
+    for (const row of opticalSystemRows) {
+        if (!row || typeof row !== 'object') continue;
+
+        const objectType = compact(row?.['object type'] ?? row?.objectType ?? row?.object ?? '');
+        const surfType = compact(row?.surfType ?? row?.['surf type'] ?? row?.type ?? row?.surfaceType ?? '');
+        const blockType = compact(row?._blockType ?? row?.blockType ?? '');
+        const kind = compact(row?.kind ?? '');
+
+        const isIdealParaxial = (
+            blockType === 'paraxial'
+            || blockType === 'thinlens'
+            || surfType === 'thinlens'
+            || Number.isFinite(Number(row?._thinLensFocalLengthX))
+            || Number.isFinite(Number(row?._thinLensFocalLengthY))
+        );
+
+        if (isIdealParaxial) {
+            hasIdealParaxial = true;
+            continue;
+        }
+
+        const isPassiveRow = (
+            objectType === 'object'
+            || objectType === 'image'
+            || objectType === 'stop'
+            || surfType === 'stop'
+            || surfType === 'gap'
+            || surfType === 'airgap'
+            || blockType === 'gap'
+            || blockType === 'coordbreak'
+            || kind === 'gap'
+        );
+
+        if (isPassiveRow) continue;
+
+        return false;
+    }
+
+    return hasIdealParaxial;
+}
+
 /**
  * 波面収差図表示の統合関数
  * 光学系データを自動取得して波面収差プロットを生成
@@ -2605,7 +2673,16 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
         
         // プロッターを作成
         const plotter = new WavefrontPlotter(options?.containerElement || 'wavefront-container');
-        const opdDisplayMode = options?.opdDisplayMode || 'pistonTiltRemoved';
+        const requestedOpdDisplayMode = options?.opdDisplayMode || 'pistonTiltRemoved';
+        const isIdealParaxialSystem = isIdealParaxialOnlySystem(opticalSystemRows);
+        const opdDisplayMode = requestedOpdDisplayMode;
+        const forceIdealParaxialZero = false;
+
+        try {
+            if (isIdealParaxialSystem && requestedOpdDisplayMode === 'pistonTiltDefocusRemoved') {
+                console.log('ℹ️ [OPD] Ideal Paraxial/ThinLens system detected; defocus removal remains under explicit user control.');
+            }
+        } catch (_) {}
         
         // プロットタイプに応じて描画
         const storeLast = (wavefrontMap) => {
@@ -2686,7 +2763,8 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                         onProgress,
                         opdDisplayMode,
                         wasmFastOnly: options?.wasmFastOnly,
-                        enableHeavyDiagnostics: options?.enableHeavyDiagnostics
+                        enableHeavyDiagnostics: options?.enableHeavyDiagnostics,
+                        forceIdealParaxialZero
                     });
                     storeLast(wavefrontMap);
                     plotResult = wavefrontMap;
@@ -2704,7 +2782,8 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
                         onProgress,
                         opdDisplayMode,
                         wasmFastOnly: options?.wasmFastOnly,
-                        enableHeavyDiagnostics: options?.enableHeavyDiagnostics
+                        enableHeavyDiagnostics: options?.enableHeavyDiagnostics,
+                        forceIdealParaxialZero
                     });
                     storeLast(wavefrontMap);
                     plotResult = wavefrontMap;
@@ -2718,7 +2797,9 @@ export async function showWavefrontDiagram(plotType = 'surface', dataType = 'wav
             case 'multifield':
                 // マルチフィールド比較では全Objectを使用
                 if (dataType === 'opd') {
-                    await plotter.plotOPDMultiFieldComparisonRust(opticalSystemRows, fieldSettings, wavelength, gridSize);
+                    await plotter.plotOPDMultiFieldComparisonRust(opticalSystemRows, fieldSettings, wavelength, gridSize, {
+                        forceIdealParaxialZero
+                    });
                 } else {
                     await plotter.plotMultiFieldComparison(opticalSystemRows, fieldSettings, wavelength, gridSize);
                 }

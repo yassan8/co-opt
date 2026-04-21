@@ -2299,8 +2299,27 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
         const getRayPointAtSurfaceIndex = (rayPath, rows, surfaceIndex) => {
             if (!Array.isArray(rayPath)) return null;
             const pIdx = getRayPathPointIndexForSurfaceIndex(rows, surfaceIndex);
-            if (pIdx === null) return null;
-            if (pIdx >= 0 && pIdx < rayPath.length) return rayPath[pIdx];
+            if (pIdx !== null && pIdx >= 0 && pIdx < rayPath.length) {
+                const direct = rayPath[pIdx];
+                if (direct && Number.isFinite(Number(direct.x)) && Number.isFinite(Number(direct.y))) {
+                    return direct;
+                }
+            }
+            for (let i = rayPath.length - 1; i >= 0; i--) {
+                const p = rayPath[i];
+                const pSurfaceIndex = Number(p?.surfaceIndex ?? p?.surface ?? p?.surfaceIdx);
+                if (Number.isInteger(pSurfaceIndex) && pSurfaceIndex === surfaceIndex) {
+                    if (Number.isFinite(Number(p?.x)) && Number.isFinite(Number(p?.y))) {
+                        return p;
+                    }
+                }
+            }
+            for (let i = rayPath.length - 1; i >= 0; i--) {
+                const p = rayPath[i];
+                if (p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))) {
+                    return p;
+                }
+            }
             return null;
         };
 

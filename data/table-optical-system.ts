@@ -2553,18 +2553,20 @@ async function calculateImageSemiDiaFromChiefRays() {
         // 主光線のImage面での最大高さを計算
         let rays = [];
         if (crossBeamResult) {
-            if (crossBeamResult.rays && crossBeamResult.rays.length > 0) {
-                rays = crossBeamResult.rays;
-            } else if (crossBeamResult.allTracedRays && Array.isArray(crossBeamResult.allTracedRays) && crossBeamResult.allTracedRays.length > 0) {
+            if (Array.isArray(crossBeamResult.allTracedRays) && crossBeamResult.allTracedRays.length > 0) {
                 rays = crossBeamResult.allTracedRays;
             } else if (crossBeamResult.objectResults && crossBeamResult.objectResults.length > 0) {
-                // 無限系: tracedRaysをそのまま使用（originalRay.type 依存にしない）
+                // 無限系/有限系ともに tracedRays を優先（raw rays は rayPath を持たない場合がある）
                 crossBeamResult.objectResults.forEach(obj => {
                   const traced = Array.isArray(obj?.tracedRays) ? obj.tracedRays : [];
                   for (const r of traced) {
-                    if (r && r.rayPath) rays.push(r);
+                    if (r && (Array.isArray(r.rayPath) || Array.isArray(r.rayPathToTarget) || Array.isArray(r.path))) {
+                      rays.push(r);
+                    }
                   }
                 });
+            } else if (crossBeamResult.rays && crossBeamResult.rays.length > 0) {
+                rays = crossBeamResult.rays;
             }
         }
         if (rays.length > 0) {
@@ -2600,6 +2602,37 @@ async function calculateImageSemiDiaFromChiefRays() {
               return count > 0 ? count : null;
             };
             const imageRayPathIndex = __rayPathPointIndexForSurfaceIndex(opticalSystemRows, imageSurfaceIndex);
+            const __pickImagePointFromRay = (ray) => {
+              const candidatePaths = [ray?.rayPath, ray?.rayPathToTarget, ray?.path, ray?.originalRay?.rayPath];
+              for (const path of candidatePaths) {
+                if (!Array.isArray(path) || path.length === 0) continue;
+
+                if (imageRayPathIndex !== null && imageRayPathIndex >= 0 && imageRayPathIndex < path.length) {
+                  const direct = path[imageRayPathIndex];
+                  if (direct && Number.isFinite(Number(direct.x)) && Number.isFinite(Number(direct.y))) {
+                    return direct;
+                  }
+                }
+
+                for (let i = path.length - 1; i >= 0; i--) {
+                  const p = path[i];
+                  const pSurfaceIndex = Number(p?.surfaceIndex ?? p?.surface ?? p?.surfaceIdx);
+                  if (Number.isInteger(pSurfaceIndex) && pSurfaceIndex === imageSurfaceIndex) {
+                    if (Number.isFinite(Number(p?.x)) && Number.isFinite(Number(p?.y))) {
+                      return p;
+                    }
+                  }
+                }
+
+                for (let i = path.length - 1; i >= 0; i--) {
+                  const p = path[i];
+                  if (p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))) {
+                    return p;
+                  }
+                }
+              }
+              return null;
+            };
 
             // Build Image surface transformation info inline to convert global coordinates back to local
             let imageSurfaceInfo = null;
@@ -2705,9 +2738,8 @@ async function calculateImageSemiDiaFromChiefRays() {
             }
 
             rays.forEach((ray, rayIndex) => {
-              if (ray.rayPath && Array.isArray(ray.rayPath) && imageRayPathIndex !== null && ray.rayPath.length > imageRayPathIndex) {
-                const imagePoint = ray.rayPath[imageRayPathIndex];
-                
+              const imagePoint = __pickImagePointFromRay(ray);
+              if (imagePoint) {
                 // Transform from global coordinates to Image surface local coordinates
                 let localX = imagePoint.x;
                 let localY = imagePoint.y;

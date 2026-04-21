@@ -1429,8 +1429,9 @@ function isCoordTransRow(row) {
 }
 
 function isObjectRow(row) {
-    const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? row?.surface_type ?? '').toLowerCase();
-    return t === 'object';
+    const t = String(row?.['object type'] ?? row?.object ?? row?.Object ?? row?.surface_type ?? '').trim().toLowerCase();
+    const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+    return t === 'object' || blockType === 'object' || blockType === 'objectsurface' || blockType === 'objectplane';
 }
 
 function isGapRow(row) {
@@ -1443,24 +1444,43 @@ function isGapRow(row) {
     const blockTypeCompact = compact(row?._blockType ?? row?.blockType ?? '');
     const kind = norm(row?.kind ?? '');
     const kindCompact = compact(row?.kind ?? '');
+    const blockRole = norm(row?._surfaceRole ?? row?.surfaceRole ?? '');
+    const title = norm(row?.title ?? row?.name ?? '');
     return (
         surfType === 'gap' || surfType === 'air gap' || surfTypeCompact === 'gap' || surfTypeCompact === 'airgap' ||
         blockType === 'gap' || blockType === 'air gap' || blockTypeCompact === 'gap' || blockTypeCompact === 'airgap' ||
-        kind === 'gap' || kind === 'air gap' || kindCompact === 'gap' || kindCompact === 'airgap'
+        kind === 'gap' || kind === 'air gap' || kindCompact === 'gap' || kindCompact === 'airgap' ||
+        blockRole === 'gap' || blockRole === 'air gap' || blockRole === 'airgap' ||
+        title === 'gap' || title === 'air gap' || title === 'airgap'
     );
 }
 
-// traceRay の rayPath は Object 行 / Coord Break 行 / Gap 行を交点として記録しない。
+function isSkippableRayPathRow(row) {
+    if (!row || typeof row !== 'object') return true;
+    if (isObjectRow(row) || isCoordTransRow(row) || isGapRow(row)) return true;
+
+    const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+    if (blockType === 'paraxial' || blockType === 'thinlens') {
+        const surfaceRole = String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase();
+        // Ideal Paraxial/ThinLens blocks bend on the front face only; the back face does not create a rayPath hit point.
+        if (surfaceRole === 'back') return true;
+    }
+
+    return false;
+}
+
+// traceRay の rayPath は Object 行 / Coord Break 行 / Gap 行に加えて、
+// Paraxial/ThinLens の back 面も交点として記録しない。
 // surfaceIndex(テーブル行) -> rayPath の point index への変換を行う。
 function surfaceIndexToRayPathPointIndex(opticalSystemRows, surfaceIndex) {
     if (!Array.isArray(opticalSystemRows) || surfaceIndex === null || surfaceIndex === undefined) return null;
     const sIdx = Math.max(0, Math.min(surfaceIndex, opticalSystemRows.length - 1));
+    if (isSkippableRayPathRow(opticalSystemRows[sIdx])) return null;
+
     let count = 0;
     for (let i = 0; i <= sIdx; i++) {
         const row = opticalSystemRows[i];
-        if (isCoordTransRow(row)) continue;
-        if (isObjectRow(row)) continue;
-        if (isGapRow(row)) continue;
+        if (isSkippableRayPathRow(row)) continue;
         count++;
     }
     return count > 0 ? count : null;

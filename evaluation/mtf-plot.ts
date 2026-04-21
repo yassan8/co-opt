@@ -19,6 +19,51 @@ async function getPSFCalculatorSingleton() {
     return _psfCalculatorSingletonPromise;
 }
 
+function isIdealParaxialOnlySystem(opticalSystemRows: any[] = []) {
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
+
+    let hasIdealParaxial = false;
+    for (const row of opticalSystemRows) {
+        if (!row || typeof row !== 'object') continue;
+
+        const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+        const surfType = String(row?.surfType ?? row?.type ?? row?.surfaceType ?? '').trim().toLowerCase();
+        const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+
+        const isIdealParaxial = (
+            blockType === 'paraxial'
+            || blockType === 'thinlens'
+            || surfType === 'thinlens'
+            || Number.isFinite(Number(row?._thinLensFocalLengthX))
+            || Number.isFinite(Number(row?._thinLensFocalLengthY))
+        );
+        if (isIdealParaxial) {
+            hasIdealParaxial = true;
+            continue;
+        }
+
+        const isPassiveRow = (
+            objectType === ''
+            || objectType === 'object'
+            || objectType === 'image'
+            || objectType === 'stop'
+            || surfType === 'gap'
+            || surfType === 'air gap'
+            || blockType === 'gap'
+            || blockType === 'air gap'
+            || surfType === 'coordinate break'
+            || surfType === 'coordbrk'
+            || blockType === 'coordinate break'
+            || blockType === 'coordbrk'
+        );
+        if (isPassiveRow) continue;
+
+        return false;
+    }
+
+    return hasIdealParaxial;
+}
+
 type MtfPlotOptions = {
     wavelengthMicrons?: number | string;
     objectIndex?: number;
@@ -398,6 +443,7 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
     ensureConsoleLog(`🔍 [TFMTF Setup] Object ${objIndex}: type="${objectTypeRaw}", isAngleType=${isAngleType}, isFiniteObject=${isFiniteObject}, objectX=${objectX.toFixed(4)}, objectY=${objectY.toFixed(4)}, defocusShift=${defocusShiftMm} mm`);
 
     const opticalSystemRows = cloneOpticalSystemRowsWithDefocusShift(baseOpticalSystemRows, defocusShiftMm, isFiniteObject);
+    const forceSymmetricIdealMtf = isIdealParaxialOnlySystem(opticalSystemRows);
     if (!opticalSystemRows || opticalSystemRows.length === 0) {
         throw new Error('光学システムデータがありません。まず光学システムを設定してください。');
     }
@@ -514,6 +560,24 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
 
         if (outY.length > 0) outY[0] = 1.0;
         return { freq: outX, mtfVals: outY };
+    };
+
+    const clampCurveToPhysicalEnvelope = (curve, envelopeVals: any[] | null = null) => {
+        if (!curve || !Array.isArray(curve.freq) || !Array.isArray(curve.mtfVals)) return curve;
+        const mtfVals = curve.mtfVals.map((v: any, idx: number) => {
+            const raw = Number(v);
+            if (!Number.isFinite(raw)) return null;
+            let clamped = Math.max(0, Math.min(1, raw));
+            if (Array.isArray(envelopeVals) && idx < envelopeVals.length) {
+                const env = Number(envelopeVals[idx]);
+                if (Number.isFinite(env)) {
+                    clamped = Math.min(clamped, Math.max(0, Math.min(1, env)));
+                }
+            }
+            return clamped;
+        });
+        if (mtfVals.length > 0 && mtfVals[0] !== null) mtfVals[0] = 1.0;
+        return { ...curve, mtfVals };
     };
 
     const computeCircularApertureDiffractionMtf = (freqLpmm, wavelengthMicron, fNumber) => {
@@ -1020,30 +1084,8 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
         tan = resampleCurveToRange(tan, requestedPlotLpmm, resolvedPlotPointCount);
         sag = resampleCurveToRange(sag, requestedPlotLpmm, resolvedPlotPointCount);
 
-        const color = getColorForWavelength(wlLocal);
-        console.log(`🔍 [TFMTF MTF] λ=${titleNmLocal}nm: tan=${tan.freq.length}pts(${Math.min(...tan.mtfVals).toFixed(3)}-${Math.max(...tan.mtfVals).toFixed(3)}), sag=${sag.freq.length}pts(${Math.min(...sag.mtfVals).toFixed(3)}-${Math.max(...sag.mtfVals).toFixed(3)})`);
-        
-        traces.push({
-            x: tan.freq,
-            y: tan.mtfVals,
-            type: 'scatter',
-            mode: 'lines',
-            name: `Tangential (${titleNmLocal}nm)`,
-            showlegend: true,
-            line: { color, width: 2, dash: 'solid' }
-        });
-        traces.push({
-            x: sag.freq,
-            y: sag.mtfVals,
-            type: 'scatter',
-            mode: 'lines',
-            name: `Sagittal (${titleNmLocal}nm)`,
-            showlegend: true,
-            line: { color, width: 2, dash: 'dot' }
-        });
-
-        if (showDiffractionLimitEnabled) {
-            let diffVals = null;
+        let diffVals = null;
+        if (showDiffractionLimitEnabled || forceSymmetricIdealMtf) {
 
             try {
                 const idealOpdGrid = Array.from({ length: s }, () => new Float32Array(s));
@@ -1150,7 +1192,67 @@ async function showMTFDiagram({ wavelengthMicrons, objectIndex, objectOverride, 
             if (!diffVals) {
                 diffVals = tan.freq.map((f) => computeCircularApertureDiffractionMtf(f, wlLocal, fNumberForDiffraction));
             }
+        }
 
+        const idealPsfEnvelope = (Array.isArray(diffVals) && diffVals.length === tan.freq.length)
+            ? diffVals.map((v) => (Number.isFinite(Number(v)) ? Math.max(0, Math.min(1, Number(v))) : null))
+            : null;
+        const analyticDiffVals = tan.freq.map((f) => {
+            const v = computeCircularApertureDiffractionMtf(f, wlLocal, fNumberForDiffraction);
+            return Number.isFinite(Number(v)) ? Math.max(0, Math.min(1, Number(v))) : null;
+        });
+        const physicalEnvelope = (Array.isArray(idealPsfEnvelope) && idealPsfEnvelope.some((v) => Number.isFinite(Number(v))))
+            ? idealPsfEnvelope
+            : (analyticDiffVals.some((v) => Number.isFinite(Number(v))) ? analyticDiffVals : null);
+
+        if (forceSymmetricIdealMtf) {
+            const symmetricVals = (Array.isArray(physicalEnvelope) && physicalEnvelope.length === tan.freq.length)
+                ? physicalEnvelope.slice()
+                : tan.freq.map((_, idx) => {
+                    const tv = Number(tan?.mtfVals?.[idx]);
+                    const sv = Number(sag?.mtfVals?.[idx]);
+                    if (Number.isFinite(tv) && Number.isFinite(sv)) return Math.max(0, Math.min(1, 0.5 * (tv + sv)));
+                    if (Number.isFinite(tv)) return Math.max(0, Math.min(1, tv));
+                    if (Number.isFinite(sv)) return Math.max(0, Math.min(1, sv));
+                    return null;
+                });
+            tan = { ...tan, mtfVals: symmetricVals.slice() };
+            sag = { ...sag, mtfVals: symmetricVals.slice() };
+            diffVals = symmetricVals.slice();
+            try {
+                console.log(`ℹ️ [MTF] Pure Paraxial/ThinLens system detected; using the analytic diffraction-limited M/S curve at λ=${titleNmLocal}nm.`);
+            } catch (_) {}
+        } else {
+            tan = clampCurveToPhysicalEnvelope(tan, physicalEnvelope);
+            sag = clampCurveToPhysicalEnvelope(sag, physicalEnvelope);
+            if (Array.isArray(physicalEnvelope) && physicalEnvelope.length === tan.freq.length) {
+                diffVals = physicalEnvelope.slice();
+            }
+        }
+
+        const color = getColorForWavelength(wlLocal);
+        console.log(`🔍 [TFMTF MTF] λ=${titleNmLocal}nm: tan=${tan.freq.length}pts(${Math.min(...tan.mtfVals).toFixed(3)}-${Math.max(...tan.mtfVals).toFixed(3)}), sag=${sag.freq.length}pts(${Math.min(...sag.mtfVals).toFixed(3)}-${Math.max(...sag.mtfVals).toFixed(3)})`);
+        
+        traces.push({
+            x: tan.freq,
+            y: tan.mtfVals,
+            type: 'scatter',
+            mode: 'lines',
+            name: `Tangential (${titleNmLocal}nm)`,
+            showlegend: true,
+            line: { color, width: 2, dash: 'solid' }
+        });
+        traces.push({
+            x: sag.freq,
+            y: sag.mtfVals,
+            type: 'scatter',
+            mode: 'lines',
+            name: `Sagittal (${titleNmLocal}nm)`,
+            showlegend: true,
+            line: { color, width: 2, dash: 'dot' }
+        });
+
+        if (showDiffractionLimitEnabled && Array.isArray(diffVals)) {
             traces.push({
                 x: tan.freq,
                 y: diffVals,

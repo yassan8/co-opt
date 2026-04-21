@@ -1,7 +1,17 @@
 import { useEffect } from 'react';
 
+function isAnalysisPopupContext(): boolean {
+  try {
+    const url = new URL(window.location.href);
+    return url.searchParams.get('coopt_analysis_window') === '1';
+  } catch (_) {
+    return false;
+  }
+}
+
 export default function RequirementsSection() {
   useEffect(() => {
+    if (isAnalysisPopupContext()) return;
     // The editor will be reinitialized by __cooptInitSystemRequirementsEditor
     // which is triggered by the initialization system
     try {
@@ -13,6 +23,7 @@ export default function RequirementsSection() {
   }, []);
 
   const waitForRequirementsEditorReady = async () => {
+    if (isAnalysisPopupContext()) return null;
     const w = window as any;
     const start = Date.now();
     const maxWaitMs = 2500;

@@ -28,6 +28,7 @@ import { runOptimizationMVP } from "../../optimization/optimizer-mvp.ts";
 import { listDesignVariablesFromBlocks } from "../../optimization/design-variables.ts";
 import { clearOptimizerStop, readDesktopSetting, writeDesktopSetting } from "../../src/desktop/ipc/client.ts";
 import { isTauriRuntime } from "../../src/desktop/runtime.ts";
+import { requestRefreshBlockInspector } from "../../core/window-facade.ts";
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
@@ -2870,12 +2871,21 @@ export default function App() {
       'through-focus-mtf': 'Through-Focus MTF',
       'field-mtf': 'Object MTF',
     };
+    const reactManagedAnalysis = new Set(['mtf', 'through-focus-mtf', 'field-mtf', 'distortion', 'distortion-grid']);
 
     const targetButtonId = analysisButtonMap[analysisWindowMode.analysis];
     const targetPopupTitle = analysisPopupTitleMap[analysisWindowMode.analysis];
     if (targetPopupTitle) {
       document.title = targetPopupTitle;
     }
+
+    // These analyses have first-class React pages in this window already.
+    // Do not re-dispatch the hidden legacy popup button, or it can overwrite
+    // the current page with an older alternate renderer.
+    if (reactManagedAnalysis.has(analysisWindowMode.analysis)) {
+      return;
+    }
+
     let disposed = false;
     let rafId = 0;
     let timeoutId = 0;
@@ -3920,8 +3930,6 @@ export default function App() {
           <ConfigurationSection />
           <SourceObjectSection />
           <DesignIntentSection />
-          <RequirementsSection />
-          <LegacyPanels />
         </div>
       </>
     );

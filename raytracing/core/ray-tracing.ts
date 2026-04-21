@@ -121,14 +121,14 @@ function __logOpdBackendOnce(kind: 'rustWasm' | 'cWasm' | 'js', detail = '') {
       };
     }
     if (kind === 'rustWasm') {
-      console.warn(`🧭 [OPD Backend] Rust-WASM${suffix}`);
+      console.info(`🧭 [OPD Backend] Rust-WASM${suffix}`);
       return;
     }
     if (kind === 'cWasm') {
-      console.warn(`🧭 [OPD Backend] C-WASM${suffix}`);
+      console.info(`🧭 [OPD Backend] C-WASM${suffix}`);
       return;
     }
-    console.warn(`🧭 [OPD Backend] JavaScript${suffix}`);
+    console.info(`🧭 [OPD Backend] JavaScript${suffix}`);
   } catch (_) {
     // ignore
   }
@@ -3370,6 +3370,42 @@ export function traceRayEvalBatchSummary(opticalSystemRows, rays, n0 = 1.0, maxS
     : opticalSystemRows;
   const surfaceData = __getCachedSurfaceData(opticalSystemRows, idx, effectiveSystemRows);
   const lockstepIncompatReason = __getLockstepBatchIncompatReason(effectiveSystemRows, idx);
+
+  // Systems containing Paraxial/ThinLens blocks cannot use the lockstep or Rust batch
+  // fast paths (the ideal-lens refraction must be evaluated per-ray in the scalar JS
+  // tracer). Fall back to per-ray scalar trace so callers (e.g. native spot raytrace
+  // via web/Rust-WASM) still receive valid hit points instead of an empty series.
+  if (effectiveSystemRows && surfaceData && lockstepIncompatReason === 'thin_lens_requires_scalar') {
+    const scalarOptions = {
+      ...(options && typeof options === 'object' ? options : null),
+      returnHitPointOnly: true,
+      // The single-hit Rust fast path also rejects ThinLens, so we must not recurse
+      // through the Rust meta batch trace here.
+      useRustWasm: false,
+      requireRustWasm: false,
+      allowNonStrict: true,
+      __disableRustSingleHitFastPath: true
+    } as any;
+    return list.map((ray: any) => {
+      try {
+        const hit = __traceRay_impl(opticalSystemRows, ray, n0, null, idx, scalarOptions);
+        if (hit && Number.isFinite(Number(hit.x)) && Number.isFinite(Number(hit.y)) && Number.isFinite(Number(hit.z))) {
+          return {
+            success: true,
+            status: 'ok',
+            hitPoint: { x: Number(hit.x), y: Number(hit.y), z: Number(hit.z) },
+            oplMicrons: NaN
+          };
+        }
+      } catch (_) {}
+      return {
+        success: false,
+        status: 'no_intersection',
+        hitPoint: null,
+        oplMicrons: NaN
+      };
+    });
+  }
 
   if (!effectiveSystemRows || !surfaceData || lockstepIncompatReason !== null) {
     return list.map(() => ({

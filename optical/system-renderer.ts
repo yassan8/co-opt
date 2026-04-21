@@ -327,6 +327,11 @@ function __coopt_buildSurfRangeByBlockId(opticalSystemData) {
         const row = opticalSystemData[i];
         const blockId = String(row?._blockId ?? '').trim();
         if (!blockId) continue;
+
+        const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+        const surfaceRole = String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase();
+        if ((blockType === 'paraxial' || blockType === 'thinlens') && surfaceRole === 'back') continue;
+
         const prev = surfRangeByBlockId.get(blockId);
         if (!prev) surfRangeByBlockId.set(blockId, { min: i, max: i });
         else {

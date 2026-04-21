@@ -438,8 +438,17 @@ class MeritFunctionEditor {
     initializeTable(): void {
         const container = document.getElementById('table-merit-function');
         if (!container) {
-            // Some windows/routes do not mount the merit-function table container.
-            console.warn('ℹ️ Merit Function テーブルコンテナ未マウント: noop tableで継続します');
+            const isAnalysisPopup = (() => {
+                try {
+                    const url = new URL(window.location.href);
+                    return url.searchParams.get('coopt_analysis_window') === '1';
+                } catch (_) {
+                    return false;
+                }
+            })();
+            if (!isAnalysisPopup) {
+                console.warn('ℹ️ Merit Function テーブルコンテナ未マウント: noop tableで継続します');
+            }
             this.table = this.createNoopTable();
             return;
         }

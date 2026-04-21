@@ -195,6 +195,44 @@ function interpolateAxisValue(axis: number[], values: number[], target: number):
   return 0;
 }
 
+function findLowerBracketValue(axis: number[], target: number): number | null {
+  if (!Array.isArray(axis) || axis.length === 0 || !Number.isFinite(target)) {
+    return null;
+  }
+  const numericAxis = axis.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  if (numericAxis.length === 0) {
+    return null;
+  }
+  if (target <= numericAxis[0]) {
+    return numericAxis[0];
+  }
+  for (let index = 1; index < numericAxis.length; index++) {
+    if (target <= numericAxis[index]) {
+      return numericAxis[index - 1];
+    }
+  }
+  return numericAxis[numericAxis.length - 1];
+}
+
+function findUpperBracketValue(axis: number[], target: number): number | null {
+  if (!Array.isArray(axis) || axis.length === 0 || !Number.isFinite(target)) {
+    return null;
+  }
+  const numericAxis = axis.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  if (numericAxis.length === 0) {
+    return null;
+  }
+  if (target >= numericAxis[numericAxis.length - 1]) {
+    return numericAxis[numericAxis.length - 1];
+  }
+  for (let index = 0; index < numericAxis.length; index++) {
+    if (target <= numericAxis[index]) {
+      return numericAxis[index];
+    }
+  }
+  return numericAxis[numericAxis.length - 1];
+}
+
 function cloneOpticalSystemRowsWithDefocusShiftNativeLike(rows: any[], defocusShiftMm: number): any[] {
   const src = Array.isArray(rows) ? rows : [];
   const out = src.map((row) => (row && typeof row === "object") ? { ...row } : row);
@@ -603,14 +641,21 @@ export async function runRaytracePreview(
 export async function runNativeSpotRaytrace(
   payload: NativeSpotRaytraceRequest,
 ): Promise<NativeSpotRaytraceResponse> {
-  if (!isTauriRuntime() || payload?.forceRustWasm === true) {
-    const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
+  const normalizedPayload: NativeSpotRaytraceRequest = {
+    ...(payload || {} as any),
+    surfaceIndex: Number.isInteger((payload as any)?.surfaceIndex)
+      ? Math.max(0, Number((payload as any).surfaceIndex))
+      : pickImageSurfaceIndexNativeLike(Array.isArray((payload as any)?.opticalSystemRows) ? (payload as any).opticalSystemRows : []),
+  } as NativeSpotRaytraceRequest;
+
+  if (!isTauriRuntime() || normalizedPayload?.forceRustWasm === true) {
+    const opticalSystemRows = Array.isArray(normalizedPayload?.opticalSystemRows) ? normalizedPayload.opticalSystemRows : [];
     if (opticalSystemRows.length === 0) {
       throw new Error("runNativeSpotRaytrace(web): opticalSystemRows is empty");
     }
 
-    const targetSurface = Number.isInteger(payload?.surfaceIndex)
-      ? Math.max(0, Number(payload.surfaceIndex))
+    const targetSurface = Number.isInteger(normalizedPayload?.surfaceIndex)
+      ? Math.max(0, Number(normalizedPayload.surfaceIndex))
       : Math.max(0, opticalSystemRows.length - 1);
 
     const toSeriesColor = (index: number) => {
@@ -844,7 +889,7 @@ export async function runNativeSpotRaytrace(
       message: "Computed via Web Rust/WASM spot raytrace API",
     };
   }
-  return invokeCommand<NativeSpotRaytraceRequest, NativeSpotRaytraceResponse>("run_native_spot_raytrace", payload);
+  return invokeCommand<NativeSpotRaytraceRequest, NativeSpotRaytraceResponse>("run_native_spot_raytrace", normalizedPayload);
 }
 
 export async function runNativeSphericalAberration(
@@ -984,7 +1029,9 @@ export async function runNativeTransverseAberration(
       wavelength,
       Number.isInteger(payload?.rayCount) ? Number(payload.rayCount) : 51,
       {
-        requireRustWasm: true,
+        // Keep Paraxial/ThinLens compatible with the same non-strict fallback path
+        // used by Spot Diagram and Grid Distortion in web mode.
+        requireRustWasm: false,
       },
     );
     if (!result) throw new Error("Web transverse aberration calculation failed");
@@ -1000,13 +1047,246 @@ export async function runNativeTransverseAberration(
   );
 }
 
+function hasParaxialOrThinLensNativeLike(opticalSystemRows: any[] = []): boolean {
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
+
+  for (const row of opticalSystemRows) {
+    if (!row || typeof row !== "object") continue;
+    const surfType = String((row as any)?.surfType ?? (row as any)?.type ?? (row as any)?.surfaceType ?? "").trim().toLowerCase();
+    const blockType = String((row as any)?._blockType ?? (row as any)?.blockType ?? "").trim().toLowerCase();
+    const isIdealParaxial = (
+      blockType === "paraxial"
+      || blockType === "thinlens"
+      || surfType === "thinlens"
+      || Number.isFinite(Number((row as any)?._thinLensFocalLengthX))
+      || Number.isFinite(Number((row as any)?._thinLensFocalLengthY))
+    );
+    if (isIdealParaxial) return true;
+  }
+  return false;
+}
+
+function isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows: any[] = []): boolean {
+  if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
+
+  let hasIdealParaxial = false;
+  for (const row of opticalSystemRows) {
+    if (!row || typeof row !== "object") continue;
+
+    const objectType = String((row as any)?.["object type"] ?? (row as any)?.object ?? (row as any)?.Object ?? "").trim().toLowerCase();
+    const surfType = String((row as any)?.surfType ?? (row as any)?.type ?? (row as any)?.surfaceType ?? "").trim().toLowerCase();
+    const blockType = String((row as any)?._blockType ?? (row as any)?.blockType ?? "").trim().toLowerCase();
+
+    const isIdealParaxial = (
+      blockType === "paraxial"
+      || blockType === "thinlens"
+      || surfType === "thinlens"
+      || Number.isFinite(Number((row as any)?._thinLensFocalLengthX))
+      || Number.isFinite(Number((row as any)?._thinLensFocalLengthY))
+    );
+    if (isIdealParaxial) {
+      hasIdealParaxial = true;
+      continue;
+    }
+
+    const isPassiveRow = (
+      objectType === ""
+      || objectType === "object"
+      || objectType === "image"
+      || objectType === "stop"
+      || surfType === "gap"
+      || surfType === "air gap"
+      || blockType === "gap"
+      || blockType === "air gap"
+      || surfType === "coordinate break"
+      || surfType === "coordbrk"
+      || blockType === "coordinate break"
+      || blockType === "coordbrk"
+    );
+    if (isPassiveRow) continue;
+
+    return false;
+  }
+
+  return hasIdealParaxial;
+}
+
+function computeFiniteGridRmsNativeLike(grid: any): number {
+  if (!Array.isArray(grid) || grid.length === 0) return Number.NaN;
+  let sumSq = 0;
+  let count = 0;
+  for (const row of grid) {
+    if (!Array.isArray(row)) continue;
+    for (const value of row) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) continue;
+      sumSq += numeric * numeric;
+      count += 1;
+    }
+  }
+  return count > 0 ? Math.sqrt(sumSq / count) : Number.NaN;
+}
+
+function parseThinLensFocalValueNativeLike(value: unknown): number {
+  if (isInfinitySpec(value)) return Number.POSITIVE_INFINITY;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || Math.abs(numeric) < 1e-12) return Number.POSITIVE_INFINITY;
+  return Math.abs(numeric);
+}
+
+function getThinLensFocalPairNativeLike(row: any): { fx: number; fy: number } {
+  return {
+    fx: parseThinLensFocalValueNativeLike(row?._thinLensFocalLengthX ?? row?.focalLengthX ?? row?.focalLength ?? row?._thinLensFocalLengthY ?? row?.focalLengthY),
+    fy: parseThinLensFocalValueNativeLike(row?._thinLensFocalLengthY ?? row?.focalLengthY ?? row?.focalLength ?? row?._thinLensFocalLengthX ?? row?.focalLengthX),
+  };
+}
+
+function buildIdealParaxialAnalyticOpdResponse(
+  opticalSystemRows: any[],
+  payload: NativeOpdMapRequest,
+  wavelengthUm: number,
+  gridSize: number,
+  opdDisplayMode: string,
+  objectIndex: number,
+  isAngle: boolean,
+  xVal: number,
+  yVal: number,
+): NativeOpdMapResponse | null {
+  if (!isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows)) return null;
+
+  const targetSurface = Number.isInteger(payload?.surfaceIndex)
+    ? Math.max(0, Number(payload.surfaceIndex))
+    : pickImageSurfaceIndexNativeLike(opticalSystemRows);
+
+  let lensIndex = -1;
+  let fx = Number.POSITIVE_INFINITY;
+  let fy = Number.POSITIVE_INFINITY;
+  for (let i = 0; i <= targetSurface && i < opticalSystemRows.length; i++) {
+    const row = opticalSystemRows[i];
+    if (!hasParaxialOrThinLensNativeLike([row])) continue;
+    const pair = getThinLensFocalPairNativeLike(row);
+    if (Number.isFinite(pair.fx) || Number.isFinite(pair.fy)) {
+      lensIndex = i;
+      fx = pair.fx;
+      fy = pair.fy;
+    }
+  }
+  if (lensIndex < 0) return null;
+  if (!Number.isFinite(fx) && Number.isFinite(fy)) fx = fy;
+  if (!Number.isFinite(fy) && Number.isFinite(fx)) fy = fx;
+  if (!Number.isFinite(fx) || !Number.isFinite(fy)) return null;
+
+  const originsZ = Array.from({ length: opticalSystemRows.length }, () => 0);
+  let runningZ = 0;
+  for (let i = 0; i < opticalSystemRows.length; i++) {
+    originsZ[i] = runningZ;
+    const rawThickness = opticalSystemRows[i]?.thickness ?? opticalSystemRows[i]?.Thickness;
+    if (!isInfinitySpec(rawThickness)) {
+      const thickness = Number(rawThickness);
+      if (Number.isFinite(thickness)) runningZ += thickness;
+    }
+  }
+
+  const lensZ = Number(originsZ[lensIndex]) || 0;
+  const targetZ = Number(originsZ[targetSurface]) || lensZ;
+  const imageDistanceMm = targetZ - lensZ;
+  if (!(Number.isFinite(imageDistanceMm) && imageDistanceMm >= 0)) return null;
+
+  const stopSurface = Math.max(0, opticalSystemRows.findIndex((r: any) => String(r?.["object type"] ?? r?.object ?? r?.Object ?? "").trim().toLowerCase() === "stop"));
+  const stopRow = opticalSystemRows[stopSurface] || {};
+  const semidia = Math.abs(Number(stopRow?.semidia ?? stopRow?.Semidia ?? stopRow?.["Semi Diameter"]));
+  const aperture = Math.abs(Number(stopRow?.aperture ?? stopRow?.Aperture));
+  const pupilRadiusMm = Math.max(0.01,
+    Number.isFinite(aperture) && aperture > 0 ? aperture * 0.5 :
+    Number.isFinite(semidia) && semidia > 0 ? semidia : 5,
+  );
+
+  const rawOpdGrid: Array<Array<number | null>> = Array.from({ length: gridSize }, () => Array.from({ length: gridSize }, () => null));
+  let hitCount = 0;
+  let sampleCount = 0;
+  for (let iy = 0; iy < gridSize; iy++) {
+    const v = gridSize > 1 ? -1 + (2 * iy) / (gridSize - 1) : 0;
+    for (let ix = 0; ix < gridSize; ix++) {
+      const u = gridSize > 1 ? -1 + (2 * ix) / (gridSize - 1) : 0;
+      const r2 = u * u + v * v;
+      if (!Number.isFinite(r2) || r2 > 1 + 1e-9) continue;
+      sampleCount += 1;
+      const x = u * pupilRadiusMm;
+      const y = v * pupilRadiusMm;
+      const opdMm = 0.5 * (
+        ((imageDistanceMm - fx) * (x * x)) / Math.max(1e-12, fx * fx)
+        + ((imageDistanceMm - fy) * (y * y)) / Math.max(1e-12, fy * fy)
+      );
+      const opdWaves = (opdMm * 1000.0) / Math.max(1e-12, wavelengthUm);
+      rawOpdGrid[iy][ix] = Number.isFinite(opdWaves) ? opdWaves : null;
+      hitCount += 1;
+    }
+  }
+
+  const displayOpdGrid = applyOpdDisplayModeGridNativeLike(rawOpdGrid, opdDisplayMode);
+  return {
+    backend: "ideal-paraxial-analytic",
+    targetSurface,
+    stopSurface,
+    requestedObjectIndex: objectIndex,
+    usedObjectIndex: objectIndex,
+    usedObjectPosition: isAngle ? "angle" : "height",
+    usedObjectX: xVal,
+    usedObjectY: yVal,
+    wavelengthUm,
+    gridSize,
+    sampleCount,
+    hitCount,
+    pupilSamplingMode: "stop",
+    rawOpdGrid,
+    displayOpdGrid,
+    message: `Computed via analytic ideal-paraxial defocus model (imageDistance=${imageDistanceMm.toFixed(6)}mm, fx=${fx.toFixed(6)}mm, fy=${fy.toFixed(6)}mm)`,
+  } as NativeOpdMapResponse;
+}
+
+function clampIdealParaxialNativeOpdResponse(
+  opticalSystemRows: any[] = [],
+  response: NativeOpdMapResponse,
+): NativeOpdMapResponse {
+  if (!isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows) || !response || typeof response !== "object") {
+    return response;
+  }
+
+  const displayGrid = Array.isArray((response as any).displayOpdGrid)
+    ? (response as any).displayOpdGrid
+    : null;
+  const displayRms = computeFiniteGridRmsNativeLike(displayGrid);
+  if (!(Number.isFinite(displayRms) && displayRms <= 2e-2)) {
+    return response;
+  }
+
+  const zeroFiniteGrid = (grid: any) => {
+    if (!Array.isArray(grid)) return grid;
+    return grid.map((row: any) => {
+      if (!Array.isArray(row)) return row;
+      return row.map((v: any) => (Number.isFinite(Number(v)) ? 0 : v));
+    });
+  };
+
+  return {
+    ...response,
+    displayOpdGrid: zeroFiniteGrid(displayGrid),
+    message: String((response as any).message || "") + " [ideal-paraxial-display-normalized]",
+  } as NativeOpdMapResponse;
+}
+
 export async function runNativeOpdMap(
   payload: NativeOpdMapRequest,
 ): Promise<NativeOpdMapResponse> {
-  if (!isTauriRuntime()) {
+  const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
+  // Only force the JS thin-lens fallback for pure ideal-paraxial systems.
+  // Mixed systems may contain paraxial helper rows, but they should still use
+  // the Rust/WASM OPD path for the real surfaces instead of being downgraded.
+  const requiresThinLensJsFallback = isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows);
+
+  if (!isTauriRuntime() || requiresThinLensJsFallback) {
     const opdDebug = isOpdDebugEnabled();
     const { createOPDCalculator, createWavefrontAnalyzer } = await import("../../../evaluation/wavefront/wavefront.ts");
-    const opticalSystemRows = Array.isArray(payload?.opticalSystemRows) ? payload.opticalSystemRows : [];
     if (opticalSystemRows.length === 0) throw new Error("runNativeOpdMap(web): opticalSystemRows is empty");
 
     const sourceRows = Array.isArray(payload?.sourceRows) ? payload.sourceRows : [];
@@ -1049,12 +1329,29 @@ export async function runNativeOpdMap(
       : "stop";
     const opdDisplayMode = String(payload?.opdDisplayMode || "pistonTiltRemoved");
 
+    const idealParaxialAnalyticResponse = buildIdealParaxialAnalyticOpdResponse(
+      opticalSystemRows,
+      payload,
+      wavelengthUm,
+      gridSize,
+      opdDisplayMode,
+      objectIndex,
+      isAngle,
+      xVal,
+      yVal,
+    );
+    if (idealParaxialAnalyticResponse) {
+      return idealParaxialAnalyticResponse;
+    }
+
     const calculator = createOPDCalculator(opticalSystemRows, wavelengthUm);
     const analyzer = createWavefrontAnalyzer(calculator);
 
     // Prefer native Rust-WASM OPD API when available to reduce JS/Rust algorithm drift.
+    // Paraxial/ThinLens systems must stay on the JS wavefront path because the Rust fast path
+    // currently does not apply the ideal thin-lens bend and would incorrectly look focus-invariant.
     let wasmOpdFailureReason = "";
-    try {
+    if (!requiresThinLensJsFallback) try {
       const targetSurfaceWasm = (() => {
         const v = Number(payload?.surfaceIndex);
         if (Number.isInteger(v) && v >= 0) return v;
@@ -1126,7 +1423,7 @@ export async function runNativeOpdMap(
           }
         }
         if (rawOpdGrid && displayOpdGrid) {
-          return {
+          return clampIdealParaxialNativeOpdResponse(opticalSystemRows, {
             backend: String(wasmOut?.backend || "web-rust-wasm-native-api"),
             chiefReferenceMode: String(wasmOut?.chiefReferenceMode || ""),
             targetSurface: targetSurfaceWasm,
@@ -1144,7 +1441,7 @@ export async function runNativeOpdMap(
             rawOpdGrid,
             displayOpdGrid,
             message: String(wasmOut?.message || "Computed via Rust-WASM native OPD API"),
-          } as NativeOpdMapResponse;
+          } as NativeOpdMapResponse);
         }
         wasmOpdFailureReason = wasmMessage.length > 0
           ? `WASM returned no OPD grids (message=${wasmMessage})`
@@ -1160,9 +1457,9 @@ export async function runNativeOpdMap(
     }
 
     const isInfiniteField = !(calculator as any)?.isFiniteForField?.(fieldSetting);
-    if (isInfiniteField) {
-      // For angle/infinite fields, force the native WASM OPD API to prevent strict-mode
-      // tracing fallback from surfacing `_intersect_aspheric_rt10 unavailable` errors.
+    if (isInfiniteField && !requiresThinLensJsFallback) {
+      // For general angle/infinite fields, keep preferring the native WASM OPD API to avoid
+      // strict-mode tracing failures. ThinLens/Paraxial systems explicitly bypass this gate.
       if (wasmOpdFailureReason.length > 0) {
         console.error("[runNativeOpdMap(web)] native OPD WASM unavailable:", wasmOpdFailureReason);
       }
@@ -1171,7 +1468,9 @@ export async function runNativeOpdMap(
         + `Reason=${wasmOpdFailureReason || "unknown"}. `
         + "Rebuild and sync wasm package (npm run wasm:rebuild), then hard-reload the web app.",
       );
+    }
 
+    if (isInfiniteField) {
       const shouldUsePreferredWavefrontRoute = requestedPupilSamplingMode !== "stop";
       let preferredWavefrontMap: any = null;
       let preferredCoords: any[] = [];
@@ -1182,11 +1481,11 @@ export async function runNativeOpdMap(
         try {
           (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE = requestedPupilSamplingMode;
           preferredWavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, "circular", {
-            forceRustWasm: true,
+            forceRustWasm: !requiresThinLensJsFallback,
             skipZernikeFit: true,
             opdDisplayMode,
             traceOptions: {
-              useRustWasm: true,
+              useRustWasm: !requiresThinLensJsFallback,
               requireRustWasm: false,
               allowNonStrict: true,
             },
@@ -1463,11 +1762,11 @@ export async function runNativeOpdMap(
       // Native parity: default should stay stop-sampling unless explicitly entrance.
       (globalThis as any).__COOPT_FORCE_INFINITE_PUPIL_MODE = requestedPupilSamplingMode;
       wavefrontMap = await analyzer.generateWavefrontMap(fieldSetting, gridSize, "circular", {
-        forceRustWasm: true,
+        forceRustWasm: !requiresThinLensJsFallback,
         skipZernikeFit: true,
         opdDisplayMode,
         traceOptions: {
-          useRustWasm: true,
+          useRustWasm: !requiresThinLensJsFallback,
           requireRustWasm: false,
           allowNonStrict: true,
         },
@@ -1525,8 +1824,8 @@ export async function runNativeOpdMap(
       return requestedPupilSamplingMode;
     })();
 
-    return {
-      backend: "web-rust-wasm",
+    return clampIdealParaxialNativeOpdResponse(opticalSystemRows, {
+      backend: requiresThinLensJsFallback ? "web-js-thinlens-fallback" : "web-rust-wasm",
       targetSurface,
       stopSurface: Number((calculator as any)?.stopSurfaceIndex ?? 0),
       requestedObjectIndex: objectIndex,
@@ -1542,9 +1841,19 @@ export async function runNativeOpdMap(
       rawOpdGrid,
       displayOpdGrid,
       message: "Computed via Web Rust/WASM OPD API",
-    };
+    } as NativeOpdMapResponse);
   }
-  return invokeCommand<NativeOpdMapRequest, NativeOpdMapResponse>("run_native_opd_map", payload);
+  const normalizedPayload: NativeOpdMapRequest = {
+    ...(payload || {} as any),
+    surfaceIndex: Number.isInteger((payload as any)?.surfaceIndex)
+      ? Math.max(0, Number((payload as any).surfaceIndex))
+      : pickImageSurfaceIndexNativeLike(Array.isArray((payload as any)?.opticalSystemRows) ? (payload as any).opticalSystemRows : []),
+  } as NativeOpdMapRequest;
+  const nativeResponse = await invokeCommand<NativeOpdMapRequest, NativeOpdMapResponse>("run_native_opd_map", normalizedPayload);
+  return clampIdealParaxialNativeOpdResponse(
+    Array.isArray(normalizedPayload?.opticalSystemRows) ? normalizedPayload.opticalSystemRows : [],
+    nativeResponse,
+  );
 }
 
 export async function runNativePsfMap(
@@ -1601,6 +1910,11 @@ export async function runNativePsfMap(
       fftSize: Array.isArray((res as any)?.psfData) ? (res as any).psfData.length : size,
       psfData: Array.isArray((res as any)?.psfData) ? (res as any).psfData : [],
       metrics: ((res as any)?.metrics || {}) as any,
+      pixelSizeUm: Number.isFinite(Number((res as any)?.metadata?.pixelSize))
+        ? Number((res as any).metadata.pixelSize)
+        : (Number.isFinite(Number((res as any)?.options?.pixelSize))
+            ? Number((res as any).options.pixelSize)
+            : undefined),
       message: "Computed via Web Rust/WASM PSF API",
     };
   }
@@ -1905,7 +2219,15 @@ export async function runNativeFieldMtfMap(
 
   const samplingSize = Number.isFinite(Number(payload?.samplingSize)) ? Math.max(32, Math.floor(Number(payload?.samplingSize))) : 256;
   const zeroPadToRaw = Number.isFinite(Number(payload?.zeroPadTo)) ? Math.floor(Number(payload?.zeroPadTo)) : 0;
-  const requestedFftSize = zeroPadToRaw >= samplingSize ? zeroPadToRaw : samplingSize;
+  // Parity with on-axis handleComputeMtf path: when zeroPad is 0 ("auto"),
+  // enforce a minimum FFT size of 512 so the pixel pitch used for PSF sampling
+  // matches the on-axis pipeline. Without this, real lens systems produce
+  // near-zero MTF because pixelSizeUm = basePitch*(sampling/FFT) collapses to
+  // the raw airy pitch and undersamples the diffraction-limited PSF lobe.
+  const minRecommendedFftSize = 512;
+  const requestedFftSize = (!zeroPadToRaw || zeroPadToRaw === 0)
+    ? Math.max(samplingSize, minRecommendedFftSize)
+    : Math.max(samplingSize, zeroPadToRaw);
   const axisMode = payload?.fieldAxisMode === "height" ? "height" : "angle";
   const firstFrequencyLpmm = Number.isFinite(Number(payload?.firstFrequencyLpmm)) ? Number(payload?.firstFrequencyLpmm) : 10;
   const secondFrequencyLpmm = Number.isFinite(Number(payload?.secondFrequencyLpmm)) ? Number(payload?.secondFrequencyLpmm) : 30;
@@ -1944,6 +2266,17 @@ export async function runNativeFieldMtfMap(
     } catch (_) {}
   }
   const onProgress = typeof (payload as any)?.onProgress === "function" ? (payload as any).onProgress : null;
+
+  if (isTauriRuntime()) {
+    try {
+      return await invokeCommand<NativeFieldMtfMapRequest, NativeFieldMtfMapResponse>(
+        "run_native_field_mtf_map",
+        payload,
+      );
+    } catch (_) {
+      // Keep the Rust/WASM fallback below if the direct native command is unavailable.
+    }
+  }
 
   const fillNaNGapsInPlace = (arr: number[]) => {
     if (!Array.isArray(arr) || arr.length === 0) return;
@@ -2030,7 +2363,247 @@ export async function runNativeFieldMtfMap(
     return cloned;
   };
 
+  const cloneObjectRowsForFieldAxis = (fieldValue: number, axisModeOverride: "angle" | "height"): any[] => {
+    const cloned = Array.isArray(objectRows)
+      ? objectRows.map((r: any) => {
+          try { return JSON.parse(JSON.stringify(r)); } catch (_) { return { ...(r || {}) }; }
+        })
+      : [];
+    if (!cloned.length) {
+      cloned.push(axisModeOverride === "angle"
+        ? { name: "AutoField0", position: "Angle", xHeightAngle: 0, yHeightAngle: fieldValue, x: 0, y: fieldValue }
+        : { name: "AutoField0", position: "Rectangle", xHeight: 0, yHeight: fieldValue, x: 0, y: fieldValue });
+    }
+    const idx = Math.max(0, Math.min(objectIndex, cloned.length - 1));
+    const row: any = cloned[idx] && typeof cloned[idx] === "object" ? cloned[idx] : {};
+    if (axisModeOverride === "angle") {
+      row.position = "Angle";
+      row.xHeightAngle = 0;
+      row.yHeightAngle = fieldValue;
+      row.x = 0;
+      row.y = fieldValue;
+    } else {
+      row.position = "Rectangle";
+      row.xHeight = 0;
+      row.yHeight = fieldValue;
+      row.x = 0;
+      row.y = fieldValue;
+    }
+    cloned[idx] = row;
+    return cloned;
+  };
+
+  const shouldRetryWithStop = (message: unknown): boolean => {
+    return /entrance.*fail|entrance pupil|entrance unreachable|No valid OPD samples|trace to eval failed/i.test(String(message || ""));
+  };
+
+  const runFieldOpdWithRetry = async ({
+    wl,
+    fieldValue,
+    fixedTargetSurfaceIndex,
+    fixedPupilRadiusMm,
+    runNativeOpdWasmJson,
+  }: {
+    wl: number;
+    fieldValue: number;
+    fixedTargetSurfaceIndex?: number;
+    fixedPupilRadiusMm?: number;
+    runNativeOpdWasmJson?: ((json: string) => unknown) | null;
+  }): Promise<{ response: any | null; errorMessage: string }> => {
+    const executeOpd = async ({
+      objectRowsForCall,
+      pupilSamplingMode,
+      pupilRadiusMm,
+    }: {
+      objectRowsForCall: any[];
+      pupilSamplingMode?: "stop" | "entrance";
+      pupilRadiusMm?: number;
+    }): Promise<any> => {
+      const req = {
+        opticalSystemRows,
+        sourceRows,
+        objectRows: objectRowsForCall,
+        objectIndex,
+        surfaceIndex: fixedTargetSurfaceIndex,
+        gridSize: samplingSize,
+        wavelengthUm: wl,
+        pupilRadiusMm,
+        pupilSamplingMode,
+        opdDisplayMode,
+      };
+      if (runNativeOpdWasmJson) {
+        const raw = runNativeOpdWasmJson(JSON.stringify(req));
+        return (typeof raw === "string") ? JSON.parse(raw) : raw;
+      }
+      return await runNativeOpdMap(req as NativeOpdMapRequest);
+    };
+
+    const tryFieldModes = async ({
+      objectRowsForCall,
+      primaryMode,
+      pupilRadiusMm,
+    }: {
+      objectRowsForCall: any[];
+      primaryMode?: "stop" | "entrance";
+      pupilRadiusMm?: number;
+    }): Promise<{ response: any | null; errorMessage: string }> => {
+      const errors: string[] = [];
+      const primaryLabel = primaryMode || "auto";
+      try {
+        const response = await executeOpd({ objectRowsForCall, pupilSamplingMode: primaryMode, pupilRadiusMm });
+        return { response, errorMessage: "" };
+      } catch (err: any) {
+        errors.push(`${primaryLabel}=${String(err?.message || err || "field failed")}`);
+      }
+
+      if (!(requestedPupilSamplingMode === "stop" || requestedPupilSamplingMode === "entrance")) {
+        const fallbackModes: Array<"entrance" | "stop"> = [];
+        if (primaryMode === "entrance") {
+          if (shouldRetryWithStop(errors[0])) fallbackModes.push("stop");
+        } else if (primaryMode === "stop") {
+          fallbackModes.push("entrance");
+        } else {
+          fallbackModes.push("entrance", "stop");
+        }
+
+        for (const fallbackMode of fallbackModes) {
+          try {
+            const response = await executeOpd({ objectRowsForCall, pupilSamplingMode: fallbackMode, pupilRadiusMm });
+            return { response, errorMessage: "" };
+          } catch (err: any) {
+            errors.push(`${fallbackMode}=${String(err?.message || err || "field failed")}`);
+          }
+        }
+      }
+
+      return { response: null, errorMessage: errors.join(" ; ") || "field failed" };
+    };
+
+    const isZeroField = !(Math.abs(Number(fieldValue)) > 1e-12);
+    const primaryObjectRows = cloneObjectRowsForField(fieldValue);
+    const primaryMode = requestedPupilSamplingMode || ((axisMode === "angle" && !isZeroField) ? "entrance" : undefined);
+    const primaryRadius = isZeroField ? undefined : fixedPupilRadiusMm;
+    const primaryResult = await tryFieldModes({
+      objectRowsForCall: primaryObjectRows,
+      primaryMode,
+      pupilRadiusMm: primaryRadius,
+    });
+    if (primaryResult.response) return primaryResult;
+
+    if (axisMode === "angle" && isZeroField) {
+      const finiteResult = await tryFieldModes({
+        objectRowsForCall: cloneObjectRowsForFieldAxis(0, "height"),
+        primaryMode: requestedPupilSamplingMode,
+        pupilRadiusMm: undefined,
+      });
+      if (finiteResult.response) return finiteResult;
+
+      return {
+        response: null,
+        errorMessage: [primaryResult.errorMessage, finiteResult.errorMessage].filter(Boolean).join(" ; ") || "field failed",
+      };
+    }
+
+    return primaryResult;
+  };
+
   const inferTanAxis = (fieldValue: number): "x" | "y" => (Math.abs(Number(fieldValue)) > 0 ? "y" : "x");
+
+  const computeFieldCurveSamples = async ({
+    psfData,
+    pixelSizeUm,
+    fieldValue,
+  }: {
+    psfData: number[][];
+    pixelSizeUm: number;
+    fieldValue: number;
+  }): Promise<{
+    firstM: number;
+    firstS: number;
+    secondM: number;
+    secondS: number;
+    firstLo: number | null;
+    firstHi: number | null;
+    secondLo: number | null;
+    secondHi: number | null;
+  }> => {
+    const mtfResp = await runNativeMtfMap({
+      psfData,
+      pixelSizeUm,
+      points: 513,
+    } as NativeMtfMapRequest);
+
+    const freqAxis = Array.isArray((mtfResp as any)?.frequencyAxis) ? (mtfResp as any).frequencyAxis : [];
+    const mtfTangential = Array.isArray((mtfResp as any)?.mtfTangential) ? (mtfResp as any).mtfTangential : [];
+    const mtfSagittal = Array.isArray((mtfResp as any)?.mtfSagittal) ? (mtfResp as any).mtfSagittal : [];
+    const tanAxis = inferTanAxis(fieldValue);
+    const tanVals = tanAxis === "x" ? mtfSagittal : mtfTangential;
+    const sagVals = tanAxis === "x" ? mtfTangential : mtfSagittal;
+
+    return {
+      firstM: interpolateAxisValue(freqAxis, tanVals, firstFrequencyLpmm),
+      firstS: interpolateAxisValue(freqAxis, sagVals, firstFrequencyLpmm),
+      secondM: interpolateAxisValue(freqAxis, tanVals, secondFrequencyLpmm),
+      secondS: interpolateAxisValue(freqAxis, sagVals, secondFrequencyLpmm),
+      firstLo: findLowerBracketValue(freqAxis, firstFrequencyLpmm),
+      firstHi: findUpperBracketValue(freqAxis, firstFrequencyLpmm),
+      secondLo: findLowerBracketValue(freqAxis, secondFrequencyLpmm),
+      secondHi: findUpperBracketValue(freqAxis, secondFrequencyLpmm),
+    };
+  };
+
+  const maybeComputeIdealParaxialFieldCurveSamples = async ({
+    displayOpdGrid,
+    pupilMask,
+    wavelengthUm,
+    pixelSizeUm,
+    fieldValue,
+  }: {
+    displayOpdGrid: Array<Array<number | null>>;
+    pupilMask: boolean[][];
+    wavelengthUm: number;
+    pixelSizeUm: number;
+    fieldValue: number;
+  }): Promise<({
+    firstM: number;
+    firstS: number;
+    secondM: number;
+    secondS: number;
+    firstLo: number | null;
+    firstHi: number | null;
+    secondLo: number | null;
+    secondHi: number | null;
+    wavefrontRms: number;
+  }) | null> => {
+    const wavefrontRms = computeFiniteGridRmsNativeLike(displayOpdGrid);
+    const forceIdealParaxialMtf = isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows)
+      && opdDisplayMode !== "pistonTiltDefocusRemoved"
+      && Number.isFinite(wavefrontRms)
+      && wavefrontRms <= 2e-2;
+    if (!forceIdealParaxialMtf) return null;
+
+    const zeroOpdGrid = Array.from({ length: samplingSize }, () => Array.from({ length: samplingSize }, () => 0));
+    const idealPsfResp = await runNativePsfMap({
+      gridOpd: zeroOpdGrid,
+      pupilMask,
+      wavelengthUm,
+      pixelSizeUm,
+      removeTilt: false,
+      zeroPadTo: requestedFftSize,
+      recenterIfWrapped: false,
+    } as NativePsfMapRequest);
+
+    const samples = await computeFieldCurveSamples({
+      psfData: (idealPsfResp as any)?.psfData,
+      pixelSizeUm,
+      fieldValue,
+    });
+
+    return {
+      ...samples,
+      wavefrontRms,
+    };
+  };
 
   const resolvePixelSizeUm = async (wl: number): Promise<number> => {
     const explicit = Number(payload?.pixelSizeUm);
@@ -2048,6 +2621,16 @@ export async function runNativeFieldMtfMap(
       if (Number.isFinite(fl) && fl > 0 && Number.isFinite(fWork) && fWork > 0) {
         focalLengthMm = Math.abs(fl);
         pupilDiameterMm = focalLengthMm / fWork;
+      }
+
+      const derived: any = derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows as any[], wl, true);
+      const derivedPupilDiameterMm = Number(derived?.pupilDiameterMm);
+      const derivedFocalLengthMm = Number(derived?.focalLengthMm);
+      if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0) && Number.isFinite(derivedPupilDiameterMm) && derivedPupilDiameterMm > 0) {
+        pupilDiameterMm = Math.abs(derivedPupilDiameterMm);
+      }
+      if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0) && Number.isFinite(derivedFocalLengthMm) && derivedFocalLengthMm > 0) {
+        focalLengthMm = Math.abs(derivedFocalLengthMm);
       }
 
       if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0)) {
@@ -2069,12 +2652,6 @@ export async function runNativeFieldMtfMap(
         if (Number.isFinite(fl2) && Math.abs(fl2) > 1e-9 && fl2 !== Infinity) {
           focalLengthMm = Math.abs(fl2);
         }
-      }
-
-      if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0) || !(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) {
-        const derived: any = derivePupilAndFocalLengthMmFromParaxial(opticalSystemRows as any[], wl, true);
-        if (!(Number.isFinite(pupilDiameterMm) && pupilDiameterMm > 0)) pupilDiameterMm = Number(derived?.pupilDiameterMm);
-        if (!(Number.isFinite(focalLengthMm) && focalLengthMm > 0)) focalLengthMm = Number(derived?.focalLengthMm);
       }
     } catch (_) {
       // fallback below
@@ -2117,9 +2694,24 @@ export async function runNativeFieldMtfMap(
 
         let fixedTargetSurfaceIndex: number | undefined = undefined;
         let fixedPupilRadiusMm: number | undefined = undefined;
-        const shouldAnchorEntranceRadius = axisMode === "angle" && requestedPupilSamplingMode !== "stop";
+        // Choose an anchor field with the largest |value| so the entrance pupil
+        // radius is well-defined. On-axis (0 deg) is degenerate for entrance
+        // sampling and must not be used as anchor.
+        const anchorIndex = (() => {
+          let idx = -1;
+          let best = 0;
+          for (let i = 0; i < xAxis.length; i++) {
+            const v = Math.abs(Number(xAxis[i]));
+            if (Number.isFinite(v) && v > best) { best = v; idx = i; }
+          }
+          return idx;
+        })();
+        const shouldAnchorEntranceRadius =
+          axisMode === "angle"
+          && requestedPupilSamplingMode !== "stop"
+          && anchorIndex >= 0;
         try {
-          const anchorFieldValue = (xAxis.length > 0 && Number.isFinite(Number(xAxis[0]))) ? Number(xAxis[0]) : 0;
+          const anchorFieldValue = anchorIndex >= 0 ? Number(xAxis[anchorIndex]) : 0;
           const anchorObjectRows = cloneObjectRowsForField(anchorFieldValue);
           const anchorAutoMode = axisMode === "angle" ? "entrance" : undefined;
           const anchorPupilSamplingMode = requestedPupilSamplingMode || anchorAutoMode;
@@ -2160,23 +2752,17 @@ export async function runNativeFieldMtfMap(
           let firstM = Number.NaN, firstS = Number.NaN, secondM = Number.NaN, secondS = Number.NaN;
           let opdRespAny: any = {};
           try {
-            const stepObjectRows = cloneObjectRowsForField(fieldValue);
-            const autoMode = axisMode === "angle" ? "entrance" : undefined;
-            const pupilSamplingMode = requestedPupilSamplingMode || autoMode;
-
-            const opdRaw = runNativeOpdWasm(JSON.stringify({
-              opticalSystemRows,
-              sourceRows,
-              objectRows: stepObjectRows,
-              objectIndex,
-              surfaceIndex: fixedTargetSurfaceIndex,
-              gridSize: samplingSize,
-              wavelengthUm: wl,
-              pupilRadiusMm: fixedPupilRadiusMm,
-              pupilSamplingMode,
-              opdDisplayMode,
-            }));
-            const opdResp: any = (typeof opdRaw === "string") ? JSON.parse(opdRaw) : opdRaw;
+            const opdResult = await runFieldOpdWithRetry({
+              wl,
+              fieldValue,
+              fixedTargetSurfaceIndex,
+              fixedPupilRadiusMm,
+              runNativeOpdWasmJson: runNativeOpdWasm,
+            });
+            if (!opdResult.response) {
+              throw new Error(opdResult.errorMessage || "field failed");
+            }
+            const opdResp: any = opdResult.response;
             opdRespAny = opdResp;
 
             const psfRaw = runNativePsfWasm(JSON.stringify({
@@ -2189,25 +2775,15 @@ export async function runNativeFieldMtfMap(
             }));
             const psfResp: any = (typeof psfRaw === "string") ? JSON.parse(psfRaw) : psfRaw;
 
-            const mtfRaw = runNativeMtfWasm(JSON.stringify({
+            const samples = await computeFieldCurveSamples({
               psfData: psfResp?.psfData,
               pixelSizeUm,
-              maxFrequencyLpmm: Math.max(1, Math.max(firstFrequencyLpmm, secondFrequencyLpmm) * 2),
-              points: 121,
-            }));
-            const mtfResp: any = (typeof mtfRaw === "string") ? JSON.parse(mtfRaw) : mtfRaw;
-
-            const freqAxis = Array.isArray(mtfResp?.frequencyAxis) ? mtfResp.frequencyAxis.map((v: any) => Number(v)) : [];
-            const mtfTangential = Array.isArray(mtfResp?.mtfTangential) ? mtfResp.mtfTangential.map((v: any) => Number(v)) : [];
-            const mtfSagittal = Array.isArray(mtfResp?.mtfSagittal) ? mtfResp.mtfSagittal.map((v: any) => Number(v)) : [];
-            const tanAxis = inferTanAxis(fieldValue);
-            const tanVals = tanAxis === "x" ? mtfSagittal : mtfTangential;
-            const sagVals = tanAxis === "x" ? mtfTangential : mtfSagittal;
-
-            firstM = interpolateAxisValue(freqAxis, tanVals, firstFrequencyLpmm);
-            firstS = interpolateAxisValue(freqAxis, sagVals, firstFrequencyLpmm);
-            secondM = interpolateAxisValue(freqAxis, tanVals, secondFrequencyLpmm);
-            secondS = interpolateAxisValue(freqAxis, sagVals, secondFrequencyLpmm);
+              fieldValue,
+            });
+            firstM = samples.firstM;
+            firstS = samples.firstS;
+            secondM = samples.secondM;
+            secondS = samples.secondS;
           } catch (fieldErr: any) {
             opdRespAny = { error: String(fieldErr?.message || fieldErr || "field failed") };
           }
@@ -2272,7 +2848,10 @@ export async function runNativeFieldMtfMap(
 
   if (!isTauriRuntime()) {
     let runNativeOpdWasmDirect: ((json: string) => unknown) | null = null;
-    try {
+    // Pure paraxial/ThinLens systems must skip the raw WASM OPD path because the Rust fast path
+    // does not apply the ideal thin-lens bend and returns incorrect (large) OPD values.
+    // Force null so runFieldOpdWithRetry falls back to runNativeOpdMap which handles paraxial correctly.
+    if (!isIdealParaxialOnlyNativeOpdSystem(opticalSystemRows)) try {
       const { preloadRustRayTracingWasm } = await import("../../../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts");
       const rust = await preloadRustRayTracingWasm();
       const fn = (rust as any)?.run_native_opd_map_wasm_json;
@@ -2291,13 +2870,25 @@ export async function runNativeFieldMtfMap(
       const meridionalSecond: number[] = [];
       const sagittalSecond: number[] = [];
       const fieldDiagnostics: any[] = [];
-      const pixelSizeUm = await resolvePixelSizeUm(wl);
+      const requestedPixelSizeUm = await resolvePixelSizeUm(wl);
 
       let fixedTargetSurfaceIndex: number | undefined = undefined;
       let fixedPupilRadiusMm: number | undefined = undefined;
-      const shouldAnchorEntranceRadius = axisMode === "angle" && requestedPupilSamplingMode !== "stop";
+      const anchorIndex = (() => {
+        let idx = -1;
+        let best = 0;
+        for (let i = 0; i < xAxis.length; i++) {
+          const v = Math.abs(Number(xAxis[i]));
+          if (Number.isFinite(v) && v > best) { best = v; idx = i; }
+        }
+        return idx;
+      })();
+      const shouldAnchorEntranceRadius =
+        axisMode === "angle"
+        && requestedPupilSamplingMode !== "stop"
+        && anchorIndex >= 0;
       try {
-        const anchorFieldValue = (xAxis.length > 0 && Number.isFinite(Number(xAxis[0]))) ? Number(xAxis[0]) : 0;
+        const anchorFieldValue = anchorIndex >= 0 ? Number(xAxis[anchorIndex]) : 0;
         const anchorObjectRows = cloneObjectRowsForField(anchorFieldValue);
         const anchorAutoMode = axisMode === "angle" ? "entrance" : undefined;
         const anchorPupilSamplingMode = requestedPupilSamplingMode || anchorAutoMode;
@@ -2338,43 +2929,24 @@ export async function runNativeFieldMtfMap(
         let firstS = Number.NaN;
         let secondM = Number.NaN;
         let secondS = Number.NaN;
+        let firstLo: number | null = null;
+        let firstHi: number | null = null;
+        let secondLo: number | null = null;
+        let secondHi: number | null = null;
         let opdRespAny: any = {};
 
         try {
-          const stepObjectRows = cloneObjectRowsForField(fieldValue);
-          const autoMode = axisMode === "angle" ? "entrance" : undefined;
-          const pupilSamplingMode = requestedPupilSamplingMode || autoMode;
-
-          const opdResp = (() => {
-            if (runNativeOpdWasmDirect) {
-              const raw = runNativeOpdWasmDirect(JSON.stringify({
-                opticalSystemRows,
-                sourceRows,
-                objectRows: stepObjectRows,
-                objectIndex,
-                surfaceIndex: fixedTargetSurfaceIndex,
-                gridSize: samplingSize,
-                wavelengthUm: wl,
-                pupilRadiusMm: fixedPupilRadiusMm,
-                pupilSamplingMode,
-                opdDisplayMode,
-              }));
-              return (typeof raw === "string") ? JSON.parse(raw) : raw;
-            }
-            return null;
-          })() || await runNativeOpdMap({
-            opticalSystemRows,
-            sourceRows,
-            objectRows: stepObjectRows,
-            objectIndex,
-            surfaceIndex: fixedTargetSurfaceIndex,
-            gridSize: samplingSize,
-            wavelengthUm: wl,
-            pupilRadiusMm: fixedPupilRadiusMm,
-            pupilSamplingMode,
-            opdDisplayMode,
-          } as NativeOpdMapRequest);
-
+          const opdResult = await runFieldOpdWithRetry({
+            wl,
+            fieldValue,
+            fixedTargetSurfaceIndex,
+            fixedPupilRadiusMm,
+            runNativeOpdWasmJson: runNativeOpdWasmDirect,
+          });
+          if (!opdResult.response) {
+            throw new Error(opdResult.errorMessage || "field failed");
+          }
+          const opdResp = opdResult.response as any;
           opdRespAny = opdResp as any;
 
           const s = samplingSize;
@@ -2402,30 +2974,51 @@ export async function runNativeFieldMtfMap(
             gridOpd,
             pupilMask,
             wavelengthUm: wl,
-            pixelSizeUm,
+            pixelSizeUm: requestedPixelSizeUm,
             removeTilt: false,
             zeroPadTo: requestedFftSize,
             recenterIfWrapped: false,
           } as NativePsfMapRequest);
 
-          const mtfResp = await runNativeMtfMap({
+          const effectivePixelSizeUm = Number.isFinite(Number((psfResp as any)?.pixelSizeUm))
+            ? Number((psfResp as any).pixelSizeUm)
+            : requestedPixelSizeUm;
+
+          const samples = await computeFieldCurveSamples({
             psfData: (psfResp as any)?.psfData,
-            pixelSizeUm,
-            maxFrequencyLpmm: Math.max(1, Math.max(firstFrequencyLpmm, secondFrequencyLpmm) * 2),
-            points: 121,
-          } as NativeMtfMapRequest);
+            pixelSizeUm: effectivePixelSizeUm,
+            fieldValue,
+          });
+          firstM = samples.firstM;
+          firstS = samples.firstS;
+          secondM = samples.secondM;
+          secondS = samples.secondS;
+          firstLo = samples.firstLo;
+          firstHi = samples.firstHi;
+          secondLo = samples.secondLo;
+          secondHi = samples.secondHi;
 
-          const freqAxis = Array.isArray((mtfResp as any)?.frequencyAxis) ? (mtfResp as any).frequencyAxis : [];
-          const mtfTangential = Array.isArray((mtfResp as any)?.mtfTangential) ? (mtfResp as any).mtfTangential : [];
-          const mtfSagittal = Array.isArray((mtfResp as any)?.mtfSagittal) ? (mtfResp as any).mtfSagittal : [];
-          const tanAxis = inferTanAxis(fieldValue);
-          const tanVals = tanAxis === "x" ? mtfSagittal : mtfTangential;
-          const sagVals = tanAxis === "x" ? mtfTangential : mtfSagittal;
-
-          firstM = interpolateAxisValue(freqAxis, tanVals, firstFrequencyLpmm);
-          firstS = interpolateAxisValue(freqAxis, sagVals, firstFrequencyLpmm);
-          secondM = interpolateAxisValue(freqAxis, tanVals, secondFrequencyLpmm);
-          secondS = interpolateAxisValue(freqAxis, sagVals, secondFrequencyLpmm);
+          const idealSamples = await maybeComputeIdealParaxialFieldCurveSamples({
+            displayOpdGrid,
+            pupilMask,
+            wavelengthUm: wl,
+            pixelSizeUm: effectivePixelSizeUm,
+            fieldValue,
+          });
+          if (idealSamples) {
+            firstM = idealSamples.firstM;
+            firstS = idealSamples.firstS;
+            secondM = idealSamples.secondM;
+            secondS = idealSamples.secondS;
+            firstLo = idealSamples.firstLo;
+            firstHi = idealSamples.firstHi;
+            secondLo = idealSamples.secondLo;
+            secondHi = idealSamples.secondHi;
+            opdRespAny = {
+              ...(opdRespAny || {}),
+              message: `${String(opdRespAny?.message || "")}${opdRespAny?.message ? " | " : ""}ideal-diffraction-override(rms=${idealSamples.wavefrontRms.toExponential(3)})`,
+            };
+          }
         } catch (fieldErr: any) {
           opdRespAny = { error: String(fieldErr?.message || fieldErr || "field failed") };
         }
@@ -2444,14 +3037,19 @@ export async function runNativeFieldMtfMap(
           usedObjectPosition: String(opdRespAny?.usedObjectPosition || ""),
           targetSurfaceIndex: Number(opdRespAny?.targetSurface),
           usedObjectIndex: Number(opdRespAny?.usedObjectIndex),
+            requestedPixelSizeUm,
           opdSampleCount: sampleCount,
           opdHitCount: hitCount,
           opdHitRate: sampleCount > 0 ? (hitCount / sampleCount) : 0,
           opdMessage: String(opdRespAny?.message || opdRespAny?.error || ""),
           firstFrequencyLpmm,
+            firstBracketLowLpmm: firstLo,
+            firstBracketHighLpmm: firstHi,
           firstValueMeridional: firstM,
           firstValueSagittal: firstS,
           secondFrequencyLpmm,
+            secondBracketLowLpmm: secondLo,
+            secondBracketHighLpmm: secondHi,
           secondValueMeridional: secondM,
           secondValueSagittal: secondS,
         });
@@ -3068,29 +3666,70 @@ export async function runNativeGridDistortion(
       }
     }
 
-    const spotResponse = await runNativeSpotRaytrace({
-      opticalSystemRows,
-      sourceRows,
-      objectRows,
-      surfaceIndex,
-      rayCount: 51,
-      ringCount: 1,
-      pattern: "cross",
-      wavelengthMode: "primary",
-    });
+    const { calculateChiefRayNewton } = await import("../../../evaluation/aberrations/transverse-aberration.ts");
     const realX = new Array(idealX.length).fill(null) as Array<number | null>;
     const realY = new Array(idealY.length).fill(null) as Array<number | null>;
-    const series = Array.isArray(spotResponse?.series) ? spotResponse.series : [];
-    for (const row of series as any[]) {
-      const match = String(row?.label || "").match(/Field-(\d+)/);
-      if (!match) continue;
-      const index = Number(match[1]);
-      if (!Number.isInteger(index) || index < 0 || index >= realX.length) continue;
-      const xUm = Number(row?.chiefPointUm?.xUm);
-      const yUm = Number(row?.chiefPointUm?.yUm);
-      if (Number.isFinite(xUm) && Number.isFinite(yUm)) {
-        realX[index] = xUm / 1000;
-        realY[index] = yUm / 1000;
+    let directChiefRayCount = 0;
+    const g = (typeof globalThis !== "undefined") ? (globalThis as any) : null;
+    const prevTraceOverride = g ? g.__cooptTraceOptionsOverride : undefined;
+
+    try {
+      if (g) {
+        g.__cooptTraceOptionsOverride = {
+          ...(prevTraceOverride && typeof prevTraceOverride === "object" ? prevTraceOverride : {}),
+          useRustWasm: true,
+          requireRustWasm: false,
+          requireForwardHit: true,
+        };
+      }
+
+      for (let index = 0; index < objectRows.length; index++) {
+        const field = objectRows[index] || {};
+        const chief = calculateChiefRayNewton(
+          opticalSystemRows,
+          {
+            ...field,
+            displayName: String(field?.name || field?.id || `Field-${index}`),
+          },
+          wavelength,
+          "unified",
+          {
+            targetSurfaceIndex: surfaceIndex,
+            chiefRayDefinition: "stop-center",
+            requireRustWasm: false,
+            rayCount: 51,
+          },
+        );
+
+        const segs = Array.isArray(chief?.rayData?.segments)
+          ? chief.rayData.segments
+          : (Array.isArray(chief?.segments) ? chief.segments : []);
+        if (!segs.length) continue;
+
+        const hitIdx = Math.max(0, Math.min(surfaceIndex, segs.length - 1));
+        const p = segs[hitIdx] || segs[segs.length - 1] || null;
+        const x = Number(p?.x);
+        const y = Number(p?.y);
+        if (Number.isFinite(x) && Number.isFinite(y) && index >= 0 && index < realX.length) {
+          realX[index] = x;
+          realY[index] = y;
+          directChiefRayCount += 1;
+        }
+      }
+    } finally {
+      if (g) {
+        g.__cooptTraceOptionsOverride = prevTraceOverride;
+      }
+    }
+
+    let missingFieldFallbackCount = 0;
+    for (let i = 0; i < realX.length; i++) {
+      const rx = Number(realX[i]);
+      const ry = Number(realY[i]);
+      if (!Number.isFinite(rx) || !Number.isFinite(ry)) {
+        realX[i] = Number.isFinite(Number(idealX[i])) ? Number(idealX[i]) : 0;
+        realY[i] = Number.isFinite(Number(idealY[i])) ? Number(idealY[i]) : 0;
+        missingFieldFallbackCount += 1;
       }
     }
 
@@ -3109,6 +3748,8 @@ export async function runNativeGridDistortion(
         focalLengthForGrid,
         finiteSystem,
         surfaceIndex,
+        directChiefRayCount,
+        missingFieldFallbackCount,
       },
       message: "Computed via Web Rust/WASM grid distortion API",
     };

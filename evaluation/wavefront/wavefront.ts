@@ -43,6 +43,48 @@ function __wavefrontIsGapRow(row) {
         kind === 'gap' || kind === 'air gap' || kindCompact === 'gap' || kindCompact === 'airgap'
     );
 }
+
+function __wavefrontIsIdealParaxialOnlySystem(opticalSystemRows: any[] = []) {
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return false;
+
+    let hasIdealParaxial = false;
+    for (const row of opticalSystemRows) {
+        if (!row || typeof row !== 'object') continue;
+
+        const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+        const surfType = String(row?.surfType ?? row?.type ?? row?.surfaceType ?? '').trim().toLowerCase();
+        const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+
+        const isIdealParaxial = (
+            blockType === 'paraxial'
+            || blockType === 'thinlens'
+            || surfType === 'thinlens'
+            || Number.isFinite(Number(row?._thinLensFocalLengthX))
+            || Number.isFinite(Number(row?._thinLensFocalLengthY))
+        );
+        if (isIdealParaxial) {
+            hasIdealParaxial = true;
+            continue;
+        }
+
+        const isPassiveRow = (
+            objectType === ''
+            || objectType === 'object'
+            || objectType === 'image'
+            || objectType === 'stop'
+            || __wavefrontIsGapRow(row)
+            || surfType === 'coordinate break'
+            || surfType === 'coordbrk'
+            || blockType === 'coordinate break'
+            || blockType === 'coordbrk'
+        );
+        if (isPassiveRow) continue;
+
+        return false;
+    }
+
+    return hasIdealParaxial;
+}
 function setCheckOnAxisOPDSymmetry(enabled) {
     try {
         if (typeof window === 'undefined') return;
@@ -1715,6 +1757,19 @@ export class OpticalPathDifferenceCalculator {
         return __wavefrontIsGapRow(row);
     }
 
+    isThinLensRow(row) {
+        const fields = [row?._blockType, row?.blockType, row?.block_type, row?.blockTypeName];
+        return fields.some((v) => {
+            const s = String(v ?? '').trim().toLowerCase();
+            return s === 'thinlens' || s === 'paraxial';
+        });
+    }
+
+    isThinLensBackRow(row) {
+        if (!this.isThinLensRow(row)) return false;
+        return String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase() === 'back';
+    }
+
     getFiniteObjectPosition(fieldSetting) {
         const xObject = Number(fieldSetting?.xHeight ?? 0) || 0;
         const yObject = Number(fieldSetting?.yHeight ?? 0) || 0;
@@ -1774,6 +1829,7 @@ export class OpticalPathDifferenceCalculator {
             if (this.isCoordTransRow(row)) continue;
             if (this.isObjectRow(row)) continue;
             if (this.isGapRow(row)) continue;
+            if (this.isThinLensBackRow(row)) continue;
             indices.push(i);
         }
         return indices;
@@ -2054,20 +2110,30 @@ export class OpticalPathDifferenceCalculator {
             : this.evaluationSurfaceIndex;
         const preparedTraceOptions = this.getTraceOptionsForSurface(maxIdx, traceOptions);
         const expectedPointCount = this.getExpectedPointCountForSurface(maxIdx);
-        
+
         const result = traceRay(this.opticalSystemRows, ray0, n0, null, maxIdx, preparedTraceOptions);
-        
-        // Check if ray reached evaluation surface (comparing with non-CT surface count)
+
         if (!result || !Array.isArray(result)) {
             return null;
         }
-        
-        // CT surfaces don't contribute to ray path, so we only check against non-CT count
+
+        // Prefer the recorded-surface count, but tolerate tracer-specific hidden surfaces
+        // (for example the skipped ThinLens/Paraxial back face) if the final point still
+        // lands on the requested evaluation surface.
         if (result.length < expectedPointCount) {
-            // Ray didn't reach evaluation surface
-            return null;
+            const lastPoint = result[result.length - 1];
+            const evalOrigin = this.getSurfaceOrigin(maxIdx);
+            const dz = Math.abs(Number(lastPoint?.z) - Number(evalOrigin?.z));
+            const dx = Math.abs(Number(lastPoint?.x) - Number(evalOrigin?.x));
+            const dy = Math.abs(Number(lastPoint?.y) - Number(evalOrigin?.y));
+            const onEvalPlane = Number.isFinite(dz) && dz <= 1e-5;
+            const evalOriginFinite = Number.isFinite(Number(evalOrigin?.x)) && Number.isFinite(Number(evalOrigin?.y));
+            const nearEvalOrigin = evalOriginFinite && Number.isFinite(dx) && Number.isFinite(dy) && Math.hypot(dx, dy) <= 1e-4;
+            if (!(onEvalPlane || nearEvalOrigin)) {
+                return null;
+            }
         }
-        
+
         return result;
     }
 
@@ -8242,6 +8308,13 @@ export class WavefrontAberrationAnalyzer {
             wavefrontMap.pupilMaskStats = { gridSize: g, occupiedCells: total, components, largestComponent: largest };
         } catch (_) {
             // ignore
+        }
+
+        const isIdealParaxialOnly = __wavefrontIsIdealParaxialOnlySystem(
+            this.opdCalculator?.opticalSystemRows || this.opticalSystemRows || []
+        );
+        if (isIdealParaxialOnly) {
+            wavefrontMap.idealParaxialOnly = true;
         }
 
         // raw を退避

@@ -3408,6 +3408,14 @@ pub fn run_native_through_focus_mtf_map(
             return Err("run_native_through_focus_mtf_map: opticalSystemRows is empty".to_string());
         }
 
+        let normalized_optical_rows = req
+            .optical_system_rows
+            .iter()
+            .map(normalize_coord_trans_row)
+            .collect::<Vec<Value>>();
+        let surface_index_for_pixel_scale = find_evaluation_surface_index_native(&normalized_optical_rows)
+            .min(normalized_optical_rows.len().saturating_sub(1));
+
         let min_mm = req.defocus_min_mm.unwrap_or(-0.1);
         let max_mm = req.defocus_max_mm.unwrap_or(0.1);
         let steps = req.steps.unwrap_or(21).clamp(3, 201) as usize;
@@ -3415,10 +3423,6 @@ pub fn run_native_through_focus_mtf_map(
         let sampling_size = req.sampling_size.unwrap_or(256).clamp(32, 4096) as usize;
         let zero_pad_to = req.zero_pad_to.unwrap_or(0) as usize;
         let requested_fft_size = resolve_mtf_fft_size(sampling_size, zero_pad_to, 121);
-        let pixel_size_um = req
-            .pixel_size_um
-            .filter(|v| v.is_finite() && *v > 0.0)
-            .unwrap_or(1.0);
         let object_index = req.object_index.unwrap_or(0);
         let requested_pupil_sampling_mode = req
             .pupil_sampling_mode
@@ -3457,6 +3461,15 @@ pub fn run_native_through_focus_mtf_map(
 
         let mut series = Vec::<NativeThroughFocusMtfSeries>::with_capacity(wavelengths.len());
         for (wi, wl) in wavelengths.iter().copied().enumerate() {
+            let pixel_size_um = resolve_mtf_pixel_size_um_native(
+                req.pixel_size_um,
+                &normalized_optical_rows,
+                &req.source_rows,
+                surface_index_for_pixel_scale,
+                wl,
+                sampling_size,
+                requested_fft_size,
+            );
             let mut tan_vec = Vec::<f64>::with_capacity(x_axis.len());
             let mut sag_vec = Vec::<f64>::with_capacity(x_axis.len());
 
@@ -3654,10 +3667,6 @@ pub fn run_native_field_mtf_map(
         let sampling_size = req.sampling_size.unwrap_or(256).clamp(32, 4096) as usize;
         let zero_pad_to = req.zero_pad_to.unwrap_or(0) as usize;
         let requested_fft_size = resolve_mtf_fft_size(sampling_size, zero_pad_to, 121);
-        let pixel_size_um = req
-            .pixel_size_um
-            .filter(|v| v.is_finite() && *v > 0.0)
-            .unwrap_or(1.0);
         let opd_display_mode = req
             .opd_display_mode
             .clone()
@@ -3730,6 +3739,15 @@ pub fn run_native_field_mtf_map(
 
         let mut series = Vec::<NativeFieldMtfSeries>::with_capacity(wavelengths.len());
         for wl in wavelengths {
+            let pixel_size_um = resolve_mtf_pixel_size_um_native(
+                req.pixel_size_um,
+                &normalized_optical_rows,
+                &req.source_rows,
+                fixed_eval_surface_index,
+                wl,
+                sampling_size,
+                requested_fft_size,
+            );
             let mut meridional_first = Vec::<f64>::with_capacity(x_axis.len());
             let mut sagittal_first = Vec::<f64>::with_capacity(x_axis.len());
             let mut meridional_second = Vec::<f64>::with_capacity(x_axis.len());
@@ -6050,6 +6068,37 @@ fn distortion_estimate_focal_length_mm(
     } else {
         None
     }
+}
+
+fn resolve_mtf_pixel_size_um_native(
+    explicit_pixel_size_um: Option<f64>,
+    rows: &[Value],
+    source_rows: &[Value],
+    surface_index: usize,
+    wavelength_um: f64,
+    sampling_size: usize,
+    requested_fft_size: usize,
+) -> f64 {
+    if let Some(v) = explicit_pixel_size_um.filter(|v| v.is_finite() && *v > 0.0) {
+        return v.abs().max(1.0e-12);
+    }
+
+    let focal_length_mm = distortion_estimate_focal_length_mm(rows, source_rows, surface_index, 1.0)
+        .map(f64::abs)
+        .filter(|v| v.is_finite() && *v > 1.0e-9)
+        .unwrap_or(100.0);
+
+    let stop_radius_mm = estimate_stop_radius_mm(rows);
+    let entrance_radius_mm = estimate_entrance_radius_mm(rows).abs().clamp(0.01, 500.0);
+    let pupil_radius_mm = if stop_radius_mm.is_finite() && stop_radius_mm > 0.0 {
+        stop_radius_mm.abs().min(entrance_radius_mm).max(0.01)
+    } else {
+        entrance_radius_mm
+    };
+    let pupil_diameter_mm = (pupil_radius_mm * 2.0).max(1.0e-12);
+    let fft_scale = ((sampling_size as f64) / (requested_fft_size.max(sampling_size) as f64)).clamp(1.0e-6, 1.0);
+    let base_pixel_pitch_um = wavelength_um.abs().max(1.0e-12) * focal_length_mm / pupil_diameter_mm;
+    (base_pixel_pitch_um * fft_scale).max(1.0e-12)
 }
 
 fn distortion_estimate_height_magnification(

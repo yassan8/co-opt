@@ -5460,7 +5460,32 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
         return;
     }
 
-    // Compute per-block surface index ranges (skip Object/Gap/CoordTrans rows)
+    const isLogicalDesignIntentSurfaceRow = (row: any) => {
+        if (!row || typeof row !== 'object') return false;
+        const rowBlockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+        const rowSurfaceRole = String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase();
+        if (rowBlockType === 'gap' || rowBlockType === 'airgap' || rowBlockType === 'air gap') return false;
+        if (rowBlockType === 'coordtrans' || rowBlockType === 'coord trans') return false;
+        if (rowBlockType === 'objectsurface' || rowBlockType === 'objectplane' || rowBlockType === 'object') return false;
+        if ((rowBlockType === 'paraxial' || rowBlockType === 'thinlens') && rowSurfaceRole === 'back') return false;
+        return true;
+    };
+
+    const getLogicalSurfaceCountForBlock = (blockLike: any) => {
+        const blockId = String(blockLike?.blockId ?? '').trim();
+        const range = blockId ? surfRangeByBlockId.get(blockId) : null;
+        if (range && Number.isFinite(range.min) && Number.isFinite(range.max)) {
+            return Math.max(0, (range.max - range.min) + 1);
+        }
+
+        const blockType = String(blockLike?.blockType ?? '').trim();
+        if (blockType === 'Paraxial' || blockType === 'ThinLens') return 1;
+
+        const n = Number(blockLike?.surfaceCount ?? 0);
+        return Number.isFinite(n) ? n : 0;
+    };
+
+    // Compute per-block surface index ranges using the same logical numbering as Spot Diagram.
     const surfRangeByBlockId = new Map<string, {min:number, max:number}>();
     try {
         if (Array.isArray(blocksInOrder) && blocksInOrder.length > 0 && typeof w.expandBlocksToOpticalSystemRows === 'function') {
@@ -5471,15 +5496,13 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 const r = rows[i];
                 const bid = String(r?._blockId ?? '').trim();
                 if (!bid) continue;
-                const rowBlockType = String(r?._blockType ?? '').trim();
-                if (rowBlockType === 'Gap' || rowBlockType === 'CoordTrans') continue;
-                if (rowBlockType === 'ObjectSurface' || rowBlockType === 'ObjectPlane' || rowBlockType === 'Object') continue;
+                if (!isLogicalDesignIntentSurfaceRow(r)) continue;
                 surfaceNo += 1;
                 const prev = surfRangeByBlockId.get(bid);
-                    if (!prev) surfRangeByBlockId.set(bid, { min: surfaceNo, max: surfaceNo });
+                if (!prev) surfRangeByBlockId.set(bid, { min: surfaceNo, max: surfaceNo });
                 else {
-                        if (surfaceNo < prev.min) prev.min = surfaceNo;
-                        if (surfaceNo > prev.max) prev.max = surfaceNo;
+                    if (surfaceNo < prev.min) prev.min = surfaceNo;
+                    if (surfaceNo > prev.max) prev.max = surfaceNo;
                 }
             }
         }
@@ -5493,7 +5516,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 if (!blockId) continue;
                 const blockType = String(b?.blockType ?? '').trim();
                 if (blockType === 'ObjectSurface' || blockType === 'ObjectPlane' || blockType === 'Object') continue;
-                const count = Number(b?.surfaceCount ?? 0);
+                const count = getLogicalSurfaceCountForBlock(b);
                 if (!Number.isFinite(count) || count <= 0) continue;
                 const start = surfaceNo + 1;
                 const end = surfaceNo + count;
@@ -5610,7 +5633,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
         const colCount = document.createElement('div');
         colCount.className = 'block-inspector-col-count';
-        const n = Number(b.surfaceCount ?? 0);
+        const n = getLogicalSurfaceCountForBlock(b);
         colCount.textContent = `→ ${Number.isFinite(n) ? n : 0} surfaces`;
 
         row.appendChild(colId);

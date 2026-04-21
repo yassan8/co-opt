@@ -305,6 +305,7 @@ export interface NativePsfMapResponse {
   fftSize: number;
   psfData: number[][];
   metrics: NativePsfMetrics;
+  pixelSizeUm?: number;
   message: string;
 }
 

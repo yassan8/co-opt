@@ -1379,14 +1379,20 @@ if (typeof window !== 'undefined') {
 function __spot_isSkippableRayPathRow(row) {
     if (!row || typeof row !== 'object') return true;
     const ot = String(row['object type'] ?? row.object ?? '').trim().toLowerCase();
-    if (ot === 'object') return true;
+    const blockType = String(row._blockType ?? row.blockType ?? '').trim().toLowerCase();
+    if (ot === 'object' || blockType === 'object' || blockType === 'objectsurface' || blockType === 'objectplane') return true;
     // Coord Break rows are transforms only; traceRay() does not record hit points for them.
     const st = String(row.surfType ?? row['surf type'] ?? row.type ?? '').trim().toLowerCase();
     if (st === 'coord trans' || st === 'coordtrans' || st === 'ct' || st === 'coordinate break' || st === 'coordinatebreak') return true;
     // Gap rows are non-physical separators and do not create hit points in rayPath.
     if (st === 'gap' || st === 'air gap' || st === 'airgap') return true;
-    const blockType = String(row._blockType ?? row.blockType ?? '').trim().toLowerCase();
     if (blockType === 'gap' || blockType === 'air gap' || blockType === 'airgap') return true;
+    // Paraxial/ThinLens back surface: traceRay() applies ideal refraction on the front face and
+    // skips the back face with `continue` — no rayPath point is recorded for it.
+    if ((blockType === 'paraxial' || blockType === 'thinlens')) {
+        const surfaceRole = String(row._surfaceRole ?? row.surfaceRole ?? '').trim().toLowerCase();
+        if (surfaceRole === 'back') return true;
+    }
     const blockRole = String(row._surfaceRole ?? row.surfaceRole ?? '').trim().toLowerCase();
     if (blockRole === 'gap' || blockRole === 'air gap' || blockRole === 'airgap') return true;
     const kind = String(row.kind ?? '').trim().toLowerCase();
@@ -1951,7 +1957,6 @@ export async function generateSpotDiagramAsync(
                     asyncProfile.timingsMs.traceRay += Math.max(0, nowMs() - traceStartMs);
                     asyncProfile.counters.traceRayCalls += 1;
                     const rayPath = traced.result;
-
                     if (rayPath && Array.isArray(rayPath) && targetPointIndex !== null && rayPath.length > targetPointIndex && targetSurfaceIndex >= 0) {
                         const hitPointGlobal = rayPath[targetPointIndex];
                         const surfaceInfo = surfaceInfoList[targetSurfaceIndex];
@@ -3700,6 +3705,9 @@ export function generateSurfaceOptions(opticalSystemRows) {
         const objTypeRaw = surfaceData?.['object type'] ?? surfaceData?.objectType ?? surfaceData?.object ?? '';
         const surfTypeRaw = surfaceData?.surfType ?? surfaceData?.['surf type'] ?? surfaceData?.type ?? '';
         const surfaceType = (objTypeRaw || surfTypeRaw || 'Standard');
+        const blockType = String(surfaceData?._blockType ?? surfaceData?.blockType ?? '').trim();
+        const surfaceRole = String(surfaceData?._surfaceRole ?? surfaceData?.surfaceRole ?? '').trim().toLowerCase();
+        const isParaxialLike = /^(paraxial|thinlens)$/i.test(blockType);
         const radius = surfaceData.radius || 'INF';
 
         // Non-physical rows are not selectable and do not count in Spot surface numbering.
@@ -3748,11 +3756,28 @@ export function generateSurfaceOptions(opticalSystemRows) {
             displayName += ` (Stop)`;
         } else if (isImage) {
             displayName += ` (Image)`;
+        } else if (isParaxialLike && surfaceRole !== 'back') {
+            const blockLabel = blockType.toLowerCase() === 'paraxial' ? 'Paraxial' : 'ThinLens';
+            const fx = Number(surfaceData?._thinLensFocalLengthX ?? surfaceData?.focalLengthX ?? surfaceData?.focalLength);
+            const fy = Number(surfaceData?._thinLensFocalLengthY ?? surfaceData?.focalLengthY ?? surfaceData?.focalLength);
+            const fmt = (v) => {
+                if (!Number.isFinite(v)) return null;
+                const rounded = Math.abs(v - Math.round(v)) < 1e-9 ? Math.round(v) : Number(v.toFixed(3));
+                return String(rounded);
+            };
+            displayName += ` (${blockLabel})`;
+            const fxText = fmt(fx);
+            const fyText = fmt(fy);
+            if (fxText && fyText) {
+                displayName += ` Fx=${fxText}, Fy=${fyText}`;
+            } else if (fxText) {
+                displayName += ` F=${fxText}`;
+            }
         } else {
             displayName += ` (${surfaceType})`;
         }
         
-        if (radius !== 'INF') {
+        if (!isParaxialLike && radius !== 'INF') {
             displayName += `, R=${radius}`;
         }
         

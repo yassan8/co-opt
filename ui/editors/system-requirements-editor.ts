@@ -1790,40 +1790,23 @@ class SystemRequirementsEditor {
         return (i >= 0) ? i : Math.max(0, opticalRows.length - 1);
       })();
 
-      const imageSurfaceIdRaw = (() => {
-        if (!Array.isArray(opticalRows) || opticalRows.length === 0) return 1;
-        let sid = 0;
-        let foundImageAt = -1;
-        for (let i = 0; i < opticalRows.length; i++) {
-          const r = opticalRows[i];
-          const ot = String(r?.['object type'] ?? r?.object ?? '').trim().toLowerCase();
-          // Only skip the true Object row (typically index 0). Count everything else,
-          // even if object type is mislabeled, so CB rows are not skipped.
-          if (i === 0 && ot === 'object') continue;
-          sid++;
-          if (isImageRow(r)) {
-            foundImageAt = i;
-            return sid;
-          }
-        }
+      const resolvedSurfaceId = (() => {
         try {
-          console.warn(`⚠️ Image面が見つかりません: config=${cfgKey}, rows=${opticalRows.length}, returning sid=${Math.max(1, sid)}`);
-        } catch (_) {}
-        return Math.max(1, sid);
-      })();
-
-      // If the first row is Object, surfaceId should equal imageIdx (1-based on non-object rows).
-      // Guard against mislabeled rows by aligning surfaceId to imageIdx when they disagree.
-      let resolvedSurfaceId = imageSurfaceIdRaw;
-      try {
-        const row0 = opticalRows && opticalRows.length > 0 ? opticalRows[0] : null;
-        const row0Type = String(row0?.['object type'] ?? row0?.object ?? '').trim().toLowerCase();
-        if (row0Type === 'object' && Number.isInteger(imageIdx) && imageIdx > 0) {
-          if (resolvedSurfaceId !== imageIdx) {
-            resolvedSurfaceId = imageIdx;
+          const opts = generateSurfaceOptions(Array.isArray(opticalRows) ? opticalRows : []);
+          if (Array.isArray(opts) && opts.length > 0) {
+            const imageOpt = opts.find((opt: any) => {
+              const label = String(opt?.label ?? '').toLowerCase();
+              return label.includes('(image)') || label.includes(' image');
+            });
+            const preferred = imageOpt || opts[opts.length - 1];
+            const numericId = Number(preferred?.surfaceId ?? preferred?.value);
+            if (Number.isFinite(numericId) && numericId > 0) {
+              return numericId;
+            }
           }
-        }
-      } catch (_) {}
+        } catch (_) {}
+        return Math.max(1, imageIdx);
+      })();
 
       const primaryWavelengthUm = (() => {
         if (!Array.isArray(sourceRows) || sourceRows.length === 0) return 0.5876;
@@ -3442,6 +3425,18 @@ try {
 } catch (_) {}
 
 const __cooptScheduleSystemRequirementsInit = (): void => {
+  const shouldSkipForPopup = (() => {
+    try {
+      const url = new URL(window.location.href);
+      return url.searchParams.get('coopt_analysis_window') === '1';
+    } catch (_) {
+      return false;
+    }
+  })();
+  if (shouldSkipForPopup) {
+    return;
+  }
+
   if (__cooptInitSystemRequirementsEditor()) {
     return;
   }

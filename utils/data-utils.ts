@@ -468,26 +468,70 @@ export function displayCoordinateTransformMatrix(tableOpticalSystem) {
     
     // Surface Originsを計算
     const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+
+    const normalize = (v) => String(v ?? '').trim().toLowerCase();
+    const compact = (v) => normalize(v).replace(/[\s_-]+/g, '');
+    const isCoordRow = (row) => {
+      const st = String(row?.surfType ?? row?.['surf type'] ?? row?.type ?? '').trim().toLowerCase();
+      const c = compact(st);
+      return st === 'coord trans' || st === 'coordinate break' || st === 'coordinate transform' || c === 'ct' || c === 'coordtrans' || c === 'coordinatebreak';
+    };
+    const isGapRow = (row) => {
+      const st = String(row?.surfType ?? row?.['surf type'] ?? row?.type ?? '').trim().toLowerCase();
+      const bt = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+      const sr = String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase();
+      const sc = compact(st);
+      const bc = compact(bt);
+      return st === 'gap' || st === 'air gap' || sc === 'gap' || sc === 'airgap' || bt === 'gap' || bt === 'air gap' || bc === 'gap' || bc === 'airgap' || sr === 'gap';
+    };
+    const isHiddenParaxialBack = (row) => {
+      const bt = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+      const sr = String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase();
+      return (bt === 'paraxial' || bt === 'thinlens') && sr === 'back';
+    };
+    const shouldDisplayRow = (row) => {
+      const ot = String(row?.['object type'] ?? row?.object ?? '').trim().toLowerCase();
+      if (ot === 'object') return false;
+      if (isCoordRow(row)) return false;
+      if (isGapRow(row)) return false;
+      if (isHiddenParaxialBack(row)) return false;
+      return true;
+    };
+    const getLabel = (row) => {
+      const objType = String(row?.['object type'] ?? row?.object ?? '').trim();
+      const surfType = String(row?.surfType ?? row?.['surf type'] ?? row?.type ?? '').trim();
+      const blockType = String(row?._blockType ?? row?.blockType ?? '').trim().toLowerCase();
+      if (objType) {
+        if (objType.toLowerCase() === 'image') return 'Image';
+        if (objType.toLowerCase() === 'stop') return 'Stop';
+      }
+      if (blockType === 'paraxial') return 'Paraxial';
+      if (blockType === 'thinlens') return 'ThinLens';
+      return surfType || objType || 'Standard';
+    };
     
     let debugOutput = "=== Surface Origins (各面の原点座標) ===\n";
     debugOutput += `計算日時: ${new Date().toLocaleString()}\n\n`;
-    
+
+    let logicalSurfaceNumber = 0;
     surfaceOrigins.forEach((surfaceData, index) => {
       const surface = opticalSystemRows[index];
+      if (!shouldDisplayRow(surface)) return;
+
+      logicalSurfaceNumber += 1;
       const origin = surfaceData.origin;
-      
-      debugOutput += `Surface ${index + 1}: ${surface.surfType || 'Standard'}\n`;
+      debugOutput += `Surface ${logicalSurfaceNumber}: ${getLabel(surface)}\n`;
       debugOutput += `  Origin: X=${origin.x.toFixed(6)}, Y=${origin.y.toFixed(6)}, Z=${origin.z.toFixed(6)}\n`;
-      
-      if (surface.surfType === 'Coord Break' || surface.surfType === 'Coordinate Break') {
+
+      if (isCoordRow(surface)) {
         debugOutput += `  Decenter: X=${surface.decenterX || surface.semidia || 0}, Y=${surface.decenterY || surface.material || 0}\n`;
         debugOutput += `  Tilt: X=${surface.tiltX || surface.rindex || 0}°, Y=${surface.tiltY || surface.abbe || 0}°, Z=${surface.tiltZ || surface.conic || 0}°\n`;
       }
-      
+
       if (surface.thickness) {
         debugOutput += `  Thickness: ${surface.thickness}\n`;
       }
-      
+
       debugOutput += "\n";
     });
     

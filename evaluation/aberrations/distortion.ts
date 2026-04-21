@@ -336,7 +336,9 @@ export async function calculateDistortionData(opticalSystemRows, fieldSamples, w
       requireRustWasm,
     });
 
-    const segs = Array.isArray(chief?.segments) ? chief.segments : [];
+    const segs = Array.isArray(chief?.rayData?.segments)
+      ? chief.rayData.segments
+      : (Array.isArray(chief?.segments) ? chief.segments : []);
     if (!segs.length) return null;
     const idx = Math.max(0, Math.min(imageSurfaceIndex, segs.length - 1));
     const p = segs[idx] || segs[segs.length - 1] || null;
@@ -481,7 +483,9 @@ export async function calculateGridDistortion(opticalSystemRows, gridSize = 20, 
       , requireRustWasm
     });
 
-    const segs = Array.isArray(chief?.segments) ? chief.segments : [];
+    const segs = Array.isArray(chief?.rayData?.segments)
+      ? chief.rayData.segments
+      : (Array.isArray(chief?.segments) ? chief.segments : []);
     if (!segs.length) return null;
     const idx = Math.max(0, Math.min(imageSurfaceIndex, segs.length - 1));
     const p = segs[idx] || segs[segs.length - 1] || null;

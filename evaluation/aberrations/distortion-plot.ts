@@ -357,6 +357,54 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
     }
   }
 
+  const realGridColor = getWavelengthColor(meta.wavelength);
+
+  // Draw real distorted grid mesh so every cell is visible.
+  for (let i = 0; i < gridSize; i++) {
+    const rowX = [];
+    const rowY = [];
+    for (let j = 0; j < gridSize; j++) {
+      const idx = i * gridSize + j;
+      const x = realGrid.x[idx];
+      const y = realGrid.y[idx];
+      rowX.push((x !== null && x !== undefined && isFinite(x)) ? x : null);
+      rowY.push((y !== null && y !== undefined && isFinite(y)) ? y : null);
+    }
+    traces.push({
+      x: rowX,
+      y: rowY,
+      mode: 'lines',
+      line: { color: realGridColor, width: 1.2 },
+      showlegend: i === 0,
+      name: i === 0 ? `Real Grid (λ=${meta.wavelength.toFixed(4)} μm)` : undefined,
+      hoverinfo: 'skip',
+      connectgaps: false,
+      type: 'scatter'
+    });
+  }
+
+  for (let j = 0; j < gridSize; j++) {
+    const colX = [];
+    const colY = [];
+    for (let i = 0; i < gridSize; i++) {
+      const idx = i * gridSize + j;
+      const x = realGrid.x[idx];
+      const y = realGrid.y[idx];
+      colX.push((x !== null && x !== undefined && isFinite(x)) ? x : null);
+      colY.push((y !== null && y !== undefined && isFinite(y)) ? y : null);
+    }
+    traces.push({
+      x: colX,
+      y: colY,
+      mode: 'lines',
+      line: { color: realGridColor, width: 1.2 },
+      showlegend: false,
+      hoverinfo: 'skip',
+      connectgaps: false,
+      type: 'scatter'
+    });
+  }
+
   // Collect real positions (points only)
   let validPointCount = 0;
   const realX = [];
@@ -396,12 +444,17 @@ export async function plotGridDistortion(data, targetDivId = 'distortion-grid', 
     x: realX,
     y: realY,
     mode: 'markers',
-    marker: { 
-      color: getWavelengthColor(meta.wavelength),
-      size: 4,
+    marker: {
+      color: realGridColor,
+      size: 6,
       symbol: 'circle',
-      opacity: 0.8
+      opacity: 0.9,
+      line: {
+        width: 0.8,
+        color: '#333333'
+      }
     },
+    showlegend: false,
     name: `Real Positions (λ=${meta.wavelength.toFixed(4)} μm)`,
     hovertemplate: 'Real: (%{x:.3f}, %{y:.3f}) mm<extra></extra>'
   });

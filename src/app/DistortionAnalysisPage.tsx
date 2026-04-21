@@ -446,9 +446,9 @@ export function DistortionAnalysisPage({ type }: { type: DistortionAnalysisType 
     if (type === 'distortion') {
       handleRenderDistortion();
     } else {
-      handleRenderGrid();
+      hideProgress();
     }
-  }, [type, handleRenderDistortion, handleRenderGrid]);
+  }, [type, handleRenderDistortion, hideProgress]);
 
   return (
     <div className="dist-analysis-page">

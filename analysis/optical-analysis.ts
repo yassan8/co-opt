@@ -1993,6 +1993,14 @@ export async function showThroughFocusSpotDiagram(options: any = {}): Promise<vo
             }
         }
 
+        const renderablePointCount = traces.reduce((sum: number, trace: any) => {
+            const xs = Array.isArray(trace?.x) ? trace.x : [];
+            return sum + xs.filter((value: any) => Number.isFinite(Number(value))).length;
+        }, 0);
+        if (renderablePointCount <= 0) {
+            throw new Error('Through-Focus Spot produced no plottable spot points on the image surface.');
+        }
+
         for (const [groupKey, entry] of legendEntries.entries()) {
             traces.push({
                 x: [null],
