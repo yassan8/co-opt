@@ -1329,6 +1329,13 @@ export function handleOptimize(): void {
         return;
       }
 
+      // Capture state before optimization for undo recording
+      let beforeOptimizationState: any = null;
+      try {
+        const sys = loadSystemConfigurations();
+        beforeOptimizationState = sys ? JSON.parse(JSON.stringify(sys)) : null;
+      } catch (_) {}
+
       const progressEvents: any[] = [];
       const result = await opt.run({
         opticalSystemRows,
@@ -1382,6 +1389,39 @@ export function handleOptimize(): void {
       } catch (applyErr) {
         console.warn('⚠️ [Optimize][TS] result apply failed:', applyErr);
       }
+
+      // Record undo command for optimization
+      try {
+        if (beforeOptimizationState && w.undoHistory && result?.ok) {
+          const sys = loadSystemConfigurations();
+          const afterOptimizationState = sys ? JSON.parse(JSON.stringify(sys)) : null;
+          if (afterOptimizationState && JSON.stringify(beforeOptimizationState) !== JSON.stringify(afterOptimizationState)) {
+            const before = beforeOptimizationState;
+            const after = afterOptimizationState;
+            const command = {
+              name: 'Optimization',
+              execute: async () => {
+                saveSystemConfigurations(after);
+                try {
+                  if (w.ConfigurationManager && typeof w.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+                    await w.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
+                  }
+                } catch (_) {}
+              },
+              undo: async () => {
+                saveSystemConfigurations(before);
+                try {
+                  if (w.ConfigurationManager && typeof w.ConfigurationManager.loadActiveConfigurationToTables === 'function') {
+                    await w.ConfigurationManager.loadActiveConfigurationToTables({ applyToUI: true });
+                  }
+                } catch (_) {}
+              },
+              redo: function() { return (this as any).execute(); },
+            };
+            w.undoHistory.record(command);
+          }
+        }
+      } catch (_) {}
 
       console.log('✅ [Optimize][TS]', result);
       if (Array.isArray(progressEvents) && progressEvents.length > 0) {
@@ -1465,12 +1505,37 @@ async function openRenderWindowDesktop(): Promise<void> {
 
   console.log('[Render3D][Desktop] render URL:', finalUrl);
 
+  const ensureRenderWindowVisible = async (): Promise<boolean> => {
+    try {
+      const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      const label = 'render-window';
+      const deadline = Date.now() + 1500;
+      while (Date.now() < deadline) {
+        let existing: any = null;
+        try { existing = await WebviewWindow.getByLabel(label); } catch (_) {}
+        if (existing) {
+          try {
+            if (typeof existing.show === 'function') await existing.show();
+            if (typeof existing.unminimize === 'function') await existing.unminimize();
+            await existing.setFocus();
+          } catch (_) {}
+          return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      }
+    } catch (_) {}
+    return false;
+  };
+
   // Primary: use Rust backend command (bypasses frontend IPC issues)
   try {
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('open_render_window', { url: finalUrl });
-    console.log('✅ [Render3D][Desktop] open_render_window invoke succeeded');
-    return;
+    if (await ensureRenderWindowVisible()) {
+      console.log('✅ [Render3D][Desktop] open_render_window invoke succeeded');
+      return;
+    }
+    console.warn('[Render3D][Desktop] Rust invoke returned but render window was not detected; falling back to WebviewWindow');
   } catch (invokeErr) {
     console.warn('[Render3D][Desktop] Rust invoke failed, falling back to WebviewWindow:', invokeErr);
   }

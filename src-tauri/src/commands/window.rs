@@ -41,6 +41,7 @@ pub async fn sync_render_rows(app: AppHandle, rows: Value) -> Result<(), String>
                 r#"
                 try {{
                     const rows = {rows_json};
+                    window.__cooptPendingRenderRows = Array.isArray(rows) ? rows : [];
                     if (!Array.isArray(rows) || rows.length === 0) {{
                         // still poke draw path in case table was updated by other sync route
                         if (typeof window.__cooptRenderWindowRedraw === 'function') {{

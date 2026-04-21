@@ -2614,6 +2614,26 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
 
   const legacyVarV = (value) => ({ value, optimize: { mode: 'V' } });
 
+  const isLegacyParaxialRow = (rowObj) => {
+    if (!rowObj || typeof rowObj !== 'object') return false;
+    try {
+      if (rowObj._idealThinLens === true) return true;
+      const blockType = String(rowObj._blockType ?? rowObj.blockType ?? '').trim();
+      if (blockType === 'Paraxial' || blockType === 'ThinLens') return true;
+    } catch (_) {}
+    return false;
+  };
+
+  const readThinLensFocalLength = (rowObj, key) => {
+    const raw = rowObj?.[key];
+    if (raw === undefined || raw === null) return undefined;
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    const s = String(raw).trim();
+    if (s === '') return undefined;
+    if (/^inf(inity)?$/i.test(s)) return 'INF';
+    return isNumericString(s) ? Number(s) : undefined;
+  };
+
   const inferLegacySurfType = (rowObj, conicValue, coefValues) => {
     const raw = normalizeSurfTypeValue(rowObj?.surfType);
     const looksAsphere = blockAsphereLooksNonZero({
@@ -2805,6 +2825,61 @@ export function deriveBlocksFromLegacyOpticalSystemRows(rows: any[]): { blocks: 
     }
     if (isStopRow(back)) {
       issues.push({ severity: 'fatal', phase: 'validate', message: `Cannot infer Lens at row ${i}: next row is Stop.` });
+      continue;
+    }
+
+    if (isLegacyParaxialRow(r) && isLegacyParaxialRow(back)) {
+      lensCount++;
+      const lensId = `Paraxial-${lensCount}`;
+      const fx = readThinLensFocalLength(r, '_thinLensFocalLengthX') ?? readThinLensFocalLength(back, '_thinLensFocalLengthX');
+      const fy = readThinLensFocalLength(r, '_thinLensFocalLengthY') ?? readThinLensFocalLength(back, '_thinLensFocalLengthY');
+      const thinSurfType = normalizeSurfTypeValue(r?.surfType) || normalizeSurfTypeValue(back?.surfType) || 'Toric';
+      const materialForParaxial = material || __normalizeLegacyMaterialForBlocks(back, i + 1, issues) || 'N-BK7';
+
+      const parameters: any = {
+        material: materialForParaxial,
+        surfType: thinSurfType,
+      };
+      if (fx !== undefined && fy !== undefined && String(fx) === String(fy)) {
+        parameters.focalLength = fx;
+      } else {
+        if (fx !== undefined) parameters.focalLengthX = fx;
+        if (fy !== undefined) parameters.focalLengthY = fy;
+      }
+
+      blocks.push({
+        blockId: lensId,
+        blockType: 'Paraxial',
+        role: null,
+        constraints: {},
+        parameters,
+        aperture: {
+          front: getLegacySemidiaRaw(r),
+          back: getLegacySemidiaRaw(back),
+        },
+        variables: {},
+        metadata: { source: 'legacy-opticalSystem' }
+      });
+
+      const gapT = asNumberOrInfOrZero(back.thickness);
+      if ((typeof gapT === 'number' && Math.abs(gapT) > 1e-12) || gapT === 'INF') {
+        gapCount++;
+        const bmRaw = normalizeMaterialName(back.material);
+        const bmKey = bmRaw.replace(/\s+/g, '').toUpperCase();
+        const matKey = String(materialForParaxial ?? '').trim().replace(/\s+/g, '').toUpperCase();
+        const gapMat = (bmRaw === '' || bmKey === 'AIR' || bmKey === matKey) ? 'AIR' : bmRaw;
+        blocks.push({
+          blockId: `Gap-${gapCount}`,
+          blockType: 'Gap',
+          role: null,
+          constraints: {},
+          parameters: { thickness: gapT, material: gapMat },
+          variables: legacyHasV(back, 'optimizeT') ? { thickness: legacyVarV(gapT) } : {},
+          metadata: { source: 'legacy-opticalSystem' }
+        });
+      }
+
+      i++;
       continue;
     }
 

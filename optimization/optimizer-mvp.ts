@@ -14,7 +14,7 @@
  * No UI is added; the entrypoint is exposed as window.OptimizationMVP.
  */
 
-import { expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
+import { expandBlocksIntoConfiguration, expandBlocksToOpticalSystemRows } from '../data/block-schema.ts';
 import { listDesignVariablesFromBlocks, setDesignVariableValue } from './design-variables.ts';
 import { getGlassDataWithSellmeier } from '../data/glass.ts';
 import { loadSystemConfigurations, saveSystemConfigurations } from '../data/table-configuration.ts';
@@ -2221,8 +2221,30 @@ function applyGapThicknessModesToBlocks(blocks) {
 
 function expandBlocksForOptimization(blocks) {
   if (!Array.isArray(blocks)) return null;
-  applyGapThicknessModesToBlocks(blocks);
-  return expandBlocksToOpticalSystemRows(blocks);
+  let workingBlocks = blocks;
+  try {
+    workingBlocks = JSON.parse(JSON.stringify(blocks));
+  } catch (_) {
+    workingBlocks = Array.isArray(blocks) ? blocks.slice() : blocks;
+  }
+
+  // Gap.thicknessMode is a derived evaluation convenience. Keep it off the
+  // canonical Design Intent blocks so non-V gaps do not persist as optimizer edits.
+  applyGapThicknessModesToBlocks(workingBlocks);
+  return expandBlocksToOpticalSystemRows(workingBlocks);
+}
+
+function materializeGapThicknessModesForPersistence(blocks) {
+  if (!Array.isArray(blocks)) return null;
+  let persistedBlocks = blocks;
+  try {
+    persistedBlocks = JSON.parse(JSON.stringify(blocks));
+  } catch (_) {
+    persistedBlocks = Array.isArray(blocks) ? blocks.slice() : blocks;
+  }
+
+  applyGapThicknessModesToBlocks(persistedBlocks);
+  return persistedBlocks;
 }
 
 function updateExpandedOpticalSystemInConfig(config) {
@@ -2239,23 +2261,6 @@ function updateExpandedOpticalSystemInConfig(config) {
   const blocksHaveObjectSurface = (() => {
     try { return config.blocks.some(b => String(b?.blockType ?? '').trim() === 'ObjectSurface'); } catch (_) { return false; }
   })();
-
-  const pickPreservedSemidiaRows = () => {
-    // Prefer the current config.opticalSystem (may include user edits not represented in Blocks)
-    try {
-      if (Array.isArray(config?.opticalSystem) && config.opticalSystem.length > 0) return config.opticalSystem;
-    } catch (_) {}
-
-    if (disablePersistedTableFallback) return null;
-
-    // Fallback: preserve from the currently displayed table data (localStorage)
-    try {
-      const rows = tryLoadPersistedOpticalSystemTableData();
-      return Array.isArray(rows) ? rows : null;
-    } catch (_) {
-      return null;
-    }
-  };
 
   const pickPreservedObjectThickness = () => {
     // ObjectSurface is canonical for object distance in Blocks-only mode.
@@ -2293,32 +2298,37 @@ function updateExpandedOpticalSystemInConfig(config) {
   };
 
   const preservedObjectThickness = pickPreservedObjectThickness();
-  const preservedSemidiaRows = pickPreservedSemidiaRows();
-  const expanded = expandBlocksForOptimization(config.blocks);
-  if (expanded && Array.isArray(expanded.rows)) {
-    if (preservedObjectThickness !== null && expanded.rows[0] && typeof expanded.rows[0] === 'object') {
-      expanded.rows[0].thickness = preservedObjectThickness;
-    }
-
-    // Preserve per-surface semidia for non-Stop rows.
-    // Blocks only model Stop.semiDiameter; other semidia values are surface-table details.
+  const legacyRows = (() => {
     try {
-      if (Array.isArray(preservedSemidiaRows) && preservedSemidiaRows.length > 0) {
-        const n = Math.min(preservedSemidiaRows.length, expanded.rows.length);
-        for (let i = 0; i < n; i++) {
-          const er = expanded.rows[i];
-          const lr = preservedSemidiaRows[i];
-          if (!er || typeof er !== 'object' || !lr || typeof lr !== 'object') continue;
-          const t = String(er['object type'] ?? er.object ?? '').trim().toLowerCase();
-          if (t === 'stop') continue; // Stop semidia should come from Blocks.
-          const lsRaw = lr.semidia ?? lr['Semi Diameter'] ?? lr['semi diameter'] ?? lr.semiDiameter ?? lr.semiDia;
-          const ls = String(lsRaw ?? '').trim();
-          if (ls !== '') er.semidia = lsRaw;
-        }
+      if (Array.isArray(config?.opticalSystem) && config.opticalSystem.length > 0) {
+        return config.opticalSystem;
       }
     } catch (_) {}
 
-    config.opticalSystem = expanded.rows;
+    if (disablePersistedTableFallback) return null;
+
+    try {
+      const rows = tryLoadPersistedOpticalSystemTableData();
+      return Array.isArray(rows) ? rows : null;
+    } catch (_) {
+      return null;
+    }
+  })();
+
+  if (Array.isArray(legacyRows) && legacyRows.length > 0) {
+    try {
+      config.opticalSystem = JSON.parse(JSON.stringify(legacyRows));
+    } catch (_) {
+      config.opticalSystem = legacyRows;
+    }
+  }
+
+  const expanded = expandBlocksIntoConfiguration(config);
+  const rows = (expanded && Array.isArray(expanded.expandedOpticalSystem))
+    ? expanded.expandedOpticalSystem
+    : (Array.isArray(config.opticalSystem) ? config.opticalSystem : null);
+  if (Array.isArray(rows) && preservedObjectThickness !== null && rows[0] && typeof rows[0] === 'object') {
+    rows[0].thickness = preservedObjectThickness;
   }
 }
 
@@ -2427,7 +2437,10 @@ function persistBlocksByConfigIdToSystemConfig({ systemConfig, configsById, targ
       const cfg = configsById ? configsById[String(cid)] : null;
       const blocks = blocksByConfigId ? blocksByConfigId[String(cid)] : null;
       if (!cfg || !Array.isArray(blocks)) continue;
-      cfg.blocks = JSON.parse(JSON.stringify(blocks));
+      const persistedBlocks = materializeGapThicknessModesForPersistence(blocks);
+      cfg.blocks = Array.isArray(persistedBlocks)
+        ? persistedBlocks
+        : JSON.parse(JSON.stringify(blocks));
       updateExpandedOpticalSystemInConfig(cfg);
     }
     return saveSystemConfigurationsRaw(systemConfig);
@@ -2466,6 +2479,41 @@ function restoreBestSnapshotAndPersist({
   } catch {
     return false;
   }
+}
+
+function getFatalExpandIssuesForBlocks(blocks) {
+  try {
+    if (!Array.isArray(blocks) || blocks.length === 0) return [];
+    const expanded = expandBlocksToOpticalSystemRows(blocks);
+    const issues = Array.isArray(expanded?.issues) ? expanded.issues : [];
+    return issues.filter(issue => issue && issue.severity === 'fatal');
+  } catch (error) {
+    return [{
+      severity: 'fatal',
+      phase: 'expand',
+      message: (error && error.message) ? String(error.message) : 'Block expansion failed.'
+    }];
+  }
+}
+
+function formatFatalExpandIssues(configs) {
+  const messages = [];
+  for (const cfg of Array.isArray(configs) ? configs : []) {
+    if (!cfg || !Array.isArray(cfg.blocks)) continue;
+    const fatals = getFatalExpandIssuesForBlocks(cfg.blocks);
+    if (fatals.length === 0) continue;
+
+    const cfgLabel = cfg?.name
+      ? `${String(cfg.name)}(${String(cfg?.id ?? '')})`
+      : String(cfg?.id ?? '');
+    const samples = fatals.slice(0, 3).map(issue => {
+      const blockId = String(issue?.blockId ?? '').trim();
+      const msg = String(issue?.message ?? 'Invalid block layout.').trim();
+      return blockId ? `${blockId}: ${msg}` : msg;
+    });
+    messages.push(`${cfgLabel}: ${samples.join(' | ')}${fatals.length > 3 ? ' | ...' : ''}`);
+  }
+  return messages;
 }
 
 function getScopeFromVariableEntry(entry) {
@@ -2763,6 +2811,16 @@ function updateActiveOpticalSystemOverrideFromBlocks(activeBlocks) {
     try {
       if (typeof globalThis !== 'undefined') globalThis.__cooptOpticalSystemRowsOverride = null;
     } catch (_) {}
+  }
+}
+
+function getCurrentProgressRowsForRender() {
+  try {
+    const rows = (typeof globalThis !== 'undefined') ? globalThis.__cooptOpticalSystemRowsOverride : null;
+    if (!Array.isArray(rows) || rows.length === 0) return undefined;
+    return JSON.parse(JSON.stringify(rows));
+  } catch (_) {
+    return undefined;
   }
 }
 
@@ -3522,6 +3580,7 @@ async function runCategoricalMaterialSweep({
             })(),
             current: best ? best.score : NaN,
             best: best ? best.score : NaN,
+            rows: getCurrentProgressRowsForRender(),
             multiScenario,
             kind: 'categorical',
             feasible: best ? best.feasible : undefined,
@@ -4604,6 +4663,19 @@ export async function runOptimizationMVP(options = {}) {
       if (__prevCalcOperandValue) editor.calculateOperandValue = __prevCalcOperandValue;
     } catch (_) {}
     const res = { ok: false, reason: `Some configurations have no Design Intent (blocks): ${noBlocks.join(', ')}` };
+    __emitProfileSummary(res);
+    return res;
+  }
+
+  const fatalExpandMessages = formatFatalExpandIssues(targetConfigs);
+  if (fatalExpandMessages.length > 0) {
+    try {
+      if (__prevCalcOperandValue) editor.calculateOperandValue = __prevCalcOperandValue;
+    } catch (_) {}
+    const res = {
+      ok: false,
+      reason: `Optimize aborted because Design Intent blocks are not expandable: ${fatalExpandMessages.join(' || ')}`
+    };
     __emitProfileSummary(res);
     return res;
   }
@@ -6213,6 +6285,7 @@ export async function runOptimizationMVP(options = {}) {
               iter,
               current: acceptedEval.score,
               best,
+              rows: getCurrentProgressRowsForRender(),
               lambda,
               method: 'lm',
               multiScenario,

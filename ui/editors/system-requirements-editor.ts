@@ -2173,17 +2173,18 @@ class SystemRequirementsEditor {
         const cmd = new w.AddRowCommand('requirement', JSON.parse(JSON.stringify(newRow)), insertIndex, false);
         cmd.execute(); // Execute first (this will update localStorage and refresh UI)
         w.undoHistory.record(cmd); // Then record for undo
+        this.syncRequirementsToSystemConfigFromStorage();
       } else {
         // Fallback if undo system is not available
         storageData.splice(insertIndex, 0, JSON.parse(JSON.stringify(newRow)));
-        saveSystemRequirementsTableData(storageData);
+        this.persistRequirementsRows(storageData);
         this.loadFromStorage();
         this.renderTable();
       }
     } catch (e) {
       // Fallback
       storageData.splice(insertIndex, 0, JSON.parse(JSON.stringify(newRow)));
-      saveSystemRequirementsTableData(storageData);
+      this.persistRequirementsRows(storageData);
       this.loadFromStorage();
       this.renderTable();
     }
@@ -2214,6 +2215,7 @@ class SystemRequirementsEditor {
         const cmd = new w.DeleteRowCommand('requirement', deletedRow, idx, false);
         cmd.execute(); // Execute first (this will update localStorage and refresh UI)
         w.undoHistory.record(cmd); // Then record for undo
+        this.syncRequirementsToSystemConfigFromStorage();
         
         try {
           if (this.inspector && typeof this.inspector.hide === 'function') this.inspector.hide();
@@ -2221,7 +2223,7 @@ class SystemRequirementsEditor {
       } else {
         // Fallback if undo system is not available
         storageData.splice(idx, 1);
-        saveSystemRequirementsTableData(storageData);
+        this.persistRequirementsRows(storageData);
         this.loadFromStorage();
         this.renderTable();
         
@@ -2232,7 +2234,7 @@ class SystemRequirementsEditor {
     } catch (e) {
       // Fallback
       storageData.splice(idx, 1);
-      saveSystemRequirementsTableData(storageData);
+      this.persistRequirementsRows(storageData);
       this.loadFromStorage();
       this.renderTable();
       
@@ -2553,6 +2555,36 @@ class SystemRequirementsEditor {
     }
   }
 
+  async flushPendingEdits(): Promise<void> {
+    try {
+      const activeEl = document.activeElement as HTMLElement | null;
+      const insideEditor = !!(
+        activeEl
+        && (
+          (this._tableRoot && this._tableRoot.contains(activeEl))
+          || activeEl.closest('#requirement-inspector')
+        )
+      );
+      if (insideEditor && typeof activeEl?.blur === 'function') {
+        activeEl.blur();
+      }
+    } catch (_) {}
+
+    await this._yieldToUI();
+
+    if (this._isEditingCell) {
+      this._isEditingCell = false;
+      if (this._pendingEvalAfterEdit) {
+        this._pendingEvalAfterEdit = false;
+        this.scheduleEvaluateAndUpdate();
+      }
+    }
+
+    try {
+      this.saveToStorage();
+    } catch (_) {}
+  }
+
   scheduleEvaluateAndUpdate(): void {
     try {
       if (this._evalTimer) clearTimeout(this._evalTimer);
@@ -2630,6 +2662,51 @@ class SystemRequirementsEditor {
     this.requirements.forEach((r: any, index: number) => {
       r.id = index + 1;
     });
+  }
+
+  _serializeRequirements(rows: any[]): any[] {
+    return (Array.isArray(rows) ? rows : []).map((r: any) => {
+      if (!r || typeof r !== 'object') return r;
+      const {
+        id,
+        enabled,
+        operand,
+        rationale,
+        rationaleHeight,
+        configId,
+        param1,
+        param2,
+        param3,
+        param4,
+        param5,
+        op,
+        tol,
+        target,
+        weight
+      } = r;
+      return { id, enabled, operand, rationale, rationaleHeight, configId, param1, param2, param3, param4, param5, op, tol, target, weight };
+    });
+  }
+
+  persistRequirementsRows(rows: any[]): void {
+    const toSave = this._serializeRequirements(rows);
+    saveSystemRequirementsTableData(toSave as any);
+
+    try {
+      const systemConfig = tryLoadSystemConfigurations() || {};
+      systemConfig.systemRequirements = JSON.parse(JSON.stringify(toSave));
+      trySaveSystemConfigurations(systemConfig);
+      if (typeof window !== 'undefined') {
+        w.__cooptSystemConfig = systemConfig;
+      }
+    } catch (_) {}
+  }
+
+  syncRequirementsToSystemConfigFromStorage(): void {
+    try {
+      const rows = loadSystemRequirementsTableData();
+      this.persistRequirementsRows(Array.isArray(rows) ? rows : []);
+    } catch (_) {}
   }
 
   getData(): any[] {
@@ -2731,30 +2808,7 @@ class SystemRequirementsEditor {
     try {
       const live = this._getLiveRequirementsData();
       this.requirements = live;
-
-      // Do not persist derived fields (current/status)
-      const toSave = (Array.isArray(live) ? live : []).map((r: any) => {
-        if (!r || typeof r !== 'object') return r;
-        const {
-          id,
-          enabled,
-          operand,
-          rationale,
-          rationaleHeight,
-          configId,
-          param1,
-          param2,
-          param3,
-          param4,
-          param5,
-          op,
-          tol,
-          target,
-          weight
-        } = r;
-        return { id, enabled, operand, rationale, rationaleHeight, configId, param1, param2, param3, param4, param5, op, tol, target, weight };
-      });
-      saveSystemRequirementsTableData(toSave as any);
+      this.persistRequirementsRows(live);
     } catch (e) {
       console.warn('System Requirements saveToStorage failed:', e);
     }

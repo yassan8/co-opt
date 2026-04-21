@@ -29,6 +29,7 @@ import { listDesignVariablesFromBlocks } from "../../optimization/design-variabl
 import { clearOptimizerStop, readDesktopSetting, writeDesktopSetting } from "../../src/desktop/ipc/client.ts";
 import { isTauriRuntime } from "../../src/desktop/runtime.ts";
 import { requestRefreshBlockInspector } from "../../core/window-facade.ts";
+import { calculateSurfaceOrigins, transformPointToLocal } from "../../raytracing/core/ray-tracing.ts";
 
 const SURFACE_COLOR_OVERRIDES_STORAGE_KEY = 'coopt.surfaceColorOverrides';
 const RENDER_SHOW_LABELS_KEY = 'coopt.render.showDesignIntentLabels';
@@ -899,6 +900,10 @@ export default function App() {
       try {
         const w = window as any;
         const reqEditor = w.systemRequirementsEditor;
+        if (reqEditor && typeof reqEditor.flushPendingEdits === 'function') {
+          const flushPromise = reqEditor.flushPendingEdits();
+          if (flushPromise && typeof flushPromise.then === 'function') await flushPromise;
+        }
         if (reqEditor && typeof reqEditor.evaluateAndUpdateNow === 'function') {
           const p = reqEditor.evaluateAndUpdateNow({ reason, forceSilent: true, silent: true });
           if (p && typeof p.then === 'function') await p;
@@ -2338,7 +2343,18 @@ export default function App() {
 
       let rows: any[] = [];
       try {
-        if (typeof w.getOpticalSystemRows === 'function') {
+        const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
+        const overrideRows = g && Array.isArray(g.__cooptOpticalSystemRowsOverride) && g.__cooptOpticalSystemRowsOverride.length > 0
+          ? g.__cooptOpticalSystemRowsOverride
+          : null;
+        if (overrideRows) {
+          rows = overrideRows;
+        }
+      } catch (_) {
+        rows = [];
+      }
+      try {
+        if (!rows.length && typeof w.getOpticalSystemRows === 'function') {
           const r = w.getOpticalSystemRows(w.tableOpticalSystem);
           rows = Array.isArray(r) ? r : [];
         }
@@ -2603,7 +2619,7 @@ export default function App() {
         }
         if (g) g.__cooptOptimizerIsRunning = true;
         try {
-          await drawRender3DView();
+          await redrawCurrentRenderView();
         } finally {
           if (g) {
             g.__cooptOptimizerIsRunning = prevRunning;
@@ -2612,6 +2628,16 @@ export default function App() {
         }
       } catch (_) {}
     };
+
+    try {
+      const pendingRows = Array.isArray(w.__cooptPendingRenderRows) ? w.__cooptPendingRenderRows : [];
+      if (pendingRows.length > 0) {
+        const toReplay = pendingRows;
+        w.__cooptPendingRenderRows = [];
+        void Promise.resolve(w.__cooptRenderWindowRedraw(toReplay));
+      }
+    } catch (_) {}
+
     return () => {
       try { delete (w as any).__cooptRenderWindowRedraw; } catch (_) {
         (w as any).__cooptRenderWindowRedraw = undefined;
@@ -3072,6 +3098,183 @@ export default function App() {
   if (isOptimizeWindowMode) {
     const percent = Number.isFinite(Number(optimizeState?.percent)) ? Math.max(0, Math.min(100, Number(optimizeState.percent))) : 0;
 
+    const getSystemConfigFromTargetWindow = (targetWindow: any) => {
+      try {
+        if (targetWindow && typeof targetWindow.loadSystemConfigurationsFromTableConfig === 'function') {
+          return targetWindow.loadSystemConfigurationsFromTableConfig();
+        }
+      } catch (_) {}
+      try {
+        if (targetWindow && typeof targetWindow.loadSystemConfigurations === 'function') {
+          return targetWindow.loadSystemConfigurations();
+        }
+      } catch (_) {}
+      return null;
+    };
+
+    const getCurrentOpticalRowsFromTargetWindow = (targetWindow: any, cfgOverride?: any): any[] => {
+      try {
+        if (targetWindow && typeof targetWindow.getOpticalSystemRows === 'function') {
+          const rows = targetWindow.getOpticalSystemRows(targetWindow.tableOpticalSystem);
+          if (Array.isArray(rows) && rows.length > 0) return rows;
+        }
+      } catch (_) {}
+      try {
+        const cfg = cfgOverride ?? getSystemConfigFromTargetWindow(targetWindow);
+        const activeId = cfg?.activeConfigId;
+        const activeCfg = Array.isArray(cfg?.configurations)
+          ? (cfg.configurations.find((c: any) => c && String(c.id) === String(activeId)) || cfg.configurations[0])
+          : null;
+        if (Array.isArray(activeCfg?.opticalSystem) && activeCfg.opticalSystem.length > 0) {
+          return activeCfg.opticalSystem;
+        }
+      } catch (_) {}
+      return [];
+    };
+
+    const getRequirementMetricsFromTargetWindow = (targetWindow: any) => {
+      const cfg = getSystemConfigFromTargetWindow(targetWindow);
+      const activeConfigId = (cfg && cfg.activeConfigId !== undefined && cfg.activeConfigId !== null)
+        ? String(cfg.activeConfigId).trim()
+        : '';
+      const reqEditor = targetWindow?.systemRequirementsEditor || (window as any).systemRequirementsEditor;
+
+      const normalizeConfigId = (row: any): string => {
+        try {
+          if (reqEditor && typeof reqEditor._normalizeConfigId === 'function') {
+            return String(reqEditor._normalizeConfigId(row?.configId, cfg, activeConfigId) || '').trim();
+          }
+        } catch (_) {}
+        const rawCfg = String(row?.configId ?? '').trim();
+        return rawCfg || activeConfigId;
+      };
+
+      const rows = (() => {
+        try {
+          if (reqEditor && typeof reqEditor.getData === 'function') {
+            const data = reqEditor.getData();
+            if (Array.isArray(data)) return data;
+          }
+        } catch (_) {}
+        try {
+          if (Array.isArray(cfg?.systemRequirements)) return cfg.systemRequirements;
+        } catch (_) {}
+        return [];
+      })();
+
+      const activeRows = Array.isArray(rows)
+        ? rows.filter((row: any) => {
+          if (!row || typeof row !== 'object') return false;
+          const enabled = (row.enabled === undefined || row.enabled === null) ? true : !!row.enabled;
+          const operand = String(row.operand ?? '').trim();
+          const weight = Number(row.weight ?? 1);
+          if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) return false;
+          const reqCfg = normalizeConfigId(row);
+          if (!activeConfigId) return true;
+          return reqCfg === activeConfigId;
+        })
+        : [];
+
+      let score = Number.NaN;
+      let sum = 0;
+      let count = 0;
+      for (const row of activeRows) {
+        const contribution = Number.isFinite(Number(row?._contribution))
+          ? Number(row._contribution)
+          : Number(row?.score);
+        if (Number.isFinite(contribution)) {
+          if (contribution > 0) sum += contribution;
+          count += 1;
+        }
+      }
+      if (count > 0 && Number.isFinite(sum)) score = sum;
+      return { score, requirementCount: activeRows.length };
+    };
+
+    const syncHostDesignIntentAndRequirements = async (
+      targetWindow: any,
+      reason: string,
+      phase: 'before' | 'after',
+      rowsForScore?: any[]
+    ) => {
+      try {
+        const cm = targetWindow?.ConfigurationManager;
+        const reqEditor = targetWindow?.systemRequirementsEditor || (window as any).systemRequirementsEditor;
+        if (reqEditor && typeof reqEditor.flushPendingEdits === 'function') {
+          const flushPromise = reqEditor.flushPendingEdits();
+          if (flushPromise && typeof flushPromise.then === 'function') await flushPromise;
+        }
+        if (cm && typeof cm.loadActiveConfigurationToTables === 'function') {
+          await Promise.resolve(cm.loadActiveConfigurationToTables({
+            applyToUI: true,
+            suppressOpticalSystemDataChanged: true,
+          }));
+        } else if (targetWindow && typeof targetWindow.loadActiveConfigurationToTables === 'function') {
+          await Promise.resolve(targetWindow.loadActiveConfigurationToTables({
+            applyToUI: true,
+            suppressOpticalSystemDataChanged: true,
+          }));
+        }
+      } catch (_) {}
+
+      let refreshedScore = Number.NaN;
+      const hostRows = Array.isArray(rowsForScore) && rowsForScore.length > 0
+        ? rowsForScore
+        : getCurrentOpticalRowsFromTargetWindow(targetWindow);
+
+      try {
+        const refreshFn = targetWindow?.__cooptRefreshRequirementTableScoreForOptimize;
+        if (typeof refreshFn === 'function' && Array.isArray(hostRows) && hostRows.length > 0) {
+          refreshedScore = Number(await refreshFn(hostRows, reason));
+        } else {
+          const reqEditor = targetWindow?.systemRequirementsEditor || (window as any).systemRequirementsEditor;
+          if (reqEditor && typeof reqEditor.evaluateAndUpdateNow === 'function') {
+            const p = reqEditor.evaluateAndUpdateNow({ reason, forceSilent: true, silent: true });
+            if (p && typeof p.then === 'function') await p;
+          }
+        }
+      } catch (_) {}
+
+      const metrics = getRequirementMetricsFromTargetWindow(targetWindow);
+      const effectiveScore = Number.isFinite(refreshedScore) ? refreshedScore : metrics.score;
+      const variableCount = countBlockOptimizeVariables(targetWindow);
+
+      setOptimizeState((prev: any) => {
+        const next: any = {
+          ...prev,
+          variableCount: variableCount > 0 ? variableCount : prev.variableCount,
+          requirementCount: Number.isFinite(Number(metrics.requirementCount))
+            ? Number(metrics.requirementCount)
+            : prev.requirementCount,
+        };
+
+        if (phase === 'before') {
+          next.requirementScoreBefore = Number.isFinite(effectiveScore) ? effectiveScore : prev.requirementScoreBefore;
+          next.requirementScoreAfter = Number.isFinite(effectiveScore) ? effectiveScore : prev.requirementScoreAfter;
+          next.requirementScoreTable = Number.isFinite(effectiveScore) ? effectiveScore : prev.requirementScoreTable;
+          next.meritBefore = Number.isFinite(effectiveScore) ? effectiveScore : prev.meritBefore;
+          next.meritAfter = Number.isFinite(effectiveScore) ? effectiveScore : prev.meritAfter;
+          next.best = Number.isFinite(effectiveScore) ? effectiveScore : prev.best;
+        } else {
+          next.requirementScoreAfter = Number.isFinite(effectiveScore) ? effectiveScore : prev.requirementScoreAfter;
+          next.requirementScoreTable = Number.isFinite(effectiveScore) ? effectiveScore : prev.requirementScoreTable;
+          next.meritAfter = Number.isFinite(effectiveScore) ? effectiveScore : prev.meritAfter;
+          if (Number.isFinite(effectiveScore)) {
+            next.best = Number.isFinite(prev.best) ? Math.min(prev.best, effectiveScore) : effectiveScore;
+          }
+        }
+
+        return next;
+      });
+
+      return {
+        rows: hostRows,
+        score: effectiveScore,
+        requirementCount: metrics.requirementCount,
+        variableCount,
+      };
+    };
+
     const maybeAutoRender = async (_rows: any[]) => {
       if (!optAutoRenderOnAccept) return;
       try {
@@ -3096,6 +3299,8 @@ export default function App() {
         } catch (_) {}
         return w;
       })();
+
+      await syncHostDesignIntentAndRequirements(hostWindow, 'optimize-run-click', 'before');
 
       const cloneJsonLocal = (v: any) => {
         try { return JSON.parse(JSON.stringify(v)); } catch (_) { return null; }
@@ -3327,52 +3532,110 @@ export default function App() {
         let tsRejectCount = 0;
         let tsBestScore = Number.POSITIVE_INFINITY;
         let tsBestRequirementScore = Number.POSITIVE_INFINITY;
-        let lastAutoRenderAt = 0;
-        const AUTO_RENDER_THROTTLE_MS = 120;
+        let renderSyncSequence = 0;
+        const renderSyncQueue: any[][] = [];
+        let renderSyncInFlight = false;
         let reqEvalInFlight = false;
         let lastReqEvalAt = 0;
         const REQ_EVAL_THROTTLE_MS = 220;
 
-        const requestRenderSync = (rowsFromProgress?: any[]) => {
-          const hasOpenRenderTarget = (() => {
-            try {
-              const hostPopup = hostWindow?.popup3DWindow;
-              if (hostPopup && !hostPopup.closed) return true;
-            } catch (_) {}
-            try {
-              const localPopup = (window as any)?.popup3DWindow;
-              if (localPopup && !localPopup.closed) return true;
-            } catch (_) {}
-            return false;
-          })();
+        const materializeAutoImageSemidiaForRender = async (rowsInput: any[]): Promise<any[]> => {
+          const rows = Array.isArray(rowsInput) ? (cloneJsonLocal(rowsInput) || rowsInput) : [];
+          if (!Array.isArray(rows) || rows.length === 0) return [];
 
-          // Keep existing opt-in behavior for auto-opening Render window,
-          // but always sync when a render popup is already open.
-          if (!optAutoRenderOnAccept && !hasOpenRenderTarget) return;
-          const now = Date.now();
-          if ((now - lastAutoRenderAt) < AUTO_RENDER_THROTTLE_MS) return;
-          lastAutoRenderAt = now;
-          let rowsForRender: any[] = [];
+          const imageSurfaceIndex = rows.findIndex((row: any) => {
+            const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
+            const normalized = String(raw ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+            return normalized === 'image' || normalized.startsWith('image');
+          });
+          if (imageSurfaceIndex < 0) return rows;
 
-          // Ensure Render window is opened/focused in desktop mode as auto-render target.
-          if (optAutoRenderOnAccept) {
-            try {
-              const openRender = (hostWindow as any).__cooptOpenRenderWindow || (window as any).__cooptOpenRenderWindow;
-              if (isTauriRuntime() && typeof openRender === 'function') {
-                void Promise.resolve(openRender());
-              } else if (typeof (hostWindow as any).handleRender3D === 'function') {
-                (hostWindow as any).handleRender3D();
-              } else {
-                const openBtn = hostWindow?.document?.getElementById?.('open-3d-window-btn') as HTMLButtonElement | null;
-                if (openBtn && typeof openBtn.click === 'function') {
-                  openBtn.click();
+          const imageSurface = rows[imageSurfaceIndex] || null;
+          const opt = String(imageSurface?.optimizeSemiDia ?? '').trim().toUpperCase();
+          const semidiaRaw = imageSurface?.semidia;
+          const semidiaMode = String(imageSurface?.semidiaMode ?? '').trim().toLowerCase();
+          const shouldAuto = opt === 'A' || String(semidiaRaw ?? '').trim().toLowerCase() === 'auto' || semidiaMode === 'auto';
+          if (!shouldAuto) return rows;
+
+          try {
+            const rays = await collectLegacyCrossRays(rows, 'BOTH');
+            const chiefRays = Array.isArray(rays)
+              ? rays.filter((ray: any) => {
+                  const label = String(ray?.beamType ?? ray?.type ?? ray?.originalRay?.type ?? '').trim().toLowerCase();
+                  return label.includes('chief') && Array.isArray(ray?.rayPath) && ray.rayPath.length > 0;
+                })
+              : [];
+            if (chiefRays.length === 0) return rows;
+
+            const isCoordTransRow = (row: any) => {
+              const st = String(row?.surfType ?? row?.['surf type'] ?? row?.surface_type ?? '').trim().toLowerCase();
+              return st === 'coord trans' || st === 'coordinate break' || st === 'coordtrans' || st === 'coordinatebreak' || st === 'ct';
+            };
+            const isObjectRow = (row: any) => {
+              const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? '';
+              return String(raw ?? '').trim().toLowerCase() === 'object';
+            };
+            const isGapRow = (row: any) => String(row?._blockType ?? '').trim() === 'Gap';
+            const getRayPathPointIndexForSurfaceIndex = (surfaceIndex: number) => {
+              let count = 0;
+              for (let index = 0; index <= surfaceIndex; index += 1) {
+                const row = rows[index];
+                if (isCoordTransRow(row) || isObjectRow(row) || isGapRow(row)) continue;
+                count += 1;
+              }
+              return count > 0 ? count : null;
+            };
+            const imageRayPathIndex = getRayPathPointIndexForSurfaceIndex(imageSurfaceIndex);
+            const pickImagePointFromRay = (ray: any) => {
+              const candidatePaths = [ray?.rayPath, ray?.rayPathToTarget, ray?.path, ray?.originalRay?.rayPath];
+              for (const path of candidatePaths) {
+                if (!Array.isArray(path) || path.length === 0) continue;
+                if (imageRayPathIndex !== null && imageRayPathIndex >= 0 && imageRayPathIndex < path.length) {
+                  const direct = path[imageRayPathIndex];
+                  if (direct && Number.isFinite(Number(direct.x)) && Number.isFinite(Number(direct.y))) return direct;
+                }
+                for (let index = path.length - 1; index >= 0; index -= 1) {
+                  const point = path[index];
+                  const pointSurfaceIndex = Number(point?.surfaceIndex ?? point?.surface ?? point?.surfaceIdx);
+                  if (Number.isInteger(pointSurfaceIndex) && pointSurfaceIndex === imageSurfaceIndex) {
+                    if (Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y))) return point;
+                  }
                 }
               }
-            } catch (_) {}
-          }
+              return null;
+            };
 
-          // Signal the main window via localStorage (works across Tauri WebviewWindows
-          // where hostWindow === w and direct DOM access is impossible).
+            const surfaceInfos = calculateSurfaceOrigins(rows);
+            const imageSurfaceInfo = Array.isArray(surfaceInfos) ? surfaceInfos[imageSurfaceIndex] : null;
+            let maxHeight = 0;
+
+            for (const ray of chiefRays) {
+              const imagePoint = pickImagePointFromRay(ray);
+              if (!imagePoint) continue;
+              const localPoint = imageSurfaceInfo ? transformPointToLocal(imagePoint, imageSurfaceInfo) : imagePoint;
+              const localX = Number(localPoint?.x);
+              const localY = Number(localPoint?.y);
+              if (!Number.isFinite(localX) || !Number.isFinite(localY)) continue;
+              const height = Math.sqrt(localX * localX + localY * localY);
+              if (Number.isFinite(height) && height > maxHeight) {
+                maxHeight = height;
+              }
+            }
+
+            if (maxHeight > 0) {
+              rows[imageSurfaceIndex] = {
+                ...rows[imageSurfaceIndex],
+                semidia: maxHeight,
+                __cooptActualSemidia: maxHeight,
+              };
+            }
+          } catch (_) {}
+
+          return rows;
+        };
+
+        const resolveRowsForRender = (rowsFromProgress?: any[]): any[] => {
+          let rowsForRender: any[] = [];
           try {
             const g = (typeof globalThis !== 'undefined') ? (globalThis as any) : null;
             const localOverride = g && Array.isArray(g.__cooptOpticalSystemRowsOverride) && g.__cooptOpticalSystemRowsOverride.length > 0
@@ -3390,14 +3653,71 @@ export default function App() {
               : null;
             const currentRows = progressRows ?? localOverride ?? hostOverride ?? tableRows ?? hostTableRows ?? [];
             rowsForRender = Array.isArray(currentRows) ? currentRows : [];
-            const payload = { ts: now, rows: rowsForRender };
+          } catch (_) {
+            rowsForRender = [];
+          }
+          return Array.isArray(rowsForRender) ? (cloneJsonLocal(rowsForRender) || rowsForRender) : [];
+        };
+
+        const performRenderSync = async (rowsForRender: any[]) => {
+          const renderRows = await materializeAutoImageSemidiaForRender(rowsForRender);
+          const hasOpenRenderTarget = (() => {
+            try {
+              const hostPopup = hostWindow?.popup3DWindow;
+              if (hostPopup && !hostPopup.closed) return true;
+            } catch (_) {}
+            try {
+              const localPopup = (window as any)?.popup3DWindow;
+              if (localPopup && !localPopup.closed) return true;
+            } catch (_) {}
+            return false;
+          })();
+
+          // Keep existing opt-in behavior for auto-opening Render window,
+          // but always sync when a render popup is already open.
+          if (!optAutoRenderOnAccept && !hasOpenRenderTarget) return;
+
+          // Ensure Render window is opened/focused in desktop mode as auto-render target.
+          if (optAutoRenderOnAccept) {
+            try {
+              const openRender = (hostWindow as any).__cooptOpenRenderWindow || (window as any).__cooptOpenRenderWindow;
+              if (isTauriRuntime() && typeof openRender === 'function') {
+                await Promise.resolve(openRender());
+                await new Promise<void>((resolve) => setTimeout(resolve, 220));
+              } else if (typeof (hostWindow as any).handleRender3D === 'function') {
+                (hostWindow as any).handleRender3D();
+              } else {
+                const openBtn = hostWindow?.document?.getElementById?.('open-3d-window-btn') as HTMLButtonElement | null;
+                if (openBtn && typeof openBtn.click === 'function') {
+                  openBtn.click();
+                }
+              }
+            } catch (_) {}
+          }
+
+          // Signal the main window via localStorage (works across Tauri WebviewWindows
+          // where hostWindow === w and direct DOM access is impossible).
+          try {
+            const payloadToken = `${Date.now()}-${++renderSyncSequence}`;
+            const payload = { ts: payloadToken, token: payloadToken, rows: renderRows };
             localStorage.setItem('coopt.renderSyncRequest', JSON.stringify(payload));
             if (isTauriRuntime()) {
-              void (async () => {
+              await (async () => {
                 try {
                   const core = await import('@tauri-apps/api/core');
                   if (core && typeof (core as any).invoke === 'function') {
-                    await (core as any).invoke('sync_render_rows', { rows: rowsForRender });
+                    let synced = false;
+                    for (let attempt = 0; attempt < 5 && !synced; attempt += 1) {
+                      try {
+                        await (core as any).invoke('sync_render_rows', { rows: renderRows });
+                        synced = true;
+                      } catch (_) {
+                        if (attempt >= 4) throw _;
+                      }
+                      if (!synced) {
+                        await new Promise<void>((resolve) => setTimeout(resolve, 180));
+                      }
+                    }
                   }
                 } catch (_) {}
                 try {
@@ -3420,9 +3740,9 @@ export default function App() {
             prevHostRowsOverride = (hostWindow as any).__cooptOpticalSystemRowsOverride;
             prevLocalRunning = (w as any).__cooptOptimizerIsRunning;
             prevLocalRowsOverride = (w as any).__cooptOpticalSystemRowsOverride;
-            if (rowsForRender.length > 0) {
-              (hostWindow as any).__cooptOpticalSystemRowsOverride = rowsForRender;
-              (w as any).__cooptOpticalSystemRowsOverride = rowsForRender;
+            if (renderRows.length > 0) {
+              (hostWindow as any).__cooptOpticalSystemRowsOverride = renderRows;
+              (w as any).__cooptOpticalSystemRowsOverride = renderRows;
             }
             (hostWindow as any).__cooptOptimizerIsRunning = true;
             (w as any).__cooptOptimizerIsRunning = true;
@@ -3437,9 +3757,11 @@ export default function App() {
             const popup = hostWindow.popup3DWindow;
             if (popup && !popup.closed) {
               if (typeof popup.__cooptRenderWindowRedraw === 'function') {
-                void Promise.resolve(popup.__cooptRenderWindowRedraw(rowsForRender));
+                await Promise.resolve(popup.__cooptRenderWindowRedraw(renderRows));
               } else if (typeof popup.postMessage === 'function') {
+                try { popup.__cooptPendingRenderRows = renderRows; } catch (_) {}
                 popup.postMessage({ action: 'request-redraw' }, '*');
+                await new Promise<void>((resolve) => setTimeout(resolve, 180));
               }
             }
           } catch (_) {}
@@ -3448,14 +3770,34 @@ export default function App() {
               w.drawOpticalSystem();
             }
           } catch (_) {}
-          setTimeout(() => {
-            try {
-              (hostWindow as any).__cooptOptimizerIsRunning = prevHostRunning;
-              (hostWindow as any).__cooptOpticalSystemRowsOverride = prevHostRowsOverride;
-              (w as any).__cooptOptimizerIsRunning = prevLocalRunning;
-              (w as any).__cooptOpticalSystemRowsOverride = prevLocalRowsOverride;
-            } catch (_) {}
-          }, 400);
+
+          try {
+            (hostWindow as any).__cooptOptimizerIsRunning = prevHostRunning;
+            (hostWindow as any).__cooptOpticalSystemRowsOverride = prevHostRowsOverride;
+            (w as any).__cooptOptimizerIsRunning = prevLocalRunning;
+            (w as any).__cooptOpticalSystemRowsOverride = prevLocalRowsOverride;
+          } catch (_) {}
+        };
+
+        const drainRenderSyncQueue = async () => {
+          if (renderSyncInFlight) return;
+          renderSyncInFlight = true;
+          try {
+            while (renderSyncQueue.length > 0) {
+              const nextRows = renderSyncQueue.shift();
+              if (!Array.isArray(nextRows) || nextRows.length === 0) continue;
+              await performRenderSync(nextRows);
+            }
+          } finally {
+            renderSyncInFlight = false;
+          }
+        };
+
+        const requestRenderSync = (rowsFromProgress?: any[]) => {
+          const rowsForRender = resolveRowsForRender(rowsFromProgress);
+          if (!Array.isArray(rowsForRender) || rowsForRender.length === 0) return;
+          renderSyncQueue.push(rowsForRender);
+          void drainRenderSyncQueue();
         };
 
         const loadHostConfigSnapshot = () => {
@@ -3654,6 +3996,8 @@ export default function App() {
         } catch (_) {}
 
         try {
+          await syncHostDesignIntentAndRequirements(hostWindow, 'optimize-finished-reload', 'after');
+
           const rowsAfter = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
           if (Array.isArray(rowsAfter) && rowsAfter.length > 0) {
             await maybeAutoRender(rowsAfter);
@@ -3683,10 +4027,13 @@ export default function App() {
         } catch (_) {}
 
         try {
-          const reqEditor = hostWindow.systemRequirementsEditor || w.systemRequirementsEditor;
-          if (reqEditor && typeof reqEditor.evaluateAndUpdateNow === 'function') {
-            await reqEditor.evaluateAndUpdateNow({ reason: 'optimize-finished-sync', forceSilent: true, silent: true });
-          }
+          const latestRows = hostWindow.getOpticalSystemRows ? hostWindow.getOpticalSystemRows(hostWindow.tableOpticalSystem) : [];
+          await syncHostDesignIntentAndRequirements(
+            hostWindow,
+            'optimize-finished-sync',
+            'after',
+            Array.isArray(latestRows) ? latestRows : []
+          );
         } catch (_) {}
 
         let finalTableScore = Number.NaN;

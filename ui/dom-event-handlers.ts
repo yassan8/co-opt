@@ -1563,12 +1563,14 @@ async function __loadAllDataObjectIntoApp(allData: any, options: { filename?: st
 
             const hasBlocks = configurationHasBlocks(cfg);
 
-            // Try to derive blocks from legacy optical system rows
-            if (typeof w.deriveBlocksFromLegacyOpticalSystemRows === 'function') {
+            // Only derive blocks when missing. Existing blocks are the authoritative
+            // Design Intent and may contain information that cannot be reconstructed
+            // from expanded opticalSystem rows (for example Paraxial focalLength V vars).
+            if (!hasBlocks && typeof w.deriveBlocksFromLegacyOpticalSystemRows === 'function') {
                 const derived = w.deriveBlocksFromLegacyOpticalSystemRows(legacyRows);
                 const hasFatal = Array.isArray(derived?.issues) && derived.issues.some((i: any) => i && i.severity === 'fatal');
 
-                if (!hasFatal && (!hasBlocks || (Array.isArray(derived?.blocks) && derived.blocks.length > 0))) {
+                if (!hasFatal && Array.isArray(derived?.blocks) && derived.blocks.length > 0) {
                     cfg.blocks = Array.isArray(derived?.blocks) ? derived.blocks : [];
                     if (!cfg.metadata || typeof cfg.metadata !== 'object') cfg.metadata = {};
                     cfg.metadata.importAnalyzeMode = false;

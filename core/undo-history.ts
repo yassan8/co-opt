@@ -773,6 +773,9 @@ export class AddRowCommand extends Command {
     } else if (this.tableName === 'requirement' && w.systemRequirementsEditor) {
       w.systemRequirementsEditor.loadFromStorage();
       w.systemRequirementsEditor.renderTable();
+      if (typeof w.systemRequirementsEditor.syncRequirementsToSystemConfigFromStorage === 'function') {
+        w.systemRequirementsEditor.syncRequirementsToSystemConfigFromStorage();
+      }
     }
   }
 }
@@ -846,6 +849,9 @@ export class DeleteRowCommand extends Command {
     } else if (this.tableName === 'requirement' && w.systemRequirementsEditor) {
       w.systemRequirementsEditor.loadFromStorage();
       w.systemRequirementsEditor.renderTable();
+      if (typeof w.systemRequirementsEditor.syncRequirementsToSystemConfigFromStorage === 'function') {
+        w.systemRequirementsEditor.syncRequirementsToSystemConfigFromStorage();
+      }
     }
   }
 }
@@ -925,16 +931,25 @@ export class UndoHistory {
     }
     
     this.isExecuting = true;
+    const command = this.undoStack.pop()!;
     try {
-      const command = this.undoStack.pop()!;
-      command.undo();
+      const result = command.undo();
       this.redoStack.push(command);
       this.notifyListeners();
+      if (result && typeof (result as any).then === 'function') {
+        // Async undo: keep isExecuting=true until the promise settles to prevent
+        // table-change events triggered by loadActiveConfigurationToTables from
+        // being recorded as new undo commands.
+        (result as Promise<any>).catch(() => {}).finally(() => {
+          this.isExecuting = false;
+        });
+      } else {
+        this.isExecuting = false;
+      }
       return true;
     } catch (_error) {
-      return false;
-    } finally {
       this.isExecuting = false;
+      return false;
     }
   }
   
@@ -947,16 +962,22 @@ export class UndoHistory {
     }
     
     this.isExecuting = true;
+    const command = this.redoStack.pop()!;
     try {
-      const command = this.redoStack.pop()!;
-      command.execute();
+      const result = command.execute();
       this.undoStack.push(command);
       this.notifyListeners();
+      if (result && typeof (result as any).then === 'function') {
+        (result as Promise<any>).catch(() => {}).finally(() => {
+          this.isExecuting = false;
+        });
+      } else {
+        this.isExecuting = false;
+      }
       return true;
     } catch (_error) {
-      return false;
-    } finally {
       this.isExecuting = false;
+      return false;
     }
   }
   
