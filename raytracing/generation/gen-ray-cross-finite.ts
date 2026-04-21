@@ -50,6 +50,20 @@ function isStopRow(row) {
     return t === 'stop' || t === 'sto';
 }
 
+function isThinLensRow(row) {
+    if (!row || typeof row !== 'object') return false;
+    const fields = [row._blockType, row.blockType, row.block_type, row.blockTypeName];
+    return fields.some((value) => {
+        const key = String(value ?? '').trim().toLowerCase();
+        return key === 'thinlens' || key === 'paraxial';
+    });
+}
+
+function isThinLensBackRow(row) {
+    if (!isThinLensRow(row)) return false;
+    return String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase() === 'back';
+}
+
 // traceRay の rayPath は Object 行 / Coord Trans 行を交点として記録しない。
 // surfaceIndex(テーブル行) -> rayPath の point index への変換を行う。
 function getRayPathPointIndexForSurfaceIndex(opticalSystemRows, surfaceIndex) {
@@ -144,11 +158,15 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
         }
     }
 
-    // Fallback for ThinLens or simple systems without an explicit Stop row:
-    // use the first physical aperture-bearing surface as a pseudo-stop so render rays still appear.
+    // Fallback for systems without an explicit Stop row.
+    // The old heuristic chose the first finite semidia surface, which breaks multi-Paraxial
+    // systems because it tends to pick the first ideal thin-lens front even when the effective
+    // limiting pupil is farther downstream. Prefer the center-most aperture-bearing surface,
+    // and never choose the synthetic ThinLens back row (traceRay skips it entirely).
+    const pseudoStopCandidates = [];
     for (let i = 0; i < opticalSystemRows.length; i++) {
         const surface = opticalSystemRows[i];
-        if (!surface || isObjectRow(surface) || isCoordTransRow(surface)) continue;
+        if (!surface || isObjectRow(surface) || isCoordTransRow(surface) || isThinLensBackRow(surface)) continue;
 
         const objType = String(surface?.['object type'] ?? surface?.object ?? surface?.Object ?? '').trim().toLowerCase();
         if (objType === 'image') continue;
@@ -156,15 +174,20 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
         const stopRadius = readApertureRadius(surface);
         if (!(Number.isFinite(stopRadius) && stopRadius > 0)) continue;
 
-        const o = (surfaceOrigins && surfaceOrigins[i]) ? surfaceOrigins[i] : null;
+        pseudoStopCandidates.push({ index: i, surface, radius: stopRadius });
+    }
+
+    if (pseudoStopCandidates.length > 0) {
+        const chosen = pseudoStopCandidates[Math.floor(pseudoStopCandidates.length / 2)];
+        const o = (surfaceOrigins && surfaceOrigins[chosen.index]) ? surfaceOrigins[chosen.index] : null;
         const stopCenter = readSurfaceCenter(o);
-        console.warn(`⚠️ [findStopSurface] 明示的なStop面が無いため、Surface ${i} を擬似Stopとして使用します`);
+        console.warn(`⚠️ [findStopSurface] 明示的なStop面が無いため、Surface ${chosen.index} を擬似Stopとして使用します`);
         return {
-            surface,
-            index: i,
+            surface: chosen.surface,
+            index: chosen.index,
             center: stopCenter,
             position: stopCenter,
-            radius: stopRadius,
+            radius: chosen.radius,
             origin: o,
             pseudoStop: true
         };
@@ -1578,6 +1601,11 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                 continue;
             }
 
+            const minimumExtentRayCount = 1
+                + ((crossType === 'both' || crossType === 'horizontal') ? 2 : 0)
+                + ((crossType === 'both' || crossType === 'vertical') ? 2 : 0);
+            const effectiveRayCount = Math.max(rayCount, minimumExtentRayCount);
+
             const rays = [];
             let rayIndex = 0;
 
@@ -1592,8 +1620,8 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
             };
             rays.push(chiefRay);
 
-            // rayCount=1 の場合は chief のみを返す（周辺光線を追加しない）
-            if (rayCount <= 1) {
+            // Render では少本数でも stop 端まで届くよう、必要最小の周辺光線を内部的に確保する。
+            if (effectiveRayCount <= 1) {
                 if (actualDebugMode) {
                     console.log(`   rayCount=${rayCount}: chief ray only`);
                 }
@@ -1724,33 +1752,32 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                     };
                 }
 
-                leftRay = {
-                    position: fixedObjectPos,
-                    direction: { x: leftDirection.i, y: leftDirection.j, z: leftDirection.k },
-                    type: 'left_marginal',
-                    wavelength: wavelength,
-                    objectIndex: actualObjectIndex,
-                    rayIndex: rayIndex++
-                };
-
-                rightRay = {
-                    position: fixedObjectPos,
-                    direction: { x: rightDirection.i, y: rightDirection.j, z: rightDirection.k },
-                    type: 'right_marginal',
-                    wavelength: wavelength,
-                    objectIndex: actualObjectIndex,
-                    rayIndex: rayIndex++
-                };
-
-                if (rayIndex < rayCount) {
+                if (rayIndex < effectiveRayCount) {
+                    leftRay = {
+                        position: fixedObjectPos,
+                        direction: { x: leftDirection.i, y: leftDirection.j, z: leftDirection.k },
+                        type: 'left_marginal',
+                        wavelength: wavelength,
+                        objectIndex: actualObjectIndex,
+                        rayIndex: rayIndex++
+                    };
                     rays.push(leftRay);
                 }
-                if (rayIndex < rayCount) {
+
+                if (rayIndex < effectiveRayCount) {
+                    rightRay = {
+                        position: fixedObjectPos,
+                        direction: { x: rightDirection.i, y: rightDirection.j, z: rightDirection.k },
+                        type: 'right_marginal',
+                        wavelength: wavelength,
+                        objectIndex: actualObjectIndex,
+                        rayIndex: rayIndex++
+                    };
                     rays.push(rightRay);
                 }
             }
 
-            if ((crossType === 'both' || crossType === 'vertical') && rayIndex < rayCount) {
+            if ((crossType === 'both' || crossType === 'vertical') && rayIndex < effectiveRayCount) {
                 // 垂直方向マージナル光線の目標点を計算（絞り中心基準）
                 const topTarget = { 
                     x: stopCenter.x, 
@@ -1800,35 +1827,34 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                     };
                 }
 
-                topRay = {
-                    position: fixedObjectPos,
-                    direction: { x: topDirection.i, y: topDirection.j, z: topDirection.k },
-                    type: 'upper_marginal',
-                    wavelength: wavelength,
-                    objectIndex: actualObjectIndex,
-                    rayIndex: rayIndex++
-                };
-
-                bottomRay = {
-                    position: fixedObjectPos,
-                    direction: { x: bottomDirection.i, y: bottomDirection.j, z: bottomDirection.k },
-                    type: 'lower_marginal',
-                    wavelength: wavelength,
-                    objectIndex: actualObjectIndex,
-                    rayIndex: rayIndex++
-                };
-
-                if (rayIndex < rayCount) {
+                if (rayIndex < effectiveRayCount) {
+                    topRay = {
+                        position: fixedObjectPos,
+                        direction: { x: topDirection.i, y: topDirection.j, z: topDirection.k },
+                        type: 'upper_marginal',
+                        wavelength: wavelength,
+                        objectIndex: actualObjectIndex,
+                        rayIndex: rayIndex++
+                    };
                     rays.push(topRay);
                 }
-                if (rayIndex < rayCount) {
+
+                if (rayIndex < effectiveRayCount) {
+                    bottomRay = {
+                        position: fixedObjectPos,
+                        direction: { x: bottomDirection.i, y: bottomDirection.j, z: bottomDirection.k },
+                        type: 'lower_marginal',
+                        wavelength: wavelength,
+                        objectIndex: actualObjectIndex,
+                        rayIndex: rayIndex++
+                    };
                     rays.push(bottomRay);
                 }
             }
 
             // 3. 残りの光線を対称的に配置（-方向から+方向への等分）
-            if (rayIndex < rayCount) {
-                const remainingRays = rayCount - rayIndex;
+            if (rayIndex < effectiveRayCount) {
+                const remainingRays = effectiveRayCount - rayIndex;
                 
                 if (actualDebugMode) {
                     console.log(`🔍 [CrossBeam] 十字配置光線生成: ${remainingRays}本`);
@@ -1852,7 +1878,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                     
                     // 水平線（左から右へ等分配置）
                     if (horizontalRays > 0) {
-                        for (let i = 0; i < horizontalRays && rayIndex < rayCount; i++) {
+                        for (let i = 0; i < horizontalRays && rayIndex < effectiveRayCount; i++) {
                             const t = (i + 1) / (horizontalRays + 1) * 2 - 1; // -1 < t < 1
                             
                             // 以前: maxRatio=0.8 によりマージナルとの間に未描画領域が残るケースがあった。
@@ -1918,7 +1944,7 @@ export function generateFiniteSystemCrossBeam(opticalSystemRows, objectPositions
                     
                     // 垂直線（下から上へ等分配置）
                     if (verticalRays > 0) {
-                        for (let i = 0; i < verticalRays && rayIndex < rayCount; i++) {
+                        for (let i = 0; i < verticalRays && rayIndex < effectiveRayCount; i++) {
                             const t = (i + 1) / (verticalRays + 1) * 2 - 1; // -1 < t < 1
                             
                             // 同様に full span を試し無効なら adapt 縮小

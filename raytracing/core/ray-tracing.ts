@@ -2321,6 +2321,37 @@ function __rtIsThinLensBackRow(row) {
   return String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase() === 'back';
 }
 
+function __rtGetPhysicalCircularSemidia(row) {
+  if (!row || typeof row !== 'object') return Infinity;
+
+  const isThinLensSurface = __rtIsThinLensRow(row);
+  const isThinLensBackSurface = __rtIsThinLensBackRow(row);
+  const isIdealThinLensFront = isThinLensSurface && !isThinLensBackSurface;
+
+  const explicitThinLensSemidiaValue = row.__cooptExplicitApertureSemidia;
+  const explicitThinLensSemidiaNum = Number(explicitThinLensSemidiaValue);
+  const hasExplicitThinLensSemidia = !(
+    explicitThinLensSemidiaValue === null ||
+    explicitThinLensSemidiaValue === undefined ||
+    String(explicitThinLensSemidiaValue).trim() === '' ||
+    explicitThinLensSemidiaValue === 'Auto' ||
+    !Number.isFinite(explicitThinLensSemidiaNum) ||
+    explicitThinLensSemidiaNum <= 0
+  );
+
+  if (isIdealThinLensFront && !hasExplicitThinLensSemidia) {
+    return Infinity;
+  }
+
+  const semiDiaValue = hasExplicitThinLensSemidia
+    ? explicitThinLensSemidiaValue
+    : (row.__cooptActualSemidia ?? row.semidia);
+  const semiDiaNum = Number(semiDiaValue);
+  return (semiDiaValue === 'Auto' || semiDiaValue === '' || !Number.isFinite(semiDiaNum) || semiDiaNum <= 0)
+    ? Infinity
+    : semiDiaNum;
+}
+
 function __rtSystemHasThinLens(rows, targetSurfaceIndex = null) {
   if (!Array.isArray(rows) || rows.length === 0) return false;
   const maxIdx = Number.isFinite(Number(targetSurfaceIndex))
@@ -6635,14 +6666,13 @@ function __traceRay_impl(opticalSystemRows, ray0, n0 = 1.0, debugLog = null, max
       
       // 2. semidia制限（"Auto"/未指定の場合は制限なし）
       // NOTE: semidia 未指定時に thickness を代用すると、物理的に存在しない開口制限を
-      //       誤って導入してしまい、軸外で大量に光線がブロックされる。n      // CB rows propagate the prior surface's semidia in __cooptActualSemidia
+      //       誤って導入してしまい、軸外で大量に光線がブロックされる。
+      // NOTE: Paraxial/ThinLens面のsemidiaは通常はレンダリング用サイズなので aperture とみなさない。
+      //       ただし Design Intent の block.aperture 由来で明示された semidia は物理 aperture として扱う。
+      // CB rows propagate the prior surface's semidia in __cooptActualSemidia
       // (since semidia column is reused for decenterX).
       if (!useRectAperture) {
-        const semiDiaValue = row.__cooptActualSemidia ?? row.semidia;
-        const semiDiaNum = Number(semiDiaValue);
-        const semiDia = (semiDiaValue === 'Auto' || semiDiaValue === '' || !Number.isFinite(semiDiaNum) || semiDiaNum <= 0)
-          ? Infinity
-          : semiDiaNum;
+        const semiDia = __rtGetPhysicalCircularSemidia(row);
         if (isFinite(semiDia)) {
           apertureLimit = Math.min(apertureLimit, semiDia);
           if (isDetailedDebug) {

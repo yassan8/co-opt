@@ -1261,6 +1261,14 @@ export function drawRayWithSegmentColors(rayPath, objectId, rayNumber, scene) {
     // Debug: 光線パスの最初のポイントと最後のポイントを確認
     const firstPoint = rayPath[0];
     const lastPoint = rayPath[rayPath.length - 1];
+    
+    // Diagnostic: log rayPath for cross-beam rays with object/type info
+    if (typeof objectId === 'string' && (objectId.includes('cross-') || objectId.includes('chief-'))) {
+        const objMatch = objectId.match(/obj(\d+)/);
+        const objNum = objMatch ? objMatch[1] : '?';
+        const beamInfo = objectId.includes('cross-vertical') ? 'V' : objectId.includes('cross-horizontal') ? 'H' : 'C';
+        console.log(`[RAY-DEBUG] Ray ${rayNumber} (${beamInfo}-obj${objNum}): pathLen=${rayPath.length} start=(${firstPoint.x.toFixed(1)}, ${firstPoint.y.toFixed(1)}, ${firstPoint.z.toFixed(1)}) → end=(${lastPoint.x.toFixed(1)}, ${lastPoint.y.toFixed(1)}, ${lastPoint.z.toFixed(1)})`);
+    }
     // console.log(`🔍 Ray ${rayNumber} start point: (${firstPoint.x}, ${firstPoint.y}, ${firstPoint.z})`);
     // console.log(`🔍 Ray ${rayNumber} end point: (${lastPoint.x}, ${lastPoint.y}, ${lastPoint.z})`);
     
@@ -1362,6 +1370,17 @@ export function drawRayWithSegmentColors(rayPath, objectId, rayNumber, scene) {
         'cross-vertical-obj9': 0x00aaff         // Object9 縦方向 - 水色
     };
     
+    const resolveCrossBeamColorKey = (rawObjectId) => {
+        if (typeof rawObjectId !== 'string') return rawObjectId;
+        const raySuffixIndex = rawObjectId.indexOf('-ray');
+        if (raySuffixIndex > 0) {
+            return rawObjectId.slice(0, raySuffixIndex);
+        }
+        return rawObjectId;
+    };
+
+    const colorObjectId = resolveCrossBeamColorKey(objectId);
+
     for (let i = 0; i < segmentsToShow; i++) {
         const startPoint = rayPath[i];
         const endPoint = rayPath[i + 1];
@@ -1394,13 +1413,13 @@ export function drawRayWithSegmentColors(rayPath, objectId, rayNumber, scene) {
             // console.log(`🎨 Segment color for ray ${rayNumber}, segment ${i}: 0x${color.toString(16)}`);
         } else {
             // Color by object: all segments of this object get the same color
-            if (crossBeamColors[objectId]) {
+            if (crossBeamColors[colorObjectId]) {
                 // クロスビーム専用の色を使用
-                color = crossBeamColors[objectId];
+                color = crossBeamColors[colorObjectId];
                 // console.log(`🎨 CrossBeam color for ${objectId}: 0x${color.toString(16)}`);
-            } else if (typeof objectId === 'string' && objectId.startsWith('chief-obj')) {
+            } else if (typeof colorObjectId === 'string' && colorObjectId.startsWith('chief-obj')) {
                 // 主光線は同一Objectのクロス光線色に合わせる
-                const objIndex = objectId.replace('chief-obj', '');
+                const objIndex = colorObjectId.replace('chief-obj', '');
                 const fallbackId = `cross-horizontal-obj${objIndex}`;
                 if (crossBeamColors[fallbackId]) {
                     color = crossBeamColors[fallbackId];

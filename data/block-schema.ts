@@ -1544,11 +1544,13 @@ export function expandBlocksToOpticalSystemRows(blocks: Block[]): { rows: any[];
         const vBack = aperture ? (isThinLens ? (aperture.back ?? aperture.front ?? aperture.s1 ?? aperture.semidia) : aperture.back) : null;
         if (vFront !== null && vFront !== undefined && String(vFront).trim() !== '') {
           front.semidia = vFront;
+          front.__cooptExplicitApertureSemidia = vFront;
         } else if (!aperture || !Object.prototype.hasOwnProperty.call(aperture, 'front')) {
           front.semidia = '';
         }
         if (vBack !== null && vBack !== undefined && String(vBack).trim() !== '') {
           back.semidia = vBack;
+          back.__cooptExplicitApertureSemidia = vBack;
         } else if (!aperture || (!Object.prototype.hasOwnProperty.call(aperture, 'back') && !isThinLens)) {
           back.semidia = '';
         }

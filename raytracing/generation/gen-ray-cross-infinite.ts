@@ -48,7 +48,7 @@ function traceRayForRenderTs(opticalSystemRows, ray0, n0 = 1.0, debugLog = null,
     // 一時診断ログ（光線追跡の直接確認）
     if (debugLog === null && maxSurfaceIndex === null) {
         const len = Array.isArray(__result) ? __result.length : (__result ? 'obj' : 'null');
-        console.log(`[RAY-DEBUG] traceRayForRenderTs: rows=${opticalSystemRows?.length} result.length=${len}`);
+        // console.log(`[RAY-DEBUG] traceRayForRenderTs: rows=${opticalSystemRows?.length} result.length=${len}`);
     }
     return __result;
 }
@@ -106,6 +106,19 @@ function isStopRow(row) {
     const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? row?.Type ?? '';
     const t = String(raw ?? '').trim().toLowerCase();
     return t === 'stop' || t === 'sto';
+}
+
+function isThinLensRow(row) {
+    if (!row || typeof row !== 'object') return false;
+    const fields = [row._blockType, row.blockType, row.block_type, row.blockTypeName];
+    return fields.some((value) => {
+        const key = String(value ?? '').trim().toLowerCase();
+        return key === 'thinlens' || key === 'paraxial';
+    });
+}
+
+function systemHasThinLensRows(opticalSystemRows) {
+    return Array.isArray(opticalSystemRows) && opticalSystemRows.some((row) => isThinLensRow(row));
 }
 
 function isImageRow(row) {
@@ -304,12 +317,7 @@ function findStopSurface(opticalSystemRows, surfaceOrigins = null) {
             
             // Stop面の半径を取得
             let stopRadius = 10; // デフォルト値
-            const radiusFields = [
-                'semidia', 'semiDiameter', 'semi-diameter', 'semi_diameter',
-                'radius', 'aperture', 'diameter', 'semi-dia',
-                'semiDia', 'aper', 'halfDiameter', 'half-diameter',
-                'Clear_Aperture', 'clearAperture', 'clear_aperture'
-            ];
+            const radiusFields = ['semidia', 'semiDiameter', 'semi-diameter', 'semi_diameter', 'radius', 'aperture', 'diameter', 'semi-dia', 'semiDia', 'aper', 'halfDiameter', 'half-diameter', 'Clear_Aperture', 'clearAperture', 'clear_aperture'];
             
             for (const field of radiusFields) {
                 const value = surface[field];
@@ -536,11 +544,18 @@ export function findApertureBoundaryRays(chiefOrigin, direction, opticalSystemRo
         if (debugMode) {
             console.log(`  🎯 [${dir.name}] 方向検索開始`);
         }
-        
-        // 二分法で絞り境界を検索
-        const boundaryDistance = binarySearchApertureBoundary(
-            chiefOrigin, direction, basis, dir.vector, 
-            searchRadius, opticalSystemRows, tolerance, debugMode, wavelength, targetSurfaceIndex
+
+        const boundaryDistance = solveStopEdgeDistanceBrent(
+            chiefOrigin,
+            direction,
+            basis,
+            dir,
+            stopInfo,
+            searchRadius,
+            opticalSystemRows,
+            tolerance,
+            debugMode,
+            wavelength
         );
         
         if (boundaryDistance !== null) {
@@ -570,6 +585,175 @@ export function findApertureBoundaryRays(chiefOrigin, direction, opticalSystemRo
     }
     
     return boundaryRays;
+}
+
+function boundaryRayOriginSeparation(rayA, rayB) {
+    if (!rayA?.origin || !rayB?.origin) return 0;
+    const dx = Number(rayA.origin.x) - Number(rayB.origin.x);
+    const dy = Number(rayA.origin.y) - Number(rayB.origin.y);
+    const dz = Number(rayA.origin.z) - Number(rayB.origin.z);
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) {
+        return 0;
+    }
+    return Math.hypot(dx, dy, dz);
+}
+
+function hasDistinctBoundaryPair(boundaryRays, directionA, directionB, minSeparation = 1e-4) {
+    const rayA = boundaryRays.find((ray) => ray?.direction === directionA);
+    const rayB = boundaryRays.find((ray) => ray?.direction === directionB);
+    if (!rayA || !rayB) {
+        return false;
+    }
+
+    const originSeparation = boundaryRayOriginSeparation(rayA, rayB);
+    const distanceDelta = Math.abs(Number(rayA.distance) - Number(rayB.distance));
+    return originSeparation > minSeparation || distanceDelta > minSeparation;
+}
+
+function hasUsableBoundaryRaysForCrossType(boundaryRays, crossType) {
+    if (!Array.isArray(boundaryRays) || boundaryRays.length === 0) {
+        return false;
+    }
+
+    const needsVertical = (crossType === 'both' || crossType === 'vertical');
+    const needsHorizontal = (crossType === 'both' || crossType === 'horizontal');
+    const verticalOk = !needsVertical || hasDistinctBoundaryPair(boundaryRays, 'upper', 'lower');
+    const horizontalOk = !needsHorizontal || hasDistinctBoundaryPair(boundaryRays, 'left', 'right');
+    return verticalOk && horizontalOk;
+}
+
+function solveStopEdgeDistanceBrent(chiefOrigin, direction, basis, directionSpec, stopInfo, maxDistance, opticalSystemRows, tolerance, debugMode, wavelength = 0.5876) {
+    const mkOrigin = (distance) => ({
+        x: chiefOrigin.x + distance * (basis.x.x * directionSpec.vector.x + basis.y.x * directionSpec.vector.y),
+        y: chiefOrigin.y + distance * (basis.x.y * directionSpec.vector.x + basis.y.y * directionSpec.vector.y),
+        z: chiefOrigin.z + distance * (basis.x.z * directionSpec.vector.x + basis.y.z * directionSpec.vector.y)
+    });
+
+    const evaluate = (distance) => {
+        const origin = mkOrigin(distance);
+        const ray = { pos: origin, dir: direction, wavelength };
+        const rayPath = traceRayForRenderTs(opticalSystemRows, ray, 1.0, null, stopInfo.index + 1);
+        const stopPoint = getRayPointAtSurfaceIndex(rayPath, opticalSystemRows, stopInfo.index);
+        if (!stopPoint) {
+            return { valid: false, value: Infinity };
+        }
+
+        if (directionSpec.name === 'upper' || directionSpec.name === 'lower') {
+            const targetY = stopInfo.center.y + (directionSpec.name === 'upper' ? stopInfo.radius : -stopInfo.radius);
+            return { valid: true, value: stopPoint.y - targetY };
+        }
+
+        const targetX = stopInfo.center.x + (directionSpec.name === 'right' ? stopInfo.radius : -stopInfo.radius);
+        return { valid: true, value: stopPoint.x - targetX };
+    };
+
+    const sampleCount = 16;
+    let bestDistance = null;
+    let bestAbsValue = Infinity;
+    let bracketStart = null;
+    let bracketEnd = null;
+    let prevDistance = 0;
+    let prevEval = evaluate(0);
+
+    // DIAGNOSTIC: sample log
+    const __diagSamples: any[] = [];
+    __diagSamples.push({ d: 0, valid: prevEval.valid, v: prevEval.valid ? Number(prevEval.value.toFixed(4)) : null });
+
+    if (prevEval.valid) {
+        bestDistance = 0;
+        bestAbsValue = Math.abs(prevEval.value);
+    }
+
+    // Bidirectional search: try positive direction first, then negative if needed.
+    // This handles systems where the chief ray passes through a focal point before the stop,
+    // causing the sign relationship between origin offset and stop hit position to invert.
+    const scanDirection = (sign: number) => {
+        let localBracketStart: number | null = null;
+        let localBracketEnd: number | null = null;
+        let localPrevDistance = 0;
+        let localPrevEval = prevEval;
+
+        for (let i = 1; i <= sampleCount; i++) {
+            const distance = sign * (maxDistance * i) / sampleCount;
+            const currentEval = evaluate(distance);
+            __diagSamples.push({ d: Number(distance.toFixed(3)), valid: currentEval.valid, v: currentEval.valid ? Number(currentEval.value.toFixed(4)) : null });
+            if (!currentEval.valid) {
+                // reset prev so we don't bridge across invalid gaps
+                localPrevEval = { valid: false, value: Infinity };
+                localPrevDistance = distance;
+                continue;
+            }
+
+            const absValue = Math.abs(currentEval.value);
+            if (absValue < bestAbsValue) {
+                bestAbsValue = absValue;
+                bestDistance = distance;
+            }
+
+            if (localPrevEval.valid && localPrevEval.value * currentEval.value <= 0) {
+                localBracketStart = localPrevDistance;
+                localBracketEnd = distance;
+                break;
+            }
+
+            localPrevDistance = distance;
+            localPrevEval = currentEval;
+        }
+
+        return { start: localBracketStart, end: localBracketEnd };
+    };
+
+    const posScan = scanDirection(+1);
+    bracketStart = posScan.start;
+    bracketEnd = posScan.end;
+
+    if (bracketStart === null || bracketEnd === null) {
+        const negScan = scanDirection(-1);
+        if (negScan.start !== null && negScan.end !== null) {
+            bracketStart = negScan.start;
+            bracketEnd = negScan.end;
+        }
+    }
+
+    let brentResult: number | null = null;
+    let brentError: string | null = null;
+    if (bracketStart !== null && bracketEnd !== null) {
+        try {
+            brentResult = brent((distance) => {
+                const result = evaluate(distance);
+                if (!result.valid) {
+                    throw new Error('stop edge trace failed during brent solve');
+                }
+                return result.value;
+            }, bracketStart, bracketEnd, tolerance, 100);
+        } catch (error) {
+            brentError = (error as any)?.message || String(error);
+            if (debugMode) {
+                console.warn(`⚠️ [ApertureBoundary] ${directionSpec.name} Brent solve failed: ${brentError}`);
+            }
+        }
+    }
+
+    // DIAGNOSTIC: per-call summary
+    try {
+        const win: any = (typeof window !== 'undefined') ? window : null;
+        if (win && win.__cooptStopEdgeDiag !== false) {
+            const validCount = __diagSamples.filter(s => s.valid).length;
+            const tag = `[STOP-EDGE-DIAG] ${directionSpec.name}`;
+            console.log(`${tag} origin=(${chiefOrigin.x.toFixed(2)},${chiefOrigin.y.toFixed(2)},${chiefOrigin.z.toFixed(2)}) dir=(${direction.x.toFixed(3)},${direction.y.toFixed(3)},${direction.z.toFixed(3)}) stopIdx=${stopInfo.index} stopR=${stopInfo.radius} maxD=${maxDistance.toFixed(2)} validSamples=${validCount}/${__diagSamples.length} bracket=[${bracketStart},${bracketEnd}] brent=${brentResult !== null ? brentResult.toFixed(4) : 'null'}${brentError ? ' ERR='+brentError : ''} bestD=${bestDistance !== null ? bestDistance.toFixed(4) : 'null'}`);
+            // Show all samples for traceability
+            const sampleStr = __diagSamples.map(s => `d=${s.d}${s.valid ? ' v='+s.v : ' INV'}`).join(' | ');
+            console.log(`${tag} samples: ${sampleStr}`);
+        }
+    } catch (_) {}
+
+    if (brentResult !== null) return brentResult;
+
+    if (debugMode && bestDistance === null) {
+        console.warn(`⚠️ [ApertureBoundary] ${directionSpec.name} could not find valid stop-edge sample`);
+    }
+
+    return bestDistance;
 }
 
 /**
@@ -756,11 +940,13 @@ function generateCrossBeamFromBoundaryRays(chiefOrigin, direction, boundaryRays,
     // 2. 境界光線を分類（方向名を正しくマッピング）
     const verticalRays = boundaryRays.filter(r => ['upper', 'lower'].includes(r.direction));
     const horizontalRays = boundaryRays.filter(r => ['left', 'right'].includes(r.direction));
-    
-    // rayCount を厳守するため、chief 以外の本数を配分
-    let remainingCount = Math.max(0, rayCount - 1);
     const useVertical = (crossType === 'both' || crossType === 'vertical') && verticalRays.length >= 2;
     const useHorizontal = (crossType === 'both' || crossType === 'horizontal') && horizontalRays.length >= 2;
+    const minimumExtentRayCount = 1 + (useVertical ? 2 : 0) + (useHorizontal ? 2 : 0);
+    const effectiveRayCount = Math.max(rayCount, minimumExtentRayCount);
+    
+    // Render では少本数でも stop 端まで届くクロスを優先し、各有効軸の端点を最低2本確保する。
+    let remainingCount = Math.max(0, effectiveRayCount - 1);
     const verticalTargetCount = useVertical
         ? (useHorizontal ? Math.floor(remainingCount / 2) : remainingCount)
         : 0;
@@ -905,9 +1091,11 @@ function generateCrossBeamFromEntrancePupil(centerOrigin, direction, planeU, pla
         }
     };
 
-    let remainingCount = Math.max(0, rayCount - 1);
     const useVertical = (crossType === 'both' || crossType === 'vertical');
     const useHorizontal = (crossType === 'both' || crossType === 'horizontal');
+    const minimumExtentRayCount = 1 + (useVertical ? 2 : 0) + (useHorizontal ? 2 : 0);
+    const effectiveRayCount = Math.max(rayCount, minimumExtentRayCount);
+    let remainingCount = Math.max(0, effectiveRayCount - 1);
     const verticalTargetCount = useVertical
         ? (useHorizontal ? Math.floor(remainingCount / 2) : remainingCount)
         : 0;
@@ -1023,10 +1211,10 @@ function estimateEffectiveEntrancePupilExtents(opticalSystemRows, centerOrigin, 
             }, 1.0, debugLog, effectiveTargetIndex);
             
             // Output debug log
-            if (debugLog.length > 0) {
-                console.error(`📋 [RayTrace Debug Log]:`);
-                debugLog.forEach(line => console.error(`   ${line}`));
-            }
+            // if (debugLog.length > 0) {
+            //     console.error(`📋 [RayTrace Debug Log]:`);
+            //     debugLog.forEach(line => console.error(`   ${line}`));
+            // }
             
             // Check first few surfaces to see where it fails
             const firstSurfaces = systemRowsForTrace.slice(0, 5).map((s, i) => ({
@@ -1295,7 +1483,7 @@ function brent(f, a, b, tol = 1e-8, maxIter = 100) {
  * @returns {Object} 生成結果
  */
 export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles, options: any = {}) {
-    console.log('[RAY-DEBUG] generateInfiniteSystemCrossBeam called. rows:', opticalSystemRows?.length, 'angles:', objectAngles?.length, 'options:', JSON.stringify(options).slice(0, 100));
+    // console.log('[RAY-DEBUG] generateInfiniteSystemCrossBeam called. rows:', opticalSystemRows?.length, 'angles:', objectAngles?.length, 'options:', JSON.stringify(options).slice(0, 100));
     opticalSystemRows = cooptNormalizeOpticalSystemRows(opticalSystemRows);
     
     const {
@@ -1331,6 +1519,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
 
     const angles = Array.isArray(objectAngles) ? objectAngles : [objectAngles];
     const allResults = [];
+    const thinLensSystem = systemHasThinLensRows(opticalSystemRows);
 
     for (let objectIndex = 0; objectIndex < angles.length; objectIndex++) {
         const objectAngle = angles[objectIndex];
@@ -1592,8 +1781,9 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         let apertureBoundaryRays = [];
         let entrancePupil = null;
         let crossBeamRays = [];
+        let effectivePupilSamplingMode = pupilSamplingMode;
 
-        if (pupilSamplingMode === 'entrance') {
+        const buildEntrancePupilCrossBeam = () => {
             const entranceAxes = buildEntrancePlaneAxesLikeOPD(dirXYZ);
             const entranceRadiusGuess = (() => {
                 try {
@@ -1677,6 +1867,10 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                     entrancePupil.extents
                 );
             }
+        };
+
+        if (effectivePupilSamplingMode === 'entrance') {
+            buildEntrancePupilCrossBeam();
         } else {
             // stop-based boundary search
             if (debugMode) {
@@ -1713,10 +1907,25 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
                 objectIndex,
                 wavelength
             );
+
+            const needsThinLensFallback = thinLensSystem && (
+                crossBeamRays.length <= 1 ||
+                !hasUsableBoundaryRaysForCrossType(apertureBoundaryRays, crossType)
+            );
+
+            if (needsThinLensFallback) {
+                effectivePupilSamplingMode = 'entrance';
+                apertureBoundaryRays = [];
+                crossBeamRays = [];
+                if (debugMode) {
+                    console.warn(`⚠️ [InfiniteSystem] Object${objectIndex + 1}: stop-based boundary search produced degenerate rays in thin-lens/paraxial system; falling back to entrance pupil sampling`);
+                }
+                buildEntrancePupilCrossBeam();
+            }
         }
 
         // 7. 光線追跡の実行
-        console.log(`[RAY-DEBUG] Object${objectIndex}: pupilSamplingMode=${pupilSamplingMode} apertureBoundaryRays=${apertureBoundaryRays.length} crossBeamRays=${crossBeamRays.length} types=${crossBeamRays.map(r=>r.type).join(',')}`);
+        // console.log(`[RAY-DEBUG] Object${objectIndex}: pupilSamplingMode=${effectivePupilSamplingMode} apertureBoundaryRays=${apertureBoundaryRays.length} crossBeamRays=${crossBeamRays.length} types=${crossBeamRays.map(r=>r.type).join(',')}`);
         const tracedRays = traceCrossBeamRays(
             opticalSystemRows,
             crossBeamRays,
@@ -1753,7 +1962,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
             direction: chiefDirection,
             chiefRayOrigin: chiefRayOrigin,
             stopSurfaceInfo: stopSurfaceInfo,
-            pupilSamplingMode: pupilSamplingMode,
+            pupilSamplingMode: effectivePupilSamplingMode,
             entrancePupil: entrancePupil,
             apertureBoundaryRays: apertureBoundaryRays,
             crossBeamRays: crossBeamRays,
@@ -1795,6 +2004,7 @@ export function generateInfiniteSystemCrossBeam(opticalSystemRows, objectAngles,
         systemType: 'infinite',
         objectCount: angles.length,
         processedObjectCount: allResults.length,
+        results: allResults,
         objectResults: allResults,
         allTracedRays: allTracedRays,
         allCrossBeamRays: allCrossBeamRays,
@@ -3836,14 +4046,14 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
             }
             
             // 全面まで追跡（描画・評価を兼用）
-            console.log(`[RAY-DEBUG] traceCrossBeamRays ray[${i}] type=${ray.type} pos=(${rayPosition?.x?.toFixed(2)},${rayPosition?.y?.toFixed(2)},${rayPosition?.z?.toFixed(2)}) dir=(${rayDirection?.x?.toFixed(3)},${rayDirection?.y?.toFixed(3)},${rayDirection?.z?.toFixed(3)})`);
+            // console.log(`[RAY-DEBUG] traceCrossBeamRays ray[${i}] type=${ray.type} pos=(${rayPosition?.x?.toFixed(2)},${rayPosition?.y?.toFixed(2)},${rayPosition?.z?.toFixed(2)}) dir=(${rayDirection?.x?.toFixed(3)},${rayDirection?.y?.toFixed(3)},${rayDirection?.z?.toFixed(3)})`);
             const rayPathFull = traceRayForRenderTs(systemRowsForTrace, {
                 pos: rayPosition,
                 dir: rayDirection,
                 wavelength: wavelength  // 波長を追加
             }, 1.0);  // 全面追跡
 
-            console.log(`[RAY-DEBUG] traceCrossBeamRays ray[${i}] type=${ray.type} rayPathFull=${rayPathFull ? rayPathFull.length : 'null'} effectiveTargetPointIndex=${effectiveTargetPointIndex} effectiveTargetIndex=${effectiveTargetIndex}`);
+            // console.log(`[RAY-DEBUG] traceCrossBeamRays ray[${i}] type=${ray.type} rayPathFull=${rayPathFull ? rayPathFull.length : 'null'} effectiveTargetPointIndex=${effectiveTargetPointIndex} effectiveTargetIndex=${effectiveTargetIndex}`);
 
             // rayPathFull が null なら詳細デバッグモードで再追跡して失敗原因を調べる
             if (!rayPathFull) {
@@ -3856,7 +4066,7 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
                     }, 1.0, diagLog, null, { ...RENDER_RUST_TRACE_OPTIONS, isDetailedDebug: true });
                 } catch (_) {}
                 const failLines = diagLog.filter(l => l.includes('❌') || l.includes('BLOCK') || l.includes('INTERSECT') || l.includes('APERTURE') || l.includes('NO_INT'));
-                console.warn(`[RAY-DEBUG] ray[${i}] traceRay=null diagLines:`, failLines.length > 0 ? failLines : diagLog.slice(-5));
+                // console.warn(`[RAY-DEBUG] ray[${i}] traceRay=null diagLines:`, failLines.length > 0 ? failLines : diagLog.slice(-5));
 
                 // フォールバック: Rust WASM なしで再追跡
                 try {
@@ -3866,7 +4076,7 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
                         wavelength: wavelength
                     }, 1.0, null, null, { allowNonStrict: true, requireWasmRayTracing: false, disableWasmRayTracing: true });
                     if (Array.isArray(fallbackPath) && fallbackPath.length >= 2) {
-                        console.warn(`[RAY-DEBUG] ray[${i}] fallback (no-WASM) succeeded! length=${fallbackPath.length}`);
+                        // console.warn(`[RAY-DEBUG] ray[${i}] fallback (no-WASM) succeeded! length=${fallbackPath.length}`);
                         // フォールバック成功: このパスを使用
                         const tracedRayEntry = {
                             success: true,
@@ -3986,7 +4196,7 @@ function traceCrossBeamRays(opticalSystemRows, crossBeamRays, wavelength, debugM
                 }
             }
         } catch (error) {
-            console.error(`[RAY-DEBUG] traceCrossBeamRays ray[${i}] THREW:`, error?.message || error, error?.stack?.split('\n').slice(0,3));
+            // console.error(`[RAY-DEBUG] traceCrossBeamRays ray[${i}] THREW:`, error?.message || error, error?.stack?.split('\n').slice(0,3));
             tracedRays.push({
                 success: false,
                 rayIndex: i,

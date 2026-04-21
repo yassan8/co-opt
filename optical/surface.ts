@@ -1545,6 +1545,101 @@ function __coopt_isIdealThinLensSurface(surf) {
   return !!(surf && (surf._idealThinLens === true || __coopt_isThinLensProfileSurface(surf)));
 }
 
+/**
+ * Draw positive/negative thin lens arrows at the aperture edges.
+ * Positive focal length (+Dptr): outward-pointing arrows (converging lens symbol)
+ * Negative focal length (-Dptr): inward-pointing arrows (diverging lens symbol)
+ * axis: 'YZ' draws arrows along Y axis (top/bottom), 'XZ' draws along X axis (left/right)
+ */
+function __coopt_drawThinLensArrows(scene, surf, semidia, originData, axis = 'YZ') {
+    if (!__coopt_isThinLensProfileSurface(surf)) return;
+
+    const focalLengthX = Number(
+        surf._thinLensFocalLengthX ?? surf.focalLengthX ?? surf.focalLength ??
+        surf._thinLensFocalLengthY ?? surf.focalLengthY ?? NaN
+    );
+    const focalLengthY = Number(
+        surf._thinLensFocalLengthY ?? surf.focalLengthY ?? surf.focalLength ??
+        surf._thinLensFocalLengthX ?? surf.focalLengthX ?? NaN
+    );
+    const focalLength = axis === 'XZ' ? focalLengthX : focalLengthY;
+    if (!isFinite(focalLength) || focalLength === 0) return;
+
+    const isPositive = focalLength > 0;
+    // Keep the thin-lens symbol visually stable regardless of the rendered aperture size.
+    const arrowH = 2.0;
+    const arrowW = 0.8;
+
+    const R = (originData.rotationMatrix && Array.isArray(originData.rotationMatrix) && originData.rotationMatrix.length >= 3)
+        ? originData.rotationMatrix : null;
+    const ox = originData.origin.x, oy = originData.origin.y, oz = originData.origin.z;
+
+    const applyTransform = (lx, ly, lz) => {
+        if (R) {
+            return {
+                x: ox + R[0][0] * lx + R[0][1] * ly + R[0][2] * lz,
+                y: oy + R[1][0] * lx + R[1][1] * ly + R[1][2] * lz,
+                z: oz + R[2][0] * lx + R[2][1] * ly + R[2][2] * lz
+            };
+        }
+        return { x: ox + lx, y: oy + ly, z: oz + lz };
+    };
+
+    const addTriangle = (lx1, ly1, lz1, lx2, ly2, lz2, lx3, ly3, lz3) => {
+        const p1 = applyTransform(lx1, ly1, lz1);
+        const p2 = applyTransform(lx2, ly2, lz2);
+        const p3 = applyTransform(lx3, ly3, lz3);
+        if (!isFinite(p1.x) || !isFinite(p1.y) || !isFinite(p1.z)) return;
+        const vertices = new Float32Array([
+            p1.x, p1.y, p1.z, p2.x, p2.y, p2.z, p3.x, p3.y, p3.z
+        ]);
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+        const mat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide, depthTest: false });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.renderOrder = 1001;
+        mesh.userData = { type: 'thinLensArrow', isOpticalElement: true };
+        scene.add(mesh);
+    };
+
+    // Each arrow is drawn in TWO orthogonal planes so it is visible from any camera angle:
+    //   YZ arrows: in XY plane (visible from Z/front view) + in YZ plane (visible from X/side view)
+    //   XZ arrows: in XY plane (visible from Z/front view) + in XZ plane (visible from Y/top view)
+    const drawArrowTriangleYZ = (tipY, baseY) => {
+        // XY plane: width along X
+        addTriangle(0, tipY, 0,  -arrowW, baseY, 0,   arrowW, baseY, 0);
+        // YZ plane: width along Z (visible from X-axis / YZ side view)
+        addTriangle(0, tipY, 0,   0, baseY, -arrowW,  0, baseY, arrowW);
+    };
+
+    const drawArrowTriangleXZ = (tipX, baseX) => {
+        // XY plane: width along Y
+        addTriangle(tipX, 0, 0,  baseX, -arrowW, 0,  baseX, arrowW, 0);
+        // XZ plane: width along Z (visible from Y-axis / XZ top view)
+        addTriangle(tipX, 0, 0,  baseX, 0, -arrowW,  baseX, 0, arrowW);
+    };
+
+    // Positive lens: tip points outward (beyond aperture), base at semidia
+    // Negative lens: tip touches aperture edge (semidia), base beyond aperture — direction stays inward
+    if (axis === 'XZ') {
+        if (isPositive) {
+            drawArrowTriangleXZ( semidia + arrowH,  semidia);   // tip outside, base at aperture
+            drawArrowTriangleXZ(-semidia - arrowH, -semidia);
+        } else {
+            drawArrowTriangleXZ( semidia,  semidia + arrowH);   // tip at aperture, base outside
+            drawArrowTriangleXZ(-semidia, -semidia - arrowH);
+        }
+    } else {
+        if (isPositive) {
+            drawArrowTriangleYZ( semidia + arrowH,  semidia);   // tip outside, base at aperture
+            drawArrowTriangleYZ(-semidia - arrowH, -semidia);
+        } else {
+            drawArrowTriangleYZ( semidia,  semidia + arrowH);   // tip at aperture, base outside
+            drawArrowTriangleYZ(-semidia, -semidia - arrowH);
+        }
+    }
+}
+
 // surfaces: 面データ配列（各要素に material, params, zOffset などがある想定）
 export function drawLensCrossSection(scene, surfaces, coordinateTransforms = [], mode = "even", segments = 100) {
   // 既存のレンズグループを削除
@@ -2531,6 +2626,11 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             yzLine.userData = { type: 'surfaceProfile', profileType: 'YZ', surfaceIndex: i + 1, isOpticalElement: true };
             scene.add(yzLine);
             yzProfileCount++;
+
+            // Draw positive/negative lens power arrows for thin lens elements
+            if (__coopt_isThinLensProfileSurface(surf)) {
+                __coopt_drawThinLensArrows(scene, surf, semidia, origin);
+            }
         } else {
         }
         
@@ -2590,6 +2690,11 @@ export function drawLensCrossSectionWithSurfaceOrigins(scene, rows, surfaceOrigi
             xzLine.userData = { type: 'surfaceProfile', profileType: 'XZ', surfaceIndex: i + 1, isOpticalElement: true };
             scene.add(xzLine);
             xzProfileCount++;
+
+            // Draw XZ-plane positive/negative lens power arrows for thin lens elements
+            if (__coopt_isThinLensProfileSurface(surf)) {
+                __coopt_drawThinLensArrows(scene, surf, semidia, origin, 'XZ');
+            }
         } else {
         }
     }

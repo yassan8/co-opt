@@ -198,6 +198,7 @@ interface CameraOptions {
   preserveCurrentOrthoBounds?: boolean;
   storeDrawCrossBounds?: boolean;
   cameraDistance?: number;
+  cameraBoundsOverride?: { minY: number; maxY: number };
 }
 
 // Export THREE and OrbitControls to global scope for popup windows
@@ -2560,13 +2561,25 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
             return;
         }
 
-        const { minZ, maxZ, centerZ, totalLength, maxY } = calculateOpticalSystemZRange();
+        const { minZ, maxZ, centerZ, totalLength, maxY: systemMaxY } = calculateOpticalSystemZRange();
         const includeRayStartMargin = options.includeRayStartMargin !== false;
         const rayStartMargin = includeRayStartMargin ? 25 : 0;
         const effectiveMinZ = Math.min(minZ, -rayStartMargin);
         const effectiveMaxZ = maxZ;
         const effectiveTotalLength = effectiveMaxZ - effectiveMinZ;
         const effectiveCenterZ = (effectiveMinZ + effectiveMaxZ) / 2;
+
+        // Use cameraBoundsOverride if provided (from drawn rays)
+        let maxY = systemMaxY;
+        let minY = 0;
+        if (options.cameraBoundsOverride) {
+            const cbo = options.cameraBoundsOverride as any;
+            if (Number.isFinite(cbo.minY) && Number.isFinite(cbo.maxY)) {
+                minY = cbo.minY;
+                maxY = Math.max(Math.abs(cbo.minY), Math.abs(cbo.maxY));
+                console.log(`[RAY-DEBUG] Using camera bounds override: minY=${minY.toFixed(1)}, maxY=${maxY.toFixed(1)}`);
+            }
+        }
 
         const savedBounds = camera?.userData?.__drawCrossOrthoBounds;
         const preserveDrawCrossBounds = options.preserveDrawCrossBounds === true && savedBounds;
@@ -2618,7 +2631,7 @@ function setCameraForYZCrossSection(options: CameraOptions = {}) {
 
         const cameraDistance = 300;
         const targetX = targetOverride ? targetOverride.x : 0;
-        const targetY = targetOverride ? targetOverride.y : 0;
+        const targetY = targetOverride ? targetOverride.y : (minY + maxY) / 2;
         const targetZ = targetOverride ? targetOverride.z : systemCenterZ;
 
         camera.position.set(targetX - cameraDistance, targetY, targetZ);
@@ -3099,17 +3112,24 @@ const startApplicationOnce = (() => {
                     let processedCount = 0;
                     let totalCount = 0;
                     
-                    if (crossBeamResult.results && Array.isArray(crossBeamResult.results)) {
+                    const objectResults = Array.isArray(crossBeamResult.objectResults)
+                        ? crossBeamResult.objectResults
+                        : (Array.isArray(crossBeamResult.results) ? crossBeamResult.results : null);
+
+                    if (objectResults) {
                         // results配列がある場合
-                        crossBeamResult.results.forEach((result, idx) => {
+                        objectResults.forEach((result, idx) => {
                             console.log(`   Result${idx + 1}:`, result);
-                            if (result.rays && Array.isArray(result.rays)) {
-                                allRays = allRays.concat(result.rays);
-                                console.log(`   Result${idx + 1} 光線数: ${result.rays.length}`);
+                            const tracedRays = Array.isArray(result?.tracedRays)
+                                ? result.tracedRays
+                                : (Array.isArray(result?.rays) ? result.rays : []);
+                            if (tracedRays.length > 0) {
+                                allRays = allRays.concat(tracedRays);
+                                console.log(`   Result${idx + 1} 光線数: ${tracedRays.length}`);
                             }
                         });
-                        processedCount = crossBeamResult.results.length;
-                        totalCount = crossBeamResult.results.length;
+                        processedCount = objectResults.length;
+                        totalCount = objectResults.length;
                     } else if (crossBeamResult.allCrossBeamRays && Array.isArray(crossBeamResult.allCrossBeamRays) &&
                                crossBeamResult.allTracedRays && Array.isArray(crossBeamResult.allTracedRays)) {
                         // 両方の配列がある場合：allTracedRaysにtypeプロパティを追加
@@ -3390,6 +3410,31 @@ function drawCrossBeamRays(tracedRays, targetScene) {
         return;
     }
     
+    const segmentCountBefore = scene.children.filter((c: any) => c.userData?.rayType === 'crossBeam').length;
+    const diagPerObjectBefore = {};
+    tracedRays.forEach(ray => {
+        const obj = ray.objectIndex || 0;
+        diagPerObjectBefore[obj] = (diagPerObjectBefore[obj] || 0) + (Array.isArray(ray.rayPath) ? ray.rayPath.length - 1 : 0);
+    });
+    console.log(`[RAY-DEBUG] Before draw: scene has ${segmentCountBefore} cross-ray segments. Per-object expected segments:`, diagPerObjectBefore);
+    
+    // Clear existing crossBeam rays from scene before drawing new ones
+    const toRemoveBeforeNewDraw: any[] = [];
+    scene.traverse((child: any) => {
+        if (child?.userData?.rayType === 'crossBeam' || (child?.userData?.type === 'optical-ray' && child?.userData?.objectId?.includes('ray'))) {
+            toRemoveBeforeNewDraw.push(child);
+        }
+    });
+    toRemoveBeforeNewDraw.forEach((obj: any) => {
+        scene.remove(obj);
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+            if (Array.isArray(obj.material)) obj.material.forEach((m: any) => m.dispose());
+            else obj.material.dispose();
+        }
+    });
+    console.log(`[RAY-DEBUG] Cleared ${toRemoveBeforeNewDraw.length} existing crossBeam rays before drawing new ones`);
+    
     let previousRayColorMode: string | null = null;
     try {
         previousRayColorMode = getRayColorMode();
@@ -3424,6 +3469,14 @@ function drawCrossBeamRays(tracedRays, targetScene) {
         if (tracedRays.length > 0 && successRays.length === 0) {
             console.warn('[RAY-DEBUG] ALL rays have success=false! Sample:', JSON.stringify(tracedRays[0]).slice(0, 200));
         }
+        
+        const perObjectDrawCount = {};
+        tracedRays.forEach(ray => {
+            const obj = ray.objectIndex || 0;
+            perObjectDrawCount[obj] = (perObjectDrawCount[obj] || 0) + 1;
+        });
+        console.log('[RAY-DEBUG] Per-object draw count:', perObjectDrawCount);
+        
         tracedRays.forEach((rayData, index) => {
             // success: false でも rayPath が2点以上あれば描画（到達したがフラグが立っていないケース対応）
             const hasPath = (Array.isArray(rayData.rayPath) && rayData.rayPath.length >= 2) ||
@@ -3514,21 +3567,54 @@ function drawCrossBeamRays(tracedRays, targetScene) {
             
             // 光線の型に応じたobjectIdを構築
             // chief も Raynum>=2 のクロスビーム色に合わせて同一Object色へ寄せる
-            let objectId;
+            let objectIdBase;
             if (beamType === 'chief') {
-                objectId = `cross-horizontal-obj${normalizedObjectIndex}`;
+                objectIdBase = `chief-obj${normalizedObjectIndex}`;
             } else if (beamType === 'horizontal') {
-                objectId = `cross-horizontal-obj${normalizedObjectIndex}`;
+                objectIdBase = `cross-horizontal-obj${normalizedObjectIndex}`;
             } else if (beamType === 'vertical') {
-                objectId = `cross-vertical-obj${normalizedObjectIndex}`;
+                objectIdBase = `cross-vertical-obj${normalizedObjectIndex}`;
             } else {
                 // フォールバック
-                objectId = `cross-vertical-obj${normalizedObjectIndex}`;
+                objectIdBase = `cross-vertical-obj${normalizedObjectIndex}`;
             }
+            const objectId = `${objectIdBase}-ray${index}`;
             
             // 光線パスを描画（正しいパラメータで呼び出し）
             drawRayWithSegmentColors(rayPath, objectId, index, scene);
         });
+        
+        const segmentCountAfter = scene.children.filter((c: any) => c.userData?.rayType === 'crossBeam').length;
+        console.log(`[RAY-DEBUG] After draw: scene now has ${segmentCountAfter} cross-ray segments (added ${segmentCountAfter - segmentCountBefore})`);
+        
+        // Recalculate camera bounds to include all drawn rays
+        if (segmentCountAfter > 0) {
+            const rayBounds = { minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity };
+            scene.traverse((child: any) => {
+                if (child?.userData?.rayType === 'crossBeam' && child.geometry) {
+                    const positions = child.geometry.attributes?.position;
+                    if (positions) {
+                        const posArray = positions.array as any;
+                        for (let i = 0; i < posArray.length; i += 3) {
+                            const y = posArray[i + 1];
+                            const z = posArray[i + 2];
+                            if (Number.isFinite(y)) {
+                                rayBounds.minY = Math.min(rayBounds.minY, y);
+                                rayBounds.maxY = Math.max(rayBounds.maxY, y);
+                            }
+                            if (Number.isFinite(z)) {
+                                rayBounds.minZ = Math.min(rayBounds.minZ, z);
+                                rayBounds.maxZ = Math.max(rayBounds.maxZ, z);
+                            }
+                        }
+                    }
+                }
+            });
+            
+            if (Number.isFinite(rayBounds.minY) && Number.isFinite(rayBounds.maxY)) {
+                console.log(`[RAY-DEBUG] Drawn rays Y range: [${rayBounds.minY.toFixed(1)}, ${rayBounds.maxY.toFixed(1)}], Z range: [${rayBounds.minZ.toFixed(1)}, ${rayBounds.maxZ.toFixed(1)}]`);
+            }
+        }
 
     } catch (error) {
     } finally {

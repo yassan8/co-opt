@@ -1929,7 +1929,8 @@ class MeritFunctionEditor {
 
             const series = Array.isArray(response?.series) ? response.series : [];
             if (series.length <= 0) return null;
-            const firstSeries = series[0] || {};
+            const firstSeries = series[0] as any || null;
+            if (!firstSeries) return null;
             const points = Array.isArray(firstSeries?.points) ? firstSeries.points : [];
             if (points.length <= 0) return null;
 

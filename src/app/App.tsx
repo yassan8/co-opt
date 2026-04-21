@@ -429,6 +429,19 @@ function applyForceModeToWindowGlobals(m: 'stop' | 'entrance' | ''): void {
   } catch (_) {}
 }
 
+function readCurrentForceMode(): 'stop' | 'entrance' | '' {
+  try {
+    const w = window as any;
+    const fromWindow = sanitizeForceModeValue(w.__COOPT_FORCE_INFINITE_PUPIL_MODE);
+    if (fromWindow) return fromWindow;
+  } catch (_) {}
+  try {
+    const fromStorage = sanitizeForceModeValue(localStorage.getItem(FORCE_MODE_KEY));
+    if (fromStorage) return fromStorage;
+  } catch (_) {}
+  return readForceModeFromUrl();
+}
+
 function DesktopSettingsPage() {
   const [forceMode, setForceMode] = useState<'stop' | 'entrance' | ''>(readForceModeFromUrl);
   const [mfrs, setMfrs] = useState<string[]>(() => {
@@ -1646,6 +1659,7 @@ export default function App() {
 
       let crossBeamResult: any = null;
       const crossType = axis === 'YZ' ? 'vertical' : (axis === 'XZ' ? 'horizontal' : 'both');
+      const requestedPupilSamplingMode = readCurrentForceMode() || undefined;
       if (isInfiniteSystem && typeof w.generateInfiniteSystemCrossBeam === 'function') {
         const objectAngles = (objectRows.length ? objectRows : [{}]).map((row: any) => ({
           x: toNumber(row?.xHeightAngle ?? row?.x),
@@ -1665,6 +1679,7 @@ export default function App() {
           debugMode: false,
           wavelength: primaryWavelength,
           crossType,
+          pupilSamplingMode: requestedPupilSamplingMode,
           targetSurfaceIndex,
           angleUnit: 'deg',
           chiefZ: -20
@@ -1701,31 +1716,45 @@ export default function App() {
       }
 
       let allRays: any[] = [];
-      if (crossBeamResult.results && Array.isArray(crossBeamResult.results)) {
-        crossBeamResult.results.forEach((result: any, resultIndex: number) => {
-          if (result?.rays && Array.isArray(result.rays)) {
-            const objectIndex = Number.isFinite(Number(result?.objectIndex))
-              ? Number(result.objectIndex)
-              : resultIndex;
-            const normalized = result.rays.map((ray: any) => ({
+      const objectResults = Array.isArray(crossBeamResult.objectResults)
+        ? crossBeamResult.objectResults
+        : (Array.isArray(crossBeamResult.results) ? crossBeamResult.results : null);
+      if (objectResults) {
+        objectResults.forEach((result: any, resultIndex: number) => {
+          const objectIndex = Number.isFinite(Number(result?.objectIndex))
+            ? Number(result.objectIndex)
+            : resultIndex;
+          const tracedRays = Array.isArray(result?.tracedRays)
+            ? result.tracedRays
+            : (Array.isArray(result?.rays) ? result.rays : []);
+
+          const normalized = tracedRays.map((ray: any) => {
+            const fallbackType = ray?.type || ray?.beamType || 'chief';
+            const fallbackSide = ray?.side;
+            const resolvedObjectIndex = Number.isFinite(Number(ray?.objectIndex))
+              ? Number(ray.objectIndex)
+              : objectIndex;
+            return {
               ...ray,
-              objectIndex: Number.isFinite(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : objectIndex,
+              objectIndex: resolvedObjectIndex,
               originalRay: {
                 ...(ray?.originalRay || {}),
-                type: ray?.originalRay?.type || ray?.type,
-                side: ray?.originalRay?.side || ray?.side,
+                type: ray?.originalRay?.type || fallbackType,
+                side: ray?.originalRay?.side || fallbackSide,
                 objectIndex: Number.isFinite(Number(ray?.originalRay?.objectIndex))
                   ? Number(ray.originalRay.objectIndex)
-                  : (Number.isFinite(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : objectIndex)
+                  : resolvedObjectIndex
               }
-            }));
-            allRays = allRays.concat(normalized);
-          }
+            };
+          });
+          allRays = allRays.concat(normalized);
         });
       } else if (
         crossBeamResult.allCrossBeamRays && Array.isArray(crossBeamResult.allCrossBeamRays) &&
         crossBeamResult.allTracedRays && Array.isArray(crossBeamResult.allTracedRays)
       ) {
+        // Fallback only for legacy return shapes. Index-based zipping is unsafe when
+        // per-object tracing drops rays, so prefer objectResults/results above.
         allRays = crossBeamResult.allTracedRays.map((tracedRay: any, index: number) => {
           const crossRay = crossBeamResult.allCrossBeamRays[index];
           if (crossRay) {
@@ -1770,6 +1799,43 @@ export default function App() {
         };
       }) : [];
 
+      const chiefOnlyObjectCount = (() => {
+        const objectIndices = new Set<number>();
+        let hasNonChief = false;
+        normalizedAllRays.forEach((ray: any) => {
+          const objectIndex = Number.isFinite(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : 0;
+          objectIndices.add(objectIndex);
+          const type = String(ray?.originalRay?.type || ray?.type || '').toLowerCase();
+          if (type !== 'chief') hasNonChief = true;
+        });
+        return hasNonChief ? -1 : objectIndices.size;
+      })();
+
+      if (
+        axis === 'BOTH' &&
+        isInfiniteSystem &&
+        chiefOnlyObjectCount > 0 &&
+        normalizedAllRays.length === chiefOnlyObjectCount
+      ) {
+        const yzRays = await collectLegacyCrossRays(opticalSystemRows, 'YZ');
+        const xzRays = await collectLegacyCrossRays(opticalSystemRows, 'XZ');
+        const merged = [...yzRays, ...xzRays];
+        const seenChiefObjects = new Set<number>();
+        const mergedDeduped = merged.filter((ray: any) => {
+          const type = String(ray?.originalRay?.type || ray?.type || '').toLowerCase();
+          if (type !== 'chief') return true;
+          const objectIndex = Number.isFinite(Number(ray?.objectIndex)) ? Number(ray.objectIndex) : 0;
+          if (seenChiefObjects.has(objectIndex)) return false;
+          seenChiefObjects.add(objectIndex);
+          return true;
+        });
+        console.warn('[RAY-DEBUG] BOTH stop-mode generation returned chief-only rays; falling back to merged YZ/XZ stop rays', {
+          mergedCount: mergedDeduped.length,
+          forceMode: requestedPupilSamplingMode || 'auto'
+        });
+        return mergedDeduped;
+      }
+
       const desiredCount = Math.max(1, Number.parseInt(String(renderRayCount), 10) || 1);
       const grouped = new Map<number, any[]>();
       normalizedAllRays.forEach((ray: any) => {
@@ -1779,6 +1845,7 @@ export default function App() {
       });
 
       const limitedRays: any[] = [];
+      const perObjectCount = {};
       grouped.forEach((rays, objectIndex) => {
         const chief = rays.filter((r: any) => String(r?.originalRay?.type || r?.type || '').toLowerCase() === 'chief');
         const nonChief = rays.filter((r: any) => String(r?.originalRay?.type || r?.type || '').toLowerCase() !== 'chief');
@@ -1794,10 +1861,12 @@ export default function App() {
           }
         }));
 
-        limitedRays.push(...ordered.slice(0, desiredCount));
+        const limited = ordered.slice(0, desiredCount);
+        perObjectCount[objectIndex] = limited.length;
+        limitedRays.push(...limited);
       });
 
-      console.log('[RAY-DEBUG] collectLegacyCrossRays returning', limitedRays.length, 'rays. Sample type:', limitedRays[0]?.originalRay?.type, 'success:', limitedRays[0]?.success);
+      console.log('[RAY-DEBUG] collectLegacyCrossRays: per-object count=', perObjectCount, 'total returning=', limitedRays.length, 'Sample type:', limitedRays[0]?.originalRay?.type, 'success:', limitedRays[0]?.success);
       return limitedRays;
     } catch (error) {
       console.error('[RenderWindow] Legacy cross-beam generation failed:', error);
@@ -2330,8 +2399,36 @@ export default function App() {
       }
 
       try {
+        // Calculate actual bounds of drawn rays before adjusting camera
+        const rayBoundsForCamera = { minY: Infinity, maxY: -Infinity };
+        if (sceneForDraw) {
+          sceneForDraw.traverse((child: any) => {
+            if (child?.userData?.rayType === 'crossBeam' && child.geometry) {
+              const positions = child.geometry.attributes?.position;
+              if (positions && Array.isArray(positions.array)) {
+                const posArray = positions.array as any;
+                for (let i = 1; i < posArray.length; i += 3) {
+                  const y = posArray[i];
+                  if (Number.isFinite(y)) {
+                    rayBoundsForCamera.minY = Math.min(rayBoundsForCamera.minY, y);
+                    rayBoundsForCamera.maxY = Math.max(rayBoundsForCamera.maxY, y);
+                  }
+                }
+              }
+            }
+          });
+        }
+        
+        const cameraBoundsOverride = (Number.isFinite(rayBoundsForCamera.minY) && Number.isFinite(rayBoundsForCamera.maxY))
+          ? { minY: rayBoundsForCamera.minY, maxY: rayBoundsForCamera.maxY }
+          : null;
+        
+        if (cameraBoundsOverride) {
+          console.log('[RAY-DEBUG] Camera Y bounds from rays:', cameraBoundsOverride);
+        }
+
         if (typeof w.setCameraForYZCrossSection === 'function') {
-          w.setCameraForYZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true });
+          w.setCameraForYZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true, cameraBoundsOverride });
         } else if (typeof w.fitCameraToScene === 'function') {
           w.fitCameraToScene();
         } else if (typeof w.adjustCameraView === 'function') {
