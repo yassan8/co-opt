@@ -10,6 +10,7 @@ import { findInfiniteSystemChiefRayOrigin } from '../raytracing/generation/gen-r
 import { findFiniteSystemChiefRayDirection } from '../raytracing/generation/gen-ray-cross-finite.ts';
 import { detectConjugateType, ConjugateType } from '../utils/conjugate-detection.ts';
 import { getRustRayTracingWasmSync } from '../rust-wasm/ts/raytracing/rust-raytracing-wasm.ts';
+import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
 
 const RENDER_TS_TRACE_OPTIONS = {
     allowNonStrict: true,
@@ -1513,6 +1514,64 @@ const mirrorChiefRayDiagToOpener = (label, payload) => {
  * @param {Object} apertureLimit - Aperture limit (optional)
  * @returns {Array} Array of ray start data
  */
+/**
+ * Convert an ImageHeight-mode object row to an equivalent Angle (infinite) or
+ * Rectangle (finite) object row by computing paraxial EFL / magnification.
+ * xHeightAngle and yHeightAngle are treated as target image heights in mm.
+ */
+function convertImageHeightToEffectiveObject(obj, opticalSystemRows, wavelengthUm: number, conjugateType: ConjugateType): any {
+    const targetX = Number(obj.xHeightAngle) || 0;
+    const targetY = Number(obj.yHeightAngle) || 0;
+
+    try {
+        const paraxial = calculateParaxialData(opticalSystemRows, wavelengthUm);
+        if (!paraxial) throw new Error('paraxial null');
+
+        if (conjugateType === 'infinite') {
+            // Infinite conjugate: field angle = atan(H_img / EFL)
+            const efl = Number(paraxial.focalLength);
+            if (!Number.isFinite(efl) || Math.abs(efl) < 1e-12) throw new Error('invalid efl');
+            const angleXDeg = Math.atan2(targetX, efl) * (180 / Math.PI);
+            const angleYDeg = Math.atan2(targetY, efl) * (180 / Math.PI);
+            return {
+                ...obj,
+                position: 'Angle',
+                xHeightAngle: angleXDeg,
+                yHeightAngle: angleYDeg,
+            };
+        } else {
+            // Finite conjugate: object height = image height / |magnification|
+            // Paraxial magnification ≈ imageDistance / objectDistance (with sign)
+            const imgDist = Number(paraxial.imageDistance);
+            // Object distance: thickness of the object surface (negative for real object)
+            const objSurf = opticalSystemRows && opticalSystemRows[0];
+            const objDist = objSurf ? Number(objSurf.thickness) : NaN;
+            let mag: number;
+            if (Number.isFinite(imgDist) && Number.isFinite(objDist) && Math.abs(objDist) > 1e-12) {
+                mag = imgDist / objDist;
+            } else {
+                mag = 1;
+            }
+            const absMag = Math.abs(mag);
+            const scale = absMag > 1e-12 ? 1 / absMag : 1;
+            return {
+                ...obj,
+                position: 'Rectangle',
+                xHeightAngle: targetX * scale,
+                yHeightAngle: targetY * scale,
+            };
+        }
+    } catch (_) {
+        // Fallback: treat as Angle with y = targetY degrees
+        return {
+            ...obj,
+            position: 'Angle',
+            xHeightAngle: targetX,
+            yHeightAngle: targetY,
+        };
+    }
+}
+
 export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount, apertureLimit = null, options: RayGenerationOptions = {}) {
     // console.log(`🎯 generateRayStartPointsForObject called for object type: ${obj.position}`);
     // console.log(`🔍 Current ray emission pattern: ${rayEmissionPattern}`);
@@ -1543,6 +1602,14 @@ export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount
         return generateRaysForAngleObject(obj, opticalSystemRows, rayCount, effectivePattern, annularRingCount, { ...enhancedOptions, wavelengthUm, apertureLimitMm: apertureLimit });
     } else if (posNorm === "rectangle") {
         return generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, effectivePattern, apertureLimit, annularRingCount, wavelengthUm, enhancedOptions);
+    } else if (posNorm === "imageheight") {
+        // Convert target image height → effective object field and delegate.
+        const effectiveObj = convertImageHeightToEffectiveObject(obj, opticalSystemRows, wavelengthUm, conjugateType);
+        if (effectiveObj.position === 'Angle') {
+            return generateRaysForAngleObject(effectiveObj, opticalSystemRows, rayCount, effectivePattern, annularRingCount, { ...enhancedOptions, wavelengthUm, apertureLimitMm: apertureLimit });
+        } else {
+            return generateRaysForRectangleObject(effectiveObj, opticalSystemRows, rayCount, effectivePattern, apertureLimit, annularRingCount, wavelengthUm, enhancedOptions);
+        }
     } else {
         console.warn(`⚠️ Unknown object position type: ${obj.position}`);
         return [];

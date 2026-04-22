@@ -3777,12 +3777,17 @@ class MeritFunctionEditor {
             // Prefer cache for NON-active configs when it's valid.
             // This aligns Requirements (spot size, etc) with the same expanded rows used by Analysis.
             // We still avoid cache for the active config during switching to prevent mid-update reads.
+            // IMPORTANT: During optimization, always bypass cache so every config reflects the current
+            // block state mutated by the optimizer (non-active configs otherwise return stale rows).
             const useCache = (() => {
                 try {
                     if (typeof globalThis === 'undefined') return true;
                     const isOptimizerRunning = !!w.__cooptOptimizerIsRunning;
+                    if (isOptimizerRunning) {
+                        return false;
+                    }
                     const isEvaluatingRequirements = !!w.__COOPT_EVALUATING_REQUIREMENTS;
-                    if (isOptimizerRunning && isEvaluatingRequirements) {
+                    if (isEvaluatingRequirements) {
                         return false;
                     }
                 } catch (_) {}

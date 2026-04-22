@@ -63,7 +63,7 @@ dist/assets/optimizer-wasm-bridge-8Q3TNa4c.js                       24.00 kB │
 dist/assets/psf-calculator-Bc6xBvfp.js                              27.29 kB │ gzip:   9.30 kB
 dist/assets/astigmatism-CPfdorHb.js                                 34.99 kB │ gzip:  12.11 kB
 dist/assets/table-configuration-Beu6h-Rk.js                        284.91 kB │ gzip:  78.12 kB
-dist/assets/app-CW1_VIAY.js                                        574.03 kB │ gzip: 162.30 kB
+dist/assets/app-BhbQSIbh.js                                        567.85 kB │ gzip: 160.11 kB
 dist/assets/main-D-f6suik.js                                     1,140.23 kB │ gzip: 268.93 kB
 dist/assets/toolbar-collapsed-storage-oKonxCdL.js                1,783.40 kB │ gzip: 497.61 kB
 
@@ -71,4 +71,4 @@ dist/assets/toolbar-collapsed-storage-oKonxCdL.js                1,783.40 kB │
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
-✓ built in 1.78s
+✓ built in 1.82s

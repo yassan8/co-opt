@@ -11,6 +11,8 @@ const w: Record<string, any> = window;
 
 import { BLOCK_SCHEMA_VERSION, DEFAULT_STOP_SEMI_DIAMETER, configurationHasBlocks, validateBlocksConfiguration, expandBlocksToOpticalSystemRows } from './block-schema.ts';
 import { storageGetItem, storageSetItem, storageRemoveItem } from '../utils/local-storage-gateway.ts';
+import { calculateParaxialData } from '../raytracing/core/ray-paraxial.ts';
+import { getPrimaryWavelength } from './glass.ts';
 
 // Block interface (for type safety with block-schema)
 interface Block {
@@ -622,6 +624,46 @@ export async function loadActiveConfigurationToTables(options: LoadConfiguration
       }
       // Keep legacy opticalSystem as-is to avoid breaking the UI.
     } else {
+      // Re-apply thicknessMode (IMD/BFL) using this config's own paraxial data.
+      // Ensures each config gets its own independently computed value on config switch.
+      try {
+        const hasThicknessMode = Array.isArray(activeConfig.blocks) && (activeConfig.blocks as any[]).some((b: any) => {
+          const m = String(b?.parameters?.thicknessMode ?? '').trim().toUpperCase();
+          return m === 'IMD' || m === 'BFL';
+        });
+        if (hasThicknessMode) {
+          const wl = (() => { try { const v = Number(getPrimaryWavelength()); return (Number.isFinite(v) && v > 0) ? v : 0.5876; } catch(_) { return 0.5876; } })();
+          const probeExpanded = expandBlocksToOpticalSystemRows(activeConfig.blocks);
+          const probeRows = probeExpanded?.rows;
+          if (Array.isArray(probeRows) && probeRows.length > 0) {
+            const paraxial = calculateParaxialData(probeRows, wl);
+            if (paraxial) {
+              let mutated = false;
+              for (const block of activeConfig.blocks as any[]) {
+                if (!block || typeof block !== 'object') continue;
+                const bt = String((block as any).blockType ?? '').trim();
+                if (bt !== 'Gap' && bt !== 'AirGap') continue;
+                const params = (block as any).parameters;
+                if (!params) continue;
+                const mode = String(params.thicknessMode ?? '').trim().toUpperCase();
+                if (mode !== 'IMD' && mode !== 'BFL') continue;
+                const target = Number(mode === 'IMD' ? paraxial.imageDistance : paraxial.backFocalLength);
+                if (!Number.isFinite(target)) continue;
+                if (Number.isFinite(Number(params.thickness)) && Math.abs(Number(params.thickness) - target) <= 1e-9) continue;
+                params.thickness = target;
+                if ((block as any).variables?.thickness && typeof (block as any).variables.thickness === 'object' && 'value' in (block as any).variables.thickness) {
+                  (block as any).variables.thickness.value = target;
+                }
+                mutated = true;
+              }
+              if (mutated) {
+                try { if (!(activeConfig as any).metadata) (activeConfig as any).metadata = {}; (activeConfig as any).metadata.modified = new Date().toISOString(); } catch(_) {}
+                saveSystemConfigurations(systemConfig);
+              }
+            }
+          }
+        }
+      } catch (_) {}
       const expanded = expandBlocksToOpticalSystemRows(activeConfig.blocks);
       for (const w of expanded.issues.filter(i => i && i.severity === 'warning')) cfgWarn('⚠️ [Configuration] Block expand warning:', w);
       const expandFatals = expanded.issues.filter(i => i && i.severity === 'fatal');

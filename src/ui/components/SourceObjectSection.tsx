@@ -18,6 +18,7 @@ export default function SourceObjectSection() {
           <button id="object-angle-btn" type="button">Angle</button>
         {/* <button id="object-height-circle-btn">Height Circle</button> */}
           <button id="object-height-rect-btn" type="button">Height Rect</button>
+          <button id="object-image-height-btn" type="button">Image Height</button>
         </div>
         <div id="table-object" className="ide-table-container"></div>
       </div>

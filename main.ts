@@ -3710,6 +3710,19 @@ function convertObjectToFieldSetting(objectData, index) {
     
     // 実際のObjectデータ構造に基づいて判定
     const isAngleType = (objectData.position === 'Angle' || objectData.Type === 'Angle' || objectData.type === 'Angle');
+    const isImageHeightType = (objectData.position === 'ImageHeight');
+    
+    if (isImageHeightType) {
+        const hX = parseFloat(objectData.xHeightAngle || 0);
+        const hY = parseFloat(objectData.yHeightAngle || 0);
+        return {
+            fieldAngle: { x: 0, y: 0 },
+            xHeight: hX,
+            yHeight: hY,
+            fieldType: 'ImageHeight',
+            displayName: `Object ${index + 1} - img ${hX}mm, ${hY}mm`
+        };
+    }
     
     if (isAngleType) {
         // 実際のプロパティ名を使用

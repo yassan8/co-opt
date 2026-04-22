@@ -175,8 +175,9 @@ const normalizeRow = (row: Partial<ObjectRow>, fallbackId: number): ObjectRow =>
   normalized.yHeightAngle = normalizeNumberLike(normalized.yHeightAngle);
   if (typeof normalized.position !== 'string') normalized.position = normalized.position ? String(normalized.position) : 'Angle';
   if (!normalized.position) normalized.position = 'Angle';
-  // Spec: Position should be Angle or Rectangle only. Migrate legacy Point -> Angle.
+  // Spec: Position should be Angle, Rectangle, or ImageHeight. Migrate legacy Point -> Angle.
   if (normalized.position === 'Point') normalized.position = 'Angle';
+  if (!['Angle', 'Rectangle', 'ImageHeight'].includes(normalized.position)) normalized.position = 'Angle';
   if (!('angle' in normalized)) normalized.angle = 0;
   return normalized as ObjectRow;
 };
@@ -608,6 +609,11 @@ const bindObjectControls = (): void => {
     (objectHeightRectBtn as any).dataset.cooptBound = '1';
     objectHeightRectBtn.addEventListener("click", setHeightRectTitles);
   }
+  const objectImageHeightBtn = document.getElementById("object-image-height-btn");
+  if (objectImageHeightBtn && (objectImageHeightBtn as any).dataset.cooptBound !== '1') {
+    (objectImageHeightBtn as any).dataset.cooptBound = '1';
+    objectImageHeightBtn.addEventListener("click", setImageHeightTitles);
+  }
 };
 
 // タイトル変更用関数
@@ -631,6 +637,18 @@ function setHeightRectTitles(): void {
     }
     if (typeof tableObject._applyGlobalPosition === 'function') {
       tableObject._applyGlobalPosition('Rectangle');
+    }
+  } catch (_) {}
+}
+
+function setImageHeightTitles(): void {
+  if (!tableObject) return;
+  try {
+    if (typeof tableObject._setColumnTitles === 'function') {
+      tableObject._setColumnTitles('X image height (mm)', 'Y image height (mm)');
+    }
+    if (typeof tableObject._applyGlobalPosition === 'function') {
+      tableObject._applyGlobalPosition('ImageHeight');
     }
   } catch (_) {}
 }

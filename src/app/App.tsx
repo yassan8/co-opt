@@ -2599,7 +2599,7 @@ const collectLegacyCrossRays = async (
           scene: sceneForDraw,
           crossSectionOnly: false,
           showSurfaceOrigins: false,
-          showSemidiaRing: false,
+          showSemidiaRing: true,
           showMirrorBackText: false,
           showDesignIntentLabels: renderShowDesignIntentLabels,
           crossSectionDirection: 'YZ',
@@ -2744,8 +2744,8 @@ const collectLegacyCrossRays = async (
     }
     const nextAxis = renderViewAxis === 'XZ' ? 'XZ' : 'YZ';
     if (renderViewMode === '3D') {
-      setRenderViewMode(nextAxis);
-      setRenderViewAxis(nextAxis);
+      await drawRender3DView();
+      return;
     }
     await drawCrossSectionView(nextAxis);
   };
@@ -2910,10 +2910,8 @@ const collectLegacyCrossRays = async (
           }
 
           try {
-            const compareAxis = renderViewAxis === 'XZ' ? 'XZ' : 'YZ';
-            setRenderViewMode(compareAxis);
-            setRenderViewAxis(compareAxis);
-            const ok = await drawCrossSectionView(compareAxis);
+            setRenderViewMode('3D');
+            const ok = await drawRender3DView();
             if (!ok) {
               setRenderWindowStatus('Draw failed');
               return false;
@@ -2926,10 +2924,8 @@ const collectLegacyCrossRays = async (
 
           const hasCanvas = ensureRenderCanvasAttached() || !!document.querySelector('#threejs-canvas-container canvas');
           if (hasCanvas) {
-            const compareAxis = renderViewAxis === 'XZ' ? 'XZ' : 'YZ';
-            setRenderViewMode(compareAxis);
-            setRenderViewAxis(compareAxis);
-            setRenderWindowStatus(renderCompareScope === 'all' ? `Ready (${compareAxis} compare)` : `Ready (${compareAxis} section)`);
+            setRenderViewMode('3D');
+            setRenderWindowStatus('Ready (3D)');
             return true;
           }
 
@@ -4623,14 +4619,12 @@ const collectLegacyCrossRays = async (
           refreshRenderLensTargets([]);
         }
 
-        const compareAxis = renderViewAxis === 'XZ' ? 'XZ' : 'YZ';
-        setRenderViewMode(compareAxis);
-        setRenderViewAxis(compareAxis);
-        const ok = await drawCrossSectionView(compareAxis);
+        setRenderViewMode('3D');
+        const ok = await drawRender3DView();
         if (!ok) return;
 
         ensureRenderCanvasAttached();
-        setRenderWindowStatus(renderCompareScope === 'all' ? `Ready (${compareAxis} compare)` : `Ready (${compareAxis} section)`);
+        setRenderWindowStatus('Ready (3D)');
       } catch (err) {
         console.error('[RenderWindow] Manual draw failed:', err);
         setRenderWindowStatus('Draw failed');
