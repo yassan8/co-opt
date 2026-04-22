@@ -6029,6 +6029,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 row.style.display = 'flex';
                 row.style.gap = '8px';
                 row.style.alignItems = 'center';
+                row.style.minHeight = '32px';
                 row.style.marginBottom = '4px';
 
                 const name = document.createElement('div');
@@ -6720,7 +6721,8 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     container.style.alignItems = 'center';
                     container.style.gap = '8px';
                     container.style.flex = '1';
-                    container.style.flexWrap = 'wrap';
+                    container.style.flexWrap = 'nowrap';
+                    container.style.minHeight = '28px';
 
                     const input = document.createElement('input');
                     input.type = 'text';
@@ -6730,6 +6732,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     input.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
                     input.style.background = isDarkMode ? '#111827' : '#fff';
                     input.style.color = isDarkMode ? '#f9fafb' : '#111827';
+                    input.style.borderRadius = '4px';
                     input.style.flex = '1';
                     input.style.minWidth = '200px';
                     input.style.height = '28px';
@@ -7071,6 +7074,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     input.style.border = isDarkMode ? '1px solid #444' : '1px solid #ddd';
                     input.style.background = isDarkMode ? '#111827' : '#fff';
                     input.style.color = isDarkMode ? '#f9fafb' : '#111827';
+                    input.style.borderRadius = '4px';
                     input.style.flex = '1';
                     input.style.minWidth = '200px';
                     input.style.height = '28px';
@@ -7150,13 +7154,18 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                         value = 'AIR';
                     }
                     const varEntry = (vars as any)[key];
+                    const isAbbeRow = key === 'abbe' || key === 'vd' || /^abbe\d+$/.test(key) || /^vd\d+$/.test(key);
+                    const isGroupedSurfTypeRow =
+                        (blockType === 'Doublet' || blockType === 'Triplet') &&
+                        /^surf\d+SurfType$/.test(key);
 
                     // Create row with optimize checkbox and scope selector
                     const paramRow = document.createElement('div');
                     paramRow.style.display = 'flex';
                     paramRow.style.alignItems = 'center';
                     paramRow.style.gap = '6px';
-                    paramRow.style.marginBottom = '4px';
+                    paramRow.style.minHeight = '32px';
+                    paramRow.style.marginBottom = (isAbbeRow || isGroupedSurfTypeRow) ? '8px' : '4px';
 
                     // Optimize checkbox
                     const cb = document.createElement('input');
@@ -7309,6 +7318,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                     apertureRow.style.display = 'flex';
                     apertureRow.style.alignItems = 'center';
                     apertureRow.style.gap = '6px';
+                    apertureRow.style.minHeight = '32px';
                     apertureRow.style.marginBottom = '4px';
 
                     // Optimize checkbox
