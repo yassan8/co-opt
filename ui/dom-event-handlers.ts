@@ -823,7 +823,7 @@ function __zmxReadPositiveFiniteSemidiaMm(row: any): number | null {
 
 function __zmxGetApertureKeysByBlockType(blockType: any): string[] {
     const t = String(blockType ?? '').trim();
-    if (t === 'Paraxial') return ['front'];
+    if (t === 'Paraxial') return ['front', 'back'];
     if (t === 'Lens' || t === 'PositiveLens') return ['front', 'back'];
     if (t === 'Doublet') return ['s1', 's2', 's3'];
     if (t === 'Triplet') return ['s1', 's2', 's3', 's4'];
@@ -7292,6 +7292,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
 
                 if (blockType === 'Paraxial') {
                     pickApertureEntry('s1', ['s1', 'front', 'surf1']);
+                    pickApertureEntry('s2', ['s2', 'back', 'surf2']);
                 } else if (blockType === 'Lens' || blockType === 'PositiveLens') {
                     pickApertureEntry('s1', ['s1', 'front', 'surf1']);
                     pickApertureEntry('s2', ['s2', 'back', 'surf2']);

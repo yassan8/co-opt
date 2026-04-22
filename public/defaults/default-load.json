@@ -2471,6 +2471,10 @@
             "variables": {},
             "metadata": {
               "source": "legacy-opticalSystem"
+            },
+            "aperture": {
+              "front": 26,
+              "back": 26
             }
           },
           {
@@ -4246,6 +4250,10 @@
             "variables": {},
             "metadata": {
               "source": "legacy-opticalSystem"
+            },
+            "aperture": {
+              "front": 26,
+              "back": 26
             }
           },
           {
