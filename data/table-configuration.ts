@@ -98,7 +98,8 @@ function createDefaultConfiguration(id: number, name: string): Configuration {
       role: null,
       constraints: {},
       parameters: {
-        objectDistanceMode: 'INF'
+        objectDistanceMode: 'INF',
+        objectDistance: 10
       },
       variables: {},
       metadata: { source: 'default' }

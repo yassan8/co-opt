@@ -4036,7 +4036,7 @@ function setupNewFileButton(): void {
                         blockType: 'ObjectSurface',
                         role: null,
                         constraints: {},
-                        parameters: { objectDistanceMode: 'INF' },
+                        parameters: { objectDistanceMode: 'INF', objectDistance: 10 },
                         variables: {},
                         metadata: { source: 'default' }
                     },
@@ -4708,7 +4708,8 @@ function createDefaultConfiguration(id: number, name: string): any {
             role: null,
             constraints: {},
             parameters: {
-                objectDistanceMode: 'INF'
+                objectDistanceMode: 'INF',
+                objectDistance: 10
             },
             variables: {},
             metadata: { source: 'default' }
@@ -5371,6 +5372,61 @@ function cooptNormalizeInputValue(raw: string, original: any): any {
     return trimmed;
 }
 
+function cooptAutoApplyGapThicknessModes(blocks: any[], changedPath: string = ''): boolean {
+    if (!Array.isArray(blocks) || blocks.length === 0) return false;
+
+    const primaryWavelength = (() => {
+        try {
+            if (typeof w.getPrimaryWavelength === 'function') {
+                const wl = Number(w.getPrimaryWavelength());
+                if (Number.isFinite(wl) && wl > 0) return wl;
+            }
+        } catch (_) {}
+        return NaN;
+    })();
+    if (!(Number.isFinite(primaryWavelength) && primaryWavelength > 0)) return false;
+
+    try {
+        const expanded = expandBlocksToOpticalSystemRows(blocks as any);
+        const rows = expanded && Array.isArray(expanded.rows) ? expanded.rows : [];
+        if (rows.length === 0) return false;
+
+        const paraxial = calculateParaxialData(rows, primaryWavelength);
+        if (!paraxial) return false;
+
+        let changed = false;
+        for (const block of blocks) {
+            if (!block || typeof block !== 'object') continue;
+            const blockType = String(block.blockType ?? '').trim();
+            if (blockType !== 'Gap' && blockType !== 'AirGap') continue;
+
+            const params = (block.parameters && typeof block.parameters === 'object') ? block.parameters : null;
+            if (!params) continue;
+
+            const mode = String(params.thicknessMode ?? '').trim().replace(/\s+/g, '').toUpperCase();
+            if (mode !== 'IMD' && mode !== 'BFL') continue;
+
+            const target = mode === 'IMD' ? paraxial.imageDistance : paraxial.backFocalLength;
+            const numeric = Number(target);
+            if (!Number.isFinite(numeric)) continue;
+
+            const current = Number(params.thickness);
+            if (Number.isFinite(current) && Math.abs(current - numeric) <= 1e-9) continue;
+
+            params.thickness = numeric;
+            if (block.variables && typeof block.variables === 'object' && block.variables.thickness && typeof block.variables.thickness === 'object' && Object.prototype.hasOwnProperty.call(block.variables.thickness, 'value')) {
+                block.variables.thickness.value = numeric;
+            }
+            changed = true;
+        }
+
+        return changed;
+    } catch (err) {
+        console.warn('⚠️ [DesignIntent] Failed to auto-apply thicknessMode:', err);
+        return false;
+    }
+}
+
 function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newValue: any): void {
     const systemConfig = loadSystemConfigurations();
     const activeConfig = systemConfig?.configurations?.find((c: any) => c.id === systemConfig?.activeConfigId)
@@ -5390,6 +5446,7 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     }
 
     cooptSetNestedValue(block, path, newValue);
+    cooptAutoApplyGapThicknessModes(blocks, path);
 
     // Re-expand Design Intent blocks into opticalSystem rows so rendering/ray-tracing sees latest values.
     try {
@@ -5856,6 +5913,9 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
             }
             if ((blockType === 'Gap' || blockType === 'AirGap') && !allParamKeys.includes('thicknessMode')) {
                 allParamKeys.push('thicknessMode');
+            }
+            if ((blockType === 'ObjectSurface' || blockType === 'ObjectPlane') && !allParamKeys.includes('objectDistance')) {
+                allParamKeys.push('objectDistance');
             }
             if (blockType === 'ImageSurface') {
                 if (!allParamKeys.includes('semidiaMode')) allParamKeys.push('semidiaMode');

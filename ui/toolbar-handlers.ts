@@ -208,7 +208,7 @@ export function handleNewFile(): void {
           blockType: 'ObjectSurface',
           role: null,
           constraints: {},
-          parameters: { objectDistanceMode: 'INF' },
+          parameters: { objectDistanceMode: 'INF', objectDistance: 10 },
           variables: {},
           metadata: { source: 'default' }
         },

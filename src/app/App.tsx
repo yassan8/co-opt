@@ -4713,8 +4713,7 @@ export default function App() {
 
   const variableCountSummary = (() => {
     try {
-      const vars = listDesignVariablesFromBlocks();
-      return Array.isArray(vars) ? vars.length : 0;
+      return countBlockOptimizeVariables(window);
     } catch (_) {
       return 0;
     }
