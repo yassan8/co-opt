@@ -62,6 +62,17 @@ type RenderLensColorTarget = {
   frontSurfaceIndex0: number;
 };
 
+type RenderCompareScope = 'active' | 'all';
+type RenderCompareOffsetDirection = 'centered' | 'positive' | 'negative';
+
+type RenderCompareEntry = {
+  configId: string;
+  name: string;
+  rows: any[];
+  objectRows: any[];
+  isActive: boolean;
+};
+
 function isPlainObject(v: any): boolean {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
@@ -535,6 +546,9 @@ export default function App() {
   const [renderWindowStatus, setRenderWindowStatus] = useState("Initializing...");
   const [renderViewAxis, setRenderViewAxis] = useState<'YZ' | 'XZ'>('YZ');
   const [renderViewMode, setRenderViewMode] = useState<'3D' | 'XZ' | 'YZ'>('3D');
+  const [renderCompareScope, setRenderCompareScope] = useState<RenderCompareScope>('active');
+  const [renderCompareOffsetDirection, setRenderCompareOffsetDirection] = useState<RenderCompareOffsetDirection>('centered');
+  const [renderCompareOffsetStepMm, setRenderCompareOffsetStepMm] = useState(20);
   const [renderRayCount, setRenderRayCount] = useState(5);
   const [renderSurfaceColorsCollapsed, setRenderSurfaceColorsCollapsed] = useState(true);
   const [renderLensColorTargets, setRenderLensColorTargets] = useState<RenderLensColorTarget[]>([]);
@@ -655,6 +669,95 @@ export default function App() {
     } catch (_) {
       return 0;
     }
+  };
+
+  const getConfigRowsForRender = (targetWindow: any, cfg: any, systemConfig?: any): any[] => {
+    if (!cfg || typeof cfg !== 'object') return [];
+    try {
+      const activeId = systemConfig?.activeConfigId;
+      const isActive = activeId !== undefined && activeId !== null && String(cfg.id) === String(activeId);
+      if (isActive && typeof targetWindow?.getOpticalSystemRows === 'function') {
+        const tableRows = targetWindow.getOpticalSystemRows(targetWindow.tableOpticalSystem);
+        if (Array.isArray(tableRows) && tableRows.length > 0) {
+          return tableRows;
+        }
+      }
+    } catch (_) {}
+
+    try {
+      if (Array.isArray(cfg.blocks) && cfg.blocks.length > 0 && typeof targetWindow?.expandBlocksToOpticalSystemRows === 'function') {
+        const expanded = targetWindow.expandBlocksToOpticalSystemRows(cfg.blocks);
+        if (expanded && Array.isArray(expanded.rows) && expanded.rows.length > 0) {
+          return expanded.rows;
+        }
+      }
+    } catch (_) {}
+
+    return Array.isArray(cfg.opticalSystem) ? cfg.opticalSystem : [];
+  };
+
+  const getConfigObjectRowsForRender = (targetWindow: any, cfg: any, systemConfig?: any): any[] => {
+    if (!cfg || typeof cfg !== 'object') return [];
+    try {
+      const activeId = systemConfig?.activeConfigId;
+      const isActive = activeId !== undefined && activeId !== null && String(cfg.id) === String(activeId);
+      if (isActive && typeof targetWindow?.getObjectRows === 'function') {
+        const tableRows = targetWindow.getObjectRows(targetWindow.tableObject);
+        if (Array.isArray(tableRows) && tableRows.length > 0) {
+          return tableRows;
+        }
+      }
+    } catch (_) {}
+
+    return Array.isArray(cfg.object) ? cfg.object : [];
+  };
+
+  const getRenderCompareEntries = (targetWindow: any): RenderCompareEntry[] => {
+    try {
+      const systemConfig = getSystemConfigFromWindow(targetWindow);
+      const configs = Array.isArray(systemConfig?.configurations) ? systemConfig.configurations : [];
+      if (configs.length === 0) return [];
+      const activeId = systemConfig?.activeConfigId;
+      const mapped = configs.map((cfg: any) => ({
+        configId: String(cfg?.id ?? ''),
+        name: String(cfg?.name ?? cfg?.id ?? 'Config').trim() || 'Config',
+        rows: getConfigRowsForRender(targetWindow, cfg, systemConfig),
+        objectRows: getConfigObjectRowsForRender(targetWindow, cfg, systemConfig),
+        isActive: activeId !== undefined && activeId !== null && String(cfg?.id) === String(activeId),
+      })).filter((entry: RenderCompareEntry) => Array.isArray(entry.rows) && entry.rows.length > 0);
+      if (mapped.length <= 1) return mapped;
+      const activeEntry = mapped.find((entry) => entry.isActive) || mapped[0];
+      const rest = mapped.filter((entry) => entry !== activeEntry);
+      return [activeEntry, ...rest];
+    } catch (_) {
+      return [];
+    }
+  };
+
+  const buildRenderCompareOffsets = (count: number): number[] => {
+    const step = Math.max(0, Number(renderCompareOffsetStepMm) || 0);
+    if (count <= 0 || step <= 0) return Array.from({ length: Math.max(0, count) }, () => 0);
+    if (renderCompareOffsetDirection === 'positive') {
+      return Array.from({ length: count }, (_, index) => index * step);
+    }
+    if (renderCompareOffsetDirection === 'negative') {
+      return Array.from({ length: count }, (_, index) => -index * step);
+    }
+    return Array.from({ length: count }, (_, index) => {
+      if (index === 0) return 0;
+      const ring = Math.ceil(index / 2);
+      return (index % 2 === 1 ? 1 : -1) * ring * step;
+    });
+  };
+
+  const applyRenderCompareOffset = (group: THREE.Group, axis: 'YZ' | 'XZ', offsetMm: number): void => {
+    group.position.set(0, 0, 0);
+    if (!Number.isFinite(offsetMm) || Math.abs(offsetMm) < 1e-9) return;
+    if (axis === 'YZ') {
+      group.position.y = offsetMm;
+      return;
+    }
+    group.position.x = offsetMm;
   };
 
   useEffect(() => {
@@ -1646,11 +1749,17 @@ export default function App() {
     } catch (_) {}
   };
 
-  const collectLegacyCrossRays = async (opticalSystemRows: any[], axis: 'YZ' | 'XZ' | 'BOTH' = 'BOTH'): Promise<any[]> => {
+const collectLegacyCrossRays = async (
+  opticalSystemRows: any[],
+  axis: 'YZ' | 'XZ' | 'BOTH' = 'BOTH',
+  objectRowsOverride?: any[]
+): Promise<any[]> => {
     const w = window as any;
     try {
       const getObjectRows = w.getObjectRows;
-      const objectRowsRaw = (typeof getObjectRows === 'function') ? (getObjectRows(w.tableObject) || []) : [];
+      const objectRowsRaw = Array.isArray(objectRowsOverride)
+        ? objectRowsOverride
+        : ((typeof getObjectRows === 'function') ? (getObjectRows(w.tableObject) || []) : []);
       const objectRows = Array.isArray(objectRowsRaw) ? objectRowsRaw : [];
 
       const objectSurface = opticalSystemRows[0] || {};
@@ -1939,6 +2048,12 @@ export default function App() {
         const p = new THREE.Vector3(attr.getX(idx), attr.getY(idx), attr.getZ(idx));
         if (typeof lineObj.localToWorld === 'function') {
           lineObj.localToWorld(p);
+        }
+        // Keep generated fill geometry in the target scene's local space.
+        // In compare mode the target scene is a translated group, so world-space
+        // vertices would be shifted twice if we skip this conversion.
+        if (scene && typeof scene.worldToLocal === 'function') {
+          scene.worldToLocal(p);
         }
         if (Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)) {
           points.push(p);
@@ -2245,15 +2360,22 @@ export default function App() {
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
     } catch (_) {}
 
-    let rows: any[] = [];
-    try {
-      if (typeof w.getOpticalSystemRows === 'function') {
-        const r = w.getOpticalSystemRows(w.tableOpticalSystem);
-        rows = Array.isArray(r) ? r : [];
+    const compareEntries = renderCompareScope === 'all' ? getRenderCompareEntries(w) : [];
+    const compareEnabled = compareEntries.length > 1;
+    const activeCompareEntry = compareEntries.find((entry) => entry.isActive) || compareEntries[0] || null;
+
+    let rows: any[] = activeCompareEntry?.rows || [];
+    if (!rows.length) {
+      try {
+        if (typeof w.getOpticalSystemRows === 'function') {
+          const r = w.getOpticalSystemRows(w.tableOpticalSystem);
+          rows = Array.isArray(r) ? r : [];
+        }
+      } catch (_) {
+        rows = [];
       }
-    } catch (_) {
-      rows = [];
     }
+
     if (!rows.length) {
       setRenderWindowStatus('No optical data');
       return false;
@@ -2266,11 +2388,28 @@ export default function App() {
       }
       if (sceneForDraw) {
         try {
+          const compareGroupsToRemove: any[] = [];
           const raysToRemove: any[] = [];
           sceneForDraw.traverse((child: any) => {
+            if (child?.userData?.type === 'renderCompareGroup') {
+              compareGroupsToRemove.push(child);
+              return;
+            }
             if (child?.userData?.type === 'optical-ray' || child?.userData?.isRayLine) {
               raysToRemove.push(child);
             }
+          });
+          [...new Set(compareGroupsToRemove)].forEach((group: any) => {
+            try {
+              group.traverse((child: any) => {
+                if (child?.geometry) child.geometry.dispose();
+                if (child?.material) {
+                  if (Array.isArray(child.material)) child.material.forEach((m: any) => m.dispose());
+                  else child.material.dispose();
+                }
+              });
+            } catch (_) {}
+            sceneForDraw.remove(group);
           });
           [...new Set(raysToRemove)].forEach((obj: any) => {
             sceneForDraw.remove(obj);
@@ -2283,17 +2422,57 @@ export default function App() {
         } catch (_) {}
       }
       if (typeof w.drawOpticalSystemSurfaces === 'function' && sceneForDraw) {
-        w.drawOpticalSystemSurfaces({
-          opticalSystemData: rows,
-          scene: sceneForDraw,
-          crossSectionOnly: true,
-          showSurfaceOrigins: false,
-          showSemidiaRing: false,
-          showMirrorBackText: false,
-          showDesignIntentLabels: renderShowDesignIntentLabels,
-          crossSectionDirection: axis,
-          crossSectionCenterOffset: 0
-        });
+        if (compareEnabled) {
+          const offsets = buildRenderCompareOffsets(compareEntries.length);
+          for (let index = 0; index < compareEntries.length; index += 1) {
+            const entry = compareEntries[index];
+            const group = new THREE.Group();
+            group.name = `render-compare-${entry.configId}`;
+            group.userData = {
+              type: 'renderCompareGroup',
+              configId: entry.configId,
+              configName: entry.name,
+              compareOffsetMm: offsets[index] || 0,
+              compareAxis: axis,
+            };
+            applyRenderCompareOffset(group, axis, offsets[index] || 0);
+            sceneForDraw.add(group);
+            w.drawOpticalSystemSurfaces({
+              opticalSystemData: entry.rows,
+              scene: group,
+              crossSectionOnly: true,
+              showSurfaceOrigins: false,
+              showSemidiaRing: false,
+              showMirrorBackText: false,
+              showDesignIntentLabels: renderShowDesignIntentLabels,
+              crossSectionDirection: axis,
+              crossSectionCenterOffset: 0
+            });
+
+            try {
+              applyRenderWindowDirectCrossFill(group, axis, entry.rows);
+            } catch (fillErr) {
+              console.warn('[RenderWindow] Compare cross-section lens fill failed:', fillErr);
+            }
+
+            const compareRays = await collectLegacyCrossRays(entry.rows, axis, entry.objectRows);
+            if (compareRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
+              w.drawCrossBeamRays(compareRays, group);
+            }
+          }
+        } else {
+          w.drawOpticalSystemSurfaces({
+            opticalSystemData: rows,
+            scene: sceneForDraw,
+            crossSectionOnly: true,
+            showSurfaceOrigins: false,
+            showSemidiaRing: false,
+            showMirrorBackText: false,
+            showDesignIntentLabels: renderShowDesignIntentLabels,
+            crossSectionDirection: axis,
+            crossSectionCenterOffset: 0
+          });
+        }
       }
 
       if (sceneForDraw) {
@@ -2310,16 +2489,18 @@ export default function App() {
         } catch (_) {}
       }
 
-      const legacyCrossRays = await collectLegacyCrossRays(rows, axis);
-      console.log('[RAY-DEBUG] drawCrossSectionView: legacyCrossRays.length=', legacyCrossRays.length, 'drawCrossBeamRays defined=', typeof w.drawCrossBeamRays === 'function', 'sceneForDraw=', !!sceneForDraw);
-      if (legacyCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
-        w.drawCrossBeamRays(legacyCrossRays, sceneForDraw);
-      }
+      if (!compareEnabled) {
+        const legacyCrossRays = await collectLegacyCrossRays(rows, axis);
+        console.log('[RAY-DEBUG] drawCrossSectionView: legacyCrossRays.length=', legacyCrossRays.length, 'drawCrossBeamRays defined=', typeof w.drawCrossBeamRays === 'function', 'sceneForDraw=', !!sceneForDraw);
+        if (legacyCrossRays.length > 0 && typeof w.drawCrossBeamRays === 'function') {
+          w.drawCrossBeamRays(legacyCrossRays, sceneForDraw);
+        }
 
-      try {
-        applyRenderWindowDirectCrossFill(sceneForDraw, axis, rows);
-      } catch (fillErr) {
-        console.warn('[RenderWindow] Cross-section lens fill failed:', fillErr);
+        try {
+          applyRenderWindowDirectCrossFill(sceneForDraw, axis, rows);
+        } catch (fillErr) {
+          console.warn('[RenderWindow] Cross-section lens fill failed:', fillErr);
+        }
       }
 
       if (axis === 'XZ' && typeof w.setCameraForXZCrossSection === 'function') {
@@ -2327,6 +2508,12 @@ export default function App() {
       } else if (axis === 'YZ' && typeof w.setCameraForYZCrossSection === 'function') {
         w.setCameraForYZCrossSection({ includeRayStartMargin: true, storeDrawCrossBounds: true });
       }
+
+      try {
+        if (typeof w.updateCameraViewBounds === 'function') {
+          w.updateCameraViewBounds();
+        }
+      } catch (_) {}
 
       syncOrthoBoundsToRendererAspect();
       const renderer = w.renderer || (typeof w.getRenderer === 'function' ? w.getRenderer() : null);
@@ -2337,7 +2524,7 @@ export default function App() {
       }
       scheduleRenderScaleOverlayUpdate();
 
-      setRenderWindowStatus(`Ready (${axis} section)`);
+      setRenderWindowStatus(compareEnabled ? `Ready (${axis} compare)` : `Ready (${axis} section)`);
       return true;
     } catch (err) {
       console.error('[RenderWindow] Cross-section draw failed:', err);
@@ -2412,7 +2599,7 @@ export default function App() {
           scene: sceneForDraw,
           crossSectionOnly: false,
           showSurfaceOrigins: false,
-          showSemidiaRing: true,
+          showSemidiaRing: false,
           showMirrorBackText: false,
           showDesignIntentLabels: renderShowDesignIntentLabels,
           crossSectionDirection: 'YZ',
@@ -2555,11 +2742,12 @@ export default function App() {
     if (isTauriRuntime()) {
       console.log('[RenderColor][Tauri] redrawCurrentRenderView', { renderViewMode, renderViewAxis });
     }
-    if (renderViewMode === 'XZ' || renderViewMode === 'YZ') {
-      await drawCrossSectionView(renderViewMode);
-      return;
+    const nextAxis = renderViewAxis === 'XZ' ? 'XZ' : 'YZ';
+    if (renderViewMode === '3D') {
+      setRenderViewMode(nextAxis);
+      setRenderViewAxis(nextAxis);
     }
-    await drawRender3DView();
+    await drawCrossSectionView(nextAxis);
   };
 
   useEffect(() => {
@@ -2571,6 +2759,13 @@ export default function App() {
       setRenderWindowStatus('Draw failed');
     });
   }, [renderShowDesignIntentLabels]);
+
+  useEffect(() => {
+    if (!isRenderWindowMode) return;
+    redrawCurrentRenderView().catch(() => {
+      setRenderWindowStatus('Draw failed');
+    });
+  }, [isRenderWindowMode, renderCompareScope, renderCompareOffsetDirection, renderCompareOffsetStepMm]);
 
   useEffect(() => {
     if (!isRenderWindowMode) return;
@@ -2715,7 +2910,10 @@ export default function App() {
           }
 
           try {
-            const ok = await drawRender3DView();
+            const compareAxis = renderViewAxis === 'XZ' ? 'XZ' : 'YZ';
+            setRenderViewMode(compareAxis);
+            setRenderViewAxis(compareAxis);
+            const ok = await drawCrossSectionView(compareAxis);
             if (!ok) {
               setRenderWindowStatus('Draw failed');
               return false;
@@ -2728,8 +2926,10 @@ export default function App() {
 
           const hasCanvas = ensureRenderCanvasAttached() || !!document.querySelector('#threejs-canvas-container canvas');
           if (hasCanvas) {
-            setRenderViewMode('3D');
-            setRenderWindowStatus('Ready (3D)');
+            const compareAxis = renderViewAxis === 'XZ' ? 'XZ' : 'YZ';
+            setRenderViewMode(compareAxis);
+            setRenderViewAxis(compareAxis);
+            setRenderWindowStatus(renderCompareScope === 'all' ? `Ready (${compareAxis} compare)` : `Ready (${compareAxis} section)`);
             return true;
           }
 
@@ -4423,12 +4623,14 @@ export default function App() {
           refreshRenderLensTargets([]);
         }
 
-        const ok = await drawRender3DView();
+        const compareAxis = renderViewAxis === 'XZ' ? 'XZ' : 'YZ';
+        setRenderViewMode(compareAxis);
+        setRenderViewAxis(compareAxis);
+        const ok = await drawCrossSectionView(compareAxis);
         if (!ok) return;
 
         ensureRenderCanvasAttached();
-        setRenderViewMode('3D');
-        setRenderWindowStatus('Ready (3D)');
+        setRenderWindowStatus(renderCompareScope === 'all' ? `Ready (${compareAxis} compare)` : `Ready (${compareAxis} section)`);
       } catch (err) {
         console.error('[RenderWindow] Manual draw failed:', err);
         setRenderWindowStatus('Draw failed');
@@ -4510,13 +4712,57 @@ export default function App() {
       } catch (_) {}
     };
 
+    const comparePreviewEntries = renderCompareScope === 'all' ? getRenderCompareEntries(window as any) : [];
+    const comparePreviewOffsets = buildRenderCompareOffsets(comparePreviewEntries.length);
+    const compareDirectionLabel = renderViewMode === 'YZ'
+      ? (renderCompareOffsetDirection === 'positive' ? 'Up' : renderCompareOffsetDirection === 'negative' ? 'Down' : 'Centered')
+      : (renderCompareOffsetDirection === 'positive' ? 'Right' : renderCompareOffsetDirection === 'negative' ? 'Left' : 'Centered');
+
     return (
       <>
         <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', margin: 0 }}>
-          <div style={{ padding: '8px 12px', borderBottom: '1px solid #ddd', fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid #ddd', fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <button type="button" onClick={handleRenderDraw}>Render</button>
             <button type="button" onClick={handleViewXZ}>X-Z View</button>
             <button type="button" onClick={handleViewYZ}>Y-Z View</button>
+            <label htmlFor="render-compare-scope" style={{ marginLeft: 12, fontSize: 12, fontWeight: 500 }}>Configs</label>
+            <select
+              id="render-compare-scope"
+              value={renderCompareScope}
+              onChange={(e) => setRenderCompareScope(e.target.value === 'all' ? 'all' : 'active')}
+              style={{ height: 28 }}
+            >
+              <option value="active">Active only</option>
+              <option value="all">All configs</option>
+            </select>
+            <label htmlFor="render-compare-direction" style={{ fontSize: 12, fontWeight: 500, opacity: renderCompareScope === 'all' ? 1 : 0.5 }}>
+              {renderViewMode === 'YZ' ? 'Offset Y' : 'Offset X'}
+            </label>
+            <select
+              id="render-compare-direction"
+              value={renderCompareOffsetDirection}
+              onChange={(e) => setRenderCompareOffsetDirection((e.target.value as RenderCompareOffsetDirection) || 'centered')}
+              disabled={renderCompareScope !== 'all'}
+              style={{ height: 28 }}
+            >
+              <option value="centered">Centered</option>
+              <option value="positive">{renderViewMode === 'YZ' ? 'Up' : 'Right'}</option>
+              <option value="negative">{renderViewMode === 'YZ' ? 'Down' : 'Left'}</option>
+            </select>
+            <label htmlFor="render-compare-step" style={{ fontSize: 12, fontWeight: 500, opacity: renderCompareScope === 'all' ? 1 : 0.5 }}>Step (mm)</label>
+            <input
+              id="render-compare-step"
+              type="number"
+              min={0}
+              step={1}
+              value={renderCompareOffsetStepMm}
+              onChange={(e) => {
+                const parsed = Number.parseFloat(e.target.value);
+                setRenderCompareOffsetStepMm(Number.isFinite(parsed) && parsed >= 0 ? parsed : 0);
+              }}
+              disabled={renderCompareScope !== 'all'}
+              style={{ width: 86 }}
+            />
             <label htmlFor="render-ray-count-input" style={{ marginLeft: 12, fontSize: 12, fontWeight: 500 }}>Raynum</label>
             <input
               id="render-ray-count-input"
@@ -4543,11 +4789,49 @@ export default function App() {
               />
               Labels
             </label>
+            {renderCompareScope === 'all' && (
+              <span style={{ fontWeight: 400, fontSize: 12, color: '#666' }}>
+                {renderViewMode === '3D'
+                  ? 'Compare offset applies to X-Z / Y-Z views.'
+                  : `${comparePreviewEntries.length || 0} configs, ${compareDirectionLabel}, step ${Math.max(0, Number(renderCompareOffsetStepMm) || 0)} mm`}
+              </span>
+            )}
             <span style={{ marginLeft: 'auto', fontWeight: 400, fontSize: 12, color: '#666' }}>{renderWindowStatus}</span>
           </div>
           <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
             <div style={{ flex: 1, minHeight: 0, position: 'relative', background: '#fff', overflow: 'hidden' }}>
               <div id="threejs-canvas-container" aria-label="Optical system 3D canvas" style={{ width: '100%', height: '100%', minHeight: 0 }} />
+              {renderCompareScope === 'all' && renderViewMode !== '3D' && comparePreviewEntries.length > 1 && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 12,
+                    left: 12,
+                    zIndex: 3,
+                    background: 'rgba(255,255,255,0.9)',
+                    border: '1px solid rgba(17,24,39,0.12)',
+                    borderRadius: 8,
+                    padding: '8px 10px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    maxWidth: 260,
+                    boxShadow: '0 8px 20px rgba(0,0,0,0.08)',
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#111827' }}>Compare Offsets</div>
+                  {comparePreviewEntries.map((entry, index) => {
+                    const offset = comparePreviewOffsets[index] || 0;
+                    const signed = offset > 0 ? `+${offset}` : `${offset}`;
+                    return (
+                      <div key={entry.configId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, fontSize: 12, color: '#374151' }}>
+                        <span style={{ fontWeight: entry.isActive ? 700 : 500 }}>{entry.name}{entry.isActive ? ' (active)' : ''}</span>
+                        <span>{signed} mm</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <RenderUcsIcon />
               <div
                 aria-hidden="true"

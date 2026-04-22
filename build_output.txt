@@ -1,0 +1,77 @@
+
+> co-opt-pro@0.0.0 build
+> vite build
+
+vite v7.3.1 building client environment for production...
+transforming...
+[plugin vite:resolve] Module "node:fs/promises" has been externalized for browser compatibility, imported by "/Users/masanori/Desktop/co-opt/rust-wasm/ts/raytracing/rust-raytracing-wasm.ts". See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.
+[plugin vite:resolve] Module "node:url" has been externalized for browser compatibility, imported by "/Users/masanori/Desktop/co-opt/rust-wasm/ts/raytracing/rust-raytracing-wasm.ts". See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.
+✓ 144 modules transformed.
+rendering chunks...
+[plugin vite:reporter] 
+(!) /Users/masanori/Desktop/co-opt/evaluation/tfmtf-worker-pool.ts is dynamically imported by /Users/masanori/Desktop/co-opt/tools/benchmark-tfmtf.ts but also statically imported by /Users/masanori/Desktop/co-opt/evaluation/mtf-plot.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /Users/masanori/Desktop/co-opt/evaluation/mtf-plot.ts is dynamically imported by /Users/masanori/Desktop/co-opt/tools/benchmark-tfmtf.ts, /Users/masanori/Desktop/co-opt/tools/benchmark-tfmtf.ts but also statically imported by /Users/masanori/Desktop/co-opt/main.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /Users/masanori/Desktop/co-opt/rust-wasm/ts/raytracing/rust-raytracing-wasm.ts is dynamically imported by /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/evaluation/wavefront/wavefront.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/ui/event-handlers.ts but also statically imported by /Users/masanori/Desktop/co-opt/core/wasm-service.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/magnification-chromatic-aberration.ts, /Users/masanori/Desktop/co-opt/evaluation/wavefront/opd-profiler.ts, /Users/masanori/Desktop/co-opt/main.ts, /Users/masanori/Desktop/co-opt/optical/ray-renderer.ts, /Users/masanori/Desktop/co-opt/raytracing/core/ray-tracing.ts, /Users/masanori/Desktop/co-opt/raytracing/generation/gen-ray-cross-infinite.ts, /Users/masanori/Desktop/co-opt/rust-wasm/ts/optimization/optimizer-wasm-bridge.ts, /Users/masanori/Desktop/co-opt/rust-wasm/ts/raytracing/fft-wasm-wrapper.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /Users/masanori/Desktop/co-opt/raytracing/core/ray-paraxial.ts is dynamically imported by /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts but also statically imported by /Users/masanori/Desktop/co-opt/ai/ai-context.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/distortion.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/longitudinal-aberration.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/seidel-coefficients-afocal.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/seidel-coefficients.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/transverse-aberration.ts, /Users/masanori/Desktop/co-opt/evaluation/mtf-plot.ts, /Users/masanori/Desktop/co-opt/evaluation/spot-diagram.ts, /Users/masanori/Desktop/co-opt/evaluation/wavefront/wavefront.ts, /Users/masanori/Desktop/co-opt/main.ts, /Users/masanori/Desktop/co-opt/optimization/optimizer-mvp.ts, /Users/masanori/Desktop/co-opt/raytracing/core/ray-tracing.ts, /Users/masanori/Desktop/co-opt/ui/dom-event-handlers.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts, /Users/masanori/Desktop/co-opt/ui/event-handlers.ts, /Users/masanori/Desktop/co-opt/utils/data-utils.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /Users/masanori/Desktop/co-opt/src/desktop/runtime.ts is dynamically imported by /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/distortion.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/distortion.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/distortion.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/distortion.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/magnification-chromatic-aberration.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts but also statically imported by /Users/masanori/Desktop/co-opt/ai/ai-assistant.ts, /Users/masanori/Desktop/co-opt/evaluation/mtf-plot.ts, /Users/masanori/Desktop/co-opt/evaluation/psf/psf-calculator.ts, /Users/masanori/Desktop/co-opt/main.ts, /Users/masanori/Desktop/co-opt/optimization/optimizer-mvp.ts, /Users/masanori/Desktop/co-opt/raytracing/core/ray-tracing.ts, /Users/masanori/Desktop/co-opt/src/app/App.tsx, /Users/masanori/Desktop/co-opt/src/app/DistortionAnalysisPage.tsx, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/ui/dom-event-handlers.ts, /Users/masanori/Desktop/co-opt/ui/event-handlers.ts, /Users/masanori/Desktop/co-opt/ui/toolbar-handlers.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /Users/masanori/Desktop/co-opt/raytracing/core/ray-tracing.ts is dynamically imported by /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/ui/ray-tracing-globals.ts but also statically imported by /Users/masanori/Desktop/co-opt/evaluation/aberrations/astigmatism.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/longitudinal-aberration.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/transverse-aberration.ts, /Users/masanori/Desktop/co-opt/evaluation/spot-diagram.ts, /Users/masanori/Desktop/co-opt/evaluation/wavefront/opd-profiler.ts, /Users/masanori/Desktop/co-opt/evaluation/wavefront/wavefront.ts, /Users/masanori/Desktop/co-opt/main.ts, /Users/masanori/Desktop/co-opt/optical/ray-renderer.ts, /Users/masanori/Desktop/co-opt/optical/system-renderer.ts, /Users/masanori/Desktop/co-opt/raytracing/core/ray-aperture-edge.ts, /Users/masanori/Desktop/co-opt/raytracing/core/ray-marginal.ts, /Users/masanori/Desktop/co-opt/raytracing/generation/gen-ray-cross-finite.ts, /Users/masanori/Desktop/co-opt/raytracing/generation/gen-ray-cross-infinite.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts, /Users/masanori/Desktop/co-opt/ui/event-handlers.ts, /Users/masanori/Desktop/co-opt/utils/data-utils.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /Users/masanori/Desktop/co-opt/evaluation/spot-diagram.ts is dynamically imported by /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/astigmatism.ts, /Users/masanori/Desktop/co-opt/evaluation/mtf-plot.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts but also statically imported by /Users/masanori/Desktop/co-opt/main.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts, /Users/masanori/Desktop/co-opt/ui/editors/system-requirements-editor.ts, /Users/masanori/Desktop/co-opt/ui/event-handlers.ts, /Users/masanori/Desktop/co-opt/ui/ui-updates.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /Users/masanori/Desktop/co-opt/evaluation/wavefront/wavefront.ts is dynamically imported by /Users/masanori/Desktop/co-opt/evaluation/mtf-plot.ts, /Users/masanori/Desktop/co-opt/evaluation/mtf-plot.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts but also statically imported by /Users/masanori/Desktop/co-opt/evaluation/wavefront/opd-profiler.ts, /Users/masanori/Desktop/co-opt/evaluation/wavefront/wavefront-plot.ts, /Users/masanori/Desktop/co-opt/main.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts, /Users/masanori/Desktop/co-opt/ui/event-handlers.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /Users/masanori/Desktop/co-opt/evaluation/aberrations/longitudinal-aberration.ts is dynamically imported by /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/ui/event-handlers.ts but also statically imported by /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /Users/masanori/Desktop/co-opt/evaluation/aberrations/transverse-aberration.ts is dynamically imported by /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts, /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts but also statically imported by /Users/masanori/Desktop/co-opt/evaluation/aberrations/astigmatism.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/distortion.ts, /Users/masanori/Desktop/co-opt/main.ts, /Users/masanori/Desktop/co-opt/raytracing/core/ray-aperture-edge.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts, /Users/masanori/Desktop/co-opt/ui/editors/system-requirements-editor.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /Users/masanori/Desktop/co-opt/src/desktop/ipc/client.ts is dynamically imported by /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/analysis/optical-analysis.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/distortion.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/distortion.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/distortion.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/distortion.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/magnification-chromatic-aberration.ts, /Users/masanori/Desktop/co-opt/evaluation/aberrations/magnification-chromatic-aberration.ts, /Users/masanori/Desktop/co-opt/evaluation/wavefront/wavefront-plot.ts, /Users/masanori/Desktop/co-opt/main.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts, /Users/masanori/Desktop/co-opt/ui/editors/merit-function-editor.ts but also statically imported by /Users/masanori/Desktop/co-opt/ai/ai-assistant.ts, /Users/masanori/Desktop/co-opt/evaluation/mtf-plot.ts, /Users/masanori/Desktop/co-opt/evaluation/psf/psf-calculator.ts, /Users/masanori/Desktop/co-opt/main.ts, /Users/masanori/Desktop/co-opt/optimization/optimizer-mvp.ts, /Users/masanori/Desktop/co-opt/src/app/App.tsx, /Users/masanori/Desktop/co-opt/src/app/DistortionAnalysisPage.tsx, /Users/masanori/Desktop/co-opt/src/app/MtfAnalysisPage.tsx, /Users/masanori/Desktop/co-opt/src/desktop/adapters/file.ts, /Users/masanori/Desktop/co-opt/ui/event-handlers.ts, /Users/masanori/Desktop/co-opt/ui/toolbar-handlers.ts, dynamic import will not move module into another chunk.
+
+computing gzip size...
+dist/assets/favicon-DBJeJkyS.svg                                     0.30 kB │ gzip:   0.23 kB
+dist/index.html                                                     21.83 kB │ gzip:   7.05 kB
+dist/assets/surface_origins-D_a0A-HZ.js                             54.07 kB
+dist/assets/surface_origins_bg-_KVYzD5l.wasm                       619.07 kB │ gzip: 239.55 kB
+dist/assets/app-CO_QaP5q.css                                        71.94 kB │ gzip:  11.05 kB
+dist/assets/__vite-browser-external-BIHI7g3E.js                      0.03 kB │ gzip:   0.05 kB
+dist/assets/loaded-file-storage-CN249uy8.js                          0.74 kB │ gzip:   0.32 kB
+dist/assets/event-B6SFpErI.js                                        1.38 kB │ gzip:   0.69 kB
+dist/assets/psf-wasm-wrapper-CegBhdv7.js                             2.19 kB │ gzip:   0.83 kB
+dist/assets/psf-serialization-CPSFDk_1.js                            2.20 kB │ gzip:   0.89 kB
+dist/assets/magnification-chromatic-aberration-plot-DX_CVh81.js      4.56 kB │ gzip:   1.96 kB
+dist/assets/webviewWindow-D5Ac7Ybx.js                                4.94 kB │ gzip:   1.49 kB
+dist/assets/longitudinal-aberration-plot-B8hkQC6I.js                 5.83 kB │ gzip:   2.11 kB
+dist/assets/fft-wasm-wrapper-Dreq2CF2.js                             7.06 kB │ gzip:   2.04 kB
+dist/assets/astigmatism-plot-D5wQAwv2.js                             8.13 kB │ gzip:   3.16 kB
+dist/assets/ray-marginal-DgZQh--5.js                                 8.76 kB │ gzip:   3.62 kB
+dist/assets/magnification-chromatic-aberration-D4-hawzU.js           9.89 kB │ gzip:   3.66 kB
+dist/assets/integrated-aberration-plot-BuuUq4Y6.js                  11.32 kB │ gzip:   3.73 kB
+dist/assets/window-yFWUnb0U.js                                      13.99 kB │ gzip:   3.52 kB
+dist/assets/transverse-aberration-plot-DHnc-iG-.js                  22.05 kB │ gzip:   5.87 kB
+dist/assets/optimizer-wasm-bridge-BaLiVoN2.js                       24.00 kB │ gzip:   6.34 kB
+dist/assets/psf-calculator-BLo9xEYf.js                              27.29 kB │ gzip:   9.30 kB
+dist/assets/astigmatism-Dl_-lTRv.js                                 34.99 kB │ gzip:  12.11 kB
+dist/assets/table-configuration-D6T-mo-b.js                        265.53 kB │ gzip:  72.09 kB
+dist/assets/app-CFc4DcSM.js                                        558.77 kB │ gzip: 158.12 kB
+dist/assets/main-BWaj4cfx.js                                     1,137.53 kB │ gzip: 268.47 kB
+dist/assets/toolbar-collapsed-storage-DRQ5WC7v.js                1,799.24 kB │ gzip: 502.94 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 1.85s
