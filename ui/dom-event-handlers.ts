@@ -4781,6 +4781,9 @@ export function loadSystemConfigurations(): any {
 export function saveSystemConfigurations(systemConfig: any): void {
     try {
         saveSystemConfigurationsFromTableConfig(systemConfig);
+        try {
+            window.dispatchEvent(new CustomEvent('coopt:system-configurations-updated'));
+        } catch (_) {}
     } catch (e) {
         console.warn('⚠️ [Configuration] Save failed:', e);
     }

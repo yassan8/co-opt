@@ -417,10 +417,17 @@ export function performAfocalParaxialTrace(opticalSystemRows, wavelength, stopIn
     const s1_mm = -s0_mm; // s₁ = -s₀（符号反転）
     const s1 = s1_mm / UNIT_SCALE; // 正規化単位
     const N1 = 1.0; // Object面の後は空気（常に1.0）
+
+    // 無限遠物体かどうか判定（Object thickness = INF）
+    const isInfiniteObject = !isFinite(s0_mm) || Math.abs(s0_mm) > 1e10;
     
     console.log(`📏 Unit Scale: ${UNIT_SCALE}mm = 1 unit`);
     console.log(`📍 s₀ (thickness) = ${s0_mm} mm (original data)`);
-    console.log(`📍 s₁ = -s₀ = ${s1_mm.toFixed(6)} mm (= ${s1.toFixed(6)} unit)`);
+    if (!isInfiniteObject) {
+        console.log(`📍 s₁ = -s₀ = ${s1_mm.toFixed(6)} mm (= ${s1.toFixed(6)} unit)`);
+    } else {
+        console.log(`📍 s₁ = -s₀ = -INF (infinite object distance)`);
+    }
     console.log(`📍 N₁ = ${N1.toFixed(6)} (空気)`);
     
     // 横倍率βを取得（Paraxial Magnification = initialAlpha / finalAlpha）
@@ -431,34 +438,45 @@ export function performAfocalParaxialTrace(opticalSystemRows, wavelength, stopIn
         return null;
     }
     
-    // β = initialAlpha / finalAlpha を計算
-    // initialAlpha = -h₁/(n₁*s₀), h₁=1.0, n₁=1.0 なので initialAlpha = -1.0/s₀
-    const initialAlpha = -1.0 / s0_mm; // α[1] = -h[1]/(n*s₀)
     const finalAlpha = fullSystemResult.finalAlpha;
-    const beta = initialAlpha / finalAlpha;
 
-    // 教科書式: γ = 1/β を採用（式(21)準拠）
-    const gamma = 1.0 / beta;
-    
-    console.log(`📊 Initial α (Object) = ${initialAlpha.toFixed(8)} rad`);
-    console.log(`📊 Final α (Image) = ${finalAlpha.toFixed(8)} rad`);
-    console.log(`📊 Paraxial Magnification β = ${beta.toFixed(8)}`);
-    console.log(`📊 Angular Magnification γ = ${gamma.toFixed(8)}`);
-    
     // === ステップ1: Marginal Ray（子午光線）の初期条件 ===
-    // 式(21): α₁ = β, h₁ = (s₁/N₁)β where s₁ = -s₀
-    // mm単位で計算してから正規化単位に変換
-    const alpha1_marginal = beta;
-    const h1_marginal_mm = (s1_mm / N1) * beta; // s₁ = -s₀を使用
-    const h1_marginal = h1_marginal_mm / UNIT_SCALE; // 正規化単位に変換
-    
-    // h₀を逆算: h₁ = h₀ - s₁·α₁/N₁ → h₀ = h₁ + s₁·α₁/N₁
-    const h0_marginal = h1_marginal + s1 * alpha1_marginal / N1;
-    
-    console.log('\n🔴 Marginal Ray (子午光線) Initial Conditions [Formula 21]:');
-    console.log(`   α₁ = β = ${alpha1_marginal.toFixed(8)}`);
-    console.log(`   h₁ = (s₁/N₁)β = (${s1_mm.toFixed(6)}/${N1.toFixed(6)})×${beta.toFixed(8)} = ${h1_marginal_mm.toFixed(8)} mm = ${h1_marginal.toFixed(8)} unit`);
-    console.log(`   h₀ (back-calculated) = ${h0_marginal.toFixed(8)} unit`);
+    let alpha1_marginal: number;
+    let h0_marginal: number;
+    let beta: number;
+
+    if (isInfiniteObject) {
+        // 無限遠物体: 平行光線入射 (collimated input)
+        // h₁ = 1.0 (規格化開口), α₁ = 0 (光軸に平行)
+        // β = 0 (無限遠では横倍率=0が数学的に正しい)
+        beta = 0;
+        alpha1_marginal = 0.0;
+        h0_marginal = 1.0; // 無限遠転送はスキップされるため h₁ = h₀ = 1.0
+        console.log('\n🔴 Marginal Ray (子午光線) Initial Conditions [Infinite Object / Collimated Input]:');
+        console.log(`   α₁ = 0 (parallel input)`);
+        console.log(`   h₁ = h₀ = 1.0 (unit aperture height)`);
+        console.log(`   β = 0 (infinite object → zero transverse magnification)`);
+    } else {
+        // 有限距離物体: 式(21)の初期条件を使用
+        const initialAlpha = -1.0 / s0_mm; // α[1] = -h[1]/(n*s₀)
+        beta = initialAlpha / finalAlpha;
+        const gamma = 1.0 / beta;
+
+        console.log(`📊 Initial α (Object) = ${initialAlpha.toFixed(8)} rad`);
+        console.log(`📊 Final α (Image) = ${finalAlpha.toFixed(8)} rad`);
+        console.log(`📊 Paraxial Magnification β = ${beta.toFixed(8)}`);
+        console.log(`📊 Angular Magnification γ = ${gamma.toFixed(8)}`);
+
+        alpha1_marginal = beta;
+        const h1_marginal_mm = (s1_mm / N1) * beta;
+        const h1_marginal = h1_marginal_mm / UNIT_SCALE;
+        h0_marginal = h1_marginal + s1 * alpha1_marginal / N1;
+
+        console.log('\n🔴 Marginal Ray (子午光線) Initial Conditions [Formula 21]:');
+        console.log(`   α₁ = β = ${alpha1_marginal.toFixed(8)}`);
+        console.log(`   h₁ = (s₁/N₁)β = (${s1_mm.toFixed(6)}/${N1.toFixed(6)})×${beta.toFixed(8)} = ${h1_marginal_mm.toFixed(8)} mm = ${h1_marginal.toFixed(8)} unit`);
+        console.log(`   h₀ (back-calculated) = ${h0_marginal.toFixed(8)} unit`);
+    }
     
     // 子午光線の追跡
     const marginalTrace = [];
@@ -562,15 +580,18 @@ export function performAfocalParaxialTrace(opticalSystemRows, wavelength, stopIn
     
     // === ステップ2: Chief Ray（主光線）の初期条件 ===
     // 条件: (1) stop面を通過 (h̄_stop≈0), (2) 出射平行 (ᾱ_final≈0)
-    const solvedChief = solveChiefInitialForStopAfocal(normalizedRows, wavelength, s1, stopIndex, beta);
-    // デバッグ・確認用にハードコード（依頼値）
-        const alpha1_chief = solvedChief.alpha1;
-        const h1_chief = solvedChief.h1;
+    // 無限遠物体の場合は s1=-INF を避け s1_eff=0 で面1からstopまでのABCDを計算する
+    const s1_for_chief = isInfiniteObject ? 0 : s1;
+    const beta_for_chief = isInfiniteObject
+        ? (Math.abs(finalAlpha) > 1e-12 ? 1.0 / finalAlpha : 1.0)
+        : beta;
+    const solvedChief = solveChiefInitialForStopAfocal(normalizedRows, wavelength, s1_for_chief, stopIndex, beta_for_chief);
+    const alpha1_chief = solvedChief.alpha1;
+    const h1_chief = solvedChief.h1;
 
     // h₀を逆算: h₁ = h₀ - s₁·α₁/N₁
-    // 要望: h̄₀ 初期値を 1/β とする。ᾱ₁ が決まったあとで h̄₀ を固定し、h̄₁ を再算出する。
-    // h0 はハードコード h1 と α1 から再計算
-    const h0_chief = h1_chief + s1 * alpha1_chief / N1;
+    // 無限遠の場合は転送がスキップされるため h₀ = h₁
+    const h0_chief = isInfiniteObject ? h1_chief : (h1_chief + s1 * alpha1_chief / N1);
     const h1_chief_final = h1_chief;
     
     console.log('\n🔵 Chief Ray (主光線) Initial Conditions [Constraints: stop h̄≈0, ᾱ_out≈0]:');

@@ -239,12 +239,19 @@ export function calculateSeidelCoefficients(opticalSystemRows, wavelength = 0.58
     console.log('📊 Trace data length:', traceData.length);
 
     // 焦点距離を計算（ray-paraxial.jsの標準関数を使用）
-    const focalLength = calculateFocalLength(opticalSystemRows, wavelength);
-    console.log(`📊 Focal Length (from calculateFocalLength): ${focalLength?.toFixed(6)} mm`);
+    // Note: calculateFocalLength returns an object {tangential,sagittal,average,astigmatism} for toric/paraxial systems
+    const focalLengthRaw = calculateFocalLength(opticalSystemRows, wavelength);
+    const focalLength = (focalLengthRaw !== null && typeof focalLengthRaw === 'object')
+        ? (focalLengthRaw.average ?? focalLengthRaw.tangential ?? null)
+        : focalLengthRaw;
+    console.log(`📊 Focal Length (from calculateFocalLength): ${(focalLength as number)?.toFixed(6)} mm`);
     
     // 後側焦点距離を計算
-    const backFocalLength = calculateBackFocalLength(opticalSystemRows, wavelength);
-    console.log(`📊 Back Focal Length: ${backFocalLength?.toFixed(6)} mm`);
+    const backFocalLengthRaw = calculateBackFocalLength(opticalSystemRows, wavelength);
+    const backFocalLength = (backFocalLengthRaw !== null && typeof backFocalLengthRaw === 'object')
+        ? (backFocalLengthRaw.average ?? backFocalLengthRaw.tangential ?? null)
+        : backFocalLengthRaw;
+    console.log(`📊 Back Focal Length: ${(backFocalLength as number)?.toFixed(6)} mm`);
     
     if (!focalLength || !isFinite(focalLength) || Math.abs(focalLength) < 1e-10) {
         console.error('⚠️ Invalid focal length calculated');

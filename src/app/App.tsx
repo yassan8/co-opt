@@ -590,6 +590,7 @@ export default function App() {
   const [optAutoRenderOnAccept, setOptAutoRenderOnAccept] = useState(false);
   const [optRunning, setOptRunning] = useState(false);
   const [optStopRequested, setOptStopRequested] = useState(false);
+  const [, setSystemConfigVersion] = useState(0);
   const [optimizeState, setOptimizeState] = useState<any>({
     status: 'idle',
     phase: 'ready',
@@ -655,6 +656,17 @@ export default function App() {
       return 0;
     }
   };
+
+  useEffect(() => {
+    const refreshStatusBar = () => {
+      setSystemConfigVersion((version) => version + 1);
+    };
+
+    window.addEventListener('coopt:system-configurations-updated', refreshStatusBar);
+    return () => {
+      window.removeEventListener('coopt:system-configurations-updated', refreshStatusBar);
+    };
+  }, []);
 
   useEffect(() => {
     const optimizeStatus = String(optimizeState?.status || 'idle').toLowerCase();
