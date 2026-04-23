@@ -2545,7 +2545,50 @@ class SystemRequirementsEditor {
     }
 
     try {
-      w.__cooptLastRequirementsEval = { at: Date.now(), stage: 'done', updated: Array.isArray(updates) ? updates.length : 0 };
+      const syncedAt = Date.now();
+      w.__cooptLastRequirementsEval = { at: syncedAt, stage: 'done', updated: Array.isArray(updates) ? updates.length : 0 };
+
+      let syncedScore = Number.NaN;
+      let contributionCount = 0;
+      const currentRows = Array.isArray(this.requirements) ? this.requirements : [];
+      for (const row of currentRows) {
+        const enabled = (row?.enabled === undefined || row?.enabled === null) ? true : !!row.enabled;
+        const operand = String(row?.operand ?? '').trim();
+        const weight = Number(row?.weight ?? 1);
+        if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) continue;
+        this._normalizeConfigId(row?.configId, systemConfig, activeConfigId);
+        const contribution = Number.isFinite(Number(row?._contribution))
+          ? Number(row?._contribution)
+          : Number(row?.score);
+        if (!Number.isFinite(contribution)) continue;
+        if (contribution > 0) {
+          syncedScore = Number.isFinite(syncedScore) ? (syncedScore + contribution) : contribution;
+        } else if (!Number.isFinite(syncedScore)) {
+          syncedScore = 0;
+        }
+        contributionCount += 1;
+      }
+
+      if (contributionCount > 0 && Number.isFinite(syncedScore)) {
+        try {
+          localStorage.setItem('coopt.requirementScoreSync', JSON.stringify({
+            ts: syncedAt,
+            score: syncedScore,
+            activeConfigId,
+            source: 'system-requirements-editor'
+          }));
+        } catch (_) {}
+        try {
+          window.dispatchEvent(new CustomEvent('coopt:requirements-updated', {
+            detail: {
+              ts: syncedAt,
+              score: syncedScore,
+              activeConfigId,
+              source: 'system-requirements-editor'
+            }
+          }));
+        } catch (_) {}
+      }
     } catch (_) {}
 
     this._isEvaluating = false;

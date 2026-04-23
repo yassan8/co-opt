@@ -773,22 +773,33 @@ export default function App() {
 
   useEffect(() => {
     const optimizeStatus = String(optimizeState?.status || 'idle').toLowerCase();
-    // Pre-run score probing must only run in the initial idle state.
-    // Otherwise it can overwrite the final optimized score after stop/done.
-    if (!isOptimizeWindowMode || optRunning || optimizeStatus !== 'idle') return;
+    // Keep host score synchronization active whenever the optimize window is open
+    // and the optimizer is not currently running. If this is limited to `idle`, the
+    // listener is torn down after a run finishes with `done` / `stopped`, and score
+    // changes in the host are only picked up after reopening the window.
+    if (!isOptimizeWindowMode || optRunning) return;
     let cancelled = false;
     let retryTimer: any = null;
 
-    const refreshPreRunScore = async (): Promise<boolean> => {
+    const refreshPreRunScore = async (triggerEval = true): Promise<boolean> => {
       try {
         const w = window as any;
-        const sre = w.systemRequirementsEditor;
-        if (sre && typeof sre.evaluateAndUpdateNow === 'function') {
+        const hostWin = (() => { try { const op = w.opener; if (op && !op.closed) return op; } catch (_) {} return w; })();
+        const sre = hostWin.systemRequirementsEditor || w.systemRequirementsEditor;
+        if (triggerEval && sre && typeof sre.evaluateAndUpdateNow === 'function') {
           const p = sre.evaluateAndUpdateNow({ reason: 'optimize-window-prerun', forceSilent: true, silent: true });
           if (p && typeof p.then === 'function') await p;
         }
 
         const cfg = (() => {
+          try {
+            if (typeof hostWin.loadSystemConfigurationsFromTableConfig === 'function') {
+              return hostWin.loadSystemConfigurationsFromTableConfig();
+            }
+            if (typeof hostWin.loadSystemConfigurations === 'function') {
+              return hostWin.loadSystemConfigurations();
+            }
+          } catch (_) {}
           try {
             if (typeof w.loadSystemConfigurationsFromTableConfig === 'function') {
               return w.loadSystemConfigurationsFromTableConfig();
@@ -820,11 +831,15 @@ export default function App() {
 
         const opticalRows = await (async () => {
           try {
+            if (typeof hostWin.getOpticalSystemRows === 'function') {
+              const d0 = hostWin.getOpticalSystemRows(hostWin.tableOpticalSystem);
+              if (Array.isArray(d0) && d0.length > 0) return d0;
+            }
             if (typeof w.getOpticalSystemRows === 'function') {
               const d0 = w.getOpticalSystemRows(w.tableOpticalSystem);
               if (Array.isArray(d0) && d0.length > 0) return d0;
             }
-            const table = w.tableOpticalSystem;
+            const table = hostWin.tableOpticalSystem || w.tableOpticalSystem;
             if (table && typeof table.getData === 'function') {
               const d = await table.getData();
               if (Array.isArray(d)) return d;
@@ -838,8 +853,9 @@ export default function App() {
             if (Array.isArray(activeCfg?.opticalSystem) && activeCfg.opticalSystem.length > 0) {
               return activeCfg.opticalSystem;
             }
-            if (activeCfg && Array.isArray(activeCfg.blocks) && activeCfg.blocks.length > 0 && typeof w.expandBlocksToOpticalSystemRows === 'function') {
-              const expanded = w.expandBlocksToOpticalSystemRows(activeCfg.blocks);
+            if (activeCfg && Array.isArray(activeCfg.blocks) && activeCfg.blocks.length > 0 && typeof (hostWin.expandBlocksToOpticalSystemRows || w.expandBlocksToOpticalSystemRows) === 'function') {
+              const expander = hostWin.expandBlocksToOpticalSystemRows || w.expandBlocksToOpticalSystemRows;
+              const expanded = expander(activeCfg.blocks);
               if (expanded && Array.isArray(expanded.rows) && expanded.rows.length > 0) {
                 return expanded.rows;
               }
@@ -861,7 +877,7 @@ export default function App() {
 
         const sourceRows = (() => {
           try {
-            const table = w.tableSource;
+            const table = hostWin.tableSource || w.tableSource;
             if (table && typeof table.getData === 'function') {
               const d = table.getData();
               if (Array.isArray(d) && d.length > 0) return d;
@@ -878,7 +894,7 @@ export default function App() {
 
         const objectRows = (() => {
           try {
-            const table = w.tableObject;
+            const table = hostWin.tableObject || w.tableObject;
             if (table && typeof table.getData === 'function') {
               const d = table.getData();
               if (Array.isArray(d) && d.length > 0) return d;
@@ -917,11 +933,7 @@ export default function App() {
           : [];
 
         const activeRows = Array.isArray(enabledRows)
-          ? enabledRows.filter((row: any) => {
-            const reqCfg = normalizeConfigId(row);
-            if (!activeConfigId) return true;
-            return reqCfg === activeConfigId;
-          })
+          ? enabledRows
           : [];
 
         let tableScore = Number.NaN;
@@ -982,7 +994,7 @@ export default function App() {
     const maxAttempts = 50;
     const runWithRetry = async () => {
       if (cancelled || optRunning) return;
-      const ok = await refreshPreRunScore();
+      const ok = await refreshPreRunScore(true);
       attempts += 1;
       if (!ok && attempts < maxAttempts && !cancelled && !optRunning) {
         retryTimer = setTimeout(() => {
@@ -992,12 +1004,109 @@ export default function App() {
     };
 
     void runWithRetry();
+
+    const w = window as any;
+    const hostWin = (() => { try { const op = w.opener; if (op && !op.closed) return op; } catch (_) {} return w; })();
+    let refreshScheduledTimer: any = null;
+    let refreshInFlight = false;
+    let refreshPending = false;
+    const scheduleHostScoreRefresh = (reason: string, triggerEval = true, delayMs = 120) => {
+      if (cancelled || optRunning) return;
+      if (refreshScheduledTimer) {
+        clearTimeout(refreshScheduledTimer);
+        refreshScheduledTimer = null;
+      }
+      refreshScheduledTimer = setTimeout(() => {
+        refreshScheduledTimer = null;
+        if (cancelled || optRunning || refreshInFlight) {
+          refreshPending = true;
+          return;
+        }
+        refreshInFlight = true;
+        void refreshPreRunScore(triggerEval)
+          .catch(() => false)
+          .finally(() => {
+            refreshInFlight = false;
+            if (refreshPending && !cancelled && !optRunning) {
+              refreshPending = false;
+              scheduleHostScoreRefresh(`${reason}:pending`, triggerEval, 0);
+            }
+          });
+      }, delayMs);
+    };
+
+    let lastObservedRequirementEvalAt = 0;
+    try {
+      const state = hostWin?.__cooptLastRequirementsEval;
+      const at = Number(state?.at ?? 0);
+      const stage = String(state?.stage ?? '').trim().toLowerCase();
+      if (Number.isFinite(at) && at > 0 && stage === 'done') {
+        lastObservedRequirementEvalAt = at;
+      }
+    } catch (_) {}
+
+    const requirementEvalPollTimer = window.setInterval(() => {
+      if (cancelled || optRunning) return;
+      try {
+        const state = hostWin?.__cooptLastRequirementsEval;
+        const at = Number(state?.at ?? 0);
+        const stage = String(state?.stage ?? '').trim().toLowerCase();
+        if (!Number.isFinite(at) || at <= lastObservedRequirementEvalAt || stage !== 'done') return;
+        lastObservedRequirementEvalAt = at;
+        scheduleHostScoreRefresh('host-requirement-eval-done', false, 0);
+      } catch (_) {}
+    }, 250);
+
+    const forceRefreshPollTimer = window.setInterval(() => {
+      if (cancelled || optRunning) return;
+      scheduleHostScoreRefresh('host-periodic-refresh', true, 0);
+    }, 1500);
+
+    const onHostRequirementsUpdated = () => {
+      scheduleHostScoreRefresh('host-requirements-updated', true, 0);
+    };
+    const onHostSystemConfigurationsUpdated = () => {
+      scheduleHostScoreRefresh('host-system-configurations-updated', true, 0);
+    };
+    try { hostWin?.addEventListener?.('coopt:requirements-updated', onHostRequirementsUpdated); } catch (_) {}
+    try { hostWin?.addEventListener?.('coopt:system-configurations-updated', onHostSystemConfigurationsUpdated); } catch (_) {}
+
+    // Listen for requirement score changes pushed by the main window while this popup is idle
+    const onRequirementScoreSync = (e: StorageEvent) => {
+      if (e.key !== 'coopt.requirementScoreSync' || !e.newValue) return;
+      if (cancelled) return;
+      try {
+        const payload = JSON.parse(e.newValue);
+        const score = Number(payload?.score);
+        if (!Number.isFinite(score)) return;
+        setOptimizeState((prev: any) => ({
+          ...prev,
+          requirementScoreBefore: score,
+          requirementScoreAfter: score,
+          requirementScoreTable: score,
+          meritBefore: score,
+          meritAfter: score,
+          best: Number.isFinite(score) ? score : prev.best,
+        }));
+      } catch (_) {}
+    };
+    window.addEventListener('storage', onRequirementScoreSync);
+
     return () => {
       cancelled = true;
       if (retryTimer) {
         clearTimeout(retryTimer);
         retryTimer = null;
       }
+      if (refreshScheduledTimer) {
+        clearTimeout(refreshScheduledTimer);
+        refreshScheduledTimer = null;
+      }
+      try { window.clearInterval(requirementEvalPollTimer); } catch (_) {}
+      try { window.clearInterval(forceRefreshPollTimer); } catch (_) {}
+      try { hostWin?.removeEventListener?.('coopt:requirements-updated', onHostRequirementsUpdated); } catch (_) {}
+      try { hostWin?.removeEventListener?.('coopt:system-configurations-updated', onHostSystemConfigurationsUpdated); } catch (_) {}
+      window.removeEventListener('storage', onRequirementScoreSync);
     };
   }, [isOptimizeWindowMode, optRunning, optMethod, optimizeState?.status]);
 
@@ -1022,6 +1131,13 @@ export default function App() {
         if (reqEditor && typeof reqEditor.evaluateAndUpdateNow === 'function') {
           const p = reqEditor.evaluateAndUpdateNow({ reason, forceSilent: true, silent: true });
           if (p && typeof p.then === 'function') await p;
+        }
+      } catch (_) {}
+      // Broadcast updated score to optimize popup (if open and idle)
+      try {
+        const score = readRequirementTableScoreFromHost();
+        if (Number.isFinite(score)) {
+          localStorage.setItem('coopt.requirementScoreSync', JSON.stringify({ ts: Date.now(), score }));
         }
       } catch (_) {}
     };
@@ -1081,8 +1197,6 @@ export default function App() {
           const operand = String(row?.operand ?? '').trim();
           const weight = Number(row?.weight ?? 1);
           if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) continue;
-          const reqCfg = normalizeConfigId(row);
-          if (activeConfigId && reqCfg !== activeConfigId) continue;
           const c = Number.isFinite(Number(row?._contribution))
             ? Number(row?._contribution)
             : Number(row?.score);
@@ -1484,6 +1598,9 @@ export default function App() {
         if (typeof w.drawOpticalSystem === 'function') {
           w.drawOpticalSystem();
         }
+        try {
+          applyRenderSync(rows);
+        } catch (_) {}
       } catch (_) {}
       finally {
         if (undoHistory) {
@@ -2404,7 +2521,11 @@ const collectLegacyCrossRays = async (
               compareGroupsToRemove.push(child);
               return;
             }
-            if (child?.userData?.type === 'optical-ray' || child?.userData?.isRayLine) {
+            if (child?.userData?.type === 'optical-ray' || child?.userData?.isRayLine || child?.userData?.rayType === 'crossBeam') {
+              raysToRemove.push(child);
+            }
+            // Clear popupLensFill objects left by the legacy draw-cross path
+            if (child?.userData?.type === 'popupLensFill' && !child?.userData?.isUltraDebugOverlay) {
               raysToRemove.push(child);
             }
           });
@@ -3386,9 +3507,8 @@ const collectLegacyCrossRays = async (
           const operand = String(row.operand ?? '').trim();
           const weight = Number(row.weight ?? 1);
           if (!enabled || !operand || !(Number.isFinite(weight) && weight > 0)) return false;
-          const reqCfg = normalizeConfigId(row);
-          if (!activeConfigId) return true;
-          return reqCfg === activeConfigId;
+          normalizeConfigId(row);
+          return true;
         })
         : [];
 
