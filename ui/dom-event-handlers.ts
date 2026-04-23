@@ -5449,6 +5449,15 @@ function cooptApplyBlockValue(blockId: string, path: string, oldValue: any, newV
     }
 
     cooptSetNestedValue(block, path, newValue);
+    if (String(block?.blockType ?? '').trim() === 'Paraxial' && /^aperture\./.test(String(path))) {
+        if (!block.aperture || typeof block.aperture !== 'object') block.aperture = {};
+        const apertureKey = String(path).slice('aperture.'.length).trim();
+        if (apertureKey === 's1' || apertureKey === 'front' || apertureKey === 'back') {
+            block.aperture.s1 = newValue;
+            block.aperture.front = newValue;
+            block.aperture.back = newValue;
+        }
+    }
     cooptAutoApplyGapThicknessModes(blocks, path);
 
     // Re-expand Design Intent blocks into opticalSystem rows so rendering/ray-tracing sees latest values.
@@ -7291,8 +7300,7 @@ function renderBlockInspector(summary: any[], groups: any, blockById: Map<string
                 };
 
                 if (blockType === 'Paraxial') {
-                    pickApertureEntry('s1', ['s1', 'front', 'surf1']);
-                    pickApertureEntry('s2', ['s2', 'back', 'surf2']);
+                    pickApertureEntry('s1', ['s1', 'front', 'back', 'surf1', 'surf2']);
                 } else if (blockType === 'Lens' || blockType === 'PositiveLens') {
                     pickApertureEntry('s1', ['s1', 'front', 'surf1']);
                     pickApertureEntry('s2', ['s2', 'back', 'surf2']);
