@@ -145,7 +145,7 @@ import { generateZMXText, downloadZMX } from './import-export/zemax-export.ts';
 import { parseZMXTextToOpticalSystemRows, parseZMXArrayBufferToOpticalSystemRows } from './import-export/zemax-import.ts';
 
 // Ray rendering modules
-import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayColorMode, optimizeObjectPositionForStop, optimizeAngleObjectPosition, generateRayStartPointsForObject, drawRayWithSegmentColors } from './optical/ray-renderer.ts';
+import { setRayEmissionPattern, setRayColorMode, getRayEmissionPattern, getRayColorMode, optimizeObjectPositionForStop, optimizeAngleObjectPosition, generateRayStartPointsForObject, drawRayWithSegmentColors, convertImageHeightToEffectiveObject } from './optical/ray-renderer.ts';
 
 // UI modules
 import { setupRayPatternButtons, setupRayColorButtons, setupViewButtons, setupOpticalSystemChangeListeners, setupSimpleViewButtons, setupTransformationControls, updateTransformSurfaceSelect, setupAnalysisWindows } from './ui/event-handlers.ts';
@@ -2284,6 +2284,25 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
             return t === 'object';
         };
 
+        const isGapRow = (row) => {
+            const fields = [
+                row?.blockType, row?._blockType, row?.block_type, row?.blockTypeName,
+                row?.['object type'], row?.object, row?.Object,
+                row?.type, row?.Type,
+                row?.comment, row?.Comment,
+            ];
+            return fields.some((value) => {
+                const key = String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+                return key === 'gap' || key === 'airgap' || key.includes('airgap');
+            });
+        };
+
+        const isThinLensBackRow = (row) => {
+            const blockType = String(row?._blockType ?? row?.blockType ?? row?.block_type ?? row?.blockTypeName ?? '').trim().toLowerCase();
+            if (blockType !== 'thinlens' && blockType !== 'paraxial') return false;
+            return String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase() === 'back';
+        };
+
         const getRayPathPointIndexForSurfaceIndex = (rows, surfaceIndex) => {
             if (!Array.isArray(rows) || surfaceIndex === null || surfaceIndex === undefined) return null;
             const sIdx = Math.max(0, Math.min(surfaceIndex, rows.length - 1));
@@ -2292,6 +2311,8 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
                 const row = rows[i];
                 if (isCoordTransRow(row)) continue;
                 if (isObjectRow(row)) continue;
+                if (isGapRow(row)) continue;
+                if (isThinLensBackRow(row)) continue;
                 count++;
             }
             return count > 0 ? count : null;
@@ -2313,12 +2334,6 @@ function updateImageSemiDiaFromChiefRays(rays, opticalSystemRows) {
                     if (Number.isFinite(Number(p?.x)) && Number.isFinite(Number(p?.y))) {
                         return p;
                     }
-                }
-            }
-            for (let i = rayPath.length - 1; i >= 0; i--) {
-                const p = rayPath[i];
-                if (p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))) {
-                    return p;
                 }
             }
             return null;
@@ -2823,6 +2838,7 @@ window['drawOpticalSystemSurfaceWrapper'] = drawOpticalSystemSurfaceWrapper;
 window['improvedDrawOpticalSystemSurfaceWrapper'] = improvedDrawOpticalSystemSurfaceWrapper;
 window['drawOptimizedRaysFromObjects'] = drawOptimizedRaysFromObjects;
 window['generateRayStartPointsForObject'] = generateRayStartPointsForObject;
+window['convertImageHeightToEffectiveObject'] = convertImageHeightToEffectiveObject;
 window['drawRayWithSegmentColors'] = drawRayWithSegmentColors;
 window['setRayEmissionPattern'] = setRayEmissionPattern;
 window['getRayEmissionPattern'] = getRayEmissionPattern;

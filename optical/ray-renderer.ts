@@ -970,6 +970,217 @@ function buildDirectionFromFieldAngles(angleXDeg, angleYDeg) {
     return normalizeVector3(dir, { x: 0, y: 0, z: 1 });
 }
 
+function findImageSurfaceIndex(opticalSystemRows) {
+    if (!Array.isArray(opticalSystemRows) || opticalSystemRows.length === 0) return 0;
+    let imageIndex = -1;
+    for (let i = 0; i < opticalSystemRows.length; i++) {
+        const row = opticalSystemRows[i] || {};
+        const objectType = String(row?.['object type'] ?? row?.object ?? row?.Object ?? '').trim().toLowerCase();
+        if (objectType === 'image') imageIndex = i;
+    }
+    return imageIndex >= 0 ? imageIndex : Math.max(0, opticalSystemRows.length - 1);
+}
+
+function transformPointToSurfaceLocal(point, surfaceInfo) {
+    if (!point || !surfaceInfo?.origin || !surfaceInfo?.rotationMatrix) return point;
+    const dx = Number(point.x) - Number(surfaceInfo.origin.x);
+    const dy = Number(point.y) - Number(surfaceInfo.origin.y);
+    const dz = Number(point.z) - Number(surfaceInfo.origin.z);
+    const matrix = surfaceInfo.rotationMatrix;
+    return {
+        x: matrix[0][0] * dx + matrix[1][0] * dy + matrix[2][0] * dz,
+        y: matrix[0][1] * dx + matrix[1][1] * dy + matrix[2][1] * dz,
+        z: matrix[0][2] * dx + matrix[1][2] * dy + matrix[2][2] * dz,
+    };
+}
+
+function resolveFiniteObjectSurfacePoint(opticalSystemRows, x, y) {
+    const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+    const firstSurfaceOrigin = surfaceOrigins?.[0]?.origin ?? { x: 0, y: 0, z: 0 };
+    const surf = opticalSystemRows?.[0] ?? {};
+    let sag = 0;
+    if (surf?.radius && surf.radius !== 'INF') {
+        const r = Math.sqrt(x * x + y * y);
+        const asphericParams = {
+            radius: parseFloat(surf.radius),
+            conic: Number(surf.conic) || 0,
+            coef1: Number(surf.coef1) || 0,
+            coef2: Number(surf.coef2) || 0,
+            coef3: Number(surf.coef3) || 0,
+            coef4: Number(surf.coef4) || 0,
+            coef5: Number(surf.coef5) || 0,
+            coef6: Number(surf.coef6) || 0,
+            coef7: Number(surf.coef7) || 0,
+            coef8: Number(surf.coef8) || 0,
+            coef9: Number(surf.coef9) || 0,
+            coef10: Number(surf.coef10) || 0,
+        };
+        sag = asphericSurfaceZ(r, asphericParams, surf.surfType === 'Aspheric Odd' ? 'odd' : 'even') || 0;
+    }
+    return {
+        x,
+        y,
+        z: Number(firstSurfaceOrigin.z) + sag,
+    };
+}
+
+function traceChiefRayImagePointForAngle(opticalSystemRows, angleXDeg, angleYDeg, imageSurfaceIndex, imageSurfaceInfo, wavelengthUm) {
+    const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+    const stopInfo = findStopSurface(opticalSystemRows, surfaceOrigins);
+    const stopCenter3d = extractStopCenter3d(stopInfo);
+    if (!stopInfo || !stopCenter3d || !Number.isInteger(stopInfo.index)) return null;
+
+    const direction = buildDirectionFromFieldAngles(angleXDeg, angleYDeg);
+    const origin = findInfiniteSystemChiefRayOrigin(
+        { i: direction.x, j: direction.y, k: direction.z },
+        stopCenter3d,
+        stopInfo.index,
+        opticalSystemRows,
+        false,
+        imageSurfaceIndex,
+        wavelengthUm,
+    );
+    if (!origin) return null;
+
+    const hit = traceRayHitPointForRender(
+        opticalSystemRows,
+        { pos: origin, dir: direction, wavelength: wavelengthUm },
+        1.0,
+        imageSurfaceIndex,
+        'rust'
+    );
+    if (!hit || !Number.isFinite(Number(hit.x)) || !Number.isFinite(Number(hit.y)) || !Number.isFinite(Number(hit.z))) {
+        return null;
+    }
+    return transformPointToSurfaceLocal(hit, imageSurfaceInfo);
+}
+
+function traceChiefRayImagePointForFiniteObject(opticalSystemRows, objectX, objectY, imageSurfaceIndex, imageSurfaceInfo, wavelengthUm) {
+    const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+    const stopInfo = findStopSurface(opticalSystemRows, surfaceOrigins);
+    const stopCenter3d = extractStopCenter3d(stopInfo);
+    if (!stopInfo || !stopCenter3d || !Number.isInteger(stopInfo.index)) return null;
+
+    const objectPoint = resolveFiniteObjectSurfacePoint(opticalSystemRows, objectX, objectY);
+    const chiefDirection = findFiniteSystemChiefRayDirection(
+        objectPoint,
+        stopCenter3d,
+        stopInfo.index,
+        opticalSystemRows,
+        false,
+        wavelengthUm,
+    );
+    if (!chiefDirection) return null;
+
+    const hit = traceRayHitPointForRender(
+        opticalSystemRows,
+        {
+            pos: objectPoint,
+            dir: { x: chiefDirection.i, y: chiefDirection.j, z: chiefDirection.k },
+            wavelength: wavelengthUm,
+        },
+        1.0,
+        imageSurfaceIndex,
+        'rust'
+    );
+    if (!hit || !Number.isFinite(Number(hit.x)) || !Number.isFinite(Number(hit.y)) || !Number.isFinite(Number(hit.z))) {
+        return null;
+    }
+    return transformPointToSurfaceLocal(hit, imageSurfaceInfo);
+}
+
+function solveImageHeightComponent(targetValue, initialGuess, evaluateCandidate, options: { initialStep?: number; maxStep?: number } = {}) {
+    const target = Number(targetValue) || 0;
+    if (Math.abs(target) < 1e-12) return 0;
+
+    const finiteInitial = Number.isFinite(initialGuess) ? initialGuess : 0;
+    let bestCandidate = finiteInitial;
+    let bestError = Infinity;
+
+    const sampleCandidate = (candidate) => {
+        const imageValue = evaluateCandidate(candidate);
+        if (!Number.isFinite(imageValue)) return null;
+        const error = imageValue - target;
+        const absError = Math.abs(error);
+        if (absError < bestError) {
+            bestError = absError;
+            bestCandidate = candidate;
+        }
+        return { candidate, error };
+    };
+
+    const center = sampleCandidate(finiteInitial) ?? sampleCandidate(0);
+    if (center && Math.abs(center.error) < 1e-6) return center.candidate;
+
+    const configuredInitialStep = Number(options?.initialStep);
+    const configuredMaxStep = Number(options?.maxStep);
+    const baseStep = (Number.isFinite(configuredInitialStep) && configuredInitialStep > 0)
+        ? configuredInitialStep
+        : Math.max(0.1, Math.abs(finiteInitial) * 0.05, Math.abs(target) * 0.02);
+    const maxStep = (Number.isFinite(configuredMaxStep) && configuredMaxStep > baseStep)
+        ? configuredMaxStep
+        : Math.max(baseStep * 32, Math.abs(finiteInitial) * 2, Math.abs(target) * 0.5, 1);
+    let bracketLow = null;
+    let bracketHigh = null;
+    let prevNeg = sampleCandidate(finiteInitial - baseStep);
+    let prevPos = sampleCandidate(finiteInitial + baseStep);
+
+    if (prevNeg && center && prevNeg.error * center.error <= 0) {
+        bracketLow = prevNeg;
+        bracketHigh = center;
+    } else if (center && prevPos && center.error * prevPos.error <= 0) {
+        bracketLow = center;
+        bracketHigh = prevPos;
+    }
+
+    for (let stepIndex = 2; (!bracketLow || !bracketHigh) && stepIndex <= 32; stepIndex++) {
+        const span = Math.min(maxStep, baseStep * stepIndex);
+        const neg = sampleCandidate(finiteInitial - span);
+        if (neg && prevNeg && neg.error * prevNeg.error <= 0) {
+            bracketLow = neg;
+            bracketHigh = prevNeg;
+            break;
+        }
+        prevNeg = neg ?? prevNeg;
+
+        const pos = sampleCandidate(finiteInitial + span);
+        if (pos && prevPos && prevPos.error * pos.error <= 0) {
+            bracketLow = prevPos;
+            bracketHigh = pos;
+            break;
+        }
+        prevPos = pos ?? prevPos;
+    }
+
+    if (!bracketLow || !bracketHigh) return bestCandidate;
+
+    let low = bracketLow.candidate;
+    let high = bracketHigh.candidate;
+    let lowError = bracketLow.error;
+    let highError = bracketHigh.error;
+
+    if (low > high) {
+        [low, high] = [high, low];
+        [lowError, highError] = [highError, lowError];
+    }
+
+    for (let iter = 0; iter < 32; iter++) {
+        const mid = 0.5 * (low + high);
+        const sample = sampleCandidate(mid);
+        if (!sample) break;
+        if (Math.abs(sample.error) < 1e-6) return sample.candidate;
+        if (lowError * sample.error <= 0) {
+            high = sample.candidate;
+            highError = sample.error;
+        } else {
+            low = sample.candidate;
+            lowError = sample.error;
+        }
+    }
+
+    return bestCandidate;
+}
+
 function applyRotationMatrixToVector(matrix, vec) {
     if (!matrix || !Array.isArray(matrix) || matrix.length < 3) return { ...vec };
     const x = Number(vec?.x) || 0;
@@ -1519,7 +1730,7 @@ const mirrorChiefRayDiagToOpener = (label, payload) => {
  * Rectangle (finite) object row by computing paraxial EFL / magnification.
  * xHeightAngle and yHeightAngle are treated as target image heights in mm.
  */
-function convertImageHeightToEffectiveObject(obj, opticalSystemRows, wavelengthUm: number, conjugateType: ConjugateType): any {
+export function convertImageHeightToEffectiveObject(obj, opticalSystemRows, wavelengthUm: number, conjugateType: ConjugateType): any {
     const targetX = Number(obj.xHeightAngle) || 0;
     const targetY = Number(obj.yHeightAngle) || 0;
 
@@ -1527,23 +1738,56 @@ function convertImageHeightToEffectiveObject(obj, opticalSystemRows, wavelengthU
         const paraxial = calculateParaxialData(opticalSystemRows, wavelengthUm);
         if (!paraxial) throw new Error('paraxial null');
 
+        const imageSurfaceIndex = findImageSurfaceIndex(opticalSystemRows);
+        const surfaceOrigins = calculateSurfaceOrigins(opticalSystemRows);
+        const imageSurfaceInfo = surfaceOrigins?.[imageSurfaceIndex] || null;
+
         if (conjugateType === 'infinite') {
-            // Infinite conjugate: field angle = atan(H_img / EFL)
             const efl = Number(paraxial.focalLength);
             if (!Number.isFinite(efl) || Math.abs(efl) < 1e-12) throw new Error('invalid efl');
-            const angleXDeg = Math.atan2(targetX, efl) * (180 / Math.PI);
-            const angleYDeg = Math.atan2(targetY, efl) * (180 / Math.PI);
+
+            const paraxialAngleXDeg = Math.atan2(targetX, efl) * (180 / Math.PI);
+            const paraxialAngleYDeg = Math.atan2(targetY, efl) * (180 / Math.PI);
+            let solvedAngleXDeg = paraxialAngleXDeg;
+            let solvedAngleYDeg = paraxialAngleYDeg;
+
+            solvedAngleXDeg = solveImageHeightComponent(targetX, paraxialAngleXDeg, (candidate) => {
+                const localHit = traceChiefRayImagePointForAngle(
+                    opticalSystemRows,
+                    candidate,
+                    solvedAngleYDeg,
+                    imageSurfaceIndex,
+                    imageSurfaceInfo,
+                    wavelengthUm,
+                );
+                return Number(localHit?.x);
+            }, {
+                initialStep: Math.max(0.05, Math.abs(paraxialAngleXDeg) * 0.05, Math.abs(targetX) * 0.005),
+                maxStep: Math.max(2, Math.abs(paraxialAngleXDeg) * 0.5, Math.abs(targetX) * 0.05),
+            });
+            solvedAngleYDeg = solveImageHeightComponent(targetY, paraxialAngleYDeg, (candidate) => {
+                const localHit = traceChiefRayImagePointForAngle(
+                    opticalSystemRows,
+                    solvedAngleXDeg,
+                    candidate,
+                    imageSurfaceIndex,
+                    imageSurfaceInfo,
+                    wavelengthUm,
+                );
+                return Number(localHit?.y);
+            }, {
+                initialStep: Math.max(0.05, Math.abs(paraxialAngleYDeg) * 0.05, Math.abs(targetY) * 0.005),
+                maxStep: Math.max(2, Math.abs(paraxialAngleYDeg) * 0.5, Math.abs(targetY) * 0.05),
+            });
+
             return {
                 ...obj,
                 position: 'Angle',
-                xHeightAngle: angleXDeg,
-                yHeightAngle: angleYDeg,
+                xHeightAngle: solvedAngleXDeg,
+                yHeightAngle: solvedAngleYDeg,
             };
         } else {
-            // Finite conjugate: object height = image height / |magnification|
-            // Paraxial magnification ≈ imageDistance / objectDistance (with sign)
             const imgDist = Number(paraxial.imageDistance);
-            // Object distance: thickness of the object surface (negative for real object)
             const objSurf = opticalSystemRows && opticalSystemRows[0];
             const objDist = objSurf ? Number(objSurf.thickness) : NaN;
             let mag: number;
@@ -1554,11 +1798,45 @@ function convertImageHeightToEffectiveObject(obj, opticalSystemRows, wavelengthU
             }
             const absMag = Math.abs(mag);
             const scale = absMag > 1e-12 ? 1 / absMag : 1;
+            const paraxialObjectX = targetX * scale;
+            const paraxialObjectY = targetY * scale;
+            let solvedObjectX = paraxialObjectX;
+            let solvedObjectY = paraxialObjectY;
+
+            solvedObjectX = solveImageHeightComponent(targetX, paraxialObjectX, (candidate) => {
+                const localHit = traceChiefRayImagePointForFiniteObject(
+                    opticalSystemRows,
+                    candidate,
+                    solvedObjectY,
+                    imageSurfaceIndex,
+                    imageSurfaceInfo,
+                    wavelengthUm,
+                );
+                return Number(localHit?.x);
+            }, {
+                initialStep: Math.max(0.01, Math.abs(paraxialObjectX) * 0.05, Math.abs(targetX) * 0.01),
+                maxStep: Math.max(1, Math.abs(paraxialObjectX) * 0.5, Math.abs(targetX) * 0.25),
+            });
+            solvedObjectY = solveImageHeightComponent(targetY, paraxialObjectY, (candidate) => {
+                const localHit = traceChiefRayImagePointForFiniteObject(
+                    opticalSystemRows,
+                    solvedObjectX,
+                    candidate,
+                    imageSurfaceIndex,
+                    imageSurfaceInfo,
+                    wavelengthUm,
+                );
+                return Number(localHit?.y);
+            }, {
+                initialStep: Math.max(0.01, Math.abs(paraxialObjectY) * 0.05, Math.abs(targetY) * 0.01),
+                maxStep: Math.max(1, Math.abs(paraxialObjectY) * 0.5, Math.abs(targetY) * 0.25),
+            });
+
             return {
                 ...obj,
                 position: 'Rectangle',
-                xHeightAngle: targetX * scale,
-                yHeightAngle: targetY * scale,
+                xHeightAngle: solvedObjectX,
+                yHeightAngle: solvedObjectY,
             };
         }
     } catch (_) {
@@ -1604,11 +1882,22 @@ export function generateRayStartPointsForObject(obj, opticalSystemRows, rayCount
         return generateRaysForRectangleObject(obj, opticalSystemRows, rayCount, effectivePattern, apertureLimit, annularRingCount, wavelengthUm, enhancedOptions);
     } else if (posNorm === "imageheight") {
         // Convert target image height → effective object field and delegate.
+        // The solver inside convertImageHeightToEffectiveObject uses a stop-center
+        // chief ray to determine the equivalent angle / object height. To keep the
+        // rendered chief ray consistent with that solve (so the chief ray actually
+        // hits the requested image height), force stop-center chief-ray aiming
+        // when delegating to the Angle / Rectangle generators.
         const effectiveObj = convertImageHeightToEffectiveObject(obj, opticalSystemRows, wavelengthUm, conjugateType);
+        const imageHeightDelegationOptions = {
+            ...enhancedOptions,
+            aimThroughStop: true,
+            useChiefRayAnalysis: true,
+            allowStopBasedOriginSolve: true,
+        };
         if (effectiveObj.position === 'Angle') {
-            return generateRaysForAngleObject(effectiveObj, opticalSystemRows, rayCount, effectivePattern, annularRingCount, { ...enhancedOptions, wavelengthUm, apertureLimitMm: apertureLimit });
+            return generateRaysForAngleObject(effectiveObj, opticalSystemRows, rayCount, effectivePattern, annularRingCount, { ...imageHeightDelegationOptions, wavelengthUm, apertureLimitMm: apertureLimit });
         } else {
-            return generateRaysForRectangleObject(effectiveObj, opticalSystemRows, rayCount, effectivePattern, apertureLimit, annularRingCount, wavelengthUm, enhancedOptions);
+            return generateRaysForRectangleObject(effectiveObj, opticalSystemRows, rayCount, effectivePattern, apertureLimit, annularRingCount, wavelengthUm, imageHeightDelegationOptions);
         }
     } else {
         console.warn(`⚠️ Unknown object position type: ${obj.position}`);

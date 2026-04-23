@@ -1787,10 +1787,19 @@ const collectLegacyCrossRays = async (
       const crossType = axis === 'YZ' ? 'vertical' : (axis === 'XZ' ? 'horizontal' : 'both');
       const requestedPupilSamplingMode = readCurrentForceMode() || undefined;
       if (isInfiniteSystem && typeof w.generateInfiniteSystemCrossBeam === 'function') {
-        const objectAngles = (objectRows.length ? objectRows : [{}]).map((row: any) => ({
-          x: toNumber(row?.xHeightAngle ?? row?.x),
-          y: toNumber(row?.yHeightAngle ?? row?.y)
-        }));
+        const objectAngles = (objectRows.length ? objectRows : [{}]).map((row: any) => {
+          const posNorm = String(row?.position ?? '').trim().toLowerCase();
+          if (posNorm === 'imageheight' && typeof w.convertImageHeightToEffectiveObject === 'function') {
+            try {
+              const conjugateType = 'infinite';
+              const effective = w.convertImageHeightToEffectiveObject(row, opticalSystemRows, primaryWavelength, conjugateType);
+              return { x: toNumber(effective?.xHeightAngle ?? effective?.x), y: toNumber(effective?.yHeightAngle ?? effective?.y) };
+            } catch (e) {
+              console.warn('[collectLegacyCrossRays] ImageHeight conversion failed, using raw value:', e);
+            }
+          }
+          return { x: toNumber(row?.xHeightAngle ?? row?.x), y: toNumber(row?.yHeightAngle ?? row?.y) };
+        });
 
         const isImageRow = (row: any) => {
           const raw = row?.['object type'] ?? row?.object ?? row?.Object ?? row?.type ?? '';
@@ -3784,11 +3793,16 @@ const collectLegacyCrossRays = async (
               return String(raw ?? '').trim().toLowerCase() === 'object';
             };
             const isGapRow = (row: any) => String(row?._blockType ?? '').trim() === 'Gap';
+            const isThinLensBackRow = (row: any) => {
+              const blockType = String(row?._blockType ?? row?.blockType ?? row?.block_type ?? row?.blockTypeName ?? '').trim().toLowerCase();
+              if (blockType !== 'thinlens' && blockType !== 'paraxial') return false;
+              return String(row?._surfaceRole ?? row?.surfaceRole ?? '').trim().toLowerCase() === 'back';
+            };
             const getRayPathPointIndexForSurfaceIndex = (surfaceIndex: number) => {
               let count = 0;
               for (let index = 0; index <= surfaceIndex; index += 1) {
                 const row = rows[index];
-                if (isCoordTransRow(row) || isObjectRow(row) || isGapRow(row)) continue;
+                if (isCoordTransRow(row) || isObjectRow(row) || isGapRow(row) || isThinLensBackRow(row)) continue;
                 count += 1;
               }
               return count > 0 ? count : null;

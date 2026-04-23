@@ -391,10 +391,10 @@ const createDOMTableObject = (container: HTMLElement | null, initialRows: Object
       // position
       const tdPos = document.createElement('td');
       const selectPos = document.createElement('select');
-      ['Angle', 'Rectangle'].forEach(v => {
+      [['Angle', 'Angle'], ['Rectangle', 'Height Rect'], ['ImageHeight', 'Image Height']].forEach(([v, label]) => {
         const opt = document.createElement('option');
         opt.value = v;
-        opt.textContent = v;
+        opt.textContent = label;
         selectPos.appendChild(opt);
       });
       selectPos.value = rowData.position;
